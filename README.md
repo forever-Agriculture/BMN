@@ -39,6 +39,8 @@ Everything runs on your computer. There is no account, cloud backend or telemetr
   to that message to answer the session. See [docs/telegram.md](docs/telegram.md).
 - **Backups.** Export a consistent snapshot of the database and stored files with a hash
   manifest, and verify it later.
+- **Appearance.** Four color palettes for the app and the terminal: Steel (default), Brown, Dark and
+  near-black Black, plus a Knight or Cross header.
 - **Keyboard first.** `Ctrl+Shift+P` opens the command palette, and every action is reachable
   from the keyboard.
 

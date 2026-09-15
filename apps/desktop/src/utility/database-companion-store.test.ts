@@ -146,6 +146,11 @@ describe('companion store', () => {
     expect(getTelegramMessage(database, 78)).toBeUndefined()
   })
 
+  it('saves the near-black Black color mode', () => {
+    putSettingsSection(database, 'appearance', { identity: 'knight', colorMode: 'black', terminalFontSize: 14 }, now)
+    expect(getSettings(database).appearance).toEqual({ identity: 'knight', colorMode: 'black', terminalFontSize: 14 })
+  })
+
   it('validates settings and keeps the stored value on invalid input', () => {
     expect(getSettings(database)).toEqual(DEFAULT_APP_SETTINGS)
     putSettingsSection(database, 'appearance', { identity: 'cross', colorMode: 'dark', terminalFontSize: 16 }, now)

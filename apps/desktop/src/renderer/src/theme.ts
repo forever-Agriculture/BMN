@@ -1,4 +1,4 @@
-// MODULE: theme.ts - Knight and Cross identities, and the Steel, Brown and Dark palettes for app chrome and the terminal
+// MODULE: theme.ts - Knight and Cross identities, and the Steel, Brown, Dark and Black palettes for app chrome and the terminal
 import type { AppearanceSettings, ColorModeName, IdentityName } from '@ai-terminal/protocol'
 import type { ITheme } from '@xterm/xterm'
 
@@ -11,7 +11,8 @@ export const IDENTITY_PRESENTATION: Readonly<Record<IdentityName, { label: strin
 export const COLOR_MODE_PRESENTATION: Readonly<Record<ColorModeName, { label: string; description: string }>> = Object.freeze({
   steel: { label: 'Steel', description: 'default, cool' },
   brown: { label: 'Brown', description: 'warm' },
-  dark: { label: 'Dark', description: 'neutral' }
+  dark: { label: 'Dark', description: 'neutral' },
+  black: { label: 'Black', description: 'near-black' }
 })
 
 const SHARED_ANSI = {
@@ -68,6 +69,19 @@ export const TERMINAL_THEMES: Readonly<Record<ColorModeName, ITheme>> = Object.f
     brightBlack: '#767370',
     white: '#d2d0cc',
     brightWhite: '#f5f4f2'
+  },
+  black: {
+    ...SHARED_ANSI,
+    background: '#0a0a0a',
+    foreground: '#e8e8e8',
+    cursor: '#e8e8e8',
+    cursorAccent: '#0a0a0a',
+    selectionBackground: '#333333',
+    selectionForeground: '#e8e8e8',
+    black: '#1a1a1a',
+    brightBlack: '#7a7a7a',
+    white: '#d4d4d4',
+    brightWhite: '#f5f5f5'
   }
 })
 

@@ -1,4 +1,4 @@
-/* MODULE: styles.css - Chancel tokens (Steel, Brown and Dark color modes; Knight and Cross identities), app chrome, workspace tree, panes, dialogs and overlays */
+/* MODULE: styles.css - Chancel tokens (Steel, Brown, Dark and Black color modes; Knight and Cross identities), app chrome, workspace tree, panes, dialogs and overlays */
 /* Steel is the default color mode: cool surfaces. Knight is the default identity: heraldic gold. */
 :root {
   --ground: #14171b;
@@ -57,6 +57,22 @@
   --faint: #767370;
   --selection: #3f3f3f;
   --focus: #e6e4e0;
+}
+
+/* Black is near-black, for dark rooms and OLED screens, like a black Zen browser space. */
+:root[data-color-mode='black'] {
+  --ground: #0a0a0a;
+  --surface: #0e0e0e;
+  --raised: #141414;
+  --hover: #171717;
+  --selected: #1c1c1c;
+  --hairline: #1f1f1f;
+  --border: #6e6e6e;
+  --text: #e8e8e8;
+  --muted: #a3a3a3;
+  --faint: #737373;
+  --selection: #333333;
+  --focus: #e8e8e8;
 }
 
 /* Cross wears the softer gold of the original Chancel header. */

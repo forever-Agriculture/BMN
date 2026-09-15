@@ -525,7 +525,7 @@ export function validateSettingsSection(section: string, value: unknown): AppSet
       const identity = candidate.identity ?? legacy?.identity
       const colorMode = candidate.colorMode ?? legacy?.colorMode
       if (!IDENTITY_NAMES.includes(identity as IdentityName)) invalid('Identity must be Knight or Cross')
-      if (!COLOR_MODE_NAMES.includes(colorMode as ColorModeName)) invalid('Color mode must be Steel, Brown or Dark')
+      if (!COLOR_MODE_NAMES.includes(colorMode as ColorModeName)) invalid('Color mode must be Steel, Brown, Dark or Black')
       const size = candidate.terminalFontSize
       if (
         typeof size !== 'number' ||
