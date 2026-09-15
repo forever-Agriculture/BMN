@@ -37,6 +37,7 @@ import {
   HostControlError,
   SessionManager,
   findStoredSession,
+  resolveHomeDirectory,
   validateLaunch,
   type CreateSessionParams,
   type PtyLike,
@@ -303,12 +304,20 @@ async function start(): Promise<void> {
         if (!isWorkspaceCreateParams(params)) {
           throw new HostControlError(ERROR_CODES.invalidArgument, 'Workspace create parameters are invalid')
         }
-        return database.createWorkspace(params)
+        return database.createWorkspace(
+          typeof params.defaultCwd === 'string'
+            ? { ...params, defaultCwd: resolveHomeDirectory(params.defaultCwd) }
+            : params
+        )
       case METHOD_REGISTRY.workspaceUpdate:
         if (!isWorkspaceUpdateParams(params)) {
           throw new HostControlError(ERROR_CODES.invalidArgument, 'Workspace update parameters are invalid')
         }
-        return database.updateWorkspace(params)
+        return database.updateWorkspace(
+          typeof params.defaultCwd === 'string'
+            ? { ...params, defaultCwd: resolveHomeDirectory(params.defaultCwd) }
+            : params
+        )
       case METHOD_REGISTRY.sessionCreate: {
         if (!isSessionCreateParams(params)) {
           throw new HostControlError(
@@ -333,22 +342,26 @@ async function start(): Promise<void> {
       case METHOD_REGISTRY.sessionList:
         return (await database.listSessions(stringValue(params, 'workspaceId')))
           .map((record) => manager.sessionWithCurrentProcessState(record))
-      case METHOD_REGISTRY.sessionUpdate:
+      case METHOD_REGISTRY.sessionUpdate: {
         if (!isSessionUpdateParams(params)) {
           throw new HostControlError(ERROR_CODES.invalidArgument, 'Session update parameters are invalid')
         }
-        if ('cwd' in params || 'executable' in params || 'argv' in params) {
-          const current = await findStoredSession(database, params.sessionId)
+        const update = typeof params.cwd === 'string'
+          ? { ...params, cwd: resolveHomeDirectory(params.cwd) }
+          : params
+        if ('cwd' in update || 'executable' in update || 'argv' in update) {
+          const current = await findStoredSession(database, update.sessionId)
           if (!current) throw new HostControlError(ERROR_CODES.notFound, 'The session was not found')
           await validateLaunch({
-            cwd: params.cwd ?? current.cwd,
-            executable: params.executable ?? current.executable,
-            argv: params.argv ?? current.argv,
+            cwd: update.cwd ?? current.cwd,
+            executable: update.executable ?? current.executable,
+            argv: update.argv ?? current.argv,
             cols: 80,
             rows: 24
           })
         }
-        return manager.sessionWithCurrentProcessState(await database.updateSession(params))
+        return manager.sessionWithCurrentProcessState(await database.updateSession(update))
+      }
       case METHOD_REGISTRY.sessionBindingGet:
         return manager.conversationBinding(stringValue(params, 'sessionId'))
       case METHOD_REGISTRY.sessionBindingReplace:
@@ -395,7 +408,7 @@ async function start(): Promise<void> {
         if (!isTemplateCreateParams(params)) {
           throw new HostControlError(ERROR_CODES.invalidArgument, 'Template create parameters are invalid')
         }
-        return database.createTemplate(params)
+        return database.createTemplate({ ...params, cwd: resolveHomeDirectory(params.cwd) })
       case METHOD_REGISTRY.layoutGet:
         return database.getLayout(stringValue(params, 'workspaceId'))
       case METHOD_REGISTRY.layoutPut:

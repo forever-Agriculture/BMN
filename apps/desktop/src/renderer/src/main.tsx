@@ -47,7 +47,8 @@ import {
   nextRequest,
   openRequests,
   progressPresentation,
-  sessionStatus
+  sessionStatus,
+  windowTitle
 } from './session-presentation'
 import { sessionProcessLabel } from './session-status'
 import {
@@ -320,6 +321,11 @@ function App(): React.JSX.Element {
       writer.apply(action.workspaceId, (state) => state.selectedSessionId ? state : action.change(state))
     }
   }, [activeWorkspaceId, sessions.length])
+
+  const selectedSessionName = sessions.find((session) => session.sessionId === selectedSessionId)?.name ?? null
+  useEffect(() => {
+    document.title = windowTitle(activeWorkspace?.name ?? null, selectedSessionName)
+  }, [activeWorkspace?.name, selectedSessionName])
 
   useEffect(() => {
     setBinding(undefined)

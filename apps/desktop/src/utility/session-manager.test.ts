@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs'
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -24,6 +24,7 @@ import {
   HostControlError,
   SessionManager,
   buildShellEnvironment,
+  resolveHomeDirectory,
   type CreateResumingRecord,
   type CreateStartingRecord,
   type IncarnationExit,
@@ -592,6 +593,41 @@ describe('shell session lifecycle', () => {
     ).rejects.toMatchObject<Partial<HostControlError>>({ code: ERROR_CODES.invalidArgument })
     expect(store.starting).toEqual([])
     await expect(manager.health()).resolves.toMatchObject({ runningIncarnations: 0 })
+  })
+
+  it('launches in a ~/ directory by expanding it to the home directory, and stores the absolute path', async () => {
+    // A workspace saved as "~/code/…" prefilled every New session form with a path the host rejected.
+    const home = await mkdtemp(join(tmpdir(), 'aiterm-home-test-'))
+    createdRoots.add(home)
+    await mkdir(join(home, 'code', 'project'), { recursive: true })
+    const store = new FakeStore()
+    const spawned: string[] = []
+    const manager = new SessionManager({
+      store,
+      spawnPty: (_executable, _argv, options) => {
+        spawned.push(options.cwd)
+        return new FakePty()
+      },
+      processStartIdentity: async () => 'linux-proc-start:home',
+      sendTerminalMessage: () => undefined,
+      homeDirectory: home
+    })
+    const launch = { ...DEFAULT_SESSION_CREATION, executable: process.execPath, argv: [], cols: 80, rows: 24 }
+
+    await manager.create({ ...launch, cwd: '~/code/project/' })
+    await manager.create({ ...launch, cwd: '~' })
+
+    expect(store.startingRecords.map((record) => record.cwd)).toEqual([join(home, 'code', 'project'), home])
+    expect(spawned).toEqual([join(home, 'code', 'project'), home])
+  })
+
+  it('expands only a leading ~ or ~/ in a launch directory', () => {
+    expect(resolveHomeDirectory('~', '/home/owner')).toBe('/home/owner')
+    expect(resolveHomeDirectory('~/', '/home/owner')).toBe('/home/owner')
+    expect(resolveHomeDirectory('~/code/Piche_Projects/app', '/home/owner')).toBe('/home/owner/code/Piche_Projects/app')
+    expect(resolveHomeDirectory('~other/code', '/home/owner')).toBe('~other/code')
+    expect(resolveHomeDirectory('/srv/~/code', '/home/owner')).toBe('/srv/~/code')
+    expect(resolveHomeDirectory('', '/home/owner')).toBe('')
   })
 
   it('persists the supplied workspace and session name when creating a session', async () => {

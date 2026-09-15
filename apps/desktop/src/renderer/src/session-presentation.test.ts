@@ -9,7 +9,8 @@ import {
   nextRequest,
   progressPresentation,
   relativeAge,
-  sessionStatus
+  sessionStatus,
+  windowTitle
 } from './session-presentation'
 
 const now = Date.parse('2026-09-14T12:00:00.000Z')
@@ -50,6 +51,13 @@ describe('session presentation', () => {
     expect(agentTag('/home/me/.local/bin/claude')).toBe('Claude')
     expect(agentTag('/bin/bash')).toBe('Shell')
     expect(agentTag('/usr/bin/htop')).toBe('htop')
+  })
+
+  it('titles the window with the selected session, like agterm', () => {
+    expect(windowTitle('PICHE', 'Q-Automations')).toBe('Q-Automations')
+    expect(windowTitle('PICHE', null)).toBe('PICHE')
+    expect(windowTitle(null, null)).toBe('AI Terminal')
+    expect(windowTitle('  ', '  ')).toBe('AI Terminal')
   })
 
   it('shortens home paths for display only', () => {

@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { access, readFile, stat } from 'node:fs/promises'
 import { constants } from 'node:fs'
+import { homedir } from 'node:os'
+import { join, resolve } from 'node:path'
 import { kill as signalProcessByPid } from 'node:process'
 import {
   ERROR_CODES,
@@ -177,6 +179,8 @@ interface SessionManagerOptions {
   processStartIdentity?: (pid: number) => Promise<string>
   sendTerminalMessage: (message: TerminalPortMessage) => void
   environment?: Readonly<Record<string, string | undefined>>
+  /** Where a launch directory written as ~ or ~/… points; the owner's home by default. */
+  homeDirectory?: string
   signalProcess?: (pid: number, signal: NodeJS.Signals) => boolean
   stopGraceMs?: number
   stopKillWaitMs?: number
@@ -327,6 +331,12 @@ async function linuxProcessStartIdentity(pid: number): Promise<string> {
   return `linux-proc-start:${startTicks}`
 }
 
+/** Expands a leading ~ or ~/ the way a shell would, so a folder typed as ~/code/app launches; other paths are unchanged. */
+export function resolveHomeDirectory(path: string, home: string = homedir()): string {
+  if (path !== '~' && !path.startsWith('~/')) return path
+  return resolve(join(home, path.slice(1)))
+}
+
 export async function validateLaunch(params: PtyLaunchParams): Promise<void> {
   let cwdInfo
   try {
@@ -377,6 +387,7 @@ export class SessionManager {
   private readonly identifyProcess: (pid: number) => Promise<string>
   private readonly sendTerminalMessage: (message: TerminalPortMessage) => void
   private readonly environment: Readonly<Record<string, string | undefined>>
+  private readonly homeDirectory: string
   private readonly sessionEnvironment:
     | ((identity: SessionIdentity) => Readonly<Record<string, string>>)
     | undefined
@@ -405,6 +416,7 @@ export class SessionManager {
     this.identifyProcess = options.processStartIdentity ?? linuxProcessStartIdentity
     this.sendTerminalMessage = options.sendTerminalMessage
     this.environment = options.environment ?? process.env
+    this.homeDirectory = options.homeDirectory ?? homedir()
     this.sessionEnvironment = options.sessionEnvironment
     this.signalProcess = options.signalProcess ?? signalProcessByPid
     this.stopGraceMs = options.stopGraceMs ?? 2_000
@@ -419,8 +431,9 @@ export class SessionManager {
   }
 
   async create(
-    params: CreateSessionParams
+    requested: CreateSessionParams
   ): Promise<SessionIdentity & { binding: PersistedConversationBinding }> {
+    const params = { ...requested, cwd: resolveHomeDirectory(requested.cwd, this.homeDirectory) }
     if (!params.workspaceId || !params.name.trim() || params.name.length > 120) {
       throw new HostControlError(ERROR_CODES.invalidArgument, 'Session workspace and name are invalid')
     }
