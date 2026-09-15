@@ -1,5 +1,6 @@
 {
   "name": "@ai-terminal/desktop",
+  "productName": "BMN",
   "version": "0.1.0",
   "private": true,
   "description": "BMN Electron desktop application",
