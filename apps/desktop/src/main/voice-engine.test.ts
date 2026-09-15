@@ -126,7 +126,9 @@ describe('whisper-cli invocation', () => {
   it('removes the temporary recording after transcription, even when the engine fails', async () => {
     const audioRoot = join(folder, 'audio')
     await mkdir(audioRoot)
-    const binary = await fakeBinary('test -f "$4" && stat -c %a "$4" && echo transcribed')
+    // `stat` has no portable flags, so Node reports the mode the recording was written with.
+    const printMode = `${JSON.stringify(process.execPath)} -p '(require("fs").statSync(process.argv[1]).mode & 0o777).toString(8)'`
+    const binary = await fakeBinary(`test -f "$4" && ${printMode} "$4" && echo transcribed`)
     const wav = encodeWav(new Float32Array(1_600), 16_000)
     await expect(transcribeRecording({ binary, modelPath: '/m.bin', language: 'auto', wav, temporaryRoot: audioRoot }))
       .resolves.toBe('600 transcribed')

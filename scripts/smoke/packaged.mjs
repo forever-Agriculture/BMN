@@ -4,11 +4,12 @@ import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { assertOwnerRootsUnchanged, fingerprintOwnerRoots } from '../lib/owner-root-guard.mjs'
+import { packagedApp } from '../lib/packaged-app.mjs'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(scriptDirectory, '../..')
-const packagedBinary = join(repoRoot, 'apps/desktop/release/linux-unpacked/ai-terminal')
+const { binary: packagedBinary, resources: packagedResources } = packagedApp(repoRoot)
 const ownerRoots = [
   join(homedir(), '.config/ai-terminal'),
   join(homedir(), '.local/share/ai-terminal'),
@@ -32,7 +33,7 @@ function parseReceipt(stdout) {
 }
 
 if (!existsSync(packagedBinary)) throw new Error(`packaged binary is missing: ${packagedBinary}`)
-const packagedWhisper = join(dirname(packagedBinary), 'resources/whisper/whisper-cli')
+const packagedWhisper = join(packagedResources, 'whisper/whisper-cli')
 if (!existsSync(packagedWhisper) || (statSync(packagedWhisper).mode & 0o111) === 0) {
   throw new Error(`packaged voice engine is missing or not executable: ${packagedWhisper}`)
 }
