@@ -337,6 +337,7 @@ function App(): React.JSX.Element {
   }, [panel])
 
   const selectedSessionName = sessions.find((session) => session.sessionId === selectedSessionId)?.name ?? null
+  useEffect(() => window.aiTerminal.reportSelectedSession(selectedSessionId), [selectedSessionId])
   useEffect(() => {
     document.title = windowTitle(activeWorkspace?.name ?? null, selectedSessionName)
   }, [activeWorkspace?.name, selectedSessionName])

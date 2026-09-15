@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 // MODULE: aiterm - command-line client for the BMN control socket (one connection per invocation)
 import { randomUUID } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { createConnection } from 'node:net'
 import { basename, dirname, join, resolve } from 'node:path'
 
 const TIMEOUT_MS = 10_000
+/** A hook runs inside the agent's turn, so a stalled app must not hold the agent up for long. */
+const HOOK_TIMEOUT_MS = 3_000
 const PROGRESS_STATES = ['running', 'waiting', 'blocked', 'claimed-done', 'verified', 'failed', 'unknown']
 const ATTENTION_KINDS = ['question', 'permission', 'review', 'notice']
 const VALUE_OPTIONS = new Set(['name', 'session', 'key', 'source', 'detail', 'kind', 'body', 'expires', 'socket', 'token-file'])
@@ -27,6 +29,8 @@ Commands:
   withdraw <request-key>                    Withdraw an attention request
   resolve <request-key> <resolution>        Resolve an attention request
   send <text> [--submit] [--key K]          Paste text into the session; --submit also presses Enter
+  hook <agent>                              Turn an agent hook event on stdin into Needs you requests;
+                                            agent is one of claude|codex; prints nothing, always exits 0
   help                                      Show this help
 
 Options:
@@ -226,27 +230,34 @@ function remoteError(error) {
   return new CliError(code, message)
 }
 
-/** One connection per invocation: auth, one request, close. */
-function call(socketPath, token, method, params) {
+/** One connection per invocation: auth, then each request in order, close. A request's remote error does not stop the rest. */
+function callEach(socketPath, token, requests, timeoutMs = TIMEOUT_MS) {
   return new Promise((resolveCall, rejectCall) => {
     const socket = createConnection(socketPath)
+    const outcomes = []
     let buffer = ''
     let settled = false
     const timer = setTimeout(() => {
-      finish(new CliError('IO_ERROR', `no response from control socket within ${TIMEOUT_MS / 1000} s`))
-    }, TIMEOUT_MS)
+      finish(new CliError('IO_ERROR', `no response from control socket within ${timeoutMs / 1000} s`))
+    }, timeoutMs)
 
-    function finish(error, result) {
+    function finish(error) {
       if (settled) return
       settled = true
       clearTimeout(timer)
       socket.destroy()
       if (error) rejectCall(error)
-      else resolveCall(result)
+      else resolveCall(outcomes)
     }
 
     function send(id, requestMethod, requestParams) {
       socket.write(`${JSON.stringify({ jsonrpc: '2.0', id, method: requestMethod, params: requestParams })}\n`)
+    }
+
+    function sendNext() {
+      const next = requests[outcomes.length]
+      if (next === undefined) finish(null)
+      else send(outcomes.length + 2, next.method, next.params)
     }
 
     function handleLine(line) {
@@ -259,12 +270,14 @@ function call(socketPath, token, method, params) {
       }
       if (!isObject(message)) {
         finish(new CliError('PROTOCOL_MISMATCH', 'control socket sent a malformed response'))
+      } else if (message.id === 1) {
+        if (message.error !== undefined) finish(remoteError(message.error))
+        else sendNext()
+      } else if (message.id === outcomes.length + 2) {
+        outcomes.push(message.error !== undefined ? { error: remoteError(message.error) } : { result: message.result })
+        sendNext()
       } else if (message.error !== undefined) {
         finish(remoteError(message.error))
-      } else if (message.id === 1) {
-        send(2, method, params)
-      } else if (message.id === 2) {
-        finish(null, message.result)
       } else {
         finish(new CliError('PROTOCOL_MISMATCH', 'control socket answered an unknown request'))
       }
@@ -289,6 +302,150 @@ function call(socketPath, token, method, params) {
       finish(new CliError('IO_ERROR', 'control socket closed the connection before responding'))
     })
   })
+}
+
+async function call(socketPath, token, method, params) {
+  const [outcome] = await callEach(socketPath, token, [{ method, params }])
+  if (outcome.error) throw outcome.error
+  return outcome.result
+}
+
+const HOOK_AGENTS = { claude: 'Claude', codex: 'Codex' }
+/** Processes that can stand between an agent and a hook it runs. */
+const HOOK_WRAPPERS = new Set(['sh', 'dash', 'bash', 'zsh', 'fish', 'ksh', 'env', 'timeout', 'nice', 'nohup', 'stdbuf'])
+const HOOK_BODY_MAX = 2000
+const IN_TERMINAL = 'answered in the terminal'
+
+function clip(text, max) {
+  if (text.length <= max) return text
+  let end = max - 1
+  const last = text.charCodeAt(end - 1)
+  if (last >= 0xd800 && last <= 0xdbff) end -= 1
+  return `${text.slice(0, end)}…`
+}
+
+/** One line without control characters, as the control server requires of a title. */
+function titleText(value, fallback) {
+  const text = typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f\s]+/g, ' ').trim() : ''
+  return clip(text || fallback, 200)
+}
+
+function bodyText(value) {
+  if (typeof value !== 'string') return undefined
+  const text = value.replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').trim()
+  return text === '' ? undefined : clip(text, HOOK_BODY_MAX)
+}
+
+function toolSummary(input) {
+  if (typeof input === 'string') return input
+  if (!isObject(input)) return undefined
+  for (const key of ['command', 'cmd', 'file_path', 'path', 'url', 'description']) {
+    const value = input[key]
+    if (typeof value === 'string' && value !== '') return value
+    if (Array.isArray(value) && value.length > 0) return value.join(' ')
+  }
+  return JSON.stringify(input)
+}
+
+/** Maps one Claude Code or Codex hook event to the attention calls that keep Needs you truthful. */
+function hookRequests(agent, event) {
+  const name = HOOK_AGENTS[agent]
+  const requestKey = (slot) => `${agent}:${slot}`
+  const open = (slot, kind, title, body) => [{
+    method: 'attention.open',
+    params: { requestKey: requestKey(slot), kind, title, ...(body === undefined ? {} : { body }) }
+  }]
+  const withdraw = (...slots) => slots.map((slot) => ({ method: 'attention.withdraw', params: { requestKey: requestKey(slot) } }))
+  const answered = (...slots) => slots.map((slot) => ({
+    method: 'attention.resolve',
+    params: { requestKey: requestKey(slot), resolution: IN_TERMINAL }
+  }))
+  switch (event.hook_event_name) {
+    case 'Notification': {
+      const type = event.notification_type
+      if (type === 'permission_prompt' || type === 'worker_permission_prompt' ||
+        (type === undefined && typeof event.message === 'string' && /permission/i.test(event.message))) {
+        return open('permission', 'permission', titleText(event.message, `${name} needs your permission`))
+      }
+      if (type === 'elicitation_dialog' || type === 'elicitation_url_dialog' || type === 'agent_needs_input') {
+        return open('question', 'question', titleText(event.message, `${name} has a question`))
+      }
+      // idle_prompt repeats a finished turn, which Stop already reported.
+      return []
+    }
+    case 'PermissionRequest':
+      return open(
+        'permission',
+        'permission',
+        titleText(`${name} wants to use ${titleText(event.tool_name, 'a tool')}`, `${name} needs your permission`),
+        bodyText(toolSummary(event.tool_input))
+      )
+    case 'PostToolUse':
+      // A tool ran, so any prompt was answered, and a turn a Stop hook sent back to work is running again.
+      return [...answered('permission', 'question'), ...withdraw('turn')]
+    case 'UserPromptSubmit':
+      return [...answered('permission', 'question'), ...withdraw('turn')]
+    case 'Stop':
+      return [
+        ...withdraw('permission', 'question'),
+        ...open('turn', 'notice', `${name} finished its turn`, bodyText(event.last_assistant_message))
+      ]
+    case 'SessionStart':
+      return event.source === 'compact' ? [] : withdraw('permission', 'question', 'turn')
+    case 'SessionEnd':
+      return withdraw('permission', 'question', 'turn')
+    case 'Interrupt':
+      return withdraw('permission', 'question')
+    default:
+      return []
+  }
+}
+
+/**
+ * An agent passes the session's environment to everything it starts, including agents it runs from a tool call
+ * (`claude -p`), so the environment alone cannot tell the owner's agent from a nested one. The agent is the nearest
+ * ancestor that is not a shell, and the owner's is the foreground job of a terminal; tool calls run without one.
+ */
+function hookFromInteractiveAgent(procRoot) {
+  if (!existsSync(procRoot)) return true
+  let pid = process.ppid
+  for (let depth = 0; depth < 16 && pid > 1; depth += 1) {
+    let stat
+    try {
+      stat = readFileSync(join(procRoot, String(pid), 'stat'), 'utf8')
+    } catch {
+      return true
+    }
+    const close = stat.lastIndexOf(')')
+    const comm = stat.slice(stat.indexOf('(') + 1, close)
+    const [, parent, group, , tty, foreground] = stat.slice(close + 2).split(' ')
+    if (!HOOK_WRAPPERS.has(comm)) return Number(tty) !== 0 && Number(group) === Number(foreground)
+    pid = Number(parent)
+  }
+  return true
+}
+
+/** Hooks must never disturb the agent: nothing on stdout, and exit 0 whatever happens. */
+async function runHook(args) {
+  const [agent] = args
+  if (args.length !== 1 || !Object.hasOwn(HOOK_AGENTS, agent)) {
+    process.stderr.write(`aiterm: hook expects one agent: ${Object.keys(HOOK_AGENTS).join('|')}\n`)
+    return 0
+  }
+  const socketPath = process.env.AITERM_CONTROL_SOCKET
+  const token = process.env.AITERM_TOKEN
+  if (!socketPath || !token || process.stdin.isTTY) return 0
+  if (!hookFromInteractiveAgent(process.env.AITERM_PROC_ROOT ?? '/proc')) return 0
+  let event
+  try {
+    event = JSON.parse(readFileSync(0, 'utf8'))
+  } catch {
+    return 0
+  }
+  if (!isObject(event)) return 0
+  const requests = hookRequests(agent, event)
+  if (requests.length > 0) await callEach(socketPath, token, requests, HOOK_TIMEOUT_MS).catch(() => undefined)
+  return 0
 }
 
 function describeSnapshot(result) {
@@ -354,6 +511,7 @@ function usageFailure(message) {
 }
 
 async function main(argv) {
+  if (argv[0] === 'hook') return runHook(argv.slice(1)).catch(() => 0)
   let request
   let parsed
   let command

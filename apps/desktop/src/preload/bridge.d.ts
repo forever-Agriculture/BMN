@@ -138,6 +138,10 @@ export interface AiTerminalBridge {
   quitApplication(): Promise<void>
   onAppEvent(listener: (message: AppEventMessage) => void): () => void
   onOpenSession(listener: (sessionId: string) => void): () => void
+  /** Whether the owner has left the desktop idle; replays the current value to each new listener. */
+  onPresence(listener: (presence: { away: boolean }) => void): () => void
+  /** Desktop notifications skip the session the owner is looking at. */
+  reportSelectedSession(sessionId: string | null): void
   listArtifacts(sessionId?: string | null): Promise<ArtifactRecord[]>
   attachFiles(sessionId: string): Promise<ArtifactRecord[]>
   attachDroppedFiles(sessionId: string, files: File[]): Promise<ArtifactRecord[]>

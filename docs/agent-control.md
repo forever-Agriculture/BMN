@@ -5,7 +5,8 @@ a script or you can use it to publish files, report progress, ask for attention 
 session.
 
 `aiterm` is a small Node.js client (`apps/desktop/bin/aiterm`). Each call opens one connection to
-the app's control socket, sends one JSON-RPC request and exits.
+the app's control socket, sends its JSON-RPC requests and exits. Packaged builds run it on BMN's own
+runtime from `resources/bin`, so sessions need no Node.js install; BMN puts that folder on `PATH`.
 
 ## How a session finds the app
 
@@ -35,6 +36,7 @@ aiterm ask <request-key> <title> [--kind K] [--body B] [--expires ISO]
 aiterm withdraw <request-key>                     Withdraw your request
 aiterm resolve <request-key> <resolution>         Mark a request resolved
 aiterm send <text> [--submit] [--key K]           Paste text into the session; --submit presses Enter
+aiterm hook <agent>                               Turn an agent hook event on stdin into Needs you requests
 aiterm help
 ```
 
@@ -86,6 +88,43 @@ aiterm send --owner --session <session-id> --submit -- "git status"
 
 `--key` makes a publish or send idempotent: repeating the same call with the same key does not
 publish or send twice.
+
+## Agent hooks: Needs you for Claude Code and Codex
+
+`aiterm hook claude` and `aiterm hook codex` read one hook event as JSON on stdin and keep **Needs
+you** in step with the agent. They print nothing and always exit 0, so a hook can never disturb the
+agent, and they do nothing outside BMN.
+
+| Event | Effect |
+| --- | --- |
+| Claude `Notification` (permission prompt) or `PermissionRequest` | Opens a `permission` request |
+| Claude `Notification` (question dialog) | Opens a `question` request |
+| `PostToolUse`, `UserPromptSubmit` | Resolves open prompts as answered in the terminal; clears the turn notice |
+| `Stop` | Withdraws open prompts; opens a `notice` that the turn finished, with the last message |
+| `SessionStart` (not after compaction), `SessionEnd` | Withdraws everything the hook opened |
+| Codex `Interrupt` | Withdraws open prompts |
+
+An agent passes its environment to agents it starts from a tool call (`claude -p`), so the hook
+also checks that the agent above it holds the terminal; nested, non-interactive agents are ignored.
+
+Add the hook to `~/.claude/settings.json` for `Notification`, `PostToolUse`, `UserPromptSubmit`,
+`Stop`, `SessionStart` and `SessionEnd`, next to any hooks already there:
+
+```json
+{ "hooks": [{ "type": "command", "timeout": 5,
+  "command": "[ -n \"$AITERM_CONTROL_SOCKET\" ] && command -v aiterm >/dev/null && aiterm hook claude; exit 0" }] }
+```
+
+For Codex, add the same entries with `aiterm hook codex` to `~/.codex/hooks.json` for `PostToolUse`,
+`UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd` and `Interrupt`, then trust them once with
+`/hooks` in Codex. Add `PermissionRequest` only without Auto Review: Codex fires it before Auto
+Review decides whether you must approve, so it would flag tools that never need you.
+
+BMN shows a desktop notification for a new request unless you are looking at that session. Telegram
+gets it only if it is still open and unseen after 15 seconds (a finished-turn notice after 60), and
+each request only once however often the agent repeats it. While you are at the desk and looking at
+the session, BMN tells the agent its terminal has focus; after a minute without input it reports the
+focus lost, so Claude Code sends its own mobile notifications while you are away.
 
 ## What the app enforces
 

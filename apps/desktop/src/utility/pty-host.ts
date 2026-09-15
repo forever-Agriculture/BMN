@@ -257,7 +257,7 @@ async function start(): Promise<void> {
     database,
     manager,
     roots,
-    cliPath: join(__dirname, '..', '..', 'bin', 'aiterm'),
+    cliPath: process.env.AITERM_CLI_PATH ?? join(__dirname, '..', '..', 'bin', 'aiterm'),
     emit: (message) => parentPort.postMessage(message)
   })
   companionHolder.current = companion

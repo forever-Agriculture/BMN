@@ -1,12 +1,13 @@
 // MODULE: control-cli.test.ts - the aiterm CLI drives a real control server with truthful output and exit codes
 import { execFile } from 'node:child_process'
-import { mkdtemp, realpath, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ControlAuth, writeOwnerToken } from './control-auth'
-import { ControlServer, MemoryReceiptStore, type ControlHandlers } from './control-server'
+import { ERROR_CODES } from '@ai-terminal/protocol'
+import { ControlError, ControlServer, MemoryReceiptStore, type ControlHandlers } from './control-server'
 
 const CLI = fileURLToPath(new URL('../../bin/aiterm', import.meta.url))
 const createdRoots = new Set<string>()
@@ -25,11 +26,14 @@ interface CliResult {
   stderr: string
 }
 
-function runCli(args: string[], options: { env?: Record<string, string>; cwd?: string } = {}): Promise<CliResult> {
+function runCli(
+  args: string[],
+  options: { env?: Record<string, string>; cwd?: string; input?: string } = {}
+): Promise<CliResult> {
   const env: NodeJS.ProcessEnv = { ...process.env }
   for (const key of Object.keys(env)) if (key.startsWith('AITERM_')) delete env[key]
   return new Promise((resolve) => {
-    execFile(
+    const child = execFile(
       process.execPath,
       [CLI, ...args],
       { env: { ...env, ...options.env }, ...(options.cwd === undefined ? {} : { cwd: options.cwd }), timeout: 15_000 },
@@ -38,6 +42,7 @@ function runCli(args: string[], options: { env?: Record<string, string>; cwd?: s
         resolve({ code, stdout, stderr })
       }
     )
+    child.stdin?.end(options.input ?? '')
   })
 }
 
@@ -235,5 +240,150 @@ describe('aiterm CLI', () => {
     expect(result.code).toBe(0)
     expect(result.stdout).toContain('Usage: aiterm')
     expect(result.stderr).toBe('')
+  })
+})
+
+interface ProcessStat {
+  comm: string
+  tty: number
+  group: number
+  foreground: number
+}
+
+/** A fake /proc in which the hook's shell was started by an agent that does or does not hold a terminal. */
+async function procTree(root: string, agent: ProcessStat): Promise<string> {
+  const proc = join(root, 'proc')
+  const write = async (pid: number, comm: string, parent: number): Promise<void> => {
+    await mkdir(join(proc, String(pid)), { recursive: true })
+    const fields = [parent, agent.group, agent.group, agent.tty, agent.foreground, 4194304, 0]
+    await writeFile(join(proc, String(pid), 'stat'), `${pid} (${comm}) S ${fields.join(' ')}\n`)
+  }
+  await write(process.pid, 'sh', 7001)
+  await write(7001, agent.comm, 1)
+  return proc
+}
+
+const HOLDS_TERMINAL: ProcessStat = { comm: 'claude', tty: 34817, group: 7001, foreground: 7001 }
+const QUIET = { code: 0, stdout: '', stderr: '' }
+
+async function runHook(
+  fixture: Awaited<ReturnType<typeof cliFixture>>,
+  agent: string,
+  event: unknown,
+  agentProcess: ProcessStat = HOLDS_TERMINAL
+): Promise<CliResult> {
+  const proc = await procTree(fixture.root, agentProcess)
+  return runCli(['hook', agent], {
+    env: { ...fixture.sessionEnv, AITERM_PROC_ROOT: proc },
+    input: JSON.stringify(event)
+  })
+}
+
+describe('aiterm hook', () => {
+  it('opens a permission request for a Claude permission prompt and nothing for an idle reminder', async () => {
+    const fixture = await cliFixture()
+
+    const permission = await runHook(fixture, 'claude', {
+      hook_event_name: 'Notification',
+      notification_type: 'permission_prompt',
+      message: 'Claude needs your permission\n\tto use Bash'
+    })
+    const idle = await runHook(fixture, 'claude', {
+      hook_event_name: 'Notification',
+      notification_type: 'idle_prompt',
+      message: 'Claude is waiting for your input'
+    })
+
+    expect(permission).toEqual(QUIET)
+    expect(idle).toEqual(QUIET)
+    expect(fixture.handlers.openAttention).toHaveBeenCalledTimes(1)
+    expect(fixture.handlers.openAttention.mock.calls[0]?.[0]).toMatchObject({
+      sessionId: 'session-1',
+      requestKey: 'claude:permission',
+      kind: 'permission',
+      title: 'Claude needs your permission to use Bash'
+    })
+  })
+
+  it('opens a Codex permission request with the command and closes it once the tool ran, past requests that are not open', async () => {
+    const fixture = await cliFixture()
+    fixture.handlers.withdrawAttention.mockRejectedValue(new ControlError(ERROR_CODES.notFound, 'No open request'))
+    fixture.handlers.resolveAttention.mockRejectedValueOnce(new ControlError(ERROR_CODES.notFound, 'No open request'))
+
+    const asked = await runHook(fixture, 'codex', {
+      hook_event_name: 'PermissionRequest',
+      tool_name: 'Bash',
+      tool_input: { command: 'pnpm test\n  --run' }
+    })
+    const ran = await runHook(fixture, 'codex', { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: {} })
+
+    expect(asked).toEqual(QUIET)
+    expect(ran).toEqual(QUIET)
+    expect(fixture.handlers.openAttention.mock.calls[0]?.[0]).toMatchObject({
+      requestKey: 'codex:permission',
+      kind: 'permission',
+      title: 'Codex wants to use Bash',
+      body: 'pnpm test\n  --run'
+    })
+    expect(fixture.handlers.resolveAttention.mock.calls.map(([params]) => [params.requestKey, params.resolution])).toEqual([
+      ['codex:permission', 'answered in the terminal'],
+      ['codex:question', 'answered in the terminal']
+    ])
+    expect(fixture.handlers.withdrawAttention.mock.calls.map(([params]) => params.requestKey)).toEqual(['codex:turn'])
+  })
+
+  it('reports a finished turn as a notice carrying the last message and withdraws prompts left open', async () => {
+    const fixture = await cliFixture()
+    const escape = String.fromCharCode(27)
+
+    const stopped = await runHook(fixture, 'claude', {
+      hook_event_name: 'Stop',
+      stop_hook_active: false,
+      last_assistant_message: `Done.\r\n${escape}[1mAll tests pass${escape}[0m`
+    })
+
+    expect(stopped).toEqual(QUIET)
+    expect(fixture.handlers.withdrawAttention.mock.calls.map(([params]) => params.requestKey)).toEqual([
+      'claude:permission',
+      'claude:question'
+    ])
+    expect(fixture.handlers.openAttention.mock.calls[0]?.[0]).toMatchObject({
+      requestKey: 'claude:turn',
+      kind: 'notice',
+      title: 'Claude finished its turn',
+      body: 'Done.\n[1mAll tests pass[0m'
+    })
+  })
+
+  it('ignores an agent that does not hold the terminal, such as claude -p run from a tool call', async () => {
+    const fixture = await cliFixture()
+    const stop = { hook_event_name: 'Stop', last_assistant_message: 'worker done' }
+
+    const toolCall = await runHook(fixture, 'claude', stop, { comm: 'claude', tty: 0, group: 7001, foreground: -1 })
+    const background = await runHook(fixture, 'claude', stop, { comm: 'claude', tty: 34817, group: 7001, foreground: 7100 })
+
+    expect(toolCall).toEqual(QUIET)
+    expect(background).toEqual(QUIET)
+    expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
+    expect(fixture.handlers.withdrawAttention).not.toHaveBeenCalled()
+  })
+
+  it('stays silent and exits 0 outside BMN, on unreadable input, and when the app cannot be reached', async () => {
+    const fixture = await cliFixture()
+    const proc = await procTree(fixture.root, HOLDS_TERMINAL)
+    const stop = JSON.stringify({ hook_event_name: 'Stop' })
+
+    const outside = await runCli(['hook', 'claude'], { input: stop })
+    const unreadable = await runCli(['hook', 'claude'], {
+      env: { ...fixture.sessionEnv, AITERM_PROC_ROOT: proc },
+      input: 'not json'
+    })
+    const unreachable = await runCli(['hook', 'codex'], {
+      env: { ...fixture.sessionEnv, AITERM_CONTROL_SOCKET: join(fixture.root, 'gone.sock'), AITERM_PROC_ROOT: proc },
+      input: stop
+    })
+
+    expect([outside, unreadable, unreachable]).toEqual([QUIET, QUIET, QUIET])
+    expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
   })
 })

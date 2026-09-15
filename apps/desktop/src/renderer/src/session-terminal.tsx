@@ -22,6 +22,7 @@ import { liveTerminalOptions, startSavedOutputCapture } from './terminal-history
 import { copyableText, createMouseClipboard } from './terminal-clipboard'
 import { TerminalOutputFlow } from './terminal-output-flow'
 import { applyTerminalExit } from './terminal-exit'
+import { createFocusReports } from './terminal-focus-reports'
 import { trackTerminalView } from './terminal-view-tracking'
 import { searchStatusText } from './terminal-view'
 import { TERMINAL_THEMES } from './theme'
@@ -174,12 +175,21 @@ export function SessionTerminal(props: {
     refit.current = resize
     const observer = new ResizeObserver(resize)
     observer.observe(container)
+    const send = (data: string): void => {
+      window.aiTerminal.sendTerminalInput(startup.current.attachmentId, new TextEncoder().encode(data))
+    }
+    const focusReports = createFocusReports({ reportsEnabled: () => terminal.modes.sendFocusMode, send })
     const input = terminal.onData((data) => {
-      window.aiTerminal.sendTerminalInput(
-        startup.current.attachmentId,
-        new TextEncoder().encode(data)
-      )
+      if (!focusReports.isFocusReport(data)) send(data)
     })
+    const textareaFocus = (): void => focusReports.paneFocus(true)
+    const textareaBlur = (): void => focusReports.paneFocus(false)
+    terminal.textarea?.addEventListener('focus', textareaFocus)
+    terminal.textarea?.addEventListener('blur', textareaBlur)
+    if (terminal.textarea && document.activeElement === terminal.textarea && document.hasFocus()) {
+      focusReports.paneFocus(true)
+    }
+    const stopPresence = window.aiTerminal.onPresence((presence) => focusReports.presence(presence))
     const mouse = createMouseClipboard({
       hasSelection: () => terminal.hasSelection(),
       getSelection: () => terminal.getSelection(),
@@ -398,6 +408,10 @@ export function SessionTerminal(props: {
     return () => {
       removeTestHook()
       props.register(props.startup.sessionId, undefined)
+      stopPresence()
+      terminal.textarea?.removeEventListener('focus', textareaFocus)
+      terminal.textarea?.removeEventListener('blur', textareaBlur)
+      focusReports.dispose()
       input.dispose()
       container.removeEventListener('mousedown', mouseDown, true)
       container.removeEventListener('contextmenu', contextMenu, true)

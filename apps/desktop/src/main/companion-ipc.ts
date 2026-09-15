@@ -10,7 +10,6 @@ import {
 } from '@ai-terminal/protocol'
 import {
   BrowserWindow,
-  Notification,
   clipboard,
   dialog,
   shell,
@@ -217,22 +216,34 @@ export function installCompanionIpcHandlers(ipc: CompanionIpcRegistrar, actions:
 export interface AppEventForwarderOptions {
   client(): CompanionHostClient | undefined
   targets(): WebContents[]
-  /** Called when the owner clicks a desktop notification. */
-  openSession(sessionId: string): void
+  /** True while the owner is present and looking at the session: selected in a focused window. */
+  watching(sessionId: string): boolean
+  notify(notification: { title: string; body: string; sessionId: string }): void
   notificationsEnabled(): boolean
+  /** Workspace and session names, so a notification says where it comes from. */
+  place?(sessionId: string): Promise<string | null>
 }
 
 /**
  * Forwards host events to every allowed renderer and raises one desktop notification per newly opened
- * attention request while no window is focused.
+ * attention request, unless the owner is already looking at that session. A request in a watched session counts as
+ * seen, so it is not sent on to the owner's phone.
  */
 export function createAppEventForwarder(options: AppEventForwarderOptions): {
   forward(message: AppEventMessage): void
   /** Records requests already open at startup so only later ones notify. */
   prime(): Promise<void>
+  /** Call when window focus, the selected session or the owner's presence changes. */
+  watchChanged(): void
 } {
   const notified = new Set<string>()
   let primed = false
+  const markWatchedSeen = async (client: CompanionHostClient, open: AttentionRecord[]): Promise<void> => {
+    for (const request of open) {
+      if (request.seenAt !== null || !options.watching(request.sessionId)) continue
+      await client.request(METHOD_REGISTRY.attentionSeen, { requestId: request.requestId }).catch(() => undefined)
+    }
+  }
   const notifyNewAttention = async (): Promise<void> => {
     const client = options.client()
     if (!client) return
@@ -241,22 +252,22 @@ export function createAppEventForwarder(options: AppEventForwarderOptions): {
       client.request<AppSettings>(METHOD_REGISTRY.settingsGet, {})
     ])
     const open = requests.filter((request) => request.state === 'open')
+    await markWatchedSeen(client, open)
     const fresh = open.filter((request) => !notified.has(`${request.requestId}:${request.revision}`))
     for (const request of open) notified.add(`${request.requestId}:${request.revision}`)
     if (!primed) {
       primed = true
       return
     }
-    const focused = BrowserWindow.getAllWindows().some((window) => window.isFocused())
-    if (focused || !settings.notifications.desktop || !options.notificationsEnabled() || !Notification.isSupported()) return
+    if (!settings.notifications.desktop || !options.notificationsEnabled()) return
     for (const request of fresh) {
-      const notification = new Notification({
-        title: request.kind === 'notice' ? 'BMN' : 'A session needs you',
+      if (options.watching(request.sessionId)) continue
+      const place = await options.place?.(request.sessionId).catch(() => null) ?? null
+      options.notify({
+        title: request.kind === 'notice' ? place ?? 'BMN' : `${place ?? 'A session'} needs you`,
         body: request.title.slice(0, 200),
-        silent: false
+        sessionId: request.sessionId
       })
-      notification.on('click', () => options.openSession(request.sessionId))
-      notification.show()
     }
   }
   return {
@@ -266,6 +277,13 @@ export function createAppEventForwarder(options: AppEventForwarderOptions): {
       }
       if (message.topic === 'attention') void notifyNewAttention().catch(() => undefined)
     },
-    prime: () => notifyNewAttention().catch(() => undefined)
+    prime: () => notifyNewAttention().catch(() => undefined),
+    watchChanged: () => {
+      const client = options.client()
+      if (!client) return
+      void client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {})
+        .then((requests) => markWatchedSeen(client, requests.filter((request) => request.state === 'open')))
+        .catch(() => undefined)
+    }
   }
 }

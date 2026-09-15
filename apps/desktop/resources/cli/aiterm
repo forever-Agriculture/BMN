@@ -1,0 +1,7 @@
+#!/bin/sh
+# MODULE: aiterm - packaged launcher that runs the aiterm CLI on BMN's own runtime, so sessions need no Node install
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+# Linux keeps the executable two levels above resources/bin; macOS keeps it in Contents/MacOS.
+runtime="$here/../../ai-terminal"
+[ -x "$runtime" ] || runtime="$here/../../MacOS/BMN"
+ELECTRON_RUN_AS_NODE=1 exec "$runtime" "$here/aiterm.mjs" "$@"

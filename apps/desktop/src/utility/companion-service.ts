@@ -28,6 +28,7 @@ import { ControlError, ControlServer, type ReceiptRecord } from './control-serve
 import type { DatabaseWorkerClient } from './database-client'
 import type { ApplicationRoots } from './roots'
 import { HostControlError, type SessionIdentity, type SessionManager } from './session-manager'
+import { createAttentionPager } from './attention-pager'
 import { TelegramConnector, maskToken, redactToken, type ConnectorHealth, type InboundReply } from './telegram-connector'
 
 const BRACKETED_PASTE_START = '\x1b[200~'
@@ -149,6 +150,23 @@ export class CompanionService {
   private telegramDetail = 'Telegram is off'
   private sweepTimer: NodeJS.Timeout | undefined
   private readonly now: () => Date
+  private readonly pager = createAttentionPager({
+    current: (requestId) => this.options.database.companion('getAttention', requestId).catch(() => null),
+    send: (record) => {
+      const session = this.knownSessions.get(record.sessionId)
+      const body = record.body ? `\n${record.body}` : ''
+      return this.telegramNotify(
+        record.sessionId,
+        record.requestId,
+        `● ${session?.name ?? 'Session'} needs you (${record.kind})\n${record.title}${body}\n\nReply to this message to answer.`
+      )
+    },
+    schedule: (callback, ms) => {
+      const timer = setTimeout(callback, ms)
+      timer.unref()
+      return () => clearTimeout(timer)
+    }
+  })
 
   constructor(private readonly options: CompanionServiceOptions) {
     this.now = options.now ?? (() => new Date())
@@ -218,6 +236,7 @@ export class CompanionService {
 
   async close(): Promise<void> {
     if (this.sweepTimer) clearInterval(this.sweepTimer)
+    this.pager.close()
     await Promise.allSettled([this.control.close(), this.telegram?.stop()])
     await unlink(join(dirname(this.socketPath), 'owner.token')).catch(() => undefined)
   }
@@ -491,15 +510,7 @@ export class CompanionService {
       ...(p.expiresAt !== undefined ? { expiresAt: new Date(p.expiresAt).toISOString() } : {})
     }, randomUUID(), this.iso())
     this.emit('attention', p.sessionId)
-    if (record.seenAt === null) {
-      const session = this.knownSessions.get(p.sessionId)
-      const body = record.body ? `\n${record.body}` : ''
-      void this.telegramNotify(
-        p.sessionId,
-        record.requestId,
-        `● ${session?.name ?? 'Session'} needs you (${record.kind})\n${record.title}${body}\n\nReply to this message to answer.`
-      )
-    }
+    this.pager.opened(record)
     return record
   }
 

@@ -230,6 +230,15 @@ ipcRenderer.on('aiterm:open-session', (_event, sessionId: unknown) => {
   for (const listener of openSessionListeners) listener(sessionId)
 })
 
+const presenceListeners = new Set<(presence: { away: boolean }) => void>()
+let presence = { away: false }
+
+ipcRenderer.on('aiterm:presence', (_event, message: unknown) => {
+  if (!message || typeof message !== 'object' || typeof (message as { away?: unknown }).away !== 'boolean') return
+  presence = { away: (message as { away: boolean }).away }
+  for (const listener of presenceListeners) listener(presence)
+})
+
 contextBridge.exposeInMainWorld('aiTerminal', {
   security: {
     sandboxed: process.sandboxed === true,
@@ -382,6 +391,14 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   onOpenSession(listener: (sessionId: string) => void): () => void {
     openSessionListeners.add(listener)
     return () => openSessionListeners.delete(listener)
+  },
+  onPresence(listener: (presence: { away: boolean }) => void): () => void {
+    presenceListeners.add(listener)
+    listener(presence)
+    return () => presenceListeners.delete(listener)
+  },
+  reportSelectedSession(sessionId: string | null): void {
+    ipcRenderer.send('aiterm:selected-session', sessionId)
   },
   listArtifacts(sessionId: string | null = null): Promise<ArtifactRecord[]> {
     return invokeBridge('aiterm:artifact:list', { sessionId })

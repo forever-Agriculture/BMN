@@ -28,6 +28,8 @@ import {
   ipcMain,
   Menu,
   MessageChannelMain,
+  Notification,
+  powerMonitor,
   session as electronSession,
   utilityProcess,
   webContents,
@@ -67,6 +69,7 @@ import {
 } from './saved-output-capture-ipc'
 import { hasExplicitApplicationLaunch, parseApplicationLaunchSpec } from './launch-spec'
 import { createAppEventForwarder, installCompanionIpcHandlers } from './companion-ipc'
+import { createPresenceMonitor, readMutterIdleMs } from './presence-monitor'
 import { installVoiceIpcHandlers } from './voice-ipc'
 import {
   attachCreatedSession,
@@ -197,16 +200,50 @@ let selfTestRendererUnavailableTemplate: LaunchTemplateRecord | undefined
 const SELF_TEST_RELEASE_CLOSE_DEADLINE_MS = 5_000
 let selfTestFailureReported = false
 const allowedSenders = new Set<number>()
+/** The session each renderer shows as selected, so a notification skips the session the owner is looking at. */
+const selectedSessions = new Map<number, string | null>()
+const allowedTargets = (): WebContents[] => [...allowedSenders]
+  .map((id) => webContents.fromId(id))
+  .filter((contents): contents is WebContents => contents !== undefined && !contents.isDestroyed())
+const presence = createPresenceMonitor({
+  // X11 sessions report idle time through powerMonitor; on Wayland only the compositor knows.
+  readIdleMs: async () => (await readMutterIdleMs()) ??
+    (process.env.WAYLAND_DISPLAY ? null : powerMonitor.getSystemIdleTime() * 1_000),
+  onChange: (current) => {
+    for (const target of allowedTargets()) target.send('aiterm:presence', current)
+    appEvents.watchChanged()
+  },
+  schedule: (callback, ms) => {
+    const timer = setTimeout(callback, ms)
+    return () => clearTimeout(timer)
+  }
+})
 const appEvents = createAppEventForwarder({
   client: () => hostClient,
-  targets: () => [...allowedSenders]
-    .map((id) => webContents.fromId(id))
-    .filter((contents): contents is WebContents => contents !== undefined),
-  openSession: (sessionId) => {
-    focusExistingWindow(applicationWindow)
-    applicationWindow?.webContents.send('aiterm:open-session', sessionId)
+  targets: allowedTargets,
+  watching: (sessionId) => !presence.current().away && BrowserWindow.getAllWindows().some((window) =>
+    !window.isDestroyed() && window.isFocused() && selectedSessions.get(window.webContents.id) === sessionId
+  ),
+  notify: ({ title, body, sessionId }) => {
+    if (!Notification.isSupported()) return
+    const notification = new Notification({ title, body, silent: false })
+    notification.on('click', () => {
+      focusExistingWindow(applicationWindow)
+      applicationWindow?.webContents.send('aiterm:open-session', sessionId)
+    })
+    notification.show()
   },
-  notificationsEnabled: () => !selfTest
+  notificationsEnabled: () => !selfTest,
+  place: async (sessionId) => {
+    const client = hostClient
+    if (!client) return null
+    for (const workspace of await client.request<WorkspaceRecord[]>(METHOD_REGISTRY.workspaceList, {})) {
+      const sessions = await client.request<SessionRecord[]>(METHOD_REGISTRY.sessionList, { workspaceId: workspace.workspaceId })
+      const session = sessions.find((candidate) => candidate.sessionId === sessionId)
+      if (session) return `${workspace.name} / ${session.name}`
+    }
+    return null
+  }
 })
 
 function appPaths(): { appRoot: string; hostEntry: string; repoRoot: string } {
@@ -232,8 +269,16 @@ function cleanupDevelopmentRoot(): void {
 function hostEnvironment(repoRoot: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
-    AITERM_REPO_ROOT: repoRoot
+    AITERM_REPO_ROOT: repoRoot,
+    AITERM_CLI_PATH: aitermCliPath()
   }
+}
+
+/** Sessions get this file's directory on PATH; packaged builds carry a launcher for it under resources/bin. */
+function aitermCliPath(): string {
+  return app.isPackaged
+    ? join(process.resourcesPath, 'bin', 'aiterm')
+    : join(app.getAppPath(), 'bin', 'aiterm')
 }
 
 async function launchHostWithChannel(): Promise<{
@@ -554,6 +599,11 @@ function installIpcHandlers(): void {
     })
     return adoptRestartedRuntime(id, started, record, dimensions)
   })
+  ipcMain.on('aiterm:selected-session', (event, sessionId: unknown) => {
+    if (!allowedSenders.has(event.sender.id) || event.senderFrame !== event.sender.mainFrame) return
+    selectedSessions.set(event.sender.id, typeof sessionId === 'string' ? sessionId : null)
+    appEvents.watchChanged()
+  })
   bridgeIpc.handle('aiterm:app:quit', (event) => {
     if (!senderIsAllowed(event)) {
       throw new MainIpcError(ERROR_CODES.unauthorized, 'Renderer sender is not authorized')
@@ -587,6 +637,11 @@ function createWindow(
     }
   })
   trackAllowedSender(allowedSenders, window.webContents)
+  const contentsId = window.webContents.id
+  window.webContents.once('destroyed', () => selectedSessions.delete(contentsId))
+  window.on('focus', () => appEvents.watchChanged())
+  // A reloaded renderer starts believing the owner is present; tell it the truth.
+  window.webContents.on('did-finish-load', () => window.webContents.send('aiterm:presence', presence.current()))
   wireLiveWindowLifecycle({
     onDidFinishLoad: (listener) => window.webContents.on('did-finish-load', listener),
     onRendererGone: (listener) =>
@@ -1972,6 +2027,8 @@ if (primaryInstance) void app.whenReady().then(async () => {
     return
   }
 
+  // Automated runs share the owner's desktop session, so their panes must not follow the owner's idle time.
+  if (!rendererTestMode) presence.start()
   try {
     const startup = await initializeApplication(rendererTestMode)
     if (!hostRendererPort) throw new Error('The renderer terminal channel is unavailable')

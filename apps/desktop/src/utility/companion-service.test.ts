@@ -5,13 +5,14 @@ import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ArtifactRecord, BackupManifest, BackupVerifyResult } from '@ai-terminal/protocol'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { METHOD_REGISTRY, type ArtifactRecord, type BackupManifest, type BackupVerifyResult } from '@ai-terminal/protocol'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CompanionService } from './companion-service'
 import type { DatabaseWorkerClient } from './database-client'
 import { COMPANION_OPERATIONS, insertArtifact, listReadyArtifacts, type CompanionOperationName } from './database-companion-store'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
 import type { SessionManager } from './session-manager'
+import type { TelegramConnector } from './telegram-connector'
 import { DEFAULT_WORKSPACE_ID } from './store-schema'
 
 const testRequire = createRequire(import.meta.url)
@@ -156,4 +157,35 @@ describe('artifact reconciliation', () => {
     const row = database.prepare('SELECT state FROM artifact WHERE artifact_id = ?').get(oldest!.artifactId) as { state: string }
     expect(row.state).toBe('missing')
   }, 30_000)
+})
+
+describe('Telegram attention notifications', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('sends a repeated prompt once after it waited unseen, and nothing for a prompt seen at the desk', async () => {
+    vi.useFakeTimers()
+    const sent: string[] = []
+    service['telegram'] = {
+      sendMessage: async (message: string) => {
+        sent.push(message)
+        return { messageId: sent.length }
+      }
+    } as unknown as TelegramConnector
+    service['telegramHealth'] = { state: 'polling', detail: '', lastPollAt: null, lastError: null, rejectedUpdates: 0 }
+    const prompt = { sessionId: 's1', incarnationId: null, kind: 'permission' as const, title: 'Claude wants to use Bash' }
+
+    await service['openAttention']({ ...prompt, requestKey: 'claude:permission' })
+    await service['openAttention']({ ...prompt, requestKey: 'claude:permission' })
+    const seen = await service['openAttention']({ ...prompt, requestKey: 'claude:question' })
+    await service.route(METHOD_REGISTRY.attentionSeen, { requestId: seen.requestId })
+    await vi.advanceTimersByTimeAsync(14_000)
+    expect(sent).toEqual([])
+    await vi.advanceTimersByTimeAsync(2_000)
+    await service['openAttention']({ ...prompt, requestKey: 'claude:permission' })
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    expect(sent).toEqual(['● Session needs you (permission)\nClaude wants to use Bash\n\nReply to this message to answer.'])
+  })
 })
