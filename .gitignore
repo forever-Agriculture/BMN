@@ -1,0 +1,22 @@
+# Secrets, dependencies and generated output.
+.env
+.env.*
+!.env.example
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
+*.log
+/dist/
+/coverage/
+/test-results/
+/playwright-report/
+
+# Local whisper.cpp build from `pnpm run voice:build`.
+/apps/desktop/resources/whisper/
+
+# Local agent and editor state.
+/.claude/
+/.codex/
+/.agents/
+/.opencode/

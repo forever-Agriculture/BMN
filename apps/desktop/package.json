@@ -1,0 +1,37 @@
+{
+  "name": "@ai-terminal/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI-Terminal Electron desktop application",
+  "desktopName": "ai-terminal.desktop",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "node ../../scripts/test/electron-dev.mjs",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false",
+    "build": "electron-vite build",
+    "test:self": "electron . --self-test",
+    "package": "pnpm run build && electron-builder --linux dir"
+  },
+  "dependencies": {
+    "@ai-terminal/protocol": "workspace:*",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/addon-search": "0.16.0",
+    "@xterm/xterm": "6.0.0",
+    "better-sqlite3": "13.0.3",
+    "node-pty": "1.1.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.2",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.7",
+    "@vitejs/plugin-react": "5.2.0",
+    "@xterm/headless": "6.0.0",
+    "electron": "44.3.0",
+    "electron-builder": "26.15.3",
+    "electron-vite": "5.0.0",
+    "typescript": "7.0.2",
+    "vite": "7.3.6"
+  }
+}

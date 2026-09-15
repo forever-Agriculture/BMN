@@ -1,0 +1,173 @@
+/* MODULE: preferences-dialog.css - layout and section styling for PreferencesDialog, scoped under .preferences-dialog */
+
+.preferences-dialog {
+  width: min(720px, calc(100vw - 32px));
+}
+
+.preferences-dialog .preferences-section {
+  padding: 16px 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.preferences-dialog .preferences-section:first-child {
+  padding-top: 0;
+  border-top: none;
+}
+
+.preferences-dialog h3 {
+  margin: 0 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.preferences-dialog .preferences-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 240px) 1fr;
+  gap: 8px 16px;
+  align-items: start;
+  padding: 8px 0;
+}
+
+.preferences-dialog .preferences-row-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.preferences-dialog .preferences-row-control {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.preferences-dialog .preferences-help {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.preferences-dialog .preferences-radio {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.preferences-dialog .preferences-font-size {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.preferences-dialog .preferences-font-size input[type='number'] {
+  width: 4.5em;
+  text-align: center;
+}
+
+.preferences-dialog .preferences-font-preview {
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  white-space: pre;
+  overflow-x: auto;
+}
+
+.preferences-dialog .preferences-status p {
+  margin: 0 0 2px;
+  font-size: 13px;
+  color: var(--text);
+}
+
+.preferences-dialog .preferences-button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.preferences-dialog .preferences-mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  overflow-wrap: anywhere;
+}
+
+.preferences-dialog .preferences-usage {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-x: auto;
+}
+
+.preferences-dialog .preferences-error {
+  margin: 4px 0;
+  color: var(--error);
+  font-size: 12px;
+}
+
+.preferences-dialog .preferences-error ul {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.preferences-dialog .preferences-success {
+  margin: 4px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+@media (max-width: 560px) {
+  .preferences-dialog .preferences-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.preferences-dialog .voice-folder {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.preferences-dialog .voice-models {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.preferences-dialog .voice-model {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 32px;
+}
+
+.preferences-dialog .voice-model-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.preferences-dialog .voice-model-state progress {
+  width: 120px;
+  accent-color: var(--text);
+}

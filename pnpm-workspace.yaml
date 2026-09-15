@@ -1,0 +1,21 @@
+packages:
+  - apps/*
+  - shared/*
+
+engineStrict: true
+saveExact: true
+
+allowBuilds:
+  electron: true
+  node-pty: true
+  better-sqlite3: true
+  esbuild: true
+  electron-builder: true
+  electron-winstaller: false
+
+onlyBuiltDependencies:
+  - electron
+  - node-pty
+  - better-sqlite3
+  - esbuild
+  - electron-builder

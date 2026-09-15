@@ -1,0 +1,209 @@
+import { createRequire } from 'node:module'
+import { DEFAULT_APP_SETTINGS, ERROR_CODES, type ArtifactRecord } from '@ai-terminal/protocol'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import {
+  artifactBytesUsed,
+  closeAttention,
+  createDraft,
+  expireAttention,
+  getReceipt,
+  getSettings,
+  getTelegramMessage,
+  insertArtifact,
+  listArtifacts,
+  listAttention,
+  listDrafts,
+  listProgress,
+  markAttentionSeen,
+  openAttention,
+  putReceipt,
+  putSettingsSection,
+  putTelegramMessage,
+  setArtifactState,
+  updateDraft,
+  upsertProgress
+} from './database-companion-store'
+import { initializeDatabase, type DatabaseConnection } from './database-initialization'
+import { DEFAULT_WORKSPACE_ID } from './store-schema'
+
+const testRequire = createRequire(import.meta.url)
+const BetterSqlite3 = testRequire('better-sqlite3') as new (path: string) => DatabaseConnection
+const now = '2026-09-14T12:00:00.000Z'
+let database: DatabaseConnection
+
+beforeEach(() => {
+  database = new BetterSqlite3(':memory:')
+  initializeDatabase(database, now)
+  database.prepare(
+    `INSERT INTO session(session_id, workspace_id, name, cwd, executable, argv_json, revision, created_at, position)
+     VALUES ('s1', ?, 'One', '/work', '/bin/bash', '[]', 1, ?, 0)`
+  ).run(DEFAULT_WORKSPACE_ID, now)
+})
+
+afterEach(() => database.close())
+
+function artifact(id: string, bytes: number): ArtifactRecord {
+  return {
+    artifactId: id,
+    sessionId: 's1',
+    incarnationId: null,
+    direction: 'input',
+    source: 'owner',
+    originalName: `${id}.png`,
+    mediaType: 'image/png',
+    byteLength: bytes,
+    sha256: 'a'.repeat(64),
+    storedPath: `/store/aa/${id}`,
+    sourcePath: null,
+    state: 'ready',
+    createdAt: now
+  }
+}
+
+describe('companion store', () => {
+  it('records artifacts, their quota use and state', () => {
+    insertArtifact(database, artifact('a1', 10))
+    insertArtifact(database, artifact('a2', 32))
+    expect(artifactBytesUsed(database)).toBe(42)
+    expect(listArtifacts(database, 's1').map((row) => row.artifactId).sort()).toEqual(['a1', 'a2'])
+    expect(setArtifactState(database, 'a1', 'missing').state).toBe('missing')
+    expect(() => setArtifactState(database, 'nope', 'missing')).toThrow(
+      expect.objectContaining({ code: ERROR_CODES.notFound })
+    )
+  })
+
+  it('keeps one open attention per key until a correlated close', () => {
+    const params = { sessionId: 's1', incarnationId: 'i1', requestKey: 'k', kind: 'question' as const, title: 'Pick?' }
+    const first = openAttention(database, params, 'r1', now)
+    expect(openAttention(database, params, 'r2', now).requestId).toBe('r1')
+    const revised = openAttention(database, { ...params, title: 'Pick now?' }, 'r3', now)
+    expect(revised).toMatchObject({ requestId: 'r1', title: 'Pick now?', revision: 2 })
+
+    const seen = markAttentionSeen(database, first.requestId, now)
+    expect(seen).toMatchObject({ state: 'open', seenAt: now })
+
+    const answered = closeAttention(database, { sessionId: 's1', requestKey: 'k' }, 'answered', 'yes', now)
+    expect(answered).toMatchObject({ state: 'answered', resolution: 'yes' })
+    expect(() => closeAttention(database, { requestId: 'r1' }, 'answered', 'again', now)).toThrow(
+      expect.objectContaining({ code: ERROR_CODES.notFound })
+    )
+
+    const reopened = openAttention(database, params, 'r4', now)
+    expect(reopened.requestId).toBe('r4')
+    expect(listAttention(database).map((row) => [row.requestId, row.state])).toEqual([
+      ['r4', 'open'],
+      ['r1', 'answered']
+    ])
+  })
+
+  it('expires only past-due open requests', () => {
+    openAttention(database, {
+      sessionId: 's1', incarnationId: null, requestKey: 'old', kind: 'permission', title: 'Old',
+      expiresAt: '2026-09-14T11:00:00.000Z'
+    }, 'r1', now)
+    openAttention(database, { sessionId: 's1', incarnationId: null, requestKey: 'new', kind: 'notice', title: 'New' }, 'r2', now)
+    expect(expireAttention(database, now)).toBe(1)
+    expect(listAttention(database).find((row) => row.requestId === 'r1')?.state).toBe('expired')
+  })
+
+  it('keeps the newest progress observation per source', () => {
+    const base = {
+      sessionId: 's1', source: 'agent', incarnationId: 'i1', label: 'Story 2.2', detail: null, receivedAt: now
+    }
+    expect(upsertProgress(database, { ...base, state: 'running', observedAt: '2026-09-14T12:00:00.000Z' }).applied).toBe(true)
+    expect(upsertProgress(database, { ...base, state: 'failed', observedAt: '2026-09-14T11:00:00.000Z' }).applied).toBe(false)
+    expect(upsertProgress(database, { ...base, state: 'claimed-done', observedAt: '2026-09-14T12:05:00.000Z' }).applied).toBe(true)
+    expect(listProgress(database)).toEqual([
+      expect.objectContaining({ state: 'claimed-done', observedAt: '2026-09-14T12:05:00.000Z' })
+    ])
+  })
+
+  it('stores control receipts with results and errors', () => {
+    putReceipt(database, { key: 'k1', paramsHash: 'h', state: 'staged' }, now)
+    expect(getReceipt(database, 'k1')).toEqual({ key: 'k1', paramsHash: 'h', state: 'staged' })
+    putReceipt(database, { key: 'k1', paramsHash: 'h', state: 'done', result: { ok: 1 } }, now)
+    expect(getReceipt(database, 'k1')).toEqual({ key: 'k1', paramsHash: 'h', state: 'done', result: { ok: 1 } })
+    expect(getReceipt(database, 'missing')).toBeUndefined()
+  })
+
+  it('creates a draft once per origin and tracks its state', () => {
+    const draft = {
+      draftId: 'd1', sessionId: 's1', origin: 'telegram' as const, originKey: 'tg:5', requestId: null,
+      text: 'hello', artifactId: null, state: 'draft' as const, detail: null
+    }
+    expect(createDraft(database, draft, now).created).toBe(true)
+    expect(createDraft(database, { ...draft, draftId: 'd2' }, now)).toMatchObject({
+      created: false,
+      record: { draftId: 'd1' }
+    })
+    updateDraft(database, 'd1', 'discarded', null, now)
+    expect(listDrafts(database)).toEqual([])
+  })
+
+  it('maps Telegram messages to sessions', () => {
+    putTelegramMessage(database, 77, 's1', 'r1', now)
+    expect(getTelegramMessage(database, 77)).toEqual({ sessionId: 's1', requestId: 'r1' })
+    expect(getTelegramMessage(database, 78)).toBeUndefined()
+  })
+
+  it('validates settings and keeps the stored value on invalid input', () => {
+    expect(getSettings(database)).toEqual(DEFAULT_APP_SETTINGS)
+    putSettingsSection(database, 'appearance', { identity: 'cross', colorMode: 'dark', terminalFontSize: 16 }, now)
+    expect(getSettings(database).appearance).toEqual({ identity: 'cross', colorMode: 'dark', terminalFontSize: 16 })
+    expect(() => putSettingsSection(database, 'appearance', { identity: 'neon', colorMode: 'dark', terminalFontSize: 16 }, now)).toThrow(
+      expect.objectContaining({ code: ERROR_CODES.invalidArgument })
+    )
+    expect(() => putSettingsSection(database, 'appearance', { identity: 'cross', colorMode: 'neon', terminalFontSize: 16 }, now))
+      .toThrow(/Color mode/)
+    expect(() => putSettingsSection(database, 'appearance', { identity: 'cross', colorMode: 'dark', terminalFontSize: 99 }, now)).toThrow()
+    expect(() => putSettingsSection(database, 'telegram', { ...DEFAULT_APP_SETTINGS.telegram, enabled: true }, now))
+      .toThrow(/allowed chat/)
+    expect(getSettings(database).appearance).toEqual({ identity: 'cross', colorMode: 'dark', terminalFontSize: 16 })
+  })
+
+  it('splits a theme stored before identity and color mode were separate choices', () => {
+    expect(getSettings(database).appearance).toEqual({ identity: 'knight', colorMode: 'steel', terminalFontSize: 14 })
+    const store = database.prepare("INSERT OR REPLACE INTO app_setting(key, value_json, updated_at) VALUES ('appearance', ?, ?)")
+    for (const [theme, identity, colorMode] of [
+      ['knight', 'knight', 'steel'],
+      ['cross', 'cross', 'brown'],
+      ['brown', 'cross', 'brown'],
+      ['dark', 'cross', 'dark']
+    ]) {
+      store.run(JSON.stringify({ theme, terminalFontSize: 15 }), now)
+      expect(getSettings(database).appearance).toEqual({ identity, colorMode, terminalFontSize: 15 })
+    }
+    store.run(JSON.stringify({ theme: 'constructor', terminalFontSize: 15 }), now)
+    expect(getSettings(database).appearance).toEqual(DEFAULT_APP_SETTINGS.appearance)
+    putSettingsSection(database, 'appearance', { identity: 'knight', colorMode: 'brown', terminalFontSize: 15 }, now)
+    expect(getSettings(database).appearance).toEqual({ identity: 'knight', colorMode: 'brown', terminalFontSize: 15 })
+  })
+
+  it('validates voice settings', () => {
+    expect(getSettings(database).voice).toEqual({ model: 'base', language: 'auto', modelFolder: null, holdSpaceToTalk: true })
+    putSettingsSection(database, 'voice', { model: 'small', language: 'uk' }, now)
+    expect(getSettings(database).voice).toEqual({ model: 'small', language: 'uk', modelFolder: null, holdSpaceToTalk: true })
+    expect(() => putSettingsSection(database, 'voice', { model: 'large', language: 'uk' }, now)).toThrow(/Base or Small/)
+    expect(() => putSettingsSection(database, 'voice', { model: 'base', language: 'klingon' }, now)).toThrow(/not supported/)
+    expect(getSettings(database).voice).toEqual({ model: 'small', language: 'uk', modelFolder: null, holdSpaceToTalk: true })
+  })
+
+  it('remembers hold Space to talk and keeps it on for sections saved before it existed', () => {
+    putSettingsSection(database, 'voice', { model: 'small', language: 'uk', modelFolder: null, holdSpaceToTalk: false }, now)
+    expect(getSettings(database).voice.holdSpaceToTalk).toBe(false)
+    expect(() => putSettingsSection(database, 'voice', { model: 'small', language: 'uk', holdSpaceToTalk: 'no' }, now)).toThrow(/Hold Space to talk/)
+    expect(getSettings(database).voice.holdSpaceToTalk).toBe(false)
+    putSettingsSection(database, 'voice', { model: 'small', language: 'uk', modelFolder: null }, now)
+    expect(getSettings(database).voice.holdSpaceToTalk).toBe(true)
+  })
+
+  it('keeps the voice model folder only as a normalized absolute path', () => {
+    putSettingsSection(database, 'voice', { model: 'base', language: 'en', modelFolder: '/media/disk/models//whisper/' }, now)
+    expect(getSettings(database).voice).toEqual({ model: 'base', language: 'en', modelFolder: '/media/disk/models/whisper/', holdSpaceToTalk: true })
+    for (const modelFolder of ['models/whisper', '', 42, '/media/\0disk']) {
+      expect(() => putSettingsSection(database, 'voice', { model: 'base', language: 'en', modelFolder }, now)).toThrow(/absolute path/)
+    }
+    putSettingsSection(database, 'voice', { model: 'base', language: 'en', modelFolder: null }, now)
+    expect(getSettings(database).voice.modelFolder).toBeNull()
+  })
+})

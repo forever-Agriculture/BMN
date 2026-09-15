@@ -1,0 +1,12 @@
+# AppArmor template: narrowly grants user namespaces to the two Electron entry points, which Chromium's sandbox needs on
+# Ubuntu 24.04 and later. Replace @REPO_ROOT@ with the absolute path of your checkout; see docs/development.md.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile ai-terminal-electron-dev "@REPO_ROOT@/node_modules/.pnpm/electron@44.3.0*/node_modules/electron/dist/electron" flags=(unconfined) {
+  userns,
+}
+
+profile ai-terminal-electron-packaged "@REPO_ROOT@/apps/desktop/release/linux-unpacked/ai-terminal" flags=(unconfined) {
+  userns,
+}

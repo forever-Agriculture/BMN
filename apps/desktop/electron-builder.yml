@@ -1,0 +1,26 @@
+appId: dev.ai-terminal.desktop
+productName: AI Terminal
+directories:
+  output: release
+files:
+  - out/**/*
+  - '!node_modules/node-pty/prebuilds/**/*'
+  - '!node_modules/node-pty/build/Release/obj.target/**/*'
+  - '!node_modules/better-sqlite3/prebuilds/darwin-*.node'
+  - '!node_modules/better-sqlite3/prebuilds/win32-*.node'
+  - '!node_modules/better-sqlite3/prebuilds/linuxmusl-*.node'
+  - '!node_modules/better-sqlite3/prebuilds/linux-arm64.node'
+asar: true
+asarUnpack:
+  - node_modules/node-pty/build/Release/pty.node
+  - node_modules/node-pty/bin/linux-x64-*/node-pty.node
+  - node_modules/better-sqlite3/prebuilds/linux-x64.node
+# Built by `pnpm run voice:build`; read at runtime from process.resourcesPath/whisper.
+extraResources:
+  - from: resources/whisper
+    to: whisper
+npmRebuild: false
+linux:
+  target:
+    - dir
+  executableName: ai-terminal

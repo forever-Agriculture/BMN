@@ -1,0 +1,35 @@
+{
+  "name": "ai-terminal",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@12.3.4",
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "postinstall": "pnpm run install:electron && node scripts/build/rebuild-native.mjs",
+    "install:electron": "node apps/desktop/node_modules/electron/install.js",
+    "test:unit": "pnpm --filter @ai-terminal/protocol run build && vitest run",
+    "test:electron": "pnpm run build && node scripts/test/electron-self-test.mjs",
+    "test:run": "pnpm run test:unit && pnpm run test:electron",
+    "lint": "eslint apps shared scripts eslint.config.mjs",
+    "typecheck": "tsc -b shared/protocol apps/desktop/tsconfig.node.json apps/desktop/tsconfig.web.json",
+    "build": "pnpm --filter @ai-terminal/protocol run build && pnpm --filter @ai-terminal/desktop run build",
+    "rebuild:native": "pnpm --filter @ai-terminal/desktop rebuild node-pty better-sqlite3 && node scripts/build/rebuild-native.mjs",
+    "package": "node scripts/voice/build-whisper.mjs && pnpm --filter @ai-terminal/desktop run package",
+    "voice:build": "node scripts/voice/build-whisper.mjs",
+    "smoke:packaged": "node scripts/smoke/packaged.mjs",
+    "install:desktop": "node scripts/install/desktop-entry.mjs"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "4.2.0",
+    "@eslint/js": "10.0.1",
+    "@typescript/native": "npm:typescript@7.0.2",
+    "eslint": "10.10.0",
+    "globals": "17.12.0",
+    "playwright": "1.63.0",
+    "typescript": "npm:@typescript/typescript6@6.0.2",
+    "typescript-eslint": "8.70.0",
+    "vitest": "5.0.0"
+  }
+}

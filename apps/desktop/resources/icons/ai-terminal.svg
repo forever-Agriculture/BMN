@@ -1,0 +1,40 @@
+<!-- MODULE: ai-terminal.svg - app icon: a point-down sword whose hilt forms the Cross, in Knight gold on the Steel ground -->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#262c33"/>
+      <stop offset="1" stop-color="#14171b"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f0d38a"/>
+      <stop offset="0.55" stop-color="#d6b25e"/>
+      <stop offset="1" stop-color="#a8843a"/>
+    </linearGradient>
+    <linearGradient id="blade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#f3dc9c"/>
+      <stop offset="0.5" stop-color="#d6b25e"/>
+      <stop offset="0.5" stop-color="#b8923f"/>
+      <stop offset="1" stop-color="#9c7a33"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.36" r="0.55">
+      <stop offset="0" stop-color="#d6b25e" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#d6b25e" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect x="32" y="32" width="448" height="448" rx="104" fill="url(#ground)"/>
+  <rect x="34" y="34" width="444" height="444" rx="102" fill="none" stroke="#3a424c" stroke-width="4"/>
+  <rect x="32" y="32" width="448" height="448" rx="104" fill="url(#glow)"/>
+  <!-- blade -->
+  <path d="M230 196 H282 V378 L256 450 L230 378 Z" fill="url(#blade)"/>
+  <path d="M256 206 V396" stroke="#8a6a2c" stroke-width="5" stroke-linecap="round" opacity="0.55"/>
+  <!-- crossguard -->
+  <rect x="132" y="164" width="248" height="38" rx="19" fill="url(#gold)"/>
+  <circle cx="132" cy="183" r="21" fill="url(#gold)"/>
+  <circle cx="380" cy="183" r="21" fill="url(#gold)"/>
+  <!-- grip -->
+  <rect x="236" y="98" width="40" height="70" rx="7" fill="#6f5424"/>
+  <path d="M236 112 L276 125 M236 130 L276 143 M236 148 L276 161" stroke="#c9a45c" stroke-width="6" stroke-linecap="round"/>
+  <!-- pommel -->
+  <circle cx="256" cy="78" r="30" fill="url(#gold)"/>
+  <circle cx="256" cy="78" r="11" fill="#14171b" opacity="0.35"/>
+</svg>

@@ -1,0 +1,183 @@
+import { spawn } from 'node:child_process'
+import { createRequire } from 'node:module'
+import { isAbsolute, join, resolve } from 'node:path'
+import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
+
+const appDirectory = resolve('apps/desktop')
+const requireFromApp = createRequire(join(appDirectory, 'package.json'))
+const electronBinary = requireFromApp('electron')
+
+const originalRuntime = process.env.XDG_RUNTIME_DIR
+const originalWaylandDisplay = process.env.WAYLAND_DISPLAY
+const waylandDisplay =
+  originalRuntime && originalWaylandDisplay && !isAbsolute(originalWaylandDisplay)
+    ? join(originalRuntime, originalWaylandDisplay)
+    : originalWaylandDisplay
+
+/** Receipt fields the self-test must prove; a receipt missing any of them fails the run. */
+const receiptContract = [
+  ['graceful', (receipt) => receipt.graceful === true],
+  ['inactiveFollowingOutputLayoutPuts', (receipt) => receipt.inactiveFollowingOutputLayoutPuts === 0],
+  ['inactiveFollowingOutputCaptured', (receipt) => receipt.inactiveFollowingOutputCaptured === true],
+  ['launchBackgroundChoiceRecorded', (receipt) => receipt.launchBackgroundChoiceRecorded === 'hide'],
+  [
+    'registeredInvokeChannels',
+    (receipt) =>
+      Array.isArray(receipt.registeredInvokeChannels) &&
+      receipt.registeredInvokeChannels.length > 0 &&
+      new Set(receipt.registeredInvokeChannels).size === receipt.registeredInvokeChannels.length &&
+      receipt.registeredInvokeChannels.every((channel) =>
+        typeof channel === 'string' && channel.startsWith('aiterm:')
+      ) &&
+      JSON.stringify(receipt.registeredInvokeChannels) ===
+        JSON.stringify(receipt.envelopedInvokeChannels)
+  ],
+  [
+    'templateCreatedSession',
+    (receipt) =>
+      receipt.templateCreatedSession?.name === 'Template-picked shell' &&
+      receipt.templateCreatedSession?.executable === '/bin/bash' &&
+      JSON.stringify(receipt.templateCreatedSession?.argv) ===
+        JSON.stringify(['--noprofile', '--norc']) &&
+      typeof receipt.templateCreatedSession?.cwd === 'string' &&
+      receipt.templateCreatedSession.cwd.length > 0 &&
+      receipt.templateCreatedSession?.backgroundChoice === 'stop'
+  ],
+  [
+    'treeSelectionLayoutPut',
+    (receipt) =>
+      typeof receipt.treeSelectionLayoutPut?.sessionId === 'string' &&
+      receipt.treeSelectionLayoutPut.sessionId.length > 0 &&
+      receipt.treeSelectionLayoutPut.layoutSelectedSessionId ===
+        receipt.treeSelectionLayoutPut.sessionId
+  ],
+  [
+    'rendererLaunchUnavailable',
+    (receipt) =>
+      typeof receipt.rendererLaunchUnavailable?.sessionId === 'string' &&
+      receipt.rendererLaunchUnavailable.sessionId.length > 0 &&
+      receipt.rendererLaunchUnavailable?.notice ===
+        'Launch unavailable: Stored arguments are unavailable in the renderer boundary probe.' &&
+      receipt.rendererLaunchUnavailable?.resumeDisabled === true &&
+      receipt.rendererLaunchUnavailable?.resumeTitle ===
+        'Stored arguments are unavailable in the renderer boundary probe.'
+  ],
+  [
+    'rendererUnavailableTemplate',
+    (receipt) =>
+      receipt.rendererUnavailableTemplate?.name === 'Unavailable launch template — unavailable' &&
+      receipt.rendererUnavailableTemplate?.disabled === true &&
+      receipt.rendererUnavailableTemplate?.title ===
+        'Stored arguments are unavailable in the renderer boundary probe.'
+  ],
+  [
+    'rendererStoppedPanelLabel',
+    (receipt) =>
+      typeof receipt.rendererStoppedPanelLabel === 'string' &&
+      receipt.rendererStoppedPanelLabel.startsWith('Interrupted · application quit · signal ') &&
+      receipt.rendererStoppedPanelLabel.includes(' · /')
+  ],
+  [
+    'rendererLiveExitLabel',
+    (receipt) =>
+      typeof receipt.rendererLiveExitLabel === 'string' &&
+      receipt.rendererLiveExitLabel.startsWith('Process exited · code 23 · /')
+  ],
+  ['rendererRecoveredAfterShellExit', (receipt) => receipt.rendererRecoveredAfterShellExit === true],
+  [
+    'rendererInverseTextContrast',
+    (receipt) => typeof receipt.rendererInverseTextContrast === 'number' && receipt.rendererInverseTextContrast >= 4.5
+  ],
+  [
+    'sessionProcessStatus',
+    (receipt) =>
+      receipt.sessionProcessStatus?.beforeRestart === 'live' &&
+      receipt.sessionProcessStatus?.afterApplicationRestart === 'interrupted'
+  ],
+  [
+    'applicationQuitStoppedSession',
+    (receipt) =>
+      receipt.applicationQuitStoppedSession?.beforeRestart?.state === 'interrupted' &&
+      receipt.applicationQuitStoppedSession?.afterRestart?.state === 'interrupted' &&
+      typeof receipt.applicationQuitStoppedSession?.beforeRestart?.detail === 'string' &&
+      receipt.applicationQuitStoppedSession.beforeRestart.detail.startsWith(
+        'application quit · signal '
+      ) &&
+      receipt.applicationQuitStoppedSession.afterRestart.detail ===
+        receipt.applicationQuitStoppedSession.beforeRestart.detail
+  ]
+]
+
+const exitCode = await withTemporaryRoot(temporaryRootContracts.electronSelfTest, async ({ roots }) => {
+  const child = spawn(electronBinary, [appDirectory, '--self-test'], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: {
+      ...process.env,
+      XDG_CONFIG_HOME: roots.config,
+      XDG_DATA_HOME: roots.data,
+      XDG_STATE_HOME: roots.state,
+      XDG_CACHE_HOME: roots.cache,
+      XDG_RUNTIME_DIR: roots.runtime,
+      AITERM_CONFIG_HOME: join(roots.config, 'ai-terminal'),
+      AITERM_DATA_HOME: join(roots.data, 'ai-terminal'),
+      AITERM_STATE_HOME: join(roots.state, 'ai-terminal'),
+      AITERM_RUNTIME_HOME: join(roots.runtime, 'ai-terminal'),
+      ...(waylandDisplay ? { WAYLAND_DISPLAY: waylandDisplay } : {})
+    }
+  })
+  let stdout = ''
+  child.stdout.on('data', (chunk) => {
+    const text = chunk.toString('utf8')
+    stdout += text
+    process.stdout.write(text)
+  })
+  child.stderr.pipe(process.stderr, { end: false })
+  return new Promise((resolveExit, reject) => {
+    let settled = false
+    let receiptSeen = false
+    let receiptError
+    const finish = (result, error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      child.stdout.destroy()
+      child.stderr.destroy()
+      if (error) reject(error)
+      else resolveExit(result)
+    }
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      finish(undefined, new Error('Electron self-test timed out after 90 seconds'))
+    }, 90_000)
+    child.stdout.on('data', () => {
+      const receipt = stdout
+        .split(/\r?\n/)
+        .map((line) => {
+          try {
+            return JSON.parse(line)
+          } catch {
+            return undefined
+          }
+        })
+        .find((value) => value?.selfTest === 'session-roundtrip')
+      if (!receipt || receiptSeen || receiptError) return
+      const unproven = receiptContract.filter(([, holds]) => !holds(receipt)).map(([field]) => field)
+      if (unproven.length > 0) {
+        receiptError = new Error(`Electron self-test receipt did not prove: ${unproven.join(', ')}`)
+      } else {
+        receiptSeen = true
+      }
+      child.kill('SIGKILL')
+    })
+    child.once('error', (error) => {
+      finish(undefined, error)
+    })
+    child.once('exit', (code, signal) => {
+      if (receiptError) finish(undefined, receiptError)
+      else if (receiptSeen) finish(0)
+      else if (signal) finish(undefined, new Error(`Electron self-test terminated by ${signal}`))
+      else finish(code ?? 1)
+    })
+  })
+})
+process.exitCode = exitCode

@@ -1,0 +1,46 @@
+# Telegram
+
+AI Terminal can message you on Telegram when a session needs you, and take your reply back to that
+session. It uses a bot you create and own. It is off by default.
+
+## What it does
+
+- When an agent asks for your attention (`aiterm ask`), the bot sends you the request. Optionally it
+  also tells you when a session's process exits.
+- Reply to that message in Telegram. By default the reply is saved as a **draft** for that exact
+  session, and you send it from the Files panel. If you turn on **Type replies into the session and
+  press Enter**, the reply is typed into the session directly.
+- A message that is not a reply to a notification gets a short answer asking you to reply to one,
+  so text never lands in whichever session happens to be focused.
+- It cannot approve permission prompts or manage sessions remotely. Answer those in the terminal.
+
+## Setup
+
+1. In Telegram, talk to [@BotFather](https://t.me/BotFather), send `/newbot`, and copy the token.
+2. Find your chat ID: send any message to your new bot, then open
+   `https://api.telegram.org/bot<token>/getUpdates` in a browser and read `message.chat.id`. For a
+   private chat it is also your user ID.
+3. In AI Terminal, open **Preferences → Telegram**:
+   - paste the **Bot token** and save it;
+   - enter the **Allowed chat ID** (and, for a group chat, the **Allowed user ID**);
+   - choose **Notify on**: Needs-you requests, or Needs-you requests and session exits;
+   - tick **Enabled** and save.
+4. Check the status line shows it polling, then press **Send test message**.
+
+## Security
+
+- The token is stored in `~/.config/ai-terminal/telegram-bot.token` with mode `600`. It is never
+  shown again in the interface (only a mask) and is removed from error messages.
+- Only updates from the allowed chat are processed. Without an allowed user ID, only a private chat
+  is accepted; with one, only that user's messages are. Everything else is counted as rejected and
+  ignored.
+- The connector uses outbound long polling. Nothing listens for incoming connections.
+
+## One program per bot
+
+Telegram lets only one program poll a bot for updates at a time. If another bot script, bridge or
+second computer uses the same token, both get `409 Conflict` errors and messages go to whichever
+wins. AI Terminal takes a lock so it never runs two connectors on one token itself, but it cannot
+see other programs: use a separate bot for AI Terminal, or stop the other poller.
+
+Sending messages does not conflict, so scripts that only *send* through the same bot keep working.

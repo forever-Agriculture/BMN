@@ -1,0 +1,11 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "noEmit": true,
+    "lib": ["ES2024"],
+    "types": ["node", "electron"]
+  },
+  "include": ["electron.vite.config.ts", "src/main/**/*.ts", "src/preload/**/*.ts", "src/utility/**/*.ts", "src/renderer/src/bridge-error.ts", "src/renderer/src/voice-wav.ts", "src/renderer/src/layout-writer.ts", "src/renderer/src/workspace-layout.ts"],
+  "references": [{ "path": "../../shared/protocol" }]
+}
