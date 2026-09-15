@@ -11,6 +11,7 @@ import {
   splitTreeSession,
   toggleShowArchived,
   toggleWorkspaceExpanded,
+  visibleWorkspaceSessions,
   visibleWorkspaces
 } from './workspace-tree'
 
@@ -30,6 +31,7 @@ const sessions: SessionRecord[] = ['a-2', 'a-1', 'b-1', 'b-2'].map((sessionId, i
   backgroundChoice: null,
   revision: 1,
   createdAt: `2026-09-13T00:00:0${index}Z`,
+  archivedAt: null,
   lastProcess: null
 }))
 
@@ -74,6 +76,13 @@ describe('workspace tree semantics', () => {
     const showing = toggleShowArchived(initial)
     expect(visibleWorkspaces(workspaces, showing.showArchived).map((item) => item.workspaceId))
       .toEqual(['a', 'b', 'c'])
+  })
+
+  it('lists an archived session only while Show archived is on, in its usual place', () => {
+    const withArchived = sessions.map((session) =>
+      session.sessionId === 'a-1' ? { ...session, archivedAt: '2026-09-14T00:00:00Z' } : session)
+    expect(visibleWorkspaceSessions(withArchived, 'a', false).map((session) => session.sessionId)).toEqual(['a-2'])
+    expect(visibleWorkspaceSessions(withArchived, 'a', true).map((session) => session.sessionId)).toEqual(['a-1', 'a-2'])
   })
 
   it('expresses Move up/down as adjacent persisted position swaps', () => {

@@ -202,6 +202,27 @@ function failure(
   }
 }
 
+/**
+ * Applies the owner's archive retention once per host start, before any session can launch. A failure
+ * is logged and never blocks startup; the next start tries again.
+ */
+async function purgeExpiredArchives(
+  database: DatabaseWorkerClient,
+  savedOutputStore: FileSavedOutputStore
+): Promise<void> {
+  try {
+    const purged = await database.purgeExpiredArchives()
+    if (purged.sessionIds.length === 0 && purged.workspaceIds.length === 0) return
+    await savedOutputStore.removeSessions(purged.sessionIds)
+    process.stderr.write(
+      `[ai-terminal] deleted ${purged.sessionIds.length} archived session(s) and ${purged.workspaceIds.length} archived workspace(s)\n`
+    )
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'unknown error'
+    process.stderr.write(`[ai-terminal] archive cleanup failed: ${message.slice(0, 240)}\n`)
+  }
+}
+
 async function start(): Promise<void> {
   const roots = resolveApplicationRoots()
   await ensureApplicationRoots(roots)
@@ -210,13 +231,15 @@ async function start(): Promise<void> {
     join(roots.data, 'state.sqlite3')
   )
   const initialized = await database.initialize()
+  const savedOutputStore = new FileSavedOutputStore(join(roots.state, 'saved-output'))
+  await purgeExpiredArchives(database, savedOutputStore)
   let terminalPort: TerminalPort | undefined
   let handshaken = false
   // The manager's callbacks run before the companion exists, so they read it through a holder.
   const companionHolder: { current?: CompanionService } = {}
   const manager = new SessionManager({
     store: database,
-    savedOutputStore: new FileSavedOutputStore(join(roots.state, 'saved-output')),
+    savedOutputStore,
     spawnPty: (executable, argv, options) =>
       nodePty.spawn!(executable, [...argv], {
         ...options,
@@ -349,6 +372,13 @@ async function start(): Promise<void> {
         const update = typeof params.cwd === 'string'
           ? { ...params, cwd: resolveHomeDirectory(params.cwd) }
           : params
+        if (update.archived === true) {
+          const current = await findStoredSession(database, update.sessionId)
+          if (!current) throw new HostControlError(ERROR_CODES.notFound, 'The session was not found')
+          if (manager.sessionWithCurrentProcessState(current).lastProcess?.state === 'live') {
+            throw new HostControlError(ERROR_CODES.invalidArgument, 'Stop the session before archiving it')
+          }
+        }
         if ('cwd' in update || 'executable' in update || 'argv' in update) {
           const current = await findStoredSession(database, update.sessionId)
           if (!current) throw new HostControlError(ERROR_CODES.notFound, 'The session was not found')

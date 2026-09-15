@@ -155,6 +155,8 @@ describe('protocol surface', () => {
       expectedRevision: 1,
       argv: ['okay', 2]
     })).toBe(false)
+    expect(isSessionUpdateParams({ sessionId: 'session-1', expectedRevision: 1, archived: true })).toBe(true)
+    expect(isSessionUpdateParams({ sessionId: 'session-1', expectedRevision: 1, archived: 'yes' })).toBe(false)
   })
 
   it('owns layout validity including pane uniqueness and selected membership', () => {
@@ -259,6 +261,7 @@ describe('protocol surface', () => {
     backgroundChoice: null,
     revision: 1,
     createdAt: '2026-09-13T00:00:00.000Z',
+    archivedAt: null,
     lastProcess: {
       incarnationId: 'incarnation-1',
       state: 'exited',
@@ -295,6 +298,10 @@ describe('protocol surface', () => {
       launchDisabledReason: 'Stored arguments are unreadable; edit and save this session.'
     })).toBe(true)
     expect(isSessionRecord({ ...sessionRecord, launchDisabledReason: '' })).toBe(false)
+    expect(isSessionRecord({ ...sessionRecord, archivedAt: '2026-09-14T10:00:00.000Z' })).toBe(true)
+    expect(isSessionRecord({ ...sessionRecord, archivedAt: 'yesterday' })).toBe(false)
+    expect(isSessionRecord(Object.fromEntries(Object.entries(sessionRecord).filter(([key]) => key !== 'archivedAt'))))
+      .toBe(false)
     expect(isLaunchTemplateRecord({
       ...templateRecord,
       argv: [],

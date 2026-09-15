@@ -159,11 +159,20 @@ export interface VoiceStatus {
   models: VoiceModelStatus[]
 }
 
+/** Days an archived session or workspace is kept before BMN deletes it; null never deletes. */
+export type ArchiveDeleteAfterDays = 90 | 30 | 10 | null
+export const ARCHIVE_DELETE_AFTER_DAYS: readonly ArchiveDeleteAfterDays[] = Object.freeze([null, 90, 30, 10])
+
+export interface ArchiveSettings {
+  deleteAfterDays: ArchiveDeleteAfterDays
+}
+
 export interface AppSettings {
   appearance: AppearanceSettings
   notifications: NotificationSettings
   telegram: TelegramSettings
   voice: VoiceSettings
+  archive: ArchiveSettings
 }
 
 export const DEFAULT_APP_SETTINGS: AppSettings = Object.freeze({
@@ -176,7 +185,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = Object.freeze({
     notifyOn: 'attention',
     autoSubmitReplies: false
   }),
-  voice: Object.freeze({ model: 'base', language: 'auto', modelFolder: null, holdSpaceToTalk: true })
+  voice: Object.freeze({ model: 'base', language: 'auto', modelFolder: null, holdSpaceToTalk: true }),
+  archive: Object.freeze({ deleteAfterDays: null })
 }) as AppSettings
 
 export type TelegramConnectorState =

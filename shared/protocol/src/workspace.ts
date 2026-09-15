@@ -79,6 +79,8 @@ export interface SessionRecord {
   backgroundChoice: BackgroundChoice | null
   revision: number
   createdAt: string
+  /** Set while the session is archived: hidden from navigation, with all its data kept. */
+  archivedAt: string | null
   lastProcess: SessionProcessStatus | null
   /** Actionable reason persisted launch metadata cannot currently be used. */
   launchDisabledReason?: string
@@ -155,6 +157,7 @@ export interface SessionUpdateParams {
   argv?: string[]
   position?: number
   backgroundChoice?: BackgroundChoice | null
+  archived?: boolean
 }
 
 export interface SessionStopParams {
@@ -229,7 +232,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 const WORKSPACE_RECORD_KEYS = ['workspaceId', 'name', 'defaultCwd', 'position', 'archivedAt', 'revision'] as const
 const SESSION_RECORD_KEYS = [
   'sessionId', 'workspaceId', 'name', 'cwd', 'executable', 'argv', 'position', 'backgroundChoice',
-  'revision', 'createdAt', 'lastProcess'
+  'revision', 'createdAt', 'archivedAt', 'lastProcess'
 ] as const
 const SESSION_RECORD_OPTIONAL_KEYS = ['launchDisabledReason'] as const
 const SESSION_PROCESS_KEYS = ['incarnationId', 'state', 'exitCode', 'signal', 'detail'] as const
@@ -239,7 +242,7 @@ const TEMPLATE_RECORD_KEYS = [
 const TEMPLATE_RECORD_OPTIONAL_KEYS = ['launchDisabledReason'] as const
 const WORKSPACE_UPDATE_FIELDS = ['name', 'defaultCwd', 'position', 'archived'] as const
 const SESSION_UPDATE_FIELDS = [
-  'workspaceId', 'name', 'cwd', 'executable', 'argv', 'position', 'backgroundChoice'
+  'workspaceId', 'name', 'cwd', 'executable', 'argv', 'position', 'backgroundChoice', 'archived'
 ] as const
 const SESSION_STOP_KEYS = ['sessionId', 'incarnationId', 'cause'] as const
 const LAYOUT_KEYS = ['workspaceId', 'selectedSessionId', 'split', 'sessionView', 'revision'] as const
@@ -338,6 +341,7 @@ export function isSessionRecord(value: unknown): value is SessionRecord {
     isBackgroundChoice(value.backgroundChoice) &&
     isRevision(value.revision) &&
     isRfc3339(value.createdAt) &&
+    (value.archivedAt === null || isRfc3339(value.archivedAt)) &&
     (!('launchDisabledReason' in value) ||
       (typeof value.launchDisabledReason === 'string' &&
         value.launchDisabledReason.trim().length > 0)) &&
@@ -426,6 +430,7 @@ export function isSessionUpdateParams(value: unknown): value is SessionUpdatePar
   if ('argv' in value && !isStringArray(value.argv)) return false
   if ('position' in value && !isPosition(value.position)) return false
   if ('backgroundChoice' in value && !isBackgroundChoice(value.backgroundChoice)) return false
+  if ('archived' in value && typeof value.archived !== 'boolean') return false
   return SESSION_UPDATE_FIELDS.some((key) => key in value)
 }
 

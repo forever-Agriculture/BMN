@@ -54,6 +54,16 @@ export function orderedWorkspaceSessions(
     .toSorted((left, right) => left.position - right.position || left.createdAt.localeCompare(right.createdAt) || left.sessionId.localeCompare(right.sessionId))
 }
 
+/** The sessions the sidebar lists: archived ones only while Show archived is on. */
+export function visibleWorkspaceSessions(
+  sessions: readonly SessionRecord[],
+  workspaceId: string,
+  showArchived: boolean
+): SessionRecord[] {
+  return orderedWorkspaceSessions(sessions, workspaceId)
+    .filter((session) => showArchived || session.archivedAt === null)
+}
+
 export function selectTreeWorkspace(
   state: WorkspaceTreeState,
   workspaceId: string

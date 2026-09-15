@@ -1,5 +1,6 @@
 // MODULE: database-companion-store.ts - artifacts, attention, progress, receipts, drafts, Telegram message map and settings rows
 import {
+  ARCHIVE_DELETE_AFTER_DAYS,
   COLOR_MODE_NAMES,
   DEFAULT_APP_SETTINGS,
   ERROR_CODES,
@@ -9,6 +10,7 @@ import {
   VOICE_MODEL_IDS,
   type AppearanceSettings,
   type AppSettings,
+  type ArchiveDeleteAfterDays,
   type ArtifactRecord,
   type ArtifactState,
   type AttentionKind,
@@ -575,19 +577,25 @@ export function validateSettingsSection(section: string, value: unknown): AppSet
         holdSpaceToTalk
       }
     }
+    case 'archive':
+      if (!ARCHIVE_DELETE_AFTER_DAYS.includes(candidate.deleteAfterDays as ArchiveDeleteAfterDays)) {
+        invalid('Delete archived items after must be Never, 90, 30 or 10 days')
+      }
+      return { deleteAfterDays: candidate.deleteAfterDays as ArchiveDeleteAfterDays }
     default:
       return invalid(`Unknown settings section ${section}`)
   }
 }
 
 export function getSettings(database: DatabaseConnection): AppSettings {
-  const rows = database.prepare("SELECT key, value_json FROM app_setting WHERE key IN ('appearance', 'notifications', 'telegram', 'voice')")
+  const rows = database.prepare("SELECT key, value_json FROM app_setting WHERE key IN ('appearance', 'notifications', 'telegram', 'voice', 'archive')")
     .all() as Array<{ key: SettingsSection; value_json: string }>
   const settings: AppSettings = {
     appearance: { ...DEFAULT_APP_SETTINGS.appearance },
     notifications: { ...DEFAULT_APP_SETTINGS.notifications },
     telegram: { ...DEFAULT_APP_SETTINGS.telegram },
-    voice: { ...DEFAULT_APP_SETTINGS.voice }
+    voice: { ...DEFAULT_APP_SETTINGS.voice },
+    archive: { ...DEFAULT_APP_SETTINGS.archive }
   }
   for (const row of rows) {
     try {

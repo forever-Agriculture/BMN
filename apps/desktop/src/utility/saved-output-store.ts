@@ -311,6 +311,28 @@ export class FileSavedOutputStore implements SavedOutputStore {
     await Promise.all(writes)
   }
 
+  /** Removes every saved-output file of the given sessions, readable or not; used when sessions are deleted. */
+  async removeSessions(sessionIds: readonly string[]): Promise<number> {
+    if (sessionIds.length === 0) return 0
+    let names: string[]
+    try {
+      names = await readdir(this.directory)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0
+      throw error
+    }
+    const prefixes = sessionIds.map((sessionId) => `${encoded(sessionId)}--`)
+    const owned = names.filter((name) => prefixes.some((prefix) => name.startsWith(prefix)))
+    await Promise.all(owned.map(async (name) => {
+      try {
+        await this.removeFile(join(this.directory, name))
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
+    }))
+    return owned.length
+  }
+
   private async atomicWrite(name: string, value: unknown): Promise<void> {
     await mkdir(this.directory, { recursive: true, mode: 0o700 })
     const destination = join(this.directory, name)

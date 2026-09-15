@@ -21,6 +21,7 @@ const sessions = ids.map((sessionId, position) => ({
   backgroundChoice: null,
   revision: 1,
   createdAt: '2026-09-13T00:00:00.000Z',
+  archivedAt: null,
   lastProcess: null
 }))
 

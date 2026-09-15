@@ -493,6 +493,14 @@ input[type='radio'] {
   align-self: center;
 }
 
+.session-row.archived .session-name {
+  color: var(--muted);
+}
+
+.session-row.archived .session-directory::before {
+  content: 'archived · ';
+}
+
 .session-row.selected > button:first-child {
   border-left-color: var(--text);
   background: var(--selected);

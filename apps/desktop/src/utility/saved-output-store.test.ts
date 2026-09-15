@@ -186,6 +186,23 @@ describe('file saved-output store', () => {
     await expect(readdir(directory)).resolves.toHaveLength(TERMINAL_SAVED_OUTPUT_RETENTION + 1)
   })
 
+  it('removes every file of deleted sessions and nothing of other sessions', async () => {
+    const { directory, store } = await storeFixture()
+    await store.save(snapshot({ sessionId: 'gone/1' }))
+    await store.save(snapshot({ sessionId: 'gone/1', incarnationId: 'incarnation-2' }))
+    await store.save(snapshot({ sessionId: 'gone/10' }))
+    await store.save(snapshot({ sessionId: 'kept' }))
+    await writeFile(join(directory, `${encodeURIComponent('gone/1')}--broken.snapshot.json`), '{', 'utf8')
+
+    await expect(store.removeSessions(['gone/1'])).resolves.toBe(3)
+
+    expect((await readdir(directory)).toSorted()).toEqual([
+      `${encodeURIComponent('gone/10')}--incarnation-1--view-1.snapshot.json`,
+      'kept--incarnation-1--view-1.snapshot.json'
+    ])
+    await expect(store.removeSessions(['gone/1'])).resolves.toBe(0)
+  })
+
   it('treats an ENOENT unlink race as an already-pruned record', async () => {
     const { directory } = await storeFixture()
     const store = new FileSavedOutputStore(directory, async (path) => {

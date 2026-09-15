@@ -112,7 +112,7 @@ describe('workspace database store', () => {
         executable: '/bin/bash',
         argv: ['--noprofile'],
         position: 3
-      }))()
+      }, now))()
       expect(renamed).toMatchObject({
         sessionId: 'session-a',
         workspaceId: DEFAULT_WORKSPACE_ID,
@@ -124,13 +124,35 @@ describe('workspace database store', () => {
         revision: 2
       })
 
-      const moved = database.transaction(() => updateSession(database, {
+      const archivedAt = '2026-09-14T10:00:00.000Z'
+      const archivedSession = database.transaction(() => updateSession(database, {
         sessionId: 'session-a',
         expectedRevision: renamed.revision,
+        archived: true
+      }, archivedAt))()
+      expect(archivedSession).toEqual({ ...renamed, archivedAt, revision: renamed.revision + 1 })
+      const archivedAgain = database.transaction(() => updateSession(database, {
+        sessionId: 'session-a',
+        expectedRevision: archivedSession.revision,
+        archived: true
+      }, '2026-09-15T10:00:00.000Z'))()
+      expect(archivedAgain.archivedAt).toBe(archivedAt)
+      const restored = database.transaction(() => updateSession(database, {
+        sessionId: 'session-a',
+        expectedRevision: archivedAgain.revision,
+        archived: false
+      }, now))()
+      expect(restored).toEqual({ ...renamed, archivedAt: null, revision: archivedAgain.revision + 1 })
+      expect(database.prepare("SELECT COUNT(*) AS n FROM process_incarnation WHERE session_id = 'session-a'").get())
+        .toEqual({ n: 1 })
+
+      const moved = database.transaction(() => updateSession(database, {
+        sessionId: 'session-a',
+        expectedRevision: restored.revision,
         workspaceId: work.workspaceId,
         position: 1,
         backgroundChoice: 'hide'
-      }))()
+      }, now))()
       expect(moved).toMatchObject({
         sessionId: 'session-a',
         workspaceId: work.workspaceId,
@@ -140,7 +162,7 @@ describe('workspace database store', () => {
         argv: ['--noprofile'],
         position: 1,
         backgroundChoice: 'hide',
-        revision: 3
+        revision: restored.revision + 1
       })
       expect(database.prepare(
         `SELECT session_id, cwd, executable, argv_json
@@ -217,7 +239,7 @@ describe('workspace database store', () => {
         sessionId: 'stopped',
         expectedRevision: 1,
         name: 'Renamed'
-      }))()
+      }, now))()
       expect(updated.lastProcess).toEqual(byId.get('stopped'))
     } finally {
       database.close()
@@ -500,7 +522,7 @@ describe('workspace database store', () => {
         sessionId: 'session-broken',
         expectedRevision: 1,
         name: 'Still blocked'
-      }))()
+      }, now))()
       expect(renamed.launchDisabledReason).toContain('invalid stored arguments')
       expect(database.prepare('SELECT argv_json FROM session WHERE session_id = ?')
         .get('session-broken')).toEqual({ argv_json: '{not-json' })
@@ -509,7 +531,7 @@ describe('workspace database store', () => {
         sessionId: 'session-broken',
         expectedRevision: renamed.revision,
         argv: ['--fixed']
-      }))()
+      }, now))()
       expect(repaired.argv).toEqual(['--fixed'])
       expect(repaired).not.toHaveProperty('launchDisabledReason')
     } finally {

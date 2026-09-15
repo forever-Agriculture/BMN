@@ -252,5 +252,11 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
         updated_at TEXT NOT NULL
       );
     `
+  },
+  {
+    version: 5,
+    sql: `
+      ALTER TABLE session ADD COLUMN archived_at TEXT;
+    `
   }
 ])

@@ -76,6 +76,7 @@ import {
   adjacentPositionUpdates,
   initialWorkspaceTree,
   orderedWorkspaceSessions,
+  visibleWorkspaceSessions,
   selectTreeSession,
   selectTreeWorkspace,
   splitTreeSession,
@@ -163,6 +164,9 @@ function App(): React.JSX.Element {
     [sessions, activeWorkspaceId]
   )
   const sessionIds = activeSessions.map((session) => session.sessionId)
+  const navigableSessionIds = activeSessions
+    .filter((session) => session.archivedAt === null)
+    .map((session) => session.sessionId)
   const home = useMemo(() => inferHome(sessions.map((session) => session.cwd)), [sessions])
   const unresolved = useMemo(() => openRequests(attention), [attention])
 
@@ -315,8 +319,8 @@ function App(): React.JSX.Element {
   )
 
   useEffect(() => {
-    if (!layout || layout.selectedSessionId || sessionIds.length === 0) return
-    const action = selectTreeSession(sessions, sessionIds[0]!)
+    if (!layout || layout.selectedSessionId || navigableSessionIds.length === 0) return
+    const action = selectTreeSession(sessions, navigableSessionIds[0]!)
     if (action) {
       writer.apply(action.workspaceId, (state) => state.selectedSessionId ? state : action.change(state))
     }
@@ -399,6 +403,17 @@ function App(): React.JSX.Element {
     ))
     const byId = new Map(updated.map((record) => [record.sessionId, record]))
     setSessions((current) => current.map((record) => byId.get(record.sessionId) ?? record))
+  }
+
+  /** Archive hides a stopped session and closes its pane; every record it owns is kept for Restore. */
+  const archiveSession = async (record: SessionRecord, archived: boolean): Promise<void> => {
+    const updated = await window.aiTerminal.updateSession({ sessionId: record.sessionId, expectedRevision: record.revision, archived })
+    setSessions((current) => current.map((item) => item.sessionId === updated.sessionId ? updated : item))
+    if (archived) {
+      writer.apply(updated.workspaceId, (state) =>
+        closeLayoutPane(state, updated.sessionId, workspaceSessionIds(sessionsRef.current, updated.workspaceId)))
+    }
+    brief(archived ? `Archived ${updated.name}. Turn on Show archived to restore it.` : `Restored ${updated.name}.`)
   }
 
   const createWorkspace = async (name: string, directory: string): Promise<void> => {
@@ -622,8 +637,8 @@ function App(): React.JSX.Element {
       return
     }
     const shown = new Set(panes.map((pane) => pane.sessionId))
-    const candidates = sessionIds.filter((id) => !shown.has(id))
-    const partner = neighbor(sessionIds, sessionId, 1)
+    const candidates = navigableSessionIds.filter((id) => !shown.has(id))
+    const partner = neighbor(navigableSessionIds, sessionId, 1)
     const chosen = partner && !shown.has(partner) ? partner : candidates[0]
     if (!chosen) {
       brief('Add another session to this workspace to split.')
@@ -686,7 +701,7 @@ function App(): React.JSX.Element {
       }
       case 'session-previous':
       case 'session-next': {
-        const next = neighbor(sessionIds, selectedSessionId, command === 'session-next' ? 1 : -1)
+        const next = neighbor(navigableSessionIds, selectedSessionId, command === 'session-next' ? 1 : -1)
         if (next) openSession(next)
         return
       }
@@ -718,7 +733,11 @@ function App(): React.JSX.Element {
     setMenu((current) => current?.element === element ? null : { element, label, entries })
   }
 
-  const sessionMenuEntries = (session: SessionRecord, index: number, siblings: readonly SessionRecord[]): MenuEntry[] => [
+  const sessionMenuEntries = (session: SessionRecord, index: number, siblings: readonly SessionRecord[]): MenuEntry[] => session.archivedAt ? [
+    { label: 'Session details', onSelect: () => { applyTreeSessionAction(selectTreeSession(sessions, session.sessionId)); setPanel('details') } },
+    'separator',
+    { label: 'Restore session', onSelect: () => void archiveSession(session, false).catch(fail('Session restore failed')) }
+  ] : [
     { label: 'Split beside', onSelect: () => splitBeside(session), shortcut: SHORTCUT_LABELS['split-toggle'] },
     { label: 'Session details', onSelect: () => { applyTreeSessionAction(selectTreeSession(sessions, session.sessionId)); setPanel('details') } },
     { label: 'Edit launch settings', onSelect: () => beginSessionEdit(session) },
@@ -727,7 +746,10 @@ function App(): React.JSX.Element {
     'separator',
     live[session.sessionId]
       ? { label: 'Stop session…', danger: true, onSelect: () => setDialog({ kind: 'stop', session }) }
-      : { label: 'Start again', disabled: !!session.launchDisabledReason, title: session.launchDisabledReason ?? undefined, onSelect: () => relaunchSession(session) }
+      : { label: 'Start again', disabled: !!session.launchDisabledReason, title: session.launchDisabledReason ?? undefined, onSelect: () => relaunchSession(session) },
+    live[session.sessionId]
+      ? { label: 'Archive session', disabled: true, title: 'Stop the session before archiving it', onSelect: () => undefined }
+      : { label: 'Archive session', onSelect: () => void archiveSession(session, true).catch(fail('Session archive failed')) }
   ]
 
   const paneMenuEntries = (session: SessionRecord): MenuEntry[] => [
@@ -769,7 +791,7 @@ function App(): React.JSX.Element {
     const command = (id: string, label: string, run: () => void, extra: Partial<PaletteCommand> = {}): PaletteCommand =>
       ({ id, group: 'Commands', label, run, ...extra })
     return [
-      ...shown.flatMap((workspace) => orderedWorkspaceSessions(sessions, workspace.workspaceId).map((session): PaletteCommand => ({
+      ...shown.flatMap((workspace) => visibleWorkspaceSessions(sessions, workspace.workspaceId, false).map((session): PaletteCommand => ({
         id: `session-${session.sessionId}`,
         group: 'Sessions',
         label: session.name,
@@ -780,7 +802,7 @@ function App(): React.JSX.Element {
         id: `workspace-${workspace.workspaceId}`,
         group: 'Workspaces',
         label: workspace.name,
-        context: ((count) => `${count} ${count === 1 ? 'session' : 'sessions'}`)(orderedWorkspaceSessions(sessions, workspace.workspaceId).length),
+        context: ((count) => `${count} ${count === 1 ? 'session' : 'sessions'}`)(visibleWorkspaceSessions(sessions, workspace.workspaceId, false).length),
         run: () => setTree((current) => selectTreeWorkspace(current, workspace.workspaceId))
       })),
       command('next-attention', 'Go to next request needing you', nextNeedingYou, { shortcut: SHORTCUT_LABELS['attention-next'], context: `${unresolved.length} waiting` }),
@@ -924,7 +946,7 @@ function App(): React.JSX.Element {
           <aside className="workspace-sidebar" aria-label="Workspaces and sessions">
             <nav className="workspace-tree">
               {visibleWorkspaces(workspaces, tree.showArchived).map((workspace, workspaceIndex, ordered) => {
-                const workspaceSessions = orderedWorkspaceSessions(sessions, workspace.workspaceId)
+                const workspaceSessions = visibleWorkspaceSessions(sessions, workspace.workspaceId, tree.showArchived)
                 const isExpanded = tree.expandedWorkspaceIds.has(workspace.workspaceId)
                 return (
                   <section key={workspace.workspaceId} className="workspace-group" aria-label={workspace.name}>
@@ -948,7 +970,7 @@ function App(): React.JSX.Element {
                       const status = sessionStatus(session, !!live[session.sessionId], unresolved)
                       const selected = session.sessionId === selectedSessionId
                       return (
-                        <div className={`session-row${selected ? ' selected' : ''}`} key={session.sessionId}>
+                        <div className={`session-row${selected ? ' selected' : ''}${session.archivedAt ? ' archived' : ''}`} key={session.sessionId}>
                           <button
                             type="button"
                             data-session-id={session.sessionId}

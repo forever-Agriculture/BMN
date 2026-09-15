@@ -548,6 +548,9 @@ export class SessionManager {
     if (stored.launchDisabledReason) {
       throw new HostControlError(ERROR_CODES.ioError, stored.launchDisabledReason)
     }
+    if (stored.archivedAt !== null) {
+      throw new HostControlError(ERROR_CODES.invalidArgument, 'Restore the session before starting it')
+    }
     const knownBinding = this.conversationBindings.get(params.sessionId)
     return knownBinding
       ? this.resumeBinding(params, knownBinding)
@@ -565,6 +568,9 @@ export class SessionManager {
     }
     if (stored.launchDisabledReason) {
       throw new HostControlError(ERROR_CODES.ioError, stored.launchDisabledReason)
+    }
+    if (stored.archivedAt !== null) {
+      throw new HostControlError(ERROR_CODES.invalidArgument, 'Restore the session before starting it')
     }
     const releaseLaunch = this.claimSessionLaunch(params.sessionId)
     try {

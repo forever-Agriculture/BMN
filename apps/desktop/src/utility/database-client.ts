@@ -21,6 +21,7 @@ import type {
   IncarnationExit,
   SessionStore
 } from './session-manager'
+import type { ArchivePurgeResult } from './database-archive-purge'
 import type { CompanionOperationName, CompanionOperations } from './database-companion-store'
 
 type CompanionArguments<Name extends CompanionOperationName> =
@@ -108,6 +109,11 @@ export class DatabaseWorkerClient implements SessionStore {
 
   async clearConversationBinding(sessionId: string): Promise<boolean> {
     return (await this.request('binding-clear', { sessionId })) as boolean
+  }
+
+  /** Deletes sessions and workspaces archived longer than the owner's setting; call only before any launch. */
+  async purgeExpiredArchives(): Promise<ArchivePurgeResult> {
+    return (await this.request('archive-purge')) as ArchivePurgeResult
   }
 
   async listWorkspaces(includeArchived = false): Promise<WorkspaceRecord[]> {

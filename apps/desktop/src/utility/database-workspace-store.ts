@@ -53,6 +53,7 @@ interface SessionRow {
   background_choice: string | null
   revision: number
   created_at: string
+  archived_at: string | null
   last_incarnation_id: string | null
   last_state: string | null
   last_exit_code: number | null
@@ -65,7 +66,7 @@ interface SessionRow {
  * it never claims a process is live — the host liveness owner decides that.
  */
 const SESSION_SELECT = `SELECT s.session_id, s.workspace_id, s.name, s.cwd, s.executable, s.argv_json,
-              s.position, s.background_choice, s.revision, s.created_at,
+              s.position, s.background_choice, s.revision, s.created_at, s.archived_at,
               i.incarnation_id AS last_incarnation_id, i.state AS last_state,
               i.exit_code AS last_exit_code, i.exit_signal AS last_exit_signal,
               i.exit_detail AS last_exit_detail
@@ -190,6 +191,7 @@ function sessionRecord(row: SessionRow): SessionRecord {
         : null,
     revision: row.revision,
     createdAt: row.created_at,
+    archivedAt: row.archived_at,
     lastProcess: recordedProcessStatus(row)
   }
   if (!isSessionRecord(record)) {
@@ -337,7 +339,8 @@ export function listSessions(database: DatabaseConnection, workspaceId: string):
 
 export function updateSession(
   database: DatabaseConnection,
-  params: SessionUpdateParams
+  params: SessionUpdateParams,
+  now: string
 ): SessionRecord {
   if (!isSessionUpdateParams(params)) invalid('Session update parameters are invalid')
   const current = selectSession(database, params.sessionId)
@@ -352,7 +355,7 @@ export function updateSession(
     .prepare(
       `UPDATE session
        SET workspace_id = ?, name = ?, cwd = ?, executable = ?, argv_json = ?,
-           position = ?, background_choice = ?, revision = ?
+           position = ?, background_choice = ?, archived_at = ?, revision = ?
        WHERE session_id = ? AND revision = ?`
     )
     .run(
@@ -363,6 +366,7 @@ export function updateSession(
       params.argv !== undefined ? JSON.stringify(params.argv) : storedArgv.argv_json,
       params.position ?? current.position,
       'backgroundChoice' in params ? params.backgroundChoice ?? null : current.backgroundChoice,
+      'archived' in params ? (params.archived ? current.archivedAt ?? now : null) : current.archivedAt,
       current.revision + 1,
       current.sessionId,
       current.revision

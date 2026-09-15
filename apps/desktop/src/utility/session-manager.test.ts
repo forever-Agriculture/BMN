@@ -323,6 +323,7 @@ class FakeStore implements SessionStore {
         backgroundChoice: created?.backgroundChoice ?? null,
         revision: 1,
         createdAt: created?.startedAt ?? '2026-09-13T00:00:00.000Z',
+        archivedAt: null,
         lastProcess: null
       }
     })
@@ -961,6 +962,33 @@ describe('shell session lifecycle', () => {
         signal: 15,
         detail: null
       })
+    } finally {
+      database.close()
+    }
+  })
+
+  it('refuses to start an archived session until it is restored', async () => {
+    const database = new BetterSqlite3(':memory:')
+    try {
+      initializeDatabase(database, '2026-09-13T09:00:00.000Z')
+      database.prepare(
+        `INSERT INTO session(
+          session_id, workspace_id, name, cwd, executable, argv_json,
+          revision, created_at, position, archived_at
+        ) VALUES ('session-archived', ?, 'Archived', '/workspace', '/bin/bash', '[]', 1, ?, 0, ?)`
+      ).run(DEFAULT_SESSION_CREATION.workspaceId, '2026-09-13T09:00:00.000Z', '2026-09-14T09:00:00.000Z')
+      const spawnPty = vi.fn((): PtyLike => new FakePty())
+      const manager = new SessionManager({
+        store: sqliteSessionStore(database),
+        spawnPty,
+        processStartIdentity: async (pid) => `linux-proc-start:${pid}`,
+        conversationReferenceExists: async () => true,
+        sendTerminalMessage: () => undefined
+      })
+      const refusal = { code: ERROR_CODES.invalidArgument, message: 'Restore the session before starting it' }
+      await expect(manager.resume({ sessionId: 'session-archived', cols: 80, rows: 24 })).rejects.toMatchObject(refusal)
+      await expect(manager.relaunch({ sessionId: 'session-archived', cols: 80, rows: 24 })).rejects.toMatchObject(refusal)
+      expect(spawnPty).not.toHaveBeenCalled()
     } finally {
       database.close()
     }
@@ -2261,6 +2289,7 @@ describe('shell session lifecycle', () => {
       backgroundChoice: null,
       revision: 1,
       createdAt: '2026-09-13T00:00:00.000Z',
+      archivedAt: null,
       lastProcess
     })
     const runningRow = stored({ incarnationId: created.incarnationId, state: 'interrupted', exitCode: null, signal: null, detail: null })

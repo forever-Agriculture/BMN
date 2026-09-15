@@ -7,6 +7,7 @@ import type {
   WorkspaceCreateParams,
   WorkspaceUpdateParams
 } from '@ai-terminal/protocol'
+import { purgeExpiredArchives } from './database-archive-purge'
 import {
   databaseSettings,
   initializeDatabase,
@@ -168,6 +169,8 @@ function handle(request: WorkerRequest): unknown {
         randomUUID(),
         new Date().toISOString()
       ))()
+    case 'archive-purge':
+      return database.transaction(() => purgeExpiredArchives(database, new Date().toISOString()))()
     case 'workspace-update':
       return database.transaction(() => updateWorkspace(
         database,
@@ -177,8 +180,11 @@ function handle(request: WorkerRequest): unknown {
     case 'session-list':
       return listSessions(database, requiredString(params, 'workspaceId'))
     case 'session-update':
-      return database.transaction(() =>
-        updateSession(database, params as unknown as SessionUpdateParams))()
+      return database.transaction(() => updateSession(
+        database,
+        params as unknown as SessionUpdateParams,
+        new Date().toISOString()
+      ))()
     case 'template-list':
       return listTemplates(database)
     case 'template-create':
