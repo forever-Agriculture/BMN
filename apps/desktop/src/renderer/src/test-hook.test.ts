@@ -80,7 +80,8 @@ describe('renderer acceptance hook', () => {
       treeSelection: {
         sessionId: 'session-a',
         layoutSelectedSessionId: 'session-a'
-      }
+      },
+      hiddenPaneSize: { shown: { cols: 80, rows: 24 }, hidden: { cols: 80, rows: 24 } }
     }
     const integration = async () => probe
     installTerminalTestHook({

@@ -19,6 +19,7 @@ import type { ProgressPresentation } from './session-presentation'
 import { agentTag } from './session-presentation'
 import { installTerminalTestHook } from './test-hook'
 import { liveTerminalOptions, startSavedOutputCapture } from './terminal-history'
+import { copyableText, createMouseClipboard } from './terminal-clipboard'
 import { TerminalOutputFlow } from './terminal-output-flow'
 import { applyTerminalExit } from './terminal-exit'
 import { trackTerminalView } from './terminal-view-tracking'
@@ -50,6 +51,7 @@ export interface TerminalController {
   paste(text: string): void
   /** Sends text as if typed on the keyboard, for a key the app held back. */
   type(text: string): void
+  selectAll(): void
   openSearch(): void
   focus(): void
 }
@@ -82,6 +84,8 @@ export function SessionTerminal(props: {
   onMore(anchor: HTMLElement): void
   onAttach(): void
   onPasteImage(): void
+  /** Right-click pastes the clipboard, the way the paste shortcut does. */
+  onPaste(): void
   /** Dictation for this pane, or null when it is not recording. */
   voice: VoiceCapture | null
   /** Another pane is recording or transcribing. */
@@ -97,8 +101,10 @@ export function SessionTerminal(props: {
   const searchInput = useRef<HTMLInputElement>(null)
   const startup = useRef(props.startup)
   const view = useRef(props.view)
+  const visible = useRef(props.visible)
   const onView = useRef(props.onView)
   const onFailure = useRef(props.onFailure)
+  const onPaste = useRef(props.onPaste)
   const activated = useRef(false)
   /** The presented exit status; undefined while the process is running. */
   const [exitStatus, setExitStatus] = useState<string>()
@@ -109,8 +115,10 @@ export function SessionTerminal(props: {
 
   startup.current = props.startup
   view.current = props.view
+  visible.current = props.visible
   onView.current = props.onView
   onFailure.current = props.onFailure
+  onPaste.current = props.onPaste
 
   useEffect(() => {
     const container = element.current
@@ -152,7 +160,9 @@ export function SessionTerminal(props: {
     })
     let ptyDimensions: { cols: number; rows: number } | undefined
     const resize = (): void => {
-      if (!container.offsetParent) return
+      // A hidden pane is parked at 1px, and fitting that would shrink the process's terminal to 2 columns: a TUI
+      // redraws into that width and the wrapped lines stay in history. A hidden pane keeps its size until shown.
+      if (!visible.current || !container.offsetParent) return
       tracking.quietly(() => fit.fit())
       void window.aiTerminal
         .resizeTerminal(props.startup.sessionId, terminal.cols, terminal.rows)
@@ -170,6 +180,25 @@ export function SessionTerminal(props: {
         new TextEncoder().encode(data)
       )
     })
+    const mouse = createMouseClipboard({
+      hasSelection: () => terminal.hasSelection(),
+      getSelection: () => terminal.getSelection(),
+      mouseTracking: () => terminal.modes.mouseTrackingMode !== 'none',
+      copy: (text) => {
+        void window.aiTerminal.writeClipboardText(text)
+          .catch((error: unknown) => onFailure.current(failureDetail(error, 'Copy failed')))
+      },
+      paste: () => onPaste.current()
+    })
+    const mouseDown = (event: MouseEvent): void => mouse.mouseDown(event)
+    // The window hears the release after xterm's document listener has finished the selection, even outside the pane.
+    const mouseUp = (event: MouseEvent): void => mouse.mouseUp(event)
+    const contextMenu = (event: MouseEvent): void => {
+      if (mouse.contextMenu(event)) event.preventDefault()
+    }
+    container.addEventListener('mousedown', mouseDown, true)
+    container.addEventListener('contextmenu', contextMenu, true)
+    window.addEventListener('mouseup', mouseUp)
     const controller: TerminalController = {
       output: (message) => {
         if (message.attachmentId !== startup.current.attachmentId) return
@@ -192,12 +221,13 @@ export function SessionTerminal(props: {
       },
       capture: () => capture.captureNow(),
       scrollToBottom: () => tracking.quietly(() => terminal.scrollToBottom()),
-      selection: () => terminal.getSelection(),
+      selection: () => copyableText(terminal.getSelection()),
       paste: (text) => {
         terminal.paste(text)
         terminal.focus()
       },
       type: (text) => terminal.input(text, true),
+      selectAll: () => terminal.selectAll(),
       openSearch: () => {
         setSearchOpen(true)
         requestAnimationFrame(() => searchInput.current?.select())
@@ -306,6 +336,7 @@ export function SessionTerminal(props: {
             return value === 'hide' || value === 'stop' ? value : null
           })()
         }
+        const shownSize = { cols: terminal.cols, rows: terminal.rows }
         templateForm.requestSubmit()
         console.warn('[ai-terminal] renderer behavioural integration: template form submitted')
         const knownSessionIds = new Set(sessionsBeforeTemplate.map((session) => session.sessionId))
@@ -321,6 +352,11 @@ export function SessionTerminal(props: {
           )
         })
         console.warn('[ai-terminal] renderer behavioural integration: template session created')
+        // The new session took this pane. Let its resize observer and the resize request settle while hidden.
+        await waitFor(() => section.current?.classList.contains('session-terminal-hidden') ? true : undefined)
+        await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+        await new Promise<void>((resolve) => setTimeout(resolve, 250))
+        const hiddenSize = { cols: terminal.cols, rows: terminal.rows }
         const sessionButton = await waitFor(() => [...document.querySelectorAll<HTMLButtonElement>(
           '.session-row > button[data-session-id]'
         )].find((button) => button.dataset.sessionId === props.startup.sessionId))
@@ -348,7 +384,8 @@ export function SessionTerminal(props: {
           treeSelection: {
             sessionId: props.startup.sessionId,
             layoutSelectedSessionId: selectedLayout.selectedSessionId
-          }
+          },
+          hiddenPaneSize: { shown: shownSize, hidden: hiddenSize }
         }
       }
     })
@@ -362,6 +399,9 @@ export function SessionTerminal(props: {
       removeTestHook()
       props.register(props.startup.sessionId, undefined)
       input.dispose()
+      container.removeEventListener('mousedown', mouseDown, true)
+      container.removeEventListener('contextmenu', contextMenu, true)
+      window.removeEventListener('mouseup', mouseUp)
       tracking.dispose()
       observer.disconnect()
       capture.dispose()

@@ -22,7 +22,14 @@ export function filterCommands(commands: readonly PaletteCommand[], query: strin
   })
 }
 
-export function CommandPalette(props: { commands: PaletteCommand[]; onClose(): void }): React.JSX.Element {
+export function CommandPalette(props: {
+  commands: PaletteCommand[]
+  onClose(): void
+  /** A narrower chooser built on the palette names its own purpose. */
+  label?: string
+  searchLabel?: string
+  placeholder?: string
+}): React.JSX.Element {
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
   const results = useMemo(() => filterCommands(props.commands, query), [props.commands, query])
@@ -37,13 +44,13 @@ export function CommandPalette(props: { commands: PaletteCommand[]; onClose(): v
 
   let lastGroup = ''
   return (
-    <Dialog label="Command palette" className="command-palette" onClose={props.onClose}>
+    <Dialog label={props.label ?? 'Command palette'} className="command-palette" onClose={props.onClose}>
       <input
         autoFocus
-        aria-label="Search commands, workspaces and sessions"
+        aria-label={props.searchLabel ?? 'Search commands, workspaces and sessions'}
         aria-controls="palette-results"
         aria-activedescendant={results[activeIndex] ? `palette-${results[activeIndex].id}` : undefined}
-        placeholder="Type a command, workspace or session"
+        placeholder={props.placeholder ?? 'Type a command, workspace or session'}
         value={query}
         onChange={(event) => {
           setQuery(event.target.value)

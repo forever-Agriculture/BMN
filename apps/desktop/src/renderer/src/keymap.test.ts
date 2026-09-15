@@ -20,6 +20,7 @@ describe('app keymap', () => {
     expect(resolveShortcut(key({ ctrlKey: true, shiftKey: true, code: 'KeyP', key: 'P' }))).toBe('palette')
     expect(resolveShortcut(key({ ctrlKey: true, shiftKey: true, code: 'KeyC', key: 'C' }))).toBe('copy')
     expect(resolveShortcut(key({ ctrlKey: true, shiftKey: true, code: 'KeyV', key: 'V' }))).toBe('paste')
+    expect(resolveShortcut(key({ ctrlKey: true, shiftKey: true, code: 'KeyA', key: 'A' }))).toBe('select-all')
     expect(resolveShortcut(key({ ctrlKey: true, shiftKey: true, code: 'KeyF', key: 'F' }))).toBe('search')
     expect(resolveShortcut(key({ ctrlKey: true, shiftKey: true, code: 'Enter', key: 'Enter' }))).toBe('split-toggle')
     expect(resolveShortcut(key({ ctrlKey: true, shiftKey: true, code: 'KeyZ', key: 'Z' }))).toBe('focus-toggle')
@@ -31,6 +32,15 @@ describe('app keymap', () => {
     expect(resolveShortcut(key({ ctrlKey: true, shiftKey: true, code: 'KeyC', key: 'С' }))).toBe('copy')
   })
 
+  it('takes the agterm paste keys and the pane switch', () => {
+    expect(resolveShortcut(key({ ctrlKey: true, code: 'KeyV', key: 'v' }))).toBe('paste')
+    expect(resolveShortcut(key({ ctrlKey: true, code: 'KeyV', key: 'м' }))).toBe('paste')
+    expect(resolveShortcut(key({ shiftKey: true, code: 'Insert', key: 'Insert' }))).toBe('paste')
+    expect(resolveShortcut(key({ code: 'Insert', key: 'Insert' }))).toBeNull()
+    expect(resolveShortcut(key({ ctrlKey: true, code: 'Tab', key: 'Tab' }))).toBe('pane-other')
+    expect(resolveShortcut(key({ ctrlKey: true, shiftKey: true, code: 'Tab', key: 'Tab' }))).toBe('pane-other')
+  })
+
   it('maps font size chords', () => {
     expect(resolveShortcut(key({ ctrlKey: true, key: '=', code: 'Equal' }))).toBe('font-increase')
     expect(resolveShortcut(key({ ctrlKey: true, shiftKey: true, key: '+', code: 'Equal' }))).toBe('font-increase')
@@ -39,13 +49,13 @@ describe('app keymap', () => {
   })
 
   it('leaves terminal keys to the process', () => {
-    for (const code of ['KeyC', 'KeyD', 'KeyL', 'KeyR', 'KeyZ', 'KeyO', 'KeyV']) {
+    for (const code of ['KeyC', 'KeyD', 'KeyL', 'KeyR', 'KeyZ', 'KeyO', 'KeyA']) {
       expect(resolveShortcut(key({ ctrlKey: true, code, key: code.slice(3).toLowerCase() }))).toBeNull()
     }
     expect(resolveShortcut(key({ altKey: true, ctrlKey: true, shiftKey: true, code: 'KeyC', key: 'C' }))).toBeNull()
     expect(resolveShortcut(key({ key: 'Escape', code: 'Escape' }))).toBeNull()
     expect(resolveShortcut(key({ shiftKey: true, key: 'Tab', code: 'Tab' }))).toBeNull()
-    expect(resolveShortcut(key({ ctrlKey: true, shiftKey: true, code: 'KeyA', key: 'A' }))).toBeNull()
+    expect(resolveShortcut(key({ altKey: true, shiftKey: true, code: 'Insert', key: 'Insert' }))).toBeNull()
   })
 
   it('recognizes modifier-only presses', () => {

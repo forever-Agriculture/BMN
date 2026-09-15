@@ -35,6 +35,11 @@ export interface TerminalIntegrationProbe {
     sessionId: string
     layoutSelectedSessionId: string | null
   }
+  /** The probing pane's terminal grid while shown, and after another session took its pane and hid it. */
+  hiddenPaneSize: {
+    shown: { cols: number; rows: number }
+    hidden: { cols: number; rows: number }
+  }
 }
 
 export interface TerminalTestHook {

@@ -48,6 +48,7 @@ import {
   openRequests,
   progressPresentation,
   sessionStatus,
+  splitCandidates,
   windowTitle
 } from './session-presentation'
 import { sessionProcessLabel } from './session-status'
@@ -89,6 +90,8 @@ import {
 
 type ShellDialog =
   | { kind: 'palette' }
+  /** Chooses the session for a second pane beside `sessionId`. */
+  | { kind: 'split-picker'; sessionId: string | null }
   | { kind: 'preferences' }
   | { kind: 'new-workspace' }
   | { kind: 'rename-workspace'; workspace: WorkspaceRecord }
@@ -122,6 +125,8 @@ function App(): React.JSX.Element {
   const [sessionForm, setSessionForm] = useState<SessionLaunchForm>(INITIAL_SESSION_FORM)
   const [pickedTemplateId, setPickedTemplateId] = useState('')
   const [editingSessionId, setEditingSessionId] = useState<string>()
+  /** The new-session form was opened from Split: the created session opens beside the current pane. */
+  const [newSessionSplit, setNewSessionSplit] = useState(false)
   const [formError, setFormError] = useState<string>()
   const [unread, setUnread] = useState<Record<string, string>>({})
   const [artifacts, setArtifacts] = useState<ArtifactRecord[]>([])
@@ -282,8 +287,9 @@ function App(): React.JSX.Element {
       if (!command || document.querySelector('dialog[open]')) return
       const target = event.target instanceof HTMLElement ? event.target : null
       const inTerminal = !!target?.closest('.terminal-surface')
-      // Copy and paste chords keep their text-field meaning outside the terminal.
-      if ((command === 'copy' || command === 'paste') && !inTerminal && target?.matches('input, textarea, select')) return
+      // Clipboard and select-all keys keep their text-field meaning outside the terminal.
+      const textKey = command === 'copy' || command === 'paste' || command === 'select-all'
+      if (textKey && !inTerminal && target?.matches('input, textarea, select')) return
       event.preventDefault()
       event.stopPropagation()
       commandRef.current(command)
@@ -325,6 +331,10 @@ function App(): React.JSX.Element {
       writer.apply(action.workspaceId, (state) => state.selectedSessionId ? state : action.change(state))
     }
   }, [activeWorkspaceId, sessions.length])
+
+  useEffect(() => {
+    if (panel !== 'details') setNewSessionSplit(false)
+  }, [panel])
 
   const selectedSessionName = sessions.find((session) => session.sessionId === selectedSessionId)?.name ?? null
   useEffect(() => {
@@ -426,11 +436,12 @@ function App(): React.JSX.Element {
     beginNewSession(created)
   }
 
-  const beginNewSession = (workspace: WorkspaceRecord | undefined): void => {
+  const beginNewSession = (workspace: WorkspaceRecord | undefined, split = false): void => {
     if (workspace && workspace.workspaceId !== activeWorkspaceId) {
       setTree((current) => selectTreeWorkspace(current, workspace.workspaceId))
     }
     setEditingSessionId(undefined)
+    setNewSessionSplit(split)
     setPickedTemplateId('')
     const recentCwd = sessions.findLast((session) => session.workspaceId === workspace?.workspaceId)?.cwd
     setSessionForm({ ...INITIAL_SESSION_FORM, cwd: workspace?.defaultCwd ?? recentCwd ?? home ?? INITIAL_SESSION_FORM.cwd })
@@ -441,6 +452,7 @@ function App(): React.JSX.Element {
   const beginSessionEdit = (session: SessionRecord): void => {
     applyTreeSessionAction(selectTreeSession(sessions, session.sessionId))
     setEditingSessionId(session.sessionId)
+    setNewSessionSplit(false)
     setPickedTemplateId('')
     setSessionForm(sessionLaunchForm(session))
     setFormError(undefined)
@@ -628,6 +640,7 @@ function App(): React.JSX.Element {
     void window.aiTerminal.writeClipboardText(text).then(() => announce('Copied selection.')).catch(fail('Copy failed'))
   }
 
+  /** Split closes the other pane of a split, or asks which session opens beside this one. */
   const toggleSplit = (sessionId: string | null = selectedSessionId): void => {
     if (!layout || !activeWorkspaceId) return
     const panes = layout.split.panes
@@ -636,15 +649,57 @@ function App(): React.JSX.Element {
       if (other) writer.apply(activeWorkspaceId, (state) => closeLayoutPane(state, other.sessionId, sessionIds))
       return
     }
-    const shown = new Set(panes.map((pane) => pane.sessionId))
-    const candidates = navigableSessionIds.filter((id) => !shown.has(id))
-    const partner = neighbor(navigableSessionIds, sessionId, 1)
-    const chosen = partner && !shown.has(partner) ? partner : candidates[0]
-    if (!chosen) {
-      brief('Add another session to this workspace to split.')
+    setDialog({ kind: 'split-picker', sessionId })
+  }
+
+  /** Opens the chosen session in the second pane and moves the keyboard there. */
+  const splitWith = (sessionId: string): void => {
+    const record = sessionsRef.current.find((session) => session.sessionId === sessionId)
+    const target = record ? writer.layouts()[record.workspaceId] : undefined
+    if (!record || !target) {
+      brief('That session no longer exists.')
       return
     }
-    applyTreeSessionAction(splitTreeSession(sessions, chosen))
+    if (target.split.panes.length >= 2 && !target.split.panes.some((pane) => pane.sessionId === sessionId)) {
+      brief('This workspace is already split. Close the split first.')
+      return
+    }
+    applyTreeSessionAction(splitTreeSession(sessionsRef.current, sessionId))
+    requestAnimationFrame(() => controllers.current.get(sessionId)?.focus())
+  }
+
+  const splitPickerCommands = (sessionId: string | null): PaletteCommand[] => {
+    const shown = new Set((layout?.split.panes ?? []).map((pane) => pane.sessionId))
+    return [
+      ...splitCandidates(navigableSessionIds, shown, sessionId).flatMap((id): PaletteCommand[] => {
+        const record = sessions.find((session) => session.sessionId === id)
+        return record ? [{
+          id: `split-${id}`,
+          group: 'Sessions',
+          label: record.name,
+          context: `${agentTag(record.executable)} · ${displayPath(record.cwd, home)} · ${live[id] ? 'running' : 'stopped'}`,
+          run: () => splitWith(id)
+        }] : []
+      }),
+      {
+        id: 'split-new-session',
+        group: 'Commands',
+        label: 'New session beside…',
+        context: activeWorkspace?.name,
+        disabled: !activeWorkspace,
+        run: () => beginNewSession(activeWorkspace, true)
+      }
+    ]
+  }
+
+  /** Moves selection and the keyboard to the other pane of a split. */
+  const focusOtherPane = (): void => {
+    const other = layout?.split.panes.find((pane) => pane.sessionId !== selectedSessionId)
+    if (!layout || layout.split.panes.length < 2 || !other) {
+      brief('Split the view to switch panes.')
+      return
+    }
+    openSession(other.sessionId)
   }
 
   const splitBeside = (session: SessionRecord): void => {
@@ -709,11 +764,16 @@ function App(): React.JSX.Element {
       case 'palette': return setDialog({ kind: 'palette' })
       case 'copy': return copySelection(selectedSessionId)
       case 'paste': return pasteClipboard(selectedSessionId)
+      case 'select-all':
+        if (controller) controller.selectAll()
+        else brief('Select all needs a running terminal.')
+        return
       case 'search':
         if (controller) controller.openSearch()
         else brief('Search needs a running terminal.')
         return
       case 'split-toggle': return toggleSplit()
+      case 'pane-other': return focusOtherPane()
       case 'focus-toggle': return setFocusMode((value) => !value)
       case 'font-increase': return changeFontSize(1)
       case 'font-decrease': return changeFontSize(-1)
@@ -757,6 +817,7 @@ function App(): React.JSX.Element {
     { label: 'Search output', shortcut: SHORTCUT_LABELS.search, onSelect: () => controllers.current.get(session.sessionId)?.openSearch() },
     { label: 'Copy selection', shortcut: SHORTCUT_LABELS.copy, onSelect: () => copySelection(session.sessionId) },
     { label: 'Paste', shortcut: SHORTCUT_LABELS.paste, onSelect: () => pasteClipboard(session.sessionId) },
+    { label: 'Select all', shortcut: SHORTCUT_LABELS['select-all'], onSelect: () => controllers.current.get(session.sessionId)?.selectAll() },
     { label: 'Send next key to terminal', shortcut: SHORTCUT_LABELS['send-next-key'], onSelect: () => runCommand('send-next-key') },
     {
       label: layout?.split.orientation === 'stacked' ? 'Arrange side by side' : 'Arrange stacked',
@@ -808,7 +869,8 @@ function App(): React.JSX.Element {
       command('next-attention', 'Go to next request needing you', nextNeedingYou, { shortcut: SHORTCUT_LABELS['attention-next'], context: `${unresolved.length} waiting` }),
       command('new-workspace', 'New workspace…', () => setDialog({ kind: 'new-workspace' })),
       command('new-session', 'New session…', () => beginNewSession(activeWorkspace), { disabled: !activeWorkspace, context: activeWorkspace?.name }),
-      command('split', (layout?.split.panes.length ?? 0) >= 2 ? 'Close split' : 'Split view', () => toggleSplit(), { shortcut: SHORTCUT_LABELS['split-toggle'] }),
+      command('split', (layout?.split.panes.length ?? 0) >= 2 ? 'Close split' : 'Split view…', () => toggleSplit(), { shortcut: SHORTCUT_LABELS['split-toggle'] }),
+      command('pane-other', 'Switch to other pane', focusOtherPane, { shortcut: SHORTCUT_LABELS['pane-other'], disabled: (layout?.split.panes.length ?? 0) < 2 }),
       command('focus', focusMode ? 'Leave focus mode' : 'Focus mode', () => setFocusMode((value) => !value), { shortcut: SHORTCUT_LABELS['focus-toggle'] }),
       command('search', 'Search terminal output', () => runCommand('search'), { shortcut: SHORTCUT_LABELS.search, disabled: !selectedSessionId || !live[selectedSessionId] }),
       command('files', panel === 'files' ? 'Close files' : 'Show files', () => setPanel(panel === 'files' ? null : 'files')),
@@ -1046,6 +1108,7 @@ function App(): React.JSX.Element {
                 onMore={(anchor) => record && openMenu(anchor, `${record.name} actions`, paneMenuEntries(record))}
                 onAttach={() => attachFiles(terminalStartup.sessionId)}
                 onPasteImage={() => pasteImage(terminalStartup.sessionId)}
+                onPaste={() => pasteClipboard(terminalStartup.sessionId)}
                 voice={voice?.sessionId === terminalStartup.sessionId ? voice : null}
                 voiceBusy={!!voice && voice.sessionId !== terminalStartup.sessionId}
                 onSpeak={() => toggleVoice(terminalStartup.sessionId)}
@@ -1236,7 +1299,12 @@ function App(): React.JSX.Element {
                     )
                     setSessions((current) => [...current, created.session])
                     setLive((current) => ({ ...current, [created.session.sessionId]: created.startup }))
-                    applyTreeSessionAction(selectTreeSession([...sessions, created.session], created.session.sessionId))
+                    const withCreated = [...sessions, created.session]
+                    const beside = newSessionSplit && (writer.layouts()[activeWorkspaceId]?.split.panes.length ?? 0) < 2
+                    applyTreeSessionAction(beside
+                      ? splitTreeSession(withCreated, created.session.sessionId)
+                      : selectTreeSession(withCreated, created.session.sessionId))
+                    setNewSessionSplit(false)
                     setPanel(null)
                     brief(`Started ${created.session.name}.`)
                   } catch (error) {
@@ -1246,7 +1314,9 @@ function App(): React.JSX.Element {
                   }
                 })()
               }}>
-                <strong>{editingSessionId ? 'Edit session' : `New session in ${activeWorkspace?.name ?? 'workspace'}`}</strong>
+                <strong>{editingSessionId
+                  ? 'Edit session'
+                  : `New ${newSessionSplit ? 'split ' : ''}session in ${activeWorkspace?.name ?? 'workspace'}`}</strong>
                 <label>Template
                   <select aria-label="Launch template" value={pickedTemplateId} onChange={(event) => {
                     const id = event.target.value
@@ -1316,6 +1386,15 @@ function App(): React.JSX.Element {
       <div className="live-announcer" aria-live="polite">{announcement}</div>
       {menu ? <PopupMenu anchor={menu} onClose={() => setMenu(null)} /> : null}
       {dialog?.kind === 'palette' ? <CommandPalette commands={paletteCommands()} onClose={() => setDialog(null)} /> : null}
+      {dialog?.kind === 'split-picker' ? (
+        <CommandPalette
+          label="Split with"
+          searchLabel="Choose the session for the second pane"
+          placeholder="Open beside this pane…"
+          commands={splitPickerCommands(dialog.sessionId)}
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
       {dialog?.kind === 'preferences' ? (
         <PreferencesDialog settings={settings} onSettings={setSettings} onClose={() => setDialog(null)} />
       ) : null}

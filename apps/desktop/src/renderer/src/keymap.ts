@@ -9,8 +9,10 @@ export type AppCommand =
   | 'palette'
   | 'copy'
   | 'paste'
+  | 'select-all'
   | 'search'
   | 'split-toggle'
+  | 'pane-other'
   | 'focus-toggle'
   | 'font-increase'
   | 'font-decrease'
@@ -36,9 +38,11 @@ export const SHORTCUT_LABELS: Readonly<Record<AppCommand, string>> = Object.free
   'attention-next': 'Ctrl Shift U',
   palette: 'Ctrl Shift P',
   copy: 'Ctrl Shift C',
-  paste: 'Ctrl Shift V',
+  paste: 'Ctrl V',
+  'select-all': 'Ctrl Shift A',
   search: 'Ctrl Shift F',
   'split-toggle': 'Ctrl Shift Enter',
+  'pane-other': 'Ctrl Tab',
   'focus-toggle': 'Ctrl Shift Z',
   'font-increase': 'Ctrl +',
   'font-decrease': 'Ctrl −',
@@ -56,6 +60,7 @@ const CTRL_SHIFT_CODES: Readonly<Record<string, AppCommand>> = Object.freeze({
   KeyP: 'palette',
   KeyC: 'copy',
   KeyV: 'paste',
+  KeyA: 'select-all',
   KeyF: 'search',
   Enter: 'split-toggle',
   NumpadEnter: 'split-toggle',
@@ -65,11 +70,14 @@ const CTRL_SHIFT_CODES: Readonly<Record<string, AppCommand>> = Object.freeze({
 })
 
 /**
- * Resolves an app command. Only Ctrl+Shift chords and Ctrl +/−/0 belong to the app; plain Ctrl keys,
- * Alt sequences, Tab and Escape stay with the terminal process.
+ * Resolves an app command. Ctrl+Shift chords, Ctrl +/−/0, Ctrl+Tab and the agterm paste keys (Ctrl+V, Shift+Insert)
+ * belong to the app; other plain Ctrl keys, Alt sequences, Tab and Escape stay with the terminal process.
  */
 export function resolveShortcut(event: ShortcutEvent): AppCommand | null {
-  if (!event.ctrlKey || event.altKey || event.metaKey) return null
+  if (event.altKey || event.metaKey) return null
+  if (!event.ctrlKey) return event.shiftKey && event.code === 'Insert' ? 'paste' : null
+  // Two panes at most, so either direction reaches the other one.
+  if (event.code === 'Tab') return 'pane-other'
   if (event.shiftKey) {
     const command = CTRL_SHIFT_CODES[event.code]
     if (command) return command
@@ -79,6 +87,8 @@ export function resolveShortcut(event: ShortcutEvent): AppCommand | null {
   if (event.key === '+' || event.key === '=' || event.code === 'NumpadAdd') return 'font-increase'
   if (event.key === '-' || event.code === 'NumpadSubtract') return 'font-decrease'
   if (event.key === '0' || event.code === 'Numpad0') return 'font-reset'
+  // A literal Ctrl+V still reaches the process through send-next-key.
+  if (event.code === 'KeyV') return 'paste'
   return null
 }
 

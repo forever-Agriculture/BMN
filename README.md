@@ -52,15 +52,21 @@ Everything runs on your computer. There is no account, cloud backend or telemetr
 | --- | --- |
 | `Ctrl+Shift+P` | Command palette |
 | `Ctrl+Shift+F` | Search in the terminal output |
-| `Ctrl+Shift+Enter` | Split the view |
+| `Ctrl+Shift+Enter` | Split the view (asks which session opens beside) or close the split |
+| `Ctrl+Tab` | Switch to the other pane |
 | `Ctrl+Shift+Z` | Focus mode |
 | `Ctrl+Shift+↑` / `↓` | Previous / next session |
 | `Ctrl+Shift+←` / `→` | Previous / next workspace |
 | `Ctrl+Shift+U` | Next open request from an agent |
-| `Ctrl+Shift+C` / `V` | Copy / paste |
+| `Ctrl+Shift+C` | Copy the selection |
+| `Ctrl+V`, `Ctrl+Shift+V`, `Shift+Insert`, right-click | Paste |
+| `Ctrl+Shift+A` | Select all |
 | `Ctrl+Shift+\` | Send the next key straight to the terminal |
 | Hold `Space`, or `Ctrl+Shift+Space` | Dictate |
 | `Ctrl +` / `Ctrl −` / `Ctrl 0` | Font size |
+
+Selecting text with the mouse copies it. Right-click goes to programs that read the mouse, such as
+vim, unless you hold Shift. Send a literal `Ctrl+V` with `Ctrl+Shift+\` first.
 
 ## Install from source
 

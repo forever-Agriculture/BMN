@@ -841,6 +841,7 @@ interface RendererIntegrationProbe {
     backgroundChoice: 'hide' | 'stop' | null
   }
   treeSelection: { sessionId: string; layoutSelectedSessionId: string | null }
+  hiddenPaneSize: { shown: { cols: number; rows: number }; hidden: { cols: number; rows: number } }
 }
 
 async function stoppedPanelLabel(window: BrowserWindow, sessionId: string): Promise<string> {
@@ -1446,6 +1447,12 @@ async function runSelfTest(): Promise<void> {
         })}`
       )
     }
+    const { shown, hidden } = preloadProbe.hiddenPaneSize
+    if (shown.cols < 20 || hidden.cols !== shown.cols || hidden.rows !== shown.rows) {
+      throw new Error(
+        `a hidden pane resized its terminal: ${JSON.stringify(preloadProbe.hiddenPaneSize)}`
+      )
+    }
     const templateRuntime = runtimes.get(preloadProbe.templateCreatedSession.sessionId)
     const applicationQuitTarget = templateRuntime
       ? runningTargetForRuntime({
@@ -1785,6 +1792,7 @@ async function runSelfTest(): Promise<void> {
       envelopedInvokeChannels,
       templateCreatedSession: preloadProbe.templateCreatedSession,
       treeSelectionLayoutPut: preloadProbe.treeSelection,
+      hiddenPaneSize: preloadProbe.hiddenPaneSize,
       inactiveFollowingOutputLayoutPuts,
       inactiveFollowingOutputCaptured,
       launchBackgroundChoiceRecorded,

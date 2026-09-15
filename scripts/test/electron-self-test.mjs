@@ -17,6 +17,13 @@ const waylandDisplay =
 /** Receipt fields the self-test must prove; a receipt missing any of them fails the run. */
 const receiptContract = [
   ['graceful', (receipt) => receipt.graceful === true],
+  [
+    'hiddenPaneSize',
+    (receipt) =>
+      receipt.hiddenPaneSize?.shown?.cols >= 20 &&
+      receipt.hiddenPaneSize.hidden?.cols === receipt.hiddenPaneSize.shown.cols &&
+      receipt.hiddenPaneSize.hidden?.rows === receipt.hiddenPaneSize.shown.rows
+  ],
   ['inactiveFollowingOutputLayoutPuts', (receipt) => receipt.inactiveFollowingOutputLayoutPuts === 0],
   ['inactiveFollowingOutputCaptured', (receipt) => receipt.inactiveFollowingOutputCaptured === true],
   ['launchBackgroundChoiceRecorded', (receipt) => receipt.launchBackgroundChoiceRecorded === 'hide'],

@@ -144,6 +144,12 @@ export function windowTitle(workspaceName: string | null, sessionName: string | 
   return sessionName?.trim() || workspaceName?.trim() || 'BMN'
 }
 
+/** What can fill a second pane: everything not already shown, starting after the current item and wrapping. */
+export function splitCandidates<T>(items: readonly T[], shown: ReadonlySet<T>, current: T | null): T[] {
+  const index = current === null ? -1 : items.indexOf(current)
+  return [...items.slice(index + 1), ...items.slice(0, index + 1)].filter((item) => !shown.has(item))
+}
+
 /** Moves to the neighbor in a list, wrapping; returns the first item when the current one is absent. */
 export function neighbor<T>(items: readonly T[], current: T | null, direction: -1 | 1): T | null {
   if (items.length === 0) return null

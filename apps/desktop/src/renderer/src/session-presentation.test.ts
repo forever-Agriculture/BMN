@@ -6,6 +6,7 @@ import {
   displayPath,
   inferHome,
   neighbor,
+  splitCandidates,
   nextRequest,
   progressPresentation,
   relativeAge,
@@ -106,5 +107,13 @@ describe('session presentation', () => {
     expect(neighbor(['a', 'b', 'c'], 'a', -1)).toBe('c')
     expect(neighbor(['a'], null, 1)).toBe('a')
     expect(neighbor([], null, 1)).toBeNull()
+  })
+
+  it('offers split partners after the current session, skipping shown ones', () => {
+    expect(splitCandidates(['a', 'b', 'c', 'd'], new Set(['b']), 'b')).toEqual(['c', 'd', 'a'])
+    expect(splitCandidates(['a', 'b', 'c', 'd'], new Set(['d']), 'd')).toEqual(['a', 'b', 'c'])
+    expect(splitCandidates(['a', 'b', 'c'], new Set(['x']), null)).toEqual(['a', 'b', 'c'])
+    expect(splitCandidates(['a', 'b', 'c'], new Set(['x']), 'x')).toEqual(['a', 'b', 'c'])
+    expect(splitCandidates(['a'], new Set(['a']), 'a')).toEqual([])
   })
 })
