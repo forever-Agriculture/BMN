@@ -282,7 +282,7 @@ export class CompanionService {
           'closeAttention',
           { requestId: text(params, 'requestId') },
           state,
-          optionalText(params, 'resolution') ?? 'Acknowledged in AI-Terminal',
+          optionalText(params, 'resolution') ?? 'Acknowledged in BMN',
           this.iso()
         )
         this.emit('attention', record.sessionId)
@@ -320,7 +320,7 @@ export class CompanionService {
         if (!this.telegram || this.telegramHealth?.state !== 'polling') {
           throw new HostControlError(ERROR_CODES.ioError, 'Telegram is not connected', true)
         }
-        await this.telegram.sendMessage('AI-Terminal test message. Replies to notifications return to their session.')
+        await this.telegram.sendMessage('BMN test message. Replies to notifications return to their session.')
         return this.telegramStatus()
       }
       case METHOD_REGISTRY.controlInfo:
@@ -796,7 +796,7 @@ export class CompanionService {
       ? undefined
       : await database.companion('getTelegramMessage', reply.replyToMessageId)
     if (!target || !this.knownSessions.has(target.sessionId)) {
-      await connector.sendMessage('Reply to a notification so AI-Terminal knows which session this is for.', {
+      await connector.sendMessage('Reply to a notification so BMN knows which session this is for.', {
         replyToMessageId: reply.messageId
       }).catch(() => undefined)
       return
@@ -841,7 +841,7 @@ export class CompanionService {
         await database.companion('updateDraft', record.draftId, 'uncertain', 'Automatic submission failed', this.iso())
       }
     }
-    await connector.sendMessage('Saved as a draft in AI-Terminal for that session.', {
+    await connector.sendMessage('Saved as a draft in BMN for that session.', {
       replyToMessageId: reply.messageId
     }).catch(() => undefined)
   }

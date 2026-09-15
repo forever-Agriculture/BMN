@@ -16,7 +16,7 @@ const ownerRoots = [
 ]
 
 // The owner may already use the app, so the smoke proves it leaves their real roots untouched.
-// Quit AI Terminal first; a running copy would change these files during the smoke.
+// Quit BMN first; a running copy would change these files during the smoke.
 const ownerFingerprint = () => fingerprintOwnerRoots(ownerRoots, { existsSync, readdirSync, statSync })
 
 function parseReceipt(stdout) {

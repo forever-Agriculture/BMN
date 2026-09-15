@@ -22,7 +22,7 @@ Ubuntu 24.04 restricts unprivileged user namespaces, which Chromium's sandbox ne
 exception, Electron exits at once with `SIGTRAP`, and the kernel log shows
 `apparmor="DENIED" operation="capable" profile="unprivileged_userns"`.
 
-AI Terminal never disables the sandbox. Instead, `scripts/sandbox/ai-terminal-electron` is an
+BMN never disables the sandbox. Instead, `scripts/sandbox/ai-terminal-electron` is an
 AppArmor profile that grants user namespaces to exactly two binaries in your checkout: the
 development Electron and the packaged `ai-terminal`. Install it with your checkout's absolute path:
 
@@ -60,8 +60,8 @@ All commands run from the repository root.
 - `native-package-config.test.ts` inspects the packaged build. It is skipped until
   `pnpm run package` has produced one.
 - The Electron self-test and the packaged smoke test run with temporary `XDG_*` folders. Your real
-  AI Terminal data is not touched.
-- Close a running AI Terminal before `pnpm run package`, since packaging replaces the binary it
+  BMN data is not touched.
+- Close a running BMN before `pnpm run package`, since packaging replaces the binary it
   runs from.
 - `scripts/lib/sandbox-flag-audit.mjs` fails the tests if a flag that disables Chromium's sandbox
   appears anywhere in `apps`, `shared` or `scripts`.

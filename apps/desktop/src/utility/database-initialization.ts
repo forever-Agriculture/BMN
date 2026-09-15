@@ -24,7 +24,7 @@ export interface DatabaseInitialization {
 }
 
 export const APPLICATION_INTERRUPTION_REASON =
-  'AI Terminal ended before this process incarnation reported an exit'
+  'BMN ended before this process incarnation reported an exit'
 
 export function databaseSettings(
   database: DatabaseConnection

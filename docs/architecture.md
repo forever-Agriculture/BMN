@@ -1,6 +1,6 @@
 # Architecture
 
-AI Terminal is an Electron application with four kinds of process. One of them, the utility
+BMN is an Electron application with four kinds of process. One of them, the utility
 process, owns all durable state and every running terminal. The window only presents it.
 
 ```mermaid

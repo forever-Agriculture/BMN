@@ -40,7 +40,7 @@ const entryPath = join(dataHome, 'applications', DESKTOP_ID)
 writeAtomically(entryPath, [
   '[Desktop Entry]',
   'Type=Application',
-  'Name=AI Terminal',
+  'Name=BMN',
   'Comment=Workspaces for Claude, Codex and shell sessions',
   `Exec="${binary}"`,
   `Icon=${ICON_NAME}`,
@@ -63,12 +63,12 @@ console.log(`Installed ${entryPath} and ${ICON_NAME} icons under ${icons}`)
 if (pin) {
   const current = spawnSync('gsettings', ['get', 'org.gnome.shell', 'favorite-apps'], { encoding: 'utf8' })
   if (current.status !== 0) {
-    console.error('Could not read GNOME dock favorites; pin AI Terminal from the app grid instead.')
+    console.error('Could not read GNOME dock favorites; pin BMN from the app grid instead.')
     process.exit(1)
   }
   const favorites = [...current.stdout.matchAll(/'([^']+)'/g)].map((match) => match[1])
   if (favorites.includes(DESKTOP_ID)) {
-    console.log('AI Terminal is already pinned to the dock.')
+    console.log('BMN is already pinned to the dock.')
   } else {
     // Sit beside the other terminals when one is pinned; otherwise go last.
     const terminals = ['io.github.melonamin.agterm.desktop', 'org.gnome.Terminal.desktop']
@@ -77,9 +77,9 @@ if (pin) {
     const value = `[${favorites.map((id) => `'${id}'`).join(', ')}]`
     const set = spawnSync('gsettings', ['set', 'org.gnome.shell', 'favorite-apps', value], { encoding: 'utf8' })
     if (set.status !== 0) {
-      console.error(`Could not pin AI Terminal: ${set.stderr.trim()}`)
+      console.error(`Could not pin BMN: ${set.stderr.trim()}`)
       process.exit(1)
     }
-    console.log('Pinned AI Terminal to the dock.')
+    console.log('Pinned BMN to the dock.')
   }
 }

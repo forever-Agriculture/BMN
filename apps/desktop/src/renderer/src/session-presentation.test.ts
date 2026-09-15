@@ -56,8 +56,8 @@ describe('session presentation', () => {
   it('titles the window with the selected session, like agterm', () => {
     expect(windowTitle('PICHE', 'Q-Automations')).toBe('Q-Automations')
     expect(windowTitle('PICHE', null)).toBe('PICHE')
-    expect(windowTitle(null, null)).toBe('AI Terminal')
-    expect(windowTitle('  ', '  ')).toBe('AI Terminal')
+    expect(windowTitle(null, null)).toBe('BMN')
+    expect(windowTitle('  ', '  ')).toBe('BMN')
   })
 
   it('shortens home paths for display only', () => {

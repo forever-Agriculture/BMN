@@ -1,6 +1,6 @@
 # Agent control: `aiterm`
 
-Every session AI Terminal starts can talk back to the app through the `aiterm` command. An agent,
+Every session BMN starts can talk back to the app through the `aiterm` command. An agent,
 a script or you can use it to publish files, report progress, ask for attention and send text to a
 session.
 
@@ -9,7 +9,7 @@ the app's control socket, sends one JSON-RPC request and exits.
 
 ## How a session finds the app
 
-AI Terminal sets these variables in every session it starts:
+BMN sets these variables in every session it starts:
 
 | Variable | Meaning |
 | --- | --- |

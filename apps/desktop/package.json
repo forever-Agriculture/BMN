@@ -2,7 +2,7 @@
   "name": "@ai-terminal/desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "AI-Terminal Electron desktop application",
+  "description": "BMN Electron desktop application",
   "desktopName": "ai-terminal.desktop",
   "main": "./out/main/index.js",
   "scripts": {

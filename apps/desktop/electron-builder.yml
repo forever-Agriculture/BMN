@@ -1,5 +1,5 @@
 appId: dev.ai-terminal.desktop
-productName: AI Terminal
+productName: BMN
 directories:
   output: release
 files:

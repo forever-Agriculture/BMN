@@ -251,7 +251,7 @@ export function createAppEventForwarder(options: AppEventForwarderOptions): {
     if (focused || !settings.notifications.desktop || !options.notificationsEnabled() || !Notification.isSupported()) return
     for (const request of fresh) {
       const notification = new Notification({
-        title: request.kind === 'notice' ? 'AI-Terminal' : 'A session needs you',
+        title: request.kind === 'notice' ? 'BMN' : 'A session needs you',
         body: request.title.slice(0, 200),
         silent: false
       })

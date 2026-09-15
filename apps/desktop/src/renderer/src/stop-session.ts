@@ -26,13 +26,13 @@ const failureFeedback: Record<
   stop: {
     prefix: 'The shell stop failed',
     fallback: 'the terminal host returned an unknown error',
-    nextStep: 'restart AI Terminal before starting another shell.',
+    nextStep: 'restart BMN before starting another shell.',
     status: 'Stop outcome unknown'
   },
   hide: {
     prefix: 'Window hide failed',
     fallback: 'the main process returned an unknown error',
-    nextStep: 'try Hide again or close AI Terminal from the desktop.'
+    nextStep: 'try Hide again or close BMN from the desktop.'
   }
 }
 

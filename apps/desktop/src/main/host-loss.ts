@@ -350,7 +350,7 @@ export function watchHostLoss(
       ok: false,
       code: ERROR_CODES.ioError,
       message:
-        'The terminal host exited unexpectedly. Fix: restart AI Terminal; the shell process ended with the terminal host.'
+        'The terminal host exited unexpectedly. Fix: restart BMN; the shell process ended with the terminal host.'
     })
   })
 }

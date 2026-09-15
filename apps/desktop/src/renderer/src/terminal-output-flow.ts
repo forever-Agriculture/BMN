@@ -31,7 +31,7 @@ export async function handleTerminalViewFailure(
     const detail = failureDetail(error, 'the recovery request failed')
     actions.setStatus('Terminal view disconnected')
     actions.setFailure(
-      `Terminal view recovery failed: ${detail.slice(0, 240)}. Fix: reopen AI Terminal; the shell process was not stopped.`
+      `Terminal view recovery failed: ${detail.slice(0, 240)}. Fix: reopen BMN; the shell process was not stopped.`
     )
   }
 }

@@ -198,7 +198,7 @@ describe('workspace database store', () => {
       incarnation.run('exited-old', 'exited', 'interrupted', '2026-09-13T11:00:00.000Z', null, null, 'older restart')
       incarnation.run('exited-new', 'exited', 'exited', '2026-09-13T11:30:00.000Z', 3, null, null)
       incarnation.run('stopped-1', 'stopped', 'exited', now, 0, 1, null)
-      incarnation.run('interrupted-1', 'interrupted', 'interrupted', now, null, null, 'AI Terminal restarted before this process exited')
+      incarnation.run('interrupted-1', 'interrupted', 'interrupted', now, null, null, 'BMN restarted before this process exited')
       incarnation.run('running-1', 'running', 'running', now, null, null, null)
 
       const byId = new Map(listSessions(database, DEFAULT_WORKSPACE_ID).map((record) => [record.sessionId, record.lastProcess]))
@@ -209,7 +209,7 @@ describe('workspace database store', () => {
         state: 'interrupted',
         exitCode: null,
         signal: null,
-        detail: 'AI Terminal restarted before this process exited'
+        detail: 'BMN restarted before this process exited'
       })
       expect(byId.get('running')).toEqual({ incarnationId: 'running-1', state: 'interrupted', exitCode: null, signal: null, detail: null })
       expect(byId.get('never')).toBeNull()

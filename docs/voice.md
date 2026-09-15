@@ -44,7 +44,7 @@ Italian and Portuguese. Choosing your language skips detection and is slightly f
 
 ## Speed
 
-Whisper normally encodes a fixed 30-second window, however short the recording. AI Terminal passes
+Whisper normally encodes a fixed 30-second window, however short the recording. BMN passes
 the recording's real length (`-ac`), and the build patches whisper.cpp so that automatic language
 detection also encodes only the recording (upstream applies the shorter window only after
 detection). Decoding is greedy (`-bs 1 -bo 1`) and uses half the CPU threads, at most 8.

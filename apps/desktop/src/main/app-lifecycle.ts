@@ -220,7 +220,7 @@ export function createApplicationLifecycle(
       }
       void actions
         .promptForQuit({
-          message: 'Quit AI Terminal and stop the running sessions?',
+          message: 'Quit BMN and stop the running sessions?',
           detail: `Quit applies to these running targets:\n\n${runningTargetDetails(targets)}`,
           buttons: ['Quit', 'Cancel'],
           defaultId: 1,

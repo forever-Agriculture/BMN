@@ -1,4 +1,6 @@
-# AI Terminal
+# BMN
+
+*Be a man: use a proper terminal.*
 
 A desktop terminal for working with coding agents on Linux. It runs your shells and your installed
 agent CLIs (Claude Code, Codex, or any other command) in real terminals, keeps them organized in
@@ -70,8 +72,8 @@ Requirements:
 - `cmake`, or [uv](https://docs.astral.sh/uv/), to build the voice engine
 
 ```bash
-git clone https://github.com/forever-Agriculture/AI-Terminal.git
-cd AI-Terminal
+git clone https://github.com/forever-Agriculture/BMN.git
+cd BMN
 pnpm install
 pnpm run package                       # builds whisper.cpp, the app and a Linux folder build
 apps/desktop/release/linux-unpacked/ai-terminal

@@ -2127,7 +2127,7 @@ describe('shell session lifecycle', () => {
 
     await expect(
       manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable, argv: [], cols: 80, rows: 24 })
-    ).rejects.toThrow(/AI Terminal injected --session-id/)
+    ).rejects.toThrow(/BMN injected --session-id/)
   })
 
   it('names the injected session-id flag when the modified launch exits during startup', async () => {
@@ -2155,7 +2155,7 @@ describe('shell session lifecycle', () => {
 
     await expect(
       manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable, argv: [], cols: 80, rows: 24 })
-    ).rejects.toThrow(/AI Terminal injected --session-id/)
+    ).rejects.toThrow(/BMN injected --session-id/)
     expect(spawns).toHaveLength(2)
     expect(spawns[1]).toEqual(['--session-id', expect.any(String)])
   })

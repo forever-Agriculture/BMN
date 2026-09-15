@@ -23,12 +23,12 @@ describe('renderer IPC feedback', () => {
     [
       'stop',
       'utility host request session.stop timed out',
-      'The shell stop failed: utility host request session.stop timed out. Fix: restart AI Terminal before starting another shell.'
+      'The shell stop failed: utility host request session.stop timed out. Fix: restart BMN before starting another shell.'
     ],
     [
       'hide',
       'main process rejected hide',
-      'Window hide failed: main process rejected hide. Fix: try Hide again or close AI Terminal from the desktop.'
+      'Window hide failed: main process rejected hide. Fix: try Hide again or close BMN from the desktop.'
     ]
   ])('surfaces a rejected %s call and consumes its rejection', async (operation, cause, notice) => {
     const setStatus = vi.fn()
@@ -104,7 +104,7 @@ describe('renderer IPC feedback', () => {
   })
 
   it.each([
-    'The terminal host exited unexpectedly. Fix: restart AI Terminal to open a new shell.',
+    'The terminal host exited unexpectedly. Fix: restart BMN to open a new shell.',
     'Terminal output exceeded the 4 MiB view queue. Fix: reopen the terminal view; the shell process was not stopped.'
   ])('clears the attachment when startup reports %j', (message) => {
     const attachment = { current: { attachmentId: 'attachment-1' } }

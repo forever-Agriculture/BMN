@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// MODULE: aiterm - command-line client for the AI-Terminal control socket (one connection per invocation)
+// MODULE: aiterm - command-line client for the BMN control socket (one connection per invocation)
 import { randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { createConnection } from 'node:net'

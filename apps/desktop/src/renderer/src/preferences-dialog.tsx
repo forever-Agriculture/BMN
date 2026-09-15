@@ -401,7 +401,7 @@ export function PreferencesDialog(props: {
         <div className="preferences-row">
           <div className="preferences-row-label">
             <label htmlFor="preferences-desktop-notifications">Desktop notifications when a session needs you</label>
-            <p className="preferences-help">Shown only while no AI-Terminal window is focused.</p>
+            <p className="preferences-help">Shown only while no BMN window is focused.</p>
           </div>
           <div className="preferences-row-control">
             <input
@@ -668,7 +668,7 @@ export function PreferencesDialog(props: {
           </p>
         )}
         <pre className="preferences-usage">{USAGE_LINES.join('\n')}</pre>
-        <p className="preferences-help">Sessions started by AI-Terminal get AITERM_CONTROL_SOCKET and AITERM_TOKEN automatically.</p>
+        <p className="preferences-help">Sessions started by BMN get AITERM_CONTROL_SOCKET and AITERM_TOKEN automatically.</p>
       </section>
 
       <section className="preferences-section">

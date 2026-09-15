@@ -1936,7 +1936,7 @@ const applicationLifecycle = createApplicationLifecycle({
   restartForUpdate: () => autoUpdater.quitAndInstall(),
   reportFailure: (error) => {
     const message = error instanceof Error ? error.message : String(error)
-    dialog.showErrorBox('AI Terminal could not complete the lifecycle action', message)
+    dialog.showErrorBox('BMN could not complete the lifecycle action', message)
   }
 })
 

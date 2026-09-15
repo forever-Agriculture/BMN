@@ -141,7 +141,7 @@ export function nextRequest(
 
 /** The window title names what you are working on, as agterm does: the selected session, else its workspace. */
 export function windowTitle(workspaceName: string | null, sessionName: string | null): string {
-  return sessionName?.trim() || workspaceName?.trim() || 'AI Terminal'
+  return sessionName?.trim() || workspaceName?.trim() || 'BMN'
 }
 
 /** Moves to the neighbor in a list, wrapping; returns the first item when the current one is absent. */

@@ -813,7 +813,7 @@ function App(): React.JSX.Element {
         context: selectedRecord?.name,
         disabled: !selectedRecord || !live[selectedRecord.sessionId]
       }),
-      command('quit', 'Quit AI Terminal…', () => void window.aiTerminal.quitApplication())
+      command('quit', 'Quit BMN…', () => void window.aiTerminal.quitApplication())
     ]
   }
 
@@ -896,7 +896,7 @@ function App(): React.JSX.Element {
             }}
             onAcknowledge={(request) => {
               const action = request.kind === 'notice'
-                ? window.aiTerminal.resolveAttention(request.requestId, 'Dismissed in AI-Terminal')
+                ? window.aiTerminal.resolveAttention(request.requestId, 'Dismissed in BMN')
                 : window.aiTerminal.markAttentionSeen(request.requestId)
               void action.then(() => refresh.attention()).catch(fail('Request update failed'))
             }}

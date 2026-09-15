@@ -11,8 +11,8 @@ const status = (change: Partial<SessionProcessStatus>): SessionProcessStatus => 
 
 describe('session process label', () => {
   it('distinguishes interrupted, exited with its code, and stopped by a signal', () => {
-    expect(sessionProcessLabel(status({ state: 'interrupted', exitCode: null, detail: 'AI Terminal restarted before this process exited' })))
-      .toBe('Interrupted · AI Terminal restarted before this process exited')
+    expect(sessionProcessLabel(status({ state: 'interrupted', exitCode: null, detail: 'BMN restarted before this process exited' })))
+      .toBe('Interrupted · BMN restarted before this process exited')
     expect(sessionProcessLabel(status({ state: 'interrupted', exitCode: null, detail: 'application quit · signal 15' })))
       .toBe('Interrupted · application quit · signal 15')
     expect(sessionProcessLabel(status({ state: 'interrupted', exitCode: null }))).toBe('Interrupted')

@@ -606,7 +606,7 @@ export async function prepareConversationLaunch(
       launchContext: { ...launchContext, argv: parsed.contextArgv },
       detail: parsed.explicitSessionId
         ? 'Claude conversation reference was supplied explicitly at launch'
-        : 'AI Terminal pinned the Claude conversation UUID before spawning the process',
+        : 'BMN pinned the Claude conversation UUID before spawning the process',
       capturedAt
     }
   }

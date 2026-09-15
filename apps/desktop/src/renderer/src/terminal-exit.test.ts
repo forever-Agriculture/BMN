@@ -51,7 +51,7 @@ describe('terminal exit feedback', () => {
     expect(feedback).toEqual({
       status: 'Interrupted',
       failure:
-        'The shell stop outcome is unknown: SIGKILL was sent but a PTY exit event was not observed. Fix: restart AI Terminal before starting another shell.'
+        'The shell stop outcome is unknown: SIGKILL was sent but a PTY exit event was not observed. Fix: restart BMN before starting another shell.'
     })
     expect(feedback.status).toBe(sessionProcessLabel({
       incarnationId, state: 'interrupted', exitCode: null, signal: null, detail: null
@@ -65,7 +65,7 @@ describe('terminal exit feedback', () => {
       terminalExitFeedback({ state: 'interrupted', cause: 'application-quit', exitCode: 0, signal: 15 }),
       terminalExitFeedback({ state: 'interrupted', cause: 'unobserved-loss', reason: 'no exit event' })
     ])
-    expect(presented).not.toMatch(/Exited · |start AI Terminal again/)
+    expect(presented).not.toMatch(/Exited · |start BMN again/)
   })
 })
 
@@ -84,7 +84,7 @@ describe('live pane exit reaction', () => {
     expect(reaction.detach).toHaveBeenCalledExactlyOnceWith('attachment-lost')
     expect(reaction.setStatus).toHaveBeenCalledExactlyOnceWith('Interrupted')
     expect(reaction.onFailure).toHaveBeenCalledExactlyOnceWith(
-      'The shell stop outcome is unknown: SIGKILL was sent but a PTY exit event was not observed. Fix: restart AI Terminal before starting another shell.'
+      'The shell stop outcome is unknown: SIGKILL was sent but a PTY exit event was not observed. Fix: restart BMN before starting another shell.'
     )
   })
 

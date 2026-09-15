@@ -1,6 +1,6 @@
 # Telegram
 
-AI Terminal can message you on Telegram when a session needs you, and take your reply back to that
+BMN can message you on Telegram when a session needs you, and take your reply back to that
 session. It uses a bot you create and own. It is off by default.
 
 ## What it does
@@ -20,7 +20,7 @@ session. It uses a bot you create and own. It is off by default.
 2. Find your chat ID: send any message to your new bot, then open
    `https://api.telegram.org/bot<token>/getUpdates` in a browser and read `message.chat.id`. For a
    private chat it is also your user ID.
-3. In AI Terminal, open **Preferences → Telegram**:
+3. In BMN, open **Preferences → Telegram**:
    - paste the **Bot token** and save it;
    - enter the **Allowed chat ID** (and, for a group chat, the **Allowed user ID**);
    - choose **Notify on**: Needs-you requests, or Needs-you requests and session exits;
@@ -40,7 +40,7 @@ session. It uses a bot you create and own. It is off by default.
 
 Telegram lets only one program poll a bot for updates at a time. If another bot script, bridge or
 second computer uses the same token, both get `409 Conflict` errors and messages go to whichever
-wins. AI Terminal takes a lock so it never runs two connectors on one token itself, but it cannot
-see other programs: use a separate bot for AI Terminal, or stop the other poller.
+wins. BMN takes a lock so it never runs two connectors on one token itself, but it cannot
+see other programs: use a separate bot for BMN, or stop the other poller.
 
 Sending messages does not conflict, so scripts that only *send* through the same bot keep working.

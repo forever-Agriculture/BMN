@@ -248,7 +248,7 @@ const SHELL_ENVIRONMENT_PRIVATE_PREFIXES = [
   'CHROME_',
   'CHROMIUM_',
   'AITERM_',
-  // Identity of whichever terminal launched the app; shells here run in AI-Terminal's xterm, not there.
+  // Identity of whichever terminal launched the app; shells here run in BMN's xterm, not there.
   'AGTERM',
   'GHOSTTY_',
   'KITTY_',
@@ -726,7 +726,7 @@ export class SessionManager {
       if (injectedArguments.length === 0) throw error
       throw new HostControlError(
         ERROR_CODES.ioError,
-        `${error instanceof Error ? error.message : 'The shell process could not be started'}. AI Terminal injected ${injectedArguments.join(', ')} for exact conversation binding.`
+        `${error instanceof Error ? error.message : 'The shell process could not be started'}. BMN injected ${injectedArguments.join(', ')} for exact conversation binding.`
       )
     }
     let resolveExit = (): void => undefined
@@ -794,7 +794,7 @@ export class SessionManager {
           ERROR_CODES.ioError,
           injectedArguments.length === 0
             ? 'The shell process exited before startup completed'
-            : `The shell process exited before startup completed after AI Terminal injected ${injectedArguments.join(', ')} for exact conversation binding`
+            : `The shell process exited before startup completed after BMN injected ${injectedArguments.join(', ')} for exact conversation binding`
         )
       }
     } catch (error) {
@@ -1080,7 +1080,7 @@ export class SessionManager {
     if (session.exitUnconfirmed) {
       throw new HostControlError(
         ERROR_CODES.ioError,
-        'The shell stop outcome is still unknown. Fix: restart AI Terminal before reusing this session.',
+        'The shell stop outcome is still unknown. Fix: restart BMN before reusing this session.',
         true
       )
     }
@@ -1088,7 +1088,7 @@ export class SessionManager {
     if (!reason) return
     throw new HostControlError(
       ERROR_CODES.ioError,
-      `The shell stop outcome is unknown: ${reason}. Fix: restart AI Terminal before reusing this session.`,
+      `The shell stop outcome is unknown: ${reason}. Fix: restart BMN before reusing this session.`,
       true
     )
   }
@@ -1407,7 +1407,7 @@ export class SessionManager {
     if (current?.exitUnconfirmed) {
       throw new HostControlError(
         ERROR_CODES.invalidArgument,
-        'The previous process of this session has not confirmed its exit; restart AI Terminal before starting it again'
+        'The previous process of this session has not confirmed its exit; restart BMN before starting it again'
       )
     }
     if (current && !current.exited) {
@@ -1430,7 +1430,7 @@ export class SessionManager {
     throw new HostControlError(
       ERROR_CODES.invalidArgument,
       existing.state === 'exit-unconfirmed'
-        ? 'The bound conversation has an exit-unconfirmed process incarnation; restart AI Terminal before resuming it'
+        ? 'The bound conversation has an exit-unconfirmed process incarnation; restart BMN before resuming it'
         : existing.state === 'live'
           ? 'The bound conversation already has a live process incarnation'
           : 'The bound conversation is already resuming or starting'

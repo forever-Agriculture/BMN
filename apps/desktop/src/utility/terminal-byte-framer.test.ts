@@ -8,8 +8,8 @@ describe('terminal byte retention framing', () => {
   it.each([
     ['UTF-8', encoder.encode('Ї')],
     ['CSI', encoder.encode('\u001b[31m')],
-    ['OSC with BEL', encoder.encode('\u001b]0;AI Terminal\u0007')],
-    ['OSC with ST', encoder.encode('\u001b]0;AI Terminal\u001b\\')],
+    ['OSC with BEL', encoder.encode('\u001b]0;BMN\u0007')],
+    ['OSC with ST', encoder.encode('\u001b]0;BMN\u001b\\')],
     ['DCS', encoder.encode('\u001bP1;2|payload\u001b\\')]
   ])('retains a complete %s sequence as one frame across every byte split', (_name, sequence) => {
     const framer = new TerminalByteFramer()

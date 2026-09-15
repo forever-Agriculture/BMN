@@ -55,7 +55,7 @@ export function terminalExitFeedback(exit: TerminalExitFeedbackInput): {
       signal: null,
       detail: null
     }),
-    failure: `The shell stop outcome is unknown: ${exit.reason}. Fix: restart AI Terminal before starting another shell.`
+    failure: `The shell stop outcome is unknown: ${exit.reason}. Fix: restart BMN before starting another shell.`
   }
 }
 

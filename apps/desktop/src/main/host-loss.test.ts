@@ -212,7 +212,7 @@ describe('host loss feedback', () => {
       ok: false,
       code: 'IO_ERROR',
       message:
-        'The terminal host exited unexpectedly. Fix: restart AI Terminal; the shell process ended with the terminal host.'
+        'The terminal host exited unexpectedly. Fix: restart BMN; the shell process ended with the terminal host.'
     })
   })
 
@@ -1131,7 +1131,7 @@ describe('Story 1.4 application lifecycle', () => {
     await vi.waitFor(() => expect(harness.quitApplication).toHaveBeenCalledOnce())
     expect(event.preventDefault).toHaveBeenCalledOnce()
     expect(harness.promptForQuit).toHaveBeenCalledWith({
-      message: 'Quit AI Terminal and stop the running sessions?',
+      message: 'Quit BMN and stop the running sessions?',
       detail:
         'Quit applies to these running targets:\n\n' +
         'Session: session-1\nProcess: /usr/bin/claude\nIncarnation: incarnation-1\nState: live',
