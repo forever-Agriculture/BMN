@@ -1953,8 +1953,11 @@ if (primaryInstance) autoUpdater.on('update-downloaded', () => applicationLifecy
 
 if (primaryInstance) void app.whenReady().then(async () => {
   // The Chancel header replaces Electron's default File/Edit/View/Window bar and its stray
-  // accelerators (reload, zoom, close); Quit lives in the command palette.
-  Menu.setApplicationMenu(null)
+  // accelerators (reload, zoom, close); Quit lives in the command palette. macOS always shows a
+  // menu bar, so there it keeps the one menu the system owns, and nothing else.
+  Menu.setApplicationMenu(
+    process.platform === 'darwin' ? Menu.buildFromTemplate([{ role: 'appMenu' }]) : null
+  )
   restrictWebPermissions()
   if (selfTest) {
     let exitCode = 0

@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json --composite false && tsc --noEmit -p tsconfig.web.json --composite false",
     "build": "electron-vite build",
     "test:self": "electron . --self-test",
-    "package": "pnpm run build && electron-builder --linux dir"
+    "package": "pnpm run build && electron-builder --dir"
   },
   "dependencies": {
     "@ai-terminal/protocol": "workspace:*",

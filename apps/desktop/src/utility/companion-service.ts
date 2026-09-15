@@ -132,6 +132,9 @@ function linkExtension(record: ArtifactRecord): string {
   return byType[record.mediaType] ?? ''
 }
 
+/** sockaddr_un.sun_path holds 108 bytes on Linux and 104 on macOS, in both cases including the terminator. */
+const MAX_SOCKET_PATH_BYTES = process.platform === 'darwin' ? 103 : 107
+
 export class CompanionService {
   readonly auth = new ControlAuth()
   readonly socketPath: string
@@ -201,10 +204,10 @@ export class CompanionService {
       this.controlListening = true
       this.controlDetail = 'Agents and the aiterm CLI can reach this app'
     } catch (error) {
-      // Linux caps a Unix socket path at 107 bytes and reports only EINVAL, so name the real cause.
-      const tooLong = Buffer.byteLength(this.socketPath) > 107
+      // The kernel caps a Unix socket path and reports only EINVAL, so name the real cause.
+      const tooLong = Buffer.byteLength(this.socketPath) > MAX_SOCKET_PATH_BYTES
       this.controlDetail = tooLong
-        ? `The control socket is unavailable: its path is longer than 107 bytes (${this.socketPath}); use a shorter runtime directory`
+        ? `The control socket is unavailable: its path is longer than ${MAX_SOCKET_PATH_BYTES} bytes (${this.socketPath}); use a shorter runtime directory`
         : `The control socket is unavailable: ${error instanceof Error ? error.message.slice(0, 200) : 'unknown error'}`
     }
     this.sweepTimer = setInterval(() => void this.sweepAttention(), ATTENTION_SWEEP_MS)

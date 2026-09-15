@@ -1,6 +1,6 @@
 // MODULE: control-cli.test.ts - the aiterm CLI drives a real control server with truthful output and exit codes
 import { execFile } from 'node:child_process'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -42,7 +42,8 @@ function runCli(args: string[], options: { env?: Record<string, string>; cwd?: s
 }
 
 async function cliFixture() {
-  const root = await mkdtemp(join(tmpdir(), 'aitcli-'))
+  // macOS reaches the temporary folder through a symlink, and the CLI child reports the real path.
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'aitcli-')))
   createdRoots.add(root)
   const socketPath = join(root, 'ctl', 'control.sock')
   const auth = new ControlAuth()

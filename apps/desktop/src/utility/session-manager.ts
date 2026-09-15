@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { access, readFile, stat } from 'node:fs/promises'
+import { access, stat } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -39,6 +39,7 @@ import {
   type TerminalPortMessage,
   type WorkspaceRecord
 } from '@ai-terminal/protocol'
+import { processStartIdentity } from './process-start-identity'
 import { HostOutputQueue, type HostOutputQueueTransition } from './transport'
 import { TerminalByteFramer } from './terminal-byte-framer'
 import {
@@ -322,15 +323,6 @@ function bytesFromPty(data: string | Uint8Array): Uint8Array {
   return typeof data === 'string' ? new TextEncoder().encode(data) : new Uint8Array(data)
 }
 
-async function linuxProcessStartIdentity(pid: number): Promise<string> {
-  const processStat = await readFile(`/proc/${pid}/stat`, 'utf8')
-  const commandEnd = processStat.lastIndexOf(')')
-  const fieldsAfterCommand = processStat.slice(commandEnd + 2).trim().split(/\s+/)
-  const startTicks = fieldsAfterCommand[19]
-  if (!startTicks) throw new Error('process start ticks are unavailable')
-  return `linux-proc-start:${startTicks}`
-}
-
 /** Expands a leading ~ or ~/ the way a shell would, so a folder typed as ~/code/app launches; other paths are unchanged. */
 export function resolveHomeDirectory(path: string, home: string = homedir()): string {
   if (path !== '~' && !path.startsWith('~/')) return path
@@ -413,7 +405,7 @@ export class SessionManager {
   constructor(options: SessionManagerOptions) {
     this.store = options.store
     this.spawnPty = options.spawnPty
-    this.identifyProcess = options.processStartIdentity ?? linuxProcessStartIdentity
+    this.identifyProcess = options.processStartIdentity ?? processStartIdentity
     this.sendTerminalMessage = options.sendTerminalMessage
     this.environment = options.environment ?? process.env
     this.homeDirectory = options.homeDirectory ?? homedir()

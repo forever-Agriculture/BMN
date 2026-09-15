@@ -2,11 +2,14 @@
 
 ## Prerequisites
 
-- Linux x64. Development happens on Ubuntu 24.04.
+- Linux x64, or macOS. Development happens on Ubuntu 24.04; macOS is built and tested on Apple
+  Silicon.
 - Node.js 24 (`engines` allows `>=24 <25`).
 - pnpm 12.3.4. `corepack enable` provides the version pinned in `package.json`.
+- `node-gyp` on `PATH` (`npm install -g node-gyp`). pnpm compiles `better-sqlite3` with it during
+  install; without it the install stops at `node-gyp: command not found`.
 - A C/C++ toolchain and Python 3 to rebuild `node-pty` and `better-sqlite3` for Electron:
-  `sudo apt install build-essential python3`.
+  `sudo apt install build-essential python3` on Linux, `xcode-select --install` on macOS.
 - `cmake` or [uv](https://docs.astral.sh/uv/) for the voice engine.
 
 ```bash
@@ -49,16 +52,17 @@ All commands run from the repository root.
 | `pnpm run test:electron` | Build, then start the real Electron app in self-test mode |
 | `pnpm run test:run` | Unit tests, then the Electron self-test |
 | `pnpm run voice:build` | Build the pinned whisper.cpp engine (`node scripts/voice/build-whisper.mjs --force` rebuilds) |
-| `pnpm run package` | Voice engine, app build and an unpacked Linux build in `apps/desktop/release/linux-unpacked` |
+| `pnpm run package` | Voice engine, app build and an unpacked build for this platform in `apps/desktop/release` |
 | `pnpm run smoke:packaged` | Start the packaged build against a temporary data folder and check it |
-| `pnpm run install:desktop [-- --pin]` | Install the launcher and icons; `--pin` adds it to the GNOME dock |
+| `pnpm run install:desktop [-- --pin]` | Linux: install the launcher and icons, `--pin` adds it to the GNOME dock. macOS: copy `BMN.app` into `~/Applications` |
 
 `make test`, `make lint`, `make typecheck` and `make build` wrap the same commands.
 
 ### Notes on the tests
 
-- `native-package-config.test.ts` inspects the packaged build. It is skipped until
-  `pnpm run package` has produced one.
+- `scripts/tests/packaged-native-modules.test.mjs` inspects the packaged build. It is skipped until
+  `pnpm run package` has produced one, and it checks the native binaries for the platform you are
+  on: `scripts/lib/packaged-app.mjs` is the single place that knows where a packaged build lands.
 - The Electron self-test and the packaged smoke test run with temporary `XDG_*` folders. Your real
   BMN data is not touched.
 - Close a running BMN before `pnpm run package`, since packaging replaces the binary it
@@ -76,6 +80,10 @@ The app resolves its folders from the XDG variables, and each can be overridden 
 | `AITERM_DATA_HOME` | `$XDG_DATA_HOME/ai-terminal` (`~/.local/share/ai-terminal`) |
 | `AITERM_STATE_HOME` | `$XDG_STATE_HOME/ai-terminal` (`~/.local/state/ai-terminal`) |
 | `AITERM_RUNTIME_HOME` | `$XDG_RUNTIME_DIR/ai-terminal` |
+
+macOS sets no `XDG_RUNTIME_DIR`, so the runtime root falls back to `$TMPDIR/ai-terminal-<uid>`.
+That path is already about 80 bytes, so a longer `TMPDIR` can push the control socket over the
+limit below.
 
 The development launcher (`scripts/test/electron-dev.mjs`) points all of them at a new temporary
 folder and removes it on exit.
@@ -103,13 +111,16 @@ See [architecture.md](architecture.md) for processes and rules. Useful entry poi
   this checkout.
 - **`node-pty` or `better-sqlite3` fails to load.** Run `pnpm run rebuild:native`. The app's error
   names the module that failed.
-- **Agent control is unavailable.** Linux limits Unix socket paths to 107 bytes. A very long
-  `XDG_RUNTIME_DIR` or `AITERM_RUNTIME_HOME` disables the control socket, and Preferences shows why.
+- **Agent control is unavailable.** A Unix socket path may hold 107 bytes on Linux and 103 on
+  macOS. A very long `XDG_RUNTIME_DIR`, `TMPDIR` or `AITERM_RUNTIME_HOME` disables the control
+  socket, and Preferences shows why.
 - **The voice engine build fails.** Install `cmake` (or uv) and run `node scripts/voice/build-whisper.mjs --force`.
 
 ## Known limitations
 
-- Linux x64 only; the package target is an unpacked folder, not a `.deb` or AppImage.
+- Linux x64 and macOS; the package target is an unpacked folder, not a `.deb`, AppImage or `.dmg`.
+- The macOS build is ad-hoc signed for the computer that built it, so it is not distributable.
+- The shortcuts use `Ctrl` on macOS as well as on Linux, so that `Cmd` stays free for macOS itself.
 - Output written after the last saved snapshot can be lost if the app or window crashes; the app
   says so when it recovers.
 - Start again runs a fresh process; use Resume to reopen a Claude Code or Codex conversation.

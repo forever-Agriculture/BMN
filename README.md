@@ -2,15 +2,15 @@
 
 *Be a man: use a proper terminal.*
 
-A desktop terminal for working with coding agents on Linux. It runs your shells and your installed
-agent CLIs (Claude Code, Codex, or any other command) in real terminals, keeps them organized in
-workspaces, and gives the agents a small local API for sharing files, reporting progress and asking
-for your attention.
+A desktop terminal for working with coding agents on Linux and macOS. It runs your shells and your
+installed agent CLIs (Claude Code, Codex, or any other command) in real terminals, keeps them
+organized in workspaces, and gives the agents a small local API for sharing files, reporting
+progress and asking for your attention.
 
 Everything runs on your computer. There is no account, cloud backend or telemetry.
 
-> Status: early and personal. It is built and used on Ubuntu 24.04 (x64). Other Linux distributions
-> may work; macOS and Windows are not supported.
+> Status: early and personal. It is built and used on Ubuntu 24.04 (x64), and builds and runs on
+> macOS (Apple Silicon). Other Linux distributions may work; Windows is not supported.
 
 ## What it does
 
@@ -66,29 +66,41 @@ Everything runs on your computer. There is no account, cloud backend or telemetr
 | `Ctrl +` / `Ctrl −` / `Ctrl 0` | Font size |
 
 Selecting text with the mouse copies it. Right-click goes to programs that read the mouse, such as
-vim, unless you hold Shift. Send a literal `Ctrl+V` with `Ctrl+Shift+\` first.
+vim, unless you hold Shift. Send a literal `Ctrl+V` with `Ctrl+Shift+\` first. The shortcuts are
+the same on macOS: they use `Ctrl`, not `Cmd`, so the keys a terminal program expects reach it.
 
 ## Install from source
 
-Requirements:
+Requirements everywhere:
 
-- Linux x64 (tested on Ubuntu 24.04)
 - Node.js 24 and pnpm 12.3.4 (`corepack enable` picks the pinned pnpm)
-- A C/C++ toolchain and Python 3 for the native modules (`sudo apt install build-essential python3`)
+- `node-gyp` on your `PATH` (`npm install -g node-gyp`); pnpm builds the native modules with it
 - `cmake`, or [uv](https://docs.astral.sh/uv/), to build the voice engine
+
+On Linux (x64, tested on Ubuntu 24.04), also install a C/C++ toolchain and Python 3:
+`sudo apt install build-essential python3`.
+
+On macOS, the C/C++ toolchain and Python 3 come from the Xcode command line tools:
+`xcode-select --install`.
 
 ```bash
 git clone https://github.com/forever-Agriculture/BMN.git
 cd BMN
 pnpm install
-pnpm run package                       # builds whisper.cpp, the app and a Linux folder build
-apps/desktop/release/linux-unpacked/ai-terminal
+pnpm run package    # builds whisper.cpp, the app and a folder build for this computer
 ```
 
-Add a launcher and icon to your desktop (optionally pinned to the GNOME dock):
+`pnpm run package` writes the build under `apps/desktop/release/`. Start it, and install it where
+your desktop looks for applications:
 
 ```bash
-pnpm run install:desktop -- --pin
+# Linux
+apps/desktop/release/linux-unpacked/ai-terminal
+pnpm run install:desktop -- --pin     # launcher and icons; --pin adds it to the GNOME dock
+
+# macOS
+open apps/desktop/release/mac-arm64/BMN.app
+pnpm run install:desktop              # copies BMN.app into ~/Applications
 ```
 
 On Ubuntu 24.04 and later, AppArmor blocks the user namespaces that Chromium's sandbox needs. If
@@ -111,7 +123,9 @@ pnpm --filter @ai-terminal/desktop run dev
 | Saved output, file staging | `~/.local/state/ai-terminal/` |
 | Control socket | `$XDG_RUNTIME_DIR/ai-terminal/control/` |
 
-The `XDG_*` variables are respected. Folders are created owner-only.
+The `XDG_*` variables are respected. Folders are created owner-only. macOS sets no
+`XDG_RUNTIME_DIR`, so the control socket goes under the per-user temporary folder instead; the
+other three folders are the same as on Linux.
 
 ## Documentation
 
