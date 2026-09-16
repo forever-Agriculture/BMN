@@ -703,6 +703,7 @@ function App(): React.JSX.Element {
       return
     }
     writer.apply(activeWorkspaceId, (state) => splitLayoutSession(state, sessionId, allSessionIds))
+    clearUnread(sessionId)
     requestAnimationFrame(() => controllers.current.get(sessionId)?.focus())
   }
 
