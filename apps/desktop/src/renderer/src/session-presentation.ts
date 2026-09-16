@@ -123,6 +123,14 @@ export function openRequests(records: readonly AttentionRecord[]): AttentionReco
     .toSorted((left, right) => left.openedAt.localeCompare(right.openedAt) || left.requestId.localeCompare(right.requestId))
 }
 
+/**
+ * The open requests the owner answers by typing, pasting or dictating into their session, the way agterm clears a
+ * session's status on a keystroke. A review waits for its own verdict.
+ */
+export function requestsAnsweredByTyping(records: readonly AttentionRecord[], sessionId: string): AttentionRecord[] {
+  return openRequests(records).filter((record) => record.sessionId === sessionId && record.kind !== 'review')
+}
+
 /** The next unresolved request after the current session's, wrapping; null when none wait. */
 export function nextRequest(
   records: readonly AttentionRecord[],

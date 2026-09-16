@@ -150,6 +150,8 @@ export class CompanionService {
   private telegramDetail = 'Telegram is off'
   private sweepTimer: NodeJS.Timeout | undefined
   private readonly now: () => Date
+  /** Whether the owner is away from the desk, as the app last reported; null while it cannot tell. */
+  private ownerAway: boolean | null = null
   private readonly pager = createAttentionPager({
     current: (requestId) => this.options.database.companion('getAttention', requestId).catch(() => null),
     send: (record) => {
@@ -165,7 +167,9 @@ export class CompanionService {
       const timer = setTimeout(callback, ms)
       timer.unref()
       return () => clearTimeout(timer)
-    }
+    },
+    ownerAway: () => this.ownerAway,
+    now: () => this.now().getTime()
   })
 
   constructor(private readonly options: CompanionServiceOptions) {
@@ -244,7 +248,7 @@ export class CompanionService {
   /** Called for every session process transition so exit notices and the session cache stay current. */
   sessionStateChanged(sessionId: string, state: string): void {
     void this.sessionsChanged().then(async () => {
-      if (state !== 'exited') return
+      if (state !== 'exited' || this.ownerAway === false) return
       const settings = await this.options.database.companion('getSettings')
       if (!settings.telegram.enabled || settings.telegram.notifyOn !== 'attention-and-exit') return
       const session = this.knownSessions.get(sessionId)
@@ -344,6 +348,14 @@ export class CompanionService {
         }
         await this.telegram.sendMessage('BMN test message. Replies to notifications return to their session.')
         return this.telegramStatus()
+      }
+      case METHOD_REGISTRY.presenceSet: {
+        const away = params.away
+        if (away !== true && away !== false && away !== null) invalid('away must be true, false or null')
+        const left = away === true && this.ownerAway !== true
+        this.ownerAway = away
+        if (left) this.pager.ownerLeft()
+        return { away }
       }
       case METHOD_REGISTRY.controlInfo:
         return {
@@ -499,6 +511,7 @@ export class CompanionService {
     title: string
     body?: string
     expiresAt?: string
+    phoneNotified?: boolean
   }): Promise<AttentionRecord> {
     const record = await this.options.database.companion('openAttention', {
       sessionId: p.sessionId,
@@ -510,7 +523,7 @@ export class CompanionService {
       ...(p.expiresAt !== undefined ? { expiresAt: new Date(p.expiresAt).toISOString() } : {})
     }, randomUUID(), this.iso())
     this.emit('attention', p.sessionId)
-    this.pager.opened(record)
+    if (!p.phoneNotified) this.pager.opened(record)
     return record
   }
 

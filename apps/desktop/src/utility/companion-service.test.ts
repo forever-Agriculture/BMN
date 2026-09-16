@@ -188,4 +188,40 @@ describe('Telegram attention notifications', () => {
 
     expect(sent).toEqual(['● Session needs you (permission)\nClaude wants to use Bash\n\nReply to this message to answer.'])
   })
+
+  it('pages only once the owner is away, never for a prompt their phone already got, and reports exits only away', async () => {
+    vi.useFakeTimers()
+    const sent: string[] = []
+    service['telegram'] = {
+      sendMessage: async (message: string) => {
+        sent.push(message)
+        return { messageId: sent.length }
+      }
+    } as unknown as TelegramConnector
+    service['telegramHealth'] = { state: 'polling', detail: '', lastPollAt: null, lastError: null, rejectedUpdates: 0 }
+    service['sessionsChanged'] = async () => undefined
+    await database.transaction(() => COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', {
+      enabled: true, allowedChatId: 1, allowedUserId: null, notifyOn: 'attention-and-exit', autoSubmitReplies: false
+    }, now))()
+    const prompt = { sessionId: 's1', incarnationId: null, kind: 'permission' as const, title: 'Claude wants to use Bash' }
+
+    await service.route(METHOD_REGISTRY.presenceSet, { away: false })
+    await service['openAttention']({ ...prompt, requestKey: 'claude:permission' })
+    await service['openAttention']({ ...prompt, requestKey: 'claude:question', phoneNotified: true })
+    service.sessionStateChanged('s1', 'exited')
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(sent).toEqual([])
+
+    await service.route(METHOD_REGISTRY.presenceSet, { away: true })
+    await vi.advanceTimersByTimeAsync(0)
+    await service.route(METHOD_REGISTRY.presenceSet, { away: true })
+    service.sessionStateChanged('s1', 'exited')
+    await vi.advanceTimersByTimeAsync(60_000)
+
+    expect(sent).toEqual([
+      '● Session needs you (permission)\nClaude wants to use Bash\n\nReply to this message to answer.',
+      '■ A session exited'
+    ])
+    await expect(service.route(METHOD_REGISTRY.presenceSet, { away: 'yes' })).rejects.toThrow('away must be')
+  })
 })

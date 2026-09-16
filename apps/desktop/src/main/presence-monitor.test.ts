@@ -1,6 +1,6 @@
 // MODULE: presence-monitor.test.ts - away after a minute of desktop idle, back on the next input
 import { describe, expect, it } from 'vitest'
-import { createPresenceMonitor, parseMutterIdletime } from './presence-monitor'
+import { createPresenceMonitor, parseMutterIdletime, type OwnerPresence } from './presence-monitor'
 
 function clock(): {
   schedule(callback: () => void, ms: number): () => void
@@ -32,25 +32,25 @@ describe('owner presence monitor', () => {
     const timers = clock()
     const monitor = createPresenceMonitor({
       readIdleMs: async () => idle.shift() ?? null,
-      onChange: (presence) => changes.push(presence.away),
+      onChange: (presence) => { if (presence.known) changes.push(presence.away) },
       schedule: timers.schedule,
       awayAfterMs: 60_000
     })
     monitor.start()
     await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(monitor.current()).toEqual({ away: false })
+    expect(monitor.current()).toEqual({ away: false, known: true })
     // Idle can only grow in real time, so nothing can change before the rest of the threshold passes.
     expect(await timers.next()).toBe(55_000)
-    expect(monitor.current()).toEqual({ away: true })
+    expect(monitor.current()).toEqual({ away: true, known: true })
     expect(await timers.next()).toBe(2_000)
     expect(await timers.next()).toBe(2_000)
-    expect(monitor.current()).toEqual({ away: false })
-    expect(changes).toEqual([true, false])
+    expect(monitor.current()).toEqual({ away: false, known: true })
+    expect(changes).toEqual([false, true, false])
   })
 
-  it('treats an unreadable idle time as present and keeps checking', async () => {
+  it('treats an unreadable idle time as present but unknown and keeps checking', async () => {
     const timers = clock()
-    const changes: boolean[] = []
+    const changes: OwnerPresence[] = []
     const readings: Array<() => Promise<number | null>> = [
       async () => { throw new Error('bus unavailable') },
       async () => null,
@@ -58,17 +58,18 @@ describe('owner presence monitor', () => {
     ]
     const monitor = createPresenceMonitor({
       readIdleMs: () => readings.shift()!(),
-      onChange: (presence) => changes.push(presence.away),
+      onChange: (presence) => changes.push(presence),
       schedule: timers.schedule,
       awayAfterMs: 60_000
     })
     monitor.start()
     await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(monitor.current()).toEqual({ away: false, known: false })
     expect(await timers.next()).toBe(15_000)
-    expect(monitor.current()).toEqual({ away: false })
+    expect(monitor.current()).toEqual({ away: false, known: false })
     expect(await timers.next()).toBe(15_000)
-    expect(monitor.current()).toEqual({ away: true })
-    expect(changes).toEqual([true])
+    expect(monitor.current()).toEqual({ away: true, known: true })
+    expect(changes).toEqual([{ away: true, known: true }])
   })
 
   it('stops scheduling checks once stopped', async () => {

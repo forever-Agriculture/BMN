@@ -212,6 +212,7 @@ const presence = createPresenceMonitor({
   onChange: (current) => {
     for (const target of allowedTargets()) target.send('aiterm:presence', current)
     appEvents.watchChanged()
+    reportPresence()
   },
   schedule: (callback, ms) => {
     const timer = setTimeout(callback, ms)
@@ -245,6 +246,13 @@ const appEvents = createAppEventForwarder({
     return null
   }
 })
+
+/** The host pages the owner's phone only while they are away; null tells it presence cannot be read. */
+function reportPresence(): void {
+  const current = presence.current()
+  void hostClient?.request(METHOD_REGISTRY.presenceSet, { away: current.known ? current.away : null })
+    .catch(() => undefined)
+}
 
 function appPaths(): { appRoot: string; hostEntry: string; repoRoot: string } {
   const appRoot = app.getAppPath()
@@ -369,6 +377,7 @@ async function initializeApplication(testMode: boolean): Promise<ApplicationStar
   trackSessionProcessStates(launched.client)
   launched.client.onAppEvent((message) => appEvents.forward(message))
   void appEvents.prime()
+  reportPresence()
   let startup = await loadApplicationStartup(testMode)
   if (hasExplicitApplicationLaunch(process.argv)) {
     const launch = parseApplicationLaunchSpec(process.argv, process.env, process.cwd())

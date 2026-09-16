@@ -68,6 +68,8 @@ export function SessionTerminal(props: {
   focusMode: boolean
   filesOpen: boolean
   needsYou: boolean
+  /** The owner typed, pasted or dictated into the pane while it needs them. */
+  onAnswer(): void
   armed: boolean
   progress: ProgressPresentation | null
   colorMode: ColorModeName
@@ -106,6 +108,8 @@ export function SessionTerminal(props: {
   const onView = useRef(props.onView)
   const onFailure = useRef(props.onFailure)
   const onPaste = useRef(props.onPaste)
+  const needsYou = useRef(props.needsYou)
+  const onAnswer = useRef(props.onAnswer)
   const activated = useRef(false)
   /** The presented exit status; undefined while the process is running. */
   const [exitStatus, setExitStatus] = useState<string>()
@@ -120,6 +124,8 @@ export function SessionTerminal(props: {
   onView.current = props.onView
   onFailure.current = props.onFailure
   onPaste.current = props.onPaste
+  needsYou.current = props.needsYou
+  onAnswer.current = props.onAnswer
 
   useEffect(() => {
     const container = element.current
@@ -182,6 +188,11 @@ export function SessionTerminal(props: {
     const input = terminal.onData((data) => {
       if (!focusReports.isFocusReport(data)) send(data)
     })
+    // onKey fires only for the owner's own keys, not for the replies xterm sends to terminal queries.
+    const answered = (): void => {
+      if (needsYou.current) onAnswer.current()
+    }
+    const keys = terminal.onKey(answered)
     const textareaFocus = (): void => focusReports.paneFocus(true)
     const textareaBlur = (): void => focusReports.paneFocus(false)
     terminal.textarea?.addEventListener('focus', textareaFocus)
@@ -234,9 +245,13 @@ export function SessionTerminal(props: {
       selection: () => copyableText(terminal.getSelection()),
       paste: (text) => {
         terminal.paste(text)
+        answered()
         terminal.focus()
       },
-      type: (text) => terminal.input(text, true),
+      type: (text) => {
+        terminal.input(text, true)
+        answered()
+      },
       selectAll: () => terminal.selectAll(),
       openSearch: () => {
         setSearchOpen(true)
@@ -413,6 +428,7 @@ export function SessionTerminal(props: {
       terminal.textarea?.removeEventListener('blur', textareaBlur)
       focusReports.dispose()
       input.dispose()
+      keys.dispose()
       container.removeEventListener('mousedown', mouseDown, true)
       container.removeEventListener('contextmenu', contextMenu, true)
       window.removeEventListener('mouseup', mouseUp)

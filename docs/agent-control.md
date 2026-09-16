@@ -100,12 +100,16 @@ agent, and they do nothing outside BMN.
 | Claude `Notification` (permission prompt) or `PermissionRequest` | Opens a `permission` request |
 | Claude `Notification` (question dialog) | Opens a `question` request |
 | `PostToolUse`, `UserPromptSubmit` | Resolves open prompts as answered in the terminal; clears the turn notice |
-| `Stop` | Withdraws open prompts; opens a `notice` that the turn finished, with the last message |
+| `Stop` | Withdraws open prompts; opens a `notice` that the turn finished, with the last message. When Claude still has background tasks or a scheduled wake-up, it opens nothing: the agent resumes without you |
 | `SessionStart` (not after compaction), `SessionEnd` | Withdraws everything the hook opened |
 | Codex `Interrupt` | Withdraws open prompts |
 
 An agent passes its environment to agents it starts from a tool call (`claude -p`), so the hook
 also checks that the agent above it holds the terminal; nested, non-interactive agents are ignored.
+
+Typing, pasting or dictating into a session answers its open prompts and notices, the way agterm
+clears a session's status on a keystroke, so they leave **Needs you** as soon as you respond, even
+when the agent sends no hook for it (a denied permission, or Esc). Review requests stay open.
 
 Add the hook to `~/.claude/settings.json` for `Notification`, `PostToolUse`, `UserPromptSubmit`,
 `Stop`, `SessionStart` and `SessionEnd`, next to any hooks already there:
@@ -121,10 +125,18 @@ For Codex, add the same entries with `aiterm hook codex` to `~/.codex/hooks.json
 Review decides whether you must approve, so it would flag tools that never need you.
 
 BMN shows a desktop notification for a new request unless you are looking at that session. Telegram
-gets it only if it is still open and unseen after 15 seconds (a finished-turn notice after 60), and
-each request only once however often the agent repeats it. While you are at the desk and looking at
-the session, BMN tells the agent its terminal has focus; after a minute without input it reports the
-focus lost, so Claude Code sends its own mobile notifications while you are away.
+gets it only while you are away from the desk (a minute without keyboard or mouse input), only if it
+is still open and unseen after 15 seconds (a finished-turn notice after 60), and each request only
+once however often the agent repeats it. A request that fell due while you were at the desk is still
+sent if you leave within 10 minutes of it opening. Session exits, when chosen, are sent only while
+you are away. If BMN cannot read idle time, Telegram gets requests as if you were away.
+
+While you are at the desk and looking at the session, BMN tells the agent its terminal has focus;
+after a minute without input it reports the focus lost, so Claude Code sends its own mobile
+notifications while you are away. A Claude session connected to Remote Control is never sent to
+Telegram: the Claude app already notifies your phone. The hook reads that from Claude Code's
+`~/.claude/sessions/<pid>.json` (or `$CLAUDE_CONFIG_DIR/sessions`), which needs `/proc`, so on macOS
+such sessions are still sent.
 
 ## What the app enforces
 
@@ -136,7 +148,7 @@ focus lost, so Claude Code sends its own mobile notifications while you are away
   its own store, hashes it, and never serves it back by path.
 - `claimed-done` is shown as a claim. Only `verified` is shown as verified.
 - A request stays open in **Needs you** until it is resolved or withdrawn; reading it only clears
-  the unread mark.
+  the unread mark. Typing into its session resolves it, except a review.
 
 These checks separate sessions from each other inside the app. They are not a sandbox against a
 malicious program that already runs as your user and can read your files.

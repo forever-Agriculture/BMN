@@ -52,6 +52,8 @@ export interface ControlHandlers {
     title: string
     body?: string
     expiresAt?: string
+    /** The agent's own app already notifies the owner's phone. */
+    phoneNotified?: boolean
   }): Promise<unknown>
   withdrawAttention(p: { sessionId: string; requestKey: string }): Promise<unknown>
   resolveAttention(p: { sessionId: string; requestKey: string; resolution: string }): Promise<unknown>
@@ -618,7 +620,7 @@ export class ControlServer {
       }
       case 'attention.open': {
         const params = closedParams(rawParams, [
-          'sessionId', 'requestKey', 'kind', 'title', 'body', 'expiresAt', 'idempotencyKey'
+          'sessionId', 'requestKey', 'kind', 'title', 'body', 'expiresAt', 'idempotencyKey', 'phoneNotified'
         ])
         const requestKey = requireText(params, 'requestKey', RULES.requestKey)
         const kind = requireEnum(params, 'kind', ATTENTION_KINDS)
@@ -626,6 +628,7 @@ export class ControlServer {
         const body = readText(params, 'body', RULES.body)
         const expiresAt = readTimestamp(params, 'expiresAt')
         const idempotencyKey = readText(params, 'idempotencyKey', RULES.idempotencyKey)
+        const phoneNotified = readBoolean(params, 'phoneNotified')
         const sessionId = this.target(scope, params)
         return this.idempotent(scope, method, idempotencyKey, params, () => handlers.openAttention({
           sessionId,
@@ -634,7 +637,8 @@ export class ControlServer {
           kind,
           title,
           ...(body === undefined ? {} : { body }),
-          ...(expiresAt === undefined ? {} : { expiresAt })
+          ...(expiresAt === undefined ? {} : { expiresAt }),
+          ...(phoneNotified === undefined ? {} : { phoneNotified })
         }))
       }
       case 'attention.withdraw': {

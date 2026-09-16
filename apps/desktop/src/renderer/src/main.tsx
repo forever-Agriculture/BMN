@@ -47,6 +47,7 @@ import {
   nextRequest,
   openRequests,
   progressPresentation,
+  requestsAnsweredByTyping,
   sessionStatus,
   splitCandidates,
   windowTitle
@@ -174,6 +175,7 @@ function App(): React.JSX.Element {
     .map((session) => session.sessionId)
   const home = useMemo(() => inferHome(sessions.map((session) => session.cwd)), [sessions])
   const unresolved = useMemo(() => openRequests(attention), [attention])
+  const answering = useRef(new Set<string>())
 
   const fail = (fallback: string) => (error: unknown): void => setFailure(failureDetail(error, fallback))
   const announce = (message: string): void => {
@@ -730,6 +732,19 @@ function App(): React.JSX.Element {
     void window.aiTerminal.putSettings('appearance', appearance).then(setSettings).catch(fail(failure))
   }
 
+  const answerByTyping = (sessionId: string): void => {
+    for (const request of requestsAnsweredByTyping(attention, sessionId)) {
+      if (answering.current.has(request.requestId)) continue
+      answering.current.add(request.requestId)
+      // The agent's own hook may close the request first, which leaves nothing to do.
+      void window.aiTerminal.resolveAttention(request.requestId, 'Answered in the terminal')
+        .catch(() => undefined)
+        .then(() => refresh.attention())
+        .catch(() => undefined)
+        .finally(() => answering.current.delete(request.requestId))
+    }
+  }
+
   const nextNeedingYou = (): void => {
     const request = nextRequest(attention, selectedSessionId)
     if (!request) {
@@ -1090,6 +1105,7 @@ function App(): React.JSX.Element {
                 focusMode={focusMode}
                 filesOpen={panel === 'files'}
                 needsYou={unresolved.some((request) => request.sessionId === terminalStartup.sessionId)}
+                onAnswer={() => answerByTyping(terminalStartup.sessionId)}
                 armed={armed}
                 progress={progressPresentation(progress, terminalStartup.sessionId, now)}
                 colorMode={settings.appearance.colorMode}

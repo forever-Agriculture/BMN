@@ -3,6 +3,8 @@ import { execFile } from 'node:child_process'
 
 export interface OwnerPresence {
   away: boolean
+  /** False while the idle time cannot be read; away is then false by default, not by evidence. */
+  known: boolean
 }
 
 /** Claude Code treats a terminal interaction within the last minute as the owner watching; this matches it. */
@@ -43,19 +45,19 @@ export function createPresenceMonitor(options: {
   awayAfterMs?: number
 }): { start(): void; stop(): void; current(): OwnerPresence } {
   const awayAfterMs = options.awayAfterMs ?? AWAY_AFTER_MS
-  let away = false
+  let presence: OwnerPresence = { away: false, known: false }
   let running = false
   let cancel: (() => void) | undefined
   const check = async (): Promise<void> => {
     const idle = await options.readIdleMs().catch(() => null)
     if (!running) return
-    const next = idle !== null && idle >= awayAfterMs
-    if (next !== away) {
-      away = next
-      options.onChange({ away })
+    const next = { away: idle !== null && idle >= awayAfterMs, known: idle !== null }
+    if (next.away !== presence.away || next.known !== presence.known) {
+      presence = next
+      options.onChange({ ...presence })
     }
     // Idle time only grows in real time, so a present owner cannot turn away before the rest of the threshold passes.
-    const wait = idle === null ? UNKNOWN_CHECK_MS : away ? AWAY_CHECK_MS : awayAfterMs - idle
+    const wait = idle === null ? UNKNOWN_CHECK_MS : presence.away ? AWAY_CHECK_MS : awayAfterMs - idle
     cancel = options.schedule(() => void check(), Math.max(wait, 1_000))
   }
   return {
@@ -69,6 +71,6 @@ export function createPresenceMonitor(options: {
       cancel?.()
       cancel = undefined
     },
-    current: () => ({ away })
+    current: () => ({ ...presence })
   }
 }

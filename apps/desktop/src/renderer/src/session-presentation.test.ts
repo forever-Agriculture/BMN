@@ -10,6 +10,7 @@ import {
   nextRequest,
   progressPresentation,
   relativeAge,
+  requestsAnsweredByTyping,
   sessionStatus,
   windowTitle
 } from './session-presentation'
@@ -100,6 +101,18 @@ describe('session presentation', () => {
     expect(nextRequest(records, 's2')?.requestId).toBe('r1')
     expect(nextRequest([records[1]!], 's1')?.requestId).toBe('r1')
     expect(nextRequest([], 's1')).toBeNull()
+  })
+
+  it('closes a session\'s open prompts and notices, but not a review, when the owner types into it', () => {
+    const records = [
+      { ...request('turn', 's1', '2026-09-14T11:20:00.000Z'), kind: 'notice' as const },
+      request('question', 's1', '2026-09-14T11:10:00.000Z'),
+      { ...request('review', 's1', '2026-09-14T11:00:00.000Z'), kind: 'review' as const },
+      request('other', 's2', '2026-09-14T11:00:00.000Z'),
+      request('closed', 's1', '2026-09-14T11:00:00.000Z', 'answered')
+    ]
+    expect(requestsAnsweredByTyping(records, 's1').map((record) => record.requestId)).toEqual(['question', 'turn'])
+    expect(requestsAnsweredByTyping(records, 's3')).toEqual([])
   })
 
   it('wraps neighbors', () => {

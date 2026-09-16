@@ -274,7 +274,7 @@ async function runHook(
 ): Promise<CliResult> {
   const proc = await procTree(fixture.root, agentProcess)
   return runCli(['hook', agent], {
-    env: { ...fixture.sessionEnv, AITERM_PROC_ROOT: proc },
+    env: { ...fixture.sessionEnv, AITERM_PROC_ROOT: proc, CLAUDE_CONFIG_DIR: join(fixture.root, 'claude') },
     input: JSON.stringify(event)
   })
 }
@@ -353,6 +353,53 @@ describe('aiterm hook', () => {
       title: 'Claude finished its turn',
       body: 'Done.\n[1mAll tests pass[0m'
     })
+  })
+
+  it('reports nothing when a turn ends with background work or a scheduled wake-up still pending', async () => {
+    const fixture = await cliFixture()
+    const stop = { hook_event_name: 'Stop', last_assistant_message: 'Waiting for the test run.' }
+
+    const working = await runHook(fixture, 'claude', {
+      ...stop,
+      background_tasks: [{ id: 'b1', type: 'local_bash', status: 'running', description: 'pnpm test' }],
+      session_crons: []
+    })
+    const scheduled = await runHook(fixture, 'claude', {
+      ...stop,
+      background_tasks: [],
+      session_crons: [{ id: 'c1', schedule: 'in 20m', prompt: 'check the run' }]
+    })
+    const idle = await runHook(fixture, 'claude', { ...stop, background_tasks: [], session_crons: [] })
+
+    expect([working, scheduled, idle]).toEqual([QUIET, QUIET, QUIET])
+    expect(fixture.handlers.withdrawAttention.mock.calls.map(([params]) => params.requestKey)).toEqual([
+      'claude:permission', 'claude:question', 'claude:turn',
+      'claude:permission', 'claude:question', 'claude:turn',
+      'claude:permission', 'claude:question'
+    ])
+    expect(fixture.handlers.openAttention).toHaveBeenCalledTimes(1)
+    expect(fixture.handlers.openAttention.mock.calls[0]?.[0]).toMatchObject({ requestKey: 'claude:turn', kind: 'notice' })
+  })
+
+  it('marks requests from a Claude session under Remote Control as already sent to the phone', async () => {
+    const fixture = await cliFixture()
+    const sessions = join(fixture.root, 'claude', 'sessions')
+    await mkdir(sessions, { recursive: true })
+    const prompt = { hook_event_name: 'Notification', notification_type: 'permission_prompt', message: 'Allow Bash?' }
+    const bridged = { pid: 7001, sessionId: 'claude-1', status: 'waiting', bridgeSessionId: 'session_01abc' }
+
+    await writeFile(join(sessions, '7001.json'), JSON.stringify(bridged))
+    await runHook(fixture, 'claude', { ...prompt, session_id: 'claude-1' })
+    await runHook(fixture, 'claude', { ...prompt, session_id: 'claude-2' })
+    await runHook(fixture, 'codex', { hook_event_name: 'Stop', session_id: 'claude-1' })
+    await writeFile(join(sessions, '7001.json'), JSON.stringify({ ...bridged, bridgeSessionId: undefined }))
+    await runHook(fixture, 'claude', { ...prompt, session_id: 'claude-1' })
+    await writeFile(join(sessions, '7001.json'), '{"sessionId":')
+    await runHook(fixture, 'claude', { ...prompt, session_id: 'claude-1' })
+
+    expect(fixture.handlers.openAttention.mock.calls.map(([params]) => params.phoneNotified)).toEqual([
+      true, undefined, undefined, undefined, undefined
+    ])
   })
 
   it('ignores an agent that does not hold the terminal, such as claude -p run from a tool call', async () => {
