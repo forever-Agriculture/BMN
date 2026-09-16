@@ -5,7 +5,7 @@ session. It uses a bot you create and own. It is off by default.
 
 ## What it does
 
-- When an agent asks for your attention (`aiterm ask`, or a Claude Code or Codex hook), the bot
+- When an agent asks for your attention (`bmn ask`, or a Claude Code or Codex hook), the bot
   sends you the request, but only while you are away from the desk and the request is still
   unanswered. Claude sessions connected to Remote Control are left to the Claude app. Optionally it
   also tells you when a session's process exits while you are away. See

@@ -39,11 +39,11 @@ process.once('exit', cleanup)
 
 child.once('error', (error) => {
   cleanup()
-  console.error(`[ai-terminal] development launch failed: ${error.message}`)
+  console.error(`[BMN] development launch failed: ${error.message}`)
   process.exitCode = 1
 })
 child.once('exit', (code, signal) => {
   cleanup()
-  if (signal) console.error(`[ai-terminal] development launch ended from ${signal}`)
+  if (signal) console.error(`[BMN] development launch ended from ${signal}`)
   process.exitCode = code ?? 1
 })

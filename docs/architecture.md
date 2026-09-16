@@ -12,7 +12,7 @@ flowchart LR
   W --> SQL[(SQLite, WAL)]
   U --> PT[PTYs: shell, Claude Code, Codex, ...]
   U --> F[Stored files and saved output]
-  C[aiterm CLI in a session] --> S[Unix socket, owner-only] --> U
+  C[bmn CLI in a session] --> S[Unix socket, owner-only] --> U
   U --> T[Optional Telegram connector] --> B[Telegram Bot API]
   R <-.terminal bytes over a MessagePort.-> U
 ```
@@ -100,7 +100,7 @@ queues, scrollback and preview decoding. Stored originals are only removed by an
 
 ```text
 apps/desktop/
-  bin/aiterm             command-line client for the control socket
+  bin/bmn             command-line client for the control socket
   src/main/              Electron main process
   src/preload/           the renderer's API
   src/renderer/          React interface

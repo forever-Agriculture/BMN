@@ -13,5 +13,5 @@ export function nativeLoadFailureMessage(
   error: unknown,
   repoRoot: string
 ): string {
-  return `[ai-terminal] the terminal host cannot start: native module "${moduleName}" failed to load: ${safeReason(error)}. Fix: run the documented rebuild command ("pnpm rebuild ${moduleName}" + the pinned @electron/rebuild step) in ${repoRoot} (requires python3, make, g++, and Electron headers download). No sessions were started.`
+  return `[BMN] the terminal host cannot start: native module "${moduleName}" failed to load: ${safeReason(error)}. Fix: run the documented rebuild command ("pnpm rebuild ${moduleName}" + the pinned @electron/rebuild step) in ${repoRoot} (requires python3, make, g++, and Electron headers download). No sessions were started.`
 }

@@ -13,11 +13,11 @@ asarUnpack:
 extraResources:
   - from: resources/whisper
     to: whisper
-  # The aiterm CLI that sessions find on PATH: a launcher plus the script it runs on the bundled runtime.
-  - from: resources/cli/aiterm
-    to: bin/aiterm
-  - from: bin/aiterm
-    to: bin/aiterm.mjs
+  # The bmn CLI that sessions find on PATH: a launcher plus the script it runs on the bundled runtime.
+  - from: resources/cli/bmn
+    to: bin/bmn
+  - from: bin/bmn
+    to: bin/bmn.mjs
 npmRebuild: false
 # better-sqlite3 loads prebuilds/<platform>-<arch>.node, which is where @electron/rebuild puts its
 # from-source build; every other prebuild it ships is dead weight, so each target keeps only its own.

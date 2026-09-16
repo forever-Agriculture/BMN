@@ -293,15 +293,15 @@ function hostEnvironment(repoRoot: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
     AITERM_REPO_ROOT: repoRoot,
-    AITERM_CLI_PATH: aitermCliPath()
+    AITERM_CLI_PATH: bmnCliPath()
   }
 }
 
 /** Sessions get this file's directory on PATH; packaged builds carry a launcher for it under resources/bin. */
-function aitermCliPath(): string {
+function bmnCliPath(): string {
   return app.isPackaged
-    ? join(process.resourcesPath, 'bin', 'aiterm')
-    : join(app.getAppPath(), 'bin', 'aiterm')
+    ? join(process.resourcesPath, 'bin', 'bmn')
+    : join(app.getAppPath(), 'bin', 'bmn')
 }
 
 async function launchHostWithChannel(): Promise<{
@@ -709,7 +709,7 @@ function startupForRuntime(current: ApplicationRuntime, viewRestored = false): S
 async function recoverApplicationRendererOnce(window: BrowserWindow): Promise<void> {
   const current = [...runtimes.values()]
   if (!hostClient || window.isDestroyed()) return
-  if (selfTest) console.error('[ai-terminal] renderer recovery: started')
+  if (selfTest) console.error('[BMN] renderer recovery: started')
   let emptyRuntimeChannel:
     | { hostPort: MessagePortMain; rendererPort: MessagePortMain }
     | undefined
@@ -733,7 +733,7 @@ async function recoverApplicationRendererOnce(window: BrowserWindow): Promise<vo
     const startup = await loadApplicationStartup(
       rendererTestMode || current.some((runtime) => runtime.testMode)
     )
-    if (selfTest) console.error('[ai-terminal] renderer recovery: startup loaded')
+    if (selfTest) console.error('[BMN] renderer recovery: startup loaded')
     let rendererPort: MessagePortMain
     if (current.length > 0) {
       const recovered = await recoverExistingSessionRenderers(current, {
@@ -751,7 +751,7 @@ async function recoverApplicationRendererOnce(window: BrowserWindow): Promise<vo
       rendererPort = recovered.rendererPort
       // An ended session's view is replaced here and can never be reattached; an unconfirmed exit stays listed for Quit.
       for (const runtime of recovered.gone) dropRuntimeView(processTracking, runtime)
-      if (selfTest) console.error('[ai-terminal] renderer recovery: sessions reattached')
+      if (selfTest) console.error('[BMN] renderer recovery: sessions reattached')
       for (const item of recovered.attachments) {
         const runtime = runtimes.get(item.sessionId)
         if (runtime) {
@@ -780,12 +780,12 @@ async function recoverApplicationRendererOnce(window: BrowserWindow): Promise<vo
     }
     startup.liveSessions = [...runtimes.values()].map((runtime) => startupForRuntime(runtime, true))
     window.webContents.postMessage('aiterm:startup', startup, [rendererPort])
-    if (selfTest) console.error('[ai-terminal] renderer recovery: startup posted')
+    if (selfTest) console.error('[BMN] renderer recovery: startup posted')
   } catch (error) {
     closeEmptyRuntimeChannel()
     if (selfTest) {
       const detail = error instanceof Error ? error.message : String(error)
-      console.error(`[ai-terminal] renderer recovery failed: ${detail}`)
+      console.error(`[BMN] renderer recovery failed: ${detail}`)
     }
     if (!window.isDestroyed()) {
       window.webContents.postMessage('aiterm:startup', actionableStartupFailure(error))
@@ -1177,7 +1177,7 @@ function reportSelfTestFailure(error: unknown): void {
   if (selfTestFailureReported) return
   selfTestFailureReported = true
   const message = error instanceof Error ? error.message : String(error)
-  console.error(`[ai-terminal] session self-test failed: ${message}`)
+  console.error(`[BMN] session self-test failed: ${message}`)
 }
 
 async function runSelfTest(): Promise<void> {
@@ -1469,14 +1469,14 @@ async function runSelfTest(): Promise<void> {
       throw new Error('multi-session fixture did not create exactly three live processes')
     }
     const rendererStartup = await loadApplicationStartup(true)
-    console.error('[ai-terminal] self-test phase: renderer preload integration')
+    console.error('[BMN] self-test phase: renderer preload integration')
     applicationWindow = createWindow(rendererStartup, {
       forceHidden: true,
       terminalPort: applicationPort,
       recoverRenderer: recoverApplicationRenderer
     })
     applicationWindow.webContents.on('console-message', (_event, level, message) => {
-      if (level === 2) console.error(`[ai-terminal] renderer console: ${message}`)
+      if (level === 2) console.error(`[BMN] renderer console: ${message}`)
     })
     await waitForRendererLoad(applicationWindow)
     const layoutSelectionsBeforeRendererProbe = selfTestLayoutPutSelections.length
@@ -1586,7 +1586,7 @@ async function runSelfTest(): Promise<void> {
         `application-quit stop was not recorded as interrupted: ${JSON.stringify(lifecycleStoppedBeforeRestart)}`
       )
     }
-    console.error('[ai-terminal] self-test phase: inactive workspace following output')
+    console.error('[BMN] self-test phase: inactive workspace following output')
     const inactiveAttachmentId = runtimes.get(thirdSession.sessionId)?.attachment.attachmentId
     if (!inactiveAttachmentId) throw new Error('the inactive workspace session has no renderer attachment')
     const inactiveMarker = 'AITERM-2-1-INACTIVE-FOLLOWING-DONE'
@@ -1613,7 +1613,7 @@ async function runSelfTest(): Promise<void> {
       );
       true;
     `))
-    console.error('[ai-terminal] self-test phase: inactive workspace output requested')
+    console.error('[BMN] self-test phase: inactive workspace output requested')
     const captureDeadline = Date.now() + 10_000
     let inactiveFollowingOutputCaptured = false
     while (!inactiveFollowingOutputCaptured && Date.now() < captureDeadline) {
@@ -1626,10 +1626,10 @@ async function runSelfTest(): Promise<void> {
     if (!inactiveFollowingOutputCaptured) {
       throw new Error('output streamed to the inactive workspace session did not advance its saved output capture')
     }
-    console.error('[ai-terminal] self-test phase: inactive workspace output captured')
+    console.error('[BMN] self-test phase: inactive workspace output captured')
     await rendererPause(500)
     const inactiveFollowingOutputLayoutPuts = selfTestLayoutPutRequests - layoutPutsBeforeOutput
-    console.error(`[ai-terminal] self-test phase: inactive workspace output layout puts ${inactiveFollowingOutputLayoutPuts}`)
+    console.error(`[BMN] self-test phase: inactive workspace output layout puts ${inactiveFollowingOutputLayoutPuts}`)
     if (inactiveFollowingOutputLayoutPuts !== 0) {
       throw new Error(
         `output to a following session of an inactive workspace issued ${inactiveFollowingOutputLayoutPuts} layout.put request(s)`
@@ -1638,12 +1638,12 @@ async function runSelfTest(): Promise<void> {
     const showArchivedReachable = await applicationWindow.webContents.executeJavaScript(
       "document.body.innerText.includes('Show archived')"
     ) as boolean
-    console.error('[ai-terminal] self-test phase: renderer restart')
+    console.error('[BMN] self-test phase: renderer restart')
     const reloaded = waitForRendererLoad(applicationWindow)
     applicationWindow.webContents.reload()
     await reloaded
     await waitForRendererHook(applicationWindow)
-    console.error('[ai-terminal] self-test phase: renderer restart loaded')
+    console.error('[BMN] self-test phase: renderer restart loaded')
     const rendererStoppedPanelLabel = await stoppedPanelLabel(
       applicationWindow,
       preloadProbe.templateCreatedSession.sessionId
@@ -1670,7 +1670,7 @@ async function runSelfTest(): Promise<void> {
       client.request(METHOD_REGISTRY.sessionBindingGet, { sessionId: identity.sessionId })
     ))
 
-    console.error('[ai-terminal] self-test phase: application restart')
+    console.error('[BMN] self-test phase: application restart')
     const supersededHostPid = client.process.pid
     const firstHostAbandoned = new Promise<void>((resolveAbandoned) => {
       const onMessage = (message: unknown): void => {
@@ -1685,15 +1685,15 @@ async function runSelfTest(): Promise<void> {
       }
       client.process.on('message', onMessage)
     })
-    console.error('[ai-terminal] self-test phase: terminating first host')
+    console.error('[BMN] self-test phase: terminating first host')
     await client.request(METHOD_REGISTRY.healthGet, { selfTestHostLoss: true })
-    console.error('[ai-terminal] self-test phase: first host termination requested')
+    console.error('[BMN] self-test phase: first host termination requested')
     await Promise.race([
       firstHostAbandoned,
       new Promise<never>((_resolve, reject) =>
         setTimeout(() => reject(new Error('self-test host termination timed out')), 5_000))
     ])
-    console.error('[ai-terminal] self-test phase: first host released its database')
+    console.error('[BMN] self-test phase: first host released its database')
     applicationWindow.webContents.postMessage('aiterm:startup', {
       ok: false,
       code: ERROR_CODES.ioError,
@@ -1710,7 +1710,7 @@ async function runSelfTest(): Promise<void> {
     sessionRecords.clear()
 
     const restarted = await launchHostWithChannel()
-    console.error('[ai-terminal] self-test phase: restarted host ready')
+    console.error('[BMN] self-test phase: restarted host ready')
     applicationWindow.hide()
     client = restarted.client
     clientClosed = false
@@ -1728,7 +1728,7 @@ async function runSelfTest(): Promise<void> {
       workspaceId: DEFAULT_WORKSPACE_ID
     })
     const restoredHealth = await client.request<HostHealth>(METHOD_REGISTRY.healthGet, {})
-    console.error('[ai-terminal] self-test phase: restored state queried')
+    console.error('[BMN] self-test phase: restored state queried')
     const restoredBindings = await Promise.all(identities.map((identity) =>
       client.request(METHOD_REGISTRY.sessionBindingGet, { sessionId: identity.sessionId })
     ))
@@ -1782,7 +1782,7 @@ async function runSelfTest(): Promise<void> {
     }
     // A dedicated live session on the restarted host, after every restored-state check, so no
     // earlier count, order or receipt value sees it.
-    console.error('[ai-terminal] self-test phase: renderer live exit feedback')
+    console.error('[BMN] self-test phase: renderer live exit feedback')
     hostClient = client
     hostRendererPort = applicationPort
     trackSessionProcessStates(client)
@@ -1816,7 +1816,7 @@ async function runSelfTest(): Promise<void> {
         `the live pane did not render the observed exit label: ${JSON.stringify(rendererLiveExitLabel)}`
       )
     }
-    console.error('[ai-terminal] self-test phase: renderer recovery after shell exit')
+    console.error('[BMN] self-test phase: renderer recovery after shell exit')
     const exitRecordDeadline = Date.now() + 5_000
     while (
       (await loadWorkspaceStartup(client)).sessions
@@ -1844,7 +1844,7 @@ async function runSelfTest(): Promise<void> {
     }
     const rendererRecoveredAfterShellExit = true
     const secondClose = await client.close()
-    console.error('[ai-terminal] self-test phase: second host closed')
+    console.error('[BMN] self-test phase: second host closed')
     clientClosed = true
     graceful &&= secondClose.graceful
     applicationPort.close()
@@ -1917,7 +1917,7 @@ async function runSelfTest(): Promise<void> {
     reportSelfTestFailure(error)
     throw error
   } finally {
-    console.error('[ai-terminal] self-test phase: releasing self-test resources')
+    console.error('[BMN] self-test phase: releasing self-test resources')
     if (applicationWindow && !applicationWindow.isDestroyed()) applicationWindow.destroy()
     applicationWindow = undefined
     if (applicationPort) applicationPort.close()
@@ -1983,7 +1983,7 @@ async function flushAllSavedOutput(): Promise<SavedOutputCaptureOutcome> {
       () => new Date(),
       (error) => {
         const message = error instanceof Error ? error.message : String(error)
-        console.error(`[ai-terminal] final-capture loss disclosure could not be persisted: ${message}`)
+        console.error(`[BMN] final-capture loss disclosure could not be persisted: ${message}`)
       }
     )
     if (outcome.status === 'unavailable') aggregate = outcome
@@ -2071,7 +2071,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
       reportSelfTestFailure(error)
       exitCode = 1
     }
-    console.error('[ai-terminal] self-test phase: exiting application')
+    console.error('[BMN] self-test phase: exiting application')
     app.exit(exitCode)
     return
   }
@@ -2105,7 +2105,7 @@ if (primaryInstance) void app.whenReady().then(async () => {
     })
   } catch (error) {
     const failure = actionableStartupFailure(error)
-    console.error(`[ai-terminal] terminal startup failed: ${failure.message}`)
+    console.error(`[BMN] terminal startup failed: ${failure.message}`)
     applicationWindow = createWindow(failure)
   }
 })

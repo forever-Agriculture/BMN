@@ -35,10 +35,10 @@ function pluralize(count: number, noun: string): string {
 }
 
 const USAGE_LINES = [
-  'aiterm progress running "Story 2.2" --source epic-auto',
-  'aiterm ask pick-db "Which database?" --body "…"',
-  'aiterm publish ./report.png',
-  'aiterm send --submit -- "continue"'
+  'bmn progress running "Story 2.2" --source epic-auto',
+  'bmn ask pick-db "Which database?" --body "…"',
+  'bmn publish ./report.png',
+  'bmn send --submit -- "continue"'
 ]
 
 const TEST_MESSAGE_DISABLED_TITLE = 'Send a test message once Telegram is connected and polling'

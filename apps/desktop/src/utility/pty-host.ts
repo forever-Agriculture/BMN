@@ -112,7 +112,7 @@ if (typeof BetterSqlite3 !== 'function') {
 
 const parentPort = process.parentPort
 if (!parentPort) {
-  process.stderr.write('[ai-terminal] the terminal host cannot start outside an Electron utility process.\n')
+  process.stderr.write('[BMN] the terminal host cannot start outside an Electron utility process.\n')
   process.exit(1)
 }
 
@@ -215,11 +215,11 @@ async function purgeExpiredArchives(
     if (purged.sessionIds.length === 0 && purged.workspaceIds.length === 0) return
     await savedOutputStore.removeSessions(purged.sessionIds)
     process.stderr.write(
-      `[ai-terminal] deleted ${purged.sessionIds.length} archived session(s) and ${purged.workspaceIds.length} archived workspace(s)\n`
+      `[BMN] deleted ${purged.sessionIds.length} archived session(s) and ${purged.workspaceIds.length} archived workspace(s)\n`
     )
   } catch (error) {
     const message = error instanceof Error ? error.message : 'unknown error'
-    process.stderr.write(`[ai-terminal] archive cleanup failed: ${message.slice(0, 240)}\n`)
+    process.stderr.write(`[BMN] archive cleanup failed: ${message.slice(0, 240)}\n`)
   }
 }
 
@@ -257,7 +257,7 @@ async function start(): Promise<void> {
     database,
     manager,
     roots,
-    cliPath: process.env.AITERM_CLI_PATH ?? join(__dirname, '..', '..', 'bin', 'aiterm'),
+    cliPath: process.env.AITERM_CLI_PATH ?? join(__dirname, '..', '..', 'bin', 'bmn'),
     emit: (message) => parentPort.postMessage(message)
   })
   companionHolder.current = companion
@@ -272,7 +272,7 @@ async function start(): Promise<void> {
         else if (isTerminalAckMessage(event.data)) manager.acknowledge(event.data)
       } catch (error) {
         const message = error instanceof Error ? error.message : 'invalid terminal transport message'
-        process.stderr.write(`[ai-terminal] terminal transport rejected: ${message.slice(0, 240)}\n`)
+        process.stderr.write(`[BMN] terminal transport rejected: ${message.slice(0, 240)}\n`)
       }
     })
     port.on('close', () => {
@@ -609,6 +609,6 @@ async function start(): Promise<void> {
 
 void start().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : 'unknown initialization error'
-  process.stderr.write(`[ai-terminal] the terminal host cannot initialize: ${message.slice(0, 480)}\n`)
+  process.stderr.write(`[BMN] the terminal host cannot initialize: ${message.slice(0, 480)}\n`)
   process.exit(1)
 })

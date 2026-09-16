@@ -1,4 +1,4 @@
-// MODULE: control-cli.test.ts - the aiterm CLI drives a real control server with truthful output and exit codes
+// MODULE: control-cli.test.ts - the bmn CLI drives a real control server with truthful output and exit codes
 import { execFile } from 'node:child_process'
 import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -9,7 +9,7 @@ import { ControlAuth, writeOwnerToken } from './control-auth'
 import { ERROR_CODES } from '@ai-terminal/protocol'
 import { ControlError, ControlServer, MemoryReceiptStore, type ControlHandlers } from './control-server'
 
-const CLI = fileURLToPath(new URL('../../bin/aiterm', import.meta.url))
+const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
 const createdRoots = new Set<string>()
 const servers = new Set<ControlServer>()
 
@@ -75,7 +75,7 @@ async function cliFixture() {
   return { root, socketPath, auth, current, handlers, sessionEnv }
 }
 
-describe('aiterm CLI', () => {
+describe('bmn CLI', () => {
   it('publishes a file resolved from the working directory with a fresh key per invocation', async () => {
     const fixture = await cliFixture()
 
@@ -129,7 +129,7 @@ describe('aiterm CLI', () => {
     expect(result).toEqual({ code: 0, stdout: 'Progress reported: blocked: Waiting for review\n', stderr: '' })
     expect(fixture.handlers.reportProgress.mock.calls.map(([call]) => call)).toEqual([
       expect.objectContaining({ source: 'ci', state: 'blocked', label: 'Waiting for review', detail: 'PR #12' }),
-      expect.objectContaining({ source: 'aiterm', state: 'running', label: 'Building' })
+      expect.objectContaining({ source: 'bmn', state: 'running', label: 'Building' })
     ])
   })
 
@@ -198,9 +198,9 @@ describe('aiterm CLI', () => {
     fixture.current.set('session-1', 'incarnation-1')
     const peer = await runCli(['withdraw', 'q1', '--session', 'session-2'], { env: fixture.sessionEnv })
 
-    expect(revoked).toEqual({ code: 1, stdout: '', stderr: 'aiterm: UNAUTHORIZED: Credential revoked\n' })
+    expect(revoked).toEqual({ code: 1, stdout: '', stderr: 'bmn: UNAUTHORIZED: Credential revoked\n' })
     expect(peer.code).toBe(1)
-    expect(peer.stderr).toMatch(/^aiterm: UNAUTHORIZED: /)
+    expect(peer.stderr).toMatch(/^bmn: UNAUTHORIZED: /)
     for (const output of [revoked.stderr, peer.stderr]) {
       expect(output).not.toContain(fixture.sessionEnv.AITERM_TOKEN)
     }
@@ -222,7 +222,7 @@ describe('aiterm CLI', () => {
       resolution: 'approved'
     })
     expect(untargeted.code).toBe(1)
-    expect(untargeted.stderr).toMatch(/^aiterm: INVALID_ARGUMENT: /)
+    expect(untargeted.stderr).toMatch(/^bmn: INVALID_ARGUMENT: /)
   })
 
   it('exits 1 when the control socket cannot be reached', async () => {
@@ -231,14 +231,14 @@ describe('aiterm CLI', () => {
     const result = await runCli(['list', '--socket', join(fixture.root, 'missing.sock')], { env: fixture.sessionEnv })
 
     expect(result.code).toBe(1)
-    expect(result.stderr).toMatch(/^aiterm: IO_ERROR: cannot reach control socket/)
+    expect(result.stderr).toMatch(/^bmn: IO_ERROR: cannot reach control socket/)
   })
 
   it('prints help and exits 0', async () => {
     const result = await runCli(['help'])
 
     expect(result.code).toBe(0)
-    expect(result.stdout).toContain('Usage: aiterm')
+    expect(result.stdout).toContain('Usage: bmn')
     expect(result.stderr).toBe('')
   })
 })
@@ -279,7 +279,7 @@ async function runHook(
   })
 }
 
-describe('aiterm hook', () => {
+describe('bmn hook', () => {
   it('opens a permission request for a Claude permission prompt and nothing for an idle reminder', async () => {
     const fixture = await cliFixture()
 
@@ -326,10 +326,68 @@ describe('aiterm hook', () => {
       body: 'pnpm test\n  --run'
     })
     expect(fixture.handlers.resolveAttention.mock.calls.map(([params]) => [params.requestKey, params.resolution])).toEqual([
-      ['codex:permission', 'answered in the terminal'],
-      ['codex:question', 'answered in the terminal']
+      ['codex:permission', 'answered in the terminal']
     ])
     expect(fixture.handlers.withdrawAttention.mock.calls.map(([params]) => params.requestKey)).toEqual(['codex:turn'])
+  })
+
+  it('keeps a Codex async follow-up question open until the owner submits input', async () => {
+    const fixture = await cliFixture()
+
+    const asked = await runHook(fixture, 'codex', {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'request_user_input_async',
+      tool_input: {
+        questions: [
+          {
+            title: 'Which routing should I use?',
+            options: ['Epic Auto routing', 'Both', 'Report model']
+          },
+          {
+            question: 'Should the report launch before billing?',
+            options: [{ label: 'Build first' }, { label: 'Wait for billing' }]
+          }
+        ]
+      }
+    })
+    const queued = await runHook(fixture, 'codex', {
+      hook_event_name: 'PostToolUse',
+      tool_name: 'request_user_input_async',
+      tool_input: {}
+    })
+
+    expect(asked).toEqual(QUIET)
+    expect(queued).toEqual(QUIET)
+    expect(fixture.handlers.openAttention).toHaveBeenCalledWith(expect.objectContaining({
+      requestKey: 'codex:question',
+      kind: 'question',
+      title: 'Codex has 2 questions: Which routing should I use?',
+      body: expect.stringContaining('2. Should the report launch before billing?')
+    }))
+
+    await runHook(fixture, 'codex', {
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'pnpm test' }
+    })
+    expect(fixture.handlers.resolveAttention.mock.calls.map(([params]) => params.requestKey)).toEqual([
+      'codex:permission'
+    ])
+    fixture.handlers.resolveAttention.mockClear()
+
+    await runHook(fixture, 'codex', {
+      hook_event_name: 'Stop',
+      last_assistant_message: 'I can continue after you answer the queued questions.'
+    })
+    expect(fixture.handlers.withdrawAttention.mock.calls.map(([params]) => params.requestKey)).not.toContain(
+      'codex:question'
+    )
+
+    await runHook(fixture, 'codex', { hook_event_name: 'UserPromptSubmit' })
+    expect(fixture.handlers.resolveAttention.mock.calls.map(([params]) => params.requestKey)).toEqual([
+      'codex:permission',
+      'codex:question'
+    ])
   })
 
   it('reports a finished turn as a notice carrying the last message and withdraws prompts left open', async () => {
@@ -402,7 +460,7 @@ describe('aiterm hook', () => {
     ])
   })
 
-  it('reports a Codex finished turn through the same dismissible notice route', async () => {
+  it('reports a Codex finished turn without withdrawing a possibly queued question', async () => {
     const fixture = await cliFixture()
 
     expect(await runHook(fixture, 'codex', {
@@ -410,8 +468,7 @@ describe('aiterm hook', () => {
       last_assistant_message: 'Review complete'
     })).toEqual(QUIET)
     expect(fixture.handlers.withdrawAttention.mock.calls.map(([params]) => params.requestKey)).toEqual([
-      'codex:permission',
-      'codex:question'
+      'codex:permission'
     ])
     expect(fixture.handlers.openAttention).toHaveBeenCalledWith(expect.objectContaining({
       requestKey: 'codex:turn',

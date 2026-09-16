@@ -266,7 +266,7 @@ export function SessionTerminal(props: {
       terminal,
       getPtyDimensions: () => ptyDimensions,
       integration: async () => {
-        console.warn('[ai-terminal] renderer behavioural integration: started')
+        console.warn('[BMN] renderer behavioural integration: started')
         const workspaces = await window.aiTerminal.listWorkspaces(true)
         const sessionsBeforeTemplate = await window.aiTerminal.listSessions(props.startup.workspaceId)
         await window.aiTerminal.resizeTerminal(
@@ -284,7 +284,7 @@ export function SessionTerminal(props: {
         const unknownSessionSavedOutput = await window.aiTerminal
           .getSavedOutput('self-test-unknown-session')
           .then(() => 'accepted', typedCode)
-        console.warn('[ai-terminal] renderer behavioural integration: bridge checks complete')
+        console.warn('[BMN] renderer behavioural integration: bridge checks complete')
         const waitFor = async <Value,>(
           probe: () => Value | undefined | null | Promise<Value | undefined | null>
         ): Promise<Value> => {
@@ -304,7 +304,7 @@ export function SessionTerminal(props: {
           '.popup-menu [role="menuitem"]'
         )].find((item) => item.textContent?.trim() === 'Session details'))
         detailsItem.click()
-        console.warn('[ai-terminal] renderer behavioural integration: details panel opened')
+        console.warn('[BMN] renderer behavioural integration: details panel opened')
         const templatePicker = await waitFor(() => document.querySelector<HTMLSelectElement>(
           'select[aria-label="Launch template"]'
         ))
@@ -348,7 +348,7 @@ export function SessionTerminal(props: {
         templatePicker.value = templateOption.value
         templatePicker.dispatchEvent(new Event('change', { bubbles: true }))
         await waitFor(() => input('Session name').value === templateName ? true : undefined)
-        console.warn('[ai-terminal] renderer behavioural integration: template selected')
+        console.warn('[BMN] renderer behavioural integration: template selected')
         const expectedTemplateSession = {
           name: input('Session name').value,
           executable: input('Executable').value,
@@ -363,7 +363,7 @@ export function SessionTerminal(props: {
         }
         const shownSize = { cols: terminal.cols, rows: terminal.rows }
         templateForm.requestSubmit()
-        console.warn('[ai-terminal] renderer behavioural integration: template form submitted')
+        console.warn('[BMN] renderer behavioural integration: template form submitted')
         const knownSessionIds = new Set(sessionsBeforeTemplate.map((session) => session.sessionId))
         const templateCreatedSession = await waitFor(async () => {
           const records = await window.aiTerminal.listSessions(props.startup.workspaceId)
@@ -376,7 +376,7 @@ export function SessionTerminal(props: {
             record.backgroundChoice === expectedTemplateSession.backgroundChoice
           )
         })
-        console.warn('[ai-terminal] renderer behavioural integration: template session created')
+        console.warn('[BMN] renderer behavioural integration: template session created')
         // The new session took this pane. Let its resize observer and the resize request settle while hidden.
         await waitFor(() => section.current?.classList.contains('session-terminal-hidden') ? true : undefined)
         await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
@@ -386,7 +386,7 @@ export function SessionTerminal(props: {
           '.session-row > button[data-session-id]'
         )].find((button) => button.dataset.sessionId === props.startup.sessionId))
         sessionButton.click()
-        console.warn('[ai-terminal] renderer behavioural integration: tree session selected')
+        console.warn('[BMN] renderer behavioural integration: tree session selected')
         const selectedLayout = await waitFor(async () => {
           const next = await window.aiTerminal.getLayout(props.startup.workspaceId)
           return next.layout.selectedSessionId === props.startup.sessionId ? next.layout : undefined
@@ -444,7 +444,7 @@ export function SessionTerminal(props: {
             ? undefined
             : next.layout
         })
-        console.warn('[ai-terminal] renderer behavioural integration: complete')
+        console.warn('[BMN] renderer behavioural integration: complete')
         return {
           workspaceCount: workspaces.length,
           sessionMethodSessionId: props.startup.sessionId,

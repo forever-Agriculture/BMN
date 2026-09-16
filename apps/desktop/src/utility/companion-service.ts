@@ -224,7 +224,7 @@ export class CompanionService {
       await writeOwnerToken(dirname(this.socketPath), this.auth.ownerToken)
       await this.control.listen()
       this.controlListening = true
-      this.controlDetail = 'Agents and the aiterm CLI can reach this app'
+      this.controlDetail = 'Agents and the bmn CLI can reach this app'
     } catch (error) {
       // The kernel caps a Unix socket path and reports only EINVAL, so name the real cause.
       const tooLong = Buffer.byteLength(this.socketPath) > MAX_SOCKET_PATH_BYTES

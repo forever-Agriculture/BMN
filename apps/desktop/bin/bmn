@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// MODULE: aiterm - command-line client for the BMN control socket (one connection per invocation)
+// MODULE: bmn - command-line client for the BMN control socket (one connection per invocation)
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import { createConnection } from 'node:net'
@@ -15,7 +15,7 @@ const VALUE_OPTIONS = new Set(['name', 'session', 'key', 'source', 'detail', 'ki
 const FLAG_OPTIONS = new Set(['json', 'owner', 'submit', 'help'])
 const GLOBAL_OPTIONS = ['json', 'owner', 'token-file', 'socket', 'help']
 
-const USAGE = `Usage: aiterm <command> [arguments] [options]
+const USAGE = `Usage: bmn <command> [arguments] [options]
 
 Commands:
   snapshot                                  Show the current state snapshot
@@ -100,7 +100,7 @@ const COMMANDS = {
       return {
         method: 'progress.report',
         params: withSession(options, {
-          source: options.source ?? 'aiterm',
+          source: options.source ?? 'bmn',
           state,
           label: requireNonEmpty(label, 'label'),
           ...(options.detail === undefined ? {} : { detail: options.detail })
@@ -348,6 +348,49 @@ function toolSummary(input) {
   return JSON.stringify(input)
 }
 
+function userInputTool(value) {
+  return typeof value === 'string' && /(?:^|[.:/])request_user_input(?:_async)?$/.test(value)
+}
+
+function asyncUserInputTool(value) {
+  return typeof value === 'string' && /(?:^|[.:/])request_user_input_async$/.test(value)
+}
+
+function userInputSummary(name, input) {
+  const candidates = isObject(input) && Array.isArray(input.questions) ? input.questions : []
+  const questions = candidates.flatMap((candidate) => {
+    if (!isObject(candidate)) return []
+    const prompt = [candidate.question, candidate.title, candidate.header]
+      .find((value) => typeof value === 'string' && value.trim() !== '')
+    if (typeof prompt !== 'string') return []
+    const options = Array.isArray(candidate.options)
+      ? candidate.options.flatMap((option) => {
+        if (typeof option === 'string' && option.trim() !== '') return [option.trim()]
+        if (isObject(option) && typeof option.label === 'string' && option.label.trim() !== '') {
+          return [option.label.trim()]
+        }
+        return []
+      })
+      : []
+    return [{ prompt: prompt.trim(), options }]
+  })
+  if (questions.length === 0) {
+    return {
+      title: `${name} has a question`,
+      body: bodyText(toolSummary(input))
+    }
+  }
+  const first = questions[0].prompt
+  const heading = questions.length === 1
+    ? `${name} asks: ${first}`
+    : `${name} has ${questions.length} questions: ${first}`
+  const rows = questions.map((question, index) => {
+    const options = question.options.length === 0 ? '' : `\n   ${question.options.join(' | ')}`
+    return `${index + 1}. ${question.prompt}${options}`
+  })
+  return { title: titleText(heading, `${name} has a question`), body: bodyText(rows.join('\n')) }
+}
+
 /** Claude Code lists in-flight background work and scheduled wake-ups on Stop; either resumes the agent without the owner. */
 function resumesByItself(event) {
   return [event.background_tasks, event.session_crons].some((list) => Array.isArray(list) && list.length > 0)
@@ -367,6 +410,11 @@ function hookRequests(agent, event) {
     params: { requestKey: requestKey(slot), resolution: IN_TERMINAL }
   }))
   switch (event.hook_event_name) {
+    case 'PreToolUse': {
+      if (agent !== 'codex' || !userInputTool(event.tool_name)) return []
+      const summary = userInputSummary(name, event.tool_input)
+      return open('question', 'question', summary.title, summary.body)
+    }
     case 'Notification': {
       const type = event.notification_type
       if (type === 'permission_prompt' || type === 'worker_permission_prompt' ||
@@ -387,17 +435,27 @@ function hookRequests(agent, event) {
         bodyText(toolSummary(event.tool_input))
       )
     case 'PostToolUse':
+      // The async question has only been queued when this tool finishes; the owner has not answered it yet.
+      if (agent === 'codex' && asyncUserInputTool(event.tool_name)) return withdraw('turn')
+      // Later Codex tools may finish while that queued question is still waiting for its owner.
+      if (agent === 'codex') {
+        const answeredSlots = userInputTool(event.tool_name) ? ['permission', 'question'] : ['permission']
+        return [...answered(...answeredSlots), ...withdraw('turn')]
+      }
       // A tool ran, so any prompt was answered, and a turn a Stop hook sent back to work is running again.
       return [...answered('permission', 'question'), ...withdraw('turn')]
     case 'UserPromptSubmit':
       return [...answered('permission', 'question'), ...withdraw('turn')]
-    case 'Stop':
+    case 'Stop': {
+      // Codex can finish the turn that queued an async question before the owner answers it.
+      const promptSlots = agent === 'codex' ? ['permission'] : ['permission', 'question']
       // A turn that ends while work is still in flight is a progress update, not a wait for the owner.
-      if (resumesByItself(event)) return withdraw('permission', 'question', 'turn')
+      if (resumesByItself(event)) return withdraw(...promptSlots, 'turn')
       return [
-        ...withdraw('permission', 'question'),
+        ...withdraw(...promptSlots),
         ...open('turn', 'notice', `${name} finished its turn`, bodyText(event.last_assistant_message))
       ]
+    }
     case 'SessionStart':
       return event.source === 'compact' ? [] : withdraw('permission', 'question', 'turn')
     case 'SessionEnd':
@@ -454,7 +512,7 @@ function claudeRemoteControlled(agentPid, sessionId) {
 async function runHook(args) {
   const [agent] = args
   if (args.length !== 1 || !Object.hasOwn(HOOK_AGENTS, agent)) {
-    process.stderr.write(`aiterm: hook expects one agent: ${Object.keys(HOOK_AGENTS).join('|')}\n`)
+    process.stderr.write(`bmn: hook expects one agent: ${Object.keys(HOOK_AGENTS).join('|')}\n`)
     return 0
   }
   const socketPath = process.env.AITERM_CONTROL_SOCKET
@@ -536,7 +594,7 @@ function describeResult(command, positionals, options, result) {
 }
 
 function usageFailure(message) {
-  process.stderr.write(`aiterm: ${message}\nRun "aiterm help" for usage.\n`)
+  process.stderr.write(`bmn: ${message}\nRun "bmn help" for usage.\n`)
   return 2
 }
 
@@ -584,7 +642,7 @@ async function main(argv) {
   } catch (error) {
     if (error instanceof UsageError) return usageFailure(error.message)
     const code = error instanceof CliError ? error.code : 'IO_ERROR'
-    process.stderr.write(`aiterm: ${code}: ${error instanceof Error ? error.message : String(error)}\n`)
+    process.stderr.write(`bmn: ${code}: ${error instanceof Error ? error.message : String(error)}\n`)
     return 1
   }
 }
@@ -594,7 +652,7 @@ main(process.argv.slice(2)).then(
     process.exitCode = code
   },
   (error) => {
-    process.stderr.write(`aiterm: IO_ERROR: ${error instanceof Error ? error.message : String(error)}\n`)
+    process.stderr.write(`bmn: IO_ERROR: ${error instanceof Error ? error.message : String(error)}\n`)
     process.exitCode = 1
   }
 )

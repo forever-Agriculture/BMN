@@ -55,7 +55,7 @@ beforeEach(() => {
     database: workerLike(database),
     manager: {} as SessionManager,
     roots: { config: join(root, 'config'), data: join(root, 'data'), state: join(root, 'state'), runtime: join(root, 'runtime') },
-    cliPath: join(root, 'bin', 'aiterm'),
+    cliPath: join(root, 'bin', 'bmn'),
     emit: () => undefined
   })
 })

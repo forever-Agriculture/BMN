@@ -25,7 +25,7 @@ Everything runs on your computer. There is no account, cloud backend or telemetr
 - **Process control.** Stop a process and keep its last screen as saved output. Start it again, or
   resume the stored Claude Code / Codex conversation through the CLI's own resume.
   Closing the window with sessions running asks whether to keep them running or stop them.
-- **Agent control (`aiterm`).** Every session gets the `aiterm` command. An agent can list sessions,
+- **Agent control (`bmn`).** Every session gets the `bmn` command. An agent can list sessions,
   publish a file, report progress, ask you a question, or send text to its own session. Each session
   gets a token scoped to that session. See [docs/agent-control.md](docs/agent-control.md).
 - **Files.** Published files, attachments and pasted images are stored as immutable originals with
@@ -130,7 +130,7 @@ other three folders are the same as on Linux.
 ## Documentation
 
 - [Architecture](docs/architecture.md): processes, data flow and the rules they follow
-- [Agent control](docs/agent-control.md): the `aiterm` command and its local API
+- [Agent control](docs/agent-control.md): the `bmn` command and its local API
 - [Voice dictation](docs/voice.md): engine, models, speed and privacy
 - [Telegram](docs/telegram.md): connecting your own bot
 - [Development](docs/development.md): building, testing, packaging and troubleshooting
