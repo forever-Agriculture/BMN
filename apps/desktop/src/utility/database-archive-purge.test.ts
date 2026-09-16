@@ -173,4 +173,32 @@ describe('archive retention', () => {
       revision: saved.revision + 1
     })
   })
+
+  it('removes a deleted session from a different workspace saved split', () => {
+    retention(90)
+    workspace('w-view', null)
+    session('kept', 'w-view', null)
+    session('gone-foreign', DEFAULT_WORKSPACE_ID, daysAgo(91))
+    const before = getLayout(database, 'w-view').layout
+    putLayout(database, 'w-view', before.revision, {
+      ...before,
+      selectedSessionId: 'gone-foreign',
+      split: {
+        orientation: 'side-by-side',
+        panes: [{ sessionId: 'kept', ratio: 0.5 }, { sessionId: 'gone-foreign', ratio: 0.5 }]
+      },
+      sessionView: {
+        kept: { scrollLine: null, followTail: true },
+        'gone-foreign': { scrollLine: 7, followTail: false }
+      }
+    }, now)
+
+    purgeExpiredArchives(database, now)
+
+    const result = getLayout(database, 'w-view')
+    expect(result.notice).toBeNull()
+    expect(result.layout.selectedSessionId).toBe('kept')
+    expect(result.layout.split.panes).toEqual([{ sessionId: 'kept', ratio: 1 }])
+    expect(result.layout.sessionView).toEqual({ kept: { scrollLine: null, followTail: true } })
+  })
 })

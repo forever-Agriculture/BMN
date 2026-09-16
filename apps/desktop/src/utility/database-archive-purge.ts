@@ -59,9 +59,12 @@ export function purgeExpiredArchives(database: DatabaseConnection, now: string):
     deleteSession.run(sessionId)
   }
 
-  const keptWorkspaces = new Set(sessions
+  // Any retained workspace may show a session from another workspace in its split.
+  const keptWorkspaces = (database
+    .prepare('SELECT workspace_id FROM workspace')
+    .all() as Array<{ workspace_id: string }>)
     .map((row) => row.workspace_id)
-    .filter((workspaceId) => !deletedWorkspaces.has(workspaceId)))
+    .filter((workspaceId) => !deletedWorkspaces.has(workspaceId))
   for (const workspaceId of keptWorkspaces) {
     forgetSessionsInLayout(database, workspaceId, deletedSessions, now)
   }

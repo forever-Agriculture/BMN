@@ -131,6 +131,17 @@ export function requestsAnsweredByTyping(records: readonly AttentionRecord[], se
   return openRequests(records).filter((record) => record.sessionId === sessionId && record.kind !== 'review')
 }
 
+export type OpenAttentionAction = 'mark-seen' | 'resolve-notice' | null
+
+/** Opening an informational notice completes it; opening a prompt only records that it was seen. */
+export function attentionActionWhenOpened(
+  request: Pick<AttentionRecord, 'kind' | 'state' | 'seenAt'>
+): OpenAttentionAction {
+  if (request.state !== 'open') return null
+  if (request.kind === 'notice') return 'resolve-notice'
+  return request.seenAt === null ? 'mark-seen' : null
+}
+
 /** The next unresolved request after the current session's, wrapping; null when none wait. */
 export function nextRequest(
   records: readonly AttentionRecord[],

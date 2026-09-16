@@ -81,6 +81,14 @@ describe('renderer acceptance hook', () => {
         sessionId: 'session-a',
         layoutSelectedSessionId: 'session-a'
       },
+      crossWorkspaceSplit: {
+        layoutWorkspaceId: 'workspace-a',
+        sourceWorkspaceId: 'workspace-b',
+        paneSessionIds: ['session-a', 'session-b'],
+        selectedAfterFocus: 'session-a',
+        sourceWorkspaceArchived: true,
+        foreignPaneRemovedAfterArchive: true
+      },
       hiddenPaneSize: { shown: { cols: 80, rows: 24 }, hidden: { cols: 80, rows: 24 } }
     }
     const integration = async () => probe

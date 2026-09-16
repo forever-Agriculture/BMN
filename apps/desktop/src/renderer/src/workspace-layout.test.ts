@@ -48,6 +48,19 @@ describe('workspace layout transitions', () => {
     expect(() => splitLayoutSession(split, 'session-c', sessions)).toThrow(/at most two/)
   })
 
+  it('keeps the active workspace while selecting a pane from another workspace', () => {
+    const allIds = ['home', 'foreign']
+    const home = selectLayoutSession(emptyWorkspaceLayout('workspace-home'), 'home', allIds)
+    const split = splitLayoutSession(home, 'foreign', allIds)
+
+    expect(split.workspaceId).toBe('workspace-home')
+    expect(split.selectedSessionId).toBe('foreign')
+    expect(split.split.panes.map((pane) => pane.sessionId)).toEqual(['home', 'foreign'])
+    const focusedHome = selectLayoutSession(split, 'home', allIds)
+    expect(focusedHome.workspaceId).toBe('workspace-home')
+    expect(focusedHome.split.panes).toEqual(split.split.panes)
+  })
+
   it('rejects an invalid transition through the shared protocol predicate', () => {
     const invalid = {
       ...emptyWorkspaceLayout('workspace-1'),

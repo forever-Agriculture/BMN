@@ -35,6 +35,14 @@ export interface TerminalIntegrationProbe {
     sessionId: string
     layoutSelectedSessionId: string | null
   }
+  crossWorkspaceSplit: {
+    layoutWorkspaceId: string
+    sourceWorkspaceId: string
+    paneSessionIds: string[]
+    selectedAfterFocus: string | null
+    sourceWorkspaceArchived: boolean
+    foreignPaneRemovedAfterArchive: boolean
+  }
   /** The probing pane's terminal grid while shown, and after another session took its pane and hid it. */
   hiddenPaneSize: {
     shown: { cols: number; rows: number }

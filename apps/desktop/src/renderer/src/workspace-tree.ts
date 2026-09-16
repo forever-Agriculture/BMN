@@ -93,11 +93,16 @@ function sessionAction(
 ): TreeSessionAction | null {
   const workspaceId = sessions.find((session) => session.sessionId === sessionId)?.workspaceId
   if (!workspaceId) return null
-  const sessionIds = orderedWorkspaceSessions(sessions, workspaceId).map((session) => session.sessionId)
+  const sessionIds = sessions.map((session) => session.sessionId)
   return {
     workspaceId,
     tree: (state) => selectTreeWorkspace(state, workspaceId),
-    change: (layout) => transition(layout, sessionId, sessionIds)
+    change: (layout) => {
+      if (layout.workspaceId !== workspaceId) {
+        throw new Error(`Session ${sessionId} does not belong to workspace ${layout.workspaceId}`)
+      }
+      return transition(layout, sessionId, sessionIds)
+    }
   }
 }
 

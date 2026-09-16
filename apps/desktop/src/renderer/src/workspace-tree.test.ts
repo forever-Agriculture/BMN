@@ -1,7 +1,7 @@
 // MODULE: workspace-tree.test.ts - sidebar tree semantics
 import { describe, expect, it } from 'vitest'
 import { emptyWorkspaceLayout, type SessionRecord, type WorkspaceRecord } from '@ai-terminal/protocol'
-import { selectLayoutSession } from './workspace-layout'
+import { selectLayoutSession, splitLayoutSession } from './workspace-layout'
 import {
   adjacentPositionUpdates,
   initialWorkspaceTree,
@@ -46,7 +46,7 @@ describe('workspace tree semantics', () => {
     expect(switched.workspaceId).toBe('b')
     expect(switched.tree(initial).selectedWorkspaceId).toBe('b')
     expect(switched.change(layoutB).selectedSessionId).toBe('b-1')
-    expect(() => switched.change(layoutA)).toThrow(/invalid state/)
+    expect(() => switched.change(layoutA)).toThrow(/does not belong/)
     expect(layoutA.selectedSessionId).toBe('a-2')
     expect(selectTreeSession(sessions, 'unknown')).toBeNull()
     expect(orderedWorkspaceSessions(sessions, 'a').map((session) => session.sessionId))
@@ -58,6 +58,18 @@ describe('workspace tree semantics', () => {
     const split = splitTreeSession(sessions, 'b-2')!
     expect(split.tree(initial).selectedWorkspaceId).toBe('b')
     expect(split.change(layoutB).split.panes.map((pane) => pane.sessionId)).toEqual(['b-1', 'b-2'])
+  })
+
+  it('selects normally after the workspace layout has held a foreign session', () => {
+    const allSessionIds = sessions.map((session) => session.sessionId)
+    const layoutA = splitLayoutSession(
+      selectLayoutSession(emptyWorkspaceLayout('a'), 'a-2', allSessionIds),
+      'b-1',
+      allSessionIds
+    )
+    const selection = selectTreeSession(sessions, 'a-1')!
+
+    expect(selection.change(layoutA).selectedSessionId).toBe('a-1')
   })
 
   it('expands unarchived workspaces initially and toggles one row, selecting its workspace', () => {

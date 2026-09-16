@@ -245,10 +245,11 @@ function selectSession(database: DatabaseConnection, sessionId: string): Session
   return sessionRecord(row)
 }
 
-function sessionIdsForWorkspace(database: DatabaseConnection, workspaceId: string): string[] {
+/** Layout panes may combine sessions from different workspaces, so every existing stable ID is valid. */
+function allSessionIds(database: DatabaseConnection): string[] {
   return (database
-    .prepare('SELECT session_id FROM session WHERE workspace_id = ?')
-    .all(workspaceId) as Array<{ session_id: string }>).map((row) => row.session_id)
+    .prepare('SELECT session_id FROM session')
+    .all() as Array<{ session_id: string }>).map((row) => row.session_id)
 }
 
 export function listWorkspaces(
@@ -436,7 +437,7 @@ export function getLayout(
   }
   if (
     row && revisionIsValid &&
-    isWorkspaceLayoutState(layout, sessionIdsForWorkspace(database, workspaceId)) &&
+    isWorkspaceLayoutState(layout, allSessionIds(database)) &&
     layout.workspaceId === workspaceId &&
     layout.revision === recoveryRevision
   ) {
@@ -468,7 +469,7 @@ export function putLayout(
   if (currentRevision !== expectedRevision) {
     return conflict('Workspace layout', workspaceId, currentRevision)
   }
-  const sessionIds = sessionIdsForWorkspace(database, workspaceId)
+  const sessionIds = allSessionIds(database)
   if (
     !isWorkspaceLayoutState(state, sessionIds) ||
     state.workspaceId !== workspaceId ||

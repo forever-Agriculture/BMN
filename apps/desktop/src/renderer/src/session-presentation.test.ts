@@ -3,6 +3,7 @@ import type { AttentionRecord, ProgressRecord } from '@ai-terminal/protocol'
 import { describe, expect, it } from 'vitest'
 import {
   agentTag,
+  attentionActionWhenOpened,
   displayPath,
   inferHome,
   neighbor,
@@ -113,6 +114,15 @@ describe('session presentation', () => {
     ]
     expect(requestsAnsweredByTyping(records, 's1').map((record) => record.requestId)).toEqual(['question', 'turn'])
     expect(requestsAnsweredByTyping(records, 's3')).toEqual([])
+  })
+
+  it('resolves an opened notice but only marks unanswered prompts as seen', () => {
+    const prompt = request('prompt', 's1', '2026-09-14T11:00:00.000Z')
+    expect(attentionActionWhenOpened(prompt)).toBe('mark-seen')
+    expect(attentionActionWhenOpened({ ...prompt, seenAt: now.toString() })).toBeNull()
+    expect(attentionActionWhenOpened({ ...prompt, kind: 'permission' })).toBe('mark-seen')
+    expect(attentionActionWhenOpened({ ...prompt, kind: 'notice' })).toBe('resolve-notice')
+    expect(attentionActionWhenOpened({ ...prompt, kind: 'notice', state: 'answered' })).toBeNull()
   })
 
   it('wraps neighbors', () => {

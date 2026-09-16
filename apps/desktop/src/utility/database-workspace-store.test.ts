@@ -355,6 +355,54 @@ describe('workspace database store', () => {
     }
   })
 
+  it('persists a split containing sessions from two workspaces and rejects a missing session', () => {
+    const database = new BetterSqlite3(':memory:')
+    try {
+      initializeDatabase(database, now)
+      database.transaction(() => createWorkspace(database, { name: 'Other' }, 'workspace-other', now))()
+      insertSession(database, {
+        sessionId: 'session-home', workspaceId: DEFAULT_WORKSPACE_ID, position: 0, cwd: '/workspace/home', argv: []
+      })
+      insertSession(database, {
+        sessionId: 'session-other', workspaceId: 'workspace-other', position: 0, cwd: '/workspace/other', argv: []
+      })
+      const initial = getLayout(database, DEFAULT_WORKSPACE_ID).layout
+      const crossWorkspace: WorkspaceLayoutState = {
+        ...initial,
+        selectedSessionId: 'session-other',
+        split: {
+          orientation: 'side-by-side',
+          panes: [
+            { sessionId: 'session-home', ratio: 0.5 },
+            { sessionId: 'session-other', ratio: 0.5 }
+          ]
+        },
+        sessionView: {
+          'session-home': { scrollLine: null, followTail: true },
+          'session-other': { scrollLine: null, followTail: true }
+        }
+      }
+
+      const stored = database.transaction(() => putLayout(
+        database, DEFAULT_WORKSPACE_ID, initial.revision, crossWorkspace, now
+      ))()
+      expect(getLayout(database, DEFAULT_WORKSPACE_ID)).toEqual({ layout: stored, notice: null })
+      expect(() => database.transaction(() => putLayout(
+        database,
+        DEFAULT_WORKSPACE_ID,
+        stored.revision,
+        {
+          ...stored,
+          selectedSessionId: 'session-missing',
+          split: { ...stored.split, panes: [{ sessionId: 'session-missing', ratio: 1 }] }
+        },
+        now
+      ))()).toThrowError(expect.objectContaining({ code: ERROR_CODES.invalidArgument }))
+    } finally {
+      database.close()
+    }
+  })
+
   it.each([
     ['invalid JSON', () => '{"workspaceId": "workspace-broken", "split": '],
     ['a closed-shape violation', () => JSON.stringify({

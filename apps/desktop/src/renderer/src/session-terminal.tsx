@@ -391,6 +391,59 @@ export function SessionTerminal(props: {
           const next = await window.aiTerminal.getLayout(props.startup.workspaceId)
           return next.layout.selectedSessionId === props.startup.sessionId ? next.layout : undefined
         })
+        const sourceWorkspace = workspaces.find((workspace) =>
+          workspace.archivedAt === null && workspace.workspaceId !== props.startup.workspaceId)
+        if (!sourceWorkspace) throw new Error('the cross-workspace split fixture was not available')
+        const sourceSession = (await window.aiTerminal.listSessions(sourceWorkspace.workspaceId))
+          .find((record) => record.archivedAt === null)
+        if (!sourceSession) throw new Error('the cross-workspace split fixture had no visible session')
+        const splitButton = await waitFor(() => [...(section.current?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
+          .find((button) => button.textContent?.trim() === 'Split' || button.textContent?.trim() === 'Unsplit'))
+        if (splitButton.textContent?.trim() === 'Unsplit') {
+          splitButton.click()
+          await waitFor(() => document.querySelector('.session-area.split') ? undefined : true)
+        }
+        splitButton.click()
+        const crossWorkspaceChoice = await waitFor(() => document.querySelector<HTMLElement>(
+          `#palette-split-${sourceSession.sessionId}`
+        ))
+        if (!crossWorkspaceChoice.textContent?.includes(sourceWorkspace.name)) {
+          throw new Error('the split choice did not name its source workspace')
+        }
+        crossWorkspaceChoice.click()
+        const crossWorkspaceLayout = await waitFor(async () => {
+          const next = await window.aiTerminal.getLayout(props.startup.workspaceId)
+          return next.layout.split.panes.some((pane) => pane.sessionId === sourceSession.sessionId)
+            ? next.layout
+            : undefined
+        })
+        const sourcePane = await waitFor(() => document.querySelector<HTMLElement>(
+          `.session-terminal[data-session-id="${sourceSession.sessionId}"]:not(.session-terminal-hidden)`
+        ))
+        if (!sourcePane) throw new Error('the cross-workspace terminal pane was not visible')
+        section.current?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+        const focusedLayout = await waitFor(async () => {
+          const next = await window.aiTerminal.getLayout(props.startup.workspaceId)
+          return next.layout.selectedSessionId === props.startup.sessionId ? next.layout : undefined
+        })
+        const workspaceMenu = await waitFor(() => document.querySelector<HTMLButtonElement>(
+          `[aria-label="Actions for ${sourceWorkspace.name}"]`
+        ))
+        workspaceMenu.click()
+        const archiveWorkspace = await waitFor(() => [...document.querySelectorAll<HTMLButtonElement>(
+          '.popup-menu [role="menuitem"]'
+        )].find((item) => item.textContent?.trim() === 'Archive workspace'))
+        archiveWorkspace.click()
+        const archivedWorkspace = await waitFor(async () =>
+          (await window.aiTerminal.listWorkspaces(true))
+            .find((workspace) => workspace.workspaceId === sourceWorkspace.workspaceId && workspace.archivedAt !== null)
+        )
+        const cleanedLayout = await waitFor(async () => {
+          const next = await window.aiTerminal.getLayout(props.startup.workspaceId)
+          return next.layout.split.panes.some((pane) => pane.sessionId === sourceSession.sessionId)
+            ? undefined
+            : next.layout
+        })
         console.warn('[ai-terminal] renderer behavioural integration: complete')
         return {
           workspaceCount: workspaces.length,
@@ -409,6 +462,16 @@ export function SessionTerminal(props: {
           treeSelection: {
             sessionId: props.startup.sessionId,
             layoutSelectedSessionId: selectedLayout.selectedSessionId
+          },
+          crossWorkspaceSplit: {
+            layoutWorkspaceId: crossWorkspaceLayout.workspaceId,
+            sourceWorkspaceId: sourceWorkspace.workspaceId,
+            paneSessionIds: crossWorkspaceLayout.split.panes.map((pane) => pane.sessionId),
+            selectedAfterFocus: focusedLayout.selectedSessionId,
+            sourceWorkspaceArchived: archivedWorkspace.archivedAt !== null,
+            foreignPaneRemovedAfterArchive:
+              cleanedLayout.split.panes.some((pane) => pane.sessionId === sourceSession.sessionId) === false &&
+              cleanedLayout.split.panes.some((pane) => pane.sessionId === props.startup.sessionId)
           },
           hiddenPaneSize: { shown: shownSize, hidden: hiddenSize }
         }

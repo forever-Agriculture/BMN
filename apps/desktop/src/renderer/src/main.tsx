@@ -41,6 +41,7 @@ import { PopupMenu, type MenuAnchor, type MenuEntry } from './popup-menu'
 import { PreferencesDialog } from './preferences-dialog'
 import {
   agentTag,
+  attentionActionWhenOpened,
   displayPath,
   inferHome,
   neighbor,
@@ -70,9 +71,10 @@ import {
   applySessionView,
   closeLayoutPane,
   resizeLayoutSplit,
+  selectLayoutSession,
   sessionLayoutView,
   setLayoutOrientation,
-  workspaceSessionIds
+  splitLayoutSession
 } from './workspace-layout'
 import {
   adjacentPositionUpdates,
@@ -169,10 +171,16 @@ function App(): React.JSX.Element {
     () => activeWorkspaceId ? orderedWorkspaceSessions(sessions, activeWorkspaceId) : [],
     [sessions, activeWorkspaceId]
   )
-  const sessionIds = activeSessions.map((session) => session.sessionId)
+  const allSessionIds = sessions.map((session) => session.sessionId)
   const navigableSessionIds = activeSessions
     .filter((session) => session.archivedAt === null)
     .map((session) => session.sessionId)
+  const splittableSessionIds = useMemo(() =>
+    visibleWorkspaces(workspaces, false).flatMap((workspace) =>
+      orderedWorkspaceSessions(sessions, workspace.workspaceId)
+        .filter((session) => session.archivedAt === null)
+        .map((session) => session.sessionId)
+    ), [sessions, workspaces])
   const home = useMemo(() => inferHome(sessions.map((session) => session.cwd)), [sessions])
   const unresolved = useMemo(() => openRequests(attention), [attention])
   const answering = useRef(new Set<string>())
@@ -401,6 +409,24 @@ function App(): React.JSX.Element {
       ...change
     })
     setWorkspaces((current) => current.map((item) => item.workspaceId === updated.workspaceId ? updated : item))
+    if (change.archived === true) {
+      const archivedSessionIds = new Set(
+        sessionsRef.current
+          .filter((session) => session.workspaceId === workspace.workspaceId)
+          .map((session) => session.sessionId)
+      )
+      const knownSessionIds = sessionsRef.current.map((session) => session.sessionId)
+      for (const workspaceId of Object.keys(writer.layouts())) {
+        if (workspaceId === workspace.workspaceId) continue
+        writer.apply(workspaceId, (state) => {
+          let next = state
+          for (const sessionId of archivedSessionIds) {
+            next = closeLayoutPane(next, sessionId, knownSessionIds)
+          }
+          return next
+        })
+      }
+    }
   }
 
   const moveWorkspace = (ordered: readonly WorkspaceRecord[], index: number, direction: -1 | 1): void => {
@@ -423,8 +449,10 @@ function App(): React.JSX.Element {
     const updated = await window.aiTerminal.updateSession({ sessionId: record.sessionId, expectedRevision: record.revision, archived })
     setSessions((current) => current.map((item) => item.sessionId === updated.sessionId ? updated : item))
     if (archived) {
-      writer.apply(updated.workspaceId, (state) =>
-        closeLayoutPane(state, updated.sessionId, workspaceSessionIds(sessionsRef.current, updated.workspaceId)))
+      for (const workspaceId of Object.keys(writer.layouts())) {
+        writer.apply(workspaceId, (state) =>
+          closeLayoutPane(state, updated.sessionId, sessionsRef.current.map((session) => session.sessionId)))
+      }
     }
     brief(archived ? `Archived ${updated.name}. Turn on Show archived to restore it.` : `Restored ${updated.name}.`)
   }
@@ -649,7 +677,7 @@ function App(): React.JSX.Element {
     const panes = layout.split.panes
     if (panes.length >= 2) {
       const other = panes.find((pane) => pane.sessionId !== sessionId) ?? panes[1]
-      if (other) writer.apply(activeWorkspaceId, (state) => closeLayoutPane(state, other.sessionId, sessionIds))
+      if (other) writer.apply(activeWorkspaceId, (state) => closeLayoutPane(state, other.sessionId, allSessionIds))
       return
     }
     setDialog({ kind: 'split-picker', sessionId })
@@ -658,29 +686,36 @@ function App(): React.JSX.Element {
   /** Opens the chosen session in the second pane and moves the keyboard there. */
   const splitWith = (sessionId: string): void => {
     const record = sessionsRef.current.find((session) => session.sessionId === sessionId)
-    const target = record ? writer.layouts()[record.workspaceId] : undefined
-    if (!record || !target) {
+    const workspace = record
+      ? workspaces.find((candidate) => candidate.workspaceId === record.workspaceId)
+      : undefined
+    if (!record || record.archivedAt !== null || workspace?.archivedAt !== null || !activeWorkspaceId) {
       brief('That session no longer exists.')
+      return
+    }
+    const target = writer.layouts()[activeWorkspaceId]
+    if (!target) {
+      brief('The current workspace layout is unavailable.')
       return
     }
     if (target.split.panes.length >= 2 && !target.split.panes.some((pane) => pane.sessionId === sessionId)) {
       brief('This workspace is already split. Close the split first.')
       return
     }
-    applyTreeSessionAction(splitTreeSession(sessionsRef.current, sessionId))
+    writer.apply(activeWorkspaceId, (state) => splitLayoutSession(state, sessionId, allSessionIds))
     requestAnimationFrame(() => controllers.current.get(sessionId)?.focus())
   }
 
   const splitPickerCommands = (sessionId: string | null): PaletteCommand[] => {
     const shown = new Set((layout?.split.panes ?? []).map((pane) => pane.sessionId))
     return [
-      ...splitCandidates(navigableSessionIds, shown, sessionId).flatMap((id): PaletteCommand[] => {
+      ...splitCandidates(splittableSessionIds, shown, sessionId).flatMap((id): PaletteCommand[] => {
         const record = sessions.find((session) => session.sessionId === id)
         return record ? [{
           id: `split-${id}`,
           group: 'Sessions',
           label: record.name,
-          context: `${agentTag(record.executable)} · ${displayPath(record.cwd, home)} · ${live[id] ? 'running' : 'stopped'}`,
+          context: `${workspaceName(record.workspaceId)} · ${agentTag(record.executable)} · ${displayPath(record.cwd, home)} · ${live[id] ? 'running' : 'stopped'}`,
           run: () => splitWith(id)
         }] : []
       }),
@@ -695,6 +730,14 @@ function App(): React.JSX.Element {
     ]
   }
 
+  /** Selects a pane in the active composition without navigating to that session's own workspace. */
+  const focusLayoutSession = (sessionId: string): void => {
+    if (!activeWorkspaceId || !layout?.split.panes.some((pane) => pane.sessionId === sessionId)) return
+    writer.apply(activeWorkspaceId, (state) => selectLayoutSession(state, sessionId, allSessionIds))
+    clearUnread(sessionId)
+    requestAnimationFrame(() => controllers.current.get(sessionId)?.focus())
+  }
+
   /** Moves selection and the keyboard to the other pane of a split. */
   const focusOtherPane = (): void => {
     const other = layout?.split.panes.find((pane) => pane.sessionId !== selectedSessionId)
@@ -702,18 +745,26 @@ function App(): React.JSX.Element {
       brief('Split the view to switch panes.')
       return
     }
-    openSession(other.sessionId)
+    focusLayoutSession(other.sessionId)
   }
 
   const splitBeside = (session: SessionRecord): void => {
-    const target = layouts[session.workspaceId]
-    if (target && target.split.panes.length >= 2 && !target.split.panes.some((pane) => pane.sessionId === session.sessionId)) {
-      writer.apply(session.workspaceId, (state) => {
-        const other = state.split.panes.find((pane) => pane.sessionId !== state.selectedSessionId)
-        return other ? closeLayoutPane(state, other.sessionId, workspaceSessionIds(sessions, session.workspaceId)) : state
-      })
+    if (!activeWorkspaceId) return
+    const sourceWorkspace = workspaces.find((workspace) => workspace.workspaceId === session.workspaceId)
+    if (session.archivedAt !== null || sourceWorkspace?.archivedAt !== null) {
+      brief('That session is archived.')
+      return
     }
-    applyTreeSessionAction(splitTreeSession(sessions, session.sessionId))
+    writer.apply(activeWorkspaceId, (state) => {
+      let next = state
+      if (next.split.panes.length >= 2 && !next.split.panes.some((pane) => pane.sessionId === session.sessionId)) {
+        const other = state.split.panes.find((pane) => pane.sessionId !== state.selectedSessionId)
+        if (other) next = closeLayoutPane(next, other.sessionId, allSessionIds)
+      }
+      return splitLayoutSession(next, session.sessionId, allSessionIds)
+    })
+    clearUnread(session.sessionId)
+    requestAnimationFrame(() => controllers.current.get(session.sessionId)?.focus())
   }
 
   const changeFontSize = (delta: number | null): void => {
@@ -841,7 +892,7 @@ function App(): React.JSX.Element {
       onSelect: () => {
         if (!activeWorkspaceId) return
         writer.apply(activeWorkspaceId, (state) =>
-          setLayoutOrientation(state, state.split.orientation === 'stacked' ? 'side-by-side' : 'stacked', sessionIds))
+          setLayoutOrientation(state, state.split.orientation === 'stacked' ? 'side-by-side' : 'stacked', allSessionIds))
       }
     },
     { label: 'New session in this workspace', onSelect: () => beginNewSession(activeWorkspace) },
@@ -935,7 +986,7 @@ function App(): React.JSX.Element {
 
   const commitRatio = (ratio: number): void => {
     if (!activeWorkspaceId) return
-    writer.apply(activeWorkspaceId, (state) => resizeLayoutSplit(state, ratio, sessionIds))
+    writer.apply(activeWorkspaceId, (state) => resizeLayoutSplit(state, ratio, allSessionIds))
   }
 
   const pointerRatio = (event: React.PointerEvent): number | null => {
@@ -990,8 +1041,14 @@ function App(): React.JSX.Element {
             anchor={needsYouButton.current}
             onOpenSession={(sessionId, request) => {
               openSession(sessionId)
-              if (request && !request.seenAt) {
-                void window.aiTerminal.markAttentionSeen(request.requestId).then(() => refresh.attention()).catch(fail('Request update failed'))
+              if (request) {
+                const opening = attentionActionWhenOpened(request)
+                const action = opening === 'resolve-notice'
+                  ? window.aiTerminal.resolveAttention(request.requestId, 'Opened in BMN').catch(() => undefined)
+                  : opening === 'mark-seen'
+                    ? window.aiTerminal.markAttentionSeen(request.requestId)
+                    : Promise.resolve()
+                void action.then(() => refresh.attention()).catch(fail('Request update failed'))
               }
             }}
             onAcknowledge={(request) => {
@@ -1118,7 +1175,7 @@ function App(): React.JSX.Element {
                 }}
                 onView={(update) => applySessionView(writer, sessionsRef.current, terminalStartup.sessionId, update)}
                 onFailure={setFailure}
-                onSelect={() => applyTreeSessionAction(selectTreeSession(sessionsRef.current, terminalStartup.sessionId))}
+                onSelect={() => focusLayoutSession(terminalStartup.sessionId)}
                 onSplit={() => toggleSplit(terminalStartup.sessionId)}
                 onFocusMode={() => setFocusMode((value) => !value)}
                 onFiles={() => setPanel((value) => value === 'files' ? null : 'files')}
@@ -1207,7 +1264,7 @@ function App(): React.JSX.Element {
                 <section key={pane.sessionId} className="stopped-pane" style={paneStyle(pane.sessionId)}>
                   <strong>{record.name}</strong>
                   <p>{sessionProcessLabel(record.lastProcess)}</p>
-                  <button type="button" onClick={() => applyTreeSessionAction(selectTreeSession(sessions, record.sessionId))}>Show session</button>
+                  <button type="button" onClick={() => focusLayoutSession(record.sessionId)}>Show session</button>
                 </section>
               )
             }) : null}

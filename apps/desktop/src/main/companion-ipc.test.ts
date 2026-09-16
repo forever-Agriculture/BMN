@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('electron', () => ({}))
 
-const { createAppEventForwarder } = await import('./companion-ipc')
+const { activateAttentionNotification, createAppEventForwarder } = await import('./companion-ipc')
 
 function request(requestId: string, sessionId: string, revision = 1): AttentionRecord {
   return {
@@ -28,12 +28,12 @@ function request(requestId: string, sessionId: string, revision = 1): AttentionR
 function forwarder(initiallyWatched: string | null): {
   events: ReturnType<typeof createAppEventForwarder>
   open: AttentionRecord[]
-  shown: Array<{ title: string; body: string; sessionId: string }>
+  shown: Array<{ title: string; body: string; sessionId: string; requestId: string; kind: string }>
   seen: string[]
   watch(sessionId: string | null): void
 } {
   const open: AttentionRecord[] = []
-  const shown: Array<{ title: string; body: string; sessionId: string }> = []
+  const shown: Array<{ title: string; body: string; sessionId: string; requestId: string; kind: string }> = []
   const seen: string[] = []
   let watched = initiallyWatched
   const events = createAppEventForwarder({
@@ -68,11 +68,13 @@ describe('desktop notifications for attention requests', () => {
     await events.prime()
     open.push(request('other', 'session-other'))
     await attentionEvent(events)
-    expect(shown).toEqual([{ title: 'A session needs you', body: 'Allow other', sessionId: 'session-other' }])
+    expect(shown).toEqual([{
+      title: 'A session needs you', body: 'Allow other', sessionId: 'session-other', requestId: 'other', kind: 'permission'
+    }])
   })
 
   it('names the workspace and session a request comes from', async () => {
-    const shown: Array<{ title: string; body: string; sessionId: string }> = []
+    const shown: Array<{ title: string; body: string; sessionId: string; requestId: string; kind: string }> = []
     const open: AttentionRecord[] = []
     const events = createAppEventForwarder({
       client: () => ({
@@ -89,8 +91,8 @@ describe('desktop notifications for attention requests', () => {
     open.push(request('named', 'session-a'), { ...request('finished', 'session-b'), kind: 'notice', title: 'Claude finished its turn' })
     await attentionEvent(events)
     expect(shown).toEqual([
-      { title: 'Work / API needs you', body: 'Allow named', sessionId: 'session-a' },
-      { title: 'BMN', body: 'Claude finished its turn', sessionId: 'session-b' }
+      { title: 'Work / API needs you', body: 'Allow named', sessionId: 'session-a', requestId: 'named', kind: 'permission' },
+      { title: 'BMN', body: 'Claude finished its turn', sessionId: 'session-b', requestId: 'finished', kind: 'notice' }
     ])
   })
 
@@ -126,5 +128,24 @@ describe('desktop notifications for attention requests', () => {
     open[1] = request('after', 'session-a', 2)
     await attentionEvent(events)
     expect(shown.map((notification) => notification.body)).toEqual(['Allow after', 'Allow after'])
+  })
+
+  it('closes every clicked desktop bubble but resolves only informational notices', async () => {
+    const close = vi.fn()
+    const openSession = vi.fn()
+    const resolveNotice = vi.fn(async () => undefined)
+
+    await activateAttentionNotification(
+      { sessionId: 'session-a', requestId: 'permission', kind: 'permission' },
+      { close, openSession, resolveNotice }
+    )
+    await activateAttentionNotification(
+      { sessionId: 'session-b', requestId: 'finished', kind: 'notice' },
+      { close, openSession, resolveNotice }
+    )
+
+    expect(close).toHaveBeenCalledTimes(2)
+    expect(openSession.mock.calls).toEqual([['session-a'], ['session-b']])
+    expect(resolveNotice).toHaveBeenCalledExactlyOnceWith('finished')
   })
 })

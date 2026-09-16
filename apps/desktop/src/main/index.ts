@@ -68,7 +68,11 @@ import {
   captureSavedOutputForLifecycle
 } from './saved-output-capture-ipc'
 import { hasExplicitApplicationLaunch, parseApplicationLaunchSpec } from './launch-spec'
-import { createAppEventForwarder, installCompanionIpcHandlers } from './companion-ipc'
+import {
+  activateAttentionNotification,
+  createAppEventForwarder,
+  installCompanionIpcHandlers
+} from './companion-ipc'
 import { createPresenceMonitor, readMutterIdleMs } from './presence-monitor'
 import { installVoiceIpcHandlers } from './voice-ipc'
 import {
@@ -225,12 +229,23 @@ const appEvents = createAppEventForwarder({
   watching: (sessionId) => !presence.current().away && BrowserWindow.getAllWindows().some((window) =>
     !window.isDestroyed() && window.isFocused() && selectedSessions.get(window.webContents.id) === sessionId
   ),
-  notify: ({ title, body, sessionId }) => {
+  notify: ({ title, body, sessionId, requestId, kind }) => {
     if (!Notification.isSupported()) return
     const notification = new Notification({ title, body, silent: false })
     notification.on('click', () => {
-      focusExistingWindow(applicationWindow)
-      applicationWindow?.webContents.send('aiterm:open-session', sessionId)
+      void activateAttentionNotification({ sessionId, requestId, kind }, {
+        close: () => notification.close(),
+        openSession: (targetSessionId) => {
+          focusExistingWindow(applicationWindow)
+          applicationWindow?.webContents.send('aiterm:open-session', targetSessionId)
+        },
+        resolveNotice: (targetRequestId) => hostClient
+          ? hostClient.request(METHOD_REGISTRY.attentionResolve, {
+              requestId: targetRequestId,
+              resolution: 'Opened in BMN'
+            })
+          : Promise.resolve()
+      })
     })
     notification.show()
   },
@@ -905,6 +920,14 @@ interface RendererIntegrationProbe {
     backgroundChoice: 'hide' | 'stop' | null
   }
   treeSelection: { sessionId: string; layoutSelectedSessionId: string | null }
+  crossWorkspaceSplit: {
+    layoutWorkspaceId: string
+    sourceWorkspaceId: string
+    paneSessionIds: string[]
+    selectedAfterFocus: string | null
+    sourceWorkspaceArchived: boolean
+    foreignPaneRemovedAfterArchive: boolean
+  }
   hiddenPaneSize: { shown: { cols: number; rows: number }; hidden: { cols: number; rows: number } }
 }
 
@@ -926,7 +949,13 @@ async function stoppedPanelLabel(window: BrowserWindow, sessionId: string): Prom
         }
         const label = document.querySelector('.stopped-session p')?.textContent?.trim();
         if (label) resolve(label);
-        else if (Date.now() >= deadline) reject(new Error('the stopped session label was not rendered'));
+        else if (Date.now() >= deadline) reject(new Error('the stopped session label was not rendered: ' + JSON.stringify({
+          selected,
+          panel: document.querySelector('.stopped-session')?.textContent?.trim() ?? null,
+          feedback: document.querySelector('.feedback-notice')?.textContent?.trim() ?? null,
+          visiblePanes: [...document.querySelectorAll('.session-terminal:not(.session-terminal-hidden)')]
+            .map((pane) => pane.getAttribute('data-session-id'))
+        })));
         else setTimeout(probe, 25);
       };
       probe();
@@ -1388,12 +1417,6 @@ async function runSelfTest(): Promise<void> {
         revision: 1
       }
     })
-    const archivedWorkspace = await client.request<WorkspaceRecord>(METHOD_REGISTRY.workspaceUpdate, {
-      workspaceId: secondWorkspace.workspaceId,
-      expectedRevision: secondWorkspace.revision,
-      archived: true
-    })
-
     const rendererChannel = new MessageChannelMain()
     client.attachTerminalPort(rendererChannel.port1)
     applicationPort.close()
@@ -1511,6 +1534,24 @@ async function runSelfTest(): Promise<void> {
         })}`
       )
     }
+    if (
+      preloadProbe.crossWorkspaceSplit.layoutWorkspaceId !== DEFAULT_WORKSPACE_ID ||
+      preloadProbe.crossWorkspaceSplit.sourceWorkspaceId !== secondWorkspace.workspaceId ||
+      !preloadProbe.crossWorkspaceSplit.paneSessionIds.includes(thirdSession.sessionId) ||
+      preloadProbe.crossWorkspaceSplit.selectedAfterFocus !== preloadProbe.treeSelection.sessionId ||
+      !preloadProbe.crossWorkspaceSplit.sourceWorkspaceArchived ||
+      !preloadProbe.crossWorkspaceSplit.foreignPaneRemovedAfterArchive
+    ) {
+      throw new Error(
+        `the renderer did not keep a cross-workspace split in the active workspace: ${JSON.stringify(
+          preloadProbe.crossWorkspaceSplit
+        )}`
+      )
+    }
+    const archivedWorkspace = (await client.request<WorkspaceRecord[]>(METHOD_REGISTRY.workspaceList, {
+      includeArchived: true
+    })).find((workspace) => workspace.workspaceId === secondWorkspace.workspaceId)
+    if (!archivedWorkspace) throw new Error('the renderer archive action removed its workspace record')
     const { shown, hidden } = preloadProbe.hiddenPaneSize
     if (shown.cols < 20 || hidden.cols !== shown.cols || hidden.rows !== shown.rows) {
       throw new Error(
@@ -1563,16 +1604,14 @@ async function runSelfTest(): Promise<void> {
     await rendererPause(400)
     const inactiveCaptureBefore = (await withinPhase('saved output before', inactiveSavedOutput())).current?.capturedAt ?? null
     const layoutPutsBeforeOutput = selfTestLayoutPutRequests
-    await withinPhase('activate and type', applicationWindow.webContents.executeJavaScript(`
-      window.aiTerminal.activateTerminal(${JSON.stringify(thirdSession.sessionId)}).then(() => {
-        window.aiTerminal.sendTerminalInput(
-          ${JSON.stringify(inactiveAttachmentId)},
-          new TextEncoder().encode(${JSON.stringify(
-            "for line in $(seq 1 80); do echo \"inactive-following-output-$line\"; done; printf 'AITERM-2-1-%s\\n' INACTIVE-FOLLOWING-DONE\r"
-          )})
-        );
-        return true;
-      })
+    await withinPhase('type into existing attachment', applicationWindow.webContents.executeJavaScript(`
+      window.aiTerminal.sendTerminalInput(
+        ${JSON.stringify(inactiveAttachmentId)},
+        new TextEncoder().encode(${JSON.stringify(
+          "for line in $(seq 1 80); do echo \"inactive-following-output-$line\"; done; printf 'AITERM-2-1-%s\\n' INACTIVE-FOLLOWING-DONE\r"
+        )})
+      );
+      true;
     `))
     console.error('[ai-terminal] self-test phase: inactive workspace output requested')
     const captureDeadline = Date.now() + 10_000
@@ -1856,6 +1895,7 @@ async function runSelfTest(): Promise<void> {
       envelopedInvokeChannels,
       templateCreatedSession: preloadProbe.templateCreatedSession,
       treeSelectionLayoutPut: preloadProbe.treeSelection,
+      crossWorkspaceSplit: preloadProbe.crossWorkspaceSplit,
       hiddenPaneSize: preloadProbe.hiddenPaneSize,
       inactiveFollowingOutputLayoutPuts,
       inactiveFollowingOutputCaptured,

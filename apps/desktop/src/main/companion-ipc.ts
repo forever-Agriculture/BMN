@@ -5,6 +5,7 @@ import {
   type AppEventMessage,
   type AppSettings,
   type ArtifactRecord,
+  type AttentionKind,
   type AttentionRecord,
   type ProtocolMethod
 } from '@ai-terminal/protocol'
@@ -218,10 +219,34 @@ export interface AppEventForwarderOptions {
   targets(): WebContents[]
   /** True while the owner is present and looking at the session: selected in a focused window. */
   watching(sessionId: string): boolean
-  notify(notification: { title: string; body: string; sessionId: string }): void
+  notify(notification: AttentionNotification): void
   notificationsEnabled(): boolean
   /** Workspace and session names, so a notification says where it comes from. */
   place?(sessionId: string): Promise<string | null>
+}
+
+export interface AttentionNotification {
+  title: string
+  body: string
+  sessionId: string
+  requestId: string
+  kind: AttentionKind
+}
+
+/** Opens the exact session and closes informational notices; prompts still require answer evidence. */
+export async function activateAttentionNotification(
+  notification: Pick<AttentionNotification, 'sessionId' | 'requestId' | 'kind'>,
+  actions: {
+    close(): void
+    openSession(sessionId: string): void
+    resolveNotice(requestId: string): Promise<unknown>
+  }
+): Promise<void> {
+  actions.close()
+  actions.openSession(notification.sessionId)
+  if (notification.kind === 'notice') {
+    await actions.resolveNotice(notification.requestId).catch(() => undefined)
+  }
 }
 
 /**
@@ -266,7 +291,9 @@ export function createAppEventForwarder(options: AppEventForwarderOptions): {
       options.notify({
         title: request.kind === 'notice' ? place ?? 'BMN' : `${place ?? 'A session'} needs you`,
         body: request.title.slice(0, 200),
-        sessionId: request.sessionId
+        sessionId: request.sessionId,
+        requestId: request.requestId,
+        kind: request.kind
       })
     }
   }

@@ -402,6 +402,25 @@ describe('aiterm hook', () => {
     ])
   })
 
+  it('reports a Codex finished turn through the same dismissible notice route', async () => {
+    const fixture = await cliFixture()
+
+    expect(await runHook(fixture, 'codex', {
+      hook_event_name: 'Stop',
+      last_assistant_message: 'Review complete'
+    })).toEqual(QUIET)
+    expect(fixture.handlers.withdrawAttention.mock.calls.map(([params]) => params.requestKey)).toEqual([
+      'codex:permission',
+      'codex:question'
+    ])
+    expect(fixture.handlers.openAttention).toHaveBeenCalledWith(expect.objectContaining({
+      requestKey: 'codex:turn',
+      kind: 'notice',
+      title: 'Codex finished its turn',
+      body: 'Review complete'
+    }))
+  })
+
   it('ignores an agent that does not hold the terminal, such as claude -p run from a tool call', async () => {
     const fixture = await cliFixture()
     const stop = { hook_event_name: 'Stop', last_assistant_message: 'worker done' }
