@@ -12,6 +12,10 @@ __pycache__/
 /test-results/
 /playwright-report/
 
+# Local reference projects used for investigation.
+/examples/*
+!/examples/README.md
+
 # Local whisper.cpp build from `pnpm run voice:build`.
 /apps/desktop/resources/whisper/
 
