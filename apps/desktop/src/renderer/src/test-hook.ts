@@ -49,6 +49,31 @@ export interface TerminalIntegrationProbe {
     shown: { cols: number; rows: number }
     hidden: { cols: number; rows: number }
   }
+  attentionTriage: {
+    responseTitles: string[]
+    responseTitlesAfterUpdate: string[]
+    remainingResponseTitles: string[]
+    updateTitles: string[]
+    updatedUpdateTitles: string[]
+    totalCount: number
+    progressText: string
+    detailsProgressText: string
+    keyboardTargetSessionId: string
+    noticeResolved: boolean
+    focusReturned: boolean
+    focusStableAfterIncomingUpdate: boolean
+  }
+  handoffFlow: {
+    draftId: string
+    targetSessionId: string
+    editedText: string
+    fileName: string
+    acceptedState: string
+    existingInputPreserved: boolean
+    payloadOccurrences: number
+    attentionResponsesPreserved: boolean
+    discardedDraftHidden: boolean
+  }
 }
 
 export interface TerminalTestHook {

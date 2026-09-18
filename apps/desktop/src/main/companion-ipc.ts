@@ -43,6 +43,8 @@ const ROUTES = {
   'aiterm:attention:resolve': METHOD_REGISTRY.attentionResolve,
   'aiterm:progress:list': METHOD_REGISTRY.progressList,
   'aiterm:draft:list': METHOD_REGISTRY.draftList,
+  'aiterm:draft:save': METHOD_REGISTRY.draftSave,
+  'aiterm:draft:retry': METHOD_REGISTRY.draftRetry,
   'aiterm:draft:send': METHOD_REGISTRY.draftSend,
   'aiterm:draft:discard': METHOD_REGISTRY.draftDiscard,
   'aiterm:settings:get': METHOD_REGISTRY.settingsGet,
@@ -231,21 +233,22 @@ export interface AttentionNotification {
   sessionId: string
   requestId: string
   kind: AttentionKind
+  revision: number
 }
 
 /** Opens the exact session and closes informational notices; prompts still require answer evidence. */
 export async function activateAttentionNotification(
-  notification: Pick<AttentionNotification, 'sessionId' | 'requestId' | 'kind'>,
+  notification: Pick<AttentionNotification, 'sessionId' | 'requestId' | 'kind' | 'revision'>,
   actions: {
     close(): void
     openSession(sessionId: string): void
-    resolveNotice(requestId: string): Promise<unknown>
+    resolveNotice(requestId: string, expectedRevision: number): Promise<unknown>
   }
 ): Promise<void> {
   actions.close()
   actions.openSession(notification.sessionId)
   if (notification.kind === 'notice') {
-    await actions.resolveNotice(notification.requestId).catch(() => undefined)
+    await actions.resolveNotice(notification.requestId, notification.revision).catch(() => undefined)
   }
 }
 
@@ -293,7 +296,8 @@ export function createAppEventForwarder(options: AppEventForwarderOptions): {
         body: request.title.slice(0, 200),
         sessionId: request.sessionId,
         requestId: request.requestId,
-        kind: request.kind
+        kind: request.kind,
+        revision: request.revision
       })
     }
   }

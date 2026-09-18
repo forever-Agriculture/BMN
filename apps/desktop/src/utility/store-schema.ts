@@ -258,5 +258,40 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
     sql: `
       ALTER TABLE session ADD COLUMN archived_at TEXT;
     `
+  },
+  {
+    version: 6,
+    sql: `
+      ALTER TABLE input_draft RENAME TO input_draft_legacy;
+
+      CREATE TABLE input_draft (
+        draft_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES session(session_id),
+        origin TEXT NOT NULL CHECK (origin IN ('telegram', 'control', 'handoff')),
+        origin_key TEXT UNIQUE,
+        source_session_id TEXT REFERENCES session(session_id) ON DELETE SET NULL,
+        request_id TEXT,
+        text TEXT,
+        artifact_id TEXT REFERENCES artifact(artifact_id),
+        artifact_ids_json TEXT NOT NULL DEFAULT '[]',
+        attempted_incarnation_id TEXT,
+        state TEXT NOT NULL CHECK (
+          state IN ('draft', 'accepted', 'submitted', 'uncertain', 'discarded')
+        ),
+        detail TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      INSERT INTO input_draft(
+        draft_id, session_id, origin, origin_key, source_session_id, request_id, text,
+        artifact_id, artifact_ids_json, attempted_incarnation_id, state, detail, created_at, updated_at
+      )
+      SELECT draft_id, session_id, origin, origin_key, NULL, request_id, text,
+        artifact_id, '[]', NULL, state, detail, created_at, updated_at
+      FROM input_draft_legacy;
+
+      DROP TABLE input_draft_legacy;
+    `
   }
 ])

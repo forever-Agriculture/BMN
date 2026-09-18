@@ -20,8 +20,8 @@ afterEach(async () => {
 })
 
 describe('owned database schema', () => {
-  it('contains the five ordered migrations and only the owned tables', () => {
-    expect(DATABASE_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5])
+  it('contains the six ordered migrations and only the owned tables', () => {
+    expect(DATABASE_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6])
     expect(STORY_SCHEMA_TABLES).toEqual([
       'app_setting',
       'artifact',
@@ -165,7 +165,7 @@ describe('owned database schema', () => {
         busyTimeoutMs: 5_000
       })
       expect(database.prepare('SELECT version FROM schema_migration ORDER BY version').all())
-        .toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }])
+        .toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }])
       expect(database.prepare('SELECT applied_at FROM schema_migration WHERE version = 3').get())
         .toEqual({ applied_at: migratedAt })
       expect(database.prepare(
@@ -242,10 +242,53 @@ describe('owned database schema', () => {
           { version: 2, applied_at: firstAppliedAt },
           { version: 3, applied_at: migratedAt },
           { version: 4, applied_at: migratedAt },
-          { version: 5, applied_at: migratedAt }
+          { version: 5, applied_at: migratedAt },
+          { version: 6, applied_at: migratedAt }
         ])
       expect(database.prepare('SELECT COUNT(*) AS count FROM workspace_layout').get())
         .toEqual({ count: 2 })
+    } finally {
+      database.close()
+    }
+  })
+
+  it('migrates legacy drafts into the handoff-capable schema without changing them', () => {
+    const database = new BetterSqlite3(':memory:')
+    try {
+      for (const migration of DATABASE_MIGRATIONS.slice(0, 5)) {
+        database.exec(migration.sql)
+        database.prepare('INSERT INTO schema_migration(version, applied_at) VALUES (?, ?)')
+          .run(migration.version, '2026-09-14T10:00:00.000Z')
+      }
+      database.prepare(
+        `INSERT INTO session(
+           session_id, workspace_id, name, cwd, executable, argv_json, revision, created_at, position
+         ) VALUES ('legacy-session', ?, 'Legacy', '/work', '/bin/bash', '[]', 1, ?, 0)`
+      ).run(DEFAULT_WORKSPACE_ID, '2026-09-14T10:00:00.000Z')
+      database.prepare(
+        `INSERT INTO input_draft(
+           draft_id, session_id, origin, origin_key, request_id, text, artifact_id,
+           state, detail, created_at, updated_at
+         ) VALUES ('legacy-draft', 'legacy-session', 'telegram', 'telegram:1', NULL, 'hello', NULL,
+           'draft', NULL, ?, ?)`
+      ).run('2026-09-14T10:00:00.000Z', '2026-09-14T10:00:00.000Z')
+
+      initializeDatabase(database, '2026-09-14T11:00:00.000Z')
+
+      expect(database.prepare(
+        `SELECT draft_id, origin, source_session_id, text, artifact_ids_json, attempted_incarnation_id, state
+         FROM input_draft`
+      ).get()).toEqual({
+        draft_id: 'legacy-draft',
+        origin: 'telegram',
+        source_session_id: null,
+        text: 'hello',
+        artifact_ids_json: '[]',
+        attempted_incarnation_id: null,
+        state: 'draft'
+      })
+      expect(database.prepare('SELECT version FROM schema_migration ORDER BY version DESC LIMIT 1').get())
+        .toEqual({ version: 6 })
     } finally {
       database.close()
     }

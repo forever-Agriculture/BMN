@@ -9,6 +9,8 @@ import {
 
 export type SessionDot = 'running' | 'needs-you' | 'exited' | 'idle'
 
+export type SessionAttention = 'response' | 'update' | null
+
 export interface SessionStatusPresentation {
   dot: SessionDot
   word: string
@@ -18,11 +20,17 @@ export interface SessionStatusPresentation {
 export function sessionStatus(
   session: Pick<SessionRecord, 'sessionId' | 'lastProcess'>,
   live: boolean,
-  openRequests: readonly Pick<AttentionRecord, 'sessionId' | 'state'>[]
+  openRequests: readonly Pick<AttentionRecord, 'sessionId' | 'state' | 'kind'>[],
+  progress: ProgressPresentation | null = null
 ): SessionStatusPresentation {
-  if (openRequests.some((request) => request.sessionId === session.sessionId && request.state === 'open')) {
+  const attention = sessionAttention(openRequests, session.sessionId)
+  if (attention === 'response') {
     return { dot: 'needs-you', word: 'Waiting for your response' }
   }
+  if (progress && !progress.stale && (progress.state === 'failed' || progress.state === 'blocked')) {
+    return { dot: 'exited', word: `${progress.word} · ${progress.source}, ${progress.age}` }
+  }
+  if (attention === 'update') return { dot: 'needs-you', word: 'Update available' }
   if (live) return { dot: 'running', word: 'Running' }
   if (session.lastProcess?.state === 'interrupted') return { dot: 'exited', word: 'Interrupted' }
   if (session.lastProcess) return { dot: 'exited', word: 'Process exited' }
@@ -100,27 +108,56 @@ export interface ProgressPresentation {
 export function progressPresentation(
   records: readonly ProgressRecord[],
   sessionId: string,
-  now: number
+  now: number,
+  incarnationId?: string | null
 ): ProgressPresentation | null {
   const newest = records
-    .filter((record) => record.sessionId === sessionId)
+    .filter((record) => record.sessionId === sessionId &&
+      (incarnationId === undefined || record.incarnationId === incarnationId))
     .toSorted((left, right) => right.observedAt.localeCompare(left.observedAt))[0]
   if (!newest) return null
+  const stale = now - Date.parse(newest.observedAt) > PROGRESS_STALE_AFTER_MS
   return {
     label: newest.label,
     state: newest.state,
-    word: PROGRESS_WORDS[newest.state],
+    word: stale ? `Last observed ${PROGRESS_WORDS[newest.state].toLocaleLowerCase()}` : PROGRESS_WORDS[newest.state],
     source: newest.source,
     age: relativeAge(newest.observedAt, now),
-    stale: now - Date.parse(newest.observedAt) > PROGRESS_STALE_AFTER_MS,
+    stale,
     detail: newest.detail
   }
+}
+
+export function isActionableAttention(
+  request: Pick<AttentionRecord, 'kind'>
+): boolean {
+  return request.kind !== 'notice'
 }
 
 export function openRequests(records: readonly AttentionRecord[]): AttentionRecord[] {
   return records
     .filter((record) => record.state === 'open')
     .toSorted((left, right) => left.openedAt.localeCompare(right.openedAt) || left.requestId.localeCompare(right.requestId))
+}
+
+export function openAttentionGroups(records: readonly AttentionRecord[]): {
+  responses: AttentionRecord[]
+  updates: AttentionRecord[]
+} {
+  const open = openRequests(records)
+  return {
+    responses: open.filter(isActionableAttention),
+    updates: open.filter((request) => !isActionableAttention(request))
+  }
+}
+
+export function sessionAttention(
+  records: readonly Pick<AttentionRecord, 'sessionId' | 'state' | 'kind'>[],
+  sessionId: string
+): SessionAttention {
+  const open = records.filter((request) => request.sessionId === sessionId && request.state === 'open')
+  if (open.some(isActionableAttention)) return 'response'
+  return open.some((request) => request.kind === 'notice') ? 'update' : null
 }
 
 /**
@@ -147,7 +184,8 @@ export function nextRequest(
   records: readonly AttentionRecord[],
   currentSessionId: string | null
 ): AttentionRecord | null {
-  const open = openRequests(records)
+  const groups = openAttentionGroups(records)
+  const open = groups.responses.length > 0 ? groups.responses : groups.updates
   if (open.length === 0) return null
   const currentIndex = open.findIndex((request) => request.sessionId === currentSessionId)
   if (currentIndex === -1) return open[0] ?? null

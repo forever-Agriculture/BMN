@@ -15,7 +15,7 @@ import type {
 import { failureDetail, isBridgeError } from './bridge-error'
 import { Icon } from './icons'
 import { SHORTCUT_LABELS } from './keymap'
-import type { ProgressPresentation } from './session-presentation'
+import type { ProgressPresentation, SessionAttention } from './session-presentation'
 import { agentTag } from './session-presentation'
 import { installTerminalTestHook } from './test-hook'
 import { liveTerminalOptions, startSavedOutputCapture } from './terminal-history'
@@ -67,7 +67,7 @@ export function SessionTerminal(props: {
   split: boolean
   focusMode: boolean
   filesOpen: boolean
-  needsYou: boolean
+  attention: SessionAttention
   /** The owner typed, pasted or dictated into the pane while it needs them. */
   onAnswer(): void
   armed: boolean
@@ -108,7 +108,7 @@ export function SessionTerminal(props: {
   const onView = useRef(props.onView)
   const onFailure = useRef(props.onFailure)
   const onPaste = useRef(props.onPaste)
-  const needsYou = useRef(props.needsYou)
+  const needsYou = useRef(props.attention !== null)
   const onAnswer = useRef(props.onAnswer)
   const activated = useRef(false)
   /** The presented exit status; undefined while the process is running. */
@@ -124,7 +124,7 @@ export function SessionTerminal(props: {
   onView.current = props.onView
   onFailure.current = props.onFailure
   onPaste.current = props.onPaste
-  needsYou.current = props.needsYou
+  needsYou.current = props.attention !== null
   onAnswer.current = props.onAnswer
 
   useEffect(() => {
@@ -300,6 +300,201 @@ export function SessionTerminal(props: {
           }
           throw new Error('renderer behavioural integration step timed out')
         }
+        const needsButton = await waitFor(() => document.querySelector<HTMLButtonElement>('.needs-you-button'))
+        const totalCount = Number(needsButton.querySelector('.count')?.textContent ?? Number.NaN)
+        const progressText = (await waitFor(() => {
+          const text = section.current?.querySelector<HTMLElement>('.progress-strip')?.textContent?.trim()
+          return text?.includes('Observed self-test failure') && text.includes('Last observed failed') &&
+            text.includes('stale') && text.includes('self-test')
+            ? text
+            : undefined
+        }))
+        needsButton.click()
+        const attentionPopover = await waitFor(() => document.querySelector<HTMLElement>('.needs-you-popover'))
+        const groupTitles = (label: string): string[] => {
+          const group = attentionPopover.querySelector<HTMLElement>(`.attention-group[aria-label="${label}"]`)
+          if (!group) throw new Error(`attention group ${label} was not rendered`)
+          return [...group.querySelectorAll<HTMLElement>('.attention-item h3')]
+            .map((item) => item.textContent?.trim() ?? '')
+        }
+        const responseTitles = groupTitles('Needs your response')
+        const updateTitles = groupTitles('Updates')
+        const focusedResponseAction = attentionPopover.querySelector<HTMLButtonElement>(
+          '.attention-group[aria-label="Needs your response"] .attention-item button.primary'
+        )
+        if (!focusedResponseAction) throw new Error('the response action was not rendered')
+        focusedResponseAction.focus()
+        console.warn('[BMN] renderer behavioural integration: attention baseline captured')
+        const updatedGroups = await waitFor(() => {
+          const nextUpdates = groupTitles('Updates')
+          return nextUpdates.includes('Self-test turn revised')
+            ? { responses: groupTitles('Needs your response'), updates: nextUpdates }
+            : undefined
+        })
+        console.warn('[BMN] renderer behavioural integration: attention update received')
+        const focusStableAfterIncomingUpdate = document.activeElement === focusedResponseAction
+        attentionPopover.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+        const focusReturned = await waitFor(() =>
+          !document.querySelector('.needs-you-popover') && document.activeElement === needsButton ? true : undefined)
+        window.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'U', code: 'KeyU', ctrlKey: true, shiftKey: true, bubbles: true
+        }))
+        const keyboardTargetSessionId = await waitFor(async () => {
+          const selected = (await window.aiTerminal.getLayout(props.startup.workspaceId)).layout.selectedSessionId
+          return selected && selected !== props.startup.sessionId ? selected : undefined
+        })
+        needsButton.click()
+        const reopenedPopover = await waitFor(() => document.querySelector<HTMLElement>('.needs-you-popover'))
+        const updateArticle = [...reopenedPopover.querySelectorAll<HTMLElement>('.attention-item.update')]
+          .find((item) => item.querySelector('h3')?.textContent?.trim() === 'Self-test turn revised')
+        const openUpdate = updateArticle?.querySelector<HTMLButtonElement>('button.primary')
+        if (!openUpdate) throw new Error('the informational update action was not rendered')
+        openUpdate.click()
+        const noticeResolved = await waitFor(async () =>
+          (await window.aiTerminal.listAttention())
+            .some((request) => request.title === 'Self-test turn revised' && request.state === 'open')
+            ? undefined
+            : true)
+        const remainingResponseTitles = (await window.aiTerminal.listAttention())
+          .filter((request) => request.state === 'open' && request.kind !== 'notice')
+          .map((request) => request.title)
+          .toSorted()
+        const returnSessionButton = await waitFor(() => [...document.querySelectorAll<HTMLButtonElement>(
+          '.session-row > button[data-session-id]'
+        )].find((button) => button.dataset.sessionId === props.startup.sessionId))
+        returnSessionButton.click()
+        await waitFor(async () => {
+          const selected = (await window.aiTerminal.getLayout(props.startup.workspaceId)).layout.selectedSessionId
+          return selected === props.startup.sessionId ? true : undefined
+        })
+        console.warn('[BMN] renderer behavioural integration: returned to source session')
+        const destination = sessionsBeforeTemplate.find((session) =>
+          session.sessionId !== props.startup.sessionId && session.archivedAt === null)
+        if (!destination) throw new Error('the handoff destination fixture was not available')
+        const filesButton = [...(section.current?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
+          .find((button) => button.textContent?.trim() === 'Files')
+        if (!filesButton) throw new Error('the Files button was not rendered')
+        filesButton.click()
+        const filesPanel = await waitFor(() => document.querySelector<HTMLElement>('.files-panel'))
+        const prepareHandoff = await waitFor(() => [...filesPanel.querySelectorAll<HTMLButtonElement>('button')]
+          .find((button) => button.textContent?.trim() === 'Prepare handoff'))
+        prepareHandoff.click()
+        const handoffForm = await waitFor(() => filesPanel.querySelector<HTMLFormElement>('.handoff-form'))
+        console.warn('[BMN] renderer behavioural integration: handoff form opened')
+        const destinationSelect = handoffForm.querySelector<HTMLSelectElement>('select')
+        const handoffTextarea = handoffForm.querySelector<HTMLTextAreaElement>('textarea')
+        const artifactChoice = [...handoffForm.querySelectorAll<HTMLLabelElement>('.handoff-files label')]
+          .find((label) => label.textContent?.includes('handoff-self-test.txt'))
+          ?.querySelector<HTMLInputElement>('input[type="checkbox"]')
+        if (!destinationSelect || !handoffTextarea || !artifactChoice) {
+          throw new Error('the complete handoff preparation form was not rendered')
+        }
+        const setControlValue = (control: HTMLSelectElement | HTMLTextAreaElement, value: string): void => {
+          const prototype = control instanceof HTMLSelectElement
+            ? HTMLSelectElement.prototype
+            : HTMLTextAreaElement.prototype
+          const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set
+          if (!setter) throw new Error('the handoff form value setter was unavailable')
+          setter.call(control, value)
+          control.dispatchEvent(new Event(control instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }))
+        }
+        setControlValue(destinationSelect, destination.sessionId)
+        setControlValue(handoffTextarea, 'Synthetic handoff line one\nQuestion line two')
+        artifactChoice.click()
+        handoffForm.requestSubmit()
+        const createdHandoff = await waitFor(async () => (await window.aiTerminal.listDrafts()).find((draft) =>
+          draft.origin === 'handoff' &&
+          draft.sourceSessionId === props.startup.sessionId &&
+          draft.sessionId === destination.sessionId &&
+          draft.text === 'Synthetic handoff line one\nQuestion line two' &&
+          draft.artifactIds.length === 1
+        ))
+        console.warn('[BMN] renderer behavioural integration: handoff saved')
+        const sourceCard = await waitFor(() => [...filesPanel.querySelectorAll<HTMLElement>('.handoff-card')]
+          .find((card) => card.textContent?.includes('Synthetic handoff line one')))
+        const editHandoff = [...sourceCard.querySelectorAll<HTMLButtonElement>('button')]
+          .find((button) => button.textContent?.trim() === 'Edit')
+        if (!editHandoff) throw new Error('the saved handoff edit action was not rendered')
+        editHandoff.click()
+        const editForm = await waitFor(() => filesPanel.querySelector<HTMLFormElement>('.handoff-form'))
+        const editTextarea = editForm.querySelector<HTMLTextAreaElement>('textarea')
+        if (!editTextarea) throw new Error('the reopened handoff text was not rendered')
+        const editedText = 'Edited handoff line one\nQuestion line two'
+        setControlValue(editTextarea, editedText)
+        editForm.requestSubmit()
+        const editedHandoff = await waitFor(async () => (await window.aiTerminal.listDrafts()).find((draft) =>
+          draft.draftId === createdHandoff.draftId &&
+          draft.text === editedText &&
+          draft.updatedAt !== createdHandoff.updatedAt
+        ))
+        console.warn('[BMN] renderer behavioural integration: handoff edited')
+        const editedCard = await waitFor(() => [...filesPanel.querySelectorAll<HTMLElement>('.handoff-card')]
+          .find((card) => card.textContent?.includes('Edited handoff line one')))
+        const openDestination = [...editedCard.querySelectorAll<HTMLButtonElement>('button')]
+          .find((button) => button.textContent?.trim() === 'Open destination')
+        if (!openDestination) throw new Error('the handoff destination action was not rendered')
+        openDestination.click()
+        await waitFor(async () => {
+          const selected = (await window.aiTerminal.getLayout(props.startup.workspaceId)).layout.selectedSessionId
+          return selected === destination.sessionId ? true : undefined
+        })
+        const destinationCard = await waitFor(() => [...document.querySelectorAll<HTMLElement>('.handoff-card')]
+          .find((card) => card.textContent?.includes('Edited handoff line one')))
+        const pasteHandoff = [...destinationCard.querySelectorAll<HTMLButtonElement>('button')]
+          .find((button) => button.textContent?.trim() === 'Paste handoff')
+        if (!pasteHandoff || pasteHandoff.disabled) throw new Error('the destination paste action was unavailable')
+        pasteHandoff.click()
+        const acceptedHandoff = await waitFor(async () => (await window.aiTerminal.listDrafts()).find((draft) =>
+          draft.draftId === editedHandoff.draftId && draft.state === 'accepted'
+        ))
+        console.warn('[BMN] renderer behavioural integration: handoff pasted')
+        const terminalText = await waitFor(() => {
+          const snapshot = window.__aitermTest?.snapshot(destination.sessionId)
+          const text = snapshot?.bufferLines.join('\n') ?? ''
+          return text.includes('EXISTING-HANDOFF-PREFIX') && text.includes('Edited handoff line one')
+            ? text
+            : undefined
+        })
+        const payloadOccurrences = terminalText.split('Edited handoff line one').length - 1
+        const remainingAfterHandoff = (await window.aiTerminal.listAttention())
+          .filter((request) => request.state === 'open' && request.kind !== 'notice')
+          .map((request) => request.title)
+          .toSorted()
+        const discardCandidate = await window.aiTerminal.saveHandoffDraft({
+          sourceSessionId: props.startup.sessionId,
+          sessionId: destination.sessionId,
+          text: 'Discard this handoff',
+          artifactIds: []
+        })
+        const discardCard = await waitFor(() => [...document.querySelectorAll<HTMLElement>('.handoff-card')]
+          .find((card) => card.textContent?.includes('Discard this handoff')))
+        const discardHandoff = [...discardCard.querySelectorAll<HTMLButtonElement>('button')]
+          .find((button) => button.textContent?.trim() === 'Discard')
+        if (!discardHandoff) throw new Error('the handoff discard action was not rendered')
+        discardHandoff.click()
+        const discardedDraftHidden = await waitFor(async () =>
+          (await window.aiTerminal.listDrafts()).some((draft) => draft.draftId === discardCandidate.draftId)
+            ? undefined
+            : true)
+        returnSessionButton.click()
+        await waitFor(async () => {
+          const selected = (await window.aiTerminal.getLayout(props.startup.workspaceId)).layout.selectedSessionId
+          return selected === props.startup.sessionId ? true : undefined
+        })
+        const closeFiles = await waitFor(() => document.querySelector<HTMLButtonElement>('.files-close'))
+        closeFiles.click()
+        const handoffFlow = {
+          draftId: acceptedHandoff.draftId,
+          targetSessionId: destination.sessionId,
+          editedText,
+          fileName: 'handoff-self-test.txt',
+          acceptedState: acceptedHandoff.state,
+          existingInputPreserved: terminalText.includes('EXISTING-HANDOFF-PREFIX'),
+          payloadOccurrences,
+          attentionResponsesPreserved:
+            JSON.stringify(remainingAfterHandoff) === JSON.stringify(remainingResponseTitles),
+          discardedDraftHidden
+        }
         // The inspector and session form live in the details panel, opened the way the owner opens it.
         const moreButton = section.current?.querySelector<HTMLButtonElement>('button[data-action="more"]')
         if (!moreButton) throw new Error('the pane More button was not rendered')
@@ -329,6 +524,13 @@ export function SessionTerminal(props: {
           '[aria-label="Selected session actions"]'
         )
         if (!inspector) throw new Error('the selected-session inspector was not rendered')
+        const detailsProgressText = await waitFor(() => {
+          const text = inspector.querySelector<HTMLElement>('.progress-strip')?.textContent?.trim()
+          return text?.includes('Observed self-test failure') && text.includes('Last observed failed') &&
+            text.includes('stale') && text.includes('self-test')
+            ? text
+            : undefined
+        })
         const launchUnavailableNotice = await waitFor(() => {
           const notice = inspector.querySelector<HTMLElement>('[role="status"]')?.textContent?.trim()
           return notice?.startsWith('Launch unavailable: ') ? notice : undefined
@@ -477,7 +679,22 @@ export function SessionTerminal(props: {
               cleanedLayout.split.panes.some((pane) => pane.sessionId === sourceSession.sessionId) === false &&
               cleanedLayout.split.panes.some((pane) => pane.sessionId === props.startup.sessionId)
           },
-          hiddenPaneSize: { shown: shownSize, hidden: hiddenSize }
+          hiddenPaneSize: { shown: shownSize, hidden: hiddenSize },
+          handoffFlow,
+          attentionTriage: {
+            responseTitles,
+            responseTitlesAfterUpdate: updatedGroups.responses,
+            remainingResponseTitles,
+            updateTitles,
+            updatedUpdateTitles: updatedGroups.updates,
+            totalCount,
+            progressText,
+            detailsProgressText,
+            keyboardTargetSessionId,
+            noticeResolved,
+            focusReturned,
+            focusStableAfterIncomingUpdate
+          }
         }
       } } : {})
     })
@@ -546,8 +763,10 @@ export function SessionTerminal(props: {
   }
 
   const name = props.startup.name
-  const statusText = `${exitStatus ?? (props.needsYou ? 'Waiting for your response' : 'Running')} · ${props.startup.cwd}`
-  const dot = exitStatus ? 'exited' : props.needsYou ? 'needs-you' : 'running'
+  const attentionWord = props.attention === 'response' ? 'Waiting for your response'
+    : props.attention === 'update' ? 'Update available' : 'Running'
+  const statusText = `${exitStatus ?? attentionWord} · ${props.startup.cwd}`
+  const dot = exitStatus ? 'exited' : props.attention ? 'needs-you' : 'running'
   const progress = props.progress
 
   return (
@@ -581,7 +800,7 @@ export function SessionTerminal(props: {
         <strong title={name}>{name}</strong>
         {props.record ? <span className="chip">{agentTag(props.record.executable)}</span> : null}
         <span className={`status-dot ${dot}`} aria-hidden="true" />
-        <span className={`pane-status${props.needsYou && !exitStatus ? ' needs-you' : ''}`}>{statusText}</span>
+        <span className={`pane-status${props.attention && !exitStatus ? ' needs-you' : ''}`}>{statusText}</span>
         <div className="pane-actions">
           <button type="button" aria-pressed={props.split} title={`Split (${SHORTCUT_LABELS['split-toggle']})`} onClick={props.onSplit}>
             <Icon name="split" /><span className="button-label">{props.split ? 'Unsplit' : 'Split'}</span>

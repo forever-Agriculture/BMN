@@ -26,6 +26,53 @@ const receiptContract = [
   ],
   ['inactiveFollowingOutputLayoutPuts', (receipt) => receipt.inactiveFollowingOutputLayoutPuts === 0],
   ['inactiveFollowingOutputCaptured', (receipt) => receipt.inactiveFollowingOutputCaptured === true],
+  [
+    'stoppedStaleProgress',
+    (receipt) =>
+      receipt.stoppedStaleProgress?.includes('Observed self-test failure') &&
+      receipt.stoppedStaleProgress?.includes('Last observed failed') &&
+      receipt.stoppedStaleProgress?.includes('stale') &&
+      receipt.stoppedStaleProgress?.includes('self-test')
+  ],
+  [
+    'attentionTriage',
+    (receipt) =>
+      receipt.attentionTriage?.totalCount === 4 &&
+      receipt.attentionTriage.responseTitles?.length === 3 &&
+      JSON.stringify(receipt.attentionTriage.responseTitlesAfterUpdate) ===
+        JSON.stringify(receipt.attentionTriage.responseTitles) &&
+      JSON.stringify(receipt.attentionTriage.remainingResponseTitles) ===
+        JSON.stringify(receipt.attentionTriage.responseTitles.toSorted()) &&
+      JSON.stringify(receipt.attentionTriage.updateTitles) === JSON.stringify(['Self-test turn finished']) &&
+      JSON.stringify(receipt.attentionTriage.updatedUpdateTitles) === JSON.stringify(['Self-test turn revised']) &&
+      receipt.attentionTriage.progressText?.includes('Observed self-test failure') &&
+      receipt.attentionTriage.progressText?.includes('Last observed failed') &&
+      receipt.attentionTriage.progressText?.includes('stale') &&
+      receipt.attentionTriage.detailsProgressText?.includes('Observed self-test failure') &&
+      receipt.attentionTriage.detailsProgressText?.includes('Last observed failed') &&
+      receipt.attentionTriage.detailsProgressText?.includes('stale') &&
+      typeof receipt.attentionTriage.keyboardTargetSessionId === 'string' &&
+      receipt.attentionTriage.noticeResolved === true &&
+      receipt.attentionTriage.focusReturned === true &&
+      receipt.attentionTriage.focusStableAfterIncomingUpdate === true &&
+      receipt.attentionTriage.staleNoticeRejected === true &&
+      receipt.attentionTriage.revisedPromptPreserved === true &&
+      receipt.attentionTriage.unavailableTargetIgnored === true
+  ],
+  [
+    'handoffFlow',
+    (receipt) =>
+      typeof receipt.handoffFlow?.draftId === 'string' &&
+      typeof receipt.handoffFlow.targetSessionId === 'string' &&
+      receipt.handoffFlow.editedText === 'Edited handoff line one\nQuestion line two' &&
+      receipt.handoffFlow.fileName === 'handoff-self-test.txt' &&
+      receipt.handoffFlow.acceptedState === 'accepted' &&
+      receipt.handoffFlow.existingInputPreserved === true &&
+      receipt.handoffFlow.payloadOccurrences === 1 &&
+      receipt.handoffFlow.attentionResponsesPreserved === true &&
+      receipt.handoffFlow.discardedDraftHidden === true &&
+      receipt.handoffFlow.persistedAfterRestart === true
+  ],
   ['launchBackgroundChoiceRecorded', (receipt) => receipt.launchBackgroundChoiceRecorded === 'hide'],
   [
     'registeredInvokeChannels',

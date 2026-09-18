@@ -49,9 +49,11 @@ import {
   openRequests,
   progressPresentation,
   requestsAnsweredByTyping,
+  sessionAttention,
   sessionStatus,
   splitCandidates,
-  windowTitle
+  windowTitle,
+  type ProgressPresentation
 } from './session-presentation'
 import { sessionProcessLabel } from './session-status'
 import {
@@ -104,6 +106,18 @@ type ShellDialog =
 type SidePanel = 'files' | 'details' | null
 
 const APP_EVENT_REFRESH_MS = 15_000
+
+function ProgressSummary({ progress }: { progress: ProgressPresentation | null }): React.JSX.Element | null {
+  if (!progress) return null
+  return (
+    <div className="progress-strip" role="group" aria-label="Progress" title={progress.detail ?? undefined}>
+      <span className="label">{progress.label}</span>
+      <span className={`state ${progress.state}`}>{progress.word}</span>
+      {progress.stale ? <span className="stale">stale</span> : null}
+      <span className="source">{progress.source} · {progress.age}</span>
+    </div>
+  )
+}
 
 function App(): React.JSX.Element {
   const controllers = useRef(new Map<string, TerminalController>())
@@ -376,11 +390,12 @@ function App(): React.JSX.Element {
     })
   }
 
-  const openSession = (sessionId: string): void => {
+  const openSession = (sessionId: string): boolean => {
     const record = sessionsRef.current.find((session) => session.sessionId === sessionId)
-    if (!record) {
-      brief('That session no longer exists.')
-      return
+    const workspace = record ? workspaces.find((item) => item.workspaceId === record.workspaceId) : undefined
+    if (!record || record.archivedAt !== null || !workspace || workspace.archivedAt !== null) {
+      brief('That session is unavailable. Refreshing attention items.')
+      return false
     }
     setTree((current) => current.expandedWorkspaceIds.has(record.workspaceId)
       ? current
@@ -388,6 +403,7 @@ function App(): React.JSX.Element {
     applyTreeSessionAction(selectTreeSession(sessionsRef.current, sessionId))
     setNeedsYouOpen(false)
     requestAnimationFrame(() => controllers.current.get(sessionId)?.focus())
+    return true
   }
   const openSessionRef = useRef(openSession)
   openSessionRef.current = openSession
@@ -797,14 +813,35 @@ function App(): React.JSX.Element {
     }
   }
 
+  const recordAttentionOpened = (request: AttentionRecord): void => {
+    const opening = attentionActionWhenOpened(request)
+    if (!opening) return
+    const action = opening === 'resolve-notice'
+      ? window.aiTerminal.resolveAttention(request.requestId, 'Opened in BMN', {
+          kind: request.kind,
+          revision: request.revision
+        })
+      : window.aiTerminal.markAttentionSeen(request.requestId)
+    void action
+      .catch((error: unknown) => {
+        // A notice can be resolved by its producing hook between render and activation.
+        if (opening !== 'resolve-notice') fail('Request update failed')(error)
+      })
+      .then(() => refresh.attention())
+      .catch(fail('Attention refresh failed'))
+  }
+
   const nextNeedingYou = (): void => {
     const request = nextRequest(attention, selectedSessionId)
     if (!request) {
       brief('None waiting.')
       return
     }
-    openSession(request.sessionId)
-    if (!request.seenAt) void window.aiTerminal.markAttentionSeen(request.requestId).then(() => refresh.attention()).catch(fail('Request update failed'))
+    if (!openSession(request.sessionId)) {
+      void refresh.attention().catch(fail('Attention refresh failed'))
+      return
+    }
+    recordAttentionOpened(request)
     const where = place(request.sessionId)
     announce(`${where.workspace}, ${where.session}: ${request.title}`)
   }
@@ -972,6 +1009,13 @@ function App(): React.JSX.Element {
   const bindingPresentation = conversationBindingPresentation(binding)
   const identity = IDENTITY_PRESENTATION[settings.appearance.identity]
   const selectedRecord = sessions.find((session) => session.sessionId === selectedSessionId)
+  const observedProgressFor = (session: SessionRecord): ProgressPresentation | null => progressPresentation(
+    progress,
+    session.sessionId,
+    now,
+    live[session.sessionId]?.incarnationId ?? session.lastProcess?.incarnationId
+  )
+  const selectedProgress = selectedRecord ? observedProgressFor(selectedRecord) : null
   const panes = layout?.split.panes ?? []
   const orientation = layout?.split.orientation ?? 'side-by-side'
   const unreadEntries: UnreadEntry[] = Object.entries(unread)
@@ -1042,20 +1086,18 @@ function App(): React.JSX.Element {
             now={now}
             anchor={needsYouButton.current}
             onOpenSession={(sessionId, request) => {
-              openSession(sessionId)
-              if (request) {
-                const opening = attentionActionWhenOpened(request)
-                const action = opening === 'resolve-notice'
-                  ? window.aiTerminal.resolveAttention(request.requestId, 'Opened in BMN').catch(() => undefined)
-                  : opening === 'mark-seen'
-                    ? window.aiTerminal.markAttentionSeen(request.requestId)
-                    : Promise.resolve()
-                void action.then(() => refresh.attention()).catch(fail('Request update failed'))
+              if (!openSession(sessionId)) {
+                void refresh.attention().catch(fail('Attention refresh failed'))
+                return
               }
+              if (request) recordAttentionOpened(request)
             }}
             onAcknowledge={(request) => {
               const action = request.kind === 'notice'
-                ? window.aiTerminal.resolveAttention(request.requestId, 'Dismissed in BMN')
+                ? window.aiTerminal.resolveAttention(request.requestId, 'Dismissed in BMN', {
+                    kind: request.kind,
+                    revision: request.revision
+                  })
                 : window.aiTerminal.markAttentionSeen(request.requestId)
               void action.then(() => refresh.attention()).catch(fail('Request update failed'))
             }}
@@ -1104,7 +1146,8 @@ function App(): React.JSX.Element {
                       >⋯</button>
                     </div>
                     {isExpanded ? workspaceSessions.map((session, sessionIndex) => {
-                      const status = sessionStatus(session, !!live[session.sessionId], unresolved)
+                      const observedProgress = observedProgressFor(session)
+                      const status = sessionStatus(session, !!live[session.sessionId], unresolved, observedProgress)
                       const selected = session.sessionId === selectedSessionId
                       return (
                         <div className={`session-row${selected ? ' selected' : ''}${session.archivedAt ? ' archived' : ''}`} key={session.sessionId}>
@@ -1163,10 +1206,10 @@ function App(): React.JSX.Element {
                 split={panes.length > 1}
                 focusMode={focusMode}
                 filesOpen={panel === 'files'}
-                needsYou={unresolved.some((request) => request.sessionId === terminalStartup.sessionId)}
+                attention={sessionAttention(unresolved, terminalStartup.sessionId)}
                 onAnswer={() => answerByTyping(terminalStartup.sessionId)}
                 armed={armed}
-                progress={progressPresentation(progress, terminalStartup.sessionId, now)}
+                progress={progressPresentation(progress, terminalStartup.sessionId, now, terminalStartup.incarnationId)}
                 colorMode={settings.appearance.colorMode}
                 fontSize={settings.appearance.terminalFontSize}
                 view={() => sessionLayoutView(writer.layouts(), sessionsRef.current, terminalStartup.sessionId)}
@@ -1239,6 +1282,7 @@ function App(): React.JSX.Element {
               <span className="eyebrow">{workspaceName(selectedRecord.workspaceId)} · {agentTag(selectedRecord.executable)}</span>
               <h2>{selectedRecord.name}</h2>
               <p>{sessionProcessLabel(selectedRecord.lastProcess)} · {selectedRecord.cwd}</p>
+              <ProgressSummary progress={selectedProgress} />
               <div className="actions">
                 {bindingPresentation.canResume ? (
                   <button type="button" className="primary" disabled={!!selectedRecord.launchDisabledReason} title={selectedRecord.launchDisabledReason}
@@ -1266,6 +1310,7 @@ function App(): React.JSX.Element {
                 <section key={pane.sessionId} className="stopped-pane" style={paneStyle(pane.sessionId)}>
                   <strong>{record.name}</strong>
                   <p>{sessionProcessLabel(record.lastProcess)}</p>
+                  <ProgressSummary progress={observedProgressFor(record)} />
                   <button type="button" onClick={() => focusLayoutSession(record.sessionId)}>Show session</button>
                 </section>
               )
@@ -1303,8 +1348,13 @@ function App(): React.JSX.Element {
               session={selectedRecord ?? null}
               sessionLabel={selectedRecord ? `${workspaceName(selectedRecord.workspaceId)} › ${selectedRecord.name}` : 'No session selected'}
               sessionLive={!!selectedSessionId && !!live[selectedSessionId]}
-              artifacts={artifacts.filter((artifact) => artifact.sessionId === selectedSessionId)}
-              drafts={drafts.filter((draft) => draft.sessionId === selectedSessionId)}
+              sessionIncarnationId={selectedSessionId ? live[selectedSessionId]?.incarnationId ?? null : null}
+              artifacts={artifacts}
+              drafts={drafts}
+              sessions={sessions}
+              workspaces={workspaces}
+              onOpenSession={openSession}
+              onRefreshDrafts={refresh.drafts}
               onClose={() => setPanel(null)}
               onFailure={setFailure}
               onNotice={brief}
@@ -1324,6 +1374,7 @@ function App(): React.JSX.Element {
                   <p>{bindingPresentation.label}</p>
                   <small>{bindingPresentation.detail}</small>
                 </div>
+                <ProgressSummary progress={selectedProgress} />
                 {selectedRecord.launchDisabledReason ? (
                   <p className="inline-error" role="status">
                     Launch unavailable: {selectedRecord.launchDisabledReason}

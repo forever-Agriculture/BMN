@@ -123,14 +123,20 @@ describe('bmn CLI', () => {
     const fixture = await cliFixture()
 
     const result = await runCli(
-      ['progress', 'blocked', 'Waiting for review', '--detail', 'PR #12', '--source', 'ci'],
+      [
+        'progress', 'blocked', 'Waiting for review', '--detail', 'PR #12', '--source', 'ci',
+        '--observed', '2026-09-14T11:45:00.000Z'
+      ],
       { env: fixture.sessionEnv }
     )
     await runCli(['progress', 'running', 'Building'], { env: fixture.sessionEnv })
 
     expect(result).toEqual({ code: 0, stdout: 'Progress reported: blocked: Waiting for review\n', stderr: '' })
     expect(fixture.handlers.reportProgress.mock.calls.map(([call]) => call)).toEqual([
-      expect.objectContaining({ source: 'ci', state: 'blocked', label: 'Waiting for review', detail: 'PR #12' }),
+      expect.objectContaining({
+        source: 'ci', state: 'blocked', label: 'Waiting for review', detail: 'PR #12',
+        observedAt: '2026-09-14T11:45:00.000Z'
+      }),
       expect.objectContaining({ source: 'bmn', state: 'running', label: 'Building' })
     ])
   })

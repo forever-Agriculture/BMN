@@ -7,6 +7,8 @@ import type {
   BackupManifest,
   BackupVerifyResult,
   ControlInfo,
+  DraftSendExpectation,
+  HandoffDraftSaveParams,
   InputDraftRecord,
   ProgressRecord,
   TelegramStatus,
@@ -153,10 +155,16 @@ export interface AiTerminalBridge {
   showArtifact(artifactId: string): Promise<{ shown: true }>
   listAttention(): Promise<AttentionRecord[]>
   markAttentionSeen(requestId: string): Promise<AttentionRecord>
-  resolveAttention(requestId: string, resolution?: string): Promise<AttentionRecord>
+  resolveAttention(
+    requestId: string,
+    resolution?: string,
+    expected?: Pick<AttentionRecord, 'kind' | 'revision'>
+  ): Promise<AttentionRecord>
   listProgress(): Promise<ProgressRecord[]>
   listDrafts(): Promise<InputDraftRecord[]>
-  sendDraft(draftId: string, submit: boolean): Promise<InputDraftRecord>
+  saveHandoffDraft(params: HandoffDraftSaveParams): Promise<InputDraftRecord>
+  retryHandoffDraft(draftId: string): Promise<InputDraftRecord>
+  sendDraft(draftId: string, submit: boolean, expected?: DraftSendExpectation): Promise<InputDraftRecord>
   discardDraft(draftId: string): Promise<InputDraftRecord>
   getSettings(): Promise<AppSettings>
   putSettings<Section extends keyof AppSettings>(section: Section, value: AppSettings[Section]): Promise<AppSettings>

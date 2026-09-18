@@ -6,12 +6,14 @@ import {
   attentionActionWhenOpened,
   displayPath,
   inferHome,
+  openAttentionGroups,
   neighbor,
   splitCandidates,
   nextRequest,
   progressPresentation,
   relativeAge,
   requestsAnsweredByTyping,
+  sessionAttention,
   sessionStatus,
   windowTitle
 } from './session-presentation'
@@ -36,12 +38,22 @@ const request = (requestId: string, sessionId: string, openedAt: string, state: 
 })
 
 describe('session presentation', () => {
-  it('ranks an open request above process state', () => {
+  it('ranks actionable requests above updates, observed failures, and process state', () => {
     const session = { sessionId: 's1', lastProcess: null }
     expect(sessionStatus(session, true, [request('r1', 's1', '2026-09-14T11:00:00.000Z')])).toEqual({
       dot: 'needs-you',
       word: 'Waiting for your response'
     })
+    const update = { ...request('turn', 's1', '2026-09-14T11:00:00.000Z'), kind: 'notice' as const }
+    expect(sessionStatus(session, true, [update])).toEqual({ dot: 'needs-you', word: 'Update available' })
+    const failed = {
+      label: 'Build', state: 'failed' as const, word: 'Failed', source: 'agent', age: '2 min ago', stale: false, detail: null
+    }
+    expect(sessionStatus(session, true, [update], failed)).toEqual({
+      dot: 'exited', word: 'Failed · agent, 2 min ago'
+    })
+    expect(sessionStatus(session, true, [request('r1', 's1', '2026-09-14T11:00:00.000Z'), update], failed).word)
+      .toBe('Waiting for your response')
     expect(sessionStatus(session, true, [request('r1', 's1', '2026-09-14T11:00:00.000Z', 'answered')]).dot).toBe('running')
     expect(sessionStatus(session, false, []).dot).toBe('idle')
     expect(sessionStatus({
@@ -82,8 +94,25 @@ describe('session presentation', () => {
     expect(progressPresentation(records, 's1', now)).toMatchObject({
       source: 'agent', word: 'Agent reports done', age: '5 min ago', stale: false
     })
-    expect(progressPresentation(records.slice(0, 1), 's1', now)).toMatchObject({ stale: true, age: '20 min ago' })
+    expect(progressPresentation(records.slice(0, 1), 's1', now)).toMatchObject({
+      stale: true, age: '20 min ago', word: 'Last observed running'
+    })
     expect(progressPresentation(records, 's2', now)).toBeNull()
+  })
+
+  it('shows progress only for the requested process incarnation', () => {
+    const records: ProgressRecord[] = [
+      {
+        sessionId: 's1', incarnationId: 'old', source: 'agent', state: 'failed', label: 'Old run', detail: null,
+        observedAt: '2026-09-14T11:59:00.000Z', receivedAt: '2026-09-14T11:59:00.000Z'
+      },
+      {
+        sessionId: 's1', incarnationId: 'current', source: 'agent', state: 'running', label: 'Current run', detail: null,
+        observedAt: '2026-09-14T11:58:00.000Z', receivedAt: '2026-09-14T11:58:00.000Z'
+      }
+    ]
+    expect(progressPresentation(records, 's1', now, 'current')?.label).toBe('Current run')
+    expect(progressPresentation(records, 's1', now, 'missing')).toBeNull()
   })
 
   it('formats relative ages', () => {
@@ -102,6 +131,24 @@ describe('session presentation', () => {
     expect(nextRequest(records, 's2')?.requestId).toBe('r1')
     expect(nextRequest([records[1]!], 's1')?.requestId).toBe('r1')
     expect(nextRequest([], 's1')).toBeNull()
+  })
+
+  it('cycles actionable requests before informational updates with stable ordering', () => {
+    const records = [
+      { ...request('notice-old', 'updates', '2026-09-14T10:00:00.000Z'), kind: 'notice' as const },
+      { ...request('permission', 'permissions', '2026-09-14T11:00:00.000Z'), kind: 'permission' as const },
+      request('question', 'questions', '2026-09-14T11:00:00.000Z'),
+      { ...request('notice-new', 'updates-2', '2026-09-14T12:00:00.000Z'), kind: 'notice' as const }
+    ]
+    const groups = openAttentionGroups(records)
+    expect(groups.responses.map((item) => item.requestId)).toEqual(['permission', 'question'])
+    expect(groups.updates.map((item) => item.requestId)).toEqual(['notice-old', 'notice-new'])
+    expect(nextRequest(records, null)?.requestId).toBe('permission')
+    expect(nextRequest(records, 'permissions')?.requestId).toBe('question')
+    expect(nextRequest(records.filter((item) => item.kind === 'notice'), null)?.requestId).toBe('notice-old')
+    expect(sessionAttention(records, 'permissions')).toBe('response')
+    expect(sessionAttention(records, 'updates')).toBe('update')
+    expect(sessionAttention(records, 'missing')).toBeNull()
   })
 
   it('closes a session\'s open prompts and notices, but not a review, when the owner types into it', () => {

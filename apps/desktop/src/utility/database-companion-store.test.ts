@@ -3,9 +3,11 @@ import { DEFAULT_APP_SETTINGS, ERROR_CODES, type ArtifactRecord } from '@bmn/pro
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   artifactBytesUsed,
+  claimHandoffDraft,
   closeAttention,
   createDraft,
   expireAttention,
+  finishHandoffDraft,
   getReceipt,
   getSettings,
   getTelegramMessage,
@@ -21,6 +23,7 @@ import {
   putTelegramMessage,
   setArtifactState,
   updateDraft,
+  updateHandoffDraft,
   upsertProgress
 } from './database-companion-store'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
@@ -37,6 +40,10 @@ beforeEach(() => {
   database.prepare(
     `INSERT INTO session(session_id, workspace_id, name, cwd, executable, argv_json, revision, created_at, position)
      VALUES ('s1', ?, 'One', '/work', '/bin/bash', '[]', 1, ?, 0)`
+  ).run(DEFAULT_WORKSPACE_ID, now)
+  database.prepare(
+    `INSERT INTO session(session_id, workspace_id, name, cwd, executable, argv_json, revision, created_at, position)
+     VALUES ('s2', ?, 'Two', '/work/two', '/bin/bash', '[]', 1, ?, 1)`
   ).run(DEFAULT_WORKSPACE_ID, now)
 })
 
@@ -96,6 +103,29 @@ describe('companion store', () => {
     ])
   })
 
+  it('does not close a request that changed kind or revision before activation', () => {
+    const first = openAttention(database, {
+      sessionId: 's1', incarnationId: null, requestKey: 'changing', kind: 'notice', title: 'Finished'
+    }, 'r-changing', now)
+    const revised = openAttention(database, {
+      sessionId: 's1', incarnationId: null, requestKey: 'changing', kind: 'question', title: 'Continue?'
+    }, 'unused', now)
+
+    expect(() => closeAttention(database, {
+      requestId: first.requestId,
+      expectedKind: first.kind,
+      expectedRevision: first.revision
+    }, 'answered', 'Opened in BMN', now)).toThrow(
+      expect.objectContaining({ code: ERROR_CODES.revisionConflict })
+    )
+    expect(listAttention(database)[0]).toMatchObject({
+      requestId: first.requestId,
+      kind: 'question',
+      state: 'open',
+      revision: revised.revision
+    })
+  })
+
   it('expires only past-due open requests', () => {
     openAttention(database, {
       sessionId: 's1', incarnationId: null, requestKey: 'old', kind: 'permission', title: 'Old',
@@ -138,6 +168,43 @@ describe('companion store', () => {
     })
     updateDraft(database, 'd1', 'discarded', null, now)
     expect(listDrafts(database)).toEqual([])
+  })
+
+  it('persists handoff metadata, edits monotonically, and claims one paste attempt', () => {
+    insertArtifact(database, artifact('handoff-file', 10))
+    const created = createDraft(database, {
+      draftId: 'handoff-1', sessionId: 's2', origin: 'handoff', originKey: null,
+      sourceSessionId: 's1', requestId: null, text: 'Review this', artifactId: null,
+      artifactIds: ['handoff-file'], attemptedIncarnationId: null,
+      state: 'draft', detail: null
+    }, now).record
+    expect(created).toMatchObject({
+      sourceSessionId: 's1', sessionId: 's2', artifactIds: ['handoff-file'], state: 'draft'
+    })
+
+    const edited = updateHandoffDraft(database, created.draftId, {
+      sessionId: 's2', sourceSessionId: 's1', text: 'Review this now',
+      artifactIds: ['handoff-file'], expectedUpdatedAt: created.updatedAt
+    }, '2026-09-14T11:00:00.000Z')
+    expect(Date.parse(edited.updatedAt)).toBe(Date.parse(created.updatedAt) + 1)
+    expect(() => updateHandoffDraft(database, created.draftId, {
+      sessionId: 's2', sourceSessionId: 's1', text: 'Stale edit', artifactIds: [],
+      expectedUpdatedAt: created.updatedAt
+    }, now)).toThrow(expect.objectContaining({ code: ERROR_CODES.revisionConflict }))
+
+    const firstClaim = claimHandoffDraft(database, edited.draftId, edited.updatedAt, 'incarnation-2', now)
+    const duplicate = claimHandoffDraft(database, edited.draftId, edited.updatedAt, 'incarnation-2', now)
+    expect(firstClaim).toMatchObject({ claimed: true, record: { state: 'uncertain', detail: 'Pasting…' } })
+    expect(duplicate).toMatchObject({ claimed: false, record: { state: 'uncertain' } })
+    const accepted = finishHandoffDraft(database, edited.draftId, 'accepted', 'Pasted to terminal — not submitted', now)
+    expect(accepted).toMatchObject({
+      state: 'accepted', attemptedIncarnationId: 'incarnation-2',
+      detail: 'Pasted to terminal — not submitted'
+    })
+    expect(() => updateHandoffDraft(database, edited.draftId, {
+      sessionId: 's2', sourceSessionId: 's1', text: 'Too late', artifactIds: [],
+      expectedUpdatedAt: accepted.updatedAt
+    }, now)).toThrow(/Only an unsent handoff/)
   })
 
   it('maps Telegram messages to sessions', () => {

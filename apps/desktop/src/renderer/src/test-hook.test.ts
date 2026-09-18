@@ -95,7 +95,32 @@ describe('renderer acceptance hook', () => {
         sourceWorkspaceArchived: true,
         foreignPaneRemovedAfterArchive: true
       },
-      hiddenPaneSize: { shown: { cols: 80, rows: 24 }, hidden: { cols: 80, rows: 24 } }
+      hiddenPaneSize: { shown: { cols: 80, rows: 24 }, hidden: { cols: 80, rows: 24 } },
+      attentionTriage: {
+        responseTitles: ['Question'],
+        responseTitlesAfterUpdate: ['Question'],
+        remainingResponseTitles: ['Question'],
+        updateTitles: ['Update'],
+        updatedUpdateTitles: ['Revised update'],
+        totalCount: 2,
+        progressText: 'Task Failed self-test',
+        detailsProgressText: 'Task Failed self-test',
+        keyboardTargetSessionId: 'session-b',
+        noticeResolved: true,
+        focusReturned: true,
+        focusStableAfterIncomingUpdate: true
+      },
+      handoffFlow: {
+        draftId: 'handoff-1',
+        targetSessionId: 'session-b',
+        editedText: 'Edited handoff',
+        fileName: 'result.txt',
+        acceptedState: 'accepted',
+        existingInputPreserved: true,
+        payloadOccurrences: 1,
+        attentionResponsesPreserved: true,
+        discardedDraftHidden: true
+      }
     }
     const integration = async () => probe
     installTerminalTestHook({

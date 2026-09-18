@@ -41,6 +41,8 @@ export const METHOD_REGISTRY = Object.freeze({
   attentionResolve: 'attention.resolve',
   progressList: 'progress.list',
   draftList: 'draft.list',
+  draftSave: 'draft.save',
+  draftRetry: 'draft.retry',
   draftSend: 'draft.send',
   draftDiscard: 'draft.discard',
   settingsGet: 'settings.get',

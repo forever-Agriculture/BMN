@@ -1162,6 +1162,20 @@ input[type='radio'] {
   border-bottom: 1px solid var(--hairline);
 }
 
+.attention-group > .eyebrow {
+  display: block;
+  padding: 9px 12px 4px;
+}
+
+.attention-group + .attention-group {
+  border-top: 1px solid var(--hairline);
+}
+
+.attention-item.update .status-dot {
+  border: 1px solid var(--muted);
+  background: transparent;
+}
+
 .attention-item .where {
   display: flex;
   align-items: center;
@@ -1172,6 +1186,15 @@ input[type='radio'] {
 
 .attention-item .where .age {
   margin-left: auto;
+}
+
+.attention-item .attention-kind {
+  padding: 1px 5px;
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 10px;
+  text-transform: uppercase;
 }
 
 .attention-item h3 {

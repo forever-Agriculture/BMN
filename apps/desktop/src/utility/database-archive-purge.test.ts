@@ -42,6 +42,19 @@ function session(sessionId: string, workspaceId: string, archivedAt: string | nu
   ).run(sessionId, workspaceId, sessionId, now, archivedAt)
 }
 
+function handoff(
+  draftId: string,
+  sourceSessionId: string,
+  destinationSessionId: string,
+  state: 'draft' | 'accepted' | 'uncertain' | 'discarded'
+): void {
+  database.prepare(
+    `INSERT INTO input_draft(
+       draft_id, session_id, origin, source_session_id, text, artifact_ids_json, state, created_at, updated_at
+     ) VALUES (?, ?, 'handoff', ?, 'Synthetic handoff', '[]', ?, ?, ?)`
+  ).run(draftId, destinationSessionId, sourceSessionId, state, now, now)
+}
+
 /** One row in every table that points at a session. */
 function dependents(sessionId: string): void {
   const n = (database.prepare('SELECT COUNT(*) AS n FROM telegram_message').get() as { n: number }).n
@@ -146,6 +159,32 @@ describe('archive retention', () => {
     expect(database.prepare("SELECT COUNT(*) AS n FROM workspace_layout WHERE workspace_id = 'w-expired'").get()).toEqual({ n: 0 })
     expect(childCount('inside-active')).toBe(0)
     expect(listSessions(database, 'w-fresh').map((record) => record.sessionId)).toEqual(['inside-fresh'])
+  })
+
+  it('retains handoff history with a removed-source fallback and deletes removed destinations', () => {
+    retention(30)
+    session('source-expired', DEFAULT_WORKSPACE_ID, daysAgo(31))
+    session('source-kept', DEFAULT_WORKSPACE_ID, null)
+    session('destination-kept', DEFAULT_WORKSPACE_ID, null)
+    session('destination-expired', DEFAULT_WORKSPACE_ID, daysAgo(31))
+    for (const state of ['draft', 'accepted', 'uncertain', 'discarded'] as const) {
+      handoff(`kept-${state}`, 'source-expired', 'destination-kept', state)
+      handoff(`removed-${state}`, 'source-kept', 'destination-expired', state)
+    }
+
+    expect(purgeExpiredArchives(database, now)).toEqual({
+      sessionIds: ['destination-expired', 'source-expired'],
+      workspaceIds: []
+    })
+
+    expect(database.prepare(
+      `SELECT draft_id, source_session_id, state FROM input_draft ORDER BY draft_id`
+    ).all()).toEqual([
+      { draft_id: 'kept-accepted', source_session_id: null, state: 'accepted' },
+      { draft_id: 'kept-discarded', source_session_id: null, state: 'discarded' },
+      { draft_id: 'kept-draft', source_session_id: null, state: 'draft' },
+      { draft_id: 'kept-uncertain', source_session_id: null, state: 'uncertain' }
+    ])
   })
 
   it('removes deleted sessions from a kept workspace layout so it still opens', () => {

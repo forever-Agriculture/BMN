@@ -18,6 +18,7 @@ import {
   type BackupManifestEntry,
   type BackupVerifyResult,
   type ControlInfo,
+  type InputDraftRecord,
   type ProgressRecord,
   type SessionRecord,
   type TelegramStatus
@@ -39,6 +40,9 @@ const TELEGRAM_DOWNLOAD_BYTES = 20 * 1024 * 1024
 const TELEGRAM_TOKEN_FILE = 'telegram-bot.token'
 const TELEGRAM_OFFSET_KEY = 'telegram.offset'
 const ATTENTION_SWEEP_MS = 30_000
+const HANDOFF_TEXT_BYTES = 16 * 1024
+const HANDOFF_PAYLOAD_BYTES = 64 * 1024
+const HANDOFF_ARTIFACTS = 10
 const TEXT_MEDIA = /^(text\/|application\/(json|xml|javascript|x-sh|x-yaml|toml))/
 
 export const UNROUTED = Symbol('unrouted')
@@ -171,6 +175,7 @@ export class CompanionService {
     ownerAway: () => this.ownerAway,
     now: () => this.now().getTime()
   })
+  private readonly draftOperations = new Map<string, Promise<void>>()
 
   constructor(private readonly options: CompanionServiceOptions) {
     this.now = options.now ?? (() => new Date())
@@ -309,9 +314,23 @@ export class CompanionService {
       }
       case METHOD_REGISTRY.attentionResolve: {
         const state = params.state === 'withdrawn' ? 'withdrawn' : 'answered'
+        const expectedKind = params.expectedKind
+        if (
+          expectedKind !== undefined &&
+          expectedKind !== 'question' && expectedKind !== 'permission' &&
+          expectedKind !== 'review' && expectedKind !== 'notice'
+        ) invalid('The expected attention kind is invalid')
+        const expectedRevision = params.expectedRevision
+        if (expectedRevision !== undefined && (!Number.isSafeInteger(expectedRevision) || Number(expectedRevision) < 1)) {
+          invalid('The expected attention revision is invalid')
+        }
         const record = await database.companion(
           'closeAttention',
-          { requestId: text(params, 'requestId') },
+          {
+            requestId: text(params, 'requestId'),
+            ...(expectedKind !== undefined ? { expectedKind } : {}),
+            ...(expectedRevision !== undefined ? { expectedRevision: Number(expectedRevision) } : {})
+          },
           state,
           optionalText(params, 'resolution') ?? 'Acknowledged in BMN',
           this.iso()
@@ -323,12 +342,28 @@ export class CompanionService {
         return database.companion('listProgress')
       case METHOD_REGISTRY.draftList:
         return database.companion('listDrafts')
+      case METHOD_REGISTRY.draftSave:
+        return this.saveHandoffDraft(params)
+      case METHOD_REGISTRY.draftRetry:
+        return this.retryHandoffDraft(text(params, 'draftId'))
       case METHOD_REGISTRY.draftSend:
-        return this.sendDraft(text(params, 'draftId'), params.submit === true)
+        return this.sendDraft(
+          text(params, 'draftId'),
+          params.submit === true,
+          optionalText(params, 'expectedIncarnationId'),
+          optionalText(params, 'expectedUpdatedAt')
+        )
       case METHOD_REGISTRY.draftDiscard: {
-        const record = await database.companion('updateDraft', text(params, 'draftId'), 'discarded', null, this.iso())
-        this.emit('drafts', record.sessionId)
-        return record
+        const draftId = text(params, 'draftId')
+        return this.withDraft(draftId, async () => {
+          const draft = await database.companion('getDraft', draftId)
+          if (draft.origin === 'handoff' && draft.state !== 'draft') {
+            invalid('Only an unsent handoff can be discarded')
+          }
+          const record = await database.companion('updateDraft', draftId, 'discarded', null, this.iso())
+          this.emit('drafts', record.sessionId)
+          return record
+        })
       }
       case METHOD_REGISTRY.settingsGet:
         return database.companion('getSettings')
@@ -618,20 +653,218 @@ export class CompanionService {
     if (!this.options.manager.liveIncarnationId(sessionId)) {
       throw new HostControlError(ERROR_CODES.notFound, 'The target session has no live process')
     }
+    const linkPath = await this.prepareArtifactLink(artifact)
+    this.options.manager.writeToSession(sessionId, bracketedPaste(`${this.quotePath(linkPath)} `, false))
+    return { delivered: true, path: linkPath }
+  }
+
+  private async prepareArtifactLink(artifact: ArtifactRecord): Promise<string> {
     const linkDirectory = join(this.options.roots.data, 'artifacts', 'links')
     await mkdir(linkDirectory, { recursive: true, mode: 0o700 })
     const linkPath = join(linkDirectory, `${artifact.artifactId}${linkExtension(artifact)}`)
     const existing = await lstat(linkPath).catch(() => undefined)
     if (!existing) await symlink(artifact.storedPath, linkPath)
     else if (!existing.isSymbolicLink()) throw new HostControlError(ERROR_CODES.ioError, 'The delivery path is occupied')
-    const quoted = /[\s'"\\]/.test(linkPath) ? `'${linkPath.replaceAll("'", "'\\''")}'` : linkPath
-    this.options.manager.writeToSession(sessionId, bracketedPaste(`${quoted} `, false))
-    return { delivered: true, path: linkPath }
+    return linkPath
   }
 
-  private async sendDraft(draftId: string, submit: boolean): Promise<unknown> {
+  private quotePath(path: string): string {
+    return /[\s'"\\]/.test(path) ? `'${path.replaceAll("'", "'\\''")}'` : path
+  }
+
+  private withDraft<Result>(draftId: string, operation: () => Promise<Result>): Promise<Result> {
+    const previous = this.draftOperations.get(draftId) ?? Promise.resolve()
+    const result = previous.then(operation, operation)
+    const tail = result.then(() => undefined, () => undefined)
+    this.draftOperations.set(draftId, tail)
+    return result.finally(() => {
+      if (this.draftOperations.get(draftId) === tail) this.draftOperations.delete(draftId)
+    })
+  }
+
+  private async availableHandoffSessions(sourceSessionId: string, sessionId: string): Promise<{
+    source: SessionRecord
+    target: SessionRecord
+  }> {
+    await this.sessionsChanged()
+    if (sourceSessionId === sessionId) invalid('Choose a different destination session')
+    const source = this.knownSessions.get(sourceSessionId)
+    const target = this.knownSessions.get(sessionId)
+    const workspaces = await this.options.database.listWorkspaces(true)
+    const availableWorkspaces = new Set(
+      workspaces.filter((workspace) => workspace.archivedAt === null).map((workspace) => workspace.workspaceId)
+    )
+    if (!source || source.archivedAt !== null || !availableWorkspaces.has(source.workspaceId)) {
+      invalid('The handoff source session is unavailable')
+    }
+    if (!target || target.archivedAt !== null || !availableWorkspaces.has(target.workspaceId)) {
+      invalid('The handoff destination is unavailable; choose it again')
+    }
+    return { source, target }
+  }
+
+  private handoffText(value: unknown): string {
+    if (typeof value !== 'string' || value.trim().length === 0) invalid('Handoff text must not be empty')
+    if (new TextEncoder().encode(value).byteLength > HANDOFF_TEXT_BYTES) {
+      invalid('Handoff text must be at most 16 KiB')
+    }
+    return value
+  }
+
+  private handoffArtifactIds(value: unknown): string[] {
+    if (!Array.isArray(value) || !value.every((item) => typeof item === 'string' && item.length > 0)) {
+      invalid('Handoff artifacts must be stored artifact IDs')
+    }
+    const distinct = [...new Set(value)]
+    if (distinct.length !== value.length) invalid('Choose each handoff file only once')
+    if (distinct.length > HANDOFF_ARTIFACTS) invalid('Choose at most 10 handoff files')
+    return distinct
+  }
+
+  private async validateHandoffArtifacts(sourceSessionId: string, artifactIds: string[]): Promise<ArtifactRecord[]> {
+    const artifacts: ArtifactRecord[] = []
+    for (const artifactId of artifactIds) {
+      const artifact = await this.readyArtifact(artifactId)
+      if (artifact.sessionId !== sourceSessionId) invalid('Every handoff file must belong to the source session')
+      artifacts.push(artifact)
+    }
+    return artifacts
+  }
+
+  private async saveHandoffDraft(
+    raw: Record<string, unknown>,
+    detail: string | null = null
+  ): Promise<InputDraftRecord> {
+    const draftId = optionalText(raw, 'draftId')
+    const sourceSessionId = text(raw, 'sourceSessionId')
+    const sessionId = text(raw, 'sessionId')
+    const handoffText = this.handoffText(raw.text)
+    const artifactIds = this.handoffArtifactIds(raw.artifactIds)
+    await this.availableHandoffSessions(sourceSessionId, sessionId)
+    await this.validateHandoffArtifacts(sourceSessionId, artifactIds)
+    if (!draftId) {
+      const { record } = await this.options.database.companion('createDraft', {
+        draftId: randomUUID(),
+        sessionId,
+        origin: 'handoff',
+        originKey: null,
+        sourceSessionId,
+        requestId: null,
+        text: handoffText,
+        artifactId: null,
+        artifactIds,
+        attemptedIncarnationId: null,
+        state: 'draft',
+        detail
+      }, this.iso())
+      this.emit('drafts', sessionId)
+      return record
+    }
+    const expectedUpdatedAt = optionalText(raw, 'expectedUpdatedAt')
+    if (!expectedUpdatedAt) invalid('The saved handoff timestamp is required for editing')
+    return this.withDraft(draftId, async () => {
+      const record = await this.options.database.companion('updateHandoffDraft', draftId, {
+        sessionId,
+        sourceSessionId,
+        text: handoffText,
+        artifactIds,
+        expectedUpdatedAt
+      }, this.iso())
+      this.emit('drafts', record.sessionId)
+      return record
+    })
+  }
+
+  private async retryHandoffDraft(draftId: string): Promise<InputDraftRecord> {
+    return this.withDraft(draftId, async () => {
+      const draft = await this.options.database.companion('getDraft', draftId)
+      if (draft.origin !== 'handoff' || draft.state !== 'uncertain' || !draft.sourceSessionId || !draft.text) {
+        invalid('Only an uncertain handoff can be copied for an explicit retry')
+      }
+      return this.saveHandoffDraft({
+        sourceSessionId: draft.sourceSessionId,
+        sessionId: draft.sessionId,
+        text: draft.text,
+        artifactIds: draft.artifactIds
+      }, `Retry of ${draft.draftId}; check the destination for a possible earlier paste`)
+    })
+  }
+
+  private async sendDraft(
+    draftId: string,
+    submit: boolean,
+    expectedIncarnationId: string | null = null,
+    expectedUpdatedAt: string | null = null
+  ): Promise<unknown> {
+    return this.withDraft(draftId, async () => this.sendDraftLocked(
+      draftId,
+      submit,
+      expectedIncarnationId,
+      expectedUpdatedAt
+    ))
+  }
+
+  private async sendDraftLocked(
+    draftId: string,
+    submit: boolean,
+    expectedIncarnationId: string | null,
+    expectedUpdatedAt: string | null
+  ): Promise<unknown> {
     const database = this.options.database
     const draft = await database.companion('getDraft', draftId)
+    if (draft.origin === 'handoff') {
+      if (draft.state !== 'draft') return draft
+      if (submit) invalid('A handoff can be pasted but never submitted automatically')
+      if (!expectedIncarnationId || !expectedUpdatedAt) {
+        invalid('Open the handoff destination again before pasting')
+      }
+      if (!draft.sourceSessionId || !draft.text) invalid('The handoff is incomplete')
+      const { source } = await this.availableHandoffSessions(draft.sourceSessionId, draft.sessionId)
+      if (this.options.manager.liveIncarnationId(draft.sessionId) !== expectedIncarnationId) {
+        throw new HostControlError(ERROR_CODES.revisionConflict, 'The destination process changed; open it again')
+      }
+      const artifacts = await this.validateHandoffArtifacts(draft.sourceSessionId, draft.artifactIds)
+      const links = await Promise.all(artifacts.map(async (artifact) => ({
+        artifact,
+        path: await this.prepareArtifactLink(artifact)
+      })))
+      const payload = [
+        `[BMN handoff from ${source.name} · ${source.executable} · ${source.cwd}]`,
+        draft.text,
+        ...(links.length > 0
+          ? ['', 'Files:', ...links.map(({ artifact, path }) => `- ${artifact.originalName}: ${this.quotePath(path)}`)]
+          : [])
+      ].join('\n')
+      if (new TextEncoder().encode(payload).byteLength > HANDOFF_PAYLOAD_BYTES) {
+        invalid('The assembled handoff must be at most 64 KiB')
+      }
+      const claim = await database.companion(
+        'claimHandoffDraft', draftId, expectedUpdatedAt, expectedIncarnationId, this.iso()
+      )
+      if (!claim.claimed) return claim.record
+      this.emit('drafts', draft.sessionId)
+      try {
+        await this.availableHandoffSessions(draft.sourceSessionId, draft.sessionId)
+      } catch (error) {
+        await database.companion('finishHandoffDraft', draftId, 'draft', 'Destination became unavailable', this.iso())
+        this.emit('drafts', draft.sessionId)
+        throw error
+      }
+      const liveIncarnationId = this.options.manager.liveIncarnationId(draft.sessionId)
+      if (liveIncarnationId !== expectedIncarnationId) {
+        await database.companion(
+          'finishHandoffDraft', draftId, 'draft', 'Destination process changed before paste', this.iso()
+        )
+        this.emit('drafts', draft.sessionId)
+        throw new HostControlError(ERROR_CODES.revisionConflict, 'The destination process changed; open it again')
+      }
+      this.options.manager.writeToSession(draft.sessionId, bracketedPaste(payload, false))
+      const record = await database.companion(
+        'finishHandoffDraft', draftId, 'accepted', 'Pasted to terminal — not submitted', this.iso()
+      )
+      this.emit('drafts', draft.sessionId)
+      return record
+    }
     if (draft.state !== 'draft' && draft.state !== 'uncertain') invalid('Only an unsent draft can be sent')
     if (draft.text) this.options.manager.writeToSession(draft.sessionId, bracketedPaste(draft.text, submit))
     if (draft.artifactId) await this.deliver(draft.artifactId, draft.sessionId)

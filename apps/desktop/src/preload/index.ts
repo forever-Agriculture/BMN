@@ -14,6 +14,8 @@ import {
   type BackupManifest,
   type BackupVerifyResult,
   type ControlInfo,
+  type DraftSendExpectation,
+  type HandoffDraftSaveParams,
   type InputDraftRecord,
   type ProgressRecord,
   type TelegramStatus,
@@ -434,8 +436,16 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   markAttentionSeen(requestId: string): Promise<AttentionRecord> {
     return invokeBridge('aiterm:attention:seen', { requestId })
   },
-  resolveAttention(requestId: string, resolution?: string): Promise<AttentionRecord> {
-    return invokeBridge('aiterm:attention:resolve', { requestId, ...(resolution ? { resolution } : {}) })
+  resolveAttention(
+    requestId: string,
+    resolution?: string,
+    expected?: Pick<AttentionRecord, 'kind' | 'revision'>
+  ): Promise<AttentionRecord> {
+    return invokeBridge('aiterm:attention:resolve', {
+      requestId,
+      ...(resolution ? { resolution } : {}),
+      ...(expected ? { expectedKind: expected.kind, expectedRevision: expected.revision } : {})
+    })
   },
   listProgress(): Promise<ProgressRecord[]> {
     return invokeBridge('aiterm:progress:list', {})
@@ -443,8 +453,14 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   listDrafts(): Promise<InputDraftRecord[]> {
     return invokeBridge('aiterm:draft:list', {})
   },
-  sendDraft(draftId: string, submit: boolean): Promise<InputDraftRecord> {
-    return invokeBridge('aiterm:draft:send', { draftId, submit })
+  saveHandoffDraft(params: HandoffDraftSaveParams): Promise<InputDraftRecord> {
+    return invokeBridge('aiterm:draft:save', params)
+  },
+  retryHandoffDraft(draftId: string): Promise<InputDraftRecord> {
+    return invokeBridge('aiterm:draft:retry', { draftId })
+  },
+  sendDraft(draftId: string, submit: boolean, expected?: DraftSendExpectation): Promise<InputDraftRecord> {
+    return invokeBridge('aiterm:draft:send', { draftId, submit, ...expected })
   },
   discardDraft(draftId: string): Promise<InputDraftRecord> {
     return invokeBridge('aiterm:draft:discard', { draftId })

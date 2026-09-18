@@ -5,9 +5,13 @@ import {
   METHOD_REGISTRY,
   isTerminalOutputMessage,
   type AppSettings,
+  type ArtifactRecord,
+  type AttentionRecord,
   type ExplicitConversationBinding,
+  type InputDraftRecord,
   type LaunchTemplateRecord,
   type LayoutGetResult,
+  type ProgressRecord,
   type SavedOutputCapture,
   type SavedOutputCaptureOutcome,
   type SavedOutputCatalog,
@@ -229,20 +233,22 @@ const appEvents = createAppEventForwarder({
   watching: (sessionId) => !presence.current().away && BrowserWindow.getAllWindows().some((window) =>
     !window.isDestroyed() && window.isFocused() && selectedSessions.get(window.webContents.id) === sessionId
   ),
-  notify: ({ title, body, sessionId, requestId, kind }) => {
+  notify: ({ title, body, sessionId, requestId, kind, revision }) => {
     if (!Notification.isSupported()) return
     const notification = new Notification({ title, body, silent: false })
     notification.on('click', () => {
-      void activateAttentionNotification({ sessionId, requestId, kind }, {
+      void activateAttentionNotification({ sessionId, requestId, kind, revision }, {
         close: () => notification.close(),
         openSession: (targetSessionId) => {
           focusExistingWindow(applicationWindow)
           applicationWindow?.webContents.send('aiterm:open-session', targetSessionId)
         },
-        resolveNotice: (targetRequestId) => hostClient
+        resolveNotice: (targetRequestId, expectedRevision) => hostClient
           ? hostClient.request(METHOD_REGISTRY.attentionResolve, {
               requestId: targetRequestId,
-              resolution: 'Opened in BMN'
+              resolution: 'Opened in BMN',
+              expectedKind: 'notice',
+              expectedRevision
             })
           : Promise.resolve()
       })
@@ -929,6 +935,34 @@ interface RendererIntegrationProbe {
     foreignPaneRemovedAfterArchive: boolean
   }
   hiddenPaneSize: { shown: { cols: number; rows: number }; hidden: { cols: number; rows: number } }
+  attentionTriage: {
+    responseTitles: string[]
+    responseTitlesAfterUpdate: string[]
+    remainingResponseTitles: string[]
+    updateTitles: string[]
+    updatedUpdateTitles: string[]
+    totalCount: number
+    progressText: string
+    detailsProgressText: string
+    keyboardTargetSessionId: string
+    noticeResolved: boolean
+    focusReturned: boolean
+    focusStableAfterIncomingUpdate: boolean
+    staleNoticeRejected?: boolean
+    revisedPromptPreserved?: boolean
+    unavailableTargetIgnored?: boolean
+  }
+  handoffFlow: {
+    draftId: string
+    targetSessionId: string
+    editedText: string
+    fileName: string
+    acceptedState: string
+    existingInputPreserved: boolean
+    payloadOccurrences: number
+    attentionResponsesPreserved: boolean
+    discardedDraftHidden: boolean
+  }
 }
 
 async function stoppedPanelLabel(window: BrowserWindow, sessionId: string): Promise<string> {
@@ -956,6 +990,32 @@ async function stoppedPanelLabel(window: BrowserWindow, sessionId: string): Prom
           visiblePanes: [...document.querySelectorAll('.session-terminal:not(.session-terminal-hidden)')]
             .map((pane) => pane.getAttribute('data-session-id'))
         })));
+        else setTimeout(probe, 25);
+      };
+      probe();
+    })
+  `) as Promise<string>
+}
+
+async function stoppedPanelProgress(window: BrowserWindow, sessionId: string): Promise<string> {
+  return window.webContents.executeJavaScript(`
+    new Promise((resolve, reject) => {
+      const deadline = Date.now() + 5000;
+      let selected = false;
+      const probe = () => {
+        const button = [...document.querySelectorAll('.session-row > button[data-session-id]')]
+          .find((candidate) => candidate.dataset.sessionId === ${JSON.stringify(sessionId)});
+        if (!button) {
+          reject(new Error('the stopped progress session tree button was not rendered'));
+          return;
+        }
+        if (!selected) {
+          selected = true;
+          button.click();
+        }
+        const text = document.querySelector('.stopped-session .progress-strip')?.textContent?.trim();
+        if (text) resolve(text);
+        else if (Date.now() >= deadline) reject(new Error('the stopped progress summary was not rendered'));
         else setTimeout(probe, 25);
       };
       probe();
@@ -1424,6 +1484,7 @@ async function runSelfTest(): Promise<void> {
     hostClient = client
     hostRendererPort = applicationPort
     trackSessionProcessStates(client)
+    client.onAppEvent((message) => appEvents.forward(message))
     runtimes.clear()
     processTracking.unconfirmedExits.clear()
     sessionRecords.clear()
@@ -1468,6 +1529,112 @@ async function runSelfTest(): Promise<void> {
     if (beforeRenderer.liveSessions !== 3 || beforeRenderer.incarnationRecords !== 3) {
       throw new Error('multi-session fixture did not create exactly three live processes')
     }
+    const writeFixtureInput = (identity: SessionIdentity, input: string): void => {
+      const runtime = runtimes.get(identity.sessionId)
+      if (!runtime) throw new Error(`attention fixture runtime missing for ${identity.sessionId}`)
+      applicationPort!.postMessage({
+        kind: 'terminal-input',
+        method: METHOD_REGISTRY.terminalWrite,
+        attachmentId: runtime.attachment.attachmentId,
+        bytes: new TextEncoder().encode(input)
+      })
+    }
+    const writeFixtureCommand = (identity: SessionIdentity, command: string): void => {
+      writeFixtureInput(identity, `${command}\r`)
+    }
+    writeFixtureCommand(
+      session,
+      'bmn ask self-question "Choose the self-test answer" --kind question'
+    )
+    writeFixtureCommand(
+      secondSession,
+      'bmn ask self-permission "Allow the self-test action" --kind permission; ' +
+      'bmn ask self-review "Review the self-test result" --kind review; ' +
+      'bmn ask self-update "Self-test turn finished" --kind notice; ' +
+      'bmn progress failed "Observed self-test failure" --source self-test ' +
+      '--observed 2026-09-18T20:00:00.000Z'
+    )
+    const attentionFixtureDeadline = Date.now() + 5_000
+    while (Date.now() < attentionFixtureDeadline) {
+      const [fixtureAttention, fixtureProgress] = await Promise.all([
+        client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}),
+        client.request<ProgressRecord[]>(METHOD_REGISTRY.progressList, {})
+      ])
+      if (
+        fixtureAttention.filter((request) => request.state === 'open').length === 4 &&
+        fixtureProgress.some((record) =>
+          record.sessionId === secondSession.sessionId && record.state === 'failed' && record.source === 'self-test')
+      ) break
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    const [fixtureAttention, fixtureProgress] = await Promise.all([
+      client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}),
+      client.request<ProgressRecord[]>(METHOD_REGISTRY.progressList, {})
+    ])
+    if (
+      fixtureAttention.filter((request) => request.state === 'open').length !== 4 ||
+      !fixtureProgress.some((record) =>
+        record.sessionId === secondSession.sessionId && record.state === 'failed' && record.source === 'self-test')
+    ) {
+      throw new Error('the attention/progress CLI fixture did not reach the utility owner')
+    }
+    const handoffArtifact = await client.request<ArtifactRecord>(METHOD_REGISTRY.artifactImportBytes, {
+      sessionId: secondSession.sessionId,
+      name: 'handoff-self-test.txt',
+      bytes: new TextEncoder().encode('synthetic handoff original\n')
+    })
+    const expectedResponseTitles = fixtureAttention
+      .filter((request) => request.state === 'open' && request.kind !== 'notice')
+      .toSorted((left, right) =>
+        left.openedAt.localeCompare(right.openedAt) || left.requestId.localeCompare(right.requestId))
+      .map((request) => request.title)
+    writeFixtureCommand(session, 'bmn ask self-race "A stale notice" --kind notice')
+    const raceNotice = await (async (): Promise<AttentionRecord> => {
+      const deadline = Date.now() + 5_000
+      while (Date.now() < deadline) {
+        const found = (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
+          .find((request) => request.requestKey === 'self-race' && request.state === 'open')
+        if (found) return found
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      throw new Error('the notice race fixture did not open')
+    })()
+    writeFixtureCommand(session, 'bmn ask self-race "A revised question" --kind question')
+    const revisedPrompt = await (async (): Promise<AttentionRecord> => {
+      const deadline = Date.now() + 5_000
+      while (Date.now() < deadline) {
+        const found = (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
+          .find((request) =>
+            request.requestId === raceNotice.requestId &&
+            request.kind === 'question' &&
+            request.revision > raceNotice.revision)
+        if (found) return found
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      throw new Error('the notice race fixture did not revise into a question')
+    })()
+    await expectRemoteFailure(
+      client.request(METHOD_REGISTRY.attentionResolve, {
+        requestId: raceNotice.requestId,
+        resolution: 'Opened in BMN',
+        expectedKind: raceNotice.kind,
+        expectedRevision: raceNotice.revision
+      }),
+      ERROR_CODES.revisionConflict,
+      'changed before it was opened'
+    )
+    const revisedAfterStaleActivation = (await client.request<AttentionRecord[]>(
+      METHOD_REGISTRY.attentionList,
+      {}
+    )).find((request) => request.requestId === revisedPrompt.requestId)
+    const staleNoticeRejected = true
+    const revisedPromptPreserved =
+      revisedAfterStaleActivation?.kind === 'question' && revisedAfterStaleActivation.state === 'open'
+    await client.request(METHOD_REGISTRY.attentionResolve, {
+      requestId: revisedPrompt.requestId,
+      resolution: 'Self-test cleanup'
+    })
+    writeFixtureInput(session, 'EXISTING-HANDOFF-PREFIX ')
     const rendererStartup = await loadApplicationStartup(true)
     console.error('[BMN] self-test phase: renderer preload integration')
     applicationWindow = createWindow(rendererStartup, {
@@ -1475,12 +1642,44 @@ async function runSelfTest(): Promise<void> {
       terminalPort: applicationPort,
       recoverRenderer: recoverApplicationRenderer
     })
+    let releaseAttentionUpdate: (() => void) | undefined
+    const attentionBaselineCaptured = new Promise<void>((resolve) => {
+      releaseAttentionUpdate = resolve
+    })
     applicationWindow.webContents.on('console-message', (_event, level, message) => {
       if (level === 2) console.error(`[BMN] renderer console: ${message}`)
+      if (message.includes('attention baseline captured')) releaseAttentionUpdate?.()
     })
     await waitForRendererLoad(applicationWindow)
     const layoutSelectionsBeforeRendererProbe = selfTestLayoutPutSelections.length
-    const preloadProbe = await waitForRendererIntegration(applicationWindow)
+    const incomingAttentionUpdate = attentionBaselineCaptured.then(async () => {
+      console.error('[BMN] self-test phase: sending live attention revision')
+      const runtime = runtimes.get(secondSession.sessionId)
+      if (!runtime) throw new Error('the incoming attention fixture runtime was unavailable')
+      await client.request(METHOD_REGISTRY.terminalWrite, {
+        attachmentId: runtime.attachment.attachmentId,
+        bytes: new TextEncoder().encode('bmn ask self-update "Self-test turn revised" --kind notice\r')
+      })
+      console.error('[BMN] self-test phase: live attention revision accepted by host')
+      const deadline = Date.now() + 5_000
+      while (Date.now() < deadline) {
+        const found = (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
+          .find((request) =>
+            request.requestKey === 'self-update' &&
+            request.kind === 'notice' &&
+            request.title === 'Self-test turn revised')
+        if (found) {
+          console.error('[BMN] self-test phase: live attention revision observed')
+          return found
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      throw new Error('the incoming attention update did not reach the utility owner')
+    })
+    const [preloadProbe] = await Promise.all([
+      waitForRendererIntegration(applicationWindow),
+      incomingAttentionUpdate
+    ])
     if (
       preloadProbe.bridgeErrorCodes.staleLayoutPut !== ERROR_CODES.revisionConflict ||
       preloadProbe.bridgeErrorCodes.unknownSessionSavedOutput !== ERROR_CODES.notFound
@@ -1489,6 +1688,68 @@ async function runSelfTest(): Promise<void> {
         `typed bridge errors did not survive the contextBridge: ${JSON.stringify(preloadProbe.bridgeErrorCodes)}`
       )
     }
+    if (
+      preloadProbe.attentionTriage.totalCount !== 4 ||
+      JSON.stringify(preloadProbe.attentionTriage.responseTitles) !== JSON.stringify(expectedResponseTitles) ||
+      JSON.stringify(preloadProbe.attentionTriage.responseTitlesAfterUpdate) !==
+        JSON.stringify(expectedResponseTitles) ||
+      JSON.stringify(preloadProbe.attentionTriage.remainingResponseTitles) !==
+        JSON.stringify(expectedResponseTitles.toSorted()) ||
+      JSON.stringify(preloadProbe.attentionTriage.updateTitles) !== JSON.stringify(['Self-test turn finished']) ||
+      JSON.stringify(preloadProbe.attentionTriage.updatedUpdateTitles) !== JSON.stringify(['Self-test turn revised']) ||
+      !preloadProbe.attentionTriage.progressText.includes('Observed self-test failure') ||
+      !preloadProbe.attentionTriage.progressText.includes('Last observed failed') ||
+      !preloadProbe.attentionTriage.progressText.includes('stale') ||
+      !preloadProbe.attentionTriage.detailsProgressText.includes('Observed self-test failure') ||
+      !preloadProbe.attentionTriage.detailsProgressText.includes('Last observed failed') ||
+      !preloadProbe.attentionTriage.detailsProgressText.includes('stale') ||
+      preloadProbe.attentionTriage.keyboardTargetSessionId !== session.sessionId ||
+      !preloadProbe.attentionTriage.noticeResolved ||
+      !preloadProbe.attentionTriage.focusReturned ||
+      !preloadProbe.attentionTriage.focusStableAfterIncomingUpdate
+    ) {
+      throw new Error(
+        `the renderer did not preserve attention triage semantics: ${JSON.stringify(preloadProbe.attentionTriage)}`
+      )
+    }
+    if (
+      preloadProbe.handoffFlow.targetSessionId !== session.sessionId ||
+      preloadProbe.handoffFlow.editedText !== 'Edited handoff line one\nQuestion line two' ||
+      preloadProbe.handoffFlow.fileName !== handoffArtifact.originalName ||
+      preloadProbe.handoffFlow.acceptedState !== 'accepted' ||
+      !preloadProbe.handoffFlow.existingInputPreserved ||
+      preloadProbe.handoffFlow.payloadOccurrences !== 1 ||
+      !preloadProbe.handoffFlow.attentionResponsesPreserved ||
+      !preloadProbe.handoffFlow.discardedDraftHidden
+    ) {
+      throw new Error(`the renderer did not complete the explicit handoff flow: ${JSON.stringify(preloadProbe.handoffFlow)}`)
+    }
+    preloadProbe.attentionTriage.staleNoticeRejected = staleNoticeRejected
+    preloadProbe.attentionTriage.revisedPromptPreserved = revisedPromptPreserved
+
+    const selectedBeforeUnavailableTarget = (await client.request<LayoutGetResult>(
+      METHOD_REGISTRY.layoutGet,
+      { workspaceId: DEFAULT_WORKSPACE_ID }
+    )).layout.selectedSessionId
+    applicationWindow.webContents.send('aiterm:open-session', thirdSession.sessionId)
+    const unavailableFeedback = await applicationWindow.webContents.executeJavaScript(`
+      new Promise((resolve, reject) => {
+        const deadline = Date.now() + 5000;
+        const probe = () => {
+          const text = document.querySelector('.feedback-notice')?.textContent?.trim() ?? '';
+          if (text === 'That session is unavailable. Refreshing attention items.') resolve(text);
+          else if (Date.now() >= deadline) reject(new Error('unavailable target feedback was not rendered: ' + text));
+          else setTimeout(probe, 25);
+        };
+        probe();
+      })
+    `) as string
+    const selectedAfterUnavailableTarget = (await client.request<LayoutGetResult>(
+      METHOD_REGISTRY.layoutGet,
+      { workspaceId: DEFAULT_WORKSPACE_ID }
+    )).layout.selectedSessionId
+    preloadProbe.attentionTriage.unavailableTargetIgnored =
+      unavailableFeedback.length > 0 && selectedAfterUnavailableTarget === selectedBeforeUnavailableTarget
     if (
       preloadProbe.launchUnavailable.sessionId !== secondSession.sessionId ||
       preloadProbe.launchUnavailable.notice !==
@@ -1713,6 +1974,7 @@ async function runSelfTest(): Promise<void> {
     console.error('[BMN] self-test phase: restarted host ready')
     applicationWindow.hide()
     client = restarted.client
+    client.onAppEvent((message) => appEvents.forward(message))
     clientClosed = false
     applicationPort = restarted.applicationPort
     const restoredWorkspaces = await client.request<WorkspaceRecord[]>(METHOD_REGISTRY.workspaceList, {
@@ -1728,6 +1990,8 @@ async function runSelfTest(): Promise<void> {
       workspaceId: DEFAULT_WORKSPACE_ID
     })
     const restoredHealth = await client.request<HostHealth>(METHOD_REGISTRY.healthGet, {})
+    const restoredDrafts = await client.request<InputDraftRecord[]>(METHOD_REGISTRY.draftList, {})
+    const restoredHandoff = restoredDrafts.find((draft) => draft.draftId === preloadProbe.handoffFlow.draftId)
     console.error('[BMN] self-test phase: restored state queried')
     const restoredBindings = await Promise.all(identities.map((identity) =>
       client.request(METHOD_REGISTRY.sessionBindingGet, { sessionId: identity.sessionId })
@@ -1776,16 +2040,30 @@ async function runSelfTest(): Promise<void> {
       restoredLayout.sessionView[session.sessionId]?.scrollLine !== 19 ||
       restoredLayout.sessionView[session.sessionId]?.followTail !== false ||
       JSON.stringify(restoredBindings.map(persistedBindingView)) !==
-        JSON.stringify(expectedBindings.map(persistedBindingView))
+        JSON.stringify(expectedBindings.map(persistedBindingView)) ||
+      restoredHandoff?.state !== 'accepted' ||
+      restoredHandoff.detail !== 'Pasted to terminal — not submitted' ||
+      !restoredHandoff.artifactIds.includes(handoffArtifact.artifactId) ||
+      restoredHandoff.attemptedIncarnationId === null
     ) {
       throw new Error('workspace/session order, layout, or bindings did not restore')
+    }
+    hostClient = client
+    hostRendererPort = applicationPort
+    trackSessionProcessStates(client)
+    await recoverApplicationRenderer(applicationWindow)
+    const stoppedStaleProgress = await stoppedPanelProgress(applicationWindow, secondSession.sessionId)
+    if (
+      !stoppedStaleProgress.includes('Observed self-test failure') ||
+      !stoppedStaleProgress.includes('Last observed failed') ||
+      !stoppedStaleProgress.includes('stale') ||
+      !stoppedStaleProgress.includes('self-test')
+    ) {
+      throw new Error(`stale current-incarnation progress did not survive into the stopped view: ${stoppedStaleProgress}`)
     }
     // A dedicated live session on the restarted host, after every restored-state check, so no
     // earlier count, order or receipt value sees it.
     console.error('[BMN] self-test phase: renderer live exit feedback')
-    hostClient = client
-    hostRendererPort = applicationPort
-    trackSessionProcessStates(client)
     const { startup: liveExitCreated } = await createSessionRuntime({
       workspaceId: DEFAULT_WORKSPACE_ID,
       name: 'Live exit shell',
@@ -1888,6 +2166,7 @@ async function runSelfTest(): Promise<void> {
       rendererLaunchUnavailable: preloadProbe.launchUnavailable,
       rendererUnavailableTemplate: preloadProbe.unavailableTemplate,
       rendererStoppedPanelLabel,
+      stoppedStaleProgress,
       rendererInverseTextContrast,
       rendererLiveExitLabel,
       rendererRecoveredAfterShellExit,
@@ -1897,6 +2176,8 @@ async function runSelfTest(): Promise<void> {
       treeSelectionLayoutPut: preloadProbe.treeSelection,
       crossWorkspaceSplit: preloadProbe.crossWorkspaceSplit,
       hiddenPaneSize: preloadProbe.hiddenPaneSize,
+      handoffFlow: { ...preloadProbe.handoffFlow, persistedAfterRestart: true },
+      attentionTriage: preloadProbe.attentionTriage,
       inactiveFollowingOutputLayoutPuts,
       inactiveFollowingOutputCaptured,
       launchBackgroundChoiceRecorded,

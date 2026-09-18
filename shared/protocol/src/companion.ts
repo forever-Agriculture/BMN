@@ -78,14 +78,31 @@ export type InputDraftState = 'draft' | 'accepted' | 'submitted' | 'uncertain' |
 export interface InputDraftRecord {
   draftId: string
   sessionId: string
-  origin: 'telegram' | 'control'
+  origin: 'telegram' | 'control' | 'handoff'
+  sourceSessionId: string | null
   requestId: string | null
   text: string | null
   artifactId: string | null
+  artifactIds: string[]
+  attemptedIncarnationId: string | null
   state: InputDraftState
   detail: string | null
   createdAt: string
   updatedAt: string
+}
+
+export interface HandoffDraftSaveParams {
+  draftId?: string
+  sourceSessionId: string
+  sessionId: string
+  text: string
+  artifactIds: string[]
+  expectedUpdatedAt?: string
+}
+
+export interface DraftSendExpectation {
+  expectedIncarnationId?: string
+  expectedUpdatedAt?: string
 }
 
 /** The header's emblem and motto, chosen independently of the colors. */

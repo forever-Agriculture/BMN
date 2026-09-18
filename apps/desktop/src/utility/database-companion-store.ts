@@ -238,7 +238,10 @@ export function getAttention(database: DatabaseConnection, requestId: string): A
  */
 export function closeAttention(
   database: DatabaseConnection,
-  target: { requestId: string } | { sessionId: string; requestKey: string },
+  target: ({ requestId: string } | { sessionId: string; requestKey: string }) & {
+    expectedKind?: AttentionKind
+    expectedRevision?: number
+  },
   state: Exclude<AttentionState, 'open'>,
   resolution: string | null,
   now: string
@@ -248,8 +251,14 @@ export function closeAttention(
         .get(target.requestId)
     : database.prepare(
         "SELECT * FROM attention_request WHERE session_id = ? AND request_key = ? AND state = 'open'"
-      ).get(target.sessionId, target.requestKey)) as AttentionRow | undefined
+  ).get(target.sessionId, target.requestKey)) as AttentionRow | undefined
   if (!row) throw new WorkspaceStoreError(ERROR_CODES.notFound, 'No matching open attention request')
+  if (
+    (target.expectedKind !== undefined && row.kind !== target.expectedKind) ||
+    (target.expectedRevision !== undefined && row.revision !== target.expectedRevision)
+  ) {
+    throw new WorkspaceStoreError(ERROR_CODES.revisionConflict, 'The attention request changed before it was opened')
+  }
   database.prepare(
     `UPDATE attention_request SET state = ?, resolution = ?, resolved_at = ?, revision = revision + 1
      WHERE request_id = ?`
@@ -389,11 +398,14 @@ export function putReceipt(database: DatabaseConnection, receipt: StoredReceipt,
 interface DraftRow {
   draft_id: string
   session_id: string
-  origin: 'telegram' | 'control'
+  origin: 'telegram' | 'control' | 'handoff'
   origin_key: string | null
+  source_session_id: string | null
   request_id: string | null
   text: string | null
   artifact_id: string | null
+  artifact_ids_json: string
+  attempted_incarnation_id: string | null
   state: InputDraftState
   detail: string | null
   created_at: string
@@ -405,9 +417,12 @@ function draftFromRow(row: DraftRow): InputDraftRecord {
     draftId: row.draft_id,
     sessionId: row.session_id,
     origin: row.origin,
+    sourceSessionId: row.source_session_id,
     requestId: row.request_id,
     text: row.text,
     artifactId: row.artifact_id,
+    artifactIds: JSON.parse(row.artifact_ids_json) as string[],
+    attemptedIncarnationId: row.attempted_incarnation_id,
     state: row.state,
     detail: row.detail,
     createdAt: row.created_at,
@@ -418,7 +433,12 @@ function draftFromRow(row: DraftRow): InputDraftRecord {
 /** A draft keyed by its origin (for example one Telegram update) is created once. */
 export function createDraft(
   database: DatabaseConnection,
-  draft: Omit<InputDraftRecord, 'createdAt' | 'updatedAt'> & { originKey: string | null },
+  draft: Omit<InputDraftRecord, 'createdAt' | 'updatedAt' | 'sourceSessionId' | 'artifactIds' | 'attemptedIncarnationId'> & {
+    originKey: string | null
+    sourceSessionId?: string | null
+    artifactIds?: string[]
+    attemptedIncarnationId?: string | null
+  },
   now: string
 ): { record: InputDraftRecord; created: boolean } {
   if (draft.originKey !== null) {
@@ -428,17 +448,21 @@ export function createDraft(
     if (existing) return { record: draftFromRow(existing), created: false }
   }
   database.prepare(
-    `INSERT INTO input_draft(draft_id, session_id, origin, origin_key, request_id, text, artifact_id, state,
-       detail, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO input_draft(
+       draft_id, session_id, origin, origin_key, source_session_id, request_id, text, artifact_id,
+       artifact_ids_json, attempted_incarnation_id, state, detail, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     draft.draftId,
     draft.sessionId,
     draft.origin,
     draft.originKey,
+    draft.sourceSessionId ?? null,
     draft.requestId,
     draft.text,
     draft.artifactId,
+    JSON.stringify(draft.artifactIds ?? []),
+    draft.attemptedIncarnationId ?? null,
     draft.state,
     draft.detail,
     now,
@@ -460,9 +484,88 @@ export function updateDraft(
   detail: string | null,
   now: string
 ): InputDraftRecord {
-  getDraft(database, draftId)
+  const current = getDraft(database, draftId)
+  const updatedAt = monotonicDraftTime(current.updatedAt, now)
   database.prepare('UPDATE input_draft SET state = ?, detail = ?, updated_at = ? WHERE draft_id = ?')
-    .run(state, detail, now, draftId)
+    .run(state, detail, updatedAt, draftId)
+  return getDraft(database, draftId)
+}
+
+function monotonicDraftTime(previous: string, now: string): string {
+  const previousMs = Date.parse(previous)
+  const nowMs = Date.parse(now)
+  return new Date(Math.max(nowMs, previousMs + 1)).toISOString()
+}
+
+export function updateHandoffDraft(
+  database: DatabaseConnection,
+  draftId: string,
+  params: {
+    sessionId: string
+    sourceSessionId: string
+    text: string
+    artifactIds: string[]
+    expectedUpdatedAt: string
+  },
+  now: string
+): InputDraftRecord {
+  const current = getDraft(database, draftId)
+  if (current.origin !== 'handoff') invalid('Only a handoff draft can be edited here')
+  if (current.state !== 'draft') invalid('Only an unsent handoff can be edited')
+  if (current.updatedAt !== params.expectedUpdatedAt) {
+    throw new WorkspaceStoreError(ERROR_CODES.revisionConflict, 'The handoff changed after this preview opened')
+  }
+  const updatedAt = monotonicDraftTime(current.updatedAt, now)
+  database.prepare(
+    `UPDATE input_draft
+     SET session_id = ?, source_session_id = ?, text = ?, artifact_ids_json = ?, detail = NULL,
+       attempted_incarnation_id = NULL, updated_at = ?
+     WHERE draft_id = ?`
+  ).run(
+    params.sessionId,
+    params.sourceSessionId,
+    params.text,
+    JSON.stringify(params.artifactIds),
+    updatedAt,
+    draftId
+  )
+  return getDraft(database, draftId)
+}
+
+export function claimHandoffDraft(
+  database: DatabaseConnection,
+  draftId: string,
+  expectedUpdatedAt: string,
+  attemptedIncarnationId: string,
+  now: string
+): { record: InputDraftRecord; claimed: boolean } {
+  const current = getDraft(database, draftId)
+  if (current.origin !== 'handoff') invalid('Only a handoff draft can use guarded paste')
+  if (current.state !== 'draft') return { record: current, claimed: false }
+  if (current.updatedAt !== expectedUpdatedAt) {
+    throw new WorkspaceStoreError(ERROR_CODES.revisionConflict, 'The handoff changed after this preview opened')
+  }
+  database.prepare(
+    `UPDATE input_draft
+     SET state = 'uncertain', detail = 'Pasting…', attempted_incarnation_id = ?, updated_at = ?
+     WHERE draft_id = ?`
+  ).run(attemptedIncarnationId, monotonicDraftTime(current.updatedAt, now), draftId)
+  return { record: getDraft(database, draftId), claimed: true }
+}
+
+export function finishHandoffDraft(
+  database: DatabaseConnection,
+  draftId: string,
+  state: 'draft' | 'accepted',
+  detail: string | null,
+  now: string
+): InputDraftRecord {
+  const current = getDraft(database, draftId)
+  if (current.origin !== 'handoff' || current.state !== 'uncertain') {
+    invalid('The handoff has no in-flight paste attempt')
+  }
+  database.prepare('UPDATE input_draft SET state = ?, detail = ?, updated_at = ? WHERE draft_id = ?')
+    .run(state, detail, monotonicDraftTime(current.updatedAt, now), draftId)
   return getDraft(database, draftId)
 }
 
@@ -656,6 +759,9 @@ export const COMPANION_OPERATIONS = Object.freeze({
   createDraft,
   getDraft,
   updateDraft,
+  updateHandoffDraft,
+  claimHandoffDraft,
+  finishHandoffDraft,
   listDrafts,
   putTelegramMessage,
   getTelegramMessage,

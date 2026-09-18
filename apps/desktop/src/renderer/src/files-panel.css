@@ -52,9 +52,97 @@
 
 .files-featured,
 .files-earlier,
-.files-drafts {
+.files-drafts,
+.files-handoffs {
   padding: 12px;
   border-bottom: 1px solid var(--hairline);
+}
+
+.files-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.files-section-heading .eyebrow {
+  margin: 0;
+}
+
+.handoff-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: var(--raised);
+}
+
+.handoff-form label,
+.handoff-files {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.handoff-form textarea,
+.handoff-form select {
+  width: 100%;
+  min-width: 0;
+}
+
+.handoff-form textarea {
+  resize: vertical;
+  font: 12px/1.45 var(--font-mono);
+}
+
+.handoff-files {
+  max-height: 180px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--hairline);
+}
+
+.handoff-files label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+}
+
+.handoff-route {
+  display: grid;
+  grid-template-columns: 3em minmax(0, 1fr);
+  gap: 6px;
+  margin: 4px 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.handoff-route span,
+.handoff-note {
+  color: var(--muted);
+}
+
+.handoff-note {
+  margin: 6px 0;
+  font-size: 12px;
+}
+
+.handoff-list {
+  margin-top: 10px;
+}
+
+.handoff-file-summary {
+  margin: 0 0 8px;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .files-preview-box {
