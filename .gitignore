@@ -38,3 +38,6 @@ __pycache__/
 /.codex/
 /.agents/
 /.opencode/
+
+# Dev Auto raw run evidence (screenshots, runtime dumps); the handoff stays tracked.
+/.dev-auto/evidence/
