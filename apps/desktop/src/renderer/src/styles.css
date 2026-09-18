@@ -11,8 +11,8 @@
   --text: #e8e8e8;
   --muted: #a3a3a3;
   --faint: #737373;
-  --identity: #d6b25e;
-  --attention: #e0973a;
+  --identity: #c9a45c;
+  --attention: #c9a45c;
   --error: #e5816c;
   --verified: #8db58f;
   --selection: #333333;
@@ -89,11 +89,6 @@
   --faint: #737373;
   --selection: #333333;
   --focus: #e8e8e8;
-}
-
-/* Cross wears the softer gold of the original Chancel header. */
-:root[data-identity='cross'] {
-  --identity: #c9a45c;
 }
 
 * {
