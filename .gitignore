@@ -15,6 +15,21 @@ __pycache__/
 # Local reference projects used for investigation.
 /examples/
 
+# Local BMAD workflows, planning, sprint tracking and review evidence.
+/_bmad/
+/_bmad-output/
+
+# Local design studies, supplied reference captures and source archives.
+/design/
+/docs/references/
+/nonsmile-*.zip
+
+# Browser captures and generated benchmark evidence (keep tool source trackable).
+/.playwright-mcp/
+/tools/bench/.work/
+/tools/bench/**/.run/
+/tools/bench/results/
+
 # Local whisper.cpp build from `pnpm run voice:build`.
 /apps/desktop/resources/whisper/
 
