@@ -91,7 +91,7 @@ export interface InputDraftRecord {
 /** The header's emblem and motto, chosen independently of the colors. */
 export type IdentityName = 'knight' | 'cross'
 export const IDENTITY_NAMES: readonly IdentityName[] = Object.freeze(['knight', 'cross'])
-/** Chrome and terminal palette. Steel is the default; Brown is the original warm Chancel look. */
+/** Chrome and terminal palette. Black is the default; Brown is the original warm Chancel look. */
 export type ColorModeName = 'steel' | 'brown' | 'dark' | 'black'
 export const COLOR_MODE_NAMES: readonly ColorModeName[] = Object.freeze(['steel', 'brown', 'dark', 'black'])
 export const TERMINAL_FONT_SIZE_RANGE = Object.freeze({ min: 10, max: 24 } as const)
@@ -176,7 +176,7 @@ export interface AppSettings {
 }
 
 export const DEFAULT_APP_SETTINGS: AppSettings = Object.freeze({
-  appearance: Object.freeze({ identity: 'knight', colorMode: 'steel', terminalFontSize: 14 }),
+  appearance: Object.freeze({ identity: 'knight', colorMode: 'black', terminalFontSize: 14 }),
   notifications: Object.freeze({ desktop: true }),
   telegram: Object.freeze({
     enabled: false,

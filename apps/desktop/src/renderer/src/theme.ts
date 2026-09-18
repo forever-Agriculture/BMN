@@ -9,10 +9,10 @@ export const IDENTITY_PRESENTATION: Readonly<Record<IdentityName, { label: strin
 })
 
 export const COLOR_MODE_PRESENTATION: Readonly<Record<ColorModeName, { label: string; description: string }>> = Object.freeze({
-  steel: { label: 'Steel', description: 'default, cool' },
+  steel: { label: 'Steel', description: 'cool' },
   brown: { label: 'Brown', description: 'warm' },
   dark: { label: 'Dark', description: 'neutral' },
-  black: { label: 'Black', description: 'near-black' }
+  black: { label: 'Black', description: 'default, near-black' }
 })
 
 const SHARED_ANSI = {

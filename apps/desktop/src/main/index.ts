@@ -651,7 +651,7 @@ function createWindow(
     width: 1000,
     height: 700,
     show: false,
-    backgroundColor: '#14171b',
+    backgroundColor: '#0a0a0a',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,

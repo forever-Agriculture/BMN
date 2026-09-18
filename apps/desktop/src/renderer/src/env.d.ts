@@ -6,12 +6,14 @@ interface TerminalTestSnapshot {
   bufferLines: string[]
   cols: number
   rows: number
+  refits: number
   ptyCols?: number
   ptyRows?: number
 }
 
 interface TerminalTestHook {
-  snapshot(): TerminalTestSnapshot
+  snapshot(sessionId?: string): TerminalTestSnapshot
+  snapshots(): Record<string, TerminalTestSnapshot>
   integration?(): Promise<{
     workspaceCount: number
     sessionMethodSessionId: string

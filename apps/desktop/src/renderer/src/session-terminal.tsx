@@ -166,10 +166,12 @@ export function SessionTerminal(props: {
       onFailure: props.onFailure
     })
     let ptyDimensions: { cols: number; rows: number } | undefined
+    let refitCount = 0
     const resize = (): void => {
       // A hidden pane is parked at 1px, and fitting that would shrink the process's terminal to 2 columns: a TUI
       // redraws into that width and the wrapped lines stay in history. A hidden pane keeps its size until shown.
       if (!visible.current || !container.offsetParent) return
+      refitCount += 1
       tracking.quietly(() => fit.fit())
       void window.aiTerminal
         .resizeTerminal(props.startup.sessionId, terminal.cols, terminal.rows)
@@ -261,11 +263,13 @@ export function SessionTerminal(props: {
     }
     props.register(props.startup.sessionId, controller)
     const removeTestHook = installTerminalTestHook({
-      enabled: props.testMode && props.selected,
+      enabled: props.testMode,
       target: window as never,
+      sessionId: props.startup.sessionId,
       terminal,
       getPtyDimensions: () => ptyDimensions,
-      integration: async () => {
+      getRefitCount: () => refitCount,
+      ...(props.selected ? { integration: async () => {
         console.warn('[BMN] renderer behavioural integration: started')
         const workspaces = await window.aiTerminal.listWorkspaces(true)
         const sessionsBeforeTemplate = await window.aiTerminal.listSessions(props.startup.workspaceId)
@@ -475,7 +479,7 @@ export function SessionTerminal(props: {
           },
           hiddenPaneSize: { shown: shownSize, hidden: hiddenSize }
         }
-      }
+      } } : {})
     })
     requestAnimationFrame(() => {
       resize()
@@ -574,7 +578,7 @@ export function SessionTerminal(props: {
       }}
     >
       <header className="pane-heading">
-        <strong>{name}</strong>
+        <strong title={name}>{name}</strong>
         {props.record ? <span className="chip">{agentTag(props.record.executable)}</span> : null}
         <span className={`status-dot ${dot}`} aria-hidden="true" />
         <span className={`pane-status${props.needsYou && !exitStatus ? ' needs-you' : ''}`}>{statusText}</span>

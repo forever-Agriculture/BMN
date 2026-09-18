@@ -1,6 +1,35 @@
 /* MODULE: styles.css - Chancel tokens (Steel, Brown, Dark and Black color modes; Knight and Cross identities), app chrome, workspace tree, panes, dialogs and overlays */
-/* Steel is the default color mode: cool surfaces. Knight is the default identity: heraldic gold. */
+/* Black is the default color mode. Knight is the default identity: heraldic gold. */
 :root {
+  --ground: #0a0a0a;
+  --surface: #0e0e0e;
+  --raised: #141414;
+  --hover: #171717;
+  --selected: #1c1c1c;
+  --hairline: #1f1f1f;
+  --border: #6e6e6e;
+  --text: #e8e8e8;
+  --muted: #a3a3a3;
+  --faint: #737373;
+  --identity: #d6b25e;
+  --attention: #e0973a;
+  --error: #e5816c;
+  --verified: #8db58f;
+  --selection: #333333;
+  --focus: #e8e8e8;
+  /* Chrome-only hover feedback; terminal output and status marks never animate. */
+  --hover-transition: background-color 100ms ease-out, border-color 100ms ease-out, color 100ms ease-out;
+  --font-chrome: 'Ubuntu Sans', Ubuntu, system-ui, sans-serif;
+  --font-mono: 'JetBrainsMono Nerd Font', 'JetBrains Mono', 'Ubuntu Mono', monospace;
+  color: var(--text);
+  background: var(--ground);
+  font-family: var(--font-chrome);
+  font-size: 13px;
+  color-scheme: dark;
+}
+
+/* Steel remains available as the cool palette. */
+:root[data-color-mode='steel'] {
   --ground: #14171b;
   --surface: #191d22;
   --raised: #20252b;
@@ -11,21 +40,8 @@
   --text: #e3e6ea;
   --muted: #a5adb7;
   --faint: #737c87;
-  --identity: #d6b25e;
-  --attention: #e0973a;
-  --error: #e5816c;
-  --verified: #8db58f;
   --selection: #3b4552;
   --focus: #e3e6ea;
-  /* Chrome-only hover feedback; terminal output and status marks never animate. */
-  --hover-transition: background-color 100ms ease-out, border-color 100ms ease-out, color 100ms ease-out;
-  --font-chrome: 'Ubuntu Sans', Ubuntu, system-ui, sans-serif;
-  --font-mono: 'JetBrainsMono Nerd Font', 'JetBrains Mono', 'Ubuntu Mono', monospace;
-  color: var(--text);
-  background: var(--ground);
-  font-family: var(--font-chrome);
-  font-size: 13px;
-  color-scheme: dark;
 }
 
 /* Brown is the original warm Chancel look. */
@@ -127,6 +143,12 @@ button:hover:not(:disabled) {
   background: var(--hover);
 }
 
+button:active:not(:disabled) {
+  background: var(--selected);
+  box-shadow: inset 0 0 0 1px var(--border);
+  transition-duration: 0ms;
+}
+
 button.primary {
   border-color: var(--text);
   color: var(--ground);
@@ -135,6 +157,12 @@ button.primary {
 
 button.primary:hover:not(:disabled) {
   background: var(--muted);
+}
+
+button.primary:active:not(:disabled) {
+  color: var(--ground);
+  background: var(--text);
+  box-shadow: inset 0 0 0 2px var(--ground);
 }
 
 button.ghost,
@@ -156,12 +184,13 @@ button.ghost:hover:not(:disabled),
 
 button:disabled {
   cursor: not-allowed;
-  color: var(--muted);
+  color: var(--faint);
   border-color: var(--hairline);
+  opacity: 0.55;
 }
 
 button.primary:disabled {
-  color: var(--muted);
+  color: var(--faint);
   background: transparent;
 }
 
@@ -183,9 +212,19 @@ input[type='radio'] {
   accent-color: var(--text);
 }
 
-:focus-visible {
+.shell-window :where(button, input, select, textarea, [tabindex]):not(.xterm-helper-textarea):focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 2px;
+}
+
+.xterm-helper-textarea:focus-visible {
+  outline: none;
+}
+
+.session-row > button:first-child:focus-visible,
+.workspace-row > button:first-child:focus-visible,
+.popup-menu [role='menuitem']:focus-visible {
+  outline-offset: -2px;
 }
 
 .eyebrow {
@@ -240,6 +279,7 @@ input[type='radio'] {
 
 .status-dot.needs-you {
   background: var(--attention);
+  box-shadow: 0 0 0 1px var(--attention);
 }
 
 .status-dot.idle {
@@ -326,7 +366,12 @@ input[type='radio'] {
   border-radius: 4px;
   color: var(--text);
   background: var(--raised);
+  box-shadow: inset 0 0 0 1px var(--hairline);
   font: 11px/18px var(--font-mono);
+}
+
+.needs-you-button[data-has-items='true'] .count {
+  color: var(--attention);
 }
 
 .feedback-notice {
@@ -454,6 +499,7 @@ input[type='radio'] {
 }
 
 .session-row > button:first-child {
+  position: relative;
   display: grid;
   grid-template-columns: 7px minmax(0, 1fr) auto;
   grid-template-rows: auto auto;
@@ -502,8 +548,25 @@ input[type='radio'] {
 }
 
 .session-row.selected > button:first-child {
-  border-left-color: var(--text);
+  border-left-color: var(--identity);
   background: var(--selected);
+}
+
+.session-row.selected .session-name {
+  font-weight: 500;
+}
+
+.session-row.selected > button:first-child:focus-visible {
+  outline: none;
+}
+
+.session-row.selected > button:first-child:focus-visible::after {
+  position: absolute;
+  inset: 2px 2px 2px 4px;
+  border: 2px solid var(--focus);
+  border-radius: 4px;
+  content: '';
+  pointer-events: none;
 }
 
 .session-row .unread-mark {
@@ -597,7 +660,12 @@ input[type='radio'] {
 }
 
 .session-area.split .session-terminal.selected {
-  outline-color: var(--focus);
+  outline-color: var(--identity);
+}
+
+.session-area.split .session-terminal:not(.selected) .pane-heading strong {
+  color: var(--muted);
+  font-weight: 500;
 }
 
 .session-terminal-hidden {
@@ -634,10 +702,8 @@ input[type='radio'] {
 }
 
 .pane-status {
-  display: inline-flex;
+  display: block;
   flex: 1 1 0;
-  align-items: center;
-  gap: 6px;
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
@@ -665,6 +731,11 @@ input[type='radio'] {
 .pane-actions button[aria-pressed='true'] {
   border-color: var(--border);
   color: var(--text);
+  background: var(--selected);
+}
+
+.pane-actions button:disabled {
+  color: var(--faint);
 }
 
 .progress-strip {
@@ -1010,6 +1081,11 @@ input[type='radio'] {
   padding: 12px 16px 16px;
 }
 
+.shell-window .app-dialog-body button:focus-visible,
+.shell-window .needs-you-popover button:focus-visible {
+  outline-offset: -2px;
+}
+
 .dialog-form {
   display: flex;
   flex-direction: column;
@@ -1185,6 +1261,36 @@ input[type='radio'] {
   list-style: none;
 }
 
+.palette-results::-webkit-scrollbar {
+  width: 8px;
+}
+
+.palette-results::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.palette-results::-webkit-scrollbar-thumb {
+  border: 2px solid var(--surface);
+  border-radius: 999px;
+  background: var(--border);
+}
+
+.palette-results::-webkit-scrollbar-button {
+  -webkit-appearance: none;
+  display: none;
+  width: 0;
+  height: 0;
+  background: transparent;
+}
+
+.palette-results::-webkit-scrollbar-button:vertical:start:decrement,
+.palette-results::-webkit-scrollbar-button:vertical:end:increment {
+  -webkit-appearance: none;
+  display: none;
+  width: 0;
+  height: 0;
+}
+
 .palette-results .group {
   padding: 8px 8px 2px;
 }
@@ -1197,6 +1303,13 @@ input[type='radio'] {
   padding: 4px 8px;
   border-radius: 6px;
   cursor: pointer;
+}
+
+.palette-results [role='option'] > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .palette-results [role='option'] .context {
@@ -1213,7 +1326,18 @@ input[type='radio'] {
 
 .palette-results [role='option'][aria-selected='true'] {
   background: var(--selected);
-  box-shadow: inset 2px 0 var(--text);
+  box-shadow: inset 2px 0 var(--identity);
+}
+
+.palette-results [role='option']:active {
+  background: var(--raised);
+  box-shadow: none;
+  transform: translateY(1px);
+  transition-duration: 0ms;
+}
+
+.palette-results [role='option'][aria-selected='true']:active {
+  box-shadow: inset 2px 0 var(--identity);
 }
 
 .live-announcer {

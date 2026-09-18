@@ -1019,6 +1019,7 @@ function App(): React.JSX.Element {
             ref={needsYouButton}
             type="button"
             className="needs-you-button"
+            data-has-items={unresolved.length > 0}
             aria-haspopup="dialog"
             aria-expanded={needsYouOpen}
             title={`Needs you (${SHORTCUT_LABELS['attention-next']} jumps to the next)`}

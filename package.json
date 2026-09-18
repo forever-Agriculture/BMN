@@ -11,6 +11,7 @@
     "install:electron": "node apps/desktop/node_modules/electron/install.js",
     "test:unit": "pnpm --filter @bmn/protocol run build && vitest run",
     "test:electron": "pnpm run build && node scripts/test/electron-self-test.mjs",
+    "test:visual": "pnpm run build && node scripts/test/electron-visual.mjs",
     "test:run": "pnpm run test:unit && pnpm run test:electron",
     "lint": "eslint apps shared scripts eslint.config.mjs",
     "typecheck": "tsc -b shared/protocol apps/desktop/tsconfig.node.json apps/desktop/tsconfig.web.json",

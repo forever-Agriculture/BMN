@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { installTerminalTestHook } from './test-hook'
 
-function fakeTerminal() {
-  const lines = ['prompt', 'AITERM-1-1-OK']
+function fakeTerminal(cols = 101, rows = 37, lines = ['prompt', 'AITERM-1-1-OK']) {
   return {
-    cols: 101,
-    rows: 37,
+    cols,
+    rows,
     buffer: {
       active: {
         length: lines.length,
@@ -24,8 +23,10 @@ describe('renderer acceptance hook', () => {
     const dispose = installTerminalTestHook({
       enabled: false,
       target,
+      sessionId: 'session-a',
       terminal: fakeTerminal(),
-      getPtyDimensions: () => ({ cols: 101, rows: 37 })
+      getPtyDimensions: () => ({ cols: 101, rows: 37 }),
+      getRefitCount: () => 2
     })
     expect(Object.hasOwn(target, '__aitermTest')).toBe(false)
     dispose()
@@ -36,18 +37,23 @@ describe('renderer acceptance hook', () => {
     const dispose = installTerminalTestHook({
       enabled: true,
       target,
+      sessionId: 'session-a',
       terminal: fakeTerminal(),
-      getPtyDimensions: () => ({ cols: 101, rows: 37 })
+      getPtyDimensions: () => ({ cols: 101, rows: 37 }),
+      getRefitCount: () => 2
     })
-    const hook = target.__aitermTest as { snapshot(): unknown }
+    const hook = target.__aitermTest as { snapshot(sessionId?: string): unknown; snapshots(): unknown }
     expect(hook).toBeTypeOf('object')
     expect(hook.snapshot()).toEqual({
       bufferLines: ['prompt', 'AITERM-1-1-OK'],
       cols: 101,
       rows: 37,
+      refits: 2,
       ptyCols: 101,
       ptyRows: 37
     })
+    expect(hook.snapshot('session-a')).toEqual(hook.snapshot())
+    expect(hook.snapshots()).toEqual({ 'session-a': hook.snapshot() })
     dispose()
     expect(Object.hasOwn(target, '__aitermTest')).toBe(false)
   })
@@ -95,11 +101,43 @@ describe('renderer acceptance hook', () => {
     installTerminalTestHook({
       enabled: true,
       target,
+      sessionId: 'session-a',
       terminal: fakeTerminal(),
       getPtyDimensions: () => undefined,
+      getRefitCount: () => 2,
       integration
     })
     await expect((target.__aitermTest as { integration(): Promise<unknown> }).integration())
       .resolves.toEqual(probe)
+  })
+
+  it('registers every test terminal and removes the facade after the last pane unmounts', () => {
+    const target: Record<string, unknown> = {}
+    const disposeA = installTerminalTestHook({
+      enabled: true,
+      target,
+      sessionId: 'session-a',
+      terminal: fakeTerminal(),
+      getPtyDimensions: () => ({ cols: 101, rows: 37 }),
+      getRefitCount: () => 2
+    })
+    const disposeB = installTerminalTestHook({
+      enabled: true,
+      target,
+      sessionId: 'session-b',
+      terminal: fakeTerminal(80, 24, ['foreign']),
+      getPtyDimensions: () => ({ cols: 80, rows: 24 }),
+      getRefitCount: () => 3
+    })
+    const hook = target.__aitermTest as {
+      snapshot(sessionId?: string): { cols: number; rows: number; refits: number }
+      snapshots(): Record<string, { cols: number; rows: number; refits: number }>
+    }
+    expect(hook.snapshot('session-b')).toMatchObject({ cols: 80, rows: 24, refits: 3 })
+    expect(Object.keys(hook.snapshots())).toEqual(['session-a', 'session-b'])
+    disposeA()
+    expect(Object.keys(hook.snapshots())).toEqual(['session-b'])
+    disposeB()
+    expect(Object.hasOwn(target, '__aitermTest')).toBe(false)
   })
 })

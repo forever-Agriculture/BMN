@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  DEFAULT_APP_SETTINGS,
   ERROR_CODES,
   FrameDecoder,
   MalformedFrameError,
@@ -50,6 +51,14 @@ const hello: RpcRequest = {
 }
 
 describe('protocol surface', () => {
+  it('uses Black for new or missing appearance settings', () => {
+    expect(DEFAULT_APP_SETTINGS.appearance).toEqual({
+      identity: 'knight',
+      colorMode: 'black',
+      terminalFontSize: 14
+    })
+  })
+
   it('exports the exact shell, saved-output, conversation-resume and companion method set', () => {
     expect(new Set(Object.values(METHOD_REGISTRY))).toEqual(
       new Set([

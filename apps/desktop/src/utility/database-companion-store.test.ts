@@ -167,7 +167,7 @@ describe('companion store', () => {
   })
 
   it('splits a theme stored before identity and color mode were separate choices', () => {
-    expect(getSettings(database).appearance).toEqual({ identity: 'knight', colorMode: 'steel', terminalFontSize: 14 })
+    expect(getSettings(database).appearance).toEqual({ identity: 'knight', colorMode: 'black', terminalFontSize: 14 })
     const store = database.prepare("INSERT OR REPLACE INTO app_setting(key, value_json, updated_at) VALUES ('appearance', ?, ?)")
     for (const [theme, identity, colorMode] of [
       ['knight', 'knight', 'steel'],

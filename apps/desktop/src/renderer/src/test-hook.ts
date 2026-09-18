@@ -2,6 +2,7 @@ export interface TerminalTestSnapshot {
   bufferLines: string[]
   cols: number
   rows: number
+  refits: number
   ptyCols?: number
   ptyRows?: number
 }
@@ -51,7 +52,8 @@ export interface TerminalIntegrationProbe {
 }
 
 export interface TerminalTestHook {
-  snapshot(): TerminalTestSnapshot
+  snapshot(sessionId?: string): TerminalTestSnapshot
+  snapshots(): Record<string, TerminalTestSnapshot>
   integration?(): Promise<TerminalIntegrationProbe>
 }
 
@@ -74,16 +76,26 @@ interface HookTarget {
   __aitermTest?: TerminalTestHook
 }
 
+interface RegisteredTerminalHook {
+  snapshot(): TerminalTestSnapshot
+  integration?(): Promise<TerminalIntegrationProbe>
+}
+
+const terminalHooks = new WeakMap<HookTarget, Map<string, RegisteredTerminalHook>>()
+const terminalFacades = new WeakMap<HookTarget, TerminalTestHook>()
+
 export function installTerminalTestHook(options: {
   enabled: boolean
   target: HookTarget
+  sessionId: string
   terminal: TestableTerminal
   getPtyDimensions(): { cols: number; rows: number } | undefined
+  getRefitCount(): number
   integration?(): Promise<TerminalIntegrationProbe>
 }): () => void {
   if (!options.enabled) return () => undefined
 
-  const hook: TerminalTestHook = {
+  const entry: RegisteredTerminalHook = {
     snapshot: () => {
       const bufferLines: string[] = []
       const buffer = options.terminal.buffer.active
@@ -96,17 +108,50 @@ export function installTerminalTestHook(options: {
         bufferLines,
         cols: options.terminal.cols,
         rows: options.terminal.rows,
+        refits: options.getRefitCount(),
         ...(ptyDimensions ? { ptyCols: ptyDimensions.cols, ptyRows: ptyDimensions.rows } : {})
       }
     },
     ...(options.integration ? { integration: options.integration } : {})
   }
-  Object.defineProperty(options.target, '__aitermTest', {
-    configurable: true,
-    enumerable: false,
-    value: hook
-  })
+  const registry = terminalHooks.get(options.target) ?? new Map<string, RegisteredTerminalHook>()
+  terminalHooks.set(options.target, registry)
+  registry.set(options.sessionId, entry)
+
+  let facade = terminalFacades.get(options.target)
+  if (!facade) {
+    facade = {
+      snapshot: (sessionId) => {
+        const current = terminalHooks.get(options.target)
+        const selected = sessionId
+          ? current?.get(sessionId)
+          : [...(current?.values() ?? [])].find((candidate) => candidate.integration) ?? current?.values().next().value
+        if (!selected) throw new Error(`terminal test snapshot unavailable${sessionId ? ` for ${sessionId}` : ''}`)
+        return selected.snapshot()
+      },
+      snapshots: () => Object.fromEntries(
+        [...(terminalHooks.get(options.target)?.entries() ?? [])]
+          .map(([sessionId, registered]) => [sessionId, registered.snapshot()])
+      )
+    }
+    Object.defineProperty(facade, 'integration', {
+      configurable: true,
+      enumerable: true,
+      get: () => [...(terminalHooks.get(options.target)?.values() ?? [])]
+        .find((candidate) => candidate.integration)?.integration
+    })
+    terminalFacades.set(options.target, facade)
+    Object.defineProperty(options.target, '__aitermTest', {
+      configurable: true,
+      enumerable: false,
+      value: facade
+    })
+  }
   return () => {
-    if (options.target.__aitermTest === hook) delete options.target.__aitermTest
+    if (registry.get(options.sessionId) === entry) registry.delete(options.sessionId)
+    if (registry.size > 0) return
+    terminalHooks.delete(options.target)
+    terminalFacades.delete(options.target)
+    if (options.target.__aitermTest === facade) delete options.target.__aitermTest
   }
 }
