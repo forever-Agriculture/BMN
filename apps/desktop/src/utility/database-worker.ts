@@ -6,7 +6,7 @@ import type {
   TemplateCreateParams,
   WorkspaceCreateParams,
   WorkspaceUpdateParams
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import { purgeExpiredArchives } from './database-archive-purge'
 import {
   databaseSettings,

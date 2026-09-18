@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module'
-import { DEFAULT_APP_SETTINGS, ERROR_CODES, type ArtifactRecord } from '@ai-terminal/protocol'
+import { DEFAULT_APP_SETTINGS, ERROR_CODES, type ArtifactRecord } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   artifactBytesUsed,

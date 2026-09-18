@@ -38,7 +38,7 @@ import {
   type TerminalInputMessage,
   type TerminalPortMessage,
   type WorkspaceRecord
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import { processStartIdentity } from './process-start-identity'
 import { HostOutputQueue, type HostOutputQueueTransition } from './transport'
 import { TerminalByteFramer } from './terminal-byte-framer'
@@ -248,6 +248,7 @@ const SHELL_ENVIRONMENT_PRIVATE_PREFIXES = [
   'ELECTRON_',
   'CHROME_',
   'CHROMIUM_',
+  'BMN_',
   'AITERM_',
   // Identity of whichever terminal launched the app; shells here run in BMN's xterm, not there.
   'AGTERM',

@@ -1,4 +1,4 @@
-import { ERROR_CODES, type ProtocolErrorCode } from '@ai-terminal/protocol'
+import { ERROR_CODES, type ProtocolErrorCode } from '@bmn/protocol'
 import type { IpcMainInvokeEvent } from 'electron'
 import type { BridgeInvokeResult } from '../preload/bridge'
 import { PtyHostRemoteError } from './pty-host-client'

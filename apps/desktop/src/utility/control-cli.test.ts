@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ControlAuth, writeOwnerToken } from './control-auth'
-import { ERROR_CODES } from '@ai-terminal/protocol'
+import { ERROR_CODES } from '@bmn/protocol'
 import { ControlError, ControlServer, MemoryReceiptStore, type ControlHandlers } from './control-server'
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
@@ -31,7 +31,9 @@ function runCli(
   options: { env?: Record<string, string>; cwd?: string; input?: string } = {}
 ): Promise<CliResult> {
   const env: NodeJS.ProcessEnv = { ...process.env }
-  for (const key of Object.keys(env)) if (key.startsWith('AITERM_')) delete env[key]
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('BMN_') || key.startsWith('AITERM_')) delete env[key]
+  }
   return new Promise((resolve) => {
     const child = execFile(
       process.execPath,
@@ -69,8 +71,8 @@ async function cliFixture() {
   await server.listen()
   servers.add(server)
   const sessionEnv = {
-    AITERM_CONTROL_SOCKET: socketPath,
-    AITERM_TOKEN: auth.sessionToken('session-1', 'incarnation-1')
+    BMN_CONTROL_SOCKET: socketPath,
+    BMN_TOKEN: auth.sessionToken('session-1', 'incarnation-1')
   }
   return { root, socketPath, auth, current, handlers, sessionEnv }
 }
@@ -182,12 +184,12 @@ describe('bmn CLI', () => {
     const fixture = await cliFixture()
 
     const noSocket = await runCli(['list'])
-    const noToken = await runCli(['list'], { env: { AITERM_CONTROL_SOCKET: fixture.socketPath } })
+    const noToken = await runCli(['list'], { env: { BMN_CONTROL_SOCKET: fixture.socketPath } })
 
     expect(noSocket.code).toBe(2)
-    expect(noSocket.stderr).toContain('AITERM_CONTROL_SOCKET')
+    expect(noSocket.stderr).toContain('BMN_CONTROL_SOCKET')
     expect(noToken.code).toBe(2)
-    expect(noToken.stderr).toContain('AITERM_TOKEN')
+    expect(noToken.stderr).toContain('BMN_TOKEN')
   })
 
   it('exits 1 with the remote code for revoked or out-of-scope requests without printing the token', async () => {
@@ -202,7 +204,7 @@ describe('bmn CLI', () => {
     expect(peer.code).toBe(1)
     expect(peer.stderr).toMatch(/^bmn: UNAUTHORIZED: /)
     for (const output of [revoked.stderr, peer.stderr]) {
-      expect(output).not.toContain(fixture.sessionEnv.AITERM_TOKEN)
+      expect(output).not.toContain(fixture.sessionEnv.BMN_TOKEN)
     }
     expect(fixture.handlers.withdrawAttention).not.toHaveBeenCalled()
   })
@@ -210,7 +212,7 @@ describe('bmn CLI', () => {
   it('uses the owner token beside the socket with --owner', async () => {
     const fixture = await cliFixture()
     await writeOwnerToken(dirname(fixture.socketPath), fixture.auth.ownerToken)
-    const env = { AITERM_CONTROL_SOCKET: fixture.socketPath }
+    const env = { BMN_CONTROL_SOCKET: fixture.socketPath }
 
     const resolved = await runCli(['resolve', 'q1', 'approved', '--owner', '--session', 'session-2'], { env })
     const untargeted = await runCli(['resolve', 'q1', 'approved', '--owner'], { env })
@@ -274,7 +276,7 @@ async function runHook(
 ): Promise<CliResult> {
   const proc = await procTree(fixture.root, agentProcess)
   return runCli(['hook', agent], {
-    env: { ...fixture.sessionEnv, AITERM_PROC_ROOT: proc, CLAUDE_CONFIG_DIR: join(fixture.root, 'claude') },
+    env: { ...fixture.sessionEnv, BMN_PROC_ROOT: proc, CLAUDE_CONFIG_DIR: join(fixture.root, 'claude') },
     input: JSON.stringify(event)
   })
 }
@@ -498,11 +500,11 @@ describe('bmn hook', () => {
 
     const outside = await runCli(['hook', 'claude'], { input: stop })
     const unreadable = await runCli(['hook', 'claude'], {
-      env: { ...fixture.sessionEnv, AITERM_PROC_ROOT: proc },
+      env: { ...fixture.sessionEnv, BMN_PROC_ROOT: proc },
       input: 'not json'
     })
     const unreachable = await runCli(['hook', 'codex'], {
-      env: { ...fixture.sessionEnv, AITERM_CONTROL_SOCKET: join(fixture.root, 'gone.sock'), AITERM_PROC_ROOT: proc },
+      env: { ...fixture.sessionEnv, BMN_CONTROL_SOCKET: join(fixture.root, 'gone.sock'), BMN_PROC_ROOT: proc },
       input: stop
     })
 

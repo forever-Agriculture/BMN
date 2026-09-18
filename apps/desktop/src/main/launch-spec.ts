@@ -1,6 +1,6 @@
 import { accessSync, constants } from 'node:fs'
 import { basename, delimiter, isAbsolute, resolve } from 'node:path'
-import { DEFAULT_WORKSPACE_ID, METHOD_REGISTRY, type ProtocolMethod } from '@ai-terminal/protocol'
+import { DEFAULT_WORKSPACE_ID, METHOD_REGISTRY, type ProtocolMethod } from '@bmn/protocol'
 
 export interface ApplicationLaunchSpec {
   cwd: string
@@ -36,7 +36,7 @@ export function parseApplicationLaunchSpec(
   environment: NodeJS.ProcessEnv,
   defaultCwd: string
 ): ApplicationLaunchSpec {
-  const cwd = environment.AITERM_LAUNCH_CWD ?? defaultCwd
+  const cwd = environment.BMN_LAUNCH_CWD ?? environment.AITERM_LAUNCH_CWD ?? defaultCwd
   const separator = applicationArgv.indexOf('--')
   if (separator >= 0) {
     const explicit = applicationArgv.slice(separator + 1)
@@ -49,7 +49,7 @@ export function parseApplicationLaunchSpec(
       argv: explicit.slice(1)
     }
   }
-  const shell = environment.AITERM_SHELL ?? environment.SHELL ?? '/bin/bash'
+  const shell = environment.BMN_SHELL ?? environment.AITERM_SHELL ?? environment.SHELL ?? '/bin/bash'
   return { cwd, executable: executablePath(shell, cwd, environment), argv: [] }
 }
 

@@ -7,7 +7,7 @@ import {
   VOICE_LANGUAGES,
   type VoiceLanguage,
   type VoiceStatus
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import type { IpcMainInvokeEvent } from 'electron'
 import {
   VOICE_MODELS,

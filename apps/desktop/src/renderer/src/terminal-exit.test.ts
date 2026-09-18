@@ -1,4 +1,4 @@
-import type { TerminalExitMessage } from '@ai-terminal/protocol'
+import type { TerminalExitMessage } from '@bmn/protocol'
 import { describe, expect, it, vi } from 'vitest'
 import { sessionProcessLabel } from './session-status'
 import { applyTerminalExit, terminalExitFeedback } from './terminal-exit'

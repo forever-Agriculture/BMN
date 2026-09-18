@@ -1,5 +1,5 @@
 // MODULE: theme.ts - Knight and Cross identities, and the Steel, Brown, Dark and Black palettes for app chrome and the terminal
-import type { AppearanceSettings, ColorModeName, IdentityName } from '@ai-terminal/protocol'
+import type { AppearanceSettings, ColorModeName, IdentityName } from '@bmn/protocol'
 import type { ITheme } from '@xterm/xterm'
 
 /** The header's emblem and motto. */

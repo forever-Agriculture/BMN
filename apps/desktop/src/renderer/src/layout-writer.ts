@@ -4,7 +4,7 @@ import {
   type LayoutGetResult,
   type LayoutPutParams,
   type WorkspaceLayoutState
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import { failureDetail, hasBridgeErrorCode } from './bridge-error'
 
 /**

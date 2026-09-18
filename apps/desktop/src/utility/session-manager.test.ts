@@ -19,7 +19,7 @@ import {
   type TerminalPortMessage,
   type TerminalViewDisconnectReason,
   type WorkspaceRecord
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import {
   HostControlError,
   SessionManager,
@@ -457,7 +457,7 @@ async function fixture(
   sent: TerminalPortMessage[]
   cwd: string
 }> {
-  const cwd = await mkdtemp(join(tmpdir(), 'aiterm-session-test-'))
+  const cwd = await mkdtemp(join(tmpdir(), 'bmn-session-test-'))
   createdRoots.add(cwd)
   const pty = new FakePty()
   const store = new FakeStore()
@@ -488,7 +488,7 @@ async function flowFixture(
   harness: Awaited<ReturnType<typeof terminalFlowHarness>>
   cwd: string
 }> {
-  const cwd = await mkdtemp(join(tmpdir(), 'aiterm-flow-test-'))
+  const cwd = await mkdtemp(join(tmpdir(), 'bmn-flow-test-'))
   createdRoots.add(cwd)
   const pty = new FakePty()
   const store = new FakeStore()
@@ -518,8 +518,9 @@ describe('shell session lifecycle', () => {
         ELECTRON_NO_ATTACH_CONSOLE: '1',
         CHROME_DESKTOP: 'electron.desktop',
         CHROMIUM_FLAGS: 'internal',
-        AITERM_DATA_HOME: '/private/data',
-        AITERM_REPO_ROOT: '/repo',
+        BMN_DATA_HOME: '/private/data',
+        BMN_REPO_ROOT: '/repo',
+        AITERM_TOKEN: 'legacy-private-token',
         NODE_CHANNEL_FD: '3'
       })
     ).toEqual({
@@ -598,7 +599,7 @@ describe('shell session lifecycle', () => {
 
   it('launches in a ~/ directory by expanding it to the home directory, and stores the absolute path', async () => {
     // A workspace saved as "~/code/…" prefilled every New session form with a path the host rejected.
-    const home = await mkdtemp(join(tmpdir(), 'aiterm-home-test-'))
+    const home = await mkdtemp(join(tmpdir(), 'bmn-home-test-'))
     createdRoots.add(home)
     await mkdir(join(home, 'code', 'project'), { recursive: true })
     const store = new FakeStore()
@@ -687,7 +688,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('records lifecycle stops as interrupted with observed evidence while explicit Stop stays exited', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-lifecycle-stop-store-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-lifecycle-stop-store-test-'))
     createdRoots.add(cwd)
     const database = new BetterSqlite3(':memory:')
     try {
@@ -762,7 +763,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('starts a stopped session again with its saved launch settings and refuses while it runs', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-relaunch-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-relaunch-test-'))
     createdRoots.add(cwd)
     const database = new BetterSqlite3(':memory:')
     try {
@@ -818,7 +819,7 @@ describe('shell session lifecycle', () => {
 
     /** A bound Claude session whose first process has exited; each later spawn gets the next PTY. */
     async function stoppedClaudeSession(options: { referenceExists?: () => Promise<boolean> } = {}) {
-      const cwd = await mkdtemp(join(tmpdir(), 'aiterm-one-process-test-'))
+      const cwd = await mkdtemp(join(tmpdir(), 'bmn-one-process-test-'))
       createdRoots.add(cwd)
       const executable = join(cwd, 'claude')
       await writeFile(executable, '#!/bin/sh\n')
@@ -900,7 +901,7 @@ describe('shell session lifecycle', () => {
     })
 
     it('refuses Start again while the previous process has not confirmed its exit', async () => {
-      const cwd = await mkdtemp(join(tmpdir(), 'aiterm-unconfirmed-relaunch-test-'))
+      const cwd = await mkdtemp(join(tmpdir(), 'bmn-unconfirmed-relaunch-test-'))
       createdRoots.add(cwd)
       const ptys: FakePty[] = []
       const manager = new SessionManager({
@@ -926,7 +927,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('keeps the first explicit stop cause when an application quit races the same teardown', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-first-stop-cause-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-first-stop-cause-test-'))
     createdRoots.add(cwd)
     const database = new BetterSqlite3(':memory:')
     try {
@@ -1041,7 +1042,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('T-A streams resume-window output from sequence zero in emission order without a renderer gap', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-resume-flow-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-resume-flow-test-'))
     createdRoots.add(cwd)
     const executable = join(cwd, 'claude')
     await writeFile(executable, '#!/bin/sh\n')
@@ -1203,7 +1204,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('resumes the exact bound conversation as a new incarnation with its original context', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-resume-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-resume-test-'))
     createdRoots.add(cwd)
     const executable = join(cwd, 'claude')
     await writeFile(executable, '#!/bin/sh\n')
@@ -1308,7 +1309,7 @@ describe('shell session lifecycle', () => {
     ['empty attached required value', ['--model=']],
     ['explicit session-id with a non-UUID value', ['--session-id', 'not-a-uuid']]
   ])('refuses %s through the probed grammar at capture and resume', async (_name, argv) => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-grammar-refusal-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-grammar-refusal-test-'))
     createdRoots.add(cwd)
     const executable = join(cwd, 'claude')
     await writeFile(executable, '#!/bin/sh\n')
@@ -1378,7 +1379,7 @@ describe('shell session lifecycle', () => {
     ['variadic values', ['--add-dir', '/a', '/b']],
     ['attached value', ['--model=sonnet']]
   ])('replays %s admitted by the probed grammar at both call sites', async (_name, argv) => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-grammar-admission-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-grammar-admission-test-'))
     createdRoots.add(cwd)
     const executable = join(cwd, 'claude')
     await writeFile(executable, '#!/bin/sh\n')
@@ -1428,7 +1429,7 @@ describe('shell session lifecycle', () => {
     ['stored resume selector', ['--resume', '22222222-2222-4222-8222-222222222222']],
     ['stored session-id selector', ['--session-id', '22222222-2222-4222-8222-222222222222']]
   ])('rejects %s after probing and never starts a native resume', async (_name, argv) => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-stored-selector-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-stored-selector-test-'))
     createdRoots.add(cwd)
     const executable = join(cwd, 'claude')
     await writeFile(executable, '#!/bin/sh\n')
@@ -1480,7 +1481,7 @@ describe('shell session lifecycle', () => {
       claudeHelp.replace(/^ {2}--model <model>.*\n(?: {40}.*\n)*/m, '')
     ]
   ])('fails closed with %s at capture and resume', async (_name, helpOutput) => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-help-shape-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-help-shape-test-'))
     createdRoots.add(cwd)
     const executable = join(cwd, 'claude')
     await writeFile(executable, '#!/bin/sh\n')
@@ -1543,7 +1544,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('refuses a concurrent resume while the first owns the conversation reservation', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-concurrent-resume-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-concurrent-resume-test-'))
     createdRoots.add(cwd)
     const executable = join(cwd, 'claude')
     await writeFile(executable, '#!/bin/sh\n')
@@ -1606,7 +1607,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('refuses a concurrent resume without stopping the already-spawned winner', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-concurrent-resume-no-stop-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-concurrent-resume-no-stop-test-'))
     createdRoots.add(cwd)
     const executable = join(cwd, 'claude')
     await writeFile(executable, '#!/bin/sh\n')
@@ -1671,7 +1672,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('refuses create while resume holds the same conversation reservation', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-create-during-resume-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-create-during-resume-test-'))
     createdRoots.add(cwd)
     const executable = join(cwd, 'claude')
     await writeFile(executable, '#!/bin/sh\n')
@@ -1732,7 +1733,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('refuses resume while create holds the same conversation reservation', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-resume-during-create-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-resume-during-create-test-'))
     createdRoots.add(cwd)
     const executable = join(cwd, 'claude')
     await writeFile(executable, '#!/bin/sh\n')
@@ -1801,7 +1802,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('captures relevant environment absence and unsets later values for existence and resume', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-environment-resume-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-environment-resume-test-'))
     createdRoots.add(cwd)
     const executable = join(cwd, 'claude')
     await writeFile(executable, '#!/bin/sh\n')
@@ -1878,7 +1879,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('refuses two app-session resumes that target the same conversation identity', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-shared-conversation-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-shared-conversation-test-'))
     createdRoots.add(cwd)
     const executable = join(cwd, 'claude')
     await writeFile(executable, '#!/bin/sh\n')
@@ -1977,7 +1978,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('does not let stale interruption cleanup evict a different registered incarnation', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-stale-interruption-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-stale-interruption-test-'))
     createdRoots.add(cwd)
     const pty = new NonExitingFakePty()
     const manager = new SessionManager({
@@ -2013,7 +2014,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('probes once per Claude executable identity and launches unmodified when unsupported', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-unsupported-claude-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-unsupported-claude-test-'))
     createdRoots.add(cwd)
     const executable = join(cwd, 'claude')
     await writeFile(executable, '#!/bin/sh\n')
@@ -2068,7 +2069,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('does not cache a timed-out Claude help probe and retries on the next create', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-timeout-reprobe-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-timeout-reprobe-test-'))
     createdRoots.add(cwd)
     const executable = join(cwd, 'claude')
     await writeFile(executable, '#!/bin/sh\n')
@@ -2105,7 +2106,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('requires a zero exit code from a fixed 80 by 24 Claude help probe', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-probe-exit-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-probe-exit-test-'))
     createdRoots.add(cwd)
     const executable = join(cwd, 'claude')
     await writeFile(executable, '#!/bin/sh\n')
@@ -2135,7 +2136,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('names the injected session-id flag when the modified launch throws during spawn', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-injected-spawn-failure-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-injected-spawn-failure-test-'))
     createdRoots.add(cwd)
     const executable = join(cwd, 'claude')
     await writeFile(executable, '#!/bin/sh\n')
@@ -2159,7 +2160,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('names the injected session-id flag when the modified launch exits during startup', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-injected-startup-failure-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-injected-startup-failure-test-'))
     createdRoots.add(cwd)
     const executable = join(cwd, 'claude')
     await writeFile(executable, '#!/bin/sh\n')
@@ -2189,7 +2190,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('reports a missing bound reference and spawns nothing', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-missing-binding-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-missing-binding-test-'))
     createdRoots.add(cwd)
     const executable = join(cwd, 'claude')
     await writeFile(executable, '#!/bin/sh\n')
@@ -2308,7 +2309,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('escalates a SIGHUP-ignoring shell and records the PTY-reported signal', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-session-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-session-test-'))
     createdRoots.add(cwd)
     const store = new FakeStore()
     let ready = (): void => undefined
@@ -2382,7 +2383,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('tears down exactly once when host-side resume attachment fails and blocks re-resume until exit', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-resume-attach-failure-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-resume-attach-failure-test-'))
     createdRoots.add(cwd)
     const executable = join(cwd, 'claude')
     await writeFile(executable, '#!/bin/sh\n')
@@ -2444,7 +2445,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('keeps the reservation when the resume record fails and the spawned PTY never exits', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-resume-record-failure-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-resume-record-failure-test-'))
     createdRoots.add(cwd)
     const executable = join(cwd, 'claude')
     await writeFile(executable, '#!/bin/sh\n')
@@ -2509,7 +2510,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('keeps an exit-unconfirmed bound incarnation registered and blocks resume', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-unconfirmed-stop-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-unconfirmed-stop-test-'))
     createdRoots.add(cwd)
     const executable = join(cwd, 'claude')
     await writeFile(executable, '#!/bin/sh\n')
@@ -2842,7 +2843,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('disconnects only a slow view under continuous output while other views and both processes continue', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-session-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-session-test-'))
     createdRoots.add(cwd)
     const ptys = [new FakePty(), new FakePty()]
     const store = new FakeStore()
@@ -3028,7 +3029,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('never reports saved output live for an exit-unconfirmed incarnation', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-saved-output-unconfirmed-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-saved-output-unconfirmed-test-'))
     createdRoots.add(cwd)
     const pty = new NonExitingFakePty()
     const savedOutputStore = new FakeSavedOutputStore()
@@ -3059,7 +3060,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('keeps a fresh session catalog isolated from another session snapshot and loss records', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-session-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-session-test-'))
     createdRoots.add(cwd)
     const savedOutputDirectory = join(cwd, 'saved-output')
     const pty = new FakePty()
@@ -3119,7 +3120,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('returns only a stopped session own capture and loss notices while other sessions have newer captures', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-stopped-catalog-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-stopped-catalog-test-'))
     createdRoots.add(cwd)
     const savedOutputDirectory = join(cwd, 'saved-output')
     const manager = new SessionManager({
@@ -3233,7 +3234,7 @@ describe('shell session lifecycle', () => {
   it('keeps both captures when the same incarnation is restored into a new view epoch', async () => {
     vi.useFakeTimers()
     vi.setSystemTime('2026-09-13T10:00:00.000Z')
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-session-view-history-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-session-view-history-test-'))
     createdRoots.add(cwd)
     const manager = new SessionManager({
       store: new FakeStore(),
@@ -3287,7 +3288,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('persists final-capture unavailability for an incarnation with no prior capture', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'aiterm-session-final-capture-loss-test-'))
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-session-final-capture-loss-test-'))
     createdRoots.add(cwd)
     const savedOutputStore = new FileSavedOutputStore(join(cwd, 'saved-output'))
     const manager = new SessionManager({
@@ -3327,7 +3328,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('applies the database connection configuration during initialization', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'aiterm-database-config-test-'))
+    const root = await mkdtemp(join(tmpdir(), 'bmn-database-config-test-'))
     createdRoots.add(root)
     const database = new BetterSqlite3(join(root, 'terminal.sqlite'))
     try {
@@ -3351,7 +3352,7 @@ describe('shell session lifecycle', () => {
   })
 
   it('reads the actual database connection configuration', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'aiterm-database-settings-test-'))
+    const root = await mkdtemp(join(tmpdir(), 'bmn-database-settings-test-'))
     createdRoots.add(root)
     const database = new BetterSqlite3(join(root, 'terminal.sqlite'))
     try {

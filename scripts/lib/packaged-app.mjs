@@ -3,7 +3,7 @@ import { join } from 'node:path'
 
 const PRODUCT_NAME = 'BMN'
 /** electron-builder names the Linux executable from `linux.executableName`; macOS uses the product name. */
-const LINUX_EXECUTABLE = 'ai-terminal'
+const LINUX_EXECUTABLE = 'bmn'
 
 /** electron-builder appends the architecture to the folder unless the target is the default x64. */
 function unpackedDirectory(platform, arch) {

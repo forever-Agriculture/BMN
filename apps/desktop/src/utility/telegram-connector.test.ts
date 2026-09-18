@@ -117,7 +117,7 @@ interface Harness {
 }
 
 async function tempDirectory(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'aiterm-telegram-test-'))
+  const root = await mkdtemp(join(tmpdir(), 'bmn-telegram-test-'))
   createdRoots.add(root)
   return root
 }

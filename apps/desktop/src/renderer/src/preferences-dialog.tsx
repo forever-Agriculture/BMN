@@ -9,8 +9,8 @@ import type {
   ControlInfo,
   NotificationSettings,
   TelegramStatus
-} from '@ai-terminal/protocol'
-import { ARCHIVE_DELETE_AFTER_DAYS, COLOR_MODE_NAMES, DEFAULT_APP_SETTINGS, IDENTITY_NAMES, TERMINAL_FONT_SIZE_RANGE } from '@ai-terminal/protocol'
+} from '@bmn/protocol'
+import { ARCHIVE_DELETE_AFTER_DAYS, COLOR_MODE_NAMES, DEFAULT_APP_SETTINGS, IDENTITY_NAMES, TERMINAL_FONT_SIZE_RANGE } from '@bmn/protocol'
 import { Icon } from './icons'
 import { COLOR_MODE_PRESENTATION, IDENTITY_PRESENTATION } from './theme'
 import { VoicePreferences } from './voice-preferences'
@@ -725,7 +725,7 @@ export function PreferencesDialog(props: {
           </p>
         )}
         <pre className="preferences-usage">{USAGE_LINES.join('\n')}</pre>
-        <p className="preferences-help">Sessions started by BMN get AITERM_CONTROL_SOCKET and AITERM_TOKEN automatically.</p>
+        <p className="preferences-help">Sessions started by BMN get BMN_CONTROL_SOCKET and BMN_TOKEN automatically.</p>
       </section>
 
       <section className="preferences-section">

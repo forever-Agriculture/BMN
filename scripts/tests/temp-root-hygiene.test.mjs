@@ -13,7 +13,7 @@ import {
 const harnessRoots = new Set()
 
 function harnessRoot() {
-  const root = mkdtempSync(join(tmpdir(), 'aiterm-temp-hygiene-'))
+  const root = mkdtempSync(join(tmpdir(), 'bmn-temp-hygiene-'))
   harnessRoots.add(root)
   return root
 }

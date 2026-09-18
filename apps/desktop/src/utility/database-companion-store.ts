@@ -24,7 +24,7 @@ import {
   type ProgressState,
   type VoiceLanguage,
   type VoiceModelId
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import { isAbsolute, normalize } from 'node:path'
 import type { DatabaseConnection } from './database-initialization'
 import { WorkspaceStoreError } from './database-workspace-store'

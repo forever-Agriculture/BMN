@@ -39,7 +39,7 @@ import {
   type WorkspaceLayoutState,
   type WorkspaceRecord,
   type WorkspaceUpdateParams
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { recoverAfterTransportFailure } from './overflow-detach'
 import { failureDetail, unwrapBridgeInvoke } from './bridge-invoke'

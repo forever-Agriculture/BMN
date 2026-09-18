@@ -1,6 +1,6 @@
 // MODULE: session-status.test.ts - the stopped-panel label follows the recorded incarnation outcome
 import { describe, expect, it } from 'vitest'
-import { isSessionProcessStatus, type SessionProcessStatus } from '@ai-terminal/protocol'
+import { isSessionProcessStatus, type SessionProcessStatus } from '@bmn/protocol'
 import { sessionProcessLabel } from './session-status'
 
 const status = (change: Partial<SessionProcessStatus>): SessionProcessStatus => {

@@ -1,5 +1,5 @@
 {
-  "name": "ai-terminal",
+  "name": "bmn",
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@12.3.4",
@@ -9,14 +9,14 @@
   "scripts": {
     "postinstall": "pnpm run install:electron && node scripts/build/rebuild-native.mjs",
     "install:electron": "node apps/desktop/node_modules/electron/install.js",
-    "test:unit": "pnpm --filter @ai-terminal/protocol run build && vitest run",
+    "test:unit": "pnpm --filter @bmn/protocol run build && vitest run",
     "test:electron": "pnpm run build && node scripts/test/electron-self-test.mjs",
     "test:run": "pnpm run test:unit && pnpm run test:electron",
     "lint": "eslint apps shared scripts eslint.config.mjs",
     "typecheck": "tsc -b shared/protocol apps/desktop/tsconfig.node.json apps/desktop/tsconfig.web.json",
-    "build": "pnpm --filter @ai-terminal/protocol run build && pnpm --filter @ai-terminal/desktop run build",
-    "rebuild:native": "pnpm --filter @ai-terminal/desktop rebuild node-pty better-sqlite3 && node scripts/build/rebuild-native.mjs",
-    "package": "node scripts/voice/build-whisper.mjs && pnpm --filter @ai-terminal/desktop run package",
+    "build": "pnpm --filter @bmn/protocol run build && pnpm --filter @bmn/desktop run build",
+    "rebuild:native": "pnpm --filter @bmn/desktop rebuild node-pty better-sqlite3 && node scripts/build/rebuild-native.mjs",
+    "package": "node scripts/voice/build-whisper.mjs && pnpm --filter @bmn/desktop run package",
     "voice:build": "node scripts/voice/build-whisper.mjs",
     "smoke:packaged": "node scripts/smoke/packaged.mjs",
     "install:desktop": "node scripts/install/desktop-entry.mjs"

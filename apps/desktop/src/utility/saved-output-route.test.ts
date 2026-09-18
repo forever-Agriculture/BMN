@@ -4,7 +4,7 @@ import {
   TERMINAL_SAVED_OUTPUT_RETENTION,
   type SavedOutputCatalog,
   type SavedOutputSnapshot
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import { describe, expect, it, vi } from 'vitest'
 import { routeTerminalSavedOutputGet } from './saved-output-route'
 

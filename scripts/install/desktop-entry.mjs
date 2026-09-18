@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url'
 import { packagedApp } from '../lib/packaged-app.mjs'
 
 // Must match "desktopName" in apps/desktop/package.json: Electron derives the Wayland app_id from it.
-const DESKTOP_ID = 'ai-terminal.desktop'
-const ICON_NAME = 'ai-terminal'
+const DESKTOP_ID = 'bmn.desktop'
+const ICON_NAME = 'bmn'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const { application, binary } = packagedApp(repoRoot)
@@ -54,7 +54,7 @@ function installDesktopEntry() {
     copyFileSync(join(iconSource, 'hicolor', file), join(icons, size, 'apps', `${ICON_NAME}.png`))
   }
   mkdirSync(join(icons, 'scalable/apps'), { recursive: true })
-  copyFileSync(join(iconSource, 'ai-terminal.svg'), join(icons, 'scalable/apps', `${ICON_NAME}.svg`))
+  copyFileSync(join(iconSource, 'bmn.svg'), join(icons, 'scalable/apps', `${ICON_NAME}.svg`))
 
   const entryPath = join(dataHome, 'applications', DESKTOP_ID)
   writeAtomically(entryPath, [

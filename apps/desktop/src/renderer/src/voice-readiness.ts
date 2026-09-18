@@ -1,5 +1,5 @@
 // MODULE: voice-readiness.ts - decides whether Speak can record and which installed model it transcribes with
-import type { VoiceModelStatus, VoiceStatus } from '@ai-terminal/protocol'
+import type { VoiceModelStatus, VoiceStatus } from '@bmn/protocol'
 
 export type VoiceReadiness =
   /** `replacesChoice` is true when the chosen model is neither installed nor downloading, so the installed one should become the saved choice. */

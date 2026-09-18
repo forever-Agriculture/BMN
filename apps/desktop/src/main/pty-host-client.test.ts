@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { describe, expect, it, vi } from 'vitest'
-import { METHOD_REGISTRY } from '@ai-terminal/protocol'
+import { METHOD_REGISTRY } from '@bmn/protocol'
 import type { UtilityProcess } from 'electron'
 import {
   closeWithinDeadline,

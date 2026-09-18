@@ -5,7 +5,7 @@ import type {
   SessionCreateParams,
   SessionRecord,
   SessionUpdateParams
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 
 export interface SessionLaunchForm {
   name: string

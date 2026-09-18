@@ -6,7 +6,7 @@ import {
   TERMINAL_UNDELIVERED_OUTPUT_BYTES,
   type SavedOutputCapture,
   type SavedOutputSnapshot
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import { describe, expect, it, vi } from 'vitest'
 import {
   captureLiveTerminalSnapshot,

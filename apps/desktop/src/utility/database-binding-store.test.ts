@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module'
 import { describe, expect, it } from 'vitest'
-import type { PersistedConversationBinding } from '@ai-terminal/protocol'
+import type { PersistedConversationBinding } from '@bmn/protocol'
 import {
   initializeDatabase,
   type DatabaseConnection

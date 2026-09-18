@@ -1,4 +1,4 @@
-import { TERMINAL_PARSER_ATOM_BYTES } from '@ai-terminal/protocol'
+import { TERMINAL_PARSER_ATOM_BYTES } from '@bmn/protocol'
 
 type ParserState =
   | 'ground'

@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin({ exclude: ['@ai-terminal/protocol'] })],
+    plugins: [externalizeDepsPlugin({ exclude: ['@bmn/protocol'] })],
     build: {
       rollupOptions: {
         input: {
@@ -16,7 +16,7 @@ export default defineConfig({
     }
   },
   preload: {
-    plugins: [externalizeDepsPlugin({ exclude: ['@ai-terminal/protocol'] })]
+    plugins: [externalizeDepsPlugin({ exclude: ['@bmn/protocol'] })]
   },
   renderer: {
     root: resolve(__dirname, 'src/renderer'),

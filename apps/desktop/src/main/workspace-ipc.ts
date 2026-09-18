@@ -3,7 +3,7 @@ import {
   METHOD_REGISTRY,
   type ProtocolErrorCode,
   type ProtocolMethod
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import type { IpcMainInvokeEvent } from 'electron'
 
 export class MainIpcError extends Error {

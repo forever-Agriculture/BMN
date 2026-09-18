@@ -19,7 +19,7 @@ import {
   type TerminalOutputMessage,
   type WorkspaceLayoutState,
   type WorkspaceRecord
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import {
   app,
   autoUpdater,
@@ -292,8 +292,8 @@ function cleanupDevelopmentRoot(): void {
 function hostEnvironment(repoRoot: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
-    AITERM_REPO_ROOT: repoRoot,
-    AITERM_CLI_PATH: bmnCliPath()
+    BMN_REPO_ROOT: repoRoot,
+    BMN_CLI_PATH: bmnCliPath()
   }
 }
 
@@ -824,15 +824,15 @@ async function expectRemoteFailure(
 }
 
 async function nativeFailureSelfTest(hostEntry: string, repoRoot: string): Promise<void> {
-  const dataRoot = process.env.AITERM_DATA_HOME
-  if (!dataRoot) throw new Error('self-test requires AITERM_DATA_HOME')
+  const dataRoot = process.env.BMN_DATA_HOME
+  if (!dataRoot) throw new Error('self-test requires BMN_DATA_HOME')
   const databasePath = join(dataRoot, 'state.sqlite3')
   const child = utilityProcess.fork(hostEntry, ['--native-failure-self-test'], {
     serviceName: 'pty-host-native-failure',
     stdio: 'pipe',
     env: {
       ...hostEnvironment(repoRoot),
-      AITERM_TEST_FAIL_NATIVE: 'node-pty'
+      BMN_TEST_FAIL_NATIVE: 'node-pty'
     }
   })
   let stderr = ''
@@ -1191,8 +1191,8 @@ async function runSelfTest(): Promise<void> {
   let graceful = true
   let clientClosed = false
   try {
-    const isolatedCwd = process.env.AITERM_STATE_HOME
-    if (!isolatedCwd) throw new Error('self-test requires AITERM_STATE_HOME')
+    const isolatedCwd = process.env.BMN_STATE_HOME
+    if (!isolatedCwd) throw new Error('self-test requires BMN_STATE_HOME')
     const envelopedInvokeChannels = await verifyRegisteredInvokeEnvelopes()
 
     await expectRemoteFailure(
@@ -1938,7 +1938,7 @@ async function runSelfTest(): Promise<void> {
 }
 
 const selfTest = process.argv.includes('--self-test')
-const rendererTestMode = process.argv.includes('--aiterm-test-mode')
+const rendererTestMode = process.argv.includes('--bmn-test-mode')
 ensureDevelopmentRoots()
 app.on('will-quit', cleanupDevelopmentRoot)
 process.once('exit', cleanupDevelopmentRoot)

@@ -1,4 +1,4 @@
-import { TERMINAL_SCROLLBACK_LINES } from '@ai-terminal/protocol'
+import { TERMINAL_SCROLLBACK_LINES } from '@bmn/protocol'
 import type { SavedOutputPresentation } from './terminal-history'
 
 const NEVER_CAPTURED_MESSAGE = 'No saved output has been captured for this session.'

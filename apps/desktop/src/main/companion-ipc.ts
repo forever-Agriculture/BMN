@@ -8,7 +8,7 @@ import {
   type AttentionKind,
   type AttentionRecord,
   type ProtocolMethod
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import {
   BrowserWindow,
   clipboard,

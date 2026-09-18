@@ -1,5 +1,5 @@
 // MODULE: process-tracking.test.ts - Quit and Close keep listing a process until its exit is confirmed
-import { ERROR_CODES, type SessionStopCause } from '@ai-terminal/protocol'
+import { ERROR_CODES, type SessionStopCause } from '@bmn/protocol'
 import { describe, expect, it } from 'vitest'
 import {
   applyProcessState,

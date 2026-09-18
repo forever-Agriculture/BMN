@@ -349,7 +349,7 @@ export class ArtifactFileStore {
     if (state !== 'ok') throw new ArtifactFileError(state, `stored original is ${state}`)
     const destination = resolve(destinationPath)
     const overwrite = options.overwrite === true
-    const temporary = join(dirname(destination), `.aiterm-${randomUUID()}${STAGING_SUFFIX}`)
+    const temporary = join(dirname(destination), `.bmn-${randomUUID()}${STAGING_SUFFIX}`)
     try {
       const existing = await lstatOrUndefined(destination)
       if (existing && (!overwrite || existing.isDirectory())) {

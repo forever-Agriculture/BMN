@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -11,14 +11,31 @@ afterEach(async () => {
   createdRoots.clear()
 })
 
+async function testEnvironment(): Promise<{
+  root: string
+  environment: Record<string, string>
+}> {
+  const root = await mkdtemp(join(tmpdir(), 'bmn-roots-test-'))
+  createdRoots.add(root)
+  return {
+    root,
+    environment: {
+      XDG_CONFIG_HOME: join(root, 'xdg-config'),
+      XDG_DATA_HOME: join(root, 'xdg-data'),
+      XDG_STATE_HOME: join(root, 'xdg-state'),
+      XDG_RUNTIME_DIR: join(root, 'xdg-runtime')
+    }
+  }
+}
+
 describe('utility application roots', () => {
-  it('honors every AITERM override without appending another directory', () => {
+  it('honors every BMN override without appending another directory', () => {
     const roots = resolveApplicationRoots(
       {
-        AITERM_CONFIG_HOME: '/isolated/config',
-        AITERM_DATA_HOME: '/isolated/data',
-        AITERM_STATE_HOME: '/isolated/state',
-        AITERM_RUNTIME_HOME: '/isolated/runtime'
+        BMN_CONFIG_HOME: '/isolated/config',
+        BMN_DATA_HOME: '/isolated/data',
+        BMN_STATE_HOME: '/isolated/state',
+        BMN_RUNTIME_HOME: '/isolated/runtime'
       },
       { homeDirectory: '/owner', runtimeFallback: '/tmp/fallback' }
     )
@@ -31,23 +48,69 @@ describe('utility application roots', () => {
     })
   })
 
-  it('uses matching XDG roots and creates all resolved roots with mode 0700', async () => {
-    const testRoot = await mkdtemp(join(tmpdir(), 'aiterm-roots-test-'))
-    createdRoots.add(testRoot)
+  it('keeps legacy root overrides working while preferring the BMN names', () => {
     const roots = resolveApplicationRoots(
       {
-        XDG_CONFIG_HOME: join(testRoot, 'xdg-config'),
-        XDG_DATA_HOME: join(testRoot, 'xdg-data'),
-        XDG_STATE_HOME: join(testRoot, 'xdg-state'),
-        XDG_RUNTIME_DIR: join(testRoot, 'xdg-runtime')
+        AITERM_DATA_HOME: '/legacy/data-override',
+        BMN_CONFIG_HOME: '/current/config-override',
+        AITERM_CONFIG_HOME: '/legacy/config-override'
       },
       { homeDirectory: '/owner', runtimeFallback: '/tmp/fallback' }
     )
 
-    expect(roots.config).toBe(join(testRoot, 'xdg-config', 'ai-terminal'))
+    expect(roots.config).toBe('/current/config-override')
+    expect(roots.data).toBe('/legacy/data-override')
+  })
+
+  it('uses BMN XDG roots for a fresh install and creates them with mode 0700', async () => {
+    const { root, environment } = await testEnvironment()
+    const roots = resolveApplicationRoots(environment, {
+      homeDirectory: '/owner',
+      runtimeFallback: '/tmp/fallback'
+    })
+
+    expect(roots).toEqual({
+      config: join(root, 'xdg-config', 'bmn'),
+      data: join(root, 'xdg-data', 'bmn'),
+      state: join(root, 'xdg-state', 'bmn'),
+      runtime: join(root, 'xdg-runtime', 'bmn')
+    })
     await ensureApplicationRoots(roots)
-    for (const root of Object.values(roots)) {
-      expect((await stat(root)).mode & 0o777).toBe(0o700)
+    for (const applicationRoot of Object.values(roots)) {
+      expect((await stat(applicationRoot)).mode & 0o777).toBe(0o700)
     }
+  })
+
+  it('keeps existing persistent data in its legacy directories without moving it', async () => {
+    const { root, environment } = await testEnvironment()
+    const legacyRoots = {
+      config: join(root, 'xdg-config', 'ai-terminal'),
+      data: join(root, 'xdg-data', 'ai-terminal'),
+      state: join(root, 'xdg-state', 'ai-terminal')
+    }
+    await Promise.all(Object.values(legacyRoots).map((legacyRoot) => mkdir(legacyRoot, { recursive: true })))
+
+    const roots = resolveApplicationRoots(environment, {
+      homeDirectory: '/owner',
+      runtimeFallback: '/tmp/fallback'
+    })
+
+    expect(roots).toEqual({
+      ...legacyRoots,
+      runtime: join(root, 'xdg-runtime', 'bmn')
+    })
+  })
+
+  it('prefers an existing BMN root when both current and legacy directories exist', async () => {
+    const { root, environment } = await testEnvironment()
+    await Promise.all([
+      mkdir(join(root, 'xdg-data', 'ai-terminal'), { recursive: true }),
+      mkdir(join(root, 'xdg-data', 'bmn'), { recursive: true })
+    ])
+
+    expect(resolveApplicationRoots(environment, {
+      homeDirectory: '/owner',
+      runtimeFallback: '/tmp/fallback'
+    }).data).toBe(join(root, 'xdg-data', 'bmn'))
   })
 })

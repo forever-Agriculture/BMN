@@ -8,7 +8,7 @@ import {
   type SessionRecord,
   type WorkspaceLayoutState,
   type WorkspaceRecord
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import type { ApplicationLaunchSpec } from './launch-spec'
 
 export const DEFAULT_LAUNCH_WORKSPACE_NAME = 'Personal'

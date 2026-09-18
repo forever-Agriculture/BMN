@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { IpcMainInvokeEvent } from 'electron'
-import { ERROR_CODES, METHOD_REGISTRY } from '@ai-terminal/protocol'
+import { ERROR_CODES, METHOD_REGISTRY } from '@bmn/protocol'
 import {
   installWorkspaceIpcHandlers,
   requireSessionRuntime

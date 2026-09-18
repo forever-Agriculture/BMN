@@ -1,7 +1,7 @@
 import {
   METHOD_REGISTRY,
   type SavedOutputCatalog
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import type { IpcMainInvokeEvent } from 'electron'
 
 interface SavedOutputSource {

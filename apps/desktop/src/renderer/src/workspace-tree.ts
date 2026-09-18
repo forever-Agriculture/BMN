@@ -1,4 +1,4 @@
-import type { SessionRecord, WorkspaceRecord } from '@ai-terminal/protocol'
+import type { SessionRecord, WorkspaceRecord } from '@bmn/protocol'
 import type { LayoutChange } from './layout-writer'
 import { selectLayoutSession, splitLayoutSession } from './workspace-layout'
 

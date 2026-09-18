@@ -6,7 +6,7 @@ import type {
   ArtifactState,
   InputDraftRecord,
   SessionRecord
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import { Dialog } from './dialog'
 import { failureDetail } from './bridge-error'
 import {

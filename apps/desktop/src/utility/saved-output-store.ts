@@ -8,7 +8,7 @@ import {
   type SavedOutputProcessState,
   type SavedOutputSnapshot,
   type SavedOutputUnreadableEntry
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import type { SavedOutputStore, SessionIdentity } from './session-manager'
 
 const RETENTION_FILE = '_retention.json'

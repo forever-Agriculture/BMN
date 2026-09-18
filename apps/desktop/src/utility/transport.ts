@@ -4,8 +4,8 @@ import {
   PTY_HOST_OUTPUT_QUEUE_BYTES,
   TERMINAL_ACKNOWLEDGEMENT_DEADLINE_MS,
   type TerminalOutputMessage
-} from '@ai-terminal/protocol'
-import type { TerminalViewDisconnectReason } from '@ai-terminal/protocol'
+} from '@bmn/protocol'
+import type { TerminalViewDisconnectReason } from '@bmn/protocol'
 
 interface HostOutputQueueOptions {
   attachmentId: string

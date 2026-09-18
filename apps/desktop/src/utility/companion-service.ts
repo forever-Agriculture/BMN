@@ -21,7 +21,7 @@ import {
   type ProgressRecord,
   type SessionRecord,
   type TelegramStatus
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import { ArtifactFileError, ArtifactFileStore, type InstalledOriginal } from './artifact-files'
 import { ControlAuth, writeOwnerToken, type ControlScope } from './control-auth'
 import { ControlError, ControlServer, type ReceiptRecord } from './control-server'
@@ -208,9 +208,14 @@ export class CompanionService {
   /** Environment for one incarnation: its scoped control credential and the CLI on PATH. */
   sessionEnvironment(identity: SessionIdentity): Record<string, string> {
     const binDirectory = dirname(this.options.cliPath)
+    const token = this.auth.sessionToken(identity.sessionId, identity.incarnationId)
     return {
+      BMN_CONTROL_SOCKET: this.socketPath,
+      BMN_TOKEN: token,
+      BMN_SESSION_ID: identity.sessionId,
+      // Transitional aliases keep existing owner hooks working while docs and new sessions use BMN.
       AITERM_CONTROL_SOCKET: this.socketPath,
-      AITERM_TOKEN: this.auth.sessionToken(identity.sessionId, identity.incarnationId),
+      AITERM_TOKEN: token,
       AITERM_SESSION_ID: identity.sessionId,
       PATH: [binDirectory, process.env.PATH ?? '/usr/bin:/bin'].join(':')
     }
@@ -638,7 +643,7 @@ export class CompanionService {
   private async exportBackup(parent: string): Promise<{ directory: string; manifest: BackupManifest }> {
     if (!isAbsolute(parent)) invalid('The backup location must be an absolute path')
     const createdAt = this.iso()
-    const directory = join(parent, `ai-terminal-backup-${createdAt.replaceAll(':', '-').replace(/\..*$/, '')}`)
+    const directory = join(parent, `bmn-backup-${createdAt.replaceAll(':', '-').replace(/\..*$/, '')}`)
     await mkdir(join(directory, 'artifacts'), { recursive: true, mode: 0o700 })
     const databaseFile = join(directory, 'state.sqlite3')
     await this.options.database.backupInto(databaseFile)

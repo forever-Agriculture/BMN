@@ -25,14 +25,14 @@ Ubuntu 24.04 restricts unprivileged user namespaces, which Chromium's sandbox ne
 exception, Electron exits at once with `SIGTRAP`, and the kernel log shows
 `apparmor="DENIED" operation="capable" profile="unprivileged_userns"`.
 
-BMN never disables the sandbox. Instead, `scripts/sandbox/ai-terminal-electron` is an
+BMN never disables the sandbox. Instead, `scripts/sandbox/bmn-electron` is an
 AppArmor profile that grants user namespaces to exactly two binaries in your checkout: the
-development Electron and the packaged `ai-terminal`. Install it with your checkout's absolute path:
+development Electron and the packaged `bmn`. Install it with your checkout's absolute path:
 
 ```bash
-sed "s|@REPO_ROOT@|$PWD|g" scripts/sandbox/ai-terminal-electron \
-  | sudo tee /etc/apparmor.d/ai-terminal-electron >/dev/null
-sudo apparmor_parser -r /etc/apparmor.d/ai-terminal-electron
+sed "s|@REPO_ROOT@|$PWD|g" scripts/sandbox/bmn-electron \
+  | sudo tee /etc/apparmor.d/bmn-electron >/dev/null
+sudo apparmor_parser -r /etc/apparmor.d/bmn-electron
 ```
 
 Run it from the repository root. The profile is tied to those paths; if you move the checkout,
@@ -44,7 +44,7 @@ All commands run from the repository root.
 
 | Command | What it does |
 | --- | --- |
-| `pnpm --filter @ai-terminal/desktop run dev` | Development app with hot reload, in a throwaway data folder |
+| `pnpm --filter @bmn/desktop run dev` | Development app with hot reload, in a throwaway data folder |
 | `pnpm run build` | Build the protocol package and the app into `apps/desktop/out` |
 | `pnpm run lint` | ESLint over `apps`, `shared` and `scripts` |
 | `pnpm run typecheck` | TypeScript project build of the protocol, main/preload and renderer |
@@ -76,12 +76,12 @@ The app resolves its folders from the XDG variables, and each can be overridden 
 
 | Variable | Default |
 | --- | --- |
-| `AITERM_CONFIG_HOME` | `$XDG_CONFIG_HOME/ai-terminal` (`~/.config/ai-terminal`) |
-| `AITERM_DATA_HOME` | `$XDG_DATA_HOME/ai-terminal` (`~/.local/share/ai-terminal`) |
-| `AITERM_STATE_HOME` | `$XDG_STATE_HOME/ai-terminal` (`~/.local/state/ai-terminal`) |
-| `AITERM_RUNTIME_HOME` | `$XDG_RUNTIME_DIR/ai-terminal` |
+| `BMN_CONFIG_HOME` | `$XDG_CONFIG_HOME/bmn` (`~/.config/bmn`) |
+| `BMN_DATA_HOME` | `$XDG_DATA_HOME/bmn` (`~/.local/share/bmn`) |
+| `BMN_STATE_HOME` | `$XDG_STATE_HOME/bmn` (`~/.local/state/bmn`) |
+| `BMN_RUNTIME_HOME` | `$XDG_RUNTIME_DIR/bmn` |
 
-macOS sets no `XDG_RUNTIME_DIR`, so the runtime root falls back to `$TMPDIR/ai-terminal-<uid>`.
+macOS sets no `XDG_RUNTIME_DIR`, so the runtime root falls back to `$TMPDIR/bmn-<uid>`.
 That path is already about 80 bytes, so a longer `TMPDIR` can push the control socket over the
 limit below.
 
@@ -112,7 +112,7 @@ See [architecture.md](architecture.md) for processes and rules. Useful entry poi
 - **`node-pty` or `better-sqlite3` fails to load.** Run `pnpm run rebuild:native`. The app's error
   names the module that failed.
 - **Agent control is unavailable.** A Unix socket path may hold 107 bytes on Linux and 103 on
-  macOS. A very long `XDG_RUNTIME_DIR`, `TMPDIR` or `AITERM_RUNTIME_HOME` disables the control
+  macOS. A very long `XDG_RUNTIME_DIR`, `TMPDIR` or `BMN_RUNTIME_HOME` disables the control
   socket, and Preferences shows why.
 - **The voice engine build fails.** Install `cmake` (or uv) and run `node scripts/voice/build-whisper.mjs --force`.
 

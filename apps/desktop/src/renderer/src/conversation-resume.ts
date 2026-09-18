@@ -1,4 +1,4 @@
-import type { ConversationBindingState } from '@ai-terminal/protocol'
+import type { ConversationBindingState } from '@bmn/protocol'
 
 export interface ConversationBindingPresentation {
   label: string

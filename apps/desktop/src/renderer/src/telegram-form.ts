@@ -1,5 +1,5 @@
 // MODULE: telegram-form.ts - pure parsing and validation of the Telegram preferences form
-import type { TelegramSettings } from '@ai-terminal/protocol'
+import type { TelegramSettings } from '@bmn/protocol'
 
 /** Raw field values as the Telegram form in PreferencesDialog holds them. */
 export interface TelegramFormFields {

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { IpcMainEvent, WebContents } from 'electron'
-import { METHOD_REGISTRY } from '@ai-terminal/protocol'
+import { METHOD_REGISTRY } from '@bmn/protocol'
 import {
   SavedOutputCaptureCoordinator,
   captureWebContents,

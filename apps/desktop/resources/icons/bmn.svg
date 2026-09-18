@@ -1,4 +1,4 @@
-<!-- MODULE: ai-terminal.svg - app icon: a point-down sword whose hilt forms the Cross, in Knight gold on the Steel ground -->
+<!-- MODULE: bmn.svg - app icon: a point-down sword whose hilt forms the Cross, in Knight gold on the Steel ground -->
 <svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
   <defs>
     <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">

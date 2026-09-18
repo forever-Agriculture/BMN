@@ -1,5 +1,5 @@
 // MODULE: session-status.ts - the owner-facing label for a session's latest process incarnation
-import type { SessionProcessStatus } from '@ai-terminal/protocol'
+import type { SessionProcessStatus } from '@bmn/protocol'
 
 /**
  * Labels a session's latest incarnation from the host's recorded evidence only:

@@ -32,7 +32,7 @@ programs that need a held Space.
 Both are the multilingual models from
 [`ggerganov/whisper.cpp`](https://huggingface.co/ggerganov/whisper.cpp) on Hugging Face. A download
 is written to a partial file, checked against its pinned size and SHA-256, and only then moved into
-place. Models are stored in `~/.local/share/ai-terminal/voice/models/` unless you choose another
+place. Models are stored in `~/.local/share/bmn/voice/models/` unless you choose another
 **Model folder**. A chosen folder that is missing, for example on an unmounted disk, is reported and
 never created.
 

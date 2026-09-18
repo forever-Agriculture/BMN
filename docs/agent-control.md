@@ -14,11 +14,11 @@ BMN sets these variables in every session it starts:
 
 | Variable | Meaning |
 | --- | --- |
-| `AITERM_CONTROL_SOCKET` | Path of the control socket |
-| `AITERM_TOKEN` | A credential that only works for this session and this run of its process |
-| `AITERM_SESSION_ID` | The session's ID |
+| `BMN_CONTROL_SOCKET` | Path of the control socket |
+| `BMN_TOKEN` | A credential that only works for this session and this run of its process |
+| `BMN_SESSION_ID` | The session's ID |
 
-The socket lives in `$XDG_RUNTIME_DIR/ai-terminal/control/`, a folder only your user can open.
+The socket lives in `$XDG_RUNTIME_DIR/bmn/control/`, a folder only your user can open.
 There is no network listener.
 
 Session tokens are HMAC-signed for one session and one process incarnation. Starting the session
@@ -46,7 +46,7 @@ Options:
 | --- | --- |
 | `--session ID` | Target session (defaults to your own; required with the owner token) |
 | `--json` | Print the raw result as JSON |
-| `--owner` | Use `owner.token` next to the socket instead of `AITERM_TOKEN` |
+| `--owner` | Use `owner.token` next to the socket instead of `BMN_TOKEN` |
 | `--token-file PATH` | Read the token from a file |
 | `--socket PATH` | Use another socket path |
 | `--` | Treat every following argument as text |
@@ -117,7 +117,7 @@ Add the hook to `~/.claude/settings.json` for `Notification`, `PostToolUse`, `Us
 
 ```json
 { "hooks": [{ "type": "command", "timeout": 5,
-  "command": "[ -n \"$AITERM_CONTROL_SOCKET\" ] && command -v bmn >/dev/null && bmn hook claude; exit 0" }] }
+  "command": "[ -n \"$BMN_CONTROL_SOCKET\" ] && command -v bmn >/dev/null && bmn hook claude; exit 0" }] }
 ```
 
 For Codex, add the same entries with `bmn hook codex` to `~/.codex/hooks.json` for `PreToolUse`,

@@ -1,7 +1,7 @@
 import { chmod, mkdir, mkdtemp, rm, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ERROR_CODES } from '@ai-terminal/protocol'
+import { ERROR_CODES } from '@bmn/protocol'
 import type { IpcMainInvokeEvent } from 'electron'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { encodeWav } from '../renderer/src/voice-wav'

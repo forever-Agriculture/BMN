@@ -2,7 +2,7 @@ import {
   METHOD_REGISTRY,
   TERMINAL_SAVED_OUTPUT_RETENTION,
   type SavedOutputCatalog
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import type { IpcMainInvokeEvent } from 'electron'
 import { describe, expect, it } from 'vitest'
 import { installSavedOutputIpcHandler } from './saved-output-ipc'

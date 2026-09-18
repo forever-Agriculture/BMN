@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
-import type { BoundConversationBinding } from '@ai-terminal/protocol'
+import type { BoundConversationBinding } from '@bmn/protocol'
 import {
   CLAUDE_IDENTITY_NEUTRAL_OPTIONS,
   buildNativeResumeLaunch,

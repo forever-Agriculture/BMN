@@ -23,7 +23,7 @@ describe('owner root guard', () => {
     const fs = {
       existsSync: (path) => path in tree,
       readdirSync: (path) => tree[path],
-      statSync: (path) => ({ isDirectory: () => tree[path] !== null, size: 7, mtimeMs: 1 })
+      lstatSync: (path) => ({ isDirectory: () => tree[path] !== null, size: 7, mtimeMs: 1 })
     }
     expect(fingerprintOwnerRoots(['/owner/config', '/owner/data'], fs)).toEqual([
       '/owner/config\tdir\t1',

@@ -1,10 +1,10 @@
 {
-  "name": "@ai-terminal/desktop",
+  "name": "@bmn/desktop",
   "productName": "BMN",
   "version": "0.1.0",
   "private": true,
   "description": "BMN Electron desktop application",
-  "desktopName": "ai-terminal.desktop",
+  "desktopName": "bmn.desktop",
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "node ../../scripts/test/electron-dev.mjs",
@@ -14,7 +14,7 @@
     "package": "pnpm run build && electron-builder --dir"
   },
   "dependencies": {
-    "@ai-terminal/protocol": "workspace:*",
+    "@bmn/protocol": "workspace:*",
     "@xterm/addon-fit": "0.11.0",
     "@xterm/addon-search": "0.16.0",
     "@xterm/xterm": "6.0.0",

@@ -5,7 +5,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { METHOD_REGISTRY, type ArtifactRecord, type BackupManifest, type BackupVerifyResult } from '@ai-terminal/protocol'
+import { METHOD_REGISTRY, type ArtifactRecord, type BackupManifest, type BackupVerifyResult } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CompanionService } from './companion-service'
 import type { DatabaseWorkerClient } from './database-client'
@@ -44,7 +44,7 @@ function workerLike(connection: DatabaseConnection): DatabaseWorkerClient {
 }
 
 beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), 'aiterm-companion-'))
+  root = mkdtempSync(join(tmpdir(), 'bmn-companion-'))
   database = new BetterSqlite3(':memory:')
   initializeDatabase(database, now)
   database.prepare(
@@ -98,6 +98,15 @@ const exportBackup = (parent: string) =>
   service.route('backup.export', { directory: parent }) as Promise<{ directory: string; manifest: BackupManifest }>
 const verifyBackup = (directory: string) =>
   service.route('backup.verify', { directory }) as Promise<BackupVerifyResult>
+
+describe('session environment', () => {
+  it('publishes BMN credentials and matching legacy aliases for existing hooks', () => {
+    const environment = service.sessionEnvironment({ sessionId: 's1', incarnationId: 'run-1' })
+    expect(environment.BMN_CONTROL_SOCKET).toBe(environment.AITERM_CONTROL_SOCKET)
+    expect(environment.BMN_TOKEN).toBe(environment.AITERM_TOKEN)
+    expect(environment.BMN_SESSION_ID).toBe(environment.AITERM_SESSION_ID)
+  })
+})
 
 describe('backup', () => {
   it('exports every ready artifact, not only the newest 1,000', async () => {

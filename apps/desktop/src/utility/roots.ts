@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { chmod, mkdir } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -16,12 +17,30 @@ interface RootFallbacks {
   runtimeFallback: string
 }
 
+const CURRENT_ROOT_DIRECTORY = 'bmn'
+const LEGACY_ROOT_DIRECTORY = 'ai-terminal'
+
+function defaultRootFallbacks(): RootFallbacks {
+  return {
+    homeDirectory: homedir(),
+    runtimeFallback: join(tmpdir(), `bmn-${process.getuid?.() ?? 'user'}`)
+  }
+}
+
+/**
+ * Existing installations keep using their legacy root in place. Moving a database and its stored
+ * files during application startup is needlessly risky; fresh installs use the BMN root, while an
+ * already-created BMN root always wins if both names exist.
+ */
+function persistentRoot(base: string): string {
+  const current = join(base, CURRENT_ROOT_DIRECTORY)
+  const legacy = join(base, LEGACY_ROOT_DIRECTORY)
+  return !existsSync(current) && existsSync(legacy) ? legacy : current
+}
+
 export function resolveApplicationRoots(
   environment: RootEnvironment = process.env,
-  fallbacks: RootFallbacks = {
-    homeDirectory: homedir(),
-    runtimeFallback: join(tmpdir(), `ai-terminal-${process.getuid?.() ?? 'user'}`)
-  }
+  fallbacks: RootFallbacks = defaultRootFallbacks()
 ): ApplicationRoots {
   const configBase = environment.XDG_CONFIG_HOME ?? join(fallbacks.homeDirectory, '.config')
   const dataBase = environment.XDG_DATA_HOME ?? join(fallbacks.homeDirectory, '.local', 'share')
@@ -29,10 +48,10 @@ export function resolveApplicationRoots(
   const runtimeBase = environment.XDG_RUNTIME_DIR ?? fallbacks.runtimeFallback
 
   return {
-    config: environment.AITERM_CONFIG_HOME ?? join(configBase, 'ai-terminal'),
-    data: environment.AITERM_DATA_HOME ?? join(dataBase, 'ai-terminal'),
-    state: environment.AITERM_STATE_HOME ?? join(stateBase, 'ai-terminal'),
-    runtime: environment.AITERM_RUNTIME_HOME ?? join(runtimeBase, 'ai-terminal')
+    config: environment.BMN_CONFIG_HOME ?? environment.AITERM_CONFIG_HOME ?? persistentRoot(configBase),
+    data: environment.BMN_DATA_HOME ?? environment.AITERM_DATA_HOME ?? persistentRoot(dataBase),
+    state: environment.BMN_STATE_HOME ?? environment.AITERM_STATE_HOME ?? persistentRoot(stateBase),
+    runtime: environment.BMN_RUNTIME_HOME ?? environment.AITERM_RUNTIME_HOME ?? join(runtimeBase, CURRENT_ROOT_DIRECTORY)
   }
 }
 

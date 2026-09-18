@@ -12,7 +12,7 @@ import {
   type RpcFailure,
   type RpcSuccess,
   type SessionProcessStateChangedMessage
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import { utilityProcess, type MessagePortMain, type UtilityProcess } from 'electron'
 
 export interface HostReady {

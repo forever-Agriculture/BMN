@@ -16,7 +16,7 @@ const chromiumSandboxKey = ['chromium', 'Sandbox'].join('')
 const disabledWord = ['fal', 'se'].join('')
 
 async function temporaryRepo() {
-  const root = await mkdtemp(join(tmpdir(), 'aiterm-sandbox-audit-'))
+  const root = await mkdtemp(join(tmpdir(), 'bmn-sandbox-audit-'))
   await mkdir(join(root, 'apps'), { recursive: true })
   return root
 }

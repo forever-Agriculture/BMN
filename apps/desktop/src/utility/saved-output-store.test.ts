@@ -7,7 +7,7 @@ import {
   TERMINAL_SAVED_OUTPUT_RETENTION,
   TERMINAL_SCROLLBACK_LINES,
   type SavedOutputSnapshot
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import { afterEach, describe, expect, it } from 'vitest'
 import { FileSavedOutputStore } from './saved-output-store'
 
@@ -19,7 +19,7 @@ afterEach(async () => {
 })
 
 async function storeFixture(): Promise<{ directory: string; store: FileSavedOutputStore }> {
-  const root = await mkdtemp(join(tmpdir(), 'aiterm-saved-output-test-'))
+  const root = await mkdtemp(join(tmpdir(), 'bmn-saved-output-test-'))
   createdRoots.add(root)
   const directory = join(root, 'saved-output')
   return { directory, store: new FileSavedOutputStore(directory) }

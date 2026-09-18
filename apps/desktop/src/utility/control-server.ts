@@ -8,7 +8,7 @@ import {
   MAX_CONTROL_FRAME_BYTES,
   isProtocolErrorCode,
   type ProtocolErrorCode
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import type { ControlAuth, ControlScope } from './control-auth'
 
 export class ControlError extends Error {

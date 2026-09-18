@@ -26,7 +26,7 @@ import {
   type SavedOutputUnavailableReason,
   type TerminalPortMessage,
   type WorkspaceLayoutState
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import { CompanionService, UNROUTED } from './companion-service'
 import { DatabaseClientError, DatabaseWorkerClient } from './database-client'
 import { nativeLoadFailureMessage } from './native-load-error'
@@ -83,12 +83,12 @@ const nativeFailureProbe = process.argv.includes('--native-failure-self-test')
 
 function loadNativeModule(moduleName: NativeModuleName): unknown {
   try {
-    if (nativeFailureProbe && process.env.AITERM_TEST_FAIL_NATIVE === moduleName) {
+    if (nativeFailureProbe && process.env.BMN_TEST_FAIL_NATIVE === moduleName) {
       throw new Error('self-test simulated missing dependency')
     }
     return nativeRequire(moduleName)
   } catch (error) {
-    const repoRoot = process.env.AITERM_REPO_ROOT ?? '<repo root>'
+    const repoRoot = process.env.BMN_REPO_ROOT ?? '<repo root>'
     process.stderr.write(`${nativeLoadFailureMessage(moduleName, error, repoRoot)}\n`)
     process.exit(1)
   }
@@ -99,13 +99,13 @@ const BetterSqlite3 = loadNativeModule('better-sqlite3')
 
 if (typeof nodePty.spawn !== 'function') {
   process.stderr.write(
-    `${nativeLoadFailureMessage('node-pty', new Error('module does not export spawn'), process.env.AITERM_REPO_ROOT ?? '<repo root>')}\n`
+    `${nativeLoadFailureMessage('node-pty', new Error('module does not export spawn'), process.env.BMN_REPO_ROOT ?? '<repo root>')}\n`
   )
   process.exit(1)
 }
 if (typeof BetterSqlite3 !== 'function') {
   process.stderr.write(
-    `${nativeLoadFailureMessage('better-sqlite3', new Error('module does not export a database constructor'), process.env.AITERM_REPO_ROOT ?? '<repo root>')}\n`
+    `${nativeLoadFailureMessage('better-sqlite3', new Error('module does not export a database constructor'), process.env.BMN_REPO_ROOT ?? '<repo root>')}\n`
   )
   process.exit(1)
 }
@@ -257,7 +257,7 @@ async function start(): Promise<void> {
     database,
     manager,
     roots,
-    cliPath: process.env.AITERM_CLI_PATH ?? join(__dirname, '..', '..', 'bin', 'bmn'),
+    cliPath: process.env.BMN_CLI_PATH ?? join(__dirname, '..', '..', 'bin', 'bmn'),
     emit: (message) => parentPort.postMessage(message)
   })
   companionHolder.current = companion

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { emptyWorkspaceLayout, type SessionRecord } from '@ai-terminal/protocol'
+import { emptyWorkspaceLayout, type SessionRecord } from '@bmn/protocol'
 import {
   FOLLOW_TAIL_VIEW,
   captureLayoutScroll,

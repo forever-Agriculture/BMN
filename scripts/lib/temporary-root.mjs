@@ -4,19 +4,19 @@ import { join } from 'node:path'
 
 export const temporaryRootContracts = Object.freeze({
   electronSelfTest: Object.freeze({
-    prefix: 'aiterm-electron-self-test-',
+    prefix: 'bmn-electron-self-test-',
     directories: Object.freeze(['config', 'data', 'state', 'runtime', 'cache'])
   }),
   electronDevelopment: Object.freeze({
-    prefix: 'aiterm-development-',
+    prefix: 'bmn-development-',
     directories: Object.freeze(['config', 'data', 'state', 'runtime', 'cache'])
   }),
   liveShell: Object.freeze({
-    prefix: 'aiterm-e2e-',
+    prefix: 'bmn-e2e-',
     directories: Object.freeze(['config', 'data', 'state', 'runtime', 'cache'])
   }),
   packagedSmoke: Object.freeze({
-    prefix: 'aiterm-packaged-smoke-',
+    prefix: 'bmn-packaged-smoke-',
     directories: Object.freeze(['config', 'data', 'state', 'runtime', 'cache'])
   })
 })

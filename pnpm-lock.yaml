@@ -139,7 +139,7 @@ importers:
 
   apps/desktop:
     dependencies:
-      '@ai-terminal/protocol':
+      '@bmn/protocol':
         specifier: workspace:*
         version: link:../../shared/protocol
       '@xterm/addon-fit':

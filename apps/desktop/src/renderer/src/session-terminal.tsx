@@ -11,7 +11,7 @@ import type {
   TerminalOutputMessage,
   TerminalViewDisconnectReason,
   VoiceSettings
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import { failureDetail, isBridgeError } from './bridge-error'
 import { Icon } from './icons'
 import { SHORTCUT_LABELS } from './keymap'

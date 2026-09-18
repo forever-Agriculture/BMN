@@ -95,7 +95,7 @@ your desktop looks for applications:
 
 ```bash
 # Linux
-apps/desktop/release/linux-unpacked/ai-terminal
+apps/desktop/release/linux-unpacked/bmn
 pnpm run install:desktop -- --pin     # launcher and icons; --pin adds it to the GNOME dock
 
 # macOS
@@ -111,21 +111,23 @@ To try it without touching your real data, run the development build. It uses a 
 temporary folder:
 
 ```bash
-pnpm --filter @ai-terminal/desktop run dev
+pnpm --filter @bmn/desktop run dev
 ```
 
 ## Where data lives
 
 | What | Where |
 | --- | --- |
-| Settings, bot token | `~/.config/ai-terminal/` |
-| Database, stored files, voice models | `~/.local/share/ai-terminal/` |
-| Saved output, file staging | `~/.local/state/ai-terminal/` |
-| Control socket | `$XDG_RUNTIME_DIR/ai-terminal/control/` |
+| Settings, bot token | `~/.config/bmn/` |
+| Database, stored files, voice models | `~/.local/share/bmn/` |
+| Saved output, file staging | `~/.local/state/bmn/` |
+| Control socket | `$XDG_RUNTIME_DIR/bmn/control/` |
 
 The `XDG_*` variables are respected. Folders are created owner-only. macOS sets no
 `XDG_RUNTIME_DIR`, so the control socket goes under the per-user temporary folder instead; the
-other three folders are the same as on Linux.
+other three folders are the same as on Linux. Existing installations continue using legacy
+`ai-terminal` config, data and state folders when those already exist; BMN leaves them in place
+rather than risking an automatic move.
 
 ## Documentation
 

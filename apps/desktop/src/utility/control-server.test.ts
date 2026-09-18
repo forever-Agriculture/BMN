@@ -5,7 +5,7 @@ import { lstat, mkdir, mkdtemp, rm, stat } from 'node:fs/promises'
 import { createConnection, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { ERROR_CODES, MAX_CONTROL_FRAME_BYTES } from '@ai-terminal/protocol'
+import { ERROR_CODES, MAX_CONTROL_FRAME_BYTES } from '@bmn/protocol'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ControlAuth } from './control-auth'
 import {

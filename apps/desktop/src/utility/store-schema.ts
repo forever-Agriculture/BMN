@@ -1,4 +1,4 @@
-import { DEFAULT_WORKSPACE_ID } from '@ai-terminal/protocol'
+import { DEFAULT_WORKSPACE_ID } from '@bmn/protocol'
 
 export { DEFAULT_WORKSPACE_ID }
 

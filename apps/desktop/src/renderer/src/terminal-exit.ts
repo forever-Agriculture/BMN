@@ -5,7 +5,7 @@ import {
   type TerminalExitedMessage,
   type TerminalLifecycleInterruptedMessage,
   type TerminalUnobservedInterruptedMessage
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import { sessionProcessLabel } from './session-status'
 
 type TerminalExitFeedbackInput =

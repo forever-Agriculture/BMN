@@ -18,7 +18,7 @@ import {
   type SessionRecord,
   type WorkspaceLayoutState,
   type WorkspaceRecord
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import './styles.css'
 import { failureDetail } from './bridge-error'
 import { CommandPalette, type PaletteCommand } from './command-palette'

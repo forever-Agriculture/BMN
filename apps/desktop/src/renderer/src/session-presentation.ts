@@ -5,7 +5,7 @@ import {
   type ProgressRecord,
   type ProgressState,
   type SessionRecord
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 
 export type SessionDot = 'running' | 'needs-you' | 'exited' | 'idle'
 

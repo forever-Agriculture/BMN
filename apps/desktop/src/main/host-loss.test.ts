@@ -7,7 +7,7 @@ import {
   type ProtocolMethod,
   type SavedOutputCaptureOutcome,
   type SessionStopCause
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import { describe, expect, it, vi } from 'vitest'
 import {
   connectRendererChannel,

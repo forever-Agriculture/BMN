@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { MissingConversationBinding } from '@ai-terminal/protocol'
+import type { MissingConversationBinding } from '@bmn/protocol'
 import {
   conversationBindingPresentation,
   resumeBoundConversation

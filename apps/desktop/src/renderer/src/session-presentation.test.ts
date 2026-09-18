@@ -1,5 +1,5 @@
 // MODULE: session-presentation.test.ts - status, tags, progress staleness and needs-you navigation
-import type { AttentionRecord, ProgressRecord } from '@ai-terminal/protocol'
+import type { AttentionRecord, ProgressRecord } from '@bmn/protocol'
 import { describe, expect, it } from 'vitest'
 import {
   agentTag,

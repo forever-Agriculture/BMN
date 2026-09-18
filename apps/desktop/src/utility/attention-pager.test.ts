@@ -1,5 +1,5 @@
 // MODULE: attention-pager.test.ts - one page per request revision, only when still open and unseen after the wait, and only while the owner is away
-import type { AttentionRecord } from '@ai-terminal/protocol'
+import type { AttentionRecord } from '@bmn/protocol'
 import { describe, expect, it } from 'vitest'
 import { createAttentionPager } from './attention-pager'
 

@@ -3,10 +3,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const rootKeys = [
-  'AITERM_CONFIG_HOME',
-  'AITERM_DATA_HOME',
-  'AITERM_STATE_HOME',
-  'AITERM_RUNTIME_HOME'
+  'BMN_CONFIG_HOME',
+  'BMN_DATA_HOME',
+  'BMN_STATE_HOME',
+  'BMN_RUNTIME_HOME'
 ] as const
 
 interface DevelopmentRoot {
@@ -20,7 +20,7 @@ export function createDevelopmentRoot(
 ): DevelopmentRoot | undefined {
   if (rootKeys.every((key) => !!environment[key])) return undefined
 
-  const root = mkdtempSync(join(baseDirectory, 'aiterm-development-'))
+  const root = mkdtempSync(join(baseDirectory, 'bmn-development-'))
   let cleaned = false
   for (const key of rootKeys) {
     if (!environment[key]) environment[key] = join(root, key.toLowerCase())

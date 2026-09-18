@@ -14,7 +14,7 @@ import {
   type WorkspaceLayoutState,
   type WorkspaceRecord,
   type WorkspaceUpdateParams
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import type {
   CreateResumingRecord,
   CreateStartingRecord,

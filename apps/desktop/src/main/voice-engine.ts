@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, open, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { availableParallelism, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { VoiceLanguage, VoiceModelId } from '@ai-terminal/protocol'
+import type { VoiceLanguage, VoiceModelId } from '@bmn/protocol'
 
 export interface VoiceModel {
   id: VoiceModelId
@@ -224,7 +224,7 @@ export async function transcribeRecording(options: {
   spawnProcess?: typeof spawn | undefined
 }): Promise<string> {
   const { durationSeconds } = validateWav(options.wav)
-  const folder = await mkdtemp(join(options.temporaryRoot ?? tmpdir(), 'aiterm-voice-'))
+  const folder = await mkdtemp(join(options.temporaryRoot ?? tmpdir(), 'bmn-voice-'))
   try {
     const wavPath = join(folder, 'recording.wav')
     await writeFile(wavPath, options.wav, { mode: 0o600 })

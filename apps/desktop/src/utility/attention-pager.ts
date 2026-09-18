@@ -1,5 +1,5 @@
 // MODULE: attention-pager.ts - sends an attention request to the owner's phone only when the owner is away and it waited unseen
-import type { AttentionKind, AttentionRecord } from '@ai-terminal/protocol'
+import type { AttentionKind, AttentionRecord } from '@bmn/protocol'
 
 /** How long a request may wait for the owner in the app before it is also sent away from the desk. */
 export const PAGE_AFTER_MS: Readonly<Record<AttentionKind, number>> = Object.freeze({

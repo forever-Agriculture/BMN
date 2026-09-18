@@ -3,10 +3,10 @@
 abi <abi/4.0>,
 include <tunables/global>
 
-profile ai-terminal-electron-dev "@REPO_ROOT@/node_modules/.pnpm/electron@44.3.0*/node_modules/electron/dist/electron" flags=(unconfined) {
+profile bmn-electron-dev "@REPO_ROOT@/node_modules/.pnpm/electron@44.3.0*/node_modules/electron/dist/electron" flags=(unconfined) {
   userns,
 }
 
-profile ai-terminal-electron-packaged "@REPO_ROOT@/apps/desktop/release/linux-unpacked/ai-terminal" flags=(unconfined) {
+profile bmn-electron-packaged "@REPO_ROOT@/apps/desktop/release/linux-unpacked/bmn" flags=(unconfined) {
   userns,
 }

@@ -1,4 +1,4 @@
-import { ERROR_CODES, METHOD_REGISTRY, type ProtocolMethod } from '@ai-terminal/protocol'
+import { ERROR_CODES, METHOD_REGISTRY, type ProtocolMethod } from '@bmn/protocol'
 
 interface HostExitSource {
   onExit(listener: (error: Error) => void): () => void

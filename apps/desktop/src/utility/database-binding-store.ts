@@ -1,4 +1,4 @@
-import type { PersistedConversationBinding } from '@ai-terminal/protocol'
+import type { PersistedConversationBinding } from '@bmn/protocol'
 import type { DatabaseConnection } from './database-initialization'
 import { parseBoundBinding } from './conversation-binding'
 

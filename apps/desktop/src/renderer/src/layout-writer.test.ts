@@ -5,7 +5,7 @@ import {
   emptyWorkspaceLayout,
   type LayoutPutParams,
   type WorkspaceLayoutState
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import { createLayoutWriter, LAYOUT_CONFLICT_RETRY_LIMIT, type LayoutWriterPort } from './layout-writer'
 import { routeSessionView, selectLayoutSession, splitLayoutSession } from './workspace-layout'
 

@@ -5,11 +5,11 @@ export function assertOwnerRootsAbsent(ownerRoots, phase, exists) {
   }
 }
 
-/** Lists every file and directory under the real roots with its size and modification time. */
-export function fingerprintOwnerRoots(ownerRoots, { existsSync, readdirSync, statSync }) {
+/** Lists every file, symlink and directory under the real roots without following links. */
+export function fingerprintOwnerRoots(ownerRoots, { existsSync, lstatSync, readdirSync }) {
   const entries = []
   const visit = (path) => {
-    const stats = statSync(path)
+    const stats = lstatSync(path)
     entries.push(`${path}\t${stats.isDirectory() ? 'dir' : stats.size}\t${stats.mtimeMs}`)
     if (stats.isDirectory()) for (const name of readdirSync(path).sort()) visit(`${path}/${name}`)
   }

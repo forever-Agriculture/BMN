@@ -37,12 +37,12 @@ Commands:
 Options:
   --session ID       Target session (defaults to your own; required with owner credentials)
   --json             Print the raw result as JSON
-  --owner            Use owner.token next to the control socket instead of AITERM_TOKEN
-  --token-file PATH  Read the token from PATH instead of AITERM_TOKEN
-  --socket PATH      Control socket path (default: AITERM_CONTROL_SOCKET)
+  --owner            Use owner.token next to the control socket instead of BMN_TOKEN
+  --token-file PATH  Read the token from PATH instead of BMN_TOKEN
+  --socket PATH      Control socket path (default: BMN_CONTROL_SOCKET)
   --                 Treat every following argument as text
 
-Environment: AITERM_CONTROL_SOCKET, AITERM_TOKEN
+Environment: BMN_CONTROL_SOCKET, BMN_TOKEN
 Exit status: 0 success, 1 remote or connection error, 2 usage error`
 
 class UsageError extends Error {}
@@ -202,15 +202,15 @@ function parseArguments(argv) {
 }
 
 function readCredentials(options) {
-  const socketPath = options.socket ?? process.env.AITERM_CONTROL_SOCKET
-  if (!socketPath) throw new UsageError('no control socket: set AITERM_CONTROL_SOCKET or pass --socket')
+  const socketPath = options.socket ?? process.env.BMN_CONTROL_SOCKET ?? process.env.AITERM_CONTROL_SOCKET
+  if (!socketPath) throw new UsageError('no control socket: set BMN_CONTROL_SOCKET or pass --socket')
   if (options.owner && options['token-file'] !== undefined) {
     throw new UsageError('use either --owner or --token-file, not both')
   }
   const tokenFile = options['token-file'] ?? (options.owner ? join(dirname(socketPath), 'owner.token') : undefined)
   if (tokenFile === undefined) {
-    const token = process.env.AITERM_TOKEN
-    if (!token) throw new UsageError('no credential: set AITERM_TOKEN or pass --owner or --token-file')
+    const token = process.env.BMN_TOKEN ?? process.env.AITERM_TOKEN
+    if (!token) throw new UsageError('no credential: set BMN_TOKEN or pass --owner or --token-file')
     return { socketPath, token }
   }
   let token
@@ -515,10 +515,10 @@ async function runHook(args) {
     process.stderr.write(`bmn: hook expects one agent: ${Object.keys(HOOK_AGENTS).join('|')}\n`)
     return 0
   }
-  const socketPath = process.env.AITERM_CONTROL_SOCKET
-  const token = process.env.AITERM_TOKEN
+  const socketPath = process.env.BMN_CONTROL_SOCKET ?? process.env.AITERM_CONTROL_SOCKET
+  const token = process.env.BMN_TOKEN ?? process.env.AITERM_TOKEN
   if (!socketPath || !token || process.stdin.isTTY) return 0
-  const agentPid = interactiveAgentPid(process.env.AITERM_PROC_ROOT ?? '/proc')
+  const agentPid = interactiveAgentPid(process.env.BMN_PROC_ROOT ?? process.env.AITERM_PROC_ROOT ?? '/proc')
   if (agentPid === null) return 0
   let event
   try {

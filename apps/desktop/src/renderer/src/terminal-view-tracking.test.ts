@@ -7,7 +7,7 @@ import {
   type SavedOutputCapture,
   type SessionRecord,
   type WorkspaceLayoutState
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import { createLayoutWriter } from './layout-writer'
 import { startSavedOutputCapture } from './terminal-history'
 import { TerminalOutputFlow } from './terminal-output-flow'

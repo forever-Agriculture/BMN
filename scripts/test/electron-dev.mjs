@@ -20,10 +20,10 @@ const { temporaryRoot, value: child } = startWithTemporaryRoot(
       XDG_DATA_HOME: roots.data,
       XDG_STATE_HOME: roots.state,
       XDG_CACHE_HOME: roots.cache,
-      AITERM_CONFIG_HOME: join(roots.config, 'ai-terminal'),
-      AITERM_DATA_HOME: join(roots.data, 'ai-terminal'),
-      AITERM_STATE_HOME: join(roots.state, 'ai-terminal'),
-      AITERM_RUNTIME_HOME: join(roots.runtime, 'ai-terminal')
+      BMN_CONFIG_HOME: join(roots.config, 'bmn'),
+      BMN_DATA_HOME: join(roots.data, 'bmn'),
+      BMN_STATE_HOME: join(roots.state, 'bmn'),
+      BMN_RUNTIME_HOME: join(roots.runtime, 'bmn')
     }
   })
 )

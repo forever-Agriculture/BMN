@@ -1,5 +1,5 @@
 // MODULE: process-tracking.ts - which session processes Quit and Close must still account for
-import type { SessionProcessState, SessionStopCause } from '@ai-terminal/protocol'
+import type { SessionProcessState, SessionStopCause } from '@bmn/protocol'
 import { isMissingStopTargetError, runningTargetForRuntime, type RunningSessionTarget } from './app-lifecycle'
 
 export interface TrackedRuntime {

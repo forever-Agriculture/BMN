@@ -5,7 +5,7 @@ import {
   type SavedOutputCaptureFlushResult,
   type SavedOutputCaptureOutcome,
   type SessionProcessState
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import type { IpcMainEvent, WebContents } from 'electron'
 
 interface CaptureIpcRegistrar {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { TERMINAL_PARSER_ATOM_BYTES } from '@ai-terminal/protocol'
+import { TERMINAL_PARSER_ATOM_BYTES } from '@bmn/protocol'
 import { TerminalByteFramer } from './terminal-byte-framer'
 
 const encoder = new TextEncoder()

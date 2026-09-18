@@ -1,7 +1,7 @@
 import type {
   ExplicitConversationBinding,
   PersistedConversationBinding
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import {
   clearConversationBinding,
   insertConversationBinding,

@@ -5,7 +5,7 @@ import {
   isSessionUpdateParams,
   type LaunchTemplateRecord,
   type SessionRecord
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import {
   INITIAL_SESSION_FORM,
   applyLaunchTemplate,

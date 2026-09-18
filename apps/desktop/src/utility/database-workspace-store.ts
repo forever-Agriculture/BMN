@@ -20,7 +20,7 @@ import {
   type WorkspaceLayoutState,
   type WorkspaceRecord,
   type WorkspaceUpdateParams
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import type { DatabaseConnection } from './database-initialization'
 
 export class WorkspaceStoreError extends Error {

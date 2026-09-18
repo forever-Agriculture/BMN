@@ -7,7 +7,7 @@ import {
   type VoiceModelStatus,
   type VoiceSettings,
   type VoiceStatus
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import { failureDetail } from './bridge-error'
 import { SHORTCUT_LABELS } from './keymap'
 

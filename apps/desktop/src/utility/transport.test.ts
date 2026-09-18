@@ -6,7 +6,7 @@ import {
   isTerminalAckMessage,
   isTerminalInputMessage,
   isTerminalOutputMessage
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import { HostOutputQueue } from './transport'
 
 describe('terminal MessagePort messages', () => {

@@ -8,7 +8,7 @@ import {
   type LayoutPutParams,
   type ProtocolErrorCode,
   type WorkspaceLayoutState
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import type { IpcMainInvokeEvent, UtilityProcess } from 'electron'
 import { bridgeInvokeRegistrar } from './bridge-ipc'
 import { PtyHostClient } from './pty-host-client'

@@ -3,7 +3,7 @@ import {
   METHOD_REGISTRY,
   type BoundConversationBinding,
   type ExplicitConversationBinding
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import {
   activateBoundSession,
   loadConversationBinding,

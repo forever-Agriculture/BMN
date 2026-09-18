@@ -2,7 +2,7 @@ import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { METHOD_REGISTRY, type ProtocolMethod } from '@ai-terminal/protocol'
+import { METHOD_REGISTRY, type ProtocolMethod } from '@bmn/protocol'
 import { prepareConversationLaunch } from '../utility/conversation-binding'
 import {
   createApplicationSession,
@@ -19,7 +19,7 @@ afterEach(async () => {
 })
 
 async function executableFixture(): Promise<{ root: string; executable: string }> {
-  const root = await mkdtemp(join(tmpdir(), 'aiterm-launch-spec-test-'))
+  const root = await mkdtemp(join(tmpdir(), 'bmn-launch-spec-test-'))
   roots.add(root)
   const executable = join(root, 'codex')
   await writeFile(executable, '#!/bin/sh\n', 'utf8')
@@ -30,7 +30,7 @@ async function executableFixture(): Promise<{ root: string; executable: string }
 describe('application launch specification', () => {
   it('restores saved workspaces without creating a fresh session unless argv has --', () => {
     expect(hasExplicitApplicationLaunch(['electron', '.'])).toBe(false)
-    expect(hasExplicitApplicationLaunch(['electron', '.', '--aiterm-test-mode'])).toBe(false)
+    expect(hasExplicitApplicationLaunch(['electron', '.', '--bmn-test-mode'])).toBe(false)
     expect(hasExplicitApplicationLaunch(['electron', '.', '--', '/bin/bash'])).toBe(true)
   })
 
@@ -38,7 +38,7 @@ describe('application launch specification', () => {
     const { root, executable } = await executableFixture()
     const environment = { PATH: root, SHELL: '/bin/bash' }
     const launch = parseApplicationLaunchSpec(
-      ['electron', '.', '--self-test', '--aiterm-test-mode', '--', 'codex', 'resume', reference],
+      ['electron', '.', '--self-test', '--bmn-test-mode', '--', 'codex', 'resume', reference],
       environment,
       root
     )
@@ -108,8 +108,8 @@ describe('application launch specification', () => {
   it('uses the configured shell without leaking self-test flags when -- is absent', () => {
     expect(
       parseApplicationLaunchSpec(
-        ['electron', '.', '--self-test', '--aiterm-test-mode'],
-        { AITERM_SHELL: '/bin/zsh' },
+        ['electron', '.', '--self-test', '--bmn-test-mode'],
+        { BMN_SHELL: '/bin/zsh' },
         '/workspace'
       )
     ).toEqual({ cwd: '/workspace', executable: '/bin/zsh', argv: [] })

@@ -34,7 +34,7 @@ import type {
   WorkspaceLayoutState,
   WorkspaceRecord,
   WorkspaceUpdateParams
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 
 /**
  * The one typed failure every `aiterm:*` bridge invoke rejects with. It is a plain object, not an

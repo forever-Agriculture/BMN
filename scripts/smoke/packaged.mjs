@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, lstatSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -11,6 +11,9 @@ const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(scriptDirectory, '../..')
 const { binary: packagedBinary, resources: packagedResources } = packagedApp(repoRoot)
 const ownerRoots = [
+  join(homedir(), '.config/bmn'),
+  join(homedir(), '.local/share/bmn'),
+  join(homedir(), '.local/state/bmn'),
   join(homedir(), '.config/ai-terminal'),
   join(homedir(), '.local/share/ai-terminal'),
   join(homedir(), '.local/state/ai-terminal')
@@ -18,7 +21,7 @@ const ownerRoots = [
 
 // The owner may already use the app, so the smoke proves it leaves their real roots untouched.
 // Quit BMN first; a running copy would change these files during the smoke.
-const ownerFingerprint = () => fingerprintOwnerRoots(ownerRoots, { existsSync, readdirSync, statSync })
+const ownerFingerprint = () => fingerprintOwnerRoots(ownerRoots, { existsSync, lstatSync, readdirSync })
 
 function parseReceipt(stdout) {
   for (const line of stdout.trim().split(/\r?\n/u).reverse()) {
@@ -61,10 +64,10 @@ await withTemporaryRoot(temporaryRootContracts.packagedSmoke, async ({ roots }) 
       XDG_STATE_HOME: roots.state,
       XDG_CACHE_HOME: roots.cache,
       XDG_RUNTIME_DIR: roots.runtime,
-      AITERM_CONFIG_HOME: join(roots.config, 'ai-terminal'),
-      AITERM_DATA_HOME: join(roots.data, 'ai-terminal'),
-      AITERM_STATE_HOME: join(roots.state, 'ai-terminal'),
-      AITERM_RUNTIME_HOME: join(roots.runtime, 'ai-terminal'),
+      BMN_CONFIG_HOME: join(roots.config, 'bmn'),
+      BMN_DATA_HOME: join(roots.data, 'bmn'),
+      BMN_STATE_HOME: join(roots.state, 'bmn'),
+      BMN_RUNTIME_HOME: join(roots.runtime, 'bmn'),
       ...(waylandDisplay ? { WAYLAND_DISPLAY: waylandDisplay } : {})
     }
   })

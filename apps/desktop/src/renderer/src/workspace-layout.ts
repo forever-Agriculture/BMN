@@ -2,7 +2,7 @@ import {
   isWorkspaceLayoutState,
   type SessionRecord,
   type WorkspaceLayoutState
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import type { LayoutChange, LayoutWriter } from './layout-writer'
 
 export type SessionView = WorkspaceLayoutState['sessionView'][string]

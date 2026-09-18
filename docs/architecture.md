@@ -27,7 +27,7 @@ flowchart LR
 | Utility | node-pty terminals, the control socket, stored files, backups, Telegram | `apps/desktop/src/utility` |
 | Database worker | The single SQLite connection; every write is one transaction | `apps/desktop/src/utility/database-worker.ts` |
 
-Messages between processes are defined once in `shared/protocol` (`@ai-terminal/protocol`) and
+Messages between processes are defined once in `shared/protocol` (`@bmn/protocol`) and
 validated on arrival.
 
 ## Rules the code follows

@@ -7,7 +7,7 @@ import {
   type SessionCreateParams,
   type WorkspaceCreateParams,
   type WorkspaceUpdateParams
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import { describe, expect, it, vi } from 'vitest'
 import { initializeDatabase, type DatabaseConnection } from '../utility/database-initialization'
 import {

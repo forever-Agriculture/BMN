@@ -125,10 +125,10 @@ const exitCode = await withTemporaryRoot(temporaryRootContracts.electronSelfTest
       XDG_STATE_HOME: roots.state,
       XDG_CACHE_HOME: roots.cache,
       XDG_RUNTIME_DIR: roots.runtime,
-      AITERM_CONFIG_HOME: join(roots.config, 'ai-terminal'),
-      AITERM_DATA_HOME: join(roots.data, 'ai-terminal'),
-      AITERM_STATE_HOME: join(roots.state, 'ai-terminal'),
-      AITERM_RUNTIME_HOME: join(roots.runtime, 'ai-terminal'),
+      BMN_CONFIG_HOME: join(roots.config, 'bmn'),
+      BMN_DATA_HOME: join(roots.data, 'bmn'),
+      BMN_STATE_HOME: join(roots.state, 'bmn'),
+      BMN_RUNTIME_HOME: join(roots.runtime, 'bmn'),
       ...(waylandDisplay ? { WAYLAND_DISPLAY: waylandDisplay } : {})
     }
   })

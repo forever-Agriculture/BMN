@@ -1,5 +1,5 @@
 // MODULE: database-archive-purge.ts - deletes sessions and workspaces archived longer than the owner's chosen period
-import { DEFAULT_WORKSPACE_ID } from '@ai-terminal/protocol'
+import { DEFAULT_WORKSPACE_ID } from '@bmn/protocol'
 import { getSettings } from './database-companion-store'
 import type { DatabaseConnection } from './database-initialization'
 

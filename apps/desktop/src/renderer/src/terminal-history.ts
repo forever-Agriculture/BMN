@@ -6,7 +6,7 @@ import {
   type SavedOutputCapture,
   type SavedOutputCatalog,
   type SavedOutputSnapshot
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 
 interface BufferLine {
   translateToString(trimRight?: boolean): string

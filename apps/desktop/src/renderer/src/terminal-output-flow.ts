@@ -3,7 +3,7 @@ import {
   CONSUMER_OUTPUT_QUEUE_BYTES,
   type TerminalOutputMessage,
   type TerminalViewDisconnectReason
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 
 interface TerminalOutputActions {
   write(bytes: Uint8Array, settled: () => void): void

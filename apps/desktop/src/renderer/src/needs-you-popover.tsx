@@ -1,6 +1,6 @@
 // MODULE: needs-you-popover.tsx - unresolved requests, unread sessions and recent request history under the header count
 import { useEffect, useRef } from 'react'
-import type { AttentionRecord } from '@ai-terminal/protocol'
+import type { AttentionRecord } from '@bmn/protocol'
 import { openRequests, relativeAge } from './session-presentation'
 
 export interface SessionPlace {

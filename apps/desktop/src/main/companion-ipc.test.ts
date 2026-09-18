@@ -1,5 +1,5 @@
 // MODULE: companion-ipc.test.ts - desktop notifications skip the watched session and repeat only on a new revision
-import { DEFAULT_APP_SETTINGS, METHOD_REGISTRY, type AttentionRecord } from '@ai-terminal/protocol'
+import { DEFAULT_APP_SETTINGS, METHOD_REGISTRY, type AttentionRecord } from '@bmn/protocol'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('electron', () => ({}))

@@ -32,7 +32,7 @@ session. It uses a bot you create and own. It is off by default.
 
 ## Security
 
-- The token is stored in `~/.config/ai-terminal/telegram-bot.token` with mode `600`. It is never
+- The token is stored in `~/.config/bmn/telegram-bot.token` with mode `600`. It is never
   shown again in the interface (only a mask) and is removed from error messages.
 - Only updates from the allowed chat are processed. Without an allowed user ID, only a private chat
   is accepted; with one, only that user's messages are. Everything else is counted as rejected and

@@ -14,7 +14,7 @@ afterEach(async () => {
 })
 
 async function temporaryRoot(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'aiterm-control-auth-'))
+  const root = await mkdtemp(join(tmpdir(), 'bmn-control-auth-'))
   createdRoots.add(root)
   return root
 }

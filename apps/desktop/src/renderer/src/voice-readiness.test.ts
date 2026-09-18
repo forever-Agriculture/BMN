@@ -1,6 +1,6 @@
 // MODULE: voice-readiness.test.ts - Speak records with the chosen model, or with a downloaded one when the chosen model is missing
 import { describe, expect, it } from 'vitest'
-import type { VoiceModelId, VoiceModelStatus, VoiceStatus } from '@ai-terminal/protocol'
+import type { VoiceModelId, VoiceModelStatus, VoiceStatus } from '@bmn/protocol'
 import { voiceReadiness, type VoiceReadiness } from './voice-readiness'
 
 const status = (installed: VoiceModelId[], change: Partial<VoiceStatus> = {}, download: Partial<Record<VoiceModelId, VoiceModelStatus['download']>> = {}): VoiceStatus => ({

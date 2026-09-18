@@ -6,7 +6,7 @@ import {
   type SessionBindingClearResult,
   type SessionResumeResult,
   type TerminalActivationResult
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 
 export interface ConversationHostClient {
   request<Result>(method: ProtocolMethod, params: object): Promise<Result>

@@ -1,4 +1,4 @@
-import type { SavedOutputCatalog } from '@ai-terminal/protocol'
+import type { SavedOutputCatalog } from '@bmn/protocol'
 import type { SessionIdentity, SessionManager } from './session-manager'
 
 type SavedOutputManager = Pick<SessionManager, 'savedOutputCatalog'> &

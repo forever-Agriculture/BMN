@@ -1,4 +1,4 @@
-import type { ProtocolErrorCode } from '@ai-terminal/protocol'
+import type { ProtocolErrorCode } from '@bmn/protocol'
 import type { BridgeError } from '../../preload/bridge'
 
 /** Structural guard for the typed rejection every `window.aiTerminal` invoke produces. */

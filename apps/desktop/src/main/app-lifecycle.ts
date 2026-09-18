@@ -3,7 +3,7 @@ import {
   type SavedOutputCaptureOutcome,
   type SessionProcessState,
   type SessionStopCause
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 
 export type BackgroundChoice = 'hide' | 'stop'
 

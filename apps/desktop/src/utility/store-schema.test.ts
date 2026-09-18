@@ -54,7 +54,7 @@ describe('owned database schema', () => {
   })
 
   it('migrates a populated Epic 1 database without losing rows and is idempotent', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'aiterm-v3-migration-test-'))
+    const root = await mkdtemp(join(tmpdir(), 'bmn-v3-migration-test-'))
     createdRoots.add(root)
     const database = new BetterSqlite3(join(root, 'state.sqlite3'))
     const firstAppliedAt = '2026-09-12T10:00:00.000Z'

@@ -43,7 +43,7 @@ interface Fixture {
 }
 
 async function fixture(overrides: Partial<ArtifactFileStoreOptions> = {}): Promise<Fixture> {
-  const base = await mkdtemp(join(tmpdir(), 'aiterm-artifact-files-test-'))
+  const base = await mkdtemp(join(tmpdir(), 'bmn-artifact-files-test-'))
   createdRoots.add(base)
   const root = join(base, 'data', 'artifacts')
   const stagingRoot = join(base, 'state', 'artifact-staging')

@@ -1,6 +1,6 @@
 // MODULE: workspace-tree.test.ts - sidebar tree semantics
 import { describe, expect, it } from 'vitest'
-import { emptyWorkspaceLayout, type SessionRecord, type WorkspaceRecord } from '@ai-terminal/protocol'
+import { emptyWorkspaceLayout, type SessionRecord, type WorkspaceRecord } from '@bmn/protocol'
 import { selectLayoutSession, splitLayoutSession } from './workspace-layout'
 import {
   adjacentPositionUpdates,

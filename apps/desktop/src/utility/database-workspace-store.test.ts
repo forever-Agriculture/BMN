@@ -4,7 +4,7 @@ import {
   emptyWorkspaceLayout,
   type PersistedConversationBinding,
   type WorkspaceLayoutState
-} from '@ai-terminal/protocol'
+} from '@bmn/protocol'
 import { describe, expect, it } from 'vitest'
 import { captureRelevantLaunchEnvironment } from './conversation-binding'
 import { insertConversationBinding } from './database-binding-store'
