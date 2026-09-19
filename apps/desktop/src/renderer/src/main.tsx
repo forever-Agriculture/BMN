@@ -70,6 +70,7 @@ import { createSpaceHold } from './space-hold'
 import { applyChromeTheme, COLOR_MODE_PRESENTATION, IDENTITY_PRESENTATION } from './theme'
 import { startVoiceRecording, VOICE_MAX_SECONDS, VOICE_SAMPLE_RATE, type VoiceRecording } from './voice-recorder'
 import { modelName, voiceReadiness } from './voice-readiness'
+import { VOICE_SUGGESTION_ROWS, suggestVocabulary } from './voice-suggestions'
 import {
   applySessionView,
   closeLayoutPane,
@@ -591,11 +592,19 @@ function App(): React.JSX.Element {
         brief('The recording was too short.')
         return
       }
-      const { text } = await window.aiTerminal.transcribeVoice({ wav, model: current.model, language: current.language })
+      const { text } = await window.aiTerminal.transcribeVoice({
+        wav,
+        model: current.model,
+        language: current.language,
+        vocabulary: current.vocabulary
+      })
       const controller = controllers.current.get(current.sessionId)
+      const incarnationId = liveRef.current.get(current.sessionId)?.incarnationId
       if (!text) brief('No speech was recognized.')
-      else if (!controller || !liveRef.current.has(current.sessionId)) brief('The session stopped before the transcript was ready.')
-      else {
+      else if (!controller || incarnationId === undefined) brief('The session stopped before the transcript was ready.')
+      else if (incarnationId !== current.incarnationId) {
+        brief('The session restarted before the transcript was ready; nothing was pasted.')
+      } else {
         controller.paste(text)
         controller.focus()
         announce('Transcript pasted. Press Enter to send it.')
@@ -610,11 +619,18 @@ function App(): React.JSX.Element {
   finishVoiceRef.current = finishVoice
 
   const beginVoice = async (sessionId: string, trigger: VoiceCapture['trigger']): Promise<void> => {
-    const { language } = settings.voice
+    // Snapshot before any asynchronous work: later edits and restarts apply to the next recording, never this one.
+    const { language, model: chosenModel, vocabulary } = settingsRef.current.voice
+    const incarnationId = liveRef.current.get(sessionId)?.incarnationId
+    if (incarnationId === undefined) {
+      brief('Start the session before dictating into it.')
+      return
+    }
     voiceStopRequested.current = false
-    updateVoice({ sessionId, phase: 'starting', startedAt: Date.now(), model: settings.voice.model, language, trigger })
+    const capture = { sessionId, incarnationId, startedAt: Date.now(), model: chosenModel, language, vocabulary, trigger }
+    updateVoice({ ...capture, phase: 'starting' })
     try {
-      const readiness = voiceReadiness(await window.aiTerminal.getVoiceStatus(), settings.voice.model)
+      const readiness = voiceReadiness(await window.aiTerminal.getVoiceStatus(), chosenModel)
       if (readiness.kind === 'engine-missing') {
         updateVoice(null)
         brief('The voice engine is not built. Run pnpm run voice:build, then rebuild the app.')
@@ -636,12 +652,13 @@ function App(): React.JSX.Element {
       }
       const model = readiness.model.id
       if (readiness.replacesChoice) {
-        void window.aiTerminal.putSettings('voice', { ...settings.voice, model }).then(setSettings).catch(fail('Voice model was not saved'))
+        // Built from the latest settings, so the fallback never restores an older language or vocabulary.
+        void window.aiTerminal.putSettings('voice', { ...settingsRef.current.voice, model }).then(setSettings).catch(fail('Voice model was not saved'))
       }
       voiceRecording.current = await startVoiceRecording()
-      updateVoice({ sessionId, phase: 'recording', startedAt: Date.now(), model, language, trigger })
+      updateVoice({ ...capture, phase: 'recording', startedAt: Date.now(), model })
       const howToStop = trigger === 'hold' ? 'Release Space to stop.' : 'Press Speak again to stop.'
-      announce(model === settings.voice.model
+      announce(model === chosenModel
         ? `Listening. ${howToStop}`
         : `Listening with ${modelName(readiness.model)}, the downloaded model. ${howToStop}`)
       voiceTimer.current = setTimeout(() => void finishVoiceRef.current(), VOICE_MAX_SECONDS * 1000)
@@ -674,6 +691,28 @@ function App(): React.JSX.Element {
   }
   const beginVoiceRef = useRef(beginVoice)
   beginVoiceRef.current = beginVoice
+
+  /** Candidate words for Preferences → Voice, read on demand from the selected live session only. */
+  const suggestVoiceVocabulary = (): { ok: true; words: string[] } | { ok: false; reason: string } => {
+    const sessionId = selectedSessionId
+    const controller = sessionId ? controllers.current.get(sessionId) : undefined
+    const startup = sessionId ? liveRef.current.get(sessionId) : undefined
+    const record = sessionsRef.current.find((session) => session.sessionId === sessionId)
+    if (!controller || !startup || !record) {
+      return { ok: false, reason: 'Select a running session first; suggestions come from its name and recent output.' }
+    }
+    const workspace = workspaces.find((item) => item.workspaceId === record.workspaceId)
+    return {
+      ok: true,
+      words: suggestVocabulary({
+        workspaceName: workspace?.name ?? '',
+        sessionName: record.name,
+        cwd: startup.cwd,
+        lines: controller.recentText(VOICE_SUGGESTION_ROWS),
+        approved: settingsRef.current.voice.vocabulary
+      })
+    }
+  }
 
   useEffect(() => () => {
     clearTimeout(voiceTimer.current)
@@ -1560,7 +1599,7 @@ function App(): React.JSX.Element {
         <FileReferenceDialog request={dialog.request} onClose={() => setDialog(null)} />
       ) : null}
       {dialog?.kind === 'preferences' ? (
-        <PreferencesDialog settings={settings} onSettings={setSettings} onClose={() => setDialog(null)} />
+        <PreferencesDialog settings={settings} onSettings={setSettings} onClose={() => setDialog(null)} suggestVocabulary={suggestVoiceVocabulary} />
       ) : null}
       {dialog?.kind === 'new-workspace' ? (
         <WorkspaceDialog mode="create" initialName="" onClose={() => setDialog(null)}

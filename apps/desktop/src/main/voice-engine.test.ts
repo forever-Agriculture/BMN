@@ -15,6 +15,7 @@ import {
   validateWav,
   voiceModel,
   whisperArguments,
+  redactVocabulary,
   type VoiceModel
 } from './voice-engine'
 
@@ -84,6 +85,30 @@ describe('whisper-cli invocation', () => {
     expect(whisperArguments({ modelPath: '/m.bin', wavPath: '/r.wav', language: 'uk', threads: 6, durationSeconds: 45 })).toEqual([
       '-m', '/m.bin', '-f', '/r.wav', '-l', 'uk', '-t', '6', '-bs', '1', '-bo', '1', '-nt', '-np'
     ])
+  })
+
+  it('passes the approved vocabulary as one --prompt value and nothing when the list is empty', () => {
+    const base = { modelPath: '/m.bin', wavPath: '/r.wav', language: 'en' as const, threads: 6, durationSeconds: 45 }
+    const without = whisperArguments(base)
+    expect(whisperArguments({ ...base, vocabulary: [] })).toEqual(without)
+    expect(without).not.toContain('--prompt')
+    const args = whisperArguments({ ...base, vocabulary: ['BMN', 'dev-auto', 'Олександр'] })
+    expect(args.slice(0, without.length)).toEqual(without)
+    expect(args.slice(without.length)).toEqual(['--prompt', 'BMN, dev-auto, Олександр'])
+    expect(args).not.toContain('--carry-initial-prompt')
+  })
+
+  it('blanks the vocabulary out of a surfaced engine error', async () => {
+    const echoing = await fakeBinary('echo "bad prompt: $*" >&2; exit 2')
+    const vocabulary = ['SecretProject', 'dev-auto']
+    const wav = encodeWav(new Float32Array(16_000), 16_000)
+    const failure = await transcribeRecording({ binary: echoing, modelPath: '/m.bin', language: 'en', wav, vocabulary, temporaryRoot: folder })
+      .then(() => 'resolved', (error: Error) => error.message)
+    expect(failure).toMatch(/^Voice engine failed \(exit 2\): bad prompt:/)
+    expect(failure).toContain('[vocabulary]')
+    expect(failure).not.toContain('SecretProject')
+    expect(failure).not.toContain('dev-auto')
+    expect(redactVocabulary('plain', [])).toBe('plain')
   })
 
   it('sizes the audio context to a short recording so the encoder skips the silent rest of its 30-second window', () => {

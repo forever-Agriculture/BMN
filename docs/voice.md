@@ -42,6 +42,24 @@ as your choice.
 Languages: Detect automatically, English, Ukrainian, Russian, Polish, German, French, Spanish,
 Italian and Portuguese. Choosing your language skips detection and is slightly faster.
 
+## Vocabulary
+
+Whisper often mishears project names and identifiers. **Preferences → Voice → Vocabulary** holds
+words it should expect: press **Suggest from current session** to see names from the session you
+are working in (its workspace and session names, its directory, and file names and identifiers in
+its last 120 terminal rows), edit a suggestion if needed and approve it, or type a word under
+**Add word**. Remove a word at any time. Nothing is stored until you approve it.
+
+On every recording the approved words are joined with `, ` and passed to `whisper-cli` as its
+initial prompt (`--prompt`), exactly as the panel's "Sent to Whisper" line shows. This is a hint,
+not a rule: Whisper may still miss a word, and the benefit depends on your voice and microphone.
+Edits apply to the next recording. The list holds at most 30 words and 400 characters in total,
+which keeps the prompt inside Whisper's 224-token prompt window for identifier-like text in Latin
+and Cyrillic script; the panel refuses further words instead of cutting the list.
+
+The approved words are visible to local process inspection (for example `ps`) while `whisper-cli`
+runs. They never appear in BMN's logs or error messages.
+
 ## Speed
 
 Whisper normally encodes a fixed 30-second window, however short the recording. BMN passes

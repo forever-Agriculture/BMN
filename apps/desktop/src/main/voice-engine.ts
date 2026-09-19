@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, open, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { availableParallelism, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { VoiceLanguage, VoiceModelId } from '@bmn/protocol'
+import { vocabularyPrompt, type VoiceLanguage, type VoiceModelId } from '@bmn/protocol'
 
 export interface VoiceModel {
   id: VoiceModelId
@@ -141,10 +141,14 @@ export function whisperArguments(options: {
   language: VoiceLanguage
   durationSeconds: number
   threads?: number
+  /** Approved vocabulary; an empty list leaves the arguments exactly as without one. */
+  vocabulary?: readonly string[] | undefined
 }): string[] {
   const threads = options.threads ?? Math.max(1, Math.min(8, Math.floor(availableParallelism() / 2)))
   const audioContext = audioContextFrames(options.durationSeconds)
+  const prompt = vocabularyPrompt(options.vocabulary ?? [])
   // Greedy decoding (-bs 1 -bo 1) keeps dictation fast; -nt -np print only the transcript on stdout.
+  // The prompt is one argv value: whisper reads it as the text preceding the recording, never as a rule.
   return [
     '-m', options.modelPath,
     '-f', options.wavPath,
@@ -154,8 +158,17 @@ export function whisperArguments(options: {
     '-bo', '1',
     '-nt',
     '-np',
-    ...(audioContext === null ? [] : ['-ac', String(audioContext)])
+    ...(audioContext === null ? [] : ['-ac', String(audioContext)]),
+    ...(prompt.length === 0 ? [] : ['--prompt', prompt])
   ]
+}
+
+/** Engine output shown to the owner must not echo the vocabulary, so the prompt and each word are blanked. */
+export function redactVocabulary(text: string, vocabulary: readonly string[]): string {
+  if (vocabulary.length === 0) return text
+  let redacted = text.split(vocabularyPrompt(vocabulary)).join('[vocabulary]')
+  for (const word of vocabulary) redacted = redacted.split(word).join('[vocabulary]')
+  return redacted
 }
 
 /** Joins whisper-cli's lines and drops non-speech markers such as [BLANK_AUDIO] or (silence). */
@@ -171,6 +184,8 @@ export interface WhisperRun {
   args: string[]
   timeoutMs?: number | undefined
   spawnProcess?: typeof spawn | undefined
+  /** Words that must not appear in a surfaced error line. */
+  vocabulary?: readonly string[] | undefined
 }
 
 export function runWhisper(run: WhisperRun): Promise<string> {
@@ -206,7 +221,7 @@ export function runWhisper(run: WhisperRun): Promise<string> {
     child.once('close', (code, signal) => {
       if (code === 0) finish(null, transcriptFromOutput(stdout))
       else {
-        const detail = stderr.trim().split('\n').at(-1) ?? ''
+        const detail = redactVocabulary(stderr.trim().split('\n').at(-1) ?? '', run.vocabulary ?? [])
         finish(new VoiceError(`Voice engine failed (${signal ?? `exit ${code}`})${detail ? `: ${detail}` : ''}`))
       }
     })
@@ -219,6 +234,8 @@ export async function transcribeRecording(options: {
   modelPath: string
   language: VoiceLanguage
   wav: Uint8Array
+  /** Already validated by the caller's boundary; joined with `, ` as the initial prompt. */
+  vocabulary?: readonly string[] | undefined
   temporaryRoot?: string
   timeoutMs?: number | undefined
   spawnProcess?: typeof spawn | undefined
@@ -230,9 +247,16 @@ export async function transcribeRecording(options: {
     await writeFile(wavPath, options.wav, { mode: 0o600 })
     return await runWhisper({
       binary: options.binary,
-      args: whisperArguments({ modelPath: options.modelPath, wavPath, language: options.language, durationSeconds }),
+      args: whisperArguments({
+        modelPath: options.modelPath,
+        wavPath,
+        language: options.language,
+        durationSeconds,
+        vocabulary: options.vocabulary
+      }),
       timeoutMs: options.timeoutMs,
-      spawnProcess: options.spawnProcess
+      spawnProcess: options.spawnProcess,
+      vocabulary: options.vocabulary
     })
   } finally {
     await rm(folder, { recursive: true, force: true })

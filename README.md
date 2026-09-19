@@ -39,7 +39,8 @@ Everything runs on your computer. There is no account, cloud backend or telemetr
   header count and `Ctrl+Shift+U` take you to the next one.
 - **Local voice dictation.** Hold Space in any terminal to talk; release to paste the text into
   the session, without pressing Enter. Transcription runs on your CPU with
-  [whisper.cpp](https://github.com/ggml-org/whisper.cpp). No audio leaves the computer. See
+  [whisper.cpp](https://github.com/ggml-org/whisper.cpp). No audio leaves the computer. Approve
+  suggested project names and identifiers once, and Whisper gets them as a hint. See
   [docs/voice.md](docs/voice.md).
 - **Optional Telegram.** Connect your own bot to get a message when a session needs you, and reply
   to that message to answer the session. See [docs/telegram.md](docs/telegram.md).

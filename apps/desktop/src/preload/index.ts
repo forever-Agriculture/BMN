@@ -518,7 +518,17 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   chooseVoiceModelFolder(): Promise<{ path: string } | null> {
     return invokeBridge('aiterm:voice:choose-folder', {})
   },
-  transcribeVoice(request: { wav: Uint8Array; model: VoiceModelId; language: VoiceLanguage }): Promise<{ text: string }> {
-    return invokeBridge('aiterm:voice:transcribe', { wav: request.wav, model: request.model, language: request.language })
+  transcribeVoice(request: {
+    wav: Uint8Array
+    model: VoiceModelId
+    language: VoiceLanguage
+    vocabulary: string[]
+  }): Promise<{ text: string }> {
+    return invokeBridge('aiterm:voice:transcribe', {
+      wav: request.wav,
+      model: request.model,
+      language: request.language,
+      vocabulary: request.vocabulary
+    })
   }
 })

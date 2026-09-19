@@ -15,6 +15,7 @@ import type {
 import { failureDetail, isBridgeError } from './bridge-error'
 import { createFileReferenceLinkProvider } from './file-reference-links'
 import { openReferenceFromPane, runFileReferenceIntegration } from './file-reference-self-test'
+import { runVoiceIntegration } from './voice-self-test'
 import { Icon } from './icons'
 import { SHORTCUT_LABELS } from './keymap'
 import type { ProgressPresentation, SessionAttention } from './session-presentation'
@@ -34,9 +35,11 @@ type ApplicationRendererStartup = Parameters<Parameters<Window['aiTerminal']['on
 export type SuccessfulStartup = Extract<ApplicationRendererStartup, { ok: true }>
 export type LiveStartup = SuccessfulStartup['liveSessions'][number]
 
-/** One dictation in flight; the model and language are fixed when recording starts. */
-export interface VoiceCapture extends Pick<VoiceSettings, 'model' | 'language'> {
+/** One dictation in flight; the model, language, vocabulary and target incarnation are fixed when recording starts. */
+export interface VoiceCapture extends Pick<VoiceSettings, 'model' | 'language' | 'vocabulary'> {
   sessionId: string
+  /** The live process the transcript may be pasted into; a restarted session gets nothing. */
+  incarnationId: string
   phase: 'starting' | 'recording' | 'transcribing'
   startedAt: number
   /** `hold` records while Space is held and stops on release; `toggle` stops on the next Speak press. */
@@ -57,6 +60,8 @@ export interface TerminalController {
   selectAll(): void
   openSearch(): void
   focus(): void
+  /** The last rows of the visible buffer as logical lines, oldest first; rows xterm wrapped are joined. Reads only. */
+  recentText(maxRows: number): string[]
 }
 
 export function SessionTerminal(props: {
@@ -287,7 +292,21 @@ export function SessionTerminal(props: {
         setSearchOpen(true)
         requestAnimationFrame(() => searchInput.current?.select())
       },
-      focus: () => terminal.focus()
+      focus: () => terminal.focus(),
+      recentText: (maxRows) => {
+        const buffer = terminal.buffer.active
+        const first = Math.max(0, buffer.length - maxRows)
+        const lines: string[] = []
+        for (let index = first; index < buffer.length; index += 1) {
+          const line = buffer.getLine(index)
+          if (!line) continue
+          const continued = buffer.getLine(index + 1)?.isWrapped === true
+          const text = line.translateToString(!continued)
+          if (line.isWrapped && lines.length > 0) lines[lines.length - 1] += text
+          else lines.push(text)
+        }
+        return lines.map((text) => text.trimEnd())
+      }
     }
     props.register(props.startup.sessionId, controller)
     const removeTestHook = installTerminalTestHook({
@@ -694,6 +713,15 @@ export function SessionTerminal(props: {
             ? undefined
             : next.layout
         })
+        // Last, because it stops and restarts the destination session and moves the tree selection.
+        const voiceFlow = await runVoiceIntegration({
+          sessionId: props.startup.sessionId,
+          workspaceId: props.startup.workspaceId,
+          terminal,
+          section: section.current!,
+          destination
+        })
+        console.warn('[BMN] renderer behavioural integration: voice complete')
         console.warn('[BMN] renderer behavioural integration: complete')
         return {
           workspaceCount: workspaces.length,
@@ -726,6 +754,7 @@ export function SessionTerminal(props: {
           hiddenPaneSize: { shown: shownSize, hidden: hiddenSize },
           handoffFlow,
           fileReferenceFlow,
+          voiceFlow,
           attentionTriage: {
             responseTitles,
             responseTitlesAfterUpdate: updatedGroups.responses,

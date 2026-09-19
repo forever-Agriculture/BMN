@@ -1,4 +1,5 @@
 import type { FileReferenceFlowProbe } from './file-reference-probe'
+import type { VoiceFlowProbe } from './voice-probe'
 
 export interface TerminalTestSnapshot {
   bufferLines: string[]
@@ -77,6 +78,7 @@ export interface TerminalIntegrationProbe {
     discardedDraftHidden: boolean
   }
   fileReferenceFlow: FileReferenceFlowProbe
+  voiceFlow: VoiceFlowProbe
 }
 
 export interface TerminalTestHook {

@@ -47,6 +47,8 @@ export function PreferencesDialog(props: {
   settings: AppSettings
   onSettings(next: AppSettings): void
   onClose(): void
+  /** Candidate dictation words from the selected live session, or why there are none. */
+  suggestVocabulary(): { ok: true; words: string[] } | { ok: false; reason: string }
 }): React.JSX.Element {
   const onSettings = useRef(props.onSettings)
   onSettings.current = props.onSettings
@@ -443,7 +445,7 @@ export function PreferencesDialog(props: {
         )}
       </section>
 
-      <VoicePreferences settings={props.settings.voice} onSettings={(next) => onSettings.current(next)} />
+      <VoicePreferences settings={props.settings.voice} onSettings={(next) => onSettings.current(next)} suggest={props.suggestVocabulary} />
 
       <section className="preferences-section">
         <h3>Telegram</h3>

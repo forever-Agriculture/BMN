@@ -91,8 +91,23 @@ describe('voice IPC', () => {
       binary: join(folder, 'whisper-cli'),
       modelPath: join(folder, 'models', 'ggml-base.bin'),
       language: 'uk',
-      wav
+      wav,
+      vocabulary: []
     }))
+  })
+
+  it('re-validates the vocabulary snapshot with the storage rules before it reaches the engine', async () => {
+    await installEngineAndBase()
+    const transcribe = vi.fn(async () => 'hello')
+    const handlers = install({ transcribe })
+    const handler = handlers.get('aiterm:voice:transcribe')!
+    await expect(handler(allowed, { model: 'base', language: 'en', wav, vocabulary: [' BMN ', 'dev-auto'] })).resolves.toEqual({ text: 'hello' })
+    expect(transcribe).toHaveBeenLastCalledWith(expect.objectContaining({ vocabulary: ['BMN', 'dev-auto'] }))
+    for (const vocabulary of [['a,b'], ['BMN', 'bmn'], 'BMN', [1], Array.from({ length: 31 }, (_, index) => `w${index}`)]) {
+      await expect(handler(allowed, { model: 'base', language: 'en', wav, vocabulary }))
+        .rejects.toMatchObject({ code: ERROR_CODES.invalidArgument })
+    }
+    expect(transcribe).toHaveBeenCalledTimes(1)
   })
 
   it('uses the chosen model folder and refuses to download or transcribe while it is missing', async () => {

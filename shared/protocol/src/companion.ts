@@ -157,6 +157,8 @@ export interface VoiceSettings {
   modelFolder: string | null
   /** Holding Space in a terminal records until release; a quick tap still types a space. */
   holdSpaceToTalk: boolean
+  /** Owner-approved words passed to Whisper as its initial prompt; empty keeps dictation unchanged. */
+  vocabulary: string[]
 }
 
 export interface VoiceModelStatus {
@@ -202,7 +204,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = Object.freeze({
     notifyOn: 'attention',
     autoSubmitReplies: false
   }),
-  voice: Object.freeze({ model: 'base', language: 'auto', modelFolder: null, holdSpaceToTalk: true }),
+  voice: Object.freeze({ model: 'base', language: 'auto', modelFolder: null, holdSpaceToTalk: true, vocabulary: Object.freeze([]) as unknown as string[] }),
   archive: Object.freeze({ deleteAfterDays: null })
 }) as AppSettings
 

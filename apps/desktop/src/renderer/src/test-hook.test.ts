@@ -121,6 +121,20 @@ describe('renderer acceptance hook', () => {
         attentionResponsesPreserved: true,
         discardedDraftHidden: true
       },
+      voiceFlow: {
+        suggested: ['SessionManager'],
+        editedApproved: 'pty-host',
+        addWordRejected: { message: 'commas', inputPreserved: true, listUnchanged: true },
+        duplicateRejected: { message: 'already', candidateKept: true },
+        approvedAfterRemove: ['SessionManager', 'BMN'],
+        promptShown: 'SessionManager, BMN',
+        persistedInSettings: true,
+        fallback: { modelChosenBefore: 'small', modelAfter: 'base', vocabularyKept: true },
+        recording: { pastedOnce: true, commandNotRun: true, announced: 'Transcript pasted' },
+        editDuringRecording: { savedWhileRecording: true, secondPastedOnce: true },
+        restarted: { notice: 'restarted', pastedIntoNewIncarnation: false },
+        noLiveSessionMessage: 'Select a running session first'
+      },
       fileReferenceFlow: {
         launchDirectory: '/work',
         palette: {

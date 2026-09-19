@@ -103,6 +103,29 @@ const receiptContract = [
       receipt.fileReferenceFlow.terminalUnchanged === true &&
       receipt.fileReferenceFlow.attentionUnchanged === true
   ],
+  [
+    'voiceFlow',
+    (receipt) =>
+      receipt.voiceFlow?.suggested?.includes('SessionManager') &&
+      receipt.voiceFlow.editedApproved === 'pty-host' &&
+      receipt.voiceFlow.addWordRejected?.inputPreserved === true &&
+      receipt.voiceFlow.addWordRejected.listUnchanged === true &&
+      receipt.voiceFlow.duplicateRejected?.candidateKept === true &&
+      JSON.stringify(receipt.voiceFlow.approvedAfterRemove) === JSON.stringify(['SessionManager', 'BMN']) &&
+      receipt.voiceFlow.promptShown === 'SessionManager, BMN' &&
+      receipt.voiceFlow.persistedInSettings === true &&
+      receipt.voiceFlow.recording?.pastedOnce === true &&
+      receipt.voiceFlow.recording.commandNotRun === true &&
+      receipt.voiceFlow.editDuringRecording?.savedWhileRecording === true &&
+      receipt.voiceFlow.restarted?.pastedIntoNewIncarnation === false &&
+      receipt.voiceFlow.restarted.notice.includes('nothing was pasted') &&
+      receipt.voiceFlow.transcriptions?.length === 3 &&
+      JSON.stringify(receipt.voiceFlow.transcriptions[0].vocabulary) === JSON.stringify(['SessionManager', 'BMN']) &&
+      receipt.voiceFlow.transcriptions[0].args.at(-2) === '--prompt' &&
+      receipt.voiceFlow.transcriptions[0].args.at(-1) === 'SessionManager, BMN' &&
+      JSON.stringify(receipt.voiceFlow.transcriptions[1].vocabulary) === JSON.stringify(['SessionManager', 'BMN', 'Changed']) &&
+      receipt.voiceFlow.persistedAfterRestart === true
+  ],
   ['launchBackgroundChoiceRecorded', (receipt) => receipt.launchBackgroundChoiceRecorded === 'hide'],
   [
     'registeredInvokeChannels',

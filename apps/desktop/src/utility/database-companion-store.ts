@@ -8,6 +8,7 @@ import {
   TERMINAL_FONT_SIZE_RANGE,
   VOICE_LANGUAGES,
   VOICE_MODEL_IDS,
+  validateVocabulary,
   type AppearanceSettings,
   type AppSettings,
   type ArchiveDeleteAfterDays,
@@ -683,11 +684,15 @@ export function validateSettingsSection(section: string, value: unknown): AppSet
       // Sections saved before hold to talk existed keep it on, like a fresh install.
       const holdSpaceToTalk = candidate.holdSpaceToTalk ?? DEFAULT_APP_SETTINGS.voice.holdSpaceToTalk
       if (typeof holdSpaceToTalk !== 'boolean') invalid('Hold Space to talk must be on or off')
+      // Sections saved before the vocabulary existed have none; the storage rules are the shared ones.
+      const vocabulary = validateVocabulary(candidate.vocabulary ?? [])
+      if (!vocabulary.ok) invalid(vocabulary.reason)
       return {
         model: candidate.model as VoiceModelId,
         language: candidate.language as VoiceLanguage,
         modelFolder: folder === null ? null : normalize(folder),
-        holdSpaceToTalk
+        holdSpaceToTalk,
+        vocabulary: vocabulary.words
       }
     }
     case 'archive':

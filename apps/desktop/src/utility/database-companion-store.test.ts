@@ -254,12 +254,12 @@ describe('companion store', () => {
   })
 
   it('validates voice settings', () => {
-    expect(getSettings(database).voice).toEqual({ model: 'base', language: 'auto', modelFolder: null, holdSpaceToTalk: true })
+    expect(getSettings(database).voice).toEqual({ model: 'base', language: 'auto', modelFolder: null, holdSpaceToTalk: true, vocabulary: [] })
     putSettingsSection(database, 'voice', { model: 'small', language: 'uk' }, now)
-    expect(getSettings(database).voice).toEqual({ model: 'small', language: 'uk', modelFolder: null, holdSpaceToTalk: true })
+    expect(getSettings(database).voice).toEqual({ model: 'small', language: 'uk', modelFolder: null, holdSpaceToTalk: true, vocabulary: [] })
     expect(() => putSettingsSection(database, 'voice', { model: 'large', language: 'uk' }, now)).toThrow(/Base or Small/)
     expect(() => putSettingsSection(database, 'voice', { model: 'base', language: 'klingon' }, now)).toThrow(/not supported/)
-    expect(getSettings(database).voice).toEqual({ model: 'small', language: 'uk', modelFolder: null, holdSpaceToTalk: true })
+    expect(getSettings(database).voice).toEqual({ model: 'small', language: 'uk', modelFolder: null, holdSpaceToTalk: true, vocabulary: [] })
   })
 
   it('remembers hold Space to talk and keeps it on for sections saved before it existed', () => {
@@ -271,9 +271,36 @@ describe('companion store', () => {
     expect(getSettings(database).voice.holdSpaceToTalk).toBe(true)
   })
 
+  it('stores the voice vocabulary under the shared rules and keeps legacy sections empty', () => {
+    putSettingsSection(database, 'voice', { model: 'base', language: 'auto', modelFolder: null, holdSpaceToTalk: true }, now)
+    expect(getSettings(database).voice.vocabulary).toEqual([])
+    putSettingsSection(database, 'voice', {
+      model: 'base', language: 'uk', modelFolder: null, holdSpaceToTalk: true, vocabulary: [' BMN ', 'dev-auto', 'Олександр']
+    }, now)
+    expect(getSettings(database).voice).toEqual({
+      model: 'base', language: 'uk', modelFolder: null, holdSpaceToTalk: true, vocabulary: ['BMN', 'dev-auto', 'Олександр']
+    })
+    const saved = getSettings(database).voice
+    for (const [vocabulary, reason] of [
+      [['BMN', 'bmn'], /already in the list/],
+      [['a,b'], /commas/],
+      [['x'.repeat(41)], /at most 40 characters/],
+      [Array.from({ length: 31 }, (_, index) => `word${index}`), /at most 30 words/],
+      [Array.from({ length: 30 }, (_, index) => `identifier-${index}-xxxxxx`), /400 characters/],
+      [['ok', 7], /list of words/],
+      ['BMN', /list of words/]
+    ] as Array<[unknown, RegExp]>) {
+      expect(() => putSettingsSection(database, 'voice', { ...saved, vocabulary }, now)).toThrow(reason)
+    }
+    expect(getSettings(database).voice).toEqual(saved)
+    // Saving another field keeps the vocabulary only when the whole section carries it.
+    putSettingsSection(database, 'voice', { ...saved, language: 'en' }, now)
+    expect(getSettings(database).voice.vocabulary).toEqual(['BMN', 'dev-auto', 'Олександр'])
+  })
+
   it('keeps the voice model folder only as a normalized absolute path', () => {
     putSettingsSection(database, 'voice', { model: 'base', language: 'en', modelFolder: '/media/disk/models//whisper/' }, now)
-    expect(getSettings(database).voice).toEqual({ model: 'base', language: 'en', modelFolder: '/media/disk/models/whisper/', holdSpaceToTalk: true })
+    expect(getSettings(database).voice).toEqual({ model: 'base', language: 'en', modelFolder: '/media/disk/models/whisper/', holdSpaceToTalk: true, vocabulary: [] })
     for (const modelFolder of ['models/whisper', '', 42, '/media/\0disk']) {
       expect(() => putSettingsSection(database, 'voice', { model: 'base', language: 'en', modelFolder }, now)).toThrow(/absolute path/)
     }

@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, realpathSync, truncateSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import {
   ERROR_CODES,
@@ -80,9 +80,11 @@ import {
   installCompanionIpcHandlers
 } from './companion-ipc'
 import type { FileReferenceFlowProbe } from '../renderer/src/file-reference-probe'
+import type { VoiceFlowProbe } from '../renderer/src/voice-probe'
 import { installFileReferenceIpcHandlers } from './file-reference-ipc'
 import { createPresenceMonitor, readMutterIdleMs } from './presence-monitor'
 import { installVoiceIpcHandlers } from './voice-ipc'
+import { VOICE_MODELS, validateWav, whisperArguments, type transcribeRecording } from './voice-engine'
 import {
   attachCreatedSession,
   createExplicitLaunchSession,
@@ -215,6 +217,29 @@ let selfTestFailureReported = false
 const selfTestShownFileReferences: string[] = []
 /** Every reference the renderer asked to read during a self-test, in order: hovering and output must add none. */
 const selfTestReadFileReferences: Array<{ sessionId: string; reference: string }> = []
+/** Self-test hook: each transcription main ran, with the argv the real engine would get; no whisper process runs. */
+interface SelfTestTranscription {
+  language: string
+  vocabulary: string[]
+  durationSeconds: number
+  args: string[]
+}
+const selfTestVoiceTranscriptions: SelfTestTranscription[] = []
+/** The self-test's stand-in engine and model live in the isolated data folder; the transcript is synthetic. */
+function selfTestVoiceFolder(): string {
+  return join(resolveApplicationRoots().data, 'voice')
+}
+const selfTestTranscribe: typeof transcribeRecording = async (options) => {
+  const { durationSeconds } = validateWav(options.wav)
+  const vocabulary = [...(options.vocabulary ?? [])]
+  selfTestVoiceTranscriptions.push({
+    language: options.language,
+    vocabulary,
+    durationSeconds,
+    args: whisperArguments({ modelPath: options.modelPath, wavPath: 'recording.wav', language: options.language, durationSeconds, threads: 1, vocabulary })
+  })
+  return `echo VOICE-PASTE-${selfTestVoiceTranscriptions.length}`
+}
 const allowedSenders = new Set<number>()
 /** The session each renderer shows as selected, so a notification skips the session the owner is looking at. */
 const selectedSessions = new Map<number, string | null>()
@@ -535,7 +560,8 @@ function installIpcHandlers(): void {
   const defaultVoiceModelFolder = join(resolveApplicationRoots().data, 'voice', 'models')
   installVoiceIpcHandlers(bridgeIpc, {
     senderIsAllowed,
-    binary: whisperBinaryPath(),
+    binary: selfTest ? join(selfTestVoiceFolder(), 'whisper-cli') : whisperBinaryPath(),
+    ...(selfTest ? { transcribe: selfTestTranscribe } : {}),
     modelFolder: async () => {
       const settings = await requireHostClient().request<AppSettings>(METHOD_REGISTRY.settingsGet, {})
       const chosen = settings.voice.modelFolder
@@ -997,6 +1023,7 @@ interface RendererIntegrationProbe {
     discardedDraftHidden: boolean
   }
   fileReferenceFlow: FileReferenceFlowProbe
+  voiceFlow: VoiceFlowProbe
 }
 
 async function stoppedPanelLabel(window: BrowserWindow, sessionId: string): Promise<string> {
@@ -1197,7 +1224,7 @@ async function waitForRendererIntegration(window: BrowserWindow): Promise<Render
   return Promise.race([
     rendererProbe,
     new Promise<never>((_resolve, reject) =>
-      setTimeout(() => reject(new Error('renderer integration main-process timeout')), 20_000))
+      setTimeout(() => reject(new Error('renderer integration main-process timeout')), 60_000))
   ])
 }
 
@@ -1678,6 +1705,12 @@ async function runSelfTest(): Promise<void> {
     )
     writeFixtureCommand(secondSession, "printf 'FILEREF %s/%s\\n' refs src/parser.ts:42:7; cd refs")
     writeFixtureInput(session, 'EXISTING-HANDOFF-PREFIX ')
+    // Dictation needs an engine and an installed model to start; both are stand-ins, and transcription is synthetic.
+    mkdirSync(join(selfTestVoiceFolder(), 'models'), { recursive: true })
+    writeFileSync(join(selfTestVoiceFolder(), 'whisper-cli'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    writeFileSync(join(selfTestVoiceFolder(), 'models', VOICE_MODELS[0]!.file), '')
+    // A sparse file at the pinned size counts as installed; no model bytes are written.
+    truncateSync(join(selfTestVoiceFolder(), 'models', VOICE_MODELS[0]!.file), VOICE_MODELS[0]!.bytes)
     const rendererStartup = await loadApplicationStartup(true)
     console.error('[BMN] self-test phase: renderer preload integration')
     applicationWindow = createWindow(rendererStartup, {
@@ -1842,6 +1875,50 @@ async function runSelfTest(): Promise<void> {
         reads: selfTestReadFileReferences,
         expectedFile: referencedFile
       })}`)
+    }
+    const voiceFlow = preloadProbe.voiceFlow
+    const expectedTranscriptions = [
+      voiceFlow.approvedAfterRemove,
+      [...voiceFlow.approvedAfterRemove, 'Changed'],
+      [...voiceFlow.approvedAfterRemove, 'Changed']
+    ]
+    if (
+      !voiceFlow.suggested.includes('SessionManager') ||
+      !voiceFlow.suggested.includes('pty_host') ||
+      !voiceFlow.suggested.includes('Personal') ||
+      !voiceFlow.suggested.includes('parser.ts') ||
+      voiceFlow.suggested.some((word) => /^\d/u.test(word)) ||
+      voiceFlow.editedApproved !== 'pty-host' ||
+      !voiceFlow.addWordRejected.message.includes('commas') ||
+      !voiceFlow.addWordRejected.inputPreserved ||
+      !voiceFlow.addWordRejected.listUnchanged ||
+      !voiceFlow.duplicateRejected.message.includes('already in the list') ||
+      !voiceFlow.duplicateRejected.candidateKept ||
+      JSON.stringify(voiceFlow.approvedAfterRemove) !== JSON.stringify(['SessionManager', 'BMN']) ||
+      voiceFlow.promptShown !== 'SessionManager, BMN' ||
+      !voiceFlow.persistedInSettings ||
+      !voiceFlow.recording.pastedOnce ||
+      !voiceFlow.recording.commandNotRun ||
+      !voiceFlow.recording.announced.includes('Transcript pasted') ||
+      voiceFlow.fallback.modelChosenBefore !== 'small' ||
+      voiceFlow.fallback.modelAfter !== 'base' ||
+      !voiceFlow.fallback.vocabularyKept ||
+      !voiceFlow.editDuringRecording.savedWhileRecording ||
+      !voiceFlow.editDuringRecording.secondPastedOnce ||
+      !voiceFlow.restarted.notice.includes('nothing was pasted') ||
+      voiceFlow.restarted.pastedIntoNewIncarnation ||
+      !voiceFlow.noLiveSessionMessage.includes('Select a running session') ||
+      selfTestVoiceTranscriptions.length !== 3 ||
+      selfTestVoiceTranscriptions.some((run, index) =>
+        JSON.stringify(run.vocabulary) !== JSON.stringify(expectedTranscriptions[index]) ||
+        run.durationSeconds < 0.3 ||
+        run.args.indexOf('--prompt') !== run.args.length - 2 ||
+        run.args.at(-1) !== run.vocabulary.join(', ') ||
+        run.args.filter((argument) => argument === '--prompt').length !== 1 ||
+        run.args.includes('--carry-initial-prompt')) ||
+      selfTestVoiceTranscriptions[0]!.args.at(-1) !== voiceFlow.promptShown
+    ) {
+      throw new Error(`the renderer did not complete the voice flow: ${JSON.stringify({ ...voiceFlow, transcriptions: selfTestVoiceTranscriptions })}`)
     }
     preloadProbe.attentionTriage.staleNoticeRejected = staleNoticeRejected
     preloadProbe.attentionTriage.revisedPromptPreserved = revisedPromptPreserved
@@ -2036,7 +2113,8 @@ async function runSelfTest(): Promise<void> {
       )
     }
     const afterRenderer = await client.request<HostHealth>(METHOD_REGISTRY.healthGet, {})
-    if (afterRenderer.liveSessions !== 3 || afterRenderer.incarnationRecords !== 4) {
+    // The voice flow stops and starts the destination session once, which adds one incarnation record.
+    if (afterRenderer.liveSessions !== 3 || afterRenderer.incarnationRecords !== 5) {
       throw new Error('renderer restart duplicated or stopped a process')
     }
     const archivedStillLive = afterRenderer.sessions.some(
@@ -2109,6 +2187,12 @@ async function runSelfTest(): Promise<void> {
       workspaceId: DEFAULT_WORKSPACE_ID
     })
     const restoredHealth = await client.request<HostHealth>(METHOD_REGISTRY.healthGet, {})
+    const restoredSettings = await client.request<AppSettings>(METHOD_REGISTRY.settingsGet, {})
+    const voicePersistedAfterRestart =
+      JSON.stringify(restoredSettings.voice.vocabulary) === JSON.stringify([...preloadProbe.voiceFlow.approvedAfterRemove, 'Changed'])
+    if (!voicePersistedAfterRestart) {
+      throw new Error(`the voice vocabulary did not survive the restart: ${JSON.stringify(restoredSettings.voice)}`)
+    }
     const restoredDrafts = await client.request<InputDraftRecord[]>(METHOD_REGISTRY.draftList, {})
     const restoredHandoff = restoredDrafts.find((draft) => draft.draftId === preloadProbe.handoffFlow.draftId)
     console.error('[BMN] self-test phase: restored state queried')
@@ -2296,6 +2380,11 @@ async function runSelfTest(): Promise<void> {
       crossWorkspaceSplit: preloadProbe.crossWorkspaceSplit,
       hiddenPaneSize: preloadProbe.hiddenPaneSize,
       handoffFlow: { ...preloadProbe.handoffFlow, persistedAfterRestart: true },
+      voiceFlow: {
+        ...preloadProbe.voiceFlow,
+        transcriptions: selfTestVoiceTranscriptions,
+        persistedAfterRestart: voicePersistedAfterRestart
+      },
       fileReferenceFlow: {
         ...preloadProbe.fileReferenceFlow,
         shownPaths: [...selfTestShownFileReferences],
@@ -2344,6 +2433,11 @@ async function runSelfTest(): Promise<void> {
 
 const selfTest = process.argv.includes('--self-test')
 const rendererTestMode = process.argv.includes('--bmn-test-mode')
+if (selfTest) {
+  // The dictation flow records from Chromium's fake microphone, so the real recorder path runs without hardware.
+  app.commandLine.appendSwitch('use-fake-device-for-media-stream')
+  app.commandLine.appendSwitch('use-fake-ui-for-media-stream')
+}
 ensureDevelopmentRoots()
 app.on('will-quit', cleanupDevelopmentRoot)
 process.once('exit', cleanupDevelopmentRoot)

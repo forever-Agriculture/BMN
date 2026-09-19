@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import {
   ERROR_CODES,
   VOICE_LANGUAGES,
+  validateVocabulary,
   type VoiceLanguage,
   type VoiceStatus
 } from '@bmn/protocol'
@@ -160,6 +161,9 @@ export function installVoiceIpcHandlers(ipc: VoiceIpcRegistrar, options: VoiceIp
     const language = values.language as VoiceLanguage
     if (!VOICE_LANGUAGES.some((candidate) => candidate.code === language)) invalid('Voice language is not supported')
     if (!(values.wav instanceof Uint8Array)) invalid('Recording must be WAV bytes')
+    // The renderer's snapshot is re-checked here: the same rules as storage, so nothing else reaches argv.
+    const vocabulary = validateVocabulary(values.vocabulary ?? [])
+    if (!vocabulary.ok) invalid(vocabulary.reason)
     if (!existsSync(options.binary)) {
       throw new MainIpcError(ERROR_CODES.notFound, 'Voice engine is not built; run pnpm run voice:build')
     }
@@ -175,7 +179,8 @@ export function installVoiceIpcHandlers(ipc: VoiceIpcRegistrar, options: VoiceIp
         binary: options.binary,
         modelPath: join(folder.path, model.file),
         language,
-        wav: values.wav
+        wav: values.wav,
+        vocabulary: vocabulary.words
       })
       return { text }
     } finally {

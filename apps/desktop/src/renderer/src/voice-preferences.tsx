@@ -1,7 +1,11 @@
-// MODULE: voice-preferences.tsx - Preferences → Voice: local engine status, model folder, model downloads and dictation language
+// MODULE: voice-preferences.tsx - Preferences → Voice: engine status, model folder, downloads, language and the approved vocabulary
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   VOICE_LANGUAGES,
+  VOICE_VOCABULARY_MAX_PROMPT_LENGTH,
+  VOICE_VOCABULARY_MAX_WORDS,
+  addVocabularyWord,
+  vocabularyPrompt,
   type AppSettings,
   type VoiceLanguage,
   type VoiceModelStatus,
@@ -17,9 +21,19 @@ function megabytes(bytes: number): string {
   return `${Math.round(bytes / 1_000_000)} MB`
 }
 
+export type VocabularySuggestion = { ok: true; words: string[] } | { ok: false; reason: string }
+
+/** A suggested word the owner can edit before approving; a refused edit keeps its text and shows why. */
+interface Candidate {
+  id: number
+  text: string
+  error: string | null
+}
+
 export function VoicePreferences(props: {
   settings: VoiceSettings
   onSettings(next: AppSettings): void
+  suggest(): VocabularySuggestion
 }): React.JSX.Element {
   const onSettings = useRef(props.onSettings)
   onSettings.current = props.onSettings
@@ -29,6 +43,11 @@ export function VoicePreferences(props: {
   const [status, setStatus] = useState<VoiceStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [candidates, setCandidates] = useState<Candidate[]>([])
+  const [suggestNote, setSuggestNote] = useState<string | null>(null)
+  const [draftWord, setDraftWord] = useState('')
+  const [draftError, setDraftError] = useState<string | null>(null)
+  const nextCandidateId = useRef(1)
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -49,7 +68,8 @@ export function VoicePreferences(props: {
     return () => clearInterval(timer)
   }, [downloading, refresh])
 
-  async function save(next: VoiceSettings): Promise<void> {
+  /** Saves the whole section; resolves the failure text when the save was refused, so a field can show it. */
+  async function save(next: VoiceSettings): Promise<string | null> {
     const previous = latestVoice.current
     latestVoice.current = next
     setVoice(next)
@@ -59,12 +79,61 @@ export function VoicePreferences(props: {
       const result = await window.aiTerminal.putSettings('voice', next)
       setVoice(result.voice)
       onSettings.current(result)
+      return null
     } catch (failure) {
+      latestVoice.current = previous
       setVoice(previous)
-      setError(failureDetail(failure, 'Could not save voice settings'))
+      const detail = failureDetail(failure, 'Could not save voice settings')
+      setError(detail)
+      return detail
     } finally {
       setBusy(false)
     }
+  }
+
+  /** Approves one word: the shared validator first, so a refused word stays where it was typed with its reason. */
+  async function approveWord(raw: string): Promise<string | null> {
+    const checked = addVocabularyWord(latestVoice.current.vocabulary, raw)
+    if (!checked.ok) return checked.reason
+    return save({ ...latestVoice.current, vocabulary: checked.words })
+  }
+
+  function suggest(): void {
+    const result = props.suggest()
+    if (!result.ok) {
+      setCandidates([])
+      setSuggestNote(result.reason)
+      return
+    }
+    setCandidates(result.words.map((text) => ({ id: nextCandidateId.current++, text, error: null })))
+    setSuggestNote(result.words.length === 0
+      ? 'No new words were found in the session\'s name or recent output.'
+      : `${result.words.length} suggested. Edit a word if needed, then approve it; nothing is saved until you do.`)
+  }
+
+  function editCandidate(id: number, text: string): void {
+    setCandidates((current) => current.map((candidate) => (candidate.id === id ? { ...candidate, text, error: null } : candidate)))
+  }
+
+  async function approveCandidate(candidate: Candidate): Promise<void> {
+    const refused = await approveWord(candidate.text)
+    setCandidates((current) => refused
+      ? current.map((item) => (item.id === candidate.id ? { ...item, error: refused } : item))
+      : current.filter((item) => item.id !== candidate.id))
+  }
+
+  function skipCandidate(id: number): void {
+    setCandidates((current) => current.filter((item) => item.id !== id))
+  }
+
+  async function addDraftWord(): Promise<void> {
+    const refused = await approveWord(draftWord)
+    setDraftError(refused)
+    if (!refused) setDraftWord('')
+  }
+
+  async function removeWord(word: string): Promise<void> {
+    await save({ ...latestVoice.current, vocabulary: latestVoice.current.vocabulary.filter((item) => item !== word) })
   }
 
   async function act(run: () => Promise<unknown>, fallback: string): Promise<void> {
@@ -247,6 +316,94 @@ export function VoicePreferences(props: {
               <option key={language.code} value={language.code}>{language.label}</option>
             ))}
           </select>
+        </div>
+      </div>
+      <div className="preferences-row">
+        <div className="preferences-row-label">
+          <span id="preferences-voice-vocabulary-label">Vocabulary</span>
+          <p className="preferences-help">
+            Names Whisper should expect, such as project names and identifiers. Suggestions come from the session you are working in; approved words are passed to Whisper as a hint on every recording. Whisper may still miss a word.
+          </p>
+        </div>
+        <div className="preferences-row-control voice-vocabulary">
+          <div className="preferences-button-row">
+            <button type="button" disabled={busy} onClick={suggest}>Suggest from current session</button>
+          </div>
+          {suggestNote && <p className="preferences-help" role="status">{suggestNote}</p>}
+          {candidates.length > 0 && (
+            <ul className="voice-vocabulary-candidates" aria-label="Suggested words">
+              {candidates.map((candidate, index) => (
+                <li key={candidate.id}>
+                  <div className="voice-vocabulary-candidate">
+                    <input
+                      type="text"
+                      value={candidate.text}
+                      aria-label={`Suggested word ${index + 1}`}
+                      aria-invalid={candidate.error ? true : undefined}
+                      aria-describedby={candidate.error ? `preferences-voice-candidate-${candidate.id}-error` : undefined}
+                      disabled={busy}
+                      onChange={(event) => editCandidate(candidate.id, event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault()
+                          void approveCandidate(candidate)
+                        }
+                      }}
+                    />
+                    <button type="button" disabled={busy} onClick={() => void approveCandidate(candidate)}>Approve</button>
+                    <button type="button" disabled={busy} aria-label={`Skip ${candidate.text}`} onClick={() => skipCandidate(candidate.id)}>Skip</button>
+                  </div>
+                  {candidate.error && (
+                    <p id={`preferences-voice-candidate-${candidate.id}-error`} className="preferences-error" role="alert">{candidate.error}</p>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          {voice.vocabulary.length === 0 ? (
+            <p className="preferences-help">No approved words yet; dictation works as before.</p>
+          ) : (
+            <ul className="voice-vocabulary-list" aria-labelledby="preferences-voice-vocabulary-label">
+              {voice.vocabulary.map((word) => (
+                <li key={word}>
+                  <code className="preferences-mono">{word}</code>
+                  <button type="button" disabled={busy} aria-label={`Remove ${word}`} onClick={() => void removeWord(word)}>Remove</button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <form
+            className="voice-vocabulary-add"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void addDraftWord()
+            }}
+          >
+            <label htmlFor="preferences-voice-add-word">Add word</label>
+            <input
+              id="preferences-voice-add-word"
+              type="text"
+              value={draftWord}
+              aria-invalid={draftError ? true : undefined}
+              aria-describedby={draftError ? 'preferences-voice-add-word-error' : undefined}
+              disabled={busy}
+              onChange={(event) => {
+                setDraftWord(event.target.value)
+                setDraftError(null)
+              }}
+            />
+            <button type="submit" disabled={busy}>Add</button>
+          </form>
+          {draftError && (
+            <p id="preferences-voice-add-word-error" className="preferences-error" role="alert">{draftError}</p>
+          )}
+          <p className="preferences-help voice-vocabulary-prompt">
+            {voice.vocabulary.length === 0
+              ? 'Nothing is sent to Whisper.'
+              : <>Sent to Whisper: <code className="preferences-mono" data-testid="voice-vocabulary-prompt">{vocabularyPrompt(voice.vocabulary)}</code></>}
+            {' · '}
+            {voice.vocabulary.length} of {VOICE_VOCABULARY_MAX_WORDS} words · {vocabularyPrompt(voice.vocabulary).length} of {VOICE_VOCABULARY_MAX_PROMPT_LENGTH} characters
+          </p>
         </div>
       </div>
       {error && (

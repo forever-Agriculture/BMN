@@ -191,7 +191,7 @@ export interface AiTerminalBridge {
   /** Opens a folder picker in the main process; null when the owner cancels. */
   chooseVoiceModelFolder(): Promise<{ path: string } | null>
   /** Transcribes a 16 kHz mono WAV recording on this machine; nothing is typed into a session. */
-  transcribeVoice(request: { wav: Uint8Array; model: VoiceModelId; language: VoiceLanguage }): Promise<{ text: string }>
+  transcribeVoice(request: { wav: Uint8Array; model: VoiceModelId; language: VoiceLanguage; vocabulary: string[] }): Promise<{ text: string }>
 }
 
 declare global {
