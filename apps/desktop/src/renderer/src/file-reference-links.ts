@@ -38,8 +38,8 @@ export function fileReferenceLinks(buffer: LinkBuffer, row: number): FileReferen
   while (last + 1 < buffer.length && last + 1 - (row - 1) < MAX_WRAPPED_ROWS && buffer.getLine(last + 1)?.isWrapped) {
     last += 1
   }
-  // A group cut short at either bound may split a path; nothing in it is trusted.
-  if ((first > 0 && buffer.getLine(first)?.isWrapped) || buffer.getLine(last + 1)?.isWrapped) return []
+  // A group cut short at either bound, or whose start was trimmed from the buffer, may split a path: none is trusted.
+  if (buffer.getLine(first)?.isWrapped || buffer.getLine(last + 1)?.isWrapped) return []
   let text = ''
   /** For each UTF-16 unit of `text`: the 0-based cell it starts in and how many cells it covers. */
   const cells: Array<{ x: number; y: number; width: number }> = []
@@ -78,6 +78,13 @@ export interface FileReferenceLinkHost {
 export interface FileReferenceLinkProvider extends ILinkProvider {
   /** Ctrl went down or up: show or hide the hovered link's underline and pointer. */
   modifierChanged(held: boolean): void
+  /** A mouse button went down in the terminal; each press opens at most one file. */
+  pressStarted(event: Pick<MouseEvent, 'button' | 'ctrlKey' | 'altKey' | 'metaKey' | 'shiftKey'>): void
+  /**
+   * macOS delivers Ctrl+click as a context menu, and the release that xterm activates links on may not follow.
+   * Opens the hovered link when the current press is a Ctrl primary click; true when it did.
+   */
+  openHovered(): boolean
 }
 
 /** Only Ctrl with the primary button, and no other modifier, opens a link; every other click stays the terminal's. */
@@ -96,16 +103,32 @@ function sameRange(left: IBufferRange, right: IBufferRange): boolean {
  */
 export function createFileReferenceLinkProvider(host: FileReferenceLinkHost): FileReferenceLinkProvider {
   let held = false
-  let hovered: ILink | undefined
+  let hovered: { link: ILink; range: IBufferRange } | undefined
+  let press = { linkActivation: false, opened: false }
+  /** Opens a link only while links are on, nothing is selected, the text is still printed there and the press has not opened one. */
+  const open = (text: string, range: IBufferRange): boolean => {
+    // A drag that ends on the link made a selection; that stays a copy, not an open.
+    if (press.opened || !host.enabled() || host.hasSelection()) return false
+    // Output can rewrite these cells before xterm renders and drops the link; open only what is still printed.
+    const current = fileReferenceLinks(host.buffer(), range.start.y)
+    if (!current.some((item) => item.text === text && sameRange(item.range, range))) return false
+    press.opened = true
+    host.open(text)
+    return true
+  }
   return {
     modifierChanged: (next) => {
       if (next === held) return
       held = next
-      if (hovered?.decorations) {
-        hovered.decorations.underline = held
-        hovered.decorations.pointerCursor = held
+      if (hovered?.link.decorations) {
+        hovered.link.decorations.underline = held
+        hovered.link.decorations.pointerCursor = held
       }
     },
+    pressStarted: (event) => {
+      press = { linkActivation: isLinkActivation(event), opened: false }
+    },
+    openHovered: () => (press.linkActivation && hovered ? open(hovered.link.text, hovered.range) : false),
     provideLinks: (row, callback) => {
       if (!host.enabled()) {
         callback(undefined)
@@ -117,18 +140,13 @@ export function createFileReferenceLinkProvider(host: FileReferenceLinkHost): Fi
           text: found.text,
           decorations: { underline: held, pointerCursor: held },
           hover: () => {
-            hovered = link
+            hovered = { link, range: found.range }
           },
           leave: () => {
-            if (hovered === link) hovered = undefined
+            if (hovered?.link === link) hovered = undefined
           },
           activate: (event, text) => {
-            // A drag that ends on the link made a selection; that stays a copy, not an open.
-            if (!isLinkActivation(event) || !host.enabled() || host.hasSelection()) return
-            // Output can rewrite these cells before xterm renders and drops the link; open only what is still printed.
-            const current = fileReferenceLinks(host.buffer(), found.range.start.y)
-            if (!current.some((item) => item.text === text && sameRange(item.range, found.range))) return
-            host.open(text)
+            if (isLinkActivation(event)) open(text, found.range)
           }
         }
         return link

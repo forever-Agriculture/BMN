@@ -219,23 +219,27 @@ export function SessionTerminal(props: {
       },
       paste: () => onPaste.current()
     })
-    const mouseDown = (event: MouseEvent): void => mouse.mouseDown(event)
-    // The window hears the release after xterm's document listener has finished the selection, even outside the pane.
-    const mouseUp = (event: MouseEvent): void => mouse.mouseUp(event)
-    const contextMenu = (event: MouseEvent): void => {
-      if (mouse.contextMenu(event)) event.preventDefault()
-    }
-    container.addEventListener('mousedown', mouseDown, true)
-    container.addEventListener('contextmenu', contextMenu, true)
-    window.addEventListener('mouseup', mouseUp)
-    // xterm's linkifier hears the click on the screen after the capture listeners above and the window hears the
-    // release last: a Ctrl+click on a link opens it and, with no selection made, the clipboard is left alone.
     const fileLinks = createFileReferenceLinkProvider({
       buffer: () => terminal.buffer.active,
       enabled: () => terminal.modes.mouseTrackingMode === 'none',
       hasSelection: () => terminal.hasSelection(),
       open: (reference) => onOpenFileReference.current(reference)
     })
+    const mouseDown = (event: MouseEvent): void => {
+      fileLinks.pressStarted(event)
+      mouse.mouseDown(event)
+    }
+    // The window hears the release after xterm's document listener has finished the selection, even outside the pane.
+    const mouseUp = (event: MouseEvent): void => mouse.mouseUp(event)
+    const contextMenu = (event: MouseEvent): void => {
+      // macOS turns Ctrl+click into this event; the hovered file link opens here, and the release adds nothing.
+      if (fileLinks.openHovered() || mouse.contextMenu(event)) event.preventDefault()
+    }
+    container.addEventListener('mousedown', mouseDown, true)
+    container.addEventListener('contextmenu', contextMenu, true)
+    window.addEventListener('mouseup', mouseUp)
+    // xterm's linkifier hears the click on the screen after the capture listeners above and the window hears the
+    // release last: a Ctrl+click on a link opens it and, with no selection made, the clipboard is left alone.
     const fileLinkRegistration = terminal.registerLinkProvider(fileLinks)
     const trackLinkModifier = (event: MouseEvent | KeyboardEvent): void => fileLinks.modifierChanged(event.ctrlKey)
     const releaseLinkModifier = (): void => fileLinks.modifierChanged(false)

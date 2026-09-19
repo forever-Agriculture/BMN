@@ -1,6 +1,6 @@
 // MODULE: file-reference-reader.test.ts - bounded read-only snapshots of referenced files and their refusals
 import { spawnSync } from 'node:child_process'
-import { appendFile, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -135,6 +135,26 @@ describe('readFileReference', () => {
     }))
     expect(result).toMatchObject({ reason: 'too-large' })
     expect(result.message).toMatch(/grew/)
+  })
+
+  it('reports a change when the shown path stops naming the file that was read', async () => {
+    const path = join(launch, 'src', 'parser.ts')
+    await writeFile(join(launch, 'replacement.ts'), 'other bytes\n')
+    const replaced = refused(await readFileReference(request('src/parser.ts'), {
+      afterCheck: () => rename(join(launch, 'replacement.ts'), path)
+    }))
+    expect(replaced).toMatchObject({ reason: 'changed', canonicalPath: path })
+
+    // A folder on the path becomes a symlink to another tree holding the same name.
+    await mkdir(join(root, 'elsewhere', 'src'), { recursive: true })
+    await writeFile(join(root, 'elsewhere', 'src', 'parser.ts'), 'elsewhere\n')
+    const swapped = refused(await readFileReference(request('src/parser.ts'), {
+      afterCheck: async () => {
+        await rename(join(launch, 'src'), join(launch, 'src-old'))
+        await symlink(join(root, 'elsewhere', 'src'), join(launch, 'src'))
+      }
+    }))
+    expect(swapped.reason).toBe('changed')
   })
 
   it('rejects malformed references and folders before touching the filesystem', async () => {

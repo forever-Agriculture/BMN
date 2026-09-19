@@ -144,6 +144,7 @@ describe('renderer acceptance hook', () => {
           underlinedWithCtrl: true,
           focusReturned: true
         },
+        contextMenuClick: { reference: 'refs/src/parser.ts:42:7', focusReturned: true },
         plainClick: { underlined: false, opened: false },
         ctrlDrag: { selected: 'refs/src/', copiedSelection: true, opened: false },
         missingSessionCode: 'NOT_FOUND',

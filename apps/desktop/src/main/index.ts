@@ -1769,14 +1769,16 @@ async function runSelfTest(): Promise<void> {
     }
     const fileReferenceFlow = preloadProbe.fileReferenceFlow
     const referencedFile = realpathSync(join(fileReferenceRoot, 'src', 'parser.ts'))
-    // Only explicit opens read: palette, launch-directory miss, chosen folder, rejected expansion, Ctrl+click,
-    // the reference printed over a redrawn link, the missing session and the other workspace's pane. Hovers, clicks
-    // and drags add nothing.
+    // Only explicit opens read: palette, launch-directory miss, chosen folder, rejected expansion, Ctrl+click, the
+    // macOS-order Ctrl+click (once, though both its context menu and its release could open it), the reference
+    // printed over a redrawn link, the missing session and the other workspace's pane. Hovers, clicks and drags add
+    // nothing.
     const expectedFileReferenceReads = [
       'refs/src/parser.ts:42:7',
       'src/parser.ts',
       'src/parser.ts',
       '$HOME/notes.txt',
+      'refs/src/parser.ts:42:7',
       'refs/src/parser.ts:42:7',
       'refs/src/parser.ts:7',
       'refs/src/parser.ts:42:7',
@@ -1805,6 +1807,8 @@ async function runSelfTest(): Promise<void> {
       !fileReferenceFlow.link.selectedElsewhere ||
       !fileReferenceFlow.link.underlinedWithCtrl ||
       !fileReferenceFlow.link.focusReturned ||
+      fileReferenceFlow.contextMenuClick.reference !== 'refs/src/parser.ts:42:7' ||
+      !fileReferenceFlow.contextMenuClick.focusReturned ||
       fileReferenceFlow.plainClick.underlined ||
       fileReferenceFlow.plainClick.opened ||
       fileReferenceFlow.ctrlDrag.selected.length < 3 ||

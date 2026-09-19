@@ -76,10 +76,14 @@ Open file reference… in the palette) sends the owner's session, the reference 
 chosen folder through preload and main to the utility. The utility parses the reference again,
 resolves a relative path against the session's launch directory (never a guessed shell directory),
 follows symlinks, opens the result without following a final symlink or blocking, and reads it only
-when it is a regular UTF-8 text file of at most 1 MiB. The preview is a snapshot that refreshes only
-on request; it is never copied into the stored files and adds nothing to the agent control socket.
-Terminal links are found only in the line xterm.js asks about, without touching the filesystem, and
-are off while a program reads the mouse.
+when it is a regular UTF-8 text file of at most 1 MiB. The launch directory is the one the running
+process started in; once the process has exited it is the session's stored folder, which may since
+have been edited. Either way the dialog shows the exact folder used. After reading, the canonical
+path must still name the file that was read, or the preview reports that the file changed. The
+preview is a snapshot that refreshes only on request; it is never copied into the stored files and
+adds nothing to the agent control socket. Show in folder reveals only a file that window was shown.
+Terminal links are found only in the line xterm.js asks about, without touching the filesystem, are
+checked against the printed text again when clicked, and are off while a program reads the mouse.
 
 **Progress and requests keep their evidence.** Process state, progress reports, unread state and
 the resolution of an agent's question are stored separately. An agent saying it is done is shown as

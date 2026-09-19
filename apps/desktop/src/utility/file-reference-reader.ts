@@ -7,7 +7,7 @@ import {
   FILE_REFERENCE_MAX_BYTES,
   FILE_REFERENCE_MAX_LENGTH,
   fileReferenceLines,
-  hasControlCharacter,
+  hasControlOrFormatCharacter,
   parseFileReference,
   type FileReferenceBase,
   type FileReferenceReadResult,
@@ -41,7 +41,7 @@ function errorCode(error: unknown): string | undefined {
 
 function chosenBase(value: unknown): string | null {
   if (value === undefined || value === null) return null
-  if (typeof value !== 'string' || value.length === 0 || value.length > FILE_REFERENCE_MAX_LENGTH || hasControlCharacter(value)) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > FILE_REFERENCE_MAX_LENGTH || hasControlOrFormatCharacter(value)) {
     invalid('The chosen folder is not a valid path')
   }
   if (!isAbsolute(value)) invalid('The chosen folder must be an absolute path')
@@ -50,6 +50,14 @@ function chosenBase(value: unknown): string | null {
 
 function sizeLabel(bytes: number): string {
   return bytes >= 1024 * 1024 ? `${bytes / (1024 * 1024)} MiB` : `${Math.round(bytes / 1024)} KiB`
+}
+
+/** True when `path` still resolves to itself and names the same file as the open handle's `stats`. */
+async function namesSameFile(path: string, stats: Stats): Promise<boolean> {
+  const resolved = await realpath(path).catch(() => null)
+  if (resolved !== path) return false
+  const named = await stat(path).catch(() => null)
+  return named !== null && named.dev === stats.dev && named.ino === stats.ino
 }
 
 function kindOf(stats: Stats): string {
@@ -63,7 +71,8 @@ function kindOf(stats: Stats): string {
 /**
  * Resolves a reference against its base, follows symlinks to the real file, and reads it only when it is a
  * readable regular UTF-8 text file within the size limit. The file is opened without following a final symlink
- * and without blocking, then checked on the open handle, so a swap or a pipe cannot change what is read.
+ * and without blocking, then checked on the open handle, so a swap or a pipe cannot change what is read. After the
+ * read the canonical path must still name that same file, or the result says the file changed.
  */
 export async function readFileReference(
   request: FileReferenceReadRequest,
@@ -134,6 +143,10 @@ export async function readFileReference(
       const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length)
       if (bytesRead === 0) break
       length += bytesRead
+    }
+    // A folder on the path swapped for a symlink, or the file replaced, would make the shown path describe other bytes.
+    if (!(await namesSameFile(canonicalPath, stats))) {
+      return unavailable('changed', 'The file changed while it was being read; refresh to read it again.', canonicalPath)
     }
     if (length > maxBytes) {
       return unavailable('too-large', `The file grew past ${sizeLabel(maxBytes)} while reading; open it in an editor.`, canonicalPath)

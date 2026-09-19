@@ -85,9 +85,12 @@ export interface FileReferenceUnavailable extends FileReferenceTarget {
 
 export type FileReferenceReadResult = FileReferenceSnapshot | FileReferenceUnavailable
 
-/** C0 and C1 control characters, which no typed path or folder may carry. */
-export function hasControlCharacter(text: string): boolean {
-  return /\p{Cc}/u.test(text)
+/**
+ * C0/C1 control characters and invisible format characters (such as a right-to-left override), which no typed
+ * path or folder may carry: they could make the shown path read differently from the one opened.
+ */
+export function hasControlOrFormatCharacter(text: string): boolean {
+  return /[\p{Cc}\p{Cf}]/u.test(text)
 }
 
 const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/
@@ -101,7 +104,9 @@ export function parseFileReference(input: string, mode: FileReferenceMode = 'typ
   const text = input.trim()
   if (text.length === 0) return failure('Enter a file reference.')
   if (text.length > FILE_REFERENCE_MAX_LENGTH) return failure('That reference is too long to be a file path.')
-  if (hasControlCharacter(text)) return failure('Control characters are not allowed in a file reference.')
+  if (hasControlOrFormatCharacter(text)) {
+    return failure('Control characters and invisible formatting characters are not allowed in a file reference.')
+  }
   const quote = text[0] === '"' || text[0] === "'" ? text[0] : null
   let body = text
   let outside: { line: number | null; column: number | null } = { line: null, column: null }
@@ -218,6 +223,8 @@ export function findFileReferences(text: string): FileReferenceMatch[] {
     const trimmed = found[0].replace(TRAILING, '')
     const start = found.index
     if (trimmed.length === 0 || taken.some(([from, to]) => start < to && start + trimmed.length > from)) continue
+    // A bare name right after a path fragment and a space may be the end of an unquoted spaced path: not guessed.
+    if (!trimmed.includes('/') && /\/\S*\s$/u.test(text.slice(0, start))) continue
     accept(start, trimmed)
   }
   return matches.toSorted((left, right) => left.start - right.start)

@@ -6,8 +6,9 @@ import { installFileReferenceIpcHandlers, type FileReferenceIpcActions } from '.
 
 type Handler = (event: IpcMainInvokeEvent, params?: unknown) => unknown
 
-const allowed = { allowed: true } as unknown as IpcMainInvokeEvent
-const stranger = { allowed: false } as unknown as IpcMainInvokeEvent
+const allowed = { allowed: true, sender: { id: 1 } } as unknown as IpcMainInvokeEvent
+const otherWindow = { allowed: true, sender: { id: 2 } } as unknown as IpcMainInvokeEvent
+const stranger = { allowed: false, sender: { id: 3 } } as unknown as IpcMainInvokeEvent
 
 function install(overrides: Partial<FileReferenceIpcActions> = {}): {
   handlers: Map<string, Handler>
@@ -21,7 +22,7 @@ function install(overrides: Partial<FileReferenceIpcActions> = {}): {
     client: () => ({
       request: async <Result,>(method: string, params: object) => {
         requests.push({ method, params })
-        return { status: 'ready' } as Result
+        return { status: 'ready', canonicalPath: '/home/me/project/src/a.ts' } as Result
       }
     }),
     senderIsAllowed: (event) => (event as unknown as { allowed: boolean }).allowed,
@@ -79,10 +80,13 @@ describe('file-reference IPC', () => {
     expect((await failure(() => cancelled.handlers.get('aiterm:file-reference:choose-base')!(stranger))).code).toBe('UNAUTHORIZED')
   })
 
-  it('shows only an absolute normalized file path', async () => {
+  it('reveals only a file this window was shown, given as an absolute normalized path', async () => {
     const { handlers, shown } = install()
     const show = handlers.get('aiterm:file-reference:show')!
+    expect((await failure(() => show(allowed, { path: '/home/me/project/src/a.ts' }))).code).toBe('INVALID_ARGUMENT')
+    await handlers.get('aiterm:file-reference:read')!(allowed, { sessionId: 's', reference: 'src/a.ts' })
     expect(await show(allowed, { path: '/home/me/project/src/a.ts' })).toEqual({ shown: true })
+    expect((await failure(() => show(otherWindow, { path: '/home/me/project/src/a.ts' }))).code).toBe('INVALID_ARGUMENT')
     for (const path of ['src/a.ts', '/home/me/../etc/passwd', '/home/me/a\u0007.ts', '', 42]) {
       expect((await failure(() => show(allowed, { path }))).code).toBe('INVALID_ARGUMENT')
     }

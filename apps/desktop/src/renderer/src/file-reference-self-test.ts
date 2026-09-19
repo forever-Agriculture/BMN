@@ -245,6 +245,31 @@ export async function runFileReferenceIntegration(options: {
   await closeWithEscape(linkDialog)
   link.focusReturned = await waitFor('link focus return', () => (document.activeElement === opener ? true : undefined))
 
+  // macOS turns Ctrl+click into a press and a context menu, and the release may follow too. The link opens once.
+  hover(column + 2, true)
+  mouse('mousedown', { x: column + 2, y: viewportRow }, true)
+  screen.dispatchEvent(new MouseEvent('contextmenu', {
+    clientX: rect.left + (column + 2.5) * cellWidth,
+    clientY: rect.top + (viewportRow + 0.5) * cellHeight,
+    ctrlKey: true,
+    button: 0,
+    bubbles: true,
+    cancelable: true,
+    view: window
+  }))
+  mouse('mouseup', { x: column + 2, y: viewportRow }, true)
+  // xterm focuses the clicked terminal on a context menu, as a real click would; the dialog returns focus there.
+  const clickedTerminalFocused = document.activeElement === textarea
+  const contextMenuDialog = await waitFor('context-menu link dialog', openDialog)
+  await waitFor('context-menu marked line', () => contextMenuDialog.querySelector('.file-reference-line')?.textContent ?? undefined)
+  const contextMenuClick = {
+    reference: contextMenuDialog.querySelector<HTMLInputElement>('input[aria-label="File reference"]')?.value ?? '',
+    focusReturned: false
+  }
+  await closeWithEscape(contextMenuDialog)
+  contextMenuClick.focusReturned = clickedTerminalFocused &&
+    await waitFor('context-menu focus return', () => (document.activeElement === textarea ? true : undefined))
+
   const plainUnderlined = hover(column + 3, false)
   click(column + 3, false)
   await pause(300)
@@ -346,6 +371,7 @@ export async function runFileReferenceIntegration(options: {
     },
     rejected,
     link,
+    contextMenuClick,
     plainClick,
     ctrlDrag,
     missingSessionCode,

@@ -58,6 +58,8 @@ describe('parseFileReference', () => {
     expect(rejected('My\\ Notes/a.md')).toMatch(/Backslash/)
     expect(rejected('src/a.ts\u0007')).toMatch(/Control/)
     expect(rejected('a\nb.txt')).toMatch(/Control/)
+    // A right-to-left override would make the shown path read differently from the one opened.
+    expect(rejected('src/a\u202Egpj.ts')).toMatch(/invisible/)
     expect(rejected('src/')).toMatch(/folder/)
     expect(rejected('..')).toMatch(/folder/)
     expect(rejected('Makefile')).toMatch(/\.\//)
@@ -114,8 +116,9 @@ describe('findFileReferences', () => {
     expect(linked('cat $HOME/notes.txt ~/x.txt')).toEqual([])
     expect(linked('bash-5.2$ ls')).toEqual([])
     expect(linked('user@host:/srv/app/main.ts')).toEqual([])
-    // The unquoted spaced path is never combined; only its standalone file-name token remains.
-    expect(linked('My Notes/plan draft.md')).toEqual(['draft.md'])
+    // The unquoted spaced path is never combined, and its last word alone would be a guessed target.
+    expect(linked('My Notes/plan draft.md')).toEqual([])
+    expect(linked('wrote draft.md and plan.md')).toEqual(['draft.md', 'plan.md'])
     expect(linked('a\\b/c.txt')).toEqual([])
     expect(linked('src/parser.ts:0 and src/lib/')).toEqual([])
   })

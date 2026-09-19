@@ -96,7 +96,8 @@ const receiptContract = [
       receipt.fileReferenceFlow.mouseMode.reportsToProgram >= 1 &&
       receipt.fileReferenceFlow.redraw?.staleOpened === false &&
       receipt.fileReferenceFlow.redraw.reference === 'refs/src/parser.ts:7' &&
-      receipt.fileReferenceFlow.reads?.length === 8 &&
+      receipt.fileReferenceFlow.reads?.length === 9 &&
+      receipt.fileReferenceFlow.contextMenuClick?.reference === 'refs/src/parser.ts:42:7' &&
       receipt.fileReferenceFlow.crossWorkspace?.session === 'Archived running chat · Self-test archived workspace' &&
       receipt.fileReferenceFlow.ptyInputEvents === 0 &&
       receipt.fileReferenceFlow.terminalUnchanged === true &&

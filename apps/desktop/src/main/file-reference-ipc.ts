@@ -4,7 +4,7 @@ import {
   ERROR_CODES,
   FILE_REFERENCE_MAX_LENGTH,
   METHOD_REGISTRY,
-  hasControlCharacter,
+  hasControlOrFormatCharacter,
   type FileReferenceReadResult,
   type ProtocolMethod
 } from '@bmn/protocol'
@@ -43,11 +43,20 @@ function boundedText(value: unknown, name: string): string {
 /** An absolute, already-normalized path without control characters, as the reader reports it. */
 function displayedFilePath(value: unknown): string {
   const path = boundedText(value, 'The file path')
-  if (hasControlCharacter(path) || !isAbsolute(path) || normalize(path) !== path) invalid('The file path must be an absolute path')
+  if (hasControlOrFormatCharacter(path) || !isAbsolute(path) || normalize(path) !== path) invalid('The file path must be an absolute path')
   return path
 }
 
+/** Files each window was shown most recently; Show in folder reveals only one of these. */
+const SHOWN_FILES_PER_WINDOW = 32
+
 export function installFileReferenceIpcHandlers(ipc: FileReferenceIpcRegistrar, actions: FileReferenceIpcActions): void {
+  const shownFiles = new Map<number, string[]>()
+  const remember = (senderId: number, path: string): void => {
+    const files = (shownFiles.get(senderId) ?? []).filter((file) => file !== path)
+    files.push(path)
+    shownFiles.set(senderId, files.slice(-SHOWN_FILES_PER_WINDOW))
+  }
   const handle = (
     channel: `aiterm:${string}`,
     listener: (event: IpcMainInvokeEvent, params: unknown) => unknown
@@ -60,7 +69,7 @@ export function installFileReferenceIpcHandlers(ipc: FileReferenceIpcRegistrar, 
     })
   }
 
-  handle('aiterm:file-reference:read', (_event, params) => {
+  handle('aiterm:file-reference:read', (event, params) => {
     const input = objectParams(params)
     const baseDirectory = input.baseDirectory
     if (baseDirectory !== undefined && baseDirectory !== null) boundedText(baseDirectory, 'The chosen folder')
@@ -69,13 +78,17 @@ export function installFileReferenceIpcHandlers(ipc: FileReferenceIpcRegistrar, 
       sessionId: boundedText(input.sessionId, 'The source session'),
       reference: boundedText(input.reference, 'The file reference'),
       baseDirectory: baseDirectory ?? null
+    }).then((result) => {
+      if (result.status === 'ready') remember(event.sender.id, result.canonicalPath)
+      return result
     })
   })
 
   handle('aiterm:file-reference:choose-base', (event) => actions.chooseFolder(event))
 
-  handle('aiterm:file-reference:show', (_event, params) => {
+  handle('aiterm:file-reference:show', (event, params) => {
     const path = displayedFilePath(objectParams(params).path)
+    if (!shownFiles.get(event.sender.id)?.includes(path)) invalid('Only a file shown in the preview can be revealed')
     actions.showInFolder(path)
     return { shown: true }
   })

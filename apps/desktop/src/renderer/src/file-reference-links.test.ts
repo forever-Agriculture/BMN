@@ -71,6 +71,15 @@ describe('fileReferenceLinks', () => {
     ])
   })
 
+  it('declines a wrapped line whose start scrolled out of the buffer', async () => {
+    const created = new Terminal({ cols: 10, rows: 3, scrollback: 0, allowProposedApi: true })
+    await new Promise<void>((resolve) => created.write('aaaa src/parser.ts:4 bb\r\nnext', resolve))
+    // The first row left is `arser.ts:4`, the tail of a path whose start was trimmed away.
+    expect(created.buffer.active.getLine(0)?.translateToString(true)).toBe('arser.ts:4')
+    expect(created.buffer.active.getLine(0)?.isWrapped).toBe(true)
+    expect(fileReferenceLinks(buffer(created), 1)).toEqual([])
+  })
+
   it('declines a line wrapped past the bound instead of guessing its start', async () => {
     const created = await terminal(`${'x'.repeat(10 * 40)} src/tail.ts\r\n`, 20)
     const rows = buffer(created)
@@ -139,6 +148,34 @@ describe('createFileReferenceLinkProvider', () => {
     await rewrite('see src/parser.ts:4')
     link!.activate(click, link!.text)
     expect(opened).toEqual(['src/parser.ts:4'])
+  })
+
+  it('opens the hovered link from a Ctrl context-menu press, once per press, as macOS delivers Ctrl+click', async () => {
+    const created = await terminal('see src/parser.ts:4\r\n')
+    const opened: string[] = []
+    const provider = createFileReferenceLinkProvider({
+      buffer: () => buffer(created),
+      enabled: () => true,
+      hasSelection: () => false,
+      open: (reference) => opened.push(reference)
+    })
+    const [link] = provided(provider, 1)!
+    provider.pressStarted(click)
+    expect(provider.openHovered()).toBe(false)
+    link!.hover!(click, link!.text)
+    provider.pressStarted({ ...click, ctrlKey: false } as MouseEvent)
+    expect(provider.openHovered()).toBe(false)
+    provider.pressStarted(click)
+    expect(provider.openHovered()).toBe(true)
+    // The release of that same press reaches xterm's activation too; the file opens once.
+    link!.activate(click, link!.text)
+    // An ordinary Ctrl+click, as Linux delivers it, opens through xterm alone.
+    provider.pressStarted(click)
+    link!.activate(click, link!.text)
+    link!.leave!(click, link!.text)
+    provider.pressStarted(click)
+    expect(provider.openHovered()).toBe(false)
+    expect(opened).toEqual(['src/parser.ts:4', 'src/parser.ts:4'])
   })
 
   it('underlines the hovered link only while Ctrl is held', async () => {

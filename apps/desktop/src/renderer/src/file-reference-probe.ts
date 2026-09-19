@@ -23,6 +23,11 @@ export interface FileReferenceFlowProbe {
     underlinedWithCtrl: boolean
     focusReturned: boolean
   }
+  /**
+   * Ctrl+click in the order macOS delivers it: press, context menu, release. It opens the file once, and focus
+   * returns to the clicked terminal, which xterm focuses on a context menu.
+   */
+  contextMenuClick: { reference: string; focusReturned: boolean }
   plainClick: { underlined: boolean; opened: boolean }
   /** A Ctrl+drag across a link stays a selection that copies, not an open. */
   ctrlDrag: { selected: string; copiedSelection: boolean; opened: boolean }
