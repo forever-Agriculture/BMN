@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -89,6 +89,7 @@ describe('utility application roots', () => {
       state: join(root, 'xdg-state', 'ai-terminal')
     }
     await Promise.all(Object.values(legacyRoots).map((legacyRoot) => mkdir(legacyRoot, { recursive: true })))
+    await writeFile(join(legacyRoots.data, 'state.sqlite3'), '')
 
     const roots = resolveApplicationRoots(environment, {
       homeDirectory: '/owner',
@@ -101,11 +102,40 @@ describe('utility application roots', () => {
     })
   })
 
-  it('prefers an existing BMN root when both current and legacy directories exist', async () => {
+  it('keeps legacy data when desktop tooling has created BMN directories without a database', async () => {
+    const { root, environment } = await testEnvironment()
+    const legacyData = join(root, 'xdg-data', 'ai-terminal')
+    await Promise.all([
+      mkdir(legacyData, { recursive: true }),
+      mkdir(join(root, 'xdg-state', 'ai-terminal'), { recursive: true }),
+      mkdir(join(root, 'xdg-data', 'bmn'), { recursive: true }),
+      mkdir(join(root, 'xdg-state', 'bmn', 'source-update'), { recursive: true })
+    ])
+    await Promise.all([
+      writeFile(join(legacyData, 'state.sqlite3'), ''),
+      writeFile(join(root, 'xdg-data', 'bmn', 'launch-bmn'), '')
+    ])
+
+    expect(resolveApplicationRoots(environment, {
+      homeDirectory: '/owner',
+      runtimeFallback: '/tmp/fallback'
+    })).toEqual({
+      config: join(root, 'xdg-config', 'ai-terminal'),
+      data: legacyData,
+      state: join(root, 'xdg-state', 'ai-terminal'),
+      runtime: join(root, 'xdg-runtime', 'bmn')
+    })
+  })
+
+  it('prefers the BMN roots when both current and legacy databases exist', async () => {
     const { root, environment } = await testEnvironment()
     await Promise.all([
       mkdir(join(root, 'xdg-data', 'ai-terminal'), { recursive: true }),
       mkdir(join(root, 'xdg-data', 'bmn'), { recursive: true })
+    ])
+    await Promise.all([
+      writeFile(join(root, 'xdg-data', 'ai-terminal', 'state.sqlite3'), ''),
+      writeFile(join(root, 'xdg-data', 'bmn', 'state.sqlite3'), '')
     ])
 
     expect(resolveApplicationRoots(environment, {
