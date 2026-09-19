@@ -155,6 +155,28 @@ describe('layout writer', () => {
     expect(fake.port.failure).not.toHaveBeenCalled()
   })
 
+  it('reapplies a stale session-view route when authoritative state adds another session', async () => {
+    const initial = selectLayoutSession(emptyWorkspaceLayout('workspace-1'), 'session-a', ['session-a'])
+    const fake = host(initial)
+    const writer = createLayoutWriter(fake.port)
+    writer.reset([initial])
+    const authoritative = { ...splitLayoutSession(initial, 'session-b', ids), revision: 4 }
+    fake.replace(authoritative)
+
+    const route = routeSessionView([sessions[0]!], 'session-a', { kind: 'scrolled-away', scrollLine: 7 })!
+    expect(writer.apply(route.workspaceId, route.change)).toBe(true)
+    await writer.idle('workspace-1')
+
+    expect(fake.port.get).toHaveBeenCalledOnce()
+    expect(fake.puts.map((put) => put.expectedRevision)).toEqual([1, 4])
+    expect(fake.stored()).toMatchObject({
+      revision: 5,
+      split: { panes: [{ sessionId: 'session-a' }, { sessionId: 'session-b' }] },
+      sessionView: { 'session-a': { scrollLine: 7, followTail: false } }
+    })
+    expect(fake.port.failure).not.toHaveBeenCalled()
+  })
+
   it('treats only the typed code as a conflict and reverts to authoritative state on other failures', async () => {
     const initial = selectLayoutSession(emptyWorkspaceLayout('workspace-1'), 'session-a', ids)
     const fake = host(initial)

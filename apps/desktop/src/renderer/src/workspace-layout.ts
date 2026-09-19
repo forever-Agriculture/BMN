@@ -37,13 +37,16 @@ function sameView(left: SessionView | undefined, right: SessionView): boolean {
   return left?.scrollLine === right.scrollLine && left.followTail === right.followTail
 }
 
-export function workspaceSessionIds(
-  sessions: readonly SessionRecord[],
-  workspaceId: string
+/** A rebased change keeps ids already validated in the authoritative layout it receives. */
+function sessionIdsForViewChange(
+  state: WorkspaceLayoutState,
+  sessionIds: readonly string[]
 ): string[] {
-  return sessions
-    .filter((session) => session.workspaceId === workspaceId)
-    .map((session) => session.sessionId)
+  return [
+    ...sessionIds,
+    ...state.split.panes.map((pane) => pane.sessionId),
+    ...Object.keys(state.sessionView)
+  ]
 }
 
 export function selectLayoutSession(
@@ -192,9 +195,9 @@ export function sessionLayoutView(
 }
 
 /**
- * The view-update router. It resolves the session's own workspace and that workspace's session ids,
- * so a mounted session of an inactive workspace never runs a transition against another workspace's
- * layout. The returned change is folded by the layout writer onto that workspace's layout.
+ * The view-update router. It resolves the session's own workspace and validates new references
+ * against the current session snapshot. When the writer rebases the change, ids already present in
+ * authoritative layout state remain valid. An inactive session never updates another workspace.
  */
 export function routeSessionView(
   sessions: readonly SessionRecord[],
@@ -203,16 +206,17 @@ export function routeSessionView(
 ): { workspaceId: string; change: LayoutChange } | null {
   const workspaceId = sessions.find((session) => session.sessionId === sessionId)?.workspaceId
   if (!workspaceId) return null
-  const sessionIds = workspaceSessionIds(sessions, workspaceId)
+  const sessionIds = sessions.map((session) => session.sessionId)
   return {
     workspaceId,
     change: (state) => {
       if (state.workspaceId !== workspaceId) {
         throw new Error(`Session ${sessionId} does not belong to workspace ${state.workspaceId}`)
       }
+      const acceptedSessionIds = sessionIdsForViewChange(state, sessionIds)
       return update.kind === 'follow-tail'
-        ? resumeLayoutFollowTail(state, sessionId, sessionIds).state
-        : captureLayoutScroll(state, sessionId, update.scrollLine, sessionIds)
+        ? resumeLayoutFollowTail(state, sessionId, acceptedSessionIds).state
+        : captureLayoutScroll(state, sessionId, update.scrollLine, acceptedSessionIds)
     }
   }
 }

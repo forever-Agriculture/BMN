@@ -123,12 +123,33 @@ describe('session view router', () => {
   const activeLayout = selectLayoutSession(emptyWorkspaceLayout('workspace-active'), 'active-a', ['active-a', 'active-b'])
   const inactiveLayout = selectLayoutSession(emptyWorkspaceLayout('workspace-inactive'), 'inactive-a', ['inactive-a'])
 
-  it("routes a session of an inactive workspace to its OWN workspace layout and session ids", () => {
+  it('routes a session of an inactive workspace to its OWN workspace layout', () => {
     const route = routeSessionView(records, 'inactive-a', { kind: 'scrolled-away', scrollLine: 12 })
     expect(route?.workspaceId).toBe('workspace-inactive')
     const next = route!.change(inactiveLayout)
     expect(next.sessionView['inactive-a']).toEqual({ scrollLine: 12, followTail: false })
     expect(() => route!.change(activeLayout)).toThrow(/does not belong to workspace workspace-active/)
+  })
+
+  it('updates a session when its home layout retains a cross-workspace pane', () => {
+    const allIds = records.map((session) => session.sessionId)
+    const mixedLayout = splitLayoutSession(inactiveLayout, 'active-a', allIds)
+    const route = routeSessionView(records, 'inactive-a', { kind: 'scrolled-away', scrollLine: 12 })!
+    const next = route.change(mixedLayout)
+
+    expect(next.sessionView['inactive-a']).toEqual({ scrollLine: 12, followTail: false })
+    expect(next.split.panes).toEqual(mixedLayout.split.panes)
+  })
+
+  it('resumes follow-tail when the home layout retains a cross-workspace pane', () => {
+    const allIds = records.map((session) => session.sessionId)
+    const mixedLayout = splitLayoutSession(inactiveLayout, 'active-a', allIds)
+    const reading = captureLayoutScroll(mixedLayout, 'inactive-a', 9, allIds)
+    const route = routeSessionView(records, 'inactive-a', { kind: 'follow-tail' })!
+    const next = route.change(reading)
+
+    expect(next.sessionView['inactive-a']).toEqual(FOLLOW_TAIL_VIEW)
+    expect(next.split.panes).toEqual(mixedLayout.split.panes)
   })
 
   it('reads a session view from its own workspace, never the active one', () => {
