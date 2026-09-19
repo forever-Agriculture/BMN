@@ -11,8 +11,11 @@ export interface VoiceFlowProbe {
   approvedAfterRemove: string[]
   promptShown: string
   persistedInSettings: boolean
-  /** Small was chosen but only Base is installed: the fallback save keeps the vocabulary saved before it. */
-  fallback: { modelChosenBefore: string; modelAfter: string; vocabularyKept: boolean }
+  /**
+   * Small was chosen but only Base is installed: the fallback save keeps the vocabulary saved before it, and a word
+   * approved afterwards in the panel that stayed open keeps Base.
+   */
+  fallback: { modelChosenBefore: string; modelAfter: string; vocabularyKept: boolean; modelAfterApproval: string }
   /** Dictation into the probe session: the synthetic transcript arrives once, with no Enter. */
   recording: { pastedOnce: boolean; commandNotRun: boolean; announced: string }
   /** A word approved while recording is saved, but that recording keeps its snapshot (main checks the argv). */

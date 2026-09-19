@@ -70,7 +70,8 @@ import { createSpaceHold } from './space-hold'
 import { applyChromeTheme, COLOR_MODE_PRESENTATION, IDENTITY_PRESENTATION } from './theme'
 import { startVoiceRecording, VOICE_MAX_SECONDS, VOICE_SAMPLE_RATE, type VoiceRecording } from './voice-recorder'
 import { modelName, voiceReadiness } from './voice-readiness'
-import { VOICE_SUGGESTION_ROWS, suggestVocabulary } from './voice-suggestions'
+import { VOICE_SUGGESTION_BYTES, VOICE_SUGGESTION_ROWS, suggestVocabulary } from './voice-suggestions'
+import { createVoiceSettingsWriter } from './voice-settings-writer'
 import {
   applySessionView,
   closeLayoutPane,
@@ -170,6 +171,15 @@ function App(): React.JSX.Element {
   const voiceStopRequested = useRef(false)
   const settingsRef = useRef(settings)
   settingsRef.current = settings
+  /** Every voice-section save, from Preferences or the model fallback, goes through this queue. */
+  const [voiceSettingsWriter] = useState(() => createVoiceSettingsWriter({
+    current: () => settingsRef.current,
+    put: (voice) => window.aiTerminal.putSettings('voice', voice),
+    saved: (next) => {
+      settingsRef.current = next
+      setSettings(next)
+    }
+  }))
   const [writer] = useState(() => createLayoutWriter({
     put: (params) => window.aiTerminal.putLayout(params),
     get: (workspaceId) => window.aiTerminal.getLayout(workspaceId),
@@ -652,8 +662,8 @@ function App(): React.JSX.Element {
       }
       const model = readiness.model.id
       if (readiness.replacesChoice) {
-        // Built from the latest settings, so the fallback never restores an older language or vocabulary.
-        void window.aiTerminal.putSettings('voice', { ...settingsRef.current.voice, model }).then(setSettings).catch(fail('Voice model was not saved'))
+        // Queued and built from the latest settings, so the fallback never restores an older language or vocabulary.
+        void voiceSettingsWriter.update((current) => ({ ...current, model })).catch(fail('Voice model was not saved'))
       }
       voiceRecording.current = await startVoiceRecording()
       updateVoice({ ...capture, phase: 'recording', startedAt: Date.now(), model })
@@ -708,7 +718,7 @@ function App(): React.JSX.Element {
         workspaceName: workspace?.name ?? '',
         sessionName: record.name,
         cwd: startup.cwd,
-        lines: controller.recentText(VOICE_SUGGESTION_ROWS),
+        lines: controller.recentText(VOICE_SUGGESTION_ROWS, VOICE_SUGGESTION_BYTES),
         approved: settingsRef.current.voice.vocabulary
       })
     }
@@ -1599,7 +1609,13 @@ function App(): React.JSX.Element {
         <FileReferenceDialog request={dialog.request} onClose={() => setDialog(null)} />
       ) : null}
       {dialog?.kind === 'preferences' ? (
-        <PreferencesDialog settings={settings} onSettings={setSettings} onClose={() => setDialog(null)} suggestVocabulary={suggestVoiceVocabulary} />
+        <PreferencesDialog
+          settings={settings}
+          onSettings={setSettings}
+          onClose={() => setDialog(null)}
+          saveVoice={(change) => voiceSettingsWriter.update(change)}
+          suggestVocabulary={suggestVoiceVocabulary}
+        />
       ) : null}
       {dialog?.kind === 'new-workspace' ? (
         <WorkspaceDialog mode="create" initialName="" onClose={() => setDialog(null)}

@@ -178,23 +178,24 @@ export async function runVoiceIntegration(options: {
     const chosen = (await window.aiTerminal.getSettings()).voice.model
     return chosen === 'small' ? chosen : undefined
   })
-  await closePreferences(dialog)
   console.warn('[BMN] renderer behavioural integration: vocabulary approved')
 
-  // Recording 1 into the probe session; a word approved meanwhile belongs to the next recording.
+  // Recording 1 into the probe session starts with Preferences still open, so the same panel stays mounted while the
+  // fallback saves Base; a word approved there afterwards must keep Base and belongs to the next recording.
   const stopFirst = await startRecording(sessionId)
   const fallbackSettings = await waitFor('fallback saved', async () => {
     const settings = await window.aiTerminal.getSettings()
     return settings.voice.model === 'base' ? settings.voice : undefined
   })
+  await approveWordVia(dialog, 'Changed')
+  const afterApproval = (await window.aiTerminal.getSettings()).voice
   const fallback = {
     modelChosenBefore,
     modelAfter: fallbackSettings.model,
-    vocabularyKept: JSON.stringify(fallbackSettings.vocabulary) === JSON.stringify(approvedAfterRemove)
+    vocabularyKept: JSON.stringify(fallbackSettings.vocabulary) === JSON.stringify(approvedAfterRemove),
+    modelAfterApproval: afterApproval.model
   }
-  dialog = await openPreferences()
-  await approveWordVia(dialog, 'Changed')
-  const savedWhileRecording = (await window.aiTerminal.getSettings()).voice.vocabulary.includes('Changed')
+  const savedWhileRecording = afterApproval.vocabulary.includes('Changed')
   await closePreferences(dialog)
   await stopFirst()
   await waitFor('first transcript pasted', () => bufferText(sessionId).includes('VOICE-PASTE-1'))

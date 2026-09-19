@@ -1903,6 +1903,7 @@ async function runSelfTest(): Promise<void> {
       voiceFlow.fallback.modelChosenBefore !== 'small' ||
       voiceFlow.fallback.modelAfter !== 'base' ||
       !voiceFlow.fallback.vocabularyKept ||
+      voiceFlow.fallback.modelAfterApproval !== 'base' ||
       !voiceFlow.editDuringRecording.savedWhileRecording ||
       !voiceFlow.editDuringRecording.secondPastedOnce ||
       !voiceFlow.restarted.notice.includes('nothing was pasted') ||

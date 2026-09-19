@@ -2,10 +2,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   VOICE_LANGUAGES,
-  VOICE_VOCABULARY_MAX_PROMPT_LENGTH,
+  VOICE_VOCABULARY_MAX_PROMPT_BYTES,
   VOICE_VOCABULARY_MAX_WORDS,
   addVocabularyWord,
   vocabularyPrompt,
+  vocabularyPromptBytes,
   type AppSettings,
   type VoiceLanguage,
   type VoiceModelStatus,
@@ -31,13 +32,15 @@ interface Candidate {
 }
 
 export function VoicePreferences(props: {
+  /** The app's latest voice settings; the panel never keeps its own copy, so a save elsewhere is never undone here. */
   settings: VoiceSettings
-  onSettings(next: AppSettings): void
+  /** Queues a save built from the latest settings when it is sent; the app publishes the result. */
+  save(change: (current: VoiceSettings) => VoiceSettings): Promise<AppSettings>
   suggest(): VocabularySuggestion
 }): React.JSX.Element {
-  const onSettings = useRef(props.onSettings)
-  onSettings.current = props.onSettings
-  const [voice, setVoice] = useState<VoiceSettings>(props.settings)
+  /** Shown while a save is in flight; the app's settings replace it when the save settles either way. */
+  const [optimistic, setOptimistic] = useState<VoiceSettings | null>(null)
+  const voice = optimistic ?? props.settings
   const latestVoice = useRef(voice)
   latestVoice.current = voice
   const [status, setStatus] = useState<VoiceStatus | null>(null)
@@ -68,25 +71,20 @@ export function VoicePreferences(props: {
     return () => clearInterval(timer)
   }, [downloading, refresh])
 
-  /** Saves the whole section; resolves the failure text when the save was refused, so a field can show it. */
-  async function save(next: VoiceSettings): Promise<string | null> {
-    const previous = latestVoice.current
-    latestVoice.current = next
-    setVoice(next)
+  /** Saves one change to the whole section; resolves the failure text when the save was refused, so a field can show it. */
+  async function save(change: (current: VoiceSettings) => VoiceSettings): Promise<string | null> {
     setBusy(true)
     setError(null)
     try {
-      const result = await window.aiTerminal.putSettings('voice', next)
-      setVoice(result.voice)
-      onSettings.current(result)
+      setOptimistic(change(latestVoice.current))
+      await props.save(change)
       return null
     } catch (failure) {
-      latestVoice.current = previous
-      setVoice(previous)
       const detail = failureDetail(failure, 'Could not save voice settings')
       setError(detail)
       return detail
     } finally {
+      setOptimistic(null)
       setBusy(false)
     }
   }
@@ -95,7 +93,12 @@ export function VoicePreferences(props: {
   async function approveWord(raw: string): Promise<string | null> {
     const checked = addVocabularyWord(latestVoice.current.vocabulary, raw)
     if (!checked.ok) return checked.reason
-    return save({ ...latestVoice.current, vocabulary: checked.words })
+    // Checked again against the settings current when the save is sent.
+    return save((current) => {
+      const added = addVocabularyWord(current.vocabulary, raw)
+      if (!added.ok) throw new Error(added.reason)
+      return { ...current, vocabulary: added.words }
+    })
   }
 
   function suggest(): void {
@@ -133,7 +136,7 @@ export function VoicePreferences(props: {
   }
 
   async function removeWord(word: string): Promise<void> {
-    await save({ ...latestVoice.current, vocabulary: latestVoice.current.vocabulary.filter((item) => item !== word) })
+    await save((current) => ({ ...current, vocabulary: current.vocabulary.filter((item) => item !== word) }))
   }
 
   async function act(run: () => Promise<unknown>, fallback: string): Promise<void> {
@@ -158,15 +161,14 @@ export function VoicePreferences(props: {
     }
     await refresh()
     // Read the choice after the awaits: a language picked meanwhile must not be saved back to its old value.
-    const current = latestVoice.current
-    if (current.model !== model.id) await save({ ...current, model: model.id })
+    if (latestVoice.current.model !== model.id) await save((current) => ({ ...current, model: model.id }))
   }
 
   async function chooseFolder(): Promise<void> {
     setError(null)
     try {
       const picked = await window.aiTerminal.chooseVoiceModelFolder()
-      if (picked) await save({ ...voice, modelFolder: picked.path })
+      if (picked) await save((current) => ({ ...current, modelFolder: picked.path }))
     } catch (failure) {
       setError(failureDetail(failure, 'Could not choose the model folder'))
     }
@@ -174,7 +176,7 @@ export function VoicePreferences(props: {
   }
 
   async function useDefaultFolder(): Promise<void> {
-    await save({ ...voice, modelFolder: null })
+    await save((current) => ({ ...current, modelFolder: null }))
     await refresh()
   }
 
@@ -247,7 +249,10 @@ export function VoicePreferences(props: {
             type="checkbox"
             checked={voice.holdSpaceToTalk}
             disabled={busy}
-            onChange={(event) => void save({ ...latestVoice.current, holdSpaceToTalk: event.target.checked })}
+            onChange={(event) => {
+              const holdSpaceToTalk = event.target.checked
+              void save((current) => ({ ...current, holdSpaceToTalk }))
+            }}
           />
         </div>
       </div>
@@ -291,7 +296,7 @@ export function VoicePreferences(props: {
                   name="preferences-voice-model"
                   checked={voice.model === model.id}
                   disabled={busy}
-                  onChange={() => void save({ ...voice, model: model.id })}
+                  onChange={() => void save((current) => ({ ...current, model: model.id }))}
                 />
                 {model.label}
               </label>
@@ -310,7 +315,10 @@ export function VoicePreferences(props: {
             id="preferences-voice-language"
             value={voice.language}
             disabled={busy}
-            onChange={(event) => void save({ ...voice, language: event.target.value as VoiceLanguage })}
+            onChange={(event) => {
+              const language = event.target.value as VoiceLanguage
+              void save((current) => ({ ...current, language }))
+            }}
           >
             {VOICE_LANGUAGES.map((language) => (
               <option key={language.code} value={language.code}>{language.label}</option>
@@ -322,7 +330,7 @@ export function VoicePreferences(props: {
         <div className="preferences-row-label">
           <span id="preferences-voice-vocabulary-label">Vocabulary</span>
           <p className="preferences-help">
-            Names Whisper should expect, such as project names and identifiers. Suggestions come from the session you are working in; approved words are passed to Whisper as a hint on every recording. Whisper may still miss a word.
+            Names Whisper should expect, such as project names and identifiers. Suggestions come from the session you are working in; approved words are passed to Whisper as a hint on every recording. Whisper may still miss a word. The hint holds at most {VOICE_VOCABULARY_MAX_PROMPT_BYTES} bytes; most non-English letters take two.
           </p>
         </div>
         <div className="preferences-row-control voice-vocabulary">
@@ -402,7 +410,7 @@ export function VoicePreferences(props: {
               ? 'Nothing is sent to Whisper.'
               : <>Sent to Whisper: <code className="preferences-mono" data-testid="voice-vocabulary-prompt">{vocabularyPrompt(voice.vocabulary)}</code></>}
             {' · '}
-            {voice.vocabulary.length} of {VOICE_VOCABULARY_MAX_WORDS} words · {vocabularyPrompt(voice.vocabulary).length} of {VOICE_VOCABULARY_MAX_PROMPT_LENGTH} characters
+            {voice.vocabulary.length} of {VOICE_VOCABULARY_MAX_WORDS} words · {vocabularyPromptBytes(voice.vocabulary)} of {VOICE_VOCABULARY_MAX_PROMPT_BYTES} bytes
           </p>
         </div>
       </div>

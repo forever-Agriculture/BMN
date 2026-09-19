@@ -11,17 +11,20 @@ export interface VoiceSuggestionSource {
   workspaceName: string
   sessionName: string
   cwd: string
-  /** Logical lines, oldest first; wrapped rows are already joined. */
+  /** Logical lines, oldest first, already bounded by `readRecentLines`. */
   lines: readonly string[]
   approved: readonly string[]
 }
 
 const URL_RUN = /\b[a-z][a-z0-9+.-]*:\/\/\S+|\bwww\.\S+/giu
+const URL = /\b[a-z][a-z0-9+.-]*:\/\/|\bwww\./iu
 /** A token is letters, digits and the separators identifiers use; anything else ends it. */
 const TOKEN_RUN = /[\p{L}\p{N}_][\p{L}\p{N}_.-]*/gu
 const HEX_HASH = /^[0-9a-f]{7,}$/iu
 const NUMERIC = /^[\p{N}._-]+$/u
 const SECRET_PREFIX = /^(?:sk-|ghp_|gho_|ghs_|ghu_|github_pat_|AKIA|xox[abprs]-|glpat-|npm_)/u
+/** Version tags such as v18 or v1.2.3 name a release, not something the owner says. */
+const VERSION = /^v\d[\d.]*$/iu
 
 function trimSeparators(token: string): string {
   return token.replace(/^[._-]+|[._-]+$/gu, '')
@@ -36,13 +39,21 @@ function looksLikeSecret(token: string): boolean {
   return classes >= 3 || (bare.length >= 24 && classes >= 2)
 }
 
+/**
+ * Numbers, hashes, URLs and secret-looking text are never offered, whichever source they come from. A name with
+ * spaces is judged word by word for secrets, so a long plain session name still counts as a name.
+ */
+function excluded(text: string): boolean {
+  return NUMERIC.test(text) || HEX_HASH.test(text) || URL.test(text) || text.split(/\s+/u).some(looksLikeSecret)
+}
+
 /** CamelCase, snake_case, kebab-case, dotted names and words with digits; plain words are prose. */
 function isIdentifier(token: string): boolean {
   const length = [...token].length
   if (length < IDENTIFIER_MIN || length > IDENTIFIER_MAX) return false
-  if (NUMERIC.test(token) || HEX_HASH.test(token) || looksLikeSecret(token)) return false
-  // Timestamps and versions carry a letter or two among digits (2026-09-18T20, 00.000Z): not names.
-  if ((token.match(/\p{L}/gu)?.length ?? 0) < 2) return false
+  if (excluded(token) || VERSION.test(token)) return false
+  // Names start with a letter or underscore; timestamps and measures start with a digit (2026-09-18T20, 00.000Z, 120ms).
+  if (!/^[\p{L}_]/u.test(token)) return false
   if (/[_-]/u.test(token)) return true
   if (token.includes('.')) return /\p{L}/u.test(token)
   if (/\p{N}/u.test(token)) return /\p{L}/u.test(token)
@@ -54,18 +65,36 @@ function fileName(path: string): string {
   return segments.at(-1) ?? ''
 }
 
-/** Keeps the last rows within the byte bound, oldest first. */
-export function boundSuggestionLines(lines: readonly string[], maxBytes = VOICE_SUGGESTION_BYTES): string[] {
+/** The part of an xterm buffer the suggester reads. */
+export interface RecentTextBuffer {
+  readonly length: number
+  getLine(index: number): { readonly isWrapped: boolean; translateToString(trimRight?: boolean): string } | undefined
+}
+
+/**
+ * The newest logical lines, oldest first, reading newest rows first and stopping at `maxRows` rows or `maxBytes` of
+ * row text, whichever comes first. Wrapped rows are joined; a line whose start lies beyond the bound is left out.
+ */
+export function readRecentLines(buffer: RecentTextBuffer, maxRows: number, maxBytes: number): string[] {
   const encoder = new TextEncoder()
-  const kept: string[] = []
+  const lines: string[] = []
+  let partial = ''
   let bytes = 0
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index]!
-    bytes += encoder.encode(line).length
+  const last = buffer.length - 1
+  for (let index = last; index >= 0 && last - index < maxRows; index -= 1) {
+    const row = buffer.getLine(index)
+    if (!row) continue
+    const continued = buffer.getLine(index + 1)?.isWrapped === true
+    const text = row.translateToString(!continued)
+    bytes += encoder.encode(text).length
     if (bytes > maxBytes) break
-    kept.unshift(line)
+    partial = text + partial
+    if (!row.isWrapped) {
+      lines.unshift(partial.trimEnd())
+      partial = ''
+    }
   }
-  return kept
+  return lines
 }
 
 /**
@@ -84,15 +113,17 @@ export function suggestVocabulary(source: VoiceSuggestionSource): string[] {
     seen.add(key)
     suggestions.push(normalized.word)
   }
-  for (const name of [source.workspaceName, source.sessionName, fileName(source.cwd)]) offer(name)
-  const lines = boundSuggestionLines(source.lines).reverse()
+  for (const name of [source.workspaceName, source.sessionName, fileName(source.cwd)]) {
+    if (!excluded(name.trim())) offer(name)
+  }
+  const lines = [...source.lines].reverse()
   const references: string[] = []
   const identifiers: string[] = []
   for (const line of lines) {
     const withoutUrls = line.replace(URL_RUN, ' ')
     for (const match of findFileReferences(withoutUrls)) {
       const name = trimSeparators(fileName(match.reference.path))
-      if (name.length > 0 && !NUMERIC.test(name) && !HEX_HASH.test(name) && !looksLikeSecret(name)) references.push(name)
+      if (name.length > 0 && !excluded(name)) references.push(name)
     }
     for (const found of withoutUrls.matchAll(TOKEN_RUN)) {
       const token = trimSeparators(found[0])

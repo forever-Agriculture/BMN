@@ -53,9 +53,10 @@ its last 120 terminal rows), edit a suggestion if needed and approve it, or type
 On every recording the approved words are joined with `, ` and passed to `whisper-cli` as its
 initial prompt (`--prompt`), exactly as the panel's "Sent to Whisper" line shows. This is a hint,
 not a rule: Whisper may still miss a word, and the benefit depends on your voice and microphone.
-Edits apply to the next recording. The list holds at most 30 words and 400 characters in total,
-which keeps the prompt inside Whisper's 224-token prompt window for identifier-like text in Latin
-and Cyrillic script; the panel refuses further words instead of cutting the list.
+Edits apply to the next recording. The list holds at most 30 words and 223 bytes in total (UTF-8:
+Latin letters take one byte, Cyrillic letters two). whisper.cpp keeps at most 223 prompt tokens and
+never makes more than one token from a byte, so every word always reaches Whisper, whatever the
+script; the panel refuses further words instead of cutting the list.
 
 The approved words are visible to local process inspection (for example `ps`) while `whisper-cli`
 runs. They never appear in BMN's logs or error messages.

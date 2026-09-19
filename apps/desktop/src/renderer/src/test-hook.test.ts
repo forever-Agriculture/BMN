@@ -129,7 +129,7 @@ describe('renderer acceptance hook', () => {
         approvedAfterRemove: ['SessionManager', 'BMN'],
         promptShown: 'SessionManager, BMN',
         persistedInSettings: true,
-        fallback: { modelChosenBefore: 'small', modelAfter: 'base', vocabularyKept: true },
+        fallback: { modelChosenBefore: 'small', modelAfter: 'base', vocabularyKept: true, modelAfterApproval: 'base' },
         recording: { pastedOnce: true, commandNotRun: true, announced: 'Transcript pasted' },
         editDuringRecording: { savedWhileRecording: true, secondPastedOnce: true },
         restarted: { notice: 'restarted', pastedIntoNewIncarnation: false },

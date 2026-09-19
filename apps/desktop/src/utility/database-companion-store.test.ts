@@ -1,4 +1,7 @@
+import { mkdtempSync, rmSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { DEFAULT_APP_SETTINGS, ERROR_CODES, type ArtifactRecord } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
@@ -282,11 +285,11 @@ describe('companion store', () => {
     })
     const saved = getSettings(database).voice
     for (const [vocabulary, reason] of [
-      [['BMN', 'bmn'], /already in the list/],
+      [['BMN', 'bmn'], /in the list twice/],
       [['a,b'], /commas/],
       [['x'.repeat(41)], /at most 40 characters/],
       [Array.from({ length: 31 }, (_, index) => `word${index}`), /at most 30 words/],
-      [Array.from({ length: 30 }, (_, index) => `identifier-${index}-xxxxxx`), /400 characters/],
+      [Array.from({ length: 12 }, (_, index) => `identifier-${index}-xxxxxx`), /223 bytes/],
       [['ok', 7], /list of words/],
       ['BMN', /list of words/]
     ] as Array<[unknown, RegExp]>) {
@@ -296,6 +299,46 @@ describe('companion store', () => {
     // Saving another field keeps the vocabulary only when the whole section carries it.
     putSettingsSection(database, 'voice', { ...saved, language: 'en' }, now)
     expect(getSettings(database).voice.vocabulary).toEqual(['BMN', 'dev-auto', 'Олександр'])
+  })
+
+  it('refuses a vocabulary without quoting its words in the error', () => {
+    let message = ''
+    try {
+      putSettingsSection(database, 'voice', { ...getSettings(database).voice, vocabulary: ['PrivateProject', 'privateproject'] }, now)
+    } catch (error) {
+      message = (error as Error).message
+    }
+    expect(message).toMatch(/in the list twice/)
+    expect(message.toLowerCase()).not.toContain('privateproject')
+  })
+
+  it('loads a voice row stored before the vocabulary existed with an empty vocabulary and its other fields intact', () => {
+    database.prepare(
+      `INSERT INTO app_setting(key, value_json, updated_at) VALUES ('voice', ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`
+    ).run('{"model":"small","language":"uk","modelFolder":"/media/models","holdSpaceToTalk":false}', now)
+    expect(getSettings(database).voice).toEqual({
+      model: 'small', language: 'uk', modelFolder: '/media/models', holdSpaceToTalk: false, vocabulary: []
+    })
+  })
+
+  it('carries the approved vocabulary through a backup copy of the database', () => {
+    putSettingsSection(database, 'voice', {
+      model: 'base', language: 'uk', modelFolder: null, holdSpaceToTalk: true, vocabulary: ['BMN', 'Олександр']
+    }, now)
+    const folder = mkdtempSync(join(tmpdir(), 'bmn-voice-backup-'))
+    try {
+      const path = join(folder, 'backup.sqlite')
+      database.prepare('VACUUM INTO ?').run(path)
+      const copy = new BetterSqlite3(path)
+      try {
+        expect(getSettings(copy).voice.vocabulary).toEqual(['BMN', 'Олександр'])
+      } finally {
+        copy.close()
+      }
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
   })
 
   it('keeps the voice model folder only as a normalized absolute path', () => {

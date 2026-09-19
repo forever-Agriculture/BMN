@@ -107,6 +107,11 @@ describe('voice IPC', () => {
       await expect(handler(allowed, { model: 'base', language: 'en', wav, vocabulary }))
         .rejects.toMatchObject({ code: ERROR_CODES.invalidArgument })
     }
+    // The refusal travels in the IPC error envelope, so it must not quote the vocabulary.
+    const refusal = await Promise.resolve(handler(allowed, { model: 'base', language: 'en', wav, vocabulary: ['PrivateProject', 'privateproject'] }))
+      .then(() => new Error('accepted'), (error: unknown) => error as Error)
+    expect(refusal.message).toMatch(/in the list twice/)
+    expect(refusal.message.toLowerCase()).not.toContain('privateproject')
     expect(transcribe).toHaveBeenCalledTimes(1)
   })
 

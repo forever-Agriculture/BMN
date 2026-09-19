@@ -8,7 +8,8 @@ import type {
   BackupVerifyResult,
   ControlInfo,
   NotificationSettings,
-  TelegramStatus
+  TelegramStatus,
+  VoiceSettings
 } from '@bmn/protocol'
 import { ARCHIVE_DELETE_AFTER_DAYS, COLOR_MODE_NAMES, DEFAULT_APP_SETTINGS, IDENTITY_NAMES, TERMINAL_FONT_SIZE_RANGE } from '@bmn/protocol'
 import { Icon } from './icons'
@@ -47,6 +48,8 @@ export function PreferencesDialog(props: {
   settings: AppSettings
   onSettings(next: AppSettings): void
   onClose(): void
+  /** Saves the voice section through the app's queue, built from the latest settings. */
+  saveVoice(change: (current: VoiceSettings) => VoiceSettings): Promise<AppSettings>
   /** Candidate dictation words from the selected live session, or why there are none. */
   suggestVocabulary(): { ok: true; words: string[] } | { ok: false; reason: string }
 }): React.JSX.Element {
@@ -445,7 +448,7 @@ export function PreferencesDialog(props: {
         )}
       </section>
 
-      <VoicePreferences settings={props.settings.voice} onSettings={(next) => onSettings.current(next)} suggest={props.suggestVocabulary} />
+      <VoicePreferences settings={props.settings.voice} save={props.saveVoice} suggest={props.suggestVocabulary} />
 
       <section className="preferences-section">
         <h3>Telegram</h3>

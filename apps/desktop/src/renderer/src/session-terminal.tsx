@@ -29,6 +29,7 @@ import { createFocusReports } from './terminal-focus-reports'
 import { trackTerminalView } from './terminal-view-tracking'
 import { searchStatusText } from './terminal-view'
 import { TERMINAL_THEMES } from './theme'
+import { readRecentLines } from './voice-suggestions'
 import type { SessionView, SessionViewUpdate } from './workspace-layout'
 
 type ApplicationRendererStartup = Parameters<Parameters<Window['aiTerminal']['onStartup']>[0]>[0]
@@ -60,8 +61,11 @@ export interface TerminalController {
   selectAll(): void
   openSearch(): void
   focus(): void
-  /** The last rows of the visible buffer as logical lines, oldest first; rows xterm wrapped are joined. Reads only. */
-  recentText(maxRows: number): string[]
+  /**
+   * The newest logical lines of the active buffer, oldest first, reading at most `maxRows` rows and `maxBytes` of their
+   * text; rows xterm wrapped are joined. Reads only.
+   */
+  recentText(maxRows: number, maxBytes: number): string[]
 }
 
 export function SessionTerminal(props: {
@@ -293,20 +297,7 @@ export function SessionTerminal(props: {
         requestAnimationFrame(() => searchInput.current?.select())
       },
       focus: () => terminal.focus(),
-      recentText: (maxRows) => {
-        const buffer = terminal.buffer.active
-        const first = Math.max(0, buffer.length - maxRows)
-        const lines: string[] = []
-        for (let index = first; index < buffer.length; index += 1) {
-          const line = buffer.getLine(index)
-          if (!line) continue
-          const continued = buffer.getLine(index + 1)?.isWrapped === true
-          const text = line.translateToString(!continued)
-          if (line.isWrapped && lines.length > 0) lines[lines.length - 1] += text
-          else lines.push(text)
-        }
-        return lines.map((text) => text.trimEnd())
-      }
+      recentText: (maxRows, maxBytes) => readRecentLines(terminal.buffer.active, maxRows, maxBytes)
     }
     props.register(props.startup.sessionId, controller)
     const removeTestHook = installTerminalTestHook({
