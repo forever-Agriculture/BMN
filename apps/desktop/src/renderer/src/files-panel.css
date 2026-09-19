@@ -242,6 +242,12 @@
   background: var(--selected);
 }
 
+/* Inside the lifted sheet every button is already a plate, so the pressed one needs a stronger plate that hover keeps. */
+.app-dialog .files-image-toolbar button[aria-pressed='true'],
+.app-dialog .files-image-toolbar button[aria-pressed='true']:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 20%, transparent);
+}
+
 .files-image-zoom-pct {
   min-width: 3.5em;
   color: var(--muted);

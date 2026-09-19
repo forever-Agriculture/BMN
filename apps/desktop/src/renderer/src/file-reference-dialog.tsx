@@ -126,7 +126,7 @@ export function FileReferenceDialog(props: { request: FileReferenceRequest; onCl
       {snapshot && preview ? (
         <>
           <p className="file-reference-status" role="status">
-            {preview.position} · snapshot read {new Date(snapshot.readAt).toLocaleTimeString()} · {byteSize(snapshot.byteLength)} ·
+            <strong className="file-reference-position">{preview.position}</strong> · snapshot read {new Date(snapshot.readAt).toLocaleTimeString()} · {byteSize(snapshot.byteLength)} ·
             read-only; Refresh reads it again
           </p>
           {preview.lineCount === 0 ? <p className="file-reference-status">The file is empty.</p> : (

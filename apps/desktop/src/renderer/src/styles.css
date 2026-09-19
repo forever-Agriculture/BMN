@@ -207,19 +207,31 @@ input[type='radio'] {
   accent-color: var(--text);
 }
 
+/* Focus sits inside the control's own edge; a ring floating outside a bordered control reads as a double line. */
 .shell-window :where(button, input, select, textarea, [tabindex]):not(.xterm-helper-textarea):focus-visible {
   outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+/* A checked box or radio is filled with the focus colour, so its ring floats just outside instead. */
+.shell-window input:is([type='checkbox'], [type='radio']):focus-visible {
   outline-offset: 2px;
+}
+
+/* A text field's border becomes the ring, with a soft halo so keyboard focus still reads at a glance. */
+.shell-window :where(input:not([type='checkbox'], [type='radio']), select, textarea):not(.xterm-helper-textarea):focus-visible {
+  outline: none;
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 14%, transparent);
+}
+
+/* A primary button is filled with the focus colour, so its ring uses the ground instead. */
+.shell-window button.primary:focus-visible {
+  outline-color: var(--ground);
 }
 
 .xterm-helper-textarea:focus-visible {
   outline: none;
-}
-
-.session-row > button:first-child:focus-visible,
-.workspace-row > button:first-child:focus-visible,
-.popup-menu [role='menuitem']:focus-visible {
-  outline-offset: -2px;
 }
 
 .eyebrow {
@@ -1033,24 +1045,47 @@ input[type='radio'] {
 
 /* ---------- Dialogs, popovers and palette ---------- */
 
+/* A dialog is one lifted sheet: no frame, a faint rim and a single deep shadow. */
 .app-dialog {
   width: min(520px, calc(100vw - 32px));
   max-height: 90vh;
   padding: 0;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  border: 0;
+  border-radius: 14px;
+  outline: 1px solid color-mix(in srgb, var(--text) 9%, transparent);
+  outline-offset: -1px;
   color: var(--text);
-  background: var(--raised);
-  box-shadow: 0 16px 48px rgb(0 0 0 / 45%);
+  background: color-mix(in srgb, var(--identity) 3%, var(--raised));
+  box-shadow: 0 30px 140px -15px rgb(0 0 0 / 70%), 0 2px 6px rgb(0 0 0 / 30%);
 }
 
 .app-dialog[open] {
   display: flex;
   flex-direction: column;
+  animation: dialog-in 180ms ease-out;
 }
 
 .app-dialog::backdrop {
-  background: rgb(0 0 0 / 35%);
+  background: rgb(0 0 0 / 28%);
+  backdrop-filter: blur(6px);
+}
+
+.app-dialog[open]::backdrop {
+  animation: backdrop-in 180ms ease-out;
+}
+
+/* Chrome only: a dialog settles into place when it opens; terminal output never animates. */
+@keyframes dialog-in {
+  from {
+    opacity: 0;
+    translate: 0 -8px;
+  }
+}
+
+@keyframes backdrop-in {
+  from {
+    opacity: 0;
+  }
 }
 
 .app-dialog-heading {
@@ -1058,27 +1093,93 @@ input[type='radio'] {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 10px 12px 8px 16px;
-  border-bottom: 1px solid var(--hairline);
+  padding: 14px 12px 0 20px;
 }
 
 .app-dialog-heading h2 {
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.app-dialog-heading .icon-button {
+  width: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-radius: 999px;
+  font-size: 16px;
+}
+
+.app-dialog-heading .icon-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 .app-dialog-body {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 14px;
   min-height: 0;
   overflow: auto;
-  padding: 12px 16px 16px;
+  padding: 12px 20px 20px;
 }
 
-.shell-window .app-dialog-body button:focus-visible,
-.shell-window .needs-you-popover button:focus-visible {
-  outline-offset: -2px;
+/* Fields and buttons inside a dialog: soft edges and filled plates instead of outlined boxes. */
+.app-dialog :where(input:not([type='checkbox'], [type='radio']), select, textarea) {
+  min-height: 36px;
+  padding: 6px 12px;
+  border-color: color-mix(in srgb, var(--text) 10%, transparent);
+  border-radius: 10px;
+  transition: var(--hover-transition), box-shadow 100ms ease-out;
+}
+
+.app-dialog :where(input:not([type='checkbox'], [type='radio']), select, textarea):hover:not(:focus-visible) {
+  border-color: color-mix(in srgb, var(--text) 18%, transparent);
+}
+
+.app-dialog :where(button:not(.icon-button)) {
+  min-height: 32px;
+  padding: 4px 14px;
+  border-color: transparent;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  font-weight: 500;
+}
+
+.app-dialog :where(button:not(.icon-button)):hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 13%, transparent);
+}
+
+.app-dialog :where(button:not(.icon-button)):active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+  box-shadow: none;
+}
+
+.app-dialog :where(button:not(.icon-button)):disabled {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  opacity: 0.6;
+}
+
+.app-dialog :where(button.ghost) {
+  background: transparent;
+}
+
+.app-dialog :where(button.ghost):hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.app-dialog button.primary:disabled {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+.app-dialog :where(button.danger) {
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 14%, transparent);
+}
+
+.app-dialog :where(button.danger):hover:not(:disabled) {
+  background: color-mix(in srgb, var(--error) 22%, transparent);
 }
 
 .dialog-form {
@@ -1103,43 +1204,51 @@ input[type='radio'] {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-}
-
-.dialog-actions .danger {
-  border-color: var(--error);
-  color: var(--error);
+  margin-top: 2px;
 }
 
 /* ---------- File reference preview ---------- */
 
 .file-reference-dialog {
-  width: min(960px, calc(100vw - 32px));
+  width: min(960px, calc(100vw - 48px));
 }
 
 .file-reference-entry {
   display: flex;
   align-items: flex-end;
-  gap: 8px;
+  gap: 10px;
 }
 
 .file-reference-entry label {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
   color: var(--muted);
+  font-size: 12px;
 }
 
 .file-reference-entry input {
   width: 100%;
+  font-size: 13px;
 }
 
+.file-reference-entry button.primary {
+  min-height: 36px;
+  padding-inline: 18px;
+}
+
+/* The facts about this opening sit on one quiet plate, on a steady row rhythm. */
 .file-reference-meta {
   display: grid;
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 4px 12px;
+  grid-template-columns: 124px minmax(0, 1fr);
+  gap: 2px 12px;
   margin: 0;
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 3.5%, transparent);
   font-size: 12px;
+  line-height: 22px;
 }
 
 .file-reference-meta dt {
@@ -1150,24 +1259,43 @@ input[type='radio'] {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 8px;
+  gap: 2px 12px;
   margin: 0;
   overflow-wrap: anywhere;
+}
+
+.file-reference-meta .mono {
+  font-size: 12px;
 }
 
 .file-reference-path {
   user-select: text;
 }
 
+/* The button's padding is pulled back so a wrapped "Choose folder…" lines up with the path above it. */
 .file-reference-base-actions {
   display: inline-flex;
   gap: 6px;
+  margin-left: -6px;
+}
+
+.file-reference-base-actions button {
+  min-height: 22px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 400;
 }
 
 .file-reference-status {
-  margin: 0;
+  margin: -4px 0 0;
   color: var(--muted);
   font-size: 12px;
+}
+
+.file-reference-position {
+  color: var(--text);
+  font-weight: 500;
 }
 
 .file-reference-preview {
@@ -1176,14 +1304,40 @@ input[type='radio'] {
   min-height: 120px;
   max-height: 55vh;
   overflow: auto;
-  border: 1px solid var(--hairline);
-  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--text) 7%, transparent);
+  border-radius: 10px;
   background: var(--ground);
+  transition: border-color 100ms ease-out;
+}
+
+.shell-window .file-reference-preview:focus-visible {
+  outline: none;
+  border-color: var(--focus);
+}
+
+.file-reference-preview::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.file-reference-preview::-webkit-scrollbar-track,
+.file-reference-preview::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.file-reference-preview::-webkit-scrollbar-thumb {
+  border: 3px solid var(--ground);
+  border-radius: 999px;
+  background: var(--border);
+}
+
+.file-reference-preview::-webkit-scrollbar-button {
+  display: none;
 }
 
 .file-reference-preview pre {
   margin: 0;
-  padding: 8px 0;
+  padding: 10px 0;
   font: 12px/1.5 var(--font-mono);
   white-space: pre;
 }
@@ -1191,27 +1345,28 @@ input[type='radio'] {
 .file-reference-gutter {
   position: sticky;
   left: 0;
-  padding-inline: 8px !important;
-  border-right: 1px solid var(--hairline);
+  padding-inline: 14px 10px !important;
   color: var(--faint);
   text-align: right;
-  background: var(--ground);
+  background: color-mix(in srgb, var(--text) 2.5%, var(--ground));
   user-select: none;
 }
 
 .file-reference-code {
   min-width: max-content;
-  padding-inline: 10px !important;
+  padding-inline: 14px 16px !important;
   color: var(--text);
   user-select: text;
 }
 
+/* The referenced line carries the identity colour, as the palette's selected row does. */
 .file-reference-line {
   display: block;
-  margin-inline: -10px;
-  padding-inline: 10px;
+  margin-inline: -14px -16px;
+  padding-inline: 14px 16px;
   color: var(--text);
-  background: var(--selection);
+  background: color-mix(in srgb, var(--identity) 13%, transparent);
+  box-shadow: inset 3px 0 var(--identity);
 }
 
 .file-reference-actions {
@@ -1369,18 +1524,31 @@ input[type='radio'] {
   color: var(--muted);
 }
 
+/* The palette floats over the terminals without dimming them. */
 .command-palette {
-  width: min(600px, calc(100vw - 32px));
-  margin-top: 12vh;
+  width: min(640px, calc(100vw - 48px));
+  margin-top: max(10vh, calc(50vh - 190px));
+}
+
+.command-palette::backdrop {
+  background: transparent;
+  backdrop-filter: none;
+}
+
+.command-palette .app-dialog-heading {
+  padding-top: 12px;
 }
 
 .command-palette .app-dialog-body {
-  padding: 8px;
+  gap: 8px;
+  padding: 8px 10px 10px;
 }
 
 .command-palette input {
   width: 100%;
-  min-height: 34px;
+  min-height: 44px;
+  padding: 8px 14px;
+  font-size: 15px;
 }
 
 .palette-results {
@@ -1424,22 +1592,23 @@ input[type='radio'] {
 }
 
 .palette-results .group {
-  padding: 8px 8px 2px;
+  padding: 10px 12px 4px;
 }
 
 .palette-results [role='option'] {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 32px;
-  padding: 4px 8px;
-  border-radius: 6px;
+  min-height: 36px;
+  padding: 4px 12px;
+  border-radius: 8px;
   cursor: pointer;
 }
 
 .palette-results [role='option'] > span:first-child {
   min-width: 0;
   overflow: hidden;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1457,8 +1626,13 @@ input[type='radio'] {
 }
 
 .palette-results [role='option'][aria-selected='true'] {
-  background: var(--selected);
+  background: color-mix(in srgb, var(--identity) 14%, transparent);
   box-shadow: inset 2px 0 var(--identity);
+}
+
+.palette-results [role='option'][aria-selected='true'] .context {
+  color: var(--text);
+  opacity: 0.75;
 }
 
 .palette-results [role='option']:active {
@@ -1558,7 +1732,9 @@ input[type='radio'] {
     transition: none !important;
   }
 
-  .pane-footer .speak-button.recording svg {
+  .pane-footer .speak-button.recording svg,
+  .app-dialog[open],
+  .app-dialog[open]::backdrop {
     animation: none;
   }
 }
