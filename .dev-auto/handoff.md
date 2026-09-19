@@ -1,46 +1,47 @@
 # Dev Auto handoff
 
-- Project / selected epics: `/home/oleksandr/code/BMN`; Epics 6–7 (stories 6.1, 6.2, 7.1, 7.2).
-- Original request and intended outcomes: `$dev-auto 6-7 complete autonomously, I'm going to bed`; finish clearer attention triage and explicit cross-session handoffs through acceptance.
+- Project / selected epics: `/home/oleksandr/code/BMN`; Epic 8 (stories 8.1, 8.2).
+- Original request and intended outcomes: `/dev-auto 8` (2026-09-19, Claude Code); open local file references from the command palette (8.1) and by Ctrl+click on terminal output (8.2) in a read-only snapshot overlay, per `_bmad-output/planning-artifacts/epics.md` Epic 8 and `reference-context-8-12.md` "File references".
 - Mode: build
 - Stopping condition: selected scope accepted; no automatic time limit
 - Explicit user stop (if any; only a later user instruction clears it): none
-- Restrictions and authorization boundaries: local implementation, proportionate checks, isolated synthetic runtime trials, necessary Codex/Claude/GLM helper and representative handoff dispatches, independent reviews, sprint/handoff updates, and ready checked local commits are authorized. No push, merge, deploy, install, real Telegram message, private-content screenshot, or destructive cleanup.
-- Authorized provider routes: native Codex helpers and the configured Codex/Claude/GLM routes under the owner’s dev-auto policy; minimum task-relevant payload only, with no credentials or unrelated private data.
-- Lead host / requested model / observed model: Codex host; no model requested; current rollout receipt to be recorded at acceptance.
+- Restrictions and authorization boundaries: local implementation, proportionate checks, isolated synthetic Electron runs, independent review dispatches under the owner's dev-auto policy (`~/.claude/CLAUDE.md` Authority), sprint/handoff updates and ready checked local commits. Push to `main` and `pnpm run update:desktop` (AGENTS.md) need separate owner authorization. No install, deploy, destructive cleanup, or private-content screenshots.
+- Authorized provider routes: native Claude Code helpers; Codex CLI, Claude CLI and configured GLM profile per `~/.claude/skills/dev-auto/references/models.md`; minimum task-relevant payload only.
+- Lead host / requested model / observed model: Claude Code; no model requested; lead runs as `claude-opus-5[1m]` (session system prompt).
+- Prior run: Epics 6–7 handoff (COMPLETE) is in git history at `93a6fe3`.
 
 ## Progress
 
-- Sprint board and reconciled state: Epics 5, 6, and 7 are accepted. The ignored sprint board marks Epic 6 stories 6.1/6.2 and Epic 7 stories 7.1/7.2 done.
-- Implemented: Epic 6 classifies questions/permissions/reviews as response-needed and notices as updates; truthful row/pane wording; actionable-first shortcut navigation; stable grouped popover ordering with kind/place/title/age/actions; current-incarnation and stale progress presentation, including stopped sessions; atomic notice kind/revision resolution; and expanded isolated Electron race/stale/focus coverage. Epic 7 adds persisted editable handoff drafts with source/destination/artifact provenance; preparation in Files without terminal writes; explicit destination-only paste without Enter; per-draft claim-before-write serialization, incarnation/revision guards, monotonic timestamps, accepted receipts, uncertain retry copies, migration/backup compatibility, and UI/service/store/protocol coverage. Implementation committed locally as `037f8a9` (`feat: complete attention triage and session handoffs`). Existing uncommitted `workspace-layout.ts` / test changes predate this run and remain preserved and excluded.
+- Sprint board and reconciled state: board (`_bmad-output/implementation-artifacts/sprint-status.yaml`, ignored) shows epics 5–7 done; epic-8 `in-progress`, 8-1 and 8-2 `review` (implemented and checked, awaiting independent review). Base `8b5a2db` was clean.
+- Implemented: shared grammar `shared/protocol/src/file-reference.ts` (typed/terminal parse, token scan, quoting, `file.reference.read` method); utility reader `apps/desktop/src/utility/file-reference-reader.ts` (realpath + O_NOFOLLOW|O_NONBLOCK open, fstat regular-file check, 1 MiB bound incl. growth, NUL/strict UTF-8) routed in `pty-host.ts` with the live launch directory (`SessionManager.liveLaunchDirectory`) or stored cwd; main IPC `file-reference-ipc.ts` (sender check, bounded fields, folder picker, Show in folder); preload bridge; renderer dialog/presentation, palette entry, selection prefill; xterm link provider `file-reference-links.ts` (requested-row only, wrapped-row join ≤16, Ctrl-only underline/activation, off in mouse-tracking mode, activation re-validates the printed cells); macOS Ctrl+click context menu suppressed; README and architecture notes.
 - Associated loop (optional; host and native loop/task ID): none
-- Active native helpers (ID, route, scope, ownership, state): none. `/root/epic7_backend`, requested native `gpt-5.6-sol`/xhigh, stopped before implementation because it incorrectly invoked a nested `bmad-build` bootstrap whose repository script is absent; no files changed.
-- Collected terminal helper results: `/root/epic7_architecture_scout`, native `gpt-5.6-luna`/max, completed a read-only map of protocol/schema/store/service/IPC/UI/test seams and claim-before-write risks with `RESULT: done`. `/root/epic6_whole_review`, native `gpt-6-astra`/medium, completed the whole-epic review and focused recheck with `RESULT: done`; E6-R1 atomic notice preconditions, E6-R2 stopped/details progress, and E6-R3 same-session notice/actionable coexistence, incoming-update focus/order, and stale progress across live/details/stopped views are all CLOSED. `/root/epic7_project_review`, native `gpt-6-astra`/high, completed the whole-Epic 7 plus cross-epic final evaluation with `RESULT: done` against diff fingerprint `d60babf37e2df7d99ba8cd28a0cf400b273f71f59607237450a01fa2cec59b34`; it found three material gaps E7-R1/R2/R3 and no new Epic 6 defect.
+- Active native helpers (ID, route, scope, ownership, state): none
+- Collected terminal helper results: none
 
 ## Decisions and findings
 
-- Original or approved intent changes: none. Keep BMN independent of personal workflow tooling. Handoff transport contains only owner-selected text, provenance, and stored-file links; no workflow instructions, resume commands, role management, or automatic Enter.
-- Material pending findings: none. Epic 7's focused Astra/high recheck marks E7-R1 truthful uncertainty refresh/result handling, E7-R2 source-session archive purge compatibility, and E7-R3 unavailable/absent attachment removal CLOSED against the consolidated repair.
-- Cross-epic obligations: preserve Epic 5 visual semantics; Epic 6 request/update resolution and ordering must remain intact through Epic 7; handoff preparation/paste must not resolve attention, start processes, or mutate unrelated workspace files.
+- Original or approved intent changes: none.
+- Material pending findings: none.
+- Cross-epic obligations: preserve Epic 5 gold/white/orange semantics and geometry; Epic 6 attention resolution (opening a file never resolves attention); Epic 7 handoff paste/receipt behaviour; one live xterm per session; no PTY writes from file preview.
 
 ## Evidence
 
-- Checks run and observed results: planning, architecture, reference context, board, complete prior handoff, and current dirty tree reconciled. Epic 6 repair suite 37 PASS. Epic 7 focused protocol/store/service/schema suite 67 PASS. CLI integration 28 PASS. Final full unit/integration suite 820 PASS and 1 skipped across 67 files. Final typecheck PASS, lint PASS, `git diff --check` PASS, and required-permission `pnpm run test:electron` PASS. The Electron receipt proves unchanged response order during a live notice revision, focus stability, stale progress in live/details/stopped views, handoff save/edit/paste/discard, existing-input preservation, one payload insertion, attention preservation, accepted persistence after restart, and graceful host shutdown. The explicitly invoked live-client trial is kept outside ordinary unit-test discovery.
-- Reviewed scope and route: full Epic 6 review via native `gpt-6-astra`/medium against base `bf7db3a` and current uncommitted Epic 6 files; unrelated workspace-layout edits excluded.
-- Reviewed revision / material finding closures / recheck or delta evidence: current uncommitted implementation relative to `bf7db3a`; independent Astra/medium recheck marks E6-R1, E6-R2, and E6-R3 CLOSED. Independent Astra/high Epic 7/project review found E7-R1/R2/R3; its focused recheck marks all three CLOSED after consolidated repairs. The four focused repair files pass 25 tests in both lead and reviewer runs.
-- Unreviewed or unverified areas: no selected acceptance outcome remains unverified. The reviewer-noted edit/send overlap, uncertain restart/retry, handoff-specific backup metadata, and most individual 16 KiB/10-file validation rejection variants remain nonblocking evidence gaps; the guarded mechanisms and representative failure/success paths are covered.
-
-- Cross-harness receipt: `.dev-auto/evidence/cross-harness-receipt.json`, SHA-256 `d26742b3221330934a3ecbe6c194891e7c54530dee13ae7214090144f3bfa37b`. Claude→Codex and Codex→Claude each used one bounded BMN paste, retained existing destination input, produced no response before manual submission, reached accepted state, and read the selected stored original. Observed clients/models: Codex CLI 0.155.0 / `gpt-5.6-luna low`; Claude Code 2.1.277 / Sonnet 5 low. Claude safe/restricted mode initially treated an instruction-only pasted package as untrusted; the passing trial used one natural owner-stated validation purpose in existing input and no follow-up or refusal override. An attempted automatic follow-up was rejected by approval review and was removed before execution.
+- Checks run and observed results (2026-09-19, working tree before the first Epic 8 commit): `pnpm run test:unit` 884 passed / 1 skipped (`.dev-auto/evidence/unit-7.log`, sha256 `d0ee1d18…`); `pnpm run lint` EXIT 0 (`lint-4.log`); `pnpm run typecheck` EXIT 0 (`typecheck-4.log`); `git diff --check` clean; `pnpm run test:electron` EXIT 0 (`electron-12.log`, sha256 `5fe0ab22…`) exercising palette by keyboard → preview line 42 → copy → Show (stubbed, path recorded) → Escape focus return; launch directory used after shell `cd`; chosen-folder read; `$HOME` rejection keeping input; Ctrl+click from the unselected pane; plain click, Ctrl+drag copy, SGR mouse-mode fixture; redraw of a hovered link (stale click shut, new reference opens as itself); palette opening from a cross-workspace split pane names `Archived running chat · Self-test archived workspace` and main's read log addresses that session; exact read log = 8 explicit opens (no hover/output reads); PTY input 0; geometry 43x30 / refits unchanged / same element; attention unchanged; missing session NOT_FOUND.
+- Regression proof: stale-link activation test fails without the cell re-check (unit) and Electron fails with `staleOpened:true` (`electron-11-nofix.log`, sha256 `c2460c7e…`); both pass with it.
+- Failed attempts kept for context: electron-1 (default mouse encoding goes via xterm `onBinary`, switched fixture to SGR), electron-3 (synthetic mousedown `detail` 0 skipped selection), electron-3/4 `terminalUnchanged:false` INCONCLUSIVE — most likely the files-panel close refit racing the baseline; baseline now waits for refits to settle, 7 consecutive passes (6–10, 12; 11 was the deliberate no-fix run). Unit timeouts in `saved-output-store.test.ts` (unit-2..4) occurred only while an unrelated 8-worker pytest ran; the file passes alone and the suite passes after (unit-5, unit-6).
+- Reviewed scope and route: none yet.
+- Reviewed revision / material finding closures / recheck or delta evidence: none yet.
+- Unreviewed or unverified areas: independent review pending. UNVERIFIED: macOS (Ctrl+click vs context menu, Show in folder), the real Linux file manager (self-test stubs `shell.showItemInFolder`), the native folder picker (dialogs disabled in self-test; chosen base exercised through the bridge). Both self-test sessions share one launch directory, so per-session base selection is shown by the addressed session ID, not by distinct paths.
+- Unrelated pre-existing gap (mention once): xterm default-encoding mouse reports arrive via `onBinary`, which BMN does not forward; SGR (1006) reports work.
 
 ## Measurement
 
-- Timing: started 2026-09-18T23:54+03:00 / acceptance reached 2026-09-19T01:19+03:00 / elapsed about 1h25m.
-- Dispatches: 6 native helper turns—architecture scout, one failed backend bootstrap with no edits, Epic 6 full review plus focused recheck, and Epic 7/project full review plus focused recheck. Representative client trials made 1 successful Codex turn and 3 Claude turns (2 recorded refusals followed by 1 passing natural-purpose trial); idle probes and trust-gate attempts made no model request. One proposed automatic Claude follow-up was rejected by approval review and removed before execution.
-- Owner interventions: 0 corrections; initial request authorizes the autonomous run.
-- Observed usage: native collaboration token counts were not surfaced to the lead; interactive trial usage was not exposed in the retained receipt. Observed review routes/models and trial client models are recorded above; no retry was made merely to discover usage.
+- Timing: started 2026-09-19T14:04+03:00 / accepted — / elapsed —
+- Dispatches: none yet.
+- Owner interventions: 0.
+- Observed usage: —
 
 ## Resume
 
-- Historical context: Epic 5 accepted in commits `3a26eaf` and `8520215`; the planning-only compatibility update that followed is superseded by this explicit implementation request.
-- Next safe action: none for the selected scope. Do not push, merge, or deploy without separate owner authorization.
-- Status: COMPLETE
+- Next safe action: commit Epic 8 locally, then dispatch the independent Fable review of that commit.
+- Status: ACTIVE

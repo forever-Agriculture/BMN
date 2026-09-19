@@ -73,6 +73,35 @@ const receiptContract = [
       receipt.handoffFlow.discardedDraftHidden === true &&
       receipt.handoffFlow.persistedAfterRestart === true
   ],
+  [
+    'fileReferenceFlow',
+    (receipt) =>
+      receipt.fileReferenceFlow?.palette?.focusedInput === true &&
+      receipt.fileReferenceFlow.palette.marked === 'FILE-REFERENCE-TARGET line 42' &&
+      receipt.fileReferenceFlow.palette.copied?.endsWith('/refs/src/parser.ts:42:7') &&
+      receipt.fileReferenceFlow.palette.focusReturned === true &&
+      receipt.fileReferenceFlow.shownPaths?.length === 1 &&
+      receipt.fileReferenceFlow.shellDirectoryIgnored?.message === 'No file exists at this path.' &&
+      receipt.fileReferenceFlow.chosenFolder?.kind === 'chosen-directory' &&
+      receipt.fileReferenceFlow.rejected?.inputPreserved === true &&
+      receipt.fileReferenceFlow.link?.reference === 'refs/src/parser.ts:42:7' &&
+      receipt.fileReferenceFlow.link.selectedElsewhere === true &&
+      receipt.fileReferenceFlow.link.focusReturned === true &&
+      receipt.fileReferenceFlow.plainClick?.opened === false &&
+      receipt.fileReferenceFlow.ctrlDrag?.copiedSelection === true &&
+      receipt.fileReferenceFlow.ctrlDrag.opened === false &&
+      receipt.fileReferenceFlow.missingSessionCode === 'NOT_FOUND' &&
+      receipt.fileReferenceFlow.mouseMode?.opened === false &&
+      receipt.fileReferenceFlow.mouseMode.underlined === false &&
+      receipt.fileReferenceFlow.mouseMode.reportsToProgram >= 1 &&
+      receipt.fileReferenceFlow.redraw?.staleOpened === false &&
+      receipt.fileReferenceFlow.redraw.reference === 'refs/src/parser.ts:7' &&
+      receipt.fileReferenceFlow.reads?.length === 8 &&
+      receipt.fileReferenceFlow.crossWorkspace?.session === 'Archived running chat · Self-test archived workspace' &&
+      receipt.fileReferenceFlow.ptyInputEvents === 0 &&
+      receipt.fileReferenceFlow.terminalUnchanged === true &&
+      receipt.fileReferenceFlow.attentionUnchanged === true
+  ],
   ['launchBackgroundChoiceRecorded', (receipt) => receipt.launchBackgroundChoiceRecorded === 'hide'],
   [
     'registeredInvokeChannels',

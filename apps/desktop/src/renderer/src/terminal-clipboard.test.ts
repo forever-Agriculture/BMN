@@ -2,8 +2,8 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { copyableText, createMouseClipboard, type MouseClipboardButton } from './terminal-clipboard'
 
-const left: MouseClipboardButton = { button: 0, shiftKey: false }
-const right: MouseClipboardButton = { button: 2, shiftKey: false }
+const left: MouseClipboardButton = { button: 0, shiftKey: false, ctrlKey: false }
+const right: MouseClipboardButton = { button: 2, shiftKey: false, ctrlKey: false }
 
 let calls: string[]
 let selection: string
@@ -56,8 +56,8 @@ describe('mouse clipboard', () => {
     selection = 'text'
     mouse.mouseDown(right)
     mouse.mouseUp(right)
-    mouse.mouseDown({ button: 1, shiftKey: false })
-    mouse.mouseUp({ button: 1, shiftKey: false })
+    mouse.mouseDown({ button: 1, shiftKey: false, ctrlKey: false })
+    mouse.mouseUp({ button: 1, shiftKey: false, ctrlKey: false })
     expect(calls).toEqual([])
   })
 
@@ -82,7 +82,15 @@ describe('mouse clipboard', () => {
     const mouse = clipboard()
     expect(mouse.contextMenu(right)).toBe(false)
     expect(calls).toEqual([])
-    expect(mouse.contextMenu({ button: 2, shiftKey: true })).toBe(true)
+    expect(mouse.contextMenu({ button: 2, shiftKey: true, ctrlKey: false })).toBe(true)
+    expect(calls).toEqual(['paste'])
+  })
+
+  it('never pastes for a Ctrl+primary click that macOS reports as a context menu, leaving it to file links', () => {
+    const mouse = clipboard()
+    expect(mouse.contextMenu({ button: 0, shiftKey: false, ctrlKey: true })).toBe(false)
+    expect(calls).toEqual([])
+    expect(mouse.contextMenu({ ...right, ctrlKey: true })).toBe(true)
     expect(calls).toEqual(['paste'])
   })
 })

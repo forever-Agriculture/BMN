@@ -13,6 +13,8 @@ import type {
   VoiceSettings
 } from '@bmn/protocol'
 import { failureDetail, isBridgeError } from './bridge-error'
+import { createFileReferenceLinkProvider } from './file-reference-links'
+import { openReferenceFromPane, runFileReferenceIntegration } from './file-reference-self-test'
 import { Icon } from './icons'
 import { SHORTCUT_LABELS } from './keymap'
 import type { ProgressPresentation, SessionAttention } from './session-presentation'
@@ -95,6 +97,8 @@ export function SessionTerminal(props: {
   voiceBusy: boolean
   onSpeak(): void
   onDropFiles(files: File[]): void
+  /** Ctrl+click on a file reference printed in this pane; it always names this pane's session. */
+  onOpenFileReference(reference: string): void
 }): React.JSX.Element {
   const element = useRef<HTMLDivElement>(null)
   const section = useRef<HTMLElement>(null)
@@ -110,6 +114,7 @@ export function SessionTerminal(props: {
   const onPaste = useRef(props.onPaste)
   const needsYou = useRef(props.attention !== null)
   const onAnswer = useRef(props.onAnswer)
+  const onOpenFileReference = useRef(props.onOpenFileReference)
   const activated = useRef(false)
   /** The presented exit status; undefined while the process is running. */
   const [exitStatus, setExitStatus] = useState<string>()
@@ -126,6 +131,7 @@ export function SessionTerminal(props: {
   onPaste.current = props.onPaste
   needsYou.current = props.attention !== null
   onAnswer.current = props.onAnswer
+  onOpenFileReference.current = props.onOpenFileReference
 
   useEffect(() => {
     const container = element.current
@@ -222,6 +228,21 @@ export function SessionTerminal(props: {
     container.addEventListener('mousedown', mouseDown, true)
     container.addEventListener('contextmenu', contextMenu, true)
     window.addEventListener('mouseup', mouseUp)
+    // xterm's linkifier hears the click on the screen after the capture listeners above and the window hears the
+    // release last: a Ctrl+click on a link opens it and, with no selection made, the clipboard is left alone.
+    const fileLinks = createFileReferenceLinkProvider({
+      buffer: () => terminal.buffer.active,
+      enabled: () => terminal.modes.mouseTrackingMode === 'none',
+      hasSelection: () => terminal.hasSelection(),
+      open: (reference) => onOpenFileReference.current(reference)
+    })
+    const fileLinkRegistration = terminal.registerLinkProvider(fileLinks)
+    const trackLinkModifier = (event: MouseEvent | KeyboardEvent): void => fileLinks.modifierChanged(event.ctrlKey)
+    const releaseLinkModifier = (): void => fileLinks.modifierChanged(false)
+    container.addEventListener('mousemove', trackLinkModifier, true)
+    window.addEventListener('keydown', trackLinkModifier, true)
+    window.addEventListener('keyup', trackLinkModifier, true)
+    window.addEventListener('blur', releaseLinkModifier)
     const controller: TerminalController = {
       output: (message) => {
         if (message.attachmentId !== startup.current.attachmentId) return
@@ -483,6 +504,16 @@ export function SessionTerminal(props: {
         })
         const closeFiles = await waitFor(() => document.querySelector<HTMLButtonElement>('.files-close'))
         closeFiles.click()
+        console.warn('[BMN] renderer behavioural integration: file references started')
+        const fileReferenceFlow = await runFileReferenceIntegration({
+          sessionId: props.startup.sessionId,
+          sessionName: props.startup.name,
+          workspaceId: props.startup.workspaceId,
+          terminal,
+          section: section.current!,
+          refitCount: () => refitCount
+        })
+        console.warn('[BMN] renderer behavioural integration: file references complete')
         const handoffFlow = {
           draftId: acceptedHandoff.draftId,
           targetSessionId: destination.sessionId,
@@ -627,6 +658,12 @@ export function SessionTerminal(props: {
           `.session-terminal[data-session-id="${sourceSession.sessionId}"]:not(.session-terminal-hidden)`
         ))
         if (!sourcePane) throw new Error('the cross-workspace terminal pane was not visible')
+        fileReferenceFlow.crossWorkspace = await openReferenceFromPane({
+          pane: sourcePane,
+          workspaceId: props.startup.workspaceId,
+          sessionId: sourceSession.sessionId,
+          reference: 'refs/src/parser.ts:42:7'
+        })
         section.current?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
         const focusedLayout = await waitFor(async () => {
           const next = await window.aiTerminal.getLayout(props.startup.workspaceId)
@@ -681,6 +718,7 @@ export function SessionTerminal(props: {
           },
           hiddenPaneSize: { shown: shownSize, hidden: hiddenSize },
           handoffFlow,
+          fileReferenceFlow,
           attentionTriage: {
             responseTitles,
             responseTitlesAfterUpdate: updatedGroups.responses,
@@ -716,6 +754,11 @@ export function SessionTerminal(props: {
       container.removeEventListener('mousedown', mouseDown, true)
       container.removeEventListener('contextmenu', contextMenu, true)
       window.removeEventListener('mouseup', mouseUp)
+      fileLinkRegistration.dispose()
+      container.removeEventListener('mousemove', trackLinkModifier, true)
+      window.removeEventListener('keydown', trackLinkModifier, true)
+      window.removeEventListener('keyup', trackLinkModifier, true)
+      window.removeEventListener('blur', releaseLinkModifier)
       tracking.dispose()
       observer.disconnect()
       capture.dispose()

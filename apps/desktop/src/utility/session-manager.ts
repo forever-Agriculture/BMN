@@ -1005,6 +1005,12 @@ export class SessionManager {
     return live && !live.exited ? live.incarnationId : undefined
   }
 
+  /** The directory the live process was started in, which an edit to the stored launch settings does not move. */
+  liveLaunchDirectory(sessionId: string): string | undefined {
+    const live = this.sessions.get(sessionId)
+    return live && !live.exited ? live.cwd : undefined
+  }
+
   /** Addressed input written straight to a session's live process, independent of any attached view. */
   writeToSession(sessionId: string, bytes: Uint8Array): void {
     const live = this.sessions.get(sessionId)

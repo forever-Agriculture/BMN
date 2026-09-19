@@ -15,6 +15,8 @@ import {
   type BackupVerifyResult,
   type ControlInfo,
   type DraftSendExpectation,
+  type FileReferenceReadParams,
+  type FileReferenceReadResult,
   type HandoffDraftSaveParams,
   type InputDraftRecord,
   type ProgressRecord,
@@ -429,6 +431,15 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   showArtifact(artifactId: string): Promise<{ shown: true }> {
     return invokeBridge('aiterm:artifact:show', { artifactId })
+  },
+  readFileReference(params: FileReferenceReadParams): Promise<FileReferenceReadResult> {
+    return invokeBridge('aiterm:file-reference:read', params)
+  },
+  chooseFileReferenceBase(): Promise<string | null> {
+    return invokeBridge('aiterm:file-reference:choose-base', {})
+  },
+  showFileReference(path: string): Promise<{ shown: true }> {
+    return invokeBridge('aiterm:file-reference:show', { path })
   },
   listAttention(): Promise<AttentionRecord[]> {
     return invokeBridge('aiterm:attention:list', {})

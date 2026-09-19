@@ -120,6 +120,52 @@ describe('renderer acceptance hook', () => {
         payloadOccurrences: 1,
         attentionResponsesPreserved: true,
         discardedDraftHidden: true
+      },
+      fileReferenceFlow: {
+        launchDirectory: '/work',
+        palette: {
+          focusedInput: true,
+          base: '/work',
+          file: '/work/refs/src/parser.ts',
+          marked: 'target',
+          position: 'Line 42, column 7 of 60 lines',
+          copied: '/work/refs/src/parser.ts:42:7',
+          shownFeedback: 'Shown in the file manager.',
+          focusReturned: true
+        },
+        shellDirectoryIgnored: { base: '/work', file: '/work/src/parser.ts', message: 'No file exists at this path.' },
+        chosenFolder: { pickerMessage: 'File dialogs are unavailable in this run', kind: 'chosen-directory', canonicalPath: '/work/refs/src/parser.ts' },
+        rejected: { message: 'Shell variables are not expanded; enter the full path.', inputPreserved: true },
+        link: {
+          reference: 'refs/src/parser.ts:42:7',
+          session: 'Shell · Work',
+          marked: 'target',
+          selectedElsewhere: true,
+          underlinedWithCtrl: true,
+          focusReturned: true
+        },
+        plainClick: { underlined: false, opened: false },
+        ctrlDrag: { selected: 'refs/src/', copiedSelection: true, opened: false },
+        missingSessionCode: 'NOT_FOUND',
+        mouseMode: { underlined: false, opened: false, reportsToProgram: 2 },
+        ptyInputEvents: 0,
+        crossWorkspace: {
+          session: 'Archived running chat · Self-test archived workspace',
+          base: '/tmp/self-test',
+          file: '/tmp/self-test/refs/src/parser.ts',
+          marked: 'FILE-REFERENCE-TARGET line 42'
+        },
+        redraw: {
+          underlinedBefore: true,
+          staleOpened: false,
+          staleUnderlined: false,
+          reference: 'refs/src/parser.ts:7',
+          marked: 'line 7',
+          ptyInputEvents: 0
+        },
+        terminalUnchanged: true,
+        terminalGeometry: { before: '80x24 refits 2', after: '80x24 refits 2', sameElement: true },
+        attentionUnchanged: true
       }
     }
     const integration = async () => probe

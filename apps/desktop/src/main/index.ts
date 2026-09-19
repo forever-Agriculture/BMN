@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import {
   ERROR_CODES,
@@ -12,6 +12,7 @@ import {
   type LaunchTemplateRecord,
   type LayoutGetResult,
   type ProgressRecord,
+  type ProtocolMethod,
   type SavedOutputCapture,
   type SavedOutputCaptureOutcome,
   type SavedOutputCatalog,
@@ -35,6 +36,7 @@ import {
   Notification,
   powerMonitor,
   session as electronSession,
+  shell,
   utilityProcess,
   webContents,
   type IpcMainInvokeEvent,
@@ -77,6 +79,8 @@ import {
   createAppEventForwarder,
   installCompanionIpcHandlers
 } from './companion-ipc'
+import type { FileReferenceFlowProbe } from '../renderer/src/file-reference-probe'
+import { installFileReferenceIpcHandlers } from './file-reference-ipc'
 import { createPresenceMonitor, readMutterIdleMs } from './presence-monitor'
 import { installVoiceIpcHandlers } from './voice-ipc'
 import {
@@ -207,6 +211,10 @@ let selfTestRendererUnavailableTemplate: LaunchTemplateRecord | undefined
 /** A failed self-test's release may still run after the reason is printed; it waits this long for the host. */
 const SELF_TEST_RELEASE_CLOSE_DEADLINE_MS = 5_000
 let selfTestFailureReported = false
+/** Self-test hook: paths Show in folder received; the automated run never opens a file manager. */
+const selfTestShownFileReferences: string[] = []
+/** Every reference the renderer asked to read during a self-test, in order: hovering and output must add none. */
+const selfTestReadFileReferences: Array<{ sessionId: string; reference: string }> = []
 const allowedSenders = new Set<number>()
 /** The session each renderer shows as selected, so a notification skips the session the owner is looking at. */
 const selectedSessions = new Map<number, string | null>()
@@ -498,6 +506,31 @@ function installIpcHandlers(): void {
     client: () => requireHostClient(),
     senderIsAllowed,
     dialogsEnabled: () => !selfTest
+  })
+  installFileReferenceIpcHandlers(bridgeIpc, {
+    client: () => {
+      const client = requireHostClient()
+      if (!selfTest) return client
+      return {
+        request: <Result>(method: ProtocolMethod, params: object) => {
+          const { sessionId, reference } = params as { sessionId?: unknown; reference?: unknown }
+          selfTestReadFileReferences.push({ sessionId: String(sessionId), reference: String(reference) })
+          return client.request<Result>(method, params)
+        }
+      }
+    },
+    senderIsAllowed,
+    chooseFolder: async (event) => {
+      if (selfTest) throw new MainIpcError(ERROR_CODES.invalidArgument, 'File dialogs are unavailable in this run')
+      const options = { title: 'Resolve the reference from this folder', properties: ['openDirectory'] as Array<'openDirectory'> }
+      const owner = BrowserWindow.fromWebContents(event.sender)
+      const picked = owner ? await dialog.showOpenDialog(owner, options) : await dialog.showOpenDialog(options)
+      return picked.canceled ? null : picked.filePaths[0] ?? null
+    },
+    showInFolder: (path) => {
+      if (selfTest) selfTestShownFileReferences.push(path)
+      else shell.showItemInFolder(path)
+    }
   })
   const defaultVoiceModelFolder = join(resolveApplicationRoots().data, 'voice', 'models')
   installVoiceIpcHandlers(bridgeIpc, {
@@ -963,6 +996,7 @@ interface RendererIntegrationProbe {
     attentionResponsesPreserved: boolean
     discardedDraftHidden: boolean
   }
+  fileReferenceFlow: FileReferenceFlowProbe
 }
 
 async function stoppedPanelLabel(window: BrowserWindow, sessionId: string): Promise<string> {
@@ -1634,6 +1668,15 @@ async function runSelfTest(): Promise<void> {
       requestId: revisedPrompt.requestId,
       resolution: 'Self-test cleanup'
     })
+    // The probe pane prints a reference relative to its launch directory, then its shell moves elsewhere.
+    const fileReferenceRoot = join(isolatedCwd, 'refs')
+    mkdirSync(join(fileReferenceRoot, 'src'), { recursive: true })
+    writeFileSync(
+      join(fileReferenceRoot, 'src', 'parser.ts'),
+      Array.from({ length: 60 }, (_, index) => index === 41 ? 'FILE-REFERENCE-TARGET line 42' : `line ${index + 1}`)
+        .join('\n') + '\n'
+    )
+    writeFixtureCommand(secondSession, "printf 'FILEREF %s/%s\\n' refs src/parser.ts:42:7; cd refs")
     writeFixtureInput(session, 'EXISTING-HANDOFF-PREFIX ')
     const rendererStartup = await loadApplicationStartup(true)
     console.error('[BMN] self-test phase: renderer preload integration')
@@ -1723,6 +1766,78 @@ async function runSelfTest(): Promise<void> {
       !preloadProbe.handoffFlow.discardedDraftHidden
     ) {
       throw new Error(`the renderer did not complete the explicit handoff flow: ${JSON.stringify(preloadProbe.handoffFlow)}`)
+    }
+    const fileReferenceFlow = preloadProbe.fileReferenceFlow
+    const referencedFile = realpathSync(join(fileReferenceRoot, 'src', 'parser.ts'))
+    // Only explicit opens read: palette, launch-directory miss, chosen folder, rejected expansion, Ctrl+click,
+    // the reference printed over a redrawn link, the missing session and the other workspace's pane. Hovers, clicks
+    // and drags add nothing.
+    const expectedFileReferenceReads = [
+      'refs/src/parser.ts:42:7',
+      'src/parser.ts',
+      'src/parser.ts',
+      '$HOME/notes.txt',
+      'refs/src/parser.ts:42:7',
+      'refs/src/parser.ts:7',
+      'refs/src/parser.ts:42:7',
+      'refs/src/parser.ts:42:7'
+    ]
+    if (
+      !fileReferenceFlow.palette.focusedInput ||
+      fileReferenceFlow.palette.base !== realpathSync(isolatedCwd) && fileReferenceFlow.palette.base !== isolatedCwd ||
+      fileReferenceFlow.palette.file !== referencedFile ||
+      fileReferenceFlow.palette.marked !== 'FILE-REFERENCE-TARGET line 42' ||
+      !fileReferenceFlow.palette.position.startsWith('Line 42, column 7 of 60 lines') ||
+      fileReferenceFlow.palette.copied !== `${referencedFile}:42:7` ||
+      fileReferenceFlow.palette.shownFeedback !== 'Shown in the file manager.' ||
+      JSON.stringify(selfTestShownFileReferences) !== JSON.stringify([referencedFile]) ||
+      !fileReferenceFlow.palette.focusReturned ||
+      fileReferenceFlow.shellDirectoryIgnored.message !== 'No file exists at this path.' ||
+      fileReferenceFlow.shellDirectoryIgnored.file !== join(fileReferenceFlow.launchDirectory, 'src', 'parser.ts') ||
+      !fileReferenceFlow.chosenFolder.pickerMessage.includes('File dialogs are unavailable') ||
+      fileReferenceFlow.chosenFolder.kind !== 'chosen-directory' ||
+      fileReferenceFlow.chosenFolder.canonicalPath !== referencedFile ||
+      fileReferenceFlow.rejected.message !== 'Shell variables are not expanded; enter the full path.' ||
+      !fileReferenceFlow.rejected.inputPreserved ||
+      fileReferenceFlow.link.reference !== 'refs/src/parser.ts:42:7' ||
+      !fileReferenceFlow.link.session.startsWith('Same CLI chat B · ') ||
+      fileReferenceFlow.link.marked !== 'FILE-REFERENCE-TARGET line 42' ||
+      !fileReferenceFlow.link.selectedElsewhere ||
+      !fileReferenceFlow.link.underlinedWithCtrl ||
+      !fileReferenceFlow.link.focusReturned ||
+      fileReferenceFlow.plainClick.underlined ||
+      fileReferenceFlow.plainClick.opened ||
+      fileReferenceFlow.ctrlDrag.selected.length < 3 ||
+      !'refs/src/parser.ts:42:7'.startsWith(fileReferenceFlow.ctrlDrag.selected) ||
+      !fileReferenceFlow.ctrlDrag.copiedSelection ||
+      fileReferenceFlow.ctrlDrag.opened ||
+      fileReferenceFlow.missingSessionCode !== ERROR_CODES.notFound ||
+      fileReferenceFlow.mouseMode.underlined ||
+      fileReferenceFlow.mouseMode.opened ||
+      fileReferenceFlow.mouseMode.reportsToProgram < 1 ||
+      fileReferenceFlow.crossWorkspace?.session !== 'Archived running chat · Self-test archived workspace' ||
+      fileReferenceFlow.crossWorkspace.base !== fileReferenceFlow.palette.base ||
+      fileReferenceFlow.crossWorkspace.file !== referencedFile ||
+      fileReferenceFlow.crossWorkspace.marked !== 'FILE-REFERENCE-TARGET line 42' ||
+      !fileReferenceFlow.redraw.underlinedBefore ||
+      fileReferenceFlow.redraw.staleOpened ||
+      fileReferenceFlow.redraw.staleUnderlined ||
+      fileReferenceFlow.redraw.reference !== 'refs/src/parser.ts:7' ||
+      fileReferenceFlow.redraw.marked !== 'line 7' ||
+      fileReferenceFlow.redraw.ptyInputEvents !== 0 ||
+      JSON.stringify(selfTestReadFileReferences.map((read) => read.reference)) !==
+        JSON.stringify(expectedFileReferenceReads) ||
+      selfTestReadFileReferences.at(-1)?.sessionId !== thirdSession.sessionId ||
+      fileReferenceFlow.ptyInputEvents !== 0 ||
+      !fileReferenceFlow.terminalUnchanged ||
+      !fileReferenceFlow.attentionUnchanged
+    ) {
+      throw new Error(`the renderer did not complete the file-reference flow: ${JSON.stringify({
+        ...fileReferenceFlow,
+        shownPaths: selfTestShownFileReferences,
+        reads: selfTestReadFileReferences,
+        expectedFile: referencedFile
+      })}`)
     }
     preloadProbe.attentionTriage.staleNoticeRejected = staleNoticeRejected
     preloadProbe.attentionTriage.revisedPromptPreserved = revisedPromptPreserved
@@ -2177,6 +2292,11 @@ async function runSelfTest(): Promise<void> {
       crossWorkspaceSplit: preloadProbe.crossWorkspaceSplit,
       hiddenPaneSize: preloadProbe.hiddenPaneSize,
       handoffFlow: { ...preloadProbe.handoffFlow, persistedAfterRestart: true },
+      fileReferenceFlow: {
+        ...preloadProbe.fileReferenceFlow,
+        shownPaths: [...selfTestShownFileReferences],
+        reads: [...selfTestReadFileReferences]
+      },
       attentionTriage: preloadProbe.attentionTriage,
       inactiveFollowingOutputLayoutPuts,
       inactiveFollowingOutputCaptured,

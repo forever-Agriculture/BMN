@@ -29,6 +29,7 @@ import {
 } from '@bmn/protocol'
 import { CompanionService, UNROUTED } from './companion-service'
 import { DatabaseClientError, DatabaseWorkerClient } from './database-client'
+import { readFileReference } from './file-reference-reader'
 import { nativeLoadFailureMessage } from './native-load-error'
 import { ensureApplicationRoots, resolveApplicationRoots } from './roots'
 import { FileSavedOutputStore } from './saved-output-store'
@@ -521,6 +522,17 @@ async function start(): Promise<void> {
           },
           typeof params.viewEpoch === 'string' ? params.viewEpoch : undefined
         )
+      case METHOD_REGISTRY.fileReferenceRead: {
+        const sessionId = stringValue(params, 'sessionId')
+        const session = await findStoredSession(database, sessionId)
+        if (!session) throw new HostControlError(ERROR_CODES.notFound, 'The source session no longer exists')
+        return readFileReference({
+          sessionId,
+          reference: params.reference,
+          baseDirectory: params.baseDirectory,
+          launchDirectory: manager.liveLaunchDirectory(sessionId) ?? session.cwd
+        })
+      }
     }
     const routed = await companionService.route(request.method, params)
     if (routed === UNROUTED) {

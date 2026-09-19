@@ -23,6 +23,7 @@ import './styles.css'
 import { failureDetail } from './bridge-error'
 import { CommandPalette, type PaletteCommand } from './command-palette'
 import { conversationBindingPresentation } from './conversation-resume'
+import { FileReferenceDialog, type FileReferenceRequest } from './file-reference-dialog'
 import { FilesPanel } from './files-panel'
 import { Icon } from './icons'
 import { isModifierOnly, resolveShortcut, SHORTCUT_LABELS, type AppCommand } from './keymap'
@@ -102,6 +103,7 @@ type ShellDialog =
   | { kind: 'rename-workspace'; workspace: WorkspaceRecord }
   | { kind: 'locate'; session: SessionRecord; binding: ConversationBindingState }
   | { kind: 'stop'; session: SessionRecord }
+  | { kind: 'file-reference'; request: FileReferenceRequest }
 
 type SidePanel = 'files' | 'details' | null
 
@@ -678,6 +680,32 @@ function App(): React.JSX.Element {
     voiceRecording.current?.cancel()
   }, [])
 
+  /** Opens the read-only file overlay for this exact session; the reference resolves from its launch directory. */
+  const openFileReference = (sessionId: string | null, reference: string, openNow: boolean): void => {
+    const record = sessionsRef.current.find((session) => session.sessionId === sessionId)
+    if (!record) {
+      brief('Select a session to open a file reference from.')
+      return
+    }
+    setDialog({
+      kind: 'file-reference',
+      request: {
+        sessionId: record.sessionId,
+        sessionName: record.name,
+        workspaceName: workspaceName(record.workspaceId),
+        launchDirectory: liveRef.current.get(record.sessionId)?.cwd ?? record.cwd,
+        reference,
+        openNow
+      }
+    })
+  }
+
+  /** A one-line terminal selection prefills the reference; it still opens only on Open. */
+  const selectedReferenceText = (sessionId: string | null): string => {
+    const selection = sessionId ? controllers.current.get(sessionId)?.selection() ?? '' : ''
+    return selection.includes('\n') ? '' : selection.trim()
+  }
+
   const copySelection = (sessionId: string | null): void => {
     const text = sessionId ? controllers.current.get(sessionId)?.selection() : ''
     if (!text) {
@@ -980,6 +1008,11 @@ function App(): React.JSX.Element {
       command('search', 'Search terminal output', () => runCommand('search'), { shortcut: SHORTCUT_LABELS.search, disabled: !selectedSessionId || !live[selectedSessionId] }),
       command('files', panel === 'files' ? 'Close files' : 'Show files', () => setPanel(panel === 'files' ? null : 'files')),
       command('details', 'Session details', () => setPanel('details'), { disabled: !selectedRecord }),
+      command('file-reference', 'Open file reference…', () => openFileReference(
+        selectedRecord?.sessionId ?? null,
+        selectedReferenceText(selectedRecord?.sessionId ?? null),
+        false
+      ), { context: selectedRecord?.name, disabled: !selectedRecord }),
       command('attach', 'Attach files to terminal…', () => attachFiles(selectedSessionId), { context: selectedRecord?.name, disabled: !selectedSessionId || !live[selectedSessionId] }),
       command('paste-image', 'Paste image into terminal', () => pasteImage(selectedSessionId), { context: selectedRecord?.name, disabled: !selectedSessionId || !live[selectedSessionId] }),
       command('voice', voice?.phase === 'recording' ? 'Stop dictation and paste' : 'Dictate into terminal', () => toggleVoice(selectedSessionId), {
@@ -1236,6 +1269,7 @@ function App(): React.JSX.Element {
                     .then((records) => deliver(records, terminalStartup.sessionId))
                     .catch(fail('Drop failed'))
                 }}
+                onOpenFileReference={(reference) => openFileReference(terminalStartup.sessionId, reference, true)}
               />
             )
           })}
@@ -1521,6 +1555,9 @@ function App(): React.JSX.Element {
           commands={splitPickerCommands(dialog.sessionId)}
           onClose={() => setDialog(null)}
         />
+      ) : null}
+      {dialog?.kind === 'file-reference' ? (
+        <FileReferenceDialog request={dialog.request} onClose={() => setDialog(null)} />
       ) : null}
       {dialog?.kind === 'preferences' ? (
         <PreferencesDialog settings={settings} onSettings={setSettings} onClose={() => setDialog(null)} />

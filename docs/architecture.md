@@ -71,6 +71,16 @@ validated and moved into place atomically before its record is committed. Previe
 by file ID, never by path. Save As checks the stored file against its hash before copying it to the
 chosen destination.
 
+**A file reference is a live read, not a stored file.** Opening a path an agent printed (Ctrl+click, or
+Open file reference… in the palette) sends the owner's session, the reference text and an optional
+chosen folder through preload and main to the utility. The utility parses the reference again,
+resolves a relative path against the session's launch directory (never a guessed shell directory),
+follows symlinks, opens the result without following a final symlink or blocking, and reads it only
+when it is a regular UTF-8 text file of at most 1 MiB. The preview is a snapshot that refreshes only
+on request; it is never copied into the stored files and adds nothing to the agent control socket.
+Terminal links are found only in the line xterm.js asks about, without touching the filesystem, and
+are off while a program reads the mouse.
+
 **Progress and requests keep their evidence.** Process state, progress reports, unread state and
 the resolution of an agent's question are stored separately. An agent saying it is done is shown as
 a claim, not as verified success. A question stays open until it is answered or withdrawn.

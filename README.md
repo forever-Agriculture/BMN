@@ -31,6 +31,10 @@ Everything runs on your computer. There is no account, cloud backend or telemetr
 - **Files.** Published files, attachments and pasted images are stored as immutable originals with
   a hash. The Files panel previews them and offers Open, Save As, Show in Folder and Deliver to
   session.
+- **File references.** `Ctrl+click` a path an agent printed, such as `src/parser.ts:42:7`, or use
+  **Open file reference…** in the palette, to see a read-only snapshot of that file at the line, with
+  Copy reference and Show in Folder. Relative paths resolve from the session's launch directory, which
+  the preview names; you can pick another folder for one opening. Nothing is edited, run or stored.
 - **Needs you.** Agent questions stay open until you answer them or the agent withdraws them. A
   header count and `Ctrl+Shift+U` take you to the next one.
 - **Local voice dictation.** Hold Space in any terminal to talk; release to paste the text into
@@ -64,9 +68,11 @@ Everything runs on your computer. There is no account, cloud backend or telemetr
 | `Ctrl+Shift+\` | Send the next key straight to the terminal |
 | Hold `Space`, or `Ctrl+Shift+Space` | Dictate |
 | `Ctrl +` / `Ctrl −` / `Ctrl 0` | Font size |
+| `Ctrl+click` a printed file path | Open a read-only preview of the file |
 
 Selecting text with the mouse copies it. Right-click goes to programs that read the mouse, such as
-vim, unless you hold Shift. Send a literal `Ctrl+V` with `Ctrl+Shift+\` first. The shortcuts are
+vim, unless you hold Shift. While such a program reads the mouse, `Ctrl+click` belongs to it too;
+use **Open file reference…** in the palette instead. Send a literal `Ctrl+V` with `Ctrl+Shift+\` first. The shortcuts are
 the same on macOS: they use `Ctrl`, not `Cmd`, so the keys a terminal program expects reach it.
 
 ## Install from source

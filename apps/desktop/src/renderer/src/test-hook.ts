@@ -1,3 +1,5 @@
+import type { FileReferenceFlowProbe } from './file-reference-probe'
+
 export interface TerminalTestSnapshot {
   bufferLines: string[]
   cols: number
@@ -74,6 +76,7 @@ export interface TerminalIntegrationProbe {
     attentionResponsesPreserved: boolean
     discardedDraftHidden: boolean
   }
+  fileReferenceFlow: FileReferenceFlowProbe
 }
 
 export interface TerminalTestHook {

@@ -8,6 +8,8 @@ import type {
   BackupVerifyResult,
   ControlInfo,
   DraftSendExpectation,
+  FileReferenceReadParams,
+  FileReferenceReadResult,
   HandoffDraftSaveParams,
   InputDraftRecord,
   ProgressRecord,
@@ -153,6 +155,12 @@ export interface AiTerminalBridge {
   saveArtifactAs(artifactId: string): Promise<{ saved: string | null }>
   openArtifact(artifactId: string): Promise<{ opened: true }>
   showArtifact(artifactId: string): Promise<{ shown: true }>
+  /** A read-only snapshot of a live local file; the utility resolves and checks the reference again. */
+  readFileReference(params: FileReferenceReadParams): Promise<FileReferenceReadResult>
+  /** A native folder picker for resolving one reference; null when cancelled. */
+  chooseFileReferenceBase(): Promise<string | null>
+  /** Reveals the displayed file in the system file manager without opening it. */
+  showFileReference(path: string): Promise<{ shown: true }>
   listAttention(): Promise<AttentionRecord[]>
   markAttentionSeen(requestId: string): Promise<AttentionRecord>
   resolveAttention(

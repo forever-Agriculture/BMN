@@ -1110,6 +1110,120 @@ input[type='radio'] {
   color: var(--error);
 }
 
+/* ---------- File reference preview ---------- */
+
+.file-reference-dialog {
+  width: min(960px, calc(100vw - 32px));
+}
+
+.file-reference-entry {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.file-reference-entry label {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+}
+
+.file-reference-entry input {
+  width: 100%;
+}
+
+.file-reference-meta {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 0;
+  font-size: 12px;
+}
+
+.file-reference-meta dt {
+  color: var(--muted);
+}
+
+.file-reference-meta dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.file-reference-path {
+  user-select: text;
+}
+
+.file-reference-base-actions {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.file-reference-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.file-reference-preview {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  min-height: 120px;
+  max-height: 55vh;
+  overflow: auto;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: var(--ground);
+}
+
+.file-reference-preview pre {
+  margin: 0;
+  padding: 8px 0;
+  font: 12px/1.5 var(--font-mono);
+  white-space: pre;
+}
+
+.file-reference-gutter {
+  position: sticky;
+  left: 0;
+  padding-inline: 8px !important;
+  border-right: 1px solid var(--hairline);
+  color: var(--faint);
+  text-align: right;
+  background: var(--ground);
+  user-select: none;
+}
+
+.file-reference-code {
+  min-width: max-content;
+  padding-inline: 10px !important;
+  color: var(--text);
+  user-select: text;
+}
+
+.file-reference-line {
+  display: block;
+  margin-inline: -10px;
+  padding-inline: 10px;
+  color: var(--text);
+  background: var(--selection);
+}
+
+.file-reference-actions {
+  align-items: center;
+}
+
+.file-reference-feedback {
+  flex: 1;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .needs-you-popover {
   position: absolute;
   top: 40px;

@@ -36,6 +36,7 @@ export const METHOD_REGISTRY = Object.freeze({
   artifactSaveAs: 'artifact.saveAs',
   artifactPreview: 'artifact.preview',
   artifactDeliver: 'artifact.deliver',
+  fileReferenceRead: 'file.reference.read',
   attentionList: 'attention.list',
   attentionSeen: 'attention.seen',
   attentionResolve: 'attention.resolve',

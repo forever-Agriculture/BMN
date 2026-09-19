@@ -623,6 +623,18 @@ describe('shell session lifecycle', () => {
     expect(spawned).toEqual([join(home, 'code', 'project'), home])
   })
 
+  it('reports the live process launch directory for file references until the process exits', async () => {
+    const { manager, pty, cwd } = await fixture()
+    const created = await manager.create({
+      ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath, argv: [], cols: 80, rows: 24
+    })
+
+    expect(manager.liveLaunchDirectory(created.sessionId)).toBe(cwd)
+    expect(manager.liveLaunchDirectory('unknown-session')).toBeUndefined()
+    pty.emitExit({ exitCode: 0 })
+    await vi.waitFor(() => expect(manager.liveLaunchDirectory(created.sessionId)).toBeUndefined())
+  })
+
   it('expands only a leading ~ or ~/ in a launch directory', () => {
     expect(resolveHomeDirectory('~', '/home/owner')).toBe('/home/owner')
     expect(resolveHomeDirectory('~/', '/home/owner')).toBe('/home/owner')

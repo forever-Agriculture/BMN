@@ -3,6 +3,7 @@
 export interface MouseClipboardButton {
   button: number
   shiftKey: boolean
+  ctrlKey: boolean
 }
 
 export interface MouseClipboardHost {
@@ -45,6 +46,8 @@ export function createMouseClipboard(host: MouseClipboardHost): MouseClipboard {
       if (text) host.copy(text)
     },
     contextMenu: (event) => {
+      // macOS reports Ctrl+click as a context menu; Ctrl with the primary button belongs to file links, not paste.
+      if (event.ctrlKey && event.button === PRIMARY) return false
       // Pasting into a program reading the mouse (vim, htop) could run keys it never asked for; Shift forces it.
       if (host.mouseTracking() && !event.shiftKey) return false
       host.paste()
