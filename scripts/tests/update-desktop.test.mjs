@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
-  desktopEntryRunsBinary,
+  desktopEntryRunsLauncher,
   repositoryReadiness,
   runningExecutablePids
 } from '../install/update-desktop.mjs'
@@ -34,9 +34,9 @@ describe('desktop source update', () => {
     expect(repositoryReadiness({ ...ready, originHead: 'def' })).toMatch(/push the commit first/u)
   })
 
-  it('verifies the installed desktop launcher uses the packaged binary', () => {
-    const binary = '/repo/apps/desktop/release/linux-unpacked/bmn'
-    expect(desktopEntryRunsBinary(`[Desktop Entry]\nExec="${binary}"\n`, binary)).toBe(true)
-    expect(desktopEntryRunsBinary('[Desktop Entry]\nExec="/old/bmn"\n', binary)).toBe(false)
+  it('verifies the installed desktop entry starts BMN through the update-aware launcher', () => {
+    const launcher = '/home/owner/.local/share/bmn/launch-bmn'
+    expect(desktopEntryRunsLauncher(`[Desktop Entry]\nExec="${launcher}"\n`, launcher)).toBe(true)
+    expect(desktopEntryRunsLauncher('[Desktop Entry]\nExec="/repo/apps/desktop/release/linux-unpacked/bmn"\n', launcher)).toBe(false)
   })
 })

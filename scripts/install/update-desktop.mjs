@@ -16,13 +16,13 @@ import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
+import { UPDATE_UNIT, launcherPath, launcherScript, updateStateDirectory } from '../lib/desktop-launcher.mjs'
 import { packagedApp } from '../lib/packaged-app.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const workerPath = fileURLToPath(import.meta.url)
 const { binary, archive } = packagedApp(repoRoot)
-const stateHome = process.env.XDG_STATE_HOME || join(homedir(), '.local/state')
-const stateDirectory = join(stateHome, 'bmn', 'source-update')
+const stateDirectory = updateStateDirectory()
 const statusPath = join(stateDirectory, 'latest.json')
 const logPath = join(stateDirectory, 'latest.log')
 const desktopEntry = join(
@@ -30,7 +30,8 @@ const desktopEntry = join(
   'applications',
   'bmn.desktop'
 )
-const unit = 'bmn-desktop-update.service'
+const launcher = launcherPath()
+const unit = UPDATE_UNIT
 
 /** Returns processes whose executable is the packaged BMN binary, without matching command text. */
 export function runningExecutablePids(executable, procRoot = '/proc') {
@@ -61,8 +62,8 @@ export function repositoryReadiness({ branch, head, originHead, status }) {
   return null
 }
 
-export function desktopEntryRunsBinary(entry, executable) {
-  return entry.split(/\r?\n/u).includes(`Exec="${executable}"`)
+export function desktopEntryRunsLauncher(entry, launcherFile) {
+  return entry.split(/\r?\n/u).includes(`Exec="${launcherFile}"`)
 }
 
 function capture(command, args) {
@@ -156,8 +157,11 @@ async function runWorker() {
   if (completedReadiness) throw new Error(`source changed during the update: ${completedReadiness}`)
   if (completedState.head !== buildingState.head) throw new Error('source commit changed during the update')
   if (!existsSync(binary) || !existsSync(archive)) throw new Error('packaged BMN artifact is missing after install')
-  if (!desktopEntryRunsBinary(readFileSync(desktopEntry, 'utf8'), binary)) {
-    throw new Error('desktop launcher does not point at the packaged BMN binary')
+  if (!desktopEntryRunsLauncher(readFileSync(desktopEntry, 'utf8'), launcher)) {
+    throw new Error('desktop entry does not run the BMN launcher')
+  }
+  if (readFileSync(launcher, 'utf8') !== launcherScript({ binary, statusPath })) {
+    throw new Error('BMN launcher does not start the packaged BMN binary')
   }
 
   const completedAt = new Date().toISOString()
@@ -196,7 +200,7 @@ function queueWorker() {
   if (result.status !== 0) {
     throw new Error(`could not queue BMN update: ${(result.stderr || result.stdout || result.error?.message || '').trim()}`)
   }
-  console.log(`Queued BMN ${state.head.slice(0, 7)} update. Close BMN and wait for the “BMN updated” notification before reopening.\nLog: ${logPath}`)
+  console.log(`Queued BMN ${state.head.slice(0, 7)} update. Close BMN; opening it from the desktop waits until the update finishes.\nLog: ${logPath}`)
 }
 
 const directlyInvoked = process.argv[1] && resolve(process.argv[1]) === workerPath

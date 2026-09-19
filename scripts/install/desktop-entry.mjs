@@ -4,6 +4,7 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, w
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { launcherPath, launcherScript, updateStateDirectory } from '../lib/desktop-launcher.mjs'
 import { packagedApp } from '../lib/packaged-app.mjs'
 
 // Must match "desktopName" in apps/desktop/package.json: Electron derives the Wayland app_id from it.
@@ -21,10 +22,10 @@ if (!existsSync(binary)) {
   process.exit(1)
 }
 
-function writeAtomically(path, content) {
+function writeAtomically(path, content, mode = 0o644) {
   mkdirSync(dirname(path), { recursive: true })
   const temporary = `${path}.tmp-${process.pid}`
-  writeFileSync(temporary, content, { mode: 0o644 })
+  writeFileSync(temporary, content, { mode })
   renameSync(temporary, path)
 }
 
@@ -56,13 +57,17 @@ function installDesktopEntry() {
   mkdirSync(join(icons, 'scalable/apps'), { recursive: true })
   copyFileSync(join(iconSource, 'bmn.svg'), join(icons, 'scalable/apps', `${ICON_NAME}.svg`))
 
+  // The launcher is replaced by rename, so a launcher already waiting on an update keeps reading its own copy.
+  const launcher = launcherPath()
+  writeAtomically(launcher, launcherScript({ binary, statusPath: join(updateStateDirectory(), 'latest.json') }), 0o755)
+
   const entryPath = join(dataHome, 'applications', DESKTOP_ID)
   writeAtomically(entryPath, [
     '[Desktop Entry]',
     'Type=Application',
     'Name=BMN',
     'Comment=Workspaces for Claude, Codex and shell sessions',
-    `Exec="${binary}"`,
+    `Exec="${launcher}"`,
     `Icon=${ICON_NAME}`,
     'Terminal=false',
     'Categories=System;TerminalEmulator;',
@@ -78,7 +83,7 @@ function installDesktopEntry() {
   }
   spawnSync('update-desktop-database', [dirname(entryPath)])
   spawnSync('gtk-update-icon-cache', ['-f', '-t', icons])
-  console.log(`Installed ${entryPath} and ${ICON_NAME} icons under ${icons}`)
+  console.log(`Installed ${entryPath}, its launcher ${launcher} and ${ICON_NAME} icons under ${icons}`)
 
   if (!pin) return
   const current = spawnSync('gsettings', ['get', 'org.gnome.shell', 'favorite-apps'], { encoding: 'utf8' })

@@ -55,7 +55,7 @@ All commands run from the repository root.
 | `pnpm run package` | Voice engine, app build and an unpacked build for this platform in `apps/desktop/release` |
 | `pnpm run smoke:packaged` | Start the packaged build against a temporary data folder and check it |
 | `pnpm run install:desktop [-- --pin]` | Linux: install the launcher and icons, `--pin` adds it to the GNOME dock. macOS: copy `BMN.app` into `~/Applications` |
-| `pnpm run update:desktop` | Linux: queue a clean pushed `main` build; wait for BMN to exit, package, smoke-test, install and notify |
+| `pnpm run update:desktop` | Linux: queue a clean pushed `main` build; wait for BMN to exit, package, smoke-test, install and notify; a desktop start during the update waits for it |
 
 `make test`, `make lint`, `make typecheck` and `make build` wrap the same commands.
 
