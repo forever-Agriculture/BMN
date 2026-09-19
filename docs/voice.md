@@ -20,8 +20,10 @@ programs that need a held Space.
 
 1. Build the engine once: `pnpm run voice:build` (`pnpm run package` does it for you). It
    downloads whisper.cpp 1.9.4, checks the pinned SHA-256, applies one small patch (below) and
-   builds `whisper-cli` into `apps/desktop/resources/whisper/`. It needs `cmake`; if `cmake` is not
-   installed it uses a pinned CMake through [uv](https://docs.astral.sh/uv/).
+   builds `whisper-cli` and whisper.cpp's speech detector (`whisper-vad-speech-segments`) into
+   `apps/desktop/resources/whisper/`, next to the Silero speech model from the same archive (also
+   pinned by SHA-256). It needs `cmake`; if `cmake` is not installed it uses a pinned CMake through
+   [uv](https://docs.astral.sh/uv/).
 2. Open **Preferences → Voice** and download a model. Download also selects it.
 
 | Model | Download | Notes |
@@ -61,6 +63,18 @@ script; the panel refuses further words instead of cutting the list.
 The approved words are visible to local process inspection (for example `ps`) while `whisper-cli`
 runs. They never appear in BMN's logs or error messages.
 
+## Silence
+
+Whisper invents text for a recording without speech (often "you"), and with approved words it
+tends to repeat them instead. So BMN first checks the recording with the Silero speech model and
+sends it to Whisper only if some moment reaches a speech probability of 0.3, with no minimum length,
+so one short word said alone still counts. Otherwise nothing is pasted and BMN says "No speech was
+recognized." The check takes a few tens of milliseconds. Measured with the bundled model on English
+and synthetic Ukrainian speech: words and phrases peaked at 0.35–1.00 (the lowest was a short word
+30 dB quieter in noise), silence and faint noise at 0.023 or less. The threshold sits below Silero's
+default of 0.5 because a refused recording loses what you said, while noise that passes only gets
+Whisper's usual transcription.
+
 ## Speed
 
 Whisper normally encodes a fixed 30-second window, however short the recording. BMN passes
@@ -82,12 +96,14 @@ Base is faster than Small. Longer recordings take proportionally longer.
 - The microphone is opened only while recording.
 - The audio is written as a WAV file into a new private temporary folder, transcribed, and the
   folder is deleted afterwards.
-- `whisper-cli` runs as a local program on that file. The only network use is the model download
+- The speech detector and `whisper-cli` run as local programs on that file. The only network use is the model download
   you start.
 
 ## Troubleshooting
 
 - **Speak opens Preferences.** No model is installed yet, or the voice engine was not built. Run
   `pnpm run voice:build` and download a model.
+- **"No speech was recognized" although you spoke.** The speech check heard nothing that sounds like
+  speech; speak closer to the microphone or check the input device.
 - **Transcription is slow.** Use Base, or choose your language instead of Detect automatically.
 - **Hold Space does nothing.** Check that the terminal has focus and that Hold Space to talk is on.

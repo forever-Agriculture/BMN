@@ -160,4 +160,6 @@ malicious program already running as your user.
 
 ## License
 
-[MIT](LICENSE). whisper.cpp is MIT-licensed; its license is copied next to the built engine.
+[MIT](LICENSE). whisper.cpp is MIT-licensed; its license is copied next to the built engine. The
+Silero speech model (MIT, [snakers4/silero-vad](https://github.com/snakers4/silero-vad)) comes from
+whisper.cpp's source archive.

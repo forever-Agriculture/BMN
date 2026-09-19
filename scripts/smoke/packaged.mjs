@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, lstatSync, readdirSync, statSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { existsSync, lstatSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { assertOwnerRootsUnchanged, fingerprintOwnerRoots } from '../lib/owner-root-guard.mjs'
@@ -42,6 +42,24 @@ if (!existsSync(packagedWhisper) || (statSync(packagedWhisper).mode & 0o111) ===
 }
 if (spawnSync(packagedWhisper, ['--help'], { stdio: 'ignore' }).status !== 0) {
   throw new Error(`packaged voice engine does not run: ${packagedWhisper}`)
+}
+// Dictation first asks the speech detector whether a recording holds speech; one second of silence must hold none.
+const packagedDetector = join(packagedResources, 'whisper/whisper-vad-speech-segments')
+const silenceFolder = mkdtempSync(join(tmpdir(), 'bmn-smoke-voice-'))
+try {
+  const silence = Buffer.alloc(44 + 32_000)
+  silence.write('RIFF', 0); silence.writeUInt32LE(36 + 32_000, 4); silence.write('WAVEfmt ', 8); silence.writeUInt32LE(16, 16)
+  silence.writeUInt16LE(1, 20); silence.writeUInt16LE(1, 22); silence.writeUInt32LE(16_000, 24); silence.writeUInt32LE(32_000, 28)
+  silence.writeUInt16LE(2, 32); silence.writeUInt16LE(16, 34); silence.write('data', 36); silence.writeUInt32LE(32_000, 40)
+  writeFileSync(join(silenceFolder, 'silence.wav'), silence)
+  const detection = spawnSync(packagedDetector, [
+    '-f', join(silenceFolder, 'silence.wav'), '-vm', join(packagedResources, 'whisper/ggml-silero-v6.2.0.bin'), '-vt', '0.3', '-vspd', '0', '-np'
+  ], { encoding: 'utf8' })
+  if (detection.status !== 0 || !/Detected 0 speech segments/u.test(detection.stdout ?? '')) {
+    throw new Error(`packaged speech detector does not work: ${packagedDetector}`)
+  }
+} finally {
+  rmSync(silenceFolder, { recursive: true, force: true })
 }
 const ownerRootsBefore = ownerFingerprint()
 

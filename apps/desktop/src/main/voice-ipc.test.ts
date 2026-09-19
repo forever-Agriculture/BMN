@@ -5,7 +5,7 @@ import { ERROR_CODES } from '@bmn/protocol'
 import type { IpcMainInvokeEvent } from 'electron'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { encodeWav } from '../renderer/src/voice-wav'
-import { VOICE_MODELS } from './voice-engine'
+import { SPEECH_DETECTOR_FILE, SPEECH_MODEL_FILE, VOICE_MODELS } from './voice-engine'
 import { installVoiceIpcHandlers, type VoiceIpcOptions } from './voice-ipc'
 
 type Handler = (event: IpcMainInvokeEvent, params?: unknown) => unknown
@@ -34,9 +34,16 @@ function install(overrides: Partial<VoiceIpcOptions> = {}): Map<string, Handler>
   return handlers
 }
 
+async function installEngine(): Promise<void> {
+  for (const name of ['whisper-cli', SPEECH_DETECTOR_FILE]) {
+    await writeFile(join(folder, name), '#!/bin/sh\n')
+    await chmod(join(folder, name), 0o755)
+  }
+  await writeFile(join(folder, SPEECH_MODEL_FILE), '')
+}
+
 async function installEngineAndBase(): Promise<void> {
-  await writeFile(join(folder, 'whisper-cli'), '#!/bin/sh\n')
-  await chmod(join(folder, 'whisper-cli'), 0o755)
+  await installEngine()
   await mkdir(join(folder, 'models'))
   await writeFile(join(folder, 'models', 'ggml-base.bin'), '')
   await truncate(join(folder, 'models', 'ggml-base.bin'), VOICE_MODELS[0]!.bytes)
@@ -69,7 +76,13 @@ describe('voice IPC', () => {
     })
     const transcribe = handlers.get('aiterm:voice:transcribe')!
     await expect(transcribe(allowed, { model: 'base', language: 'auto', wav })).rejects.toThrow(/pnpm run voice:build/)
+    // An engine built before the speech check existed lacks the detector and its model: it is not usable yet.
     await writeFile(join(folder, 'whisper-cli'), '')
+    await writeFile(join(folder, SPEECH_DETECTOR_FILE), '')
+    await expect(transcribe(allowed, { model: 'base', language: 'auto', wav })).rejects.toThrow(/pnpm run voice:build/)
+    expect((await handlers.get('aiterm:voice:status')!(allowed) as { engineAvailable: boolean }).engineAvailable).toBe(false)
+    await installEngine()
+    expect((await handlers.get('aiterm:voice:status')!(allowed) as { engineAvailable: boolean }).engineAvailable).toBe(true)
     await expect(transcribe(allowed, { model: 'base', language: 'auto', wav })).rejects.toThrow(/Download the base voice model/)
     await expect(transcribe(allowed, { model: 'large', language: 'auto', wav })).rejects.toThrow(/Unknown voice model/)
     await expect(transcribe(allowed, { model: 'base', language: 'xx', wav })).rejects.toThrow(/not supported/)
@@ -92,7 +105,8 @@ describe('voice IPC', () => {
       modelPath: join(folder, 'models', 'ggml-base.bin'),
       language: 'uk',
       wav,
-      vocabulary: []
+      vocabulary: [],
+      speechDetector: { binary: join(folder, SPEECH_DETECTOR_FILE), modelPath: join(folder, SPEECH_MODEL_FILE) }
     }))
   })
 

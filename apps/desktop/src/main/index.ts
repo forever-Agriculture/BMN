@@ -84,7 +84,14 @@ import type { VoiceFlowProbe } from '../renderer/src/voice-probe'
 import { installFileReferenceIpcHandlers } from './file-reference-ipc'
 import { createPresenceMonitor, readMutterIdleMs } from './presence-monitor'
 import { installVoiceIpcHandlers } from './voice-ipc'
-import { VOICE_MODELS, validateWav, whisperArguments, type transcribeRecording } from './voice-engine'
+import {
+  SPEECH_DETECTOR_FILE,
+  SPEECH_MODEL_FILE,
+  VOICE_MODELS,
+  validateWav,
+  whisperArguments,
+  type transcribeRecording
+} from './voice-engine'
 import {
   attachCreatedSession,
   createExplicitLaunchSession,
@@ -1708,6 +1715,8 @@ async function runSelfTest(): Promise<void> {
     // Dictation needs an engine and an installed model to start; both are stand-ins, and transcription is synthetic.
     mkdirSync(join(selfTestVoiceFolder(), 'models'), { recursive: true })
     writeFileSync(join(selfTestVoiceFolder(), 'whisper-cli'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    writeFileSync(join(selfTestVoiceFolder(), SPEECH_DETECTOR_FILE), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    writeFileSync(join(selfTestVoiceFolder(), SPEECH_MODEL_FILE), '')
     writeFileSync(join(selfTestVoiceFolder(), 'models', VOICE_MODELS[0]!.file), '')
     // A sparse file at the pinned size counts as installed; no model bytes are written.
     truncateSync(join(selfTestVoiceFolder(), 'models', VOICE_MODELS[0]!.file), VOICE_MODELS[0]!.bytes)

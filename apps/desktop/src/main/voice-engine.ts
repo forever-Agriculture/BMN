@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, open, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { availableParallelism, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { vocabularyPrompt, type VoiceLanguage, type VoiceModelId } from '@bmn/protocol'
 
 export interface VoiceModel {
@@ -135,6 +135,10 @@ function audioContextFrames(durationSeconds: number): number | null {
   return frames < WHISPER_WINDOW_FRAMES ? frames : null
 }
 
+function defaultThreads(): number {
+  return Math.max(1, Math.min(8, Math.floor(availableParallelism() / 2)))
+}
+
 export function whisperArguments(options: {
   modelPath: string
   wavPath: string
@@ -144,7 +148,7 @@ export function whisperArguments(options: {
   /** Approved vocabulary; an empty list leaves the arguments exactly as without one. */
   vocabulary?: readonly string[] | undefined
 }): string[] {
-  const threads = options.threads ?? Math.max(1, Math.min(8, Math.floor(availableParallelism() / 2)))
+  const threads = options.threads ?? defaultThreads()
   const audioContext = audioContextFrames(options.durationSeconds)
   const prompt = vocabularyPrompt(options.vocabulary ?? [])
   // Greedy decoding (-bs 1 -bo 1) keeps dictation fast; -nt -np print only the transcript on stdout.
@@ -161,6 +165,47 @@ export function whisperArguments(options: {
     ...(audioContext === null ? [] : ['-ac', String(audioContext)]),
     ...(prompt.length === 0 ? [] : ['--prompt', prompt])
   ]
+}
+
+/** whisper.cpp's stock speech-segment tool and the Silero VAD model it reads, built beside whisper-cli by `pnpm run voice:build`. */
+export const SPEECH_DETECTOR_FILE = 'whisper-vad-speech-segments'
+export const SPEECH_MODEL_FILE = 'ggml-silero-v6.2.0.bin'
+
+/**
+ * Speech probability that any moment of the recording must reach. Measured with the bundled model: English and Ukrainian
+ * words and phrases peaked at 0.35–1.00 (the lowest a short word 30 dB quieter in noise), silence and noise at 0.023 or
+ * less. Below Silero's default 0.5 because refusing real speech loses the dictation, while passing noise only restores
+ * Whisper's old behavior. No minimum duration, so one short word said alone still counts.
+ */
+export const SPEECH_THRESHOLD = 0.3
+
+export interface EngineFiles {
+  whisper: string
+  speechDetector: string
+  speechModel: string
+}
+
+export function engineFiles(whisperBinary: string): EngineFiles {
+  const folder = dirname(whisperBinary)
+  return { whisper: whisperBinary, speechDetector: join(folder, SPEECH_DETECTOR_FILE), speechModel: join(folder, SPEECH_MODEL_FILE) }
+}
+
+export function speechDetectionArguments(options: { modelPath: string; wavPath: string; threads?: number }): string[] {
+  return [
+    '-f', options.wavPath,
+    '-vm', options.modelPath,
+    '-vt', String(SPEECH_THRESHOLD),
+    '-vspd', '0',
+    '-t', String(options.threads ?? defaultThreads()),
+    '-np'
+  ]
+}
+
+/** Reads the tool's "Detected N speech segments" line; any other output is a failure, never a guess. */
+export function speechSegmentsFromOutput(stdout: string): number {
+  const match = /Detected (\d+) speech segments/u.exec(stdout)
+  if (!match) throw new VoiceError('Speech detection gave no result')
+  return Number(match[1])
 }
 
 /** Engine output shown to the owner must not echo the vocabulary, so the prompt and each word are blanked. */
@@ -228,10 +273,14 @@ export function runWhisper(run: WhisperRun): Promise<string> {
   })
 }
 
-/** Writes the recording to a private temporary folder, runs whisper-cli and always removes the audio. */
+/**
+ * Writes the recording to a private temporary folder, transcribes it only if it holds speech, and always removes the
+ * audio. Whisper invents text for silence ("you"), and an approved vocabulary makes it echo those words instead.
+ */
 export async function transcribeRecording(options: {
   binary: string
   modelPath: string
+  speechDetector: { binary: string; modelPath: string }
   language: VoiceLanguage
   wav: Uint8Array
   /** Already validated by the caller's boundary; joined with `, ` as the initial prompt. */
@@ -245,6 +294,13 @@ export async function transcribeRecording(options: {
   try {
     const wavPath = join(folder, 'recording.wav')
     await writeFile(wavPath, options.wav, { mode: 0o600 })
+    const detection = await runWhisper({
+      binary: options.speechDetector.binary,
+      args: speechDetectionArguments({ modelPath: options.speechDetector.modelPath, wavPath }),
+      timeoutMs: options.timeoutMs,
+      spawnProcess: options.spawnProcess
+    })
+    if (speechSegmentsFromOutput(detection) === 0) return ''
     return await runWhisper({
       binary: options.binary,
       args: whisperArguments({

@@ -13,6 +13,7 @@ import type { IpcMainInvokeEvent } from 'electron'
 import {
   VOICE_MODELS,
   downloadModel,
+  engineFiles,
   modelInstalled,
   transcribeRecording,
   voiceModel,
@@ -26,7 +27,7 @@ interface VoiceIpcRegistrar {
 
 export interface VoiceIpcOptions {
   senderIsAllowed(event: IpcMainInvokeEvent): boolean
-  /** Path to the whisper-cli binary built by `pnpm run voice:build`. */
+  /** Path to the whisper-cli binary built by `pnpm run voice:build`; the speech detector and its model sit beside it. */
   binary: string
   /** The owner's chosen model folder, or the default one inside the app data folder. */
   modelFolder(): Promise<{ path: string; custom: boolean }>
@@ -40,6 +41,11 @@ interface DownloadState {
   receivedBytes: number
   error?: string
   controller?: AbortController
+}
+
+/** The engine counts as built only with whisper-cli, the speech detector and the detector's model all in place. */
+function engineBuilt(binary: string): boolean {
+  return Object.values(engineFiles(binary)).every((path) => existsSync(path))
 }
 
 function invalid(message: string): never {
@@ -96,7 +102,7 @@ export function installVoiceIpcHandlers(ipc: VoiceIpcRegistrar, options: VoiceIp
     authorize(event)
     const folder = await currentFolder(options)
     return {
-      engineAvailable: existsSync(options.binary),
+      engineAvailable: engineBuilt(options.binary),
       modelFolder: folder,
       models: await Promise.all(VOICE_MODELS.map(async (model) => {
         const download = downloads.get(model.id)
@@ -164,7 +170,7 @@ export function installVoiceIpcHandlers(ipc: VoiceIpcRegistrar, options: VoiceIp
     // The renderer's snapshot is re-checked here: the same rules as storage, so nothing else reaches argv.
     const vocabulary = validateVocabulary(values.vocabulary ?? [])
     if (!vocabulary.ok) invalid(vocabulary.reason)
-    if (!existsSync(options.binary)) {
+    if (!engineBuilt(options.binary)) {
       throw new MainIpcError(ERROR_CODES.notFound, 'Voice engine is not built; run pnpm run voice:build')
     }
     const folder = await currentFolder(options)
@@ -175,9 +181,11 @@ export function installVoiceIpcHandlers(ipc: VoiceIpcRegistrar, options: VoiceIp
     if (transcribing) throw new MainIpcError(ERROR_CODES.ioError, 'Another recording is still being transcribed')
     transcribing = true
     try {
+      const files = engineFiles(options.binary)
       const text = await (options.transcribe ?? transcribeRecording)({
         binary: options.binary,
         modelPath: join(folder.path, model.file),
+        speechDetector: { binary: files.speechDetector, modelPath: files.speechModel },
         language,
         wav: values.wav,
         vocabulary: vocabulary.words
