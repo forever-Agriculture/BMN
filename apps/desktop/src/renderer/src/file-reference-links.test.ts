@@ -175,6 +175,11 @@ describe('createFileReferenceLinkProvider', () => {
     link!.leave!(click, link!.text)
     provider.pressStarted(click)
     expect(provider.openHovered()).toBe(false)
+    // A Ctrl click elsewhere has ended; a later keyboard context menu over a link is not a click.
+    link!.hover!(click, link!.text)
+    provider.pressStarted(click)
+    provider.pressEnded()
+    expect(provider.openHovered()).toBe(false)
     expect(opened).toEqual(['src/parser.ts:4', 'src/parser.ts:4'])
   })
 

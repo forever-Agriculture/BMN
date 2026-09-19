@@ -230,7 +230,10 @@ export function SessionTerminal(props: {
       mouse.mouseDown(event)
     }
     // The window hears the release after xterm's document listener has finished the selection, even outside the pane.
-    const mouseUp = (event: MouseEvent): void => mouse.mouseUp(event)
+    const mouseUp = (event: MouseEvent): void => {
+      mouse.mouseUp(event)
+      fileLinks.pressEnded()
+    }
     const contextMenu = (event: MouseEvent): void => {
       // macOS turns Ctrl+click into this event; the hovered file link opens here, and the release adds nothing.
       if (fileLinks.openHovered() || mouse.contextMenu(event)) event.preventDefault()

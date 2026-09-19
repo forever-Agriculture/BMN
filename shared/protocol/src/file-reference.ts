@@ -223,8 +223,9 @@ export function findFileReferences(text: string): FileReferenceMatch[] {
     const trimmed = found[0].replace(TRAILING, '')
     const start = found.index
     if (trimmed.length === 0 || taken.some(([from, to]) => start < to && start + trimmed.length > from)) continue
-    // A bare name right after a path fragment and a space may be the end of an unquoted spaced path: not guessed.
-    if (!trimmed.includes('/') && /\/\S*\s$/u.test(text.slice(0, start))) continue
+    // A bare name right after a path fragment and one space may be the end of an unquoted spaced path: not guessed.
+    // Punctuation, a line suffix or a tab ends the fragment, so a name after those stands on its own.
+    if (!trimmed.includes('/') && /\/[^\s,;:!?)\]}>"'`]* $/u.test(text.slice(0, start))) continue
     accept(start, trimmed)
   }
   return matches.toSorted((left, right) => left.start - right.start)

@@ -80,6 +80,8 @@ export interface FileReferenceLinkProvider extends ILinkProvider {
   modifierChanged(held: boolean): void
   /** A mouse button went down in the terminal; each press opens at most one file. */
   pressStarted(event: Pick<MouseEvent, 'button' | 'ctrlKey' | 'altKey' | 'metaKey' | 'shiftKey'>): void
+  /** The button was released; a later context menu (the Menu key, Shift+F10) is not part of that click. */
+  pressEnded(): void
   /**
    * macOS delivers Ctrl+click as a context menu, and the release that xterm activates links on may not follow.
    * Opens the hovered link when the current press is a Ctrl primary click; true when it did.
@@ -127,6 +129,9 @@ export function createFileReferenceLinkProvider(host: FileReferenceLinkHost): Fi
     },
     pressStarted: (event) => {
       press = { linkActivation: isLinkActivation(event), opened: false }
+    },
+    pressEnded: () => {
+      press = { linkActivation: false, opened: false }
     },
     openHovered: () => (press.linkActivation && hovered ? open(hovered.link.text, hovered.range) : false),
     provideLinks: (row, callback) => {

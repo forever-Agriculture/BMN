@@ -119,6 +119,9 @@ describe('findFileReferences', () => {
     // The unquoted spaced path is never combined, and its last word alone would be a guessed target.
     expect(linked('My Notes/plan draft.md')).toEqual([])
     expect(linked('wrote draft.md and plan.md')).toEqual(['draft.md', 'plan.md'])
+    // Punctuation or a tab ends a path, so the name after it is its own reference.
+    expect(linked('I updated src/parser.ts, README.md and docs/x.md')).toEqual(['src/parser.ts', 'README.md', 'docs/x.md'])
+    expect(linked('wrote src/a.ts\tb.ts')).toEqual(['src/a.ts', 'b.ts'])
     expect(linked('a\\b/c.txt')).toEqual([])
     expect(linked('src/parser.ts:0 and src/lib/')).toEqual([])
   })
