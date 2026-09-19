@@ -373,9 +373,9 @@ export function VoicePreferences(props: {
           ) : (
             <ul className="voice-vocabulary-list" aria-labelledby="preferences-voice-vocabulary-label">
               {voice.vocabulary.map((word) => (
-                <li key={word}>
-                  <code className="preferences-mono">{word}</code>
-                  <button type="button" disabled={busy} aria-label={`Remove ${word}`} onClick={() => void removeWord(word)}>Remove</button>
+                <li key={word} className="voice-vocabulary-chip">
+                  <code>{word}</code>
+                  <button type="button" disabled={busy} aria-label={`Remove ${word}`} onClick={() => void removeWord(word)}>×</button>
                 </li>
               ))}
             </ul>
@@ -387,10 +387,11 @@ export function VoicePreferences(props: {
               void addDraftWord()
             }}
           >
-            <label htmlFor="preferences-voice-add-word">Add word</label>
+            <label htmlFor="preferences-voice-add-word" className="visually-hidden">Add word</label>
             <input
               id="preferences-voice-add-word"
               type="text"
+              placeholder="Add a word"
               value={draftWord}
               aria-invalid={draftError ? true : undefined}
               aria-describedby={draftError ? 'preferences-voice-add-word-error' : undefined}
@@ -405,13 +406,17 @@ export function VoicePreferences(props: {
           {draftError && (
             <p id="preferences-voice-add-word-error" className="preferences-error" role="alert">{draftError}</p>
           )}
-          <p className="preferences-help voice-vocabulary-prompt">
+          <div className="voice-vocabulary-prompt">
+            <div className="voice-vocabulary-prompt-head">
+              <span className="eyebrow">Sent to Whisper</span>
+              <span className="voice-vocabulary-count">
+                {voice.vocabulary.length} of {VOICE_VOCABULARY_MAX_WORDS} words · {vocabularyPromptBytes(voice.vocabulary)} of {VOICE_VOCABULARY_MAX_PROMPT_BYTES} bytes
+              </span>
+            </div>
             {voice.vocabulary.length === 0
-              ? 'Nothing is sent to Whisper.'
-              : <>Sent to Whisper: <code className="preferences-mono" data-testid="voice-vocabulary-prompt">{vocabularyPrompt(voice.vocabulary)}</code></>}
-            {' · '}
-            {voice.vocabulary.length} of {VOICE_VOCABULARY_MAX_WORDS} words · {vocabularyPromptBytes(voice.vocabulary)} of {VOICE_VOCABULARY_MAX_PROMPT_BYTES} bytes
-          </p>
+              ? <p className="preferences-help">Nothing is sent to Whisper.</p>
+              : <code className="voice-vocabulary-prompt-text" data-testid="voice-vocabulary-prompt">{vocabularyPrompt(voice.vocabulary)}</code>}
+          </div>
         </div>
       </div>
       {error && (

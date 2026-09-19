@@ -1898,6 +1898,7 @@ async function runSelfTest(): Promise<void> {
       !voiceFlow.suggested.includes('parser.ts') ||
       voiceFlow.suggested.some((word) => /^\d/u.test(word)) ||
       voiceFlow.editedApproved !== 'pty-host' ||
+      !voiceFlow.chipsShareLine ||
       !voiceFlow.addWordRejected.message.includes('commas') ||
       !voiceFlow.addWordRejected.inputPreserved ||
       !voiceFlow.addWordRejected.listUnchanged ||

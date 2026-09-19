@@ -124,6 +124,7 @@ describe('renderer acceptance hook', () => {
       voiceFlow: {
         suggested: ['SessionManager'],
         editedApproved: 'pty-host',
+        chipsShareLine: true,
         addWordRejected: { message: 'commas', inputPreserved: true, listUnchanged: true },
         duplicateRejected: { message: 'already', candidateKept: true },
         approvedAfterRemove: ['SessionManager', 'BMN'],

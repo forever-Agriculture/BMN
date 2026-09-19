@@ -5,6 +5,8 @@ export interface VoiceFlowProbe {
   suggested: string[]
   /** A suggested word edited before approval, as it appears in the approved list. */
   editedApproved: string
+  /** The approved words render as chips sharing a line, each with its own remove control, not one row per word. */
+  chipsShareLine: boolean
   addWordRejected: { message: string; inputPreserved: boolean; listUnchanged: boolean }
   duplicateRejected: { message: string; candidateKept: boolean }
   /** The approved list after one removal, and the prompt line shown for it. */

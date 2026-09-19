@@ -108,6 +108,7 @@ const receiptContract = [
     (receipt) =>
       receipt.voiceFlow?.suggested?.includes('SessionManager') &&
       receipt.voiceFlow.editedApproved === 'pty-host' &&
+      receipt.voiceFlow.chipsShareLine === true &&
       receipt.voiceFlow.addWordRejected?.inputPreserved === true &&
       receipt.voiceFlow.addWordRejected.listUnchanged === true &&
       receipt.voiceFlow.duplicateRejected?.candidateKept === true &&

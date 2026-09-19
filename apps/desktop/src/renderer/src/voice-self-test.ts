@@ -43,6 +43,18 @@ function approvedWords(dialog: ParentNode): string[] {
   return [...dialog.querySelectorAll<HTMLElement>('.voice-vocabulary-list code')].map((item) => item.textContent ?? '')
 }
 
+/** True when every approved word sits on the first chip's line, with its remove control inside the chip. */
+function chipsShareLine(dialog: ParentNode): boolean {
+  const chips = [...dialog.querySelectorAll<HTMLElement>('.voice-vocabulary-list > li')]
+  if (chips.length < 2) return false
+  const top = chips[0]!.getBoundingClientRect().top
+  return chips.every((chip) => {
+    const box = chip.getBoundingClientRect()
+    const remove = chip.querySelector('button')?.getBoundingClientRect()
+    return Math.abs(box.top - top) < 1 && !!remove && remove.left >= box.left && remove.right <= box.right
+  })
+}
+
 function candidateInputs(dialog: ParentNode): HTMLInputElement[] {
   return [...dialog.querySelectorAll<HTMLInputElement>('ul[aria-label="Suggested words"] input')]
 }
@@ -145,6 +157,7 @@ export async function runVoiceIntegration(options: {
   buttonIn(manager.parentElement!, 'Approve').click()
   await waitFor('SessionManager approved', () => approvedWords(dialog).includes('SessionManager'))
   await approveWordVia(dialog, 'BMN')
+  const chipsOnOneLine = chipsShareLine(dialog)
 
   const addInput = dialog.querySelector<HTMLInputElement>('#preferences-voice-add-word')!
   const before = approvedWords(dialog)
@@ -247,6 +260,7 @@ export async function runVoiceIntegration(options: {
   return {
     suggested,
     editedApproved: 'pty-host',
+    chipsShareLine: chipsOnOneLine,
     addWordRejected,
     duplicateRejected,
     approvedAfterRemove,

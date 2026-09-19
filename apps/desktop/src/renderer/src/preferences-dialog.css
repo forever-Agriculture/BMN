@@ -98,10 +98,11 @@
 .preferences-dialog .preferences-mono {
   font-family: var(--font-mono);
   font-size: 12px;
+  display: inline-block;
+  max-width: 100%;
   color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  border-radius: 6px;
   padding: 2px 6px;
   overflow-wrap: anywhere;
 }
@@ -161,6 +162,12 @@
   min-height: 32px;
 }
 
+.preferences-dialog .voice-model .preferences-radio {
+  flex: 1 1 200px;
+  align-items: flex-start;
+  min-width: 0;
+}
+
 .preferences-dialog .voice-model-state {
   display: flex;
   align-items: center;
@@ -177,8 +184,7 @@
   align-items: stretch;
 }
 
-.preferences-dialog .voice-vocabulary-candidates,
-.preferences-dialog .voice-vocabulary-list {
+.preferences-dialog .voice-vocabulary-candidates {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -187,7 +193,6 @@
   gap: 6px;
 }
 
-.preferences-dialog .voice-vocabulary-list li,
 .preferences-dialog .voice-vocabulary-candidate,
 .preferences-dialog .voice-vocabulary-add {
   display: flex;
@@ -202,7 +207,93 @@
   min-width: 120px;
 }
 
-.preferences-dialog .voice-vocabulary-add label {
-  font-size: 13px;
+/* Approved words are a set of short tokens: a wrapping cloud of chips, each with its own remove control. */
+.preferences-dialog .voice-vocabulary-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* Pending suggestions and approved words are separate sets; a rule keeps them from reading as one block. */
+.preferences-dialog .voice-vocabulary-candidates + .voice-vocabulary-list {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+
+.preferences-dialog .voice-vocabulary-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 26px;
+  max-width: 100%;
+  padding: 0 2px 0 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
   color: var(--text);
+}
+
+.preferences-dialog .voice-vocabulary-chip code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.preferences-dialog .voice-vocabulary-chip button {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1;
+}
+
+.preferences-dialog .voice-vocabulary-chip button:hover:not(:disabled) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 13%, transparent);
+}
+
+.preferences-dialog .voice-vocabulary-chip button:disabled {
+  background: transparent;
+  color: var(--faint);
+}
+
+/* The exact hint Whisper receives, shown as its own block with the limits beside its heading. */
+.preferences-dialog .voice-vocabulary-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.preferences-dialog .voice-vocabulary-prompt-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 4px 12px;
+}
+
+.preferences-dialog .voice-vocabulary-count {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.preferences-dialog .voice-vocabulary-prompt-text {
+  display: block;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
