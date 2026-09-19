@@ -265,6 +265,7 @@ describe('created session registration', () => {
         }
         if (method === METHOD_REGISTRY.sessionList) return (await sessionList()) as Result
         if (method === METHOD_REGISTRY.terminalDetach) return { detached: true } as Result
+        if (method === METHOD_REGISTRY.sessionStop) return { stopped: true } as Result
         throw new Error(`unexpected registration method ${method}`)
       }
     }
@@ -277,7 +278,7 @@ describe('created session registration', () => {
       failure: 'the session list request fails',
       sessionList: async () => Promise.reject(new Error('host list failed'))
     }
-  ])('detaches the attached lease before propagating when $failure', async ({ sessionList }) => {
+  ])('detaches and stops the created process before propagating when $failure', async ({ sessionList }) => {
     const { client, calls } = registrationClient(sessionList)
 
     await expect(attachCreatedSession<{ attachmentId: string }>(client, params)).rejects.toThrow()
@@ -286,9 +287,37 @@ describe('created session registration', () => {
       METHOD_REGISTRY.sessionCreate,
       METHOD_REGISTRY.terminalAttach,
       METHOD_REGISTRY.sessionList,
-      METHOD_REGISTRY.terminalDetach
+      METHOD_REGISTRY.terminalDetach,
+      METHOD_REGISTRY.sessionStop
     ])
-    expect(calls.at(-1)?.params).toEqual({ attachmentId: 'attachment-new' })
+    expect(calls.at(-1)?.params).toEqual({
+      sessionId: 'session-new',
+      incarnationId: 'incarnation-new',
+      cause: 'explicit'
+    })
+  })
+
+  it('stops the created process when attaching its terminal fails', async () => {
+    const calls: Array<{ method: ProtocolMethod; params: object }> = []
+    const client: StartupHostClient = {
+      async request<Result>(method: ProtocolMethod, requestParams: object): Promise<Result> {
+        calls.push({ method, params: requestParams })
+        if (method === METHOD_REGISTRY.sessionCreate) {
+          return { sessionId: 'session-new', incarnationId: 'incarnation-new', binding: null } as Result
+        }
+        if (method === METHOD_REGISTRY.terminalAttach) throw new Error('host attach failed')
+        if (method === METHOD_REGISTRY.sessionStop) return { stopped: true } as Result
+        throw new Error(`unexpected registration method ${method}`)
+      }
+    }
+
+    await expect(attachCreatedSession(client, params)).rejects.toThrow('host attach failed')
+
+    expect(calls.map((call) => call.method)).toEqual([
+      METHOD_REGISTRY.sessionCreate,
+      METHOD_REGISTRY.terminalAttach,
+      METHOD_REGISTRY.sessionStop
+    ])
   })
 
   it('keeps the lease attached and returns the persisted record when registration succeeds', async () => {

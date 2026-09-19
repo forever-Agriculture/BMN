@@ -950,7 +950,7 @@ describe('shell session lifecycle', () => {
 
       const explicitStop = manager.stop(created, 'explicit')
       const applicationQuitStop = manager.stop(created, 'application-quit')
-      expect(pty.killCalls).toBe(1)
+      await vi.waitFor(() => expect(pty.killCalls).toBe(1))
       pty.emitExit({ exitCode: 0, signal: 15 })
 
       await expect(Promise.all([explicitStop, applicationQuitStop]))
@@ -2380,6 +2380,38 @@ describe('shell session lifecycle', () => {
       reason: 'SIGKILL was sent but a PTY exit event was not observed'
     })
     await expect(manager.health()).resolves.toMatchObject({ liveSessions: 1 })
+  })
+
+  it('does not signal a recycled pid when the process identity changed before stop', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-recycled-pid-test-'))
+    createdRoots.add(cwd)
+    const pty = new NonExitingFakePty()
+    const store = new FakeStore()
+    const signalProcess = vi.fn(() => true)
+    let identityReads = 0
+    const manager = new SessionManager({
+      store,
+      spawnPty: () => pty,
+      processStartIdentity: async () =>
+        ++identityReads === 1 ? 'linux-proc-start:original' : 'linux-proc-start:replacement',
+      signalProcess,
+      stopGraceMs: 0,
+      stopKillWaitMs: 0,
+      sendTerminalMessage: () => undefined
+    })
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION,
+      cwd,
+      executable: process.execPath,
+      argv: [],
+      cols: 80,
+      rows: 24
+    })
+
+    await expect(manager.stop(created)).rejects.toThrow(/stop outcome is unknown/)
+
+    expect(pty.killCalls).toBe(0)
+    expect(signalProcess).not.toHaveBeenCalled()
+    expect(store.interrupted.get(created.incarnationId)).toMatch(/identity disappeared or changed/i)
   })
 
   it('tears down exactly once when host-side resume attachment fails and blocks re-resume until exit', async () => {

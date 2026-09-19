@@ -20,8 +20,8 @@ afterEach(async () => {
 })
 
 describe('owned database schema', () => {
-  it('contains the six ordered migrations and only the owned tables', () => {
-    expect(DATABASE_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6])
+  it('contains the seven ordered migrations and only the owned tables', () => {
+    expect(DATABASE_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7])
     expect(STORY_SCHEMA_TABLES).toEqual([
       'app_setting',
       'artifact',
@@ -165,7 +165,10 @@ describe('owned database schema', () => {
         busyTimeoutMs: 5_000
       })
       expect(database.prepare('SELECT version FROM schema_migration ORDER BY version').all())
-        .toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }])
+        .toEqual([
+          { version: 1 }, { version: 2 }, { version: 3 }, { version: 4 },
+          { version: 5 }, { version: 6 }, { version: 7 }
+        ])
       expect(database.prepare('SELECT applied_at FROM schema_migration WHERE version = 3').get())
         .toEqual({ applied_at: migratedAt })
       expect(database.prepare(
@@ -243,7 +246,8 @@ describe('owned database schema', () => {
           { version: 3, applied_at: migratedAt },
           { version: 4, applied_at: migratedAt },
           { version: 5, applied_at: migratedAt },
-          { version: 6, applied_at: migratedAt }
+          { version: 6, applied_at: migratedAt },
+          { version: 7, applied_at: migratedAt }
         ])
       expect(database.prepare('SELECT COUNT(*) AS count FROM workspace_layout').get())
         .toEqual({ count: 2 })
@@ -288,7 +292,40 @@ describe('owned database schema', () => {
         state: 'draft'
       })
       expect(database.prepare('SELECT version FROM schema_migration ORDER BY version DESC LIMIT 1').get())
-        .toEqual({ version: 6 })
+        .toEqual({ version: 7 })
+    } finally {
+      database.close()
+    }
+  })
+
+  it('keeps existing Telegram mappings draft-only when adding process incarnation binding', () => {
+    const database = new BetterSqlite3(':memory:')
+    try {
+      for (const migration of DATABASE_MIGRATIONS.slice(0, 6)) {
+        database.exec(migration.sql)
+        database.prepare('INSERT INTO schema_migration(version, applied_at) VALUES (?, ?)')
+          .run(migration.version, '2026-09-14T10:00:00.000Z')
+      }
+      database.prepare(
+        `INSERT INTO session(
+           session_id, workspace_id, name, cwd, executable, argv_json, revision, created_at
+         ) VALUES ('telegram-session', ?, 'Telegram', '/work', '/bin/bash', '[]', 1, ?)`
+      ).run(DEFAULT_WORKSPACE_ID, '2026-09-14T10:00:00.000Z')
+      database.prepare(
+        `INSERT INTO telegram_message(message_id, session_id, request_id, sent_at)
+         VALUES (77, 'telegram-session', NULL, ?)`
+      ).run('2026-09-14T10:00:00.000Z')
+
+      initializeDatabase(database, '2026-09-14T11:00:00.000Z')
+
+      expect(database.prepare(
+        'SELECT message_id, session_id, request_id, incarnation_id FROM telegram_message'
+      ).get()).toEqual({
+        message_id: 77,
+        session_id: 'telegram-session',
+        request_id: null,
+        incarnation_id: null
+      })
     } finally {
       database.close()
     }

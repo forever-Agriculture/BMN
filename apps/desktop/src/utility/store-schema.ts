@@ -293,5 +293,11 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
 
       DROP TABLE input_draft_legacy;
     `
+  },
+  {
+    version: 7,
+    sql: `
+      ALTER TABLE telegram_message ADD COLUMN incarnation_id TEXT;
+    `
   }
 ])

@@ -2,6 +2,13 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+const removeTemporaryRoot = (root) => rmSync(root, {
+  recursive: true,
+  force: true,
+  maxRetries: 5,
+  retryDelay: 50
+})
+
 export const temporaryRootContracts = Object.freeze({
   electronSelfTest: Object.freeze({
     prefix: 'bmn-electron-self-test-',
@@ -38,11 +45,11 @@ export function createTemporaryRoot(contract, baseDirectory = tmpdir()) {
       cleanup() {
         if (cleaned) return
         cleaned = true
-        rmSync(root, { recursive: true, force: true })
+        removeTemporaryRoot(root)
       }
     }
   } catch (error) {
-    rmSync(root, { recursive: true, force: true })
+    removeTemporaryRoot(root)
     throw error
   }
 }

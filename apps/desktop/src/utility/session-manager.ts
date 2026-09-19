@@ -1443,21 +1443,26 @@ export class SessionManager {
 
   private async performTeardownSession(session: LiveSession): Promise<string | undefined> {
     if (session.exited) return undefined
-    try {
-      session.pty.kill()
-    } catch {
-      // Identity verification and the bounded force-kill path below remain authoritative.
+    const identityMatches = async (): Promise<boolean> => {
+      try {
+        return session.processStartIdentity.length > 0 &&
+          (await this.identifyProcess(session.pty.pid)) === session.processStartIdentity
+      } catch {
+        // The OS process may have disappeared before node-pty delivered its exit event.
+        return false
+      }
+    }
+    let identityStillMatches = await identityMatches()
+    if (identityStillMatches) {
+      try {
+        session.pty.kill()
+      } catch {
+        // The bounded wait and identity-checked force-kill path below decide the outcome.
+      }
     }
     if (await this.waitForExit(session, this.stopGraceMs)) return undefined
 
-    let identityStillMatches = false
-    try {
-      identityStillMatches =
-        session.processStartIdentity.length > 0 &&
-        (await this.identifyProcess(session.pty.pid)) === session.processStartIdentity
-    } catch {
-      // The OS process may have disappeared before node-pty delivered its exit event.
-    }
+    identityStillMatches = await identityMatches()
     if (identityStillMatches) {
       try {
         this.signalProcess(-session.pty.pid, 'SIGKILL')

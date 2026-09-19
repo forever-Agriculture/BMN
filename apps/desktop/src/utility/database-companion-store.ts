@@ -581,20 +581,30 @@ export function putTelegramMessage(
   messageId: number,
   sessionId: string,
   requestId: string | null,
+  incarnationId: string | null,
   now: string
 ): void {
   database.prepare(
-    `INSERT OR REPLACE INTO telegram_message(message_id, session_id, request_id, sent_at) VALUES (?, ?, ?, ?)`
-  ).run(messageId, sessionId, requestId, now)
+    `INSERT OR REPLACE INTO telegram_message(
+       message_id, session_id, request_id, incarnation_id, sent_at
+     ) VALUES (?, ?, ?, ?, ?)`
+  ).run(messageId, sessionId, requestId, incarnationId, now)
 }
 
 export function getTelegramMessage(
   database: DatabaseConnection,
   messageId: number
-): { sessionId: string; requestId: string | null } | undefined {
-  const row = database.prepare('SELECT session_id, request_id FROM telegram_message WHERE message_id = ?')
-    .get(messageId) as { session_id: string; request_id: string | null } | undefined
-  return row ? { sessionId: row.session_id, requestId: row.request_id } : undefined
+): { sessionId: string; requestId: string | null; incarnationId: string | null } | undefined {
+  const row = database.prepare(
+    'SELECT session_id, request_id, incarnation_id FROM telegram_message WHERE message_id = ?'
+  ).get(messageId) as {
+    session_id: string
+    request_id: string | null
+    incarnation_id: string | null
+  } | undefined
+  return row
+    ? { sessionId: row.session_id, requestId: row.request_id, incarnationId: row.incarnation_id }
+    : undefined
 }
 
 type SettingsSection = keyof AppSettings

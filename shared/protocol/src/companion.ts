@@ -263,7 +263,16 @@ export interface BackupVerifyResult {
   directory: string
   ok: boolean
   checked: number
-  failures: Array<{ file: string; reason: 'missing' | 'hash-mismatch' | 'unreadable-manifest' | 'unreadable-database' | 'not-in-manifest' }>
+  failures: Array<{
+    file: string
+    reason:
+      | 'missing'
+      | 'hash-mismatch'
+      | 'unreadable-manifest'
+      | 'unreadable-database'
+      | 'not-in-manifest'
+      | 'database-mismatch'
+  }>
 }
 
 export interface ControlInfo {

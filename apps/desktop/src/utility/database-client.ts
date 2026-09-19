@@ -52,6 +52,8 @@ export class DatabaseWorkerClient implements SessionStore {
   private readonly worker: Worker
   private readonly pending = new Map<number, PendingRequest>()
   private nextId = 1
+  private failure: Error | undefined
+  private closed = false
 
   constructor(workerEntry: string, databasePath: string) {
     this.worker = new Worker(workerEntry, { workerData: { databasePath } })
@@ -67,9 +69,9 @@ export class DatabaseWorkerClient implements SessionStore {
       }
       else pending.resolve(response.result)
     })
-    this.worker.on('error', (error) => this.rejectAll(error))
+    this.worker.on('error', (error) => this.fail(error))
     this.worker.on('exit', (code) => {
-      if (code !== 0) this.rejectAll(new Error(`database worker exited with code ${code}`))
+      if (!this.closed) this.fail(new Error(`database worker exited with code ${code}`))
     })
   }
 
@@ -209,16 +211,30 @@ export class DatabaseWorkerClient implements SessionStore {
   }
 
   async close(): Promise<void> {
+    if (this.closed) return
     await this.request('close')
+    this.closed = true
     await this.worker.terminate()
   }
 
   private request(operation: string, params?: Record<string, unknown>): Promise<unknown> {
+    if (this.failure) return Promise.reject(this.failure)
+    if (this.closed) return Promise.reject(new Error('database worker is closed'))
     const id = this.nextId++
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject })
-      this.worker.postMessage({ id, operation, ...(params ? { params } : {}) })
+      try {
+        this.worker.postMessage({ id, operation, ...(params ? { params } : {}) })
+      } catch (error) {
+        this.pending.delete(id)
+        reject(error instanceof Error ? error : new Error('database worker request could not be sent'))
+      }
     })
+  }
+
+  private fail(error: Error): void {
+    this.failure ??= error
+    this.rejectAll(this.failure)
   }
 
   private rejectAll(error: Error): void {

@@ -122,6 +122,35 @@ function backupArtifactFile(artifact: ArtifactRecord): string {
   return join('artifacts', artifact.sha256.slice(0, 2), artifact.artifactId)
 }
 
+function isBackupManifestEntry(value: unknown): value is BackupManifestEntry {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const entry = value as Partial<BackupManifestEntry>
+  return typeof entry.file === 'string' && entry.file.length > 0 &&
+    typeof entry.sha256 === 'string' && /^[a-f0-9]{64}$/.test(entry.sha256) &&
+    typeof entry.byteLength === 'number' && Number.isSafeInteger(entry.byteLength) && entry.byteLength >= 0
+}
+
+function isBackupManifest(value: unknown): value is BackupManifest {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const manifest = value as Partial<BackupManifest>
+  if (
+    manifest.formatVersion !== 1 ||
+    typeof manifest.createdAt !== 'string' ||
+    !isBackupManifestEntry(manifest.database) ||
+    !Array.isArray(manifest.artifacts) ||
+    !Array.isArray(manifest.excluded) ||
+    !manifest.excluded.every((item) => typeof item === 'string')
+  ) return false
+  const artifactIds = new Set<string>()
+  for (const entry of manifest.artifacts) {
+    if (!isBackupManifestEntry(entry)) return false
+    const artifactId = (entry as { artifactId?: unknown }).artifactId
+    if (typeof artifactId !== 'string' || artifactId.length === 0 || artifactIds.has(artifactId)) return false
+    artifactIds.add(artifactId)
+  }
+  return true
+}
+
 function linkExtension(record: ArtifactRecord): string {
   const fromName = extname(record.originalName)
   if (/^\.[A-Za-z0-9]{1,8}$/.test(fromName)) return fromName.toLowerCase()
@@ -866,6 +895,15 @@ export class CompanionService {
       return record
     }
     if (draft.state !== 'draft' && draft.state !== 'uncertain') invalid('Only an unsent draft can be sent')
+    if (
+      expectedIncarnationId &&
+      this.options.manager.liveIncarnationId(draft.sessionId) !== expectedIncarnationId
+    ) {
+      throw new HostControlError(
+        ERROR_CODES.revisionConflict,
+        'The destination process changed before input was sent'
+      )
+    }
     if (draft.text) this.options.manager.writeToSession(draft.sessionId, bracketedPaste(draft.text, submit))
     if (draft.artifactId) await this.deliver(draft.artifactId, draft.sessionId)
     const record = await database.companion('updateDraft', draftId, submit ? 'submitted' : 'accepted', null, this.iso())
@@ -909,8 +947,9 @@ export class CompanionService {
     if (!isAbsolute(directory)) invalid('The backup location must be an absolute path')
     let manifest: BackupManifest
     try {
-      manifest = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8')) as BackupManifest
-      if (manifest.formatVersion !== 1 || !manifest.database || !Array.isArray(manifest.artifacts)) throw new Error()
+      const parsed: unknown = JSON.parse(await readFile(join(directory, 'manifest.json'), 'utf8'))
+      if (!isBackupManifest(parsed)) throw new Error()
+      manifest = parsed
     } catch {
       return { directory, ok: false, checked: 0, failures: [{ file: 'manifest.json', reason: 'unreadable-manifest' }] }
     }
@@ -930,12 +969,30 @@ export class CompanionService {
     }
     // Hashes only prove the listed files; the database says which artifacts the backup must hold.
     if (failures.length === 0) {
-      const listed = new Set(manifest.artifacts.map((entry) => entry.artifactId))
       const recorded = await this.options.database.readyArtifactsInBackup(join(directory, manifest.database.file))
         .catch(() => undefined)
-      if (!recorded) failures.push({ file: manifest.database.file, reason: 'unreadable-database' })
-      for (const artifact of recorded ?? []) {
-        if (!listed.has(artifact.artifactId)) failures.push({ file: backupArtifactFile(artifact), reason: 'not-in-manifest' })
+      if (!recorded) {
+        failures.push({ file: manifest.database.file, reason: 'unreadable-database' })
+      } else {
+        const listed = new Map(manifest.artifacts.map((entry) => [entry.artifactId, entry]))
+        const recordedById = new Map(recorded.map((artifact) => [artifact.artifactId, artifact]))
+        for (const artifact of recorded) {
+          const entry = listed.get(artifact.artifactId)
+          if (!entry) {
+            failures.push({ file: backupArtifactFile(artifact), reason: 'not-in-manifest' })
+          } else if (
+            entry.file !== backupArtifactFile(artifact) ||
+            entry.sha256 !== artifact.sha256 ||
+            entry.byteLength !== artifact.byteLength
+          ) {
+            failures.push({ file: entry.file, reason: 'database-mismatch' })
+          }
+        }
+        for (const entry of manifest.artifacts) {
+          if (!recordedById.has(entry.artifactId)) {
+            failures.push({ file: entry.file, reason: 'database-mismatch' })
+          }
+        }
       }
     }
     return { directory, ok: failures.length === 0, checked: entries.length, failures }
@@ -1041,9 +1098,12 @@ export class CompanionService {
   private async telegramNotify(sessionId: string, requestId: string | null, message: string): Promise<void> {
     const connector = this.telegram
     if (!connector || this.telegramHealth?.state !== 'polling') return
+    const incarnationId = this.options.manager.liveIncarnationId(sessionId) ?? null
     try {
       const sent = await connector.sendMessage(message)
-      await this.options.database.companion('putTelegramMessage', sent.messageId, sessionId, requestId, this.iso())
+      await this.options.database.companion(
+        'putTelegramMessage', sent.messageId, sessionId, requestId, incarnationId, this.iso()
+      )
     } catch {
       // Connector health carries the redacted failure; attention stays open in the app either way.
     }
@@ -1093,17 +1153,37 @@ export class CompanionService {
     if (!created) return
     this.emit('drafts', target.sessionId)
     const live = this.options.manager.liveIncarnationId(target.sessionId)
-    if (settings.telegram.autoSubmitReplies && live) {
+    const request = target.requestId
+      ? await database.companion('getAttention', target.requestId).catch(() => undefined)
+      : undefined
+    const currentTarget =
+      live !== undefined &&
+      target.incarnationId !== null &&
+      live === target.incarnationId &&
+      request?.state === 'open' &&
+      request.sessionId === target.sessionId &&
+      (request.incarnationId === null || request.incarnationId === target.incarnationId)
+    if (settings.telegram.autoSubmitReplies && currentTarget) {
       try {
-        await this.sendDraft(record.draftId, true)
-        if (target.requestId && reply.text) {
-          await database.companion('closeAttention', { requestId: target.requestId }, 'answered', reply.text, this.iso())
+        await this.sendDraft(record.draftId, true, target.incarnationId)
+        if (reply.text) {
+          await database.companion(
+            'closeAttention',
+            { requestId: request.requestId, expectedRevision: request.revision },
+            'answered',
+            reply.text,
+            this.iso()
+          )
             .then(() => this.emit('attention', target.sessionId), () => undefined)
         }
         await connector.sendMessage('Sent to the session.', { replyToMessageId: reply.messageId }).catch(() => undefined)
         return
-      } catch {
-        await database.companion('updateDraft', record.draftId, 'uncertain', 'Automatic submission failed', this.iso())
+      } catch (error) {
+        if (!(error instanceof HostControlError) || error.code !== ERROR_CODES.revisionConflict) {
+          await database.companion(
+            'updateDraft', record.draftId, 'uncertain', 'Automatic submission failed', this.iso()
+          )
+        }
       }
     }
     await connector.sendMessage('Saved as a draft in BMN for that session.', {

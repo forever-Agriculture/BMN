@@ -65,17 +65,18 @@ export interface CreatedSessionIdentity {
 }
 
 /**
- * Creates a session, attaches the renderer lease and resolves the persisted record. When
- * registration fails after the attach, the lease is detached before the failure propagates so no
- * attachment outlives a session the main process never registered.
+ * Creates a session, attaches the renderer lease and resolves the persisted record. Once creation
+ * succeeds, every later registration failure stops that exact incarnation before propagating so a
+ * process the main process never registered cannot keep running outside Stop and Quit tracking.
  */
 export async function attachCreatedSession<Attachment extends { attachmentId: string }>(
   client: StartupHostClient,
   params: SessionCreateParams
 ): Promise<{ identity: CreatedSessionIdentity; attachment: Attachment; record: SessionRecord }> {
   const identity = await client.request<CreatedSessionIdentity>(METHOD_REGISTRY.sessionCreate, params)
-  const attachment = await client.request<Attachment>(METHOD_REGISTRY.terminalAttach, identity)
+  let attachment: Attachment | undefined
   try {
+    attachment = await client.request<Attachment>(METHOD_REGISTRY.terminalAttach, identity)
     const sessions = await client.request<SessionRecord[]>(METHOD_REGISTRY.sessionList, {
       workspaceId: params.workspaceId
     })
@@ -83,10 +84,25 @@ export async function attachCreatedSession<Attachment extends { attachmentId: st
     if (!record) throw new Error(`Created session ${identity.sessionId} was not persisted`)
     return { identity, attachment, record }
   } catch (error) {
+    if (attachment) {
+      try {
+        await client.request(METHOD_REGISTRY.terminalDetach, { attachmentId: attachment.attachmentId })
+      } catch {
+        // Stopping the incarnation below also revokes its attachment.
+      }
+    }
     try {
-      await client.request(METHOD_REGISTRY.terminalDetach, { attachmentId: attachment.attachmentId })
-    } catch {
-      // Preserve the registration failure; the host revokes the lease when its port closes.
+      await client.request(METHOD_REGISTRY.sessionStop, {
+        sessionId: identity.sessionId,
+        incarnationId: identity.incarnationId,
+        cause: 'explicit'
+      })
+    } catch (stopError) {
+      throw new AggregateError(
+        [error, stopError],
+        `Created session ${identity.sessionId} could not be registered or stopped`,
+        { cause: stopError }
+      )
     }
     throw error
   }

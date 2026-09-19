@@ -208,8 +208,10 @@ describe('companion store', () => {
   })
 
   it('maps Telegram messages to sessions', () => {
-    putTelegramMessage(database, 77, 's1', 'r1', now)
-    expect(getTelegramMessage(database, 77)).toEqual({ sessionId: 's1', requestId: 'r1' })
+    putTelegramMessage(database, 77, 's1', 'r1', 'incarnation-1', now)
+    expect(getTelegramMessage(database, 77)).toEqual({
+      sessionId: 's1', requestId: 'r1', incarnationId: 'incarnation-1'
+    })
     expect(getTelegramMessage(database, 78)).toBeUndefined()
   })
 

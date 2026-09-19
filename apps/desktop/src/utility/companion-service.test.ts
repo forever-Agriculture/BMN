@@ -316,6 +316,25 @@ describe('backup', () => {
     expect(result.failures.some((failure) => failure.file.endsWith(kept!.artifactId))).toBe(false)
   })
 
+  it('fails verification when a manifest artifact points at another recorded artifact file', async () => {
+    await storeArtifacts(2)
+    const { directory } = await exportBackup(join(root, 'backups'))
+    const manifestPath = join(directory, 'manifest.json')
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as BackupManifest
+    const [first, second] = manifest.artifacts
+    if (!first || !second) throw new Error('expected two backup artifacts')
+    await rm(join(directory, second.file))
+    writeFileSync(manifestPath, JSON.stringify({
+      ...manifest,
+      artifacts: [first, { ...first, artifactId: second.artifactId }]
+    }))
+
+    const result = await verifyBackup(directory)
+
+    expect(result.ok).toBe(false)
+    expect(result.failures).toContainEqual({ file: first.file, reason: 'database-mismatch' })
+  })
+
   it('reports a backup database that cannot be read instead of failing the check', async () => {
     await storeArtifacts(1)
     const { directory } = await exportBackup(join(root, 'backups'))
@@ -356,6 +375,23 @@ describe('artifact reconciliation', () => {
 describe('Telegram attention notifications', () => {
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('binds each notification to the process incarnation live when it was sent', async () => {
+    service['telegram'] = {
+      sendMessage: async () => ({ messageId: 77 })
+    } as unknown as TelegramConnector
+    service['telegramHealth'] = {
+      state: 'polling', detail: '', lastPollAt: null, lastError: null, rejectedUpdates: 0
+    }
+
+    await service['telegramNotify']('s1', 'request-1', 'Session needs you')
+
+    expect(COMPANION_OPERATIONS.getTelegramMessage(database, 77)).toEqual({
+      sessionId: 's1',
+      requestId: 'request-1',
+      incarnationId: 'incarnation-1'
+    })
   })
 
   it('sends a repeated prompt once after it waited unseen, and nothing for a prompt seen at the desk', async () => {
@@ -417,5 +453,133 @@ describe('Telegram attention notifications', () => {
       '■ A session exited'
     ])
     await expect(service.route(METHOD_REGISTRY.presenceSet, { away: 'yes' })).rejects.toThrow('away must be')
+  })
+
+  it.each([
+    ['the request was already resolved', async (requestId: string) => {
+      COMPANION_OPERATIONS.closeAttention(database, { requestId }, 'answered', 'handled at the desk', now)
+    }],
+    ['the notified process was replaced', async () => {
+      liveIncarnations.set('s1', 'replacement-incarnation')
+    }]
+  ])('keeps an automatic reply as a draft when %s', async (_case, makeStale) => {
+    const sent: string[] = []
+    service['telegram'] = {
+      sendMessage: async (message: string) => {
+        sent.push(message)
+        return { messageId: sent.length }
+      }
+    } as unknown as TelegramConnector
+    await service.sessionsChanged()
+    COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', {
+      enabled: true, allowedChatId: 1, allowedUserId: null,
+      notifyOn: 'attention-and-exit', autoSubmitReplies: true
+    }, now)
+    const request = COMPANION_OPERATIONS.openAttention(database, {
+      sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'telegram-stale',
+      kind: 'permission', title: 'Old permission'
+    }, 'telegram-stale-request', now)
+    COMPANION_OPERATIONS.putTelegramMessage(
+      database, 77, 's1', request.requestId, 'incarnation-1', now
+    )
+    await makeStale(request.requestId)
+
+    await service['handleTelegramReply']({
+      updateId: 88,
+      chatId: 1,
+      fromUserId: 1,
+      messageId: 99,
+      replyToMessageId: 77,
+      text: 'yes',
+      file: null
+    })
+
+    expect(writes).toEqual([])
+    expect(sent).toEqual(['Saved as a draft in BMN for that session.'])
+    expect(COMPANION_OPERATIONS.listDrafts(database)).toContainEqual(
+      expect.objectContaining({ origin: 'telegram', state: 'draft', text: 'yes' })
+    )
+  })
+
+  it('submits a reply only while its exact notified process and request are current', async () => {
+    const sent: string[] = []
+    service['telegram'] = {
+      sendMessage: async (message: string) => {
+        sent.push(message)
+        return { messageId: sent.length }
+      }
+    } as unknown as TelegramConnector
+    await service.sessionsChanged()
+    COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', {
+      enabled: true, allowedChatId: 1, allowedUserId: null,
+      notifyOn: 'attention-and-exit', autoSubmitReplies: true
+    }, now)
+    const request = COMPANION_OPERATIONS.openAttention(database, {
+      sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'telegram-current',
+      kind: 'question', title: 'Current question'
+    }, 'telegram-current-request', now)
+    COMPANION_OPERATIONS.putTelegramMessage(
+      database, 77, 's1', request.requestId, 'incarnation-1', now
+    )
+
+    await service['handleTelegramReply']({
+      updateId: 88,
+      chatId: 1,
+      fromUserId: 1,
+      messageId: 99,
+      replyToMessageId: 77,
+      text: 'current answer',
+      file: null
+    })
+
+    expect(writes).toHaveLength(1)
+    expect(new TextDecoder().decode(writes[0]!.bytes)).toBe(
+      '\x1b[200~current answer\x1b[201~\r'
+    )
+    expect(sent).toEqual(['Sent to the session.'])
+    expect(COMPANION_OPERATIONS.getAttention(database, request.requestId)).toMatchObject({
+      state: 'answered', resolution: 'current answer'
+    })
+  })
+
+  it('keeps the reply as a draft when the process changes immediately before the write', async () => {
+    const sent: string[] = []
+    service['telegram'] = {
+      sendMessage: async (message: string) => {
+        sent.push(message)
+        return { messageId: sent.length }
+      }
+    } as unknown as TelegramConnector
+    await service.sessionsChanged()
+    COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', {
+      enabled: true, allowedChatId: 1, allowedUserId: null,
+      notifyOn: 'attention-and-exit', autoSubmitReplies: true
+    }, now)
+    const request = COMPANION_OPERATIONS.openAttention(database, {
+      sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'telegram-race',
+      kind: 'question', title: 'Racing question'
+    }, 'telegram-race-request', now)
+    COMPANION_OPERATIONS.putTelegramMessage(
+      database, 77, 's1', request.requestId, 'incarnation-1', now
+    )
+    let incarnationReads = 0
+    service['options'].manager.liveIncarnationId = () =>
+      ++incarnationReads === 1 ? 'incarnation-1' : 'replacement-incarnation'
+
+    await service['handleTelegramReply']({
+      updateId: 88,
+      chatId: 1,
+      fromUserId: 1,
+      messageId: 99,
+      replyToMessageId: 77,
+      text: 'racing answer',
+      file: null
+    })
+
+    expect(writes).toEqual([])
+    expect(sent).toEqual(['Saved as a draft in BMN for that session.'])
+    expect(COMPANION_OPERATIONS.listDrafts(database)).toContainEqual(
+      expect.objectContaining({ origin: 'telegram', state: 'draft', text: 'racing answer' })
+    )
   })
 })
