@@ -97,6 +97,7 @@ your desktop looks for applications:
 # Linux
 apps/desktop/release/linux-unpacked/bmn
 pnpm run install:desktop -- --pin     # launcher and icons; --pin adds it to the GNOME dock
+pnpm run update:desktop               # later: wait for BMN to close, then rebuild and install
 
 # macOS
 open apps/desktop/release/mac-arm64/BMN.app

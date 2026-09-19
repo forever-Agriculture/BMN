@@ -20,7 +20,8 @@
     "package": "node scripts/voice/build-whisper.mjs && pnpm --filter @bmn/desktop run package",
     "voice:build": "node scripts/voice/build-whisper.mjs",
     "smoke:packaged": "node scripts/smoke/packaged.mjs",
-    "install:desktop": "node scripts/install/desktop-entry.mjs"
+    "install:desktop": "node scripts/install/desktop-entry.mjs",
+    "update:desktop": "node scripts/install/update-desktop.mjs"
   },
   "devDependencies": {
     "@electron/rebuild": "4.2.0",
