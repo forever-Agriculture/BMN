@@ -194,8 +194,8 @@ bmn hook is not yours
   UUID. Two live sessions can never bind one conversation: the second report is refused and the
   first session keeps it. The owner token cannot report a conversation. A hook prints nothing and
   throws away what the app answers, so every refusal is written with its reason to
-  `refused-requests.log` in BMN's state folder (`$XDG_STATE_HOME/bmn/`), newest last, owner-only
-  and capped at 256 KiB.
+  `refused-requests.log` in BMN's state folder (`$XDG_STATE_HOME/bmn/`), newest last and owner-only.
+  The file is trimmed back to its newest half as soon as an append carries it past 256 KiB.
 - `bmn list` and `bmn snapshot` carry each session's conversation route beside the fields they
   already had, as `conversation: { status, captureRoute }`, or `null` for a session with no
   binding. The reference itself is never listed, and a session sees only its own.

@@ -679,7 +679,7 @@ describe('refused agent requests', () => {
     expect(statSync(service.refusalLogPath).mode & 0o777).toBe(0o600)
   })
 
-  it('keeps the newest refusals and never grows past its cap', async () => {
+  it('trims back to the newest refusals once an append carries it past the cap', async () => {
     const reach = service as unknown as {
       logRefusal(method: string, sessionId: string | null, reason: string): void
       refusalWrites: Promise<void>

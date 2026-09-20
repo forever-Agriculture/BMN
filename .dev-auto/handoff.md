@@ -17,7 +17,7 @@
 - Associated loop (optional; host and native loop/task ID): none
 - Implementation and repair inventories, file by file: `.dev-auto/log.md`.
 - Active native helpers (ID, route, scope, ownership, state): none
-- Collected terminal helper results: full review of `e4e27dc` by Codex CLI `gpt-6-astra/medium` returned 8 findings (7 MATERIAL) to `.dev-auto/evidence/epic-13/review-astra.md` (sha256 5261464645f5…). Focused recheck of `30cd2d4` dispatched to `gpt-6-astra/low`, in flight.
+- Collected terminal helper results: full review of `e4e27dc` by Codex CLI `gpt-6-astra/medium` returned 8 findings (7 MATERIAL) to `evidence/epic-13/review-astra.md`. Focused recheck of `30cd2d4` (`gpt-6-astra/low`, `recheck-astra.md`) closed 7 of 8, left M6 PARTIALLY CLOSED and said DO NOT ACCEPT. M6 fixed in `0a5ce6f`; second focused recheck of that one finding dispatched to `gpt-6-astra/low`, in flight.
 
 ## Decisions and findings
 
@@ -26,13 +26,13 @@
   2. The hook also ignores SessionStart payloads carrying `agent_id` (a Claude subagent), as herdr does (H1); the pid gate cannot catch an in-process subagent.
   3. AC4's "the command shown before Resume is exactly what runs": today no dialog shows a command, so the hook-captured Codex binding detail carries `Resume runs: <exact command>` and `not carried: <names>`; the session menu already renders the detail. A dropped prompt is counted, never quoted, so private text is not shown.
   4. A hook-captured Claude binding parses its stored argv with `allowExplicitSessionId: true`, so a selector BMN pinned at launch is superseded by the harness's word instead of blocking Resume; every other stored-argv rule is unchanged.
-- Material pending findings: none open. M1 (claim rollback), M4 (early SessionStart), M5a/b/c (Resume flow), M6 (logged refusal) and M7 (route in snapshot/list) closed in `30cd2d4`; M2 and M3 were closed in the working tree while the review ran, so the reviewer excluded them. N1 (Codex `-i` arity) closed by reading it as one value. Acceptance waits only on the focused recheck's verdict.
+- Material pending findings: M1-M5, M7 and N1 CLOSED by the recheck at `30cd2d4`, which found no new defect. M6 was PARTIALLY CLOSED: the utility's stderr is captured into a bounded in-memory buffer (`pty-host-client.ts:156-158,297-305`) and printed only if the host dies, so the reason was unreachable while BMN ran. `0a5ce6f` writes refusals to `refused-requests.log` in the state root instead, verified on the running stack by the Electron self-test reading a real refused rival report out of the file (`conversationFromHook.refusalReason`). Acceptance waits on the second recheck's verdict.
 - Design consult on the Resume confirmation: Fable, receipt `fable-dialog.json`. Adopted its copy, kind-named dropped arguments and Resume-autofocus; rejected showing the modal only when an argument is dropped, because AC4 requires the command shown before Resume.
 - Cross-epic obligations: Epic 14 takes the next free schema migration number after 13.1 (13.1 takes 8). Story 13.2's brief must not contradict the dev-auto cockpit rules (B6). Launch-time Claude pinning and the honest `unsupported` fallback stay.
 
 ## Evidence
 
-- Checks run and observed results, on `30cd2d4` at load average 2.3: `pnpm run typecheck` and `pnpm run lint` EXIT 0; `pnpm run test:unit` 980 passed / 1 skipped (`unit-3.log`, was 960 before the repairs and 913 at Epic 9); `pnpm run test:electron` EXIT 0 (`electron-6.log`), receipt `conversationFromHook.listed` = {"sessions":1,"conversation":{"status":"bound","captureRoute":"hook-session-start"}} from the hook-reported session's own `bmn list --json`. `codex resume --help` on codex-cli 0.155.1 read by hand for the accepted resume options (AC4); `claude --version` 2.1.278.
+- Checks run and observed results, on `0a5ce6f` (earlier numbers were `30cd2d4`), load average 2.3: `pnpm run typecheck` and `pnpm run lint` EXIT 0; `pnpm run test:unit` 982 passed / 1 skipped (`unit-4.log`, was 960 before the repairs and 913 at Epic 9); `pnpm run test:electron` EXIT 0 (`electron-7.log`), receipt `conversationFromHook.listed` = {"sessions":1,"conversation":{"status":"bound","captureRoute":"hook-session-start"}} from the hook-reported session's own `bmn list --json`, and `conversationFromHook.refusalReason` read from `refused-requests.log` while the app ran. `codex resume --help` on codex-cli 0.155.1 read by hand for the accepted resume options (AC4); `claude --version` 2.1.278.
 - Tests: unit tests for the hook mapping (4 accepted sources, compact, missing/non-UUID/non-string id, subagent payload, unknown source, nested agent, refused call), control validation (owner refused, cross-session refused, 7 invalid-argument shapes, lowercasing), the Codex option table and argv split, `bindingFromObservation` details, and session-manager precedence, refusals and claim release. Electron self-test phase "conversation reported by a session hook": a synthetic `#!node` Codex harness inside a real BMN session pipes a fixture SessionStart into the real `bmn hook codex`; the binding goes `unsupported` -> `hook-session-start`, a second session reporting the same id stays `unsupported`, and Stop then Resume spawns `resume 01a0b657-… --model gpt-6` (receipt field `conversationFromHook`, contract in `scripts/test/electron-self-test.mjs`).
 - Reviewed scope and route: whole epic on `e4e27dc`, `gpt-6-astra` medium via Codex CLI read-only; focused recheck of `30cd2d4`, `gpt-6-astra` low, same route.
 - Finding closures: every M1/M4/M5/M6/M7 fix ships a named regression test; the M1, M4 and M6 tests were each fence-probed RED with the fix mutated away. Test names, probes and observed failures: `.dev-auto/log.md`.
@@ -40,15 +40,16 @@
 
 ## Measurement
 
-- Timing: started 2026-09-20T09:50+03:00; story 13.1 checks green ~11:08+03:00; repairs committed 11:56+03:00.
+- Timing: started 2026-09-20T09:50+03:00; story 13.1 checks green ~11:08+03:00; repairs committed 11:56+03:00; M6 refusal log 12:02+03:00.
 - Dispatches:
   - Epic 13 full review via Codex CLI | epic-review | gpt-6-astra/medium | receipt `.dev-auto/evidence/epic-13/review-astra.json` | first
   - Resume-confirmation design consult via Claude CLI | ui-design | claude-fable-5-1/medium | receipt `.dev-auto/evidence/epic-13/fable-dialog.json` | first
-  - Epic 13 focused recheck via Codex CLI | recheck | gpt-6-astra/low | receipt pending | second
+  - Epic 13 focused recheck of `30cd2d4` via Codex CLI | recheck | gpt-6-astra/low | receipt `evidence/epic-13/recheck-astra.json` | second
+  - Epic 13 M6 recheck of `0a5ce6f` via Codex CLI | recheck | gpt-6-astra/low | receipt pending | third
 - Owner interventions: none.
 - Observed usage: pending.
 
 ## Resume
 
-- Next safe action: collect the focused recheck of `30cd2d4`; if it returns no open material finding, set the board's epic-13 and both stories to `done`, record routes/tiers/usage with `scripts/check.py usage`, run `scripts/check.py check` and publish the handoff. Push and `pnpm run update:desktop` need the owner's authorization for this run.
+- Next safe action: collect the M6 recheck of `0a5ce6f`; if it closes M6 with no new material finding, set the board's epic-13 and both stories to `done`, record routes/tiers/usage with `scripts/check.py usage`, run `scripts/check.py check` and publish the handoff. Push and `pnpm run update:desktop` need the owner's authorization for this run.
 - Status: ACTIVE

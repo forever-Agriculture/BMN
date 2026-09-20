@@ -45,7 +45,7 @@ const TELEGRAM_DOWNLOAD_BYTES = 20 * 1024 * 1024
 const TELEGRAM_TOKEN_FILE = 'telegram-bot.token'
 const TELEGRAM_OFFSET_KEY = 'telegram.offset'
 const ATTENTION_SWEEP_MS = 30_000
-/** The refusal log keeps its most recent lines within this size and never grows past it. */
+/** The refusal log is trimmed back to half this size as soon as one append carries it past. */
 const REFUSAL_LOG_BYTES = 256 * 1024
 const HANDOFF_TEXT_BYTES = 16 * 1024
 const HANDOFF_PAYLOAD_BYTES = 64 * 1024
@@ -263,7 +263,8 @@ export class CompanionService {
    * A hook prints nothing and drops what the app answers, so a refused conversation report would
    * otherwise leave no trace at all. The utility's stderr is no help: the main process captures it
    * into a bounded buffer and prints it only if the host dies. So the reason goes to a file the
-   * owner can open while BMN runs, newest last, bounded and owner-only.
+   * owner can open while BMN runs, newest last, bounded and owner-only. A write that fails leaves
+   * only the stderr line, which is written first for exactly that reason.
    */
   private logRefusal(method: string, sessionId: string | null, reason: string): void {
     const line = `${this.iso()} ${method} refused for ${sessionId ?? 'the owner'}: ${reason}\n`
