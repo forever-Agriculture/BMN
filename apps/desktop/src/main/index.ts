@@ -1040,6 +1040,82 @@ interface RendererIntegrationProbe {
   voiceFlow: VoiceFlowProbe
 }
 
+/**
+ * Clicks Resume on a stopped, bound session and reads what the owner is actually shown before
+ * anything starts, then cancels. The caller checks that nothing was launched.
+ */
+async function resumeConfirmationShown(
+  window: BrowserWindow,
+  session: { sessionId: string; name: string },
+  restoreSelectionTo: string
+): Promise<{ command: string; note: string | null }> {
+  return window.webContents.executeJavaScript(`
+    new Promise((resolve, reject) => {
+      const deadline = Date.now() + 8000;
+      let selected = false;
+      let clicked = false;
+      const treeButton = (id) => [...document.querySelectorAll('.session-row > button[data-session-id]')]
+        .find((candidate) => candidate.dataset.sessionId === id);
+      const probe = () => {
+        const button = treeButton(${JSON.stringify(session.sessionId)});
+        if (!button) {
+          reject(new Error('the bound session tree button was not rendered'));
+          return;
+        }
+        if (!selected) {
+          selected = true;
+          button.click();
+          setTimeout(probe, 25);
+          return;
+        }
+        // The panel is shared, so wait for it to be this session's before touching its buttons.
+        const shown = document.querySelector('.stopped-session h2')?.textContent?.trim();
+        if (shown !== ${JSON.stringify(session.name)}) {
+          if (Date.now() >= deadline) reject(new Error('the bound session panel never appeared: ' + shown));
+          else setTimeout(probe, 25);
+          return;
+        }
+        if (!clicked) {
+          const resume = [...document.querySelectorAll('.stopped-session .actions button')]
+            .find((candidate) => candidate.textContent.trim() === 'Resume');
+          if (resume) {
+            clicked = true;
+            resume.click();
+          }
+          setTimeout(probe, 25);
+          return;
+        }
+        const command = document.querySelector('dialog[open] .resume-command')?.textContent ?? null;
+        if (command) {
+          const note = document.querySelector('dialog[open] .dialog-note')?.textContent?.trim() ?? null;
+          const cancel = [...document.querySelectorAll('dialog[open] .dialog-actions button')]
+            .find((candidate) => candidate.textContent.trim() === 'Cancel');
+          if (!cancel) {
+            reject(new Error('the Resume confirmation offered no way out'));
+            return;
+          }
+          cancel.click();
+          // Leave the selection where this phase found it, so the persisted layout is unchanged.
+          treeButton(${JSON.stringify(restoreSelectionTo)})?.click();
+          resolve({ command, note });
+          return;
+        }
+        if (Date.now() >= deadline) {
+          reject(new Error('the Resume confirmation did not show a command: ' + JSON.stringify({
+            selected,
+            clicked,
+            actions: [...document.querySelectorAll('.stopped-session .actions button')]
+              .map((candidate) => candidate.textContent.trim()),
+            dialog: document.querySelector('dialog[open]')?.textContent?.trim() ?? null,
+            feedback: document.querySelector('.feedback-notice')?.textContent?.trim() ?? null
+          })));
+        } else setTimeout(probe, 25);
+      };
+      probe();
+    })
+  `) as Promise<{ command: string; note: string | null }>
+}
+
 async function stoppedPanelLabel(window: BrowserWindow, sessionId: string): Promise<string> {
   return window.webContents.executeJavaScript(`
     new Promise((resolve, reject) => {
@@ -2302,6 +2378,28 @@ async function runSelfTest(): Promise<void> {
         `the stopped panel did not render the recorded process label: ${JSON.stringify(rendererStoppedPanelLabel)}`
       )
     }
+    // AC4: what the owner reads before Resume is the command that runs, and Cancel starts nothing.
+    const liveBeforeConfirmation = (await client.request<HostHealth>(METHOD_REGISTRY.healthGet, {})).liveSessions
+    const resumeConfirmation = await resumeConfirmationShown(
+      applicationWindow,
+      { sessionId: reportingSession.sessionId, name: 'Hook-reported Codex' },
+      preloadProbe.templateCreatedSession.sessionId
+    )
+    const liveAfterCancel = (await client.request<HostHealth>(METHOD_REGISTRY.healthGet, {})).liveSessions
+    if (liveAfterCancel !== liveBeforeConfirmation) {
+      throw new Error('cancelling the Resume confirmation started or stopped a process')
+    }
+    const resumeConfirmationShownToOwner = {
+      command: resumeConfirmation.command,
+      note: resumeConfirmation.note,
+      // The command the owner read must be exactly the one the earlier real Resume spawned.
+      matchesSpawnedArguments:
+        resumeConfirmation.command ===
+        [reportingHarness.executable, ...(harnessRunArguments[1] ?? [])].join(' '),
+      startedNothing: liveAfterCancel === liveBeforeConfirmation
+    }
+    console.error(`[BMN] self-test phase: resume confirmation ${JSON.stringify(resumeConfirmationShownToOwner)}`)
+
     const afterRenderer = await client.request<HostHealth>(METHOD_REGISTRY.healthGet, {})
     // The voice flow stops and starts the destination session once, and the hook-reported Codex
     // phase starts two sessions and resumes one, all stopped again; each adds one record.
@@ -2570,6 +2668,7 @@ async function runSelfTest(): Promise<void> {
       mainPreloadWorkspaceMethod: preloadProbe.workspaceCount,
       mainPreloadSessionMethod: preloadProbe.sessionMethodSessionId,
       bridgeErrorCodesTyped: preloadProbe.bridgeErrorCodes,
+      resumeConfirmationShownToOwner,
       rendererLaunchUnavailable: preloadProbe.launchUnavailable,
       rendererUnavailableTemplate: preloadProbe.unavailableTemplate,
       rendererStoppedPanelLabel,

@@ -219,6 +219,18 @@ const receiptContract = [
         JSON.stringify(['resume', '01a0b657-21a8-7f00-addd-b73646828f5b', '--model', 'gpt-6'])
   ],
   [
+    'resumeConfirmationShownToOwner',
+    (receipt) =>
+      // AC4: the command the owner reads is the one that runs, and Cancel starts nothing.
+      receipt.resumeConfirmationShownToOwner?.matchesSpawnedArguments === true &&
+      receipt.resumeConfirmationShownToOwner?.startedNothing === true &&
+      receipt.resumeConfirmationShownToOwner?.command?.includes(
+        'resume 01a0b657-21a8-7f00-addd-b73646828f5b --model gpt-6'
+      ) &&
+      receipt.resumeConfirmationShownToOwner?.note ===
+        'Not carried over from the original launch: --full-auto. codex resume does not accept them.'
+  ],
+  [
     'survivalTable',
     (receipt) =>
       receipt.survivalTable?.rendererCrash?.liveProcesses === 3 &&
