@@ -365,3 +365,59 @@ Repaired-tree evidence: typecheck/lint EXIT 0, `test:unit` 1,051 passed / 1 skip
 (`evidence/epic-14/visual-9.log`). Two visual runs failed first and are kept:
 `visual-7.log` (a resize-refit redraw won the race before the paint read, fixed by
 re-checking the pair immediately before each measurement).
+
+## 2026-09-20, first focused recheck of `e1ed8ca` and the second repair
+
+Route: Codex CLI, `gpt-6-astra`, `model_reasoning_effort=low`, read-only, prompt
+`scratchpad/review/recheck-prompt.md`, receipt `scratchpad/review/astra-recheck.json`.
+
+Verdict, verbatim: "**I would not accept Epic 14 yet.** The repair closes five
+findings, partly closes three, and introduces an immediate-Working regression."
+
+Closed: 1, 2, 3, 8. Closed with a regression: 5. Partly closed: 4, 6, 7.
+
+Repaired in `e9a1d04`:
+
+- **AC1 regression (the serious one).** `publishableActivities` held back a session
+  entering Working, so a first byte 100 ms after a publication waited for the tick.
+  Fixed by exempting the Working transition from the cap. Reconciliation recorded:
+  a session can only enter Working after the 1.5 s idle window, so at most one such
+  publication per 1.5 s per session, which cannot breach two per second.
+- **Finding 4's remainder.** A successful but unchanged open still said `opened`.
+  The store now returns `AttentionOpenResult = AttentionRecord & { changed: boolean }`
+  — reported, never stored — which flows out through the control response, and
+  `bin/bmn` skips the effect when `changed === false`.
+- **Finding 7's remainder.** `isHookEventName` is now exactly `RULES.source`
+  (1-64 characters, no C0 controls, no 0x7f), so `Custom Event` and `Évènement` pass.
+  The whole origin is back to 64 characters; `hookOrigin` returns no origin when the
+  composed value would exceed it, so a long event still reaches the log without
+  producing a refusal.
+- **Colon-containing provenance.** `originName` split on every colon and kept the
+  first segment; it now splits only the agent off.
+- **Finding 6's remainder.** At `@media (max-width: 800px)` the sidebar is a 64 px
+  rail; `.session-detail` was not in the hide list, so the word was cramped into an
+  implicit column. It is hidden with the name and the chip, as the path was before,
+  and the visual script now drives 780x600 and asserts the mark shows, the detail
+  line does not, the row does not overflow the sidebar, and the tooltip still names
+  the state.
+- **Refusal flooding.** A bad origin queued an append per call. `usableOrigin`
+  records one per caller per 60 s; the reason never varies, so nothing is lost.
+
+Six fence probes, all FAILS as required: the Working exemption, the store's
+`changed`, the hook's use of it, the colon-preserving origin name, the refusal quiet
+period, and the `RULES.source` event shape (this one needed a `@bmn/protocol` rebuild
+before `npx vitest` saw the change — a bare `npx vitest run` uses the built package).
+
+Recorded, not closed: the self-test's `openRequestsUnchanged` compares attention-row
+counts, not desktop or Telegram notification counts. The self-test disables desktop
+notifications (`notificationsEnabled: () => !selfTest`), so it cannot count them; the
+display-only guarantee is structural (nothing derived reaches the notify path) and the
+activity phase's `attentionUnchanged` covers the request side.
+
+Also recorded from the recheck, unchanged by this repair: "no partial batch" cannot
+mean atomic execution — a timeout or disconnect after an accepted mutation can still
+prevent later calls and the observation. That predates Epic 14.
+
+Evidence on `e9a1d04`: typecheck/lint EXIT 0, `test:unit` 1,062 passed / 1 skipped,
+`test:electron` EXIT 0 (`evidence/epic-14/electron-14.log`), `test:visual` EXIT 0
+(`evidence/epic-14/visual-10.log`).
