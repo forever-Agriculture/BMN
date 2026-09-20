@@ -105,6 +105,18 @@ See [architecture.md](architecture.md) for processes and rules. Useful entry poi
 | Files, requests, control socket, Telegram, backups | `apps/desktop/src/utility/companion-service.ts` |
 | Database | `apps/desktop/src/utility/database-*.ts` |
 | Shared message types | `shared/protocol/src` |
+| Header identities and sigils | `apps/desktop/src/renderer/src/theme.ts`, `icons.tsx` |
+
+### Parked sigils
+
+The Boss identity shipped on 2026-09-20 with a trophy and *Veni, Vidi, Vici*. These drafts were the
+runner-up for a corporate Boss and are kept for a future identity or a swap. Each is a 16×16 `d`
+string for the stroke icon set in `icons.tsx` (stroke 1.4, round caps, no fill):
+
+- Classic tie: `M6.2 2.5h3.6l-.9 2.5 1.9 7.3L8 14.5l-2.8-2.2 1.9-7.3zM7.1 5h1.8`
+- Tie with tie bar: `M6.2 2.5h3.6l-.9 2.5 1.9 7.3L8 14.5l-2.8-2.2 1.9-7.3zM7.1 5h1.8M5.6 9.3h4.8`
+- Windsor, wider knot (Astra's pick): `M5.8 2h4.4l-.9 3 1.7 7.5L8 14.5l-3-2L6.7 5zM6.7 5h2.6`
+- Gavel with block, for an "owner's judgement" theme: `M8.7 4.4 6.6 2.3 2.3 6.6l2.1 2.1zM7.1 7.1l4.2 4.2M8 13h5.5v1.8H8z`
 
 ## Troubleshooting
 
