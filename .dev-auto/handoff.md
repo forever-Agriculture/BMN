@@ -5,7 +5,7 @@
 - Mode: build
 - Stopping condition: selected scope accepted
 - Explicit user stop (if any; only a later user instruction clears it): none
-- Restrictions and authorization boundaries: local work, checks, isolated Electron runs, helper dispatches, board/handoff updates and checked local commits (`~/.claude/CLAUDE.md` Authority; `/dev-auto 11`). Push to `main` and `pnpm run update:desktop` are NOT authorized — the owner withdrew his conditional grant so he can look first (both quotes in `.dev-auto/log.md`). Never push the old private `feat/epic-1/2` branches. Epic 11 out of scope: `epics.md:443`.
+- Restrictions and authorization boundaries: local work, checks, isolated Electron runs, helper dispatches, board/handoff updates and checked local commits (`~/.claude/CLAUDE.md` Authority; `/dev-auto 11`). The owner looked at the screenshots and then authorized the push: "Let's update what we have and push to GH" (2026-09-20). Both it and the earlier withdrawal are in `.dev-auto/log.md`; a further push needs the same again. Never push the old private `feat/epic-1/2` branches. Epic 11 out of scope: `epics.md:443`.
 - Decision and history log: `.dev-auto/log.md`
 - Authorized provider routes: Codex CLI, Claude CLI and the configured GLM profile per `references/models.md`. Owner 2026-09-20: GLM and GLM Flash may be dispatched freely; Fable replaces Astra for the whole-epic review and must approve the design. Quotes in `.dev-auto/log.md`.
 - Lead host / requested model / observed model: Claude Code; none requested; observed `claude-opus-5`/xhigh, session `7b3fae16-dba0-4a6e-874e-c32d5287dc15`.
@@ -13,7 +13,7 @@
 ## Progress
 
 - Sprint board: `_bmad-output/implementation-artifacts/sprint-status.yaml` (git-ignored); epics 5-9, 13, 14 `done`; `epic-11` and its story now `done`, accepted at `e2cd331`. Epic 12 stays `backlog`: the order is 13 -> 14 -> 12 -> 11 -> 10 and the owner took 11 first, which costs nothing because 11.1 depends on "current app only" (`epics.md:449`).
-- Baseline `1ead48f`. Two commits, both local and unpushed: `e2cd331` (Epic 11) and `5fcc6aa` (the owner-requested notice-bar fix, outside Epic 11). `origin/main` is still at `3e40d1b`, so `1ead48f` from an earlier session is also unpushed and must be preserved.
+- Baseline `1ead48f`. Pushed: `origin/main` now carries `3e40d1b..87c2d7b` — `1ead48f` from the earlier session, `e2cd331` (Epic 11), `5fcc6aa` (the notice-bar fix, outside Epic 11) and `87c2d7b` (this handoff). `pnpm run update:desktop` is queued for `87c2d7b` and waits for packaged BMN to exit before it packages and smoke-tests it; log `~/.local/state/bmn/source-update/latest.log`.
 - Implemented: the marker enum, guards and record field (`shared/protocol/src/workspace.ts`); migration 10 with a column CHECK (`store-schema.ts:353-370`); store mapping, create, update, legacy degradation (`database-workspace-store.ts`); names and label (`theme.ts`); the component (`renderer/src/workspace-marker.tsx`); a radio group in the existing menu (`popup-menu.tsx`); the choice, sidebar mark and per-pane identity (`main.tsx`); the pane-heading mark (`session-terminal.tsx`); CSS (`styles.css`).
 - Associated loop: none
 - Active native helpers: none
@@ -47,5 +47,5 @@
 
 ## Resume
 
-- Next safe action: show the owner the marker and notice-bar screenshots under `.dev-auto/evidence/epic-11/` and wait for his approval; only then push `e2cd331` and `5fcc6aa` to `main` and run `pnpm run update:desktop`. Epic 12 is next in the delivery order and is not selected by this run.
-- Status: COMPLETE — Epic 11 accepted at `e2cd331`; every check green and every review finding closed. Push and `update:desktop` wait on the owner.
+- Next safe action: none for the epic; the owner closes BMN when convenient and the queued packaging runs by itself. Epic 12 is next in the delivery order and is not selected by this run.
+- Status: COMPLETE — Epic 11 accepted at `e2cd331`, pushed through `87c2d7b`; every check green, every review finding closed, desktop update queued.

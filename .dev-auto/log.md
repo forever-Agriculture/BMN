@@ -726,3 +726,16 @@ not prove the flake is gone; it is recorded as a residual risk.
   - Epic 11 whole-epic review via Claude CLI | epic-review | claude-fable-5-1/medium | receipt `scratchpad/epic-11/fable-epic-review-3.json` | escalated: owner named Fable in place of Astra; a first tools-disabled attempt produced no review and was re-dispatched with read tools
   - persistence and protocol boundary via Claude CLI + GLM profile | complex | GLM-5.3/max | receipt `scratchpad/epic-11/glm-persistence-review.json` | first
 
+
+### Push, 2026-09-20
+
+The owner looked at the screenshots, set the focus-ring question aside ("forget about this ugly white
+frame") and authorized release: "Let's update what we have and push to GH". Pushed `3e40d1b..87c2d7b`
+to `origin/main` (the public repo), carrying `1ead48f` from the earlier session, `e2cd331` (Epic 11),
+`5fcc6aa` (the notice-bar fix) and `87c2d7b` (acceptance docs). `pnpm run update:desktop` queued the
+packaging of `87c2d7b`; it waits for packaged BMN to exit.
+
+Left open at his request, not lost: the selected row's keyboard-focus ring (Epic 5, `3a26eaf`,
+`styles.css:665-672`) reads as a heavy white box when the sidebar is navigated by keyboard, and the
+native `title` tooltip on session rows is unstyled and overlaps rows on hover. Neither is Epic 11's;
+both would be their own piece of work.
