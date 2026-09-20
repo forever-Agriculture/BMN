@@ -2,14 +2,17 @@
 import { describe, expect, it } from 'vitest'
 import {
   ACTIVITY_IDLE_AFTER_MS,
+  ACTIVITY_MIN_PUBLISH_MS,
   ACTIVITY_START_GRACE_MS,
   TERMINAL_TITLE_MAX,
   capTitle,
+  publishableActivities,
   sameActivities,
   sessionActivities,
   sessionActivity,
   titleWord,
-  type ActivityObservation
+  type ActivityObservation,
+  type SessionActivity
 } from './session-activity'
 
 const start = Date.parse('2026-09-20T12:00:00.000Z')
@@ -89,5 +92,66 @@ describe('session activity', () => {
     })).toBe(false)
     // A new title alone is a change: the row tooltip shows it.
     expect(sameActivities(before, { ...before, s1: { word: 'Working', working: true, title: 'build' } })).toBe(false)
+  })
+})
+
+describe('the two-updates-per-second cap', () => {
+  const working: SessionActivity = { word: 'Working', working: true, title: null }
+  const idle: SessionActivity = { word: 'Idle', working: false, title: null }
+  const titled: SessionActivity = { word: 'Idle', working: false, title: 'build' }
+
+  it('holds a session back per session, so another session waking cannot carry its change through', () => {
+    // s1 published at `start`; s2 wakes 300 ms later and publishes at once, which is its first word.
+    const published = publishableActivities(
+      { s1: idle, s2: working },
+      { s1: titled, s2: working },
+      { s1: start, s2: start - ACTIVITY_MIN_PUBLISH_MS },
+      start + 300
+    )
+
+    expect(published.s1).toEqual(idle)
+    expect(published.s2).toEqual(working)
+  })
+
+  it('lets the held change through on the next tick', () => {
+    const published = publishableActivities({ s1: idle }, { s1: titled }, { s1: start }, start + ACTIVITY_MIN_PUBLISH_MS)
+
+    expect(published.s1).toEqual(titled)
+  })
+
+  it('publishes a session never published before at once, so the first byte still reads Working', () => {
+    const published = publishableActivities({}, { s1: working }, {}, start)
+
+    expect(published.s1).toEqual(working)
+  })
+
+  it('keeps at most two updates per second per session under a title storm', () => {
+    const publishedAt: Record<string, number> = {}
+    let shown: Record<string, SessionActivity> = {}
+    const changes: number[] = []
+    // A storm: every 50 ms one session changes title and the other prints, for four seconds.
+    for (let step = 0; step < 80; step += 1) {
+      const now = start + step * 50
+      const next = {
+        s1: { word: 'Idle', working: false, title: `build ${step}` } as SessionActivity,
+        s2: working
+      }
+      const published = publishableActivities(shown, next, publishedAt, now)
+      for (const [sessionId, activity] of Object.entries(published)) {
+        if (sameActivities({ [sessionId]: activity }, { [sessionId]: shown[sessionId] ?? activity }) &&
+          shown[sessionId] !== undefined) continue
+        publishedAt[sessionId] = now
+        if (sessionId === 's1') changes.push(now)
+      }
+      shown = published
+    }
+
+    expect(changes.length).toBeGreaterThan(0)
+    for (const [index, at] of changes.entries()) {
+      const previous = changes[index - 1]
+      if (previous !== undefined) expect(at - previous).toBeGreaterThanOrEqual(ACTIVITY_MIN_PUBLISH_MS)
+    }
+    // Four seconds of storm, at most two updates a second.
+    expect(changes.length).toBeLessThanOrEqual(8)
   })
 })

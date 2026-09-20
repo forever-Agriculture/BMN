@@ -6,6 +6,8 @@ export interface PaletteCommand {
   id: string
   group: 'Sessions' | 'Workspaces' | 'Commands'
   label: string
+  /** A `status-dot` class for a row that stands for something with a state, so the palette shows the mark too. */
+  mark?: string | undefined
   context?: string | undefined
   shortcut?: string | undefined
   disabled?: boolean | undefined
@@ -82,7 +84,8 @@ export function CommandPalette(props: {
               onMouseMove={() => setActive(index)}
               onClick={() => invoke(command)}
             >
-              <span>{command.label}</span>
+              {command.mark ? <span className={`status-dot ${command.mark}`} aria-hidden="true" /> : null}
+              <span className="label">{command.label}</span>
               {command.context ? <span className="context">{command.context}</span> : null}
               {command.shortcut ? <span className="shortcut">{command.shortcut}</span> : null}
             </li>

@@ -61,15 +61,36 @@ export type AttentionOrigin = string
 
 export const ATTENTION_ORIGINS = Object.freeze(['cli', 'owner', 'input', 'telegram', 'expiry'] as const)
 
-const HOOK_ORIGIN = /^hook:(claude|codex):[A-Za-z][A-Za-z0-9]{0,40}$/
-
-/** The one place the closed origin vocabulary is decided, so every entry point refuses the same words. */
-export function isAttentionOrigin(value: string): boolean {
-  return (ATTENTION_ORIGINS as readonly string[]).includes(value) || HOOK_ORIGIN.test(value)
-}
+/** Origins a session's own token may claim: its harness's hook events, and the CLI it runs itself. */
+export const AGENT_ATTENTION_ORIGINS = Object.freeze(['cli'] as const)
 
 export const HOOK_EVENT_AGENTS = Object.freeze(['claude', 'codex'] as const)
 export type HookEventAgent = (typeof HOOK_EVENT_AGENTS)[number]
+
+/** The event half of `hook:<agent>:<Event>`: the printable `RULES.source` shape, so an unfamiliar event still reads. */
+const HOOK_EVENT_NAME = /^[\x21-\x7e]+$/
+/** `RULES.source` size, which bounds a plain origin word and the event half of a hook origin alike. */
+const ORIGIN_MAX = 64
+/** `hook:` plus the longest agent plus a full-length event name, so composing one never clips a valid event. */
+const HOOK_ORIGIN_MAX = 'hook:claude:'.length + ORIGIN_MAX
+
+/** The one place the closed origin vocabulary is decided, so every entry point accepts the same words. */
+export function isAttentionOrigin(value: string): boolean {
+  if (value.length < 1 || value.length > HOOK_ORIGIN_MAX) return false
+  if ((ATTENTION_ORIGINS as readonly string[]).includes(value)) return true
+  if (!value.startsWith('hook:')) return false
+  // Only the agent is split off: an event name may itself contain a colon, and the log should still read.
+  const rest = value.slice('hook:'.length)
+  const separator = rest.indexOf(':')
+  if (separator < 0) return false
+  return (HOOK_EVENT_AGENTS as readonly string[]).includes(rest.slice(0, separator)) &&
+    isHookEventName(rest.slice(separator + 1))
+}
+
+/** A hook event name the log will store: printable, no whitespace, at most `RULES.source` characters. */
+export function isHookEventName(value: string): boolean {
+  return value.length >= 1 && value.length <= ORIGIN_MAX && HOOK_EVENT_NAME.test(value)
+}
 
 export const HOOK_EVENT_EFFECTS = Object.freeze(['opened', 'withdrew', 'answered'] as const)
 export type HookEventEffect = (typeof HOOK_EVENT_EFFECTS)[number]

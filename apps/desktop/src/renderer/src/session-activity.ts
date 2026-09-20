@@ -87,6 +87,32 @@ export function sessionActivities(
   return activities
 }
 
+/** A session's presentation may change at most this often, which is AC4's two updates per second. */
+export const ACTIVITY_MIN_PUBLISH_MS = 500
+
+/**
+ * Holds back a session whose presentation changed less than `ACTIVITY_MIN_PUBLISH_MS` ago, so one session's first
+ * byte cannot carry another session's pending title change past the cap. The tick re-derives from the same
+ * observations, so a held change lands at most one tick late - far inside the 1.5 s idle window.
+ */
+export function publishableActivities(
+  previous: Readonly<Record<string, SessionActivity>>,
+  next: Readonly<Record<string, SessionActivity>>,
+  publishedAt: Readonly<Record<string, number>>,
+  now: number
+): Record<string, SessionActivity> {
+  const publishable: Record<string, SessionActivity> = {}
+  for (const [sessionId, derived] of Object.entries(next)) {
+    const before = previous[sessionId]
+    const last = publishedAt[sessionId]
+    const changed = !before ||
+      before.word !== derived.word || before.working !== derived.working || before.title !== derived.title
+    const tooSoon = last !== undefined && now - last < ACTIVITY_MIN_PUBLISH_MS
+    publishable[sessionId] = changed && before && tooSoon ? before : derived
+  }
+  return publishable
+}
+
 /** True when two derivations would render the same, so the tick can skip the update entirely. */
 export function sameActivities(
   left: Readonly<Record<string, SessionActivity>>,

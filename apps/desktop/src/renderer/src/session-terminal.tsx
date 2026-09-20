@@ -858,7 +858,7 @@ export function SessionTerminal(props: {
   const name = props.startup.name
   const attentionWord = props.attention === 'response' ? 'Waiting for your response'
     : props.attention === 'update' ? 'Update available' : props.activity?.word ?? 'Running'
-  const statusText = `${exitStatus ?? attentionWord} · ${props.startup.cwd}`
+  const stateWord = exitStatus ?? attentionWord
   const dot = exitStatus ? 'exited'
     : props.attention ? 'needs-you'
       : props.activity && !props.activity.working ? 'running-idle' : 'running'
@@ -895,7 +895,10 @@ export function SessionTerminal(props: {
         <strong title={name}>{name}</strong>
         {props.record ? <span className="chip">{agentTag(props.record.executable)}</span> : null}
         <span className={`status-dot ${dot}`} aria-hidden="true" />
-        <span className={`pane-status${props.attention && !exitStatus ? ' needs-you' : ''}`}>{statusText}</span>
+        <span className={`pane-status${props.attention && !exitStatus ? ' needs-you' : ''}`}>
+          <span className="pane-state">{stateWord}</span>
+          <span className="pane-directory">{` · ${props.startup.cwd}`}</span>
+        </span>
         <div className="pane-actions">
           <button type="button" aria-pressed={props.split} title={`Split (${SHORTCUT_LABELS['split-toggle']})`} onClick={props.onSplit}>
             <Icon name="split" /><span className="button-label">{props.split ? 'Unsplit' : 'Split'}</span>

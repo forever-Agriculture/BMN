@@ -45,6 +45,7 @@ import { PreferencesDialog } from './preferences-dialog'
 import {
   ACTIVITY_TICK_MS,
   capTitle,
+  publishableActivities,
   sameActivities,
   sessionActivities,
   type ActivityObservation,
@@ -190,6 +191,8 @@ function App(): React.JSX.Element {
   const activityRef = useRef(activity)
   /** How many times each session's presented activity actually changed; the self-test reads it for the throttle. */
   const activityUpdates = useRef<Record<string, number>>({})
+  /** When each session's presentation last changed, so its own cap holds however often publishing is triggered. */
+  const activityPublishedAt = useRef<Record<string, number>>({})
   const [voice, setVoice] = useState<VoiceCapture | null>(null)
   const voiceRef = useRef<VoiceCapture | null>(null)
   const voiceRecording = useRef<VoiceRecording | null>(null)
@@ -246,9 +249,19 @@ function App(): React.JSX.Element {
     if (observed) observed.title = capTitle(title)
   }
 
-  /** Re-derives every observed session; the state changes only when a word, a mark or a title changed. */
+  /**
+   * Re-derives every observed session; the state changes only when a word, a mark or a title changed, and a
+   * session that changed within the last half second keeps its shown value so the per-session cap holds even
+   * when another session's first byte publishes immediately.
+   */
   const publishActivity = (): void => {
-    const next = sessionActivities(observations.current, Date.now())
+    const now = Date.now()
+    const next = publishableActivities(
+      activityRef.current,
+      sessionActivities(observations.current, now),
+      activityPublishedAt.current,
+      now
+    )
     if (sameActivities(activityRef.current, next)) return
     for (const [sessionId, derived] of Object.entries(next)) {
       const before = activityRef.current[sessionId]
@@ -256,6 +269,10 @@ function App(): React.JSX.Element {
         continue
       }
       activityUpdates.current[sessionId] = (activityUpdates.current[sessionId] ?? 0) + 1
+      activityPublishedAt.current[sessionId] = now
+    }
+    for (const sessionId of Object.keys(activityPublishedAt.current)) {
+      if (!(sessionId in next)) delete activityPublishedAt.current[sessionId]
     }
     activityRef.current = next
     setActivity(next)
@@ -1144,19 +1161,24 @@ function App(): React.JSX.Element {
     const command = (id: string, label: string, run: () => void, extra: Partial<PaletteCommand> = {}): PaletteCommand =>
       ({ id, group: 'Commands', label, run, ...extra })
     return [
-      ...shown.flatMap((workspace) => visibleWorkspaceSessions(sessions, workspace.workspaceId, false).map((session): PaletteCommand => ({
-        id: `session-${session.sessionId}`,
-        group: 'Sessions',
-        label: session.name,
-        context: `${workspace.name} · ${agentTag(session.executable)} · ${sessionStatus(
+      ...shown.flatMap((workspace) => visibleWorkspaceSessions(sessions, workspace.workspaceId, false).map((session): PaletteCommand => {
+        const status = sessionStatus(
           session,
           !!live[session.sessionId],
           unresolved,
           observedProgressFor(session),
           activity[session.sessionId] ?? null
-        ).word} · ${displayPath(session.cwd, home)}`,
-        run: () => openSession(session.sessionId)
-      }))),
+        )
+        return {
+          id: `session-${session.sessionId}`,
+          group: 'Sessions',
+          label: session.name,
+          // The palette row carries the same mark and word as the sidebar row it stands for.
+          mark: status.dot,
+          context: `${workspace.name} · ${agentTag(session.executable)} · ${status.word} · ${displayPath(session.cwd, home)}`,
+          run: () => openSession(session.sessionId)
+        }
+      })),
       ...shown.map((workspace): PaletteCommand => ({
         id: `workspace-${workspace.workspaceId}`,
         group: 'Workspaces',
@@ -1360,10 +1382,13 @@ function App(): React.JSX.Element {
                               clearUnread(session.sessionId)
                             }}
                           >
-                            <span className={`status-dot ${status.dot}`} role="img" aria-label={status.word} />
+                            <span className={`status-dot ${status.dot}`} aria-hidden="true" />
                             <span className="session-name">{session.name}</span>
                             <span className="chip">{agentTag(session.executable)}</span>
-                            <span className="session-directory">{displayPath(session.cwd, home)}</span>
+                            <span className="session-detail">
+                              <span className="session-state">{status.word}</span>
+                              <span className="session-directory">{displayPath(session.cwd, home)}</span>
+                            </span>
                           </button>
                           {unread[session.sessionId] && !selected ? <span className="unread-mark" title="New output">new</span> : null}
                           <button

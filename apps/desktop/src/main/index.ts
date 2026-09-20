@@ -79,7 +79,8 @@ import { hasExplicitApplicationLaunch, parseApplicationLaunchSpec } from './laun
 import {
   activateAttentionNotification,
   createAppEventForwarder,
-  installCompanionIpcHandlers
+  installCompanionIpcHandlers,
+  noticeResolution
 } from './companion-ipc'
 import type { FileReferenceFlowProbe } from '../renderer/src/file-reference-probe'
 import type { VoiceFlowProbe } from '../renderer/src/voice-probe'
@@ -238,10 +239,11 @@ interface HookProvenanceProbe {
   answeredByTypingState: string
   rows: string[]
   events: { event: string; effects: string[]; toolName: string | null }[]
-  otherSessionEvents: number
+  /** The other live session's own log, read with the same bridge call: each session sees only its own events. */
+  otherSessionEvents: { event: string; effects: string[] }[]
   listWroteToPty: boolean
-  notificationsBefore: number
-  notificationsAfter: number
+  openRequestsBefore: number
+  openRequestsAfter: number
   closed: boolean
 }
 
@@ -316,12 +318,7 @@ const appEvents = createAppEventForwarder({
           applicationWindow?.webContents.send('aiterm:open-session', targetSessionId)
         },
         resolveNotice: (targetRequestId, expectedRevision) => hostClient
-          ? hostClient.request(METHOD_REGISTRY.attentionResolve, {
-              requestId: targetRequestId,
-              resolution: 'Opened in BMN',
-              expectedKind: 'notice',
-              expectedRevision
-            })
+          ? hostClient.request(METHOD_REGISTRY.attentionResolve, noticeResolution(targetRequestId, expectedRevision))
           : Promise.resolve()
       })
     })
@@ -1539,6 +1536,35 @@ function writeClaudeHookHarness(directory: string): {
     { mode: 0o700 }
   )
   return { executable, opened, toolGate, resolved, secondGate, reopened }
+}
+
+/**
+ * A second session that fires one hook event of its own. Its name is not in either agent's table, so it opens
+ * nothing and only reaches the log - which is what the log is for, and what keeps the two sessions' logs apart.
+ */
+function writeIsolationHookHarness(directory: string): { executable: string; fired: string; event: string } {
+  mkdirSync(directory, { recursive: true })
+  const fired = join(directory, 'fired')
+  const executable = join(directory, 'claude')
+  const event = 'Isolation-Probe'
+  writeFileSync(join(directory, 'package.json'), '{"type":"commonjs"}\n')
+  writeFileSync(
+    executable,
+    [
+      `#!${process.env.BMN_SELF_TEST_NODE ?? '/usr/bin/env node'}`,
+      "const { spawnSync } = require('node:child_process')",
+      "const { writeFileSync } = require('node:fs')",
+      `spawnSync('bmn', ['hook', 'claude'], {`,
+      `  input: JSON.stringify({ hook_event_name: ${JSON.stringify(event)} }), stdio: ['pipe', 'ignore', 'ignore']`,
+      '})',
+      `writeFileSync(${JSON.stringify(fired)}, '')`,
+      "process.stdout.write('isolation hook harness ready\\n')",
+      'setInterval(() => undefined, 1_000)',
+      ''
+    ].join('\n'),
+    { mode: 0o700 }
+  )
+  return { executable, fired, event }
 }
 
 /** Waits for one of the harness's marker files; the harness writes each one after its event landed. */
@@ -2782,7 +2808,6 @@ async function runSelfTest(): Promise<void> {
         const probe = window.__bmnActivity;
         const hook = window.__aitermTest;
         if (!probe || !hook) throw new Error('the activity probes are unavailable');
-        
         const entries = Object.entries(ids);
         const snapshotOf = (id) => { try { return hook.snapshot(id) } catch { return null } };
         const shapeOf = (id) => {
@@ -2930,8 +2955,19 @@ async function runSelfTest(): Promise<void> {
       cols: 80,
       rows: 24
     }, true)
+    const isolationHarness = writeIsolationHookHarness(join(isolatedCwd, 'isolation-harness'))
+    const isolationSession = await createSessionRuntime({
+      workspaceId: DEFAULT_WORKSPACE_ID,
+      name: 'Hook isolation',
+      cwd: isolatedCwd,
+      executable: isolationHarness.executable,
+      argv: [],
+      cols: 80,
+      rows: 24
+    }, true)
     await recoverApplicationRenderer(applicationWindow)
     await untilFileExists(hookHarness.opened, 'opened its first request')
+    await untilFileExists(isolationHarness.fired, 'fired its own hook event')
     const requestsOf = async (): Promise<AttentionRecord[]> =>
       (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
         .filter((request) => request.sessionId === hookSession.session.sessionId)
@@ -2964,6 +3000,7 @@ async function runSelfTest(): Promise<void> {
     const hookProvenance = await applicationWindow.webContents.executeJavaScript(`
       (async () => {
         const sessionId = ${JSON.stringify(hookSession.session.sessionId)};
+        const otherSessionId = ${JSON.stringify(isolationSession.session.sessionId)};
         const wait = async (read, what) => {
           const deadline = Date.now() + 10000;
           for (;;) {
@@ -2977,7 +3014,7 @@ async function runSelfTest(): Promise<void> {
         const pane = await wait(() => document.querySelector('.session-terminal[data-session-id="' + sessionId + '"]'), 'the pane');
         const textarea = pane.querySelector('.xterm-helper-textarea');
         if (!textarea) throw new Error('the hook fixture pane has no terminal input');
-        const notificationsBefore = (await window.aiTerminal.listAttention()).length;
+        const openRequestsBefore = (await window.aiTerminal.listAttention()).length;
         // The pane only answers for the owner once the window itself knows the request is open.
         await wait(() => pane.querySelector('.pane-heading .status-dot.needs-you'), 'the pane to need the owner');
         // Typing into a pane that needs the owner answers its open requests, and records that it did.
@@ -3014,19 +3051,22 @@ async function runSelfTest(): Promise<void> {
           answeredByTypingState: answeredByTyping.state,
           rows,
           events: events.map((event) => ({ event: event.event, effects: event.effects, toolName: event.toolName })),
-          otherSessionEvents: (await window.aiTerminal.listHookEvents('no-such-session')).length,
+          otherSessionEvents: (await window.aiTerminal.listHookEvents(otherSessionId))
+            .map((event) => ({ event: event.event, effects: event.effects })),
           listWroteToPty: afterList !== beforeList,
-          notificationsBefore,
-          notificationsAfter: (await window.aiTerminal.listAttention()).length,
+          openRequestsBefore,
+          openRequestsAfter: (await window.aiTerminal.listAttention()).length,
           closed
         };
       })()
     `) as HookProvenanceProbe
-    await client.request(METHOD_REGISTRY.sessionStop, {
-      sessionId: hookSession.session.sessionId,
-      incarnationId: hookSession.session.lastProcess?.incarnationId,
-      cause: 'explicit'
-    })
+    for (const runtime of [hookSession, isolationSession]) {
+      await client.request(METHOD_REGISTRY.sessionStop, {
+        sessionId: runtime.session.sessionId,
+        incarnationId: runtime.session.lastProcess?.incarnationId,
+        cause: 'explicit'
+      })
+    }
     const requestProvenance = {
       openedBy: openedByHook.openedBy,
       openedResolvedBy: openedByHook.resolvedBy,
@@ -3038,7 +3078,7 @@ async function runSelfTest(): Promise<void> {
       listedRows: hookProvenance.rows,
       otherSessionEvents: hookProvenance.otherSessionEvents,
       listWroteToPty: hookProvenance.listWroteToPty,
-      notificationsUnchanged: hookProvenance.notificationsBefore === hookProvenance.notificationsAfter,
+      openRequestsUnchanged: hookProvenance.openRequestsBefore === hookProvenance.openRequestsAfter,
       dialogClosed: hookProvenance.closed
     }
     console.error(`[BMN] self-test phase: request provenance ${JSON.stringify(requestProvenance)}`)
@@ -3067,9 +3107,14 @@ async function runSelfTest(): Promise<void> {
     if (!requestProvenance.listedRows.some((row) => row.includes('PostToolUse · Bash'))) {
       throw new Error(`the Hook events list did not show the events: ${JSON.stringify(requestProvenance.listedRows)}`)
     }
-    if (requestProvenance.otherSessionEvents !== 0) throw new Error('a session read another session’s hook events')
+    // Two live sessions, each firing its own events: neither log may carry the other's.
+    if (JSON.stringify(requestProvenance.otherSessionEvents) !==
+      JSON.stringify([{ event: 'Isolation-Probe', effects: [] }])) {
+      throw new Error(`the other session's log is not its own: ${JSON.stringify(requestProvenance.otherSessionEvents)}`)
+    }
+    if (listedEvents.includes('Isolation-Probe')) throw new Error('a session read another session’s hook events')
     if (requestProvenance.listWroteToPty) throw new Error('opening the Hook events list wrote to a PTY')
-    if (!requestProvenance.notificationsUnchanged) throw new Error('opening the Hook events list changed a request')
+    if (!requestProvenance.openRequestsUnchanged) throw new Error('opening the Hook events list changed a request')
     if (!requestProvenance.dialogClosed) throw new Error('the Hook events dialog did not close on Escape')
 
     const secondClose = await client.close()

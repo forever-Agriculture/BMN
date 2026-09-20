@@ -233,9 +233,10 @@ const receiptContract = [
       receipt.requestProvenance?.hookEvents?.[1]?.toolName === 'Bash' &&
       Array.isArray(receipt.requestProvenance?.listedRows) &&
       receipt.requestProvenance.listedRows.some((row) => row.includes('PostToolUse · Bash')) &&
-      receipt.requestProvenance?.otherSessionEvents === 0 &&
+      JSON.stringify(receipt.requestProvenance?.otherSessionEvents) ===
+        JSON.stringify([{ event: 'Isolation-Probe', effects: [] }]) &&
       receipt.requestProvenance?.listWroteToPty === false &&
-      receipt.requestProvenance?.notificationsUnchanged === true &&
+      receipt.requestProvenance?.openRequestsUnchanged === true &&
       receipt.requestProvenance?.dialogClosed === true
   ],
   [

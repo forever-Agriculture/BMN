@@ -237,6 +237,20 @@ export interface AttentionNotification {
   revision: number
 }
 
+/**
+ * What clicking a desktop notice writes. Clicking the bubble is the owner acting, so the request's history
+ * says `owner` rather than "unknown", and the revision guard the click was raised with is kept.
+ */
+export function noticeResolution(requestId: string, expectedRevision: number): {
+  requestId: string
+  resolution: string
+  expectedKind: AttentionKind
+  expectedRevision: number
+  origin: string
+} {
+  return { requestId, resolution: 'Opened in BMN', expectedKind: 'notice', expectedRevision, origin: 'owner' }
+}
+
 /** Opens the exact session and closes informational notices; prompts still require answer evidence. */
 export async function activateAttentionNotification(
   notification: Pick<AttentionNotification, 'sessionId' | 'requestId' | 'kind' | 'revision'>,

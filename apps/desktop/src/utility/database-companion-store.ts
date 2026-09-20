@@ -198,8 +198,9 @@ export function openAttention(
     const unchanged = existing.kind === params.kind &&
       existing.title === params.title &&
       existing.body === (params.body ?? null) &&
-      existing.expires_at === (params.expiresAt ?? null) &&
-      existing.opened_by === (params.origin ?? null)
+      existing.expires_at === (params.expiresAt ?? null)
+    // Provenance alone never counts as a change: a re-open that says only a different origin must not clear
+    // `seen_at` and show the owner a request they have already read. What opened it stays what opened it.
     if (unchanged) return attentionFromRow(existing)
     database.prepare(
       `UPDATE attention_request SET kind = ?, title = ?, body = ?, expires_at = ?, incarnation_id = ?,

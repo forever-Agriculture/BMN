@@ -707,6 +707,51 @@ describe('bmn hook provenance and the hook event log', () => {
     })
   })
 
+  it('records no effect for calls the host refused, which is what a missing request looks like', async () => {
+    const fixture = await cliFixture()
+    const missing = (): never => {
+      throw new ControlError(ERROR_CODES.notFound, 'no open request with that key')
+    }
+    fixture.handlers.withdrawAttention.mockImplementation(missing)
+    fixture.handlers.resolveAttention.mockImplementation(missing)
+
+    // A PostToolUse resolves and withdraws; with nothing open, every call comes back not-found.
+    const result = await runHook(fixture, 'claude', { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: {} })
+
+    expect(result).toEqual(QUIET)
+    expect(fixture.handlers.withdrawAttention).toHaveBeenCalled()
+    expect(fixture.handlers.resolveAttention).toHaveBeenCalled()
+    // AC2: effects describe what changed, so an event that changed nothing lists nothing.
+    expect(fixture.handlers.observeHookEvent).toHaveBeenCalledTimes(1)
+    expect(fixture.handlers.observeHookEvent.mock.calls[0]?.[0]).toMatchObject({ event: 'PostToolUse', effects: [] })
+  })
+
+  it('records only the half of a partial batch that the host accepted', async () => {
+    const fixture = await cliFixture()
+    fixture.handlers.withdrawAttention.mockImplementation((): never => {
+      throw new ControlError(ERROR_CODES.notFound, 'no open request with that key')
+    })
+
+    // A Claude Stop withdraws the question it answered and opens the finished-turn notice.
+    const result = await runHook(fixture, 'claude', { hook_event_name: 'Stop', last_assistant_message: 'Done' })
+
+    expect(result).toEqual(QUIET)
+    expect(fixture.handlers.openAttention).toHaveBeenCalled()
+    expect(fixture.handlers.observeHookEvent.mock.calls[0]?.[0]).toMatchObject({ effects: ['opened'] })
+  })
+
+  it('carries an unfamiliar but printable event name, which is what the log is for', async () => {
+    const fixture = await cliFixture()
+
+    const result = await runHook(fixture, 'claude', { hook_event_name: 'Custom-Event' })
+
+    expect(result).toEqual(QUIET)
+    expect(fixture.handlers.observeHookEvent.mock.calls[0]?.[0]).toMatchObject({
+      event: 'Custom-Event',
+      effects: []
+    })
+  })
+
   it('carries the harness source and tool name when the payload has them', async () => {
     const fixture = await cliFixture()
 

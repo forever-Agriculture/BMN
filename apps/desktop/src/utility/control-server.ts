@@ -4,10 +4,11 @@ import { chmod, lstat, mkdir, unlink } from 'node:fs/promises'
 import { createConnection, createServer, type Server, type Socket } from 'node:net'
 import { dirname, isAbsolute } from 'node:path'
 import {
-  ATTENTION_ORIGINS,
+  AGENT_ATTENTION_ORIGINS,
   ERROR_CODES,
   MAX_CONTROL_FRAME_BYTES,
   isAttentionOrigin,
+  isHookEventName,
   isProtocolErrorCode,
   type ProtocolErrorCode
 } from '@bmn/protocol'
@@ -273,16 +274,35 @@ function requireEnum<T extends string>(params: Params, key: string, allowed: rea
 }
 
 /**
- * The closed origin vocabulary: `hook:<agent>:<Event>` names the harness hook that acted, and the rest name
- * the owner's own routes. Anything else is refused, so a caller cannot invent a provenance word.
+ * Provenance is optional metadata, so a malformed, oversized or unauthorized origin is dropped and recorded -
+ * never allowed to stop the open, withdraw or resolve it came with. `owner`, `input`, `telegram` and `expiry`
+ * are the app's own words: a session token may claim only its harness's hook events and the CLI it runs itself,
+ * so an agent cannot dress its own action up as the owner's.
  */
-function readOrigin(params: Params, key: string): string | undefined {
-  const value = readText(params, key, RULES.source)
-  if (value === undefined) return undefined
-  if (!isAttentionOrigin(value)) {
-    throw invalid(`${key} must be one of: ${ATTENTION_ORIGINS.join(', ')}, or hook:<agent>:<Event>`)
-  }
-  return value
+function acceptableOrigin(value: unknown, scope: ControlScope): boolean {
+  if (typeof value !== 'string' || !isAttentionOrigin(value)) return false
+  return scope.kind === 'owner' ||
+    value.startsWith('hook:') ||
+    (AGENT_ATTENTION_ORIGINS as readonly string[]).includes(value)
+}
+
+/** The origin to store, or undefined when none was offered or the one offered was dropped and recorded. */
+function usableOrigin(
+  params: Params,
+  scope: ControlScope,
+  method: string,
+  handlers: ControlHandlers
+): string | undefined {
+  const value = params.origin
+  if (value === undefined || value === null) return undefined
+  if (acceptableOrigin(value, scope)) return value as string
+  // The refused word is never echoed: a caller must not be able to write its own line into the refusal log.
+  handlers.reportRefusal(
+    method,
+    scope.kind === 'session' ? scope.sessionId : null,
+    'origin refused: unknown provenance for this credential'
+  )
+  return undefined
 }
 
 function requireEffects(params: Params, key: string): HookEventEffect[] {
@@ -701,7 +721,7 @@ export class ControlServer {
         const expiresAt = readTimestamp(params, 'expiresAt')
         const idempotencyKey = readText(params, 'idempotencyKey', RULES.idempotencyKey)
         const phoneNotified = readBoolean(params, 'phoneNotified')
-        const origin = readOrigin(params, 'origin')
+        const origin = usableOrigin(params, scope, method, handlers)
         const sessionId = this.target(scope, params)
         return this.idempotent(scope, method, idempotencyKey, params, () => handlers.openAttention({
           sessionId,
@@ -756,7 +776,7 @@ export class ControlServer {
       case 'attention.withdraw': {
         const params = closedParams(rawParams, ['sessionId', 'requestKey', 'origin'])
         const requestKey = requireText(params, 'requestKey', RULES.requestKey)
-        const origin = readOrigin(params, 'origin')
+        const origin = usableOrigin(params, scope, method, handlers)
         const sessionId = this.target(scope, params)
         return handlers.withdrawAttention({ sessionId, requestKey, ...(origin === undefined ? {} : { origin }) })
       }
@@ -764,7 +784,7 @@ export class ControlServer {
         const params = closedParams(rawParams, ['sessionId', 'requestKey', 'resolution', 'origin'])
         const requestKey = requireText(params, 'requestKey', RULES.requestKey)
         const resolution = requireText(params, 'resolution', RULES.resolution)
-        const origin = readOrigin(params, 'origin')
+        const origin = usableOrigin(params, scope, method, handlers)
         const sessionId = this.target(scope, params)
         return handlers.resolveAttention({
           sessionId,
@@ -778,6 +798,7 @@ export class ControlServer {
         const params = closedParams(rawParams, ['sessionId', 'agent', 'event', 'source', 'toolName', 'effects'])
         const agent = requireEnum(params, 'agent', HOOK_EVENT_AGENTS)
         const event = requireText(params, 'event', RULES.source)
+        if (!isHookEventName(event)) throw invalid('event must be printable ASCII without spaces')
         const source = readText(params, 'source', RULES.source)
         const toolName = readText(params, 'toolName', RULES.source)
         const effects = requireEffects(params, 'effects')

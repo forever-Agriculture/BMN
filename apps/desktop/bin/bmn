@@ -305,8 +305,11 @@ function callEach(socketPath, token, requests, timeoutMs = TIMEOUT_MS) {
 
     function sendNext() {
       const next = requests[outcomes.length]
-      if (next === undefined) finish(null)
-      else send(outcomes.length + 2, next.method, next.params)
+      // A trailing entry may be a function of the outcomes so far, so a call can report what the calls
+      // before it actually did. Returning undefined ends the batch, which is how it declines to be sent.
+      const resolved = typeof next === 'function' ? next(outcomes) : next
+      if (resolved === undefined) finish(null)
+      else send(outcomes.length + 2, resolved.method, resolved.params)
     }
 
     function handleLine(line) {
@@ -470,9 +473,12 @@ function conversationObservation(agent, event) {
  * harness invents that does not fit the shape is dropped rather than refused with the calls it belongs to.
  */
 function hookOrigin(agent, eventName) {
-  return typeof eventName === 'string' && /^[A-Za-z][A-Za-z0-9]{0,40}$/.test(eventName)
-    ? `hook:${agent}:${eventName}`
-    : undefined
+  return hookEventName(eventName) === undefined ? undefined : `hook:${agent}:${eventName}`
+}
+
+/** The printable `RULES.source` shape the app accepts, so an unfamiliar event still reaches the log. */
+function hookEventName(eventName) {
+  return typeof eventName === 'string' && /^[\x21-\x7e]{1,64}$/.test(eventName) ? eventName : undefined
 }
 
 /** Maps one Claude Code or Codex hook event to the attention calls that keep Needs you truthful. */
@@ -622,23 +628,31 @@ async function runHook(args) {
     for (const request of opens) request.params.phoneNotified = true
   }
   // One observation per event, whether or not it changed anything: an event that opened nothing is
-  // exactly what the owner needs to see when a request they expected never arrived.
-  const observation = hookObservation(agent, event, requests)
-  const calls = observation ? [...requests, observation] : requests
-  if (calls.length > 0) await callEach(socketPath, token, calls, HOOK_TIMEOUT_MS).catch(() => undefined)
+  // exactly what the owner needs to see when a request they expected never arrived. It goes last, on the
+  // same connection and timeout, so it can report what the calls before it actually did.
+  const observable = hookEventName(event.hook_event_name) !== undefined
+  if (requests.length === 0 && !observable) return 0
+  const calls = [...requests, (outcomes) => hookObservation(agent, event, requests, outcomes)]
+  await callEach(socketPath, token, calls, HOOK_TIMEOUT_MS).catch(() => undefined)
   return 0
 }
 
-/** One `hook.observe` call describing this event and what it changed; the effects are read off the calls. */
-function hookObservation(agent, event, requests) {
-  const eventName = event.hook_event_name
-  if (typeof eventName !== 'string' || !/^[A-Za-z][A-Za-z0-9]{0,40}$/.test(eventName)) return undefined
+/**
+ * One `hook.observe` call describing this event and what it changed. An effect is recorded only for a call
+ * the host accepted: a Stop that found nothing to withdraw, or an open the host refused, leaves the list
+ * empty, which is what the owner needs to see when a request they expected never arrived.
+ */
+function hookObservation(agent, event, requests, outcomes) {
+  const eventName = hookEventName(event.hook_event_name)
+  if (eventName === undefined) return undefined
   const byMethod = { 'attention.open': 'opened', 'attention.withdraw': 'withdrew', 'attention.resolve': 'answered' }
   const effects = []
-  for (const request of requests) {
+  requests.forEach((request, index) => {
+    const outcome = outcomes[index]
+    if (outcome === undefined || outcome.error !== undefined) return
     const effect = byMethod[request.method]
     if (effect !== undefined && !effects.includes(effect)) effects.push(effect)
-  }
+  })
   const shaped = (value) => typeof value === 'string' && /^[\x20-\x7e]{1,64}$/.test(value) ? value : undefined
   const source = shaped(event.source)
   const toolName = shaped(event.tool_name)

@@ -157,16 +157,35 @@ describe('companion store', () => {
     expect(anonymous).toMatchObject({ openedBy: null, resolvedBy: null })
   })
 
-  it('reopening the same key with a new origin records the newer one', () => {
+  it('reopening the same request with only a different origin changes nothing the owner can see', () => {
     const first = openAttention(database, {
       sessionId: 's1', incarnationId: null, requestKey: 'k', kind: 'question', title: 'Which?', origin: 'cli'
     }, 'r1', now)
+    markAttentionSeen(database, first.requestId, now)
     const again = openAttention(database, {
       sessionId: 's1', incarnationId: null, requestKey: 'k', kind: 'question', title: 'Which?',
       origin: 'hook:codex:PreToolUse'
     }, 'r2', now)
 
+    // Provenance is display-only: a repeat that says only a different origin must not bump the revision
+    // an owner action is checked against, nor make a request the owner already read unread again.
     expect(again.requestId).toBe(first.requestId)
+    expect(again.revision).toBe(first.revision)
+    expect(again.seenAt).toBe(now)
+    expect(again.openedBy).toBe('cli')
+  })
+
+  it('reopening with changed content still records the origin that changed it', () => {
+    const first = openAttention(database, {
+      sessionId: 's1', incarnationId: null, requestKey: 'k', kind: 'question', title: 'Which?', origin: 'cli'
+    }, 'r1', now)
+    const again = openAttention(database, {
+      sessionId: 's1', incarnationId: null, requestKey: 'k', kind: 'question', title: 'Which one now?',
+      origin: 'hook:codex:PreToolUse'
+    }, 'r2', now)
+
+    expect(again.requestId).toBe(first.requestId)
+    expect(again.revision).toBe(first.revision + 1)
     expect(again.openedBy).toBe('hook:codex:PreToolUse')
   })
 

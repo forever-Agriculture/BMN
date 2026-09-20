@@ -884,16 +884,22 @@ const evidence = await withTemporaryRoot(
             height: style.height
           }
         }
+        // A word only the screen reader can reach is not a word the owner can see, so visibility is measured.
+        const shown = (element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== 'hidden'
         const readRow = (sessionId) => {
           const row = document.querySelector(`.session-row button[data-session-id="${sessionId}"]`)
           const mark = row?.querySelector('.status-dot')
-          if (!(row instanceof HTMLElement) || !(mark instanceof HTMLElement)) {
+          const state = row?.querySelector('.session-state')
+          if (!(row instanceof HTMLElement) || !(mark instanceof HTMLElement) || !(state instanceof HTMLElement)) {
             throw new Error(`activity row unavailable for ${sessionId}`)
           }
           return {
             ...inkOf(mark),
             marks: mark.className,
-            word: mark.getAttribute('aria-label'),
+            word: state.textContent?.trim() ?? '',
+            wordShown: shown(state),
+            wordInk: getComputedStyle(state).color,
+            wordBehind: opaque(state),
             rowTitle: row.getAttribute('title'),
             selected: !!row.closest('.session-row.selected'),
             behind: opaque(row)
@@ -903,14 +909,17 @@ const evidence = await withTemporaryRoot(
           const pane = document.querySelector(`.session-terminal[data-session-id="${sessionId}"]`)
           const mark = pane?.querySelector('.pane-heading .status-dot')
           const status = pane?.querySelector('.pane-status')
-          if (!(mark instanceof HTMLElement) || !(status instanceof HTMLElement)) {
+          const state = pane?.querySelector('.pane-heading .pane-state')
+          if (!(mark instanceof HTMLElement) || !(status instanceof HTMLElement) || !(state instanceof HTMLElement)) {
             throw new Error(`activity pane unavailable for ${sessionId}`)
           }
           return {
             ...inkOf(mark),
             marks: mark.className,
-            word: status.textContent?.trim() ?? '',
-            wordInk: getComputedStyle(status).color,
+            word: state.textContent?.trim() ?? '',
+            wordShown: shown(state),
+            markShown: shown(mark),
+            wordInk: getComputedStyle(state).color,
             behind: opaque(status)
           }
         }
@@ -931,6 +940,11 @@ const evidence = await withTemporaryRoot(
       await page.waitForFunction((sessionId) => !!document.querySelector(
         `.session-row.selected button[data-session-id="${sessionId}"]`), fixture.selectedSessionId)
 
+      const settledActivityWords = () => page.waitForFunction(({ working, idle }) => {
+        const words = window.__bmnActivity?.words() ?? {}
+        return words[working] === 'Working' && words[idle] === 'Idle'
+      }, { working: fixture.selectedSessionId, idle: fixture.foreignSessionId })
+
       const activityMeasurements = []
       for (const [identity, colorMode] of [
         ['knight', 'black'], ['cross', 'black'],
@@ -944,13 +958,31 @@ const evidence = await withTemporaryRoot(
           await setContentSize(application, page, width, height)
           await settleTerminalLayout(page)
           // A resize refits every terminal, and the shells redraw, so the silent one is briefly working.
-          await page.waitForFunction(({ working, idle }) => {
-            const words = window.__bmnActivity?.words() ?? {}
-            return words[working] === 'Working' && words[idle] === 'Idle'
-          }, { working: fixture.selectedSessionId, idle: fixture.foreignSessionId })
-          // The selected row also carries focus here, so the mark is measured with every overlap at once.
-          await page.focus(`.session-row.selected button[data-session-id="${fixture.selectedSessionId}"]`)
-          const paint = await readActivityPaint()
+          // Focusing the row can refit again, so the pair is re-checked right before the paint is read and
+          // the read is repeated if the idle session was mid-redraw.
+          let paint
+          let capture
+          for (let attempt = 0; ; attempt += 1) {
+            await settledActivityWords()
+            // The selected row also carries focus here, so the mark is measured with every overlap at once.
+            await page.focus(`.session-row.selected button[data-session-id="${fixture.selectedSessionId}"]`)
+            paint = await readActivityPaint()
+            // The screenshot is taken inside the settled window and the words re-read after it, so the
+            // evidence shows the states that were measured rather than a shell mid-redraw.
+            capture = await screenshot(
+              page,
+              `${colorMode}-${identity}-${width}x${height}-working-idle.png`,
+              activityEvidenceDirectory
+            )
+            const stillSettled = await page.evaluate(({ working, idle }) => {
+              const words = window.__bmnActivity?.words() ?? {}
+              return words[working] === 'Working' && words[idle] === 'Idle'
+            }, { working: fixture.selectedSessionId, idle: fixture.foreignSessionId })
+            if (stillSettled &&
+              paint.idleRow.marks.includes('running-idle') &&
+              !paint.workingRow.marks.includes('running-idle')) break
+            if (attempt >= 5) throw new Error(`the two observed states never settled: ${JSON.stringify(paint)}`)
+          }
           const measurement = {
             identity,
             colorMode,
@@ -967,9 +999,19 @@ const evidence = await withTemporaryRoot(
             idleRowMark: ratio(paint.idleRow.ink, paint.idleRow.behind),
             workingPaneMark: ratio(paint.workingPane.ink, paint.workingPane.behind),
             idlePaneMark: ratio(paint.idlePane.ink, paint.idlePane.behind),
-            // Words.
+            // Words, measured where they are painted, in all three of AC3's places.
             workingPaneWord: ratio(paint.workingPane.wordInk, paint.workingPane.behind),
             idlePaneWord: ratio(paint.idlePane.wordInk, paint.idlePane.behind),
+            workingRowWord: ratio(paint.workingRow.wordInk, paint.workingRow.wordBehind),
+            idleRowWord: ratio(paint.idleRow.wordInk, paint.idleRow.wordBehind),
+            shown: {
+              workingRowWord: paint.workingRow.wordShown,
+              idleRowWord: paint.idleRow.wordShown,
+              workingPaneWord: paint.workingPane.wordShown,
+              idlePaneWord: paint.idlePane.wordShown,
+              workingPaneMark: paint.workingPane.markShown,
+              idlePaneMark: paint.idlePane.markShown
+            },
             // Recorded, not gated: the live-idle ring is told from Not started by geometry and hue,
             // which is Fable's call for a 7px mark, not by a contrast ratio between two marks.
             idleMarkAgainstNotStarted: ratio(paint.idleRow.ink, paint.notStartedInk),
@@ -984,11 +1026,7 @@ const evidence = await withTemporaryRoot(
             rowTitles: { working: paint.workingRow.rowTitle, idle: paint.idleRow.rowTitle }
           }
           activityMeasurements.push(measurement)
-          screenshots.push(await screenshot(
-            page,
-            `${colorMode}-${identity}-${width}x${height}-working-idle.png`,
-            activityEvidenceDirectory
-          ))
+          screenshots.push(capture)
         }
       }
       for (const measurement of activityMeasurements) {
@@ -999,6 +1037,8 @@ const evidence = await withTemporaryRoot(
         assert.ok(measurement.idlePaneMark >= 3, detail)
         assert.ok(measurement.workingPaneWord >= 4.5, detail)
         assert.ok(measurement.idlePaneWord >= 4.5, detail)
+        assert.ok(measurement.workingRowWord >= 4.5, detail)
+        assert.ok(measurement.idleRowWord >= 4.5, detail)
         // AC3: filled versus a 2px ring, and never the 1px ring that means Not started.
         assert.equal(measurement.geometry.workingBorderWidth, '0px', detail)
         assert.equal(measurement.geometry.idleBorderWidth, '2px', detail)
@@ -1006,11 +1046,15 @@ const evidence = await withTemporaryRoot(
         assert.ok(measurement.marks.working.includes('running'), detail)
         assert.ok(!measurement.marks.working.includes('running-idle'), detail)
         assert.ok(measurement.marks.idle.includes('running-idle'), detail)
-        // AC5: no information depends on the mark alone — every mark is named where it is shown.
+        // AC5: no information depends on the mark alone — every mark is named, visibly, where it is shown,
+        // at 900x600 as well as 1440x900.
         assert.equal(measurement.words.workingRow, 'Working', detail)
         assert.equal(measurement.words.idleRow, 'Idle', detail)
-        assert.ok(measurement.words.workingPane.startsWith('Working · '), detail)
-        assert.ok(measurement.words.idlePane.startsWith('Idle · '), detail)
+        assert.equal(measurement.words.workingPane, 'Working', detail)
+        assert.equal(measurement.words.idlePane, 'Idle', detail)
+        for (const [where, visible] of Object.entries(measurement.shown)) {
+          assert.equal(visible, true, `${where} is not visible: ${detail}`)
+        }
         assert.ok(measurement.rowTitles.working?.includes('· Working ·'), detail)
         assert.ok(measurement.rowTitles.idle?.includes('· Idle ·'), detail)
         // The selected row carries the mark under selection and focus at the same time.
@@ -1019,6 +1063,11 @@ const evidence = await withTemporaryRoot(
       await setContentSize(application, page, 1440, 900)
       await setAppearance(page, 'knight', 'black')
       await disableTarget()
+      // That last resize refit the terminals again, so the silent session is briefly working.
+      await page.waitForFunction(({ working, idle }) => {
+        const words = window.__bmnActivity?.words() ?? {}
+        return words[working] === 'Working' && words[idle] === 'Idle'
+      }, { working: fixture.selectedSessionId, idle: fixture.foreignSessionId })
       // AC3: the state word joins the palette row's context, so typing it filters with no new control.
       const activityNames = await page.evaluate(({ working, idle }) => {
         const nameOf = (sessionId) => document
@@ -1037,11 +1086,28 @@ const evidence = await withTemporaryRoot(
         return page.evaluate(() => [...document.querySelectorAll('.palette-results [role="option"]')]
           .map((option) => option.textContent?.trim() ?? ''))
       }
+      // AC3: the palette session row carries the mark as well as the word.
+      const paletteMarks = async (query) => {
+        await page.fill('.command-palette input', query)
+        await page.waitForFunction((text) =>
+          document.querySelector('.command-palette input')?.value === text, query)
+        return page.evaluate(() => [...document.querySelectorAll('.palette-results [role="option"]')]
+          .map((option) => {
+            const mark = option.querySelector('.status-dot')
+            return {
+              label: option.querySelector('.label')?.textContent?.trim() ?? '',
+              mark: mark?.className ?? null,
+              markShown: !!mark && mark.getClientRects().length > 0
+            }
+          }))
+      }
       const activityPaletteFiltering = {
         workingName: activityNames.working,
         idleName: activityNames.idle,
         working: await paletteSessionNames('working'),
-        idle: await paletteSessionNames('idle')
+        idle: await paletteSessionNames('idle'),
+        workingMarks: await paletteMarks('working'),
+        idleMarks: await paletteMarks('idle')
       }
       screenshots.push(await screenshot(page, 'black-knight-palette-idle-filter.png', activityEvidenceDirectory))
       const filterDetail = JSON.stringify(activityPaletteFiltering)
@@ -1061,7 +1127,57 @@ const evidence = await withTemporaryRoot(
         !activityPaletteFiltering.idle.some((text) => text.includes(activityNames.working)),
         filterDetail
       )
+      for (const [state, expected] of [['workingMarks', 'running'], ['idleMarks', 'running-idle']]) {
+        const rows = activityPaletteFiltering[state]
+        assert.ok(rows.length > 0, filterDetail)
+        for (const row of rows) {
+          assert.ok(row.mark?.includes(expected), `${state}: ${JSON.stringify(row)}`)
+          assert.equal(row.markShown, true, `${state}: ${JSON.stringify(row)}`)
+        }
+      }
+      assert.ok(
+        activityPaletteFiltering.workingMarks.every((row) => !row.mark?.includes('running-idle')),
+        filterDetail
+      )
       await page.keyboard.press('Escape')
+
+      // AC3: an open request still outranks activity, in all three places at once.
+      await runControlCli(
+        roots, fixture.selectedSessionId, 'ask', 'epic14-precedence', 'Which branch?', '--kind', 'question'
+      )
+      await page.waitForFunction(() =>
+        document.querySelector('.needs-you-button')?.getAttribute('data-has-items') === 'true')
+      const precedence = await page.evaluate(async (sessionId) => {
+        const wait = async (check) => {
+          for (let attempt = 0; attempt < 80; attempt += 1) {
+            if (check()) return true
+            await new Promise((resolve) => setTimeout(resolve, 50))
+          }
+          return false
+        }
+        const rowWord = () => document
+          .querySelector(`.session-row button[data-session-id="${sessionId}"] .session-state`)?.textContent?.trim()
+        const settled = await wait(() => rowWord() === 'Waiting for your response')
+        const row = document.querySelector(`.session-row button[data-session-id="${sessionId}"]`)
+        const pane = document.querySelector(`.session-terminal[data-session-id="${sessionId}"] .pane-heading`)
+        return {
+          settled,
+          rowWord: rowWord(),
+          rowMark: row?.querySelector('.status-dot')?.className ?? null,
+          paneWord: pane?.querySelector('.pane-state')?.textContent?.trim() ?? null,
+          paneMark: pane?.querySelector('.status-dot')?.className ?? null
+        }
+      }, fixture.selectedSessionId)
+      const precedenceDetail = JSON.stringify(precedence)
+      assert.equal(precedence.settled, true, precedenceDetail)
+      assert.equal(precedence.rowWord, 'Waiting for your response', precedenceDetail)
+      assert.ok(precedence.rowMark?.includes('needs-you'), precedenceDetail)
+      assert.equal(precedence.paneWord, 'Waiting for your response', precedenceDetail)
+      assert.ok(precedence.paneMark?.includes('needs-you'), precedenceDetail)
+      screenshots.push(await screenshot(
+        page, 'black-knight-attention-outranks-activity.png', activityEvidenceDirectory
+      ))
+      await runControlCli(roots, fixture.selectedSessionId, 'withdraw', 'epic14-precedence')
       phase('observed activity mark and word checks passed')
 
       phase('all runtime checks passed')
@@ -1069,6 +1185,7 @@ const evidence = await withTemporaryRoot(
         fixture,
         activityMeasurements,
         activityPaletteFiltering,
+        activityAttentionPrecedence: precedence,
         screenshotProvenance: {
           before: 'Reconstructed previous CSS selectors applied to the repaired runtime; not a base-HEAD capture.',
           after: 'Current repaired runtime.'

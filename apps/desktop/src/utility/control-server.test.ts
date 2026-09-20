@@ -436,12 +436,9 @@ describe('control server validation', () => {
       { agentCli: 'claude', conversationReference: OBSERVED_REFERENCE, source: 'startup', transcriptPath: `/${'x'.repeat(4096)}` }],
     ['unknown observation parameter', 'conversation.observe',
       { agentCli: 'claude', conversationReference: OBSERVED_REFERENCE, source: 'startup', pid: 12 }],
-    ['invented origin word', 'attention.open', { requestKey: 'q', kind: 'question', title: 'T', origin: 'guess' }],
-    ['unknown hook agent in origin', 'attention.open',
-      { requestKey: 'q', kind: 'question', title: 'T', origin: 'hook:gemini:Stop' }],
-    ['oversize origin', 'attention.withdraw', { requestKey: 'q', origin: `hook:claude:${'E'.repeat(64)}` }],
-    ['control character origin', 'attention.resolve', { requestKey: 'q', resolution: 'done', origin: 'cli\nowner' }],
     ['unknown hook agent', 'hook.observe', { agent: 'gemini', event: 'Stop', effects: [] }],
+    ['control character hook event', 'hook.observe', { agent: 'claude', event: 'Stop\u0007', effects: [] }],
+    ['hook event with a space', 'hook.observe', { agent: 'claude', event: 'Post ToolUse', effects: [] }],
     ['missing hook event', 'hook.observe', { agent: 'claude', effects: [] }],
     ['hook effects not an array', 'hook.observe', { agent: 'claude', event: 'Stop', effects: 'opened' }],
     ['invented hook effect', 'hook.observe', { agent: 'claude', event: 'Stop', effects: ['notified'] }],
@@ -476,7 +473,7 @@ describe('control server validation', () => {
       requestKey: 'q', kind: 'question', title: 'Which one?', origin: 'hook:claude:Notification'
     })
     await client.request('attention.withdraw', { requestKey: 'q', origin: 'hook:codex:Stop' })
-    await client.request('attention.resolve', { requestKey: 'q', resolution: 'done', origin: 'input' })
+    await client.request('attention.resolve', { requestKey: 'q', resolution: 'done', origin: 'cli' })
     const observed = await client.request('hook.observe', {
       agent: 'claude', event: 'PostToolUse', toolName: 'Bash', effects: ['answered', 'withdrew']
     })
@@ -488,7 +485,7 @@ describe('control server validation', () => {
       expect.objectContaining({ origin: 'hook:codex:Stop' })
     )
     expect(fixture.handlers.resolveAttention).toHaveBeenLastCalledWith(
-      expect.objectContaining({ origin: 'input' })
+      expect.objectContaining({ origin: 'cli' })
     )
     expect(observed.result).toEqual({ recorded: true })
     expect(fixture.handlers.observeHookEvent).toHaveBeenLastCalledWith({
@@ -515,6 +512,69 @@ describe('control server validation', () => {
       kind: 'question',
       title: 'Which one?'
     })
+  })
+
+  it.each([
+    ['an invented word', 'guess'],
+    ['an unknown hook agent', 'hook:gemini:Stop'],
+    ['an oversize hook event', `hook:claude:${'E'.repeat(65)}`],
+    ['a control character', 'cli\nowner'],
+    ["the owner's own word", 'owner'],
+    ['a typed answer', 'input'],
+    ['a Telegram reply', 'telegram'],
+    ['expiry', 'expiry']
+  ])('drops %s as provenance and still opens, withdraws and resolves the request', async (_label, origin) => {
+    const fixture = await serverFixture()
+    const client = await authenticated(fixture, sessionToken(fixture))
+
+    const opened = await client.request('attention.open', {
+      requestKey: 'q', kind: 'question', title: 'Which one?', origin
+    })
+    const withdrawn = await client.request('attention.withdraw', { requestKey: 'q', origin })
+    const resolved = await client.request('attention.resolve', { requestKey: 'q', resolution: 'done', origin })
+
+    // AC5: a bad origin is refused without affecting the operation it arrived with.
+    expect(opened.error).toBeUndefined()
+    expect(withdrawn.error).toBeUndefined()
+    expect(resolved.error).toBeUndefined()
+    const withoutOrigin = expect.not.objectContaining({ origin: expect.anything() })
+    expect(fixture.handlers.openAttention).toHaveBeenCalledExactlyOnceWith(withoutOrigin)
+    expect(fixture.handlers.withdrawAttention).toHaveBeenCalledExactlyOnceWith(withoutOrigin)
+    expect(fixture.handlers.resolveAttention).toHaveBeenCalledExactlyOnceWith(withoutOrigin)
+    // The drop is recorded rather than silent, and never echoes the refused word back into the log.
+    expect(fixture.handlers.reportRefusal).toHaveBeenCalledTimes(3)
+    expect(fixture.handlers.reportRefusal).toHaveBeenLastCalledWith(
+      'attention.resolve', 'session-1', 'origin refused: unknown provenance for this credential'
+    )
+    expect(fixture.handlers.reportRefusal.mock.calls.every(([, , reason]) => !String(reason).includes(origin)))
+      .toBe(true)
+  })
+
+  it("lets the owner token record the owner's own routes", async () => {
+    const fixture = await serverFixture()
+    const client = await authenticated(fixture, fixture.auth.ownerToken)
+
+    for (const origin of ['owner', 'input', 'telegram', 'expiry']) {
+      await client.request('attention.resolve', {
+        sessionId: 'session-1', requestKey: 'q', resolution: 'done', origin
+      })
+      expect(fixture.handlers.resolveAttention).toHaveBeenLastCalledWith(expect.objectContaining({ origin }))
+    }
+    expect(fixture.handlers.reportRefusal).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    'hook:claude:Custom-Event',
+    'hook:codex:Pre_Tool.Use',
+    `hook:claude:${'E'.repeat(64)}`
+  ])('accepts %s, the printable event shape the app documents', async (origin) => {
+    const fixture = await serverFixture()
+    const client = await authenticated(fixture, sessionToken(fixture))
+
+    await client.request('attention.open', { requestKey: 'q', kind: 'question', title: 'T', origin })
+
+    expect(fixture.handlers.openAttention).toHaveBeenLastCalledWith(expect.objectContaining({ origin }))
+    expect(fixture.handlers.reportRefusal).not.toHaveBeenCalled()
   })
 
   it('normalizes timestamps and accepts text at the 64 KiB limit', async () => {

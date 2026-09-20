@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('electron', () => ({}))
 
-const { activateAttentionNotification, createAppEventForwarder } = await import('./companion-ipc')
+const { activateAttentionNotification, createAppEventForwarder, noticeResolution } = await import('./companion-ipc')
 
 function request(requestId: string, sessionId: string, revision = 1): AttentionRecord {
   return {
@@ -149,5 +149,15 @@ describe('desktop notifications for attention requests', () => {
     expect(close).toHaveBeenCalledTimes(2)
     expect(openSession.mock.calls).toEqual([['session-a'], ['session-b']])
     expect(resolveNotice).toHaveBeenCalledExactlyOnceWith('finished', 7)
+  })
+
+  it('records the owner as what resolved a clicked notice, and keeps the revision guard', () => {
+    expect(noticeResolution('finished', 7)).toEqual({
+      requestId: 'finished',
+      resolution: 'Opened in BMN',
+      expectedKind: 'notice',
+      expectedRevision: 7,
+      origin: 'owner'
+    })
   })
 })
