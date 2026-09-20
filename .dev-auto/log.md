@@ -112,3 +112,256 @@ the call hit an unknown method; the session is `/bin/bash`, which would have bee
 refused for agent mismatch anyway; and no request was withdrawn because this run
 opened none. The running build also has no `conversation` field in `bmn list --json`,
 which confirms the field arrives only with the desktop update.
+
+## 2026-09-20, Epic 14 opened (`/dev-auto 14`)
+
+Owner instructions this run, verbatim:
+- "you can consult with Fable if you get stuck or can't handle something"
+- "make sure you don't run redundant things right now"
+- "I see 8 shells running, do you need them?"
+- "Regarding visuals or designs you can consult with fable"
+- "when you're done and everyting is tested you push to GH and update locally and give me
+  a summary: what we did, why, how can I test it"
+- "stop whe you find a convenient moment, we'll continue later"
+
+Epic 13 published: `git push origin main` took `85df305..99e3832` (the whole accepted epic).
+`pnpm run update:desktop` was deliberately not run yet, to avoid packaging twice in one day;
+it belongs with the Epic 14 push under the owner's instruction above.
+
+### The GLM-5.3-Flash second opinion on Epic 13 (finished during this run)
+
+Receipt `/tmp/claude-1000/-home-oleksandr-code-BMN/ea13531c-e72d-4534-8edc-d155f1750851/scratchpad/glm2-review.json`
+(GLM-5.3-Flash, 18,618 in / 13,128 out, $0.421, 1,495 s). Six findings, one "MATERIAL
+(conditional)", verdict DO NOT ACCEPT pending that condition. Checked one by one:
+
+1. MATERIAL (conditional) — NOT A DEFECT. The claim: a hook-captured Claude binding might
+   leave an old selector in `contextArgv`, so Resume could carry two selectors and reopen the
+   wrong conversation. It cannot. `--session-id` is consumed and never pushed
+   (`conversation-binding.ts:436-457`, the `continue`), and `--resume`/`--continue` are absent
+   from `CLAUDE_IDENTITY_NEUTRAL_OPTIONS` (:43-), so a stored `--resume` returns `unsafeReason`
+   and Resume throws instead of running. Both halves are already asserted in
+   `conversation-binding.test.ts:574-583`. The reviewer had the source packet only, not the tests.
+2. MINOR — recorded, not fixed. `swapConversationClaim` rollback during an unconfirmed exit.
+3. MINOR — recorded, not fixed. Preview/confirm TOCTOU: `session.binding.replace` over the
+   control socket between reading the dialog and confirming would run a different command than
+   the one shown. Narrow but owner-reachable; a revision check on resume would close it.
+4. MINOR — recorded. The `'variadic'` branch of `codexResumeArguments` is dead today.
+5. MINOR — REAL, fixed in `56b7cb1`. `Unknown parameter: ${key}` (`control-server.ts:202`)
+   carries the caller's own key into `refused-requests.log`, so a newline in a parameter name
+   forged log lines. `logRefusal` now flattens control characters and caps the reason; the
+   regression test was fence-probed RED with the fix mutated away.
+6. MINOR — NOT A DEFECT. No earlier migration creates an index on `conversation_binding`
+   (`store-schema.ts` has two `CREATE INDEX`, on `artifact` and `attention_request`).
+
+### Fable design consult, story 14.1 mark
+
+Question: is a 1px green ring (live and resting) distinguishable from the 1px faint ring that
+means Not started, at 7px? Verdict: no - "at 7px the eye resolves almost no chroma" - so keep
+filled versus hollow but make the resting live ring 2px; no pulse, since it "breaks the house
+rule and solves the wrong problem". Adopted verbatim in `styles.css`. Receipt
+`.dev-auto/evidence/epic-14/fable-mark.json` (claude-fable-5-1, 1,628 out, $0.175).
+
+### The blocker Epic 14.1 ran into (open design decision)
+
+The self-test fixtures printed and the renderer never saw a byte. Cause, proven by an ungated
+fixture that prints at once (`electron-7.log`): a session's output only reaches the renderer
+after `terminal.activate` creates its `outputQueue` (`session-manager.ts:1141-1166`), and the
+renderer activates a pane only when it is **visible and selected**
+(`session-terminal.tsx:807-826`). A live session the owner has never opened therefore streams
+nothing to the window - so the activity word for exactly the sessions the story is about
+("tell who is busy without opening each terminal") would sit at Running, then Idle, forever.
+
+The intended fix, not yet implemented: activate on mount for every live pane, and keep the
+focus effect conditional on visible+selected. Every pane already has a mounted xterm, and
+activation is never revoked today, so this only makes immediate what normal use already
+reaches. It also fixes the unread mark for never-opened sessions. Consequence to weigh:
+every live session streams output to the window from the start.
+`main/index.ts:1207-1217` (`liveExitPaneLabel`) then needs its activate-then-exit dance
+simplified, because a second activation of an active attachment is refused.
+
+## 2026-09-20, Epic 14 resumed (`/dev-auto resume`)
+
+The owner's `/dev-auto resume` cleared the 13:30 stop. Work continued in the same session.
+
+### Story 14.1 closed (`78c2423`)
+
+The activation decision from the pause was taken as written: `ensureActive()` in
+`session-terminal.tsx` runs from an empty-dependency effect, so every live pane activates when it
+mounts; the visible+selected effect keeps the focus behaviour and calls `ensureActive()` again so a
+failed activation can still retry on selection. `liveExitPaneLabel` (`main/index.ts`) lost its
+activate-then-exit dance and its now-unused `sessionId` parameter, because a second activation of an
+active attachment is refused (`session-manager.ts` `activateAttachment`).
+
+Accepted consequence, recorded: every live session streams output to the window from the start.
+That is what the story needs (a session the owner never opened otherwise shows no observed word and
+no unread mark), and activation was never revoked before, so this only makes immediate what normal
+use already reached. `undeliveredOutput` buffering now applies mainly when no window holds the
+session.
+
+`pnpm run test:electron` EXIT 0 on the first run after the fix (`electron-8.log`): burst Working at
+1.0 s and Idle at 2.5 s, silent Running then Idle and never Working, late first byte Working with no
+Running after it, both title rows, updates 2-9 per session against a cap of 21, zero input events,
+geometry unchanged, attention unchanged. The two diagnostics (the extra `immediate` fixture, the
+per-fixture argv log) were removed before that run.
+
+### AC5, the contrast and screenshot evidence
+
+`scripts/test/electron-visual.mjs` gained an Epic 14 phase: it withdraws the Epic 5 request, drives
+the selected session with a ~100 Hz printer and leaves the other silent, waits for Working and Idle,
+then for each of Black/Steel/Brown/Dark x Knight/Cross at 1440x900 and 900x600 measures the mark
+where it renders (walking up to the first ancestor that actually paints, since a ring's own
+background is transparent) and the word, and writes a paired screenshot. Measured on the selected,
+focused row so selection, focus and the mark overlap.
+
+`visual-3.log` results at knight/black 1440x900: working row mark 8.40:1, idle row mark 7.42:1,
+pane marks 8.40:1, words 7.65:1 - all above the 3:1 and 4.5:1 floors. Geometry: filled 0px border
+versus a 2px ring at 7px, against the 1px ring that means Not started. Recorded, not gated: the
+live-idle ring against `--faint` is 2.06:1, which is why Fable's answer was geometry and not chroma;
+AC5's 3:1 is about a mark against its background, and the word is always shown beside the mark
+(aria-label, row tooltip, pane heading, palette context).
+
+Two of my own bugs in that phase, both fixed: the measured row was whichever the Epic 5 phases left
+selected, and a window resize refits every terminal so the silent session was briefly Working. The
+phase now selects the working row itself and waits for the words to settle after each resize.
+
+Recorded not fixed: `visual-1.log` timed out on Epic 5's own `.status-dot.needs-you` wait on the
+first launch and passed on the next two runs from the same build. A slow-first-launch flake in an
+Epic 5 check, not an Epic 14 regression.
+
+### Story 14.2 (`97c9183`)
+
+Read of intent, recorded: the epic's AC3 summary says all three places show "the mark and the word",
+but the design context it points at says "the mark appears in sidebar rows, pane headings and
+palette session rows; the state word joins the palette row's context". The sidebar therefore shows
+the mark with the word in its `aria-label` and row tooltip, as every existing dot state already
+does; the pane heading shows the word as text; the palette carries it in the row context. Changing
+the sidebar to print a word on every row would be a layout change the design did not ask for.
+
+`hookOrigin` and `hookObservation` in `bin/bmn` both drop out for an event name that is not
+event-shaped, so a malformed event sends its attention calls without an origin instead of losing
+them; `callEach` records each outcome and continues, and the observation is appended last, so a
+refused `hook.observe` cannot affect the calls before it. That is AC5's "the observation dropped
+without affecting the underlying open, withdraw or resolve".
+
+Unbounded-growth path closed before review: `sessionsChanged()` now drops the hook log of any
+session the database no longer lists, so a purged session leaves nothing behind.
+
+AC4's "backups and archive purge include the two columns as ordinary request data" needed no code:
+`backup.export` copies the database file (`VACUUM INTO`) and `purgeExpiredArchives` deletes whole
+rows from `attention_request`.
+
+Self-test `requestProvenance` receipt (`electron-11.log`, EXIT 0): openedBy `hook:claude:Notification`
+with no resolver while open; resolvedBy `hook:claude:PostToolUse` at state answered; a second prompt
+answered by a real keystroke into the pane recording `input`; three logged events with effects
+`[opened]`, `[answered, withdrew]` with toolName Bash, `[opened]`; the dialog's own rows; zero events
+for another session; no PTY write from opening the list; unchanged request count; Escape closed it.
+Two of my own probe bugs on the way: a synthetic KeyboardEvent needs the legacy `keyCode` or xterm
+produces no key at all, and I had asserted four listed rows where three events arrive.
+
+### Story 14.2 contents, moved out of the handoff (2026-09-20)
+
+- Committed in `97c9183`, story 14.2:
+  - Protocol: `openedBy`/`resolvedBy`, `isAttentionOrigin` (the one place the closed vocabulary is decided), `HookEventRecord`, cap 30, effects cap 8, `METHOD_REGISTRY.hookEventsList`.
+  - Store: migration 9 (two nullable `ADD COLUMN`s, no other table); origin on open, reopen and close; `expireAttention` writes `expiry`. Backups copy the file and the purge deletes whole rows, so both carry the columns unchanged.
+  - Utility: `origin` validated on the three attention methods and on the owner path; new `hook.observe`; the per-session in-memory log with its cap; `hookEvents.list` on the host channel; Telegram replies record `telegram`.
+  - `bin/bmn`: `cli` on ask/withdraw/resolve, `hook:<agent>:<Event>` on every hook call, one `hook.observe` per event.
+  - Renderer: `attentionProvenance` wording, the provenance line on open and recent popover rows, `hook-events-dialog.tsx` behind the row menu's "Hook events…", `input`/`owner` at the four resolve call sites, styles. `docs/agent-control.md` says the words and that the log is memory-only.
+  - Self-test: the "request provenance and hook events" phase with a synthetic Claude harness firing real `bmn hook claude` events, and the `requestProvenance` receipt contract.
+
+### Handoff detail trimmed for the size limit (2026-09-20)
+
+- Committed in `e1ed8ca`, the repair of the eight review findings: origin dropped-and-recorded rather than refusing the call (`control-server.ts:289`); session tokens limited to `hook:*` and `AGENT_ATTENTION_ORIGINS`; `opened_by` out of the store's `unchanged` comparison; hook effects read off accepted outcomes through a function-valued trailing call in `callEach`; a per-session publish cap (`publishableActivities`); the visible word in the sidebar and the mark in the palette, with narrow panes dropping the path and chip instead of the word; the printable `RULES.source` shape for origins and event names; `origin: 'owner'` on a clicked desktop notice. Plus a second live session in the self-test for real per-session log isolation, and visible-word/palette-mark/attention-precedence checks in the visual script.
+
+- Material pending findings: the eight Astra findings are all repaired in `e1ed8ca` but the focused recheck has not returned; acceptance waits on it. Known residual, recorded not fixed: a repeated identical `attention.open` still records `opened` as an effect, because the CLI cannot see the store's prior revision and the request is open as a result of that event. The 14.1 activation decision is taken and implemented in `78c2423`: every live pane activates on mount (`session-terminal.tsx:822-838`), the focus effect keeps visible+selected and retries, `liveExitPaneLabel` just writes to the attachment. Accepted consequence and reasoning in `.dev-auto/log.md`.
+
+- Tests: 14.1 — 7 unit tests for the derivation and the presentation precedence, the Electron `sessionActivity` phase, and the visual phase's 16 measurements. 14.2 — 25 new unit tests (origin validation and the closed vocabulary, `hook.observe` params and effects, store round-trip and reopen, expiry origin, the legacy-database migration, the log cap and per-session scoping, hook provenance for nine events in the contract table, the provenance and hook-event wording), plus the Electron `requestProvenance` phase. Repair — 8 origin-drop cases, an owner-route case, 3 printable-shape cases, 2 store reopen cases, 3 hook-effect cases, 4 throttle cases and the notice-provenance case. Untested: the Needs you popover's rendered provenance line has no unit test of its own (the wording function does); the visual script does not screenshot the popover or the Hook events dialog.
+
+- Unreviewed or unverified areas: the repair itself until the recheck returns. Astra did not examine native PTY behaviour, the transport/backpressure implementation, token cryptography, the Telegram delivery/lease machinery or OS notification behaviour, and left activation-failure recovery runtime-unverified. AC5 screenshots have now been eyeballed at 900x600 and 1440x900 in four palettes.
+
+- Owner interventions: six mid-turn notes, all answered without rework; two of them (Fable, no redundant runs) changed how the work was done.
+- Observed usage: Fable $0.175 (1,628 out); GLM-5.3-Flash $0.421 (13,128 out). Lead usage to be read with `scripts/check.py usage` at acceptance.
+
+- Sprint board and reconciled state: `_bmad-output/implementation-artifacts/sprint-status.yaml` (git-ignored); epics 5-9 and 13 `done`, epic-14 and both stories still `backlog` (to be moved when 14.1 lands). Reconciled against git at `56b7cb1`. `origin/main` is at `99e3832`: all of Epic 13 is published; `56b7cb1` is local only.
+
+
+## 2026-09-20, Astra review of Epic 14 and the consolidated repair
+
+Route: Codex CLI, `gpt-6-astra`, `model_reasoning_effort=medium`, read-only sandbox,
+prompt `scratchpad/review/prompt.md`, receipt `scratchpad/review/astra-review.json`.
+Reviewed revision `97c9183` over the range `99e3832..97c9183`.
+
+Verdict, verbatim: "**The epic broadly follows BMN's architecture, but I would not
+accept `97c9183` yet.** The display-only derivation is mostly sound; several precise
+acceptance criteria and provenance guarantees are not."
+
+Eight material findings, all closed in `e1ed8ca`:
+
+1. *Malformed provenance prevents an otherwise valid attention operation* —
+   `control-server.ts:704/759/767` validated the origin before calling the handler, so
+   `origin: "guess"` created no request, against 14.2 AC5. Closed: `readOrigin` replaced
+   by `usableOrigin` (`control-server.ts:289`), which drops the origin, records it via
+   `handlers.reportRefusal` with a constant reason that never echoes the refused word,
+   and lets the call through. The four INVALID_ARGUMENT rows that pinned the old
+   behaviour were replaced by an eight-case table test.
+2. *Changing only provenance changes unread state and notification behaviour* —
+   `opened_by` was in the `unchanged` comparison at `database-companion-store.ts:198`,
+   so a repeat with a different origin cleared `seen_at` and bumped `revision`, which
+   desktop notifications and Telegram paging key on. Closed by removing it; two tests
+   now pin both directions.
+3. *Session credentials can impersonate owner-side provenance* — a session token could
+   resolve its own request as `owner`, `input` or `telegram`. Closed: `acceptableOrigin`
+   gives the full vocabulary to an owner scope only; a session scope gets `hook:*` and
+   `AGENT_ATTENTION_ORIGINS` (`['cli']`).
+4. *The hook log reports attempted operations as completed effects* — `bmn:626/638` built
+   the observation before sending and read effects off method names, so a `PostToolUse`
+   with nothing open recorded `answered` and `withdrew`. Closed: `callEach` accepts a
+   trailing entry that is a function of the outcomes so far, so the observation is built
+   after the attention calls on the same connection and the same `HOOK_TIMEOUT_MS`, and
+   records an effect only for an outcome without an error.
+5. *The cap is not enforced per session* — Astra's own in-memory probe produced three
+   updates for one session within 300 ms as three others woke. Closed:
+   `publishableActivities` plus a per-session `activityPublishedAt` ref.
+6. *The required mark-and-word presentation is incomplete* — no visible word in the
+   sidebar, no mark in the palette, and `styles.css:1792` hid the whole pane word below
+   420 px. Closed: `.session-state` in the sidebar row, `mark` on the palette command,
+   and the narrow-pane rule now drops the path and the agent chip instead of the word.
+7. *The CLI silently drops valid source-shaped event names* — `/^[A-Za-z][A-Za-z0-9]{0,40}$/`
+   rejected `Custom-Event`. Closed: the printable `RULES.source` shape in
+   `isAttentionOrigin`, `isHookEventName` and `bin/bmn`, with `hook:<agent>:` allowed a
+   full-length event name (`HOOK_ORIGIN_MAX`) and a colon permitted inside the event.
+8. *Clicking a desktop notice omits owner provenance* — closed by `noticeResolution`
+   in `companion-ipc.ts`, which carries `origin: 'owner'` and the revision guard.
+
+Also acted on from Astra's limitations: the self-test's other-session check used a
+nonexistent session id through the owner bridge and proved nothing; it now starts a
+second live session whose harness fires its own `Isolation-Probe` event and asserts each
+log holds only its own. `notificationsUnchanged` was renamed `openRequestsUnchanged`,
+since it compares attention-row counts, not notifications.
+
+Fence probes (fix reverted in place, test observed failing, fix restored):
+
+- finding 1/3 capability half — FAILS as required (4 owner-word cases)
+- finding 1 drop-not-throw half — FAILS as required (3 malformed cases)
+- finding 2 — FAILS as required
+- finding 4 — FAILS as required (2 cases)
+- finding 5 — FAILS as required (2 cases)
+- finding 8 — FAILS as required
+
+Findings 6 and 7 were not fence-probed; 6 is covered by the visual script's `shown`
+flags and word assertions at both sizes, 7 by table tests on the accepted shapes.
+
+Residual, recorded not fixed: a repeated identical `attention.open` still records
+`opened` as an effect. The CLI cannot see the store's prior revision, and the request is
+open as a result of that event, so the word is defensible; making it exact would need a
+new field on the open response.
+
+Own probe bugs found while repairing, not product defects: the visual script measured
+the mark's `aria-label` rather than a visible word, and took its screenshot outside the
+settled window, so evidence could show a shell mid-redraw. Both fixed; the measurement
+and the screenshot now happen inside one settled window with a retry.
+
+Repaired-tree evidence: typecheck/lint EXIT 0, `test:unit` 1,051 passed / 1 skipped,
+`test:electron` EXIT 0 (`evidence/epic-14/electron-13.log`), `test:visual` EXIT 0
+(`evidence/epic-14/visual-9.log`). Two visual runs failed first and are kept:
+`visual-7.log` (a resize-refit redraw won the race before the paint read, fixed by
+re-checking the pair immediately before each measurement).
