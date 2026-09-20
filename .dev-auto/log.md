@@ -532,3 +532,111 @@ Evidence on `00f5e38`: typecheck/lint EXIT 0, `test:unit` 1,065 passed / 1 skipp
 
 - Restrictions and authorization boundaries: local work, checks, isolated Electron runs, review dispatches, board/handoff updates and checked local commits (`~/.claude/CLAUDE.md` Authority; `/dev-auto 14`). Push to `main` plus `pnpm run update:desktop` are authorized **once Epic 14 is finished and tested** (owner, 2026-09-20: "when you're done and everyting is tested you push to GH and update locally and give me a summary"), not before. Out of scope per the epic: screen scraping, rule downloads, sounds, sidebar reordering, a status column on the control socket, notifications from derived state, `bmn wait`/`subscribe`, OSC 9/777 notices. Never push the old private `feat/epic-1/2` branches.
 
+
+## 2026-09-20 — Epic 11 run (Claude Code, claude-opus-5 1M, session 7b3fae16)
+
+Owner instructions this run, verbatim:
+
+- `/dev-auto 11`
+- "you can dispatch GLM flash and GLM as much as you want, we have a lot of limits"
+- "and in the end let Fable reviews instead of astra (whole epic)"
+- "in the end you double check and if you're confident you can update local BMN and push to GH"
+
+Scope decision: the recorded delivery order is 13 -> 14 -> 12 -> 11 -> 10, so the owner selected
+Epic 11 ahead of Epic 12. Story 11.1 depends on "current app only" (`epics.md:449`), so nothing
+from Epic 12 is required and taking 11 first costs nothing. Epic 12 stays in backlog.
+
+### Marker design (Fable, claude-fable-5-1/medium, $0.558)
+
+Receipt: `scratchpad/epic-11/fable-marker-design.json`. Asked for a form and five swatches with
+contrast computed against twelve palette backgrounds. I recomputed all 60 ratios plus eight more
+(the four `--hover` and four `--raised` backgrounds Fable was not given) before using any of them:
+every one of Fable's numbers matched mine exactly, and the true minimum across all twenty
+backgrounds is 4.92 (violet on steel's `--selected` #29303a), against a 3:1 requirement.
+
+Accepted: a 4x12px solid bar, 2px radius, no border, no shadow, no animation, placed first in the
+sidebar workspace row and first in the pane heading, using each container's existing flex gap
+(6px in the row button, 10px in the heading) rather than its own margin. Swatches: slate #8fa3b8,
+teal #5cbfb0, blue #6fa8e8, violet #a98fe6, rose #e08ab8. One set for all four palettes; no
+per-palette override needed.
+
+Why the bar and not a dot: every status mark in BMN is a 7px circle (filled running, 2px-ring
+running-idle, 1px-ring not-started, ringed needs-you). A 4x12 rectangle at a 3:1 aspect ratio with a
+2px radius cannot resolve to a circle at any zoom, and it is always solid, so it has no hollow or
+ringed variant to confuse with a state. The five markers are told apart from each other by their
+names in the tooltip and the accessible name, not by hue — Fable was explicit that the text, not the
+form, is the colour-blind basis, and the accessible name carries the workspace as well as the marker.
+
+Deviation from Fable, decided by me: Fable recommended rendering an empty transparent slot in the
+sidebar for `none`, to keep names aligned across rows. I render nothing at all for `none`, because
+AC1 requires new and legacy workspaces to keep "the current appearance unchanged", and a reserved
+10px slot on every row changes today's appearance for every existing workspace. The cost is that a
+marked workspace's name is indented by 10px and an unmarked one's is not.
+
+Fable's recorded risks, carried forward: blue/violet and slate/blue converge under protanopia and
+deuteranopia, and teal can drift towards `--verified` green under deuteranopia — in all three cases
+the name in the tooltip and accessible label is the disambiguator, which is why the visual block
+asserts the label is present and distinct on every marker in every palette.
+
+### Authorization change, 2026-09-20 (same session)
+
+Earlier in the run the owner said: "in the end you double check and if you're confident you can
+update local BMN and push to GH". He then superseded it: "I think I need to verify and approve
+before you update local and push to GH. Because I like simplicity, so I want to make sure we don't
+overcomplicate and it's not ugly". So the run stops at a local commit; the owner looks at the
+screenshots and decides. He also asked: "Make sure that Fable approves the designs" — Fable
+proposed the form and swatches, and must also approve what was actually built.
+
+### test:visual attribution, 2026-09-20
+
+`test:visual` failed twice on this working tree at Epic 5's own `.status-dot.needs-you` wait
+(`electron-visual.mjs:330`), long before the Epic 11 block, with the request already `answered` and
+`resolvedBy: "input"` about 17 ms after it opened. Epic 14's handoff recorded the same signature as a
+flake. To attribute it I stashed the whole Epic 11 change and ran the suite three times on the clean
+baseline: 3/3 PASS (`scratchpad/epic-11/visual-baseline*.log`). With the change restored: 2/2 FAIL,
+1 earlier PASS. That is not a flake I can dismiss; the cause is under investigation.
+
+### Fable's approval of the built design, 2026-09-20 (claude-fable-5-1/medium, $0.159)
+
+Receipt: `scratchpad/epic-11/fable-approval.json`. Asked against the owner's words — "Make sure that
+Fable approves the designs" and "Let Fable make sure we're simple and these designs are simple and
+minimalistic and optional".
+
+Verdict: `approved: true`, `must_fix: []`. On simplicity: "One stored value with a sensible default,
+one 4x12 bar, one radio group in a menu that already existed. Nothing new to learn and nothing to
+configure. Genuinely optional: 'none' emits no element, so a user who ignores the feature never sees
+a pixel of it. Five hues and a fixed size are the right amount of choice; more would be a theme
+editor."
+
+Two ugliness risks named, both taken:
+
+1. "The 'None' swatch drawn as a 4px-wide dashed outline will render as a grey smudge ... it is the
+   one decorative flourish in the feature." Removed: the None swatch now draws nothing and the word
+   carries the meaning.
+2. "once a user marks some workspaces but not others, the sidebar's left edge goes jagged by ~10px
+   between rows, which reads as a bug rather than a choice." Taken with Fable's own refinement:
+   render nothing while every workspace is on None (so an untouched install is pixel-identical, which
+   AC1 requires), and reserve a transparent slot on every row as soon as any workspace is marked.
+   Pane headings are unchanged — they are not a stacked list, so nothing misaligns there.
+
+Declined, with reason: Fable's optional "consider whether the uppercase MARKER group label is needed".
+Kept. Without it the menu would show six bare colour names among commands like "New session here" and
+"Archive workspace"; the label is one 11px muted line in the app's existing eyebrow style, and the
+group's accessible name has to exist anyway.
+
+### Owner-requested chrome fix, outside Epic 11, 2026-09-20
+
+The owner sent a crop and said "I think these lines red and yellow are ugly", then, asked which:
+"red and gold touching". The failure notice bar drew a full-width 1px `--error` bottom border that sat
+flush against the gold `--identity` selection outline of the pane below it — two saturated 1px lines,
+adjacent, meaning two different things. Neither line is Epic 11's.
+
+Fable chose the fix (`scratchpad/epic-11/fable-notice-clash.json`, $0.135): move the red off the
+full-width edge to a 3px accent at the left of the message, inset 6px top and bottom so it cannot
+touch the gold even at the corner, and let the bottom edge be the ordinary `--hairline` seam. It
+rejected insetting the gold outline instead, because that "shrinks the protected gold outline on all
+four sides for a problem that exists only on the top edge and only while a notice is present".
+Selection keeps its token, shape and precedence, so Epic 11 AC3 is untouched. The accent measures
+6.74:1 (black), 5.65 (steel), 5.57 (brown) and 5.82 (dark) against `--raised`, all above the 3:1
+floor; I computed these rather than take Fable's word. `.brief` confirmations were never red and stay
+unchanged. This ships as its own commit, separate from Epic 11.

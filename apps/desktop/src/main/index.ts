@@ -1044,6 +1044,26 @@ interface RendererIntegrationProbe {
     sourceWorkspaceArchived: boolean
     foreignPaneRemovedAfterArchive: boolean
   }
+  /** Epic 11: each pane's marker comes from its own workspace, and choosing one moves no geometry. */
+  workspaceMarkers: {
+    before: {
+      localPane: string | null
+      foreignPane: string | null
+      grid: { cols: number; rows: number }
+      localHeading: number
+      foreignHeading: number
+    }
+    foreignPaneAfterLocalChoice: string | null
+    localPane: string | null
+    foreignPane: string | null
+    localSidebar: string | null
+    foreignSidebar: string | null
+    foreignPaneLabel: string | null
+    storedRevisions: { local: number; foreign: number }
+    grid: { cols: number; rows: number }
+    localHeading: number
+    foreignHeading: number
+  }
   hiddenPaneSize: { shown: { cols: number; rows: number }; hidden: { cols: number; rows: number } }
   attentionTriage: {
     responseTitles: string[]
@@ -2361,6 +2381,41 @@ async function runSelfTest(): Promise<void> {
       includeArchived: true
     })).find((workspace) => workspace.workspaceId === secondWorkspace.workspaceId)
     if (!archivedWorkspace) throw new Error('the renderer archive action removed its workspace record')
+    // Epic 11 AC1-AC4: a marker chosen from a workspace's own menu reaches only that workspace's rows
+    // and panes, is stored with one revision bump, and moves no terminal geometry.
+    const markers = preloadProbe.workspaceMarkers
+    if (
+      markers.before.localPane !== null ||
+      markers.before.foreignPane !== null ||
+      markers.foreignPaneAfterLocalChoice !== null ||
+      markers.localPane !== 'teal' ||
+      markers.foreignPane !== 'rose' ||
+      markers.localSidebar !== 'teal' ||
+      markers.foreignSidebar !== 'rose' ||
+      markers.foreignPaneLabel !== `${secondWorkspace.name} workspace · Rose marker` ||
+      markers.storedRevisions.local !== 1 ||
+      markers.storedRevisions.foreign !== 1
+    ) {
+      throw new Error(
+        `workspace markers did not follow their own workspace: ${JSON.stringify(markers)}`
+      )
+    }
+    if (
+      markers.grid.cols !== markers.before.grid.cols ||
+      markers.grid.rows !== markers.before.grid.rows ||
+      markers.localHeading !== markers.before.localHeading ||
+      markers.foreignHeading !== markers.before.foreignHeading ||
+      markers.before.localHeading <= 0
+    ) {
+      throw new Error(
+        `choosing a workspace marker moved the pane geometry: ${JSON.stringify(markers)}`
+      )
+    }
+    if (archivedWorkspace.marker !== 'rose') {
+      throw new Error(
+        `archiving a workspace dropped its marker: ${JSON.stringify(archivedWorkspace)}`
+      )
+    }
     const { shown, hidden } = preloadProbe.hiddenPaneSize
     if (shown.cols < 20 || hidden.cols !== shown.cols || hidden.rows !== shown.rows) {
       throw new Error(
@@ -2552,6 +2607,32 @@ async function runSelfTest(): Promise<void> {
     await reloaded
     await waitForRendererHook(applicationWindow)
     console.error('[BMN] self-test phase: renderer restart loaded')
+    // Epic 11 AC1: the marker is stored, not remembered by the view, so it is still there after a restart.
+    const markersAfterRestart = await client.request<WorkspaceRecord[]>(METHOD_REGISTRY.workspaceList, {
+      includeArchived: true
+    })
+    const restartedLocalWorkspace = markersAfterRestart
+      .find((workspace) => workspace.workspaceId === DEFAULT_WORKSPACE_ID)
+    const restartedLocalMarker = restartedLocalWorkspace?.marker
+    const restartedForeignMarker = markersAfterRestart
+      .find((workspace) => workspace.workspaceId === secondWorkspace.workspaceId)?.marker
+    if (!restartedLocalWorkspace || restartedLocalMarker !== 'teal' || restartedForeignMarker !== 'rose') {
+      throw new Error(
+        `workspace markers did not survive the renderer restart: ${JSON.stringify({
+          restartedLocalMarker,
+          restartedForeignMarker
+        })}`
+      )
+    }
+    const rendererMarkerAfterRestart = await applicationWindow.webContents.executeJavaScript(
+      `document.querySelector('.workspace-group[aria-label=${JSON.stringify(restartedLocalWorkspace.name)}] `
+      + `.workspace-row .workspace-marker')?.dataset.marker ?? null`
+    ) as string | null
+    if (rendererMarkerAfterRestart !== 'teal') {
+      throw new Error(
+        `the reloaded renderer did not redraw the stored marker: ${JSON.stringify(rendererMarkerAfterRestart)}`
+      )
+    }
     const rendererStoppedPanelLabel = await stoppedPanelLabel(
       applicationWindow,
       preloadProbe.templateCreatedSession.sessionId
@@ -3289,6 +3370,7 @@ async function runSelfTest(): Promise<void> {
       templateCreatedSession: preloadProbe.templateCreatedSession,
       treeSelectionLayoutPut: preloadProbe.treeSelection,
       crossWorkspaceSplit: preloadProbe.crossWorkspaceSplit,
+      workspaceMarkers: preloadProbe.workspaceMarkers,
       hiddenPaneSize: preloadProbe.hiddenPaneSize,
       handoffFlow: { ...preloadProbe.handoffFlow, persistedAfterRestart: true },
       voiceFlow: {

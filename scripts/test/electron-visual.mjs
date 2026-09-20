@@ -14,6 +14,7 @@ const repoRoot = resolve(scriptDirectory, '../..')
 const appDirectory = join(repoRoot, 'apps/desktop')
 const evidenceDirectory = join(repoRoot, '.dev-auto/evidence/epic-5')
 const activityEvidenceDirectory = join(repoRoot, '.dev-auto/evidence/epic-14')
+const markerEvidenceDirectory = join(repoRoot, '.dev-auto/evidence/epic-11')
 const requireFromApp = createRequire(join(appDirectory, 'package.json'))
 const electronBinary = requireFromApp('electron')
 const execFileAsync = promisify(execFile)
@@ -142,6 +143,7 @@ async function pointerStates(page, locator, activeScreenshotName) {
 
 await mkdir(evidenceDirectory, { recursive: true })
 await mkdir(activityEvidenceDirectory, { recursive: true })
+await mkdir(markerEvidenceDirectory, { recursive: true })
 
 const evidence = await withTemporaryRoot(
   temporaryRootContracts.electronDevelopment,
@@ -230,7 +232,9 @@ const evidence = await withTemporaryRoot(
         return {
           initialSettings: initialSettings.appearance,
           primaryWorkspaceId: primary.workspaceId,
+          primaryWorkspaceName: primary.name,
           secondWorkspaceId: second.workspaceId,
+          secondWorkspaceName: second.name,
           selectedSessionId: selected.sessionId,
           foreignSessionId: foreign.sessionId,
           longSessionId: sessions[4].sessionId,
@@ -246,20 +250,6 @@ const evidence = await withTemporaryRoot(
       await setContentSize(application, page, 1440, 900)
 
       const selectedTextarea = page.locator('.session-terminal.selected .xterm-helper-textarea')
-      await runControlCli(
-        roots,
-        fixture.selectedSessionId,
-        'ask',
-        'epic5-visual',
-        'Review visual hierarchy?',
-        '--kind',
-        'question'
-      )
-      await page.waitForFunction(() =>
-        document.querySelector('.needs-you-button')?.getAttribute('data-has-items') === 'true'
-      )
-      phase('attention fixture visible')
-
       await Promise.all([
         runControlCli(roots, fixture.selectedSessionId, 'send', "printf 'EPIC5-PRIMARY-LIVE\\n'", '--submit'),
         runControlCli(roots, fixture.foreignSessionId, 'send', "printf 'EPIC5-FOREIGN-LIVE\\n'", '--submit')
@@ -284,6 +274,24 @@ const evidence = await withTemporaryRoot(
         document.querySelector(`.session-terminal[data-session-id="${sessionId}"]`)?.classList.contains('selected'),
       fixture.selectedSessionId)
       phase('synthetic live output visible in both panes')
+
+      // The request is opened only after every synthetic keystroke and click has landed. BMN answers a
+      // session's open request as soon as the owner types into it, so opening it first raced the
+      // fixture's own input and intermittently left the phases below with a resolved request
+      // (observed 2026-09-20; the same timeout is recorded against Epic 14).
+      await runControlCli(
+        roots,
+        fixture.selectedSessionId,
+        'ask',
+        'epic5-visual',
+        'Review visual hierarchy?',
+        '--kind',
+        'question'
+      )
+      await page.waitForFunction(() =>
+        document.querySelector('.needs-you-button')?.getAttribute('data-has-items') === 'true'
+      )
+      phase('attention fixture visible')
 
       const disableTarget = async () => page.evaluate(() => {
         const button = document.querySelector('.session-terminal.selected .pane-actions button:last-child')
@@ -1225,9 +1233,463 @@ const evidence = await withTemporaryRoot(
       // dialog is driven end to end, with real events and its rendered rows, by the Electron self-test.
       phase('observed activity mark and word checks passed')
 
+      // ---------- Epic 11: workspace identity markers ----------
+      phase('workspace identity markers')
+      await setContentSize(application, page, 1440, 900)
+      await setAppearance(page, 'knight', 'black')
+      await settleTerminalLayout(page)
+
+      // The cross-workspace split is already on screen: the selected pane belongs to the primary
+      // workspace and the foreign pane to the second one, so the two panes test AC2 directly.
+      const markerGeometryBefore = await page.evaluate(({ selectedSessionId, foreignSessionId }) => {
+        const pane = (sessionId) => document.querySelector(`.session-terminal[data-session-id="${sessionId}"]`)
+        const grid = (sessionId) => {
+          const surface = pane(sessionId)?.querySelector('.xterm-screen')
+          const box = surface?.getBoundingClientRect()
+          return box ? { width: Math.round(box.width), height: Math.round(box.height) } : null
+        }
+        const heading = (sessionId) => {
+          const box = pane(sessionId)?.querySelector('.pane-heading')?.getBoundingClientRect()
+          return box ? Math.round(box.height) : null
+        }
+        const sidebarRow = document.querySelector('.workspace-row > button:first-child')?.getBoundingClientRect()
+        return {
+          selectedGrid: grid(selectedSessionId),
+          foreignGrid: grid(foreignSessionId),
+          selectedHeading: heading(selectedSessionId),
+          foreignHeading: heading(foreignSessionId),
+          sidebarRowHeight: sidebarRow ? Math.round(sidebarRow.height) : null,
+          markerCount: document.querySelectorAll('.workspace-marker').length
+        }
+      }, { selectedSessionId: fixture.selectedSessionId, foreignSessionId: fixture.foreignSessionId })
+      assert.equal(markerGeometryBefore.markerCount, 0, JSON.stringify(markerGeometryBefore))
+
+      // The owner's real route: the workspace's own menu. A direct store write would change the
+      // database without redrawing anything, because the renderer holds its workspaces in state.
+      const setMarker = async (workspaceName, label, marker) => {
+        await page.click(`[aria-label="Actions for ${workspaceName}"]`)
+        await page.waitForSelector('.popup-menu [role="group"][aria-label="Marker"]')
+        await page.locator('.popup-menu [role="group"][aria-label="Marker"] [role="menuitemradio"]')
+          .filter({ hasText: new RegExp(`^${label}$`) })
+          .click()
+        await page.waitForFunction(() => !document.querySelector('.popup-menu'))
+        await page.waitForFunction(({ workspaceName, marker }) => {
+          const group = document.querySelector(`.workspace-group[aria-label="${workspaceName}"]`)
+          const shown = group?.querySelector('.workspace-row .workspace-marker')?.dataset.marker ?? null
+          return marker === 'none' ? shown === null : shown === marker
+        }, { workspaceName, marker })
+      }
+
+      // AC5: the six choices are named, keyboard reachable and carry a visible selection in the menu.
+      await page.click('.workspace-row .row-menu-button')
+      await page.waitForSelector('.popup-menu [role="group"][aria-label="Marker"]')
+      const markerMenu = await page.evaluate(() => {
+        const group = document.querySelector('.popup-menu [role="group"][aria-label="Marker"]')
+        const options = [...(group?.querySelectorAll('[role="menuitemradio"]') ?? [])]
+        const covered = (element) => {
+          const box = element.getBoundingClientRect()
+          const at = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)
+          return !element.contains(at) && at !== element
+        }
+        const menu = document.querySelector('.popup-menu')?.getBoundingClientRect()
+        return {
+          labels: options.map((option) => option.textContent?.trim() ?? ''),
+          checked: options.filter((option) => option.getAttribute('aria-checked') === 'true')
+            .map((option) => option.textContent?.trim()),
+          swatches: options.map((option) => option.querySelector('.workspace-marker')?.dataset.marker ?? null),
+          anyCovered: options.some(covered),
+          // Nothing the menu adds may push its own items off screen.
+          fitsViewport: !!menu && menu.top >= 0 && menu.bottom <= window.innerHeight + 1
+        }
+      })
+      // Keyboard only: the arrow keys walk into the group and the choice that lands there shows a ring.
+      let markerKeyboardFocus = null
+      for (let step = 0; step < 10; step += 1) {
+        await page.keyboard.press('ArrowDown')
+        markerKeyboardFocus = await page.evaluate(() => {
+          const active = document.activeElement
+          const style = active ? getComputedStyle(active) : null
+          return {
+            role: active?.getAttribute('role') ?? null,
+            label: active?.textContent?.trim() ?? null,
+            outlineWidth: style?.outlineWidth ?? null,
+            outlineStyle: style?.outlineStyle ?? null,
+            outlineColor: style?.outlineColor ?? null,
+            steps: 0
+          }
+        })
+        if (markerKeyboardFocus.role === 'menuitemradio') {
+          markerKeyboardFocus.steps = step + 1
+          break
+        }
+      }
+      await page.keyboard.press('Escape')
+      await page.waitForFunction(() => !document.querySelector('.popup-menu'))
+
+      await setMarker(fixture.primaryWorkspaceName, 'Teal', 'teal')
+      await setMarker(fixture.secondWorkspaceName, 'Rose', 'rose')
+
+      // AC3 wants selection, keyboard focus and Needs you overlapping a marker, so the marked row that
+      // the loop selects and focuses also carries a real open request for the whole loop.
+      await runControlCli(
+        roots, fixture.selectedSessionId, 'ask', 'epic11-marker', 'Review the workspace marker?',
+        '--kind', 'question'
+      )
+      await page.waitForFunction(() =>
+        document.querySelector('.needs-you-button')?.getAttribute('data-has-items') === 'true')
+      // The markers were just chosen with the mouse, and Chromium keeps that modality until a key
+      // arrives: a programmatic focus after a click is not :focus-visible. One Tab makes the focus
+      // below the keyboard focus this criterion is actually about.
+      await page.keyboard.press('Tab')
+
+      const markerMeasurements = []
+      for (const [identity, colorMode] of [
+        ['knight', 'black'], ['cross', 'black'],
+        ['knight', 'steel'], ['cross', 'steel'],
+        ['knight', 'brown'], ['cross', 'brown'],
+        ['knight', 'dark'], ['cross', 'dark']
+      ]) {
+        await setAppearance(page, identity, colorMode)
+        for (const [width, height] of [[1440, 900], [900, 600]]) {
+          await setContentSize(application, page, width, height)
+          await settleTerminalLayout(page)
+          // Selection, keyboard focus and Needs you all land on the row that also carries a marker.
+          await page.focus(`.session-row.selected button[data-session-id="${fixture.selectedSessionId}"]`)
+          const paint = await page.evaluate(({ selectedSessionId, foreignSessionId }) => {
+            const behind = (element) => {
+              let node = element
+              while (node) {
+                const background = getComputedStyle(node).backgroundColor
+                if (background && background !== 'rgba(0, 0, 0, 0)' && background !== 'transparent') return background
+                node = node.parentElement
+              }
+              return getComputedStyle(document.body).backgroundColor
+            }
+            const read = (marker) => {
+              if (!(marker instanceof HTMLElement)) return null
+              const style = getComputedStyle(marker)
+              const box = marker.getBoundingClientRect()
+              return {
+                marker: marker.dataset.marker ?? null,
+                ink: style.backgroundColor,
+                behind: behind(marker.parentElement ?? marker),
+                width: Math.round(box.width),
+                height: Math.round(box.height),
+                borderRadius: style.borderRadius,
+                shown: marker.getClientRects().length > 0,
+                label: marker.getAttribute('aria-label'),
+                title: marker.getAttribute('title'),
+                // AC4/"no animations": nothing named to animate and no transition time at all.
+                animation: `${style.animationName} ${style.animationDuration} ${style.transitionDuration}`
+              }
+            }
+            const pane = (sessionId) => document.querySelector(`.session-terminal[data-session-id="${sessionId}"]`)
+            const paneMarker = (sessionId) => read(pane(sessionId)?.querySelector('.pane-heading .workspace-marker'))
+            const groups = [...document.querySelectorAll('.workspace-group')]
+            const selectedRow = document.querySelector(`.session-row.selected button[data-session-id="${selectedSessionId}"]`)
+            const selectedStyle = selectedRow ? getComputedStyle(selectedRow) : null
+            const statusDot = selectedRow?.querySelector('.status-dot')
+            const statusStyle = statusDot ? getComputedStyle(statusDot) : null
+            const attention = document.querySelector('.status-dot.needs-you')
+            const token = (name) => {
+              const raw = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+              const hex = raw.replace('#', '')
+              return `rgb(${[0, 2, 4].map((at) => Number.parseInt(hex.slice(at, at + 2), 16)).join(', ')})`
+            }
+            return {
+              tokens: {
+                identity: token('--identity'),
+                attention: token('--attention'),
+                focus: token('--focus'),
+                verified: token('--verified')
+              },
+              selectedPane: paneMarker(selectedSessionId),
+              foreignPane: paneMarker(foreignSessionId),
+              sidebar: groups.map((group) => ({
+                workspace: group.getAttribute('aria-label'),
+                ...(read(group.querySelector('.workspace-row .workspace-marker[data-marker]')) ?? { marker: null }),
+                nameShown: (group.querySelector('.workspace-row .eyebrow')?.getClientRects().length ?? 0) > 0,
+                nameText: group.querySelector('.workspace-row .eyebrow')?.textContent?.trim() ?? null,
+                nameInk: (() => {
+                  const name = group.querySelector('.workspace-row .eyebrow')
+                  return name ? getComputedStyle(name).color : null
+                })(),
+                nameBehind: (() => {
+                  const name = group.querySelector('.workspace-row .eyebrow')
+                  return name ? behind(name) : null
+                })()
+              })),
+              // The semantic tokens that must keep their meaning beside a marker.
+              selection: selectedStyle?.borderLeftColor ?? null,
+              // The selected row is the one carrying the open request, so its mark is the attention mark.
+              statusDot: statusStyle
+                ? { background: statusStyle.backgroundColor, width: statusStyle.width, radius: statusStyle.borderRadius }
+                : null,
+              // A selected row draws its keyboard ring as a ::after border, not an outline
+              // (styles.css:661-672), so the outline properties would report a default that happens to
+              // match --focus. The real ring is read here.
+              focusRing: selectedRow
+                ? {
+                    color: getComputedStyle(selectedRow, '::after').borderTopColor,
+                    width: getComputedStyle(selectedRow, '::after').borderTopWidth
+                  }
+                : null,
+              attentionDot: attention ? getComputedStyle(attention).backgroundColor : null,
+              // Terminal ink, to show the marker never reached the terminal.
+              terminalBackground: (() => {
+                const screen = pane(selectedSessionId)?.querySelector('.xterm-screen')
+                return screen ? behind(screen) : null
+              })()
+            }
+          }, { selectedSessionId: fixture.selectedSessionId, foreignSessionId: fixture.foreignSessionId })
+
+          const capture = await screenshot(
+            page,
+            `${colorMode}-${identity}-${width}x${height}-workspace-markers.png`,
+            markerEvidenceDirectory
+          )
+          screenshots.push(capture)
+          markerMeasurements.push({
+            identity,
+            colorMode,
+            width,
+            height,
+            selectedPane: paint.selectedPane,
+            foreignPane: paint.foreignPane,
+            sidebar: paint.sidebar,
+            selectedPaneMark: ratio(paint.selectedPane.ink, paint.selectedPane.behind),
+            foreignPaneMark: ratio(paint.foreignPane.ink, paint.foreignPane.behind),
+            sidebarMarks: paint.sidebar
+              .filter((row) => row.marker)
+              .map((row) => ({ workspace: row.workspace, marker: row.marker, contrast: ratio(row.ink, row.behind) })),
+            sidebarNames: paint.sidebar
+              .map((row) => ({ workspace: row.workspace, shown: row.nameShown, text: row.nameText,
+                contrast: row.nameInk && row.nameBehind ? ratio(row.nameInk, row.nameBehind) : null })),
+            semantics: {
+              selection: paint.selection,
+              focusRing: paint.focusRing,
+              statusDot: paint.statusDot,
+              attentionDot: paint.attentionDot,
+              terminalBackground: paint.terminalBackground,
+              tokens: paint.tokens
+            }
+          })
+        }
+      }
+
+      for (const measurement of markerMeasurements) {
+        const detail = JSON.stringify(measurement)
+        // AC2: each pane takes its own workspace's marker; the active workspace never reaches the other pane.
+        assert.equal(measurement.selectedPane.marker, 'teal', detail)
+        assert.equal(measurement.foreignPane.marker, 'rose', detail)
+        assert.equal(measurement.selectedPane.shown, true, detail)
+        assert.equal(measurement.foreignPane.shown, true, detail)
+        // AC5/AC3: 3:1 for a meaningful boundary, in every palette and at both sizes.
+        assert.ok(measurement.selectedPaneMark >= 3, detail)
+        assert.ok(measurement.foreignPaneMark >= 3, detail)
+        for (const mark of measurement.sidebarMarks) assert.ok(mark.contrast >= 3, detail)
+        // AC3: the marker is a bar, never the 7px status circle, and it never animates.
+        for (const mark of [measurement.selectedPane, measurement.foreignPane]) {
+          assert.equal(mark.width, 4, detail)
+          assert.equal(mark.height, 12, detail)
+          assert.equal(mark.borderRadius, '2px', detail)
+          assert.equal(mark.animation, 'none 0s 0s', detail)
+          // AC2/AC5: the workspace travels with the marker as text, so no meaning rests on hue alone.
+          assert.ok(mark.label?.includes('workspace'), detail)
+          assert.equal(mark.label, mark.title, detail)
+        }
+        assert.ok(measurement.selectedPane.label?.includes('Teal marker'), detail)
+        assert.ok(measurement.foreignPane.label?.includes('Rose marker'), detail)
+        assert.notEqual(measurement.selectedPane.label, measurement.foreignPane.label, detail)
+        // AC3: beside a marker, gold selection, white focus and orange attention are still painted with
+        // their own tokens, and the status mark keeps the circle it has always been.
+        assert.equal(measurement.semantics.selection, measurement.semantics.tokens.identity, detail)
+        assert.equal(measurement.semantics.focusRing?.color, measurement.semantics.tokens.focus, detail)
+        assert.equal(measurement.semantics.focusRing?.width, '2px', detail)
+        assert.equal(measurement.semantics.attentionDot, measurement.semantics.tokens.attention, detail)
+        assert.equal(measurement.semantics.statusDot?.background, measurement.semantics.tokens.attention, detail)
+        assert.equal(measurement.semantics.statusDot?.width, '7px', detail)
+        assert.equal(measurement.semantics.statusDot?.radius, '50%', detail)
+        // The marker is none of them: identity never borrows a semantic token.
+        for (const semantic of Object.values(measurement.semantics.tokens)) {
+          assert.notEqual(measurement.selectedPane.ink, semantic, detail)
+          assert.notEqual(measurement.foreignPane.ink, semantic, detail)
+        }
+        // AC5: names stay legible at 4.5:1 and visible next to the marker, at both sizes.
+        for (const name of measurement.sidebarNames) {
+          assert.equal(name.shown, true, `${name.workspace}: ${detail}`)
+          assert.ok(name.text && name.text.length > 0, detail)
+          assert.ok(name.contrast !== null && name.contrast >= 4.5, `${name.workspace}: ${detail}`)
+        }
+      }
+
+      // AC4: the same layout before and after, so the terminal keeps its grid and the headings their height.
+      const markerGeometryAfter = await page.evaluate(({ selectedSessionId, foreignSessionId }) => {
+        const pane = (sessionId) => document.querySelector(`.session-terminal[data-session-id="${sessionId}"]`)
+        const grid = (sessionId) => {
+          const surface = pane(sessionId)?.querySelector('.xterm-screen')
+          const box = surface?.getBoundingClientRect()
+          return box ? { width: Math.round(box.width), height: Math.round(box.height) } : null
+        }
+        const heading = (sessionId) => {
+          const box = pane(sessionId)?.querySelector('.pane-heading')?.getBoundingClientRect()
+          return box ? Math.round(box.height) : null
+        }
+        const sidebarRow = document.querySelector('.workspace-row > button:first-child')?.getBoundingClientRect()
+        return {
+          selectedGrid: grid(selectedSessionId),
+          foreignGrid: grid(foreignSessionId),
+          selectedHeading: heading(selectedSessionId),
+          foreignHeading: heading(foreignSessionId),
+          sidebarRowHeight: sidebarRow ? Math.round(sidebarRow.height) : null,
+          markerCount: document.querySelectorAll('.workspace-marker').length
+        }
+      }, { selectedSessionId: fixture.selectedSessionId, foreignSessionId: fixture.foreignSessionId })
+
+      await setContentSize(application, page, 1440, 900)
+      await setAppearance(page, 'knight', 'black')
+      await settleTerminalLayout(page)
+      const markerGeometrySameSize = await page.evaluate(({ selectedSessionId, foreignSessionId }) => {
+        const pane = (sessionId) => document.querySelector(`.session-terminal[data-session-id="${sessionId}"]`)
+        const grid = (sessionId) => {
+          const surface = pane(sessionId)?.querySelector('.xterm-screen')
+          const box = surface?.getBoundingClientRect()
+          return box ? { width: Math.round(box.width), height: Math.round(box.height) } : null
+        }
+        const heading = (sessionId) => {
+          const box = pane(sessionId)?.querySelector('.pane-heading')?.getBoundingClientRect()
+          return box ? Math.round(box.height) : null
+        }
+        const sidebarRow = document.querySelector('.workspace-row > button:first-child')?.getBoundingClientRect()
+        return {
+          selectedGrid: grid(selectedSessionId),
+          foreignGrid: grid(foreignSessionId),
+          selectedHeading: heading(selectedSessionId),
+          foreignHeading: heading(foreignSessionId),
+          sidebarRowHeight: sidebarRow ? Math.round(sidebarRow.height) : null,
+          markerCount: document.querySelectorAll('.workspace-marker').length
+        }
+      }, { selectedSessionId: fixture.selectedSessionId, foreignSessionId: fixture.foreignSessionId })
+      const geometryDetail = JSON.stringify({ markerGeometryBefore, markerGeometrySameSize })
+      assert.deepEqual(markerGeometrySameSize.selectedGrid, markerGeometryBefore.selectedGrid, geometryDetail)
+      assert.deepEqual(markerGeometrySameSize.foreignGrid, markerGeometryBefore.foreignGrid, geometryDetail)
+      assert.equal(markerGeometrySameSize.selectedHeading, markerGeometryBefore.selectedHeading, geometryDetail)
+      assert.equal(markerGeometrySameSize.foreignHeading, markerGeometryBefore.foreignHeading, geometryDetail)
+      assert.equal(markerGeometrySameSize.sidebarRowHeight, markerGeometryBefore.sidebarRowHeight, geometryDetail)
+      assert.ok(markerGeometrySameSize.markerCount >= 3, geometryDetail)
+      screenshots.push(await screenshot(page, 'black-knight-markers-1440x900.png', markerEvidenceDirectory))
+
+      const markerMenuDetail = JSON.stringify({ markerMenu, markerKeyboardFocus })
+      assert.deepEqual(markerMenu.labels, ['None', 'Slate', 'Teal', 'Blue', 'Violet', 'Rose'], markerMenuDetail)
+      assert.deepEqual(markerMenu.checked, ['None'], markerMenuDetail)
+      assert.deepEqual(markerMenu.swatches, ['none', 'slate', 'teal', 'blue', 'violet', 'rose'], markerMenuDetail)
+      assert.equal(markerMenu.anyCovered, false, markerMenuDetail)
+      assert.equal(markerMenu.fitsViewport, true, markerMenuDetail)
+      assert.equal(markerKeyboardFocus.role, 'menuitemradio', markerMenuDetail)
+      assert.ok(markerMenu.labels.includes(markerKeyboardFocus.label), markerMenuDetail)
+      assert.notEqual(markerKeyboardFocus.outlineStyle, 'none', markerMenuDetail)
+      assert.notEqual(markerKeyboardFocus.outlineWidth, '0px', markerMenuDetail)
+
+      // AC5: the second workspace's name is deliberately long. Beside a marker it must still truncate
+      // rather than push the marker or the menu button out of the row.
+      const longNameRow = await page.evaluate((workspaceName) => {
+        const group = document.querySelector(`.workspace-group[aria-label="${workspaceName}"]`)
+        const marker = group?.querySelector('.workspace-row .workspace-marker')
+        const row = marker?.closest('.workspace-row')
+        const name = row?.querySelector('.eyebrow')
+        const menuButton = row?.querySelector('.row-menu-button')
+        if (!(row instanceof HTMLElement) || !(name instanceof HTMLElement)) throw new Error('long-name row missing')
+        const sidebar = row.closest('.workspace-sidebar')
+        return {
+          truncated: name.scrollWidth > name.clientWidth,
+          markerShown: marker.getClientRects().length > 0,
+          menuButtonShown: !!menuButton && menuButton.getClientRects().length > 0,
+          overflows: !!sidebar && row.getBoundingClientRect().right > sidebar.getBoundingClientRect().right + 1,
+          markerLeftOfName: marker.getBoundingClientRect().right <= name.getBoundingClientRect().left + 1
+        }
+      }, fixture.secondWorkspaceName)
+      screenshots.push(await screenshot(page, 'black-knight-marker-long-name.png', markerEvidenceDirectory))
+      const longNameDetail = JSON.stringify(longNameRow)
+      assert.equal(longNameRow.truncated, true, longNameDetail)
+      assert.equal(longNameRow.markerShown, true, longNameDetail)
+      assert.equal(longNameRow.menuButtonShown, true, longNameDetail)
+      assert.equal(longNameRow.overflows, false, longNameDetail)
+      assert.equal(longNameRow.markerLeftOfName, true, longNameDetail)
+
+      await setContentSize(application, page, 780, 600)
+      await settleTerminalLayout(page)
+      const markerRail = await page.evaluate((workspaceName) => {
+        const group = document.querySelector(`.workspace-group[aria-label="${workspaceName}"]`)
+        const marker = group?.querySelector('.workspace-row .workspace-marker')
+        const row = marker?.closest('.workspace-row')
+        const name = row?.querySelector('.eyebrow')
+        if (!(row instanceof HTMLElement) || !(name instanceof HTMLElement)) throw new Error('rail marker missing')
+        const sidebar = row.closest('.workspace-sidebar')
+        return {
+          markerShown: marker.getClientRects().length > 0,
+          nameShown: name.getClientRects().length > 0,
+          nameWidth: Math.round(name.getBoundingClientRect().width),
+          overflows: !!sidebar && row.getBoundingClientRect().right > sidebar.getBoundingClientRect().right + 1
+        }
+      }, fixture.secondWorkspaceName)
+      screenshots.push(await screenshot(page, 'black-knight-marker-780x600-rail.png', markerEvidenceDirectory))
+      const markerRailDetail = JSON.stringify(markerRail)
+      assert.equal(markerRail.markerShown, true, markerRailDetail)
+      assert.equal(markerRail.nameShown, true, markerRailDetail)
+      assert.ok(markerRail.nameWidth > 0, markerRailDetail)
+      assert.equal(markerRail.overflows, false, markerRailDetail)
+
+      await setContentSize(application, page, 1440, 900)
+      await settleTerminalLayout(page)
+      await runControlCli(roots, fixture.selectedSessionId, 'withdraw', 'epic11-marker')
+
+      // AC1/AC3: None is an equivalent usable choice, and choosing it puts the row back as it was.
+      await setMarker(fixture.primaryWorkspaceName, 'None', 'none')
+      // Every pane of that workspace drops its mark, hidden ones included; the other workspace keeps its.
+      await page.waitForFunction(({ selectedSessionId, foreignSessionId }) => {
+        const mark = (sessionId) => document
+          .querySelector(`.session-terminal[data-session-id="${sessionId}"] .pane-heading .workspace-marker`)
+        return !mark(selectedSessionId) && !!mark(foreignSessionId)
+      }, { selectedSessionId: fixture.selectedSessionId, foreignSessionId: fixture.foreignSessionId })
+      const afterNone = await page.evaluate(({ selectedSessionId, foreignSessionId }) => {
+        const pane = (sessionId) => document.querySelector(`.session-terminal[data-session-id="${sessionId}"]`)
+        return {
+          selectedPaneMarker: pane(selectedSessionId)
+            ?.querySelector('.pane-heading .workspace-marker')?.dataset.marker ?? null,
+          foreignPaneMarker: pane(foreignSessionId)
+            ?.querySelector('.pane-heading .workspace-marker')?.dataset.marker ?? null,
+          sidebarMarkerWorkspaces: [...document.querySelectorAll('.workspace-group')]
+            .filter((group) => group.querySelector('.workspace-row .workspace-marker[data-marker]'))
+            .map((group) => group.getAttribute('aria-label')),
+          // Unmarked rows hold an invisible slot so every workspace name keeps one left edge.
+          reservedSlots: document.querySelectorAll('.workspace-row .workspace-marker:not([data-marker])').length,
+          nameLeftEdges: [...new Set([...document.querySelectorAll('.workspace-row .eyebrow')]
+            .map((name) => Math.round(name.getBoundingClientRect().left)))],
+          // Hidden panes follow their workspace too, so no stale mark is left behind anywhere.
+          remainingPaneMarkers: [...document.querySelectorAll('.session-terminal .pane-heading .workspace-marker')]
+            .map((mark) => mark.dataset.marker)
+        }
+      }, { selectedSessionId: fixture.selectedSessionId, foreignSessionId: fixture.foreignSessionId })
+      const afterNoneDetail = JSON.stringify(afterNone)
+      assert.equal(afterNone.selectedPaneMarker, null, afterNoneDetail)
+      assert.equal(afterNone.foreignPaneMarker, 'rose', afterNoneDetail)
+      assert.equal(afterNone.sidebarMarkerWorkspaces.length, 1, afterNoneDetail)
+      assert.deepEqual([...new Set(afterNone.remainingPaneMarkers)], ['rose'], afterNoneDetail)
+      // One workspace still carries a marker, so the unmarked one keeps its slot and the names line up.
+      assert.equal(afterNone.reservedSlots, 1, afterNoneDetail)
+      assert.equal(afterNone.nameLeftEdges.length, 1, afterNoneDetail)
+      phase('workspace identity marker checks passed')
+
       phase('all runtime checks passed')
       return {
         fixture,
+        markerMeasurements,
+        markerMenu,
+        markerKeyboardFocus,
+        markerGeometry: { before: markerGeometryBefore, afterPalettes: markerGeometryAfter, sameSize: markerGeometrySameSize },
+        markerLongName: longNameRow,
+        markerRail,
+        markerAfterNone: afterNone,
         activityMeasurements,
         activityPaletteFiltering,
         activityAttentionPrecedence: precedence,

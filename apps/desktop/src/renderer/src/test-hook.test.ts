@@ -98,6 +98,25 @@ describe('renderer acceptance hook', () => {
         sourceWorkspaceArchived: true,
         foreignPaneRemovedAfterArchive: true
       },
+      workspaceMarkers: {
+        before: {
+          localPane: null,
+          foreignPane: null,
+          grid: { cols: 80, rows: 24 },
+          localHeading: 42,
+          foreignHeading: 42
+        },
+        foreignPaneAfterLocalChoice: null,
+        localPane: 'teal',
+        foreignPane: 'rose',
+        localSidebar: 'teal',
+        foreignSidebar: 'rose',
+        foreignPaneLabel: 'Workspace B workspace · Rose marker',
+        storedRevisions: { local: 1, foreign: 1 },
+        grid: { cols: 80, rows: 24 },
+        localHeading: 42,
+        foreignHeading: 42
+      },
       hiddenPaneSize: { shown: { cols: 80, rows: 24 }, hidden: { cols: 80, rows: 24 } },
       attentionTriage: {
         responseTitles: ['Question'],

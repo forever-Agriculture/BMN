@@ -16,9 +16,9 @@ import {
 } from './workspace-tree'
 
 const workspaces: WorkspaceRecord[] = [
-  { workspaceId: 'b', name: 'B', defaultCwd: null, position: 1, archivedAt: null, revision: 1 },
-  { workspaceId: 'a', name: 'A', defaultCwd: null, position: 0, archivedAt: null, revision: 1 },
-  { workspaceId: 'c', name: 'C', defaultCwd: null, position: 2, archivedAt: '2026-09-13T00:00:00Z', revision: 2 }
+  { workspaceId: 'b', name: 'B', defaultCwd: null, position: 1, marker: 'none', archivedAt: null, revision: 1 },
+  { workspaceId: 'a', name: 'A', defaultCwd: null, position: 0, marker: 'teal', archivedAt: null, revision: 1 },
+  { workspaceId: 'c', name: 'C', defaultCwd: null, position: 2, marker: 'none', archivedAt: '2026-09-13T00:00:00Z', revision: 2 }
 ]
 const sessions: SessionRecord[] = ['a-2', 'a-1', 'b-1', 'b-2'].map((sessionId, index) => ({
   sessionId,

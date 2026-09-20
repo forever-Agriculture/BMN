@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  DEFAULT_WORKSPACE_MARKER,
+  WORKSPACE_MARKERS,
   APP_EVENT_TOPICS,
   DEFAULT_APP_SETTINGS,
   isAppEventMessage,
@@ -35,6 +37,7 @@ import {
   isSessionProcessStateChangedMessage,
   isWorkspaceCreateParams,
   isWorkspaceLayoutState,
+  isWorkspaceMarker,
   isWorkspaceRecord,
   isWorkspaceUpdateParams,
   emptyWorkspaceLayout,
@@ -264,6 +267,7 @@ describe('protocol surface', () => {
     name: 'Personal',
     defaultCwd: null,
     position: 0,
+    marker: 'none',
     archivedAt: null,
     revision: 1
   }
@@ -346,6 +350,37 @@ describe('protocol surface', () => {
   ])('closes the %s shape: accepts the exact shape and rejects an unknown key', (_name, validate, exact) => {
     expect(validate(exact)).toBe(true)
     expect(validate({ ...exact, sessionOrder: ['session-1'] })).toBe(false)
+  })
+
+  it('names exactly the six curated workspace markers and rejects anything else', () => {
+    expect(WORKSPACE_MARKERS).toEqual(['none', 'slate', 'teal', 'blue', 'violet', 'rose'])
+    expect(DEFAULT_WORKSPACE_MARKER).toBe('none')
+    for (const marker of WORKSPACE_MARKERS) expect(isWorkspaceMarker(marker)).toBe(true)
+    for (const rejected of ['magenta', 'gold', 'NONE', '', 'needs-you', null, 7, undefined]) {
+      expect(isWorkspaceMarker(rejected)).toBe(false)
+    }
+  })
+
+  it('carries a marker through the workspace record and both parameter shapes', () => {
+    expect(isWorkspaceRecord({ ...workspaceRecord, marker: 'violet' })).toBe(true)
+    expect(isWorkspaceRecord({ ...workspaceRecord, marker: 'chartreuse' })).toBe(false)
+    // The record's shape is closed, so a stored workspace without a marker is not a valid record.
+    expect(isWorkspaceRecord(
+      Object.fromEntries(Object.entries(workspaceRecord).filter(([key]) => key !== 'marker'))
+    )).toBe(false)
+
+    expect(isWorkspaceCreateParams({ name: 'Personal', marker: 'teal' })).toBe(true)
+    expect(isWorkspaceCreateParams({ name: 'Personal', marker: 'teal-ish' })).toBe(false)
+    expect(isWorkspaceUpdateParams({
+      workspaceId: 'workspace-1', expectedRevision: 1, marker: 'rose'
+    })).toBe(true)
+    expect(isWorkspaceUpdateParams({
+      workspaceId: 'workspace-1', expectedRevision: 1, marker: 'rosy'
+    })).toBe(false)
+    // A marker alone is a change, so choosing one needs no other field.
+    expect(isWorkspaceUpdateParams({
+      workspaceId: 'workspace-1', expectedRevision: 1, marker: 'none'
+    })).toBe(true)
   })
 })
 

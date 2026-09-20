@@ -1,6 +1,10 @@
+import { mkdtemp, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   ERROR_CODES,
+  WORKSPACE_MARKERS,
   emptyWorkspaceLayout,
   type PersistedConversationBinding,
   type WorkspaceLayoutState
@@ -627,6 +631,204 @@ describe('workspace database store', () => {
       expect(listWorkspaces(database)).toHaveLength(1)
     } finally {
       database.close()
+    }
+  })
+})
+
+describe('workspace identity marker', () => {
+  const withDatabase = (run: (database: DatabaseConnection) => void): void => {
+    const database = new BetterSqlite3(':memory:')
+    try {
+      initializeDatabase(database, now)
+      run(database)
+    } finally {
+      database.close()
+    }
+  }
+
+  it('defaults a new workspace and the seeded one to none', () => {
+    withDatabase((database) => {
+      const created = database.transaction(() => createWorkspace(
+        database,
+        { name: 'Unmarked' },
+        'workspace-unmarked',
+        now
+      ))()
+      expect(created.marker).toBe('none')
+      const seeded = listWorkspaces(database).find(
+        (workspace) => workspace.workspaceId === DEFAULT_WORKSPACE_ID
+      )
+      expect(seeded?.marker).toBe('none')
+    })
+  })
+
+  it('stores a marker chosen at creation and every marker the protocol names', () => {
+    withDatabase((database) => {
+      for (const marker of WORKSPACE_MARKERS) {
+        const created = database.transaction(() => createWorkspace(
+          database,
+          { name: `Workspace ${marker}`, marker },
+          `workspace-${marker}`,
+          now
+        ))()
+        expect(created.marker).toBe(marker)
+        expect(listWorkspaces(database).find(
+          (workspace) => workspace.workspaceId === `workspace-${marker}`
+        )?.marker).toBe(marker)
+      }
+    })
+  })
+
+  it('changes a marker through normal revision validation and refuses a stale revision', () => {
+    withDatabase((database) => {
+      const created = database.transaction(() => createWorkspace(
+        database, { name: 'Marked' }, 'workspace-marked', now
+      ))()
+      const marked = database.transaction(() => updateWorkspace(database, {
+        workspaceId: created.workspaceId,
+        expectedRevision: created.revision,
+        marker: 'violet'
+      }, now))()
+      expect(marked.marker).toBe('violet')
+      expect(marked.revision).toBe(created.revision + 1)
+
+      expect(() => database.transaction(() => updateWorkspace(database, {
+        workspaceId: created.workspaceId,
+        expectedRevision: created.revision,
+        marker: 'rose'
+      }, now))()).toThrow(WorkspaceStoreError)
+      expect(listWorkspaces(database).find(
+        (workspace) => workspace.workspaceId === created.workspaceId
+      )?.marker).toBe('violet')
+    })
+  })
+
+  it('rejects a marker outside the curated set without touching the stored one', () => {
+    withDatabase((database) => {
+      const created = database.transaction(() => createWorkspace(
+        database, { name: 'Guarded', marker: 'teal' }, 'workspace-guarded', now
+      ))()
+      expect(() => database.transaction(() => updateWorkspace(database, {
+        workspaceId: created.workspaceId,
+        expectedRevision: created.revision,
+        marker: 'magenta'
+      } as unknown as Parameters<typeof updateWorkspace>[1], now))()).toThrow(WorkspaceStoreError)
+      expect(listWorkspaces(database).find(
+        (workspace) => workspace.workspaceId === created.workspaceId
+      )?.marker).toBe('teal')
+    })
+  })
+
+  it('keeps an unknown marker out of the column itself, not only out of the protocol guard', () => {
+    withDatabase((database) => {
+      // Straight SQL, so this fences the column CHECK rather than the parameter validation above it.
+      expect(() => database
+        .prepare(`INSERT INTO workspace(workspace_id, name, default_cwd, archived_at, revision, position, marker)
+                  VALUES ('workspace-raw', 'Raw', NULL, NULL, 1, 9, 'chartreuse')`)
+        .run()).toThrow(/CHECK constraint failed/)
+      for (const marker of WORKSPACE_MARKERS) {
+        expect(() => database
+          .prepare(`INSERT INTO workspace(workspace_id, name, default_cwd, archived_at, revision, position, marker)
+                    VALUES (?, 'Raw', NULL, NULL, 1, 9, ?)`)
+          .run(`workspace-raw-${marker}`, marker)).not.toThrow()
+      }
+    })
+  })
+
+  it('leaves the marker alone when an unrelated field changes, and through archive and restore', () => {
+    withDatabase((database) => {
+      const created = database.transaction(() => createWorkspace(
+        database, { name: 'Kept', marker: 'blue' }, 'workspace-kept', now
+      ))()
+      const renamed = database.transaction(() => updateWorkspace(database, {
+        workspaceId: created.workspaceId,
+        expectedRevision: created.revision,
+        name: 'Renamed'
+      }, now))()
+      expect(renamed.marker).toBe('blue')
+
+      const archived = database.transaction(() => updateWorkspace(database, {
+        workspaceId: created.workspaceId,
+        expectedRevision: renamed.revision,
+        archived: true
+      }, now))()
+      expect(archived.archivedAt).not.toBeNull()
+      expect(archived.marker).toBe('blue')
+
+      const restored = database.transaction(() => updateWorkspace(database, {
+        workspaceId: created.workspaceId,
+        expectedRevision: archived.revision,
+        archived: false
+      }, now))()
+      expect(restored.archivedAt).toBeNull()
+      expect(restored.marker).toBe('blue')
+    })
+  })
+
+  it('reads an unrecognized stored marker back as none instead of hiding the workspace', () => {
+    withDatabase((database) => {
+      const created = database.transaction(() => createWorkspace(
+        database, { name: 'Legacy', marker: 'rose' }, 'workspace-legacy', now
+      ))()
+      // Rebuild the table without the column CHECK, the way a hand-edited file or a future schema
+      // could leave it, so the read path is exercised on a value the column would normally refuse.
+      database.pragma('foreign_keys = OFF')
+      database.exec(`
+        CREATE TABLE workspace_unchecked (
+          workspace_id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          default_cwd TEXT,
+          archived_at TEXT,
+          revision INTEGER NOT NULL,
+          position INTEGER NOT NULL DEFAULT 0,
+          marker TEXT NOT NULL DEFAULT 'none'
+        );
+        INSERT INTO workspace_unchecked
+          SELECT workspace_id, name, default_cwd, archived_at, revision, position, marker
+          FROM workspace;
+        DROP TABLE workspace;
+        ALTER TABLE workspace_unchecked RENAME TO workspace;
+      `)
+      database.pragma('foreign_keys = ON')
+      database.prepare('UPDATE workspace SET marker = ? WHERE workspace_id = ?')
+        .run('chartreuse', created.workspaceId)
+
+      const read = listWorkspaces(database).find(
+        (workspace) => workspace.workspaceId === created.workspaceId
+      )
+      expect(read?.marker).toBe('none')
+      expect(read?.name).toBe('Legacy')
+    })
+  })
+
+  it('carries markers through the backup statement the host actually runs', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'bmn-marker-backup-'))
+    // The host's `backup-into` runs `VACUUM INTO ?` (database-worker.ts), so the copy under test is
+    // made the same way rather than by a different API that happens to agree today.
+    const source = new BetterSqlite3(join(folder, 'source.sqlite'))
+    try {
+      initializeDatabase(source, now)
+      source.transaction(() => createWorkspace(
+        source, { name: 'Backed up', marker: 'violet' }, 'workspace-backup', now
+      ))()
+      const path = join(folder, 'backup.sqlite')
+      source.prepare('VACUUM INTO ?').run(path)
+      const copy = new BetterSqlite3(path)
+      try {
+        expect(listWorkspaces(copy).find(
+          (workspace) => workspace.workspaceId === 'workspace-backup'
+        )?.marker).toBe('violet')
+        // The column keeps its constraint in the copy, so a restored database is not laxer.
+        expect(() => copy
+          .prepare(`INSERT INTO workspace(workspace_id, name, default_cwd, archived_at, revision, position, marker)
+                    VALUES ('workspace-copy', 'Copy', NULL, NULL, 1, 9, 'chartreuse')`)
+          .run()).toThrow(/CHECK constraint failed/)
+      } finally {
+        copy.close()
+      }
+    } finally {
+      source.close()
+      await rm(folder, { recursive: true, force: true })
     }
   })
 })

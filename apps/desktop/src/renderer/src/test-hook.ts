@@ -49,6 +49,26 @@ export interface TerminalIntegrationProbe {
     sourceWorkspaceArchived: boolean
     foreignPaneRemovedAfterArchive: boolean
   }
+  /** Epic 11: each pane's marker comes from its own workspace, and choosing one moves no geometry. */
+  workspaceMarkers: {
+    before: {
+      localPane: string | null
+      foreignPane: string | null
+      grid: { cols: number; rows: number }
+      localHeading: number
+      foreignHeading: number
+    }
+    foreignPaneAfterLocalChoice: string | null
+    localPane: string | null
+    foreignPane: string | null
+    localSidebar: string | null
+    foreignSidebar: string | null
+    foreignPaneLabel: string | null
+    storedRevisions: { local: number; foreign: number }
+    grid: { cols: number; rows: number }
+    localHeading: number
+    foreignHeading: number
+  }
   /** The probing pane's terminal grid while shown, and after another session took its pane and hid it. */
   hiddenPaneSize: {
     shown: { cols: number; rows: number }

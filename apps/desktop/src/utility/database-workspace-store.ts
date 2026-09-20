@@ -1,4 +1,5 @@
 import {
+  DEFAULT_WORKSPACE_MARKER,
   ERROR_CODES,
   emptyWorkspaceLayout,
   isLaunchTemplateRecord,
@@ -6,6 +7,7 @@ import {
   isTemplateCreateParams,
   isWorkspaceCreateParams,
   isWorkspaceLayoutState,
+  isWorkspaceMarker,
   isWorkspaceRecord,
   isWorkspaceUpdateParams,
   isSessionUpdateParams,
@@ -38,6 +40,7 @@ interface WorkspaceRow {
   name: string
   default_cwd: string | null
   position: number
+  marker: string
   archived_at: string | null
   revision: number
 }
@@ -143,6 +146,9 @@ function workspaceRecord(row: WorkspaceRow): WorkspaceRecord {
     name: row.name,
     defaultCwd: row.default_cwd,
     position: row.position,
+    // A marker is decoration, so an unreadable one degrades to the default rather than hiding the
+    // workspace and every session under it.
+    marker: isWorkspaceMarker(row.marker) ? row.marker : DEFAULT_WORKSPACE_MARKER,
     archivedAt: row.archived_at,
     revision: row.revision
   }
@@ -227,7 +233,7 @@ function templateRecord(row: TemplateRow): LaunchTemplateRecord {
 function selectWorkspace(database: DatabaseConnection, workspaceId: string): WorkspaceRecord {
   const row = database
     .prepare(
-      `SELECT workspace_id, name, default_cwd, position, archived_at, revision
+      `SELECT workspace_id, name, default_cwd, position, marker, archived_at, revision
        FROM workspace WHERE workspace_id = ?`
     )
     .get(workspaceId) as WorkspaceRow | undefined
@@ -258,7 +264,7 @@ export function listWorkspaces(
 ): WorkspaceRecord[] {
   const rows = database
     .prepare(
-      `SELECT workspace_id, name, default_cwd, position, archived_at, revision
+      `SELECT workspace_id, name, default_cwd, position, marker, archived_at, revision
        FROM workspace
        WHERE ? = 1 OR archived_at IS NULL
        ORDER BY CASE WHEN archived_at IS NULL THEN 0 ELSE 1 END, position, workspace_id`
@@ -280,10 +286,16 @@ export function createWorkspace(
   database
     .prepare(
       `INSERT INTO workspace(
-        workspace_id, name, default_cwd, archived_at, revision, position
-      ) VALUES (?, ?, ?, NULL, 1, ?)`
+        workspace_id, name, default_cwd, archived_at, revision, position, marker
+      ) VALUES (?, ?, ?, NULL, 1, ?, ?)`
     )
-    .run(workspaceId, params.name.trim(), params.defaultCwd ?? null, nextPosition)
+    .run(
+      workspaceId,
+      params.name.trim(),
+      params.defaultCwd ?? null,
+      nextPosition,
+      params.marker ?? DEFAULT_WORKSPACE_MARKER
+    )
   const layout = emptyWorkspaceLayout(workspaceId)
   database
     .prepare(
@@ -312,13 +324,14 @@ export function updateWorkspace(
   database
     .prepare(
       `UPDATE workspace
-       SET name = ?, default_cwd = ?, position = ?, archived_at = ?, revision = ?
+       SET name = ?, default_cwd = ?, position = ?, marker = ?, archived_at = ?, revision = ?
        WHERE workspace_id = ? AND revision = ?`
     )
     .run(
       params.name?.trim() ?? current.name,
       'defaultCwd' in params ? params.defaultCwd ?? null : current.defaultCwd,
       params.position ?? current.position,
+      params.marker ?? current.marker,
       archivedAt,
       current.revision + 1,
       current.workspaceId,

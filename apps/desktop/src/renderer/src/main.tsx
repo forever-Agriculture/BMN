@@ -19,6 +19,7 @@ import {
   type ProgressRecord,
   type ClosePromptRequest,
   type SessionRecord,
+  isWorkspaceMarker,
   type WorkspaceLayoutState,
   type WorkspaceRecord
 } from '@bmn/protocol'
@@ -84,6 +85,7 @@ import { CloseSessionsDialog } from './close-sessions-dialog'
 import { loadSavedOutputPresentation, type SavedOutputCatalogPresentation } from './terminal-history'
 import { createSpaceHold } from './space-hold'
 import { applyChromeTheme, COLOR_MODE_PRESENTATION, IDENTITY_PRESENTATION } from './theme'
+import { markerForWorkspace, WorkspaceIdentityMark, workspaceMarkerOptions } from './workspace-marker'
 import { startVoiceRecording, VOICE_MAX_SECONDS, VOICE_SAMPLE_RATE, type VoiceRecording } from './voice-recorder'
 import { modelName, voiceReadiness } from './voice-readiness'
 import { VOICE_SUGGESTION_BYTES, VOICE_SUGGESTION_ROWS, suggestVocabulary } from './voice-suggestions'
@@ -1181,6 +1183,17 @@ function App(): React.JSX.Element {
     { label: 'Move down', disabled: index === ordered.length - 1, onSelect: () => moveWorkspace(ordered, index, 1) },
     'separator',
     {
+      group: 'Marker',
+      selected: workspace.marker,
+      options: workspaceMarkerOptions(),
+      onChoose: (marker) => {
+        // The menu hands back a string; only a marker the protocol recognizes reaches the store.
+        if (!isWorkspaceMarker(marker)) return
+        void updateWorkspace(workspace, { marker }).catch(fail('Workspace marker change failed'))
+      }
+    },
+    'separator',
+    {
       label: workspace.archivedAt ? 'Restore workspace' : 'Archive workspace',
       onSelect: () => void updateWorkspace(workspace, { archived: workspace.archivedAt === null }).catch(fail('Workspace update failed'))
     }
@@ -1376,6 +1389,9 @@ function App(): React.JSX.Element {
           <aside className="workspace-sidebar" aria-label="Workspaces and sessions">
             <nav className="workspace-tree">
               {visibleWorkspaces(workspaces, tree.showArchived).map((workspace, workspaceIndex, ordered) => {
+                // Names keep one left edge as soon as any workspace is marked, and none of this exists
+                // while every workspace is still on None.
+                const anyMarker = ordered.some((item) => item.marker !== 'none')
                 const workspaceSessions = visibleWorkspaceSessions(sessions, workspace.workspaceId, tree.showArchived)
                 const isExpanded = tree.expandedWorkspaceIds.has(workspace.workspaceId)
                 return (
@@ -1384,6 +1400,7 @@ function App(): React.JSX.Element {
                       <button type="button" aria-expanded={isExpanded} onClick={() => {
                         setTree((current) => toggleWorkspaceExpanded(current, workspace.workspaceId))
                       }}>
+                        <WorkspaceIdentityMark workspaceName={workspace.name} marker={workspace.marker} reserveSlot={anyMarker} decorative />
                         <span className="eyebrow">{workspace.name}</span>
                         <span className="count">{workspaceSessions.length}</span>
                       </button>
@@ -1454,6 +1471,7 @@ function App(): React.JSX.Element {
                 key={terminalStartup.attachmentId}
                 startup={terminalStartup}
                 record={record}
+                workspaceIdentity={markerForWorkspace(workspaces, record?.workspaceId)}
                 visible={paneIndex !== -1}
                 selected={selectedSessionId === terminalStartup.sessionId}
                 order={Math.max(0, paneIndex) * 2}

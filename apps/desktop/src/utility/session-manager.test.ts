@@ -308,6 +308,7 @@ class FakeStore implements SessionStore {
       name: 'Default',
       defaultCwd: null,
       position: 0,
+      marker: 'none',
       archivedAt: null,
       revision: 1
     }]

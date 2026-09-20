@@ -5,6 +5,21 @@ export const DEFAULT_WORKSPACE_ID = '00000000-0000-4000-8000-000000000001'
 export const WORKSPACE_NAME_MAX_LENGTH = 120
 export const LAYOUT_RATIO_TOLERANCE = 0.000_001
 
+/**
+ * A workspace's optional identity marker. This says which workspace a row or pane belongs to and
+ * never what a session is doing, so it carries no process, attention or selection meaning. `none` is
+ * the default for new and legacy workspaces and renders nothing.
+ */
+export type WorkspaceMarker = 'none' | 'slate' | 'teal' | 'blue' | 'violet' | 'rose'
+export const WORKSPACE_MARKERS: readonly WorkspaceMarker[] = Object.freeze([
+  'none', 'slate', 'teal', 'blue', 'violet', 'rose'
+])
+export const DEFAULT_WORKSPACE_MARKER: WorkspaceMarker = 'none'
+
+export function isWorkspaceMarker(value: unknown): value is WorkspaceMarker {
+  return typeof value === 'string' && (WORKSPACE_MARKERS as readonly string[]).includes(value)
+}
+
 export type BackgroundChoice = 'hide' | 'stop'
 export type SessionStopCause =
   | 'explicit'
@@ -51,6 +66,8 @@ export interface WorkspaceRecord {
   name: string
   defaultCwd: string | null
   position: number
+  /** Identity only: which workspace this is, never a process or attention state. */
+  marker: WorkspaceMarker
   archivedAt: string | null
   revision: number
 }
@@ -121,6 +138,7 @@ export interface WorkspaceCreateParams {
   name: string
   defaultCwd?: string | null
   position?: number
+  marker?: WorkspaceMarker
 }
 
 export interface WorkspaceUpdateParams {
@@ -129,6 +147,7 @@ export interface WorkspaceUpdateParams {
   name?: string
   defaultCwd?: string | null
   position?: number
+  marker?: WorkspaceMarker
   archived?: boolean
 }
 
@@ -237,7 +256,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
-const WORKSPACE_RECORD_KEYS = ['workspaceId', 'name', 'defaultCwd', 'position', 'archivedAt', 'revision'] as const
+const WORKSPACE_RECORD_KEYS = ['workspaceId', 'name', 'defaultCwd', 'position', 'marker', 'archivedAt', 'revision'] as const
 const SESSION_RECORD_KEYS = [
   'sessionId', 'workspaceId', 'name', 'cwd', 'executable', 'argv', 'position', 'backgroundChoice',
   'revision', 'createdAt', 'archivedAt', 'lastProcess'
@@ -248,7 +267,7 @@ const TEMPLATE_RECORD_KEYS = [
   'templateId', 'name', 'executable', 'argv', 'cwd', 'backgroundChoice', 'revision', 'createdAt'
 ] as const
 const TEMPLATE_RECORD_OPTIONAL_KEYS = ['launchDisabledReason'] as const
-const WORKSPACE_UPDATE_FIELDS = ['name', 'defaultCwd', 'position', 'archived'] as const
+const WORKSPACE_UPDATE_FIELDS = ['name', 'defaultCwd', 'position', 'marker', 'archived'] as const
 const SESSION_UPDATE_FIELDS = [
   'workspaceId', 'name', 'cwd', 'executable', 'argv', 'position', 'backgroundChoice', 'archived'
 ] as const
@@ -316,6 +335,7 @@ export function isWorkspaceRecord(value: unknown): value is WorkspaceRecord {
     isName(value.name) &&
     isNullableText(value.defaultCwd) &&
     isPosition(value.position) &&
+    isWorkspaceMarker(value.marker) &&
     (value.archivedAt === null || isRfc3339(value.archivedAt)) &&
     isRevision(value.revision)
   )
@@ -377,9 +397,12 @@ export function isLaunchTemplateRecord(value: unknown): value is LaunchTemplateR
 }
 
 export function isWorkspaceCreateParams(value: unknown): value is WorkspaceCreateParams {
-  if (!isRecord(value) || !hasExactKeys(value, ['name'], ['defaultCwd', 'position'])) return false
+  if (!isRecord(value) || !hasExactKeys(value, ['name'], ['defaultCwd', 'position', 'marker'])) {
+    return false
+  }
   if (!isName(value.name)) return false
   if ('defaultCwd' in value && !isNullableText(value.defaultCwd)) return false
+  if ('marker' in value && !isWorkspaceMarker(value.marker)) return false
   return !('position' in value) || isPosition(value.position)
 }
 
@@ -395,6 +418,7 @@ export function isWorkspaceUpdateParams(value: unknown): value is WorkspaceUpdat
   if ('name' in value && !isName(value.name)) return false
   if ('defaultCwd' in value && !isNullableText(value.defaultCwd)) return false
   if ('position' in value && !isPosition(value.position)) return false
+  if ('marker' in value && !isWorkspaceMarker(value.marker)) return false
   if ('archived' in value && typeof value.archived !== 'boolean') return false
   return WORKSPACE_UPDATE_FIELDS.some((key) => key in value)
 }

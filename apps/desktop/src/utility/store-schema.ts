@@ -355,5 +355,15 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
       ALTER TABLE attention_request ADD COLUMN opened_by TEXT;
       ALTER TABLE attention_request ADD COLUMN resolved_by TEXT;
     `
+  },
+  {
+    // Workspace identity marker: one added column with a default, so every legacy workspace reads as
+    // 'none' and looks exactly as it did. The CHECK keeps an unknown marker out of the column; the
+    // store still maps an unexpected stored value back to 'none' rather than hiding the workspace.
+    version: 10,
+    sql: `
+      ALTER TABLE workspace ADD COLUMN marker TEXT NOT NULL DEFAULT 'none'
+        CHECK (marker IN ('none', 'slate', 'teal', 'blue', 'violet', 'rose'));
+    `
   }
 ])

@@ -10,7 +10,8 @@ import type {
   TerminalExitMessage,
   TerminalOutputMessage,
   TerminalViewDisconnectReason,
-  VoiceSettings
+  VoiceSettings,
+  WorkspaceMarker
 } from '@bmn/protocol'
 import { failureDetail, isBridgeError } from './bridge-error'
 import { createFileReferenceLinkProvider } from './file-reference-links'
@@ -18,6 +19,7 @@ import { openReferenceFromPane, runFileReferenceIntegration } from './file-refer
 import { runVoiceIntegration } from './voice-self-test'
 import { Icon } from './icons'
 import { SHORTCUT_LABELS } from './keymap'
+import { WorkspaceIdentityMark } from './workspace-marker'
 import { capTitle, type SessionActivity } from './session-activity'
 import type { ProgressPresentation, SessionAttention } from './session-presentation'
 import { agentTag } from './session-presentation'
@@ -72,6 +74,8 @@ export interface TerminalController {
 export function SessionTerminal(props: {
   startup: LiveStartup
   record: SessionRecord | undefined
+  /** The pane's own workspace, so a cross-workspace split shows each pane's identity, not the active one. */
+  workspaceIdentity: { name: string; marker: WorkspaceMarker } | null
   visible: boolean
   selected: boolean
   order: number
@@ -688,6 +692,81 @@ export function SessionTerminal(props: {
           `.session-terminal[data-session-id="${sourceSession.sessionId}"]:not(.session-terminal-hidden)`
         ))
         if (!sourcePane) throw new Error('the cross-workspace terminal pane was not visible')
+
+        // Epic 11: choose a marker for each workspace from its own menu, with a cross-workspace split
+        // on screen, and watch that each pane takes its own workspace's marker and that the terminal
+        // grid and the heading height do not move.
+        const localPane = section.current!
+        const paneHeadingHeight = (pane: HTMLElement): number =>
+          pane.querySelector<HTMLElement>('.pane-heading')?.getBoundingClientRect().height ?? -1
+        const paneMarker = (pane: HTMLElement): string | null =>
+          pane.querySelector<HTMLElement>('.pane-heading .workspace-marker')?.dataset.marker ?? null
+        const sidebarMarker = (workspaceName: string): string | null =>
+          document.querySelector<HTMLElement>(
+            `.workspace-group[aria-label="${workspaceName}"] .workspace-row .workspace-marker`
+          )?.dataset.marker ?? null
+        const chooseMarker = async (workspaceName: string, label: string): Promise<void> => {
+          const menuButton = await waitFor(() => document.querySelector<HTMLButtonElement>(
+            `[aria-label="Actions for ${workspaceName}"]`
+          ))
+          menuButton.click()
+          const choice = await waitFor(() => [...document.querySelectorAll<HTMLButtonElement>(
+            '.popup-menu [role="group"][aria-label="Marker"] [role="menuitemradio"]'
+          )].find((item) => item.textContent?.trim() === label))
+          if (choice.getAttribute('aria-checked') !== 'false') {
+            throw new Error(`the ${label} marker was already the chosen one for ${workspaceName}`)
+          }
+          choice.click()
+        }
+        const activeWorkspace = workspaces.find(
+          (workspace) => workspace.workspaceId === props.startup.workspaceId
+        )
+        if (!activeWorkspace) throw new Error('the active workspace was not in the startup list')
+        const markersBefore = {
+          localPane: paneMarker(localPane),
+          foreignPane: paneMarker(sourcePane),
+          grid: { cols: terminal.cols, rows: terminal.rows },
+          localHeading: paneHeadingHeight(localPane),
+          foreignHeading: paneHeadingHeight(sourcePane)
+        }
+
+        await chooseMarker(activeWorkspace.name, 'Teal')
+        await waitFor(() => paneMarker(localPane) === 'teal' ? true : undefined)
+        // The other workspace has chosen nothing, so its pane must still carry no marker at all.
+        const foreignPaneAfterLocalChoice = paneMarker(sourcePane)
+
+        await chooseMarker(sourceWorkspace.name, 'Rose')
+        await waitFor(() => paneMarker(sourcePane) === 'rose' ? true : undefined)
+
+        const storedMarkers = await waitFor(async () => {
+          const records = await window.aiTerminal.listWorkspaces(true)
+          const local = records.find((workspace) => workspace.workspaceId === activeWorkspace.workspaceId)
+          const foreign = records.find((workspace) => workspace.workspaceId === sourceWorkspace.workspaceId)
+          return local?.marker === 'teal' && foreign?.marker === 'rose'
+            ? { local: local!, foreign: foreign! }
+            : undefined
+        })
+        const workspaceMarkers = {
+          before: markersBefore,
+          foreignPaneAfterLocalChoice,
+          localPane: paneMarker(localPane),
+          foreignPane: paneMarker(sourcePane),
+          localSidebar: sidebarMarker(activeWorkspace.name),
+          foreignSidebar: sidebarMarker(sourceWorkspace.name),
+          // The marker's accessible name carries the workspace, so identity does not need the hue.
+          foreignPaneLabel: sourcePane
+            .querySelector<HTMLElement>('.pane-heading .workspace-marker')
+            ?.getAttribute('aria-label') ?? null,
+          storedRevisions: {
+            local: storedMarkers.local.revision - activeWorkspace.revision,
+            foreign: storedMarkers.foreign.revision - sourceWorkspace.revision
+          },
+          grid: { cols: terminal.cols, rows: terminal.rows },
+          localHeading: paneHeadingHeight(localPane),
+          foreignHeading: paneHeadingHeight(sourcePane)
+        }
+        console.warn('[BMN] renderer behavioural integration: workspace markers chosen')
+
         fileReferenceFlow.crossWorkspace = await openReferenceFromPane({
           pane: sourcePane,
           workspaceId: props.startup.workspaceId,
@@ -755,6 +834,7 @@ export function SessionTerminal(props: {
               cleanedLayout.split.panes.some((pane) => pane.sessionId === sourceSession.sessionId) === false &&
               cleanedLayout.split.panes.some((pane) => pane.sessionId === props.startup.sessionId)
           },
+          workspaceMarkers,
           hiddenPaneSize: { shown: shownSize, hidden: hiddenSize },
           handoffFlow,
           fileReferenceFlow,
@@ -892,6 +972,12 @@ export function SessionTerminal(props: {
       }}
     >
       <header className="pane-heading">
+        {props.workspaceIdentity ? (
+          <WorkspaceIdentityMark
+            workspaceName={props.workspaceIdentity.name}
+            marker={props.workspaceIdentity.marker}
+          />
+        ) : null}
         <strong title={name}>{name}</strong>
         {props.record ? <span className="chip">{agentTag(props.record.executable)}</span> : null}
         <span className={`status-dot ${dot}`} aria-hidden="true" />

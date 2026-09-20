@@ -10,6 +10,13 @@ export type MenuEntry =
       danger?: boolean | undefined
       shortcut?: string | undefined
     }
+  /** One exclusive choice inside the menu: a named group whose options carry the current selection. */
+  | {
+      group: string
+      selected: string
+      options: ReadonlyArray<{ value: string; label: string; mark?: React.JSX.Element | undefined }>
+      onChoose(value: string): void
+    }
   | 'separator'
 
 export interface MenuAnchor {
@@ -33,7 +40,9 @@ export function PopupMenu(props: { anchor: MenuAnchor; onClose(): void }): React
     const below = rect.bottom + 4
     const top = below + height > window.innerHeight - 8 ? Math.max(8, rect.top - height - 4) : below
     setPosition({ top, left })
-    menu.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus()
+    menu.current?.querySelector<HTMLButtonElement>(
+      '[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled)'
+    )?.focus()
   }, [props.anchor])
 
   useEffect(() => {
@@ -46,7 +55,9 @@ export function PopupMenu(props: { anchor: MenuAnchor; onClose(): void }): React
   }, [props.anchor])
 
   const items = (): HTMLButtonElement[] =>
-    [...(menu.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? [])]
+    [...(menu.current?.querySelectorAll<HTMLButtonElement>(
+      '[role="menuitem"]:not(:disabled), [role="menuitemradio"]:not(:disabled)'
+    ) ?? [])]
 
   return (
     <div
@@ -77,7 +88,27 @@ export function PopupMenu(props: { anchor: MenuAnchor; onClose(): void }): React
     >
       {props.anchor.entries.map((entry, index) => entry === 'separator'
         ? <hr key={`separator-${index}`} />
-        : (
+        : 'group' in entry
+          ? (
+              <div key={entry.group} className="menu-group" role="group" aria-label={entry.group}>
+                <span className="menu-group-label" aria-hidden="true">{entry.group}</span>
+                {entry.options.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={option.value === entry.selected}
+                    onClick={() => {
+                      props.onClose()
+                      entry.onChoose(option.value)
+                    }}
+                  >
+                    <span>{option.mark}{option.label}</span>
+                  </button>
+                ))}
+              </div>
+            )
+          : (
             <button
               key={entry.label}
               type="button"

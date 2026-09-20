@@ -1,6 +1,28 @@
-// MODULE: theme.ts - Knight, Cross and Boss identities, and the Steel, Brown, Dark and Black palettes for app chrome and the terminal
-import type { AppearanceSettings, ColorModeName, IdentityName } from '@bmn/protocol'
+// MODULE: theme.ts - Knight, Cross and Boss identities, the Steel, Brown, Dark and Black palettes for app chrome and the terminal, and the workspace marker names
+import type { AppearanceSettings, ColorModeName, IdentityName, WorkspaceMarker } from '@bmn/protocol'
 import type { ITheme } from '@xterm/xterm'
+
+/**
+ * The workspace marker's owner-facing names. The marker says which workspace something belongs to,
+ * so these names — not the hue — are what tells two markers apart for a colour-blind owner, and they
+ * carry the workspace identity into tooltips and accessible names. The swatches themselves live in
+ * `styles.css` keyed by `data-marker`, measured against all four palettes.
+ */
+export const WORKSPACE_MARKER_PRESENTATION: Readonly<Record<WorkspaceMarker, { label: string }>> = Object.freeze({
+  none: { label: 'None' },
+  slate: { label: 'Slate' },
+  teal: { label: 'Teal' },
+  blue: { label: 'Blue' },
+  violet: { label: 'Violet' },
+  rose: { label: 'Rose' }
+})
+
+/** What a marker is called where it is shown: the workspace first, because the marker means identity. */
+export function workspaceMarkerLabel(workspaceName: string, marker: WorkspaceMarker): string {
+  return marker === 'none'
+    ? `${workspaceName} workspace`
+    : `${workspaceName} workspace · ${WORKSPACE_MARKER_PRESENTATION[marker].label} marker`
+}
 
 /** The header's emblem and motto. */
 export const IDENTITY_PRESENTATION: Readonly<Record<IdentityName, { label: string; icon: 'sword' | 'cross' | 'trophy'; motto: string }>> = Object.freeze({

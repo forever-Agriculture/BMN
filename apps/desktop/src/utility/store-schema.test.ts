@@ -20,8 +20,9 @@ afterEach(async () => {
 })
 
 describe('owned database schema', () => {
-  it('contains the nine ordered migrations and only the owned tables', () => {
-    expect(DATABASE_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9])
+  it('contains the ten ordered migrations and only the owned tables', () => {
+    expect(DATABASE_MIGRATIONS.map((migration) => migration.version))
+      .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
     expect(STORY_SCHEMA_TABLES).toEqual([
       'app_setting',
       'artifact',
@@ -52,6 +53,7 @@ describe('owned database schema', () => {
       "'claude-session-id', 'explicit-resume-reference', 'hook-session-start', 'unsupported'"
     )
     expect(sql).toContain('conversation_reference text')
+    expect(sql).toContain("marker in ('none', 'slate', 'teal', 'blue', 'violet', 'rose')")
     expect(sql).toContain('launch_environment_json text not null')
     expect(sql).toContain(DEFAULT_WORKSPACE_ID)
   })
@@ -180,7 +182,8 @@ describe('owned database schema', () => {
       expect(database.prepare('SELECT version FROM schema_migration ORDER BY version').all())
         .toEqual([
           { version: 1 }, { version: 2 }, { version: 3 }, { version: 4 },
-          { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }
+          { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 },
+          { version: 10 }
         ])
       expect(database.prepare('SELECT applied_at FROM schema_migration WHERE version = 3').get())
         .toEqual({ applied_at: migratedAt })
@@ -210,6 +213,13 @@ describe('owned database schema', () => {
       ).all()).toEqual([
         { workspace_id: DEFAULT_WORKSPACE_ID, position: 0 },
         { workspace_id: 'workspace-b', position: 1 }
+      ])
+      // Every workspace that predates the marker column reads as the default, so nothing looks different.
+      expect(database.prepare(
+        'SELECT workspace_id, marker FROM workspace ORDER BY workspace_id'
+      ).all()).toEqual([
+        { workspace_id: DEFAULT_WORKSPACE_ID, marker: 'none' },
+        { workspace_id: 'workspace-b', marker: 'none' }
       ])
       const layouts = database.prepare(
         'SELECT workspace_id, layout_json, revision FROM workspace_layout ORDER BY workspace_id'
@@ -262,7 +272,8 @@ describe('owned database schema', () => {
           { version: 6, applied_at: migratedAt },
           { version: 7, applied_at: migratedAt },
           { version: 8, applied_at: migratedAt },
-          { version: 9, applied_at: migratedAt }
+          { version: 9, applied_at: migratedAt },
+          { version: 10, applied_at: migratedAt }
         ])
       expect(database.prepare('SELECT COUNT(*) AS count FROM workspace_layout').get())
         .toEqual({ count: 2 })
@@ -307,7 +318,7 @@ describe('owned database schema', () => {
         state: 'draft'
       })
       expect(database.prepare('SELECT version FROM schema_migration ORDER BY version DESC LIMIT 1').get())
-        .toEqual({ version: 9 })
+        .toEqual({ version: 10 })
     } finally {
       database.close()
     }

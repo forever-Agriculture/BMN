@@ -304,6 +304,47 @@ input[type='radio'] {
   background: transparent;
 }
 
+/*
+ * Workspace identity marker: a 4x12 solid bar, deliberately never the 7px circle every status mark
+ * uses, so identity and status cannot be confused at a glance. One curated set of five swatches
+ * serves all four palettes; each measures at least 4.92:1 against every palette's ground, surface,
+ * hover and selected background (measured 2026-09-20, design by Fable, minimum on steel's --selected
+ * #29303a, against a 3:1 requirement). The five are told apart by their names in the tooltip and the
+ * accessible name, never by hue alone. `none` renders no element at all, so a workspace that never
+ * chose a marker looks exactly as it did before the choice existed. Markers never animate.
+ */
+.workspace-marker {
+  display: inline-block;
+  flex: none;
+  width: 4px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--marker, transparent);
+}
+
+.workspace-marker[data-marker='slate'] {
+  --marker: #8fa3b8;
+}
+
+.workspace-marker[data-marker='teal'] {
+  --marker: #5cbfb0;
+}
+
+.workspace-marker[data-marker='blue'] {
+  --marker: #6fa8e8;
+}
+
+.workspace-marker[data-marker='violet'] {
+  --marker: #a98fe6;
+}
+
+.workspace-marker[data-marker='rose'] {
+  --marker: #e08ab8;
+}
+
+/* In the menu the swatch previews the choice. None is drawn as nothing, because nothing is what it
+ * leaves behind; the word beside it carries the meaning (design review, 2026-09-20). */
+
 /* ---------- Shell ---------- */
 
 .shell-window {
@@ -673,6 +714,51 @@ input[type='radio'] {
   margin: 4px 0;
   border: 0;
   border-top: 1px solid var(--hairline);
+}
+
+/* An exclusive choice inside a menu: a named group whose current option carries a check. */
+.popup-menu .menu-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.popup-menu .menu-group-label {
+  padding: 4px 10px 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.popup-menu [role='menuitemradio'] {
+  justify-content: flex-start;
+  gap: 16px;
+  border-color: transparent;
+  text-align: left;
+}
+
+.popup-menu [role='menuitemradio'] > span {
+  display: inline-flex;
+  flex: 1;
+  gap: 8px;
+  align-items: center;
+}
+
+/* The selected choice is named by a glyph as well as by aria-checked, never by colour alone. */
+.popup-menu [role='menuitemradio']::after {
+  content: '';
+  width: 12px;
+  color: var(--text);
+  text-align: right;
+}
+
+.popup-menu [role='menuitemradio'][aria-checked='true']::after {
+  content: '✓';
+}
+
+.popup-menu [role='menuitemradio'][aria-checked='true'] {
+  background: var(--selected);
 }
 
 /* ---------- Session area and panes ---------- */
