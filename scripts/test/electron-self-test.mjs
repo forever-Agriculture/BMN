@@ -209,6 +209,10 @@ const receiptContract = [
       receipt.conversationFromHook?.listed?.sessions === 1 &&
       receipt.conversationFromHook?.listed?.conversation?.status === 'bound' &&
       receipt.conversationFromHook?.listed?.conversation?.captureRoute === 'hook-session-start' &&
+      // The refused rival report left a reason the owner can read while the app is still running.
+      receipt.conversationFromHook?.refusalReason?.endsWith(
+        'already resumed in "Hook-reported Codex"'
+      ) &&
       JSON.stringify(receipt.conversationFromHook?.launchArguments) ===
         JSON.stringify(['--model', 'gpt-6', '--full-auto']) &&
       JSON.stringify(receipt.conversationFromHook?.resumedArguments) ===

@@ -1,7 +1,7 @@
 // MODULE: companion-service.test.ts - backup export/verify completeness and artifact reconciliation against the real store
 import { createHash } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -656,5 +656,43 @@ describe('conversation route in list and snapshot', () => {
         conversation: { status: 'bound', captureRoute: 'hook-session-start' }
       }
     ])
+  })
+})
+
+describe('refused agent requests', () => {
+  it('writes the reason where the owner can read it while BMN runs', async () => {
+    const reach = service as unknown as {
+      logRefusal(method: string, sessionId: string | null, reason: string): void
+      refusalWrites: Promise<void>
+    }
+
+    reach.logRefusal('conversation.observe', 's1', 'already resumed in "Two"')
+    reach.logRefusal('conversation.observe', null, 'conversationReference must be a UUID')
+    await reach.refusalWrites
+
+    const written = await readFile(service.refusalLogPath, 'utf8')
+    expect(written).toBe([
+      `${now} conversation.observe refused for s1: already resumed in "Two"`,
+      `${now} conversation.observe refused for the owner: conversationReference must be a UUID`,
+      ''
+    ].join('\n'))
+    expect(statSync(service.refusalLogPath).mode & 0o777).toBe(0o600)
+  })
+
+  it('keeps the newest refusals and never grows past its cap', async () => {
+    const reach = service as unknown as {
+      logRefusal(method: string, sessionId: string | null, reason: string): void
+      refusalWrites: Promise<void>
+    }
+
+    for (let index = 0; index < 4_000; index += 1) {
+      reach.logRefusal('conversation.observe', 's1', `refusal number ${index} ${'x'.repeat(80)}`)
+    }
+    await reach.refusalWrites
+
+    const written = await readFile(service.refusalLogPath, 'utf8')
+    expect(Buffer.byteLength(written)).toBeLessThanOrEqual(256 * 1024)
+    expect(written).toContain('refusal number 3999')
+    expect(written).not.toContain('refusal number 0 ')
   })
 })

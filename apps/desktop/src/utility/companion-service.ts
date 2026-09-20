@@ -1,7 +1,7 @@
 // MODULE: companion-service.ts - host-side artifacts, attention, progress, drafts, settings, control socket, Telegram and backup
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { chmod, copyFile, lstat, mkdir, readFile, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises'
+import { appendFile, chmod, copyFile, lstat, mkdir, readFile, rename, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, join, relative } from 'node:path'
 import {
@@ -45,6 +45,8 @@ const TELEGRAM_DOWNLOAD_BYTES = 20 * 1024 * 1024
 const TELEGRAM_TOKEN_FILE = 'telegram-bot.token'
 const TELEGRAM_OFFSET_KEY = 'telegram.offset'
 const ATTENTION_SWEEP_MS = 30_000
+/** The refusal log keeps its most recent lines within this size and never grows past it. */
+const REFUSAL_LOG_BYTES = 256 * 1024
 const HANDOFF_TEXT_BYTES = 16 * 1024
 const HANDOFF_PAYLOAD_BYTES = 64 * 1024
 const HANDOFF_ARTIFACTS = 10
@@ -177,6 +179,8 @@ const MAX_SOCKET_PATH_BYTES = process.platform === 'darwin' ? 103 : 107
 export class CompanionService {
   readonly auth = new ControlAuth()
   readonly socketPath: string
+  /** Where a refused agent request and its reason are written, for the owner to read. */
+  readonly refusalLogPath: string
   private readonly files: ArtifactFileStore
   private readonly control: ControlServer
   private readonly knownSessions = new Map<string, SessionRecord>()
@@ -210,10 +214,13 @@ export class CompanionService {
     now: () => this.now().getTime()
   })
   private readonly draftOperations = new Map<string, Promise<void>>()
+  /** Refusals are appended one at a time, so two rejected reports cannot interleave in the file. */
+  private refusalWrites: Promise<void> = Promise.resolve()
 
   constructor(private readonly options: CompanionServiceOptions) {
     this.now = options.now ?? (() => new Date())
     this.socketPath = join(options.roots.runtime, 'control', 'control.sock')
+    this.refusalLogPath = join(options.roots.state, 'refused-requests.log')
     this.files = new ArtifactFileStore({
       root: join(options.roots.data, 'artifacts', 'originals'),
       stagingRoot: join(options.roots.state, 'artifact-staging'),
@@ -254,10 +261,32 @@ export class CompanionService {
 
   /**
    * A hook prints nothing and drops what the app answers, so a refused conversation report would
-   * otherwise leave no trace at all. One line on the host's stderr keeps the reason readable.
+   * otherwise leave no trace at all. The utility's stderr is no help: the main process captures it
+   * into a bounded buffer and prints it only if the host dies. So the reason goes to a file the
+   * owner can open while BMN runs, newest last, bounded and owner-only.
    */
   private logRefusal(method: string, sessionId: string | null, reason: string): void {
-    process.stderr.write(`[BMN] ${method} refused for ${sessionId ?? 'the owner'}: ${reason}\n`)
+    const line = `${this.iso()} ${method} refused for ${sessionId ?? 'the owner'}: ${reason}\n`
+    process.stderr.write(`[BMN] ${line}`)
+    this.refusalWrites = this.refusalWrites
+      .then(() => this.appendRefusal(line))
+      .catch(() => undefined)
+  }
+
+  /**
+   * Appends one refusal. The file is trimmed from the front only once it passes its cap, and then
+   * back to half of it, so a refused report costs one append and not a rewrite of the whole log.
+   */
+  private async appendRefusal(line: string): Promise<void> {
+    const path = this.refusalLogPath
+    await mkdir(dirname(path), { recursive: true, mode: 0o700 })
+    await appendFile(path, line, { mode: 0o600 })
+    const { size } = await stat(path)
+    if (size <= REFUSAL_LOG_BYTES) return
+    const written = await readFile(path)
+    const kept = written.subarray(written.byteLength - Math.floor(REFUSAL_LOG_BYTES / 2))
+    const firstLineBreak = kept.indexOf(0x0a)
+    await writeFile(path, firstLineBreak === -1 ? kept : kept.subarray(firstLineBreak + 1), { mode: 0o600 })
   }
 
   /** Environment for one incarnation: its scoped control credential and the CLI on PATH. */

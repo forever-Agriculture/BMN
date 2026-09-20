@@ -2251,9 +2251,26 @@ async function runSelfTest(): Promise<void> {
       await client.request(METHOD_REGISTRY.sessionStop, { ...stopping, cause: 'explicit' })
     }
     const hookPhaseSessionIds = new Set([reportingSession.sessionId, rivalSession.sessionId])
+    // The rival's report was refused; the owner must be able to read why while BMN is still running.
+    const refusalLog = join(resolveApplicationRoots().state, 'refused-requests.log')
+    const refusalReason = await (async (): Promise<string | null> => {
+      const deadline = Date.now() + 5_000
+      while (Date.now() < deadline) {
+        if (existsSync(refusalLog)) {
+          const line = readFileSync(refusalLog, 'utf8')
+            .split('\n')
+            .filter((entry) => entry.includes(rivalSession.sessionId))
+            .at(-1)
+          if (line) return line.slice(line.indexOf('refused for'))
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      return null
+    })()
     const conversationFromHook = {
       startedRoute: startedUnsupported.captureRoute,
       listed: listedConversation(reportingHarness.listing),
+      refusalReason,
       reportedRoute: reportedBinding.captureRoute,
       reportedReference: reportedBinding.conversationReference,
       reportedDetail: reportedBinding.detail,
