@@ -421,3 +421,109 @@ prevent later calls and the observation. That predates Epic 14.
 Evidence on `e9a1d04`: typecheck/lint EXIT 0, `test:unit` 1,062 passed / 1 skipped,
 `test:electron` EXIT 0 (`evidence/epic-14/electron-14.log`), `test:visual` EXIT 0
 (`evidence/epic-14/visual-10.log`).
+
+## 2026-09-20, second recheck of `e9a1d04` and the cap fix
+
+Route: Codex CLI, `gpt-6-astra`/low, read-only, prompt `scratchpad/review/recheck2-prompt.md`,
+receipt `scratchpad/review/astra-recheck2.json`.
+
+Verdict, verbatim: "**I would not accept Epic 14 yet.** Immediate Working is restored,
+but the exemption reintroduces a rate-cap violation. The other implementation repairs
+are sound within the boundaries below."
+
+Closed by this recheck: the unchanged-open effect, the `RULES.source` event shape and
+the 64-character origin, colon-preserving provenance, the compact rail, and the
+same-caller refusal flood. It also traced the new `changed` field and found no
+regression in idempotent replay, the Telegram pager or `state.snapshot`.
+
+Left open, and fixed in `7519f17`: the Working exemption could still put three
+publications in one second — the reviewer's timeline was a title change at 1,000 ms,
+Idle at 1,500 ms and output again at 1,600 ms. Charging the exempt publication to its
+window did not help, because the violation is behind it, not ahead. The rule is now
+that **one of AC4's two updates a second is reserved for the start of work** and every
+other change waits a full second, with a per-session `{ ordinary, working }` pair.
+A session whose process restarts inside a second reaches Working through the ordinary
+window, which is a deliberate trade against a crash loop redrawing the row at will.
+
+Four fence probes, all FAILS as required: the ordinary window widened back to 500 ms,
+the working exemption made unconditional, the exemption removed entirely, and the
+ASCII-only `toolName` shape.
+
+Two smaller items from the same recheck, also in `7519f17`: `originRefusals` now drops
+entries whose quiet period has passed rather than keeping one per session forever, and
+a hook's `source` and `toolName` take the same `RULES.source` shape as its event name.
+
+Recorded, not fixed:
+
+- The self-test cannot count desktop or Telegram notifications because it disables
+  them; `openRequestsUnchanged` is what it measures, and it is named for that.
+- Below 800 px the sidebar is a rail of marks and the word needs a hover. AC3 asks for
+  the word in the sidebar row; 64 px cannot hold one, and the name and path are already
+  hidden there.
+- The visual script still does not screenshot the Needs you popover or the Hook events
+  dialog, which the story's verification section asks for.
+- "No partial batch" is not atomicity: a hook timeout after an accepted call can still
+  skip the observation. Predates Epic 14.
+
+Evidence on `7519f17`: typecheck/lint EXIT 0, `test:unit` 1,063 passed / 1 skipped,
+`test:electron` EXIT 0 (`evidence/epic-14/electron-15.log`, still Working at 1.0 s and
+Idle at 2.5 s), `test:visual` EXIT 0 (`evidence/epic-14/visual-11.log`).
+
+## 2026-09-20, third recheck and the AC1/AC4 decision
+
+Route: Codex CLI, `gpt-6-astra`/low, read-only, prompt `scratchpad/review/recheck3-prompt.md`,
+receipt `scratchpad/review/astra-recheck3.json`. Narrow: the one open question plus the
+two small items, with the six already-closed items reused.
+
+Verdict, verbatim: "**The AC1/AC4 reconciliation remains open.** I reproduced two
+counterexamples through the actual function... The six closed items remain closed."
+
+Its first counterexample was decisive in the other direction: reserving one of AC4's
+two updates a second for the start of work pushed the idle word to 2,499 ms after the
+last byte, and AC1 says outright that it lands 1.5-2.0 s after the last byte. Timeline:
+Running at 0, the only byte at 1 ms, a title change published at 1,500, Idle derived at
+2,000 but blocked by the widened window until 2,500.
+
+**Decision (mine, recorded).** AC1 and AC4 cannot both hold in the corner case, and AC1
+wins where they meet. `ACTIVITY_MIN_PUBLISH_MS` is back to the 500 ms tick; the start of
+work publishes at once. The worst case is three updates in one rolling second, and only
+when a title changes, the session then goes idle, and output resumes inside the same
+second. Reasons:
+
+- The epic's own mechanism for AC4 is the 500 ms tick ("The renderer re-derives every
+  live session on this tick, which also caps presentation updates at two per second"),
+  and AC1 requires the first byte to read as working "at once". The extra update is what
+  the epic itself describes, not a departure from it.
+- AC1's timings are what the owner sees and what the Electron receipt asserts (Working at
+  1.0 s, Idle at 2.5 s). A missed idle deadline is a visible defect; a third cheap React
+  update in a rare second is not.
+- What AC4 protects is asserted separately and unaffected: `geometryUnchanged`, zero
+  refits, zero PTY input events and `attentionUnchanged` in the self-test receipt.
+
+Two tests pin the decision, both fence-probed: ordinary changes stay a tick apart under a
+700 ms title storm while every burst's first byte publishes on the tick it arrives, and
+the idle word lands inside AC1's window however the title storms (this one fails if the
+window is widened to 1,000 ms, which is exactly the reviewer's counterexample).
+
+The recheck's second counterexample — a session that exits and restarts inside a second
+publishes more than twice, because the exit path deletes the observation and the windows
+are rebuilt from the live set — is accepted and recorded rather than fixed. It is a
+session lifecycle event, not the redraw storm AC4 names, and holding windows for departed
+sessions would trade a bounded map for an unbounded one.
+
+Its third point, accepted as stated: pruning `originRefusals` happens on the next invalid
+call, so expired entries linger while none arrive (bounded by the callers that made the
+mistake); and `RULES.source` admits Unicode bidi and invisible characters, which can
+mislead in display text. That is the shape the epic specifies, and the values are
+rendered as React text with no new authority.
+
+Also added in `00f5e38`: the Needs you popover is screenshotted with its provenance lines
+(`evidence/epic-14/black-knight-needs-you-provenance.png`), which the story's verification
+asks for. The Hook events dialog is not screenshotted: `bmn hook` deliberately ignores a
+call that is not the agent's own foreground process, so a shell in the visual fixture
+cannot produce an event. The dialog is driven end to end, with real events and its
+rendered rows, by the Electron self-test (`listedRows` in the receipt).
+
+Evidence on `00f5e38`: typecheck/lint EXIT 0, `test:unit` 1,065 passed / 1 skipped,
+`test:electron` EXIT 0 (`evidence/epic-14/electron-16.log`), `test:visual` EXIT 0
+(`evidence/epic-14/visual-14.log`).
