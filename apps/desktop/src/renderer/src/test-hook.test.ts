@@ -117,6 +117,30 @@ describe('renderer acceptance hook', () => {
         localHeading: 42,
         foreignHeading: 42
       },
+      progressEvidenceSurface: {
+        reportedStrip: 'Checks Reported verified Evidence attached (1) evidence · just now',
+        bareStrip: 'Task Last observed failed No evidence attached stale self-test · 1 h ago',
+        dialog: {
+          title: 'Progress — Session A',
+          note: 'What evidence reported. BMN keeps the files it attached; it does not check the work.',
+          provenance: 'Reported verified · from evidence · just now',
+          rowName: 'checks.log',
+          rowAvailability: 'text/plain · 26 B',
+          previewText: 'self-test: 3 checks passed'
+        },
+        quiet: {
+          inputEventsBefore: 0,
+          inputEventsAfter: 0,
+          surfaceHeightBefore: 320,
+          surfaceHeightWhileOpen: 320,
+          surfaceHeightAfter: 320,
+          gridBefore: { cols: 80, rows: 24 },
+          gridAfter: { cols: 80, rows: 24 }
+        },
+        focusReturnedToStrip: true,
+        openedFromPaneMenu: true,
+        bareDialog: { title: 'Progress — Session B', body: 'No evidence attached to this report.' }
+      },
       hiddenPaneSize: { shown: { cols: 80, rows: 24 }, hidden: { cols: 80, rows: 24 } },
       attentionTriage: {
         responseTitles: ['Question'],

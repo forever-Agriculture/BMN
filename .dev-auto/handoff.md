@@ -14,7 +14,8 @@
 
 - Sprint board: `_bmad-output/implementation-artifacts/sprint-status.yaml` (git-ignored); epics 5-9, 11, 13, 14 `done`; `epic-12` and both stories `backlog` at start. Delivery order 13 -> 14 -> 12 -> 11 -> 10; 11 was taken early by the owner, so 12 is next as planned. 12.2 depends on 12.1; both depend on the current app otherwise.
 - Baseline `70c2d4c` (clean tree, `origin/main` identical). Epic 11 shipped through `87c2d7b`; `pnpm run update:desktop` is still QUEUED for `87c2d7b` waiting for packaged BMN to exit (`~/.local/state/bmn/source-update/latest.log`). That packaging is the owner's, not this run's.
-- Implemented: nothing yet.
+- Implemented 12.1, committed at `da5ea9a`: `ProgressEvidence` and `MAX_PROGRESS_EVIDENCE` (`shared/protocol/src/companion.ts`); schema migration 11's `progress_evidence` table (`store-schema.ts`); eligibility, snapshotting, replacement and read-back in the store (`database-companion-store.ts`); the purge entry (`database-archive-purge.ts`); `evidenceIds` on `progress.report` with a bounded identifier-array reader (`control-server.ts`); the pass-through (`companion-service.ts`); repeatable `--evidence-id` and its help (`apps/desktop/bin/bmn`); and `docs/agent-control.md`.
+- Implemented 12.2, uncommitted: `evidenceWord`, the reporter's-voice words and the two stale prefixes (`session-presentation.ts`); one `progress-strip.tsx` for all four strip sites with the state word as a button; `artifact-presentation.tsx` (the extracted `formatBytes`, `originalStateLabel`, `artifactIcon`, `ImageViewport` and a shared `useArtifactPreview`, now also used by `files-panel.tsx`); `progress-evidence-dialog.tsx`; the dialog variant, opener, gone-detection and `Progress details` menu entry (`main.tsx`); the pane prop (`session-terminal.tsx`); CSS (`styles.css`).
 - Associated loop: none
 - Active native helpers: none
 - Collected terminal helper results: none
@@ -27,11 +28,11 @@
 
 ## Evidence
 
-- Checks run and observed results: none yet.
-- Tests: none yet.
-- Reviewed scope and route: none yet.
-- Baseline and reviewed revisions / dispositions: baseline `70c2d4c`; nothing reviewed yet.
-- Unreviewed or unverified: everything; macOS is unrun as in every earlier epic.
+- Checks run on the working tree: `typecheck`/`lint` EXIT 0; `test:unit` **1,119 passed / 1 skipped** (1,097 at the Epic 11 baseline). `test:electron` and `test:visual` not yet run for this epic.
+- Tests: 23 new unit tests (9 store, 3 schema/purge assertions inside existing cases, 6 control-server shape rows plus one handler assertion, 2 CLI cases plus 3 usage rows, 1 presentation case, 5 dialog-helper cases). 23 regression fences, each run red-then-green (15 for 12.1, 8 for 12.2); the lists are in `.dev-auto/log.md`. Two 12.1 fences started green and exposed real test gaps, both closed.
+- Reviewed scope and route: none yet. Fable is to review the built result and the whole epic, per the carried owner instruction.
+- Baseline and reviewed revisions / dispositions: baseline `70c2d4c`; 12.1 at `da5ea9a`; nothing reviewed yet.
+- Unreviewed or unverified: every runtime claim. No Electron or visual run yet, so the dialog's focus behaviour, the zero-PTY-write claim, the no-resize claim and the CLI-through-restart path are all UNVERIFIED. macOS unrun as in every earlier epic.
 
 ## Measurement
 
@@ -42,5 +43,5 @@
 
 ## Resume
 
-- Next safe action: finish reading the 12.1 code baseline (control server, companion service, progress store, archive purge, snapshot shape), then implement 12.1.
-- Status: ACTIVE — Epic 12 selected, baseline `70c2d4c` read; implementation not started.
+- Next safe action: add the Electron self-test probes for both stories (an isolated shell publishing then reporting with the ID and reading it back after restart; the dialog opened from the strip button and the More menu with zero PTY writes and unchanged `.terminal-surface` height), then run `test:electron` and `test:visual`.
+- Status: ACTIVE — 12.1 committed at `da5ea9a` and 12.2 built; runtime verification and both reviews still to come.

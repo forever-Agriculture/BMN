@@ -30,6 +30,8 @@ import { conversationBindingPresentation } from './conversation-resume'
 import { FileReferenceDialog, type FileReferenceRequest } from './file-reference-dialog'
 import { FilesPanel } from './files-panel'
 import { HookEventsDialog } from './hook-events-dialog'
+import { ProgressEvidenceDialog } from './progress-evidence-dialog'
+import { ProgressStrip } from './progress-strip'
 import { Icon } from './icons'
 import { isModifierOnly, resolveShortcut, SHORTCUT_LABELS, type AppCommand } from './keymap'
 import { createLayoutWriter } from './layout-writer'
@@ -128,22 +130,21 @@ type ShellDialog =
   | { kind: 'file-reference'; request: FileReferenceRequest }
   /** Read-only: what this session's harness reported, for a request that did or did not arrive. */
   | { kind: 'hook-events'; session: SessionRecord }
+  /**
+   * Read-only: one progress observation and the published files it points at. The observation is
+   * captured when the detail opens, so a newer report cannot swap itself in under the owner.
+   */
+  | {
+      kind: 'progress-evidence'
+      session: SessionRecord
+      opened: ProgressPresentation
+      /** The process the observation belonged to; a different one closes the detail. */
+      incarnationId: string | null
+    }
 
 type SidePanel = 'files' | 'details' | null
 
 const APP_EVENT_REFRESH_MS = 15_000
-
-function ProgressSummary({ progress }: { progress: ProgressPresentation | null }): React.JSX.Element | null {
-  if (!progress) return null
-  return (
-    <div className="progress-strip" role="group" aria-label="Progress" title={progress.detail ?? undefined}>
-      <span className="label">{progress.label}</span>
-      <span className={`state ${progress.state}`}>{progress.word}</span>
-      {progress.stale ? <span className="stale">stale</span> : null}
-      <span className="source">{progress.source} · {progress.age}</span>
-    </div>
-  )
-}
 
 function App(): React.JSX.Element {
   const controllers = useRef(new Map<string, TerminalController>())
@@ -1156,6 +1157,13 @@ function App(): React.JSX.Element {
 
   const paneMenuEntries = (session: SessionRecord): MenuEntry[] => [
     { label: 'Session details', onSelect: () => setPanel('details') },
+    // xterm consumes Tab inside the terminal, so the More menu is the keyboard route to the detail.
+    {
+      label: 'Progress details',
+      disabled: !observedProgressFor(session),
+      title: observedProgressFor(session) ? undefined : 'No progress reported yet',
+      onSelect: () => openProgressDetail(session, observedProgressFor(session))
+    },
     { label: 'Search output', shortcut: SHORTCUT_LABELS.search, onSelect: () => controllers.current.get(session.sessionId)?.openSearch() },
     { label: 'Copy selection', shortcut: SHORTCUT_LABELS.copy, onSelect: () => copySelection(session.sessionId) },
     { label: 'Paste', shortcut: SHORTCUT_LABELS.paste, onSelect: () => pasteClipboard(session.sessionId) },
@@ -1280,6 +1288,23 @@ function App(): React.JSX.Element {
     live[session.sessionId]?.incarnationId ?? session.lastProcess?.incarnationId
   )
   const selectedProgress = selectedRecord ? observedProgressFor(selectedRecord) : null
+  const sessionIncarnation = (session: SessionRecord): string | null =>
+    live[session.sessionId]?.incarnationId ?? session.lastProcess?.incarnationId ?? null
+  /** Freezes the observation the owner opened; the dialog renders from that and never from live state. */
+  const openProgressDetail = (session: SessionRecord | undefined, opened: ProgressPresentation | null): void => {
+    if (session && opened) {
+      setDialog({ kind: 'progress-evidence', session, opened, incarnationId: sessionIncarnation(session) })
+    }
+  }
+  /**
+   * Why an open detail must close itself: the session it describes is gone, or its process is a new
+   * one, and either way the files on screen would be answering a question nobody asked any more.
+   */
+  const progressDetailGone = (session: SessionRecord, incarnationId: string | null): 'session' | 'process' | null => {
+    const record = sessions.find((candidate) => candidate.sessionId === session.sessionId)
+    if (!record || record.archivedAt !== null) return 'session'
+    return sessionIncarnation(record) === incarnationId ? null : 'process'
+  }
   const panes = layout?.split.panes ?? []
   const orientation = layout?.split.orientation ?? 'side-by-side'
   const unreadEntries: UnreadEntry[] = Object.entries(unread)
@@ -1500,6 +1525,10 @@ function App(): React.JSX.Element {
                 onFocusMode={() => setFocusMode((value) => !value)}
                 onFiles={() => setPanel((value) => value === 'files' ? null : 'files')}
                 onMore={(anchor) => record && openMenu(anchor, `${record.name} actions`, paneMenuEntries(record))}
+                onOpenProgress={() => openProgressDetail(
+                  record,
+                  progressPresentation(progress, terminalStartup.sessionId, now, terminalStartup.incarnationId)
+                )}
                 onAttach={() => attachFiles(terminalStartup.sessionId)}
                 onPasteImage={() => pasteImage(terminalStartup.sessionId)}
                 onPaste={() => pasteClipboard(terminalStartup.sessionId)}
@@ -1558,7 +1587,7 @@ function App(): React.JSX.Element {
               <span className="eyebrow">{workspaceName(selectedRecord.workspaceId)} · {agentTag(selectedRecord.executable)}</span>
               <h2>{selectedRecord.name}</h2>
               <p>{sessionProcessLabel(selectedRecord.lastProcess)} · {selectedRecord.cwd}</p>
-              <ProgressSummary progress={selectedProgress} />
+              <ProgressStrip progress={selectedProgress} onOpen={() => openProgressDetail(selectedRecord, selectedProgress)} />
               <div className="actions">
                 {bindingPresentation.canResume ? (
                   <button type="button" className="primary" disabled={!!selectedRecord.launchDisabledReason} title={selectedRecord.launchDisabledReason}
@@ -1586,7 +1615,7 @@ function App(): React.JSX.Element {
                 <section key={pane.sessionId} className="stopped-pane" style={paneStyle(pane.sessionId)}>
                   <strong>{record.name}</strong>
                   <p>{sessionProcessLabel(record.lastProcess)}</p>
-                  <ProgressSummary progress={observedProgressFor(record)} />
+                  <ProgressStrip progress={observedProgressFor(record)} onOpen={() => openProgressDetail(record, observedProgressFor(record))} />
                   <button type="button" onClick={() => focusLayoutSession(record.sessionId)}>Show session</button>
                 </section>
               )
@@ -1650,7 +1679,7 @@ function App(): React.JSX.Element {
                   <p>{bindingPresentation.label}</p>
                   <small>{bindingPresentation.detail}</small>
                 </div>
-                <ProgressSummary progress={selectedProgress} />
+                <ProgressStrip progress={selectedProgress} onOpen={() => openProgressDetail(selectedRecord, selectedProgress)} />
                 {selectedRecord.launchDisabledReason ? (
                   <p className="inline-error" role="status">
                     Launch unavailable: {selectedRecord.launchDisabledReason}
@@ -1858,6 +1887,19 @@ function App(): React.JSX.Element {
           now={now}
           onClose={() => setDialog(null)}
           onFailure={setFailure}
+        />
+      ) : null}
+      {dialog?.kind === 'progress-evidence' ? (
+        <ProgressEvidenceDialog
+          sessionName={dialog.session.name}
+          opened={dialog.opened}
+          current={observedProgressFor(dialog.session)}
+          gone={progressDetailGone(dialog.session, dialog.incarnationId)}
+          artifacts={artifacts}
+          onClose={() => setDialog(null)}
+          onAnnounce={announce}
+          onFailure={setFailure}
+          onNotice={brief}
         />
       ) : null}
       {dialog?.kind === 'stop' ? (

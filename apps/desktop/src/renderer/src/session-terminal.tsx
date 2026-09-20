@@ -16,10 +16,12 @@ import type {
 import { failureDetail, isBridgeError } from './bridge-error'
 import { createFileReferenceLinkProvider } from './file-reference-links'
 import { openReferenceFromPane, runFileReferenceIntegration } from './file-reference-self-test'
+import { runProgressEvidenceIntegration } from './progress-evidence-self-test'
 import { runVoiceIntegration } from './voice-self-test'
 import { Icon } from './icons'
 import { SHORTCUT_LABELS } from './keymap'
 import { WorkspaceIdentityMark } from './workspace-marker'
+import { ProgressStrip } from './progress-strip'
 import { capTitle, type SessionActivity } from './session-activity'
 import type { ProgressPresentation, SessionAttention } from './session-presentation'
 import { agentTag } from './session-presentation'
@@ -105,6 +107,8 @@ export function SessionTerminal(props: {
   onFocusMode(): void
   onFiles(): void
   onMore(anchor: HTMLElement): void
+  /** The strip's state word: opens the progress detail for this pane's own observation. */
+  onOpenProgress(anchor: HTMLElement): void
   onAttach(): void
   onPasteImage(): void
   /** Right-click pastes the clipboard, the way the paste shortcut does. */
@@ -364,6 +368,20 @@ export function SessionTerminal(props: {
             ? text
             : undefined
         }))
+        // Epic 12.2: the other pane's session published a file and reported `verified` pointing at it.
+        // Run it here, while the split still holds both original sessions and before the
+        // cross-workspace split replaces that pane.
+        const reportingPane = await waitFor(() => [...document.querySelectorAll<HTMLElement>(
+          '.session-terminal[data-session-id]:not(.session-terminal-hidden)'
+        )].find((pane) => pane.dataset.sessionId !== props.startup.sessionId))
+        const progressEvidenceSurface = await runProgressEvidenceIntegration({
+          ownPane: section.current!,
+          reportingPane,
+          terminal,
+          inputEvents: () => inputEvents
+        })
+        console.warn('[BMN] renderer behavioural integration: progress evidence detail')
+
         needsButton.click()
         const attentionPopover = await waitFor(() => document.querySelector<HTMLElement>('.needs-you-popover'))
         const groupTitles = (label: string): string[] => {
@@ -835,6 +853,7 @@ export function SessionTerminal(props: {
               cleanedLayout.split.panes.some((pane) => pane.sessionId === props.startup.sessionId)
           },
           workspaceMarkers,
+          progressEvidenceSurface,
           hiddenPaneSize: { shown: shownSize, hidden: hiddenSize },
           handoffFlow,
           fileReferenceFlow,
@@ -1001,14 +1020,7 @@ export function SessionTerminal(props: {
           </button>
         </div>
       </header>
-      {progress ? (
-        <div className="progress-strip" role="group" aria-label="Progress" title={progress.detail ?? undefined}>
-          <span className="label">{progress.label}</span>
-          <span className={`state ${progress.state}`}>{progress.word}</span>
-          {progress.stale ? <span className="stale">stale</span> : null}
-          <span className="source">{progress.source} · {progress.age}</span>
-        </div>
-      ) : null}
+      <ProgressStrip progress={progress} onOpen={props.onOpenProgress} />
       {searchOpen ? (
         <div className="terminal-search" role="search">
           <input

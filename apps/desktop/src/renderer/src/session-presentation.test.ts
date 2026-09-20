@@ -81,7 +81,8 @@ describe('session presentation', () => {
     const update = { ...request('turn', 's1', '2026-09-14T11:00:00.000Z'), kind: 'notice' as const }
     expect(sessionStatus(session, true, [update])).toEqual({ dot: 'needs-you', word: 'Update available' })
     const failed = {
-      label: 'Build', state: 'failed' as const, word: 'Failed', source: 'agent', age: '2 min ago', stale: false, detail: null
+      label: 'Build', state: 'failed' as const, word: 'Failed', source: 'agent', age: '2 min ago', stale: false,
+      detail: null, evidence: [], evidenceWord: 'No evidence attached', observedAt: '2026-09-14T11:58:00.000Z'
     }
     expect(sessionStatus(session, true, [update], failed)).toEqual({
       dot: 'exited', word: 'Failed · agent, 2 min ago'
@@ -113,12 +114,14 @@ describe('session presentation', () => {
       .toBe('Waiting for your response')
     expect(sessionStatus(session, true, [update], null, working).word).toBe('Update available')
     const failed = {
-      label: 'Build', state: 'failed' as const, word: 'Failed', source: 'agent', age: '2 min ago', stale: false, detail: null
+      label: 'Build', state: 'failed' as const, word: 'Failed', source: 'agent', age: '2 min ago', stale: false,
+      detail: null, evidence: [], evidenceWord: 'No evidence attached', observedAt: '2026-09-14T11:58:00.000Z'
     }
     expect(sessionStatus(session, true, [], failed, working).dot).toBe('exited')
     // An agent's own claim is not merged into the observed word; a stale claim no longer outranks it.
     const claimed = {
-      label: 'Epic 14', state: 'running' as const, word: 'Running', source: 'agent', age: '1 min ago', stale: false, detail: null
+      label: 'Epic 14', state: 'running' as const, word: 'Running', source: 'agent', age: '1 min ago', stale: false,
+      detail: null, evidence: [], evidenceWord: 'No evidence attached', observedAt: '2026-09-14T11:59:00.000Z'
     }
     expect(sessionStatus(session, true, [], claimed, resting)).toEqual({ dot: 'running-idle', word: 'Idle' })
     // Activity never reaches a session that is not live.
@@ -166,6 +169,38 @@ describe('session presentation', () => {
       stale: true, age: '20 min ago', word: 'Last observed running'
     })
     expect(progressPresentation(records, 's2', now)).toBeNull()
+  })
+
+  it('reports a claim in the reporter\'s voice and says whether anything backs it', () => {
+    const base: Omit<ProgressRecord, 'observedAt' | 'state'> = {
+      sessionId: 's1', incarnationId: null, source: 'agent', label: 'Story 12.1 checks', detail: null,
+      evidence: [], receivedAt: '2026-09-14T12:00:00.000Z'
+    }
+    const at = (state: ProgressRecord['state'], observedAt: string, evidence: ProgressRecord['evidence'] = []) =>
+      progressPresentation([{ ...base, state, observedAt, evidence }], 's1', now)
+
+    // `verified` stays the wire word; the display says who claimed it.
+    expect(at('verified', '2026-09-14T11:55:00.000Z')).toMatchObject({
+      word: 'Reported verified', evidenceWord: 'No evidence attached'
+    })
+    expect(at('verified', '2026-09-14T11:55:00.000Z', [
+      { artifactId: 'a1', name: 'checks.log' }, { artifactId: 'a2', name: 'shot.png' }
+    ])).toMatchObject({
+      word: 'Reported verified',
+      evidenceWord: 'Evidence attached (2)',
+      evidence: [{ artifactId: 'a1', name: 'checks.log' }, { artifactId: 'a2', name: 'shot.png' }],
+      observedAt: '2026-09-14T11:55:00.000Z'
+    })
+    // Attaching files never changes the state, and never stops a report going stale.
+    expect(at('verified', '2026-09-14T11:40:00.000Z', [{ artifactId: 'a1', name: 'checks.log' }]))
+      .toMatchObject({ state: 'verified', stale: true, word: 'Last reported verified' })
+    expect(at('claimed-done', '2026-09-14T11:40:00.000Z')).toMatchObject({ word: 'Last reported done' })
+    // Only the two report states change their stale prefix; an observation keeps the old wording.
+    expect(at('failed', '2026-09-14T11:40:00.000Z')).toMatchObject({ word: 'Last observed failed' })
+    expect(at('waiting', '2026-09-14T11:40:00.000Z')).toMatchObject({ word: 'Last observed waiting' })
+    // Every state carries the evidence word, not only the ones that claim success.
+    expect(at('running', '2026-09-14T11:55:00.000Z', [{ artifactId: 'a1', name: 'partial.log' }]))
+      .toMatchObject({ word: 'Running', evidenceWord: 'Evidence attached (1)' })
   })
 
   it('shows progress only for the requested process incarnation', () => {

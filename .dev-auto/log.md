@@ -768,3 +768,9 @@ Two of those started GREEN and exposed real gaps, both fixed rather than argued 
 - Removing `progress_evidence` from the purge's `SESSION_CHILD_TABLES` changed nothing, because the foreign-key cascade took the rows anyway. A new case runs the purge with `foreign_keys = OFF`, which is exactly the claim the code comment makes.
 
 Checks on this tree: `typecheck` EXIT 0, `lint` EXIT 0, `test:unit` 1,112 passed / 1 skipped (1,097 before). The epic's own runtime verification (an isolated shell publishing, reporting with the ID, and reading it back after restart) is deliberately deferred to one combined Electron pass with 12.2 rather than paying the build cost twice.
+
+## Owner intervention, 2026-09-20 (mid-run, verbatim)
+
+> you can double check everything in the end, maybe consult with Fable, dispatch glm flash for review and tests and when you're confident you can update local and push to GH
+
+Read as: the reviews stay as planned (Fable named explicitly, GLM Flash added for review and tests), and push to `origin/main` plus `pnpm run update:desktop` are authorized for this run's Epic 12 work, conditional on my being confident — that is, on the acceptance checks and the review dispositions being clean. It does not authorize pushing anything else; the old private `feat/epic-1/2` branches stay unpushed.

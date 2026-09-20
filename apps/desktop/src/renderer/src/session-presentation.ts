@@ -3,6 +3,7 @@ import type { SessionActivity } from './session-activity'
 import {
   PROGRESS_STALE_AFTER_MS,
   type AttentionRecord,
+  type ProgressEvidence,
   type ProgressRecord,
   type ProgressState,
   type SessionRecord
@@ -147,14 +148,28 @@ export function attentionProvenance(
   return name === null ? `${verb} by unknown` : `${verb} by ${name}`
 }
 
+/**
+ * `verified` is the reporter's word, never BMN's verdict, so the strip says who said it. The wire
+ * vocabulary keeps `verified` for compatibility; only the display changes.
+ */
 const PROGRESS_WORDS: Readonly<Record<ProgressState, string>> = Object.freeze({
   running: 'Running',
   waiting: 'Waiting',
   blocked: 'Blocked',
   'claimed-done': 'Agent reports done',
-  verified: 'Verified',
+  verified: 'Reported verified',
   failed: 'Failed',
   unknown: 'Unknown'
+})
+
+/**
+ * Stale normally reads "Last observed running". The two states that are a report rather than an
+ * observation need their own past tense, because lowercasing their word would give the unreadable
+ * "Last observed reported verified".
+ */
+const PROGRESS_STALE_WORDS: Readonly<Partial<Record<ProgressState, string>>> = Object.freeze({
+  verified: 'Last reported verified',
+  'claimed-done': 'Last reported done'
 })
 
 export interface ProgressPresentation {
@@ -165,6 +180,12 @@ export interface ProgressPresentation {
   age: string
   stale: boolean
   detail: string | null
+  /** The files the reporter attached, in the order it named them; never a judgement about them. */
+  evidence: readonly ProgressEvidence[]
+  /** "Evidence attached (2)" or "No evidence attached", shown for every state at every strip site. */
+  evidenceWord: string
+  /** Identifies this exact observation, so an open detail can tell when a newer one replaced it. */
+  observedAt: string
 }
 
 /** The newest observation for a session, with age and a stale word after the freshness window. */
@@ -180,14 +201,20 @@ export function progressPresentation(
     .toSorted((left, right) => right.observedAt.localeCompare(left.observedAt))[0]
   if (!newest) return null
   const stale = now - Date.parse(newest.observedAt) > PROGRESS_STALE_AFTER_MS
+  const evidence = newest.evidence ?? []
   return {
     label: newest.label,
     state: newest.state,
-    word: stale ? `Last observed ${PROGRESS_WORDS[newest.state].toLocaleLowerCase()}` : PROGRESS_WORDS[newest.state],
+    word: stale
+      ? PROGRESS_STALE_WORDS[newest.state] ?? `Last observed ${PROGRESS_WORDS[newest.state].toLocaleLowerCase()}`
+      : PROGRESS_WORDS[newest.state],
     source: newest.source,
     age: relativeAge(newest.observedAt, now),
     stale,
-    detail: newest.detail
+    detail: newest.detail,
+    evidence,
+    evidenceWord: evidence.length === 0 ? 'No evidence attached' : `Evidence attached (${evidence.length})`,
+    observedAt: newest.observedAt
   }
 }
 

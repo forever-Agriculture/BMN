@@ -1064,6 +1064,31 @@ interface RendererIntegrationProbe {
     localHeading: number
     foreignHeading: number
   }
+  /** Epic 12.2: the detail's words, that it wrote nothing and resized nothing, and both ways in. */
+  progressEvidenceSurface: {
+    reportedStrip: string
+    bareStrip: string
+    dialog: {
+      title: string
+      note: string
+      provenance: string
+      rowName: string
+      rowAvailability: string
+      previewText: string
+    }
+    quiet: {
+      inputEventsBefore: number
+      inputEventsAfter: number
+      surfaceHeightBefore: number
+      surfaceHeightWhileOpen: number
+      surfaceHeightAfter: number
+      gridBefore: { cols: number; rows: number }
+      gridAfter: { cols: number; rows: number }
+    }
+    focusReturnedToStrip: boolean
+    openedFromPaneMenu: boolean
+    bareDialog: { title: string; body: string }
+  }
   hiddenPaneSize: { shown: { cols: number; rows: number }; hidden: { cols: number; rows: number } }
   attentionTriage: {
     responseTitles: string[]
@@ -1677,6 +1702,15 @@ async function runSelfTest(): Promise<void> {
   const ready = launched.ready
   let applicationPort: MessagePortMain | undefined = launched.applicationPort
   let receipt: Record<string, unknown> | undefined
+  /** Epic 12.1: what the CLI stored, what it refused, and whether the links survive a restart. */
+  let progressEvidence: {
+    sameIdOnRetry: boolean
+    outcome: string[]
+    state: string
+    label: string
+    links: ProgressRecord['evidence']
+    artifactId: string
+  } | undefined
   let graceful = true
   let clientClosed = false
   try {
@@ -2007,6 +2041,98 @@ async function runSelfTest(): Promise<void> {
     ) {
       throw new Error('the attention/progress CLI fixture did not reach the utility owner')
     }
+    // Epic 12.1: a session publishes a file of its own and then reports progress that points at it,
+    // exactly as the CLI documents it. The three refusals in the same shell prove the report is all
+    // or nothing: an ID from another session, a file handed *to* this session, and an unknown ID each
+    // leave the previous observation exactly where it was.
+    const evidenceDirectory = join(isolatedCwd, 'evidence')
+    mkdirSync(evidenceDirectory, { recursive: true })
+    const evidenceLog = join(evidenceDirectory, 'checks.log')
+    writeFileSync(evidenceLog, 'self-test: 3 checks passed\n')
+    const evidenceReceipt = join(evidenceDirectory, 'publish.json')
+    const evidenceRetryReceipt = join(evidenceDirectory, 'publish-retry.json')
+    const evidenceOutcome = join(evidenceDirectory, 'outcome.txt')
+    const attachedToSession = await client.request<ArtifactRecord>(METHOD_REGISTRY.artifactImportBytes, {
+      sessionId: session.sessionId,
+      name: 'brief-handed-to-the-agent.txt',
+      bytes: new TextEncoder().encode('what the owner asked for\n')
+    })
+    const otherSessionEvidence = await client.request<ArtifactRecord>(METHOD_REGISTRY.artifactImportBytes, {
+      sessionId: secondSession.sessionId,
+      name: 'another-sessions-file.txt',
+      bytes: new TextEncoder().encode('not this session\n')
+    })
+    writeFixtureCommand(
+      session,
+      `bmn progress running "Self-test evidence baseline" --source evidence --observed 2026-09-18T19:00:00.000Z; ` +
+      `bmn publish ${evidenceLog} --key self-test-evidence --json > ${evidenceReceipt}; ` +
+      // The same key must return the same artifact, which is what makes a later reference safe.
+      `bmn publish ${evidenceLog} --key self-test-evidence --json > ${evidenceRetryReceipt}`
+    )
+    const publishedEvidence = await (async (): Promise<{ first: string; retry: string }> => {
+      const deadline = Date.now() + 10_000
+      while (Date.now() < deadline) {
+        if (existsSync(evidenceReceipt) && existsSync(evidenceRetryReceipt)) {
+          try {
+            const first = JSON.parse(readFileSync(evidenceReceipt, 'utf8')) as { artifactId?: string }
+            const retry = JSON.parse(readFileSync(evidenceRetryReceipt, 'utf8')) as { artifactId?: string }
+            if (first.artifactId && retry.artifactId) return { first: first.artifactId, retry: retry.artifactId }
+          } catch {
+            // The shell is still writing the file; read it again.
+          }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      throw new Error('the session did not publish its own evidence file')
+    })()
+    writeFixtureCommand(
+      session,
+      // No --observed: the accepted report must be fresh, so the strip reads "Reported verified"
+      // rather than the stale "Last reported verified". The baseline above is the old one.
+      `bmn progress verified "Self-test checks passed" --source evidence ` +
+      `--detail "3 checks, 0 failures" --evidence-id ${publishedEvidence.first} ` +
+      `&& echo accepted > ${evidenceOutcome}; ` +
+      `bmn progress failed "Should not be stored" --source evidence --evidence-id ${otherSessionEvidence.artifactId} ` +
+      `2>/dev/null || echo refused-other-session >> ${evidenceOutcome}; ` +
+      `bmn progress failed "Should not be stored" --source evidence --evidence-id ${attachedToSession.artifactId} ` +
+      `2>/dev/null || echo refused-input >> ${evidenceOutcome}; ` +
+      `bmn progress failed "Should not be stored" --source evidence --evidence-id no-such-artifact ` +
+      `2>/dev/null || echo refused-unknown >> ${evidenceOutcome}; ` +
+      `bmn progress failed "Should not be stored" --source evidence ` +
+      `--evidence-id ${publishedEvidence.first} --evidence-id ${publishedEvidence.first} ` +
+      `2>/dev/null || echo refused-duplicate >> ${evidenceOutcome}; ` +
+      `echo done >> ${evidenceOutcome}`
+    )
+    const evidenceOutcomeLines = await (async (): Promise<string[]> => {
+      const deadline = Date.now() + 10_000
+      while (Date.now() < deadline) {
+        if (existsSync(evidenceOutcome)) {
+          const lines = readFileSync(evidenceOutcome, 'utf8').split('\n').filter((line) => line !== '')
+          if (lines.at(-1) === 'done') return lines
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      throw new Error('the evidence refusal fixture did not finish')
+    })()
+    const evidenceProgress = await (async (): Promise<ProgressRecord> => {
+      const deadline = Date.now() + 5_000
+      while (Date.now() < deadline) {
+        const found = (await client.request<ProgressRecord[]>(METHOD_REGISTRY.progressList, {}))
+          .find((record) => record.sessionId === session.sessionId && record.source === 'evidence')
+        if (found?.state === 'verified') return found
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      throw new Error('the evidence progress report did not reach the utility owner')
+    })()
+    progressEvidence = {
+      sameIdOnRetry: publishedEvidence.first === publishedEvidence.retry,
+      outcome: evidenceOutcomeLines,
+      state: evidenceProgress.state,
+      label: evidenceProgress.label,
+      links: evidenceProgress.evidence,
+      artifactId: publishedEvidence.first
+    }
+
     const handoffArtifact = await client.request<ArtifactRecord>(METHOD_REGISTRY.artifactImportBytes, {
       sessionId: secondSession.sessionId,
       name: 'handoff-self-test.txt',
@@ -2409,6 +2535,57 @@ async function runSelfTest(): Promise<void> {
     ) {
       throw new Error(
         `choosing a workspace marker moved the pane geometry: ${JSON.stringify(markers)}`
+      )
+    }
+    // Epic 12.2 AC1-AC4: the words are the reporter's, the detail opens both ways, and opening it
+    // writes nothing to the PTY and leaves the terminal exactly the size it was.
+    const evidenceSurface = preloadProbe.progressEvidenceSurface
+    if (
+      !evidenceSurface.reportedStrip.includes('Reported verified') ||
+      !evidenceSurface.reportedStrip.includes('Evidence attached (1)') ||
+      evidenceSurface.reportedStrip.includes('Verified ·') ||
+      !evidenceSurface.bareStrip.includes('No evidence attached') ||
+      !evidenceSurface.bareStrip.includes('Last observed failed') ||
+      !evidenceSurface.dialog.title.startsWith('Progress — ') ||
+      !evidenceSurface.dialog.note.includes('it does not check the work') ||
+      !evidenceSurface.dialog.provenance.startsWith('Reported verified · from evidence · ') ||
+      evidenceSurface.dialog.rowName !== 'checks.log' ||
+      !evidenceSurface.dialog.rowAvailability.startsWith('text/plain · ') ||
+      !evidenceSurface.dialog.previewText.includes('self-test: 3 checks passed') ||
+      !evidenceSurface.focusReturnedToStrip ||
+      !evidenceSurface.openedFromPaneMenu ||
+      !evidenceSurface.bareDialog.body.includes('No evidence attached to this report.')
+    ) {
+      throw new Error(`the progress detail did not read honestly: ${JSON.stringify(evidenceSurface)}`)
+    }
+    const quiet = evidenceSurface.quiet
+    if (
+      quiet.inputEventsAfter !== quiet.inputEventsBefore ||
+      quiet.surfaceHeightWhileOpen !== quiet.surfaceHeightBefore ||
+      quiet.surfaceHeightAfter !== quiet.surfaceHeightBefore ||
+      quiet.surfaceHeightBefore <= 0 ||
+      quiet.gridAfter.cols !== quiet.gridBefore.cols ||
+      quiet.gridAfter.rows !== quiet.gridBefore.rows
+    ) {
+      throw new Error(`opening the progress detail disturbed the terminal: ${JSON.stringify(quiet)}`)
+    }
+    // Epic 12.1 AC1-AC2 through the real CLI: one accepted report and four refusals, all or nothing.
+    if (
+      !progressEvidence?.sameIdOnRetry ||
+      progressEvidence.state !== 'verified' ||
+      progressEvidence.links.length !== 1 ||
+      progressEvidence.links[0]?.artifactId !== progressEvidence.artifactId ||
+      progressEvidence.links[0]?.name !== 'checks.log' ||
+      JSON.stringify(progressEvidence.outcome) !== JSON.stringify([
+        'accepted', 'refused-other-session', 'refused-input', 'refused-unknown', 'refused-duplicate', 'done'
+      ])
+    ) {
+      throw new Error(`the evidence CLI contract did not hold: ${JSON.stringify(progressEvidence)}`)
+    }
+    // AC1 again, at the inspector: every strip site says whether anything backs the word.
+    if (!preloadProbe.attentionTriage.detailsProgressText.includes('No evidence attached')) {
+      throw new Error(
+        `the inspector strip kept the old word: ${preloadProbe.attentionTriage.detailsProgressText}`
       )
     }
     if (archivedWorkspace.marker !== 'rose') {
@@ -2823,6 +3000,17 @@ async function runSelfTest(): Promise<void> {
     hostRendererPort = applicationPort
     trackSessionProcessStates(client)
     await recoverApplicationRenderer(applicationWindow)
+    // Epic 12.1 AC4: the link and its name are still there after the database was closed and reopened.
+    const restoredEvidence = (await client.request<ProgressRecord[]>(METHOD_REGISTRY.progressList, {}))
+      .find((record) => record.sessionId === session.sessionId && record.source === 'evidence')
+    if (
+      restoredEvidence?.state !== 'verified' ||
+      JSON.stringify(restoredEvidence.evidence) !== JSON.stringify(progressEvidence?.links)
+    ) {
+      throw new Error(
+        `progress evidence did not survive the restart: ${JSON.stringify(restoredEvidence?.evidence)}`
+      )
+    }
     const stoppedStaleProgress = await stoppedPanelProgress(applicationWindow, secondSession.sessionId)
     if (
       !stoppedStaleProgress.includes('Observed self-test failure') ||
@@ -3371,6 +3559,8 @@ async function runSelfTest(): Promise<void> {
       treeSelectionLayoutPut: preloadProbe.treeSelection,
       crossWorkspaceSplit: preloadProbe.crossWorkspaceSplit,
       workspaceMarkers: preloadProbe.workspaceMarkers,
+      progressEvidence: { ...progressEvidence, persistedAfterRestart: true },
+      progressEvidenceSurface: preloadProbe.progressEvidenceSurface,
       hiddenPaneSize: preloadProbe.hiddenPaneSize,
       handoffFlow: { ...preloadProbe.handoffFlow, persistedAfterRestart: true },
       voiceFlow: {

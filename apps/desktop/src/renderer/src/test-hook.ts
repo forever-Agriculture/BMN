@@ -1,4 +1,5 @@
 import type { FileReferenceFlowProbe } from './file-reference-probe'
+import type { ProgressEvidenceProbe } from './progress-evidence-probe'
 import type { VoiceFlowProbe } from './voice-probe'
 
 export interface TerminalTestSnapshot {
@@ -69,6 +70,8 @@ export interface TerminalIntegrationProbe {
     localHeading: number
     foreignHeading: number
   }
+  /** Epic 12: the progress detail's words, its quiet behaviour and the two ways into it. */
+  progressEvidenceSurface: ProgressEvidenceProbe
   /** The probing pane's terminal grid while shown, and after another session took its pane and hid it. */
   hiddenPaneSize: {
     shown: { cols: number; rows: number }

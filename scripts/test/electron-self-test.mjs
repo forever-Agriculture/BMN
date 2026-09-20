@@ -228,6 +228,39 @@ const receiptContract = [
       receipt.sessionActivity?.attentionUnchanged === true
   ],
   [
+    'progressEvidence',
+    (receipt) =>
+      receipt.progressEvidence?.sameIdOnRetry === true &&
+      receipt.progressEvidence?.state === 'verified' &&
+      receipt.progressEvidence?.links?.length === 1 &&
+      receipt.progressEvidence.links[0]?.name === 'checks.log' &&
+      receipt.progressEvidence?.persistedAfterRestart === true &&
+      JSON.stringify(receipt.progressEvidence?.outcome) === JSON.stringify([
+        'accepted', 'refused-other-session', 'refused-input', 'refused-unknown', 'refused-duplicate', 'done'
+      ])
+  ],
+  [
+    'progressEvidenceSurface',
+    (receipt) =>
+      receipt.progressEvidenceSurface?.reportedStrip?.includes('Reported verified') === true &&
+      receipt.progressEvidenceSurface.reportedStrip.includes('Evidence attached (1)') &&
+      receipt.progressEvidenceSurface?.bareStrip?.includes('No evidence attached') === true &&
+      receipt.progressEvidenceSurface?.dialog?.previewText?.includes('self-test: 3 checks passed') === true &&
+      receipt.progressEvidenceSurface?.dialog?.rowName === 'checks.log' &&
+      receipt.progressEvidenceSurface?.focusReturnedToStrip === true &&
+      receipt.progressEvidenceSurface?.openedFromPaneMenu === true &&
+      receipt.progressEvidenceSurface?.bareDialog?.body?.includes('No evidence attached to this report.') === true &&
+      // The whole reason the detail is a dialog: no PTY write and no terminal resize.
+      receipt.progressEvidenceSurface?.quiet?.inputEventsAfter ===
+        receipt.progressEvidenceSurface?.quiet?.inputEventsBefore &&
+      receipt.progressEvidenceSurface?.quiet?.surfaceHeightWhileOpen ===
+        receipt.progressEvidenceSurface?.quiet?.surfaceHeightBefore &&
+      receipt.progressEvidenceSurface?.quiet?.gridAfter?.cols ===
+        receipt.progressEvidenceSurface?.quiet?.gridBefore?.cols &&
+      receipt.progressEvidenceSurface?.quiet?.gridAfter?.rows ===
+        receipt.progressEvidenceSurface?.quiet?.gridBefore?.rows
+  ],
+  [
     'requestProvenance',
     (receipt) =>
       receipt.requestProvenance?.openedBy === 'hook:claude:Notification' &&

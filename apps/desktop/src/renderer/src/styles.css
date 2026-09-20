@@ -934,6 +934,140 @@ input[type='radio'] {
   font-size: 11px;
 }
 
+/* The state word is the way into the detail. It keeps its own state colour and adds no chrome of its
+   own, so the strip reads as one line rather than as a row of controls. */
+.progress-strip .progress-open {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.progress-strip .progress-open:hover {
+  text-decoration: underline;
+}
+
+/* Whether anything backs the word is never in the word's own colour: it is a fact, not a verdict. */
+.progress-strip .progress-open .evidence {
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  text-decoration: none;
+}
+
+.progress-evidence-dialog h3 {
+  margin: 12px 0 2px;
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.progress-evidence-dialog .provenance {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.progress-evidence-dialog .provenance .stale {
+  padding: 0 6px;
+  border: 1px solid var(--attention);
+  border-radius: 4px;
+  color: var(--attention);
+  font-size: 11px;
+}
+
+.progress-evidence-dialog .detail {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font: 12px/1.45 var(--font-mono);
+  white-space: pre-wrap;
+}
+
+.progress-evidence-dialog .eyebrow {
+  display: block;
+  margin: 14px 0 6px;
+}
+
+/* A newer report informs; it does not ask. Hairline and muted, never orange and never red. */
+.progress-replaced {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.progress-replaced button {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.progress-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.progress-evidence li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: var(--raised);
+  font-size: 12px;
+}
+
+.progress-evidence .name {
+  overflow: hidden;
+  color: var(--text);
+  font: 12px/1.4 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A file that is gone is muted, never --error: red would read as the reported work having failed. */
+.progress-evidence .availability {
+  margin-left: auto;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.progress-evidence li.unavailable .name {
+  color: var(--muted);
+}
+
+.progress-evidence .actions {
+  display: flex;
+  gap: 4px;
+}
+
+.progress-evidence .actions button {
+  padding: 1px 8px;
+  font-size: 11px;
+}
+
+.progress-evidence-dialog .files-preview-box {
+  margin-top: 10px;
+  max-height: 260px;
+  overflow: auto;
+}
+
 .terminal-search {
   display: flex;
   align-items: center;
