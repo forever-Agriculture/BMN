@@ -49,6 +49,7 @@ import {
   sameActivities,
   sessionActivities,
   type ActivityObservation,
+  type ActivityPublication,
   type SessionActivity
 } from './session-activity'
 import {
@@ -192,7 +193,7 @@ function App(): React.JSX.Element {
   /** How many times each session's presented activity actually changed; the self-test reads it for the throttle. */
   const activityUpdates = useRef<Record<string, number>>({})
   /** When each session's presentation last changed, so its own cap holds however often publishing is triggered. */
-  const activityPublishedAt = useRef<Record<string, number>>({})
+  const activityPublishedAt = useRef<Record<string, ActivityPublication>>({})
   const [voice, setVoice] = useState<VoiceCapture | null>(null)
   const voiceRef = useRef<VoiceCapture | null>(null)
   const voiceRecording = useRef<VoiceRecording | null>(null)
@@ -256,12 +257,13 @@ function App(): React.JSX.Element {
    */
   const publishActivity = (): void => {
     const now = Date.now()
-    const next = publishableActivities(
+    const { activities: next, publishedAt } = publishableActivities(
       activityRef.current,
       sessionActivities(observations.current, now),
       activityPublishedAt.current,
       now
     )
+    activityPublishedAt.current = publishedAt
     if (sameActivities(activityRef.current, next)) return
     for (const [sessionId, derived] of Object.entries(next)) {
       const before = activityRef.current[sessionId]
@@ -269,10 +271,6 @@ function App(): React.JSX.Element {
         continue
       }
       activityUpdates.current[sessionId] = (activityUpdates.current[sessionId] ?? 0) + 1
-      activityPublishedAt.current[sessionId] = now
-    }
-    for (const sessionId of Object.keys(activityPublishedAt.current)) {
-      if (!(sessionId in next)) delete activityPublishedAt.current[sessionId]
     }
     activityRef.current = next
     setActivity(next)

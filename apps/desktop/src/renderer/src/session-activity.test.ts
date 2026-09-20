@@ -12,6 +12,7 @@ import {
   sessionActivity,
   titleWord,
   type ActivityObservation,
+  type ActivityPublication,
   type SessionActivity
 } from './session-activity'
 
@@ -99,73 +100,96 @@ describe('the two-updates-per-second cap', () => {
   const working: SessionActivity = { word: 'Working', working: true, title: null }
   const idle: SessionActivity = { word: 'Idle', working: false, title: null }
   const titled: SessionActivity = { word: 'Idle', working: false, title: 'build' }
+  const at = (ordinary: number, work = -Infinity): ActivityPublication => ({ ordinary, working: work })
 
   it('holds a session back per session, so another session waking cannot carry its change through', () => {
-    // s1 published at `start`; s2 wakes 300 ms later and publishes at once, which is its first word.
-    const published = publishableActivities(
+    // s1 published 300 ms ago; s2 has published nothing, so its first word lands at once.
+    const { activities } = publishableActivities(
       { s1: idle, s2: working },
       { s1: titled, s2: working },
-      { s1: start, s2: start - ACTIVITY_MIN_PUBLISH_MS },
+      { s1: at(start) },
       start + 300
     )
 
-    expect(published.s1).toEqual(idle)
-    expect(published.s2).toEqual(working)
+    expect(activities.s1).toEqual(idle)
+    expect(activities.s2).toEqual(working)
   })
 
-  it('lets the held change through on the next tick', () => {
-    const published = publishableActivities({ s1: idle }, { s1: titled }, { s1: start }, start + ACTIVITY_MIN_PUBLISH_MS)
+  it('lets the held change through once its second is up', () => {
+    const { activities } = publishableActivities(
+      { s1: idle }, { s1: titled }, { s1: at(start) }, start + ACTIVITY_MIN_PUBLISH_MS
+    )
 
-    expect(published.s1).toEqual(titled)
+    expect(activities.s1).toEqual(titled)
   })
 
   it('publishes a session never published before at once, so the first byte still reads Working', () => {
-    const published = publishableActivities({}, { s1: working }, {}, start)
+    const { activities } = publishableActivities({}, { s1: working }, {}, start)
 
-    expect(published.s1).toEqual(working)
+    expect(activities.s1).toEqual(working)
   })
 
   it('never holds back the first byte, because AC1 says Working lands at once', () => {
     const running: SessionActivity = { word: 'Running', working: false, title: null }
-    // Published 100 ms ago, well inside the cap, and the first byte has just arrived.
-    const published = publishableActivities({ s1: running }, { s1: working }, { s1: start }, start + 100)
+    // An ordinary change 100 ms ago, well inside the cap, and the first byte has just arrived.
+    const { activities } = publishableActivities(
+      { s1: running }, { s1: working }, { s1: at(start) }, start + 100
+    )
 
-    expect(published.s1).toEqual(working)
+    expect(activities.s1).toEqual(working)
   })
 
   it('still holds back a change that is not the start of work', () => {
-    const published = publishableActivities({ s1: working }, { s1: idle }, { s1: start }, start + 100)
+    const { activities } = publishableActivities(
+      { s1: working }, { s1: idle }, { s1: at(start) }, start + 100
+    )
 
-    expect(published.s1).toEqual(working)
+    expect(activities.s1).toEqual(working)
   })
 
-  it('keeps at most two updates per second per session under a title storm', () => {
-    const publishedAt: Record<string, number> = {}
+  it('makes a session that restarts inside a second wait its ordinary turn', () => {
+    const running: SessionActivity = { word: 'Running', working: false, title: null }
+    // Work started 300 ms ago; a crash loop may not redraw the row again straight away.
+    const { activities } = publishableActivities(
+      { s1: running }, { s1: working }, { s1: { ordinary: start, working: start } }, start + 300
+    )
+
+    expect(activities.s1).toEqual(running)
+  })
+
+  it('keeps every rolling second to two updates while titles storm and work starts and stops', () => {
+    // The published sequence is replayed through the real function, 20 ms at a time, for twelve seconds.
+    // Every 700 ms the title changes; output arrives in bursts, so the session also enters and leaves work.
     let shown: Record<string, SessionActivity> = {}
-    const changes: number[] = []
-    // A storm: every 50 ms one session changes title and the other prints, for four seconds.
-    for (let step = 0; step < 80; step += 1) {
-      const now = start + step * 50
-      const next = {
-        s1: { word: 'Idle', working: false, title: `build ${step}` } as SessionActivity,
-        s2: working
+    let windows: Record<string, ActivityPublication> = {}
+    const published: number[] = []
+    for (let step = 0; step * 20 <= 12_000; step += 1) {
+      const now = start + step * 20
+      const since = (now - start) % 4_000
+      // Output for 400 ms, then 3.6 s of silence: Working, then Idle once the idle window passes.
+      const isWorking = since < 400
+      const restingWord = since >= 400 + ACTIVITY_IDLE_AFTER_MS
+      const derived: SessionActivity = isWorking
+        ? { word: 'Working', working: true, title: `build ${Math.floor((now - start) / 700)}` }
+        : {
+            word: restingWord ? 'Idle' : 'Working',
+            working: !restingWord,
+            title: `build ${Math.floor((now - start) / 700)}`
+          }
+      const result = publishableActivities(shown, { s1: derived }, windows, now)
+      const after = result.activities.s1
+      const first = shown.s1
+      if (!first || first.word !== after?.word || first.working !== after.working || first.title !== after.title) {
+        published.push(now)
       }
-      const published = publishableActivities(shown, next, publishedAt, now)
-      for (const [sessionId, activity] of Object.entries(published)) {
-        if (sameActivities({ [sessionId]: activity }, { [sessionId]: shown[sessionId] ?? activity }) &&
-          shown[sessionId] !== undefined) continue
-        publishedAt[sessionId] = now
-        if (sessionId === 's1') changes.push(now)
-      }
-      shown = published
+      shown = result.activities
+      windows = result.publishedAt
     }
 
-    expect(changes.length).toBeGreaterThan(0)
-    for (const [index, at] of changes.entries()) {
-      const previous = changes[index - 1]
-      if (previous !== undefined) expect(at - previous).toBeGreaterThanOrEqual(ACTIVITY_MIN_PUBLISH_MS)
+    expect(published.length).toBeGreaterThan(4)
+    for (const [index, moment] of published.entries()) {
+      const inWindow = published.slice(index).filter((other) => other - moment < 1_000)
+      expect(inWindow.length).toBeLessThanOrEqual(2)
     }
-    // Four seconds of storm, at most two updates a second.
-    expect(changes.length).toBeLessThanOrEqual(8)
   })
 })

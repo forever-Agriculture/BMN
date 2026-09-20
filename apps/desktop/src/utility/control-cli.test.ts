@@ -752,6 +752,17 @@ describe('bmn hook provenance and the hook event log', () => {
     }
   )
 
+  it('carries a tool name the RULES.source shape allows, not only an ASCII one', async () => {
+    const fixture = await cliFixture()
+
+    await runHook(fixture, 'claude', { hook_event_name: 'PostToolUse', tool_name: 'Éditeur', tool_input: {} })
+
+    expect(fixture.handlers.observeHookEvent.mock.calls[0]?.[0]).toMatchObject({
+      event: 'PostToolUse',
+      toolName: 'Éditeur'
+    })
+  })
+
   it('records an open the host says changed nothing as changing nothing', async () => {
     const fixture = await cliFixture()
     fixture.handlers.openAttention.mockImplementation(async () => ({ opened: true, changed: false }))

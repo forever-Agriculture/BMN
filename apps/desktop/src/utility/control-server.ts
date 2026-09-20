@@ -647,9 +647,13 @@ export class ControlServer {
     if (value === undefined || value === null) return undefined
     if (acceptableOrigin(value, scope)) return value as string
     const caller = scope.kind === 'session' ? scope.sessionId : null
-    const last = this.originRefusals.get(caller ?? '')
     const now = Date.now()
-    if (last === undefined || now - last >= ORIGIN_REFUSAL_QUIET_MS) {
+    // The map holds only callers still inside their quiet period, so it cannot grow with the sessions that
+    // have ever made the mistake.
+    for (const [seen, at] of this.originRefusals) {
+      if (now - at >= ORIGIN_REFUSAL_QUIET_MS) this.originRefusals.delete(seen)
+    }
+    if (!this.originRefusals.has(caller ?? '')) {
       this.originRefusals.set(caller ?? '', now)
       handlers.reportRefusal(method, caller, 'origin refused: unknown provenance for this credential')
     }

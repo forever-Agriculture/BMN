@@ -659,9 +659,10 @@ function hookObservation(agent, event, requests, outcomes) {
     const effect = byMethod[request.method]
     if (effect !== undefined && !effects.includes(effect)) effects.push(effect)
   })
-  const shaped = (value) => typeof value === 'string' && /^[\x20-\x7e]{1,64}$/.test(value) ? value : undefined
-  const source = shaped(event.source)
-  const toolName = shaped(event.tool_name)
+  // `source` and `toolName` take the same `RULES.source` shape as the event name: a tool called "Éditeur"
+  // belongs in the log as much as one called "Bash".
+  const source = hookEventName(event.source)
+  const toolName = hookEventName(event.tool_name)
   return {
     method: 'hook.observe',
     params: {

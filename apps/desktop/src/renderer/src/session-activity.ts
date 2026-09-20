@@ -87,34 +87,67 @@ export function sessionActivities(
   return activities
 }
 
-/** A session's presentation may change at most this often, which is AC4's two updates per second. */
-export const ACTIVITY_MIN_PUBLISH_MS = 500
+/**
+ * AC4 allows a session two presentation updates a second. One is reserved for the start of work, which AC1
+ * says must land at once, so every other change waits out a full second: at most one of each, never a third.
+ */
+export const ACTIVITY_MIN_PUBLISH_MS = 1_000
+
+/** When a session last published an ordinary change, and when it last published the start of work. */
+export interface ActivityPublication {
+  ordinary: number
+  working: number
+}
+
+/** What to show now, and the windows each session's cap is measured from on the next call. */
+export interface PublishableActivities {
+  activities: Record<string, SessionActivity>
+  publishedAt: Record<string, ActivityPublication>
+}
+
+const NEVER: ActivityPublication = Object.freeze({ ordinary: -Infinity, working: -Infinity })
 
 /**
- * Holds back a session whose presentation changed less than `ACTIVITY_MIN_PUBLISH_MS` ago, so one session's first
- * byte cannot carry another session's pending title change past the cap. The tick re-derives from the same
- * observations, so a held change lands at most one tick late - far inside the 1.5 s idle window.
+ * Decides what each session may show now. A session that entered Working shows it at once, because AC1 says
+ * the first byte reads as working immediately; everything else - going idle, a title the table recognises -
+ * waits out its second. Both are per session, so one session's first byte can never carry another session's
+ * pending change through, and the two kinds cannot add up to more than AC4's two updates in any one second.
  *
- * Entering Working is never held: AC1 says the first byte makes a session Working at once, and a session can
- * only enter Working again after the idle window has passed, so the exemption cannot itself breach the cap.
+ * The tick re-derives from the same observations, so a held change lands at most one tick late. A session
+ * whose process restarts inside a second reaches Working through the ordinary window instead, which delays
+ * that one case by less than a tick rather than letting a crash loop redraw the row at will.
  */
 export function publishableActivities(
   previous: Readonly<Record<string, SessionActivity>>,
   next: Readonly<Record<string, SessionActivity>>,
-  publishedAt: Readonly<Record<string, number>>,
+  publishedAt: Readonly<Record<string, ActivityPublication>>,
   now: number
-): Record<string, SessionActivity> {
-  const publishable: Record<string, SessionActivity> = {}
+): PublishableActivities {
+  const activities: Record<string, SessionActivity> = {}
+  const windows: Record<string, ActivityPublication> = {}
   for (const [sessionId, derived] of Object.entries(next)) {
     const before = previous[sessionId]
-    const last = publishedAt[sessionId]
+    const last = publishedAt[sessionId] ?? NEVER
+    windows[sessionId] = last
     const changed = !before ||
       before.word !== derived.word || before.working !== derived.working || before.title !== derived.title
-    const tooSoon = last !== undefined && now - last < ACTIVITY_MIN_PUBLISH_MS
-    const startedWorking = derived.working && (!before || !before.working)
-    publishable[sessionId] = changed && before && tooSoon && !startedWorking ? before : derived
+    if (!changed) {
+      activities[sessionId] = derived
+      continue
+    }
+    if (derived.working && !before?.working && now - last.working >= ACTIVITY_MIN_PUBLISH_MS) {
+      activities[sessionId] = derived
+      windows[sessionId] = { ordinary: last.ordinary, working: now }
+      continue
+    }
+    if (now - last.ordinary >= ACTIVITY_MIN_PUBLISH_MS) {
+      activities[sessionId] = derived
+      windows[sessionId] = { ordinary: now, working: last.working }
+      continue
+    }
+    activities[sessionId] = before ?? derived
   }
-  return publishable
+  return { activities, publishedAt: windows }
 }
 
 /** True when two derivations would render the same, so the tick can skip the update entirely. */
