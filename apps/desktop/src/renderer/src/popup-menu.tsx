@@ -25,7 +25,12 @@ export interface MenuAnchor {
   entries: MenuEntry[]
 }
 
-/** Arrow keys move between items, Escape closes and returns focus to the anchor, outside clicks close. */
+/**
+ * Arrow keys move between items, outside clicks close, and Escape *or* choosing an item returns focus
+ * to the anchor. Selecting must return it too: React commits the close and the action together, so an
+ * action that opens a dialog would otherwise find the chosen item already gone and capture `body` as
+ * the element to restore focus to when it closes.
+ */
 export function PopupMenu(props: { anchor: MenuAnchor; onClose(): void }): React.JSX.Element {
   const menu = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState({ top: 0, left: 0 })
@@ -99,6 +104,7 @@ export function PopupMenu(props: { anchor: MenuAnchor; onClose(): void }): React
                     role="menuitemradio"
                     aria-checked={option.value === entry.selected}
                     onClick={() => {
+                      props.anchor.element.focus()
                       props.onClose()
                       entry.onChoose(option.value)
                     }}
@@ -117,6 +123,7 @@ export function PopupMenu(props: { anchor: MenuAnchor; onClose(): void }): React
               disabled={entry.disabled}
               title={entry.title}
               onClick={() => {
+                props.anchor.element.focus()
                 props.onClose()
                 entry.onSelect()
               }}

@@ -19,6 +19,35 @@ async function waitFor<Value>(
 
 const text = (node: Element | null | undefined): string => node?.textContent?.trim() ?? ''
 
+function channels(colour: string): [number, number, number] {
+  const parts = colour.match(/[\d.]+/g)?.map(Number) ?? []
+  return [parts[0] ?? 0, parts[1] ?? 0, parts[2] ?? 0]
+}
+
+/** WCAG relative luminance and contrast, so the four states can be shown to stay legible. */
+function contrast(foreground: string, background: string): number {
+  const luminance = (colour: string): number => {
+    const [red, green, blue] = channels(colour).map((value) => {
+      const channel = value / 255
+      return channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
+    }) as [number, number, number]
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+  }
+  const first = luminance(foreground)
+  const second = luminance(background)
+  const [lighter, darker] = first > second ? [first, second] : [second, first]
+  return Math.round(((lighter + 0.05) / (darker + 0.05)) * 100) / 100
+}
+
+/** A CSS variable as the browser resolves it, in the same `rgb(...)` form as a computed colour. */
+function token(name: string, probe: HTMLElement): string {
+  const previous = probe.style.color
+  probe.style.color = `var(${name})`
+  const resolved = getComputedStyle(probe).color
+  probe.style.color = previous
+  return resolved
+}
+
 function openDialog(): HTMLDialogElement | null {
   return document.querySelector<HTMLDialogElement>('dialog.progress-evidence-dialog[open]')
 }
@@ -105,6 +134,23 @@ export async function runProgressEvidenceIntegration(options: {
   await waitFor('the progress detail closed', () => openDialog() === null)
   const focusReturnedToStrip = document.activeElement === opener
 
+  const verifiedWord = stateButton(reportingPane)
+  const bareWord = stateButton(ownPane)
+  const stripBackground = getComputedStyle(
+    reportingPane.querySelector<HTMLElement>('.progress-strip')!
+  ).backgroundColor
+  const evidenceWord = verifiedWord.querySelector<HTMLElement>('.evidence')!
+  const colours = {
+    verifiedInk: getComputedStyle(verifiedWord).color,
+    verifiedToken: token('--verified', verifiedWord),
+    failedInk: getComputedStyle(bareWord).color,
+    errorToken: token('--error', bareWord),
+    evidenceInk: getComputedStyle(evidenceWord).color,
+    mutedToken: token('--muted', evidenceWord),
+    verifiedContrast: contrast(getComputedStyle(verifiedWord).color, stripBackground),
+    evidenceContrast: contrast(getComputedStyle(evidenceWord).color, stripBackground)
+  }
+
   const quiet = {
     inputEventsBefore,
     inputEventsAfter: options.inputEvents(),
@@ -116,14 +162,17 @@ export async function runProgressEvidenceIntegration(options: {
   }
 
   // The keyboard route: xterm consumes Tab inside the terminal, so the pane's More menu is the way in.
+  // Closing must hand focus back to the More button, or a keyboard owner is left nowhere.
   const more = reportingPane.querySelector<HTMLButtonElement>('.pane-actions [data-action="more"]')
   if (!more) throw new Error('progress evidence integration: the reporting pane had no More button')
+  more.focus()
   more.click()
   const entry = await waitFor('the pane menu offered Progress details', () => menuEntry('Progress details'))
   entry.click()
   const fromMenu = await waitFor('the progress detail opened from the menu', () => openDialog())
   fromMenu.dispatchEvent(new Event('cancel', { cancelable: true }))
   await waitFor('the menu-opened detail closed', () => openDialog() === null)
+  const focusReturnedToMenuButton = document.activeElement === more
 
   // The same detail for a report with nothing behind it: the surface never implies otherwise.
   const ownMore = ownPane.querySelector<HTMLButtonElement>('.pane-actions [data-action="more"]')
@@ -143,8 +192,10 @@ export async function runProgressEvidenceIntegration(options: {
     reportedStrip,
     bareStrip,
     dialog: detail,
+    colours,
     quiet,
     focusReturnedToStrip,
+    focusReturnedToMenuButton,
     openedFromPaneMenu: true,
     bareDialog
   }

@@ -232,7 +232,10 @@ bmn hook is not yours
 - An agent can publish only regular files inside its session's working directory or the system
   temporary folder; symlinks that escape those folders are refused. The app copies the file into
   its own store, hashes it, and never serves it back by path.
-- `claimed-done` is shown as a claim. Only `verified` is shown as verified.
+- `claimed-done` and `verified` are both shown as the reporter's words, with source and age —
+  "Agent reports done", "Reported verified" — and never as BMN's own judgement.
+- Evidence must be a file **this session** published. A restarted session can still name a file
+  its previous process published: the rule is about the session, not the process.
 - A request stays open in **Needs you** until it is resolved or withdrawn; reading it only clears
   the unread mark. Typing into its session resolves it, except a review.
 

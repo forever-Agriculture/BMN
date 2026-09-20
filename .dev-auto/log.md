@@ -774,3 +774,126 @@ Checks on this tree: `typecheck` EXIT 0, `lint` EXIT 0, `test:unit` 1,112 passed
 > you can double check everything in the end, maybe consult with Fable, dispatch glm flash for review and tests and when you're confident you can update local and push to GH
 
 Read as: the reviews stay as planned (Fable named explicitly, GLM Flash added for review and tests), and push to `origin/main` plus `pnpm run update:desktop` are authorized for this run's Epic 12 work, conditional on my being confident — that is, on the acceptance checks and the review dispositions being clean. It does not authorize pushing anything else; the old private `feat/epic-1/2` branches stay unpushed.
+
+## Story 12.2 implemented (the surface), committed at `5b217c6`
+
+Built to Fable's own 2026-09-20 consultation (`reviews/fable-epic12-evidence-surface.md`), with the
+three MUST-FIX items already folded into `epics.md` before implementation started. Departures from
+that consultation, each deliberate:
+
+- **The snapshot lives in the dialog's own state, not in the App's `dialog` state.** Fable put it in
+  the App. The App still freezes the observation at open (`main.tsx` `openProgressDetail` stores
+  `opened` in the `dialog` union) — what the dialog owns is the *currently displayed* snapshot, so
+  `Show newest` needs no round trip through the App. Same behaviour, less plumbing.
+- **No `Deliver to session` action on an evidence row**, though `files-panel.tsx` offers it for an
+  artifact. It writes a path into the PTY, which 12.2 AC4 forbids outright.
+- **`progressDetailGone` is computed in the App**, not inferred from a null presentation, so "the
+  session is gone" and "the process restarted" stay distinguishable and each gets its own spoken
+  reason. The incarnation is captured with the snapshot at open.
+
+Eight further regression fences, each run red-then-green (`scratchpad/fence2.py`): `verified` shown as
+BMN's own verdict · the ungrammatical stale prefix back · the stale prefix applied to every state ·
+the evidence word only when something is attached · a dropped artifact silently omitted · a lost
+original still offered for preview · a renamed original masking the reported name · provenance
+dropping who said it.
+
+## Runtime evidence on `5b217c6`
+
+`pnpm run test:electron` EXIT 0 (`.dev-auto/evidence/epic-12/electron-4.log`), `pnpm run test:visual`
+EXIT 0 (`visual-1.log`). The Epic 12 blocks of the receipt are extracted to
+`.dev-auto/evidence/epic-12/electron-receipt-epic12.json`:
+
+- `progressEvidence`: `sameIdOnRetry: true` — the shell published `checks.log` with `--key
+  self-test-evidence`, republished with the same key, and got the same artifact ID back, which is what
+  makes a later reference safe. `outcome: ["accepted","refused-other-session","refused-input",
+  "refused-unknown","refused-duplicate","done"]` — one accepted report and four refusals, in order,
+  each leaving the accepted `verified` report standing with its one link. `persistedAfterRestart:
+  true` — the link and its name survived the database being closed and reopened.
+- `progressEvidenceSurface`: `reportedStrip` = "Self-test checks passed / Reported verified /
+  Evidence attached (1) / evidence · 0 s ago"; `bareStrip` = "Observed self-test failure / Last
+  observed failed / No evidence attached / stale / self-test · 2 d ago". The dialog's note, provenance,
+  row name, `text/plain · 27 B` and the previewed file contents all read as designed.
+  `focusReturnedToStrip: true`, `openedFromPaneMenu: true`, and the evidence-free detail says "No
+  evidence attached to this report."
+- `quiet`: **0 PTY input events** before and after, `.terminal-surface` 510px before, during and after,
+  grid 43x32 unchanged. That is the whole argument for the dialog rather than an in-flow region,
+  measured rather than asserted.
+- `stoppedStaleProgress` and `attentionTriage.detailsProgressText` both now carry "No evidence
+  attached", so all four strip sites say whether anything backs the word (AC1, Fable MUST-FIX 3).
+- `schemaTables` includes `progress_evidence`, so the backup/restore health check that compares the
+  restored table list against `STORY_SCHEMA_TABLES` still matches.
+
+Two fixture mistakes of mine, both found by the Electron run and fixed rather than worked around:
+the accepted report first carried `--observed 2026-09-18T19:30:00.000Z`, which made it two days old,
+so the strip correctly read "Last reported verified" and the probe correctly refused it; and the probe
+activated the strip button with a bare `click()`, which does not focus it the way a real click or
+keyboard activation does, so focus restore had nothing to return to. The probe now focuses the word
+and asserts it can take focus before activating it.
+
+## Review 1: whole epic, `claude-fable-5-1`/medium with read tools, against `5b217c6`
+
+Receipt `.dev-auto/evidence/epic-12/reviews/fable-epic-review.json`, 85 turns, $3.759, subtype
+`success`. Fable wrote the 12.2 surface design, so this review also asks whether I built what it
+designed. It noted one limitation: the review brief lives outside the working directory and its read
+was denied, so it answered the four questions from my framing of them rather than from the file.
+
+Verdict: intent met; no blocking finding. Four findings, every one disposed against `5b217c6` plus
+the repairs below.
+
+**Finding 1 (SHOULD) — `docs/agent-control.md:235` still said "Only `verified` is shown as verified".**
+CLOSED by fixing it. I verified the line myself before touching it. It was the one place left where
+the wire word read as BMN's verdict, in the same file that says two paragraphs earlier that BMN
+judges nothing. Replaced with: both `claimed-done` and `verified` are shown as the reporter's words,
+with source and age, and never as BMN's own judgement.
+
+**Finding 2 (SHOULD) — focus is lost after closing a detail opened from the More menu.** CLOSED with
+a runtime fence. Verified against source: `popup-menu.tsx` called `onClose()` then `onSelect()`, so
+React committed both together and the chosen item was already out of the DOM when `Dialog`'s mount
+effect captured `document.activeElement` (`dialog.tsx:21`); the captured opener was `body` and
+`body.focus()` on close is a no-op. Escape already returned focus to the anchor; selecting did not.
+Fixed in the one place Fable named — the menu item now focuses `props.anchor.element` before closing
+— and, for the same reason, the radio-group branch too, so the module's stated contract ("Escape
+closes and returns focus to the anchor") is true of selection as well. This also fixes the same
+latent defect for Hook events and every other menu-opened dialog.
+
+Fable asked for the assertion, and it was right to: `focusReturnedToMenuButton` now joins the
+receipt. Fenced red-then-green through the real app — with the fix reverted,
+`.dev-auto/evidence/epic-12/electron-fence-menu-focus.log` shows `focusReturnedToMenuButton: false`
+and EXIT 1; with it restored, `electron-6.log` is EXIT 0.
+
+**Finding 3 (LOW) — replacement compared `observedAt` alone, and the snapshot froze the age.**
+CLOSED, both halves. Two reports can share an `observedAt` (a caller repeating `--observed`, a
+replayed script) while differing in everything else, and the open detail would have shown neither
+banner nor announcement while the store moved underneath it. `ProgressPresentation` now carries
+`receivedAt`, and the dialog treats a change in `observedAt`, `receivedAt` *or* `source` as a
+replacement. Separately, a detail left open kept saying "0 s ago": a new `agedProgress()` re-derives
+age, staleness and the stale word from the frozen observation and the live clock, while every record
+of what was actually said — label, state, evidence, evidence word, timestamps — stays frozen. Two
+unit tests cover it.
+
+**Finding 4 (NOTE) — a restarted session may cite a file its previous process published.** ACCEPTED
+as designed and documented. `resolveEvidence` checks session, direction and state, not incarnation,
+which is exactly the decided contract ("published by this session"); Fable said it would not change
+it. Took its suggestion of one line in `docs/agent-control.md` so the rule is not a surprise.
+
+Fable's own confirmations, each with coordinates in the receipt: eligibility correct including the
+null-session case and owner tokens; atomicity and ordering correct, with resolution before the
+out-of-order read and links written inside the same transaction as the observation; the deletion
+asymmetry correct, with no artifact-delete path anywhere in `apps/desktop/src`; the detail disturbs
+nothing, cross-checked against the receipt's 0 input events and unchanged 510px surface; the
+extractions lose no behaviour; Epic 5's four state colours, `attentionProvenance()` and the workspace
+marker are untouched. Departures from its design: three judged right, one (the `observedAt`-only
+comparison) judged wrong and now fixed.
+
+Boundaries Fable did not examine, recorded as unreviewed: the preload/IPC policy for
+`previewArtifact`, backup restore, Telegram, the companion-service proxy to the worker,
+`test-hook.ts`, the visual rendering of the new CSS, and macOS.
+
+## Evidence gap I closed on my own re-read, before the reviews landed
+
+I had claimed the strip's four state colours survive the word becoming a button, on specificity
+reasoning alone. The visual suite measures Epic 14's activity word (`.session-state`/`.pane-state`),
+not `.progress-strip .state`, so nothing measured it. The probe now reads the computed inks and the
+palette tokens and asserts `verifiedInk === --verified`, `failedInk === --error`,
+`evidenceInk === --muted`, that the evidence ink is not the verified token, and that both clear 4.5:1
+against the strip's own background. Green in `electron-5.log` and after.

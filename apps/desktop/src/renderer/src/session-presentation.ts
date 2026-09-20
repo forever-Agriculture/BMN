@@ -186,6 +186,27 @@ export interface ProgressPresentation {
   evidenceWord: string
   /** Identifies this exact observation, so an open detail can tell when a newer one replaced it. */
   observedAt: string
+  /** When BMN stored it. Two reports can share an `observedAt`; they cannot share this. */
+  receivedAt: string
+}
+
+/**
+ * The same observation read at a later moment. A detail opened minutes ago must not keep saying
+ * "0 s ago": its words are frozen deliberately, its age is not.
+ */
+export function agedProgress(progress: ProgressPresentation, now: number): ProgressPresentation {
+  const stale = now - Date.parse(progress.observedAt) > PROGRESS_STALE_AFTER_MS
+  return {
+    ...progress,
+    stale,
+    word: progressWord(progress.state, stale),
+    age: relativeAge(progress.observedAt, now)
+  }
+}
+
+function progressWord(state: ProgressState, stale: boolean): string {
+  if (!stale) return PROGRESS_WORDS[state]
+  return PROGRESS_STALE_WORDS[state] ?? `Last observed ${PROGRESS_WORDS[state].toLocaleLowerCase()}`
 }
 
 /** The newest observation for a session, with age and a stale word after the freshness window. */
@@ -205,16 +226,15 @@ export function progressPresentation(
   return {
     label: newest.label,
     state: newest.state,
-    word: stale
-      ? PROGRESS_STALE_WORDS[newest.state] ?? `Last observed ${PROGRESS_WORDS[newest.state].toLocaleLowerCase()}`
-      : PROGRESS_WORDS[newest.state],
+    word: progressWord(newest.state, stale),
     source: newest.source,
     age: relativeAge(newest.observedAt, now),
     stale,
     detail: newest.detail,
     evidence,
     evidenceWord: evidence.length === 0 ? 'No evidence attached' : `Evidence attached (${evidence.length})`,
-    observedAt: newest.observedAt
+    observedAt: newest.observedAt,
+    receivedAt: newest.receivedAt
   }
 }
 

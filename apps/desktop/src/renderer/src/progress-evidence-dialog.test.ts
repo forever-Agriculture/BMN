@@ -75,7 +75,8 @@ describe('progress provenance', () => {
     detail: null,
     evidence: [],
     evidenceWord: 'No evidence attached',
-    observedAt: '2026-09-14T11:55:00.000Z'
+    observedAt: '2026-09-14T11:55:00.000Z',
+    receivedAt: '2026-09-14T11:55:00.000Z'
   }
 
   it('says what was reported, by whom and how long ago', () => {

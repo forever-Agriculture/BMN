@@ -10,6 +10,7 @@ import {
   neighbor,
   splitCandidates,
   nextRequest,
+  agedProgress,
   progressPresentation,
   relativeAge,
   requestsAnsweredByTyping,
@@ -82,7 +83,8 @@ describe('session presentation', () => {
     expect(sessionStatus(session, true, [update])).toEqual({ dot: 'needs-you', word: 'Update available' })
     const failed = {
       label: 'Build', state: 'failed' as const, word: 'Failed', source: 'agent', age: '2 min ago', stale: false,
-      detail: null, evidence: [], evidenceWord: 'No evidence attached', observedAt: '2026-09-14T11:58:00.000Z'
+      detail: null, evidence: [], evidenceWord: 'No evidence attached',
+      observedAt: '2026-09-14T11:58:00.000Z', receivedAt: '2026-09-14T11:58:00.000Z'
     }
     expect(sessionStatus(session, true, [update], failed)).toEqual({
       dot: 'exited', word: 'Failed · agent, 2 min ago'
@@ -115,13 +117,15 @@ describe('session presentation', () => {
     expect(sessionStatus(session, true, [update], null, working).word).toBe('Update available')
     const failed = {
       label: 'Build', state: 'failed' as const, word: 'Failed', source: 'agent', age: '2 min ago', stale: false,
-      detail: null, evidence: [], evidenceWord: 'No evidence attached', observedAt: '2026-09-14T11:58:00.000Z'
+      detail: null, evidence: [], evidenceWord: 'No evidence attached',
+      observedAt: '2026-09-14T11:58:00.000Z', receivedAt: '2026-09-14T11:58:00.000Z'
     }
     expect(sessionStatus(session, true, [], failed, working).dot).toBe('exited')
     // An agent's own claim is not merged into the observed word; a stale claim no longer outranks it.
     const claimed = {
       label: 'Epic 14', state: 'running' as const, word: 'Running', source: 'agent', age: '1 min ago', stale: false,
-      detail: null, evidence: [], evidenceWord: 'No evidence attached', observedAt: '2026-09-14T11:59:00.000Z'
+      detail: null, evidence: [], evidenceWord: 'No evidence attached',
+      observedAt: '2026-09-14T11:59:00.000Z', receivedAt: '2026-09-14T11:59:00.000Z'
     }
     expect(sessionStatus(session, true, [], claimed, resting)).toEqual({ dot: 'running-idle', word: 'Idle' })
     // Activity never reaches a session that is not live.
@@ -201,6 +205,36 @@ describe('session presentation', () => {
     // Every state carries the evidence word, not only the ones that claim success.
     expect(at('running', '2026-09-14T11:55:00.000Z', [{ artifactId: 'a1', name: 'partial.log' }]))
       .toMatchObject({ word: 'Running', evidenceWord: 'Evidence attached (1)' })
+  })
+
+  it('re-ages an open detail without changing the words it was opened with', () => {
+    const opened = progressPresentation([{
+      sessionId: 's1', incarnationId: null, source: 'agent', state: 'verified', label: 'Checks',
+      detail: null, evidence: [{ artifactId: 'a1', name: 'checks.log' }],
+      observedAt: '2026-09-14T11:58:00.000Z', receivedAt: '2026-09-14T11:58:00.000Z'
+    }], 's1', now)!
+
+    expect(opened).toMatchObject({ word: 'Reported verified', age: '2 min ago', stale: false })
+
+    // Twenty minutes later the same observation is older, and says so, in the same honest voice.
+    const later = agedProgress(opened, Date.parse('2026-09-14T12:20:00.000Z'))
+    expect(later).toMatchObject({ word: 'Last reported verified', age: '22 min ago', stale: true })
+    // Everything that is a record of what was said stays exactly as it was.
+    expect(later.label).toBe(opened.label)
+    expect(later.state).toBe(opened.state)
+    expect(later.evidence).toEqual(opened.evidence)
+    expect(later.evidenceWord).toBe(opened.evidenceWord)
+    expect(later.observedAt).toBe(opened.observedAt)
+    expect(later.receivedAt).toBe(opened.receivedAt)
+  })
+
+  it('carries the stored time, so two reports at the same observed time are still distinguishable', () => {
+    const at = (receivedAt: string) => progressPresentation([{
+      sessionId: 's1', incarnationId: null, source: 'agent', state: 'running', label: 'Replayed',
+      detail: null, evidence: [], observedAt: '2026-09-14T11:58:00.000Z', receivedAt
+    }], 's1', now)!
+
+    expect(at('2026-09-14T11:58:00.000Z').receivedAt).not.toBe(at('2026-09-14T11:59:00.000Z').receivedAt)
   })
 
   it('shows progress only for the requested process incarnation', () => {

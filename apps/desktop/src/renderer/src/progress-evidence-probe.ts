@@ -24,8 +24,25 @@ export interface ProgressEvidenceProbe {
     gridBefore: { cols: number; rows: number }
     gridAfter: { cols: number; rows: number }
   }
+  /**
+   * Epic 5 kept four legible progress states; turning the word into a button must not cost that.
+   * Each ink is the palette token it was, and the evidence word stays muted so no colour endorses
+   * a claim. Contrast is against the strip's own background.
+   */
+  colours: {
+    verifiedInk: string
+    verifiedToken: string
+    failedInk: string
+    errorToken: string
+    evidenceInk: string
+    mutedToken: string
+    verifiedContrast: number
+    evidenceContrast: number
+  }
   /** Escape closes it and hands focus back to the word that opened it. */
   focusReturnedToStrip: boolean
+  /** Closing a detail opened from the More menu hands focus back to that menu's button. */
+  focusReturnedToMenuButton: boolean
   /** The keyboard route: the pane's More menu, since xterm eats Tab inside the terminal. */
   openedFromPaneMenu: boolean
   /** This pane's own detail, opened from its menu: the same surface with nothing behind the claim. */

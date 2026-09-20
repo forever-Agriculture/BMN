@@ -137,7 +137,18 @@ describe('renderer acceptance hook', () => {
           gridBefore: { cols: 80, rows: 24 },
           gridAfter: { cols: 80, rows: 24 }
         },
+        colours: {
+          verifiedInk: 'rgb(126, 200, 135)',
+          verifiedToken: 'rgb(126, 200, 135)',
+          failedInk: 'rgb(224, 108, 117)',
+          errorToken: 'rgb(224, 108, 117)',
+          evidenceInk: 'rgb(163, 163, 163)',
+          mutedToken: 'rgb(163, 163, 163)',
+          verifiedContrast: 8.1,
+          evidenceContrast: 7.6
+        },
         focusReturnedToStrip: true,
+        focusReturnedToMenuButton: true,
         openedFromPaneMenu: true,
         bareDialog: { title: 'Progress — Session B', body: 'No evidence attached to this report.' }
       },

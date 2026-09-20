@@ -10,7 +10,7 @@ import {
   originalStateLabel,
   useArtifactPreview
 } from './artifact-presentation'
-import type { ProgressPresentation } from './session-presentation'
+import { agedProgress, type ProgressPresentation } from './session-presentation'
 
 interface EvidenceRow {
   artifactId: string
@@ -81,12 +81,16 @@ export function ProgressEvidenceDialog(props: {
   /** Why this detail must close itself instead of describing a session that is gone. */
   gone: 'session' | 'process' | null
   artifacts: readonly ArtifactRecord[]
+  /** The shell's clock, so a detail left open keeps telling the truth about how old the report is. */
+  now: number
   onClose(): void
   onAnnounce(message: string): void
   onFailure(message: string): void
   onNotice(message: string): void
 }): React.JSX.Element {
-  const [snapshot, setSnapshot] = useState<ProgressPresentation>(props.opened)
+  const [opened, setSnapshot] = useState<ProgressPresentation>(props.opened)
+  // The words are frozen at open; the age is not, or a detail left open keeps saying "0 s ago".
+  const snapshot = agedProgress(opened, props.now)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [pending, setPending] = useState<ReadonlySet<string>>(new Set())
   const firstRow = useRef<HTMLButtonElement>(null)
@@ -96,7 +100,14 @@ export function ProgressEvidenceDialog(props: {
   onAnnounce.current = props.onAnnounce
   onClose.current = props.onClose
 
-  const replacement = props.current && props.current.observedAt !== snapshot.observedAt ? props.current : null
+  // Two reports can carry the same `observedAt` — a caller repeating `--observed`, a replayed script —
+  // so the stored time decides as well. Missing a replacement would leave stale files on screen.
+  const replaced = props.current !== null && (
+    props.current.observedAt !== opened.observedAt ||
+    props.current.receivedAt !== opened.receivedAt ||
+    props.current.source !== opened.source
+  )
+  const replacement = replaced ? props.current : null
   const rows = evidenceRows(snapshot.evidence, props.artifacts)
   const selected = rows.find((row) => row.artifactId === selectedId && row.ready) ?? null
   const { preview, error: previewError, loading: previewLoading } = useArtifactPreview(selected?.artifactId ?? null)
@@ -112,7 +123,7 @@ export function ProgressEvidenceDialog(props: {
   useEffect(() => {
     if (!replacement) return
     onAnnounce.current('A newer progress report replaced the one you opened.')
-  }, [replacement?.observedAt])
+  }, [replacement?.observedAt, replacement?.receivedAt])
 
   function showNewest(): void {
     if (!replacement) return

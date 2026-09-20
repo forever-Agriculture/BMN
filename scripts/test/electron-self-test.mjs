@@ -247,7 +247,17 @@ const receiptContract = [
       receipt.progressEvidenceSurface?.bareStrip?.includes('No evidence attached') === true &&
       receipt.progressEvidenceSurface?.dialog?.previewText?.includes('self-test: 3 checks passed') === true &&
       receipt.progressEvidenceSurface?.dialog?.rowName === 'checks.log' &&
+      // Epic 5's four states stay legible, and only the muted evidence word is added beside them.
+      receipt.progressEvidenceSurface?.colours?.verifiedInk ===
+        receipt.progressEvidenceSurface?.colours?.verifiedToken &&
+      receipt.progressEvidenceSurface?.colours?.failedInk ===
+        receipt.progressEvidenceSurface?.colours?.errorToken &&
+      receipt.progressEvidenceSurface?.colours?.evidenceInk ===
+        receipt.progressEvidenceSurface?.colours?.mutedToken &&
+      receipt.progressEvidenceSurface?.colours?.verifiedContrast >= 4.5 &&
+      receipt.progressEvidenceSurface?.colours?.evidenceContrast >= 4.5 &&
       receipt.progressEvidenceSurface?.focusReturnedToStrip === true &&
+      receipt.progressEvidenceSurface?.focusReturnedToMenuButton === true &&
       receipt.progressEvidenceSurface?.openedFromPaneMenu === true &&
       receipt.progressEvidenceSurface?.bareDialog?.body?.includes('No evidence attached to this report.') === true &&
       // The whole reason the detail is a dialog: no PTY write and no terminal resize.

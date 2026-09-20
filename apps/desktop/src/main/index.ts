@@ -1085,7 +1085,18 @@ interface RendererIntegrationProbe {
       gridBefore: { cols: number; rows: number }
       gridAfter: { cols: number; rows: number }
     }
+    colours: {
+      verifiedInk: string
+      verifiedToken: string
+      failedInk: string
+      errorToken: string
+      evidenceInk: string
+      mutedToken: string
+      verifiedContrast: number
+      evidenceContrast: number
+    }
     focusReturnedToStrip: boolean
+    focusReturnedToMenuButton: boolean
     openedFromPaneMenu: boolean
     bareDialog: { title: string; body: string }
   }
@@ -2553,10 +2564,24 @@ async function runSelfTest(): Promise<void> {
       !evidenceSurface.dialog.rowAvailability.startsWith('text/plain · ') ||
       !evidenceSurface.dialog.previewText.includes('self-test: 3 checks passed') ||
       !evidenceSurface.focusReturnedToStrip ||
+      !evidenceSurface.focusReturnedToMenuButton ||
       !evidenceSurface.openedFromPaneMenu ||
       !evidenceSurface.bareDialog.body.includes('No evidence attached to this report.')
     ) {
       throw new Error(`the progress detail did not read honestly: ${JSON.stringify(evidenceSurface)}`)
+    }
+    // Epic 5's four states must stay legible now that the word is a button, and the evidence word
+    // must stay muted: no colour may endorse a claim.
+    const inks = evidenceSurface.colours
+    if (
+      inks.verifiedInk !== inks.verifiedToken ||
+      inks.failedInk !== inks.errorToken ||
+      inks.evidenceInk !== inks.mutedToken ||
+      inks.evidenceInk === inks.verifiedToken ||
+      inks.verifiedContrast < 4.5 ||
+      inks.evidenceContrast < 4.5
+    ) {
+      throw new Error(`the strip state button lost its palette: ${JSON.stringify(inks)}`)
     }
     const quiet = evidenceSurface.quiet
     if (

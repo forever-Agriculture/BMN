@@ -1896,6 +1896,7 @@ function App(): React.JSX.Element {
           current={observedProgressFor(dialog.session)}
           gone={progressDetailGone(dialog.session, dialog.incarnationId)}
           artifacts={artifacts}
+          now={now}
           onClose={() => setDialog(null)}
           onAnnounce={announce}
           onFailure={setFailure}
