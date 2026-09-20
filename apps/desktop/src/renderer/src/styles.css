@@ -432,20 +432,41 @@ input[type='radio'] {
   color: var(--attention);
 }
 
+/*
+ * The failure bar's red used to run the full window width along its bottom edge, directly against the
+ * gold selection outline of the pane beneath it: two saturated 1px lines touching, meaning two
+ * different things (owner, 2026-09-20; design review the same day). The red moved to a short accent at
+ * the reading start of the message and the bottom edge became the ordinary hairline seam, so nothing
+ * red runs alongside the gold. Selection keeps its token, its shape and its precedence.
+ */
 .feedback-notice {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 7px 12px;
-  border-bottom: 1px solid var(--error);
+  padding: 7px 12px 7px 15px;
+  border-bottom: 1px solid var(--hairline);
   color: var(--text);
   background: var(--raised);
   font-size: 13px;
 }
 
+/* Not on `.brief`, which is a confirmation and was never red. */
+.feedback-notice:not(.brief)::before {
+  content: '';
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 0;
+  width: 3px;
+  background: var(--error);
+  pointer-events: none;
+}
+
 /* Brief confirmations float above the panes so terminals do not refit each time one appears. */
 .feedback-notice.brief {
   position: fixed;
+  padding-left: 12px;
   bottom: 44px;
   left: 50%;
   z-index: 30;
