@@ -106,8 +106,8 @@ export interface DraftSendExpectation {
 }
 
 /** The header's emblem and motto, chosen independently of the colors. */
-export type IdentityName = 'knight' | 'cross'
-export const IDENTITY_NAMES: readonly IdentityName[] = Object.freeze(['knight', 'cross'])
+export type IdentityName = 'knight' | 'cross' | 'boss'
+export const IDENTITY_NAMES: readonly IdentityName[] = Object.freeze(['knight', 'cross', 'boss'])
 /** Chrome and terminal palette. Black is the default; Brown is the original warm Chancel look. */
 export type ColorModeName = 'steel' | 'brown' | 'dark' | 'black'
 export const COLOR_MODE_NAMES: readonly ColorModeName[] = Object.freeze(['steel', 'brown', 'dark', 'black'])

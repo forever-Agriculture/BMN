@@ -332,7 +332,7 @@ export function PreferencesDialog(props: {
             <span>Identity</span>
             <p className="preferences-help">The emblem and motto in the header.</p>
           </div>
-          <div className="preferences-row-control" role="radiogroup" aria-label="Identity">
+          <div className="preferences-row-control preferences-identities" role="radiogroup" aria-label="Identity">
             {IDENTITY_NAMES.map((identity) => (
               <label className="preferences-radio" key={identity}>
                 <input

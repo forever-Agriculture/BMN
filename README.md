@@ -47,7 +47,7 @@ Everything runs on your computer. There is no account, cloud backend or telemetr
 - **Backups.** Export a consistent snapshot of the database and stored files with a hash
   manifest, and verify it later.
 - **Appearance.** Four color palettes for the app and the terminal: near-black Black (default), Steel,
-  Brown and Dark, plus a Knight or Cross header.
+  Brown and Dark, plus a Knight, Cross or Boss header.
 - **Keyboard first.** `Ctrl+Shift+P` opens the command palette, and every action is reachable
   from the keyboard.
 

@@ -1,11 +1,12 @@
-// MODULE: theme.ts - Knight and Cross identities, and the Steel, Brown, Dark and Black palettes for app chrome and the terminal
+// MODULE: theme.ts - Knight, Cross and Boss identities, and the Steel, Brown, Dark and Black palettes for app chrome and the terminal
 import type { AppearanceSettings, ColorModeName, IdentityName } from '@bmn/protocol'
 import type { ITheme } from '@xterm/xterm'
 
 /** The header's emblem and motto. */
-export const IDENTITY_PRESENTATION: Readonly<Record<IdentityName, { label: string; icon: 'sword' | 'cross'; motto: string }>> = Object.freeze({
+export const IDENTITY_PRESENTATION: Readonly<Record<IdentityName, { label: string; icon: 'sword' | 'cross' | 'trophy'; motto: string }>> = Object.freeze({
   knight: { label: 'Knight', icon: 'sword', motto: 'Audentes Fortuna Iuvat' },
-  cross: { label: 'Cross', icon: 'cross', motto: 'Soli Deo Gloria' }
+  cross: { label: 'Cross', icon: 'cross', motto: 'Soli Deo Gloria' },
+  boss: { label: 'Boss', icon: 'trophy', motto: 'Veni, Vidi, Vici' }
 })
 
 export const COLOR_MODE_PRESENTATION: Readonly<Record<ColorModeName, { label: string; description: string }>> = Object.freeze({

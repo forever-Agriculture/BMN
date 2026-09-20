@@ -227,6 +227,8 @@ describe('companion store', () => {
     expect(getSettings(database)).toEqual(DEFAULT_APP_SETTINGS)
     putSettingsSection(database, 'appearance', { identity: 'cross', colorMode: 'dark', terminalFontSize: 16 }, now)
     expect(getSettings(database).appearance).toEqual({ identity: 'cross', colorMode: 'dark', terminalFontSize: 16 })
+    putSettingsSection(database, 'appearance', { identity: 'boss', colorMode: 'dark', terminalFontSize: 16 }, now)
+    expect(getSettings(database).appearance).toEqual({ identity: 'boss', colorMode: 'dark', terminalFontSize: 16 })
     expect(() => putSettingsSection(database, 'appearance', { identity: 'neon', colorMode: 'dark', terminalFontSize: 16 }, now)).toThrow(
       expect.objectContaining({ code: ERROR_CODES.invalidArgument })
     )
@@ -235,7 +237,7 @@ describe('companion store', () => {
     expect(() => putSettingsSection(database, 'appearance', { identity: 'cross', colorMode: 'dark', terminalFontSize: 99 }, now)).toThrow()
     expect(() => putSettingsSection(database, 'telegram', { ...DEFAULT_APP_SETTINGS.telegram, enabled: true }, now))
       .toThrow(/allowed chat/)
-    expect(getSettings(database).appearance).toEqual({ identity: 'cross', colorMode: 'dark', terminalFontSize: 16 })
+    expect(getSettings(database).appearance).toEqual({ identity: 'boss', colorMode: 'dark', terminalFontSize: 16 })
   })
 
   it('splits a theme stored before identity and color mode were separate choices', () => {

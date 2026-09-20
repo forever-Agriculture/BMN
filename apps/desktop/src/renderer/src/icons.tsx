@@ -1,6 +1,7 @@
 // MODULE: icons.tsx - 16px stroke icons for shell controls; always paired with a visible or accessible label
 const PATHS = {
   cross: 'M8 1.5v13M3.5 5.5h9',
+  trophy: 'M4.5 2h7v4.5a3.5 3.5 0 0 1-7 0zM4.5 3H2.5v1.5a2 2 0 0 0 2 2M11.5 3h2v1.5a2 2 0 0 1-2 2M8 10v4M5.5 14h5',
   sword: 'M5.4 9.4 11.9 2.9 13.5 2.5 13.1 4.1 6.6 10.6M4 8l4 4M5.5 10.5l-2 2M3.7 13.2a.9.9 0 1 1-1.8 0 .9.9 0 1 1 1.8 0',
   split: 'M2.5 3.5h11v9h-11zM8 3.5v9',
   focus: 'M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10',

@@ -46,6 +46,13 @@
   gap: 8px;
 }
 
+/* Three identities, each with a motto, stack one per line instead of wrapping unevenly. */
+.preferences-dialog .preferences-identities {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
 .preferences-dialog .preferences-help {
   margin: 0;
   font-size: 12px;
