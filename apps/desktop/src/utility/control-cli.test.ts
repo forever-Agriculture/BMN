@@ -63,6 +63,7 @@ async function cliFixture() {
     publishArtifact: vi.fn(async (): Promise<unknown> => ({ artifactId: 'artifact-1' })),
     reportProgress: vi.fn<ControlHandlers['reportProgress']>(async () => ({ recorded: true })),
     openAttention: vi.fn<ControlHandlers['openAttention']>(async () => ({ opened: true })),
+    observeConversation: vi.fn<ControlHandlers['observeConversation']>(async () => ({ accepted: true, detail: 'observed' })),
     withdrawAttention: vi.fn<ControlHandlers['withdrawAttention']>(async () => ({ withdrawn: true })),
     resolveAttention: vi.fn<ControlHandlers['resolveAttention']>(async () => ({ resolved: true })),
     submitInput: vi.fn<ControlHandlers['submitInput']>(async () => undefined)
@@ -272,6 +273,7 @@ async function procTree(root: string, agent: ProcessStat): Promise<string> {
 }
 
 const HOLDS_TERMINAL: ProcessStat = { comm: 'claude', tty: 34817, group: 7001, foreground: 7001 }
+const OBSERVED_REFERENCE = '01a0b657-21a8-7f00-addd-b73646828f5b'
 const QUIET = { code: 0, stdout: '', stderr: '' }
 
 async function runHook(
@@ -484,6 +486,85 @@ describe('bmn hook', () => {
       title: 'Codex finished its turn',
       body: 'Review complete'
     }))
+  })
+
+  it.each([
+    ['claude', 'startup', { transcript_path: '/home/owner/.claude/projects/p/abc.jsonl' }],
+    ['claude', 'clear', {}],
+    ['codex', 'resume', {}],
+    ['codex', 'fork', {}]
+  ])('reports the conversation %s is in when SessionStart says %s, on top of the withdrawals', async (agent, source, extra) => {
+    const fixture = await cliFixture()
+
+    const result = await runHook(fixture, agent, {
+      hook_event_name: 'SessionStart',
+      source,
+      session_id: OBSERVED_REFERENCE,
+      ...extra
+    })
+
+    expect(result).toEqual(QUIET)
+    expect(fixture.handlers.withdrawAttention.mock.calls.map(([params]) => params.requestKey)).toEqual([
+      `${agent}:permission`, `${agent}:question`, `${agent}:turn`
+    ])
+    expect(fixture.handlers.observeConversation).toHaveBeenCalledTimes(1)
+    expect(fixture.handlers.observeConversation.mock.calls[0]?.[0]).toEqual({
+      sessionId: 'session-1',
+      incarnationId: 'incarnation-1',
+      agentCli: agent,
+      conversationReference: OBSERVED_REFERENCE,
+      source,
+      ...('transcript_path' in extra ? { transcriptPath: extra.transcript_path } : {})
+    })
+  })
+
+  it.each([
+    ['compaction, which stays in the same conversation', { source: 'compact', session_id: OBSERVED_REFERENCE }],
+    ['a payload with no session id', { source: 'startup' }],
+    ['a session id that is not a UUID', { source: 'startup', session_id: 'rollout-2026' }],
+    ['a non-string session id', { source: 'startup', session_id: 42 }],
+    ['a subagent payload', { source: 'startup', session_id: OBSERVED_REFERENCE, agent_id: 'explorer' }],
+    ['an unknown source', { source: 'restore', session_id: OBSERVED_REFERENCE }]
+  ])('reports no conversation for %s', async (_label, event) => {
+    const fixture = await cliFixture()
+
+    const result = await runHook(fixture, 'claude', { hook_event_name: 'SessionStart', ...event })
+
+    expect(result).toEqual(QUIET)
+    expect(fixture.handlers.observeConversation).not.toHaveBeenCalled()
+    expect(fixture.handlers.withdrawAttention).toHaveBeenCalledTimes(
+      (event as { source?: string }).source === 'compact' ? 0 : 3
+    )
+  })
+
+  it('keeps the withdrawals when the app refuses the conversation it reported', async () => {
+    const fixture = await cliFixture()
+    fixture.handlers.observeConversation.mockRejectedValue(
+      new ControlError(ERROR_CODES.invalidArgument, 'conversationReference must be a UUID')
+    )
+
+    const result = await runHook(fixture, 'codex', {
+      hook_event_name: 'SessionStart',
+      source: 'startup',
+      session_id: OBSERVED_REFERENCE
+    })
+
+    expect(result).toEqual(QUIET)
+    expect(fixture.handlers.withdrawAttention).toHaveBeenCalledTimes(3)
+  })
+
+  it('reports nothing from a nested agent, whose conversation is not the owner\'s', async () => {
+    const fixture = await cliFixture()
+
+    const result = await runHook(
+      fixture,
+      'claude',
+      { hook_event_name: 'SessionStart', source: 'startup', session_id: OBSERVED_REFERENCE },
+      { comm: 'claude', tty: 0, group: 7001, foreground: -1 }
+    )
+
+    expect(result).toEqual(QUIET)
+    expect(fixture.handlers.observeConversation).not.toHaveBeenCalled()
   })
 
   it('ignores an agent that does not hold the terminal, such as claude -p run from a tool call', async () => {

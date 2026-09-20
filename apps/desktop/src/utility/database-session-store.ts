@@ -1,6 +1,6 @@
 import type {
-  ExplicitConversationBinding,
-  PersistedConversationBinding
+  PersistedConversationBinding,
+  ReplaceableConversationBinding
 } from '@bmn/protocol'
 import {
   clearConversationBinding,
@@ -131,7 +131,7 @@ export function getSessionConversationBinding(
 
 export function replaceSessionConversationBinding(
   database: DatabaseConnection,
-  binding: ExplicitConversationBinding
+  binding: ReplaceableConversationBinding
 ): PersistedConversationBinding {
   return database.transaction(() => replaceConversationBinding(database, binding))()
 }

@@ -10,6 +10,9 @@ const TIMEOUT_MS = 10_000
 /** A hook runs inside the agent's turn, so a stalled app must not hold the agent up for long. */
 const HOOK_TIMEOUT_MS = 3_000
 const PROGRESS_STATES = ['running', 'waiting', 'blocked', 'claimed-done', 'verified', 'failed', 'unknown']
+/** SessionStart sources that mean the process is now in a different conversation; `compact` is not one. */
+const CONVERSATION_SOURCES = ['startup', 'resume', 'clear', 'fork']
+const CONVERSATION_REFERENCE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const ATTENTION_KINDS = ['question', 'permission', 'review', 'notice']
 const VALUE_OPTIONS = new Set([
   'name', 'session', 'key', 'source', 'detail', 'observed', 'kind', 'body', 'expires', 'socket', 'token-file'
@@ -399,6 +402,27 @@ function resumesByItself(event) {
   return [event.background_tasks, event.session_crons].some((list) => Array.isArray(list) && list.length > 0)
 }
 
+/**
+ * The harness names the conversation its process is in when a session starts, resumes, is cleared
+ * or is forked. Subagent payloads carry `agent_id` and speak for a nested conversation, not the
+ * owner's, so they are ignored the way the nested-agent gate ignores a `claude -p` helper.
+ */
+function conversationObservation(agent, event) {
+  if (!CONVERSATION_SOURCES.includes(event.source)) return undefined
+  if (event.agent_id !== undefined && event.agent_id !== null) return undefined
+  if (typeof event.session_id !== 'string' || !CONVERSATION_REFERENCE.test(event.session_id)) return undefined
+  const transcript = event.transcript_path
+  return {
+    method: 'conversation.observe',
+    params: {
+      agentCli: agent,
+      conversationReference: event.session_id,
+      source: event.source,
+      ...(typeof transcript === 'string' && transcript.startsWith('/') ? { transcriptPath: transcript } : {})
+    }
+  }
+}
+
 /** Maps one Claude Code or Codex hook event to the attention calls that keep Needs you truthful. */
 function hookRequests(agent, event) {
   const name = HOOK_AGENTS[agent]
@@ -459,8 +483,13 @@ function hookRequests(agent, event) {
         ...open('turn', 'notice', `${name} finished its turn`, bodyText(event.last_assistant_message))
       ]
     }
-    case 'SessionStart':
-      return event.source === 'compact' ? [] : withdraw('permission', 'question', 'turn')
+    case 'SessionStart': {
+      // Compaction keeps the same conversation and the same open requests.
+      if (event.source === 'compact') return []
+      const observation = conversationObservation(agent, event)
+      const withdrawals = withdraw('permission', 'question', 'turn')
+      return observation ? [...withdrawals, observation] : withdrawals
+    }
     case 'SessionEnd':
       return withdraw('permission', 'question', 'turn')
     case 'Interrupt':

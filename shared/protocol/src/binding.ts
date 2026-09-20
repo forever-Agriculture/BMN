@@ -19,7 +19,24 @@ export interface BoundConversationBinding extends ConversationBindingBase {
   agentCli: 'claude' | 'codex'
   status: 'bound'
   conversationReference: string
-  captureRoute: 'claude-session-id' | 'explicit-resume-reference'
+  captureRoute: 'claude-session-id' | 'explicit-resume-reference' | 'hook-session-start'
+}
+
+/** The harness's own SessionStart word: which conversation the running process is in right now. */
+export type ConversationObservationSource = 'startup' | 'resume' | 'clear' | 'fork'
+
+export interface ConversationObservation {
+  sessionId: string
+  incarnationId: string | null
+  agentCli: 'claude' | 'codex'
+  conversationReference: string
+  source: ConversationObservationSource
+  transcriptPath?: string
+}
+
+export interface ConversationObservationResult {
+  accepted: boolean
+  detail: string
 }
 
 export interface MissingConversationBinding extends ConversationBindingBase {

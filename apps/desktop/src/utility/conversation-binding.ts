@@ -5,6 +5,8 @@ import type {
   AgentCli,
   BoundConversationBinding,
   ConversationLaunchContext,
+  ConversationObservationSource,
+  HookConversationBinding,
   PersistedConversationBinding,
   UnsupportedConversationBinding
 } from '@bmn/protocol'
@@ -344,8 +346,11 @@ export function parseBoundBinding(input: unknown): PersistedConversationBinding 
     if (
       (candidate.agentCli === 'claude' &&
         candidate.captureRoute !== 'claude-session-id' &&
-        candidate.captureRoute !== 'explicit-resume-reference') ||
-      (candidate.agentCli === 'codex' && candidate.captureRoute !== 'explicit-resume-reference')
+        candidate.captureRoute !== 'explicit-resume-reference' &&
+        candidate.captureRoute !== 'hook-session-start') ||
+      (candidate.agentCli === 'codex' &&
+        candidate.captureRoute !== 'explicit-resume-reference' &&
+        candidate.captureRoute !== 'hook-session-start')
     ) {
       return invalidBoundBinding(input, 'stored capture route does not match the bound agent CLI')
     }
@@ -612,6 +617,208 @@ export async function prepareConversationLaunch(
   }
 }
 
+/**
+ * Codex CLI version whose `codex resume --help` this option table was read from, by hand, on
+ * 2026-09-20. The table is never parsed at runtime: a newer CLI is checked by hand and the
+ * constant and its unit test are updated together.
+ */
+export const CODEX_RESUME_OPTIONS_CLI_VERSION = '0.155.1'
+
+type CodexOptionArity = 'none' | 'required' | 'variadic'
+
+/**
+ * Every option `codex resume` accepts on {@link CODEX_RESUME_OPTIONS_CLI_VERSION}, by the exact
+ * spelling a launch command may use. `--help` and `--version` are deliberately absent: carrying
+ * them would print a page instead of resuming. `--last`, `--all` and `--include-non-interactive`
+ * are resume-only, so a plain `codex` launch can never carry them.
+ */
+export const CODEX_RESUME_OPTIONS: ReadonlyMap<string, CodexOptionArity> = new Map<string, CodexOptionArity>([
+  ['-a', 'required'],
+  ['--add-dir', 'required'],
+  ['--approve-for-me', 'none'],
+  ['--ask-for-approval', 'required'],
+  ['-C', 'required'],
+  ['-c', 'required'],
+  ['--cd', 'required'],
+  ['--config', 'required'],
+  ['--dangerously-bypass-approvals-and-sandbox', 'none'],
+  ['--dangerously-bypass-hook-trust', 'none'],
+  ['--disable', 'required'],
+  ['--enable', 'required'],
+  ['-i', 'variadic'],
+  ['--image', 'variadic'],
+  ['--local-provider', 'required'],
+  ['-m', 'required'],
+  ['--model', 'required'],
+  ['--no-alt-screen', 'none'],
+  ['--oss', 'none'],
+  ['-p', 'required'],
+  ['--profile', 'required'],
+  ['--remote', 'required'],
+  ['--remote-auth-token-env', 'required'],
+  ['-s', 'required'],
+  ['--sandbox', 'required'],
+  ['--search', 'none'],
+  ['--strict-config', 'none'],
+  ['--worktree', 'none']
+])
+
+export interface CodexResumeArguments {
+  carried: string[]
+  droppedOptions: string[]
+  droppedPositionals: number
+}
+
+/**
+ * Splits a stored Codex launch command into the options `codex resume` still accepts and the rest.
+ * Anything unrecognised is dropped rather than guessed at, so a mistake can only lose an option,
+ * never invent one; the value of an unknown option is dropped with it as a positional. The
+ * conversation id goes first in the rebuilt command so a variadic `--image` cannot swallow it.
+ */
+export function codexResumeArguments(argv: readonly string[]): CodexResumeArguments {
+  const carried: string[] = []
+  const droppedOptions: string[] = []
+  let droppedPositionals = 0
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index]!
+    if (token === '--') {
+      droppedPositionals += argv.length - index - 1
+      break
+    }
+    if (token.length < 2 || !token.startsWith('-')) {
+      droppedPositionals += 1
+      continue
+    }
+    const equals = token.indexOf('=')
+    const name = equals === -1 ? token : token.slice(0, equals)
+    const arity = CODEX_RESUME_OPTIONS.get(name)
+    if (arity === undefined) {
+      droppedOptions.push(name)
+      continue
+    }
+    if (arity === 'none' || equals !== -1) {
+      carried.push(token)
+      continue
+    }
+    if (arity === 'required') {
+      const value = argv[index + 1]
+      if (value === undefined) {
+        droppedOptions.push(name)
+        continue
+      }
+      carried.push(token, value)
+      index += 1
+      continue
+    }
+    const values: string[] = []
+    while (index + 1 < argv.length && !argv[index + 1]!.startsWith('-')) {
+      index += 1
+      values.push(argv[index]!)
+    }
+    if (values.length === 0) droppedOptions.push(name)
+    else carried.push(token, ...values)
+  }
+  return { carried, droppedOptions, droppedPositionals }
+}
+
+/** Names what Resume leaves behind, without repeating a prompt the owner typed. */
+export function describeDroppedCodexArguments(dropped: CodexResumeArguments): string | undefined {
+  const parts = [...dropped.droppedOptions]
+  if (dropped.droppedPositionals === 1) parts.push('1 other argument')
+  else if (dropped.droppedPositionals > 1) parts.push(`${dropped.droppedPositionals} other arguments`)
+  return parts.length === 0 ? undefined : parts.join(', ')
+}
+
+/** The exact command a hook-captured Codex binding resumes with, for the detail the owner reads. */
+export function codexResumeCommand(binding: BoundConversationBinding): string {
+  const { carried } = codexResumeArguments(binding.launchContext.argv)
+  return [
+    binding.launchContext.executable,
+    'resume',
+    binding.conversationReference,
+    ...carried
+  ].join(' ')
+}
+
+/** The control socket's detail limit, so every composed binding detail fits a request field. */
+export const MAX_BINDING_DETAIL_CHARACTERS = 2_000
+
+const OBSERVATION_AGENT_NAMES: Readonly<Record<'claude' | 'codex', string>> = {
+  claude: 'Claude Code',
+  codex: 'Codex'
+}
+
+const OBSERVATION_SOURCE_PHRASES: Readonly<Record<ConversationObservationSource, string>> = {
+  startup: 'at session start',
+  resume: 'when the conversation resumed',
+  clear: 'after the conversation was cleared',
+  fork: 'after the conversation was forked'
+}
+
+export function conversationObservationDetail(
+  parts: readonly (string | undefined)[]
+): string {
+  return parts.filter((part): part is string => !!part).join('; ').slice(0, MAX_BINDING_DETAIL_CHARACTERS)
+}
+
+/** "Reported by Codex at session start" - the harness's own word, named by its source. */
+export function conversationObservationSourceDetail(
+  agent: 'claude' | 'codex',
+  source: ConversationObservationSource
+): string {
+  return `Reported by ${OBSERVATION_AGENT_NAMES[agent]} ${OBSERVATION_SOURCE_PHRASES[source]}`
+}
+
+export interface ConversationObservationInput {
+  agentCli: 'claude' | 'codex'
+  conversationReference: string
+  source: ConversationObservationSource
+  transcriptPath?: string
+}
+
+/**
+ * Turns an accepted SessionStart observation into the binding it replaces the stored one with.
+ * The launch context stays the session's own; only the conversation the process is in changes.
+ */
+export function bindingFromObservation(
+  observation: ConversationObservationInput,
+  current: PersistedConversationBinding,
+  capturedAt: string
+): HookConversationBinding {
+  const replaced = current.status === 'bound' &&
+    current.conversationReference !== observation.conversationReference
+    ? `replaces ${current.conversationReference}`
+    : undefined
+  const binding: HookConversationBinding = {
+    sessionId: current.sessionId,
+    agentCli: observation.agentCli,
+    status: 'bound',
+    conversationReference: observation.conversationReference,
+    captureRoute: 'hook-session-start',
+    launchContext: {
+      cwd: current.launchContext.cwd,
+      executable: current.launchContext.executable,
+      argv: [...current.launchContext.argv],
+      environment: { ...current.launchContext.environment }
+    },
+    detail: '',
+    capturedAt
+  }
+  const dropped = observation.agentCli === 'codex'
+    ? describeDroppedCodexArguments(codexResumeArguments(binding.launchContext.argv))
+    : undefined
+  return {
+    ...binding,
+    detail: conversationObservationDetail([
+      conversationObservationSourceDetail(observation.agentCli, observation.source),
+      replaced,
+      observation.transcriptPath === undefined ? undefined : `transcript ${observation.transcriptPath}`,
+      observation.agentCli === 'codex' ? `Resume runs: ${codexResumeCommand(binding)}` : undefined,
+      dropped === undefined ? undefined : `not carried: ${dropped}`
+    ])
+  }
+}
+
 export function buildNativeResumeLaunch(
   binding: BoundConversationBinding,
   claudeGrammar?: ClaudeOptionGrammar
@@ -626,11 +833,18 @@ export function buildNativeResumeLaunch(
     if (!claudeGrammar) {
       throw new Error('Stored Claude launch context requires a probed option grammar')
     }
-    const parsed = claudeArguments(binding.launchContext.argv, claudeGrammar, false)
-    if (parsed.unsafeReason || parsed.explicitSessionId) {
+    // A hook-captured binding keeps the argv BMN launched with, which may still hold the selector
+    // BMN pinned then; the harness's own word supersedes it rather than blocking Resume.
+    const fromHook = binding.captureRoute === 'hook-session-start'
+    const parsed = claudeArguments(binding.launchContext.argv, claudeGrammar, fromHook)
+    if (parsed.unsafeReason || (parsed.explicitSessionId && !fromHook)) {
       throw new Error(parsed.unsafeReason ?? 'Stored Claude launch context contains a selector')
     }
     argv = [...parsed.contextArgv, '--resume', binding.conversationReference]
+  } else if (binding.captureRoute === 'hook-session-start') {
+    // A hook-captured binding keeps the session's full argv, so Resume carries what `codex resume`
+    // still accepts and drops the rest, which the binding detail names.
+    argv = ['resume', binding.conversationReference, ...codexResumeArguments(binding.launchContext.argv).carried]
   } else {
     if (binding.launchContext.argv.length > 0) {
       throw new Error('Stored Codex resume context must not contain arguments')

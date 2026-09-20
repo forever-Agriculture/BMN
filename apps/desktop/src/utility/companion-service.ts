@@ -230,6 +230,7 @@ export class CompanionService {
         publishArtifact: (p) => this.controlCall(() => this.publishArtifact(p)),
         reportProgress: (p) => this.controlCall(() => this.reportProgress(p)),
         openAttention: (p) => this.controlCall(() => this.openAttention(p)),
+        observeConversation: (p) => this.controlCall(() => options.manager.observeConversation(p)),
         withdrawAttention: (p) => this.controlCall(() => this.closeAttentionByKey(p.sessionId, p.requestKey, 'withdrawn', null)),
         resolveAttention: (p) => this.controlCall(() => this.closeAttentionByKey(p.sessionId, p.requestKey, 'answered', p.resolution)),
         submitInput: (p) => this.controlCall(async () => {

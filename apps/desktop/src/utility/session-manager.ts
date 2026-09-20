@@ -17,8 +17,11 @@ import {
   type BackgroundChoice,
   type BoundConversationBinding,
   type ConversationBindingState,
+  type ConversationObservation,
+  type ConversationObservationResult,
   type ExplicitConversationBinding,
   type PersistedConversationBinding,
+  type ReplaceableConversationBinding,
   type ProtocolErrorCode,
   type SavedOutputCapture,
   type SavedOutputCatalog,
@@ -45,9 +48,13 @@ import { TerminalByteFramer } from './terminal-byte-framer'
 import {
   agentCli,
   applyCapturedLaunchEnvironment,
+  bindingFromObservation,
   buildNativeResumeLaunch,
   conversationIdentity,
+  conversationObservationDetail,
+  conversationObservationSourceDetail,
   conversationReferenceExists,
+  isLowercaseConversationReference,
   parseBoundBinding,
   parseClaudeHelpOptionGrammar,
   prepareConversationLaunch,
@@ -104,7 +111,7 @@ export interface SessionStore extends StoredSessionReader {
   createResuming(record: CreateResumingRecord): Promise<void>
   getConversationBinding(sessionId: string): Promise<PersistedConversationBinding | undefined>
   replaceConversationBinding(
-    binding: ExplicitConversationBinding
+    binding: ReplaceableConversationBinding
   ): Promise<PersistedConversationBinding>
   clearConversationBinding(sessionId: string): Promise<boolean>
   markRunning(incarnationId: string): Promise<void>
@@ -239,6 +246,8 @@ type ConversationReservationState = 'resuming' | 'live' | 'exit-unconfirmed'
 
 interface ConversationReservation {
   conversationIdentity: string
+  /** The session the reservation was claimed for, so a refused claim can name the holder. */
+  sessionId: string
   state: ConversationReservationState
   live?: LiveSession
 }
@@ -399,6 +408,8 @@ export class SessionManager {
   private readonly onSessionStateChange: (message: SessionProcessStateChangedMessage) => void
   private readonly claudeSessionIdCapabilities = new Map<string, Promise<ClaudeCapabilityProbeResult>>()
   private readonly conversationBindings = new Map<string, PersistedConversationBinding>()
+  /** One SessionStart observation at a time per session, so a claim swap is never interleaved. */
+  private readonly conversationObservations = new Map<string, Promise<unknown>>()
   private readonly conversationReservations = new Map<string, ConversationReservation>()
   /** Sessions with a Start again or Resume between its checks and its process being tracked. */
   private readonly launchingSessions = new Set<string>()
@@ -442,7 +453,7 @@ export class SessionManager {
       () => this.claudeSessionIdCapability(params)
     )
     const bindingIdentity = conversationIdentity(prepared.binding)
-    const reservation = bindingIdentity ? this.claimConversation(bindingIdentity) : undefined
+    const reservation = bindingIdentity ? this.claimConversation(bindingIdentity, sessionId) : undefined
     const live = await this.startIncarnation(
       sessionId,
       {
@@ -526,6 +537,116 @@ export class SessionManager {
     const cleared = await this.store.clearConversationBinding(sessionId)
     this.conversationBindings.delete(sessionId)
     return { cleared }
+  }
+
+  /**
+   * The harness's own SessionStart word about which conversation its process is in. The latest
+   * accepted observation from the live incarnation wins, because the process, not the launch
+   * command, knows where it is. A refusal changes nothing and says why.
+   */
+  async observeConversation(
+    observation: ConversationObservation
+  ): Promise<ConversationObservationResult> {
+    const queued = (this.conversationObservations.get(observation.sessionId) ?? Promise.resolve())
+      .then(() => this.applyConversationObservation(observation))
+    this.conversationObservations.set(
+      observation.sessionId,
+      queued.then(() => undefined, () => undefined)
+    )
+    return queued
+  }
+
+  private async applyConversationObservation(
+    observation: ConversationObservation
+  ): Promise<ConversationObservationResult> {
+    const refuse = (reason: string): ConversationObservationResult => ({
+      accepted: false,
+      detail: conversationObservationDetail([
+        conversationObservationSourceDetail(observation.agentCli, observation.source),
+        `refused: ${reason}`
+      ])
+    })
+    const live = this.sessions.get(observation.sessionId)
+    if (!live || live.exited) return refuse('the session has no live process')
+    if (observation.incarnationId !== null && observation.incarnationId !== live.incarnationId) {
+      return refuse('the reporting process incarnation is no longer live')
+    }
+    const launched = agentCli(live.executable)
+    if (launched !== observation.agentCli) {
+      return refuse(`the session was launched as ${launched}, not ${observation.agentCli}`)
+    }
+    // The control socket admits any 8-4-4-4-12 hex reference; only a storable UUID can be bound.
+    if (!isLowercaseConversationReference(observation.conversationReference)) {
+      return refuse('the reported conversation reference is not a storable UUID')
+    }
+    const stored = await this.store.getConversationBinding(observation.sessionId)
+    const current = stored ? parseBoundBinding(stored) : undefined
+    if (!current) return refuse('the session has no stored conversation binding')
+    // A live session may have exited while the binding was read.
+    if (this.sessions.get(observation.sessionId) !== live || live.exited) {
+      return refuse('the session has no live process')
+    }
+    const identity = `${observation.agentCli}:${observation.conversationReference}`
+    const alreadyBound = current.status === 'bound' &&
+      current.agentCli === observation.agentCli &&
+      current.conversationReference === observation.conversationReference
+    if (!alreadyBound) {
+      const holder = this.conversationReservations.get(identity)
+      if (holder && holder !== live.conversationReservation) {
+        const name = await this.storedSessionName(holder.sessionId)
+        return refuse(`already resumed in ${JSON.stringify(name)}`)
+      }
+    }
+    const binding = bindingFromObservation(observation, current, new Date().toISOString())
+    const restoreClaim = this.swapConversationClaim(live, identity)
+    try {
+      const persisted = await this.store.replaceConversationBinding(binding)
+      this.conversationBindings.set(observation.sessionId, persisted)
+    } catch (error) {
+      restoreClaim()
+      throw error
+    }
+    return { accepted: true, detail: binding.detail }
+  }
+
+  private async storedSessionName(sessionId: string): Promise<string> {
+    const stored = await findStoredSession(this.store, sessionId).catch(() => undefined)
+    return stored?.name ?? sessionId
+  }
+
+  /**
+   * Moves a live session's conversation claim to the identity the harness reported: the new
+   * reservation is acquired, the old one released and the live session re-attached, so teardown
+   * releases the identity the session actually holds.
+   */
+  private swapConversationClaim(live: LiveSession, identity: string): () => void {
+    const previous = live.conversationReservation
+    if (previous && previous.conversationIdentity === identity) return () => undefined
+    const reservation: ConversationReservation = {
+      conversationIdentity: identity,
+      sessionId: live.sessionId,
+      state: 'live',
+      live
+    }
+    this.conversationReservations.set(identity, reservation)
+    if (previous && this.conversationReservations.get(previous.conversationIdentity) === previous) {
+      this.conversationReservations.delete(previous.conversationIdentity)
+    }
+    live.conversationIdentity = identity
+    live.conversationReservation = reservation
+    return () => {
+      if (this.conversationReservations.get(identity) === reservation) {
+        this.conversationReservations.delete(identity)
+      }
+      if (previous) {
+        this.conversationReservations.set(previous.conversationIdentity, previous)
+        live.conversationIdentity = previous.conversationIdentity
+        live.conversationReservation = previous
+        return
+      }
+      delete live.conversationIdentity
+      delete live.conversationReservation
+    }
   }
 
   /**
@@ -618,7 +739,7 @@ export class SessionManager {
     let reservation: ConversationReservation
     let releaseLaunch: () => void
     try {
-      reservation = this.claimConversation(bindingIdentity)
+      reservation = this.claimConversation(bindingIdentity, params.sessionId)
     } catch (error) {
       return Promise.reject(error)
     }
@@ -1425,10 +1546,10 @@ export class SessionManager {
     return () => this.launchingSessions.delete(sessionId)
   }
 
-  private claimConversation(conversationIdentity: string): ConversationReservation {
+  private claimConversation(conversationIdentity: string, sessionId: string): ConversationReservation {
     const existing = this.conversationReservations.get(conversationIdentity)
     if (!existing) {
-      const reservation: ConversationReservation = { conversationIdentity, state: 'resuming' }
+      const reservation: ConversationReservation = { conversationIdentity, sessionId, state: 'resuming' }
       this.conversationReservations.set(conversationIdentity, reservation)
       return reservation
     }

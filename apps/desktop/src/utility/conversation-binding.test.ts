@@ -3,8 +3,12 @@ import { describe, expect, it, vi } from 'vitest'
 import type { BoundConversationBinding } from '@bmn/protocol'
 import {
   CLAUDE_IDENTITY_NEUTRAL_OPTIONS,
+  CODEX_RESUME_OPTIONS,
+  CODEX_RESUME_OPTIONS_CLI_VERSION,
+  bindingFromObservation,
   buildNativeResumeLaunch,
   captureRelevantLaunchEnvironment,
+  codexResumeArguments,
   parseClaudeHelpOptionGrammar,
   parseBoundBinding,
   prepareConversationLaunch,
@@ -98,6 +102,24 @@ function boundClaude(argv: readonly string[]): BoundConversationBinding {
       environment: captureRelevantLaunchEnvironment({ CLAUDE_CONFIG_DIR: '/config/claude' })
     },
     detail: 'pinned before spawn',
+    capturedAt
+  }
+}
+
+function hookCodex(argv: readonly string[]): BoundConversationBinding {
+  return {
+    sessionId: 'app-session',
+    agentCli: 'codex',
+    status: 'bound',
+    conversationReference: conversationId,
+    captureRoute: 'hook-session-start',
+    launchContext: {
+      cwd: '/workspace',
+      executable: '/usr/bin/codex',
+      argv: [...argv],
+      environment: captureRelevantLaunchEnvironment({ CODEX_HOME: '/config/codex' })
+    },
+    detail: 'reported by the harness',
     capturedAt
   }
 }
@@ -474,6 +496,125 @@ describe('conversation identity capture and native resume', () => {
       executable: '/usr/bin/claude',
       argv: ['--model', 'sonnet', '--resume', conversationId],
       environment: captureRelevantLaunchEnvironment({ CLAUDE_CONFIG_DIR: '/config/claude' })
+    })
+  })
+})
+
+describe('conversation identity reported by the harness SessionStart hook', () => {
+  it('pins the Codex resume options read by hand from codex resume --help', () => {
+    expect(CODEX_RESUME_OPTIONS_CLI_VERSION).toBe('0.155.1')
+    expect([...CODEX_RESUME_OPTIONS.keys()]).toEqual([
+      '-a', '--add-dir', '--approve-for-me', '--ask-for-approval', '-C', '-c', '--cd', '--config',
+      '--dangerously-bypass-approvals-and-sandbox', '--dangerously-bypass-hook-trust',
+      '--disable', '--enable', '-i', '--image', '--local-provider', '-m', '--model',
+      '--no-alt-screen', '--oss', '-p', '--profile', '--remote', '--remote-auth-token-env',
+      '-s', '--sandbox', '--search', '--strict-config', '--worktree'
+    ])
+    // Carrying either would print a page instead of resuming the conversation.
+    expect(CODEX_RESUME_OPTIONS.has('--help')).toBe(false)
+    expect(CODEX_RESUME_OPTIONS.has('--version')).toBe(false)
+  })
+
+  it.each([
+    ['a flag and a valued option', ['--search', '-m', 'gpt-6'], ['--search', '-m', 'gpt-6'], [], 0],
+    ['an attached value', ['--model=gpt-6'], ['--model=gpt-6'], [], 0],
+    ['a variadic image list', ['-i', 'a.png', 'b.png', '--oss'], ['-i', 'a.png', 'b.png', '--oss'], [], 0],
+    ['an option codex resume does not accept', ['--full-auto'], [], ['--full-auto'], 0],
+    ['a prompt', ['Do the thing'], [], [], 1],
+    ['an option missing its value', ['--model'], [], ['--model'], 0],
+    ['everything after a literal separator', ['--search', '--', '-m', 'x'], ['--search'], [], 2]
+  ])('splits %s into carried and dropped launch arguments', (_name, argv, carried, options, positionals) => {
+    expect(codexResumeArguments(argv)).toEqual({
+      carried,
+      droppedOptions: options,
+      droppedPositionals: positionals
+    })
+  })
+
+  it('resumes a hook-captured Codex conversation with the id first and the accepted options after', () => {
+    expect(buildNativeResumeLaunch(hookCodex(['--model', 'gpt-6', '--full-auto', 'a prompt']))).toEqual({
+      cwd: '/workspace',
+      executable: '/usr/bin/codex',
+      argv: ['resume', conversationId, '--model', 'gpt-6'],
+      environment: captureRelevantLaunchEnvironment({ CODEX_HOME: '/config/codex' })
+    })
+  })
+
+  it('still refuses stored arguments on the explicit Codex resume route', () => {
+    expect(() =>
+      buildNativeResumeLaunch({ ...hookCodex(['--model', 'gpt-6']), captureRoute: 'explicit-resume-reference' })
+    ).toThrow(/must not contain arguments/)
+  })
+
+  it('lets the harness word supersede a selector Claude was pinned with, and nothing else', () => {
+    expect(buildNativeResumeLaunch(
+      { ...boundClaude(['--session-id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '--model', 'sonnet']), captureRoute: 'hook-session-start' },
+      claudeGrammar
+    ).argv).toEqual(['--model', 'sonnet', '--resume', conversationId])
+    expect(() => buildNativeResumeLaunch(
+      { ...boundClaude(['--resume', conversationId]), captureRoute: 'hook-session-start' },
+      claudeGrammar
+    )).toThrow()
+  })
+
+  it.each([
+    ['claude', 'hook-session-start'],
+    ['codex', 'hook-session-start']
+  ] as const)('admits a %s binding captured from the hook through the shared parser', (agent, route) => {
+    const base = agent === 'claude' ? boundClaude([]) : hookCodex([])
+    expect(parseBoundBinding({ ...base, captureRoute: route })).toMatchObject({
+      status: 'bound',
+      agentCli: agent,
+      captureRoute: 'hook-session-start'
+    })
+  })
+
+  it('names the source, the replaced conversation and the command Resume runs', () => {
+    const binding = bindingFromObservation(
+      { agentCli: 'codex', conversationReference: conversationId, source: 'startup' },
+      { ...hookCodex(['--model', 'gpt-6', '--full-auto', 'a prompt']), conversationReference: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' },
+      capturedAt
+    )
+    expect(binding.captureRoute).toBe('hook-session-start')
+    expect(binding.detail).toBe(
+      'Reported by Codex at session start; replaces cccccccc-cccc-4ccc-8ccc-cccccccccccc; ' +
+      `Resume runs: /usr/bin/codex resume ${conversationId} --model gpt-6; ` +
+      'not carried: --full-auto, 1 other argument'
+    )
+  })
+
+  it('keeps the session launch context and names a Claude clear without a resume command', () => {
+    const binding = bindingFromObservation(
+      { agentCli: 'claude', conversationReference: conversationId, source: 'clear', transcriptPath: '/home/o/.claude/x.jsonl' },
+      { ...boundClaude(['--model', 'sonnet']), conversationReference: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc' },
+      capturedAt
+    )
+    expect(binding.launchContext.argv).toEqual(['--model', 'sonnet'])
+    expect(binding.detail).toBe(
+      'Reported by Claude Code after the conversation was cleared; ' +
+      'replaces cccccccc-cccc-4ccc-8ccc-cccccccccccc; transcript /home/o/.claude/x.jsonl'
+    )
+  })
+
+  it('rebinds an unsupported Codex session and says only where the word came from', () => {
+    const unsupported = {
+      sessionId: 'app-session',
+      agentCli: 'codex' as const,
+      status: 'unsupported' as const,
+      captureRoute: 'unsupported' as const,
+      launchContext: hookCodex([]).launchContext,
+      detail: 'Codex 0.154.0 cannot pin a TUI session id at launch',
+      capturedAt
+    }
+    expect(bindingFromObservation(
+      { agentCli: 'codex', conversationReference: conversationId, source: 'startup' },
+      unsupported,
+      capturedAt
+    )).toMatchObject({
+      status: 'bound',
+      captureRoute: 'hook-session-start',
+      conversationReference: conversationId,
+      detail: `Reported by Codex at session start; Resume runs: /usr/bin/codex resume ${conversationId}`
     })
   })
 })

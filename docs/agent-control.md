@@ -103,6 +103,7 @@ agent, and they do nothing outside BMN.
 | `PostToolUse`, `UserPromptSubmit` | Clears the turn notice. Claude resolves open prompts after a tool completes. Codex resolves permission after any tool and resolves a question only after synchronous `request_user_input` or `UserPromptSubmit`; an async question stays open while later tools run |
 | `Stop` | Withdraws open prompts and opens a `notice` that the turn finished, with the last message. Codex keeps a queued async question open until the owner submits input. When Claude still has background tasks or a scheduled wake-up, it opens nothing: the agent resumes without you |
 | `SessionStart` (not after compaction), `SessionEnd` | Withdraws everything the hook opened |
+| `SessionStart` with `startup`, `resume`, `clear` or `fork` | Also reports the conversation the process is now in, so Resume reopens that one |
 | Codex `Interrupt` | Withdraws open prompts |
 
 An agent passes its environment to agents it starts from a tool call (`claude -p`), so the hook
@@ -146,6 +147,10 @@ such sessions are still sent.
 - Requests are validated for schema and size before anything runs.
 - A session token can only publish, report and send for its own session, and only while that
   process incarnation is current.
+- A conversation reported by `SessionStart` is accepted only from the session's own live process,
+  only when the agent it names matches the command the session was launched with, and only as a
+  UUID. Two live sessions can never bind one conversation: the second report is refused and the
+  first session keeps it. The owner token cannot report a conversation.
 - An agent can publish only regular files inside its session's working directory or the system
   temporary folder; symlinks that escape those folders are refused. The app copies the file into
   its own store, hashes it, and never serves it back by path.

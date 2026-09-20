@@ -197,6 +197,20 @@ const receiptContract = [
     (receipt) => typeof receipt.rendererInverseTextContrast === 'number' && receipt.rendererInverseTextContrast >= 4.5
   ],
   [
+    'conversationFromHook',
+    (receipt) =>
+      receipt.conversationFromHook?.startedRoute === 'unsupported' &&
+      receipt.conversationFromHook?.reportedRoute === 'hook-session-start' &&
+      receipt.conversationFromHook?.reportedReference === '01a0b657-21a8-7f00-addd-b73646828f5b' &&
+      receipt.conversationFromHook?.reportedDetail?.startsWith('Reported by Codex at session start') &&
+      receipt.conversationFromHook?.reportedDetail?.includes('not carried: --full-auto') &&
+      receipt.conversationFromHook?.rivalRoute === 'unsupported' &&
+      JSON.stringify(receipt.conversationFromHook?.launchArguments) ===
+        JSON.stringify(['--model', 'gpt-6', '--full-auto']) &&
+      JSON.stringify(receipt.conversationFromHook?.resumedArguments) ===
+        JSON.stringify(['resume', '01a0b657-21a8-7f00-addd-b73646828f5b', '--model', 'gpt-6'])
+  ],
+  [
     'sessionProcessStatus',
     (receipt) =>
       receipt.sessionProcessStatus?.beforeRestart === 'live' &&
@@ -230,6 +244,8 @@ const exitCode = await withTemporaryRoot(temporaryRootContracts.electronSelfTest
       BMN_DATA_HOME: join(roots.data, 'bmn'),
       BMN_STATE_HOME: join(roots.state, 'bmn'),
       BMN_RUNTIME_HOME: join(roots.runtime, 'bmn'),
+      // The synthetic Codex harness runs on this Node, so the self-test needs none on PATH.
+      BMN_SELF_TEST_NODE: process.execPath,
       ...(waylandDisplay ? { WAYLAND_DISPLAY: waylandDisplay } : {})
     }
   })

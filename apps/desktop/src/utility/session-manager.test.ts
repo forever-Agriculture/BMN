@@ -3486,3 +3486,262 @@ describe('shell session lifecycle', () => {
     }
   })
 })
+
+describe('conversation identity reported by the harness', () => {
+  const OBSERVED = '01a0b657-21a8-7f00-addd-b73646828f5b'
+  const OTHER = '01a0b659-2862-7d93-a4c5-bc1bd2a47915'
+
+  async function codexFixture(argv: readonly string[] = [], names: readonly string[] = ['Codex']): Promise<{
+    manager: SessionManager
+    store: FakeStore
+    executable: string
+    cwd: string
+    spawns: Array<{ executable: string; argv: readonly string[] }>
+    ptys: FakePty[]
+    sessions: Array<SessionIdentity & { binding: PersistedConversationBinding }>
+  }> {
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-observe-test-'))
+    createdRoots.add(cwd)
+    const executable = join(cwd, 'codex')
+    await writeFile(executable, '#!/bin/sh\n')
+    await chmod(executable, 0o700)
+    const store = new FakeStore()
+    const spawns: Array<{ executable: string; argv: readonly string[] }> = []
+    const ptys: FakePty[] = []
+    const manager = new SessionManager({
+      store,
+      spawnPty: (command, spawnArgv) => {
+        spawns.push({ executable: command, argv: [...spawnArgv] })
+        const pty = new FakePty()
+        ptys.push(pty)
+        return pty
+      },
+      processStartIdentity: async () => `linux-proc-start:${spawns.length}`,
+      conversationReferenceExists: async () => true,
+      sendTerminalMessage: () => undefined
+    })
+    const sessions = []
+    for (const name of names) {
+      sessions.push(await manager.create({
+        ...DEFAULT_SESSION_CREATION, name, cwd, executable, argv: [...argv], cols: 80, rows: 24
+      }))
+    }
+    return { manager, store, executable, cwd, spawns, ptys, sessions }
+  }
+
+  it('binds an unsupported Codex session from its own word and resumes the conversation it named', async () => {
+    const fixture = await codexFixture(['--model', 'gpt-6', '--full-auto'])
+    const [created] = fixture.sessions
+    expect(created!.binding).toMatchObject({ status: 'unsupported', captureRoute: 'unsupported' })
+
+    const observed = await fixture.manager.observeConversation({
+      sessionId: created!.sessionId,
+      incarnationId: created!.incarnationId,
+      agentCli: 'codex',
+      conversationReference: OBSERVED,
+      source: 'startup'
+    })
+
+    expect(observed).toEqual({
+      accepted: true,
+      detail: `Reported by Codex at session start; Resume runs: ${fixture.executable} resume ${OBSERVED} --model gpt-6; not carried: --full-auto`
+    })
+    await expect(fixture.manager.conversationBinding(created!.sessionId)).resolves.toMatchObject({
+      status: 'bound',
+      agentCli: 'codex',
+      captureRoute: 'hook-session-start',
+      conversationReference: OBSERVED
+    })
+
+    fixture.ptys[0]!.emitExit({ exitCode: 0 })
+    await vi.waitFor(async () => {
+      await expect(fixture.manager.health()).resolves.toMatchObject({ liveSessions: 0 })
+    })
+    await fixture.manager.resume({ sessionId: created!.sessionId, cols: 80, rows: 24 })
+
+    expect(fixture.spawns.at(-1)).toMatchObject({
+      executable: fixture.executable,
+      argv: ['resume', OBSERVED, '--model', 'gpt-6']
+    })
+  })
+
+  it('refreshes the capture time when the harness repeats the conversation it already reported', async () => {
+    const fixture = await codexFixture()
+    const [created] = fixture.sessions
+    const observe = (): Promise<unknown> => fixture.manager.observeConversation({
+      sessionId: created!.sessionId,
+      incarnationId: created!.incarnationId,
+      agentCli: 'codex',
+      conversationReference: OBSERVED,
+      source: 'startup'
+    })
+
+    await observe()
+    const first = await fixture.manager.conversationBinding(created!.sessionId)
+    await new Promise((resolve) => setTimeout(resolve, 2))
+    await observe()
+    const second = await fixture.manager.conversationBinding(created!.sessionId)
+
+    expect(second).toMatchObject({ status: 'bound', conversationReference: OBSERVED })
+    expect(Date.parse(second.capturedAt)).toBeGreaterThanOrEqual(Date.parse(first.capturedAt))
+  })
+
+  it('follows the conversation a cleared Claude session moved to and says which one it replaced', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-observe-claude-test-'))
+    createdRoots.add(cwd)
+    const executable = join(cwd, 'claude')
+    await writeFile(executable, '#!/bin/sh\n')
+    await chmod(executable, 0o700)
+    const store = new FakeStore()
+    const manager = new SessionManager({
+      store,
+      spawnPty: (_command, argv) => {
+        const pty = new FakePty()
+        if (argv.length === 1 && argv[0] === '--help') completeCapabilityProbe(pty)
+        return pty
+      },
+      processStartIdentity: async () => 'linux-proc-start:claude',
+      conversationReferenceExists: async () => true,
+      sendTerminalMessage: () => undefined
+    })
+    const created = await manager.create({
+      ...DEFAULT_SESSION_CREATION, cwd, executable, argv: ['--model', 'sonnet'], cols: 80, rows: 24
+    })
+    const pinned = created.binding.status === 'bound' ? created.binding.conversationReference : 'unreachable'
+
+    const observed = await manager.observeConversation({
+      sessionId: created.sessionId,
+      incarnationId: created.incarnationId,
+      agentCli: 'claude',
+      conversationReference: OBSERVED,
+      source: 'clear'
+    })
+
+    expect(observed).toEqual({
+      accepted: true,
+      detail: `Reported by Claude Code after the conversation was cleared; replaces ${pinned}`
+    })
+    await expect(manager.conversationBinding(created.sessionId)).resolves.toMatchObject({
+      captureRoute: 'hook-session-start',
+      conversationReference: OBSERVED,
+      launchContext: { argv: ['--model', 'sonnet'] }
+    })
+  })
+
+  it('refuses a conversation another live session already holds and keeps the stored binding', async () => {
+    const fixture = await codexFixture([], ['BMN lead', 'Second'])
+    const [lead, second] = fixture.sessions
+    await fixture.manager.observeConversation({
+      sessionId: lead!.sessionId,
+      incarnationId: lead!.incarnationId,
+      agentCli: 'codex',
+      conversationReference: OBSERVED,
+      source: 'startup'
+    })
+
+    const refused = await fixture.manager.observeConversation({
+      sessionId: second!.sessionId,
+      incarnationId: second!.incarnationId,
+      agentCli: 'codex',
+      conversationReference: OBSERVED,
+      source: 'startup'
+    })
+
+    expect(refused).toEqual({
+      accepted: false,
+      detail: 'Reported by Codex at session start; refused: already resumed in "BMN lead"'
+    })
+    await expect(fixture.manager.conversationBinding(second!.sessionId)).resolves.toMatchObject({
+      status: 'unsupported',
+      captureRoute: 'unsupported'
+    })
+    await expect(fixture.manager.conversationBinding(lead!.sessionId)).resolves.toMatchObject({
+      conversationReference: OBSERVED
+    })
+  })
+
+  it('releases the conversation it swapped to, and the one it left, when the process ends', async () => {
+    const fixture = await codexFixture([], ['First', 'Second'])
+    const [first, second] = fixture.sessions
+    await fixture.manager.observeConversation({
+      sessionId: first!.sessionId,
+      incarnationId: first!.incarnationId,
+      agentCli: 'codex',
+      conversationReference: OBSERVED,
+      source: 'startup'
+    })
+    // The same session then reports a different conversation, so only the latest is held.
+    await fixture.manager.observeConversation({
+      sessionId: first!.sessionId,
+      incarnationId: first!.incarnationId,
+      agentCli: 'codex',
+      conversationReference: OTHER,
+      source: 'clear'
+    })
+
+    const freed = await fixture.manager.observeConversation({
+      sessionId: second!.sessionId,
+      incarnationId: second!.incarnationId,
+      agentCli: 'codex',
+      conversationReference: OBSERVED,
+      source: 'startup'
+    })
+    expect(freed).toMatchObject({ accepted: true })
+
+    fixture.ptys[0]!.emitExit({ exitCode: 0 })
+    await vi.waitFor(async () => {
+      await expect(fixture.manager.health()).resolves.toMatchObject({ liveSessions: 1 })
+    })
+    // The identity the first session ended on is free again; the one the second holds is not.
+    await expect(fixture.manager.resume({ sessionId: first!.sessionId, cols: 80, rows: 24 }))
+      .resolves.toMatchObject({ binding: { conversationReference: OTHER } })
+  })
+
+  it.each([
+    ['the launch classification does not match', (id: SessionIdentity) => ({
+      sessionId: id.sessionId, incarnationId: id.incarnationId, agentCli: 'claude' as const,
+      conversationReference: OBSERVED, source: 'startup' as const
+    }), 'the session was launched as codex, not claude'],
+    ['the reporting incarnation is stale', (id: SessionIdentity) => ({
+      sessionId: id.sessionId, incarnationId: 'incarnation-gone', agentCli: 'codex' as const,
+      conversationReference: OBSERVED, source: 'startup' as const
+    }), 'the reporting process incarnation is no longer live'],
+    ['the reference is not a storable UUID', (id: SessionIdentity) => ({
+      sessionId: id.sessionId, incarnationId: id.incarnationId, agentCli: 'codex' as const,
+      conversationReference: 'ffffffff-ffff-ffff-ffff-ffffffffffff', source: 'startup' as const
+    }), 'the reported conversation reference is not a storable UUID']
+  ])('refuses and stores nothing when %s', async (_label, build, reason) => {
+    const fixture = await codexFixture()
+    const [created] = fixture.sessions
+
+    const refused = await fixture.manager.observeConversation(build(created!))
+
+    expect(refused.accepted).toBe(false)
+    expect(refused.detail).toContain(`refused: ${reason}`)
+    await expect(fixture.manager.conversationBinding(created!.sessionId)).resolves.toMatchObject({
+      status: 'unsupported'
+    })
+  })
+
+  it('refuses a conversation reported after the process has gone', async () => {
+    const fixture = await codexFixture()
+    const [created] = fixture.sessions
+    fixture.ptys[0]!.emitExit({ exitCode: 0 })
+    await vi.waitFor(async () => {
+      await expect(fixture.manager.health()).resolves.toMatchObject({ liveSessions: 0 })
+    })
+
+    const refused = await fixture.manager.observeConversation({
+      sessionId: created!.sessionId,
+      incarnationId: created!.incarnationId,
+      agentCli: 'codex',
+      conversationReference: OBSERVED,
+      source: 'startup'
+    })
+
+    expect(refused).toEqual({
+      accepted: false,
+      detail: 'Reported by Codex at session start; refused: the session has no live process'
+    })
+  })
+})

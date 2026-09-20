@@ -20,6 +20,8 @@ export class ControlError extends Error {
 
 export type ProgressState = 'running' | 'waiting' | 'blocked' | 'claimed-done' | 'verified' | 'failed' | 'unknown'
 export type AttentionKind = 'question' | 'permission' | 'review' | 'notice'
+export type ConversationAgentCli = 'claude' | 'codex'
+export type ConversationObservationSource = 'startup' | 'resume' | 'clear' | 'fork'
 
 export interface ControlHandlers {
   /** Revocation: session tokens are valid only while their incarnation is the current live one. */
@@ -54,6 +56,15 @@ export interface ControlHandlers {
     expiresAt?: string
     /** The agent's own app already notifies the owner's phone. */
     phoneNotified?: boolean
+  }): Promise<unknown>
+  /** The harness's own word about which conversation its process is in; never reachable by the owner token. */
+  observeConversation(p: {
+    sessionId: string
+    incarnationId: string | null
+    agentCli: ConversationAgentCli
+    conversationReference: string
+    source: ConversationObservationSource
+    transcriptPath?: string
   }): Promise<unknown>
   withdrawAttention(p: { sessionId: string; requestKey: string }): Promise<unknown>
   resolveAttention(p: { sessionId: string; requestKey: string; resolution: string }): Promise<unknown>
@@ -131,6 +142,12 @@ const PROGRESS_STATES: readonly ProgressState[] = [
   'running', 'waiting', 'blocked', 'claimed-done', 'verified', 'failed', 'unknown'
 ]
 const ATTENTION_KINDS: readonly AttentionKind[] = ['question', 'permission', 'review', 'notice']
+const CONVERSATION_AGENT_CLIS: readonly ConversationAgentCli[] = ['claude', 'codex']
+const CONVERSATION_OBSERVATION_SOURCES: readonly ConversationObservationSource[] = [
+  'startup', 'resume', 'clear', 'fork'
+]
+/** 8-4-4-4-12 hex, the shape both Claude Code session ids and Codex rollout ids use. */
+const CONVERSATION_REFERENCE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/
 const SESSION_TOKEN_TEXT = /s1\.[A-Za-z0-9_:-]+\.[A-Za-z0-9_:-]+\.[0-9a-fA-F]{16,}/g
 const LONG_HEX_TEXT = /[0-9a-fA-F]{32,}/g
@@ -148,6 +165,7 @@ const RULES = {
   title: { min: 1, max: 200, unit: 'characters', controls: 'reject' },
   body: { min: 1, max: 8000, unit: 'characters', controls: 'allow-whitespace' },
   resolution: { min: 1, max: 200, unit: 'characters', controls: 'reject' },
+  conversationReference: { min: 36, max: 36, unit: 'characters', controls: 'reject' },
   text: { min: 0, max: MAX_INPUT_TEXT_BYTES, unit: 'bytes', controls: 'allow' },
   timestamp: { min: 1, max: 64, unit: 'characters', controls: 'reject' }
 } satisfies Record<string, TextRule>
@@ -640,6 +658,34 @@ export class ControlServer {
           ...(expiresAt === undefined ? {} : { expiresAt }),
           ...(phoneNotified === undefined ? {} : { phoneNotified })
         }))
+      }
+      case 'conversation.observe': {
+        const params = closedParams(rawParams, [
+          'sessionId', 'agentCli', 'conversationReference', 'source', 'transcriptPath'
+        ])
+        // The owner keeps the explicit replace route; only a session may speak for its own process.
+        if (scope.kind !== 'session') {
+          throw unauthorized('Only a session credential may report its own conversation')
+        }
+        const observedCli = requireEnum(params, 'agentCli', CONVERSATION_AGENT_CLIS)
+        const conversationReference = requireText(params, 'conversationReference', RULES.conversationReference)
+        if (!CONVERSATION_REFERENCE.test(conversationReference)) {
+          throw invalid('conversationReference must be a UUID')
+        }
+        const source = requireEnum(params, 'source', CONVERSATION_OBSERVATION_SOURCES)
+        const transcriptPath = readText(params, 'transcriptPath', RULES.path)
+        if (transcriptPath !== undefined && !isAbsolute(transcriptPath)) {
+          throw invalid('transcriptPath must be absolute')
+        }
+        const sessionId = this.target(scope, params)
+        return handlers.observeConversation({
+          sessionId,
+          incarnationId: incarnationOf(scope),
+          agentCli: observedCli,
+          conversationReference: conversationReference.toLowerCase(),
+          source,
+          ...(transcriptPath === undefined ? {} : { transcriptPath })
+        })
       }
       case 'attention.withdraw': {
         const params = closedParams(rawParams, ['sessionId', 'requestKey'])

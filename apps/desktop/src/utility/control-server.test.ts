@@ -128,6 +128,7 @@ function fakeHandlers(current: Map<string, string>) {
     })),
     reportProgress: vi.fn(async (): Promise<unknown> => ({ recorded: true })),
     openAttention: vi.fn(async (): Promise<unknown> => ({ opened: true })),
+    observeConversation: vi.fn(async (): Promise<unknown> => ({ accepted: true, detail: 'observed' })),
     withdrawAttention: vi.fn(async (): Promise<unknown> => ({ withdrawn: true })),
     resolveAttention: vi.fn(async (): Promise<unknown> => ({ resolved: true })),
     submitInput: vi.fn(async (): Promise<void> => undefined)
@@ -156,6 +157,8 @@ async function authenticated(fixture: Fixture, token: string): Promise<TestClien
   expect(response.error).toBeUndefined()
   return client
 }
+
+const OBSERVED_REFERENCE = '01a0b657-21a8-7f00-addd-b73646828f5b'
 
 function sessionToken(fixture: Fixture, sessionId = 'session-1', incarnationId = 'incarnation-1'): string {
   return fixture.auth.sessionToken(sessionId, incarnationId)
@@ -256,6 +259,62 @@ describe('control server authentication', () => {
   })
 })
 
+describe('conversation observation from a session hook', () => {
+  it('passes the session, its incarnation and a lowercased reference to the handler', async () => {
+    const fixture = await serverFixture()
+    const client = await authenticated(fixture, sessionToken(fixture))
+
+    const response = await client.request('conversation.observe', {
+      agentCli: 'codex',
+      conversationReference: OBSERVED_REFERENCE.toUpperCase(),
+      source: 'clear',
+      transcriptPath: '/home/owner/.codex/sessions/rollout.jsonl'
+    })
+
+    expect(response.result).toEqual({ accepted: true, detail: 'observed' })
+    expect(fixture.handlers.observeConversation).toHaveBeenLastCalledWith({
+      sessionId: 'session-1',
+      incarnationId: 'incarnation-1',
+      agentCli: 'codex',
+      conversationReference: OBSERVED_REFERENCE,
+      source: 'clear',
+      transcriptPath: '/home/owner/.codex/sessions/rollout.jsonl'
+    })
+  })
+
+  it('refuses the owner token, which keeps its own explicit replace route', async () => {
+    const fixture = await serverFixture()
+    const client = await authenticated(fixture, fixture.auth.ownerToken)
+
+    expectError(
+      await client.request('conversation.observe', {
+        sessionId: 'session-1',
+        agentCli: 'claude',
+        conversationReference: OBSERVED_REFERENCE,
+        source: 'startup'
+      }),
+      ERROR_CODES.unauthorized
+    )
+    expect(fixture.handlers.observeConversation).not.toHaveBeenCalled()
+  })
+
+  it('refuses a session credential that names another session', async () => {
+    const fixture = await serverFixture()
+    const client = await authenticated(fixture, sessionToken(fixture))
+
+    expectError(
+      await client.request('conversation.observe', {
+        sessionId: 'session-2',
+        agentCli: 'claude',
+        conversationReference: OBSERVED_REFERENCE,
+        source: 'startup'
+      }),
+      ERROR_CODES.unauthorized
+    )
+    expect(fixture.handlers.observeConversation).not.toHaveBeenCalled()
+  })
+})
+
 describe('control server targeting', () => {
   it('lets session credentials default to and only target their own session', async () => {
     const fixture = await serverFixture()
@@ -340,7 +399,21 @@ describe('control server validation', () => {
     ['non-boolean submit', 'input.submit', { text: 'ls', submit: 'yes', idempotencyKey: 'k' }],
     ['empty text without submit', 'input.submit', { text: '', idempotencyKey: 'k' }],
     ['snapshot params', 'state.snapshot', { verbose: true }],
-    ['unknown method', 'session.kill', {}]
+    ['unknown method', 'session.kill', {}],
+    ['non-UUID conversation reference', 'conversation.observe',
+      { agentCli: 'claude', conversationReference: 'not-a-uuid-not-a-uuid-not-a-uuid-abcd', source: 'startup' }],
+    ['short conversation reference', 'conversation.observe',
+      { agentCli: 'claude', conversationReference: '11111111-1111-4111-8111-11111111111', source: 'startup' }],
+    ['unknown observation source', 'conversation.observe',
+      { agentCli: 'claude', conversationReference: OBSERVED_REFERENCE, source: 'compact' }],
+    ['unknown observation agent', 'conversation.observe',
+      { agentCli: 'gemini', conversationReference: OBSERVED_REFERENCE, source: 'startup' }],
+    ['relative transcript path', 'conversation.observe',
+      { agentCli: 'claude', conversationReference: OBSERVED_REFERENCE, source: 'startup', transcriptPath: 'x.jsonl' }],
+    ['oversize transcript path', 'conversation.observe',
+      { agentCli: 'claude', conversationReference: OBSERVED_REFERENCE, source: 'startup', transcriptPath: `/${'x'.repeat(4096)}` }],
+    ['unknown observation parameter', 'conversation.observe',
+      { agentCli: 'claude', conversationReference: OBSERVED_REFERENCE, source: 'startup', pid: 12 }]
   ])('rejects %s with INVALID_ARGUMENT and keeps the connection', async (_label, method, params) => {
     const fixture = await serverFixture()
     const client = await authenticated(fixture, sessionToken(fixture))
@@ -353,7 +426,8 @@ describe('control server validation', () => {
       fixture.handlers.reportProgress,
       fixture.handlers.openAttention,
       fixture.handlers.resolveAttention,
-      fixture.handlers.submitInput
+      fixture.handlers.submitInput,
+      fixture.handlers.observeConversation
     ]) {
       expect(handler).not.toHaveBeenCalled()
     }

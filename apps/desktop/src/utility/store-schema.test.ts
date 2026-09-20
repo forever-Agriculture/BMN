@@ -20,8 +20,8 @@ afterEach(async () => {
 })
 
 describe('owned database schema', () => {
-  it('contains the seven ordered migrations and only the owned tables', () => {
-    expect(DATABASE_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7])
+  it('contains the eight ordered migrations and only the owned tables', () => {
+    expect(DATABASE_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
     expect(STORY_SCHEMA_TABLES).toEqual([
       'app_setting',
       'artifact',
@@ -48,6 +48,9 @@ describe('owned database schema', () => {
     expect(sql).toContain('exit_signal integer')
     expect(sql).toContain('exit_detail text')
     expect(sql).toContain("status in ('bound', 'unsupported')")
+    expect(sql).toContain(
+      "'claude-session-id', 'explicit-resume-reference', 'hook-session-start', 'unsupported'"
+    )
     expect(sql).toContain('conversation_reference text')
     expect(sql).toContain('launch_environment_json text not null')
     expect(sql).toContain(DEFAULT_WORKSPACE_ID)
@@ -143,6 +146,16 @@ describe('owned database schema', () => {
         'captured Codex binding',
         firstAppliedAt
       )
+      // Every legacy route and status must survive the version 8 table rebuild unchanged.
+      database
+        .prepare(
+          `INSERT INTO conversation_binding(
+            session_id, agent_cli, status, conversation_reference, capture_route,
+            launch_cwd, launch_executable, launch_argv_json, launch_environment_json,
+            detail, captured_at
+          ) VALUES ('session-b', 'claude', 'unsupported', NULL, 'unsupported', ?, ?, '[]', '{}', ?, ?)`
+        )
+        .run('/personal/tie', '/usr/bin/claude', 'no exact binding was captured', firstAppliedAt)
       const sessionsBefore = database.prepare('SELECT * FROM session ORDER BY session_id').all()
       const workspacesBefore = database.prepare(
         `SELECT workspace_id, name, default_cwd, archived_at, revision
@@ -167,7 +180,7 @@ describe('owned database schema', () => {
       expect(database.prepare('SELECT version FROM schema_migration ORDER BY version').all())
         .toEqual([
           { version: 1 }, { version: 2 }, { version: 3 }, { version: 4 },
-          { version: 5 }, { version: 6 }, { version: 7 }
+          { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }
         ])
       expect(database.prepare('SELECT applied_at FROM schema_migration WHERE version = 3').get())
         .toEqual({ applied_at: migratedAt })
@@ -247,7 +260,8 @@ describe('owned database schema', () => {
           { version: 4, applied_at: migratedAt },
           { version: 5, applied_at: migratedAt },
           { version: 6, applied_at: migratedAt },
-          { version: 7, applied_at: migratedAt }
+          { version: 7, applied_at: migratedAt },
+          { version: 8, applied_at: migratedAt }
         ])
       expect(database.prepare('SELECT COUNT(*) AS count FROM workspace_layout').get())
         .toEqual({ count: 2 })
@@ -292,7 +306,7 @@ describe('owned database schema', () => {
         state: 'draft'
       })
       expect(database.prepare('SELECT version FROM schema_migration ORDER BY version DESC LIMIT 1').get())
-        .toEqual({ version: 7 })
+        .toEqual({ version: 8 })
     } finally {
       database.close()
     }

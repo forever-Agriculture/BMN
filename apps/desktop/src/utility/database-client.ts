@@ -2,10 +2,10 @@ import { Worker } from 'node:worker_threads'
 import {
   ERROR_CODES,
   type ArtifactRecord,
-  type ExplicitConversationBinding,
   type LaunchTemplateRecord,
   type LayoutGetResult,
   type PersistedConversationBinding,
+  type ReplaceableConversationBinding,
   type ProtocolErrorCode,
   type SessionRecord,
   type SessionUpdateParams,
@@ -104,7 +104,7 @@ export class DatabaseWorkerClient implements SessionStore {
   }
 
   async replaceConversationBinding(
-    binding: ExplicitConversationBinding
+    binding: ReplaceableConversationBinding
   ): Promise<PersistedConversationBinding> {
     return (await this.request('binding-replace', { binding })) as PersistedConversationBinding
   }

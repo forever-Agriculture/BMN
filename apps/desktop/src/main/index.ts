@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, realpathSync, truncateSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, truncateSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import {
   ERROR_CODES,
@@ -7,10 +7,12 @@ import {
   type AppSettings,
   type ArtifactRecord,
   type AttentionRecord,
+  type BoundConversationBinding,
   type ExplicitConversationBinding,
   type InputDraftRecord,
   type LaunchTemplateRecord,
   type LayoutGetResult,
+  type PersistedConversationBinding,
   type ProgressRecord,
   type ProtocolMethod,
   type SavedOutputCapture,
@@ -1308,8 +1310,67 @@ function reportSelfTestFailure(error: unknown): void {
   console.error(`[BMN] session self-test failed: ${message}`)
 }
 
+/** Resume checks that a Codex rollout exists, so the self-test gives the host its own CODEX_HOME. */
+function selfTestCodexHome(): string {
+  const home = join(process.env.BMN_STATE_HOME ?? '', 'codex-home')
+  mkdirSync(home, { recursive: true, mode: 0o700 })
+  return home
+}
+
+/**
+ * A synthetic Codex harness: it records the arguments it was started with and reports the
+ * conversation it is in through the real `bmn hook codex`, exactly as the installed CLI's
+ * SessionStart hook does. It keeps running so its session stays live.
+ */
+function writeCodexHarness(directory: string, reference: string): { executable: string; log: string } {
+  mkdirSync(directory, { recursive: true })
+  const log = join(directory, 'argv.log')
+  const executable = join(directory, 'codex')
+  writeFileSync(join(directory, 'package.json'), '{"type":"commonjs"}\n')
+  writeFileSync(
+    executable,
+    [
+      `#!${process.env.BMN_SELF_TEST_NODE ?? '/usr/bin/env node'}`,
+      "const { spawnSync } = require('node:child_process')",
+      "const { appendFileSync } = require('node:fs')",
+      "const event = JSON.stringify({",
+      "  hook_event_name: 'SessionStart',",
+      "  source: 'startup',",
+      `  session_id: ${JSON.stringify(reference)},`,
+      "})",
+      "spawnSync('bmn', ['hook', 'codex'], { input: event, stdio: ['pipe', 'ignore', 'ignore'] })",
+      `appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + '\\n')`,
+      "process.stdout.write('codex harness ready\\n')",
+      "setInterval(() => undefined, 1_000)",
+      ''
+    ].join('\n'),
+    { mode: 0o700 }
+  )
+  return { executable, log }
+}
+
+function harnessRuns(log: string): string[][] {
+  if (!existsSync(log)) return []
+  return readFileSync(log, 'utf8')
+    .split('\n')
+    .filter((line) => line.trim() !== '')
+    .map((line) => JSON.parse(line) as string[])
+}
+
+async function untilHarnessRuns(log: string, count: number): Promise<string[][]> {
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    const runs = harnessRuns(log)
+    if (runs.length >= count) return runs
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  throw new Error(`the synthetic Codex harness did not reach ${count} run(s): ${log}`)
+}
+
 async function runSelfTest(): Promise<void> {
   const { hostEntry, repoRoot } = appPaths()
+  // Set before the host starts: the utility captures CODEX_HOME into every session's launch context.
+  process.env.CODEX_HOME = selfTestCodexHome()
   await nativeFailureSelfTest(hostEntry, repoRoot)
   const launched = await launchHostWithChannel()
   let client = launched.client
@@ -2106,6 +2167,82 @@ async function runSelfTest(): Promise<void> {
     const showArchivedReachable = await applicationWindow.webContents.executeJavaScript(
       "document.body.innerText.includes('Show archived')"
     ) as boolean
+    console.error('[BMN] self-test phase: conversation reported by a session hook')
+    const hookReference = '01a0b657-21a8-7f00-addd-b73646828f5b'
+    const rolloutDirectory = join(process.env.CODEX_HOME!, 'sessions', '2026', '09', '20')
+    mkdirSync(rolloutDirectory, { recursive: true })
+    writeFileSync(join(rolloutDirectory, `rollout-2026-09-20T00-00-00-${hookReference}.jsonl`), '')
+    const reportingHarness = writeCodexHarness(join(isolatedCwd, 'codex-harness-a'), hookReference)
+    const rivalHarness = writeCodexHarness(join(isolatedCwd, 'codex-harness-b'), hookReference)
+    const reportingSession = await client.request<SessionIdentity>(METHOD_REGISTRY.sessionCreate, {
+      workspaceId: DEFAULT_WORKSPACE_ID,
+      name: 'Hook-reported Codex',
+      cwd: isolatedCwd,
+      executable: reportingHarness.executable,
+      argv: ['--model', 'gpt-6', '--full-auto'],
+      cols: 80,
+      rows: 24
+    })
+    const startedUnsupported = await client.request<PersistedConversationBinding>(
+      METHOD_REGISTRY.sessionBindingGet,
+      { sessionId: reportingSession.sessionId }
+    )
+    await untilHarnessRuns(reportingHarness.log, 1)
+    const reportedBinding = await (async (): Promise<BoundConversationBinding> => {
+      const deadline = Date.now() + 10_000
+      while (Date.now() < deadline) {
+        const binding = await client.request<PersistedConversationBinding>(
+          METHOD_REGISTRY.sessionBindingGet,
+          { sessionId: reportingSession.sessionId }
+        )
+        if (binding.status === 'bound' && binding.captureRoute === 'hook-session-start') return binding
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      throw new Error('the reported conversation never reached the binding')
+    })()
+    const rivalSession = await client.request<SessionIdentity>(METHOD_REGISTRY.sessionCreate, {
+      workspaceId: DEFAULT_WORKSPACE_ID,
+      name: 'Rival Codex',
+      cwd: isolatedCwd,
+      executable: rivalHarness.executable,
+      argv: [],
+      cols: 80,
+      rows: 24
+    })
+    await untilHarnessRuns(rivalHarness.log, 1)
+    const rivalBinding = await client.request<PersistedConversationBinding>(
+      METHOD_REGISTRY.sessionBindingGet,
+      { sessionId: rivalSession.sessionId }
+    )
+    await client.request(METHOD_REGISTRY.sessionStop, {
+      sessionId: reportingSession.sessionId,
+      incarnationId: reportingSession.incarnationId,
+      cause: 'explicit'
+    })
+    const resumedSession = await client.request<SessionIdentity>(METHOD_REGISTRY.sessionResume, {
+      sessionId: reportingSession.sessionId,
+      cols: 80,
+      rows: 24
+    })
+    const harnessRunArguments = await untilHarnessRuns(reportingHarness.log, 2)
+    for (const stopping of [
+      { sessionId: reportingSession.sessionId, incarnationId: resumedSession.incarnationId },
+      { sessionId: rivalSession.sessionId, incarnationId: rivalSession.incarnationId }
+    ]) {
+      await client.request(METHOD_REGISTRY.sessionStop, { ...stopping, cause: 'explicit' })
+    }
+    const hookPhaseSessionIds = new Set([reportingSession.sessionId, rivalSession.sessionId])
+    const conversationFromHook = {
+      startedRoute: startedUnsupported.captureRoute,
+      reportedRoute: reportedBinding.captureRoute,
+      reportedReference: reportedBinding.conversationReference,
+      reportedDetail: reportedBinding.detail,
+      rivalRoute: rivalBinding.captureRoute,
+      resumedArguments: harnessRunArguments[1] ?? null,
+      launchArguments: harnessRunArguments[0] ?? null
+    }
+    console.error(`[BMN] self-test phase: conversation reported ${JSON.stringify(conversationFromHook)}`)
+
     console.error('[BMN] self-test phase: renderer restart')
     const reloaded = waitForRendererLoad(applicationWindow)
     applicationWindow.webContents.reload()
@@ -2124,8 +2261,9 @@ async function runSelfTest(): Promise<void> {
       )
     }
     const afterRenderer = await client.request<HostHealth>(METHOD_REGISTRY.healthGet, {})
-    // The voice flow stops and starts the destination session once, which adds one incarnation record.
-    if (afterRenderer.liveSessions !== 3 || afterRenderer.incarnationRecords !== 5) {
+    // The voice flow stops and starts the destination session once, and the hook-reported Codex
+    // phase starts two sessions and resumes one, all stopped again; each adds one record.
+    if (afterRenderer.liveSessions !== 3 || afterRenderer.incarnationRecords !== 8) {
       throw new Error('renderer restart duplicated or stopped a process')
     }
     const archivedStillLive = afterRenderer.sessions.some(
@@ -2228,7 +2366,10 @@ async function runSelfTest(): Promise<void> {
     ) {
       throw new Error('application restart did not interrupt every prior live incarnation')
     }
-    if (![...restoredDefaultSessions, ...restoredArchivedSessions].every((record) =>
+    // The hook-reported Codex sessions were stopped before the restart, so they are exited, not interrupted.
+    const priorLiveSessions = [...restoredDefaultSessions, ...restoredArchivedSessions]
+      .filter((record) => !hookPhaseSessionIds.has(record.sessionId))
+    if (!priorLiveSessions.every((record) =>
       record.lastProcess?.state === 'interrupted' &&
       record.lastProcess.exitCode === null &&
       record.lastProcess.signal === null
@@ -2248,7 +2389,9 @@ async function runSelfTest(): Promise<void> {
     }
     if (
       restoredWorkspaces.length !== 2 ||
-      restoredDefaultSessions.map((item) => item.sessionId).join(',') !== defaultSessionsAfterLifecycleStop.map((item) => item.sessionId).join(',') ||
+      restoredDefaultSessions.filter((item) => !hookPhaseSessionIds.has(item.sessionId))
+        .map((item) => item.sessionId).join(',') !==
+        defaultSessionsAfterLifecycleStop.map((item) => item.sessionId).join(',') ||
       restoredArchivedSessions[0]?.sessionId !== thirdSession.sessionId ||
       restoredLayout.selectedSessionId !== preloadProbe.templateCreatedSession.sessionId ||
       restoredLayout.sessionView[session.sessionId]?.scrollLine !== 19 ||
@@ -2410,6 +2553,7 @@ async function runSelfTest(): Promise<void> {
         beforeRestart: lifecycleStoppedBeforeRestart,
         afterRestart: lifecycleStoppedAfterRestart
       },
+      conversationFromHook,
       rendererRestarted: true,
       schemaTables: restoredHealth.schemaTables,
       nativeFailureBeforeDatabase: true,

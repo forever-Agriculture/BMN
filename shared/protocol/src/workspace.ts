@@ -190,6 +190,14 @@ export interface ExplicitConversationBinding extends BoundConversationBinding {
   captureRoute: 'explicit-resume-reference'
 }
 
+/** A binding captured from the harness's SessionStart hook rather than from the launch command. */
+export interface HookConversationBinding extends BoundConversationBinding {
+  captureRoute: 'hook-session-start'
+}
+
+/** The two routes whose bindings may replace a stored one after launch. */
+export type ReplaceableConversationBinding = ExplicitConversationBinding | HookConversationBinding
+
 export interface SessionBindingReplaceParams {
   binding: ExplicitConversationBinding
 }

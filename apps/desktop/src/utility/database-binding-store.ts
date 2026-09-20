@@ -68,13 +68,19 @@ export function insertConversationBinding(
   writeConversationBinding(database, parsedForWrite(input), false)
 }
 
+/** Only a later capture may replace a stored binding: the owner's explicit reference, or the harness's own word. */
+const REPLACEABLE_ROUTES = ['explicit-resume-reference', 'hook-session-start'] as const
+
 export function replaceConversationBinding(
   database: DatabaseConnection,
   input: unknown
 ): PersistedConversationBinding {
   const binding = parsedForWrite(input)
-  if (binding.status !== 'bound' || binding.captureRoute !== 'explicit-resume-reference') {
-    throw new Error('Replacement conversation bindings require an explicit resume reference')
+  if (
+    binding.status !== 'bound' ||
+    !(REPLACEABLE_ROUTES as readonly string[]).includes(binding.captureRoute)
+  ) {
+    throw new Error('Replacement conversation bindings require an explicit resume reference or a hook observation')
   }
   writeConversationBinding(database, binding, true)
   return binding

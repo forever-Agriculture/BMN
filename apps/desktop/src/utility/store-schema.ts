@@ -299,5 +299,52 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
     sql: `
       ALTER TABLE telegram_message ADD COLUMN incarnation_id TEXT;
     `
+  },
+  {
+    // capture_route carries a SQL CHECK, which SQLite cannot alter, so the widened route needs a
+    // table rebuild: create, copy every legacy row unchanged, drop, rename.
+    version: 8,
+    sql: `
+      CREATE TABLE conversation_binding_next (
+        session_id TEXT PRIMARY KEY REFERENCES session(session_id),
+        agent_cli TEXT NOT NULL CHECK (agent_cli IN ('claude', 'codex', 'other')),
+        status TEXT NOT NULL CHECK (status IN ('bound', 'unsupported')),
+        conversation_reference TEXT,
+        capture_route TEXT NOT NULL CHECK (
+          capture_route IN (
+            'claude-session-id', 'explicit-resume-reference', 'hook-session-start', 'unsupported'
+          )
+        ),
+        launch_cwd TEXT NOT NULL,
+        launch_executable TEXT NOT NULL,
+        launch_argv_json TEXT NOT NULL,
+        launch_environment_json TEXT NOT NULL,
+        detail TEXT NOT NULL,
+        captured_at TEXT NOT NULL,
+        CHECK (
+          (
+            status = 'bound' AND agent_cli IN ('claude', 'codex') AND
+            conversation_reference IS NOT NULL AND capture_route != 'unsupported'
+          ) OR (
+            status = 'unsupported' AND conversation_reference IS NULL AND
+            capture_route = 'unsupported'
+          )
+        )
+      );
+
+      INSERT INTO conversation_binding_next(
+        session_id, agent_cli, status, conversation_reference, capture_route,
+        launch_cwd, launch_executable, launch_argv_json, launch_environment_json,
+        detail, captured_at
+      )
+      SELECT session_id, agent_cli, status, conversation_reference, capture_route,
+        launch_cwd, launch_executable, launch_argv_json, launch_environment_json,
+        detail, captured_at
+      FROM conversation_binding;
+
+      DROP TABLE conversation_binding;
+
+      ALTER TABLE conversation_binding_next RENAME TO conversation_binding;
+    `
   }
 ])
