@@ -20,9 +20,9 @@ afterEach(async () => {
 })
 
 describe('owned database schema', () => {
-  it('contains the ten ordered migrations and only the owned tables', () => {
+  it('contains the eleven ordered migrations and only the owned tables', () => {
     expect(DATABASE_MIGRATIONS.map((migration) => migration.version))
-      .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+      .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
     expect(STORY_SCHEMA_TABLES).toEqual([
       'app_setting',
       'artifact',
@@ -32,6 +32,7 @@ describe('owned database schema', () => {
       'input_draft',
       'launch_template',
       'process_incarnation',
+      'progress_evidence',
       'progress_observation',
       'schema_migration',
       'session',
@@ -54,6 +55,10 @@ describe('owned database schema', () => {
     )
     expect(sql).toContain('conversation_reference text')
     expect(sql).toContain("marker in ('none', 'slate', 'teal', 'blue', 'violet', 'rose')")
+    // Evidence belongs to its observation and goes with it; it deliberately does not reference
+    // artifact, so losing an original leaves a named, visible reference instead of erasing it.
+    expect(sql).toContain('foreign key (session_id, source) references progress_observation')
+    expect(sql).not.toMatch(/artifact_id text not null references/)
     expect(sql).toContain('launch_environment_json text not null')
     expect(sql).toContain(DEFAULT_WORKSPACE_ID)
   })
@@ -183,7 +188,7 @@ describe('owned database schema', () => {
         .toEqual([
           { version: 1 }, { version: 2 }, { version: 3 }, { version: 4 },
           { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 },
-          { version: 10 }
+          { version: 10 }, { version: 11 }
         ])
       expect(database.prepare('SELECT applied_at FROM schema_migration WHERE version = 3').get())
         .toEqual({ applied_at: migratedAt })
@@ -221,6 +226,22 @@ describe('owned database schema', () => {
         { workspace_id: DEFAULT_WORKSPACE_ID, marker: 'none' },
         { workspace_id: 'workspace-b', marker: 'none' }
       ])
+      // Every report that predates evidence reads as an empty list, and an observation still deletes
+      // its own links even when a caller forgets the child table.
+      database.prepare(
+        `INSERT INTO progress_observation(
+           session_id, source, incarnation_id, state, label, detail, observed_at, received_at
+         ) VALUES ('session-a', 'agent', NULL, 'running', 'Legacy', NULL, ?, ?)`
+      ).run(firstAppliedAt, firstAppliedAt)
+      expect(database.prepare('SELECT count(*) AS links FROM progress_evidence').get())
+        .toEqual({ links: 0 })
+      database.prepare(
+        `INSERT INTO progress_evidence(session_id, source, position, artifact_id, display_name)
+         VALUES ('session-a', 'agent', 0, 'missing-artifact', 'checks.log')`
+      ).run()
+      database.prepare("DELETE FROM progress_observation WHERE session_id = 'session-a'").run()
+      expect(database.prepare('SELECT count(*) AS links FROM progress_evidence').get())
+        .toEqual({ links: 0 })
       const layouts = database.prepare(
         'SELECT workspace_id, layout_json, revision FROM workspace_layout ORDER BY workspace_id'
       ).all() as Array<{ workspace_id: string; layout_json: string; revision: number }>
@@ -273,7 +294,8 @@ describe('owned database schema', () => {
           { version: 7, applied_at: migratedAt },
           { version: 8, applied_at: migratedAt },
           { version: 9, applied_at: migratedAt },
-          { version: 10, applied_at: migratedAt }
+          { version: 10, applied_at: migratedAt },
+          { version: 11, applied_at: migratedAt }
         ])
       expect(database.prepare('SELECT COUNT(*) AS count FROM workspace_layout').get())
         .toEqual({ count: 2 })
@@ -318,13 +340,13 @@ describe('owned database schema', () => {
         state: 'draft'
       })
       expect(database.prepare('SELECT version FROM schema_migration ORDER BY version DESC LIMIT 1').get())
-        .toEqual({ version: 10 })
+        .toEqual({ version: 11 })
     } finally {
       database.close()
     }
   })
 
-  it('gives a legacy attention row unknown provenance and changes no other table', () => {
+  it('gives a legacy attention row unknown provenance and adds only the evidence table', () => {
     const database = new BetterSqlite3(':memory:')
     try {
       for (const migration of DATABASE_MIGRATIONS.slice(0, 8)) {
@@ -359,8 +381,10 @@ describe('owned database schema', () => {
         opened_by: null,
         resolved_by: null
       })
+      // Migrations 9 and 10 only add columns; 11 adds exactly one table and touches nothing else.
       expect(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all())
-        .toEqual(tablesBefore)
+        .toEqual([...tablesBefore, { name: 'progress_evidence' }]
+          .sort((left, right) => (left as { name: string }).name.localeCompare((right as { name: string }).name)))
     } finally {
       database.close()
     }

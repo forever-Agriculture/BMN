@@ -152,7 +152,8 @@ describe('session presentation', () => {
 
   it('marks progress stale after ten minutes and uses the newest observation', () => {
     const base: Omit<ProgressRecord, 'observedAt' | 'state' | 'source'> = {
-      sessionId: 's1', incarnationId: null, label: 'Story 2.2', detail: null, receivedAt: '2026-09-14T12:00:00.000Z'
+      sessionId: 's1', incarnationId: null, label: 'Story 2.2', detail: null, evidence: [],
+      receivedAt: '2026-09-14T12:00:00.000Z'
     }
     const records: ProgressRecord[] = [
       { ...base, source: 'journal', state: 'running', observedAt: '2026-09-14T11:40:00.000Z' },
@@ -171,11 +172,11 @@ describe('session presentation', () => {
     const records: ProgressRecord[] = [
       {
         sessionId: 's1', incarnationId: 'old', source: 'agent', state: 'failed', label: 'Old run', detail: null,
-        observedAt: '2026-09-14T11:59:00.000Z', receivedAt: '2026-09-14T11:59:00.000Z'
+        evidence: [], observedAt: '2026-09-14T11:59:00.000Z', receivedAt: '2026-09-14T11:59:00.000Z'
       },
       {
         sessionId: 's1', incarnationId: 'current', source: 'agent', state: 'running', label: 'Current run', detail: null,
-        observedAt: '2026-09-14T11:58:00.000Z', receivedAt: '2026-09-14T11:58:00.000Z'
+        evidence: [], observedAt: '2026-09-14T11:58:00.000Z', receivedAt: '2026-09-14T11:58:00.000Z'
       }
     ]
     expect(progressPresentation(records, 's1', now, 'current')?.label).toBe('Current run')

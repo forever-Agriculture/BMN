@@ -11,6 +11,7 @@ export const STORY_SCHEMA_TABLES = Object.freeze([
   'input_draft',
   'launch_template',
   'process_incarnation',
+  'progress_evidence',
   'progress_observation',
   'schema_migration',
   'session',
@@ -364,6 +365,27 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
     sql: `
       ALTER TABLE workspace ADD COLUMN marker TEXT NOT NULL DEFAULT 'none'
         CHECK (marker IN ('none', 'slate', 'teal', 'blue', 'violet', 'rose'));
+    `
+  },
+  {
+    // Progress evidence: files a report points at, in one child table, so every legacy observation
+    // reads as an empty list. The link belongs to the observation and goes with it, which is why the
+    // foreign key is to progress_observation and cascades. There is deliberately NO reference to
+    // artifact: deleting or losing an original must leave a visible, named, unavailable reference
+    // rather than quietly erasing what a report claimed to rest on.
+    version: 11,
+    sql: `
+      CREATE TABLE progress_evidence (
+        session_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        position INTEGER NOT NULL CHECK (position >= 0),
+        artifact_id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        PRIMARY KEY (session_id, source, position),
+        FOREIGN KEY (session_id, source) REFERENCES progress_observation(session_id, source)
+          ON DELETE CASCADE ON UPDATE CASCADE
+      );
+      CREATE INDEX progress_evidence_by_artifact ON progress_evidence(artifact_id);
     `
   }
 ])

@@ -739,3 +739,32 @@ Left open at his request, not lost: the selected row's keyboard-focus ring (Epic
 `styles.css:665-672`) reads as a heavy white box when the sidebar is navigated by keyboard, and the
 native `title` tooltip on session rows is unstyled and overlaps rows on hover. Neither is Epic 11's;
 both would be their own piece of work.
+
+---
+
+# Run: /dev-auto 12 (Epic 12 — Inspectable Progress Evidence), started 2026-09-20T23:00+03:00
+
+Lead `claude-opus-5[1m]`, Claude Code session `c190fca0-f764-4d0d-876d-937012c0b71c`. Baseline `70c2d4c`, clean tree, identical to `origin/main`.
+
+Owner input verbatim: `/dev-auto 12` — nothing else at start. No new restrictions; the Epic 11 push grant is spent (it named that push).
+
+## Story 12.1 implemented (persistence, control boundary, CLI, docs)
+
+Design decisions taken while implementing, all inside the prepared contract (`epics.md:494`, `reference-context-8-12.md:85`):
+
+- **Where the links live.** A child table `progress_evidence(session_id, source, position, artifact_id, display_name)` with a foreign key to `progress_observation(session_id, source)` that cascades, and deliberately **no** foreign key to `artifact` (`store-schema.ts` migration 11). That is what makes "artifact deletion must not cascade-delete these links" (AC4) structural rather than a convention: losing an original leaves a named, visible reference. `position` keeps the reporter's order.
+- **Where eligibility is decided.** Inside `resolveEvidence` in the store (`database-companion-store.ts`), so validation and the write share the worker's one transaction (`database-worker.ts:252`). An ineligible ID throws `WorkspaceStoreError(invalidArgument)`, which the worker forwards by code and `toControlError` maps to `INVALID_ARGUMENT`, so AC2's "reject the whole report without changing the previous observation" and AC3's atomicity hold by construction rather than by ordering luck.
+- **Validation runs before the timestamp rule**, so a refusal never silently means "your report was too old". `applied: false` keeps its single meaning.
+- **Omission is an empty list.** `upsertProgress` deletes the observation's links before inserting, so a new report never inherits the last task's files (AC2). The CLI omits `evidenceIds` entirely when none were given; the control server reads an absent array as `[]`.
+- **CLI.** `--evidence-id` is the first repeatable option, so the parser grew a `LIST_OPTIONS` set beside `VALUE_OPTIONS`/`FLAG_OPTIONS` rather than special-casing one command. The receipt line says how many files were attached *and that they were not checked*.
+- **AC5's documentation duty** is discharged in three places that a caller actually reads: `bmn help` (the option paragraph), `bmn help agents` (one line in "Your states are claims, not verdicts", which keeps the brief at 35 lines of at most 99 characters), and `docs/agent-control.md` (a worked publish-with-`--key`-then-reference example, the eligibility rule in plain words, and an explicit paragraph that BMN neither reads the files nor judges the claim). The existing test that fails when the binary and the doc drift still passes.
+
+Fifteen regression fences, each run red-then-green with `scratchpad/fence.py` (kept out of the repo; the script rewrites one line of source, runs the guarding test, expects a failure, then restores):
+
+RED for: any artifact accepted · a lost original accepted · duplicate ids allowed · cap removed · written before validated · links inherited by the next report · out-of-order report drops the current files · name not snapshotted · read-back order lost · listed order lost · `evidenceIds` refused by the closed shape · evidence ids unchecked · `--evidence-id` not repeatable · migration 11 missing · evidence not purged with its session.
+
+Two of those started GREEN and exposed real gaps, both fixed rather than argued away:
+- Reversing `readEvidence`'s `ORDER BY position` changed nothing, because no test read a multi-link list back from the database. The out-of-order case now stores two links and asserts their order on the read-back path.
+- Removing `progress_evidence` from the purge's `SESSION_CHILD_TABLES` changed nothing, because the foreign-key cascade took the rows anyway. A new case runs the purge with `foreign_keys = OFF`, which is exactly the claim the code comment makes.
+
+Checks on this tree: `typecheck` EXIT 0, `lint` EXIT 0, `test:unit` 1,112 passed / 1 skipped (1,097 before). The epic's own runtime verification (an isolated shell publishing, reporting with the ID, and reading it back after restart) is deliberately deferred to one combined Electron pass with 12.2 rather than paying the build cost twice.

@@ -82,6 +82,10 @@ function dependents(sessionId: string): void {
      VALUES (?, 'agent', 'running', 'L', ?, ?)`
   ).run(sessionId, now, now)
   database.prepare(
+    `INSERT INTO progress_evidence(session_id, source, position, artifact_id, display_name)
+     VALUES (?, 'agent', 0, ?, 'report.md')`
+  ).run(sessionId, artifactId)
+  database.prepare(
     `INSERT INTO input_draft(draft_id, session_id, origin, artifact_id, state, created_at, updated_at)
      VALUES (?, ?, 'telegram', ?, 'draft', ?, ?)`
   ).run(`d-${sessionId}`, sessionId, artifactId, now, now)
@@ -95,6 +99,7 @@ const CHILD_TABLES = [
   'conversation_binding',
   'attention_request',
   'progress_observation',
+  'progress_evidence',
   'input_draft',
   'telegram_message'
 ]
@@ -140,6 +145,24 @@ describe('archive retention', () => {
     expect(childCount('fresh')).toBe(CHILD_TABLES.length)
     expect(childCount('active')).toBe(CHILD_TABLES.length)
     expect(database.prepare("SELECT session_id FROM artifact WHERE artifact_id = 'a-expired'").get()).toEqual({ session_id: null })
+    // The evidence link goes with its session; the file it pointed at is kept and only unlinked.
+    expect(database.prepare("SELECT COUNT(*) AS n FROM progress_evidence WHERE artifact_id = 'a-expired'").get())
+      .toEqual({ n: 0 })
+  })
+
+  it('deletes evidence links with their session even with foreign keys off', () => {
+    retention(30)
+    session('expired', DEFAULT_WORKSPACE_ID, daysAgo(31))
+    dependents('expired')
+    // The purge names the table itself, so it does not rely on the cascade the pragma provides.
+    database.pragma('foreign_keys = OFF')
+
+    try {
+      expect(purgeExpiredArchives(database, now)).toEqual({ sessionIds: ['expired'], workspaceIds: [] })
+      expect(database.prepare('SELECT COUNT(*) AS n FROM progress_evidence').get()).toEqual({ n: 0 })
+    } finally {
+      database.pragma('foreign_keys = ON')
+    }
     expect(purgeExpiredArchives(database, now)).toEqual({ sessionIds: [], workspaceIds: [] })
   })
 

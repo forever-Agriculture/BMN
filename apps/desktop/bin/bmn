@@ -17,6 +17,8 @@ const ATTENTION_KINDS = ['question', 'permission', 'review', 'notice']
 const VALUE_OPTIONS = new Set([
   'name', 'session', 'key', 'source', 'detail', 'observed', 'kind', 'body', 'expires', 'socket', 'token-file'
 ])
+/** Options that may be repeated; each occurrence appends, so the order given is the order stored. */
+const LIST_OPTIONS = new Set(['evidence-id'])
 const FLAG_OPTIONS = new Set(['json', 'owner', 'submit', 'help'])
 const GLOBAL_OPTIONS = ['json', 'owner', 'token-file', 'socket', 'help']
 
@@ -27,8 +29,14 @@ Commands:
   list                                      List sessions
   publish <file> [--name N] [--key K]       Publish a file as an artifact
   progress <state> <label> [--source S] [--detail D] [--observed ISO]
+                            [--evidence-id ID ...]
                                             Report progress; state is one of
-                                            ${PROGRESS_STATES.join('|')}
+                                            ${PROGRESS_STATES.join('|')}.
+                                            --evidence-id points at up to 10 files this session
+                                            already published (publish with --key, keep the
+                                            returned id, then report). BMN stores and shows the
+                                            link; it never checks the files or the claim, so
+                                            attached evidence certifies nothing.
   ask <request-key> <title> [--kind K] [--body B] [--expires ISO]
                                             Ask for attention; kind is one of
                                             ${ATTENTION_KINDS.join('|')} (default question)
@@ -71,6 +79,7 @@ Your states are claims, not verdicts
   claimed-done says you believe the work is finished. The owner sees it as your claim.
   verified is the owner's judgement. Never report it: that would launder your claim as proof.
   failed and blocked are honest. Prefer either to a hopeful running.
+  --evidence-id <id> attaches a file you already published. BMN shows it; it checks nothing.
 
 Whose screen this is
   Needs you is the owner's queue, and the other sessions are the owner's. Neither is yours to tidy.
@@ -137,11 +146,13 @@ const COMMANDS = {
   },
   progress: {
     args: ['state', 'label'],
-    options: ['source', 'detail', 'observed', 'session'],
+    options: ['source', 'detail', 'observed', 'session', 'evidence-id'],
     build: ([state, label], options) => {
       if (!PROGRESS_STATES.includes(state)) {
         throw new UsageError(`state must be one of ${PROGRESS_STATES.join(', ')}`)
       }
+      const evidenceIds = options['evidence-id'] ?? []
+      for (const id of evidenceIds) requireNonEmpty(id, 'evidence-id')
       return {
         method: 'progress.report',
         params: withSession(options, {
@@ -149,6 +160,8 @@ const COMMANDS = {
           state,
           label: requireNonEmpty(label, 'label'),
           ...(options.detail === undefined ? {} : { detail: options.detail }),
+          // Omitted means this report has no evidence; it never inherits the previous report's files.
+          ...(evidenceIds.length === 0 ? {} : { evidenceIds }),
           ...(options.observed === undefined ? {} : { observedAt: options.observed })
         })
       }
@@ -230,6 +243,13 @@ function parseArguments(argv) {
     if (!argument.startsWith('--')) throw new UsageError(`unknown option ${argument}`)
     const equals = argument.indexOf('=')
     const name = argument.slice(2, equals === -1 ? undefined : equals)
+    if (LIST_OPTIONS.has(name)) {
+      const value = equals !== -1 ? argument.slice(equals + 1) : argv[index + 1]
+      if (value === undefined) throw new UsageError(`--${name} requires a value`)
+      if (equals === -1) index += 1
+      options[name] = [...(options[name] ?? []), value]
+      continue
+    }
     if (options[name] !== undefined) throw new UsageError(`--${name} given more than once`)
     if (FLAG_OPTIONS.has(name)) {
       if (equals !== -1) throw new UsageError(`--${name} does not take a value`)
@@ -717,8 +737,11 @@ function describeResult(command, positionals, options, result) {
       const artifactId = isObject(result) && typeof result.artifactId === 'string' ? ` as ${result.artifactId}` : ''
       return `Published ${options.name ?? basename(positionals[0])}${artifactId}${duplicate}`
     }
-    case 'progress':
-      return `Progress reported: ${positionals[0]}: ${positionals[1]}`
+    case 'progress': {
+      const attached = options['evidence-id']?.length ?? 0
+      const evidence = attached === 0 ? '' : ` (${attached} evidence file${attached === 1 ? '' : 's'} attached, not checked)`
+      return `Progress reported: ${positionals[0]}: ${positionals[1]}${evidence}`
+    }
     case 'ask':
       return `Attention request ${positionals[0]} opened${duplicate}`
     case 'withdraw':

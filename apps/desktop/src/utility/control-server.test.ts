@@ -349,8 +349,17 @@ describe('control server targeting', () => {
       source: 'agent',
       state: 'running',
       label: 'Working',
+      // A report that names nothing carries an empty list, never the previous report's files.
+      evidenceIds: [],
       observedAt: NOW.toISOString()
     })
+
+    await client.request('progress.report', {
+      source: 'agent', state: 'verified', label: 'Checks passed', evidenceIds: ['art-2', 'art-1']
+    })
+    expect(fixture.handlers.reportProgress).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sessionId: 'session-1', evidenceIds: ['art-2', 'art-1'] })
+    )
 
     expectError(
       await client.request('attention.withdraw', { sessionId: 'session-2', requestKey: 'q1' }),
@@ -411,6 +420,13 @@ describe('control server validation', () => {
     ['control character label', 'progress.report', { source: 'a', state: 'running', label: 'a[2Jb' }],
     ['non-string detail', 'progress.report', { source: 'a', state: 'running', label: 'x', detail: 5 }],
     ['bad observedAt', 'progress.report', { source: 'a', state: 'running', label: 'x', observedAt: 'yesterday' }],
+    ['evidence not an array', 'progress.report', { source: 'a', state: 'running', label: 'x', evidenceIds: 'a1' }],
+    ['non-string evidence', 'progress.report', { source: 'a', state: 'running', label: 'x', evidenceIds: [1] }],
+    ['empty evidence id', 'progress.report', { source: 'a', state: 'running', label: 'x', evidenceIds: [''] }],
+    ['control character evidence id', 'progress.report',
+      { source: 'a', state: 'running', label: 'x', evidenceIds: ['a\u0007b'] }],
+    ['eleven evidence ids', 'progress.report',
+      { source: 'a', state: 'running', label: 'x', evidenceIds: Array.from({ length: 11 }, (_, i) => `a${i}`) }],
     ['relative path', 'artifact.publish', { path: 'notes.md', idempotencyKey: 'k' }],
     ['missing publish key', 'artifact.publish', { path: '/tmp/notes.md' }],
     ['bad kind', 'attention.open', { requestKey: 'q', kind: 'urgent', title: 'Title' }],

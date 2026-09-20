@@ -145,6 +145,28 @@ describe('bmn CLI', () => {
     ])
   })
 
+  it('repeats --evidence-id in the order given and sends none when it is absent', async () => {
+    const fixture = await cliFixture()
+
+    const attached = await runCli(
+      ['progress', 'verified', 'Checks passed', '--evidence-id', 'art-2', '--evidence-id=art-1'],
+      { env: fixture.sessionEnv }
+    )
+    const bare = await runCli(['progress', 'running', 'Building'], { env: fixture.sessionEnv })
+
+    expect(attached).toEqual({
+      code: 0,
+      stdout: 'Progress reported: verified: Checks passed (2 evidence files attached, not checked)\n',
+      stderr: ''
+    })
+    expect(bare.stdout).toBe('Progress reported: running: Building\n')
+    expect(fixture.handlers.reportProgress.mock.calls.map(([call]) => call)).toEqual([
+      expect.objectContaining({ state: 'verified', evidenceIds: ['art-2', 'art-1'] }),
+      // Omitted is an empty list, so nothing is carried over from the report before it.
+      expect.objectContaining({ state: 'running', evidenceIds: [] })
+    ])
+  })
+
   it('sends text as a paste and only submits with --submit', async () => {
     const fixture = await cliFixture()
 
@@ -178,7 +200,10 @@ describe('bmn CLI', () => {
     ['an unknown option', ['list', '--verbose']],
     ['an option for another command', ['list', '--submit']],
     ['a missing option value', ['publish', 'a.md', '--name']],
-    ['an invalid attention kind', ['ask', 'q1', 'Deploy?', '--kind', 'urgent']]
+    ['an invalid attention kind', ['ask', 'q1', 'Deploy?', '--kind', 'urgent']],
+    ['an empty evidence id', ['progress', 'verified', 'Done', '--evidence-id', '']],
+    ['a missing evidence id value', ['progress', 'verified', 'Done', '--evidence-id']],
+    ['evidence on another command', ['publish', 'a.md', '--evidence-id', 'art-1']]
   ])('exits 2 for %s without contacting the server', async (_label, args) => {
     const fixture = await cliFixture()
 
@@ -309,6 +334,8 @@ describe('bmn help agents', () => {
       '`bmn help`',
       'publish <file>',
       'progress <state> <label>',
+      '--evidence-id <id>',
+      'it checks nothing',
       'ask <key> <title>',
       'withdraw <key>',
       'claimed-done',

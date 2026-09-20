@@ -2,7 +2,13 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DEFAULT_APP_SETTINGS, ERROR_CODES, type ArtifactRecord } from '@bmn/protocol'
+import {
+  DEFAULT_APP_SETTINGS,
+  ERROR_CODES,
+  type ArtifactRecord,
+  type ProgressRecord,
+  type ProgressState
+} from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   artifactBytesUsed,
@@ -67,6 +73,18 @@ function artifact(id: string, bytes: number): ArtifactRecord {
     sourcePath: null,
     state: 'ready',
     createdAt: now
+  }
+}
+
+/** What `bmn publish` stores: this session's own output, ready to be referenced. */
+function published(id: string): ArtifactRecord {
+  return { ...artifact(id, 10), direction: 'output', source: 'agent' }
+}
+
+function progress(observedAt: string, state: ProgressState = 'claimed-done'): Omit<ProgressRecord, 'evidence'> {
+  return {
+    sessionId: 's1', source: 'agent', incarnationId: 'i1', state, label: 'Story 12.1',
+    detail: null, observedAt, receivedAt: now
   }
 }
 
@@ -201,8 +219,105 @@ describe('companion store', () => {
     expect(upsertProgress(database, { ...base, state: 'failed', observedAt: '2026-09-14T11:00:00.000Z' }).applied).toBe(false)
     expect(upsertProgress(database, { ...base, state: 'claimed-done', observedAt: '2026-09-14T12:05:00.000Z' }).applied).toBe(true)
     expect(listProgress(database)).toEqual([
-      expect.objectContaining({ state: 'claimed-done', observedAt: '2026-09-14T12:05:00.000Z' })
+      expect.objectContaining({ state: 'claimed-done', observedAt: '2026-09-14T12:05:00.000Z', evidence: [] })
     ])
+  })
+
+  it('links only files the same session published, and snapshots their names', () => {
+    insertArtifact(database, published('out-1'))
+    insertArtifact(database, published('out-2'))
+    const stored = upsertProgress(database, progress('2026-09-14T12:00:00.000Z'), ['out-2', 'out-1'])
+
+    expect(stored.applied).toBe(true)
+    // The order given is the order kept, so the reporter decides what reads first.
+    expect(stored.record.evidence).toEqual([
+      { artifactId: 'out-2', name: 'out-2.png' },
+      { artifactId: 'out-1', name: 'out-1.png' }
+    ])
+    expect(listProgress(database)[0]?.evidence).toEqual(stored.record.evidence)
+  })
+
+  it('refuses a report whose evidence is not this session\'s own published output', () => {
+    insertArtifact(database, published('out-1'))
+    // Handed to the session, not published by it: an agent must not cite its own brief as proof.
+    insertArtifact(database, { ...published('given'), direction: 'input' })
+    insertArtifact(database, { ...published('elsewhere'), sessionId: 's2' })
+    insertArtifact(database, { ...published('detached'), sessionId: null })
+    insertArtifact(database, { ...published('gone'), state: 'missing' })
+
+    for (const id of ['given', 'elsewhere', 'detached', 'gone', 'never-published']) {
+      expect(() => upsertProgress(database, progress('2026-09-14T12:00:00.000Z'), [id]))
+        .toThrow(expect.objectContaining({ code: ERROR_CODES.invalidArgument }))
+    }
+    expect(() => upsertProgress(database, progress('2026-09-14T12:00:00.000Z'), ['out-1', 'out-1']))
+      .toThrow(/given twice/)
+    expect(() => upsertProgress(database, progress('2026-09-14T12:00:00.000Z'), Array(11).fill('out-1')))
+      .toThrow(/at most 10/)
+    // Nothing was written by any of the refusals.
+    expect(listProgress(database)).toEqual([])
+  })
+
+  it('refuses the whole report on bad evidence, leaving the previous observation and its files', () => {
+    insertArtifact(database, published('out-1'))
+    upsertProgress(database, progress('2026-09-14T12:00:00.000Z', 'running'), ['out-1'])
+
+    expect(() => upsertProgress(database, progress('2026-09-14T12:09:00.000Z', 'verified'), ['out-1', 'nope']))
+      .toThrow(/not a file this session published/)
+
+    expect(listProgress(database)).toEqual([
+      expect.objectContaining({
+        state: 'running',
+        observedAt: '2026-09-14T12:00:00.000Z',
+        evidence: [{ artifactId: 'out-1', name: 'out-1.png' }]
+      })
+    ])
+  })
+
+  it('replaces links with the new report and never inherits the previous report\'s files', () => {
+    insertArtifact(database, published('out-1'))
+    insertArtifact(database, published('out-2'))
+    upsertProgress(database, progress('2026-09-14T12:00:00.000Z'), ['out-1'])
+
+    upsertProgress(database, progress('2026-09-14T12:01:00.000Z'), ['out-2'])
+    expect(listProgress(database)[0]?.evidence).toEqual([{ artifactId: 'out-2', name: 'out-2.png' }])
+
+    upsertProgress(database, progress('2026-09-14T12:02:00.000Z'))
+    expect(listProgress(database)[0]?.evidence).toEqual([])
+  })
+
+  it('keeps an out-of-order report from replacing the current observation or its files', () => {
+    insertArtifact(database, published('out-1'))
+    insertArtifact(database, published('out-2'))
+    insertArtifact(database, published('out-3'))
+    upsertProgress(database, progress('2026-09-14T12:05:00.000Z', 'verified'), ['out-2', 'out-1'])
+
+    const older = upsertProgress(database, progress('2026-09-14T12:00:00.000Z', 'running'), ['out-3'])
+
+    // The refusal hands back the observation that stands, with its own files in their own order.
+    expect(older.applied).toBe(false)
+    expect(older.record.evidence).toEqual([
+      { artifactId: 'out-2', name: 'out-2.png' },
+      { artifactId: 'out-1', name: 'out-1.png' }
+    ])
+    expect(listProgress(database)).toEqual([
+      expect.objectContaining({
+        state: 'verified',
+        evidence: [{ artifactId: 'out-2', name: 'out-2.png' }, { artifactId: 'out-1', name: 'out-1.png' }]
+      })
+    ])
+  })
+
+  it('keeps a link and its name after the original is lost, and never deletes the original', () => {
+    insertArtifact(database, published('out-1'))
+    upsertProgress(database, progress('2026-09-14T12:00:00.000Z'), ['out-1'])
+
+    setArtifactState(database, 'out-1', 'missing')
+    expect(listProgress(database)[0]?.evidence).toEqual([{ artifactId: 'out-1', name: 'out-1.png' }])
+
+    // A later report drops the link; the stored file itself is untouched.
+    upsertProgress(database, progress('2026-09-14T12:01:00.000Z'))
+    expect(listProgress(database)[0]?.evidence).toEqual([])
+    expect(listArtifacts(database, 's1').map((row) => row.artifactId)).toContain('out-1')
   })
 
   it('stores control receipts with results and errors', () => {

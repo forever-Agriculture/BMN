@@ -21,6 +21,8 @@ import {
   type IdentityName,
   type InputDraftRecord,
   type InputDraftState,
+  MAX_PROGRESS_EVIDENCE,
+  type ProgressEvidence,
   type ProgressRecord,
   type ProgressState,
   type VoiceLanguage,
@@ -330,7 +332,15 @@ interface ProgressRow {
   received_at: string
 }
 
-function progressFromRow(row: ProgressRow): ProgressRecord {
+interface ProgressEvidenceRow {
+  session_id: string
+  source: string
+  position: number
+  artifact_id: string
+  display_name: string
+}
+
+function progressFromRow(row: ProgressRow, evidence: ProgressEvidence[]): ProgressRecord {
   return {
     sessionId: row.session_id,
     source: row.source,
@@ -338,21 +348,82 @@ function progressFromRow(row: ProgressRow): ProgressRecord {
     state: row.state,
     label: row.label,
     detail: row.detail,
+    evidence,
     observedAt: row.observed_at,
     receivedAt: row.received_at
   }
 }
 
-/** Keeps the newest observation per source; an older out-of-order observation is not applied. */
+function readEvidence(database: DatabaseConnection, sessionId: string, source: string): ProgressEvidence[] {
+  return (database.prepare(
+    'SELECT * FROM progress_evidence WHERE session_id = ? AND source = ? ORDER BY position'
+  ).all(sessionId, source) as ProgressEvidenceRow[])
+    .map((row) => ({ artifactId: row.artifact_id, name: row.display_name }))
+}
+
+/**
+ * Turns the IDs a report named into links, refusing the whole report if any one of them is not this
+ * session's own published output. `bmn publish` stores `direction: 'output'`; files the owner or
+ * Telegram hand *to* a session are `'input'`, so the rule means "published by this session, not given
+ * to it" and an agent cannot cite its own brief as proof it did the work. The display name is
+ * snapshotted here, because the original may be gone by the time anyone looks.
+ */
+function resolveEvidence(
+  database: DatabaseConnection,
+  sessionId: string,
+  artifactIds: readonly string[]
+): ProgressEvidence[] {
+  if (artifactIds.length > MAX_PROGRESS_EVIDENCE) {
+    throw new WorkspaceStoreError(
+      ERROR_CODES.invalidArgument,
+      `A report may reference at most ${MAX_PROGRESS_EVIDENCE} evidence files`
+    )
+  }
+  const seen = new Set<string>()
+  const statement = database.prepare(
+    'SELECT session_id, direction, state, original_name FROM artifact WHERE artifact_id = ?'
+  )
+  return artifactIds.map((artifactId) => {
+    if (seen.has(artifactId)) {
+      throw new WorkspaceStoreError(ERROR_CODES.invalidArgument, `Evidence ${artifactId} was given twice`)
+    }
+    seen.add(artifactId)
+    const row = statement.get(artifactId) as
+      | Pick<ArtifactRow, 'session_id' | 'direction' | 'state' | 'original_name'>
+      | undefined
+    if (!row || row.session_id !== sessionId || row.direction !== 'output') {
+      throw new WorkspaceStoreError(
+        ERROR_CODES.invalidArgument,
+        `Evidence ${artifactId} is not a file this session published`
+      )
+    }
+    if (row.state !== 'ready') {
+      throw new WorkspaceStoreError(ERROR_CODES.invalidArgument, `Evidence ${artifactId} is not ready`)
+    }
+    return { artifactId, name: row.original_name }
+  })
+}
+
+/**
+ * Keeps the newest observation per source; an older out-of-order observation is not applied, and its
+ * evidence is not applied either, so the current report and the files behind it always belong
+ * together. Ineligible evidence refuses the report before the timestamp rule runs, so a refusal never
+ * silently means "too old". The whole thing runs in the worker's transaction.
+ */
 export function upsertProgress(
   database: DatabaseConnection,
-  record: ProgressRecord
+  record: Omit<ProgressRecord, 'evidence'>,
+  evidenceIds: readonly string[] = []
 ): { record: ProgressRecord; applied: boolean } {
+  const evidence = resolveEvidence(database, record.sessionId, evidenceIds)
   const existing = database.prepare(
     'SELECT * FROM progress_observation WHERE session_id = ? AND source = ?'
   ).get(record.sessionId, record.source) as ProgressRow | undefined
   if (existing && Date.parse(existing.observed_at) > Date.parse(record.observedAt)) {
-    return { record: progressFromRow(existing), applied: false }
+    return {
+      record: progressFromRow(existing, readEvidence(database, record.sessionId, record.source)),
+      applied: false
+    }
   }
   database.prepare(
     `INSERT INTO progress_observation(session_id, source, incarnation_id, state, label, detail, observed_at, received_at)
@@ -370,13 +441,34 @@ export function upsertProgress(
     record.observedAt,
     record.receivedAt
   )
-  return { record, applied: true }
+  // A new report replaces its links outright: omitting IDs means this report has no evidence, never
+  // that it inherits the last task's files.
+  database.prepare('DELETE FROM progress_evidence WHERE session_id = ? AND source = ?')
+    .run(record.sessionId, record.source)
+  const insert = database.prepare(
+    'INSERT INTO progress_evidence(session_id, source, position, artifact_id, display_name) VALUES (?, ?, ?, ?, ?)'
+  )
+  evidence.forEach((link, position) => {
+    insert.run(record.sessionId, record.source, position, link.artifactId, link.name)
+  })
+  return { record: { ...record, evidence }, applied: true }
 }
 
 export function listProgress(database: DatabaseConnection): ProgressRecord[] {
+  const evidence = new Map<string, ProgressEvidence[]>()
+  for (const row of database.prepare(
+    'SELECT * FROM progress_evidence ORDER BY session_id, source, position'
+  ).all() as ProgressEvidenceRow[]) {
+    const key = `${row.session_id}\u0000${row.source}`
+    const links = evidence.get(key)
+    const link = { artifactId: row.artifact_id, name: row.display_name }
+    if (links) links.push(link)
+    else evidence.set(key, [link])
+  }
   return (database.prepare(
     'SELECT * FROM progress_observation ORDER BY observed_at DESC'
-  ).all() as ProgressRow[]).map(progressFromRow)
+  ).all() as ProgressRow[])
+    .map((row) => progressFromRow(row, evidence.get(`${row.session_id}\u0000${row.source}`) ?? []))
 }
 
 export interface StoredReceipt {

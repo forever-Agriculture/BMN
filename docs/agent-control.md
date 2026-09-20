@@ -31,7 +31,7 @@ socket, can address any session and requires `--session`.
 bmn snapshot                                   Show the current state snapshot
 bmn list                                       List sessions
 bmn publish <file> [--name N] [--key K]        Publish a file to the Files panel
-bmn progress <state> <label> [--source S] [--detail D]
+bmn progress <state> <label> [--source S] [--detail D] [--evidence-id ID ...]
 bmn ask <request-key> <title> [--kind K] [--body B] [--expires ISO]
 bmn withdraw <request-key>                     Withdraw your request
 bmn resolve <request-key> <resolution>         Mark a request resolved
@@ -71,6 +71,25 @@ bmn progress running "Migrating 1,200 records" --source migrate.sh
 # ...
 bmn progress claimed-done "Migration finished" --detail "1,200 of 1,200 rows"
 ```
+
+Point a report at files you already published. Publish first with `--key`, keep the artifact ID it
+returns, then name it; a repeated publish with the same key returns the same ID, so the reference
+stays valid:
+
+```bash
+id=$(bmn publish ./out/checks.log --key migrate-checks --json | sed -n 's/.*"artifactId": "\([^"]*\)".*/\1/p')
+bmn progress claimed-done "Migration finished" --evidence-id "$id"
+```
+
+Up to ten distinct IDs, on any state. Each must be a file **this** session published: a file the
+owner or Telegram handed to the session is not evidence that the session did the work. Leaving
+`--evidence-id` out means this report has no evidence, not that it keeps the last one's files.
+
+BMN stores the reference and its filename, shows them beside the report, and lets the owner open
+them. **It does not read the files, run anything, or judge the claim.** Evidence being present,
+and its stored bytes passing their integrity check, says nothing about whether the work succeeded
+or whether those files are the relevant ones. A file that is later deleted stays visible as a named,
+unavailable reference rather than quietly disappearing from the report.
 
 Ask the owner a question and clear it later:
 
@@ -174,6 +193,7 @@ Your states are claims, not verdicts
   claimed-done says you believe the work is finished. The owner sees it as your claim.
   verified is the owner's judgement. Never report it: that would launder your claim as proof.
   failed and blocked are honest. Prefer either to a hopeful running.
+  --evidence-id <id> attaches a file you already published. BMN shows it; it checks nothing.
 
 Whose screen this is
   Needs you is the owner's queue, and the other sessions are the owner's. Neither is yours to tidy.

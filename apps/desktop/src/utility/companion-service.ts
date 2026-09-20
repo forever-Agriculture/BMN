@@ -664,9 +664,12 @@ export class CompanionService {
     state: ProgressRecord['state']
     label: string
     detail?: string
+    evidenceIds?: readonly string[]
     observedAt: string
   }): Promise<unknown> {
     if (Number.isNaN(Date.parse(p.observedAt))) invalid('observedAt must be an ISO timestamp')
+    // The store resolves the IDs inside the same transaction that writes the observation, so an
+    // ineligible file refuses the whole report and leaves the previous one exactly as it was.
     const result = await this.options.database.companion('upsertProgress', {
       sessionId: p.sessionId,
       source: p.source,
@@ -676,7 +679,7 @@ export class CompanionService {
       detail: p.detail ?? null,
       observedAt: new Date(p.observedAt).toISOString(),
       receivedAt: this.iso()
-    })
+    }, [...(p.evidenceIds ?? [])])
     if (result.applied) this.emit('progress', p.sessionId)
     return { applied: result.applied, current: result.record }
   }

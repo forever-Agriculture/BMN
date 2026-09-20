@@ -7,6 +7,7 @@ import {
   AGENT_ATTENTION_ORIGINS,
   ERROR_CODES,
   MAX_CONTROL_FRAME_BYTES,
+  MAX_PROGRESS_EVIDENCE,
   isAttentionOrigin,
   isHookEventName,
   isProtocolErrorCode,
@@ -50,6 +51,8 @@ export interface ControlHandlers {
     state: ProgressState
     label: string
     detail?: string
+    /** Already-published artifact IDs this report points at; empty means none, never the last report's. */
+    evidenceIds: readonly string[]
     observedAt: string
   }): Promise<unknown>
   openAttention(p: {
@@ -229,10 +232,7 @@ function closedParams(value: unknown, allowed: readonly string[]): Params {
   return value
 }
 
-function readText(params: Params, key: string, rule: TextRule): string | undefined {
-  const value = params[key]
-  if (value === undefined) return undefined
-  if (typeof value !== 'string') throw invalid(`${key} must be a string`)
+function checkedText(key: string, value: string, rule: TextRule): string {
   const size = rule.unit === 'bytes' ? Buffer.byteLength(value, 'utf8') : value.length
   if (size < rule.min || size > rule.max) {
     throw invalid(`${key} must be ${rule.min}..${rule.max} ${rule.unit}`)
@@ -241,6 +241,13 @@ function readText(params: Params, key: string, rule: TextRule): string | undefin
     throw invalid(`${key} must not contain control characters`)
   }
   return value
+}
+
+function readText(params: Params, key: string, rule: TextRule): string | undefined {
+  const value = params[key]
+  if (value === undefined) return undefined
+  if (typeof value !== 'string') throw invalid(`${key} must be a string`)
+  return checkedText(key, value, rule)
 }
 
 function requireText(params: Params, key: string, rule: TextRule): string {
@@ -289,6 +296,18 @@ function acceptableOrigin(value: unknown, scope: ControlScope): boolean {
 
 /** One dropped origin per caller per this long reaches the refusal log; the reason never varies. */
 const ORIGIN_REFUSAL_QUIET_MS = 60_000
+
+/** A bounded array of identifiers, for a repeatable option; absent means an empty list, never inherited. */
+function readIdentifiers(params: Params, key: string, max: number): string[] {
+  const value = params[key]
+  if (value === undefined) return []
+  if (!Array.isArray(value)) throw invalid(`${key} must be an array`)
+  if (value.length > max) throw invalid(`${key} must hold at most ${max} entries`)
+  return value.map((entry, index) => {
+    if (typeof entry !== 'string') throw invalid(`${key} entries must be text`)
+    return checkedText(`${key}[${index}]`, entry, IDENTIFIER)
+  })
+}
 
 function requireEffects(params: Params, key: string): HookEventEffect[] {
   const value = params[key]
@@ -708,11 +727,14 @@ export class ControlServer {
         }))
       }
       case 'progress.report': {
-        const params = closedParams(rawParams, ['sessionId', 'source', 'state', 'label', 'detail', 'observedAt'])
+        const params = closedParams(rawParams, [
+          'sessionId', 'source', 'state', 'label', 'detail', 'observedAt', 'evidenceIds'
+        ])
         const source = requireText(params, 'source', RULES.source)
         const state = requireEnum(params, 'state', PROGRESS_STATES)
         const label = requireText(params, 'label', RULES.label)
         const detail = readText(params, 'detail', RULES.detail)
+        const evidenceIds = readIdentifiers(params, 'evidenceIds', MAX_PROGRESS_EVIDENCE)
         const observedAt = readTimestamp(params, 'observedAt') ?? this.now().toISOString()
         const sessionId = this.target(scope, params)
         return handlers.reportProgress({
@@ -722,6 +744,7 @@ export class ControlServer {
           state,
           label,
           ...(detail === undefined ? {} : { detail }),
+          evidenceIds,
           observedAt
         })
       }

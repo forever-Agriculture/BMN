@@ -15,6 +15,8 @@ const SESSION_CHILD_TABLES = [
   'input_draft',
   'telegram_message',
   'attention_request',
+  // Before its observation: the cascade would take it anyway, but the purge should not depend on a pragma.
+  'progress_evidence',
   'progress_observation',
   'conversation_binding',
   'process_incarnation'

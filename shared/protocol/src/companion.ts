@@ -131,6 +131,20 @@ export type ProgressState =
 
 export const PROGRESS_STALE_AFTER_MS = 10 * 60 * 1000
 
+/**
+ * One already-published file a report points at. The name is the artifact's display name as it was
+ * when the link was made, so a deleted or renamed original is still nameable. Presence says the
+ * reporter attached something, never that BMN checked the work.
+ */
+export interface ProgressEvidence {
+  artifactId: string
+  /** The artifact's display name at link time; kept even when the original is gone. */
+  name: string
+}
+
+/** At most this many distinct evidence references on one observation. */
+export const MAX_PROGRESS_EVIDENCE = 10
+
 /** The latest observation per session and named source. */
 export interface ProgressRecord {
   sessionId: string
@@ -139,6 +153,8 @@ export interface ProgressRecord {
   state: ProgressState
   label: string
   detail: string | null
+  /** Empty for every legacy report and for any report that named no files. */
+  evidence: ProgressEvidence[]
   observedAt: string
   receivedAt: string
 }
