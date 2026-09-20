@@ -47,6 +47,18 @@ const TELEGRAM_OFFSET_KEY = 'telegram.offset'
 const ATTENTION_SWEEP_MS = 30_000
 /** The refusal log is trimmed back to half this size as soon as one append carries it past. */
 const REFUSAL_LOG_BYTES = 256 * 1024
+/** One refusal reason on one line; longer than this is a validator quoting the caller, not a reason. */
+const REFUSAL_REASON_CHARACTERS = 500
+
+/** Every control character becomes a space, so one refused request can never write two log lines. */
+function flattenRefusalReason(reason: string): string {
+  let flattened = ''
+  for (const character of reason.slice(0, REFUSAL_REASON_CHARACTERS)) {
+    const code = character.codePointAt(0) ?? 0
+    flattened += code === 0x7f || code < 0x20 ? ' ' : character
+  }
+  return flattened
+}
 const HANDOFF_TEXT_BYTES = 16 * 1024
 const HANDOFF_PAYLOAD_BYTES = 64 * 1024
 const HANDOFF_ARTIFACTS = 10
@@ -267,7 +279,10 @@ export class CompanionService {
    * only the stderr line, which is written first for exactly that reason.
    */
   private logRefusal(method: string, sessionId: string | null, reason: string): void {
-    const line = `${this.iso()} ${method} refused for ${sessionId ?? 'the owner'}: ${reason}\n`
+    // One refusal is one line. A validator that names the offending parameter can carry the caller's
+    // own bytes into this file, so control characters become spaces and no agent can forge entries.
+    const flattened = flattenRefusalReason(reason)
+    const line = `${this.iso()} ${method} refused for ${sessionId ?? 'the owner'}: ${flattened}\n`
     process.stderr.write(`[BMN] ${line}`)
     this.refusalWrites = this.refusalWrites
       .then(() => this.appendRefusal(line))

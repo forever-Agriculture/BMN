@@ -679,6 +679,22 @@ describe('refused agent requests', () => {
     expect(statSync(service.refusalLogPath).mode & 0o777).toBe(0o600)
   })
 
+  it('keeps a refusal on one line, whatever the caller put in the parameter name', async () => {
+    const reach = service as unknown as {
+      logRefusal(method: string, sessionId: string | null, reason: string): void
+      refusalWrites: Promise<void>
+    }
+
+    // `Unknown parameter: <key>` carries the caller's own key; a newline in it would forge a second entry.
+    reach.logRefusal('conversation.observe', 's1', 'Unknown parameter: x\n2026-01-01T00:00:00.000Z forged line')
+    await reach.refusalWrites
+
+    const written = await readFile(service.refusalLogPath, 'utf8')
+    expect(written.trimEnd().split('\n')).toHaveLength(1)
+    expect(written).toContain('Unknown parameter: x 2026-01-01T00:00:00.000Z forged line')
+    expect(written).not.toContain('\n2026-01-01')
+  })
+
   it('trims back to the newest refusals once an append carries it past the cap', async () => {
     const reach = service as unknown as {
       logRefusal(method: string, sessionId: string | null, reason: string): void
