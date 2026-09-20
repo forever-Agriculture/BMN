@@ -88,10 +88,10 @@ export function sessionActivities(
 }
 
 /**
- * AC4 allows a session two presentation updates a second. One is reserved for the start of work, which AC1
- * says must land at once, so every other change waits out a full second: at most one of each, never a third.
+ * The tick's own spacing, and the gap a session's presentation must leave between changes. AC4's two updates
+ * a second is this cap; the one thing it never delays is the start of work, which AC1 requires at once.
  */
-export const ACTIVITY_MIN_PUBLISH_MS = 1_000
+export const ACTIVITY_MIN_PUBLISH_MS = 500
 
 /** When a session last published an ordinary change, and when it last published the start of work. */
 export interface ActivityPublication {
@@ -110,12 +110,15 @@ const NEVER: ActivityPublication = Object.freeze({ ordinary: -Infinity, working:
 /**
  * Decides what each session may show now. A session that entered Working shows it at once, because AC1 says
  * the first byte reads as working immediately; everything else - going idle, a title the table recognises -
- * waits out its second. Both are per session, so one session's first byte can never carry another session's
- * pending change through, and the two kinds cannot add up to more than AC4's two updates in any one second.
+ * waits out the tick. Both windows are per session, so one session's first byte can never carry another
+ * session's pending change through, and a held change lands at most one tick late, which keeps AC1's
+ * "idle 1.5-2.0 s after the last byte" intact.
  *
- * The tick re-derives from the same observations, so a held change lands at most one tick late. A session
- * whose process restarts inside a second reaches Working through the ordinary window instead, which delays
- * that one case by less than a tick rather than letting a crash loop redraw the row at will.
+ * AC1 and AC4 cannot both hold in the corner case, and AC1 wins where they meet. A title change, then the
+ * idle word, then output again within the same second publishes three times rather than two. Reserving one
+ * of the two for the start of work was tried and pushes the idle word past 2.0 s, which AC1 states outright,
+ * so the cap governs the tick and the first byte is its one exception. What AC4 protects is untouched either
+ * way: no terminal is remounted or refit, nothing is written to a PTY and nothing notifies.
  */
 export function publishableActivities(
   previous: Readonly<Record<string, SessionActivity>>,

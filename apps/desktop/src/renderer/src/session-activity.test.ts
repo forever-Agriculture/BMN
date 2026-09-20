@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   ACTIVITY_IDLE_AFTER_MS,
   ACTIVITY_MIN_PUBLISH_MS,
+  ACTIVITY_TICK_MS,
   ACTIVITY_START_GRACE_MS,
   TERMINAL_TITLE_MAX,
   capTitle,
@@ -157,39 +158,62 @@ describe('the two-updates-per-second cap', () => {
     expect(activities.s1).toEqual(running)
   })
 
-  it('keeps every rolling second to two updates while titles storm and work starts and stops', () => {
-    // The published sequence is replayed through the real function, 20 ms at a time, for twelve seconds.
-    // Every 700 ms the title changes; output arrives in bursts, so the session also enters and leaves work.
+  it('keeps ordinary changes a tick apart under a title storm, and never delays the start of work', () => {
+    // Twelve seconds at 20 ms resolution: the title changes every 700 ms, output arrives in 400 ms bursts
+    // every four seconds, so the session also enters and leaves work.
     let shown: Record<string, SessionActivity> = {}
     let windows: Record<string, ActivityPublication> = {}
-    const published: number[] = []
+    const ordinary: number[] = []
+    const startedWork: number[] = []
     for (let step = 0; step * 20 <= 12_000; step += 1) {
       const now = start + step * 20
       const since = (now - start) % 4_000
-      // Output for 400 ms, then 3.6 s of silence: Working, then Idle once the idle window passes.
-      const isWorking = since < 400
-      const restingWord = since >= 400 + ACTIVITY_IDLE_AFTER_MS
-      const derived: SessionActivity = isWorking
-        ? { word: 'Working', working: true, title: `build ${Math.floor((now - start) / 700)}` }
-        : {
-            word: restingWord ? 'Idle' : 'Working',
-            working: !restingWord,
-            title: `build ${Math.floor((now - start) / 700)}`
-          }
+      const resting = since >= 400 + ACTIVITY_IDLE_AFTER_MS
+      const derived: SessionActivity = {
+        word: resting ? 'Idle' : 'Working',
+        working: !resting,
+        title: `build ${Math.floor((now - start) / 700)}`
+      }
       const result = publishableActivities(shown, { s1: derived }, windows, now)
       const after = result.activities.s1
-      const first = shown.s1
-      if (!first || first.word !== after?.word || first.working !== after.working || first.title !== after.title) {
-        published.push(now)
-      }
+      const before = shown.s1
+      const changed = !before ||
+        before.word !== after?.word || before.working !== after.working || before.title !== after.title
+      if (changed) (after?.working && !before?.working ? startedWork : ordinary).push(now)
       shown = result.activities
       windows = result.publishedAt
     }
 
-    expect(published.length).toBeGreaterThan(4)
-    for (const [index, moment] of published.entries()) {
-      const inWindow = published.slice(index).filter((other) => other - moment < 1_000)
-      expect(inWindow.length).toBeLessThanOrEqual(2)
+    expect(ordinary.length).toBeGreaterThan(4)
+    expect(startedWork.length).toBe(4)
+    for (const [index, moment] of ordinary.entries()) {
+      const previous = ordinary[index - 1]
+      if (previous !== undefined) expect(moment - previous).toBeGreaterThanOrEqual(ACTIVITY_MIN_PUBLISH_MS)
     }
+    // AC1 outranks the cap where they meet: every burst's first byte is shown on the tick it arrives.
+    for (const moment of startedWork) expect((moment - start) % 4_000).toBeLessThan(ACTIVITY_TICK_MS)
+  })
+
+  it('shows the idle word inside the 1.5-2.0 s AC1 allows, however the title storms', () => {
+    // One byte at `start`, a title change 1.4 s later, then silence: the idle word may wait for the tick
+    // after the title, never longer.
+    let shown: Record<string, SessionActivity> = {}
+    let windows: Record<string, ActivityPublication> = {}
+    let idleAt: number | null = null
+    for (let step = 0; step * 20 <= 4_000 && idleAt === null; step += 1) {
+      const now = start + step * 20
+      const derived = sessionActivity(
+        { incarnationId: 'i1', liveSince: start, lastOutputAt: start, title: now >= start + 1_400 ? 'build' : null },
+        now
+      )
+      const result = publishableActivities(shown, { s1: derived }, windows, now)
+      if (result.activities.s1?.word === 'Idle' && shown.s1?.word !== 'Idle') idleAt = now - start
+      shown = result.activities
+      windows = result.publishedAt
+    }
+
+    expect(idleAt).not.toBeNull()
+    expect(idleAt ?? 0).toBeGreaterThanOrEqual(ACTIVITY_IDLE_AFTER_MS)
+    expect(idleAt ?? 0).toBeLessThanOrEqual(2_000)
   })
 })

@@ -1203,7 +1203,26 @@ const evidence = await withTemporaryRoot(
       screenshots.push(await screenshot(
         page, 'black-knight-attention-outranks-activity.png', activityEvidenceDirectory
       ))
+
+      // 14.2 AC3: the popover says what opened each request, in plain words beside the row content.
+      await page.locator('.needs-you-button').click()
+      await page.waitForSelector('.needs-you-popover')
+      const provenanceLines = await page.evaluate(() => [...document.querySelectorAll('.needs-you-popover')]
+        .flatMap((popover) => [...popover.querySelectorAll('.provenance')])
+        .map((line) => line.textContent?.trim() ?? ''))
+      screenshots.push(await screenshot(
+        page, 'black-knight-needs-you-provenance.png', activityEvidenceDirectory
+      ))
+      await page.keyboard.press('Escape')
+      assert.ok(
+        provenanceLines.some((line) => line.startsWith('from bmn ask')),
+        JSON.stringify(provenanceLines)
+      )
       await runControlCli(roots, fixture.selectedSessionId, 'withdraw', 'epic14-precedence')
+
+      // The Hook events dialog is not screenshotted here: `bmn hook` deliberately ignores a call that is
+      // not the agent's own foreground process, so a shell in this fixture cannot produce an event. The
+      // dialog is driven end to end, with real events and its rendered rows, by the Electron self-test.
       phase('observed activity mark and word checks passed')
 
       phase('all runtime checks passed')
@@ -1213,6 +1232,7 @@ const evidence = await withTemporaryRoot(
         activityPaletteFiltering,
         activityAttentionPrecedence: precedence,
         activityCompactRail: railRow,
+        activityProvenanceLines: provenanceLines,
         screenshotProvenance: {
           before: 'Reconstructed previous CSS selectors applied to the repaired runtime; not a base-HEAD capture.',
           after: 'Current repaired runtime.'
