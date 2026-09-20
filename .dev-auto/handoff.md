@@ -12,44 +12,41 @@
 
 ## Progress
 
-- Sprint board and reconciled state: `_bmad-output/implementation-artifacts/sprint-status.yaml` (git-ignored) has epic-13 and both stories `backlog`; epics 5-9 `done`. Reconciled against git at `85df305` (clean tree, `main` level with `origin/main`). Delivery order 13 -> 14 -> 12 -> 11 -> 10.
-- Implemented: story 13.1 in `fc94cd4`, story 13.2 in `e4e27dc`, review repairs in `30cd2d4`, all on `main` (local only; not pushed). Base `85df305`.
+- Sprint board: `_bmad-output/implementation-artifacts/sprint-status.yaml` (git-ignored) now has epic-13 and both stories `done`; epics 5-9 `done`. Reconciled against git at `85df305` (clean tree, `main` level with `origin/main`). Delivery order 13 -> 14 -> 12 -> 11 -> 10.
+- Implemented and ACCEPTED: story 13.1 in `fc94cd4`, story 13.2 in `e4e27dc`, review repairs in `30cd2d4`, the reachable refusal log in `0a5ce6f`, wording in `9a8e8ca`; all on `main`, local only, NOT pushed. Base `85df305`.
 - Associated loop (optional; host and native loop/task ID): none
 - Implementation and repair inventories, file by file: `.dev-auto/log.md`.
 - Active native helpers (ID, route, scope, ownership, state): none
-- Collected terminal helper results: full review of `e4e27dc` by Codex CLI `gpt-6-astra/medium` returned 8 findings (7 MATERIAL) to `evidence/epic-13/review-astra.md`. Focused recheck of `30cd2d4` (`gpt-6-astra/low`, `recheck-astra.md`) closed 7 of 8, left M6 PARTIALLY CLOSED and said DO NOT ACCEPT. M6 fixed in `0a5ce6f`; second focused recheck of that one finding dispatched to `gpt-6-astra/low`, in flight.
+- Collected terminal helper results: full review of `e4e27dc` by Codex CLI `gpt-6-astra/medium` returned 8 findings (7 MATERIAL) to `evidence/epic-13/review-astra.md`. Focused recheck of `30cd2d4` (`recheck-astra.md`) closed 7 of 8, left M6 PARTIALLY CLOSED, DO NOT ACCEPT. M6 fixed in `0a5ce6f`; the M6 recheck (`recheck2-astra.md`) returned "Finding 6: CLOSED", "No material blocking defect found in this diff" and ACCEPT.
 
 ## Decisions and findings
 
-- Original or approved intent changes (13.1, all recorded for review):
-  1. AC3's claim-conflict refusal is returned and not stored: the wording "the old binding and claim are kept" and AC2's "no stored change" are read literally, so the detail `Reported by Codex at session start; refused: already resumed in "<name>"` is the method's result, not a binding rewrite. The utility has no logger (zero `console.*` in `apps/desktop/src/utility`), so the returned reason is the "logged reason"; Epic 14.2's hook-event log is where it becomes owner-visible.
-  2. The hook also ignores SessionStart payloads carrying `agent_id` (a Claude subagent), as herdr does (H1); the pid gate cannot catch an in-process subagent.
-  3. AC4's "the command shown before Resume is exactly what runs": today no dialog shows a command, so the hook-captured Codex binding detail carries `Resume runs: <exact command>` and `not carried: <names>`; the session menu already renders the detail. A dropped prompt is counted, never quoted, so private text is not shown.
-  4. A hook-captured Claude binding parses its stored argv with `allowExplicitSessionId: true`, so a selector BMN pinned at launch is superseded by the harness's word instead of blocking Resume; every other stored-argv rule is unchanged.
-- Material pending findings: M1-M5, M7 and N1 CLOSED by the recheck at `30cd2d4`, which found no new defect. M6 was PARTIALLY CLOSED: the utility's stderr is captured into a bounded in-memory buffer (`pty-host-client.ts:156-158,297-305`) and printed only if the host dies, so the reason was unreachable while BMN ran. `0a5ce6f` writes refusals to `refused-requests.log` in the state root instead, verified on the running stack by the Electron self-test reading a real refused rival report out of the file (`conversationFromHook.refusalReason`). Acceptance waits on the second recheck's verdict.
+- Original or approved intent changes (13.1), four of them, each reviewed and accepted: `.dev-auto/log.md`.
+- Material pending findings: none. All eight review findings are CLOSED by an independent recheck; no new defect was introduced by the repairs. M6 needed two rounds: the utility's stderr is captured into a bounded in-memory buffer (`pty-host-client.ts:156-158,297-305`) and printed only if the host dies, so `0a5ce6f` writes refusals to `refused-requests.log` in the state root instead.
+- Non-blocking notes the recheck left open, recorded not fixed: a failed refusal write is swallowed (the stderr line is written first and survives); existing directory and file permissions are not tightened, only creation modes; a sustained flood of refusals grows the pending write queue, since the size cap gives no backpressure.
 - Design consult on the Resume confirmation: Fable, receipt `fable-dialog.json`. Adopted its copy, kind-named dropped arguments and Resume-autofocus; rejected showing the modal only when an argument is dropped, because AC4 requires the command shown before Resume.
 - Cross-epic obligations: Epic 14 takes the next free schema migration number after 13.1 (13.1 takes 8). Story 13.2's brief must not contradict the dev-auto cockpit rules (B6). Launch-time Claude pinning and the honest `unsupported` fallback stay.
 
 ## Evidence
 
-- Checks run and observed results, on `0a5ce6f` (earlier numbers were `30cd2d4`), load average 2.3: `pnpm run typecheck` and `pnpm run lint` EXIT 0; `pnpm run test:unit` 982 passed / 1 skipped (`unit-4.log`, was 960 before the repairs and 913 at Epic 9); `pnpm run test:electron` EXIT 0 (`electron-7.log`), receipt `conversationFromHook.listed` = {"sessions":1,"conversation":{"status":"bound","captureRoute":"hook-session-start"}} from the hook-reported session's own `bmn list --json`, and `conversationFromHook.refusalReason` read from `refused-requests.log` while the app ran. `codex resume --help` on codex-cli 0.155.1 read by hand for the accepted resume options (AC4); `claude --version` 2.1.278.
+- Checks run and observed results, on `0a5ce6f` (earlier numbers were `30cd2d4`), load average 2.3: `pnpm run typecheck` and `pnpm run lint` EXIT 0; `pnpm run test:unit` 982 passed / 1 skipped (`unit-5.log` on `9a8e8ca`, `unit-4.log` on `0a5ce6f`, was 960 before the repairs and 913 at Epic 9); `pnpm run test:electron` EXIT 0 (`electron-7.log`), receipt `conversationFromHook.listed` = {"sessions":1,"conversation":{"status":"bound","captureRoute":"hook-session-start"}} from the hook-reported session's own `bmn list --json`, and `conversationFromHook.refusalReason` read from `refused-requests.log` while the app ran. `codex resume --help` on codex-cli 0.155.1 read by hand for the accepted resume options (AC4); `claude --version` 2.1.278.
 - Tests: unit tests for the hook mapping (4 accepted sources, compact, missing/non-UUID/non-string id, subagent payload, unknown source, nested agent, refused call), control validation (owner refused, cross-session refused, 7 invalid-argument shapes, lowercasing), the Codex option table and argv split, `bindingFromObservation` details, and session-manager precedence, refusals and claim release. Electron self-test phase "conversation reported by a session hook": a synthetic `#!node` Codex harness inside a real BMN session pipes a fixture SessionStart into the real `bmn hook codex`; the binding goes `unsupported` -> `hook-session-start`, a second session reporting the same id stays `unsupported`, and Stop then Resume spawns `resume 01a0b657-… --model gpt-6` (receipt field `conversationFromHook`, contract in `scripts/test/electron-self-test.mjs`).
-- Reviewed scope and route: whole epic on `e4e27dc`, `gpt-6-astra` medium via Codex CLI read-only; focused recheck of `30cd2d4`, `gpt-6-astra` low, same route.
+- Reviewed revision and route: whole epic on `e4e27dc`, `gpt-6-astra/medium` via Codex CLI read-only; focused rechecks of `30cd2d4` and `0a5ce6f`, `gpt-6-astra/low`, same route. Accepted at `0a5ce6f`; `9a8e8ca` changes only a comment, a test name and a doc sentence.
 - Finding closures: every M1/M4/M5/M6/M7 fix ships a named regression test; the M1, M4 and M6 tests were each fence-probed RED with the fix mutated away. Test names, probes and observed failures: `.dev-auto/log.md`.
 - Unreviewed or unverified areas: the real Claude Code 2.1.278 and Codex 0.155.1 SessionStart payload shape stays DOCUMENTED until the owner launches each once inside BMN and reads the binding. `codex resume` accepting the carried argv is DOCUMENTED from `--help`, exercised only against the synthetic harness. macOS UNVERIFIED.
 
 ## Measurement
 
-- Timing: started 2026-09-20T09:50+03:00; story 13.1 checks green ~11:08+03:00; repairs committed 11:56+03:00; M6 refusal log 12:02+03:00.
+- Timing: started 2026-09-20T09:50+03:00; story 13.1 checks green ~11:08+03:00; repairs 11:56+03:00; M6 refusal log 12:02+03:00; accepted 12:06+03:00.
 - Dispatches:
   - Epic 13 full review via Codex CLI | epic-review | gpt-6-astra/medium | receipt `.dev-auto/evidence/epic-13/review-astra.json` | first
   - Resume-confirmation design consult via Claude CLI | ui-design | claude-fable-5-1/medium | receipt `.dev-auto/evidence/epic-13/fable-dialog.json` | first
   - Epic 13 focused recheck of `30cd2d4` via Codex CLI | recheck | gpt-6-astra/low | receipt `evidence/epic-13/recheck-astra.json` | second
-  - Epic 13 M6 recheck of `0a5ce6f` via Codex CLI | recheck | gpt-6-astra/low | receipt pending | third
+  - Epic 13 M6 recheck of `0a5ce6f` via Codex CLI | recheck | gpt-6-astra/low | receipt `evidence/epic-13/recheck2-astra.json` | third
 - Owner interventions: none.
-- Observed usage: pending.
+- Observed usage: read with `scripts/check.py usage`; lead `claude-opus-5/xhigh` 243k out / 68.9M cache-read over 315 responses; review `gpt-6-astra/medium` 1,943,649 tok; rechecks `gpt-6-astra/low` 411,453 and 148,123 tok; design consult `claude-fable-5-1` 559 out, $0.122. Requested and observed routes matched throughout; no substitution, no dispatch failure. Per-receipt detail in `.dev-auto/log.md`.
 
 ## Resume
 
-- Next safe action: collect the M6 recheck of `0a5ce6f`; if it closes M6 with no new material finding, set the board's epic-13 and both stories to `done`, record routes/tiers/usage with `scripts/check.py usage`, run `scripts/check.py check` and publish the handoff. Push and `pnpm run update:desktop` need the owner's authorization for this run.
-- Status: ACTIVE
+- Next safe action: none required for Epic 13. To publish it, the owner must authorize `git push origin main` and then `pnpm run update:desktop` (AGENTS.md), neither of which is authorized for this run. The next planned epic is 14.
+- Status: COMPLETE — Epic 13 accepted; nothing authorized remains.

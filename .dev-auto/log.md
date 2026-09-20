@@ -60,3 +60,23 @@ Verbose results of the round: `pnpm run test:unit` 980 passed / 1 skipped
 - Story 13.1: New capture route `hook-session-start` (`shared/protocol/src/binding.ts:22`, `workspace.ts:189-199`), schema migration 8 rebuilding `conversation_binding` with the widened CHECK (`store-schema.ts:305-350`), control method `conversation.observe` with session-only scope, closed params, UUID and absolute-path rules (`control-server.ts:648-675`), companion handler (`companion-service.ts:233`), `SessionManager.observeConversation` with precedence, refusals and an atomic claim swap (`session-manager.ts:530-645`), `bmn hook` SessionStart report (`apps/desktop/bin/bmn:427-447,505-512`), Codex resume option table + argv split + detail composition (`conversation-binding.ts:615-810`), docs row and enforcement bullet (`docs/agent-control.md:106,150-153`).
 - Story 13.2: `bmn help agents` prints a 34-line brief (longest line 99 characters) held in `AGENT_BRIEF` (`apps/desktop/bin/bmn:50-86`), repeated verbatim in `docs/agent-control.md` "## A brief for agents" with a drift test; `## What survives` table in `docs/architecture.md:105-131` with the seven endings and six columns, linked from `README.md:27`; self-test `survivalTable` receipt asserts the renderer-crash and Quit rows.
 - Repairs (`30cd2d4`): identity-checked claim rollback and `await live.recordReady` in `session-manager.ts:593,652-666`; `reportRefusal` on every `conversation.observe` throw (`control-server.ts:689-700`) and on a non-accepted result (`companion-service.ts:236-243`); `conversation: {status, captureRoute}` on `session.list`/`state.snapshot` from one bulk read (`companion-service.ts:481-500`, `database-binding-store.ts:141-158`); `session.resume.preview` sharing `prepareResumeLaunch` with the real resume (`session-manager.ts:771-841`, `pty-host.ts:400`), a `ResumeDialog` confirmation (`shell-dialogs.tsx:101-128`) and a `conversations` app event that reloads a binding a hook changed (`main.tsx:248-250,386-393`); `-i`/`--image` arity `required` (`conversation-binding.ts:648`).
+
+## Intent changes and per-receipt usage, Epic 13 (moved out of the handoff at acceptance)
+
+- Original or approved intent changes (13.1, all recorded for review):
+  1. AC3's claim-conflict refusal is returned and not stored: the wording "the old binding and claim are kept" and AC2's "no stored change" are read literally, so the detail `Reported by Codex at session start; refused: already resumed in "<name>"` is the method's result, not a binding rewrite. The utility has no logger (zero `console.*` in `apps/desktop/src/utility`), so the returned reason is the "logged reason"; Epic 14.2's hook-event log is where it becomes owner-visible.
+  2. The hook also ignores SessionStart payloads carrying `agent_id` (a Claude subagent), as herdr does (H1); the pid gate cannot catch an in-process subagent.
+  3. AC4's "the command shown before Resume is exactly what runs": today no dialog shows a command, so the hook-captured Codex binding detail carries `Resume runs: <exact command>` and `not carried: <names>`; the session menu already renders the detail. A dropped prompt is counted, never quoted, so private text is not shown.
+  4. A hook-captured Claude binding parses its stored argv with `allowExplicitSessionId: true`, so a selector BMN pinned at launch is superseded by the harness's word instead of blocking Resume; every other stored-argv rule is unchanged.
+
+Observed routes, tiers and usage, read with `scripts/check.py usage`:
+- lead, Claude Code session `ea13531c`: `claude-opus-5/xhigh`, 315 responses,
+  243,054 output / 68,881,619 cache-read / 594,399 cache-write tokens.
+- full review, rollout `01a0bde2-97a3-7b61-ac80-6c65775db50b`: `gpt-6-astra/medium`,
+  1,943,649 total tokens, 08:15:39Z to 08:22:59Z.
+- recheck of `30cd2d4`, rollout `01a0be06-20e6-7b11-8ec9-e7280a2cce1a`: `gpt-6-astra/low`,
+  411,453 total tokens, 08:54:27Z to 08:56:29Z.
+- M6 recheck of `0a5ce6f`, newest rollout of 2026-09-20: `gpt-6-astra/low`, 148,123 total
+  tokens, 09:00:21Z to 09:01:05Z.
+- Resume-dialog design consult: `claude-fable-5-1`, 559 output / 531 cache-read /
+  4,705 cache-write tokens, costUSD 0.12220275.
