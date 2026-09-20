@@ -640,3 +640,89 @@ Selection keeps its token, shape and precedence, so Epic 11 AC3 is untouched. Th
 6.74:1 (black), 5.65 (steel), 5.57 (brown) and 5.82 (dark) against `--raised`, all above the 3:1
 floor; I computed these rather than take Fable's word. `.brief` confirmations were never red and stay
 unchanged. This ships as its own commit, separate from Epic 11.
+
+### Reviews and their dispositions, 2026-09-20
+
+Two independent reviews of the final tree, both with read tools against the real files.
+
+**Whole-epic review — Fable (`claude-fable-5-1`/medium, 47 turns, $2.93)**, receipt
+`scratchpad/epic-11/fable-epic-review-3.json`. A first attempt at the tools-disabled packet route
+(`fable-epic-review.json`, $0.89) was wasted: Fable emitted tool calls that could not run, and it
+correctly caught that my packet's copy of `workspace-marker.tsx` predated the `reserveSlot` change I
+had made after building it. My error; re-dispatched with `--tools 'Read,Grep,Glob'` per
+[[glm-dispatch-with-read-tools]].
+
+Verdict: "No blocking findings." All five risk-map items disposed as closed with file:line. Three
+non-blocking findings, all three taken and fixed in the reviewed tree:
+
+1. "AC3 selection/focus/attention tokens are recorded, not asserted, beside a marker." Closed: the
+   marker loop now reads `--identity`, `--attention`, `--focus` and `--verified` from the palette and
+   asserts the painted selection, focus ring and attention mark equal them in all eight palette x
+   identity pairs, and that no marker ink equals any of them.
+2. "The screenshot set shows Needs you at zero ... the overlap claim rests on the earlier activity
+   phase." Closed: the marker loop now opens a real request (`bmn ask epic11-marker`) on the marked,
+   selected, focused row and withdraws it afterwards, so selection, keyboard focus and Needs you
+   genuinely overlap a marker in every measurement and screenshot.
+3. "Polish: duplicated accessible name ... 'Personal workspace · Teal marker Personal 4'." Closed: the
+   sidebar mark is `aria-hidden` and keeps only its tooltip, because the row already says the name; the
+   pane heading's mark keeps `role="img"` and the full label, because a heading names only its session.
+
+Fixing (1) exposed two further mistakes of my own, both fixed: I first measured the selected row's
+focus ring as an `outline`, which is `none` there — the ring is a `::after` border (`styles.css:661-672`)
+— and the outline's computed colour happened to equal `--focus`, so the assertion had been passing on a
+coincidence. And `page.focus()` after a mouse click does not match `:focus-visible` in Chromium, so one
+`Tab` now sets keyboard modality before the loop reads the ring.
+
+Fable also reviewed the out-of-epic notice-bar change: "Correct and safe ... This does not break
+Epic 5: the error token is still used, only its extent changed."
+
+**Focused persistence review — GLM-5.3/max (68 turns, $2.13)**, receipt
+`scratchpad/epic-11/glm-persistence-review.json`. Asked five adversarial questions about the closed
+record shape, migration 10, the full-row update, display-only-ness and test strength. "No finding" on
+all of questions 1-4, each with an inventory and file:line. It confirmed WorkspaceRecord never crosses
+the control socket at all and that no production code does `SELECT *` or a positional read on
+`workspace`. One coverage gap raised and taken: my backup test copied the database with
+better-sqlite3's `.backup()` while the host actually runs `VACUUM INTO` (`database-worker.ts:227`). The
+test now uses the production statement and also asserts the column CHECK survives into the copy.
+
+GLM named two things it could not answer: it could not execute old code against a migrated database,
+and with read-only tools it could not run the suites. Both accepted as stated limits.
+
+### A self-inflicted test-harness failure worth recording
+
+Four visual runs failed after the AC3 work, and I first read them as the pre-existing `needs-you`
+flake. They were not. A scripted edit anchored on `await page.waitForSelector('.status-dot.needs-you')`
+matched Epic 5's phase instead of my own block, inserted a `Tab` press there, and in doing so detached
+that wait's diagnostic `.catch(...)` onto the `Tab` press. The failures moved around (the popover's
+primary button, then the hierarchy fixture) because the diagnostic that would have named the cause had
+been silently reattached. Restoring Epic 5's `.catch` and putting the `Tab` press in the Epic 11 block
+fixed it; two consecutive clean runs followed (`visual-clean-1.log`, `visual-clean-2.log`).
+
+Separately, and genuinely pre-existing: the Epic 5 fixture opened its attention request BEFORE sending
+synthetic PTY input to the same session, and BMN answers a session's open request when the owner types
+into it. Two runs failed that way (`visual-2.log`, `visual-3.log`, request `answered`, `resolvedBy:
+"input"`, 17 ms after opening) while three clean-baseline runs passed. The fixture now opens the request
+after all synthetic input has landed. That ordering is the right one regardless, but two clean runs do
+not prove the flake is gone; it is recorded as a residual risk.
+
+### Epic 11 visual measurements, in full
+
+- Visual measurements, 8 palette x identity pairs at 1440x900 and 900x600, with the marked row selected, keyboard-focused and carrying a real open request: mark-vs-background 7.81-8.76 (3:1 required); workspace-name contrast 7.65 (4.5 required); mark box 4x12px radius 2px, `animationName` none and `transitionDuration` 0s everywhere; painted selection, focus ring and attention mark each equal to their own palette token, and no marker ink equal to any of them; the status mark still 7px at 50% radius; terminal grid and heading heights unchanged at the same window size; the menu listing exactly None/Slate/Teal/Blue/Violet/Rose with one checked and nothing covered; arrow keys reaching a `menuitemradio` with a visible ring; a long workspace name truncating without displacing the mark or the menu button; the 780px rail keeping mark and name inside it; and None removing the mark from that workspace's sidebar row and every one of its panes, hidden ones included, while the other workspace keeps its own.
+
+
+### Epic 11 fences and review dispositions, in full
+
+- Regression fences: ten, each run red-then-green — the unknown-marker degradation, update keeping the current marker, create storing the chosen one, the migration default, the column CHECK (fenced by straight SQL, independent of the parameter guard), the protocol guard, the closed record shape, the per-pane workspace lookup and the label wording.
+
+- Baseline and reviewed revisions / material finding dispositions / recheck or delta evidence: baseline `1ead48f`; reviewed as the working tree that became `e2cd331` + `5fcc6aa`. Fable: no blocking findings, five risk-map items closed with file:line, three non-blocking findings all closed in the reviewed tree. GLM: "no finding" on four of five questions, one coverage gap closed (the backup test now runs the host's own `VACUUM INTO`). No finding is unresolved.
+
+
+### Epic 11 dispatch rows
+
+- Dispatches:
+  - 11.1 marker form and swatches via Claude CLI | routine | claude-fable-5-1/medium | receipt `scratchpad/epic-11/fable-marker-design.json` | escalated: the owner's standing instruction is that Fable decides UI/design
+  - built-design approval via Claude CLI | routine | claude-fable-5-1/medium | receipt `scratchpad/epic-11/fable-approval.json` | escalated: owner asked for Fable's approval by name
+  - notice-bar red/gold fix via Claude CLI | routine | claude-fable-5-1/medium | receipt `scratchpad/epic-11/fable-notice-clash.json` | escalated: same standing design instruction
+  - Epic 11 whole-epic review via Claude CLI | epic-review | claude-fable-5-1/medium | receipt `scratchpad/epic-11/fable-epic-review-3.json` | escalated: owner named Fable in place of Astra; a first tools-disabled attempt produced no review and was re-dispatched with read tools
+  - persistence and protocol boundary via Claude CLI + GLM profile | complex | GLM-5.3/max | receipt `scratchpad/epic-11/glm-persistence-review.json` | first
+
