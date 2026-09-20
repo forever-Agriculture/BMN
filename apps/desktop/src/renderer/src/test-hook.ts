@@ -6,6 +6,8 @@ export interface TerminalTestSnapshot {
   cols: number
   rows: number
   refits: number
+  /** Everything xterm would send to the PTY for this pane, counted since the terminal opened. */
+  inputEvents: number
   ptyCols?: number
   ptyRows?: number
 }
@@ -121,6 +123,7 @@ export function installTerminalTestHook(options: {
   terminal: TestableTerminal
   getPtyDimensions(): { cols: number; rows: number } | undefined
   getRefitCount(): number
+  getInputCount(): number
   integration?(): Promise<TerminalIntegrationProbe>
 }): () => void {
   if (!options.enabled) return () => undefined
@@ -139,6 +142,7 @@ export function installTerminalTestHook(options: {
         cols: options.terminal.cols,
         rows: options.terminal.rows,
         refits: options.getRefitCount(),
+        inputEvents: options.getInputCount(),
         ...(ptyDimensions ? { ptyCols: ptyDimensions.cols, ptyRows: ptyDimensions.rows } : {})
       }
     },

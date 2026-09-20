@@ -1,4 +1,5 @@
 // MODULE: session-presentation.ts - status dots, agent tags, progress freshness and needs-you ordering for the shell
+import type { SessionActivity } from './session-activity'
 import {
   PROGRESS_STALE_AFTER_MS,
   type AttentionRecord,
@@ -7,7 +8,7 @@ import {
   type SessionRecord
 } from '@bmn/protocol'
 
-export type SessionDot = 'running' | 'needs-you' | 'exited' | 'idle'
+export type SessionDot = 'running' | 'running-idle' | 'needs-you' | 'exited' | 'idle'
 
 export type SessionAttention = 'response' | 'update' | null
 
@@ -16,12 +17,16 @@ export interface SessionStatusPresentation {
   word: string
 }
 
-/** The row/heading status: an open request outranks process state; idle is a ring only. */
+/**
+ * The row/heading status: an open request outranks process state, and a fresh failed or blocked report outranks
+ * observed activity; idle is a ring only. `activity` is the observed word for a live session, and is used nowhere else.
+ */
 export function sessionStatus(
   session: Pick<SessionRecord, 'sessionId' | 'lastProcess'>,
   live: boolean,
   openRequests: readonly Pick<AttentionRecord, 'sessionId' | 'state' | 'kind'>[],
-  progress: ProgressPresentation | null = null
+  progress: ProgressPresentation | null = null,
+  activity: SessionActivity | null = null
 ): SessionStatusPresentation {
   const attention = sessionAttention(openRequests, session.sessionId)
   if (attention === 'response') {
@@ -31,7 +36,10 @@ export function sessionStatus(
     return { dot: 'exited', word: `${progress.word} · ${progress.source}, ${progress.age}` }
   }
   if (attention === 'update') return { dot: 'needs-you', word: 'Update available' }
-  if (live) return { dot: 'running', word: 'Running' }
+  if (live) {
+    if (!activity) return { dot: 'running', word: 'Running' }
+    return { dot: activity.working ? 'running' : 'running-idle', word: activity.word }
+  }
   if (session.lastProcess?.state === 'interrupted') return { dot: 'exited', word: 'Interrupted' }
   if (session.lastProcess) return { dot: 'exited', word: 'Process exited' }
   return { dot: 'idle', word: 'Not started' }

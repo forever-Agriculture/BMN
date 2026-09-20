@@ -26,7 +26,8 @@ describe('renderer acceptance hook', () => {
       sessionId: 'session-a',
       terminal: fakeTerminal(),
       getPtyDimensions: () => ({ cols: 101, rows: 37 }),
-      getRefitCount: () => 2
+      getRefitCount: () => 2,
+      getInputCount: () => 5
     })
     expect(Object.hasOwn(target, '__aitermTest')).toBe(false)
     dispose()
@@ -40,7 +41,8 @@ describe('renderer acceptance hook', () => {
       sessionId: 'session-a',
       terminal: fakeTerminal(),
       getPtyDimensions: () => ({ cols: 101, rows: 37 }),
-      getRefitCount: () => 2
+      getRefitCount: () => 2,
+      getInputCount: () => 5
     })
     const hook = target.__aitermTest as { snapshot(sessionId?: string): unknown; snapshots(): unknown }
     expect(hook).toBeTypeOf('object')
@@ -49,6 +51,7 @@ describe('renderer acceptance hook', () => {
       cols: 101,
       rows: 37,
       refits: 2,
+      inputEvents: 5,
       ptyCols: 101,
       ptyRows: 37
     })
@@ -192,6 +195,7 @@ describe('renderer acceptance hook', () => {
       terminal: fakeTerminal(),
       getPtyDimensions: () => undefined,
       getRefitCount: () => 2,
+      getInputCount: () => 5,
       integration
     })
     await expect((target.__aitermTest as { integration(): Promise<unknown> }).integration())
@@ -206,7 +210,8 @@ describe('renderer acceptance hook', () => {
       sessionId: 'session-a',
       terminal: fakeTerminal(),
       getPtyDimensions: () => ({ cols: 101, rows: 37 }),
-      getRefitCount: () => 2
+      getRefitCount: () => 2,
+      getInputCount: () => 5
     })
     const disposeB = installTerminalTestHook({
       enabled: true,
@@ -214,7 +219,8 @@ describe('renderer acceptance hook', () => {
       sessionId: 'session-b',
       terminal: fakeTerminal(80, 24, ['foreign']),
       getPtyDimensions: () => ({ cols: 80, rows: 24 }),
-      getRefitCount: () => 3
+      getRefitCount: () => 3,
+      getInputCount: () => 7
     })
     const hook = target.__aitermTest as {
       snapshot(sessionId?: string): { cols: number; rows: number; refits: number }

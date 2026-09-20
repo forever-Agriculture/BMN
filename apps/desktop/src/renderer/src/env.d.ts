@@ -7,8 +7,17 @@ interface TerminalTestSnapshot {
   cols: number
   rows: number
   refits: number
+  /** Everything xterm would send to the PTY for this pane, counted since the terminal opened. */
+  inputEvents: number
   ptyCols?: number
   ptyRows?: number
+}
+
+/** Test mode only: what the shell derived for each live session, and how often it published a change. */
+interface ActivityTestHook {
+  words(): Record<string, string>
+  titles(): Record<string, string | null>
+  updates(): Record<string, number>
 }
 
 interface TerminalTestHook {
@@ -31,5 +40,6 @@ interface TerminalTestHook {
 declare global {
   interface Window {
     __aitermTest?: TerminalTestHook
+    __bmnActivity?: ActivityTestHook
   }
 }

@@ -197,6 +197,29 @@ const receiptContract = [
     (receipt) => typeof receipt.rendererInverseTextContrast === 'number' && receipt.rendererInverseTextContrast >= 4.5
   ],
   [
+    'sessionActivity',
+    (receipt) =>
+      receipt.sessionActivity?.burstAfterOneSecond === 'Working' &&
+      receipt.sessionActivity?.burstAfterTwoAndAHalf === 'Idle' &&
+      receipt.sessionActivity?.silentEarly === 'Running' &&
+      receipt.sessionActivity?.silentLate === 'Idle' &&
+      receipt.sessionActivity?.silentEverWorking === false &&
+      receipt.sessionActivity?.silentRunningAfterIdle === false &&
+      Array.isArray(receipt.sessionActivity?.lateBeforeFirstByte) &&
+      !receipt.sessionActivity.lateBeforeFirstByte.includes('Idle') &&
+      receipt.sessionActivity?.lateRunningAfterOutput === false &&
+      receipt.sessionActivity?.lateAfterFourSeconds === 'Idle' &&
+      receipt.sessionActivity?.titledResting === 'Idle' &&
+      receipt.sessionActivity?.titledRestingTitle === '\u2733 x' &&
+      receipt.sessionActivity?.titledActionRequired === 'Action required' &&
+      receipt.sessionActivity?.titledWhilePrinting === 'Working' &&
+      Object.values(receipt.sessionActivity?.updates ?? { missing: Number.POSITIVE_INFINITY })
+        .every((count) => count <= receipt.sessionActivity.updateCap) &&
+      Object.values(receipt.sessionActivity?.inputEvents ?? { missing: 1 }).every((count) => count === 0) &&
+      receipt.sessionActivity?.geometryUnchanged === true &&
+      receipt.sessionActivity?.attentionUnchanged === true
+  ],
+  [
     'conversationFromHook',
     (receipt) =>
       receipt.conversationFromHook?.startedRoute === 'unsupported' &&

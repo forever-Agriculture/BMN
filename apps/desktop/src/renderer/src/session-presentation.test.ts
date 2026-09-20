@@ -62,6 +62,39 @@ describe('session presentation', () => {
     }, false, []).word).toBe('Process exited')
   })
 
+  it('shows observed activity only inside the live branch, under every existing rank', () => {
+    const session = { sessionId: 's1', lastProcess: null }
+    const working = { word: 'Working' as const, working: true, title: null }
+    const resting = { word: 'Idle' as const, working: false, title: null }
+    expect(sessionStatus(session, true, [], null, working)).toEqual({ dot: 'running', word: 'Working' })
+    expect(sessionStatus(session, true, [], null, resting)).toEqual({ dot: 'running-idle', word: 'Idle' })
+    expect(sessionStatus(session, true, [], null, { word: 'Running', working: false, title: null }))
+      .toEqual({ dot: 'running-idle', word: 'Running' })
+    expect(sessionStatus(session, true, [], null, { word: 'Action required', working: false, title: null }))
+      .toEqual({ dot: 'running-idle', word: 'Action required' })
+    // No observation yet: the word the shell showed before this epic.
+    expect(sessionStatus(session, true, [], null, null)).toEqual({ dot: 'running', word: 'Running' })
+    const update = { ...request('turn', 's1', '2026-09-14T11:00:00.000Z'), kind: 'notice' as const }
+    expect(sessionStatus(session, true, [request('r1', 's1', '2026-09-14T11:00:00.000Z')], null, resting).word)
+      .toBe('Waiting for your response')
+    expect(sessionStatus(session, true, [update], null, working).word).toBe('Update available')
+    const failed = {
+      label: 'Build', state: 'failed' as const, word: 'Failed', source: 'agent', age: '2 min ago', stale: false, detail: null
+    }
+    expect(sessionStatus(session, true, [], failed, working).dot).toBe('exited')
+    // An agent's own claim is not merged into the observed word; a stale claim no longer outranks it.
+    const claimed = {
+      label: 'Epic 14', state: 'running' as const, word: 'Running', source: 'agent', age: '1 min ago', stale: false, detail: null
+    }
+    expect(sessionStatus(session, true, [], claimed, resting)).toEqual({ dot: 'running-idle', word: 'Idle' })
+    // Activity never reaches a session that is not live.
+    expect(sessionStatus(session, false, [], null, working)).toEqual({ dot: 'idle', word: 'Not started' })
+    expect(sessionStatus({
+      sessionId: 's1',
+      lastProcess: { incarnationId: 'i', state: 'exited', exitCode: 0, signal: null, detail: null }
+    }, false, [], null, working).word).toBe('Process exited')
+  })
+
   it('names agents from the executable', () => {
     expect(agentTag('/home/me/.local/bin/claude')).toBe('Claude')
     expect(agentTag('/bin/bash')).toBe('Shell')

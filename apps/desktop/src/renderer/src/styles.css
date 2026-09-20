@@ -284,6 +284,16 @@ input[type='radio'] {
   background: var(--verified);
 }
 
+/*
+ * A live session at rest keeps the running colour and the dot's geometry, hollow instead of filled. The ring is 2px,
+ * not the 1px of the faint Not-started ring: at 7px the eye resolves almost no colour, so the two rings are told apart
+ * by weight, not hue (design review, 2026-09-20). No pulse: status marks never animate.
+ */
+.status-dot.running-idle {
+  border: 2px solid var(--verified);
+  background: transparent;
+}
+
 .status-dot.needs-you {
   background: var(--attention);
   box-shadow: 0 0 0 1px var(--attention);

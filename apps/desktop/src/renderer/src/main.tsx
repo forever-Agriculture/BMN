@@ -42,6 +42,14 @@ import { NeedsYouPopover, type UnreadEntry } from './needs-you-popover'
 import { PopupMenu, type MenuAnchor, type MenuEntry } from './popup-menu'
 import { PreferencesDialog } from './preferences-dialog'
 import {
+  ACTIVITY_TICK_MS,
+  capTitle,
+  sameActivities,
+  sessionActivities,
+  type ActivityObservation,
+  type SessionActivity
+} from './session-activity'
+import {
   agentTag,
   attentionActionWhenOpened,
   displayPath,
@@ -168,6 +176,17 @@ function App(): React.JSX.Element {
   const [armed, setArmed] = useState(false)
   const [dragRatio, setDragRatio] = useState<number | null>(null)
   const [now, setNow] = useState(() => Date.now())
+  /**
+   * What each live session has been observed doing: its last output, its terminal title and when its incarnation went
+   * live. Display only - nothing here opens, resolves or withdraws a request, writes to a PTY or notifies.
+   */
+  const observations = useRef(new Map<string, ActivityObservation>())
+  /** The incarnation whose exit the window has seen, so a stale `live` entry is not observed again. */
+  const exited = useRef(new Map<string, string>())
+  const [activity, setActivity] = useState<Record<string, SessionActivity>>({})
+  const activityRef = useRef(activity)
+  /** How many times each session's presented activity actually changed; the self-test reads it for the throttle. */
+  const activityUpdates = useRef<Record<string, number>>({})
   const [voice, setVoice] = useState<VoiceCapture | null>(null)
   const voiceRef = useRef<VoiceCapture | null>(null)
   const voiceRecording = useRef<VoiceRecording | null>(null)
@@ -195,6 +214,7 @@ function App(): React.JSX.Element {
 
   liveRef.current = new Map(Object.entries(live))
   sessionsRef.current = sessions
+  activityRef.current = activity
   const activeWorkspaceId = tree.selectedWorkspaceId
   const activeWorkspace = workspaces.find((item) => item.workspaceId === activeWorkspaceId)
   const layout = activeWorkspaceId ? layouts[activeWorkspaceId] : undefined
@@ -217,6 +237,27 @@ function App(): React.JSX.Element {
   const unresolved = useMemo(() => openRequests(attention), [attention])
   const answering = useRef(new Set<string>())
 
+  /** xterm reports the title the harness set; it refines the resting word and fills the row tooltip, nothing else. */
+  const noteTitle = (sessionId: string, title: string): void => {
+    const observed = observations.current.get(sessionId)
+    if (observed) observed.title = capTitle(title)
+  }
+
+  /** Re-derives every observed session; the state changes only when a word, a mark or a title changed. */
+  const publishActivity = (): void => {
+    const next = sessionActivities(observations.current, Date.now())
+    if (sameActivities(activityRef.current, next)) return
+    for (const [sessionId, derived] of Object.entries(next)) {
+      const before = activityRef.current[sessionId]
+      if (before && before.word === derived.word && before.working === derived.working && before.title === derived.title) {
+        continue
+      }
+      activityUpdates.current[sessionId] = (activityUpdates.current[sessionId] ?? 0) + 1
+    }
+    activityRef.current = next
+    setActivity(next)
+  }
+
   const fail = (fallback: string) => (error: unknown): void => setFailure(failureDetail(error, fallback))
   const announce = (message: string): void => {
     setAnnouncement('')
@@ -232,6 +273,49 @@ function App(): React.JSX.Element {
     const timer = setTimeout(() => setNotice(undefined), 6_000)
     return () => clearTimeout(timer)
   }, [notice])
+
+  // One observation per live incarnation: a restart starts a fresh one, and a session that is no longer live has none.
+  useEffect(() => {
+    const started = Date.now()
+    for (const [sessionId, startup] of Object.entries(live)) {
+      if (exited.current.get(sessionId) === startup.incarnationId) continue
+      const observed = observations.current.get(sessionId)
+      if (observed?.incarnationId === startup.incarnationId) continue
+      observations.current.set(sessionId, {
+        incarnationId: startup.incarnationId,
+        liveSince: started,
+        lastOutputAt: null,
+        title: null
+      })
+    }
+    for (const sessionId of [...observations.current.keys()]) {
+      if (!(sessionId in live)) observations.current.delete(sessionId)
+    }
+    for (const sessionId of [...exited.current.keys()]) {
+      if (!(sessionId in live)) exited.current.delete(sessionId)
+    }
+    publishActivity()
+  }, [live])
+
+  useEffect(() => {
+    const tick = setInterval(publishActivity, ACTIVITY_TICK_MS)
+    return () => clearInterval(tick)
+  }, [])
+
+  // The self-test reads the words the shell derived, the titles it kept and how often each session was republished.
+  useEffect(() => {
+    if (startup?.testMode !== true) return
+    const read = <Value,>(pick: (item: SessionActivity) => Value): Record<string, Value> =>
+      Object.fromEntries(Object.entries(activityRef.current).map(([sessionId, item]) => [sessionId, pick(item)]))
+    window.__bmnActivity = {
+      words: () => read((item) => item.word),
+      titles: () => read((item) => item.title),
+      updates: () => ({ ...activityUpdates.current })
+    }
+    return () => {
+      delete window.__bmnActivity
+    }
+  }, [startup?.testMode])
 
   const applyStartup = (next: SuccessfulStartup): void => {
     setStartup(next)
@@ -275,13 +359,25 @@ function App(): React.JSX.Element {
       const sessionId = sessionFor(message.attachmentId)
       if (!sessionId) return
       controllers.current.get(sessionId)?.output(message)
+      const observed = observations.current.get(sessionId)
+      if (observed) {
+        observed.lastOutputAt = Date.now()
+        // Working shows on the first byte; every other change waits for the tick, which holds the two-per-second cap.
+        if (!activityRef.current[sessionId]?.working) publishActivity()
+      }
       if (!sessionLayoutView(writer.layouts(), sessionsRef.current, sessionId).followTail) {
         setUnread((current) => current[sessionId] ? current : { ...current, [sessionId]: new Date().toISOString() })
       }
     })
     const stopExit = window.aiTerminal.onTerminalExit((message) => {
       const sessionId = sessionFor(message.attachmentId)
-      if (sessionId) controllers.current.get(sessionId)?.exit(message)
+      if (!sessionId) return
+      controllers.current.get(sessionId)?.exit(message)
+      // The process is gone: its title and activity go with it, and the row reads as it did before this epic.
+      const incarnationId = liveRef.current.get(sessionId)?.incarnationId
+      if (incarnationId) exited.current.set(sessionId, incarnationId)
+      observations.current.delete(sessionId)
+      publishActivity()
     })
     const stopDisconnected = window.aiTerminal.onTerminalViewDisconnected((message) => {
       const sessionId = sessionFor(message.attachmentId)
@@ -1048,7 +1144,13 @@ function App(): React.JSX.Element {
         id: `session-${session.sessionId}`,
         group: 'Sessions',
         label: session.name,
-        context: `${workspace.name} · ${agentTag(session.executable)} · ${displayPath(session.cwd, home)}`,
+        context: `${workspace.name} · ${agentTag(session.executable)} · ${sessionStatus(
+          session,
+          !!live[session.sessionId],
+          unresolved,
+          observedProgressFor(session),
+          activity[session.sessionId] ?? null
+        ).word} · ${displayPath(session.cwd, home)}`,
         run: () => openSession(session.sessionId)
       }))),
       ...shown.map((workspace): PaletteCommand => ({
@@ -1239,7 +1341,8 @@ function App(): React.JSX.Element {
                     </div>
                     {isExpanded ? workspaceSessions.map((session, sessionIndex) => {
                       const observedProgress = observedProgressFor(session)
-                      const status = sessionStatus(session, !!live[session.sessionId], unresolved, observedProgress)
+                      const observedActivity = activity[session.sessionId] ?? null
+                      const status = sessionStatus(session, !!live[session.sessionId], unresolved, observedProgress, observedActivity)
                       const selected = session.sessionId === selectedSessionId
                       return (
                         <div className={`session-row${selected ? ' selected' : ''}${session.archivedAt ? ' archived' : ''}`} key={session.sessionId}>
@@ -1247,7 +1350,7 @@ function App(): React.JSX.Element {
                             type="button"
                             data-session-id={session.sessionId}
                             aria-current={selected ? 'true' : undefined}
-                            title={`${session.name} · ${status.word} · ${session.cwd}`}
+                            title={`${session.name} · ${status.word}${observedActivity?.title ? ` · ${observedActivity.title}` : ''} · ${session.cwd}`}
                             onClick={() => {
                               applyTreeSessionAction(selectTreeSession(sessions, session.sessionId))
                               clearUnread(session.sessionId)
@@ -1299,6 +1402,8 @@ function App(): React.JSX.Element {
                 focusMode={focusMode}
                 filesOpen={panel === 'files'}
                 attention={sessionAttention(unresolved, terminalStartup.sessionId)}
+                activity={activity[terminalStartup.sessionId] ?? null}
+                onTitle={(title) => noteTitle(terminalStartup.sessionId, title)}
                 onAnswer={() => answerByTyping(terminalStartup.sessionId)}
                 armed={armed}
                 progress={progressPresentation(progress, terminalStartup.sessionId, now, terminalStartup.incarnationId)}

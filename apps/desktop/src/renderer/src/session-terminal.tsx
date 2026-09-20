@@ -18,6 +18,7 @@ import { openReferenceFromPane, runFileReferenceIntegration } from './file-refer
 import { runVoiceIntegration } from './voice-self-test'
 import { Icon } from './icons'
 import { SHORTCUT_LABELS } from './keymap'
+import { capTitle, type SessionActivity } from './session-activity'
 import type { ProgressPresentation, SessionAttention } from './session-presentation'
 import { agentTag } from './session-presentation'
 import { installTerminalTestHook } from './test-hook'
@@ -79,6 +80,10 @@ export function SessionTerminal(props: {
   focusMode: boolean
   filesOpen: boolean
   attention: SessionAttention
+  /** The observed working/idle word for this pane, or null before the first derivation. Display only. */
+  activity: SessionActivity | null
+  /** The harness set the terminal title; the shell caps it, keeps it in memory and shows it. */
+  onTitle(title: string): void
   /** The owner typed, pasted or dictated into the pane while it needs them. */
   onAnswer(): void
   armed: boolean
@@ -124,6 +129,7 @@ export function SessionTerminal(props: {
   const needsYou = useRef(props.attention !== null)
   const onAnswer = useRef(props.onAnswer)
   const onOpenFileReference = useRef(props.onOpenFileReference)
+  const onTitle = useRef(props.onTitle)
   const activated = useRef(false)
   /** The presented exit status; undefined while the process is running. */
   const [exitStatus, setExitStatus] = useState<string>()
@@ -141,6 +147,7 @@ export function SessionTerminal(props: {
   needsYou.current = props.attention !== null
   onAnswer.current = props.onAnswer
   onOpenFileReference.current = props.onOpenFileReference
+  onTitle.current = props.onTitle
 
   useEffect(() => {
     const container = element.current
@@ -202,7 +209,10 @@ export function SessionTerminal(props: {
       window.aiTerminal.sendTerminalInput(startup.current.attachmentId, new TextEncoder().encode(data))
     }
     const focusReports = createFocusReports({ reportsEnabled: () => terminal.modes.sendFocusMode, send })
+    // Counted for the self-test: everything this pane would put on the PTY, so a display-only change can prove it wrote nothing.
+    let inputEvents = 0
     const input = terminal.onData((data) => {
+      inputEvents += 1
       if (!focusReports.isFocusReport(data)) send(data)
     })
     // onKey fires only for the owner's own keys, not for the replies xterm sends to terminal queries.
@@ -210,6 +220,8 @@ export function SessionTerminal(props: {
       if (needsYou.current) onAnswer.current()
     }
     const keys = terminal.onKey(answered)
+    // A title is read and shown, never obeyed: it cannot make a session working, and it opens nothing.
+    const titles = terminal.onTitleChange((title) => onTitle.current(capTitle(title)))
     const textareaFocus = (): void => focusReports.paneFocus(true)
     const textareaBlur = (): void => focusReports.paneFocus(false)
     terminal.textarea?.addEventListener('focus', textareaFocus)
@@ -307,6 +319,7 @@ export function SessionTerminal(props: {
       terminal,
       getPtyDimensions: () => ptyDimensions,
       getRefitCount: () => refitCount,
+      getInputCount: () => inputEvents,
       ...(props.selected ? { integration: async () => {
         console.warn('[BMN] renderer behavioural integration: started')
         const workspaces = await window.aiTerminal.listWorkspaces(true)
@@ -778,6 +791,7 @@ export function SessionTerminal(props: {
       focusReports.dispose()
       input.dispose()
       keys.dispose()
+      titles.dispose()
       container.removeEventListener('mousedown', mouseDown, true)
       container.removeEventListener('contextmenu', contextMenu, true)
       window.removeEventListener('mouseup', mouseUp)
@@ -803,16 +817,25 @@ export function SessionTerminal(props: {
     refit.current()
   }, [props.colorMode, props.fontSize])
 
-  useEffect(() => {
-    if (!props.visible || !props.selected) return
-    const terminal = element.current?.querySelector('.xterm-helper-textarea') as HTMLElement | null
-    if (!document.querySelector('dialog[open]')) terminal?.focus()
+  /** Asks the host to start streaming this session's output; the first caller wins and a failure may retry. */
+  const ensureActive = (): void => {
     if (activated.current) return
     activated.current = true
     void window.aiTerminal.activateTerminal(props.startup.sessionId).catch((error: unknown) => {
       activated.current = false
       props.onFailure(failureDetail(error, 'Terminal activation failed'))
     })
+  }
+
+  // Every live pane activates when it mounts, visible or not: output reaches the window only after
+  // activation, so a session the owner never opened would show no unread mark and no observed word.
+  useEffect(ensureActive, [])
+
+  useEffect(() => {
+    if (!props.visible || !props.selected) return
+    const terminal = element.current?.querySelector('.xterm-helper-textarea') as HTMLElement | null
+    if (!document.querySelector('dialog[open]')) terminal?.focus()
+    ensureActive()
   }, [props.visible, props.selected])
 
   const find = (direction: 1 | -1): void => {
@@ -834,9 +857,11 @@ export function SessionTerminal(props: {
 
   const name = props.startup.name
   const attentionWord = props.attention === 'response' ? 'Waiting for your response'
-    : props.attention === 'update' ? 'Update available' : 'Running'
+    : props.attention === 'update' ? 'Update available' : props.activity?.word ?? 'Running'
   const statusText = `${exitStatus ?? attentionWord} · ${props.startup.cwd}`
-  const dot = exitStatus ? 'exited' : props.attention ? 'needs-you' : 'running'
+  const dot = exitStatus ? 'exited'
+    : props.attention ? 'needs-you'
+      : props.activity && !props.activity.working ? 'running-idle' : 'running'
   const progress = props.progress
 
   return (

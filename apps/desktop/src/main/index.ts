@@ -216,6 +216,22 @@ let savedOutputCaptureCoordinator: SavedOutputCaptureCoordinator | undefined
 let selfTestLayoutPutRequests = 0
 const selfTestLayoutPutSelections: Array<string | null> = []
 let selfTestBridgeInvokeRegistrations: readonly BridgeInvokeRegistration[] = []
+/** What the renderer's activity probe hands back for one self-test sampling window. */
+interface ActivitySampling {
+  samples: {
+    at: number
+    words: Record<string, string | null>
+    titles: Record<string, string | null>
+    burstDone: boolean
+  }[]
+  attentionBefore: number
+  attentionAfter: number
+  updates: Record<string, number>
+  before: Record<string, { cols: number; rows: number; refits: number; inputEvents: number } | null>
+  after: Record<string, { cols: number; rows: number; refits: number; inputEvents: number } | null>
+  burstBuffer: string
+}
+
 const SELF_TEST_LAUNCH_DISABLED_REASON =
   'Stored arguments are unavailable in the renderer boundary probe.'
 let selfTestRendererLaunchBlockedSessionId: string | undefined
@@ -1180,7 +1196,7 @@ async function stoppedPanelProgress(window: BrowserWindow, sessionId: string): P
  */
 async function liveExitPaneLabel(
   window: BrowserWindow,
-  live: { sessionId: string; attachmentId: string; name: string }
+  live: { attachmentId: string; name: string }
 ): Promise<string> {
   return window.webContents.executeJavaScript(`
     new Promise((resolve, reject) => {
@@ -1191,17 +1207,15 @@ async function liveExitPaneLabel(
         const label = document.querySelector(selector)?.textContent?.trim();
         if (label && !exitRequested) {
           exitRequested = true;
-          const exit = () => window.aiTerminal.sendTerminalInput(
+          // Every live pane activated when it mounted, so the attachment already carries input both ways.
+          window.aiTerminal.sendTerminalInput(
             ${JSON.stringify(live.attachmentId)},
             new TextEncoder().encode(${JSON.stringify('exit 23\r')})
           );
-          // A pane selected in the tree already holds the active attachment and refuses a second activation.
-          const pane = document.querySelector(${JSON.stringify(`section.session-terminal[aria-label="${live.name} terminal"]`)});
-          if (pane && !pane.classList.contains('session-terminal-hidden')) exit();
-          else window.aiTerminal.activateTerminal(${JSON.stringify(live.sessionId)}).then(exit, reject);
         }
-        if (label && !label.startsWith('Running · ')) resolve(label);
-        else if (Date.now() >= deadline) reject(new Error('the live pane header did not leave Running: ' + label));
+        // A live pane now says what it observes (Running, Working, Idle); only the exit ends this wait.
+        if (label && (label.startsWith('Process exited') || label.startsWith('Interrupted'))) resolve(label);
+        else if (Date.now() >= deadline) reject(new Error('the live pane header did not show the exit: ' + label));
         else setTimeout(probe, 25);
       };
       probe();
@@ -2590,7 +2604,6 @@ async function runSelfTest(): Promise<void> {
       throw new Error(`reverse-video terminal text rendered at contrast ${rendererInverseTextContrast.toFixed(2)}, below 4.5`)
     }
     const rendererLiveExitLabel = await liveExitPaneLabel(applicationWindow, {
-      sessionId: liveExitRuntime.session.sessionId,
       attachmentId: liveExitRuntime.attachment.attachmentId,
       name: liveExitRuntime.name
     })
@@ -2626,6 +2639,209 @@ async function runSelfTest(): Promise<void> {
       )
     }
     const rendererRecoveredAfterShellExit = true
+
+    // Epic 14.1: the working/idle word the shell observes, from real output and real titles, with
+    // nothing derived acting. Each fixture waits on a gate file, so its clock starts after the
+    // renderer holds the session and the first byte lands where the assertions expect it.
+    console.error('[BMN] self-test phase: observed session activity')
+    const activityGate = join(isolatedCwd, 'activity-gate')
+    const gated = (body: string): string[] => [
+      '--noprofile',
+      '--norc',
+      '-c',
+      `while [ ! -f ${JSON.stringify(activityGate)} ]; do sleep 0.05; done; ${body}`
+    ]
+    const activityFixtures = [
+      // Prints every 200 ms, then stops: Working while it prints, Idle 1.5-2.0 s after the last byte.
+      ['burst', 'Activity burst', gated("for index in $(seq 1 8); do printf 'x\\n'; sleep 0.2; done; printf 'DONE\\n'; sleep 300")],
+      // Never prints: Running for the start grace, then Idle, and never Working.
+      ['silent', 'Activity silent', ['--noprofile', '--norc', '-c', 'sleep 300']],
+      // First byte inside the 3 s grace: Working at once, and never Running again.
+      ['late', 'Activity late first byte', gated("sleep 1; printf 'FIRST\\n'; sleep 300")],
+      // The two titles the table knows, each while otherwise silent, then output under a known title.
+      ['titled', 'Activity titles', gated(
+        "printf '\\033]0;\u2733 x\\007\\n'; sleep 4; printf '\\033]0;Action Required x\\007\\n'; sleep 4; " +
+        "printf '\\033]0;\u2733 y\\007\\n'; for index in $(seq 1 200); do printf '.\\n'; sleep 0.05; done"
+      )],
+      // A ~100 Hz source: the presented word must still change at most twice a second.
+      ['flood', 'Activity flood', gated("for index in $(seq 1 1200); do printf '.\\n'; sleep 0.01; done; sleep 300")]
+    ] as const
+    const activityIds: Record<string, string> = {}
+    for (const [key, name, argv] of activityFixtures) {
+      const created = await createSessionRuntime({
+        workspaceId: DEFAULT_WORKSPACE_ID,
+        name,
+        cwd: isolatedCwd,
+        executable: '/bin/bash',
+        argv: [...argv],
+        cols: 80,
+        rows: 24
+      }, true)
+      activityIds[key] = created.session.sessionId
+    }
+    await recoverApplicationRenderer(applicationWindow)
+    // The gate opens only once the renderer holds every fixture: output before the pane exists is
+    // output the shell never observes, and the assertions below measure from the first byte.
+    await applicationWindow.webContents.executeJavaScript(`
+      new Promise((resolve, reject) => {
+        const ids = Object.values(${JSON.stringify(activityIds)});
+        const deadline = Date.now() + 15000;
+        const probe = () => {
+          const words = window.__bmnActivity?.words() ?? {};
+          const hook = window.__aitermTest;
+          const ready = hook && ids.every((id) => {
+            if (words[id] === undefined) return false;
+            try { return hook.snapshot(id) !== null } catch { return false }
+          });
+          if (ready) resolve(true);
+          else if (Date.now() >= deadline) reject(new Error('the activity fixtures never reached the renderer'));
+          else setTimeout(probe, 25);
+        };
+        probe();
+      })
+    `)
+    const activityWindowMs = 10_500
+    const activitySampling = applicationWindow.webContents.executeJavaScript(`
+      (async () => {
+        const ids = ${JSON.stringify(activityIds)};
+        const probe = window.__bmnActivity;
+        const hook = window.__aitermTest;
+        if (!probe || !hook) throw new Error('the activity probes are unavailable');
+        
+        const entries = Object.entries(ids);
+        const snapshotOf = (id) => { try { return hook.snapshot(id) } catch { return null } };
+        const shapeOf = (id) => {
+          const snapshot = snapshotOf(id);
+          return snapshot === null ? null : {
+            cols: snapshot.cols, rows: snapshot.rows, refits: snapshot.refits, inputEvents: snapshot.inputEvents
+          };
+        };
+        const byKey = (read) => Object.fromEntries(entries.map(([key, id]) => [key, read(id)]));
+        const before = byKey(shapeOf);
+        const attentionBefore = (await window.aiTerminal.listAttention()).length;
+        const samples = [];
+        const until = Date.now() + ${activityWindowMs};
+        while (Date.now() < until) {
+          const words = probe.words();
+          const titles = probe.titles();
+          const burst = snapshotOf(ids.burst);
+          samples.push({
+            at: Date.now(),
+            words: byKey((id) => words[id] ?? null),
+            titles: byKey((id) => titles[id] ?? null),
+            burstDone: burst !== null && burst.bufferLines.join('').includes('DONE')
+          });
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+        const updates = probe.updates();
+        return {
+          samples,
+          attentionBefore,
+          attentionAfter: (await window.aiTerminal.listAttention()).length,
+          updates: byKey((id) => updates[id] ?? 0),
+          before,
+          after: byKey(shapeOf),
+          burstBuffer: ((snapshotOf(ids.burst) ?? {}).bufferLines ?? []).join('|').slice(0, 300)
+        };
+      })()
+    `) as Promise<ActivitySampling>
+    writeFileSync(activityGate, '')
+    console.error(`[BMN] self-test phase: activity gate ${activityGate} exists=${existsSync(activityGate)}`)
+    const gateAt = Date.now()
+    const activity = await activitySampling
+    const wordAt = (offset: number, key: string): string | null => {
+      const target = gateAt + offset
+      const closest = activity.samples.reduce((best, candidate) =>
+        Math.abs(candidate.at - target) < Math.abs(best.at - target) ? candidate : best)
+      return closest.words[key] ?? null
+    }
+    const wordsOf = (key: string): (string | null)[] => activity.samples.map((sample) => sample.words[key] ?? null)
+    const burstDoneAt = activity.samples.find((sample) => sample.burstDone)?.at ?? null
+    const burstWord = (offset: number): string | null => {
+      const target = (burstDoneAt ?? gateAt) + offset
+      const closest = activity.samples.reduce((best, candidate) =>
+        Math.abs(candidate.at - target) < Math.abs(best.at - target) ? candidate : best)
+      return closest.words.burst ?? null
+    }
+    const lateWords = wordsOf('late')
+    const lateWorking = lateWords.indexOf('Working')
+    const silentWords = wordsOf('silent')
+    const silentIdle = silentWords.indexOf('Idle')
+    const sessionActivity = {
+      burstLastByteAfterGateMs: burstDoneAt === null ? null : burstDoneAt - gateAt,
+      // AC1: Working at 1.0 s of silence, Idle by 2.5 s.
+      burstAfterOneSecond: burstWord(1_000),
+      burstAfterTwoAndAHalf: burstWord(2_500),
+      // AC1: a silent fresh incarnation reads Running, then Idle, and never Working.
+      silentEarly: wordAt(500, 'silent'),
+      silentLate: wordAt(4_500, 'silent'),
+      silentEverWorking: silentWords.includes('Working'),
+      silentRunningAfterIdle: silentIdle === -1 ? true : silentWords.slice(silentIdle).includes('Running'),
+      // AC1: the first byte wins inside the grace, and Running never comes back.
+      lateBeforeFirstByte: lateWords.slice(0, lateWorking === -1 ? 0 : lateWorking),
+      lateRunningAfterOutput: lateWorking === -1 ? true : lateWords.slice(lateWorking).includes('Running'),
+      lateAfterFourSeconds: wordAt(4_000, 'late'),
+      // AC2: a known title names the resting word, is shown, and never makes a session working.
+      titledResting: wordAt(2_500, 'titled'),
+      titledRestingTitle: activity.samples.reduce((best, candidate) =>
+        Math.abs(candidate.at - (gateAt + 2_500)) < Math.abs(best.at - (gateAt + 2_500)) ? candidate : best).titles.titled,
+      titledActionRequired: wordAt(6_500, 'titled'),
+      titledWhilePrinting: wordAt(9_500, 'titled'),
+      // AC4: at most two presentation updates per second per session, even at ~100 Hz.
+      updates: activity.updates,
+      updateCap: Math.ceil((activityWindowMs / 1_000) * 2),
+      // AC4: nothing derived writes to a PTY, refits a terminal or touches a request.
+      inputEvents: Object.fromEntries(Object.entries(activity.after).map(([key, shape]) => [key, shape?.inputEvents ?? null])),
+      geometryUnchanged: Object.entries(activity.after).every(([key, shape]) => {
+        const start = activity.before[key]
+        return !!shape && !!start && shape.cols === start.cols && shape.rows === start.rows && shape.refits === start.refits
+      }),
+      attentionUnchanged: activity.attentionBefore === activity.attentionAfter
+    }
+    console.error(`[BMN] self-test phase: session activity ${JSON.stringify(sessionActivity)}`)
+    console.error(`[BMN] self-test phase: activity last sample ${JSON.stringify({
+      words: activity.samples.at(-1)?.words ?? null,
+      titles: activity.samples.at(-1)?.titles ?? null,
+      samples: activity.samples.length,
+      burstBuffer: activity.burstBuffer,
+      shapes: activity.before
+    })}`)
+    if (burstDoneAt === null) throw new Error('the activity burst session never printed its last byte')
+    if (sessionActivity.burstAfterOneSecond !== 'Working' || sessionActivity.burstAfterTwoAndAHalf !== 'Idle') {
+      throw new Error('output activity did not hold Working for 1.5 s of silence and then rest')
+    }
+    if (sessionActivity.silentEarly !== 'Running' || sessionActivity.silentLate !== 'Idle') {
+      throw new Error('a silent fresh incarnation did not read Running and then Idle')
+    }
+    if (sessionActivity.silentEverWorking || sessionActivity.silentRunningAfterIdle) {
+      throw new Error('a session that printed nothing was called working, or went back to Running')
+    }
+    if (lateWorking === -1 || sessionActivity.lateBeforeFirstByte.includes('Idle')) {
+      throw new Error('the first byte did not make a starting session working inside its grace')
+    }
+    if (sessionActivity.lateRunningAfterOutput || sessionActivity.lateAfterFourSeconds !== 'Idle') {
+      throw new Error('a session that has printed went back to Running')
+    }
+    if (sessionActivity.titledResting !== 'Idle' || sessionActivity.titledRestingTitle !== '\u2733 x') {
+      throw new Error('the terminal title was not kept and shown while the session rested')
+    }
+    if (sessionActivity.titledActionRequired !== 'Action required') {
+      throw new Error('a known title did not name the resting word')
+    }
+    if (sessionActivity.titledWhilePrinting !== 'Working') {
+      throw new Error('a title overruled output activity')
+    }
+    for (const [key, count] of Object.entries(sessionActivity.updates)) {
+      if (count > sessionActivity.updateCap) {
+        throw new Error(`session ${key} published ${count} activity updates, past the throttle`)
+      }
+    }
+    if (Object.values(sessionActivity.inputEvents).some((count) => count !== 0)) {
+      throw new Error('observing activity wrote to a PTY')
+    }
+    if (!sessionActivity.geometryUnchanged) throw new Error('observing activity refit or remounted a terminal')
+    if (!sessionActivity.attentionUnchanged) throw new Error('observing activity opened or resolved a request')
+
     const secondClose = await client.close()
     console.error('[BMN] self-test phase: second host closed')
     clientClosed = true
@@ -2703,6 +2919,7 @@ async function runSelfTest(): Promise<void> {
         afterRestart: lifecycleStoppedAfterRestart
       },
       conversationFromHook,
+      sessionActivity,
       survivalTable: {
         rendererCrash: survivingRendererCrash,
         quit: {
