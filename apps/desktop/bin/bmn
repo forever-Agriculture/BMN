@@ -473,12 +473,16 @@ function conversationObservation(agent, event) {
  * harness invents that does not fit the shape is dropped rather than refused with the calls it belongs to.
  */
 function hookOrigin(agent, eventName) {
-  return hookEventName(eventName) === undefined ? undefined : `hook:${agent}:${eventName}`
+  if (hookEventName(eventName) === undefined) return undefined
+  const origin = `hook:${agent}:${eventName}`
+  // The whole origin is one `RULES.source` value; a name too long to fit is logged but not stamped.
+  return origin.length > 64 ? undefined : origin
 }
 
-/** The printable `RULES.source` shape the app accepts, so an unfamiliar event still reaches the log. */
+/** The `RULES.source` shape the app accepts: 1-64 characters, no control characters. */
 function hookEventName(eventName) {
-  return typeof eventName === 'string' && /^[\x21-\x7e]{1,64}$/.test(eventName) ? eventName : undefined
+  // eslint-disable-next-line no-control-regex
+  return typeof eventName === 'string' && /^[^\x00-\x1f\x7f]{1,64}$/.test(eventName) ? eventName : undefined
 }
 
 /** Maps one Claude Code or Codex hook event to the attention calls that keep Needs you truthful. */
@@ -650,6 +654,8 @@ function hookObservation(agent, event, requests, outcomes) {
   requests.forEach((request, index) => {
     const outcome = outcomes[index]
     if (outcome === undefined || outcome.error !== undefined) return
+    // Repeating an identical request changes nothing; the host says so and the log must not claim otherwise.
+    if (isObject(outcome.result) && outcome.result.changed === false) return
     const effect = byMethod[request.method]
     if (effect !== undefined && !effects.includes(effect)) effects.push(effect)
   })

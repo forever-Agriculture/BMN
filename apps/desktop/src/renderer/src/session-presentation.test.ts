@@ -234,7 +234,10 @@ describe('session presentation', () => {
     [{ state: 'answered', openedBy: 'cli', resolvedBy: 'hook:claude:PostToolUse' }, 'resolved by Claude PostToolUse'],
     [{ state: 'withdrawn', openedBy: 'cli', resolvedBy: 'hook:claude:Stop' }, 'withdrawn by Claude Stop'],
     [{ state: 'withdrawn', openedBy: 'cli', resolvedBy: null }, 'withdrawn by unknown'],
-    [{ state: 'expired', openedBy: 'cli', resolvedBy: 'expiry' }, 'expired']
+    [{ state: 'expired', openedBy: 'cli', resolvedBy: 'expiry' }, 'expired'],
+    // An event name may hold a colon or a space; the owner reads all of it, not the first segment.
+    [{ state: 'open', openedBy: 'hook:claude:Custom:Event', resolvedBy: null }, 'from Claude Custom:Event'],
+    [{ state: 'open', openedBy: 'hook:codex:Custom Event', resolvedBy: null }, 'from Codex Custom Event']
   ] as const)('says %o in plain words', (request, words) => {
     expect(attentionProvenance(request)).toBe(words)
   })

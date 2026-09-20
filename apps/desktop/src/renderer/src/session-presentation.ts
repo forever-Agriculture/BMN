@@ -98,7 +98,11 @@ const ORIGIN_AGENT_NAMES: Readonly<Record<string, string>> = Object.freeze({ cla
 function originName(origin: string | null, action: 'opened' | 'closed'): string | null {
   if (origin === null) return null
   if (origin.startsWith('hook:')) {
-    const [, agent = '', event = ''] = origin.split(':')
+    // Only the agent is split off: an event name may contain a colon, and the owner should see all of it.
+    const rest = origin.slice('hook:'.length)
+    const separator = rest.indexOf(':')
+    const agent = separator < 0 ? rest : rest.slice(0, separator)
+    const event = separator < 0 ? '' : rest.slice(separator + 1)
     return `${ORIGIN_AGENT_NAMES[agent] ?? agent} ${event}`.trim()
   }
   switch (origin) {

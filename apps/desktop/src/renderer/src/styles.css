@@ -1792,8 +1792,9 @@ input[type='radio'] {
     padding-inline: 8px;
   }
 
+  /* The rail is a column of marks: the name, the path and the observed word all live in the row tooltip. */
   .session-row .session-name,
-  .session-row .session-directory,
+  .session-row .session-detail,
   .session-row .chip,
   .session-row .row-menu-button,
   .workspace-row .row-menu-button,

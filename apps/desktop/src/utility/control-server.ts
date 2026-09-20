@@ -286,24 +286,8 @@ function acceptableOrigin(value: unknown, scope: ControlScope): boolean {
     (AGENT_ATTENTION_ORIGINS as readonly string[]).includes(value)
 }
 
-/** The origin to store, or undefined when none was offered or the one offered was dropped and recorded. */
-function usableOrigin(
-  params: Params,
-  scope: ControlScope,
-  method: string,
-  handlers: ControlHandlers
-): string | undefined {
-  const value = params.origin
-  if (value === undefined || value === null) return undefined
-  if (acceptableOrigin(value, scope)) return value as string
-  // The refused word is never echoed: a caller must not be able to write its own line into the refusal log.
-  handlers.reportRefusal(
-    method,
-    scope.kind === 'session' ? scope.sessionId : null,
-    'origin refused: unknown provenance for this credential'
-  )
-  return undefined
-}
+/** One dropped origin per caller per this long reaches the refusal log; the reason never varies. */
+const ORIGIN_REFUSAL_QUIET_MS = 60_000
 
 function requireEffects(params: Params, key: string): HookEventEffect[] {
   const value = params[key]
@@ -410,6 +394,8 @@ async function removeStaleSocket(socketPath: string): Promise<void> {
 export class ControlServer {
   private server: Server | undefined
   private readonly connections = new Set<Connection>()
+  /** When each caller last had a dropped origin recorded, so a bad parameter cannot flood the log. */
+  private readonly originRefusals = new Map<string, number>()
   private readonly receiptLocks = new Map<string, Promise<void>>()
   private readonly now: () => Date
 
@@ -645,6 +631,31 @@ export class ControlServer {
   }
 
   /** Session scope may omit sessionId (own) or name only itself; owner scope must name an existing session. */
+  /**
+   * The origin to store, or undefined when none was offered or the one offered was dropped and recorded.
+   * The refused word is never echoed - a caller must not be able to write its own line into the refusal
+   * log - and one line per caller per quiet period is enough, since the reason never varies. Without that
+   * a caller could turn a cheap parameter mistake into an unbounded queue of appends.
+   */
+  private usableOrigin(
+    params: Params,
+    scope: ControlScope,
+    method: string,
+    handlers: ControlHandlers
+  ): string | undefined {
+    const value = params.origin
+    if (value === undefined || value === null) return undefined
+    if (acceptableOrigin(value, scope)) return value as string
+    const caller = scope.kind === 'session' ? scope.sessionId : null
+    const last = this.originRefusals.get(caller ?? '')
+    const now = Date.now()
+    if (last === undefined || now - last >= ORIGIN_REFUSAL_QUIET_MS) {
+      this.originRefusals.set(caller ?? '', now)
+      handlers.reportRefusal(method, caller, 'origin refused: unknown provenance for this credential')
+    }
+    return undefined
+  }
+
   private target(scope: ControlScope, params: Params): string {
     const requested = readText(params, 'sessionId', RULES.sessionId)
     if (scope.kind === 'session') {
@@ -721,7 +732,7 @@ export class ControlServer {
         const expiresAt = readTimestamp(params, 'expiresAt')
         const idempotencyKey = readText(params, 'idempotencyKey', RULES.idempotencyKey)
         const phoneNotified = readBoolean(params, 'phoneNotified')
-        const origin = usableOrigin(params, scope, method, handlers)
+        const origin = this.usableOrigin(params, scope, method, handlers)
         const sessionId = this.target(scope, params)
         return this.idempotent(scope, method, idempotencyKey, params, () => handlers.openAttention({
           sessionId,
@@ -776,7 +787,7 @@ export class ControlServer {
       case 'attention.withdraw': {
         const params = closedParams(rawParams, ['sessionId', 'requestKey', 'origin'])
         const requestKey = requireText(params, 'requestKey', RULES.requestKey)
-        const origin = usableOrigin(params, scope, method, handlers)
+        const origin = this.usableOrigin(params, scope, method, handlers)
         const sessionId = this.target(scope, params)
         return handlers.withdrawAttention({ sessionId, requestKey, ...(origin === undefined ? {} : { origin }) })
       }
@@ -784,7 +795,7 @@ export class ControlServer {
         const params = closedParams(rawParams, ['sessionId', 'requestKey', 'resolution', 'origin'])
         const requestKey = requireText(params, 'requestKey', RULES.requestKey)
         const resolution = requireText(params, 'resolution', RULES.resolution)
-        const origin = usableOrigin(params, scope, method, handlers)
+        const origin = this.usableOrigin(params, scope, method, handlers)
         const sessionId = this.target(scope, params)
         return handlers.resolveAttention({
           sessionId,

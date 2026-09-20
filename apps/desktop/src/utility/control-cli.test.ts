@@ -740,16 +740,50 @@ describe('bmn hook provenance and the hook event log', () => {
     expect(fixture.handlers.observeHookEvent.mock.calls[0]?.[0]).toMatchObject({ effects: ['opened'] })
   })
 
-  it('carries an unfamiliar but printable event name, which is what the log is for', async () => {
-    const fixture = await cliFixture()
+  it.each(['Custom-Event', 'Custom Event', 'Évènement'])(
+    'carries the unfamiliar event name %s, which is what the log is for',
+    async (event) => {
+      const fixture = await cliFixture()
 
-    const result = await runHook(fixture, 'claude', { hook_event_name: 'Custom-Event' })
+      const result = await runHook(fixture, 'claude', { hook_event_name: event })
+
+      expect(result).toEqual(QUIET)
+      expect(fixture.handlers.observeHookEvent.mock.calls[0]?.[0]).toMatchObject({ event, effects: [] })
+    }
+  )
+
+  it('records an open the host says changed nothing as changing nothing', async () => {
+    const fixture = await cliFixture()
+    fixture.handlers.openAttention.mockImplementation(async () => ({ opened: true, changed: false }))
+
+    // The same permission prompt twice: the second finds the request already open and identical.
+    const result = await runHook(fixture, 'claude', {
+      hook_event_name: 'Notification', notification_type: 'permission_prompt', message: 'Allow Bash?'
+    })
 
     expect(result).toEqual(QUIET)
+    expect(fixture.handlers.openAttention).toHaveBeenCalled()
     expect(fixture.handlers.observeHookEvent.mock.calls[0]?.[0]).toMatchObject({
-      event: 'Custom-Event',
+      event: 'Notification',
       effects: []
     })
+  })
+
+  it('logs an event whose name is too long to stamp on a request, without an origin', async () => {
+    const fixture = await cliFixture()
+    // 60 characters fits `RULES.source` for the event, but `hook:claude:` + 60 exceeds the origin's 64.
+    const event = 'E'.repeat(60)
+
+    const result = await runHook(fixture, 'claude', {
+      hook_event_name: 'Notification', notification_type: 'permission_prompt', message: 'Allow Bash?'
+    })
+    const stamped = fixture.handlers.openAttention.mock.calls.at(-1)?.[0] as { origin?: string } | undefined
+    const long = await runHook(fixture, 'claude', { hook_event_name: event })
+
+    expect(result).toEqual(QUIET)
+    expect(long).toEqual(QUIET)
+    expect(stamped?.origin).toBe('hook:claude:Notification')
+    expect(fixture.handlers.observeHookEvent.mock.calls.at(-1)?.[0]).toMatchObject({ event, effects: [] })
   })
 
   it('carries the harness source and tool name when the payload has them', async () => {

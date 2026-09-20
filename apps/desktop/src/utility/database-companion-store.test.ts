@@ -173,6 +173,9 @@ describe('companion store', () => {
     expect(again.revision).toBe(first.revision)
     expect(again.seenAt).toBe(now)
     expect(again.openedBy).toBe('cli')
+    // Reported, never stored: the caller needs to be able to say the event changed nothing.
+    expect(first.changed).toBe(true)
+    expect(again.changed).toBe(false)
   })
 
   it('reopening with changed content still records the origin that changed it', () => {
@@ -187,6 +190,7 @@ describe('companion store', () => {
     expect(again.requestId).toBe(first.requestId)
     expect(again.revision).toBe(first.revision + 1)
     expect(again.openedBy).toBe('hook:codex:PreToolUse')
+    expect(again.changed).toBe(true)
   })
 
   it('keeps the newest progress observation per source', () => {

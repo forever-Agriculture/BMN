@@ -438,7 +438,7 @@ describe('control server validation', () => {
       { agentCli: 'claude', conversationReference: OBSERVED_REFERENCE, source: 'startup', pid: 12 }],
     ['unknown hook agent', 'hook.observe', { agent: 'gemini', event: 'Stop', effects: [] }],
     ['control character hook event', 'hook.observe', { agent: 'claude', event: 'Stop\u0007', effects: [] }],
-    ['hook event with a space', 'hook.observe', { agent: 'claude', event: 'Post ToolUse', effects: [] }],
+    ['oversize hook event', 'hook.observe', { agent: 'claude', event: 'E'.repeat(65), effects: [] }],
     ['missing hook event', 'hook.observe', { agent: 'claude', effects: [] }],
     ['hook effects not an array', 'hook.observe', { agent: 'claude', event: 'Stop', effects: 'opened' }],
     ['invented hook effect', 'hook.observe', { agent: 'claude', event: 'Stop', effects: ['notified'] }],
@@ -541,11 +541,12 @@ describe('control server validation', () => {
     expect(fixture.handlers.openAttention).toHaveBeenCalledExactlyOnceWith(withoutOrigin)
     expect(fixture.handlers.withdrawAttention).toHaveBeenCalledExactlyOnceWith(withoutOrigin)
     expect(fixture.handlers.resolveAttention).toHaveBeenCalledExactlyOnceWith(withoutOrigin)
-    // The drop is recorded rather than silent, and never echoes the refused word back into the log.
-    expect(fixture.handlers.reportRefusal).toHaveBeenCalledTimes(3)
-    expect(fixture.handlers.reportRefusal).toHaveBeenLastCalledWith(
-      'attention.resolve', 'session-1', 'origin refused: unknown provenance for this credential'
+    // The drop is recorded rather than silent, but only once per caller per quiet period: the reason never
+    // varies, and a caller must not be able to turn a bad parameter into an unbounded queue of log appends.
+    expect(fixture.handlers.reportRefusal).toHaveBeenCalledExactlyOnceWith(
+      'attention.open', 'session-1', 'origin refused: unknown provenance for this credential'
     )
+    // The refused word is never echoed back into the log.
     expect(fixture.handlers.reportRefusal.mock.calls.every(([, , reason]) => !String(reason).includes(origin)))
       .toBe(true)
   })
@@ -566,8 +567,11 @@ describe('control server validation', () => {
   it.each([
     'hook:claude:Custom-Event',
     'hook:codex:Pre_Tool.Use',
-    `hook:claude:${'E'.repeat(64)}`
-  ])('accepts %s, the printable event shape the app documents', async (origin) => {
+    'hook:claude:Custom Event',
+    'hook:codex:Évènement',
+    'hook:claude:Custom:Event',
+    `hook:claude:${'E'.repeat(52)}`
+  ])('accepts %s, the RULES.source shape the epic names', async (origin) => {
     const fixture = await serverFixture()
     const client = await authenticated(fixture, sessionToken(fixture))
 

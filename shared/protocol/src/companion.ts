@@ -67,16 +67,12 @@ export const AGENT_ATTENTION_ORIGINS = Object.freeze(['cli'] as const)
 export const HOOK_EVENT_AGENTS = Object.freeze(['claude', 'codex'] as const)
 export type HookEventAgent = (typeof HOOK_EVENT_AGENTS)[number]
 
-/** The event half of `hook:<agent>:<Event>`: the printable `RULES.source` shape, so an unfamiliar event still reads. */
-const HOOK_EVENT_NAME = /^[\x21-\x7e]+$/
-/** `RULES.source` size, which bounds a plain origin word and the event half of a hook origin alike. */
+/** `RULES.source` size: the whole origin and a hook event name alike are at most this many characters. */
 const ORIGIN_MAX = 64
-/** `hook:` plus the longest agent plus a full-length event name, so composing one never clips a valid event. */
-const HOOK_ORIGIN_MAX = 'hook:claude:'.length + ORIGIN_MAX
 
 /** The one place the closed origin vocabulary is decided, so every entry point accepts the same words. */
 export function isAttentionOrigin(value: string): boolean {
-  if (value.length < 1 || value.length > HOOK_ORIGIN_MAX) return false
+  if (value.length < 1 || value.length > ORIGIN_MAX) return false
   if ((ATTENTION_ORIGINS as readonly string[]).includes(value)) return true
   if (!value.startsWith('hook:')) return false
   // Only the agent is split off: an event name may itself contain a colon, and the log should still read.
@@ -87,9 +83,18 @@ export function isAttentionOrigin(value: string): boolean {
     isHookEventName(rest.slice(separator + 1))
 }
 
-/** A hook event name the log will store: printable, no whitespace, at most `RULES.source` characters. */
+/**
+ * A hook event name the log will store: exactly the `RULES.source` shape the socket already enforces -
+ * 1 to 64 characters with no control characters. Spaces and non-ASCII letters are names too, and an
+ * unfamiliar event is precisely what the log exists to show.
+ */
 export function isHookEventName(value: string): boolean {
-  return value.length >= 1 && value.length <= ORIGIN_MAX && HOOK_EVENT_NAME.test(value)
+  if (value.length < 1 || value.length > ORIGIN_MAX) return false
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code === 0x7f || code < 0x20) return false
+  }
+  return true
 }
 
 export const HOOK_EVENT_EFFECTS = Object.freeze(['opened', 'withdrew', 'answered'] as const)

@@ -1060,6 +1060,32 @@ const evidence = await withTemporaryRoot(
         // The selected row carries the mark under selection and focus at the same time.
         assert.equal(measurement.selectionOverlap, true, detail)
       }
+      // Below 800 px the sidebar collapses to a rail of marks: the name, the path and the observed word all
+      // live in the row tooltip, and nothing may spill out of the 64 px column.
+      await setContentSize(application, page, 780, 600)
+      await settleTerminalLayout(page)
+      const railRow = await page.evaluate((sessionId) => {
+        const row = document.querySelector(`.session-row button[data-session-id="${sessionId}"]`)
+        const detail = row?.querySelector('.session-detail')
+        const mark = row?.querySelector('.status-dot')
+        if (!(row instanceof HTMLElement) || !(detail instanceof HTMLElement) || !(mark instanceof HTMLElement)) {
+          throw new Error('rail row unavailable')
+        }
+        const sidebar = row.closest('.workspace-sidebar')
+        return {
+          detailShown: detail.getClientRects().length > 0,
+          markShown: mark.getClientRects().length > 0,
+          title: row.getAttribute('title'),
+          overflows: !!sidebar && row.getBoundingClientRect().right > sidebar.getBoundingClientRect().right + 1
+        }
+      }, fixture.selectedSessionId)
+      screenshots.push(await screenshot(page, 'black-knight-780x600-rail.png', activityEvidenceDirectory))
+      const railDetail = JSON.stringify(railRow)
+      assert.equal(railRow.markShown, true, railDetail)
+      assert.equal(railRow.detailShown, false, railDetail)
+      assert.equal(railRow.overflows, false, railDetail)
+      assert.ok(railRow.title?.includes(' · Working · ') || railRow.title?.includes(' · Idle · '), railDetail)
+
       await setContentSize(application, page, 1440, 900)
       await setAppearance(page, 'knight', 'black')
       await disableTarget()
@@ -1186,6 +1212,7 @@ const evidence = await withTemporaryRoot(
         activityMeasurements,
         activityPaletteFiltering,
         activityAttentionPrecedence: precedence,
+        activityCompactRail: railRow,
         screenshotProvenance: {
           before: 'Reconstructed previous CSS selectors applied to the repaired runtime; not a base-HEAD capture.',
           after: 'Current repaired runtime.'

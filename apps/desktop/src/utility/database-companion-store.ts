@@ -185,12 +185,18 @@ export interface AttentionOpenParams {
 }
 
 /** Opening the same key again while it is open updates that request instead of duplicating it. */
+/**
+ * The record, plus whether this open changed anything. A caller that repeats an identical request needs to
+ * be able to say "nothing changed" rather than claim it opened one; `changed` is reported, never stored.
+ */
+export type AttentionOpenResult = AttentionRecord & { changed: boolean }
+
 export function openAttention(
   database: DatabaseConnection,
   params: AttentionOpenParams,
   requestId: string,
   now: string
-): AttentionRecord {
+): AttentionOpenResult {
   const existing = database.prepare(
     "SELECT * FROM attention_request WHERE session_id = ? AND request_key = ? AND state = 'open'"
   ).get(params.sessionId, params.requestKey) as AttentionRow | undefined
@@ -201,7 +207,7 @@ export function openAttention(
       existing.expires_at === (params.expiresAt ?? null)
     // Provenance alone never counts as a change: a re-open that says only a different origin must not clear
     // `seen_at` and show the owner a request they have already read. What opened it stays what opened it.
-    if (unchanged) return attentionFromRow(existing)
+    if (unchanged) return { ...attentionFromRow(existing), changed: false }
     database.prepare(
       `UPDATE attention_request SET kind = ?, title = ?, body = ?, expires_at = ?, incarnation_id = ?,
          opened_by = ?, seen_at = NULL, revision = revision + 1
@@ -215,7 +221,7 @@ export function openAttention(
       params.origin ?? null,
       existing.request_id
     )
-    return getAttention(database, existing.request_id)
+    return { ...getAttention(database, existing.request_id), changed: true }
   }
   database.prepare(
     `INSERT INTO attention_request(request_id, session_id, incarnation_id, request_key, kind, title, body,
@@ -233,7 +239,7 @@ export function openAttention(
     params.expiresAt ?? null,
     params.origin ?? null
   )
-  return getAttention(database, requestId)
+  return { ...getAttention(database, requestId), changed: true }
 }
 
 export function getAttention(database: DatabaseConnection, requestId: string): AttentionRecord {

@@ -125,6 +125,20 @@ describe('the two-updates-per-second cap', () => {
     expect(published.s1).toEqual(working)
   })
 
+  it('never holds back the first byte, because AC1 says Working lands at once', () => {
+    const running: SessionActivity = { word: 'Running', working: false, title: null }
+    // Published 100 ms ago, well inside the cap, and the first byte has just arrived.
+    const published = publishableActivities({ s1: running }, { s1: working }, { s1: start }, start + 100)
+
+    expect(published.s1).toEqual(working)
+  })
+
+  it('still holds back a change that is not the start of work', () => {
+    const published = publishableActivities({ s1: working }, { s1: idle }, { s1: start }, start + 100)
+
+    expect(published.s1).toEqual(working)
+  })
+
   it('keeps at most two updates per second per session under a title storm', () => {
     const publishedAt: Record<string, number> = {}
     let shown: Record<string, SessionActivity> = {}

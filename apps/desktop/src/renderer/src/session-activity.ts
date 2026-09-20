@@ -94,6 +94,9 @@ export const ACTIVITY_MIN_PUBLISH_MS = 500
  * Holds back a session whose presentation changed less than `ACTIVITY_MIN_PUBLISH_MS` ago, so one session's first
  * byte cannot carry another session's pending title change past the cap. The tick re-derives from the same
  * observations, so a held change lands at most one tick late - far inside the 1.5 s idle window.
+ *
+ * Entering Working is never held: AC1 says the first byte makes a session Working at once, and a session can
+ * only enter Working again after the idle window has passed, so the exemption cannot itself breach the cap.
  */
 export function publishableActivities(
   previous: Readonly<Record<string, SessionActivity>>,
@@ -108,7 +111,8 @@ export function publishableActivities(
     const changed = !before ||
       before.word !== derived.word || before.working !== derived.working || before.title !== derived.title
     const tooSoon = last !== undefined && now - last < ACTIVITY_MIN_PUBLISH_MS
-    publishable[sessionId] = changed && before && tooSoon ? before : derived
+    const startedWorking = derived.working && (!before || !before.working)
+    publishable[sessionId] = changed && before && tooSoon && !startedWorking ? before : derived
   }
   return publishable
 }
