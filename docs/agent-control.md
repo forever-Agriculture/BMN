@@ -37,7 +37,7 @@ bmn withdraw <request-key>                     Withdraw your request
 bmn resolve <request-key> <resolution>         Mark a request resolved
 bmn send <text> [--submit] [--key K]           Paste text into the session; --submit presses Enter
 bmn hook <agent>                               Turn an agent hook event on stdin into Needs you requests
-bmn help
+bmn help [agents]                              Show usage; `help agents` prints the agent brief
 ```
 
 Options:
@@ -141,6 +141,48 @@ notifications while you are away. A Claude session connected to Remote Control i
 Telegram: the Claude app already notifies your phone. The hook reads that from Claude Code's
 `~/.claude/sessions/<pid>.json` (or `$CLAUDE_CONFIG_DIR/sessions`), which needs `/proc`, so on macOS
 such sessions are still sent.
+
+## A brief for agents
+
+`bmn help agents` prints this page from the binary, so an agent can read it without leaving its
+session. The block below is the same text; a unit test fails when the two differ.
+
+```text
+bmn: how to behave as an agent inside a BMN session.
+
+Are you inside BMN?
+  If BMN_CONTROL_SOCKET is unset you are not in a BMN session: use none of this.
+  Run `bmn help` for the exact syntax. This page is etiquette, not a command reference.
+
+What to send, and when
+  publish <file>          a file the owner should be able to open: a report, a diff, an image.
+  progress <state> <label>  a real change of state, not a running commentary.
+  ask <key> <title>       a decision only the owner can make; go on with what does not need it.
+  withdraw <key>          the moment the answer arrives or the question stops mattering.
+
+Your states are claims, not verdicts
+  claimed-done says you believe the work is finished. The owner sees it as your claim.
+  verified is the owner's judgement. Never report it: that would launder your claim as proof.
+  failed and blocked are honest. Prefer either to a hopeful running.
+
+Whose screen this is
+  Needs you is the owner's queue, and the other sessions are the owner's. Neither is yours to tidy.
+  Your token reaches your own session only; a call naming another session is refused by design.
+  Resolve or withdraw only the requests you opened yourself.
+
+send is not a message channel
+  send types into your own terminal and nowhere else.
+  It never reaches the owner or another session, and there is no agent-to-agent channel here.
+  If someone else must know something, ask or publish it.
+
+Submission is not delivery
+  A call that returns proves it was submitted. It does not prove anything was read or acted on.
+  --key makes publish and send idempotent, and it is the only retry contract there is.
+  When an outcome is uncertain, do not resend: a repeat without that key does the work twice.
+
+bmn hook is not yours
+  bmn hook <agent> is how BMN reads your harness's own hook events. Never run it by hand.
+```
 
 ## What the app enforces
 

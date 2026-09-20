@@ -211,6 +211,21 @@ const receiptContract = [
         JSON.stringify(['resume', '01a0b657-21a8-7f00-addd-b73646828f5b', '--model', 'gpt-6'])
   ],
   [
+    'survivalTable',
+    (receipt) =>
+      receipt.survivalTable?.rendererCrash?.liveProcesses === 3 &&
+      receipt.survivalTable.rendererCrash.incarnationRecords === 8 &&
+      receipt.survivalTable.rendererCrash.openRequestsBefore > 0 &&
+      receipt.survivalTable.rendererCrash.openRequestsAfter ===
+        receipt.survivalTable.rendererCrash.openRequestsBefore &&
+      receipt.survivalTable.quit?.recorded?.startsWith('application quit · signal ') &&
+      receipt.survivalTable.quit.afterApplicationRestart === receipt.survivalTable.quit.recorded &&
+      receipt.survivalTable.quit.openRequestsAfter ===
+        receipt.survivalTable.rendererCrash.openRequestsAfter &&
+      JSON.stringify(receipt.survivalTable.documented) ===
+        JSON.stringify(['close-window-keep-sessions', 'app-crash-or-reboot', 'desktop-update'])
+  ],
+  [
     'sessionProcessStatus',
     (receipt) =>
       receipt.sessionProcessStatus?.beforeRestart === 'live' &&

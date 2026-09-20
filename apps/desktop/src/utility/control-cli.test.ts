@@ -1,6 +1,6 @@
 // MODULE: control-cli.test.ts - the bmn CLI drives a real control server with truthful output and exit codes
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -10,6 +10,7 @@ import { ERROR_CODES } from '@bmn/protocol'
 import { ControlError, ControlServer, MemoryReceiptStore, type ControlHandlers } from './control-server'
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
+const AGENT_CONTROL_DOC = fileURLToPath(new URL('../../../../docs/agent-control.md', import.meta.url))
 const createdRoots = new Set<string>()
 const servers = new Set<ControlServer>()
 
@@ -288,6 +289,57 @@ async function runHook(
     input: JSON.stringify(event)
   })
 }
+
+describe('bmn help agents', () => {
+  it('prints a brief an agent can read in one screen, and sends nothing to the socket', async () => {
+    const brief = await runCli(['help', 'agents'], {
+      env: { BMN_CONTROL_SOCKET: '/nonexistent/bmn-help-agents.sock', BMN_TOKEN: 'unused' }
+    })
+
+    expect(brief.code).toBe(0)
+    expect(brief.stderr).toBe('')
+    const lines = brief.stdout.split('\n').slice(0, -1)
+    expect(lines.length).toBeLessThanOrEqual(40)
+    expect(lines.filter((line) => line.length > 100)).toEqual([])
+    for (const rule of [
+      'BMN_CONTROL_SOCKET',
+      '`bmn help`',
+      'publish <file>',
+      'progress <state> <label>',
+      'ask <key> <title>',
+      'withdraw <key>',
+      'claimed-done',
+      "verified is the owner's judgement",
+      'Needs you is the owner',
+      'your own session only',
+      'send types into your own terminal',
+      'Submission is not delivery',
+      '--key',
+      'do not resend',
+      'Never run it by hand'
+    ]) {
+      expect(brief.stdout).toContain(rule)
+    }
+  })
+
+  it('keeps the printed brief and the documented one identical', async () => {
+    const [brief, documentation] = await Promise.all([
+      runCli(['help', 'agents']),
+      readFile(AGENT_CONTROL_DOC, 'utf8')
+    ])
+    const fenced = /## A brief for agents[\s\S]*?```text\n([\s\S]*?)```/.exec(documentation)
+
+    expect(fenced?.[1]).toBe(brief.stdout)
+  })
+
+  it('names the brief in its usage, and plain help still prints the commands', async () => {
+    const usage = await runCli(['help'])
+
+    expect(usage.code).toBe(0)
+    expect(usage.stdout).toContain('help [agents]')
+    expect(usage.stdout).toContain('Usage: bmn <command> [arguments] [options]')
+  })
+})
 
 describe('bmn hook', () => {
   it('opens a permission request for a Claude permission prompt and nothing for an idle reminder', async () => {

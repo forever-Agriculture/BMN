@@ -2243,6 +2243,11 @@ async function runSelfTest(): Promise<void> {
     }
     console.error(`[BMN] self-test phase: conversation reported ${JSON.stringify(conversationFromHook)}`)
 
+    const openRequestCount = async (): Promise<number> =>
+      (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
+        .filter((request) => request.state === 'open').length
+    const openRequestsBeforeRendererRestart = await openRequestCount()
+
     console.error('[BMN] self-test phase: renderer restart')
     const reloaded = waitForRendererLoad(applicationWindow)
     applicationWindow.webContents.reload()
@@ -2265,6 +2270,13 @@ async function runSelfTest(): Promise<void> {
     // phase starts two sessions and resumes one, all stopped again; each adds one record.
     if (afterRenderer.liveSessions !== 3 || afterRenderer.incarnationRecords !== 8) {
       throw new Error('renderer restart duplicated or stopped a process')
+    }
+    // "What survives", renderer-crash row: the processes, the layout and the open requests outlive the view.
+    const survivingRendererCrash = {
+      liveProcesses: afterRenderer.liveSessions,
+      incarnationRecords: afterRenderer.incarnationRecords,
+      openRequestsBefore: openRequestsBeforeRendererRestart,
+      openRequestsAfter: await openRequestCount()
     }
     const archivedStillLive = afterRenderer.sessions.some(
       (candidate) => candidate.sessionId === thirdSession.sessionId && candidate.state === 'live'
@@ -2376,6 +2388,7 @@ async function runSelfTest(): Promise<void> {
     )) {
       throw new Error('session.list did not report the interrupted incarnation after application restart')
     }
+    const openRequestsAfterApplicationRestart = await openRequestCount()
     const lifecycleStoppedAfterRestart = restoredDefaultSessions.find(
       (record) => record.sessionId === preloadProbe.templateCreatedSession.sessionId
     )?.lastProcess
@@ -2554,6 +2567,16 @@ async function runSelfTest(): Promise<void> {
         afterRestart: lifecycleStoppedAfterRestart
       },
       conversationFromHook,
+      survivalTable: {
+        rendererCrash: survivingRendererCrash,
+        quit: {
+          recorded: lifecycleStoppedBeforeRestart.detail,
+          afterApplicationRestart: lifecycleStoppedAfterRestart?.detail ?? null,
+          openRequestsAfter: openRequestsAfterApplicationRestart
+        },
+        // Rows no automated check exercises; docs/architecture.md marks them UNVERIFIED.
+        documented: ['close-window-keep-sessions', 'app-crash-or-reboot', 'desktop-update']
+      },
       rendererRestarted: true,
       schemaTables: restoredHealth.schemaTables,
       nativeFailureBeforeDatabase: true,
