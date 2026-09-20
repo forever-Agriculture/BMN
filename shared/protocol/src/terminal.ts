@@ -15,17 +15,6 @@ export const SAVED_OUTPUT_FORMAT_VERSION = 2
 export const RESTORED_VIEW_NOTICE =
   'View restored after renderer loss. The process kept running. Earlier output is in Saved Output.'
 
-export function publishRunningStartupFeedback(
-  startup: { cwd: string; viewRestored?: true },
-  actions: {
-    setStatus(status: string): void
-    setFailure(failure: string): void
-  }
-): void {
-  actions.setStatus(`Running · ${startup.cwd}`)
-  if (startup.viewRestored === true) actions.setFailure(RESTORED_VIEW_NOTICE)
-}
-
 export interface TerminalByteMessage {
   attachmentId: string
   streamSeq: number

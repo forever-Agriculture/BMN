@@ -8,6 +8,9 @@ import {
   type ArtifactRecord,
   type AttentionRecord,
   type BoundConversationBinding,
+  type ClosePromptDecision,
+  type ClosePromptMode,
+  type ClosePromptSession,
   type ExplicitConversationBinding,
   type InputDraftRecord,
   type LaunchTemplateRecord,
@@ -112,8 +115,11 @@ import {
   createApplicationLifecycle,
   runningTargetForRuntime,
   type BackgroundChoice,
+  type CloseChoicePrompt,
+  type QuitChoicePrompt,
   type RunningSessionTarget
 } from './app-lifecycle'
+import { ClosePromptCoordinator, agentName } from './close-prompt-ipc'
 import {
   applyProcessState,
   createProcessTracking,
@@ -213,6 +219,7 @@ let applicationWindow: BrowserWindow | undefined
 let quitRequested = false
 let developmentRoot: ReturnType<typeof createDevelopmentRoot>
 let savedOutputCaptureCoordinator: SavedOutputCaptureCoordinator | undefined
+let closePromptCoordinator: ClosePromptCoordinator | undefined
 /** Self-test hook: every renderer layout.put request main forwards, counted before the host answers. */
 let selfTestLayoutPutRequests = 0
 const selfTestLayoutPutSelections: Array<string | null> = []
@@ -526,6 +533,10 @@ function restrictWebPermissions(): void {
 
 function installIpcHandlers(): void {
   savedOutputCaptureCoordinator = new SavedOutputCaptureCoordinator(
+    ipcMain,
+    (sender) => allowedSenders.has(sender.id) && !sender.isDestroyed()
+  )
+  closePromptCoordinator = new ClosePromptCoordinator(
     ipcMain,
     (sender) => allowedSenders.has(sender.id) && !sender.isDestroyed()
   )
@@ -1293,6 +1304,65 @@ async function inverseTextContrast(
  * Waits for a recovered startup to replace an exited session's pane (a failed recovery leaves the pane
  * mounted), then selects that session in the rendered tree and returns its stopped-panel label.
  */
+/**
+ * The word the sidebar row shows for a session, once it stops saying `Running`. The pane heading and
+ * the row read the same process from different state, and only the row went stale when a process
+ * ended on its own.
+ */
+async function sidebarSessionWord(
+  window: BrowserWindow,
+  session: { sessionId: string }
+): Promise<string> {
+  return window.webContents.executeJavaScript(`
+    new Promise((resolve, reject) => {
+      const deadline = Date.now() + 10000;
+      const probe = () => {
+        const button = [...document.querySelectorAll('.session-row > button[data-session-id]')]
+          .find((candidate) => candidate.dataset.sessionId === ${JSON.stringify(session.sessionId)});
+        const word = button?.querySelector('.session-state')?.textContent?.trim();
+        if (word && word !== 'Running' && word !== 'Working' && word !== 'Idle') resolve(word);
+        else if (Date.now() >= deadline) reject(new Error('the sidebar row still reads ' + word + ' for an ended process'));
+        else setTimeout(probe, 25);
+      };
+      probe();
+    })
+  `) as Promise<string>
+}
+
+/**
+ * Reads the in-app close question the way the owner meets it, then cancels it. Returns what the
+ * dialog said, so the self-test can prove the window -- not a native box -- asked, and that the
+ * answer travelled back.
+ */
+async function closePromptDialogText(window: BrowserWindow): Promise<{
+  heading: string
+  summary: string
+  rows: string[]
+}> {
+  return window.webContents.executeJavaScript(`
+    new Promise((resolve, reject) => {
+      const deadline = Date.now() + 10000;
+      const probe = () => {
+        const dialog = document.querySelector('dialog.close-sessions[open]');
+        if (dialog) {
+          const read = {
+            heading: dialog.querySelector('.app-dialog-heading h2')?.textContent?.trim() ?? '',
+            summary: dialog.querySelector('.close-sessions-summary')?.textContent?.trim() ?? '',
+            rows: [...dialog.querySelectorAll('.close-sessions-list li')].map((row) => row.textContent.trim())
+          };
+          const cancel = [...dialog.querySelectorAll('.dialog-actions button')]
+            .find((button) => button.textContent.trim() === 'Cancel');
+          if (!cancel) { reject(new Error('the close prompt has no Cancel')); return; }
+          cancel.click();
+          resolve(read);
+        } else if (Date.now() >= deadline) reject(new Error('the window never showed the close prompt'));
+        else setTimeout(probe, 25);
+      };
+      probe();
+    })
+  `) as Promise<{ heading: string; summary: string; rows: string[] }>
+}
+
 async function recoveredStoppedLabel(
   window: BrowserWindow,
   stopped: { sessionId: string; name: string }
@@ -2713,6 +2783,15 @@ async function runSelfTest(): Promise<void> {
         `the live pane did not render the observed exit label: ${JSON.stringify(rendererLiveExitLabel)}`
       )
     }
+    // The row the owner actually scans must stop calling a dead process live, without a restart.
+    const rendererLiveExitSidebarWord = await sidebarSessionWord(applicationWindow, {
+      sessionId: liveExitCreated.sessionId
+    })
+    if (rendererLiveExitSidebarWord !== 'Process exited') {
+      throw new Error(
+        `the sidebar row did not follow the exit: ${JSON.stringify(rendererLiveExitSidebarWord)}`
+      )
+    }
     console.error('[BMN] self-test phase: renderer recovery after shell exit')
     const exitRecordDeadline = Date.now() + 5_000
     while (
@@ -3117,6 +3196,42 @@ async function runSelfTest(): Promise<void> {
     if (!requestProvenance.openRequestsUnchanged) throw new Error('opening the Hook events list changed a request')
     if (!requestProvenance.dialogClosed) throw new Error('the Hook events dialog did not close on Escape')
 
+    // The close question itself: asked inside the window, in session names, and answerable.
+    console.error('[BMN] self-test phase: close prompt')
+    const closePromptRuntime = runtimes.get(hookSession.startup.sessionId)
+    if (!closePromptRuntime) throw new Error('the hook session has no runtime for the close prompt')
+    const closePromptAnswer = askTheWindow('close', [{
+      sessionId: closePromptRuntime.session.sessionId,
+      incarnationId: closePromptRuntime.session.incarnationId,
+      executable: closePromptRuntime.executable,
+      processState: 'live'
+    }])
+    const closePromptShown = await closePromptDialogText(applicationWindow)
+    const closePromptDecision = await closePromptAnswer
+    const closePrompt = {
+      heading: closePromptShown.heading,
+      summary: closePromptShown.summary,
+      rows: closePromptShown.rows,
+      decision: closePromptDecision?.kind ?? 'unanswered'
+    }
+    console.error(`[BMN] self-test phase: close prompt ${JSON.stringify(closePrompt)}`)
+    if (closePrompt.heading !== 'Close BMN?') {
+      throw new Error(`the close prompt did not head with its question: ${closePrompt.heading}`)
+    }
+    if (closePrompt.summary !== '1 session is still running. Keep them running, or stop them.') {
+      throw new Error(`the close prompt did not summarize the running work: ${closePrompt.summary}`)
+    }
+    // The owner's words for the session, and no identifier anywhere in the row.
+    if (!closePrompt.rows[0]?.includes(closePromptRuntime.name) || closePrompt.rows.length !== 1) {
+      throw new Error(`the close prompt did not name the session: ${JSON.stringify(closePrompt.rows)}`)
+    }
+    if (closePrompt.rows[0]?.includes(closePromptRuntime.session.sessionId)) {
+      throw new Error('the close prompt showed an identifier to the owner')
+    }
+    if (closePrompt.decision !== 'cancel') {
+      throw new Error(`the owner's answer did not reach the main process: ${closePrompt.decision}`)
+    }
+
     const secondClose = await client.close()
     console.error('[BMN] self-test phase: second host closed')
     clientClosed = true
@@ -3166,6 +3281,8 @@ async function runSelfTest(): Promise<void> {
       stoppedStaleProgress,
       rendererInverseTextContrast,
       rendererLiveExitLabel,
+      rendererLiveExitSidebarWord,
+      closePrompt,
       rendererRecoveredAfterShellExit,
       registeredInvokeChannels: selfTestBridgeInvokeRegistrations.map(({ channel }) => channel),
       envelopedInvokeChannels,
@@ -3297,10 +3414,49 @@ async function flushAllSavedOutput(): Promise<SavedOutputCaptureOutcome> {
   return aggregate
 }
 
+/**
+ * Asks the window itself, so the owner reads session names in BMN's own dialog instead of a native
+ * box full of identifiers. Resolves undefined when there is no window able to answer.
+ */
+async function askTheWindow(
+  mode: ClosePromptMode,
+  targets: readonly RunningSessionTarget[]
+): Promise<ClosePromptDecision | undefined> {
+  const sessions: ClosePromptSession[] = targets.map((target) => ({
+    sessionId: target.sessionId,
+    name: sessionRecords.get(target.sessionId)?.name ?? 'Untitled session',
+    agent: agentName(target.executable),
+    processState: target.processState
+  }))
+  const view = applicationWindow && !applicationWindow.isDestroyed()
+    ? applicationWindow.webContents
+    : undefined
+  return closePromptCoordinator?.request(view, mode, sessions)
+}
+
+async function nativeChoice(
+  type: 'question' | 'warning',
+  prompt: CloseChoicePrompt | QuitChoicePrompt
+): Promise<number> {
+  const options = {
+    type,
+    noLink: true,
+    message: prompt.message,
+    detail: prompt.detail,
+    buttons: [...prompt.buttons],
+    defaultId: prompt.defaultId,
+    cancelId: prompt.cancelId
+  }
+  const result = applicationWindow && !applicationWindow.isDestroyed()
+    ? await dialog.showMessageBox(applicationWindow, options)
+    : await dialog.showMessageBox(options)
+  return result.response
+}
+
 const applicationLifecycle = createApplicationLifecycle({
   runningTargets,
-  saveBackgroundChoice: async (targets, choice) => {
-    for (const target of targets) {
+  saveBackgroundChoice: async (decisions) => {
+    for (const { target, choice } of decisions) {
       const current = runtimes.get(target.sessionId)
       const record = sessionRecords.get(target.sessionId)
       if (!current || !record || current.session.incarnationId !== target.incarnationId) continue
@@ -3314,36 +3470,23 @@ const applicationLifecycle = createApplicationLifecycle({
     }
   },
   promptForClose: async (choice) => {
-    const result = applicationWindow && !applicationWindow.isDestroyed()
-      ? await dialog.showMessageBox(applicationWindow, {
-          type: 'question',
-          noLink: true,
-          ...choice,
-          buttons: [...choice.buttons]
-        })
-      : await dialog.showMessageBox({
-          type: 'question',
-          noLink: true,
-          ...choice,
-          buttons: [...choice.buttons]
-        })
-    return result.response as 0 | 1 | 2
+    const answered = await askTheWindow('close', choice.targets)
+    if (answered) return answered
+    // No window to ask: the native box is the honest fallback, and it answers for every session.
+    const response = await nativeChoice('question', choice)
+    if (response === 2) return { kind: 'cancel' }
+    return {
+      kind: 'proceed',
+      choices: Object.fromEntries(
+        choice.targets.map((target) => [target.sessionId, response === 0 ? 'hide' : 'stop'])
+      ),
+      remember: true
+    }
   },
   promptForQuit: async (choice) => {
-    const result = applicationWindow && !applicationWindow.isDestroyed()
-      ? await dialog.showMessageBox(applicationWindow, {
-          type: 'warning',
-          noLink: true,
-          ...choice,
-          buttons: [...choice.buttons]
-        })
-      : await dialog.showMessageBox({
-          type: 'warning',
-          noLink: true,
-          ...choice,
-          buttons: [...choice.buttons]
-        })
-    return result.response as 0 | 1
+    const answered = await askTheWindow('quit', choice.targets)
+    if (answered) return answered.kind === 'cancel' ? 'cancel' : 'quit'
+    return (await nativeChoice('warning', choice)) === 0 ? 'quit' : 'cancel'
   },
   flushSavedOutput: flushAllSavedOutput,
   stopTargets: stopCurrentTargets,

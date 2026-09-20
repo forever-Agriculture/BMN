@@ -14,6 +14,7 @@ import {
   relativeAge,
   requestsAnsweredByTyping,
   sessionAttention,
+  sessionProcessLive,
   sessionStatus,
   windowTitle,
   attentionProvenance
@@ -38,6 +39,36 @@ const request = (requestId: string, sessionId: string, openedAt: string, state: 
   revision: 1,
   openedBy: null,
   resolvedBy: null
+})
+
+describe('a view that outlives its process', () => {
+  const session = (lastProcess: { incarnationId: string; state: 'live' | 'exited' | 'interrupted' } | null) => ({
+    sessionId: 'session-1',
+    lastProcess: lastProcess
+      ? { ...lastProcess, exitCode: lastProcess.state === 'exited' ? 23 : null, signal: null, detail: null }
+      : null
+  })
+
+  it('stops calling a session live once its attached incarnation has ended', () => {
+    // The pane stays mounted so its output can still be read; the row must not read Running.
+    expect(sessionProcessLive(session({ incarnationId: 'incarnation-1', state: 'exited' }), 'incarnation-1')).toBe(false)
+    expect(sessionProcessLive(session({ incarnationId: 'incarnation-1', state: 'interrupted' }), 'incarnation-1')).toBe(false)
+    expect(sessionStatus(session({ incarnationId: 'incarnation-1', state: 'exited' }), false, [])).toEqual({
+      dot: 'exited',
+      word: 'Process exited'
+    })
+  })
+
+  it('keeps a running session live, including one whose record still describes an older incarnation', () => {
+    expect(sessionProcessLive(session({ incarnationId: 'incarnation-1', state: 'live' }), 'incarnation-1')).toBe(true)
+    expect(sessionProcessLive(session({ incarnationId: 'incarnation-0', state: 'exited' }), 'incarnation-1')).toBe(true)
+    expect(sessionProcessLive(session(null), 'incarnation-1')).toBe(true)
+  })
+
+  it('is not live when no view is attached at all', () => {
+    expect(sessionProcessLive(session(null), undefined)).toBe(false)
+    expect(sessionProcessLive(session({ incarnationId: 'incarnation-1', state: 'live' }), undefined)).toBe(false)
+  })
 })
 
 describe('session presentation', () => {

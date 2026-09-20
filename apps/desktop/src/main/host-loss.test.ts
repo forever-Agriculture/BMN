@@ -2,8 +2,6 @@ import { Terminal } from '@xterm/headless'
 import {
   ERROR_CODES,
   METHOD_REGISTRY,
-  RESTORED_VIEW_NOTICE,
-  publishRunningStartupFeedback,
   type ProtocolMethod,
   type SavedOutputCaptureOutcome,
   type SessionStopCause
@@ -23,6 +21,9 @@ import {
   createApplicationLifecycle,
   runningTargetForRuntime,
   stopAndDisposeCurrentTarget,
+  type BackgroundChoiceDecision,
+  type CloseChoicePrompt,
+  type CloseDecision,
   type RunningSessionTarget
 } from './app-lifecycle'
 import { acquireRootScopedSingleInstance, focusExistingWindow } from './single-instance'
@@ -705,19 +706,6 @@ describe('host loss feedback', () => {
     expect(hostPorts).toEqual(['one-host-port'])
   })
 
-  it('publishes the restored-view notice through renderer startup feedback', () => {
-    const setStatus = vi.fn()
-    const setFailure = vi.fn()
-
-    publishRunningStartupFeedback(
-      { cwd: '/workspace', viewRestored: true },
-      { setStatus, setFailure }
-    )
-
-    expect(setStatus).toHaveBeenCalledWith('Running · /workspace')
-    expect(setFailure).toHaveBeenCalledWith(RESTORED_VIEW_NOTICE)
-  })
-
   it('schedules a fresh renderer for bounded-queue and sequence failures', () => {
     const reload = vi.fn()
     const scheduled: Array<() => void> = []
@@ -743,22 +731,34 @@ const RUNNING_TARGET: RunningSessionTarget = {
   processState: 'live'
 }
 
+/** Every unset target answered the same way, the shape the native fallback still produces. */
+function everyTarget(
+  targets: readonly RunningSessionTarget[],
+  choice: 'hide' | 'stop'
+): CloseDecision {
+  return {
+    kind: 'proceed',
+    choices: Object.fromEntries(targets.map((target) => [target.sessionId, choice])),
+    remember: true
+  }
+}
+
 function applicationLifecycleHarness(options: {
   targets?: RunningSessionTarget[]
-  closeResponse?: 0 | 1 | 2
-  quitResponse?: 0 | 1
+  closeResponse?: (prompt: CloseChoicePrompt) => CloseDecision
+  quitResponse?: 'quit' | 'cancel'
   captureOutcome?: SavedOutputCaptureOutcome
 } = {}) {
   const state = {
     targets: options.targets ?? [{ ...RUNNING_TARGET }]
   }
-  const saveBackgroundChoice = vi.fn(
-    (targets: readonly RunningSessionTarget[], choice: 'hide' | 'stop') => {
-      for (const target of targets) target.backgroundChoice = choice
-    }
+  const saveBackgroundChoice = vi.fn((decisions: readonly BackgroundChoiceDecision[]) => {
+    for (const decision of decisions) decision.target.backgroundChoice = decision.choice
+  })
+  const promptForClose = vi.fn(async (prompt: CloseChoicePrompt) =>
+    options.closeResponse ? options.closeResponse(prompt) : everyTarget(prompt.targets, 'hide')
   )
-  const promptForClose = vi.fn(async () => options.closeResponse ?? (0 as const))
-  const promptForQuit = vi.fn(async () => options.quitResponse ?? (1 as const))
+  const promptForQuit = vi.fn(async () => options.quitResponse ?? ('cancel' as const))
   const stopTargets = vi.fn(async (
     targets: readonly RunningSessionTarget[],
     cause: SessionStopCause
@@ -823,8 +823,8 @@ describe('Story 1.4 application lifecycle', () => {
     const lifecycle = createApplicationLifecycle({
       runningTargets: () => [],
       saveBackgroundChoice: vi.fn(),
-      promptForClose: vi.fn(async () => 2 as const),
-      promptForQuit: vi.fn(async () => 1 as const),
+      promptForClose: vi.fn(async () => ({ kind: 'cancel' }) as const),
+      promptForQuit: vi.fn(async () => 'cancel' as const),
       flushSavedOutput: () => captureSavedOutputForLifecycle(
         undefined,
         captureWebContents(false, destroyedWindow),
@@ -863,8 +863,8 @@ describe('Story 1.4 application lifecycle', () => {
             : [RUNNING_TARGET])
         ],
         saveBackgroundChoice: vi.fn(),
-        promptForClose: vi.fn(async () => 1 as const),
-        promptForQuit: vi.fn(async () => 0 as const),
+        promptForClose: vi.fn(async (prompt: CloseChoicePrompt) => everyTarget(prompt.targets, 'stop')),
+        promptForQuit: vi.fn(async () => 'quit' as const),
         flushSavedOutput: async () => {
           savedResult = liveBuffer
           return { status: 'saved' }
@@ -899,8 +899,8 @@ describe('Story 1.4 application lifecycle', () => {
     const lifecycle = createApplicationLifecycle({
       runningTargets: () => targets,
       saveBackgroundChoice: vi.fn(),
-      promptForClose: vi.fn(async () => 2 as const),
-      promptForQuit: vi.fn(async () => 1 as const),
+      promptForClose: vi.fn(async () => ({ kind: 'cancel' }) as const),
+      promptForQuit: vi.fn(async () => 'cancel' as const),
       flushSavedOutput: () => new Promise((resolve) => {
         releaseCapture = () => resolve({ status: 'saved' })
       }),
@@ -1019,8 +1019,7 @@ describe('Story 1.4 application lifecycle', () => {
       processState: 'live' as const
     }
     const harness = applicationLifecycleHarness({
-      targets: [{ ...RUNNING_TARGET }, second],
-      closeResponse: 0
+      targets: [{ ...RUNNING_TARGET }, second]
     })
 
     harness.lifecycle.closeLastWindow(preventableEvent())
@@ -1034,18 +1033,59 @@ describe('Story 1.4 application lifecycle', () => {
         'Session: session-2\nProcess: /usr/bin/codex\nIncarnation: incarnation-2\nState: live',
       buttons: ['Minimize (keep running)', 'Stop', 'Cancel'],
       defaultId: 0,
-      cancelId: 2
+      cancelId: 2,
+      targets: [expect.objectContaining({ sessionId: 'session-1' }), second]
     })
-    expect(harness.saveBackgroundChoice).toHaveBeenCalledWith(
-      expect.arrayContaining([expect.objectContaining({ sessionId: 'session-1' }), second]),
-      'hide'
-    )
+    expect(harness.saveBackgroundChoice).toHaveBeenCalledWith([
+      { target: expect.objectContaining({ sessionId: 'session-1' }), choice: 'hide' },
+      { target: second, choice: 'hide' }
+    ])
     expect(harness.state.targets).toHaveLength(2)
     expect(harness.stopTargets).not.toHaveBeenCalled()
   })
 
+  it('keeps the sessions the owner kept and stops only the ones they marked', async () => {
+    const second = {
+      sessionId: 'session-2',
+      incarnationId: 'incarnation-2',
+      executable: '/usr/bin/codex',
+      processState: 'live' as const
+    }
+    const harness = applicationLifecycleHarness({
+      targets: [{ ...RUNNING_TARGET }, second],
+      closeResponse: () => ({
+        kind: 'proceed',
+        choices: { 'session-2': 'stop' },
+        remember: false
+      })
+    })
+
+    harness.lifecycle.closeLastWindow(preventableEvent())
+
+    await vi.waitFor(() => expect(harness.hideWindow).toHaveBeenCalledOnce())
+    // An unmentioned session is kept, never stopped by omission.
+    expect(harness.stopTargets).toHaveBeenCalledWith([second], 'close-last-window')
+    expect(harness.saveBackgroundChoice).not.toHaveBeenCalled()
+    expect(harness.quitApplication).not.toHaveBeenCalled()
+  })
+
+  it('stops every session and quits when the owner stopped them all', async () => {
+    const harness = applicationLifecycleHarness({
+      closeResponse: (prompt) => everyTarget(prompt.targets, 'stop')
+    })
+
+    harness.lifecycle.closeLastWindow(preventableEvent())
+
+    await vi.waitFor(() => expect(harness.quitApplication).toHaveBeenCalledOnce())
+    expect(harness.stopTargets).toHaveBeenCalledWith(
+      [expect.objectContaining({ sessionId: 'session-1', backgroundChoice: 'stop' })],
+      'close-last-window'
+    )
+    expect(harness.hideWindow).not.toHaveBeenCalled()
+  })
+
   it('treats Cancel as a genuine no-op and leaves every process running', async () => {
-    const harness = applicationLifecycleHarness({ closeResponse: 2 })
+    const harness = applicationLifecycleHarness({ closeResponse: () => ({ kind: 'cancel' }) })
 
     harness.lifecycle.closeLastWindow(preventableEvent())
 
@@ -1063,7 +1103,7 @@ describe('Story 1.4 application lifecycle', () => {
     async (action) => {
     const harness = applicationLifecycleHarness({
       targets: [{ ...RUNNING_TARGET, backgroundChoice: 'stop' }],
-      quitResponse: 0,
+      quitResponse: 'quit',
       captureOutcome: {
         status: 'unavailable',
         reason: 'no-renderer',
@@ -1123,7 +1163,7 @@ describe('Story 1.4 application lifecycle', () => {
   })
 
   it('lists exact running targets and asks Quit or Cancel before quitting', async () => {
-    const harness = applicationLifecycleHarness({ quitResponse: 0 })
+    const harness = applicationLifecycleHarness({ quitResponse: 'quit' })
     const event = preventableEvent()
 
     harness.lifecycle.beforeQuit(event)
@@ -1137,7 +1177,8 @@ describe('Story 1.4 application lifecycle', () => {
         'Session: session-1\nProcess: /usr/bin/claude\nIncarnation: incarnation-1\nState: live',
       buttons: ['Quit', 'Cancel'],
       defaultId: 1,
-      cancelId: 1
+      cancelId: 1,
+      targets: [RUNNING_TARGET]
     })
     expect(harness.stopTargets).toHaveBeenCalledWith([RUNNING_TARGET], 'application-quit')
     expect(harness.flushSavedOutput.mock.invocationCallOrder[0]).toBeLessThan(

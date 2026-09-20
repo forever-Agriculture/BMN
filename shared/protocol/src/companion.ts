@@ -298,7 +298,18 @@ export interface TelegramStatus {
   rejectedUpdates: number
 }
 
-export type AppEventTopic = 'artifacts' | 'attention' | 'progress' | 'drafts' | 'settings' | 'telegram' | 'conversations'
+/** One list, because a topic the validator does not know is a message the window never receives. */
+export const APP_EVENT_TOPICS = [
+  'artifacts',
+  'attention',
+  'progress',
+  'drafts',
+  'settings',
+  'telegram',
+  'conversations'
+] as const
+
+export type AppEventTopic = (typeof APP_EVENT_TOPICS)[number]
 
 export interface AppEventMessage {
   kind: 'app-event'
@@ -312,7 +323,7 @@ export function isAppEventMessage(value: unknown): value is AppEventMessage {
   return (
     candidate.kind === 'app-event' &&
     typeof candidate.topic === 'string' &&
-    ['artifacts', 'attention', 'progress', 'drafts', 'settings', 'telegram'].includes(candidate.topic) &&
+    (APP_EVENT_TOPICS as readonly string[]).includes(candidate.topic) &&
     (candidate.sessionId === null || typeof candidate.sessionId === 'string')
   )
 }

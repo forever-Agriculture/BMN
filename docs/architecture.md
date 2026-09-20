@@ -146,18 +146,20 @@ automated check.
 
 ```text
 apps/desktop/
-  bin/bmn             command-line client for the control socket
+  bin/bmn                command-line client for the control socket
   src/main/              Electron main process
   src/preload/           the renderer's API
   src/renderer/          React interface
   src/utility/           PTY host, companion service, database, Telegram
-  resources/             icons; the built voice engine lands in resources/whisper (gitignored)
+  resources/             icons and the packaged CLI launcher; the built voice engine lands in resources/whisper (gitignored)
 shared/protocol/         message types and validation shared by every process
 scripts/
   build/                 native module rebuild for Electron
   install/               Linux launcher and icons, or the macOS application bundle
+  lib/                   shared pieces of the packaging and launcher scripts
   sandbox/               AppArmor profile template for Ubuntu 24.04+
   smoke/                 packaged build smoke test
   test/                  Electron self-test and the throwaway-root dev launcher
+  tests/                 unit tests for the scripts above
   voice/                 pinned whisper.cpp build
 ```

@@ -10,6 +10,11 @@ import {
   isAttentionOrigin,
   isHookEventName,
   isProtocolErrorCode,
+  type AttentionKind,
+  type ConversationObservationSource,
+  type HookEventAgent,
+  type HookEventEffect,
+  type ProgressState,
   type ProtocolErrorCode
 } from '@bmn/protocol'
 import type { ControlAuth, ControlScope } from './control-auth'
@@ -21,12 +26,8 @@ export class ControlError extends Error {
   }
 }
 
-export type ProgressState = 'running' | 'waiting' | 'blocked' | 'claimed-done' | 'verified' | 'failed' | 'unknown'
-export type AttentionKind = 'question' | 'permission' | 'review' | 'notice'
+/** The narrowing this server does on purpose: a conversation belongs to an agent CLI, not to a shell. */
 export type ConversationAgentCli = 'claude' | 'codex'
-export type HookEventAgent = 'claude' | 'codex'
-export type HookEventEffect = 'opened' | 'withdrew' | 'answered'
-export type ConversationObservationSource = 'startup' | 'resume' | 'clear' | 'fork'
 
 export interface ControlHandlers {
   /** Revocation: session tokens are valid only while their incarnation is the current live one. */

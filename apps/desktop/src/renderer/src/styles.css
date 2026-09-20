@@ -1264,6 +1264,115 @@ input[type='radio'] {
   font-size: 12px;
 }
 
+/* ---------- Closing with sessions still running ---------- */
+
+.close-sessions-summary {
+  margin: 0;
+  color: var(--muted);
+}
+
+.close-sessions-bulk {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: -4px;
+}
+
+.close-sessions-bulk button.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  transition: var(--hover-transition);
+}
+
+.close-sessions-bulk button.link:hover {
+  color: var(--text);
+}
+
+.close-sessions-list {
+  /* Five and a half rows: enough to show there is more, without a dialog the height of the screen. */
+  max-height: 258px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.close-sessions-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.close-sessions-list li:first-child {
+  border-top: 0;
+}
+
+.close-sessions-list .who {
+  display: grid;
+  min-width: 0;
+}
+
+.close-sessions-list .name {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.close-sessions-list .workspace {
+  color: var(--muted);
+}
+
+.close-sessions-list .detail {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+/* Two segments, so the answer for each session is visible without opening anything. */
+.close-sessions-list .choice {
+  display: flex;
+  flex: none;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.app-dialog .close-sessions-list button.segment {
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.app-dialog .close-sessions-list button.segment.chosen {
+  background: color-mix(in srgb, var(--text) 13%, transparent);
+  color: var(--text);
+}
+
+/* Stop reads as the exception it is: the word carries it, not a filled red button. */
+.app-dialog .close-sessions-list button.segment.chosen.stop {
+  color: var(--error);
+}
+
+.close-sessions-remember {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
 /* ---------- File reference preview ---------- */
 
 .file-reference-dialog {

@@ -21,6 +21,20 @@ export interface SessionStatusPresentation {
  * The row/heading status: an open request outranks process state, and a fresh failed or blocked report outranks
  * observed activity; idle is a ring only. `activity` is the observed word for a live session, and is used nowhere else.
  */
+/**
+ * A pane outlives its process on purpose: when a command ends, the view stays so the owner can read
+ * what it printed. Liveness therefore is not "a view is attached" but "the attached incarnation has
+ * not ended" -- without this the row keeps calling a finished session Running.
+ */
+export function sessionProcessLive(
+  session: Pick<SessionRecord, 'lastProcess'>,
+  liveIncarnationId: string | undefined
+): boolean {
+  if (!liveIncarnationId) return false
+  const last = session.lastProcess
+  return !(last?.incarnationId === liveIncarnationId && last.state !== 'live')
+}
+
 export function sessionStatus(
   session: Pick<SessionRecord, 'sessionId' | 'lastProcess'>,
   live: boolean,

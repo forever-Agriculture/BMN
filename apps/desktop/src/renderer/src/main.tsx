@@ -5,6 +5,7 @@ import {
   COLOR_MODE_NAMES,
   DEFAULT_APP_SETTINGS,
   IDENTITY_NAMES,
+  RESTORED_VIEW_NOTICE,
   TERMINAL_FONT_SIZE_RANGE,
   type AppearanceSettings,
   type AppSettings,
@@ -16,6 +17,7 @@ import {
   type InputDraftRecord,
   type LaunchTemplateRecord,
   type ProgressRecord,
+  type ClosePromptRequest,
   type SessionRecord,
   type WorkspaceLayoutState,
   type WorkspaceRecord
@@ -63,6 +65,7 @@ import {
   progressPresentation,
   requestsAnsweredByTyping,
   sessionAttention,
+  sessionProcessLive,
   sessionStatus,
   splitCandidates,
   windowTitle,
@@ -77,6 +80,7 @@ import {
   type VoiceCapture
 } from './session-terminal'
 import { ConfirmDialog, ConversationReferenceDialog, ResumeDialog, WorkspaceDialog } from './shell-dialogs'
+import { CloseSessionsDialog } from './close-sessions-dialog'
 import { loadSavedOutputPresentation, type SavedOutputCatalogPresentation } from './terminal-history'
 import { createSpaceHold } from './space-hold'
 import { applyChromeTheme, COLOR_MODE_PRESENTATION, IDENTITY_PRESENTATION } from './theme'
@@ -177,6 +181,8 @@ function App(): React.JSX.Element {
   const [focusMode, setFocusMode] = useState(false)
   const [menu, setMenu] = useState<MenuAnchor | null>(null)
   const [dialog, setDialog] = useState<ShellDialog | null>(null)
+  /** Its own state, not a ShellDialog: a close question must not replace work the owner has open. */
+  const [closePrompt, setClosePrompt] = useState<ClosePromptRequest | null>(null)
   const [needsYouOpen, setNeedsYouOpen] = useState(false)
   const [armed, setArmed] = useState(false)
   const [dragRatio, setDragRatio] = useState<number | null>(null)
@@ -344,7 +350,11 @@ function App(): React.JSX.Element {
     setLayouts(writer.layouts())
     setLive(Object.fromEntries(next.liveSessions.map((item) => [item.sessionId, item])))
     setTree(initialWorkspaceTree(next.workspaces, next.activeWorkspaceId))
-    setFailure(next.layoutNotices.length > 0 ? next.layoutNotices.join(' ') : undefined)
+    // A rebuilt view keeps the process but not this pane's earlier output; the owner is told once.
+    const notices = next.liveSessions.some((item) => item.viewRestored)
+      ? [...next.layoutNotices, RESTORED_VIEW_NOTICE]
+      : next.layoutNotices
+    setFailure(notices.length > 0 ? notices.join(' ') : undefined)
   }
 
   const refresh = {
@@ -355,6 +365,22 @@ function App(): React.JSX.Element {
     settings: () => window.aiTerminal.getSettings().then(setSettings),
     // A hook can rebind a conversation at any time; the window reloads the binding it is showing.
     conversations: async () => setBindingRevision((revision) => revision + 1)
+  }
+
+  const reloadWorkspaceSessions = (workspaceId: string): Promise<void> =>
+    window.aiTerminal.listSessions(workspaceId).then((refreshed) => {
+      const byId = new Map(refreshed.map((item) => [item.sessionId, item]))
+      setSessions((current) => current.map((item) => byId.get(item.sessionId) ?? item))
+    })
+
+  /**
+   * The pane keeps the ended process's output on screen, so the view is not torn down here. Only the
+   * record is reloaded, and that recorded outcome is what stops the row from still saying Running.
+   */
+  const recordSessionExit = (sessionId: string): void => {
+    const record = sessionsRef.current.find((item) => item.sessionId === sessionId)
+    if (!record) return
+    void reloadWorkspaceSessions(record.workspaceId).catch(fail('Session refresh failed'))
   }
 
   useEffect(() => {
@@ -396,6 +422,7 @@ function App(): React.JSX.Element {
       if (incarnationId) exited.current.set(sessionId, incarnationId)
       observations.current.delete(sessionId)
       publishActivity()
+      recordSessionExit(sessionId)
     })
     const stopDisconnected = window.aiTerminal.onTerminalViewDisconnected((message) => {
       const sessionId = sessionFor(message.attachmentId)
@@ -411,6 +438,7 @@ function App(): React.JSX.Element {
       void refresh[message.topic]().catch(fail('Companion data refresh failed'))
     })
     const stopOpenSession = window.aiTerminal.onOpenSession((sessionId) => openSessionRef.current(sessionId))
+    const stopClosePrompt = window.aiTerminal.onClosePrompt(setClosePrompt)
     const ticker = setInterval(() => setNow(Date.now()), APP_EVENT_REFRESH_MS)
     const spaceHold = createSpaceHold({
       typeSpace: (sessionId) => controllers.current.get(sessionId)?.type(' '),
@@ -469,6 +497,7 @@ function App(): React.JSX.Element {
       stopCapture()
       stopAppEvent()
       stopOpenSession()
+      stopClosePrompt()
       clearInterval(ticker)
       window.removeEventListener('keydown', onKeyDown, true)
       window.removeEventListener('keyup', onKeyUp, true)
@@ -650,9 +679,7 @@ function App(): React.JSX.Element {
         delete next[record.sessionId]
         return next
       })
-      const refreshed = await window.aiTerminal.listSessions(record.workspaceId)
-      const byId = new Map(refreshed.map((item) => [item.sessionId, item]))
-      setSessions((current) => current.map((item) => byId.get(item.sessionId) ?? item))
+      await reloadWorkspaceSessions(record.workspaceId)
       brief(`Stopped ${record.name}.`)
     }).catch(fail('Stop failed'))
   }
@@ -669,8 +696,14 @@ function App(): React.JSX.Element {
     controllers.current.get(sessionId)?.focus()
   }
 
+  const processLive = (sessionId: string | null | undefined): boolean => {
+    if (!sessionId) return false
+    const record = sessions.find((item) => item.sessionId === sessionId)
+    return !!record && sessionProcessLive(record, live[sessionId]?.incarnationId)
+  }
+
   const requireLive = (sessionId: string | null): string | null => {
-    if (sessionId && live[sessionId]) return sessionId
+    if (sessionId && processLive(sessionId)) return sessionId
     brief('Start the session before sending it files or pasted content.')
     return null
   }
@@ -1162,7 +1195,7 @@ function App(): React.JSX.Element {
       ...shown.flatMap((workspace) => visibleWorkspaceSessions(sessions, workspace.workspaceId, false).map((session): PaletteCommand => {
         const status = sessionStatus(
           session,
-          !!live[session.sessionId],
+          sessionProcessLive(session, live[session.sessionId]?.incarnationId),
           unresolved,
           observedProgressFor(session),
           activity[session.sessionId] ?? null
@@ -1366,7 +1399,7 @@ function App(): React.JSX.Element {
                     {isExpanded ? workspaceSessions.map((session, sessionIndex) => {
                       const observedProgress = observedProgressFor(session)
                       const observedActivity = activity[session.sessionId] ?? null
-                      const status = sessionStatus(session, !!live[session.sessionId], unresolved, observedProgress, observedActivity)
+                      const status = sessionStatus(session, sessionProcessLive(session, live[session.sessionId]?.incarnationId), unresolved, observedProgress, observedActivity)
                       const selected = session.sessionId === selectedSessionId
                       return (
                         <div className={`session-row${selected ? ' selected' : ''}${session.archivedAt ? ' archived' : ''}`} key={session.sessionId}>
@@ -1816,6 +1849,20 @@ function App(): React.JSX.Element {
           confirmLabel="Stop session"
           onConfirm={() => stopSession(dialog.session)}
           onClose={() => setDialog(null)}
+        />
+      ) : null}
+      {closePrompt ? (
+        <CloseSessionsDialog
+          key={closePrompt.requestId}
+          request={closePrompt}
+          describe={(sessionId) => ({
+            workspace: place(sessionId).workspace,
+            activity: activity[sessionId]?.word
+          })}
+          onDecide={(decision) => {
+            window.aiTerminal.answerClosePrompt(closePrompt.requestId, decision)
+            setClosePrompt(null)
+          }}
         />
       ) : null}
     </main>

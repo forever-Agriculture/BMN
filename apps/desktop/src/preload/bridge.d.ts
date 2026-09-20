@@ -7,6 +7,8 @@ import type {
   AttentionRecord,
   BackupManifest,
   BackupVerifyResult,
+  ClosePromptDecision,
+  ClosePromptRequest,
   ControlInfo,
   DraftSendExpectation,
   FileReferenceReadParams,
@@ -145,6 +147,8 @@ export interface AiTerminalBridge {
   /** Quits the app; the owner is asked first when sessions are running. */
   quitApplication(): Promise<void>
   onAppEvent(listener: (message: AppEventMessage) => void): () => void
+  onClosePrompt(listener: (request: ClosePromptRequest) => void): () => void
+  answerClosePrompt(requestId: string, decision: ClosePromptDecision): void
   onOpenSession(listener: (sessionId: string) => void): () => void
   /** Whether the owner has left the desktop idle; replays the current value to each new listener. */
   onPresence(listener: (presence: { away: boolean }) => void): () => void

@@ -191,6 +191,14 @@ const receiptContract = [
       typeof receipt.rendererLiveExitLabel === 'string' &&
       receipt.rendererLiveExitLabel.startsWith('Process exited · code 23 · /')
   ],
+  ['rendererLiveExitSidebarWord', (receipt) => receipt.rendererLiveExitSidebarWord === 'Process exited'],
+  [
+    'closePrompt',
+    (receipt) =>
+      receipt.closePrompt?.heading === 'Close BMN?' &&
+      receipt.closePrompt?.decision === 'cancel' &&
+      receipt.closePrompt?.rows?.length === 1
+  ],
   ['rendererRecoveredAfterShellExit', (receipt) => receipt.rendererRecoveredAfterShellExit === true],
   [
     'rendererInverseTextContrast',

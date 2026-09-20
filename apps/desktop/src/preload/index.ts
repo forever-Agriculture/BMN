@@ -6,6 +6,7 @@ import {
   isTerminalExitMessage,
   isTerminalViewDisconnectedMessage,
   isAppEventMessage,
+  isClosePromptRequest,
   type AppEventMessage,
   type AppSettings,
   type ArtifactPreview,
@@ -20,6 +21,8 @@ import {
   type FileReferenceReadParams,
   type FileReferenceReadResult,
   type HandoffDraftSaveParams,
+  type ClosePromptDecision,
+  type ClosePromptRequest,
   type InputDraftRecord,
   type ProgressRecord,
   type TelegramStatus,
@@ -237,6 +240,13 @@ ipcRenderer.on('aiterm:open-session', (_event, sessionId: unknown) => {
   for (const listener of openSessionListeners) listener(sessionId)
 })
 
+const closePromptListeners = new Set<(request: ClosePromptRequest) => void>()
+
+ipcRenderer.on('aiterm:lifecycle:close-prompt', (_event, request: unknown) => {
+  if (!isClosePromptRequest(request)) return
+  for (const listener of closePromptListeners) listener(request)
+})
+
 const presenceListeners = new Set<(presence: { away: boolean }) => void>()
 let presence = { away: false }
 
@@ -402,6 +412,14 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   onOpenSession(listener: (sessionId: string) => void): () => void {
     openSessionListeners.add(listener)
     return () => openSessionListeners.delete(listener)
+  },
+  onClosePrompt(listener: (request: ClosePromptRequest) => void): () => void {
+    closePromptListeners.add(listener)
+    return () => closePromptListeners.delete(listener)
+  },
+  /** The owner's answer to one close or quit question; the main process holds the window open for it. */
+  answerClosePrompt(requestId: string, decision: ClosePromptDecision): void {
+    ipcRenderer.send('aiterm:lifecycle:close-decision', requestId, decision)
   },
   onPresence(listener: (presence: { away: boolean }) => void): () => void {
     presenceListeners.add(listener)

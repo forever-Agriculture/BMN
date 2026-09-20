@@ -21,6 +21,10 @@ function shellQuote(value) {
  * A POSIX shell launcher, so a desktop start never depends on the node that built it. While the
  * update unit is active it waits, except when the update is still waiting for a running BMN to exit:
  * then the start is forwarded to that instance, whose single-instance lock focuses it.
+ *
+ * A held start shows a progress window that names the phase it is waiting on, because a desktop with
+ * nothing on it cannot be told apart from a start that failed. The window is informational: nothing
+ * it offers stops the update, and dismissing it never starts a half-replaced build.
  */
 export function launcherScript({ binary, statusPath, unit = UPDATE_UNIT }) {
   return `#!/bin/sh
@@ -28,6 +32,7 @@ export function launcherScript({ binary, statusPath, unit = UPDATE_UNIT }) {
 binary=${shellQuote(binary)}
 status=${shellQuote(statusPath)}
 unit=${shellQuote(unit)}
+log=\${status%.json}.log
 
 updating() {
   systemctl --user is-active --quiet "$unit" 2>/dev/null
@@ -42,15 +47,77 @@ running() {
 }
 
 phase() {
-  sed -n 's/.*"phase": *"\\([^"]*\\)".*/\\1/p' "$status" 2>/dev/null
+  sed -n 's/.*"phase": *"\\([^"]*\\)".*/\\1/p' "$status" 2>/dev/null | tail -n 1
 }
 
+# The last build step the worker announced, so the window says more than "please wait".
+step() {
+  sed -n 's/^[^ ]* START \\([^:]*\\):.*/\\1/p' "$log" 2>/dev/null | tail -n 1
+}
+
+describe() {
+  case $(phase) in
+    queued|waiting-for-exit) echo 'Getting the update ready…' ;;
+    building)
+      case $(step) in
+        package) echo 'Packaging the new build. This usually takes 1-3 minutes.' ;;
+        'packaged smoke test') echo 'Checking the new build…' ;;
+        'desktop install') echo 'Finishing the install…' ;;
+        *) echo 'Packaging the new build…' ;;
+      esac ;;
+    complete) echo 'Update complete. Opening BMN…' ;;
+    *) echo 'Updating BMN…' ;;
+  esac
+}
+
+# Feeds zenity: "#text" retitles the bar, and the closing 100 ends the window when the update does.
+feed() {
+  last=
+  while updating; do
+    text=$(describe)
+    if [ "$text" != "$last" ]; then
+      printf '#%s\\n' "$text"
+      last=$text
+    fi
+    sleep 1
+  done
+  printf '100\\n'
+}
+
+window() {
+  feed | zenity --progress --pulsate --auto-close --width 380 \\
+    --title 'BMN is updating' --text 'Getting the update ready…' \\
+    --cancel-label "Don't wait" 2>/dev/null
+}
+
+waited=
 if updating; then
   case $(phase) in
     queued|waiting-for-exit) running && exec "$binary" "$@" ;;
   esac
-  notify-send 'BMN is updating' 'BMN opens when the update finishes.' 2>/dev/null
-  while updating; do sleep 1; done
+  waited=yes
+  if command -v zenity >/dev/null 2>&1; then
+    window
+    # Dismissed, or the window could not be shown: never start a half-replaced build.
+    updating && exit 0
+  else
+    notify-send 'BMN is updating' 'BMN opens when the update finishes.' 2>/dev/null
+    while updating; do sleep 1; done
+  fi
+fi
+
+# Only this run's own wait reports a failure; a stale failed status must not greet every later start.
+if [ -n "$waited" ] && [ "$(phase)" = failed ]; then
+  if command -v zenity >/dev/null 2>&1; then
+    zenity --question --title 'BMN update failed' --width 380 \\
+      --text 'The update did not finish. BMN can open the build you had before.' \\
+      --ok-label 'Open previous build' --cancel-label 'Show log' 2>/dev/null || {
+      xdg-open "$log" >/dev/null 2>&1
+      exit 0
+    }
+  else
+    notify-send --urgency critical 'BMN update failed' "Opening the previous build. Log: $log" 2>/dev/null
+  fi
 fi
 
 if [ ! -x "$binary" ]; then

@@ -1,11 +1,12 @@
 import {
   ERROR_CODES,
+  type BackgroundChoice,
   type SavedOutputCaptureOutcome,
   type SessionProcessState,
   type SessionStopCause
 } from '@bmn/protocol'
 
-export type BackgroundChoice = 'hide' | 'stop'
+export type { BackgroundChoice }
 
 export interface RunningSessionTarget {
   sessionId: string
@@ -28,6 +29,8 @@ export interface CloseChoicePrompt {
   buttons: readonly ['Minimize (keep running)', 'Stop', 'Cancel']
   defaultId: 0
   cancelId: 2
+  /** The same targets the detail text lists, for a prompt that can name them itself. */
+  targets: readonly RunningSessionTarget[]
 }
 
 export interface QuitChoicePrompt {
@@ -36,6 +39,20 @@ export interface QuitChoicePrompt {
   buttons: readonly ['Quit', 'Cancel']
   defaultId: 1
   cancelId: 1
+  targets: readonly RunningSessionTarget[]
+}
+
+/**
+ * One answer per session, so a close can keep one agent working and stop another. A session the
+ * answer does not mention keeps running: nothing is stopped by omission.
+ */
+export type CloseDecision =
+  | { kind: 'cancel' }
+  | { kind: 'proceed'; choices: Readonly<Record<string, BackgroundChoice>>; remember: boolean }
+
+export interface BackgroundChoiceDecision {
+  target: RunningSessionTarget
+  choice: BackgroundChoice
 }
 
 interface PreventableEvent {
@@ -44,12 +61,9 @@ interface PreventableEvent {
 
 interface ApplicationLifecycleActions {
   runningTargets(): readonly RunningSessionTarget[]
-  saveBackgroundChoice(
-    targets: readonly RunningSessionTarget[],
-    choice: BackgroundChoice
-  ): void | Promise<void>
-  promptForClose(choice: CloseChoicePrompt): Promise<0 | 1 | 2>
-  promptForQuit(choice: QuitChoicePrompt): Promise<0 | 1>
+  saveBackgroundChoice(decisions: readonly BackgroundChoiceDecision[]): void | Promise<void>
+  promptForClose(choice: CloseChoicePrompt): Promise<CloseDecision>
+  promptForQuit(choice: QuitChoicePrompt): Promise<'quit' | 'cancel'>
   flushSavedOutput(): Promise<SavedOutputCaptureOutcome>
   stopTargets(
     targets: readonly RunningSessionTarget[],
@@ -118,6 +132,14 @@ export function runningTargetDetails(targets: readonly RunningSessionTarget[]): 
     .join('\n\n')
 }
 
+/** A session's own saved choice wins; an unanswered session keeps running rather than being stopped. */
+function chosenFor(
+  target: RunningSessionTarget,
+  answered: Readonly<Record<string, BackgroundChoice>>
+): BackgroundChoice {
+  return target.backgroundChoice ?? answered[target.sessionId] ?? 'hide'
+}
+
 export function createApplicationLifecycle(
   actions: ApplicationLifecycleActions
 ): ApplicationLifecycle {
@@ -169,29 +191,30 @@ export function createApplicationLifecycle(
 
       const unsetTargets = targets.filter((target) => target.backgroundChoice === undefined)
       const decide = async (): Promise<void> => {
-        let unsetChoice: BackgroundChoice | undefined
+        let answered: Readonly<Record<string, BackgroundChoice>> = {}
         if (unsetTargets.length > 0) {
-          const response = await actions.promptForClose({
+          const decision = await actions.promptForClose({
             message: 'Close the last window?',
             detail: `Choose what to do with these running targets:\n\n${runningTargetDetails(unsetTargets)}`,
             buttons: ['Minimize (keep running)', 'Stop', 'Cancel'],
             defaultId: 0,
-            cancelId: 2
+            cancelId: 2,
+            targets: unsetTargets
           })
-          if (response === 2) {
+          if (decision.kind === 'cancel') {
             decisionInProgress = false
             return
           }
-          unsetChoice = response === 0 ? 'hide' : 'stop'
-          await actions.saveBackgroundChoice(unsetTargets, unsetChoice)
+          answered = decision.choices
+          if (decision.remember) {
+            await actions.saveBackgroundChoice(
+              unsetTargets.map((target) => ({ target, choice: chosenFor(target, answered) }))
+            )
+          }
         }
 
-        const stopTargets = targets.filter(
-          (target) => (target.backgroundChoice ?? unsetChoice) === 'stop'
-        )
-        const keepTargets = targets.filter(
-          (target) => (target.backgroundChoice ?? unsetChoice) === 'hide'
-        )
+        const stopTargets = targets.filter((target) => chosenFor(target, answered) === 'stop')
+        const keepTargets = targets.filter((target) => chosenFor(target, answered) !== 'stop')
         await captureThen(async () => {
           if (stopTargets.length > 0) {
             await actions.stopTargets(stopTargets, 'close-last-window')
@@ -224,10 +247,11 @@ export function createApplicationLifecycle(
           detail: `Quit applies to these running targets:\n\n${runningTargetDetails(targets)}`,
           buttons: ['Quit', 'Cancel'],
           defaultId: 1,
-          cancelId: 1
+          cancelId: 1,
+          targets
         })
         .then((response) => {
-          if (response === 1) {
+          if (response === 'cancel') {
             decisionInProgress = false
             return
           }

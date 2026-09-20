@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  APP_EVENT_TOPICS,
   DEFAULT_APP_SETTINGS,
+  isAppEventMessage,
   ERROR_CODES,
   FrameDecoder,
   MalformedFrameError,
@@ -557,5 +559,21 @@ describe('terminal byte messages', () => {
         reason: 'x'.repeat(241)
       })
     ).toBe(false)
+  })
+})
+
+describe('app events', () => {
+  // A topic the validator does not know is dropped between the utility process and the window, so
+  // every declared topic must pass: 'conversations' was declared and rejected, and a hook-driven
+  // rebinding never reached the renderer.
+  it.each(APP_EVENT_TOPICS)('carries the %s topic across the process boundary', (topic) => {
+    expect(isAppEventMessage({ kind: 'app-event', topic, sessionId: 'session-1' })).toBe(true)
+    expect(isAppEventMessage({ kind: 'app-event', topic, sessionId: null })).toBe(true)
+  })
+
+  it('refuses a message that is not a declared app event', () => {
+    expect(isAppEventMessage({ kind: 'app-event', topic: 'invented', sessionId: null })).toBe(false)
+    expect(isAppEventMessage({ kind: 'other', topic: 'attention', sessionId: null })).toBe(false)
+    expect(isAppEventMessage({ kind: 'app-event', topic: 'attention', sessionId: 7 })).toBe(false)
   })
 })
