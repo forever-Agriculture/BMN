@@ -14,8 +14,8 @@
 
 - Sprint board: `_bmad-output/implementation-artifacts/sprint-status.yaml` (git-ignored); epics 5-9, 11, 12, 13, 14 `done`, both Epic 12 stories `done` at `3757221`. Order 13 -> 14 -> 12 -> 11 -> 10; only Epic 10 remains.
 - Baseline `70c2d4c` (clean tree, `origin/main` identical). Accepted head `3757221`, four commits: `da5ea9a` (12.1), `5b217c6` (12.2), `69342e6` (the four review repairs), `3757221` (the three tests closing review gaps).
-- 12.1 ships the protocol type, migration 11's `progress_evidence` table, store eligibility/snapshot/replacement, the purge entry, `evidenceIds` on `progress.report`, repeatable `--evidence-id` and the docs. 12.2 ships `evidenceWord` and the reporter's-voice words, one `progress-strip.tsx` for all four sites with the state word as a button, the extracted `artifact-presentation.tsx` now shared with `files-panel.tsx`, `progress-evidence-dialog.tsx`, the dialog variant/opener/gone-detection/menu entry, CSS and the two Electron probes. File lists in `.dev-auto/log.md`.
-- Epic 11's `update:desktop` is still QUEUED for `87c2d7b`, waiting for packaged BMN to exit (`~/.local/state/bmn/source-update/latest.log`); this run's own update supersedes it once pushed.
+- 12.1 ships the protocol type, migration 11's `progress_evidence` table, store eligibility/snapshot/replacement, the purge entry, `evidenceIds` on `progress.report`, repeatable `--evidence-id` and the docs. 12.2 ships the reporter's-voice words, one `progress-strip.tsx` for all four sites with the state word as a button, the extracted `artifact-presentation.tsx`, the evidence dialog and its two Electron probes. File lists in `.dev-auto/log.md`.
+- Pushed `70c2d4c..e83ceba` to `origin/main` under the owner's grant, then ran `pnpm run update:desktop`. Epic 11's queued worker is still waiting for packaged BMN to exit and will package `e83ceba`, not the `87c2d7b` it logged: `runWorker` re-reads `gitState()` after the wait. Log `~/.local/state/bmn/source-update/latest.log`.
 - Associated loop: none. Active native helpers: none. Collected terminal helper results: both reviews collected and dispositioned.
 
 ## Decisions and findings
@@ -42,5 +42,5 @@
 
 ## Resume
 
-- Next safe action: none for Epic 12. Epic 10 is the only unfinished planned epic and takes migration 12.
+- Next safe action: none for Epic 12; it is pushed and the local update is queued. Reopening BMN after it exits runs the new build. Epic 10 is the only unfinished planned epic and takes migration 12.
 - Status: COMPLETE — Epic 12 accepted at `3757221`; both reviews returned no blocking finding and every finding is dispositioned.
