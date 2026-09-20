@@ -5,14 +5,14 @@
 - Mode: build
 - Stopping condition: selected scope accepted; no automatic time limit
 - Explicit user stop (if any; only a later user instruction clears it): none — the 2026-09-20 ~13:30+03:00 stop was cleared by the owner's `/dev-auto resume` (2026-09-20, same day).
-- Restrictions and authorization boundaries: local work, checks, isolated Electron runs, review dispatches, board/handoff updates and checked local commits (`~/.claude/CLAUDE.md` Authority; `/dev-auto 14`). Push to `main` plus `pnpm run update:desktop` are authorized **once Epic 14 is finished and tested** (owner, 2026-09-20: "when you're done and everyting is tested you push to GH and update locally and give me a summary"), not before. Out of scope per the epic: screen scraping, rule downloads, sounds, sidebar reordering, a status column on the control socket, notifications from derived state, `bmn wait`/`subscribe`, OSC 9/777 notices. Never push the old private `feat/epic-1/2` branches.
+- Restrictions and authorization boundaries: local work, checks, isolated Electron runs, review dispatches, board/handoff updates and checked local commits (`~/.claude/CLAUDE.md` Authority; `/dev-auto 14`). Push to `main` plus `pnpm run update:desktop` were authorized once Epic 14 was finished and tested (owner, 2026-09-20, quoted in `.dev-auto/log.md`) and have now been used for that scope; a further push needs the same condition met again. Never push the old private `feat/epic-1/2` branches. The epic's out-of-scope list is in `epics.md:641`.
 - Decision and history log: `.dev-auto/log.md`
 - Authorized provider routes: native Claude Code helpers; Codex CLI, Claude CLI and the configured GLM profile per `~/.claude/skills/dev-auto/references/models.md`. Owner twice named Fable for design and for being stuck.
 - Lead host / requested model / observed model: Claude Code; none requested; observed `claude-opus-5`/xhigh across two sessions (`6e51a794-afa3-4791-9959-a67faca37a29`, `b32a43da-5c78-457a-b075-c8bc457007f5`).
 
 ## Progress
 
-- Sprint board: `_bmad-output/implementation-artifacts/sprint-status.yaml` (git-ignored); epics 5-9, 13 and 14 `done`, both Epic 14 stories `done`, accepted at `00f5e38`. `origin/main` is at `99e3832`; everything since is local until the push the owner authorised.
+- Sprint board: `_bmad-output/implementation-artifacts/sprint-status.yaml` (git-ignored); epics 5-9, 13 and 14 `done`, both Epic 14 stories `done`, accepted at `00f5e38`. Pushed: `origin/main` now carries `56b7cb1..d62ecf9`. `pnpm run update:desktop` is queued and waiting for packaged BMN to exit before it packages and smoke-tests that commit.
 - Implemented and committed: `56b7cb1` (Epic 13 refusal-log fix), `78c2423` (14.1), `97c9183` (14.2), `e1ed8ca` (the eight review findings), `e9a1d04` (the first recheck's), `7519f17` and `00f5e38` (the second and third rechecks'), plus `6c91099` and `2ea4ee6` for the log.
 - Uncommitted: this handoff and `.dev-auto/log.md` only.
 - Story 14.2's contents, by layer, are listed in `.dev-auto/log.md` under "Story 14.2 contents".
@@ -53,5 +53,5 @@
 
 ## Resume
 
-- Next safe action: none for the epic. Epic 12 is next in the delivery order and is not selected by this run.
+- Next safe action: none for the epic; the owner closes BMN when convenient and the queued packaging runs by itself. Epic 12 is next in the delivery order and is not selected by this run.
 - Status: COMPLETE — Epic 14 accepted at `00f5e38`: typecheck, lint, 1,065 unit tests, `test:electron` and `test:visual` all green; one full review and three rechecks closed out.

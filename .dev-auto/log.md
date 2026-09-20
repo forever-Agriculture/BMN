@@ -527,3 +527,8 @@ rendered rows, by the Electron self-test (`listedRows` in the receipt).
 Evidence on `00f5e38`: typecheck/lint EXIT 0, `test:unit` 1,065 passed / 1 skipped,
 `test:electron` EXIT 0 (`evidence/epic-14/electron-16.log`), `test:visual` EXIT 0
 (`evidence/epic-14/visual-14.log`).
+
+### Handoff detail trimmed at acceptance (2026-09-20)
+
+- Restrictions and authorization boundaries: local work, checks, isolated Electron runs, review dispatches, board/handoff updates and checked local commits (`~/.claude/CLAUDE.md` Authority; `/dev-auto 14`). Push to `main` plus `pnpm run update:desktop` are authorized **once Epic 14 is finished and tested** (owner, 2026-09-20: "when you're done and everyting is tested you push to GH and update locally and give me a summary"), not before. Out of scope per the epic: screen scraping, rule downloads, sounds, sidebar reordering, a status column on the control socket, notifications from derived state, `bmn wait`/`subscribe`, OSC 9/777 notices. Never push the old private `feat/epic-1/2` branches.
+
