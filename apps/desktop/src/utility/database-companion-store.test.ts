@@ -307,6 +307,25 @@ describe('companion store', () => {
     ])
   })
 
+  it('lets a report at the very same observed time replace the one before it, files and all', () => {
+    insertArtifact(database, published('out-1'))
+    insertArtifact(database, published('out-2'))
+    const sameMoment = '2026-09-14T12:00:00.000Z'
+    upsertProgress(database, progress(sameMoment, 'running'), ['out-1'])
+
+    // Only a strictly older observation is refused, so a tie replaces — and must carry its own files.
+    const tie = upsertProgress(database, progress(sameMoment, 'verified'), ['out-2'])
+
+    expect(tie.applied).toBe(true)
+    expect(listProgress(database)).toEqual([
+      expect.objectContaining({
+        state: 'verified',
+        observedAt: sameMoment,
+        evidence: [{ artifactId: 'out-2', name: 'out-2.png' }]
+      })
+    ])
+  })
+
   it('keeps a link and its name after the original is lost, and never deletes the original', () => {
     insertArtifact(database, published('out-1'))
     upsertProgress(database, progress('2026-09-14T12:00:00.000Z'), ['out-1'])

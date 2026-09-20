@@ -715,6 +715,70 @@ describe('refused agent requests', () => {
   })
 })
 
+describe('progress evidence through the service', () => {
+  /** `progress.report` is a control method, so drive the handler the control server is given. */
+  const report = (p: Record<string, unknown>) =>
+    (service as unknown as {
+      reportProgress: (p: unknown) => Promise<{ applied: boolean; current: { evidence: unknown[] } }>
+    }).reportProgress({ sessionId: 's1', incarnationId: null, source: 'agent', ...p })
+
+  /** A ready file this session published: the only kind a report may point at. */
+  const published = (artifactId: string, sessionId = 's1'): ArtifactRecord =>
+    insertArtifact(database, {
+      artifactId,
+      sessionId,
+      incarnationId: null,
+      direction: 'output',
+      source: 'agent',
+      originalName: `${artifactId}.txt`,
+      mediaType: 'text/plain',
+      byteLength: 4,
+      sha256: createHash('sha256').update(artifactId).digest('hex'),
+      storedPath: join(root, 'data', 'artifacts', 'originals', artifactId),
+      sourcePath: null,
+      state: 'ready',
+      createdAt: now
+    })
+
+  it('carries the reported ids to the store in the order they were given', async () => {
+    published('out-1')
+    published('out-2')
+
+    const result = await report({
+      state: 'verified',
+      label: 'Checks passed',
+      evidenceIds: ['out-2', 'out-1'],
+      observedAt: now
+    })
+
+    expect(result.applied).toBe(true)
+    expect(result.current.evidence).toEqual([
+      { artifactId: 'out-2', name: 'out-2.txt' },
+      { artifactId: 'out-1', name: 'out-1.txt' }
+    ])
+    expect(emitted.at(-1)).toMatchObject({ kind: 'app-event', topic: 'progress', sessionId: 's1' })
+  })
+
+  it('reports nothing at all when one named file is not this session\'s own output', async () => {
+    published('out-1')
+    published('other-session', 's2')
+    await report({ state: 'running', label: 'Building', observedAt: now })
+    emitted = []
+
+    await expect(report({
+      state: 'verified',
+      label: 'Checks passed',
+      evidenceIds: ['out-1', 'other-session'],
+      observedAt: '2026-09-14T12:05:00.000Z'
+    })).rejects.toMatchObject({ code: ERROR_CODES.invalidArgument })
+
+    // The earlier report stands untouched, and nothing told the renderer otherwise.
+    const standing = COMPANION_OPERATIONS.listProgress(database)
+    expect(standing).toEqual([expect.objectContaining({ state: 'running', label: 'Building', evidence: [] })])
+    expect(emitted).toEqual([])
+  })
+})
+
 describe('hook event log', () => {
   const observe = (sessionId: string, event: string, effects: HookEventRecord['effects'] = []): void => {
     (service as unknown as {
