@@ -897,3 +897,57 @@ not `.progress-strip .state`, so nothing measured it. The probe now reads the co
 palette tokens and asserts `verifiedInk === --verified`, `failedInk === --error`,
 `evidenceInk === --muted`, that the evidence ink is not the verified token, and that both clear 4.5:1
 against the strip's own background. Green in `electron-5.log` and after.
+
+## 2026-09-20 — GLM-5.3-Flash review of the 12.1 boundary, and its dispositions
+
+Route `GLM-5.3-Flash`/max, read tools plus three allowed check commands, 70 turns,
+$2.471235, subtype `success`. Receipt `.dev-auto/evidence/epic-12/reviews/glm-flash-12-1.json`.
+Reviewed revision `5b217c6` plus the uncommitted repairs.
+
+**No blocking finding.** All seven questions answered correct with file:line citations:
+eligibility has no bypass; atomicity holds because `database-worker.ts:252` wraps every
+companion op in `database.transaction`; ordering always moves the observation and its links
+together; no evidence is inherited at any of the three layers; deletion is safe by
+construction; the `LIST_OPTIONS` parser changes no existing option; AC5's documentation duty
+is met.
+
+Its own command results, independently reproduced: `pnpm run lint` EXIT 0; `pnpm run test:unit`
+1119 then **1121 passed / 0 failed / 1 skipped**. Its first `pnpm run typecheck` was EXIT 1 —
+caused by my concurrent edit adding `colours` to the probe between its two runs, not a defect
+in the tree; its re-run was EXIT 0, matching my own.
+
+Four non-blocking test gaps, each dispositioned against the accepted revision:
+
+1. `companion-service.reportProgress` had zero unit coverage; the join was guarded only by the
+   Electron self-test. **CLOSED.** Added `describe('progress evidence through the service')` in
+   `companion-service.test.ts` against the real store: one case asserts the ids reach the store
+   in the given order and that the `app-event`/`progress` emit fires, one asserts a file from
+   another session refuses the whole report, leaves the earlier one standing and emits nothing.
+   Fenced red-then-green: replacing the pass-through with `[]` fails **both** cases; restored,
+   30 passed.
+2. The owner-token-across-sessions path with a real store is only end-to-end. **ACCEPTED as
+   recorded coverage, not closed.** The Electron self-test drives it with a real owner-imported
+   artifact and a real shell (`refused-input`), which is stronger evidence than a unit test; a
+   unit equivalent would need a second socket harness. Recorded in Unreviewed.
+3. An equal-timestamp report (tie replaces, observation and evidence together) was untested.
+   **CLOSED.** Added the tie case to `database-companion-store.test.ts`. Fenced red-then-green:
+   changing `database-companion-store.ts:422` from `>` to `>=` fails exactly that one case;
+   restored, 29 passed.
+4. The `bin/bmn` USAGE page and the `docs/agent-control.md:34` commands block have no drift
+   guard; only the agent brief is pinned. **REJECTED for this epic, recorded as pre-existing.**
+   The gap predates Epic 12 and covers a block this epic only appended to; both sides were
+   checked by hand this run. Pinning the whole commands block is an unrelated change to a
+   shared doc test and belongs to whoever next touches that block. Mentioned once, here.
+
+Not examined by GLM, and so carried into Unreviewed: the 12.2 renderer surfaces,
+`artifact-files.ts` internals, `control-auth.ts` cryptography beyond the revocation gate, and
+the Electron run.
+
+After the three added tests: `typecheck`/`lint` EXIT 0, `test:unit` **1,124 passed / 1 skipped**
+(83 files). No production file changed since `69342e6`, so `electron-6.log` and `visual-2.log`
+stay valid for this revision — confirmed with `git diff --name-only 69342e6 | grep -v '\.test\.ts$'`
+returning nothing.
+
+Usage read with `scripts/check.py usage`: lead `claude-opus-5/xhigh`, 231 responses,
+174,550 output / 58,002,835 cache-read tokens. Fable `claude-fable-5-1` $3.75896775, 85 turns.
+GLM `GLM-5.3-Flash` $2.471235, 70 turns.
