@@ -41,6 +41,7 @@ const ROUTES = {
   'aiterm:attention:list': METHOD_REGISTRY.attentionList,
   'aiterm:attention:seen': METHOD_REGISTRY.attentionSeen,
   'aiterm:attention:resolve': METHOD_REGISTRY.attentionResolve,
+  'aiterm:hook-events:list': METHOD_REGISTRY.hookEventsList,
   'aiterm:progress:list': METHOD_REGISTRY.progressList,
   'aiterm:draft:list': METHOD_REGISTRY.draftList,
   'aiterm:draft:save': METHOD_REGISTRY.draftSave,

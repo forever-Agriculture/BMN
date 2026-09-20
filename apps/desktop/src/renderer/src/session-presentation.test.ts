@@ -15,7 +15,8 @@ import {
   requestsAnsweredByTyping,
   sessionAttention,
   sessionStatus,
-  windowTitle
+  windowTitle,
+  attentionProvenance
 } from './session-presentation'
 
 const now = Date.parse('2026-09-14T12:00:00.000Z')
@@ -34,7 +35,9 @@ const request = (requestId: string, sessionId: string, openedAt: string, state: 
   expiresAt: null,
   resolvedAt: null,
   seenAt: null,
-  revision: 1
+  revision: 1,
+  openedBy: null,
+  resolvedBy: null
 })
 
 describe('session presentation', () => {
@@ -218,5 +221,21 @@ describe('session presentation', () => {
     expect(splitCandidates(['a', 'b', 'c'], new Set(['x']), null)).toEqual(['a', 'b', 'c'])
     expect(splitCandidates(['a', 'b', 'c'], new Set(['x']), 'x')).toEqual(['a', 'b', 'c'])
     expect(splitCandidates(['a'], new Set(['a']), 'a')).toEqual([])
+  })
+
+  it.each([
+    [{ state: 'open', openedBy: 'hook:claude:Notification', resolvedBy: null }, 'from Claude Notification'],
+    [{ state: 'open', openedBy: 'hook:codex:PreToolUse', resolvedBy: null }, 'from Codex PreToolUse'],
+    [{ state: 'open', openedBy: 'cli', resolvedBy: null }, 'from bmn ask'],
+    [{ state: 'open', openedBy: null, resolvedBy: null }, 'from unknown'],
+    [{ state: 'answered', openedBy: 'cli', resolvedBy: 'input' }, 'resolved by typing'],
+    [{ state: 'answered', openedBy: 'cli', resolvedBy: 'telegram' }, 'answered from Telegram'],
+    [{ state: 'answered', openedBy: 'cli', resolvedBy: 'owner' }, 'resolved by BMN'],
+    [{ state: 'answered', openedBy: 'cli', resolvedBy: 'hook:claude:PostToolUse' }, 'resolved by Claude PostToolUse'],
+    [{ state: 'withdrawn', openedBy: 'cli', resolvedBy: 'hook:claude:Stop' }, 'withdrawn by Claude Stop'],
+    [{ state: 'withdrawn', openedBy: 'cli', resolvedBy: null }, 'withdrawn by unknown'],
+    [{ state: 'expired', openedBy: 'cli', resolvedBy: 'expiry' }, 'expired']
+  ] as const)('says %o in plain words', (request, words) => {
+    expect(attentionProvenance(request)).toBe(words)
   })
 })

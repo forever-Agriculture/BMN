@@ -146,6 +146,8 @@ interface AttentionRow {
   resolved_at: string | null
   seen_at: string | null
   revision: number
+  opened_by: string | null
+  resolved_by: string | null
 }
 
 function attentionFromRow(row: AttentionRow): AttentionRecord {
@@ -163,7 +165,10 @@ function attentionFromRow(row: AttentionRow): AttentionRecord {
     expiresAt: row.expires_at,
     resolvedAt: row.resolved_at,
     seenAt: row.seen_at,
-    revision: row.revision
+    revision: row.revision,
+    // Rows written before migration 9 have no provenance; they read as unknown rather than guessing.
+    openedBy: row.opened_by,
+    resolvedBy: row.resolved_by
   }
 }
 
@@ -175,6 +180,8 @@ export interface AttentionOpenParams {
   title: string
   body?: string
   expiresAt?: string
+  /** What opened it; a caller that does not say leaves the column null. */
+  origin?: string
 }
 
 /** Opening the same key again while it is open updates that request instead of duplicating it. */
@@ -191,11 +198,12 @@ export function openAttention(
     const unchanged = existing.kind === params.kind &&
       existing.title === params.title &&
       existing.body === (params.body ?? null) &&
-      existing.expires_at === (params.expiresAt ?? null)
+      existing.expires_at === (params.expiresAt ?? null) &&
+      existing.opened_by === (params.origin ?? null)
     if (unchanged) return attentionFromRow(existing)
     database.prepare(
       `UPDATE attention_request SET kind = ?, title = ?, body = ?, expires_at = ?, incarnation_id = ?,
-         seen_at = NULL, revision = revision + 1
+         opened_by = ?, seen_at = NULL, revision = revision + 1
        WHERE request_id = ?`
     ).run(
       params.kind,
@@ -203,14 +211,15 @@ export function openAttention(
       params.body ?? null,
       params.expiresAt ?? null,
       params.incarnationId,
+      params.origin ?? null,
       existing.request_id
     )
     return getAttention(database, existing.request_id)
   }
   database.prepare(
     `INSERT INTO attention_request(request_id, session_id, incarnation_id, request_key, kind, title, body,
-       state, resolution, opened_at, expires_at, resolved_at, seen_at, revision)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'open', NULL, ?, ?, NULL, NULL, 1)`
+       state, resolution, opened_at, expires_at, resolved_at, seen_at, revision, opened_by, resolved_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'open', NULL, ?, ?, NULL, NULL, 1, ?, NULL)`
   ).run(
     requestId,
     params.sessionId,
@@ -220,7 +229,8 @@ export function openAttention(
     params.title,
     params.body ?? null,
     now,
-    params.expiresAt ?? null
+    params.expiresAt ?? null,
+    params.origin ?? null
   )
   return getAttention(database, requestId)
 }
@@ -245,7 +255,9 @@ export function closeAttention(
   },
   state: Exclude<AttentionState, 'open'>,
   resolution: string | null,
-  now: string
+  now: string,
+  /** What closed it; null keeps the column empty for a caller that does not say. */
+  origin: string | null = null
 ): AttentionRecord {
   const row = ('requestId' in target
     ? database.prepare("SELECT * FROM attention_request WHERE request_id = ? AND state = 'open'")
@@ -261,15 +273,17 @@ export function closeAttention(
     throw new WorkspaceStoreError(ERROR_CODES.revisionConflict, 'The attention request changed before it was opened')
   }
   database.prepare(
-    `UPDATE attention_request SET state = ?, resolution = ?, resolved_at = ?, revision = revision + 1
+    `UPDATE attention_request SET state = ?, resolution = ?, resolved_at = ?, resolved_by = ?,
+       revision = revision + 1
      WHERE request_id = ?`
-  ).run(state, resolution, now, row.request_id)
+  ).run(state, resolution, now, origin, row.request_id)
   return getAttention(database, row.request_id)
 }
 
 export function expireAttention(database: DatabaseConnection, now: string): number {
   const result = database.prepare(
-    `UPDATE attention_request SET state = 'expired', resolved_at = ?, revision = revision + 1
+    `UPDATE attention_request SET state = 'expired', resolved_at = ?, resolved_by = 'expiry',
+       revision = revision + 1
      WHERE state = 'open' AND expires_at IS NOT NULL AND expires_at <= ?`
   ).run(now, now)
   return Number(result.changes)

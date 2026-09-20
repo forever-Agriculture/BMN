@@ -132,6 +132,7 @@ function fakeHandlers(current: Map<string, string>) {
     observeConversation: vi.fn(async (): Promise<unknown> => ({ accepted: true, detail: 'observed' })),
     withdrawAttention: vi.fn(async (): Promise<unknown> => ({ withdrawn: true })),
     resolveAttention: vi.fn(async (): Promise<unknown> => ({ resolved: true })),
+    observeHookEvent: vi.fn(async (): Promise<unknown> => ({ recorded: true })),
     submitInput: vi.fn(async (): Promise<void> => undefined)
   } satisfies ControlHandlers
 }
@@ -434,7 +435,19 @@ describe('control server validation', () => {
     ['oversize transcript path', 'conversation.observe',
       { agentCli: 'claude', conversationReference: OBSERVED_REFERENCE, source: 'startup', transcriptPath: `/${'x'.repeat(4096)}` }],
     ['unknown observation parameter', 'conversation.observe',
-      { agentCli: 'claude', conversationReference: OBSERVED_REFERENCE, source: 'startup', pid: 12 }]
+      { agentCli: 'claude', conversationReference: OBSERVED_REFERENCE, source: 'startup', pid: 12 }],
+    ['invented origin word', 'attention.open', { requestKey: 'q', kind: 'question', title: 'T', origin: 'guess' }],
+    ['unknown hook agent in origin', 'attention.open',
+      { requestKey: 'q', kind: 'question', title: 'T', origin: 'hook:gemini:Stop' }],
+    ['oversize origin', 'attention.withdraw', { requestKey: 'q', origin: `hook:claude:${'E'.repeat(64)}` }],
+    ['control character origin', 'attention.resolve', { requestKey: 'q', resolution: 'done', origin: 'cli\nowner' }],
+    ['unknown hook agent', 'hook.observe', { agent: 'gemini', event: 'Stop', effects: [] }],
+    ['missing hook event', 'hook.observe', { agent: 'claude', effects: [] }],
+    ['hook effects not an array', 'hook.observe', { agent: 'claude', event: 'Stop', effects: 'opened' }],
+    ['invented hook effect', 'hook.observe', { agent: 'claude', event: 'Stop', effects: ['notified'] }],
+    ['too many hook effects', 'hook.observe',
+      { agent: 'claude', event: 'Stop', effects: ['opened', 'opened', 'opened', 'opened', 'opened', 'opened', 'opened', 'opened', 'opened'] }],
+    ['unknown hook parameter', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], pid: 12 }]
   ])('rejects %s with INVALID_ARGUMENT and keeps the connection', async (_label, method, params) => {
     const fixture = await serverFixture()
     const client = await authenticated(fixture, sessionToken(fixture))
@@ -448,10 +461,60 @@ describe('control server validation', () => {
       fixture.handlers.openAttention,
       fixture.handlers.resolveAttention,
       fixture.handlers.submitInput,
-      fixture.handlers.observeConversation
+      fixture.handlers.observeConversation,
+      fixture.handlers.observeHookEvent
     ]) {
       expect(handler).not.toHaveBeenCalled()
     }
+  })
+
+  it('stores the closed origin vocabulary and records one hook event per call', async () => {
+    const fixture = await serverFixture()
+    const client = await authenticated(fixture, sessionToken(fixture))
+
+    await client.request('attention.open', {
+      requestKey: 'q', kind: 'question', title: 'Which one?', origin: 'hook:claude:Notification'
+    })
+    await client.request('attention.withdraw', { requestKey: 'q', origin: 'hook:codex:Stop' })
+    await client.request('attention.resolve', { requestKey: 'q', resolution: 'done', origin: 'input' })
+    const observed = await client.request('hook.observe', {
+      agent: 'claude', event: 'PostToolUse', toolName: 'Bash', effects: ['answered', 'withdrew']
+    })
+
+    expect(fixture.handlers.openAttention).toHaveBeenLastCalledWith(
+      expect.objectContaining({ origin: 'hook:claude:Notification' })
+    )
+    expect(fixture.handlers.withdrawAttention).toHaveBeenLastCalledWith(
+      expect.objectContaining({ origin: 'hook:codex:Stop' })
+    )
+    expect(fixture.handlers.resolveAttention).toHaveBeenLastCalledWith(
+      expect.objectContaining({ origin: 'input' })
+    )
+    expect(observed.result).toEqual({ recorded: true })
+    expect(fixture.handlers.observeHookEvent).toHaveBeenLastCalledWith({
+      sessionId: 'session-1',
+      agent: 'claude',
+      event: 'PostToolUse',
+      source: null,
+      toolName: 'Bash',
+      effects: ['answered', 'withdrew']
+    })
+  })
+
+  it('opens and resolves without an origin, which stores no provenance', async () => {
+    const fixture = await serverFixture()
+    const client = await authenticated(fixture, sessionToken(fixture))
+
+    await client.request('attention.open', { requestKey: 'q', kind: 'question', title: 'Which one?' })
+
+    // An exact match: a caller that says nothing stores no provenance rather than a guessed word.
+    expect(fixture.handlers.openAttention).toHaveBeenLastCalledWith({
+      sessionId: 'session-1',
+      incarnationId: 'incarnation-1',
+      requestKey: 'q',
+      kind: 'question',
+      title: 'Which one?'
+    })
   })
 
   it('normalizes timestamps and accepts text at the 64 KiB limit', async () => {

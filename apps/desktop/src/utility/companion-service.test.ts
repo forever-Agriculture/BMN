@@ -7,11 +7,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   ERROR_CODES,
+  HOOK_EVENT_LOG_LIMIT,
   METHOD_REGISTRY,
   type AppEventMessage,
   type ArtifactRecord,
   type BackupManifest,
   type BackupVerifyResult,
+  type HookEventRecord,
   type SessionRecord
 } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -710,5 +712,44 @@ describe('refused agent requests', () => {
     expect(Buffer.byteLength(written)).toBeLessThanOrEqual(256 * 1024)
     expect(written).toContain('refusal number 3999')
     expect(written).not.toContain('refusal number 0 ')
+  })
+})
+
+describe('hook event log', () => {
+  const observe = (sessionId: string, event: string, effects: HookEventRecord['effects'] = []): void => {
+    (service as unknown as {
+      observeHookEvent(p: {
+        sessionId: string
+        agent: HookEventRecord['agent']
+        event: string
+        source: string | null
+        toolName: string | null
+        effects: readonly HookEventRecord['effects'][number][]
+      }): unknown
+    }).observeHookEvent({ sessionId, agent: 'claude', event, source: null, toolName: null, effects })
+  }
+
+  it('keeps only the newest events per session and never mixes two sessions', async () => {
+    for (let index = 0; index < HOOK_EVENT_LOG_LIMIT + 5; index += 1) observe('s1', `Event${index}`)
+    observe('s2', 'OnlyTheirs', ['opened'])
+
+    const mine = await service.route(METHOD_REGISTRY.hookEventsList, { sessionId: 's1' }) as HookEventRecord[]
+    const theirs = await service.route(METHOD_REGISTRY.hookEventsList, { sessionId: 's2' }) as HookEventRecord[]
+
+    expect(mine).toHaveLength(HOOK_EVENT_LOG_LIMIT)
+    expect(mine[0]?.event).toBe('Event5')
+    expect(mine.at(-1)?.event).toBe(`Event${HOOK_EVENT_LOG_LIMIT + 4}`)
+    expect(mine.some((entry) => entry.sessionId === 's2')).toBe(false)
+    expect(theirs).toEqual([expect.objectContaining({ event: 'OnlyTheirs', effects: ['opened'] })])
+  })
+
+  it('reads as empty for a session that reported nothing, and keeps the log out of the snapshot', async () => {
+    observe('s1', 'Stop', ['withdrew', 'opened'])
+
+    const empty = await service.route(METHOD_REGISTRY.hookEventsList, { sessionId: 's2' })
+    const snapshot = await service.route(METHOD_REGISTRY.attentionList, {})
+
+    expect(empty).toEqual([])
+    expect(JSON.stringify(snapshot)).not.toContain('withdrew')
   })
 })

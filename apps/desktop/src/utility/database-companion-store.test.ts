@@ -129,14 +129,45 @@ describe('companion store', () => {
     })
   })
 
-  it('expires only past-due open requests', () => {
+  it('expires only past-due open requests, and says expiry closed them', () => {
     openAttention(database, {
       sessionId: 's1', incarnationId: null, requestKey: 'old', kind: 'permission', title: 'Old',
       expiresAt: '2026-09-14T11:00:00.000Z'
     }, 'r1', now)
     openAttention(database, { sessionId: 's1', incarnationId: null, requestKey: 'new', kind: 'notice', title: 'New' }, 'r2', now)
     expect(expireAttention(database, now)).toBe(1)
-    expect(listAttention(database).find((row) => row.requestId === 'r1')?.state).toBe('expired')
+    expect(listAttention(database).find((row) => row.requestId === 'r1')).toMatchObject({
+      state: 'expired',
+      resolvedBy: 'expiry'
+    })
+  })
+
+  it('stores what opened and what closed a request, and leaves both null when nobody says', () => {
+    openAttention(database, {
+      sessionId: 's1', incarnationId: null, requestKey: 'k', kind: 'question', title: 'Which?',
+      origin: 'hook:claude:Notification'
+    }, 'r1', now)
+    const closed = closeAttention(
+      database, { sessionId: 's1', requestKey: 'k' }, 'answered', 'yes', now, 'hook:claude:PostToolUse'
+    )
+    openAttention(database, { sessionId: 's2', incarnationId: null, requestKey: 'k', kind: 'notice', title: 'Done' }, 'r2', now)
+    const anonymous = closeAttention(database, { sessionId: 's2', requestKey: 'k' }, 'withdrawn', null, now)
+
+    expect(closed).toMatchObject({ openedBy: 'hook:claude:Notification', resolvedBy: 'hook:claude:PostToolUse' })
+    expect(anonymous).toMatchObject({ openedBy: null, resolvedBy: null })
+  })
+
+  it('reopening the same key with a new origin records the newer one', () => {
+    const first = openAttention(database, {
+      sessionId: 's1', incarnationId: null, requestKey: 'k', kind: 'question', title: 'Which?', origin: 'cli'
+    }, 'r1', now)
+    const again = openAttention(database, {
+      sessionId: 's1', incarnationId: null, requestKey: 'k', kind: 'question', title: 'Which?',
+      origin: 'hook:codex:PreToolUse'
+    }, 'r2', now)
+
+    expect(again.requestId).toBe(first.requestId)
+    expect(again.openedBy).toBe('hook:codex:PreToolUse')
   })
 
   it('keeps the newest progress observation per source', () => {

@@ -1,7 +1,7 @@
 // MODULE: needs-you-popover.tsx - unresolved requests, unread sessions and recent request history under the header count
 import { useEffect, useRef } from 'react'
 import type { AttentionRecord } from '@bmn/protocol'
-import { isActionableAttention, openAttentionGroups, relativeAge } from './session-presentation'
+import { attentionProvenance, isActionableAttention, openAttentionGroups, relativeAge } from './session-presentation'
 
 export interface SessionPlace {
   workspace: string
@@ -63,6 +63,7 @@ export function NeedsYouPopover(props: {
           <span className={`status-dot ${actionable ? 'needs-you' : ''}`} aria-hidden="true" />
           {where(request.sessionId)}
           <span className="attention-kind">{kindLabel(request)}</span>
+          <span className="provenance">{attentionProvenance(request)}</span>
           <span className="age">{relativeAge(request.openedAt, props.now)}</span>
         </div>
         <h3>{request.title}</h3>
@@ -144,7 +145,7 @@ export function NeedsYouPopover(props: {
           {recent.map((request) => (
             <button key={request.requestId} type="button" className="popover-row" onClick={() => props.onOpenSession(request.sessionId, null)}>
               {where(request.sessionId)}
-              <span>{request.title} · {request.state}</span>
+              <span>{request.title} · {attentionProvenance(request)}</span>
               <span className="age">{relativeAge(request.resolvedAt ?? request.openedAt, props.now)}</span>
             </button>
           ))}

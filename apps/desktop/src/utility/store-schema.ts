@@ -346,5 +346,14 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
 
       ALTER TABLE conversation_binding_next RENAME TO conversation_binding;
     `
+  },
+  {
+    // Request provenance: two nullable columns, so every legacy row reads as unknown provenance and
+    // no other table changes. Backups and the archive purge carry them as ordinary request data.
+    version: 9,
+    sql: `
+      ALTER TABLE attention_request ADD COLUMN opened_by TEXT;
+      ALTER TABLE attention_request ADD COLUMN resolved_by TEXT;
+    `
   }
 ])

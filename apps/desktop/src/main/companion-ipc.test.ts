@@ -21,7 +21,9 @@ function request(requestId: string, sessionId: string, revision = 1): AttentionR
     expiresAt: null,
     resolvedAt: null,
     seenAt: null,
-    revision
+    revision,
+    openedBy: null,
+    resolvedBy: null
   }
 }
 

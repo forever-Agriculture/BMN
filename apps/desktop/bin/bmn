@@ -168,6 +168,7 @@ const COMMANDS = {
           requestKey: requireNonEmpty(requestKey, 'request-key'),
           kind,
           title: requireNonEmpty(title, 'title'),
+          origin: 'cli',
           ...(options.body === undefined ? {} : { body: options.body }),
           ...(options.expires === undefined ? {} : { expiresAt: options.expires })
         })
@@ -179,7 +180,7 @@ const COMMANDS = {
     options: ['session'],
     build: ([requestKey], options) => ({
       method: 'attention.withdraw',
-      params: withSession(options, { requestKey: requireNonEmpty(requestKey, 'request-key') })
+      params: withSession(options, { requestKey: requireNonEmpty(requestKey, 'request-key'), origin: 'cli' })
     })
   },
   resolve: {
@@ -189,7 +190,8 @@ const COMMANDS = {
       method: 'attention.resolve',
       params: withSession(options, {
         requestKey: requireNonEmpty(requestKey, 'request-key'),
-        resolution: requireNonEmpty(resolution, 'resolution')
+        resolution: requireNonEmpty(resolution, 'resolution'),
+        origin: 'cli'
       })
     })
   },
@@ -463,18 +465,33 @@ function conversationObservation(agent, event) {
   }
 }
 
+/**
+ * The provenance word for one hook event. The vocabulary is closed on the app side, so an event name the
+ * harness invents that does not fit the shape is dropped rather than refused with the calls it belongs to.
+ */
+function hookOrigin(agent, eventName) {
+  return typeof eventName === 'string' && /^[A-Za-z][A-Za-z0-9]{0,40}$/.test(eventName)
+    ? `hook:${agent}:${eventName}`
+    : undefined
+}
+
 /** Maps one Claude Code or Codex hook event to the attention calls that keep Needs you truthful. */
 function hookRequests(agent, event) {
   const name = HOOK_AGENTS[agent]
   const requestKey = (slot) => `${agent}:${slot}`
+  // Every call this event makes carries the event that made it, so Needs you can say where a row came from.
+  const origin = hookOrigin(agent, event.hook_event_name)
   const open = (slot, kind, title, body) => [{
     method: 'attention.open',
-    params: { requestKey: requestKey(slot), kind, title, ...(body === undefined ? {} : { body }) }
+    params: { requestKey: requestKey(slot), kind, title, origin, ...(body === undefined ? {} : { body }) }
   }]
-  const withdraw = (...slots) => slots.map((slot) => ({ method: 'attention.withdraw', params: { requestKey: requestKey(slot) } }))
+  const withdraw = (...slots) => slots.map((slot) => ({
+    method: 'attention.withdraw',
+    params: { requestKey: requestKey(slot), origin }
+  }))
   const answered = (...slots) => slots.map((slot) => ({
     method: 'attention.resolve',
-    params: { requestKey: requestKey(slot), resolution: IN_TERMINAL }
+    params: { requestKey: requestKey(slot), resolution: IN_TERMINAL, origin }
   }))
   switch (event.hook_event_name) {
     case 'PreToolUse': {
@@ -604,8 +621,37 @@ async function runHook(args) {
   if (agent === 'claude' && opens.length > 0 && claudeRemoteControlled(agentPid, event.session_id)) {
     for (const request of opens) request.params.phoneNotified = true
   }
-  if (requests.length > 0) await callEach(socketPath, token, requests, HOOK_TIMEOUT_MS).catch(() => undefined)
+  // One observation per event, whether or not it changed anything: an event that opened nothing is
+  // exactly what the owner needs to see when a request they expected never arrived.
+  const observation = hookObservation(agent, event, requests)
+  const calls = observation ? [...requests, observation] : requests
+  if (calls.length > 0) await callEach(socketPath, token, calls, HOOK_TIMEOUT_MS).catch(() => undefined)
   return 0
+}
+
+/** One `hook.observe` call describing this event and what it changed; the effects are read off the calls. */
+function hookObservation(agent, event, requests) {
+  const eventName = event.hook_event_name
+  if (typeof eventName !== 'string' || !/^[A-Za-z][A-Za-z0-9]{0,40}$/.test(eventName)) return undefined
+  const byMethod = { 'attention.open': 'opened', 'attention.withdraw': 'withdrew', 'attention.resolve': 'answered' }
+  const effects = []
+  for (const request of requests) {
+    const effect = byMethod[request.method]
+    if (effect !== undefined && !effects.includes(effect)) effects.push(effect)
+  }
+  const shaped = (value) => typeof value === 'string' && /^[\x20-\x7e]{1,64}$/.test(value) ? value : undefined
+  const source = shaped(event.source)
+  const toolName = shaped(event.tool_name)
+  return {
+    method: 'hook.observe',
+    params: {
+      agent,
+      event: eventName,
+      effects,
+      ...(source === undefined ? {} : { source }),
+      ...(toolName === undefined ? {} : { toolName })
+    }
+  }
 }
 
 function describeSnapshot(result) {

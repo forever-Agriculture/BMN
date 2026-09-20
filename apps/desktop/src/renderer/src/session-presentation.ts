@@ -92,6 +92,43 @@ export function relativeAge(fromIso: string, now: number): string {
   return `${Math.round(hours / 24)} d ago`
 }
 
+const ORIGIN_AGENT_NAMES: Readonly<Record<string, string>> = Object.freeze({ claude: 'Claude', codex: 'Codex' })
+
+/** The plain name of whatever acted on a request, or null when the row predates provenance. */
+function originName(origin: string | null, action: 'opened' | 'closed'): string | null {
+  if (origin === null) return null
+  if (origin.startsWith('hook:')) {
+    const [, agent = '', event = ''] = origin.split(':')
+    return `${ORIGIN_AGENT_NAMES[agent] ?? agent} ${event}`.trim()
+  }
+  switch (origin) {
+    case 'cli': return action === 'opened' ? 'bmn ask' : 'the bmn CLI'
+    case 'owner': return 'BMN'
+    case 'input': return 'typing'
+    case 'telegram': return 'Telegram'
+    case 'expiry': return 'expiry'
+    default: return origin
+  }
+}
+
+/**
+ * Says in plain words what opened a request, or what closed it: "from Claude Notification",
+ * "resolved by typing", "withdrawn by Claude Stop", "expired". A row with no provenance says so.
+ */
+export function attentionProvenance(
+  request: Pick<AttentionRecord, 'state' | 'openedBy' | 'resolvedBy'>
+): string {
+  if (request.state === 'open') {
+    const name = originName(request.openedBy, 'opened')
+    return name === null ? 'from unknown' : `from ${name}`
+  }
+  if (request.state === 'expired') return 'expired'
+  const verb = request.state === 'withdrawn' ? 'withdrawn' : 'resolved'
+  if (request.resolvedBy === 'telegram') return 'answered from Telegram'
+  const name = originName(request.resolvedBy, 'closed')
+  return name === null ? `${verb} by unknown` : `${verb} by ${name}`
+}
+
 const PROGRESS_WORDS: Readonly<Record<ProgressState, string>> = Object.freeze({
   running: 'Running',
   waiting: 'Waiting',

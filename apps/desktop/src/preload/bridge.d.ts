@@ -3,6 +3,7 @@ import type {
   AppSettings,
   ArtifactPreview,
   ArtifactRecord,
+  AttentionOrigin,
   AttentionRecord,
   BackupManifest,
   BackupVerifyResult,
@@ -11,6 +12,7 @@ import type {
   FileReferenceReadParams,
   FileReferenceReadResult,
   HandoffDraftSaveParams,
+  HookEventRecord,
   InputDraftRecord,
   ProgressRecord,
   TelegramStatus,
@@ -168,8 +170,11 @@ export interface AiTerminalBridge {
   resolveAttention(
     requestId: string,
     resolution?: string,
-    expected?: Pick<AttentionRecord, 'kind' | 'revision'>
+    expected?: Pick<AttentionRecord, 'kind' | 'revision'>,
+    origin?: AttentionOrigin
   ): Promise<AttentionRecord>
+  /** Read-only: the recent hook events of one session, in memory only and never another session's. */
+  listHookEvents(sessionId: string): Promise<HookEventRecord[]>
   listProgress(): Promise<ProgressRecord[]>
   listDrafts(): Promise<InputDraftRecord[]>
   saveHandoffDraft(params: HandoffDraftSaveParams): Promise<InputDraftRecord>

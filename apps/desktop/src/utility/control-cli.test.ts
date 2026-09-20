@@ -68,6 +68,7 @@ async function cliFixture() {
     observeConversation: vi.fn<ControlHandlers['observeConversation']>(async () => ({ accepted: true, detail: 'observed' })),
     withdrawAttention: vi.fn<ControlHandlers['withdrawAttention']>(async () => ({ withdrawn: true })),
     resolveAttention: vi.fn<ControlHandlers['resolveAttention']>(async () => ({ resolved: true })),
+    observeHookEvent: vi.fn<ControlHandlers['observeHookEvent']>(async () => ({ recorded: true })),
     submitInput: vi.fn<ControlHandlers['submitInput']>(async () => undefined)
   } satisfies ControlHandlers
   const server = new ControlServer({ socketPath, auth, handlers, receipts: new MemoryReceiptStore() })
@@ -230,7 +231,8 @@ describe('bmn CLI', () => {
     expect(fixture.handlers.resolveAttention).toHaveBeenCalledWith({
       sessionId: 'session-2',
       requestKey: 'q1',
-      resolution: 'approved'
+      resolution: 'approved',
+      origin: 'cli'
     })
     expect(untargeted.code).toBe(1)
     expect(untargeted.stderr).toMatch(/^bmn: INVALID_ARGUMENT: /)
@@ -650,5 +652,83 @@ describe('bmn hook', () => {
 
     expect([outside, unreadable, unreachable]).toEqual([QUIET, QUIET, QUIET])
     expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
+  })
+})
+
+describe('bmn hook provenance and the hook event log', () => {
+  it.each([
+    ['claude', { hook_event_name: 'Notification', notification_type: 'permission_prompt', message: 'Allow Bash?' },
+      ['opened']],
+    ['claude', { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: {} }, ['answered', 'withdrew']],
+    ['claude', { hook_event_name: 'UserPromptSubmit' }, ['answered', 'withdrew']],
+    ['claude', { hook_event_name: 'Stop', last_assistant_message: 'Done' }, ['withdrew', 'opened']],
+    ['claude', { hook_event_name: 'SessionEnd' }, ['withdrew']],
+    ['claude', { hook_event_name: 'Interrupt' }, ['withdrew']],
+    ['codex', { hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: {} }, ['opened']],
+    ['codex', { hook_event_name: 'PreToolUse', tool_name: 'request_user_input', tool_input: {} }, ['opened']],
+    ['codex', { hook_event_name: 'Stop' }, ['withdrew', 'opened']]
+  ])('stamps every %s call with its own event and records what it changed', async (agent, event, effects) => {
+    const fixture = await cliFixture()
+
+    const result = await runHook(fixture, agent, event)
+
+    expect(result).toEqual(QUIET)
+    const origins = [
+      ...fixture.handlers.openAttention.mock.calls,
+      ...fixture.handlers.withdrawAttention.mock.calls,
+      ...fixture.handlers.resolveAttention.mock.calls
+    ].map(([params]) => (params as { origin?: string }).origin)
+    expect(origins.length).toBeGreaterThan(0)
+    expect(new Set(origins)).toEqual(new Set([`hook:${agent}:${event.hook_event_name}`]))
+    expect(fixture.handlers.observeHookEvent).toHaveBeenCalledTimes(1)
+    const observed = fixture.handlers.observeHookEvent.mock.calls[0]?.[0]
+    expect(observed).toMatchObject({ sessionId: 'session-1', agent, event: event.hook_event_name })
+    expect(new Set(observed?.effects)).toEqual(new Set(effects))
+  })
+
+  it('records an event that changed nothing, which is what a missing request looks like', async () => {
+    const fixture = await cliFixture()
+
+    const result = await runHook(fixture, 'claude', {
+      hook_event_name: 'Notification',
+      notification_type: 'idle_prompt',
+      message: 'Claude is waiting'
+    })
+
+    expect(result).toEqual(QUIET)
+    expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
+    expect(fixture.handlers.observeHookEvent).toHaveBeenCalledTimes(1)
+    expect(fixture.handlers.observeHookEvent.mock.calls[0]?.[0]).toMatchObject({
+      agent: 'claude',
+      event: 'Notification',
+      source: null,
+      toolName: null,
+      effects: []
+    })
+  })
+
+  it('carries the harness source and tool name when the payload has them', async () => {
+    const fixture = await cliFixture()
+
+    await runHook(fixture, 'claude', {
+      hook_event_name: 'SessionStart',
+      source: 'resume',
+      session_id: OBSERVED_REFERENCE
+    })
+
+    expect(fixture.handlers.observeHookEvent.mock.calls[0]?.[0]).toMatchObject({
+      event: 'SessionStart',
+      source: 'resume',
+      toolName: null
+    })
+  })
+
+  it('records nothing for an event name the harness did not shape like an event', async () => {
+    const fixture = await cliFixture()
+
+    const result = await runHook(fixture, 'claude', { hook_event_name: 'Stop\nForged' })
+
+    expect(result).toEqual(QUIET)
+    expect(fixture.handlers.observeHookEvent).not.toHaveBeenCalled()
   })
 })

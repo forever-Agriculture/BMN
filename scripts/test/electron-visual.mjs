@@ -13,6 +13,7 @@ const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(scriptDirectory, '../..')
 const appDirectory = join(repoRoot, 'apps/desktop')
 const evidenceDirectory = join(repoRoot, '.dev-auto/evidence/epic-5')
+const activityEvidenceDirectory = join(repoRoot, '.dev-auto/evidence/epic-14')
 const requireFromApp = createRequire(join(appDirectory, 'package.json'))
 const electronBinary = requireFromApp('electron')
 const execFileAsync = promisify(execFile)
@@ -83,8 +84,8 @@ async function setAppearance(page, identity, colorMode) {
   )
 }
 
-async function screenshot(page, name) {
-  const path = join(evidenceDirectory, name)
+async function screenshot(page, name, directory = evidenceDirectory) {
+  const path = join(directory, name)
   await page.screenshot({ path })
   return path
 }
@@ -140,6 +141,7 @@ async function pointerStates(page, locator, activeScreenshotName) {
 }
 
 await mkdir(evidenceDirectory, { recursive: true })
+await mkdir(activityEvidenceDirectory, { recursive: true })
 
 const evidence = await withTemporaryRoot(
   temporaryRootContracts.electronDevelopment,
@@ -321,7 +323,19 @@ const evidence = await withTemporaryRoot(
       await grayscale.evaluate((element) => element.remove())
 
       await page.waitForSelector('.session-terminal.selected .pane-status')
-      await page.waitForSelector('.status-dot.needs-you')
+      await page.waitForSelector('.status-dot.needs-you').catch(async (error) => {
+        const diagnostic = await page.evaluate(async () => ({
+          attention: await window.aiTerminal.listAttention(),
+          dots: [...document.querySelectorAll('.status-dot')].map((dot) => ({
+            classes: dot.className,
+            label: dot.getAttribute('aria-label'),
+            where: dot.closest('.session-row') ? 'row' : dot.closest('.session-terminal')
+              ? `pane${dot.closest('.session-terminal-hidden') ? '-hidden' : ''}` : 'other',
+            box: dot.getBoundingClientRect().width
+          }))
+        }))
+        throw new Error(`needs-you dot missing: ${JSON.stringify(diagnostic)}`, { cause: error })
+      })
       const hierarchyPolish = await page.evaluate(() => {
         const status = document.querySelector('.session-terminal.selected .pane-status')
         const attention = document.querySelector('.status-dot.needs-you')
@@ -831,9 +845,230 @@ const evidence = await withTemporaryRoot(
       assert.equal(persistedSteel.colorMode, 'steel')
       await setAppearance(page, 'knight', 'black')
 
+      // Epic 14.1 AC5: the observed working/idle mark and word, measured where they render, in both
+      // states, across the four palettes and both identities, with selection and focus overlapping.
+      phase('driving two live sessions into Working and Idle')
+      await runControlCli(roots, fixture.selectedSessionId, 'withdraw', 'epic5-visual')
+      await page.waitForFunction(() =>
+        document.querySelector('.needs-you-button')?.getAttribute('data-has-items') === 'false')
+      await runControlCli(
+        roots,
+        fixture.selectedSessionId,
+        'send',
+        "for index in $(seq 1 12000); do printf 'EPIC14-WORKING\\n'; sleep 0.05; done",
+        '--submit'
+      )
+      await page.waitForFunction(({ working, idle }) => {
+        const words = window.__bmnActivity?.words() ?? {}
+        return words[working] === 'Working' && words[idle] === 'Idle'
+      }, { working: fixture.selectedSessionId, idle: fixture.foreignSessionId })
+      phase('both observed states visible')
+
+      const readActivityPaint = () => page.evaluate(({ working, idle }) => {
+        // The dot's own background is transparent while it is a ring, so the boundary is measured
+        // against the first ancestor that actually paints.
+        const opaque = (element) => {
+          for (let node = element; node; node = node.parentElement) {
+            const background = getComputedStyle(node).backgroundColor
+            const parts = background.match(/[\d.]+/g)
+            if (parts && (parts.length < 4 || Number(parts[3]) > 0.5)) return background
+          }
+          return getComputedStyle(document.documentElement).backgroundColor
+        }
+        const inkOf = (mark) => {
+          const style = getComputedStyle(mark)
+          return {
+            ink: style.borderTopWidth === '0px' ? style.backgroundColor : style.borderTopColor,
+            borderWidth: style.borderTopWidth,
+            width: style.width,
+            height: style.height
+          }
+        }
+        const readRow = (sessionId) => {
+          const row = document.querySelector(`.session-row button[data-session-id="${sessionId}"]`)
+          const mark = row?.querySelector('.status-dot')
+          if (!(row instanceof HTMLElement) || !(mark instanceof HTMLElement)) {
+            throw new Error(`activity row unavailable for ${sessionId}`)
+          }
+          return {
+            ...inkOf(mark),
+            marks: mark.className,
+            word: mark.getAttribute('aria-label'),
+            rowTitle: row.getAttribute('title'),
+            selected: !!row.closest('.session-row.selected'),
+            behind: opaque(row)
+          }
+        }
+        const readPane = (sessionId) => {
+          const pane = document.querySelector(`.session-terminal[data-session-id="${sessionId}"]`)
+          const mark = pane?.querySelector('.pane-heading .status-dot')
+          const status = pane?.querySelector('.pane-status')
+          if (!(mark instanceof HTMLElement) || !(status instanceof HTMLElement)) {
+            throw new Error(`activity pane unavailable for ${sessionId}`)
+          }
+          return {
+            ...inkOf(mark),
+            marks: mark.className,
+            word: status.textContent?.trim() ?? '',
+            wordInk: getComputedStyle(status).color,
+            behind: opaque(status)
+          }
+        }
+        const root = getComputedStyle(document.documentElement)
+        return {
+          workingRow: readRow(working),
+          idleRow: readRow(idle),
+          workingPane: readPane(working),
+          idlePane: readPane(idle),
+          // `.status-dot.idle` means Not started; no fixture session is stopped, so the token is read directly.
+          notStartedInk: root.getPropertyValue('--faint').trim(),
+          notStartedBorderWidth: '1px'
+        }
+      }, { working: fixture.selectedSessionId, idle: fixture.foreignSessionId })
+
+      // The mark is measured on the selected, focused row, so selection, focus and the mark overlap.
+      await page.click(`.session-row button[data-session-id="${fixture.selectedSessionId}"]`)
+      await page.waitForFunction((sessionId) => !!document.querySelector(
+        `.session-row.selected button[data-session-id="${sessionId}"]`), fixture.selectedSessionId)
+
+      const activityMeasurements = []
+      for (const [identity, colorMode] of [
+        ['knight', 'black'], ['cross', 'black'],
+        ['knight', 'steel'], ['cross', 'steel'],
+        ['knight', 'brown'], ['cross', 'brown'],
+        ['knight', 'dark'], ['cross', 'dark']
+      ]) {
+        await setAppearance(page, identity, colorMode)
+        await disableTarget()
+        for (const [width, height] of [[1440, 900], [900, 600]]) {
+          await setContentSize(application, page, width, height)
+          await settleTerminalLayout(page)
+          // A resize refits every terminal, and the shells redraw, so the silent one is briefly working.
+          await page.waitForFunction(({ working, idle }) => {
+            const words = window.__bmnActivity?.words() ?? {}
+            return words[working] === 'Working' && words[idle] === 'Idle'
+          }, { working: fixture.selectedSessionId, idle: fixture.foreignSessionId })
+          // The selected row also carries focus here, so the mark is measured with every overlap at once.
+          await page.focus(`.session-row.selected button[data-session-id="${fixture.selectedSessionId}"]`)
+          const paint = await readActivityPaint()
+          const measurement = {
+            identity,
+            colorMode,
+            width,
+            height,
+            words: {
+              workingRow: paint.workingRow.word,
+              idleRow: paint.idleRow.word,
+              workingPane: paint.workingPane.word,
+              idlePane: paint.idlePane.word
+            },
+            // Meaningful boundaries: the mark against whatever is painted behind it.
+            workingRowMark: ratio(paint.workingRow.ink, paint.workingRow.behind),
+            idleRowMark: ratio(paint.idleRow.ink, paint.idleRow.behind),
+            workingPaneMark: ratio(paint.workingPane.ink, paint.workingPane.behind),
+            idlePaneMark: ratio(paint.idlePane.ink, paint.idlePane.behind),
+            // Words.
+            workingPaneWord: ratio(paint.workingPane.wordInk, paint.workingPane.behind),
+            idlePaneWord: ratio(paint.idlePane.wordInk, paint.idlePane.behind),
+            // Recorded, not gated: the live-idle ring is told from Not started by geometry and hue,
+            // which is Fable's call for a 7px mark, not by a contrast ratio between two marks.
+            idleMarkAgainstNotStarted: ratio(paint.idleRow.ink, paint.notStartedInk),
+            geometry: {
+              workingBorderWidth: paint.workingRow.borderWidth,
+              idleBorderWidth: paint.idleRow.borderWidth,
+              notStartedBorderWidth: paint.notStartedBorderWidth,
+              markWidth: paint.idleRow.width
+            },
+            marks: { working: paint.workingRow.marks, idle: paint.idleRow.marks },
+            selectionOverlap: paint.workingRow.selected,
+            rowTitles: { working: paint.workingRow.rowTitle, idle: paint.idleRow.rowTitle }
+          }
+          activityMeasurements.push(measurement)
+          screenshots.push(await screenshot(
+            page,
+            `${colorMode}-${identity}-${width}x${height}-working-idle.png`,
+            activityEvidenceDirectory
+          ))
+        }
+      }
+      for (const measurement of activityMeasurements) {
+        const detail = JSON.stringify(measurement)
+        assert.ok(measurement.workingRowMark >= 3, detail)
+        assert.ok(measurement.idleRowMark >= 3, detail)
+        assert.ok(measurement.workingPaneMark >= 3, detail)
+        assert.ok(measurement.idlePaneMark >= 3, detail)
+        assert.ok(measurement.workingPaneWord >= 4.5, detail)
+        assert.ok(measurement.idlePaneWord >= 4.5, detail)
+        // AC3: filled versus a 2px ring, and never the 1px ring that means Not started.
+        assert.equal(measurement.geometry.workingBorderWidth, '0px', detail)
+        assert.equal(measurement.geometry.idleBorderWidth, '2px', detail)
+        assert.equal(measurement.geometry.markWidth, '7px', detail)
+        assert.ok(measurement.marks.working.includes('running'), detail)
+        assert.ok(!measurement.marks.working.includes('running-idle'), detail)
+        assert.ok(measurement.marks.idle.includes('running-idle'), detail)
+        // AC5: no information depends on the mark alone — every mark is named where it is shown.
+        assert.equal(measurement.words.workingRow, 'Working', detail)
+        assert.equal(measurement.words.idleRow, 'Idle', detail)
+        assert.ok(measurement.words.workingPane.startsWith('Working · '), detail)
+        assert.ok(measurement.words.idlePane.startsWith('Idle · '), detail)
+        assert.ok(measurement.rowTitles.working?.includes('· Working ·'), detail)
+        assert.ok(measurement.rowTitles.idle?.includes('· Idle ·'), detail)
+        // The selected row carries the mark under selection and focus at the same time.
+        assert.equal(measurement.selectionOverlap, true, detail)
+      }
+      await setContentSize(application, page, 1440, 900)
+      await setAppearance(page, 'knight', 'black')
+      await disableTarget()
+      // AC3: the state word joins the palette row's context, so typing it filters with no new control.
+      const activityNames = await page.evaluate(({ working, idle }) => {
+        const nameOf = (sessionId) => document
+          .querySelector(`.session-row button[data-session-id="${sessionId}"] .session-name`)
+          ?.textContent?.trim()
+        const names = { working: nameOf(working), idle: nameOf(idle) }
+        if (!names.working || !names.idle) throw new Error('activity fixture names unavailable')
+        return names
+      }, { working: fixture.selectedSessionId, idle: fixture.foreignSessionId })
+      await paletteButton.click()
+      await page.waitForSelector('.command-palette[open]')
+      const paletteSessionNames = async (query) => {
+        await page.fill('.command-palette input', query)
+        await page.waitForFunction((text) =>
+          document.querySelector('.command-palette input')?.value === text, query)
+        return page.evaluate(() => [...document.querySelectorAll('.palette-results [role="option"]')]
+          .map((option) => option.textContent?.trim() ?? ''))
+      }
+      const activityPaletteFiltering = {
+        workingName: activityNames.working,
+        idleName: activityNames.idle,
+        working: await paletteSessionNames('working'),
+        idle: await paletteSessionNames('idle')
+      }
+      screenshots.push(await screenshot(page, 'black-knight-palette-idle-filter.png', activityEvidenceDirectory))
+      const filterDetail = JSON.stringify(activityPaletteFiltering)
+      assert.ok(
+        activityPaletteFiltering.working.some((text) => text.includes(activityNames.working)),
+        filterDetail
+      )
+      assert.ok(
+        !activityPaletteFiltering.working.some((text) => text.includes(activityNames.idle)),
+        filterDetail
+      )
+      assert.ok(
+        activityPaletteFiltering.idle.some((text) => text.includes(activityNames.idle)),
+        filterDetail
+      )
+      assert.ok(
+        !activityPaletteFiltering.idle.some((text) => text.includes(activityNames.working)),
+        filterDetail
+      )
+      await page.keyboard.press('Escape')
+      phase('observed activity mark and word checks passed')
+
       phase('all runtime checks passed')
       return {
         fixture,
+        activityMeasurements,
+        activityPaletteFiltering,
         screenshotProvenance: {
           before: 'Reconstructed previous CSS selectors applied to the repaired runtime; not a base-HEAD capture.',
           after: 'Current repaired runtime.'

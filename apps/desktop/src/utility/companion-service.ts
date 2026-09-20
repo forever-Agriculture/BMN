@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, join, relative } from 'node:path'
 import {
   ERROR_CODES,
+  HOOK_EVENT_LOG_LIMIT,
+  isAttentionOrigin,
   METHOD_REGISTRY,
   PROGRESS_STALE_AFTER_MS,
   type AppEventMessage,
@@ -18,6 +20,8 @@ import {
   type BackupManifestEntry,
   type BackupVerifyResult,
   type ControlInfo,
+  type HookEventEffect,
+  type HookEventRecord,
   type InputDraftRecord,
   type ProgressRecord,
   type SessionRecord,
@@ -226,6 +230,8 @@ export class CompanionService {
     now: () => this.now().getTime()
   })
   private readonly draftOperations = new Map<string, Promise<void>>()
+  /** The last `HOOK_EVENT_LOG_LIMIT` hook events per session, in memory only; a restart clears them. */
+  private readonly hookEvents = new Map<string, HookEventRecord[]>()
   /** Refusals are appended one at a time, so two rejected reports cannot interleave in the file. */
   private refusalWrites: Promise<void> = Promise.resolve()
 
@@ -262,8 +268,13 @@ export class CompanionService {
           else this.emit('conversations', p.sessionId)
           return result
         }),
-        withdrawAttention: (p) => this.controlCall(() => this.closeAttentionByKey(p.sessionId, p.requestKey, 'withdrawn', null)),
-        resolveAttention: (p) => this.controlCall(() => this.closeAttentionByKey(p.sessionId, p.requestKey, 'answered', p.resolution)),
+        withdrawAttention: (p) => this.controlCall(
+          () => this.closeAttentionByKey(p.sessionId, p.requestKey, 'withdrawn', null, p.origin ?? null)
+        ),
+        resolveAttention: (p) => this.controlCall(
+          () => this.closeAttentionByKey(p.sessionId, p.requestKey, 'answered', p.resolution, p.origin ?? null)
+        ),
+        observeHookEvent: (p) => this.controlCall(async () => this.observeHookEvent(p)),
         submitInput: (p) => this.controlCall(async () => {
           this.options.manager.writeToSession(p.sessionId, bracketedPaste(p.text, p.submit))
         })
@@ -402,6 +413,9 @@ export class CompanionService {
         return this.deliver(text(params, 'artifactId'), text(params, 'sessionId'))
       case METHOD_REGISTRY.attentionList:
         return database.companion('listAttention')
+      case METHOD_REGISTRY.hookEventsList:
+        // Read-only and scoped to one session; the log never reaches `state.snapshot` or another session.
+        return this.listHookEvents(text(params, 'sessionId'))
       case METHOD_REGISTRY.attentionSeen: {
         const record = await database.companion('markAttentionSeen', text(params, 'requestId'), this.iso())
         this.emit('attention', record.sessionId)
@@ -419,6 +433,8 @@ export class CompanionService {
         if (expectedRevision !== undefined && (!Number.isSafeInteger(expectedRevision) || Number(expectedRevision) < 1)) {
           invalid('The expected attention revision is invalid')
         }
+        const origin = optionalText(params, 'origin')
+        if (origin !== null && !isAttentionOrigin(origin)) invalid('The request origin is invalid')
         const record = await database.companion(
           'closeAttention',
           {
@@ -428,7 +444,8 @@ export class CompanionService {
           },
           state,
           optionalText(params, 'resolution') ?? 'Acknowledged in BMN',
-          this.iso()
+          this.iso(),
+          origin
         )
         this.emit('attention', record.sessionId)
         return record
@@ -527,6 +544,10 @@ export class CompanionService {
     this.knownSessions.clear()
     for (const session of lists.flat()) {
       this.knownSessions.set(session.sessionId, this.options.manager.sessionWithCurrentProcessState(session))
+    }
+    // A deleted session keeps no hook events: the log follows the sessions that still exist.
+    for (const sessionId of this.hookEvents.keys()) {
+      if (!this.knownSessions.has(sessionId)) this.hookEvents.delete(sessionId)
     }
   }
 
@@ -669,6 +690,7 @@ export class CompanionService {
     body?: string
     expiresAt?: string
     phoneNotified?: boolean
+    origin?: string
   }): Promise<AttentionRecord> {
     const record = await this.options.database.companion('openAttention', {
       sessionId: p.sessionId,
@@ -677,7 +699,8 @@ export class CompanionService {
       kind: p.kind,
       title: p.title,
       ...(p.body !== undefined ? { body: p.body } : {}),
-      ...(p.expiresAt !== undefined ? { expiresAt: new Date(p.expiresAt).toISOString() } : {})
+      ...(p.expiresAt !== undefined ? { expiresAt: new Date(p.expiresAt).toISOString() } : {}),
+      ...(p.origin !== undefined ? { origin: p.origin } : {})
     }, randomUUID(), this.iso())
     this.emit('attention', p.sessionId)
     if (!p.phoneNotified) this.pager.opened(record)
@@ -688,13 +711,47 @@ export class CompanionService {
     sessionId: string,
     requestKey: string,
     state: 'answered' | 'withdrawn',
-    resolution: string | null
+    resolution: string | null,
+    origin: string | null = null
   ): Promise<AttentionRecord> {
     const record = await this.options.database.companion(
-      'closeAttention', { sessionId, requestKey }, state, resolution, this.iso()
+      'closeAttention', { sessionId, requestKey }, state, resolution, this.iso(), origin
     )
     this.emit('attention', sessionId)
     return record
+  }
+
+  /**
+   * One hook event, kept in memory only. It is a record of what the harness reported, so it never
+   * opens, withdraws or resolves anything; the log is bounded per session and never leaves the
+   * session it belongs to. A restart starts an empty log, which the agent docs say plainly.
+   */
+  private observeHookEvent(p: {
+    sessionId: string
+    agent: HookEventRecord['agent']
+    event: string
+    source: string | null
+    toolName: string | null
+    effects: readonly HookEventEffect[]
+  }): { recorded: true } {
+    const log = this.hookEvents.get(p.sessionId) ?? []
+    log.push({
+      sessionId: p.sessionId,
+      agent: p.agent,
+      event: p.event,
+      source: p.source,
+      toolName: p.toolName,
+      effects: [...p.effects],
+      observedAt: this.iso()
+    })
+    if (log.length > HOOK_EVENT_LOG_LIMIT) log.splice(0, log.length - HOOK_EVENT_LOG_LIMIT)
+    this.hookEvents.set(p.sessionId, log)
+    return { recorded: true }
+  }
+
+  /** The window's read-only view of one session's log; a session never sees another session's events. */
+  listHookEvents(sessionId: string): HookEventRecord[] {
+    return [...(this.hookEvents.get(sessionId) ?? [])]
   }
 
   private async sweepAttention(): Promise<void> {
@@ -1260,7 +1317,8 @@ export class CompanionService {
             { requestId: request.requestId, expectedRevision: request.revision },
             'answered',
             reply.text,
-            this.iso()
+            this.iso(),
+            'telegram'
           )
             .then(() => this.emit('attention', target.sessionId), () => undefined)
         }

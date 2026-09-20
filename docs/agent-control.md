@@ -106,6 +106,16 @@ agent, and they do nothing outside BMN.
 | `SessionStart` with `startup`, `resume`, `clear` or `fork` | Also reports the conversation the process is now in, so Resume reopens that one |
 | Codex `Interrupt` | Withdraws open prompts |
 
+Every one of these calls carries the event that made it, so a request in **Needs you** says where it
+came from ("from Claude Notification") and a closed one says what closed it ("withdrawn by Claude
+Stop", "resolved by typing", "expired"). A request opened before this existed reads "from unknown".
+
+Each hook event also records itself, whether or not it changed anything: the session's ⋯ menu has
+**Hook events…**, a read-only list of what the harness reported, with the event, the tool it ran and
+what it changed. That list is the answer to "why is there no request for this?". It is kept in
+memory only, at most 30 events per session, is never shown to another session, and starts empty
+again after BMN restarts.
+
 An agent passes its environment to agents it starts from a tool call (`claude -p`), so the hook
 also checks that the agent above it holds the terminal; nested, non-interactive agents are ignored.
 

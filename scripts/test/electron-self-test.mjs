@@ -220,6 +220,25 @@ const receiptContract = [
       receipt.sessionActivity?.attentionUnchanged === true
   ],
   [
+    'requestProvenance',
+    (receipt) =>
+      receipt.requestProvenance?.openedBy === 'hook:claude:Notification' &&
+      receipt.requestProvenance?.openedResolvedBy === null &&
+      receipt.requestProvenance?.resolvedState === 'answered' &&
+      receipt.requestProvenance?.resolvedBy === 'hook:claude:PostToolUse' &&
+      receipt.requestProvenance?.typedResolvedBy === 'input' &&
+      receipt.requestProvenance?.typedState !== 'open' &&
+      JSON.stringify(receipt.requestProvenance?.hookEvents?.map((event) => event.event)) ===
+        JSON.stringify(['Notification', 'PostToolUse', 'Notification']) &&
+      receipt.requestProvenance?.hookEvents?.[1]?.toolName === 'Bash' &&
+      Array.isArray(receipt.requestProvenance?.listedRows) &&
+      receipt.requestProvenance.listedRows.some((row) => row.includes('PostToolUse · Bash')) &&
+      receipt.requestProvenance?.otherSessionEvents === 0 &&
+      receipt.requestProvenance?.listWroteToPty === false &&
+      receipt.requestProvenance?.notificationsUnchanged === true &&
+      receipt.requestProvenance?.dialogClosed === true
+  ],
+  [
     'conversationFromHook',
     (receipt) =>
       receipt.conversationFromHook?.startedRoute === 'unsupported' &&

@@ -47,7 +47,52 @@ export interface AttentionRecord {
   resolvedAt: string | null
   seenAt: string | null
   revision: number
+  /** What opened the request, from the closed origin vocabulary; null for a row that predates provenance. */
+  openedBy: AttentionOrigin | null
+  /** What answered, withdrew or expired it; null while it is open or for a legacy row. */
+  resolvedBy: AttentionOrigin | null
 }
+
+/**
+ * Who or what acted on a request. `hook:<agent>:<Event>` names the harness hook that did it; the rest name
+ * the owner's own routes. Free-form by shape so an unknown hook event still reads, closed by validation.
+ */
+export type AttentionOrigin = string
+
+export const ATTENTION_ORIGINS = Object.freeze(['cli', 'owner', 'input', 'telegram', 'expiry'] as const)
+
+const HOOK_ORIGIN = /^hook:(claude|codex):[A-Za-z][A-Za-z0-9]{0,40}$/
+
+/** The one place the closed origin vocabulary is decided, so every entry point refuses the same words. */
+export function isAttentionOrigin(value: string): boolean {
+  return (ATTENTION_ORIGINS as readonly string[]).includes(value) || HOOK_ORIGIN.test(value)
+}
+
+export const HOOK_EVENT_AGENTS = Object.freeze(['claude', 'codex'] as const)
+export type HookEventAgent = (typeof HOOK_EVENT_AGENTS)[number]
+
+export const HOOK_EVENT_EFFECTS = Object.freeze(['opened', 'withdrew', 'answered'] as const)
+export type HookEventEffect = (typeof HOOK_EVENT_EFFECTS)[number]
+
+/** The most recent hook events of one session, kept in memory only so a restart starts an empty log. */
+export interface HookEventRecord {
+  sessionId: string
+  agent: HookEventAgent
+  /** The harness's own event name, for example `PostToolUse`. */
+  event: string
+  /** The harness's `source` field, when it sent one. */
+  source: string | null
+  toolName: string | null
+  /** What the event changed in Needs you; empty when it changed nothing. */
+  effects: readonly HookEventEffect[]
+  observedAt: string
+}
+
+/** The most recent hook events the utility keeps per session; older ones are dropped. */
+export const HOOK_EVENT_LOG_LIMIT = 30
+
+/** At most one effect per slot the hook touches, so a malformed array is refused rather than stored. */
+export const MAX_HOOK_EVENT_EFFECTS = 8
 
 export type ProgressState =
   | 'running'

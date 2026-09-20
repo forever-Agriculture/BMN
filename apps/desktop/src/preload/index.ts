@@ -10,7 +10,9 @@ import {
   type AppSettings,
   type ArtifactPreview,
   type ArtifactRecord,
+  type AttentionOrigin,
   type AttentionRecord,
+  type HookEventRecord,
   type BackupManifest,
   type BackupVerifyResult,
   type ControlInfo,
@@ -455,13 +457,18 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   resolveAttention(
     requestId: string,
     resolution?: string,
-    expected?: Pick<AttentionRecord, 'kind' | 'revision'>
+    expected?: Pick<AttentionRecord, 'kind' | 'revision'>,
+    origin?: AttentionOrigin
   ): Promise<AttentionRecord> {
     return invokeBridge('aiterm:attention:resolve', {
       requestId,
       ...(resolution ? { resolution } : {}),
-      ...(expected ? { expectedKind: expected.kind, expectedRevision: expected.revision } : {})
+      ...(expected ? { expectedKind: expected.kind, expectedRevision: expected.revision } : {}),
+      ...(origin ? { origin } : {})
     })
+  },
+  listHookEvents(sessionId: string): Promise<HookEventRecord[]> {
+    return invokeBridge('aiterm:hook-events:list', { sessionId })
   },
   listProgress(): Promise<ProgressRecord[]> {
     return invokeBridge('aiterm:progress:list', {})

@@ -4,8 +4,10 @@ import { chmod, lstat, mkdir, unlink } from 'node:fs/promises'
 import { createConnection, createServer, type Server, type Socket } from 'node:net'
 import { dirname, isAbsolute } from 'node:path'
 import {
+  ATTENTION_ORIGINS,
   ERROR_CODES,
   MAX_CONTROL_FRAME_BYTES,
+  isAttentionOrigin,
   isProtocolErrorCode,
   type ProtocolErrorCode
 } from '@bmn/protocol'
@@ -21,6 +23,8 @@ export class ControlError extends Error {
 export type ProgressState = 'running' | 'waiting' | 'blocked' | 'claimed-done' | 'verified' | 'failed' | 'unknown'
 export type AttentionKind = 'question' | 'permission' | 'review' | 'notice'
 export type ConversationAgentCli = 'claude' | 'codex'
+export type HookEventAgent = 'claude' | 'codex'
+export type HookEventEffect = 'opened' | 'withdrew' | 'answered'
 export type ConversationObservationSource = 'startup' | 'resume' | 'clear' | 'fork'
 
 export interface ControlHandlers {
@@ -56,6 +60,8 @@ export interface ControlHandlers {
     expiresAt?: string
     /** The agent's own app already notifies the owner's phone. */
     phoneNotified?: boolean
+    /** What opened it, from the closed origin vocabulary. */
+    origin?: string
   }): Promise<unknown>
   /** Records why a conversation report was refused, so a refusal is not silent to the owner. */
   reportRefusal(method: string, sessionId: string | null, reason: string): void
@@ -68,8 +74,22 @@ export interface ControlHandlers {
     source: ConversationObservationSource
     transcriptPath?: string
   }): Promise<unknown>
-  withdrawAttention(p: { sessionId: string; requestKey: string }): Promise<unknown>
-  resolveAttention(p: { sessionId: string; requestKey: string; resolution: string }): Promise<unknown>
+  withdrawAttention(p: { sessionId: string; requestKey: string; origin?: string }): Promise<unknown>
+  resolveAttention(p: {
+    sessionId: string
+    requestKey: string
+    resolution: string
+    origin?: string
+  }): Promise<unknown>
+  /** One hook event, recorded so the owner can see which events arrived; it changes nothing by itself. */
+  observeHookEvent(p: {
+    sessionId: string
+    agent: HookEventAgent
+    event: string
+    source: string | null
+    toolName: string | null
+    effects: readonly HookEventEffect[]
+  }): Promise<unknown>
   /** Writes text into the PTY as a bracketed paste; appends '\r' only when submit is true. */
   submitInput(p: { sessionId: string; text: string; submit: boolean }): Promise<void>
 }
@@ -144,6 +164,9 @@ const PROGRESS_STATES: readonly ProgressState[] = [
   'running', 'waiting', 'blocked', 'claimed-done', 'verified', 'failed', 'unknown'
 ]
 const ATTENTION_KINDS: readonly AttentionKind[] = ['question', 'permission', 'review', 'notice']
+const HOOK_EVENT_AGENTS: readonly HookEventAgent[] = ['claude', 'codex']
+const HOOK_EVENT_EFFECTS: readonly HookEventEffect[] = ['opened', 'withdrew', 'answered']
+const MAX_HOOK_EVENT_EFFECTS = 8
 const CONVERSATION_AGENT_CLIS: readonly ConversationAgentCli[] = ['claude', 'codex']
 const CONVERSATION_OBSERVATION_SOURCES: readonly ConversationObservationSource[] = [
   'startup', 'resume', 'clear', 'fork'
@@ -247,6 +270,34 @@ function requireEnum<T extends string>(params: Params, key: string, allowed: rea
     throw invalid(`${key} must be one of: ${allowed.join(', ')}`)
   }
   return value as T
+}
+
+/**
+ * The closed origin vocabulary: `hook:<agent>:<Event>` names the harness hook that acted, and the rest name
+ * the owner's own routes. Anything else is refused, so a caller cannot invent a provenance word.
+ */
+function readOrigin(params: Params, key: string): string | undefined {
+  const value = readText(params, key, RULES.source)
+  if (value === undefined) return undefined
+  if (!isAttentionOrigin(value)) {
+    throw invalid(`${key} must be one of: ${ATTENTION_ORIGINS.join(', ')}, or hook:<agent>:<Event>`)
+  }
+  return value
+}
+
+function requireEffects(params: Params, key: string): HookEventEffect[] {
+  const value = params[key]
+  if (value === undefined) return []
+  if (!Array.isArray(value)) throw invalid(`${key} must be an array`)
+  if (value.length > MAX_HOOK_EVENT_EFFECTS) {
+    throw invalid(`${key} must hold at most ${MAX_HOOK_EVENT_EFFECTS} entries`)
+  }
+  for (const entry of value) {
+    if (typeof entry !== 'string' || !(HOOK_EVENT_EFFECTS as readonly string[]).includes(entry)) {
+      throw invalid(`${key} entries must be one of: ${HOOK_EVENT_EFFECTS.join(', ')}`)
+    }
+  }
+  return value as HookEventEffect[]
 }
 
 function requestId(message: unknown): RequestId {
@@ -640,7 +691,8 @@ export class ControlServer {
       }
       case 'attention.open': {
         const params = closedParams(rawParams, [
-          'sessionId', 'requestKey', 'kind', 'title', 'body', 'expiresAt', 'idempotencyKey', 'phoneNotified'
+          'sessionId', 'requestKey', 'kind', 'title', 'body', 'expiresAt', 'idempotencyKey', 'phoneNotified',
+          'origin'
         ])
         const requestKey = requireText(params, 'requestKey', RULES.requestKey)
         const kind = requireEnum(params, 'kind', ATTENTION_KINDS)
@@ -649,6 +701,7 @@ export class ControlServer {
         const expiresAt = readTimestamp(params, 'expiresAt')
         const idempotencyKey = readText(params, 'idempotencyKey', RULES.idempotencyKey)
         const phoneNotified = readBoolean(params, 'phoneNotified')
+        const origin = readOrigin(params, 'origin')
         const sessionId = this.target(scope, params)
         return this.idempotent(scope, method, idempotencyKey, params, () => handlers.openAttention({
           sessionId,
@@ -658,7 +711,8 @@ export class ControlServer {
           title,
           ...(body === undefined ? {} : { body }),
           ...(expiresAt === undefined ? {} : { expiresAt }),
-          ...(phoneNotified === undefined ? {} : { phoneNotified })
+          ...(phoneNotified === undefined ? {} : { phoneNotified }),
+          ...(origin === undefined ? {} : { origin })
         }))
       }
       case 'conversation.observe': {
@@ -700,17 +754,42 @@ export class ControlServer {
         }
       }
       case 'attention.withdraw': {
-        const params = closedParams(rawParams, ['sessionId', 'requestKey'])
+        const params = closedParams(rawParams, ['sessionId', 'requestKey', 'origin'])
         const requestKey = requireText(params, 'requestKey', RULES.requestKey)
+        const origin = readOrigin(params, 'origin')
         const sessionId = this.target(scope, params)
-        return handlers.withdrawAttention({ sessionId, requestKey })
+        return handlers.withdrawAttention({ sessionId, requestKey, ...(origin === undefined ? {} : { origin }) })
       }
       case 'attention.resolve': {
-        const params = closedParams(rawParams, ['sessionId', 'requestKey', 'resolution'])
+        const params = closedParams(rawParams, ['sessionId', 'requestKey', 'resolution', 'origin'])
         const requestKey = requireText(params, 'requestKey', RULES.requestKey)
         const resolution = requireText(params, 'resolution', RULES.resolution)
+        const origin = readOrigin(params, 'origin')
         const sessionId = this.target(scope, params)
-        return handlers.resolveAttention({ sessionId, requestKey, resolution })
+        return handlers.resolveAttention({
+          sessionId,
+          requestKey,
+          resolution,
+          ...(origin === undefined ? {} : { origin })
+        })
+      }
+      case 'hook.observe': {
+        // The log is a record of what the harness reported, never a reason to act: it opens nothing.
+        const params = closedParams(rawParams, ['sessionId', 'agent', 'event', 'source', 'toolName', 'effects'])
+        const agent = requireEnum(params, 'agent', HOOK_EVENT_AGENTS)
+        const event = requireText(params, 'event', RULES.source)
+        const source = readText(params, 'source', RULES.source)
+        const toolName = readText(params, 'toolName', RULES.source)
+        const effects = requireEffects(params, 'effects')
+        const sessionId = this.target(scope, params)
+        return handlers.observeHookEvent({
+          sessionId,
+          agent,
+          event,
+          source: source ?? null,
+          toolName: toolName ?? null,
+          effects
+        })
       }
       case 'input.submit': {
         const params = closedParams(rawParams, ['sessionId', 'text', 'submit', 'idempotencyKey'])

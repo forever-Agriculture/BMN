@@ -26,6 +26,7 @@ import { CommandPalette, type PaletteCommand } from './command-palette'
 import { conversationBindingPresentation } from './conversation-resume'
 import { FileReferenceDialog, type FileReferenceRequest } from './file-reference-dialog'
 import { FilesPanel } from './files-panel'
+import { HookEventsDialog } from './hook-events-dialog'
 import { Icon } from './icons'
 import { isModifierOnly, resolveShortcut, SHORTCUT_LABELS, type AppCommand } from './keymap'
 import { createLayoutWriter } from './layout-writer'
@@ -117,6 +118,8 @@ type ShellDialog =
   /** Shows the exact command before Resume starts anything. */
   | { kind: 'resume'; session: SessionRecord; preview: ConversationResumePreview }
   | { kind: 'file-reference'; request: FileReferenceRequest }
+  /** Read-only: what this session's harness reported, for a request that did or did not arrive. */
+  | { kind: 'hook-events'; session: SessionRecord }
 
 type SidePanel = 'files' | 'details' | null
 
@@ -988,7 +991,7 @@ function App(): React.JSX.Element {
       if (answering.current.has(request.requestId)) continue
       answering.current.add(request.requestId)
       // The agent's own hook may close the request first, which leaves nothing to do.
-      void window.aiTerminal.resolveAttention(request.requestId, 'Answered in the terminal')
+      void window.aiTerminal.resolveAttention(request.requestId, 'Answered in the terminal', undefined, 'input')
         .catch(() => undefined)
         .then(() => refresh.attention())
         .catch(() => undefined)
@@ -1003,7 +1006,7 @@ function App(): React.JSX.Element {
       ? window.aiTerminal.resolveAttention(request.requestId, 'Opened in BMN', {
           kind: request.kind,
           revision: request.revision
-        })
+        }, 'owner')
       : window.aiTerminal.markAttentionSeen(request.requestId)
     void action
       .catch((error: unknown) => {
@@ -1088,6 +1091,7 @@ function App(): React.JSX.Element {
   ] : [
     { label: 'Split beside', onSelect: () => splitBeside(session), shortcut: SHORTCUT_LABELS['split-toggle'] },
     { label: 'Session details', onSelect: () => { applyTreeSessionAction(selectTreeSession(sessions, session.sessionId)); setPanel('details') } },
+    { label: 'Hook events…', onSelect: () => setDialog({ kind: 'hook-events', session }) },
     { label: 'Edit launch settings', onSelect: () => beginSessionEdit(session) },
     { label: 'Move up', disabled: index === 0, onSelect: () => void moveSession(siblings, index, -1).catch(fail('Session move failed')) },
     { label: 'Move down', disabled: index === siblings.length - 1, onSelect: () => void moveSession(siblings, index, 1).catch(fail('Session move failed')) },
@@ -1291,12 +1295,12 @@ function App(): React.JSX.Element {
                 ? window.aiTerminal.resolveAttention(request.requestId, 'Dismissed in BMN', {
                     kind: request.kind,
                     revision: request.revision
-                  })
+                  }, 'owner')
                 : window.aiTerminal.markAttentionSeen(request.requestId)
               void action.then(() => refresh.attention()).catch(fail('Request update failed'))
             }}
             onMarkAnswered={(request) => {
-              void window.aiTerminal.resolveAttention(request.requestId, 'Answered in the terminal')
+              void window.aiTerminal.resolveAttention(request.requestId, 'Answered in the terminal', undefined, 'input')
                 .then(() => refresh.attention())
                 .catch(fail('Request update failed'))
             }}
@@ -1771,6 +1775,15 @@ function App(): React.JSX.Element {
           sessionName={dialog.session.name}
           onConfirm={() => resumeSession(dialog.session)}
           onClose={() => setDialog(null)}
+        />
+      ) : null}
+      {dialog?.kind === 'hook-events' ? (
+        <HookEventsDialog
+          sessionId={dialog.session.sessionId}
+          sessionName={dialog.session.name}
+          now={now}
+          onClose={() => setDialog(null)}
+          onFailure={setFailure}
         />
       ) : null}
       {dialog?.kind === 'stop' ? (

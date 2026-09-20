@@ -20,8 +20,8 @@ afterEach(async () => {
 })
 
 describe('owned database schema', () => {
-  it('contains the eight ordered migrations and only the owned tables', () => {
-    expect(DATABASE_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+  it('contains the nine ordered migrations and only the owned tables', () => {
+    expect(DATABASE_MIGRATIONS.map((migration) => migration.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9])
     expect(STORY_SCHEMA_TABLES).toEqual([
       'app_setting',
       'artifact',
@@ -180,7 +180,7 @@ describe('owned database schema', () => {
       expect(database.prepare('SELECT version FROM schema_migration ORDER BY version').all())
         .toEqual([
           { version: 1 }, { version: 2 }, { version: 3 }, { version: 4 },
-          { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }
+          { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 }
         ])
       expect(database.prepare('SELECT applied_at FROM schema_migration WHERE version = 3').get())
         .toEqual({ applied_at: migratedAt })
@@ -261,7 +261,8 @@ describe('owned database schema', () => {
           { version: 5, applied_at: migratedAt },
           { version: 6, applied_at: migratedAt },
           { version: 7, applied_at: migratedAt },
-          { version: 8, applied_at: migratedAt }
+          { version: 8, applied_at: migratedAt },
+          { version: 9, applied_at: migratedAt }
         ])
       expect(database.prepare('SELECT COUNT(*) AS count FROM workspace_layout').get())
         .toEqual({ count: 2 })
@@ -306,7 +307,49 @@ describe('owned database schema', () => {
         state: 'draft'
       })
       expect(database.prepare('SELECT version FROM schema_migration ORDER BY version DESC LIMIT 1').get())
-        .toEqual({ version: 8 })
+        .toEqual({ version: 9 })
+    } finally {
+      database.close()
+    }
+  })
+
+  it('gives a legacy attention row unknown provenance and changes no other table', () => {
+    const database = new BetterSqlite3(':memory:')
+    try {
+      for (const migration of DATABASE_MIGRATIONS.slice(0, 8)) {
+        database.exec(migration.sql)
+        database.prepare('INSERT INTO schema_migration(version, applied_at) VALUES (?, ?)')
+          .run(migration.version, '2026-09-14T10:00:00.000Z')
+      }
+      database.prepare(
+        `INSERT INTO session(
+           session_id, workspace_id, name, cwd, executable, argv_json, revision, created_at, position
+         ) VALUES ('legacy-session', ?, 'Legacy', '/work', '/bin/bash', '[]', 1, ?, 0)`
+      ).run(DEFAULT_WORKSPACE_ID, '2026-09-14T10:00:00.000Z')
+      database.prepare(
+        `INSERT INTO attention_request(
+           request_id, session_id, incarnation_id, request_key, kind, title, body,
+           state, resolution, opened_at, expires_at, resolved_at, seen_at, revision
+         ) VALUES ('legacy-request', 'legacy-session', NULL, 'claude:permission', 'permission', 'Allow Bash?',
+           NULL, 'open', NULL, ?, NULL, NULL, NULL, 1)`
+      ).run('2026-09-14T10:00:00.000Z')
+      const tablesBefore = database.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
+      ).all()
+
+      initializeDatabase(database, '2026-09-14T11:00:00.000Z')
+
+      expect(database.prepare(
+        'SELECT request_id, state, title, opened_by, resolved_by FROM attention_request'
+      ).get()).toEqual({
+        request_id: 'legacy-request',
+        state: 'open',
+        title: 'Allow Bash?',
+        opened_by: null,
+        resolved_by: null
+      })
+      expect(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all())
+        .toEqual(tablesBefore)
     } finally {
       database.close()
     }

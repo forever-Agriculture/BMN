@@ -1483,8 +1483,49 @@ input[type='radio'] {
   font-size: 12px;
 }
 
+.attention-item .where .provenance {
+  overflow: hidden;
+  max-width: 45%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .attention-item .where .age {
   margin-left: auto;
+}
+
+.hook-events {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hook-events li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: var(--raised);
+  font-size: 12px;
+}
+
+.hook-events .hook-event-name {
+  color: var(--text);
+  font: 12px/1.4 var(--font-mono);
+}
+
+.hook-events .hook-event-effects,
+.hook-events .age {
+  color: var(--muted);
+}
+
+.hook-events .age {
+  margin-left: auto;
+  white-space: nowrap;
 }
 
 .attention-item .attention-kind {

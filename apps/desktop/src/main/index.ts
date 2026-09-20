@@ -232,6 +232,19 @@ interface ActivitySampling {
   burstBuffer: string
 }
 
+/** What the renderer observed while the hook fixture's requests were opened, resolved and listed. */
+interface HookProvenanceProbe {
+  answeredByTypingResolvedBy: string | null
+  answeredByTypingState: string
+  rows: string[]
+  events: { event: string; effects: string[]; toolName: string | null }[]
+  otherSessionEvents: number
+  listWroteToPty: boolean
+  notificationsBefore: number
+  notificationsAfter: number
+  closed: boolean
+}
+
 const SELF_TEST_LAUNCH_DISABLED_REASON =
   'Stored arguments are unavailable in the renderer boundary probe.'
 let selfTestRendererLaunchBlockedSessionId: string | undefined
@@ -1474,6 +1487,68 @@ async function untilHarnessRuns(log: string, count: number): Promise<string[][]>
     await new Promise((resolve) => setTimeout(resolve, 25))
   }
   throw new Error(`the synthetic Codex harness did not reach ${count} run(s): ${log}`)
+}
+
+/**
+ * A synthetic Claude harness: it fires real hook events through the installed `bmn hook claude`, the
+ * way the CLI's own hooks do, and waits on gate files so the caller can read the app between events.
+ */
+function writeClaudeHookHarness(directory: string): {
+  executable: string
+  opened: string
+  toolGate: string
+  resolved: string
+  secondGate: string
+  reopened: string
+} {
+  mkdirSync(directory, { recursive: true })
+  const opened = join(directory, 'opened')
+  const toolGate = join(directory, 'tool-gate')
+  const resolved = join(directory, 'resolved')
+  const secondGate = join(directory, 'second-gate')
+  const reopened = join(directory, 'reopened')
+  const executable = join(directory, 'claude')
+  writeFileSync(join(directory, 'package.json'), '{"type":"commonjs"}\n')
+  writeFileSync(
+    executable,
+    [
+      `#!${process.env.BMN_SELF_TEST_NODE ?? '/usr/bin/env node'}`,
+      "const { spawnSync } = require('node:child_process')",
+      "const { existsSync, writeFileSync } = require('node:fs')",
+      "const fire = (event) => spawnSync('bmn', ['hook', 'claude'], {",
+      "  input: JSON.stringify(event), stdio: ['pipe', 'ignore', 'ignore']",
+      "})",
+      "const prompt = { hook_event_name: 'Notification', notification_type: 'permission_prompt',",
+      "  message: 'Allow the hook self-test action' }",
+      "fire(prompt)",
+      `writeFileSync(${JSON.stringify(opened)}, '')`,
+      "const after = (gate, run, marker) => {",
+      "  const timer = setInterval(() => {",
+      "    if (!existsSync(gate)) return",
+      "    clearInterval(timer)",
+      "    run()",
+      "    writeFileSync(marker, '')",
+      "  }, 25)",
+      "}",
+      `after(${JSON.stringify(toolGate)}, () => fire({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: {} }), ${JSON.stringify(resolved)})`,
+      `after(${JSON.stringify(secondGate)}, () => fire(prompt), ${JSON.stringify(reopened)})`,
+      "process.stdout.write('claude hook harness ready\\n')",
+      "setInterval(() => undefined, 1_000)",
+      ''
+    ].join('\n'),
+    { mode: 0o700 }
+  )
+  return { executable, opened, toolGate, resolved, secondGate, reopened }
+}
+
+/** Waits for one of the harness's marker files; the harness writes each one after its event landed. */
+async function untilFileExists(path: string, what: string): Promise<void> {
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    if (existsSync(path)) return
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  throw new Error(`the Claude hook harness never ${what}: ${path}`)
 }
 
 async function runSelfTest(): Promise<void> {
@@ -2842,6 +2917,161 @@ async function runSelfTest(): Promise<void> {
     if (!sessionActivity.geometryUnchanged) throw new Error('observing activity refit or remounted a terminal')
     if (!sessionActivity.attentionUnchanged) throw new Error('observing activity opened or resolved a request')
 
+    // Epic 14.2: what opened a request and what closed it, and the log of events that says why a
+    // request the owner expected never arrived. Real hook events through the installed `bmn hook`.
+    console.error('[BMN] self-test phase: request provenance and hook events')
+    const hookHarness = writeClaudeHookHarness(join(isolatedCwd, 'claude-harness'))
+    const hookSession = await createSessionRuntime({
+      workspaceId: DEFAULT_WORKSPACE_ID,
+      name: 'Hook provenance',
+      cwd: isolatedCwd,
+      executable: hookHarness.executable,
+      argv: [],
+      cols: 80,
+      rows: 24
+    }, true)
+    await recoverApplicationRenderer(applicationWindow)
+    await untilFileExists(hookHarness.opened, 'opened its first request')
+    const requestsOf = async (): Promise<AttentionRecord[]> =>
+      (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
+        .filter((request) => request.sessionId === hookSession.session.sessionId)
+    const untilRequest = async (
+      what: string,
+      matches: (request: AttentionRecord) => boolean
+    ): Promise<AttentionRecord> => {
+      const deadline = Date.now() + 10_000
+      while (Date.now() < deadline) {
+        const found = (await requestsOf()).find(matches)
+        if (found) return found
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      throw new Error(`the hook fixture never produced ${what}: ${JSON.stringify(await requestsOf())}`)
+    }
+    const openedByHook = await untilRequest('an open request', (request) => request.state === 'open')
+    writeFileSync(hookHarness.toolGate, '')
+    await untilFileExists(hookHarness.resolved, 'ran its tool')
+    const resolvedByHook = await untilRequest(
+      'a resolved request',
+      (request) => request.requestId === openedByHook.requestId && request.state !== 'open'
+    )
+    // A second identical prompt, so the owner can answer one in the terminal instead of through a hook.
+    writeFileSync(hookHarness.secondGate, '')
+    await untilFileExists(hookHarness.reopened, 'reopened its request')
+    const reopenedByHook = await untilRequest(
+      'a second open request',
+      (request) => request.requestId !== openedByHook.requestId && request.state === 'open'
+    )
+    const hookProvenance = await applicationWindow.webContents.executeJavaScript(`
+      (async () => {
+        const sessionId = ${JSON.stringify(hookSession.session.sessionId)};
+        const wait = async (read, what) => {
+          const deadline = Date.now() + 10000;
+          for (;;) {
+            const value = await read();
+            if (value !== undefined && value !== null) return value;
+            if (Date.now() >= deadline) throw new Error('the hook events probe timed out waiting for ' + what);
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+        };
+        const hook = window.__aitermTest;
+        const pane = await wait(() => document.querySelector('.session-terminal[data-session-id="' + sessionId + '"]'), 'the pane');
+        const textarea = pane.querySelector('.xterm-helper-textarea');
+        if (!textarea) throw new Error('the hook fixture pane has no terminal input');
+        const notificationsBefore = (await window.aiTerminal.listAttention()).length;
+        // The pane only answers for the owner once the window itself knows the request is open.
+        await wait(() => pane.querySelector('.pane-heading .status-dot.needs-you'), 'the pane to need the owner');
+        // Typing into a pane that needs the owner answers its open requests, and records that it did.
+        // xterm reads the legacy keyCode, so a synthetic event without one produces no key at all.
+        const typeOneKey = () => textarea.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'y', code: 'KeyY', keyCode: 89, which: 89, bubbles: true, cancelable: true
+        }));
+        typeOneKey();
+        const answeredByTyping = await wait(async () => {
+          const found = (await window.aiTerminal.listAttention())
+            .find((request) => request.requestId === ${JSON.stringify(reopenedByHook.requestId)});
+          if (found && found.state !== 'open') return found;
+          typeOneKey();
+          return undefined;
+        }, 'the typed answer');
+        const beforeList = hook.snapshot(sessionId).inputEvents;
+        const rowMenu = await wait(() => document.querySelector('[aria-label="Actions for Hook provenance"]'), 'the row menu');
+        rowMenu.click();
+        const entry = await wait(() => [...document.querySelectorAll('.popup-menu [role="menuitem"]')]
+          .find((item) => item.textContent?.trim() === 'Hook events…'), 'the Hook events entry');
+        entry.click();
+        const dialog = await wait(() => document.querySelector('dialog.hook-events-dialog[open]'), 'the Hook events dialog');
+        const rows = await wait(() => {
+          const listed = [...dialog.querySelectorAll('.hook-events li')];
+          return listed.length >= 3 ? listed.map((row) => row.textContent?.trim() ?? '') : undefined;
+        }, 'the listed events');
+        const events = await window.aiTerminal.listHookEvents(sessionId);
+        const afterList = hook.snapshot(sessionId).inputEvents;
+        dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        dialog.dispatchEvent(new Event('cancel', { cancelable: true }));
+        const closed = await wait(() => document.querySelector('dialog.hook-events-dialog') === null ? true : undefined, 'the dialog to close');
+        return {
+          answeredByTypingResolvedBy: answeredByTyping.resolvedBy,
+          answeredByTypingState: answeredByTyping.state,
+          rows,
+          events: events.map((event) => ({ event: event.event, effects: event.effects, toolName: event.toolName })),
+          otherSessionEvents: (await window.aiTerminal.listHookEvents('no-such-session')).length,
+          listWroteToPty: afterList !== beforeList,
+          notificationsBefore,
+          notificationsAfter: (await window.aiTerminal.listAttention()).length,
+          closed
+        };
+      })()
+    `) as HookProvenanceProbe
+    await client.request(METHOD_REGISTRY.sessionStop, {
+      sessionId: hookSession.session.sessionId,
+      incarnationId: hookSession.session.lastProcess?.incarnationId,
+      cause: 'explicit'
+    })
+    const requestProvenance = {
+      openedBy: openedByHook.openedBy,
+      openedResolvedBy: openedByHook.resolvedBy,
+      resolvedState: resolvedByHook.state,
+      resolvedBy: resolvedByHook.resolvedBy,
+      typedState: hookProvenance.answeredByTypingState,
+      typedResolvedBy: hookProvenance.answeredByTypingResolvedBy,
+      hookEvents: hookProvenance.events,
+      listedRows: hookProvenance.rows,
+      otherSessionEvents: hookProvenance.otherSessionEvents,
+      listWroteToPty: hookProvenance.listWroteToPty,
+      notificationsUnchanged: hookProvenance.notificationsBefore === hookProvenance.notificationsAfter,
+      dialogClosed: hookProvenance.closed
+    }
+    console.error(`[BMN] self-test phase: request provenance ${JSON.stringify(requestProvenance)}`)
+    if (requestProvenance.openedBy !== 'hook:claude:Notification') {
+      throw new Error(`the hook-opened request did not record its event: ${requestProvenance.openedBy}`)
+    }
+    if (requestProvenance.openedResolvedBy !== null) {
+      throw new Error('an open request already carried a resolver')
+    }
+    if (requestProvenance.resolvedState !== 'answered' ||
+      requestProvenance.resolvedBy !== 'hook:claude:PostToolUse') {
+      throw new Error(`the tool run did not record what resolved the request: ${JSON.stringify(requestProvenance)}`)
+    }
+    if (requestProvenance.typedState === 'open' || requestProvenance.typedResolvedBy !== 'input') {
+      throw new Error(`typing did not record that it answered: ${JSON.stringify(requestProvenance)}`)
+    }
+    const listedEvents = requestProvenance.hookEvents.map((event) => event.event)
+    if (JSON.stringify(listedEvents) !== JSON.stringify(['Notification', 'PostToolUse', 'Notification'])) {
+      throw new Error(`the hook event log did not hold the events that arrived: ${listedEvents.join(',')}`)
+    }
+    if (!requestProvenance.hookEvents[0]?.effects.includes('opened') ||
+      !requestProvenance.hookEvents[1]?.effects.includes('answered') ||
+      requestProvenance.hookEvents[1]?.toolName !== 'Bash') {
+      throw new Error(`the hook event log did not say what each event changed: ${JSON.stringify(requestProvenance.hookEvents)}`)
+    }
+    if (!requestProvenance.listedRows.some((row) => row.includes('PostToolUse · Bash'))) {
+      throw new Error(`the Hook events list did not show the events: ${JSON.stringify(requestProvenance.listedRows)}`)
+    }
+    if (requestProvenance.otherSessionEvents !== 0) throw new Error('a session read another session’s hook events')
+    if (requestProvenance.listWroteToPty) throw new Error('opening the Hook events list wrote to a PTY')
+    if (!requestProvenance.notificationsUnchanged) throw new Error('opening the Hook events list changed a request')
+    if (!requestProvenance.dialogClosed) throw new Error('the Hook events dialog did not close on Escape')
+
     const secondClose = await client.close()
     console.error('[BMN] self-test phase: second host closed')
     clientClosed = true
@@ -2920,6 +3150,7 @@ async function runSelfTest(): Promise<void> {
       },
       conversationFromHook,
       sessionActivity,
+      requestProvenance,
       survivalTable: {
         rendererCrash: survivingRendererCrash,
         quit: {
