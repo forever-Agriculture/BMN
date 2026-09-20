@@ -4,6 +4,7 @@ import {
   type ArtifactRecord,
   type LaunchTemplateRecord,
   type LayoutGetResult,
+  type ConversationRouteSummary,
   type PersistedConversationBinding,
   type ReplaceableConversationBinding,
   type ProtocolErrorCode,
@@ -101,6 +102,11 @@ export class DatabaseWorkerClient implements SessionStore {
     return (await this.request('binding-get', { sessionId })) as
       | PersistedConversationBinding
       | undefined
+  }
+
+  /** The route of every stored binding, for the snapshot and list projections. */
+  async listConversationRoutes(): Promise<ConversationRouteSummary[]> {
+    return (await this.request('binding-routes')) as ConversationRouteSummary[]
   }
 
   async replaceConversationBinding(

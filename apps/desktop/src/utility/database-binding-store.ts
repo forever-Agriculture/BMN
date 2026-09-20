@@ -1,4 +1,4 @@
-import type { PersistedConversationBinding } from '@bmn/protocol'
+import type { ConversationRouteSummary, PersistedConversationBinding } from '@bmn/protocol'
 import type { DatabaseConnection } from './database-initialization'
 import { parseBoundBinding } from './conversation-binding'
 
@@ -137,4 +137,21 @@ export function selectConversationBinding(
     detail: row.detail,
     capturedAt: row.captured_at
   })
+}
+
+/**
+ * Every stored binding's route, in one read. The snapshot and list projections report the route
+ * for each session they already show, so a whole-workspace listing stays one query.
+ */
+export function selectConversationRoutes(
+  database: DatabaseConnection
+): ConversationRouteSummary[] {
+  const rows = database
+    .prepare('SELECT session_id, status, capture_route FROM conversation_binding')
+    .all() as Record<string, unknown>[]
+  return rows.map((row) => ({
+    sessionId: String(row.session_id),
+    status: row.status as ConversationRouteSummary['status'],
+    captureRoute: row.capture_route as ConversationRouteSummary['captureRoute']
+  }))
 }

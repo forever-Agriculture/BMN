@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { MissingConversationBinding } from '@bmn/protocol'
+import type { ConversationResumePreview, MissingConversationBinding } from '@bmn/protocol'
 import {
   conversationBindingPresentation,
-  resumeBoundConversation
+  resumeBoundConversation,
+  resumeConfirmationPresentation
 } from './conversation-resume'
 
 describe('visible conversation resume decisions', () => {
@@ -36,5 +37,33 @@ describe('visible conversation resume decisions', () => {
       message: binding.detail
     })
     expect(resume).not.toHaveBeenCalled()
+  })
+})
+
+describe('the confirmation shown before Resume starts anything', () => {
+  const preview: ConversationResumePreview = {
+    sessionId: 'session-1',
+    agentCli: 'codex',
+    conversationReference: '01a0b657-0000-4000-8000-000000000001',
+    command: '/usr/bin/codex resume 01a0b657-0000-4000-8000-000000000001 --model gpt-6',
+    notCarried: '--search, 1 positional argument'
+  }
+
+  it('shows the utility\u2019s own command untouched, and names what is left behind', () => {
+    expect(resumeConfirmationPresentation(preview, 'BMN lead')).toEqual({
+      message: 'Resume the Codex conversation in "BMN lead". This command runs:',
+      command: preview.command,
+      notCarried: { names: '--search, 1 positional argument', reason: 'codex resume does not accept them.' }
+    })
+  })
+
+  it('says nothing about dropped arguments when everything is carried', () => {
+    expect(resumeConfirmationPresentation({ ...preview, notCarried: '' }, 'BMN lead').notCarried)
+      .toBeNull()
+  })
+
+  it('names Claude Code by the name the owner knows it by', () => {
+    expect(resumeConfirmationPresentation({ ...preview, agentCli: 'claude' }, 'Review').message)
+      .toBe('Resume the Claude Code conversation in "Review". This command runs:')
   })
 })

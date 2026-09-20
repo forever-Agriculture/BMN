@@ -11,6 +11,7 @@ import {
   type ArtifactRecord,
   type AttentionRecord,
   type ConversationBindingState,
+  type ConversationResumePreview,
   type ExplicitConversationBinding,
   type InputDraftRecord,
   type LaunchTemplateRecord,
@@ -64,7 +65,7 @@ import {
   type TerminalController,
   type VoiceCapture
 } from './session-terminal'
-import { ConfirmDialog, ConversationReferenceDialog, WorkspaceDialog } from './shell-dialogs'
+import { ConfirmDialog, ConversationReferenceDialog, ResumeDialog, WorkspaceDialog } from './shell-dialogs'
 import { loadSavedOutputPresentation, type SavedOutputCatalogPresentation } from './terminal-history'
 import { createSpaceHold } from './space-hold'
 import { applyChromeTheme, COLOR_MODE_PRESENTATION, IDENTITY_PRESENTATION } from './theme'
@@ -105,6 +106,8 @@ type ShellDialog =
   | { kind: 'rename-workspace'; workspace: WorkspaceRecord }
   | { kind: 'locate'; session: SessionRecord; binding: ConversationBindingState }
   | { kind: 'stop'; session: SessionRecord }
+  /** Shows the exact command before Resume starts anything. */
+  | { kind: 'resume'; session: SessionRecord; preview: ConversationResumePreview }
   | { kind: 'file-reference'; request: FileReferenceRequest }
 
 type SidePanel = 'files' | 'details' | null
@@ -142,6 +145,8 @@ function App(): React.JSX.Element {
   const [live, setLive] = useState<Record<string, LiveStartup>>({})
   const [tree, setTree] = useState<WorkspaceTreeState>(() => initialWorkspaceTree([], null))
   const [binding, setBinding] = useState<ConversationBindingState>()
+  /** Bumped when something outside the window changes a binding, so the shown one is reloaded. */
+  const [bindingRevision, setBindingRevision] = useState(0)
   const [savedOutput, setSavedOutput] = useState<SavedOutputCatalogPresentation>()
   const [sessionForm, setSessionForm] = useState<SessionLaunchForm>(INITIAL_SESSION_FORM)
   const [pickedTemplateId, setPickedTemplateId] = useState('')
@@ -245,7 +250,9 @@ function App(): React.JSX.Element {
     attention: () => window.aiTerminal.listAttention().then(setAttention),
     progress: () => window.aiTerminal.listProgress().then(setProgress),
     drafts: () => window.aiTerminal.listDrafts().then(setDrafts),
-    settings: () => window.aiTerminal.getSettings().then(setSettings)
+    settings: () => window.aiTerminal.getSettings().then(setSettings),
+    // A hook can rebind a conversation at any time; the window reloads the binding it is showing.
+    conversations: async () => setBindingRevision((revision) => revision + 1)
   }
 
   useEffect(() => {
@@ -382,11 +389,14 @@ function App(): React.JSX.Element {
   useEffect(() => {
     setBinding(undefined)
     setSavedOutput(undefined)
+  }, [selectedSessionId])
+
+  useEffect(() => {
     if (!selectedSessionId) return
     void window.aiTerminal.getConversationBinding(selectedSessionId)
       .then(setBinding)
       .catch(fail('Binding unavailable'))
-  }, [selectedSessionId])
+  }, [selectedSessionId, bindingRevision])
 
   const applyTreeSessionAction = (action: TreeSessionAction | null): void => {
     if (!action) return
@@ -1369,7 +1379,7 @@ function App(): React.JSX.Element {
               <div className="actions">
                 {bindingPresentation.canResume ? (
                   <button type="button" className="primary" disabled={!!selectedRecord.launchDisabledReason} title={selectedRecord.launchDisabledReason}
-                    onClick={() => resumeSession(selectedRecord)}>Resume</button>
+                    onClick={() => confirmResume(selectedRecord)}>Resume</button>
                 ) : null}
                 <button type="button" className={bindingPresentation.canResume ? undefined : 'primary'}
                   disabled={!!selectedRecord.launchDisabledReason} title={selectedRecord.launchDisabledReason ?? 'Run the saved command again in a new process'}
@@ -1464,7 +1474,7 @@ function App(): React.JSX.Element {
                   </p>
                 ) : null}
                 <div className="actions">
-                  {bindingPresentation.canResume ? <button type="button" onClick={() => resumeSession(selectedRecord)} disabled={!!selectedRecord.launchDisabledReason}
+                  {bindingPresentation.canResume ? <button type="button" onClick={() => confirmResume(selectedRecord)} disabled={!!selectedRecord.launchDisabledReason}
                     title={selectedRecord.launchDisabledReason}>Resume</button> : null}
                   {bindingPresentation.canLocate && binding && binding.agentCli !== 'other' ? (
                     <button type="button" onClick={() => setDialog({ kind: 'locate', session: selectedRecord, binding })}>Locate chat</button>
@@ -1650,6 +1660,14 @@ function App(): React.JSX.Element {
           }
         }} />
       ) : null}
+      {dialog?.kind === 'resume' ? (
+        <ResumeDialog
+          preview={dialog.preview}
+          sessionName={dialog.session.name}
+          onConfirm={() => resumeSession(dialog.session)}
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
       {dialog?.kind === 'stop' ? (
         <ConfirmDialog
           label="Stop session"
@@ -1661,6 +1679,13 @@ function App(): React.JSX.Element {
       ) : null}
     </main>
   )
+
+  /** Reads the exact command first: no conversation reopens on a command the owner has not seen. */
+  function confirmResume(record: SessionRecord): void {
+    void window.aiTerminal.previewConversationResume(record.sessionId)
+      .then((preview) => setDialog({ kind: 'resume', session: record, preview }))
+      .catch(fail('Resume unavailable'))
+  }
 
   function resumeSession(record: SessionRecord): void {
     void window.aiTerminal.resumeConversation(record.sessionId).then((next) => {

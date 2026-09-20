@@ -123,6 +123,10 @@ through the CLI's own resume, and only for a session whose conversation BMN know
 launch, one you located by hand, or one the harness reported through its `SessionStart` hook. A
 session without that stays honest about it and offers **Start again** instead.
 
+Resume shows the exact command first. The confirmation is built from the same launch the process is
+started with, so what you read is what runs, and it names any stored argument the CLI's own resume
+will not take — by kind, never quoting a prompt you typed.
+
 The Electron self-test checks two of these rows against the running app: the renderer-crash row (the
 processes and the layout survive a new view) and the Quit row (the interruption and its recorded
 reason survive an application restart, with the open requests intact). The other rows are documented

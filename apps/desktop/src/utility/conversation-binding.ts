@@ -645,8 +645,11 @@ export const CODEX_RESUME_OPTIONS: ReadonlyMap<string, CodexOptionArity> = new M
   ['--dangerously-bypass-hook-trust', 'none'],
   ['--disable', 'required'],
   ['--enable', 'required'],
-  ['-i', 'variadic'],
-  ['--image', 'variadic'],
+  // `codex resume --help` prints `-i, --image <FILE>...`, but the local CLI audit describes a
+  // comma-delimited `--image FILE`. One value is the conservative reading either way: a greedy list
+  // would carry the prompt that follows it, and a second file is dropped and named instead.
+  ['-i', 'required'],
+  ['--image', 'required'],
   ['--local-provider', 'required'],
   ['-m', 'required'],
   ['--model', 'required'],
@@ -724,20 +727,33 @@ export function codexResumeArguments(argv: readonly string[]): CodexResumeArgume
 /** Names what Resume leaves behind, without repeating a prompt the owner typed. */
 export function describeDroppedCodexArguments(dropped: CodexResumeArguments): string | undefined {
   const parts = [...dropped.droppedOptions]
-  if (dropped.droppedPositionals === 1) parts.push('1 other argument')
-  else if (dropped.droppedPositionals > 1) parts.push(`${dropped.droppedPositionals} other arguments`)
+  // Named by kind, never quoted: "other" reads as a flag the owner may have lost, while a dropped
+  // positional is almost always the prompt they typed, which is theirs and may be private.
+  if (dropped.droppedPositionals === 1) parts.push('1 positional argument')
+  else if (dropped.droppedPositionals > 1) parts.push(`${dropped.droppedPositionals} positional arguments`)
   return parts.length === 0 ? undefined : parts.join(', ')
+}
+
+/** Keeps an argument's boundaries visible when the command is read as one line. */
+function shownArgument(argument: string): string {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(argument)
+    ? argument
+    : `"${argument.replace(/(["\\$`])/g, '\\$1')}"`
+}
+
+/** One readable line for a launch, with every argument's own boundaries still visible. */
+export function shownCommand(executable: string, argv: readonly string[]): string {
+  return [executable, ...argv].map(shownArgument).join(' ')
 }
 
 /** The exact command a hook-captured Codex binding resumes with, for the detail the owner reads. */
 export function codexResumeCommand(binding: BoundConversationBinding): string {
   const { carried } = codexResumeArguments(binding.launchContext.argv)
-  return [
-    binding.launchContext.executable,
+  return shownCommand(binding.launchContext.executable, [
     'resume',
     binding.conversationReference,
     ...carried
-  ].join(' ')
+  ])
 }
 
 /** The control socket's detail limit, so every composed binding detail fits a request field. */
@@ -809,12 +825,14 @@ export function bindingFromObservation(
     : undefined
   return {
     ...binding,
+    // The transcript path goes last: it is the only unbounded part, so the detail cap cuts it
+    // rather than the command the owner has to be able to read before Resume.
     detail: conversationObservationDetail([
       conversationObservationSourceDetail(observation.agentCli, observation.source),
       replaced,
-      observation.transcriptPath === undefined ? undefined : `transcript ${observation.transcriptPath}`,
       observation.agentCli === 'codex' ? `Resume runs: ${codexResumeCommand(binding)}` : undefined,
-      dropped === undefined ? undefined : `not carried: ${dropped}`
+      dropped === undefined ? undefined : `not carried: ${dropped}`,
+      observation.transcriptPath === undefined ? undefined : `transcript ${observation.transcriptPath}`
     ])
   }
 }

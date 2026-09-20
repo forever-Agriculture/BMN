@@ -16,6 +16,7 @@ export const METHOD_REGISTRY = Object.freeze({
   sessionBindingReplace: 'session.binding.replace',
   sessionBindingClear: 'session.binding.clear',
   sessionResume: 'session.resume',
+  sessionResumePreview: 'session.resume.preview',
   sessionRelaunch: 'session.relaunch',
   sessionStop: 'session.stop',
   templateList: 'template.list',

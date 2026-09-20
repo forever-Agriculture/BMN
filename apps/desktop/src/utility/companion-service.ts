@@ -32,6 +32,11 @@ import { HostControlError, type SessionIdentity, type SessionManager } from './s
 import { createAttentionPager } from './attention-pager'
 import { TelegramConnector, maskToken, redactToken, type ConnectorHealth, type InboundReply } from './telegram-connector'
 
+/** A listed session plus its conversation route; `null` when the session has no stored binding. */
+type ListedSession = SessionRecord & {
+  conversation: { status: string; captureRoute: string } | null
+}
+
 const BRACKETED_PASTE_START = '\x1b[200~'
 const BRACKETED_PASTE_END = '\x1b[201~'
 const PREVIEW_IMAGE_BYTES = 20 * 1024 * 1024
@@ -226,11 +231,18 @@ export class CompanionService {
           options.manager.liveIncarnationId(sessionId) === incarnationId,
         sessionExists: (sessionId) => this.knownSessions.has(sessionId),
         snapshot: (scope) => this.controlCall(() => this.snapshot(scope)),
-        listSessions: (scope) => this.controlCall(async () => this.sessionsFor(scope)),
+        listSessions: (scope) => this.controlCall(async () => this.listedSessions(scope)),
         publishArtifact: (p) => this.controlCall(() => this.publishArtifact(p)),
         reportProgress: (p) => this.controlCall(() => this.reportProgress(p)),
         openAttention: (p) => this.controlCall(() => this.openAttention(p)),
-        observeConversation: (p) => this.controlCall(() => options.manager.observeConversation(p)),
+        reportRefusal: (method, sessionId, reason) => this.logRefusal(method, sessionId, reason),
+        observeConversation: (p) => this.controlCall(async () => {
+          const result = await options.manager.observeConversation(p)
+          if (!result.accepted) this.logRefusal('conversation.observe', p.sessionId, result.detail)
+          // The window loads a binding when the selection changes; a hook changes it at any time.
+          else this.emit('conversations', p.sessionId)
+          return result
+        }),
         withdrawAttention: (p) => this.controlCall(() => this.closeAttentionByKey(p.sessionId, p.requestKey, 'withdrawn', null)),
         resolveAttention: (p) => this.controlCall(() => this.closeAttentionByKey(p.sessionId, p.requestKey, 'answered', p.resolution)),
         submitInput: (p) => this.controlCall(async () => {
@@ -238,6 +250,14 @@ export class CompanionService {
         })
       }
     })
+  }
+
+  /**
+   * A hook prints nothing and drops what the app answers, so a refused conversation report would
+   * otherwise leave no trace at all. One line on the host's stderr keeps the reason readable.
+   */
+  private logRefusal(method: string, sessionId: string | null, reason: string): void {
+    process.stderr.write(`[BMN] ${method} refused for ${sessionId ?? 'the owner'}: ${reason}\n`)
   }
 
   /** Environment for one incarnation: its scoped control credential and the CLI on PATH. */
@@ -471,8 +491,29 @@ export class CompanionService {
     return scope.kind === 'owner' ? sessions : sessions.filter((session) => session.sessionId === scope.sessionId)
   }
 
-  private async snapshot(scope: ControlScope): Promise<unknown> {
+  /**
+   * The session records a caller may see, each carrying its conversation route. The route is added
+   * beside the existing fields and the reference itself is never listed: a client that ignores the
+   * field sees exactly what it saw before.
+   */
+  private async listedSessions(scope: ControlScope): Promise<ListedSession[]> {
     const sessions = await this.sessionsFor(scope)
+    const routes = new Map(
+      (await this.options.database.listConversationRoutes()).map((route) => [route.sessionId, route])
+    )
+    return sessions.map((session) => {
+      const route = routes.get(session.sessionId)
+      return {
+        ...session,
+        conversation: route
+          ? { status: route.status, captureRoute: route.captureRoute }
+          : null
+      }
+    })
+  }
+
+  private async snapshot(scope: ControlScope): Promise<unknown> {
+    const sessions = await this.listedSessions(scope)
     const visible = new Set(sessions.map((session) => session.sessionId))
     const [attention, progress] = await Promise.all([
       this.options.database.companion('listAttention'),
@@ -485,7 +526,8 @@ export class CompanionService {
         sessionId: session.sessionId,
         name: session.name,
         cwd: session.cwd,
-        process: session.lastProcess?.state ?? 'never-started'
+        process: session.lastProcess?.state ?? 'never-started',
+        conversation: session.conversation
       })),
       attention: attention.filter((request) => request.state === 'open' && visible.has(request.sessionId)),
       progress: progress

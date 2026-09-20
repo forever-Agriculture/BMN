@@ -102,6 +102,7 @@ import {
 import {
   activateBoundSession,
   loadConversationBinding,
+  previewConversationResume,
   locateConversationBinding,
   resumeBoundSession,
   startNewConversation
@@ -641,6 +642,10 @@ function installIpcHandlers(): void {
   bridgeIpc.handle('aiterm:session:binding-get', (event, sessionId: unknown) => {
     const id = requireKnownSession(event, sessionId)
     return loadConversationBinding(requireHostClient(), id)
+  })
+  bridgeIpc.handle('aiterm:session:resume-preview', (event, sessionId: unknown) => {
+    const id = requireKnownSession(event, sessionId)
+    return previewConversationResume(requireHostClient(), id)
   })
   bridgeIpc.handle('aiterm:session:binding-replace', (event, sessionId: unknown, binding: ExplicitConversationBinding) => {
     const id = requireKnownSession(event, sessionId)
@@ -1322,9 +1327,13 @@ function selfTestCodexHome(): string {
  * conversation it is in through the real `bmn hook codex`, exactly as the installed CLI's
  * SessionStart hook does. It keeps running so its session stays live.
  */
-function writeCodexHarness(directory: string, reference: string): { executable: string; log: string } {
+function writeCodexHarness(
+  directory: string,
+  reference: string
+): { executable: string; log: string; listing: string } {
   mkdirSync(directory, { recursive: true })
   const log = join(directory, 'argv.log')
+  const listing = join(directory, 'list.json')
   const executable = join(directory, 'codex')
   writeFileSync(join(directory, 'package.json'), '{"type":"commonjs"}\n')
   writeFileSync(
@@ -1332,13 +1341,16 @@ function writeCodexHarness(directory: string, reference: string): { executable: 
     [
       `#!${process.env.BMN_SELF_TEST_NODE ?? '/usr/bin/env node'}`,
       "const { spawnSync } = require('node:child_process')",
-      "const { appendFileSync } = require('node:fs')",
+      "const { appendFileSync, writeFileSync } = require('node:fs')",
       "const event = JSON.stringify({",
       "  hook_event_name: 'SessionStart',",
       "  source: 'startup',",
       `  session_id: ${JSON.stringify(reference)},`,
       "})",
       "spawnSync('bmn', ['hook', 'codex'], { input: event, stdio: ['pipe', 'ignore', 'ignore'] })",
+      // The session reads its own listing back with its own token, the way an agent would.
+      "const listed = spawnSync('bmn', ['list', '--json'], { encoding: 'utf8' })",
+      `writeFileSync(${JSON.stringify(listing)}, listed.stdout ?? '')`,
       `appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + '\\n')`,
       "process.stdout.write('codex harness ready\\n')",
       "setInterval(() => undefined, 1_000)",
@@ -1346,7 +1358,14 @@ function writeCodexHarness(directory: string, reference: string): { executable: 
     ].join('\n'),
     { mode: 0o700 }
   )
-  return { executable, log }
+  return { executable, log, listing }
+}
+
+/** What a session's own `bmn list --json` says about its conversation, once the hook has reported. */
+function listedConversation(listing: string): { sessions: number; conversation: unknown } {
+  if (!existsSync(listing)) return { sessions: 0, conversation: null }
+  const rows = JSON.parse(readFileSync(listing, 'utf8')) as Array<{ conversation?: unknown }>
+  return { sessions: rows.length, conversation: rows[0]?.conversation ?? null }
 }
 
 function harnessRuns(log: string): string[][] {
@@ -2234,6 +2253,7 @@ async function runSelfTest(): Promise<void> {
     const hookPhaseSessionIds = new Set([reportingSession.sessionId, rivalSession.sessionId])
     const conversationFromHook = {
       startedRoute: startedUnsupported.captureRoute,
+      listed: listedConversation(reportingHarness.listing),
       reportedRoute: reportedBinding.captureRoute,
       reportedReference: reportedBinding.conversationReference,
       reportedDetail: reportedBinding.detail,

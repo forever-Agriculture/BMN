@@ -399,6 +399,8 @@ async function start(): Promise<void> {
         return manager.replaceConversationBinding(
           params.binding as ExplicitConversationBinding
         )
+      case METHOD_REGISTRY.sessionResumePreview:
+        return manager.conversationResumePreview(stringValue(params, 'sessionId'))
       case METHOD_REGISTRY.sessionBindingClear:
         return manager.clearConversationBinding(stringValue(params, 'sessionId'))
       case METHOD_REGISTRY.sessionResume:

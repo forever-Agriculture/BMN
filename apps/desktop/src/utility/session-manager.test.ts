@@ -10,6 +10,7 @@ import {
   SAVED_OUTPUT_FORMAT_VERSION,
   TERMINAL_SAVED_OUTPUT_BYTES,
   TERMINAL_SCROLLBACK_LINES,
+  type ConversationObservationResult,
   type ExplicitConversationBinding,
   type PersistedConversationBinding,
   type SavedOutputCapture,
@@ -292,6 +293,14 @@ class FakeStore implements SessionStore {
   readonly running = new Set<string>()
   readonly exited = new Map<string, IncarnationExit>()
   readonly interrupted = new Map<string, string>()
+  /** Holds a binding write open, so a test can act while a claim swap is still uncommitted. */
+  replaceGate: (() => Promise<void>) | undefined
+  /** Fails the next binding write once, to exercise the rollback of an uncommitted swap. */
+  replaceFailure: Error | undefined
+  /** Runs while a session record is still being created, before anything can read it. */
+  onCreateStarting: ((record: CreateStartingRecord) => void) | undefined
+  /** Holds record creation open, so a test can act during the window before the record exists. */
+  createGate: (() => Promise<void>) | undefined
 
   async listWorkspaces(): Promise<readonly WorkspaceRecord[]> {
     return [{
@@ -330,6 +339,8 @@ class FakeStore implements SessionStore {
   }
 
   async createStarting(record: CreateStartingRecord): Promise<void> {
+    this.onCreateStarting?.(record)
+    if (this.createGate) await this.createGate()
     this.starting.push(record.incarnationId)
     this.startingRecords.push(structuredClone(record))
     this.bindings.set(record.sessionId, structuredClone(record.binding))
@@ -349,6 +360,12 @@ class FakeStore implements SessionStore {
   async replaceConversationBinding(
     binding: ExplicitConversationBinding
   ): Promise<PersistedConversationBinding> {
+    if (this.replaceGate) await this.replaceGate()
+    if (this.replaceFailure) {
+      const failure = this.replaceFailure
+      this.replaceFailure = undefined
+      throw failure
+    }
     this.bindings.set(binding.sessionId, structuredClone(binding))
     return structuredClone(binding)
   }
@@ -3723,6 +3740,107 @@ describe('conversation identity reported by the harness', () => {
     })
   })
 
+  it('keeps an unconfirmed exit reserved instead of letting a late report release it', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-observe-unconfirmed-test-'))
+    createdRoots.add(cwd)
+    const executable = join(cwd, 'codex')
+    await writeFile(executable, '#!/bin/sh\n')
+    await chmod(executable, 0o700)
+    const pty = new NonExitingFakePty()
+    const manager = new SessionManager({
+      store: new FakeStore(),
+      spawnPty: () => pty,
+      processStartIdentity: async () => 'linux-proc-start:unconfirmed',
+      stopGraceMs: 0,
+      stopKillWaitMs: 0,
+      sendTerminalMessage: () => undefined
+    })
+    const created = await manager.create({
+      ...DEFAULT_SESSION_CREATION, cwd, executable, argv: [], cols: 80, rows: 24
+    })
+    await expect(manager.stop({
+      sessionId: created.sessionId,
+      incarnationId: created.incarnationId
+    })).rejects.toThrow(/stop outcome is unknown/)
+    await expect(manager.health()).resolves.toMatchObject({
+      sessions: [{ state: 'exit-unconfirmed' }]
+    })
+
+    const refused = await manager.observeConversation({
+      sessionId: created.sessionId,
+      incarnationId: created.incarnationId,
+      agentCli: 'codex',
+      conversationReference: OBSERVED,
+      source: 'startup'
+    })
+
+    expect(refused).toEqual({
+      accepted: false,
+      detail: 'Reported by Codex at session start; refused: the process exit of this session is unconfirmed'
+    })
+    await expect(manager.conversationBinding(created.sessionId)).resolves.toMatchObject({
+      status: 'unsupported'
+    })
+  })
+
+  it('does not take a claim another live session holds, even when the owner located the same chat', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-observe-located-test-'))
+    createdRoots.add(cwd)
+    const executable = join(cwd, 'codex')
+    await writeFile(executable, '#!/bin/sh\n')
+    await chmod(executable, 0o700)
+    const ptys: FakePty[] = []
+    const store = new FakeStore()
+    const manager = new SessionManager({
+      store,
+      spawnPty: () => {
+        const pty = new FakePty()
+        ptys.push(pty)
+        return pty
+      },
+      processStartIdentity: async () => `linux-proc-start:${ptys.length}`,
+      conversationReferenceExists: async () => true,
+      sendTerminalMessage: () => undefined
+    })
+    // The holder resumed the conversation explicitly, so it owns the claim.
+    const holder = await manager.create({
+      ...DEFAULT_SESSION_CREATION, name: 'Holder', cwd, executable, argv: ['resume', OBSERVED], cols: 80, rows: 24
+    })
+    expect(holder.binding).toMatchObject({ status: 'bound', captureRoute: 'explicit-resume-reference' })
+    const latecomer = await manager.create({
+      ...DEFAULT_SESSION_CREATION, name: 'Latecomer', cwd, executable, argv: [], cols: 80, rows: 24
+    })
+    // Locate chat points the second session at the same conversation without taking a claim.
+    await manager.replaceConversationBinding({
+      ...(holder.binding as ExplicitConversationBinding),
+      sessionId: latecomer.sessionId,
+      captureRoute: 'explicit-resume-reference'
+    })
+
+    const refused = await manager.observeConversation({
+      sessionId: latecomer.sessionId,
+      incarnationId: latecomer.incarnationId,
+      agentCli: 'codex',
+      conversationReference: OBSERVED,
+      source: 'startup'
+    })
+
+    expect(refused).toEqual({
+      accepted: false,
+      detail: 'Reported by Codex at session start; refused: already resumed in "Holder"'
+    })
+    await expect(manager.conversationBinding(latecomer.sessionId)).resolves.toMatchObject({
+      captureRoute: 'explicit-resume-reference'
+    })
+    // The holder still owns the conversation, so the latecomer cannot resume into it.
+    ptys[1]!.emitExit({ exitCode: 0 })
+    await vi.waitFor(async () => {
+      await expect(manager.health()).resolves.toMatchObject({ liveSessions: 1 })
+    })
+    await expect(manager.resume({ sessionId: latecomer.sessionId, cols: 80, rows: 24 }))
+      .rejects.toThrow(/already has a live process incarnation/)
+  })
+
   it('refuses a conversation reported after the process has gone', async () => {
     const fixture = await codexFixture()
     const [created] = fixture.sessions
@@ -3742,6 +3860,159 @@ describe('conversation identity reported by the harness', () => {
     expect(refused).toEqual({
       accepted: false,
       detail: 'Reported by Codex at session start; refused: the session has no live process'
+    })
+  })
+
+  it('shows the command Resume then runs, argument for argument', async () => {
+    const fixture = await codexFixture(['--model', 'gpt-6', '--full-auto', 'write the release notes'])
+    const [created] = fixture.sessions
+    await fixture.manager.observeConversation({
+      sessionId: created!.sessionId,
+      incarnationId: created!.incarnationId,
+      agentCli: 'codex',
+      conversationReference: OBSERVED,
+      source: 'startup'
+    })
+
+    const preview = await fixture.manager.conversationResumePreview(created!.sessionId)
+
+    expect(preview).toEqual({
+      sessionId: created!.sessionId,
+      agentCli: 'codex',
+      conversationReference: OBSERVED,
+      command: `${fixture.executable} resume ${OBSERVED} --model gpt-6`,
+      notCarried: '--full-auto, 1 positional argument'
+    })
+
+    fixture.ptys[0]!.emitExit({ exitCode: 0 })
+    await vi.waitFor(async () => {
+      await expect(fixture.manager.health()).resolves.toMatchObject({ liveSessions: 0 })
+    })
+    await fixture.manager.resume({ sessionId: created!.sessionId, cols: 80, rows: 24 })
+
+    const spawned = fixture.spawns.at(-1)!
+    expect([spawned.executable, ...spawned.argv].join(' ')).toBe(preview.command)
+  })
+
+  it('refuses a preview for a session whose conversation it never learned', async () => {
+    const fixture = await codexFixture()
+
+    await expect(fixture.manager.conversationResumePreview(fixture.sessions[0]!.sessionId))
+      .rejects.toThrow('cannot pin a TUI session id at launch')
+  })
+
+  it('leaves a conversation released mid-swap to the session that took it', async () => {
+    const fixture = await codexFixture([], ['One', 'Two'])
+    const [one, two] = fixture.sessions
+    const observe = (
+      session: SessionIdentity,
+      conversationReference: string
+    ): Promise<ConversationObservationResult> => fixture.manager.observeConversation({
+      sessionId: session.sessionId,
+      incarnationId: session.incarnationId,
+      agentCli: 'codex',
+      conversationReference,
+      source: 'startup'
+    })
+    await observe(one!, OBSERVED)
+
+    // While One's move to OTHER is still uncommitted, Two takes the conversation One just released.
+    let taken: Promise<ConversationObservationResult> | undefined
+    fixture.store.replaceGate = async () => {
+      fixture.store.replaceGate = undefined
+      taken = observe(two!, OBSERVED)
+      await taken
+      fixture.store.replaceFailure = new Error('the database is unavailable')
+    }
+
+    await expect(observe(one!, OTHER)).rejects.toThrow('the database is unavailable')
+
+    await expect(taken).resolves.toMatchObject({ accepted: true })
+    // The rollback must not take back what Two now owns: One sees Two named as the holder.
+    await expect(observe(one!, OBSERVED)).resolves.toEqual({
+      accepted: false,
+      detail: 'Reported by Codex at session start; refused: already resumed in "Two"'
+    })
+  })
+
+  it('does not resurrect the claim of a session that ended while its swap was uncommitted', async () => {
+    const fixture = await codexFixture([], ['One', 'Two'])
+    const [one, two] = fixture.sessions
+    await fixture.manager.observeConversation({
+      sessionId: one!.sessionId,
+      incarnationId: one!.incarnationId,
+      agentCli: 'codex',
+      conversationReference: OBSERVED,
+      source: 'startup'
+    })
+
+    // One's process ends while its move to OTHER is still uncommitted, then the write fails.
+    fixture.store.replaceGate = async () => {
+      fixture.store.replaceGate = undefined
+      fixture.ptys[0]!.emitExit({ exitCode: 0 })
+      await vi.waitFor(async () => {
+        await expect(fixture.manager.health()).resolves.toMatchObject({ liveSessions: 1 })
+      })
+    }
+    fixture.store.replaceFailure = new Error('the database is unavailable')
+
+    await expect(fixture.manager.observeConversation({
+      sessionId: one!.sessionId,
+      incarnationId: one!.incarnationId,
+      agentCli: 'codex',
+      conversationReference: OTHER,
+      source: 'startup'
+    })).rejects.toThrow('the database is unavailable')
+
+    // Neither conversation may stay reserved for a process that has gone.
+    await expect(fixture.manager.observeConversation({
+      sessionId: two!.sessionId,
+      incarnationId: two!.incarnationId,
+      agentCli: 'codex',
+      conversationReference: OBSERVED,
+      source: 'startup'
+    })).resolves.toMatchObject({ accepted: true })
+  })
+
+  it('waits for the session record a hook beat, instead of refusing the first report', async () => {
+    const fixture = await codexFixture()
+    let writeRecord = (): void => undefined
+    let reported: Promise<ConversationObservationResult> | undefined
+    // The process is live before its record is written; hold that window open.
+    fixture.store.createGate = () => new Promise<void>((resolve) => {
+      writeRecord = resolve
+    })
+    fixture.store.onCreateStarting = (record) => {
+      fixture.store.onCreateStarting = undefined
+      // The harness reports its conversation before the record this observation reads exists.
+      reported = fixture.manager.observeConversation({
+        sessionId: record.sessionId,
+        incarnationId: record.incarnationId,
+        agentCli: 'codex',
+        conversationReference: OTHER,
+        source: 'startup'
+      })
+    }
+
+    const creating = fixture.manager.create({
+      ...DEFAULT_SESSION_CREATION,
+      name: 'Early',
+      cwd: fixture.cwd,
+      executable: fixture.executable,
+      argv: [],
+      cols: 80,
+      rows: 24
+    })
+    // Let the observation run all the way to the record it needs, which is not there yet.
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    writeRecord()
+    const created = await creating
+
+    await expect(reported).resolves.toMatchObject({ accepted: true })
+    await expect(fixture.manager.conversationBinding(created.sessionId)).resolves.toMatchObject({
+      status: 'bound',
+      captureRoute: 'hook-session-start',
+      conversationReference: OTHER
     })
   })
 })

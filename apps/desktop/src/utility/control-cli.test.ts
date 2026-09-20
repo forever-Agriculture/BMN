@@ -64,6 +64,7 @@ async function cliFixture() {
     publishArtifact: vi.fn(async (): Promise<unknown> => ({ artifactId: 'artifact-1' })),
     reportProgress: vi.fn<ControlHandlers['reportProgress']>(async () => ({ recorded: true })),
     openAttention: vi.fn<ControlHandlers['openAttention']>(async () => ({ opened: true })),
+    reportRefusal: vi.fn<ControlHandlers['reportRefusal']>(),
     observeConversation: vi.fn<ControlHandlers['observeConversation']>(async () => ({ accepted: true, detail: 'observed' })),
     withdrawAttention: vi.fn<ControlHandlers['withdrawAttention']>(async () => ({ withdrawn: true })),
     resolveAttention: vi.fn<ControlHandlers['resolveAttention']>(async () => ({ resolved: true })),

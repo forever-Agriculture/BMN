@@ -9,6 +9,7 @@ import {
   buildNativeResumeLaunch,
   captureRelevantLaunchEnvironment,
   codexResumeArguments,
+  codexResumeCommand,
   parseClaudeHelpOptionGrammar,
   parseBoundBinding,
   prepareConversationLaunch,
@@ -501,6 +502,29 @@ describe('conversation identity capture and native resume', () => {
 })
 
 describe('conversation identity reported by the harness SessionStart hook', () => {
+  it('shows a command whose argument boundaries survive being read as one line', () => {
+    const binding = { ...hookCodex(['--config', 'shell_environment_policy.inherit = all']) }
+    expect(codexResumeCommand(binding)).toBe(
+      `/usr/bin/codex resume ${conversationId} --config "shell_environment_policy.inherit = all"`
+    )
+  })
+
+  it('cuts the transcript path, never the command, when a detail reaches the 2000-character cap', () => {
+    const binding = bindingFromObservation(
+      {
+        agentCli: 'codex',
+        conversationReference: conversationId,
+        source: 'startup',
+        transcriptPath: `/${'p'.repeat(2_400)}`
+      },
+      hookCodex(['--model', 'gpt-6']),
+      capturedAt
+    )
+    expect(binding.detail.length).toBe(2_000)
+    expect(binding.detail).toContain(`Resume runs: /usr/bin/codex resume ${conversationId} --model gpt-6`)
+    expect(binding.detail).toContain('; transcript /ppp')
+  })
+
   it('pins the Codex resume options read by hand from codex resume --help', () => {
     expect(CODEX_RESUME_OPTIONS_CLI_VERSION).toBe('0.155.1')
     expect([...CODEX_RESUME_OPTIONS.keys()]).toEqual([
@@ -518,7 +542,8 @@ describe('conversation identity reported by the harness SessionStart hook', () =
   it.each([
     ['a flag and a valued option', ['--search', '-m', 'gpt-6'], ['--search', '-m', 'gpt-6'], [], 0],
     ['an attached value', ['--model=gpt-6'], ['--model=gpt-6'], [], 0],
-    ['a variadic image list', ['-i', 'a.png', 'b.png', '--oss'], ['-i', 'a.png', 'b.png', '--oss'], [], 0],
+    ['one image and nothing greedy after it', ['-i', 'a.png', 'PRIVATE PROMPT', '--oss'],
+      ['-i', 'a.png', '--oss'], [], 1],
     ['an option codex resume does not accept', ['--full-auto'], [], ['--full-auto'], 0],
     ['a prompt', ['Do the thing'], [], [], 1],
     ['an option missing its value', ['--model'], [], ['--model'], 0],
@@ -579,7 +604,7 @@ describe('conversation identity reported by the harness SessionStart hook', () =
     expect(binding.detail).toBe(
       'Reported by Codex at session start; replaces cccccccc-cccc-4ccc-8ccc-cccccccccccc; ' +
       `Resume runs: /usr/bin/codex resume ${conversationId} --model gpt-6; ` +
-      'not carried: --full-auto, 1 other argument'
+      'not carried: --full-auto, 1 positional argument'
     )
   })
 

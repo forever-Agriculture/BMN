@@ -1,4 +1,5 @@
 import type {
+  ConversationRouteSummary,
   PersistedConversationBinding,
   ReplaceableConversationBinding
 } from '@bmn/protocol'
@@ -6,7 +7,8 @@ import {
   clearConversationBinding,
   insertConversationBinding,
   replaceConversationBinding,
-  selectConversationBinding
+  selectConversationBinding,
+  selectConversationRoutes
 } from './database-binding-store'
 import type { DatabaseConnection, SqlValue } from './database-initialization'
 import type {
@@ -134,6 +136,12 @@ export function replaceSessionConversationBinding(
   binding: ReplaceableConversationBinding
 ): PersistedConversationBinding {
   return database.transaction(() => replaceConversationBinding(database, binding))()
+}
+
+export function listSessionConversationRoutes(
+  database: DatabaseConnection
+): ConversationRouteSummary[] {
+  return selectConversationRoutes(database)
 }
 
 export function clearSessionConversationBinding(

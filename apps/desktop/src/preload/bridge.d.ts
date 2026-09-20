@@ -18,6 +18,7 @@ import type {
   VoiceModelId,
   VoiceStatus,
   ConversationBindingState,
+  ConversationResumePreview,
   ExplicitConversationBinding,
   LaunchTemplateRecord,
   LayoutGetResult,
@@ -117,6 +118,7 @@ export interface AiTerminalBridge {
   getSavedOutput(sessionId: string): Promise<SavedOutputCatalog>
   stopSession(sessionId: string): Promise<{ stopped: true }>
   getConversationBinding(sessionId: string): Promise<ConversationBindingState>
+  previewConversationResume(sessionId: string): Promise<ConversationResumePreview>
   locateConversation(binding: ExplicitConversationBinding): Promise<ExplicitConversationBinding>
   startNewConversation(sessionId: string): Promise<{ cleared: boolean }>
   resumeConversation(sessionId: string): Promise<TerminalStartupSuccess>

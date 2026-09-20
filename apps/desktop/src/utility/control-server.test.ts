@@ -128,6 +128,7 @@ function fakeHandlers(current: Map<string, string>) {
     })),
     reportProgress: vi.fn(async (): Promise<unknown> => ({ recorded: true })),
     openAttention: vi.fn(async (): Promise<unknown> => ({ opened: true })),
+    reportRefusal: vi.fn(),
     observeConversation: vi.fn(async (): Promise<unknown> => ({ accepted: true, detail: 'observed' })),
     withdrawAttention: vi.fn(async (): Promise<unknown> => ({ withdrawn: true })),
     resolveAttention: vi.fn(async (): Promise<unknown> => ({ resolved: true })),
@@ -312,6 +313,26 @@ describe('conversation observation from a session hook', () => {
       ERROR_CODES.unauthorized
     )
     expect(fixture.handlers.observeConversation).not.toHaveBeenCalled()
+  })
+
+  it('records the refusal reason, which the hook itself throws away', async () => {
+    const fixture = await serverFixture()
+    const client = await authenticated(fixture, sessionToken(fixture))
+
+    expectError(
+      await client.request('conversation.observe', {
+        agentCli: 'claude',
+        conversationReference: 'not-a-uuid-at-all-not-a-uuid-at-all1',
+        source: 'startup'
+      }),
+      ERROR_CODES.invalidArgument
+    )
+
+    expect(fixture.handlers.reportRefusal).toHaveBeenLastCalledWith(
+      'conversation.observe',
+      'session-1',
+      'conversationReference must be a UUID'
+    )
   })
 })
 

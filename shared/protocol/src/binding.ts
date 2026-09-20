@@ -60,6 +60,16 @@ export type PersistedConversationBinding =
   | BoundConversationBinding
   | UnsupportedConversationBinding
 
+/**
+ * What `session.list` and `state.snapshot` say about a session's conversation: the route only,
+ * never the reference. Added beside the existing fields, so a client that ignores it is unaffected.
+ */
+export interface ConversationRouteSummary {
+  sessionId: string
+  status: PersistedConversationBinding['status']
+  captureRoute: PersistedConversationBinding['captureRoute']
+}
+
 export interface SessionBindingGetParams {
   sessionId: string
 }
@@ -77,6 +87,19 @@ export interface SessionResumeResult {
   streamSeq: 0
   captureStartedAt: string
   binding: BoundConversationBinding
+}
+
+/**
+ * What Resume will run, read before anything starts. `command` is built from the same launch the
+ * process is started with, so the owner confirms the exact command rather than a description.
+ */
+export interface ConversationResumePreview {
+  sessionId: string
+  agentCli: 'claude' | 'codex'
+  conversationReference: string
+  command: string
+  /** Stored arguments `<cli> resume` will not accept, named for the owner; empty when none. */
+  notCarried: string
 }
 
 export interface TerminalActivateParams {

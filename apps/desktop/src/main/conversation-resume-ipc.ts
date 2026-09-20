@@ -1,6 +1,7 @@
 import {
   METHOD_REGISTRY,
   type ConversationBindingState,
+  type ConversationResumePreview,
   type ExplicitConversationBinding,
   type ProtocolMethod,
   type SessionBindingClearResult,
@@ -19,6 +20,14 @@ export function loadConversationBinding(
   sessionId: string
 ): Promise<ConversationBindingState> {
   return client.request(METHOD_REGISTRY.sessionBindingGet, { sessionId })
+}
+
+/** What Resume would run, read before the owner confirms it. Starts nothing. */
+export function previewConversationResume(
+  client: ConversationHostClient,
+  sessionId: string
+): Promise<ConversationResumePreview> {
+  return client.request(METHOD_REGISTRY.sessionResumePreview, { sessionId })
 }
 
 export async function resumeBoundSession(

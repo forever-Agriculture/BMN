@@ -19,6 +19,7 @@ import {
   type ConversationBindingState,
   type ConversationObservation,
   type ConversationObservationResult,
+  type ConversationResumePreview,
   type ExplicitConversationBinding,
   type PersistedConversationBinding,
   type ReplaceableConversationBinding,
@@ -54,10 +55,13 @@ import {
   conversationObservationDetail,
   conversationObservationSourceDetail,
   conversationReferenceExists,
+  codexResumeArguments,
+  describeDroppedCodexArguments,
   isLowercaseConversationReference,
   parseBoundBinding,
   parseClaudeHelpOptionGrammar,
   prepareConversationLaunch,
+  shownCommand,
   type ClaudeOptionGrammar,
   type ClaudeSessionIdCapability
 } from './conversation-binding'
@@ -549,10 +553,12 @@ export class SessionManager {
   ): Promise<ConversationObservationResult> {
     const queued = (this.conversationObservations.get(observation.sessionId) ?? Promise.resolve())
       .then(() => this.applyConversationObservation(observation))
-    this.conversationObservations.set(
-      observation.sessionId,
-      queued.then(() => undefined, () => undefined)
-    )
+    const settled = queued.then(() => undefined, () => undefined).then(() => {
+      if (this.conversationObservations.get(observation.sessionId) === settled) {
+        this.conversationObservations.delete(observation.sessionId)
+      }
+    })
+    this.conversationObservations.set(observation.sessionId, settled)
     return queued
   }
 
@@ -568,6 +574,8 @@ export class SessionManager {
     })
     const live = this.sessions.get(observation.sessionId)
     if (!live || live.exited) return refuse('the session has no live process')
+    // An unconfirmed exit keeps the conversation reserved until BMN restarts; do not release it.
+    if (live.exitUnconfirmed) return refuse('the process exit of this session is unconfirmed')
     if (observation.incarnationId !== null && observation.incarnationId !== live.incarnationId) {
       return refuse('the reporting process incarnation is no longer live')
     }
@@ -579,23 +587,28 @@ export class SessionManager {
     if (!isLowercaseConversationReference(observation.conversationReference)) {
       return refuse('the reported conversation reference is not a storable UUID')
     }
+    // A harness can report before its own session record has been written: the process is spawned
+    // and registered live before `createStarting` completes, so wait for the record it needs.
+    try {
+      await live.recordReady
+    } catch {
+      return refuse('the session record was not created')
+    }
     const stored = await this.store.getConversationBinding(observation.sessionId)
     const current = stored ? parseBoundBinding(stored) : undefined
     if (!current) return refuse('the session has no stored conversation binding')
-    // A live session may have exited while the binding was read.
+    // A live session may have ended while the binding was read.
     if (this.sessions.get(observation.sessionId) !== live || live.exited) {
       return refuse('the session has no live process')
     }
+    if (live.exitUnconfirmed) return refuse('the process exit of this session is unconfirmed')
     const identity = `${observation.agentCli}:${observation.conversationReference}`
-    const alreadyBound = current.status === 'bound' &&
-      current.agentCli === observation.agentCli &&
-      current.conversationReference === observation.conversationReference
-    if (!alreadyBound) {
-      const holder = this.conversationReservations.get(identity)
-      if (holder && holder !== live.conversationReservation) {
-        const name = await this.storedSessionName(holder.sessionId)
-        return refuse(`already resumed in ${JSON.stringify(name)}`)
-      }
+    // Checked even when the stored binding already names this conversation: a binding the owner
+    // located by hand carries no claim, so its session must still not take one another session holds.
+    const holder = this.conversationReservations.get(identity)
+    if (holder && holder !== live.conversationReservation) {
+      const name = await this.storedSessionName(holder.sessionId)
+      return refuse(`already resumed in ${JSON.stringify(name)}`)
     }
     const binding = bindingFromObservation(observation, current, new Date().toISOString())
     const restoreClaim = this.swapConversationClaim(live, identity)
@@ -634,11 +647,15 @@ export class SessionManager {
     }
     live.conversationIdentity = identity
     live.conversationReservation = reservation
+    // Rolling back must give up only what this session still owns: while the store write was in
+    // flight another session may have taken the released identity, or this one may have torn down.
     return () => {
       if (this.conversationReservations.get(identity) === reservation) {
         this.conversationReservations.delete(identity)
       }
-      if (previous) {
+      if (live.conversationReservation !== reservation) return
+      const stillLive = this.sessions.get(live.sessionId) === live && !live.exited
+      if (previous && stillLive && !this.conversationReservations.has(previous.conversationIdentity)) {
         this.conversationReservations.set(previous.conversationIdentity, previous)
         live.conversationIdentity = previous.conversationIdentity
         live.conversationReservation = previous
@@ -755,18 +772,15 @@ export class SessionManager {
     }).finally(releaseLaunch)
   }
 
-  private async resumeOnce(
-    params: SessionResumeParams,
-    binding: BoundConversationBinding,
-    reservation: ConversationReservation
-  ): Promise<SessionResumeResult> {
-    if (!await this.referenceExists(binding)) {
-      throw new HostControlError(
-        ERROR_CODES.notFound,
-        `The bound ${binding.agentCli} conversation reference is missing; no process was started`
-      )
-    }
-    const resumeEnvironment = applyCapturedLaunchEnvironment(
+  /**
+   * The launch Resume will run: the same probe, the same argv builder and the same failures, so
+   * the command the owner confirms and the process that starts cannot drift apart.
+   */
+  private async prepareResumeLaunch(binding: BoundConversationBinding): Promise<{
+    launch: ReturnType<typeof buildNativeResumeLaunch>
+    environment: ReturnType<typeof applyCapturedLaunchEnvironment>
+  }> {
+    const environment = applyCapturedLaunchEnvironment(
       this.environment,
       binding.launchContext.environment
     )
@@ -780,7 +794,7 @@ export class SessionManager {
           cols: 80,
           rows: 24
         },
-        resumeEnvironment
+        environment
       )
       if (!capability.supported || !capability.grammar) {
         throw new HostControlError(
@@ -790,15 +804,55 @@ export class SessionManager {
       }
       claudeGrammar = capability.grammar
     }
-    let launch
     try {
-      launch = buildNativeResumeLaunch(binding, claudeGrammar)
+      return { launch: buildNativeResumeLaunch(binding, claudeGrammar), environment }
     } catch (error) {
       throw new HostControlError(
         ERROR_CODES.invalidArgument,
         error instanceof Error ? error.message : 'The stored launch context is unsupported'
       )
     }
+  }
+
+  /**
+   * What Resume would run for a session, without starting anything. The owner reads this before
+   * confirming, so no conversation is reopened by a command they have not seen.
+   */
+  async conversationResumePreview(sessionId: string): Promise<ConversationResumePreview> {
+    const stored = this.conversationBindings.get(sessionId)
+      ?? await this.store.getConversationBinding(sessionId)
+    const binding = stored ? parseBoundBinding(stored) : undefined
+    if (!binding || binding.status !== 'bound') {
+      throw new HostControlError(
+        ERROR_CODES.invalidArgument,
+        binding?.detail ?? 'No conversation binding was captured for this session'
+      )
+    }
+    const { launch } = await this.prepareResumeLaunch(binding)
+    const dropped = binding.agentCli === 'codex' && binding.captureRoute === 'hook-session-start'
+      ? describeDroppedCodexArguments(codexResumeArguments(binding.launchContext.argv))
+      : undefined
+    return {
+      sessionId,
+      agentCli: binding.agentCli,
+      conversationReference: binding.conversationReference,
+      command: shownCommand(launch.executable, launch.argv),
+      notCarried: dropped ?? ''
+    }
+  }
+
+  private async resumeOnce(
+    params: SessionResumeParams,
+    binding: BoundConversationBinding,
+    reservation: ConversationReservation
+  ): Promise<SessionResumeResult> {
+    if (!await this.referenceExists(binding)) {
+      throw new HostControlError(
+        ERROR_CODES.notFound,
+        `The bound ${binding.agentCli} conversation reference is missing; no process was started`
+      )
+    }
+    const { launch, environment: resumeEnvironment } = await this.prepareResumeLaunch(binding)
     const launchParams: PtyLaunchParams = {
       cwd: launch.cwd,
       executable: launch.executable,

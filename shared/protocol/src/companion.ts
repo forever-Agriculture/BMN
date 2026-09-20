@@ -227,7 +227,7 @@ export interface TelegramStatus {
   rejectedUpdates: number
 }
 
-export type AppEventTopic = 'artifacts' | 'attention' | 'progress' | 'drafts' | 'settings' | 'telegram'
+export type AppEventTopic = 'artifacts' | 'attention' | 'progress' | 'drafts' | 'settings' | 'telegram' | 'conversations'
 
 export interface AppEventMessage {
   kind: 'app-event'

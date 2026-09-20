@@ -18,6 +18,7 @@ import {
   createResumingSession,
   createStartingSession,
   getSessionConversationBinding,
+  listSessionConversationRoutes,
   markSessionExited,
   markSessionInterrupted,
   markSessionRunning,
@@ -156,6 +157,8 @@ function handle(request: WorkerRequest): unknown {
       })
     case 'binding-get':
       return getSessionConversationBinding(database, requiredString(params, 'sessionId'))
+    case 'binding-routes':
+      return listSessionConversationRoutes(database)
     case 'binding-replace':
       return replaceSessionConversationBinding(database, params.binding as never)
     case 'binding-clear':

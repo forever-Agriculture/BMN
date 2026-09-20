@@ -205,6 +205,10 @@ const receiptContract = [
       receipt.conversationFromHook?.reportedDetail?.startsWith('Reported by Codex at session start') &&
       receipt.conversationFromHook?.reportedDetail?.includes('not carried: --full-auto') &&
       receipt.conversationFromHook?.rivalRoute === 'unsupported' &&
+      // The session's own `bmn list --json` shows its route, and only its own session.
+      receipt.conversationFromHook?.listed?.sessions === 1 &&
+      receipt.conversationFromHook?.listed?.conversation?.status === 'bound' &&
+      receipt.conversationFromHook?.listed?.conversation?.captureRoute === 'hook-session-start' &&
       JSON.stringify(receipt.conversationFromHook?.launchArguments) ===
         JSON.stringify(['--model', 'gpt-6', '--full-auto']) &&
       JSON.stringify(receipt.conversationFromHook?.resumedArguments) ===

@@ -57,6 +57,8 @@ export interface ControlHandlers {
     /** The agent's own app already notifies the owner's phone. */
     phoneNotified?: boolean
   }): Promise<unknown>
+  /** Records why a conversation report was refused, so a refusal is not silent to the owner. */
+  reportRefusal(method: string, sessionId: string | null, reason: string): void
   /** The harness's own word about which conversation its process is in; never reachable by the owner token. */
   observeConversation(p: {
     sessionId: string
@@ -660,32 +662,42 @@ export class ControlServer {
         }))
       }
       case 'conversation.observe': {
-        const params = closedParams(rawParams, [
-          'sessionId', 'agentCli', 'conversationReference', 'source', 'transcriptPath'
-        ])
-        // The owner keeps the explicit replace route; only a session may speak for its own process.
-        if (scope.kind !== 'session') {
-          throw unauthorized('Only a session credential may report its own conversation')
+        // A hook discards what this call answers, so every refusal is recorded instead of vanishing.
+        try {
+          const params = closedParams(rawParams, [
+            'sessionId', 'agentCli', 'conversationReference', 'source', 'transcriptPath'
+          ])
+          // The owner keeps the explicit replace route; only a session may speak for its own process.
+          if (scope.kind !== 'session') {
+            throw unauthorized('Only a session credential may report its own conversation')
+          }
+          const observedCli = requireEnum(params, 'agentCli', CONVERSATION_AGENT_CLIS)
+          const conversationReference = requireText(params, 'conversationReference', RULES.conversationReference)
+          if (!CONVERSATION_REFERENCE.test(conversationReference)) {
+            throw invalid('conversationReference must be a UUID')
+          }
+          const source = requireEnum(params, 'source', CONVERSATION_OBSERVATION_SOURCES)
+          const transcriptPath = readText(params, 'transcriptPath', RULES.path)
+          if (transcriptPath !== undefined && !isAbsolute(transcriptPath)) {
+            throw invalid('transcriptPath must be absolute')
+          }
+          const sessionId = this.target(scope, params)
+          return await handlers.observeConversation({
+            sessionId,
+            incarnationId: incarnationOf(scope),
+            agentCli: observedCli,
+            conversationReference: conversationReference.toLowerCase(),
+            source,
+            ...(transcriptPath === undefined ? {} : { transcriptPath })
+          })
+        } catch (error) {
+          handlers.reportRefusal(
+            method,
+            scope.kind === 'session' ? scope.sessionId : null,
+            this.redact(this.toControlError(error).message)
+          )
+          throw error
         }
-        const observedCli = requireEnum(params, 'agentCli', CONVERSATION_AGENT_CLIS)
-        const conversationReference = requireText(params, 'conversationReference', RULES.conversationReference)
-        if (!CONVERSATION_REFERENCE.test(conversationReference)) {
-          throw invalid('conversationReference must be a UUID')
-        }
-        const source = requireEnum(params, 'source', CONVERSATION_OBSERVATION_SOURCES)
-        const transcriptPath = readText(params, 'transcriptPath', RULES.path)
-        if (transcriptPath !== undefined && !isAbsolute(transcriptPath)) {
-          throw invalid('transcriptPath must be absolute')
-        }
-        const sessionId = this.target(scope, params)
-        return handlers.observeConversation({
-          sessionId,
-          incarnationId: incarnationOf(scope),
-          agentCli: observedCli,
-          conversationReference: conversationReference.toLowerCase(),
-          source,
-          ...(transcriptPath === undefined ? {} : { transcriptPath })
-        })
       }
       case 'attention.withdraw': {
         const params = closedParams(rawParams, ['sessionId', 'requestKey'])

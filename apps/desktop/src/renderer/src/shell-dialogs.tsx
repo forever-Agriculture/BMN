@@ -1,6 +1,8 @@
 // MODULE: shell-dialogs.tsx - small shell dialogs: workspace name, conversation reference and destructive confirmation
 import { useState } from 'react'
 import { Dialog } from './dialog'
+import { resumeConfirmationPresentation } from './conversation-resume'
+import type { ConversationResumePreview } from '@bmn/protocol'
 
 export function WorkspaceDialog(props: {
   mode: 'create' | 'rename'
@@ -91,6 +93,38 @@ export function ConfirmDialog(props: {
           props.onClose()
           props.onConfirm()
         }}>{props.confirmLabel}</button>
+      </div>
+    </Dialog>
+  )
+}
+
+/**
+ * Shows the exact Resume command before anything starts, with the stored arguments it leaves
+ * behind. Nothing is launched until the owner confirms what they have read.
+ */
+export function ResumeDialog(props: {
+  preview: ConversationResumePreview
+  sessionName: string
+  onConfirm(): void
+  onClose(): void
+}): React.JSX.Element {
+  const shown = resumeConfirmationPresentation(props.preview, props.sessionName)
+  return (
+    <Dialog label="Resume conversation" onClose={props.onClose}>
+      <p>{shown.message}</p>
+      <pre className="resume-command">{shown.command}</pre>
+      {shown.notCarried ? (
+        <p className="dialog-note">
+          Not carried over from the original launch: {shown.notCarried.names}. {shown.notCarried.reason}
+        </p>
+      ) : null}
+      <div className="dialog-actions">
+        <button type="button" className="ghost" onClick={props.onClose}>Cancel</button>
+        {/* Resume is not destructive and is the action just asked for, so Enter completes it. */}
+        <button type="button" className="primary" autoFocus onClick={() => {
+          props.onClose()
+          props.onConfirm()
+        }}>Resume</button>
       </div>
     </Dialog>
   )

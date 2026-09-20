@@ -19,6 +19,7 @@ import { CompanionService } from './companion-service'
 import type { DatabaseWorkerClient } from './database-client'
 import { COMPANION_OPERATIONS, insertArtifact, listReadyArtifacts, type CompanionOperationName } from './database-companion-store'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
+import { selectConversationRoutes } from './database-binding-store'
 import { listSessions, listWorkspaces } from './database-workspace-store'
 import type { SessionManager } from './session-manager'
 import type { TelegramConnector } from './telegram-connector'
@@ -53,7 +54,8 @@ function workerLike(connection: DatabaseConnection): DatabaseWorkerClient {
       }
     },
     listWorkspaces: async (includeArchived = false) => listWorkspaces(connection, includeArchived),
-    listSessions: async (workspaceId: string) => listSessions(connection, workspaceId)
+    listSessions: async (workspaceId: string) => listSessions(connection, workspaceId),
+    listConversationRoutes: async () => selectConversationRoutes(connection)
   } as unknown as DatabaseWorkerClient
 }
 
@@ -581,5 +583,78 @@ describe('Telegram attention notifications', () => {
     expect(COMPANION_OPERATIONS.listDrafts(database)).toContainEqual(
       expect.objectContaining({ origin: 'telegram', state: 'draft', text: 'racing answer' })
     )
+  })
+})
+
+describe('conversation route in list and snapshot', () => {
+  /** The control handlers are private; the projection is the surface both of them are built from. */
+  function listed(scope: { kind: 'owner' } | { kind: 'session'; sessionId: string }): Promise<
+    Array<{ sessionId: string; conversation: { status: string; captureRoute: string } | null }>
+  > {
+    const reach = service as unknown as {
+      listedSessions(scope: unknown): Promise<
+        Array<{ sessionId: string; conversation: { status: string; captureRoute: string } | null }>
+      >
+    }
+    return reach.listedSessions(scope)
+  }
+
+  function storeBinding(sessionId: string, status: string, captureRoute: string, reference: string | null): void {
+    database.prepare(
+      `INSERT INTO conversation_binding(
+         session_id, agent_cli, status, conversation_reference, capture_route,
+         launch_cwd, launch_executable, launch_argv_json, launch_environment_json, detail, captured_at
+       ) VALUES (?, 'codex', ?, ?, ?, '/work', '/usr/bin/codex', '[]', '{}', 'stored', ?)`
+    ).run(sessionId, status, reference, captureRoute, now)
+  }
+
+  it('adds the hook route beside the existing session fields, and null without a binding', async () => {
+    storeBinding('s2', 'bound', 'hook-session-start', '01a0b657-0000-4000-8000-000000000001')
+
+    const sessions = await listed({ kind: 'owner' })
+
+    expect(sessions.map((session) => [session.sessionId, session.conversation])).toEqual([
+      ['s1', null],
+      ['s2', { status: 'bound', captureRoute: 'hook-session-start' }]
+    ])
+    // Backward compatible: every field a client read before is still there, untouched.
+    expect(sessions[0]).toMatchObject({ sessionId: 's1', name: 'One', cwd: '/work' })
+  })
+
+  it('reports the legacy routes unchanged', async () => {
+    storeBinding('s1', 'unsupported', 'unsupported', null)
+    storeBinding('s2', 'bound', 'claude-session-id', '01a0b657-0000-4000-8000-000000000002')
+
+    expect((await listed({ kind: 'owner' })).map((session) => session.conversation)).toEqual([
+      { status: 'unsupported', captureRoute: 'unsupported' },
+      { status: 'bound', captureRoute: 'claude-session-id' }
+    ])
+  })
+
+  it('never shows one session the route of another', async () => {
+    storeBinding('s2', 'bound', 'hook-session-start', '01a0b657-0000-4000-8000-000000000003')
+
+    const sessions = await listed({ kind: 'session', sessionId: 's1' })
+
+    expect(sessions).toHaveLength(1)
+    expect(sessions[0]).toMatchObject({ sessionId: 's1', conversation: null })
+  })
+
+  it('carries the route into the snapshot the owner sees', async () => {
+    storeBinding('s2', 'bound', 'hook-session-start', '01a0b657-0000-4000-8000-000000000004')
+
+    const reach = service as unknown as { snapshot(scope: unknown): Promise<{ sessions: unknown[] }> }
+    const snapshot = await reach.snapshot({ kind: 'owner' })
+
+    expect(snapshot.sessions).toEqual([
+      { sessionId: 's1', name: 'One', cwd: '/work', process: 'never-started', conversation: null },
+      {
+        sessionId: 's2',
+        name: 'Two',
+        cwd: '/work/two',
+        process: 'never-started',
+        conversation: { status: 'bound', captureRoute: 'hook-session-start' }
+      }
+    ])
   })
 })

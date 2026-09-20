@@ -25,6 +25,7 @@ import {
   type VoiceModelId,
   type VoiceStatus,
   type ConversationBindingState,
+  type ConversationResumePreview,
   type ExplicitConversationBinding,
   type LaunchTemplateRecord,
   type LayoutGetResult,
@@ -321,6 +322,10 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   getConversationBinding(sessionId: string): Promise<ConversationBindingState> {
     return invokeBridge('aiterm:session:binding-get', sessionId)
+  },
+  /** What Resume would run for this session. Read-only: no process is started. */
+  previewConversationResume(sessionId: string): Promise<ConversationResumePreview> {
+    return invokeBridge('aiterm:session:resume-preview', sessionId)
   },
   locateConversation(binding: ExplicitConversationBinding): Promise<ExplicitConversationBinding> {
     return invokeBridge('aiterm:session:binding-replace', binding.sessionId, binding)

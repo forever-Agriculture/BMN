@@ -1207,6 +1207,26 @@ input[type='radio'] {
   margin-top: 2px;
 }
 
+/* The exact Resume command, wrapped rather than cut: the owner confirms the whole of it. */
+.resume-command {
+  max-height: 30vh;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: var(--ground);
+  font: 12px/1.45 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.dialog-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 /* ---------- File reference preview ---------- */
 
 .file-reference-dialog {
