@@ -8,6 +8,7 @@ import {
   resumeInterruptedHeading,
   resumeInterruptedRows,
   resumeInterruptedSummary,
+  offerNeedsRecording,
   resumeRowOutcomeWords,
   shouldOfferInterrupted,
   startableRows
@@ -52,6 +53,18 @@ describe('the words the offer uses', () => {
       .toBe('a desktop update stopped 1 session. Nothing has started since.')
     expect(resumeInterruptedSummary(cohort([entry({ sessionId: 'a' }), entry({ sessionId: 'b' })], 'application-quit')))
       .toBe('quitting BMN stopped 2 sessions. Nothing has started since.')
+  })
+})
+
+describe('when a stop still has to be recorded as offered', () => {
+  it('records a stop the owner has not been shown yet, however the dialog opens', () => {
+    expect(offerNeedsRecording(cohort([entry({ sessionId: 'a' })]))).toBe(true)
+  })
+
+  it('records nothing for an absent stop, or one already offered', () => {
+    expect(offerNeedsRecording(null)).toBe(false)
+    expect(offerNeedsRecording({ ...cohort([entry({ sessionId: 'a' })]), offeredAt: '2026-09-21T10:02:00.000Z' }))
+      .toBe(false)
   })
 })
 

@@ -30,6 +30,17 @@ export function interruptedStopWords(cause: ResumableStopCause): string {
 }
 
 /**
+ * Whether opening this cohort's dialog is the first time the owner sees it, so the stop has still
+ * to be recorded as offered. Being shown it is the answer BMN counts, however the dialog was
+ * opened: by hand from the palette just as much as at start-up.
+ */
+export function offerNeedsRecording(
+  cohort: InterruptedSessionCohort | null
+): cohort is InterruptedSessionCohort {
+  return cohort !== null && cohort.offeredAt === null
+}
+
+/**
  * Whether the start-up offer may open now. Recording a stop as offered is how BMN promises never to
  * ask twice, so it may only happen when the owner is actually shown the dialog: a stop that arrives
  * while another dialog holds the screen is left for the next start, and for the palette.
@@ -38,7 +49,7 @@ export function shouldOfferInterrupted(
   cohort: InterruptedSessionCohort | null,
   anotherDialogOpen: boolean
 ): cohort is InterruptedSessionCohort {
-  return cohort !== null && cohort.offeredAt === null && !anotherDialogOpen
+  return offerNeedsRecording(cohort) && !anotherDialogOpen
 }
 
 export function resumeInterruptedHeading(cause: ResumableStopCause): string {

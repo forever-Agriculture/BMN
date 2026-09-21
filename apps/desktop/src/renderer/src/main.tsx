@@ -34,7 +34,11 @@ import { FilesPanel } from './files-panel'
 import { HookEventsDialog } from './hook-events-dialog'
 import { ProgressEvidenceDialog } from './progress-evidence-dialog'
 import { ResumeInterruptedDialog } from './resume-interrupted-dialog'
-import { interruptedStopWords, shouldOfferInterrupted } from './resume-interrupted-presentation'
+import {
+  interruptedStopWords,
+  offerNeedsRecording,
+  shouldOfferInterrupted
+} from './resume-interrupted-presentation'
 import { ProgressStrip } from './progress-strip'
 import { Icon } from './icons'
 import { isModifierOnly, resolveShortcut, SHORTCUT_LABELS, type AppCommand } from './keymap'
@@ -1314,7 +1318,14 @@ function App(): React.JSX.Element {
       }),
       command('resume-interrupted', 'Resume interrupted sessions…', () => {
         void reloadInterruptedCohort()
-          .then((cohort) => setDialog(cohort ? { kind: 'resume-interrupted', cohort } : null))
+          .then((cohort) => {
+            setDialog(cohort ? { kind: 'resume-interrupted', cohort } : null)
+            // Opening it by hand is being shown it, so a stop the start-up offer never reached is
+            // recorded here instead; the next start does not ask about it again.
+            if (!offerNeedsRecording(cohort)) return undefined
+            return window.aiTerminal.markCohortOffered(cohort.cohortId)
+              .then((offer) => setInterrupted({ ...cohort, offeredAt: offer.offeredAt }))
+          })
           .catch(fail('The resume offer could not be read'))
       }, {
         disabled: !interrupted,
