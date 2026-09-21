@@ -3,12 +3,12 @@ import { DEFAULT_ON_DECSET_MODES, TRACKED_DECSET_MODES } from '@bmn/protocol'
 
 const TRACKED = new Set(TRACKED_DECSET_MODES)
 /**
- * A terminal runs one mouse protocol and one mouse encoding at a time, so these are slots rather
- * than flags: setting one replaces the others, and resetting any of them turns the whole slot off.
- * Keeping them as independent flags would restore a protocol the program had switched away from.
+ * A terminal runs one mouse protocol at a time, so these are one slot rather than three flags:
+ * setting one replaces the others, and resetting any of them turns reporting off, which is what
+ * xterm itself does. Kept as flags, a rebuilt view would report to a protocol the program had
+ * switched away from, or one it had turned off.
  */
 const MOUSE_PROTOCOLS = [1000, 1002, 1003]
-const MOUSE_ENCODINGS = [1005, 1006]
 /** A private-mode parameter list longer than this is not one a terminal would send. */
 const MAX_PARAMETERS = 64
 
@@ -71,11 +71,8 @@ export class DecsetModeTracker {
       if (parameter === '') continue
       const mode = Number(parameter)
       if (!TRACKED.has(mode)) continue
-      const slot = MOUSE_PROTOCOLS.includes(mode)
-        ? MOUSE_PROTOCOLS
-        : MOUSE_ENCODINGS.includes(mode) ? MOUSE_ENCODINGS : undefined
-      if (slot) {
-        for (const other of slot) this.on.delete(other)
+      if (MOUSE_PROTOCOLS.includes(mode)) {
+        for (const other of MOUSE_PROTOCOLS) this.on.delete(other)
         if (set) this.on.add(mode)
         continue
       }

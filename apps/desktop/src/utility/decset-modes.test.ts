@@ -54,9 +54,16 @@ describe('reading private modes from a program’s output', () => {
     expect(feed('\u001b[?1002h\u001b[?1002l').modes()).toEqual([])
   })
 
-  it('keeps one mouse encoding the same way, without touching the protocol', () => {
-    expect(feed('\u001b[?1000h\u001b[?1005h\u001b[?1006h').modes()).toEqual([1000, 1006])
-    expect(feed('\u001b[?1000h\u001b[?1006h\u001b[?1005l').modes()).toEqual([1000])
+  /** xterm 6.0.0 ignores the UTF-8 encoding either way, so following it could only mislead a view. */
+  it('leaves the SGR encoding alone when the program mentions the UTF-8 one', () => {
+    expect(TRACKED_DECSET_MODES).not.toContain(1005)
+    expect(feed('\u001b[?1000h\u001b[?1006h\u001b[?1005h').modes()).toEqual([1000, 1006])
+    expect(feed('\u001b[?1000h\u001b[?1006h\u001b[?1005l').modes()).toEqual([1000, 1006])
+  })
+
+  it('follows the SGR encoding itself, and the protocol it rides on, separately', () => {
+    expect(feed('\u001b[?1000h\u001b[?1006h\u001b[?1006l').modes()).toEqual([1000])
+    expect(feed('\u001b[?1006h\u001b[?1003h').modes()).toEqual([1003, 1006])
   })
 
   it('ignores private modes outside the tracked set', () => {

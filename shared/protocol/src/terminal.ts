@@ -22,9 +22,13 @@ export const RESTORED_VIEW_NOTICE =
  *
  * `1049` is the alternate screen; a view that came back without it would draw a TUI over the
  * scrollback the owner was reading. The order here is the order the modes are restored in.
+ *
+ * `1005`, the UTF-8 mouse encoding, is deliberately absent: xterm 6.0.0 ignores both `?1005h` and
+ * `?1005l`, so a view's encoding never follows them. Carrying it could only restore an encoding
+ * the view is not in, or drop the SGR encoding the program is really using.
  */
 export const TRACKED_DECSET_MODES: readonly number[] = Object.freeze([
-  1, 6, 7, 25, 1000, 1002, 1003, 1004, 1005, 1006, 1049, 2004
+  1, 6, 7, 25, 1000, 1002, 1003, 1004, 1006, 1049, 2004
 ])
 
 /**
