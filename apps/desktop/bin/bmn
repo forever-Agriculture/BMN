@@ -636,10 +636,19 @@ const HOOK_ENTRY_TIMEOUT = 5
  * The file that harness actually reads. Both harnesses let the owner move their config directory,
  * and BMN follows them there rather than writing a file the harness will never look at.
  */
+/**
+ * Absolute, but never through `resolve` or `join`: both collapse `..` as text, and a `..` has to
+ * reach `linkTarget` intact or it is answered from where a link was written, not where it points.
+ */
+function absoluteUncollapsed(path) {
+  return isAbsolute(path) ? path : `${process.cwd()}/${path}`
+}
+
 function hookFilePath(agent) {
   const [directory, ...rest] = HOOK_FILES[agent].path
   const moved = agent === 'claude' ? process.env.CLAUDE_CONFIG_DIR : process.env.CODEX_HOME
-  return join(moved || join(homedir(), directory), ...rest)
+  // The owner's own directory cannot contain a `..`; a directory they moved it to can.
+  return moved ? `${absoluteUncollapsed(moved)}/${rest.join('/')}` : join(homedir(), directory, ...rest)
 }
 
 function hookEntryCommand(agent) {
@@ -670,7 +679,6 @@ const COMMAND_WRAPPERS = {
   env: { assignments: true, positional: 0 },
   command: { assignments: false, positional: 0 },
   exec: { assignments: false, positional: 0 },
-  eval: { assignments: false, positional: 0 },
   nohup: { assignments: false, positional: 0 },
   setsid: { assignments: false, positional: 0 },
   nice: { assignments: false, positional: 0 },
@@ -678,22 +686,24 @@ const COMMAND_WRAPPERS = {
 }
 /** Words that begin a command without being one; the command follows them. */
 const SHELL_KEYWORDS = ['then', 'else', 'elif', 'do', '{', '!']
+/** Of those, the ones that are a syntax error unless a construct opened earlier in the command. */
+const CONTINUATION_KEYWORDS = ['then', 'else', 'elif', 'do']
+/** The words that open such a construct. `then bmn hook claude` on its own runs nothing. */
+const OPENING_KEYWORDS = ['if', 'while', 'until', 'for', 'case', 'select']
+/** And the words that close one again, so `if true; then :; fi; then …` is a syntax error too. */
+const CLOSING_KEYWORDS = ['fi', 'done', 'esac']
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=[^(]*$/
-const HEREDOC = /<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/
 
 /**
- * The line with everything the shell would never run taken out: a comment to the end of its line,
- * and the body of a here-document. Both are text that reads exactly like a command.
+ * The line with its comments taken out. A `#` starts a comment wherever a word is not already
+ * open - at the start, after a space, and also straight after an operator, so `:;# bmn hook claude`
+ * is a comment and `file#1` is a file name.
  */
 function withoutInertText(command) {
   const lines = []
-  let skipUntil = null
   for (const line of command.split('\n')) {
-    if (skipUntil !== null) {
-      if (line.trim() === skipUntil) skipUntil = null
-      continue
-    }
     let quote = ''
+    let open = false
     let kept = line
     for (let index = 0; index < line.length; index += 1) {
       const character = line[index]
@@ -701,19 +711,42 @@ function withoutInertText(command) {
         if (character === quote) quote = ''
         continue
       }
-      if (character === '"' || character === "'") { quote = character; continue }
-      if (character === '\\') { index += 1; continue }
-      // A `#` starts a comment only where a word starts, never inside one.
-      if (character === '#' && (index === 0 || /\s/.test(line[index - 1]))) {
+      if (character === '"' || character === "'") { quote = character; open = true; continue }
+      if (character === '\\') { index += 1; open = true; continue }
+      if (character === '#' && !open) {
         kept = line.slice(0, index)
         break
       }
+      if (/[\s;&|()<>]/.test(character)) { open = false; continue }
+      open = true
     }
     lines.push(kept)
-    const heredoc = HEREDOC.exec(kept)
-    if (heredoc !== null && !kept.includes('<<<')) skipUntil = heredoc[2]
   }
   return lines.join('\n')
+}
+
+/**
+ * Whether a here-document starts anywhere in the command. Its body is text that reads exactly like
+ * a command, and telling it apart needs the delimiter rules in full: it may be quoted, numeric or
+ * indented, the terminator may be indented under `<<-`, and several documents may be pending at
+ * once. BMN reads none of that. It stops reading a command that contains one, which costs a
+ * duplicate entry and never a silent gap.
+ */
+function hasHereDocument(command) {
+  let quote = ''
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index]
+    if (quote) {
+      if (character === quote) quote = ''
+      continue
+    }
+    if (character === '"' || character === "'") { quote = character; continue }
+    if (character === '\\') { index += 1; continue }
+    // `<<<` is a here-string: one word, no body, nothing to tell apart.
+    if (character === '<' && command[index + 1] === '<' && command[index + 2] !== '<') return true
+    if (character === '<' && command[index + 1] === '<') index += 2
+  }
+  return false
 }
 
 /**
@@ -737,10 +770,13 @@ function commandSegments(command) {
     started = false
     literal = false
   }
-  const endSegment = () => {
+  let piped = false
+  const endSegment = (separator = '') => {
     endWord()
-    if (words.length > 0) segments.push(words)
+    if (words.length > 0) segments.push({ words, backgrounded: separator === '&', piped })
     words = []
+    // Only the left-hand side of a pipe keeps the standard input the harness handed the entry.
+    piped = separator === '|'
   }
   for (let index = 0; index < command.length; index += 1) {
     const character = command[index]
@@ -765,27 +801,25 @@ function commandSegments(command) {
       spaced = false
       continue
     }
-    // `&>` and `|&` are redirections; a bare `&` or `|` ends the command.
-    if ((character === ';' || character === '\n' || character === '|' ||
-      (character === '&' && command[index + 1] !== '>')) && !(character === '|' && command[index + 1] === '&')) {
-      endSegment()
+    // `&>` is a redirection. Every `|` ends the command, including the `|` of `|&`, which is a
+    // pipe that also carries stderr - the words after it belong to the next command, not this one.
+    if (character === ';' || character === '\n' || character === '|' ||
+      (character === '&' && command[index + 1] !== '>')) {
+      // `&&` joins two commands; a lone `&` runs the one before it in the background.
+      endSegment(character === '&' && command[index + 1] === '&' ? '&&' : character)
       spaced = true
       continue
     }
-    if (character === '>' || character === '<' || character === '&' || character === '|') {
+    if (character === '>' || character === '<' || character === '&') {
       const attached = !spaced && started
       endWord()
+      const start = index
       while (index + 1 < command.length && '><&|'.includes(command[index + 1])) index += 1
-      // `>&2` names the descriptor it duplicates in the same breath, so it is part of the redirection.
-      if (command[index + 1] === '&') {
-        index += 1
-        while (index + 1 < command.length && /[\d-]/.test(command[index + 1])) index += 1
-      }
-      words.push({ text: character, literal: false, redirect: true, attached })
+      words.push({ text: command.slice(start, index + 1), literal: false, redirect: true, attached })
       spaced = false
       continue
     }
-    if (/\s/.test(character)) {
+    if (/[ \t\n\r\f\v]/.test(character)) {
       endWord()
       spaced = true
       continue
@@ -798,16 +832,26 @@ function commandSegments(command) {
   return segments
 }
 
-/** Drops each redirection and its target, and the file descriptor written against it. */
+/**
+ * The words with each redirection and its target taken out, or null when the segment is not one BMN
+ * will read: a redirection with no target is a syntax error, and anything that redirects the command's
+ * own standard input takes away the only channel a hook event arrives on.
+ */
 function withoutRedirections(words) {
   const kept = []
   for (let index = 0; index < words.length; index += 1) {
     if (words[index].redirect) {
+      const operator = words[index].text
       const previous = kept[kept.length - 1]
       // `2>file` writes a descriptor; `bmn 2 >file` passes 2 to bmn and is a different command.
-      if (words[index].attached && previous !== undefined && !previous.literal && /^\d+$/.test(previous.text)) {
-        kept.pop()
-      }
+      // Only `>` and `<` take a descriptor in front: in `bmn 1&>file` the `1` is an argument.
+      const attachedDescriptor =
+        words[index].attached && (operator[0] === '>' || operator[0] === '<') &&
+        previous !== undefined && !previous.literal && /^\d+$/.test(previous.text)
+      const descriptor = attachedDescriptor ? previous.text : null
+      if (attachedDescriptor) kept.pop()
+      if (descriptor === '0' || (descriptor === null && operator[0] === '<')) return null
+      if (index + 1 >= words.length) return null
       index += 1
       continue
     }
@@ -816,21 +860,29 @@ function withoutRedirections(words) {
   return kept
 }
 
-/** The word as the shell read it: `(` and `)` are punctuation only where the shell saw them bare. */
-function wordText(word) {
-  return word.literal ? word.text : word.text.replace(/^\(+/, '').replace(/\)+$/, '')
+/**
+ * The word as the shell read it: `(` and `)` are punctuation only where the shell saw them bare.
+ * `closing` is false for the program word, which opens a subshell but never closes one - `bmn)` is
+ * a `case` pattern running a program called `hook`, not a subshell running bmn.
+ */
+function wordText(word, closing = true) {
+  if (word.literal) return word.text
+  const opened = word.text.replace(/^\(+/, '')
+  return closing ? opened.replace(/\)+$/, '') : opened
 }
 
 /** The last path component of the program, so `/usr/bin/bmn` is bmn and `other.bmn` is not. */
 function programName(word) {
-  const text = wordText(word)
+  const text = wordText(word, false)
   return text.slice(text.lastIndexOf('/') + 1)
 }
 
-function runsHookInSegment(all, agent) {
+function runsHookInSegment(all, agent, opened) {
   const words = all.filter((word) => wordText(word) !== '')
+  const begins = (word) =>
+    SHELL_KEYWORDS.includes(word) && (opened || !CONTINUATION_KEYWORDS.includes(word))
   let index = 0
-  while (index < words.length && !words[index].literal && SHELL_KEYWORDS.includes(words[index].text)) index += 1
+  while (index < words.length && !words[index].literal && begins(words[index].text)) index += 1
   while (index < words.length && !words[index].literal && ASSIGNMENT.test(words[index].text)) index += 1
   for (let step = 0; step < 8 && index < words.length; step += 1) {
     const wrapper = COMMAND_WRAPPERS[programName(words[index])]
@@ -843,16 +895,29 @@ function runsHookInSegment(all, agent) {
     if (index < words.length && !words[index].literal && words[index].text.startsWith('-')) return false
     index += wrapper.positional
   }
-  const [program, second, third] = words.slice(index, index + 3)
-  if (program === undefined || second === undefined || third === undefined) return false
+  // Exactly three words: `bmn hook <agent>` takes one argument and refuses any more, so a fourth
+  // word means the command the shell runs prints an error and reports nothing.
+  if (words.length !== index + 3) return false
+  const [program, second, third] = words.slice(index)
   return programName(program) === 'bmn' && wordText(second) === 'hook' && wordText(third) === agent
 }
 
 /** Whether this entry's command runs `bmn hook <agent>`; see COMMAND_WRAPPERS for what is read. */
 function runsHook(command, agent) {
   if (typeof command !== 'string') return false
-  for (const words of commandSegments(withoutInertText(command))) {
-    if (runsHookInSegment(withoutRedirections(words), agent)) return true
+  if (hasHereDocument(command)) return false
+  let opened = false
+  for (const segment of commandSegments(withoutInertText(command))) {
+    const kept = withoutRedirections(segment.words)
+    if (kept === null) continue
+    // The hook event arrives only on standard input, and a backgrounded command is handed
+    // /dev/null while the right-hand side of a pipe is handed whatever the left-hand side wrote.
+    const reads = !segment.backgrounded && !segment.piped
+    if (reads && runsHookInSegment(kept, agent, opened)) return true
+    const first = kept.find((word) => wordText(word) !== '')
+    if (first === undefined || first.literal) continue
+    if (OPENING_KEYWORDS.includes(first.text)) opened = true
+    if (CLOSING_KEYWORDS.includes(first.text)) opened = false
   }
   return false
 }
@@ -1032,7 +1097,9 @@ function linkTarget(path) {
   // it is met, so `..` after a symlink steps back from where the link landed and not from where it
   // was written. Neither `resolve()` nor `realpathSync()` can be used here - both collapse `..` as
   // text first, which lands on a different file and would overwrite whatever happens to be there.
-  let pending = resolve(path).split('/').filter((part) => part !== '')
+  // Made absolute by concatenation, never by `resolve`/`join`, which would collapse the `..` in the
+  // given path itself before a single link had been read.
+  let pending = absoluteUncollapsed(path).split('/').filter((part) => part !== '')
   let out = ''
   let hops = 0
   while (pending.length > 0) {
@@ -1147,7 +1214,7 @@ function runHooks(argv) {
     const agents = hookAgentsFor(agent)
     const pathFor = (name) => parsed.options.file === undefined
       ? hookFilePath(name)
-      : resolve(process.cwd(), parsed.options.file)
+      : absoluteUncollapsed(parsed.options.file)
     return action === 'check'
       ? checkHooksCommand(agents, pathFor, parsed.options.json === true)
       : installHooksCommand(agents[0], pathFor(agents[0]), parsed.options.json === true)

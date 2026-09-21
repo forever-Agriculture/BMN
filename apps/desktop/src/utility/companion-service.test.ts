@@ -11,6 +11,7 @@ import {
   HOOK_EVENT_LOG_LIMIT,
   isAttentionOrigin,
   METHOD_REGISTRY,
+  TERMINAL_NOTICE_BODY_MAX,
   TERMINAL_NOTICE_WINDOW_MS,
   type AppEventMessage,
   type ArtifactRecord,
@@ -1036,6 +1037,22 @@ describe('terminal notices (OSC 9, 99, 777)', () => {
     expect(rows).toHaveLength(1)
     expect([first, second].filter((result) => (result as { opened: boolean }).opened)).toHaveLength(2)
     expect(rows[0]?.body).toContain('B')
+  })
+
+  it('drops the lines the owner has already read rather than the newest one, and clips the body', async () => {
+    await service.sessionsChanged()
+    const long = 'x'.repeat(3000)
+
+    await notice({ title: 'first', body: long })
+    await notice({ title: 'second', body: long })
+    await notice({ title: 'third', body: long })
+    const rows = await openRows()
+
+    const body = rows[0]?.body ?? ''
+    expect(body.length).toBeLessThanOrEqual(TERMINAL_NOTICE_BODY_MAX)
+    // The newest line is the one that has not been read yet, so it is the one that survives.
+    expect(body).toContain('third')
+    expect(body).not.toContain('first')
   })
 
   it('gives a restarted program its own row instead of a line under the last run', async () => {

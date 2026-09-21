@@ -205,13 +205,28 @@ Both commands say what is **configured**. Neither says that a hook has ever fire
 **Hook events…** list is what shows that. Nor does either say the command *will* run: the documented
 entry is guarded and does nothing while BMN is not running, which is the point of the guard.
 
-BMN reads a small set of command shapes, not shell. It sees `bmn hook <agent>` when those are the
-words of the command, including through a bare wrapper that carries no options — `timeout 5`,
-`nohup`, `command`, `env FOO=1`, a subshell, a pipe, a redirection. It deliberately does **not** try
-to read a wrapper carrying a flag, a shell handed a script (`sh -c '…'`), or a command substitution,
-because what those do depends on the flag or the script. Those read as `missing`, so `install` adds
-its own entry beside yours and the hook fires twice rather than not at all. If you see a duplicate,
-that is why, and removing either one is safe.
+BMN reads a small set of command shapes, not shell. It sees `bmn hook <agent>` when those three
+words are the whole command, including through a bare wrapper that carries no options — `timeout 5`,
+`nohup`, `command`, `env FOO=1`, a subshell, a redirection that leaves standard input alone. It
+deliberately does **not** try to read a wrapper carrying a flag, a shell handed a script
+(`sh -c '…'`), a command substitution, an `eval` that assembles its own script, a `time`, a line
+continuation, or any command containing a here-document, because what those run depends on a flag,
+a script or a body whose delimiter rules BMN does not model.
+
+It also reads as `missing` the shapes that would run but could never report, because the hook event
+arrives only on the command's standard input: a command in the background (`bmn hook claude &` is
+handed `/dev/null`), the right-hand side of a pipe, and anything that redirects or closes standard
+input. A fourth word reads as missing too — `bmn hook <agent>` takes exactly one agent and refuses
+more.
+
+Everything in those two paragraphs reads as `missing`, so `install` adds its own entry beside yours
+and the hook fires twice rather than not at all. If you see a duplicate, that is why, and removing
+either one is safe.
+
+The rule behind that list: every shape BMN cannot read with certainty errs towards a duplicate
+entry, never towards a silent gap, because a gap leaves you with no hook and no warning. It is
+checked rather than asserted — the test suite runs every shape above through a real `bash` with a
+stub `bmn` and fails if `check` ever says "wired" about a command the shell did not run.
 
 The entries themselves, for wiring them by hand. `~/.claude/settings.json` needs `Notification`,
 `PostToolUse`, `UserPromptSubmit`, `Stop`, `SessionStart` and `SessionEnd`, next to any hooks

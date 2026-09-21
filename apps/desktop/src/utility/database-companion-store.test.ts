@@ -26,6 +26,7 @@ import {
   listDrafts,
   listProgress,
   markAttentionSeen,
+  appendAttentionBody,
   openAttention,
   putReceipt,
   putSettingsSection,
@@ -122,6 +123,25 @@ describe('companion store', () => {
       ['r4', 'open'],
       ['r1', 'answered']
     ])
+  })
+
+  it('adds to an open request without moving its revision, and refuses a closed one', () => {
+    // The desktop notifier and the pending Telegram page both key on `requestId:revision`, so
+    // touching the revision here would notify twice and never page. Returning null for a request
+    // that is no longer open is what makes the read and the write one step.
+    const opened = openAttention(database, {
+      sessionId: 's1', incarnationId: null, requestKey: 'growing', kind: 'notice', title: 'Building'
+    }, 'r-growing', now)
+    const seen = markAttentionSeen(database, opened.requestId, now)
+
+    const grown = appendAttentionBody(database, opened.requestId, 'one\ntwo')
+
+    expect(grown).toMatchObject({ body: 'one\ntwo', revision: opened.revision, seenAt: seen.seenAt, state: 'open' })
+
+    closeAttention(database, { requestId: opened.requestId }, 'answered', 'done', now)
+
+    expect(appendAttentionBody(database, opened.requestId, 'three')).toBeNull()
+    expect(appendAttentionBody(database, 'never-existed', 'three')).toBeNull()
   })
 
   it('does not close a request that changed kind or revision before activation', () => {

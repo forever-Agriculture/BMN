@@ -1483,3 +1483,144 @@ revision is re-checked from scratch after the next commit.
 This is the second time in this run: the same thing happened with two overlapping mutation-fence
 runs earlier. The rule I am holding myself to from here: while a check or fence run is in flight,
 the working tree is read-only, and the only safe edits are to `.dev-auto/` files no run touches.
+
+## 2026-09-22 — Fourth recheck refused `36a89d8`; five more false positives, and a rule I broke a third time
+
+Receipt: `.dev-auto/evidence/epic-15/reviews/epic-15-recheck4-astra.md` (gpt-6-astra/medium, read-only,
+prompt `epic-15-recheck4-prompt.md`). Verdict: **"Epic 15 is not acceptable at `36a89d8`."** The
+symlink P1 is confirmed closed — Astra checked relative links, link-to-link, several symlinked
+parents and `..` after a symlink, and all installed into the kernel-observed target with unrelated
+sentinels untouched. Findings 1-4, the queue closure, finding 5's rejected disposition and the
+withdrawn `env -i` finding all stand. **It accepted the `until true` judgement**, with the fair
+caveat that the conditional category must not become a general escape hatch for contradictory
+witnesses.
+
+What it found, every one of which I reproduced against a real bash before touching anything:
+
+1. `bmn |& true hook claude` read as **wired** while bash runs `bmn` with no arguments. My wave-4b
+   change was wrong in kind: `|&` is a *pipe* that also carries stderr, not a redirection, so it
+   ends the command. `&>` is the redirection; every `|` ends a command, including the `|` of `|&`.
+2. `bmn 1&>/dev/null hook claude` read as **wired** while bash passes `1`, `hook`, `claude`. Only
+   `>` and `<` take a descriptor in front of them; `&>` and `&>>` do not, so the `1` is an argument.
+3. Here-documents: `<<123`, an indented terminator that ends nothing, and two documents pending at
+   once all left the body readable as a command. The delimiter rules are quoted, numeric, indented
+   and stackable, and BMN models none of that — so it now **refuses to read any command containing a
+   here-document** rather than model it. A duplicate entry, never a gap.
+4. `:;# example; bmn hook claude` read as **wired**. A `#` begins a comment wherever a word is not
+   already open, which includes straight after an operator, not only after a space. Confirmed
+   against bash for `;`, `&`, `|`, `(` and `>`.
+5. `eval bmn hook claude '|'` read as **wired** while bash's `eval` fails to parse what it assembled.
+   `eval` builds a script out of its arguments and runs that, so it is not an argument-preserving
+   wrapper and is no longer read at all.
+
+**A sixth, found by my own probe before Astra's arrived:** `then bmn hook claude` read as wired and
+is a syntax error that runs nothing. The keyword skip exists for `if true; then bmn hook claude; fi`,
+where the segment really does begin with `then`. A continuation keyword (`then`, `else`, `elif`,
+`do`) is now only skipped when an opening keyword appeared earlier in the same command.
+
+All six are in the false-positive direction — the one that leaves the owner with no hook and no
+warning — so the claim that every residual error errs towards a duplicate was false when I made it.
+It is now checked rather than asserted: `docs/agent-control.md` states the rule and names the test
+that enforces it.
+
+### The extra GLM opinions, and what I took from them
+
+GLM-5.3-Flash/max, read-only with `Read,Grep,Glob`, 23 turns, $1.54
+(`epic-15-extra4-glmflash.json`), on the tests rather than the code. It confirmed the differential
+test is not a tautology, that the `allowedMisses` guard fails in both directions, and that the three
+`companion-service` requirements are assertion-backed at their use sites, naming the specific
+assertion each regression would fail. Four things it was right about and I fixed:
+
+- `true && bmn hook claude` does not need the conditional exemption: it runs, so it is ordinary
+  ground truth. Moved out.
+- The conditional shapes' verdicts were only ever checked as "not missing". Their exact wording is
+  now pinned in the recognition table, so the weakest assertion is no longer the only one.
+- The runner-failure comment claimed more than the code checked: a runner that failed to *start*
+  resolved as "the hook did not run". A string `code` (ENOENT) is now its own reported problem.
+- Five flag-carrying wrappers were listed twice, once literally and once through `allowedMisses`,
+  reading like independent negatives. The duplicates are gone.
+
+And four real coverage gaps, all now closed with tests: the `Notification` elicitation branches, the
+missing-`notification_type` permission fallback, a Codex `PreToolUse` for a tool that is not asking
+the owner anything, `interactiveAgentPid`'s unreadable-`/proc` path (fail-closed there would silently
+disable every hook on an odd system), the terminal-notice body overflow, and `appendAttentionBody`'s
+store-level contract.
+
+**One of its findings was my mistake, not the code's.** It reported that `bmn hooks uninstall` does
+not exist. It does not, and it never should: the epic scopes `check` and `install` only
+(`epics.md:773`). The claim came from my own dispatch prompt, which described 15.2 wrongly. Nothing
+in the handoff or this log ever claimed it.
+
+**Both reviewers were right that the "60 shapes" count was stale.** The differential list had grown
+to 81 entries before this wave and is larger again now. The handoff no longer states a number that
+has to be maintained by hand.
+
+### I edited the tree during a review run, for the third time
+
+Astra had finished, but the two GLM reviews were still reading the tree when I started applying this
+wave. I had written the rule after the second time and then broke it again within the hour. Their
+line citations are against a file that changed under them, so **neither GLM run can be cited as a
+review of a revision**; their findings are leads that I verified myself against the current file,
+which is how I treated them above, and it is why GLM-5.3's verdict is recorded as findings rather
+than as an opinion on `36a89d8`.
+
+The mechanism I am adding instead of another promise: check for a running reviewer or check process
+before the first edit of a wave, not after. The three failures so far were all the same shape — I
+started editing because I had a result in hand, without asking what else was still reading.
+
+### GLM-5.3's extra opinion, which found the most of any run this wave
+
+Receipt `.dev-auto/evidence/epic-15/reviews/epic-15-extra4-glm53.json` (GLM-5.3/max via the Claude
+CLI on the GLM profile, `Read,Grep,Glob` only, 12 turns, $2.80). It opens by saying its first read of
+`bin/bmn` was stale and did not match the tests, and that it re-traced everything from a re-read.
+That is my mid-run edit showing up in someone else's work; its findings below are against the
+current file, and I verified each one myself.
+
+**The symlink class, a third time — and this time in the path BMN is *given*.** `resolve()` collapses
+`..` as text. `linkTarget`'s first line called `resolve(path)`, and the CLI called
+`resolve(process.cwd(), --file)` before that, so a `..` never survived to reach the resolver written
+to handle it. With `x -> cfg/claude`, `--file <root>/x/../settings.json` landed on the file beside
+the link rather than inside what the link points at, overwrote it, and backed up the wrong file.
+Reproduced exactly as described. `hookFilePath` had the same defect through `join` for a moved
+`CLAUDE_CONFIG_DIR`. Both now go through `absoluteUncollapsed`, which makes a path absolute by
+concatenation only. Two tests, both fenced; the `..`-through-a-missing-component refusal now fires
+for the given path too, which it never could before.
+
+**A whole category my test oracle could not see.** The hook event arrives only on the command's
+standard input, and the stub accepted any argv and never read stdin — so it was more permissive than
+the real binary in two ways at once:
+
+- `bmn hook` takes exactly one agent and refuses more (`bin/bmn:1333`). `bmn hook claude --json`,
+  `bmn hook claude extra` and `bmn hook claude 2 >/dev/null` were all read as wired and are all dead
+  entries. The recogniser now requires the triple to be the whole command.
+- Anything that takes stdin away leaves an entry that runs and reports nothing: a redirection of
+  descriptor 0, the right-hand side of a pipe, and the background. **`bmn hook claude &` and
+  `echo x | bmn hook claude` were both pinned as wired**, and both are dead. Verified directly:
+  `printf … | bash -c 'cat & wait'` prints nothing, because a backgrounded command with job control
+  off is handed `/dev/null`. GLM-5.3 raised this as unverified-by-reading and was right.
+
+The stub now holds the real contract — exactly two arguments, and an event on stdin that starts with
+`{` — and the harness pipes one in. That change alone flipped two pinned shapes. One shape,
+`bmn hook claude 0<&1`, had to leave the differential list because duplicating the runner's own
+stdout onto stdin makes the stub block; it is pinned in the table instead, and the reason is written
+where it sits.
+
+**Four smaller ones, all verified and all fixed:** a `)` stripped from the *program* word made
+`case $x in\nbmn) hook claude\nesac` read as a subshell; JS `\s` splits on NBSP where the shell does
+not, so a copy-pasted entry read as three words; a redirection with no target is a syntax error that
+read as a clean command; and `opened` was never cleared by `fi`/`done`/`esac`, so
+`if true; then :; fi; then bmn hook claude` read as wired.
+
+**One thing it called dead code was dead**, and the comment above it was false: after the operator
+run-loop consumes every `><&|`, the digit-eating branch for `>&2` could never run. The operator is
+now captured whole, which is what the descriptor rules actually need, and the branch is gone.
+
+Its `false &&> x bmn hook claude` question settles against it: `bash -c 'false &&> /dev/null echo RAN'`
+prints nothing, so `&&` wins the lexing. That shape is in the conditional family and reads as wired,
+which is the documented contract, not a defect.
+
+**Fences:** `fences-15-wave5.log`, 19 probes, 18 RED. The one GREEN was useful: my positional rule
+for stripping `)` was dead, because a third word ending in `)` is always the last of exactly three.
+The guard that actually matters is on the program word, and it is now fenced separately and RED.
+Two further probes, on `appendAttentionBody`'s open-only update and the notice body's oldest-first
+eviction, are also RED. 1,340 unit tests pass; lint and typecheck are clean.
