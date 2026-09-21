@@ -364,6 +364,8 @@ const receiptContract = [
       receipt.terminalModes.after.sendFocusMode === true &&
       receipt.terminalModes.after.mouseTrackingMode ===
         receipt.terminalModes.before.mouseTrackingMode &&
+      receipt.terminalModes.before.wraparoundMode === false &&
+      receipt.terminalModes.after.wraparoundMode === false &&
       receipt.terminalModes.pasteBracketed === true &&
       receipt.terminalModes.pasteArrivedBare === false &&
       receipt.terminalModes.focusReported === true

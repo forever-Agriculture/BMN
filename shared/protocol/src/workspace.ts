@@ -264,7 +264,7 @@ export interface SessionCohortStartedProcess {
   attachmentId: string
   streamSeq: 0
   captureStartedAt: string
-  /** The private terminal modes the started process has set so far; empty for one that set none. */
+  /** The private terminal modes a new view would get wrong; empty when a fresh view matches. */
   modes: number[]
   cwd: string
   executable: string

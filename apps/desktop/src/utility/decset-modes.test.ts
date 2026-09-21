@@ -11,8 +11,14 @@ function feed(...chunks: string[]): DecsetModeTracker {
 }
 
 describe('reading private modes from a program’s output', () => {
-  it('starts with nothing, because a program that set no modes has none', () => {
+  it('starts with nothing, because a program that changed no mode leaves a fresh view right', () => {
     expect(feed('hello\r\n').modes()).toEqual([])
+  })
+
+  /** A TUI hides the cursor and stops wrapping; a rebuilt view that shows both is the bug. */
+  it('follows a mode a fresh view has on and the program turned off', () => {
+    expect(feed('\u001b[?25l\u001b[?7l').modes()).toEqual([7, 25])
+    expect(feed('\u001b[?25l\u001b[?25h').modes()).toEqual([])
   })
 
   it('takes the modes a program sets, including several in one sequence', () => {
@@ -34,6 +40,23 @@ describe('reading private modes from a program’s output', () => {
     const backwards = feed('\u001b[?1h\u001b[?1006h\u001b[?1049h').modes()
     expect(forwards).toEqual(backwards)
     expect(forwards).toEqual([1, 1006, 1049])
+  })
+
+  /** A terminal runs one mouse protocol at a time, so a switch replaces, never adds. */
+  it('keeps one mouse protocol, the one the program switched to', () => {
+    expect(feed('\u001b[?1003h\u001b[?1000h').modes()).toEqual([1000])
+    expect(feed('\u001b[?1000h\u001b[?1003h').modes()).toEqual([1003])
+  })
+
+  /** xterm turns mouse reporting off whichever protocol is named in the reset. */
+  it('turns mouse reporting off when any of its modes is reset', () => {
+    expect(feed('\u001b[?1000h\u001b[?1003l').modes()).toEqual([])
+    expect(feed('\u001b[?1002h\u001b[?1002l').modes()).toEqual([])
+  })
+
+  it('keeps one mouse encoding the same way, without touching the protocol', () => {
+    expect(feed('\u001b[?1000h\u001b[?1005h\u001b[?1006h').modes()).toEqual([1000, 1006])
+    expect(feed('\u001b[?1000h\u001b[?1006h\u001b[?1005l').modes()).toEqual([1000])
   })
 
   it('ignores private modes outside the tracked set', () => {
@@ -61,8 +84,8 @@ describe('reading private modes from a program’s output', () => {
   })
 
   /** A process that ended has no modes: nothing of its state may reach the next one's view. */
-  it('forgets everything when the process exits', () => {
-    const tracker = feed('\u001b[?1049h\u001b[?2004h')
+  it('forgets everything when the process exits, including what it turned off', () => {
+    const tracker = feed('\u001b[?1049h\u001b[?2004h\u001b[?25l')
     tracker.clear()
     expect(tracker.modes()).toEqual([])
     tracker.read(new TextEncoder().encode('\u001b[?1006h'))

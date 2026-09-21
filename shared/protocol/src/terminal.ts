@@ -28,13 +28,24 @@ export const TRACKED_DECSET_MODES: readonly number[] = Object.freeze([
 ])
 
 /**
- * The sequences that bring a fresh terminal view up to the modes the program set. They are written
- * into the view and never to the process: the program is not asked to repeat itself, and its own
- * idea of the modes is untouched. Modes outside `TRACKED_DECSET_MODES` are ignored.
+ * The tracked modes a terminal has on before any program speaks: autowrap and a visible cursor.
+ * A program that turns one of these off has to be followed too, or a rebuilt view would show a
+ * cursor the program hid, or wrap a line it meant to keep on one row.
+ */
+export const DEFAULT_ON_DECSET_MODES: readonly number[] = Object.freeze([7, 25])
+
+/**
+ * The sequences that bring a fresh terminal view to the mode state a program is already in.
+ * The list names only the modes whose state differs from a fresh view's, so each one is set or
+ * reset accordingly and a view that already matches is written to not at all.
+ *
+ * This is written into the view and never to the process: the program is not asked to repeat
+ * itself, and its own idea of the modes is untouched. Modes outside `TRACKED_DECSET_MODES` are
+ * ignored.
  */
 export function decsetRestoreSequence(modes: readonly number[]): string {
   return TRACKED_DECSET_MODES.filter((mode) => modes.includes(mode))
-    .map((mode) => `\x1b[?${mode}h`)
+    .map((mode) => `\x1b[?${mode}${DEFAULT_ON_DECSET_MODES.includes(mode) ? 'l' : 'h'}`)
     .join('')
 }
 

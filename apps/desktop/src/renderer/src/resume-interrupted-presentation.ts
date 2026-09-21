@@ -29,6 +29,18 @@ export function interruptedStopWords(cause: ResumableStopCause): string {
   return cause === 'update-restart' ? 'a desktop update' : 'quitting BMN'
 }
 
+/**
+ * Whether the start-up offer may open now. Recording a stop as offered is how BMN promises never to
+ * ask twice, so it may only happen when the owner is actually shown the dialog: a stop that arrives
+ * while another dialog holds the screen is left for the next start, and for the palette.
+ */
+export function shouldOfferInterrupted(
+  cohort: InterruptedSessionCohort | null,
+  anotherDialogOpen: boolean
+): cohort is InterruptedSessionCohort {
+  return cohort !== null && cohort.offeredAt === null && !anotherDialogOpen
+}
+
 export function resumeInterruptedHeading(cause: ResumableStopCause): string {
   return cause === 'update-restart' ? 'Resume what the update stopped?' : 'Resume what the quit stopped?'
 }

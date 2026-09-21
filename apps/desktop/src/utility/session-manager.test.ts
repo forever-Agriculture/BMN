@@ -4081,6 +4081,145 @@ describe('resuming what a lifecycle stop interrupted', () => {
   const relaunchCommand = (index: number): string =>
     `${process.execPath} --version session-${index}`
 
+  /**
+   * One session bound to a real conversation, stopped by the same update restart. AC4 is about a
+   * Resume row: what it starts must be the command the row showed, built from the same launch.
+   */
+  async function boundInterruptedSession(options: { reference?: () => boolean } = {}) {
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-cohort-bound-'))
+    createdRoots.add(cwd)
+    const executable = join(cwd, 'codex')
+    await writeFile(executable, '#!/bin/sh\n')
+    await chmod(executable, 0o700)
+    const database = new BetterSqlite3(':memory:') as DatabaseConnection
+    initializeDatabase(database, '2026-09-21T09:00:00.000Z')
+    const spawns: Array<{ executable: string; argv: readonly string[] }> = []
+    const manager = new SessionManager({
+      store: sqliteSessionStore(database),
+      spawnPty: (command, argv) => {
+        spawns.push({ executable: command, argv: [...argv] })
+        return new SignalExitFakePty()
+      },
+      processStartIdentity: async (pid) => `linux-proc-start:${pid}`,
+      conversationReferenceExists: async () => options.reference?.() ?? true,
+      sendTerminalMessage: () => undefined
+    })
+    const created = await manager.create({
+      ...DEFAULT_SESSION_CREATION,
+      name: 'Bound Codex',
+      cwd,
+      executable,
+      argv: ['--model', 'gpt-6', '--full-auto'],
+      cols: 80,
+      rows: 24
+    })
+    await manager.observeConversation({
+      sessionId: created.sessionId,
+      incarnationId: created.incarnationId,
+      agentCli: 'codex',
+      conversationReference: '01a0b657-21a8-7f00-addd-b73646828f5b',
+      source: 'startup'
+    })
+    const preview = await manager.conversationResumePreview(created.sessionId)
+    await manager.stop(created, 'update-restart')
+    spawns.length = 0
+    return { database, manager, created, spawns, preview }
+  }
+
+  it('offers a bound session as Resume, with the command Resume itself would run', async () => {
+    const { database, manager, created, preview } = await boundInterruptedSession()
+    try {
+      const cohort = await manager.interruptedCohort()
+
+      expect(cohort?.entries).toEqual([expect.objectContaining({
+        sessionId: created.sessionId,
+        action: 'resume',
+        command: preview.command,
+        notCarried: '--full-auto',
+        relaunchReason: null
+      })])
+    } finally {
+      database.close()
+    }
+  })
+
+  it('starts a Resume row with exactly the command the row showed', async () => {
+    const { database, manager, created, spawns, preview } = await boundInterruptedSession()
+    try {
+      const cohort = (await manager.interruptedCohort())!
+      const result = await manager.resumeCohort({
+        cohortId: cohort.cohortId,
+        idempotencyKey: 'bound-1',
+        entries: [{
+          sessionId: created.sessionId,
+          action: 'resume',
+          command: cohort.entries[0]!.command,
+          cols: 100,
+          rows: 30
+        }]
+      })
+
+      expect(result.entries.map((entry) => entry.outcome)).toEqual(['started'])
+      expect(spawns).toHaveLength(1)
+      expect([spawns[0]!.executable, ...spawns[0]!.argv].join(' ')).toBe(preview.command)
+    } finally {
+      database.close()
+    }
+  })
+
+  it('refuses a Resume row whose command changed after the owner read it', async () => {
+    const { database, manager, created, spawns } = await boundInterruptedSession()
+    try {
+      const cohort = (await manager.interruptedCohort())!
+      const result = await manager.resumeCohort({
+        cohortId: cohort.cohortId,
+        idempotencyKey: 'bound-2',
+        entries: [{
+          sessionId: created.sessionId,
+          action: 'resume',
+          command: `${cohort.entries[0]!.command} --dangerously-bypass-approvals`,
+          cols: 80,
+          rows: 24
+        }]
+      })
+
+      expect(result.entries[0]).toMatchObject({ outcome: 'failed' })
+      expect(result.entries[0]?.error).toContain('The command changed since it was shown')
+      expect(spawns).toEqual([])
+    } finally {
+      database.close()
+    }
+  })
+
+  /** AC4: a binding that went stale between the preview and the button fails with its own words. */
+  it('fails a Resume row whose conversation disappeared, in the binding’s own words', async () => {
+    let reference = true
+    const { database, manager, created, spawns } = await boundInterruptedSession({ reference: () => reference })
+    try {
+      const cohort = (await manager.interruptedCohort())!
+      reference = false
+      const result = await manager.resumeCohort({
+        cohortId: cohort.cohortId,
+        idempotencyKey: 'bound-3',
+        entries: [{
+          sessionId: created.sessionId,
+          action: 'resume',
+          command: cohort.entries[0]!.command,
+          cols: 80,
+          rows: 24
+        }]
+      })
+
+      expect(result.entries[0]).toMatchObject({
+        outcome: 'failed',
+        error: 'The bound codex conversation reference is missing; no process was started'
+      })
+      expect(spawns).toEqual([])
+    } finally {
+      database.close()
+    }
+  })
+
   it('lists every session the stop interrupted with the command Start again would run', async () => {
     const { database, manager, created } = await interruptedSessions(2)
     try {

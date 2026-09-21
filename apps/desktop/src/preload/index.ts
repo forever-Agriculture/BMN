@@ -64,7 +64,7 @@ interface StartupSuccess {
   attachmentId: string
   streamSeq: 0
   captureStartedAt: string
-  /** Private terminal modes the program set, replayed into a view created after it did. */
+  /** Private terminal modes a view created after the program started must be brought to. */
   modes: number[]
   cwd: string
   executable: string

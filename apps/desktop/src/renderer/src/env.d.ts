@@ -9,7 +9,7 @@ interface TerminalTestSnapshot {
   refits: number
   /** Everything xterm would send to the PTY for this pane, counted since the terminal opened. */
   inputEvents: number
-  modes: { bracketedPasteMode: boolean; sendFocusMode: boolean; mouseTrackingMode: string }
+  modes: { bracketedPasteMode: boolean; sendFocusMode: boolean; mouseTrackingMode: string; wraparoundMode: boolean }
   ptyCols?: number
   ptyRows?: number
 }

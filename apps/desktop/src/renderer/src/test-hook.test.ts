@@ -5,7 +5,7 @@ function fakeTerminal(
   cols = 101,
   rows = 37,
   lines = ['prompt', 'AITERM-1-1-OK'],
-  modes = { bracketedPasteMode: false, sendFocusMode: false, mouseTrackingMode: 'none' }
+  modes = { bracketedPasteMode: false, sendFocusMode: false, mouseTrackingMode: 'none', wraparoundMode: true }
 ) {
   return {
     cols,
@@ -59,7 +59,7 @@ describe('renderer acceptance hook', () => {
       refits: 2,
       inputEvents: 5,
       // The modes a rebuilt view must come back with, read from the view itself.
-      modes: { bracketedPasteMode: false, sendFocusMode: false, mouseTrackingMode: 'none' },
+      modes: { bracketedPasteMode: false, sendFocusMode: false, mouseTrackingMode: 'none', wraparoundMode: true },
       ptyCols: 101,
       ptyRows: 37
     })

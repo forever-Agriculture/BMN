@@ -199,8 +199,8 @@ export interface AttachmentIdentity extends SessionIdentity {
   streamSeq: 0
   captureStartedAt: string
   /**
-   * The private modes the program has set, so a view created now can be brought up to date. Empty
-   * for a process that set none, and for one that has exited.
+   * The private modes whose state a view created now would get wrong, so it can be brought up to
+   * the program's. Empty for a process that changed none, and for one that has exited.
    */
   modes: number[]
 }

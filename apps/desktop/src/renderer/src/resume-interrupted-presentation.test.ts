@@ -9,6 +9,7 @@ import {
   resumeInterruptedRows,
   resumeInterruptedSummary,
   resumeRowOutcomeWords,
+  shouldOfferInterrupted,
   startableRows
 } from './resume-interrupted-presentation'
 
@@ -51,6 +52,23 @@ describe('the words the offer uses', () => {
       .toBe('a desktop update stopped 1 session. Nothing has started since.')
     expect(resumeInterruptedSummary(cohort([entry({ sessionId: 'a' }), entry({ sessionId: 'b' })], 'application-quit')))
       .toBe('quitting BMN stopped 2 sessions. Nothing has started since.')
+  })
+})
+
+describe('when the offer may open at start-up', () => {
+  it('opens for a stop that has not been offered yet', () => {
+    expect(shouldOfferInterrupted(cohort([entry({ sessionId: 'a' })]), false)).toBe(true)
+  })
+
+  it('stays away when there is nothing to offer, or the stop was already offered', () => {
+    expect(shouldOfferInterrupted(null, false)).toBe(false)
+    expect(shouldOfferInterrupted({ ...cohort([entry({ sessionId: 'a' })]), offeredAt: '2026-09-21T10:02:00.000Z' }, false))
+      .toBe(false)
+  })
+
+  /** Recording a stop as offered is the promise never to ask again, so it may not be spent unseen. */
+  it('waits rather than talking over a dialog the owner already has open', () => {
+    expect(shouldOfferInterrupted(cohort([entry({ sessionId: 'a' })]), true)).toBe(false)
   })
 })
 

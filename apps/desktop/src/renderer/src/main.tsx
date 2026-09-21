@@ -34,7 +34,7 @@ import { FilesPanel } from './files-panel'
 import { HookEventsDialog } from './hook-events-dialog'
 import { ProgressEvidenceDialog } from './progress-evidence-dialog'
 import { ResumeInterruptedDialog } from './resume-interrupted-dialog'
-import { interruptedStopWords } from './resume-interrupted-presentation'
+import { interruptedStopWords, shouldOfferInterrupted } from './resume-interrupted-presentation'
 import { ProgressStrip } from './progress-strip'
 import { Icon } from './icons'
 import { isModifierOnly, resolveShortcut, SHORTCUT_LABELS, type AppCommand } from './keymap'
@@ -192,6 +192,8 @@ function App(): React.JSX.Element {
   const [focusMode, setFocusMode] = useState(false)
   const [menu, setMenu] = useState<MenuAnchor | null>(null)
   const [dialog, setDialog] = useState<ShellDialog | null>(null)
+  /** What the owner is looking at now, for the start-up offer that must not talk over it. */
+  const dialogRef = useRef<ShellDialog | null>(null)
   /** What the newest update or quit interrupted, so the palette knows whether there is an offer. */
   const [interrupted, setInterrupted] = useState<InterruptedSessionCohort | null>(null)
   /** Its own state, not a ShellDialog: a close question must not replace work the owner has open. */
@@ -221,6 +223,7 @@ function App(): React.JSX.Element {
   const voiceStopRequested = useRef(false)
   const settingsRef = useRef(settings)
   settingsRef.current = settings
+  dialogRef.current = dialog
   /** Every voice-section save, from Preferences or the model fallback, goes through this queue. */
   const [voiceSettingsWriter] = useState(() => createVoiceSettingsWriter({
     current: () => settingsRef.current,
@@ -357,15 +360,16 @@ function App(): React.JSX.Element {
   /**
    * The offer BMN makes once per stop, after the window has loaded the sessions. It is recorded as
    * offered the moment it opens, so dismissing it with Escape is an answer: the same stop never
-   * asks again, and the palette command is the way back to it.
+   * asks again, and the palette command is the way back to it. A stop that arrives while another
+   * dialog is open is not recorded, because it was never shown; the next start offers it.
    */
   useEffect(() => {
     if (!startup || interruptedOfferChecked.current) return
     interruptedOfferChecked.current = true
     void reloadInterruptedCohort()
       .then((cohort) => {
-        if (!cohort || cohort.offeredAt !== null) return undefined
-        setDialog((current) => current ?? { kind: 'resume-interrupted', cohort })
+        if (!shouldOfferInterrupted(cohort, dialogRef.current !== null)) return undefined
+        setDialog({ kind: 'resume-interrupted', cohort })
         return window.aiTerminal.markCohortOffered(cohort.cohortId)
           .then((offer) => setInterrupted({ ...cohort, offeredAt: offer.offeredAt }))
       })

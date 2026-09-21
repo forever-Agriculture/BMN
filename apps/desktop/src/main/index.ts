@@ -61,6 +61,7 @@ import {
   connectRendererChannel,
   createRendererRecoveryCoalescer,
   recoverExistingSessionRenderers,
+  adoptsStartedAttachment,
   scheduleTerminalViewRecovery,
   wireLiveWindowLifecycle,
   watchHostLoss
@@ -725,6 +726,10 @@ function installIpcHandlers(): void {
     dimensions: { cols: number; rows: number }
   ): StartupSuccess => {
     const record = sessionRecords.get(id)!
+    const adopted = runtimes.get(id)
+    // A retry of a recorded start names an incarnation this window may already be running; taking
+    // its old attachment back would hand the pane a lease the renderer's recovery has revoked.
+    if (adopted && !adoptsStartedAttachment(adopted.attachment, attachment)) return startupForRuntime(adopted)
     const runtime: ApplicationRuntime = runtimes.get(id) ?? {
       client: requireHostClient(),
       session: attachment,
@@ -1672,7 +1677,12 @@ async function terminalViewModes(
   window: BrowserWindow,
   sessionId: string,
   waitForThem: boolean
-): Promise<{ bracketedPasteMode: boolean; sendFocusMode: boolean; mouseTrackingMode: string }> {
+): Promise<{
+  bracketedPasteMode: boolean
+  sendFocusMode: boolean
+  mouseTrackingMode: string
+  wraparoundMode: boolean
+}> {
   return window.webContents.executeJavaScript(`
     new Promise((resolve, reject) => {
       const deadline = Date.now() + 10000;
@@ -1681,7 +1691,8 @@ async function terminalViewModes(
         let modes;
         try { modes = hook?.snapshot(${JSON.stringify(sessionId)})?.modes; } catch { modes = undefined; }
         const settled = modes && (!${waitForThem ? 'true' : 'false'} ||
-          (modes.bracketedPasteMode && modes.sendFocusMode && modes.mouseTrackingMode !== 'none'));
+          (modes.bracketedPasteMode && modes.sendFocusMode && modes.mouseTrackingMode !== 'none' &&
+            !modes.wraparoundMode));
         if (settled) { resolve(modes); return; }
         if (Date.now() >= deadline) {
           if (modes) resolve(modes);
@@ -1692,7 +1703,12 @@ async function terminalViewModes(
       };
       probe();
     })
-  `) as Promise<{ bracketedPasteMode: boolean; sendFocusMode: boolean; mouseTrackingMode: string }>
+  `) as Promise<{
+    bracketedPasteMode: boolean
+    sendFocusMode: boolean
+    mouseTrackingMode: string
+    wraparoundMode: boolean
+  }>
 }
 
 /**
@@ -1983,7 +1999,8 @@ function writeTerminalModeProgram(directory: string): { executable: string; inpu
       `#!${process.env.BMN_SELF_TEST_NODE ?? '/usr/bin/env node'}`,
       "const { appendFileSync } = require('node:fs')",
       // Bracketed paste, focus reports, and mouse tracking with SGR encoding.
-      "process.stdout.write('\\u001b[?2004h\\u001b[?1004h\\u001b[?1000h\\u001b[?1006h')",
+      // On: bracketed paste, focus reports, mouse with SGR. Off: autowrap, which a fresh view has on.
+      "process.stdout.write('\\u001b[?2004h\\u001b[?1004h\\u001b[?1000h\\u001b[?1006h\\u001b[?7l')",
       "process.stdout.write('MODE-PROGRAM-READY\\r\\n')",
       // Raw mode, as every TUI does: the line discipline must not hold a paste back until Enter.
       "if (process.stdin.isTTY) process.stdin.setRawMode(true)",
@@ -3282,14 +3299,17 @@ async function runSelfTest(): Promise<void> {
     if (
       !modesBeforeRestart.bracketedPasteMode ||
       !modesBeforeRestart.sendFocusMode ||
-      modesBeforeRestart.mouseTrackingMode === 'none'
+      modesBeforeRestart.mouseTrackingMode === 'none' ||
+      modesBeforeRestart.wraparoundMode
     ) {
       throw new Error(`the mode program never reached the first view: ${JSON.stringify(modesBeforeRestart)}`)
     }
     if (
       !modesAfterRestart.bracketedPasteMode ||
       !modesAfterRestart.sendFocusMode ||
-      modesAfterRestart.mouseTrackingMode === 'none'
+      modesAfterRestart.mouseTrackingMode === 'none' ||
+      // A mode the program turned off is as much its state as one it turned on.
+      modesAfterRestart.wraparoundMode
     ) {
       throw new Error(
         `the rebuilt view lost the program's terminal modes: ${JSON.stringify(terminalModes)}`

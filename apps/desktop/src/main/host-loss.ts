@@ -295,6 +295,19 @@ export async function recoverRendererView<HostPort, RendererPort>(
   }
 }
 
+/**
+ * Whether a start result may take over the session's runtime. A retried action replays a recorded
+ * start, so it can name an incarnation the window already adopted; the renderer may have recovered
+ * that incarnation since and hold a newer attachment for it. The recorded one was revoked with the
+ * view it belonged to, so the current lease stays and the retry changes nothing.
+ */
+export function adoptsStartedAttachment(
+  current: { incarnationId: string } | undefined,
+  started: { incarnationId: string }
+): boolean {
+  return current === undefined || current.incarnationId !== started.incarnationId
+}
+
 export function recoverExistingSessionRenderer<HostPort, RendererPort>(
   runtime: ExistingSessionRecoveryRuntime<HostPort>,
   actions: ExistingSessionRecoveryActions<HostPort, RendererPort>

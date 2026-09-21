@@ -8,6 +8,7 @@ import {
 } from '@bmn/protocol'
 import { describe, expect, it, vi } from 'vitest'
 import {
+  adoptsStartedAttachment,
   connectRendererChannel,
   createRendererRecoveryCoalescer,
   recoverExistingSessionRenderer,
@@ -1204,5 +1205,23 @@ describe('Story 1.4 application lifecycle', () => {
     expect(harness.flushSavedOutput).toHaveBeenCalledOnce()
     expect(harness.stopTargets).toHaveBeenCalledWith([], 'update-restart')
     expect(harness.restartForUpdate).toHaveBeenCalledOnce()
+  })
+})
+
+describe('adopting the attachment a start reports', () => {
+  it('adopts a start that names an incarnation this window is not running', () => {
+    expect(adoptsStartedAttachment(undefined, { incarnationId: 'incarnation-1' })).toBe(true)
+    expect(adoptsStartedAttachment({ incarnationId: 'incarnation-1' }, { incarnationId: 'incarnation-2' }))
+      .toBe(true)
+  })
+
+  /**
+   * A retried cohort action replays the recorded start. Its attachment was revoked when the
+   * renderer recovered that same incarnation, so putting it back would leave the pane writing to
+   * a lease the host no longer honours.
+   */
+  it('keeps the current attachment when the start replays an incarnation already adopted', () => {
+    expect(adoptsStartedAttachment({ incarnationId: 'incarnation-1' }, { incarnationId: 'incarnation-1' }))
+      .toBe(false)
   })
 })
