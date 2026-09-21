@@ -20,6 +20,7 @@ import type {
   SessionCohortOfferedResult,
   ProgressRecord,
   TelegramStatus,
+  TerminalNoticeCode,
   VoiceLanguage,
   VoiceModelId,
   VoiceStatus,
@@ -206,6 +207,17 @@ export interface AiTerminalBridge {
   ): Promise<AttentionRecord>
   /** Read-only: the recent hook events of one session, in memory only and never another session's. */
   listHookEvents(sessionId: string): Promise<HookEventRecord[]>
+  /**
+   * A terminal notification (OSC 9, 99 or 777) the view read out of this session's own output.
+   * Only the window can see it, so only the window reports it; it opens a notice and nothing else.
+   */
+  reportTerminalNotice(params: {
+    sessionId: string
+    incarnationId: string
+    code: TerminalNoticeCode
+    title: string
+    body?: string
+  }): Promise<{ opened: boolean; requestKey: string; reason?: string }>
   listProgress(): Promise<ProgressRecord[]>
   listDrafts(): Promise<InputDraftRecord[]>
   saveHandoffDraft(params: HandoffDraftSaveParams): Promise<InputDraftRecord>

@@ -6,11 +6,15 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  AGENT_ATTENTION_ORIGINS,
   ERROR_CODES,
   HOOK_EVENT_LOG_LIMIT,
+  isAttentionOrigin,
   METHOD_REGISTRY,
+  TERMINAL_NOTICE_WINDOW_MS,
   type AppEventMessage,
   type ArtifactRecord,
+  type AttentionRecord,
   type BackupManifest,
   type BackupVerifyResult,
   type HookEventRecord,
@@ -784,13 +788,22 @@ describe('hook event log', () => {
     (service as unknown as {
       observeHookEvent(p: {
         sessionId: string
+        incarnationId: string | null
         agent: HookEventRecord['agent']
         event: string
         source: string | null
         toolName: string | null
         effects: readonly HookEventRecord['effects'][number][]
       }): unknown
-    }).observeHookEvent({ sessionId, agent: 'claude', event, source: null, toolName: null, effects })
+    }).observeHookEvent({
+      sessionId,
+      incarnationId: liveIncarnations.get(sessionId) ?? null,
+      agent: 'claude',
+      event,
+      source: null,
+      toolName: null,
+      effects
+    })
   }
 
   it('keeps only the newest events per session and never mixes two sessions', async () => {
@@ -815,5 +828,150 @@ describe('hook event log', () => {
 
     expect(empty).toEqual([])
     expect(JSON.stringify(snapshot)).not.toContain('withdrew')
+  })
+})
+
+describe('terminal notices (OSC 9, 99, 777)', () => {
+  const notice = (params: Record<string, unknown>): Promise<unknown> =>
+    service.route(METHOD_REGISTRY.attentionTerminalNotice, {
+      sessionId: 's1',
+      incarnationId: 'incarnation-1',
+      code: 9,
+      title: 'Build finished',
+      ...params
+    })
+
+  const observeHook = (sessionId: string, incarnationId: string | null): void => {
+    (service as unknown as {
+      observeHookEvent(p: {
+        sessionId: string
+        incarnationId: string | null
+        agent: HookEventRecord['agent']
+        event: string
+        source: string | null
+        toolName: string | null
+        effects: readonly HookEventRecord['effects'][number][]
+      }): unknown
+    }).observeHookEvent({
+      sessionId,
+      incarnationId,
+      agent: 'claude',
+      event: 'Stop',
+      source: null,
+      toolName: null,
+      effects: ['opened']
+    })
+  }
+
+  const openRows = async (): Promise<AttentionRecord[]> =>
+    (await service.route(METHOD_REGISTRY.attentionList, {}) as AttentionRecord[])
+      .filter((record) => record.state === 'open')
+
+  it('opens one notice with the terminal as its origin, and writes nothing to the session', async () => {
+    await service.sessionsChanged()
+
+    const result = await notice({ body: 'three warnings' })
+    const [row, ...extra] = await openRows()
+
+    expect(result).toMatchObject({ opened: true, requestKey: 'osc:9' })
+    expect(extra).toEqual([])
+    expect(row).toMatchObject({
+      sessionId: 's1',
+      kind: 'notice',
+      requestKey: 'osc:9',
+      title: 'Build finished',
+      body: 'three warnings',
+      openedBy: 'osc:9'
+    })
+    expect(writes).toEqual([])
+  })
+
+  it('logs the notice as the terminal, so the hook log still explains what arrived', async () => {
+    await service.sessionsChanged()
+
+    await notice({ code: 777, title: 'Deploy' })
+    const log = await service.route(METHOD_REGISTRY.hookEventsList, { sessionId: 's1' }) as HookEventRecord[]
+
+    expect(log).toEqual([expect.objectContaining({ agent: 'terminal', event: 'osc:777', effects: ['opened'] })])
+  })
+
+  it('opens nothing for a session whose harness reported a hook this incarnation, and says so in the log', async () => {
+    await service.sessionsChanged()
+    observeHook('s1', 'incarnation-1')
+
+    const result = await notice({})
+    const log = await service.route(METHOD_REGISTRY.hookEventsList, { sessionId: 's1' }) as HookEventRecord[]
+
+    expect(result).toMatchObject({ opened: false })
+    expect(await openRows()).toEqual([])
+    expect(log.at(-1)).toMatchObject({ agent: 'terminal', event: 'osc:9', effects: [] })
+  })
+
+  it('opens the notice when the only hook events belong to a previous incarnation', async () => {
+    await service.sessionsChanged()
+    observeHook('s1', 'incarnation-0')
+
+    const result = await notice({})
+
+    expect(result).toMatchObject({ opened: true })
+    expect(await openRows()).toHaveLength(1)
+  })
+
+  it('appends further notices of any code to the open row instead of opening a second one', async () => {
+    await service.sessionsChanged()
+
+    await notice({ title: 'First' })
+    await notice({ code: 777, title: 'Second', body: 'more' })
+    await notice({ code: 99, title: 'Third' })
+    const rows = await openRows()
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ requestKey: 'osc:9', title: 'First' })
+    expect(rows[0]?.body).toBe('Second\nmore\nThird')
+  })
+
+  it('opens a fresh row once the coalescing window has passed, replacing the text of the same key', async () => {
+    await service.sessionsChanged()
+    let clock = Date.parse(now)
+    ;(service as unknown as { now(): Date }).now = () => new Date(clock)
+
+    await notice({ title: 'First' })
+    clock += TERMINAL_NOTICE_WINDOW_MS
+    await notice({ title: 'Later' })
+    const rows = await openRows()
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ requestKey: 'osc:9', title: 'Later' })
+    expect(rows[0]?.body).toBeNull()
+  })
+
+  it('starts a new row rather than reopening one the owner already answered', async () => {
+    await service.sessionsChanged()
+    await notice({ title: 'First' })
+    const [opened] = await openRows()
+    await service.route(METHOD_REGISTRY.attentionResolve, { requestId: opened?.requestId, resolution: 'read' })
+
+    await notice({ title: 'Second' })
+    const rows = await openRows()
+
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.title).toBe('Second')
+    expect(rows[0]?.requestId).not.toBe(opened?.requestId)
+  })
+
+  it('refuses a notice for another process, an unknown session and an unknown sequence', async () => {
+    await service.sessionsChanged()
+
+    await expect(notice({ incarnationId: 'incarnation-gone' })).rejects.toThrow(/different process/)
+    await expect(notice({ sessionId: 'nobody' })).rejects.toThrow(/unknown/)
+    await expect(notice({ code: 8 })).rejects.toThrow(/BMN reads/)
+    expect(await openRows()).toEqual([])
+  })
+
+  it('never lets a session token claim a terminal origin on a request of its own', () => {
+    for (const origin of ['osc:9', 'osc:99', 'osc:777']) {
+      expect(isAttentionOrigin(origin)).toBe(true)
+      expect((AGENT_ATTENTION_ORIGINS as readonly string[]).includes(origin)).toBe(false)
+    }
   })
 })

@@ -506,6 +506,8 @@ describe('control server validation', () => {
     expect(observed.result).toEqual({ recorded: true })
     expect(fixture.handlers.observeHookEvent).toHaveBeenLastCalledWith({
       sessionId: 'session-1',
+      // The incarnation that reported it: a later process must not inherit its predecessor's log.
+      incarnationId: 'incarnation-1',
       agent: 'claude',
       event: 'PostToolUse',
       source: null,

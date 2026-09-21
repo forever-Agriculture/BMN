@@ -265,6 +265,20 @@ interface ActivitySampling {
 }
 
 /** What the renderer observed while the hook fixture's requests were opened, resolved and listed. */
+interface TerminalNoticeProbe {
+  openedBy: string | null
+  title: string
+  body: string | null
+  kind: string
+  provenance: string
+  ptyInputEvents: number
+  refitCount: number
+  hookedSessionRows: number
+  hookedSessionEvents: { agent: string; event: string; effects: string[] }[]
+  resolvedState: string
+  resolvedBy: string | null
+}
+
 interface HookProvenanceProbe {
   answeredByTypingResolvedBy: string | null
   answeredByTypingState: string
@@ -2121,6 +2135,44 @@ function writeIsolationHookHarness(directory: string): { executable: string; fir
     { mode: 0o700 }
   )
   return { executable, fired, event }
+}
+
+/**
+ * Epic 15.1: a program that knows nothing of `bmn` and only writes a terminal notification. With
+ * `hookFirst` it reports one real hook event before printing, which is the session BMN must leave
+ * to its own harness.
+ */
+function writeTerminalNoticeHarness(
+  directory: string,
+  options: { hookFirst: boolean }
+): { executable: string; printed: string } {
+  mkdirSync(directory, { recursive: true })
+  const printed = join(directory, 'printed')
+  const executable = join(directory, 'notice-harness')
+  writeFileSync(join(directory, 'package.json'), '{"type":"commonjs"}\n')
+  writeFileSync(
+    executable,
+    [
+      `#!${process.env.BMN_SELF_TEST_NODE ?? '/usr/bin/env node'}`,
+      "const { spawnSync } = require('node:child_process')",
+      "const { writeFileSync } = require('node:fs')",
+      ...(options.hookFirst
+        ? [
+          "spawnSync('bmn', ['hook', 'claude'], {",
+          "  input: JSON.stringify({ hook_event_name: 'Stop', last_assistant_message: 'the harness finished' }),",
+          "  stdio: ['pipe', 'ignore', 'ignore']",
+          '})'
+        ]
+        : []),
+      // OSC 9, the plainest of the three: ESC ] 9 ; text BEL.
+      "process.stdout.write('\\u001b]9;BMN self-test notice\\u0007')",
+      `writeFileSync(${JSON.stringify(printed)}, '')`,
+      'setInterval(() => undefined, 1_000)',
+      ''
+    ].join('\n'),
+    { mode: 0o700 }
+  )
+  return { executable, printed }
 }
 
 /** Waits for one of the harness's marker files; the harness writes each one after its event landed. */
@@ -4140,6 +4192,7 @@ async function runSelfTest(): Promise<void> {
     if (!requestProvenance.openRequestsUnchanged) throw new Error('opening the Hook events list changed a request')
     if (!requestProvenance.dialogClosed) throw new Error('the Hook events dialog did not close on Escape')
 
+
     // The close question itself: asked inside the window, in session names, and answerable.
     console.error('[BMN] self-test phase: close prompt')
     const closePromptRuntime = runtimes.get(hookSession.startup.sessionId)
@@ -4175,6 +4228,131 @@ async function runSelfTest(): Promise<void> {
     if (closePrompt.decision !== 'cancel') {
       throw new Error(`the owner's answer did not reach the main process: ${closePrompt.decision}`)
     }
+
+    /**
+     * Epic 15.1: a program with no BMN hook reaches Needs you through the terminal's own
+     * notification sequence, and a session whose harness already reports through `bmn hook` is
+     * left to that hook. Two synthetic sessions, one of each kind.
+     */
+    console.error('[BMN] self-test phase: terminal notices')
+    const noticeCwd = join(isolatedCwd, 'terminal-notice')
+    mkdirSync(noticeCwd, { recursive: true })
+    const plainHarness = writeTerminalNoticeHarness(join(noticeCwd, 'plain'), { hookFirst: false })
+    const plainSession = await createSessionRuntime({
+      workspaceId: DEFAULT_WORKSPACE_ID,
+      name: 'Terminal notice',
+      cwd: noticeCwd,
+      executable: plainHarness.executable,
+      argv: [],
+      cols: 80,
+      rows: 24
+    }, true)
+    const hookedHarness = writeTerminalNoticeHarness(join(noticeCwd, 'hooked'), { hookFirst: true })
+    const hookedSession = await createSessionRuntime({
+      workspaceId: DEFAULT_WORKSPACE_ID,
+      name: 'Terminal notice with a hook',
+      cwd: noticeCwd,
+      executable: hookedHarness.executable,
+      argv: [],
+      cols: 80,
+      rows: 24
+    }, true)
+    await recoverApplicationRenderer(applicationWindow)
+    await untilFileExists(plainHarness.printed, 'printed its notification')
+    await untilFileExists(hookedHarness.printed, 'printed its notification after its hook')
+    const terminalNotice = await applicationWindow.webContents.executeJavaScript(`
+      (async () => {
+        const plainId = ${JSON.stringify(plainSession.session.sessionId)};
+        const hookedId = ${JSON.stringify(hookedSession.session.sessionId)};
+        const wait = async (read, what) => {
+          const deadline = Date.now() + 10000;
+          for (;;) {
+            const value = await read();
+            if (value !== undefined && value !== null) return value;
+            if (Date.now() >= deadline) throw new Error('the terminal notice probe timed out waiting for ' + what);
+            await new Promise((resolve) => setTimeout(resolve, 25));
+          }
+        };
+        const hook = window.__aitermTest;
+        const rowsOf = async (sessionId) => (await window.aiTerminal.listAttention())
+          .filter((request) => request.sessionId === sessionId && request.state === 'open');
+        const opened = await wait(async () => (await rowsOf(plainId))[0], 'the terminal notice');
+        // The hooked session's own hook opened a turn notice; the OSC one must add nothing to it.
+        await wait(async () => (await rowsOf(hookedId)).length > 0 ? true : undefined, 'the hooked session row');
+        const hookedEvents = await wait(async () => {
+          const events = await window.aiTerminal.listHookEvents(hookedId);
+          return events.some((event) => event.agent === 'terminal') ? events : undefined;
+        }, 'the suppressed notification in the hook log');
+        const pane = await wait(() => document.querySelector('.session-terminal[data-session-id="' + plainId + '"]'), 'the pane');
+        // The words the owner reads: Needs you says where the row came from.
+        const needsButton = await wait(() => document.querySelector('.needs-you-button'), 'the Needs you button');
+        needsButton.click();
+        const provenance = await wait(() => {
+          const row = [...document.querySelectorAll('.attention-item')]
+            .find((item) => item.querySelector('h3')?.textContent?.trim() === 'BMN self-test notice');
+          return row?.querySelector('.provenance')?.textContent?.trim() || undefined;
+        }, 'the provenance words');
+        document.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+        const before = hook.snapshot(plainId);
+        const textarea = pane.querySelector('.xterm-helper-textarea');
+        if (!textarea) throw new Error('the notice pane has no terminal input');
+        const typeOneKey = () => textarea.dispatchEvent(new KeyboardEvent('keydown', {
+          key: 'y', code: 'KeyY', keyCode: 89, which: 89, bubbles: true, cancelable: true
+        }));
+        typeOneKey();
+        const resolved = await wait(async () => {
+          const found = (await window.aiTerminal.listAttention())
+            .find((request) => request.requestId === opened.requestId);
+          if (found && found.state !== 'open') return found;
+          typeOneKey();
+          return undefined;
+        }, 'the notice to be answered by typing');
+        return {
+          openedBy: opened.openedBy,
+          title: opened.title,
+          body: opened.body,
+          kind: opened.kind,
+          provenance,
+          ptyInputEvents: before.inputEvents,
+          refitCount: before.refitCount,
+          hookedSessionRows: (await rowsOf(hookedId)).length,
+          hookedSessionEvents: (await window.aiTerminal.listHookEvents(hookedId))
+            .map((event) => ({ agent: event.agent, event: event.event, effects: event.effects })),
+          resolvedState: resolved.state,
+          resolvedBy: resolved.resolvedBy
+        };
+      })()
+    `) as TerminalNoticeProbe
+    for (const runtime of [plainSession, hookedSession]) {
+      await client.request(METHOD_REGISTRY.sessionStop, {
+        sessionId: runtime.session.sessionId,
+        incarnationId: runtime.session.lastProcess?.incarnationId,
+        cause: 'explicit'
+      })
+    }
+    console.error(`[BMN] self-test phase: terminal notices ${JSON.stringify(terminalNotice)}`)
+    if (terminalNotice.kind !== 'notice' || terminalNotice.openedBy !== 'osc:9') {
+      throw new Error(`the OSC 9 sequence did not open a notice from the terminal: ${JSON.stringify(terminalNotice)}`)
+    }
+    if (terminalNotice.title !== 'BMN self-test notice') {
+      throw new Error(`the notice did not carry the program's own words: ${terminalNotice.title}`)
+    }
+    if (terminalNotice.provenance !== 'from the terminal (OSC 9)') {
+      throw new Error(`Needs you did not say where the notice came from: ${terminalNotice.provenance}`)
+    }
+    // The sequence is consumed and answered by the window alone: the program hears nothing back.
+    if (terminalNotice.ptyInputEvents !== 0) throw new Error('reading a terminal notification wrote to the PTY')
+    const suppressed = terminalNotice.hookedSessionEvents.filter((event) => event.agent === 'terminal')
+    if (suppressed.length !== 1 || suppressed[0]?.event !== 'osc:9' || suppressed[0]?.effects.length !== 0) {
+      throw new Error(`the suppressed notification was not logged: ${JSON.stringify(terminalNotice.hookedSessionEvents)}`)
+    }
+    if (terminalNotice.hookedSessionRows !== 1) {
+      throw new Error(`a hooked session got a second row from its terminal: ${terminalNotice.hookedSessionRows}`)
+    }
+    if (terminalNotice.resolvedState === 'open' || terminalNotice.resolvedBy !== 'input') {
+      throw new Error(`typing did not resolve the terminal notice: ${JSON.stringify(terminalNotice)}`)
+    }
+
 
     const secondClose = await client.close()
     console.error('[BMN] self-test phase: second host closed')
@@ -4260,6 +4438,7 @@ async function runSelfTest(): Promise<void> {
       conversationFromHook,
       sessionActivity,
       requestProvenance,
+      terminalNotice,
       survivalTable: {
         rendererCrash: survivingRendererCrash,
         quit: {

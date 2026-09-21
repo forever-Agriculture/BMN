@@ -46,6 +46,7 @@ import {
   type TerminalExitMessage,
   type TerminalOutputMessage,
   type TerminalViewDisconnectedMessage,
+  type TerminalNoticeCode,
   type TerminalViewDisconnectReason,
   type WorkspaceCreateParams,
   type WorkspaceLayoutState,
@@ -524,6 +525,15 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   listHookEvents(sessionId: string): Promise<HookEventRecord[]> {
     return invokeBridge('aiterm:hook-events:list', { sessionId })
+  },
+  reportTerminalNotice(params: {
+    sessionId: string
+    incarnationId: string
+    code: TerminalNoticeCode
+    title: string
+    body?: string
+  }): Promise<{ opened: boolean; requestKey: string; reason?: string }> {
+    return invokeBridge('aiterm:attention:terminal-notice', params)
   },
   listProgress(): Promise<ProgressRecord[]> {
     return invokeBridge('aiterm:progress:list', {})

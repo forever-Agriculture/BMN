@@ -107,7 +107,11 @@ export function relativeAge(fromIso: string, now: number): string {
   return `${Math.round(hours / 24)} d ago`
 }
 
-const ORIGIN_AGENT_NAMES: Readonly<Record<string, string>> = Object.freeze({ claude: 'Claude', codex: 'Codex' })
+const ORIGIN_AGENT_NAMES: Readonly<Record<string, string>> = Object.freeze({
+  claude: 'Claude',
+  codex: 'Codex',
+  terminal: 'the terminal'
+})
 
 /** The plain name of whatever acted on a request, or null when the row predates provenance. */
 function originName(origin: string | null, action: 'opened' | 'closed'): string | null {
@@ -120,6 +124,8 @@ function originName(origin: string | null, action: 'opened' | 'closed'): string 
     const event = separator < 0 ? '' : rest.slice(separator + 1)
     return `${ORIGIN_AGENT_NAMES[agent] ?? agent} ${event}`.trim()
   }
+  // A terminal's own notification: the program said it, BMN only read it off the screen.
+  if (origin.startsWith('osc:')) return `the terminal (OSC ${origin.slice('osc:'.length)})`
   switch (origin) {
     case 'cli': return action === 'opened' ? 'bmn ask' : 'the bmn CLI'
     case 'owner': return 'BMN'

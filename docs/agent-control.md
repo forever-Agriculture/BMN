@@ -128,6 +128,23 @@ agent, and they do nothing outside BMN.
 | `SessionStart` with `startup`, `resume`, `clear` or `fork` | Also reports the conversation the process is now in, so Resume reopens that one |
 | Codex `Interrupt` | Withdraws open prompts |
 
+### Notifications from any program
+
+A harness with no BMN hook still speaks the terminal's own notification language, and BMN reads it.
+A program that writes **OSC 9** (`ESC ] 9 ; text BEL`, iTerm2), **OSC 777**
+(`ESC ] 777 ; notify ; title ; body BEL`, urxvt) or **OSC 99** (`ESC ] 99 ; metadata ; text BEL`,
+kitty) into its session opens one `notice` in **Needs you**, which pages you like a finished turn
+and clears when you type into that session. The row says it came "from the terminal (OSC 9)".
+
+The rules are deliberately narrow. It is always a `notice`: a program's own message can never open a
+question or a permission, ask for a decision or change the session's working/idle word. The sequence
+is consumed instead of printed, nothing is written back to the program, and the terminal is never
+resized or redrawn for it. Several notifications within two seconds become more lines on the one
+row rather than a queue of them. A session whose harness already reports through its own `bmn hook`
+is left to that hook for as long as that process runs — two routes for one turn would mean two rows
+— and the suppressed notification is still listed under **Hook events…** so the absence of a request
+has an answer.
+
 Every one of these calls carries the event that made it, so a request in **Needs you** says where it
 came from ("from Claude Notification") and a closed one says what closed it ("withdrawn by Claude
 Stop", "resolved by typing", "expired"). A request opened before this existed reads "from unknown".

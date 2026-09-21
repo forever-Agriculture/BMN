@@ -59,12 +59,36 @@ export interface AttentionRecord {
  */
 export type AttentionOrigin = string
 
-export const ATTENTION_ORIGINS = Object.freeze(['cli', 'owner', 'input', 'telegram', 'expiry'] as const)
+/**
+ * Terminal notification sequences BMN reads from a session's own output: iTerm2's OSC 9, kitty's
+ * OSC 99 and urxvt's OSC 777. A program that knows none of BMN still speaks these, so they are how
+ * a harness without a BMN hook reaches Needs you. They open a `notice` and nothing else.
+ */
+export const TERMINAL_NOTICE_CODES = Object.freeze([9, 99, 777] as const)
+export type TerminalNoticeCode = (typeof TERMINAL_NOTICE_CODES)[number]
+
+/** Caps the renderer applies before sending; they mirror `RULES.title` and `RULES.body`, which enforce them. */
+export const TERMINAL_NOTICE_TITLE_MAX = 200
+export const TERMINAL_NOTICE_BODY_MAX = 8000
+
+/** Further notices this soon after a row opened join it instead of opening another one. */
+export const TERMINAL_NOTICE_WINDOW_MS = 2_000
+
+export function terminalNoticeOrigin(code: TerminalNoticeCode): string {
+  return `osc:${code}`
+}
+
+export const ATTENTION_ORIGINS = Object.freeze([
+  'cli', 'owner', 'input', 'telegram', 'expiry',
+  // App-assigned: the window saw the sequence in the session's own output. Never claimable by a token.
+  ...TERMINAL_NOTICE_CODES.map(terminalNoticeOrigin)
+] as const)
 
 /** Origins a session's own token may claim: its harness's hook events, and the CLI it runs itself. */
 export const AGENT_ATTENTION_ORIGINS = Object.freeze(['cli'] as const)
 
-export const HOOK_EVENT_AGENTS = Object.freeze(['claude', 'codex'] as const)
+/** `terminal` is not a harness: it is what a program's own OSC notification is logged as. */
+export const HOOK_EVENT_AGENTS = Object.freeze(['claude', 'codex', 'terminal'] as const)
 export type HookEventAgent = (typeof HOOK_EVENT_AGENTS)[number]
 
 /** `RULES.source` size: the whole origin and a hook event name alike are at most this many characters. */
@@ -103,6 +127,8 @@ export type HookEventEffect = (typeof HOOK_EVENT_EFFECTS)[number]
 /** The most recent hook events of one session, kept in memory only so a restart starts an empty log. */
 export interface HookEventRecord {
   sessionId: string
+  /** The process incarnation that reported it; null for a row recorded before this was tracked. */
+  incarnationId: string | null
   agent: HookEventAgent
   /** The harness's own event name, for example `PostToolUse`. */
   event: string

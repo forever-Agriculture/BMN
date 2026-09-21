@@ -44,6 +44,7 @@ export const METHOD_REGISTRY = Object.freeze({
   attentionList: 'attention.list',
   attentionSeen: 'attention.seen',
   attentionResolve: 'attention.resolve',
+  attentionTerminalNotice: 'attention.terminalNotice',
   hookEventsList: 'hookEvents.list',
   progressList: 'progress.list',
   draftList: 'draft.list',

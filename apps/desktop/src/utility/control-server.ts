@@ -89,6 +89,8 @@ export interface ControlHandlers {
   /** One hook event, recorded so the owner can see which events arrived; it changes nothing by itself. */
   observeHookEvent(p: {
     sessionId: string
+    /** The incarnation that reported it, so a later process does not inherit its predecessor's log. */
+    incarnationId: string | null
     agent: HookEventAgent
     event: string
     source: string | null
@@ -169,7 +171,7 @@ const PROGRESS_STATES: readonly ProgressState[] = [
   'running', 'waiting', 'blocked', 'claimed-done', 'verified', 'failed', 'unknown'
 ]
 const ATTENTION_KINDS: readonly AttentionKind[] = ['question', 'permission', 'review', 'notice']
-const HOOK_EVENT_AGENTS: readonly HookEventAgent[] = ['claude', 'codex']
+const HOOK_EVENT_AGENTS: readonly HookEventAgent[] = ['claude', 'codex', 'terminal']
 const HOOK_EVENT_EFFECTS: readonly HookEventEffect[] = ['opened', 'withdrew', 'answered']
 const MAX_HOOK_EVENT_EFFECTS = 8
 const CONVERSATION_AGENT_CLIS: readonly ConversationAgentCli[] = ['claude', 'codex']
@@ -844,6 +846,7 @@ export class ControlServer {
         const sessionId = this.target(scope, params)
         return handlers.observeHookEvent({
           sessionId,
+          incarnationId: incarnationOf(scope),
           agent,
           event,
           source: source ?? null,

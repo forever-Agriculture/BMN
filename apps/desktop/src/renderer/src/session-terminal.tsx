@@ -6,6 +6,7 @@ import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import {
   decsetRestoreSequence,
+  TERMINAL_NOTICE_CODES,
   type ColorModeName,
   type SessionRecord,
   type TerminalExitMessage,
@@ -26,6 +27,7 @@ import { ProgressStrip } from './progress-strip'
 import { capTitle, type SessionActivity } from './session-activity'
 import type { ProgressPresentation, SessionAttention } from './session-presentation'
 import { agentTag } from './session-presentation'
+import { parseTerminalNotice } from './terminal-notice'
 import { installTerminalTestHook } from './test-hook'
 import { liveTerminalOptions, startSavedOutputCapture } from './terminal-history'
 import { copyableText, createMouseClipboard } from './terminal-clipboard'
@@ -239,6 +241,27 @@ export function SessionTerminal(props: {
     const keys = terminal.onKey(answered)
     // A title is read and shown, never obeyed: it cannot make a session working, and it opens nothing.
     const titles = terminal.onTitleChange((title) => onTitle.current(capTitle(title)))
+    /**
+     * Epic 15.1: a program that knows nothing of `bmn` still speaks the terminal's own notification
+     * sequences. They are read here, consumed so they never print, and reported to the utility,
+     * which opens a `notice` and nothing else. Nothing here reaches the PTY, changes the activity
+     * word or refits the view: the window only repeats what the program said.
+     */
+    const notices = TERMINAL_NOTICE_CODES.map((code) => terminal.parser.registerOscHandler(code, (data) => {
+      const notice = parseTerminalNotice(code, data)
+      if (notice !== null) {
+        void window.aiTerminal.reportTerminalNotice({
+          sessionId: startup.current.sessionId,
+          incarnationId: startup.current.incarnationId,
+          code,
+          title: notice.title,
+          ...(notice.body === undefined ? {} : { body: notice.body })
+        // A notification the app declined - a process that has already gone, a session it no longer
+        // knows - is not a failure the owner needs a banner for. The sequence is still consumed.
+        }).catch(() => undefined)
+      }
+      return true
+    }))
     const textareaFocus = (): void => focusReports.paneFocus(true)
     const textareaBlur = (): void => focusReports.paneFocus(false)
     terminal.textarea?.addEventListener('focus', textareaFocus)
@@ -900,6 +923,7 @@ export function SessionTerminal(props: {
       input.dispose()
       keys.dispose()
       titles.dispose()
+      for (const notice of notices) notice.dispose()
       container.removeEventListener('mousedown', mouseDown, true)
       container.removeEventListener('contextmenu', contextMenu, true)
       window.removeEventListener('mouseup', mouseUp)

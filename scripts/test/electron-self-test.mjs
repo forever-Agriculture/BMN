@@ -291,6 +291,20 @@ const receiptContract = [
       receipt.requestProvenance?.dialogClosed === true
   ],
   [
+    'terminalNotice',
+    (receipt) =>
+      receipt.terminalNotice?.kind === 'notice' &&
+      receipt.terminalNotice?.openedBy === 'osc:9' &&
+      receipt.terminalNotice?.title === 'BMN self-test notice' &&
+      receipt.terminalNotice?.provenance === 'from the terminal (OSC 9)' &&
+      receipt.terminalNotice?.ptyInputEvents === 0 &&
+      receipt.terminalNotice?.hookedSessionRows === 1 &&
+      JSON.stringify(receipt.terminalNotice?.hookedSessionEvents?.filter((event) => event.agent === 'terminal')) ===
+        JSON.stringify([{ agent: 'terminal', event: 'osc:9', effects: [] }]) &&
+      receipt.terminalNotice?.resolvedBy === 'input' &&
+      receipt.terminalNotice?.resolvedState !== 'open'
+  ],
+  [
     'conversationFromHook',
     (receipt) =>
       receipt.conversationFromHook?.startedRoute === 'unsupported' &&

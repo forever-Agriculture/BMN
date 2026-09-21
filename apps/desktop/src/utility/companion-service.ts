@@ -10,6 +10,11 @@ import {
   isAttentionOrigin,
   METHOD_REGISTRY,
   PROGRESS_STALE_AFTER_MS,
+  TERMINAL_NOTICE_BODY_MAX,
+  TERMINAL_NOTICE_CODES,
+  TERMINAL_NOTICE_TITLE_MAX,
+  TERMINAL_NOTICE_WINDOW_MS,
+  terminalNoticeOrigin,
   type AppEventMessage,
   type AppEventTopic,
   type AppSettings,
@@ -25,7 +30,8 @@ import {
   type InputDraftRecord,
   type ProgressRecord,
   type SessionRecord,
-  type TelegramStatus
+  type TelegramStatus,
+  type TerminalNoticeCode
 } from '@bmn/protocol'
 import { ArtifactFileError, ArtifactFileStore, type InstalledOriginal } from './artifact-files'
 import { ControlAuth, writeOwnerToken, type ControlScope } from './control-auth'
@@ -232,6 +238,14 @@ export class CompanionService {
   private readonly draftOperations = new Map<string, Promise<void>>()
   /** The last `HOOK_EVENT_LOG_LIMIT` hook events per session, in memory only; a restart clears them. */
   private readonly hookEvents = new Map<string, HookEventRecord[]>()
+  /** The terminal notice each session has open, so a burst becomes more lines and not more rows. */
+  private readonly terminalNotices = new Map<string, {
+    requestId: string
+    requestKey: string
+    title: string
+    openedAt: number
+    lines: string[]
+  }>()
   /** Refusals are appended one at a time, so two rejected reports cannot interleave in the file. */
   private refusalWrites: Promise<void> = Promise.resolve()
 
@@ -416,6 +430,29 @@ export class CompanionService {
       case METHOD_REGISTRY.hookEventsList:
         // Read-only and scoped to one session; the log never reaches `state.snapshot` or another session.
         return this.listHookEvents(text(params, 'sessionId'))
+      case METHOD_REGISTRY.attentionTerminalNotice: {
+        // Only the owner's own window reaches this switch, and only it can see a session's output,
+        // so a session token has no way in: the control socket has no method for this at all.
+        const sessionId = text(params, 'sessionId')
+        if (!this.knownSessions.has(sessionId)) invalid('The session is unknown')
+        const incarnationId = text(params, 'incarnationId')
+        const code = params.code
+        if (!(TERMINAL_NOTICE_CODES as readonly unknown[]).includes(code)) {
+          invalid('The notification sequence is not one BMN reads')
+        }
+        // A sequence from a process that has already gone must not speak for the one that replaced it.
+        if (this.options.manager.liveIncarnationId(sessionId) !== incarnationId) {
+          invalid('The session is running a different process now')
+        }
+        const body = optionalText(params, 'body')
+        return this.terminalNotice({
+          sessionId,
+          incarnationId,
+          code: code as TerminalNoticeCode,
+          title: text(params, 'title', TERMINAL_NOTICE_TITLE_MAX),
+          ...(body === null || body === '' ? {} : { body: body.slice(0, TERMINAL_NOTICE_BODY_MAX) })
+        })
+      }
       case METHOD_REGISTRY.attentionSeen: {
         const record = await database.companion('markAttentionSeen', text(params, 'requestId'), this.iso())
         this.emit('attention', record.sessionId)
@@ -694,6 +731,8 @@ export class CompanionService {
     expiresAt?: string
     phoneNotified?: boolean
     origin?: string
+    /** A row the owner has already been told about; more text on it is not a second interruption. */
+    silent?: boolean
   }): Promise<AttentionRecord> {
     const record = await this.options.database.companion('openAttention', {
       sessionId: p.sessionId,
@@ -706,8 +745,114 @@ export class CompanionService {
       ...(p.origin !== undefined ? { origin: p.origin } : {})
     }, randomUUID(), this.iso())
     this.emit('attention', p.sessionId)
-    if (!p.phoneNotified) this.pager.opened(record)
+    if (!p.phoneNotified && !p.silent) this.pager.opened(record)
     return record
+  }
+
+  /**
+   * A terminal notification the window read out of the session's own output (OSC 9, 99 or 777).
+   *
+   * It is the one route into Needs you for a program that knows nothing of BMN, so it is kept as
+   * small as it can be: it opens a `notice` and never a question or a permission, it writes nothing
+   * to the PTY, and a session whose harness already reports through its own BMN hook is left to that
+   * hook, because two routes for one turn would mean two rows. That suppression is per incarnation,
+   * never per time window: a hook seen an hour ago in *this* process is still the truthful reporter,
+   * and one seen in a previous process says nothing about the program running now.
+   */
+  private async terminalNotice(p: {
+    sessionId: string
+    incarnationId: string
+    code: TerminalNoticeCode
+    title: string
+    body?: string
+  }): Promise<{ opened: boolean; requestKey: string; reason?: string }> {
+    const requestKey = terminalNoticeOrigin(p.code)
+    const reported = this.hookEvents.get(p.sessionId)
+      ?.some((record) => record.agent !== 'terminal' && record.incarnationId === p.incarnationId)
+    if (reported === true) {
+      // Counted but not acted on, so "why is there no request for this?" still has an answer.
+      this.observeHookEvent({
+        sessionId: p.sessionId,
+        incarnationId: p.incarnationId,
+        agent: 'terminal',
+        event: requestKey,
+        source: null,
+        toolName: null,
+        effects: []
+      })
+      return { opened: false, requestKey, reason: 'this session reports through its own BMN hook' }
+    }
+    const now = this.now().getTime()
+    const open = await this.openTerminalNotice(p.sessionId, now)
+    const text = p.body === undefined ? p.title : `${p.title}\n${p.body}`
+    if (open) {
+      open.lines.push(text)
+      // Oldest first out: the newest line is the one the owner has not read yet.
+      while (open.lines.join('\n').length > TERMINAL_NOTICE_BODY_MAX && open.lines.length > 1) open.lines.shift()
+      const record = await this.openAttention({
+        sessionId: p.sessionId,
+        incarnationId: p.incarnationId,
+        requestKey: open.requestKey,
+        kind: 'notice',
+        title: open.title,
+        body: open.lines.join('\n').slice(0, TERMINAL_NOTICE_BODY_MAX),
+        origin: requestKey,
+        silent: true
+      })
+      open.requestId = record.requestId
+      this.observeTerminalNotice(p, requestKey, 'opened')
+      return { opened: true, requestKey: open.requestKey }
+    }
+    const record = await this.openAttention({
+      sessionId: p.sessionId,
+      incarnationId: p.incarnationId,
+      requestKey,
+      kind: 'notice',
+      title: p.title,
+      ...(p.body === undefined ? {} : { body: p.body }),
+      origin: requestKey
+    })
+    this.terminalNotices.set(p.sessionId, {
+      requestId: record.requestId,
+      requestKey,
+      title: p.title,
+      openedAt: now,
+      lines: p.body === undefined ? [] : [p.body]
+    })
+    this.observeTerminalNotice(p, requestKey, 'opened')
+    return { opened: true, requestKey }
+  }
+
+  /** The row a further notice joins: this session's own, opened moments ago and still open. */
+  private async openTerminalNotice(
+    sessionId: string,
+    now: number
+  ): Promise<{ requestId: string; requestKey: string; title: string; openedAt: number; lines: string[] } | null> {
+    const open = this.terminalNotices.get(sessionId)
+    if (!open || now - open.openedAt >= TERMINAL_NOTICE_WINDOW_MS) return null
+    // The owner may have answered it in between; adding lines to a closed row would reopen what they read.
+    const current = await this.options.database.companion('getAttention', open.requestId).catch(() => null)
+    if (current === null || current.state !== 'open') {
+      this.terminalNotices.delete(sessionId)
+      return null
+    }
+    return open
+  }
+
+  private observeTerminalNotice(
+    p: { sessionId: string; incarnationId: string },
+    event: string,
+    effect: HookEventEffect
+  ): void {
+    this.observeHookEvent({
+      sessionId: p.sessionId,
+      incarnationId: p.incarnationId,
+      agent: 'terminal',
+      event,
+      source: null,
+      toolName: null,
+      effects: [effect]
+    })
   }
 
   private async closeAttentionByKey(
@@ -731,6 +876,7 @@ export class CompanionService {
    */
   private observeHookEvent(p: {
     sessionId: string
+    incarnationId: string | null
     agent: HookEventRecord['agent']
     event: string
     source: string | null
@@ -740,6 +886,7 @@ export class CompanionService {
     const log = this.hookEvents.get(p.sessionId) ?? []
     log.push({
       sessionId: p.sessionId,
+      incarnationId: p.incarnationId,
       agent: p.agent,
       event: p.event,
       source: p.source,
