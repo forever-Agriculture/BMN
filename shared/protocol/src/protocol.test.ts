@@ -82,6 +82,9 @@ describe('protocol surface', () => {
         'session.resume',
         'session.resume.preview',
         'session.stop',
+        'session.cohort.list',
+        'session.cohort.offered',
+        'session.cohort.resume',
         'template.list',
         'template.create',
         'layout.get',
@@ -122,7 +125,7 @@ describe('protocol surface', () => {
         'presence.set'
       ])
     )
-    expect(Object.values(METHOD_REGISTRY)).toHaveLength(53)
+    expect(Object.values(METHOD_REGISTRY)).toHaveLength(56)
   })
 
   it('exports the initial stable error codes', () => {

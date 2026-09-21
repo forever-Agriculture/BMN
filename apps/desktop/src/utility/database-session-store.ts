@@ -11,6 +11,7 @@ import {
   selectConversationRoutes
 } from './database-binding-store'
 import type { DatabaseConnection, SqlValue } from './database-initialization'
+import type { InterruptedIncarnationRow } from './interrupted-cohort'
 import type {
   CreateResumingRecord,
   CreateStartingRecord,
@@ -149,4 +150,78 @@ export function clearSessionConversationBinding(
   sessionId: string
 ): boolean {
   return database.transaction(() => clearConversationBinding(database, sessionId))()
+}
+
+interface InterruptedIncarnationDatabaseRow {
+  session_id: string
+  incarnation_id: string
+  workspace_id: string
+  workspace_name: string
+  name: string
+  cwd: string
+  executable: string
+  argv_json: string
+  exit_detail: string | null
+  exited_at: string
+  cohort_offered_at: string | null
+}
+
+/**
+ * Every unarchived session whose latest incarnation is recorded interrupted, newest stop first.
+ * Which of them a stop actually interrupted is decided from the detail and the time by
+ * `newestInterruptionCohort`; this read applies no wording rule of its own.
+ */
+export function selectInterruptedIncarnations(
+  database: DatabaseConnection
+): InterruptedIncarnationRow[] {
+  const rows = database
+    .prepare(
+      `SELECT s.session_id, i.incarnation_id, s.workspace_id, w.name AS workspace_name,
+              s.name, s.cwd, s.executable, s.argv_json,
+              i.exit_detail, i.exited_at, i.cohort_offered_at
+       FROM session s
+       JOIN workspace w ON w.workspace_id = s.workspace_id
+       JOIN process_incarnation i ON i.incarnation_id = (
+         SELECT latest.incarnation_id FROM process_incarnation latest
+         WHERE latest.session_id = s.session_id
+         ORDER BY latest.started_at DESC, latest.rowid DESC LIMIT 1
+       )
+       WHERE s.archived_at IS NULL AND i.state = 'interrupted' AND i.exited_at IS NOT NULL
+       ORDER BY w.position, w.name, s.position, s.created_at, s.session_id`
+    )
+    .all() as InterruptedIncarnationDatabaseRow[]
+  return rows.map((row) => ({
+    sessionId: row.session_id,
+    incarnationId: row.incarnation_id,
+    workspaceId: row.workspace_id,
+    workspaceName: row.workspace_name,
+    name: row.name,
+    cwd: row.cwd,
+    executable: row.executable,
+    argv: JSON.parse(row.argv_json) as string[],
+    detail: row.exit_detail ?? '',
+    interruptedAt: row.exited_at,
+    offeredAt: row.cohort_offered_at
+  }))
+}
+
+/**
+ * Stamps every incarnation in a cohort, so a dismissed offer never returns for the same stop. The
+ * stamp records that BMN asked, never that anything started.
+ */
+export function markCohortOffered(
+  database: DatabaseConnection,
+  incarnationIds: readonly string[],
+  offeredAt: string
+): void {
+  if (incarnationIds.length === 0) return
+  const placeholders = incarnationIds.map(() => '?').join(', ')
+  database.transaction(() => {
+    database
+      .prepare(
+        `UPDATE process_incarnation SET cohort_offered_at = ?
+         WHERE incarnation_id IN (${placeholders}) AND cohort_offered_at IS NULL`
+      )
+      .run(offeredAt, ...incarnationIds)
+  })()
 }

@@ -1614,6 +1614,102 @@ input[type='radio'] {
   color: var(--muted);
 }
 
+/* ---------- Resuming what an update or a quit stopped ---------- */
+
+.resume-interrupted {
+  width: min(760px, calc(100vw - 48px));
+}
+
+.resume-interrupted-summary {
+  margin: 0;
+  color: var(--muted);
+}
+
+.resume-interrupted-list {
+  /* About four rows: the command matters more than the count, so each row gets room to be read. */
+  max-height: 340px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.resume-interrupted-list li {
+  display: grid;
+  gap: 4px;
+  padding: 10px 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.resume-interrupted-list li:first-child {
+  border-top: 0;
+}
+
+/* A row whose process is running is settled: it reads quieter than the ones still deciding. */
+.resume-interrupted-list li[data-outcome="started"] .who,
+.resume-interrupted-list li[data-outcome="not-started"] .who {
+  color: var(--muted);
+}
+
+.resume-interrupted-list .who {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.resume-interrupted-list .name {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resume-interrupted-list .workspace {
+  color: var(--muted);
+}
+
+.resume-interrupted-list .command {
+  margin: 0;
+  padding-left: 24px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.resume-interrupted-list .command .action {
+  color: var(--faint);
+}
+
+.resume-interrupted-list .command code {
+  color: var(--text);
+  font-family: var(--font-mono);
+}
+
+.resume-interrupted-list .note {
+  margin: 0;
+  padding-left: 24px;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.resume-interrupted-list .outcome {
+  margin: 0;
+  padding-left: 24px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.resume-interrupted-list li[data-outcome="failed"] .outcome {
+  color: var(--error);
+}
+
+.resume-interrupted-failure {
+  margin: 0;
+  color: var(--error);
+  font-size: 12px;
+}
+
 /* ---------- File reference preview ---------- */
 
 .file-reference-dialog {

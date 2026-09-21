@@ -1,5 +1,5 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, truncateSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import {
   ERROR_CODES,
   METHOD_REGISTRY,
@@ -13,6 +13,7 @@ import {
   type ClosePromptSession,
   type ExplicitConversationBinding,
   type InputDraftRecord,
+  type InterruptedSessionCohort,
   type LaunchTemplateRecord,
   type LayoutGetResult,
   type PersistedConversationBinding,
@@ -22,6 +23,8 @@ import {
   type SavedOutputCaptureOutcome,
   type SavedOutputCatalog,
   type SavedOutputSnapshot,
+  type SessionCohortOfferedResult,
+  type SessionCohortResumeResult,
   type SessionCreateParams,
   type SessionProcessState,
   type SessionRecord,
@@ -163,6 +166,26 @@ interface HostHealth {
   }>
   schemaTables: readonly string[]
   database: { journalMode: string; foreignKeys: boolean; busyTimeoutMs: number }
+}
+
+/** What the renderer may ask for: the rows it drew, with the command each row showed. */
+interface RendererCohortResumeRequest {
+  cohortId: string
+  idempotencyKey: string
+  entries: Array<{ sessionId: string; action: 'resume' | 'relaunch'; command: string }>
+}
+
+function isRendererCohortResumeRequest(value: unknown): value is RendererCohortResumeRequest {
+  if (!value || typeof value !== 'object') return false
+  const request = value as Partial<RendererCohortResumeRequest>
+  if (typeof request.cohortId !== 'string' || request.cohortId.length === 0) return false
+  if (typeof request.idempotencyKey !== 'string' || request.idempotencyKey.length === 0) return false
+  if (!Array.isArray(request.entries) || request.entries.length === 0) return false
+  return request.entries.every((entry) =>
+    !!entry &&
+    typeof entry.sessionId === 'string' && entry.sessionId.length > 0 &&
+    (entry.action === 'resume' || entry.action === 'relaunch') &&
+    typeof entry.command === 'string' && entry.command.length > 0)
 }
 
 interface StartupSuccess extends AttachmentIdentity {
@@ -728,6 +751,74 @@ function installIpcHandlers(): void {
     const dimensions = runtimes.get(id)?.dimensions ?? { cols: 80, rows: 24 }
     const resumed = await resumeBoundSession(requireHostClient(), id, dimensions)
     return adoptRestartedRuntime(id, resumed, resumed.binding.launchContext, dimensions)
+  })
+  bridgeIpc.handle('aiterm:session:cohort-list', (event) => {
+    if (!senderIsAllowed(event)) {
+      throw new MainIpcError(ERROR_CODES.unauthorized, 'Renderer sender is not authorized')
+    }
+    return requireHostClient().request<InterruptedSessionCohort | null>(
+      METHOD_REGISTRY.sessionCohortList,
+      {}
+    )
+  })
+  bridgeIpc.handle('aiterm:session:cohort-offered', (event, cohortId: unknown) => {
+    if (!senderIsAllowed(event)) {
+      throw new MainIpcError(ERROR_CODES.unauthorized, 'Renderer sender is not authorized')
+    }
+    if (typeof cohortId !== 'string' || cohortId.length === 0) {
+      throw new MainIpcError(ERROR_CODES.invalidArgument, 'An explicit cohortId is required')
+    }
+    return requireHostClient().request<SessionCohortOfferedResult>(
+      METHOD_REGISTRY.sessionCohortOffered,
+      { cohortId }
+    )
+  })
+  /**
+   * The dialog's one action. The utility owns the starts and their order; this adopts each started
+   * process as an ordinary pane, exactly as a single Resume or Start again does.
+   */
+  bridgeIpc.handle('aiterm:session:cohort-resume', async (event, request: unknown) => {
+    if (!senderIsAllowed(event)) {
+      throw new MainIpcError(ERROR_CODES.unauthorized, 'Renderer sender is not authorized')
+    }
+    if (!isRendererCohortResumeRequest(request)) {
+      throw new MainIpcError(ERROR_CODES.invalidArgument, 'Cohort resume parameters are invalid')
+    }
+    for (const entry of request.entries) {
+      if (!sessionRecords.has(entry.sessionId)) {
+        throw new MainIpcError(ERROR_CODES.notFound, `Session ${entry.sessionId} was not found`)
+      }
+    }
+    const result = await requireHostClient().request<SessionCohortResumeResult>(
+      METHOD_REGISTRY.sessionCohortResume,
+      {
+        cohortId: request.cohortId,
+        idempotencyKey: request.idempotencyKey,
+        entries: request.entries.map((entry) => ({
+          ...entry,
+          ...(runtimes.get(entry.sessionId)?.dimensions ?? { cols: 80, rows: 24 })
+        }))
+      }
+    )
+    return {
+      cohortId: result.cohortId,
+      entries: result.entries.map((entry) => {
+        if (entry.outcome !== 'started' || !entry.started) {
+          return { sessionId: entry.sessionId, outcome: entry.outcome, ...(entry.error ? { error: entry.error } : {}) }
+        }
+        const { cwd, executable, ...attachment } = entry.started
+        return {
+          sessionId: entry.sessionId,
+          outcome: entry.outcome,
+          startup: adoptRestartedRuntime(
+            entry.sessionId,
+            attachment,
+            { cwd, executable },
+            runtimes.get(entry.sessionId)?.dimensions ?? { cols: 80, rows: 24 }
+          )
+        }
+      })
+    }
   })
   bridgeIpc.handle('aiterm:session:relaunch', async (event, sessionId: unknown) => {
     const id = requireKnownSession(event, sessionId)
@@ -1419,6 +1510,160 @@ async function closePromptDialogText(window: BrowserWindow): Promise<{
   `) as Promise<{ heading: string; summary: string; rows: string[] }>
 }
 
+/** What the resume-after-stop offer says, without answering it. */
+interface ResumeOfferReading {
+  heading: string
+  summary: string
+  rows: Array<{ name: string; command: string; checked: boolean; outcome: string }>
+  button: string
+}
+
+const RESUME_OFFER_READER = `(dialog) => ({
+  heading: dialog.querySelector('.app-dialog-heading h2')?.textContent?.trim() ?? '',
+  summary: dialog.querySelector('.resume-interrupted-summary')?.textContent?.trim() ?? '',
+  rows: [...dialog.querySelectorAll('.resume-interrupted-list li')].map((row) => ({
+    name: row.querySelector('.name')?.textContent?.trim() ?? '',
+    command: row.querySelector('.command code')?.textContent?.trim() ?? '',
+    checked: row.querySelector('input[type=checkbox]')?.checked === true,
+    outcome: row.querySelector('.outcome')?.textContent?.trim() ?? ''
+  })),
+  button: [...dialog.querySelectorAll('.dialog-actions button')]
+    .map((button) => button.textContent.trim())
+    .find((label) => label.startsWith('Resume ')) ?? ''
+})`
+
+async function resumeOfferShown(
+  window: BrowserWindow,
+  timeoutMs = 10_000
+): Promise<ResumeOfferReading> {
+  return window.webContents.executeJavaScript(`
+    new Promise((resolve, reject) => {
+      const deadline = Date.now() + ${timeoutMs};
+      const read = ${RESUME_OFFER_READER};
+      const probe = () => {
+        const dialog = document.querySelector('dialog.resume-interrupted[open]');
+        if (dialog) resolve(read(dialog));
+        else if (Date.now() >= deadline) reject(new Error('the window never offered to resume the stopped sessions'));
+        else setTimeout(probe, 25);
+      };
+      probe();
+    })
+  `) as Promise<ResumeOfferReading>
+}
+
+/** True when the offer stays away for the whole window; used where asking again would be wrong. */
+async function resumeOfferStaysAway(window: BrowserWindow, forMs: number): Promise<boolean> {
+  return window.webContents.executeJavaScript(`
+    new Promise((resolve) => {
+      const deadline = Date.now() + ${forMs};
+      const probe = () => {
+        if (document.querySelector('dialog.resume-interrupted[open]')) resolve(false);
+        else if (Date.now() >= deadline) resolve(true);
+        else setTimeout(probe, 25);
+      };
+      probe();
+    })
+  `) as Promise<boolean>
+}
+
+/** Presses the offer's one button and reads every row back once the action has settled. */
+async function pressResumeOffer(window: BrowserWindow): Promise<ResumeOfferReading> {
+  return window.webContents.executeJavaScript(`
+    new Promise((resolve, reject) => {
+      const deadline = Date.now() + 20000;
+      const read = ${RESUME_OFFER_READER};
+      let pressed = false;
+      const probe = () => {
+        const dialog = document.querySelector('dialog.resume-interrupted[open]');
+        if (!dialog) {
+          if (Date.now() >= deadline) reject(new Error('the resume offer closed before it was answered'));
+          else setTimeout(probe, 25);
+          return;
+        }
+        const button = [...dialog.querySelectorAll('.dialog-actions button')]
+          .find((candidate) => candidate.textContent.trim().startsWith('Resume '));
+        if (!pressed) {
+          if (!button) { reject(new Error('the resume offer has no button')); return; }
+          pressed = true;
+          button.click();
+          setTimeout(probe, 25);
+          return;
+        }
+        const current = read(dialog);
+        if (current.rows.every((row) => row.outcome !== '')) { resolve(current); return; }
+        if (Date.now() >= deadline) reject(new Error('the resume offer never reported its rows: ' + JSON.stringify(current)));
+        else setTimeout(probe, 25);
+      };
+      probe();
+    })
+  `) as Promise<ResumeOfferReading>
+}
+
+/** Closes the offer the way the owner would, and says whether it went. */
+async function closeResumeOffer(window: BrowserWindow): Promise<boolean> {
+  return window.webContents.executeJavaScript(`
+    new Promise((resolve, reject) => {
+      const deadline = Date.now() + 5000;
+      let clicked = false;
+      const probe = () => {
+        const dialog = document.querySelector('dialog.resume-interrupted[open]');
+        if (!dialog) { resolve(clicked); return; }
+        if (!clicked) {
+          const close = [...dialog.querySelectorAll('.dialog-actions button')]
+            .find((candidate) => ['Cancel', 'Close'].includes(candidate.textContent.trim()));
+          if (!close) { reject(new Error('the resume offer has no way out')); return; }
+          clicked = true;
+          close.click();
+        }
+        if (Date.now() >= deadline) reject(new Error('the resume offer would not close'));
+        else setTimeout(probe, 25);
+      };
+      probe();
+    })
+  `) as Promise<boolean>
+}
+
+/**
+ * Runs one palette command by its label, the way the owner reaches it. A command the palette does
+ * not offer — `filterCommands` drops a disabled one — comes back as `missing`, with the palette
+ * closed again, so a test can assert either outcome.
+ */
+async function runPaletteCommand(
+  window: BrowserWindow,
+  label: string
+): Promise<'ran' | 'missing'> {
+  return window.webContents.executeJavaScript(`
+    new Promise((resolve, reject) => {
+      const settleMs = 1500;
+      let opened = 0;
+      const probe = () => {
+        const palette = document.querySelector('dialog.command-palette[open]');
+        if (!palette) {
+          if (opened > 0) { resolve('missing'); return; }
+          const paletteButton = document.querySelector('button[aria-label="Command palette"]');
+          if (!paletteButton) { reject(new Error('the palette button is not rendered')); return; }
+          opened = Date.now();
+          paletteButton.click();
+          setTimeout(probe, 25);
+          return;
+        }
+        const option = [...palette.querySelectorAll('li[role=option]')]
+          .find((candidate) => candidate.textContent.trim().startsWith(${JSON.stringify(label)}));
+        if (option) { option.click(); resolve('ran'); return; }
+        if (Date.now() - opened >= settleMs) {
+          palette.dispatchEvent(new Event('cancel', { cancelable: true }));
+          const close = palette.querySelector('.app-dialog-heading .icon-button');
+          if (close) close.click();
+          setTimeout(() => resolve('missing'), 25);
+          return;
+        }
+        setTimeout(probe, 25);
+      };
+      probe();
+    })
+  `) as Promise<'ran' | 'missing'>
+}
+
 async function recoveredStoppedLabel(
   window: BrowserWindow,
   stopped: { sessionId: string; name: string }
@@ -1592,6 +1837,27 @@ function listedConversation(listing: string): { sessions: number; conversation: 
   if (!existsSync(listing)) return { sessions: 0, conversation: null }
   const rows = JSON.parse(readFileSync(listing, 'utf8')) as Array<{ conversation?: unknown }>
   return { sessions: rows.length, conversation: rows[0]?.conversation ?? null }
+}
+
+/** A command that records its argv and then stays up, so a started row can be proved by its argv. */
+function writeArgvRecorder(directory: string, name: string): { executable: string; log: string } {
+  mkdirSync(directory, { recursive: true })
+  const log = join(directory, `${name}.log`)
+  const executable = join(directory, name)
+  writeFileSync(join(directory, 'package.json'), '{"type":"commonjs"}\n')
+  writeFileSync(
+    executable,
+    [
+      `#!${process.env.BMN_SELF_TEST_NODE ?? '/usr/bin/env node'}`,
+      "const { appendFileSync } = require('node:fs')",
+      `appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + '\\n')`,
+      `process.stdout.write(${JSON.stringify(name)} + ' started\\n')`,
+      'setInterval(() => undefined, 1_000)',
+      ''
+    ].join('\n'),
+    { mode: 0o700 }
+  )
+  return { executable, log }
 }
 
 function harnessRuns(log: string): string[][] {
@@ -2652,6 +2918,25 @@ async function runSelfTest(): Promise<void> {
         `application-quit stop was not recorded as interrupted: ${JSON.stringify(lifecycleStoppedBeforeRestart)}`
       )
     }
+    /**
+     * Epic 17.1 AC2: this stop is mid-run, which only a self-test can arrange, so the offer is
+     * recorded as made here. What the renderer restart below then proves is the rule itself: a
+     * cohort BMN has already asked about never asks again by itself.
+     */
+    const quitCohortBeforeRestart = await client.request<InterruptedSessionCohort | null>(
+      METHOD_REGISTRY.sessionCohortList,
+      {}
+    )
+    if (quitCohortBeforeRestart?.cause !== 'application-quit') {
+      throw new Error(
+        `the application-quit stop did not form a resumable cohort: ${JSON.stringify(quitCohortBeforeRestart)}`
+      )
+    }
+    const quitCohortOffer = await client.request<SessionCohortOfferedResult>(
+      METHOD_REGISTRY.sessionCohortOffered,
+      { cohortId: quitCohortBeforeRestart.cohortId }
+    )
+
     console.error('[BMN] self-test phase: inactive workspace following output')
     const inactiveAttachmentId = runtimes.get(thirdSession.sessionId)?.attachment.attachmentId
     if (!inactiveAttachmentId) throw new Error('the inactive workspace session has no renderer attachment')
@@ -2809,6 +3094,11 @@ async function runSelfTest(): Promise<void> {
     await reloaded
     await waitForRendererHook(applicationWindow)
     console.error('[BMN] self-test phase: renderer restart loaded')
+    // Epic 17.1 AC2: the offer was made once; a rebuilt view is not a new start, so it stays away.
+    const offerStayedAwayAfterRendererRestart = await resumeOfferStaysAway(applicationWindow, 750)
+    if (!offerStayedAwayAfterRendererRestart) {
+      throw new Error('an already-offered interruption asked again after the renderer restart')
+    }
     // Epic 11 AC1: the marker is stored, not remembered by the view, so it is still there after a restart.
     const markersAfterRestart = await client.request<WorkspaceRecord[]>(METHOD_REGISTRY.workspaceList, {
       includeArchived: true
@@ -3317,6 +3607,134 @@ async function runSelfTest(): Promise<void> {
 
     // Epic 14.2: what opened a request and what closed it, and the log of events that says why a
     // request the owner expected never arrived. Real hook events through the installed `bmn hook`.
+    /**
+     * Epic 17.1: the update loop itself. Two sessions are stopped exactly as `update:desktop` stops
+     * them, the window is reloaded as the next start would load it, and the offer is answered.
+     */
+    console.error('[BMN] self-test phase: resume after an update stop')
+    const resumeOfferDirectory = join(isolatedCwd, 'resume-offer')
+    const firstRecorder = writeArgvRecorder(resumeOfferDirectory, 'first-agent')
+    const secondRecorder = writeArgvRecorder(resumeOfferDirectory, 'second-agent')
+    const stoppedByUpdate = []
+    for (const recorder of [firstRecorder, secondRecorder]) {
+      const { session: record, startup: created } = await createSessionRuntime({
+        workspaceId: DEFAULT_WORKSPACE_ID,
+        name: `Update ${basename(recorder.executable)}`,
+        cwd: isolatedCwd,
+        executable: recorder.executable,
+        argv: ['--keep-going'],
+        cols: 80,
+        rows: 24
+      }, true)
+      stoppedByUpdate.push({ record, created, recorder })
+    }
+    await untilHarnessRuns(firstRecorder.log, 1)
+    await untilHarnessRuns(secondRecorder.log, 1)
+    const updateTargets = stoppedByUpdate.flatMap(({ record }) => {
+      const runtime = runtimes.get(record.sessionId)
+      const target = runtime
+        ? runningTargetForRuntime({
+            ...runtime.session,
+            executable: runtime.executable,
+            processState: runtime.processState
+          })
+        : undefined
+      return target ? [target] : []
+    })
+    if (updateTargets.length !== 2) throw new Error('the update-stop fixture did not start two sessions')
+    await stopCurrentTargets(updateTargets, 'update-restart')
+    const updateCohort = await client.request<InterruptedSessionCohort | null>(
+      METHOD_REGISTRY.sessionCohortList,
+      {}
+    )
+    if (updateCohort?.cause !== 'update-restart' || updateCohort.entries.length !== 2) {
+      throw new Error(`the update stop did not form its own cohort: ${JSON.stringify(updateCohort)}`)
+    }
+    // The next start: a fresh window load, exactly what the owner sees after `update:desktop`.
+    const reloadedAfterUpdate = waitForRendererLoad(applicationWindow)
+    applicationWindow.webContents.reload()
+    await reloadedAfterUpdate
+    await waitForRendererHook(applicationWindow)
+    const offerAfterUpdate = await resumeOfferShown(applicationWindow)
+    const expectedCommands = stoppedByUpdate
+      .map(({ recorder }) => `${recorder.executable} --keep-going`)
+    if (
+      offerAfterUpdate.heading !== 'Resume what the update stopped?' ||
+      offerAfterUpdate.summary !== 'a desktop update stopped 2 sessions. Nothing has started since.' ||
+      // No conversation was ever captured for these, so both rows are Start again and start unchecked.
+      offerAfterUpdate.button !== 'Resume 0 sessions' ||
+      JSON.stringify(offerAfterUpdate.rows.map((row) => row.command).sort()) !==
+        JSON.stringify([...expectedCommands].sort()) ||
+      offerAfterUpdate.rows.some((row) => row.checked)
+    ) {
+      throw new Error(`the resume offer did not read as expected: ${JSON.stringify(offerAfterUpdate)}`)
+    }
+    // Dismissed without an answer: nothing may have started, and the palette must bring it back.
+    await closeResumeOffer(applicationWindow)
+    if (harnessRuns(firstRecorder.log).length !== 1 || harnessRuns(secondRecorder.log).length !== 1) {
+      throw new Error('dismissing the resume offer started a process')
+    }
+    const paletteReopened = await runPaletteCommand(applicationWindow, 'Resume interrupted sessions…')
+    if (paletteReopened !== 'ran') {
+      throw new Error(`the palette did not offer to reopen the dismissed offer: ${paletteReopened}`)
+    }
+    const reopenedOffer = await resumeOfferShown(applicationWindow)
+    if (JSON.stringify(reopenedOffer.rows.map((row) => row.command).sort()) !==
+      JSON.stringify([...expectedCommands].sort())) {
+      throw new Error(`the palette reopened something else: ${JSON.stringify(reopenedOffer)}`)
+    }
+    const offerAnswered = await applicationWindow.webContents.executeJavaScript(`
+      new Promise((resolve, reject) => {
+        const dialog = document.querySelector('dialog.resume-interrupted[open]');
+        if (!dialog) { reject(new Error('the resume offer closed before it was answered')); return; }
+        for (const box of dialog.querySelectorAll('input[type=checkbox]')) box.click();
+        resolve(true);
+      })
+    `) as boolean
+    if (!offerAnswered) throw new Error('the resume offer rows could not be checked')
+    const offerResult = await pressResumeOffer(applicationWindow)
+    if (offerResult.rows.some((row) => row.outcome !== 'Started')) {
+      throw new Error(`a checked row did not start: ${JSON.stringify(offerResult.rows)}`)
+    }
+    const restartedArgv = await Promise.all([firstRecorder, secondRecorder]
+      .map((recorder) => untilHarnessRuns(recorder.log, 2)))
+    if (!restartedArgv.every((runs) => JSON.stringify(runs[1]) === JSON.stringify(['--keep-going']))) {
+      throw new Error(`the started rows ran something else: ${JSON.stringify(restartedArgv)}`)
+    }
+    await closeResumeOffer(applicationWindow)
+    // A second start must not ask again: the cohort was offered, and both of its rows are running.
+    const reloadedAgain = waitForRendererLoad(applicationWindow)
+    applicationWindow.webContents.reload()
+    await reloadedAgain
+    await waitForRendererHook(applicationWindow)
+    const offerStayedAwayAfterSecondStart = await resumeOfferStaysAway(applicationWindow, 750)
+    if (!offerStayedAwayAfterSecondStart) {
+      throw new Error('the resume offer asked again after a second start')
+    }
+    console.error(`[BMN] self-test phase: resume after an update stop ${JSON.stringify({
+      heading: offerAfterUpdate.heading,
+      summary: offerAfterUpdate.summary,
+      commands: offerAfterUpdate.rows.map((row) => row.command),
+      startsUnchecked: offerAfterUpdate.rows.every((row) => !row.checked),
+      dismissedStartedNothing: true,
+      reopenedFromPalette: reopenedOffer.rows.map((row) => row.command),
+      outcomes: offerResult.rows.map((row) => row.outcome),
+      argv: restartedArgv.map((runs) => runs[1] ?? null),
+      quitCohortOfferedAt: quitCohortOffer.offeredAt,
+      offerStayedAwayAfterRendererRestart,
+      offerStayedAwayAfterSecondStart
+    })}`)
+    // The fixture leaves nothing running: later phases count on the sessions they started themselves.
+    for (const { record } of stoppedByUpdate) {
+      const runtime = runtimes.get(record.sessionId)
+      if (!runtime) continue
+      await client.request(METHOD_REGISTRY.sessionStop, {
+        sessionId: runtime.session.sessionId,
+        incarnationId: runtime.session.incarnationId,
+        cause: 'explicit'
+      })
+    }
+
     console.error('[BMN] self-test phase: request provenance and hook events')
     const hookHarness = writeClaudeHookHarness(join(isolatedCwd, 'claude-harness'))
     const hookSession = await createSessionRuntime({

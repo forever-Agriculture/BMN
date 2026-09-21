@@ -19,10 +19,12 @@ import {
   createStartingSession,
   getSessionConversationBinding,
   listSessionConversationRoutes,
+  markCohortOffered,
   markSessionExited,
   markSessionInterrupted,
   markSessionRunning,
-  replaceSessionConversationBinding
+  replaceSessionConversationBinding,
+  selectInterruptedIncarnations
 } from './database-session-store'
 import {
   WorkspaceStoreError,
@@ -221,6 +223,14 @@ function handle(request: WorkerRequest): unknown {
         database,
         requiredString(params, 'incarnationId'),
         requiredString(params, 'reason')
+      )
+    case 'interrupted-incarnations':
+      return selectInterruptedIncarnations(database)
+    case 'cohort-offered':
+      return markCohortOffered(
+        database,
+        (params.incarnationIds as string[]) ?? [],
+        requiredString(params, 'offeredAt')
       )
     case 'backup-into':
       // VACUUM INTO writes a consistent snapshot and cannot run inside a transaction.

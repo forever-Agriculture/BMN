@@ -33,6 +33,14 @@ import {
   type SavedOutputUnreadableEntry,
   type SessionProcessStatus,
   type SessionRecord,
+  type InterruptedSessionCohort,
+  type InterruptedSessionEntry,
+  type SessionCohortOfferedResult,
+  type SessionCohortResumeEntry,
+  type SessionCohortResumeEntryResult,
+  type SessionCohortResumeParams,
+  type SessionCohortResumeResult,
+  type SessionCohortStartedProcess,
   type SessionResumeParams,
   type SessionResumeResult,
   type SessionStopCause,
@@ -44,6 +52,11 @@ import {
   type WorkspaceRecord
 } from '@bmn/protocol'
 import { processStartIdentity } from './process-start-identity'
+import {
+  newestInterruptionCohort,
+  resumableStopCause,
+  type InterruptedIncarnationRow
+} from './interrupted-cohort'
 import { HostOutputQueue, type HostOutputQueueTransition } from './transport'
 import { TerminalByteFramer } from './terminal-byte-framer'
 import {
@@ -110,6 +123,15 @@ export interface CreateResumingRecord {
 }
 
 /** The manager's store also owns stored-session reads, so resume gates on the persisted record. */
+/**
+ * A start that repeats a command the owner has already read. `expectedCommand` is compared with the
+ * command about to be spawned, so a binding that changed after the row was drawn fails the row
+ * instead of quietly starting something else.
+ */
+export interface ConfirmedStartParams extends SessionResumeParams {
+  expectedCommand?: string
+}
+
 export interface SessionStore extends StoredSessionReader {
   createStarting(record: CreateStartingRecord): Promise<void>
   createResuming(record: CreateResumingRecord): Promise<void>
@@ -121,6 +143,8 @@ export interface SessionStore extends StoredSessionReader {
   markRunning(incarnationId: string): Promise<void>
   markExited(incarnationId: string, exit: IncarnationExit): Promise<void>
   markInterrupted(incarnationId: string, reason: string): Promise<void>
+  listInterruptedIncarnations(): Promise<readonly InterruptedIncarnationRow[]>
+  markCohortOffered(incarnationIds: readonly string[], offeredAt: string): Promise<void>
   health(): Promise<{
     runningIncarnations: number
     interruptedIncarnations?: number
@@ -320,6 +344,19 @@ export interface StoredSessionReader {
   listSessions(workspaceId: string): Promise<readonly SessionRecord[]>
 }
 
+/**
+ * The row the owner read is the contract: if the command a start is about to run differs by a
+ * byte, the row fails instead of starting something the owner never saw.
+ */
+function requireConfirmedCommand(expected: string | undefined, actual: string): void {
+  if (expected !== undefined && expected !== actual) {
+    throw new HostControlError(
+      ERROR_CODES.invalidArgument,
+      `The command changed since it was shown; nothing was started. It now reads: ${actual}`
+    )
+  }
+}
+
 export async function findStoredSession(
   reader: StoredSessionReader,
   sessionId: string
@@ -417,6 +454,11 @@ export class SessionManager {
   private readonly conversationReservations = new Map<string, ConversationReservation>()
   /** Sessions with a Start again or Resume between its checks and its process being tracked. */
   private readonly launchingSessions = new Set<string>()
+  /**
+   * One dialog action per key, for the process lifetime. Repeated clicks, IPC retries and renderer
+   * reconnects join the run already in flight and read its recorded result; nothing starts twice.
+   */
+  private readonly cohortResumeActions = new Map<string, Promise<SessionCohortResumeResult>>()
 
   constructor(options: SessionManagerOptions) {
     this.store = options.store
@@ -671,7 +713,7 @@ export class SessionManager {
    * not stored is NOT_FOUND, and stored launch metadata that cannot be used is IO_ERROR with its
    * actionable reason.
    */
-  async resume(params: SessionResumeParams): Promise<SessionResumeResult> {
+  async resume(params: ConfirmedStartParams): Promise<SessionResumeResult> {
     const stored = await findStoredSession(this.store, params.sessionId)
     if (!stored) {
       throw new HostControlError(ERROR_CODES.notFound, 'The session was not found')
@@ -689,10 +731,180 @@ export class SessionManager {
   }
 
   /**
+   * What one stop interrupted, and what starting each of them again would run. Reads records and
+   * builds commands; it starts nothing, and a session the host is holding live has already been
+   * resumed by hand, so it is left out.
+   */
+  async interruptedCohort(): Promise<InterruptedSessionCohort | null> {
+    const selection = newestInterruptionCohort(await this.store.listInterruptedIncarnations())
+    if (!selection) return null
+    const entries: InterruptedSessionEntry[] = []
+    for (const member of selection.members) {
+      // The host still holding the session means it was resumed by hand, or its stop never
+      // confirmed an exit. Neither can be started from here, so neither is offered.
+      if (this.liveIncarnationId(member.sessionId)) continue
+      entries.push(await this.interruptedEntry(member))
+    }
+    if (entries.length === 0) return null
+    return {
+      cohortId: selection.cohortId,
+      cause: selection.cause,
+      stoppedAt: selection.stoppedAt,
+      offeredAt: selection.offeredAt,
+      entries
+    }
+  }
+
+  /**
+   * Records that the dialog was shown for this cohort, so the offer is made once per stop. The
+   * stamp is about the question, never about a process: nothing here starts or stops anything.
+   */
+  async markCohortOffered(cohortId: string): Promise<SessionCohortOfferedResult> {
+    const selection = this.requireNewestCohort(
+      newestInterruptionCohort(await this.store.listInterruptedIncarnations()),
+      cohortId
+    )
+    const offeredAt = selection.offeredAt ?? new Date().toISOString()
+    await this.store.markCohortOffered(selection.members.map((row) => row.incarnationId), offeredAt)
+    return { cohortId: selection.cohortId, offeredAt }
+  }
+
+  /**
+   * Starts the rows the owner checked, in their order, through the same Resume and Start again the
+   * per-session controls use. Epic 10's contract: one in-memory key per dialog action, sequential
+   * starts, stop after the first failure, and an outcome for every row. Nothing is retried or
+   * killed, so a session that started stays running whatever the row after it does.
+   */
+  async resumeCohort(params: SessionCohortResumeParams): Promise<SessionCohortResumeResult> {
+    const recorded = this.cohortResumeActions.get(params.idempotencyKey)
+    if (recorded) return recorded
+    const action = this.runCohortResume(params)
+    this.cohortResumeActions.set(params.idempotencyKey, action)
+    // The first caller awaits the rejection; this only keeps a retry-less failure from being unhandled.
+    void action.catch(() => undefined)
+    return action
+  }
+
+  private async runCohortResume(
+    params: SessionCohortResumeParams
+  ): Promise<SessionCohortResumeResult> {
+    const entries: SessionCohortResumeEntryResult[] = []
+    let stopped = false
+    for (const entry of params.entries) {
+      if (stopped) {
+        entries.push({ sessionId: entry.sessionId, outcome: 'not-started' })
+        continue
+      }
+      try {
+        entries.push({
+          sessionId: entry.sessionId,
+          outcome: 'started',
+          started: await this.startCohortEntry(entry)
+        })
+      } catch (error) {
+        entries.push({
+          sessionId: entry.sessionId,
+          outcome: 'failed',
+          error: error instanceof Error ? error.message : 'The session could not be started'
+        })
+        stopped = true
+      }
+    }
+    return { cohortId: params.cohortId, entries }
+  }
+
+  /**
+   * Re-reads the records immediately before the start. The row must still be a session a lifecycle
+   * stop interrupted; live, archived and exit-unconfirmed sessions fall out here or at the launch
+   * claim the two start paths already take. The check is per row, not per cohort, so one row that
+   * stopped qualifying does not invalidate the command another row still shows.
+   */
+  private async startCohortEntry(
+    entry: SessionCohortResumeEntry
+  ): Promise<SessionCohortStartedProcess> {
+    const interrupted = await this.store.listInterruptedIncarnations()
+    const member = interrupted.find((row) =>
+      row.sessionId === entry.sessionId && resumableStopCause(row.detail) !== null)
+    if (!member) {
+      throw new HostControlError(
+        ERROR_CODES.invalidArgument,
+        'This session is no longer one a stop interrupted; nothing was started'
+      )
+    }
+    const start: ConfirmedStartParams = {
+      sessionId: entry.sessionId,
+      cols: entry.cols,
+      rows: entry.rows,
+      expectedCommand: entry.command
+    }
+    if (entry.action === 'relaunch') {
+      const started = await this.relaunch(start)
+      return { ...started, cwd: member.cwd, executable: member.executable }
+    }
+    const resumed = await this.resume(start)
+    return {
+      sessionId: resumed.sessionId,
+      incarnationId: resumed.incarnationId,
+      attachmentId: resumed.attachmentId,
+      streamSeq: resumed.streamSeq,
+      captureStartedAt: resumed.captureStartedAt,
+      cwd: resumed.binding.launchContext.cwd,
+      executable: resumed.binding.launchContext.executable
+    }
+  }
+
+  private requireNewestCohort(
+    selection: ReturnType<typeof newestInterruptionCohort>,
+    cohortId: string
+  ): NonNullable<ReturnType<typeof newestInterruptionCohort>> {
+    if (!selection || selection.cohortId !== cohortId) {
+      throw new HostControlError(
+        ERROR_CODES.notFound,
+        'The interruption this offer described is no longer the newest one'
+      )
+    }
+    return selection
+  }
+
+  /** One row: what the start would run, or why this session can only be started again. */
+  private async interruptedEntry(row: InterruptedIncarnationRow): Promise<InterruptedSessionEntry> {
+    const shared = {
+      sessionId: row.sessionId,
+      incarnationId: row.incarnationId,
+      workspaceId: row.workspaceId,
+      workspaceName: row.workspaceName,
+      name: row.name,
+      detail: row.detail,
+      interruptedAt: row.interruptedAt
+    }
+    try {
+      const preview = await this.conversationResumePreview(row.sessionId)
+      return {
+        ...shared,
+        action: 'resume',
+        command: preview.command,
+        notCarried: preview.notCarried,
+        relaunchReason: null
+      }
+    } catch (error) {
+      // A session without a usable binding is honest about it and offers the stored command instead.
+      return {
+        ...shared,
+        action: 'relaunch',
+        command: shownCommand(row.executable, row.argv),
+        notCarried: '',
+        relaunchReason: error instanceof Error
+          ? error.message
+          : 'No conversation binding was captured for this session'
+      }
+    }
+  }
+
+  /**
    * Runs a stopped session's saved command again in a new process. Nothing is injected, so an agent
    * CLI starts a fresh conversation and the stored conversation binding is left for Resume.
    */
-  async relaunch(params: SessionResumeParams): Promise<AttachmentIdentity> {
+  async relaunch(params: ConfirmedStartParams): Promise<AttachmentIdentity> {
     const stored = await findStoredSession(this.store, params.sessionId)
     if (!stored) {
       throw new HostControlError(ERROR_CODES.notFound, 'The session was not found')
@@ -703,6 +915,7 @@ export class SessionManager {
     if (stored.archivedAt !== null) {
       throw new HostControlError(ERROR_CODES.invalidArgument, 'Restore the session before starting it')
     }
+    requireConfirmedCommand(params.expectedCommand, shownCommand(stored.executable, stored.argv))
     const releaseLaunch = this.claimSessionLaunch(params.sessionId)
     try {
       const launchParams: PtyLaunchParams = {
@@ -731,7 +944,7 @@ export class SessionManager {
     }
   }
 
-  private async loadBindingAndResume(params: SessionResumeParams): Promise<SessionResumeResult> {
+  private async loadBindingAndResume(params: ConfirmedStartParams): Promise<SessionResumeResult> {
     const stored = await this.store.getConversationBinding(params.sessionId)
     const binding = stored ? parseBoundBinding(stored) : undefined
     if (!binding) {
@@ -745,7 +958,7 @@ export class SessionManager {
   }
 
   private resumeBinding(
-    params: SessionResumeParams,
+    params: ConfirmedStartParams,
     persistedBinding: PersistedConversationBinding
   ): Promise<SessionResumeResult> {
     const binding = parseBoundBinding(persistedBinding)
@@ -842,7 +1055,7 @@ export class SessionManager {
   }
 
   private async resumeOnce(
-    params: SessionResumeParams,
+    params: ConfirmedStartParams,
     binding: BoundConversationBinding,
     reservation: ConversationReservation
   ): Promise<SessionResumeResult> {
@@ -853,6 +1066,7 @@ export class SessionManager {
       )
     }
     const { launch, environment: resumeEnvironment } = await this.prepareResumeLaunch(binding)
+    requireConfirmedCommand(params.expectedCommand, shownCommand(launch.executable, launch.argv))
     const launchParams: PtyLaunchParams = {
       cwd: launch.cwd,
       executable: launch.executable,

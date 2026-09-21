@@ -111,11 +111,11 @@ agent has to guess.
 | --- | --- | --- | --- | --- | --- | --- |
 | Close the window, keep the sessions | Keeps running | Kept: the window is minimized, not destroyed | Captured on the same cadence | Unchanged | Not needed; nothing stopped | Stay open |
 | Close the window and stop the sessions | Stopped, recorded *interrupted · last window close* | Ends with the process | A final capture is taken before the stop | Unchanged; the pane keeps its place | Resume reopens a bound conversation | Stay open; a harness that sends `SessionEnd` withdraws the ones its hook opened |
-| Quit | Stopped after BMN lists the running sessions and asks, recorded *interrupted · application quit* | Ends with the process | A final capture is taken before the stop | Unchanged | Resume reopens a bound conversation | Stay open; `SessionEnd` withdraws the hook's own |
+| Quit | Stopped after BMN lists the running sessions and asks, recorded *interrupted · application quit* | Ends with the process | A final capture is taken before the stop | Unchanged | Resume reopens a bound conversation; the next start offers to resume them all in one dialog | Stay open; `SessionEnd` withdraws the hook's own |
 | Stop a session | Stopped; an unconfirmed stop stays *exit unconfirmed* until the host reports the exit | Ends with the process | A final capture is taken before the stop | Unchanged | Resume reopens a bound conversation | Stay open; `SessionEnd` withdraws the hook's own |
 | Renderer crash | Keeps running | A new view is created and the program is asked to repaint; bytes from before the crash are not replayed | Unaffected | Unchanged: order, selection, scroll position and follow-tail are restored | Not needed; nothing stopped | Stay open |
 | App crash or reboot | Ends when its pseudo-terminal closes (UNVERIFIED); the next start marks earlier incarnations *interrupted* and starts nothing by itself | Gone | The last periodic capture; output written after it is lost | Unchanged | Resume reopens a bound conversation, including one a `SessionStart` hook reported | Stay open |
-| Desktop update | Stopped: packaging waits for BMN to exit, and an update installed while it runs stops the sessions, recorded *interrupted · update restart* | Ends with the process | A final capture is taken before the stop | Unchanged | Resume reopens a bound conversation | Stay open |
+| Desktop update | Stopped: packaging waits for BMN to exit, and an update installed while it runs stops the sessions, recorded *interrupted · update restart* | Ends with the process | A final capture is taken before the stop | Unchanged | Resume reopens a bound conversation; the next start offers to resume them all in one dialog | Stay open |
 
 Saved output is a plain-text snapshot of the live screen, taken periodically, on stop and on quit;
 it is never replayed into a terminal. *Resume* reopens the stored Claude Code or Codex conversation
@@ -126,6 +126,13 @@ session without that stays honest about it and offers **Start again** instead.
 Resume shows the exact command first. The confirmation is built from the same launch the process is
 started with, so what you read is what runs, and it names any stored argument the CLI's own resume
 will not take — by kind, never quoting a prompt you typed.
+
+After an update or a quit, the next start offers the sessions that stop interrupted in one dialog:
+one row each with the exact Resume command, or **Start again** with the stored command for a session
+without a bound conversation. Resume rows are checked, Start again rows are not, and the rows start
+in order, one at a time, stopping after the first failure — every row ends up reading *started*,
+*failed* with the reason, or *not started*. Nothing begins until the button, and the offer is made
+once per stop; **Resume interrupted sessions…** in the palette reopens it.
 
 The Electron self-test checks two of these rows against the running app: the renderer-crash row (the
 processes and the layout survive a new view) and the Quit row (the interruption and its recorded

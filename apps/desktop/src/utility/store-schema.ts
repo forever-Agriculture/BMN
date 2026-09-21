@@ -387,5 +387,15 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
       );
       CREATE INDEX progress_evidence_by_artifact ON progress_evidence(artifact_id);
     `
+  },
+  {
+    // Resume-after-stop offer: one nullable column on the incarnation the stop interrupted, stamped
+    // for every incarnation in a cohort once its dialog has been shown. Every legacy row reads as
+    // never offered, which is what a session interrupted before this version should read as: the
+    // offer is about the dialog, never about the process, so nothing starts from a missing stamp.
+    version: 12,
+    sql: `
+      ALTER TABLE process_incarnation ADD COLUMN cohort_offered_at TEXT;
+    `
   }
 ])

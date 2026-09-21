@@ -951,3 +951,29 @@ returning nothing.
 Usage read with `scripts/check.py usage`: lead `claude-opus-5/xhigh`, 231 responses,
 174,550 output / 58,002,835 cache-read tokens. Fable `claude-fable-5-1` $3.75896775, 85 turns.
 GLM `GLM-5.3-Flash` $2.471235, 70 turns.
+
+---
+
+# Run: Epic 17 (`/dev-auto 17`), 2026-09-21
+
+Previous run closed: Epic 12 accepted at `3757221`, pushed, `update:desktop` queued. That
+handoff's full text is superseded by this run's handoff; its Epic 12 record stays above in this
+log.
+
+## Selection and plan read (2026-09-21)
+
+`/dev-auto 17` with no other words. Board order decided 2026-09-21 and owner-approved:
+17 -> 15 -> 16 -> 18 -> 10 (`sprint-status.yaml:4`). Epic 17 is first and depends on the
+current app only.
+
+Sources read before any edit:
+- `_bmad-output/planning-artifacts/epics.md:863-909` (Epic 17, stories 17.1 and 17.2).
+- `_bmad-output/planning-artifacts/reference-context-15-18.md:76-82` (design), `:32-54`
+  (reference register H13, H14, B1, B3, B4), `:55-73` (code baseline), `:135-137` (shared
+  acceptance boundary).
+- `_bmad-output/planning-artifacts/epics.md:395` (Epic 10 re-scope: in-memory idempotency key,
+  sequential starts, stop after the first failure, per-entry outcomes; 17.1 pre-builds the
+  coordinator 10.2 later shares).
+- `AGENTS.md`, `_bmad-output/implementation-artifacts/sprint-status.yaml`.
+
+Baseline: `a3c92ae`, clean tree, identical to `origin/main`.

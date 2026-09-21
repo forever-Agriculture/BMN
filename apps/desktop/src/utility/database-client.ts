@@ -23,6 +23,7 @@ import type {
   SessionStore
 } from './session-manager'
 import type { ArchivePurgeResult } from './database-archive-purge'
+import type { InterruptedIncarnationRow } from './interrupted-cohort'
 import type { CompanionOperationName, CompanionOperations } from './database-companion-store'
 
 type CompanionArguments<Name extends CompanionOperationName> =
@@ -178,6 +179,15 @@ export class DatabaseWorkerClient implements SessionStore {
 
   async markInterrupted(incarnationId: string, reason: string): Promise<void> {
     await this.request('mark-interrupted', { incarnationId, reason })
+  }
+
+  /** Every unarchived session whose latest incarnation is recorded interrupted. Reads only. */
+  async listInterruptedIncarnations(): Promise<InterruptedIncarnationRow[]> {
+    return (await this.request('interrupted-incarnations')) as InterruptedIncarnationRow[]
+  }
+
+  async markCohortOffered(incarnationIds: readonly string[], offeredAt: string): Promise<void> {
+    await this.request('cohort-offered', { incarnationIds: [...incarnationIds], offeredAt })
   }
 
   async health(): Promise<{

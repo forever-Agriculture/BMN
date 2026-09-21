@@ -7,6 +7,7 @@ import {
   PROTOCOL_VERSION,
   isCompatibleProtocol,
   isRpcRequest,
+  isSessionCohortResumeParams,
   isSessionCreateParams,
   isSessionStopParams,
   isSessionUpdateParams,
@@ -429,6 +430,25 @@ async function start(): Promise<void> {
           cols: numberValue(params, 'cols'),
           rows: numberValue(params, 'rows')
         })
+      case METHOD_REGISTRY.sessionCohortList:
+        return manager.interruptedCohort()
+      case METHOD_REGISTRY.sessionCohortOffered:
+        return manager.markCohortOffered(stringValue(params, 'cohortId'))
+      case METHOD_REGISTRY.sessionCohortResume:
+        if (!terminalPort) {
+          throw new HostControlError(
+            ERROR_CODES.ioError,
+            'The terminal byte channel is not connected',
+            true
+          )
+        }
+        if (!isSessionCohortResumeParams(params)) {
+          throw new HostControlError(
+            ERROR_CODES.invalidArgument,
+            'Session cohort resume parameters are invalid'
+          )
+        }
+        return manager.resumeCohort(params)
       case METHOD_REGISTRY.sessionStop:
         if (!isSessionStopParams(params)) {
           throw new HostControlError(ERROR_CODES.invalidArgument, 'Session stop parameters are invalid')

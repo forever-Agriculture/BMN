@@ -16,6 +16,8 @@ import type {
   HandoffDraftSaveParams,
   HookEventRecord,
   InputDraftRecord,
+  InterruptedSessionCohort,
+  SessionCohortOfferedResult,
   ProgressRecord,
   TelegramStatus,
   VoiceLanguage,
@@ -76,6 +78,25 @@ export interface TerminalStartupSuccess {
   viewRestored?: true
 }
 
+/** One checked row of the resume-after-stop dialog, carrying the command that row showed. */
+export interface RendererCohortResumeRequest {
+  cohortId: string
+  idempotencyKey: string
+  entries: Array<{ sessionId: string; action: 'resume' | 'relaunch'; command: string }>
+}
+
+export interface RendererCohortResumeEntryResult {
+  sessionId: string
+  outcome: 'started' | 'failed' | 'not-started'
+  error?: string
+  startup?: TerminalStartupSuccess
+}
+
+export interface RendererCohortResumeResult {
+  cohortId: string
+  entries: RendererCohortResumeEntryResult[]
+}
+
 export interface TerminalStartupFailure {
   ok: false
   message: string
@@ -128,6 +149,10 @@ export interface AiTerminalBridge {
   resumeConversation(sessionId: string): Promise<TerminalStartupSuccess>
   /** Runs the saved command again in a new process; agents start a fresh conversation. */
   relaunchSession(sessionId: string): Promise<TerminalStartupSuccess>
+  /** What the newest update or quit interrupted, with the command each row would run. */
+  listInterruptedCohort(): Promise<InterruptedSessionCohort | null>
+  markCohortOffered(cohortId: string): Promise<SessionCohortOfferedResult>
+  resumeCohort(request: RendererCohortResumeRequest): Promise<RendererCohortResumeResult>
   listWorkspaces(includeArchived?: boolean): Promise<WorkspaceRecord[]>
   createWorkspace(params: WorkspaceCreateParams): Promise<WorkspaceRecord>
   updateWorkspace(params: WorkspaceUpdateParams): Promise<WorkspaceRecord>

@@ -17,7 +17,8 @@ Everything runs on your computer. There is no account, cloud backend or telemetr
 - **Workspaces and sessions.** Named workspaces hold independent sessions. A session is a shell,
   Claude Code, Codex, or any command, with its own working directory. Launch templates, rename,
   archive and edit launch settings. Layout, order and selection survive a restart, but nothing
-  starts automatically.
+  starts automatically; after an update or a quit, BMN offers to resume what the stop interrupted,
+  in one dialog that shows each command and starts nothing until you press the button.
 - **Real terminals.** Each session is a real PTY rendered by one live [xterm.js](https://xtermjs.org/)
   view. There is no tmux layer and no replayed output, so key encodings, colors, bell and OSC
   notifications reach the program unchanged. Your CLIs keep their own configuration,

@@ -47,12 +47,15 @@ import {
   createResumingSession,
   createStartingSession,
   getSessionConversationBinding,
+  markCohortOffered,
   markSessionExited,
   markSessionInterrupted,
   markSessionRunning,
-  replaceSessionConversationBinding
+  replaceSessionConversationBinding,
+  selectInterruptedIncarnations
 } from './database-session-store'
 import { listSessions, listWorkspaces } from './database-workspace-store'
+import type { InterruptedIncarnationRow } from './interrupted-cohort'
 
 const testRequire = createRequire(import.meta.url)
 const nodePty = testRequire('node-pty') as {
@@ -266,6 +269,9 @@ function sqliteSessionStore(database: DatabaseConnection): SessionStore {
     markRunning: async (incarnationId) => markSessionRunning(database, incarnationId),
     markExited: async (incarnationId, exit) => markSessionExited(database, incarnationId, exit),
     markInterrupted: async (incarnationId, reason) => markSessionInterrupted(database, incarnationId, reason),
+    listInterruptedIncarnations: async () => selectInterruptedIncarnations(database),
+    markCohortOffered: async (incarnationIds, offeredAt) =>
+      markCohortOffered(database, incarnationIds, offeredAt),
     health: async () => ({
       runningIncarnations: Number((database
         .prepare("SELECT COUNT(*) AS count FROM process_incarnation WHERE state IN ('starting', 'running')")
@@ -286,6 +292,9 @@ function completeCapabilityProbe(
 }
 
 class FakeStore implements SessionStore {
+  /** Rows a test seeds when it exercises the resume-after-stop offer; empty for every other test. */
+  readonly interruptedIncarnations: InterruptedIncarnationRow[] = []
+  readonly cohortOffers: Array<{ incarnationIds: readonly string[]; offeredAt: string }> = []
   readonly starting: string[] = []
   readonly startingRecords: CreateStartingRecord[] = []
   readonly resuming: string[] = []
@@ -387,6 +396,17 @@ class FakeStore implements SessionStore {
   async markInterrupted(incarnationId: string, reason: string): Promise<void> {
     this.running.delete(incarnationId)
     this.interrupted.set(incarnationId, reason)
+  }
+
+  async listInterruptedIncarnations(): Promise<readonly InterruptedIncarnationRow[]> {
+    return this.interruptedIncarnations
+  }
+
+  async markCohortOffered(incarnationIds: readonly string[], offeredAt: string): Promise<void> {
+    this.cohortOffers.push({ incarnationIds: [...incarnationIds], offeredAt })
+    for (const row of this.interruptedIncarnations) {
+      if (incarnationIds.includes(row.incarnationId)) row.offeredAt ??= offeredAt
+    }
   }
 
   async health(): Promise<{ runningIncarnations: number }> {
@@ -4015,5 +4035,322 @@ describe('conversation identity reported by the harness', () => {
       captureRoute: 'hook-session-start',
       conversationReference: OTHER
     })
+  })
+})
+
+describe('resuming what a lifecycle stop interrupted', () => {
+  /**
+   * Real records, because the cohort is decided from them: three shell sessions started and then
+   * stopped as one update restart, exactly as `stopCurrentTargets` does at quit and update time.
+   */
+  async function interruptedSessions(count: number, options: { cause?: 'update-restart' | 'application-quit' } = {}) {
+    const database = new BetterSqlite3(':memory:') as DatabaseConnection
+    initializeDatabase(database, '2026-09-21T09:00:00.000Z')
+    const spawns: Array<{ executable: string; argv: readonly string[] }> = []
+    const spawnFailures = new Set<string>()
+    const manager = new SessionManager({
+      store: sqliteSessionStore(database),
+      spawnPty: (executable, argv) => {
+        if (spawnFailures.has(String(argv[1]))) throw new Error('no pseudo-terminal was available')
+        spawns.push({ executable, argv: [...argv] })
+        return new SignalExitFakePty()
+      },
+      processStartIdentity: async (pid) => `linux-proc-start:${pid}`,
+      sendTerminalMessage: () => undefined
+    })
+    const created = []
+    for (let index = 0; index < count; index += 1) {
+      const identity = await manager.create({
+        ...DEFAULT_SESSION_CREATION,
+        name: `Session ${index}`,
+        cwd: tmpdir(),
+        executable: process.execPath,
+        argv: ['--version', `session-${index}`],
+        cols: 80,
+        rows: 24
+      })
+      created.push(identity)
+    }
+    for (const identity of created) await manager.stop(identity, options.cause ?? 'update-restart')
+    spawns.length = 0
+    return { database, manager, created, spawns, spawnFailures }
+  }
+
+  const relaunchCommand = (index: number): string =>
+    `${process.execPath} --version session-${index}`
+
+  it('lists every session the stop interrupted with the command Start again would run', async () => {
+    const { database, manager, created } = await interruptedSessions(2)
+    try {
+      const cohort = await manager.interruptedCohort()
+      expect(cohort).toMatchObject({ cause: 'update-restart', offeredAt: null })
+      expect(cohort?.entries.map((entry) => ({
+        sessionId: entry.sessionId,
+        name: entry.name,
+        workspaceName: entry.workspaceName,
+        action: entry.action,
+        command: entry.command,
+        notCarried: entry.notCarried
+      }))).toEqual([
+        {
+          sessionId: created[0]!.sessionId,
+          name: 'Session 0',
+          workspaceName: 'Personal',
+          action: 'relaunch',
+          command: relaunchCommand(0),
+          notCarried: ''
+        },
+        {
+          sessionId: created[1]!.sessionId,
+          name: 'Session 1',
+          workspaceName: 'Personal',
+          action: 'relaunch',
+          command: relaunchCommand(1),
+          notCarried: ''
+        }
+      ])
+      // A session without a binding says so in the harness's own words rather than offering Resume.
+      expect(cohort?.entries[0]?.relaunchReason)
+        .toContain('Native conversation resume is available only for direct Claude or Codex CLI launches')
+      expect(cohort?.entries[0]?.detail).toMatch(/^update restart · /)
+    } finally {
+      database.close()
+    }
+  })
+
+  it('offers once per stop and reopens the same cohort afterwards', async () => {
+    const { database, manager } = await interruptedSessions(2)
+    try {
+      const cohort = (await manager.interruptedCohort())!
+      const offer = await manager.markCohortOffered(cohort.cohortId)
+      expect(offer.cohortId).toBe(cohort.cohortId)
+
+      const reread = await manager.interruptedCohort()
+      expect(reread?.cohortId).toBe(cohort.cohortId)
+      expect(reread?.offeredAt).toBe(offer.offeredAt)
+      // Asking again is not a second offer: the stamp names when BMN first asked.
+      await expect(manager.markCohortOffered(cohort.cohortId)).resolves.toEqual(offer)
+      await expect(manager.markCohortOffered('not-this-cohort')).rejects.toMatchObject({
+        code: ERROR_CODES.notFound
+      })
+    } finally {
+      database.close()
+    }
+  })
+
+  it('leaves out a session the owner already resumed by hand', async () => {
+    const { database, manager, created } = await interruptedSessions(2)
+    try {
+      await manager.relaunch({ sessionId: created[0]!.sessionId, cols: 80, rows: 24 })
+      const cohort = await manager.interruptedCohort()
+      expect(cohort?.entries.map((entry) => entry.sessionId)).toEqual([created[1]!.sessionId])
+    } finally {
+      database.close()
+    }
+  })
+
+  it('has nothing to offer once every interrupted session is running again', async () => {
+    const { database, manager, created } = await interruptedSessions(1)
+    try {
+      await manager.relaunch({ sessionId: created[0]!.sessionId, cols: 80, rows: 24 })
+      await expect(manager.interruptedCohort()).resolves.toBeNull()
+    } finally {
+      database.close()
+    }
+  })
+
+  it('starts the checked rows in order and reports each one', async () => {
+    const { database, manager, created, spawns } = await interruptedSessions(3)
+    try {
+      const cohort = (await manager.interruptedCohort())!
+      const result = await manager.resumeCohort({
+        cohortId: cohort.cohortId,
+        idempotencyKey: 'action-1',
+        entries: [0, 2].map((index) => ({
+          sessionId: created[index]!.sessionId,
+          action: 'relaunch' as const,
+          command: relaunchCommand(index),
+          cols: 100,
+          rows: 30
+        }))
+      })
+
+      expect(result.entries.map((entry) => entry.outcome)).toEqual(['started', 'started'])
+      expect(spawns.map((spawn) => spawn.argv[1])).toEqual(['session-0', 'session-2'])
+      expect(result.entries[0]?.started).toMatchObject({
+        sessionId: created[0]!.sessionId,
+        cwd: tmpdir(),
+        executable: process.execPath,
+        attachmentId: expect.any(String)
+      })
+      await expect(manager.health()).resolves.toMatchObject({ liveSessions: 2 })
+    } finally {
+      database.close()
+    }
+  })
+
+  it('returns the recorded result for a repeated click and starts nothing twice', async () => {
+    const { database, manager, created, spawns } = await interruptedSessions(2)
+    try {
+      const cohort = (await manager.interruptedCohort())!
+      const request = {
+        cohortId: cohort.cohortId,
+        idempotencyKey: 'one-press',
+        entries: [{
+          sessionId: created[0]!.sessionId,
+          action: 'relaunch' as const,
+          command: relaunchCommand(0),
+          cols: 80,
+          rows: 24
+        }]
+      }
+      const [first, second] = await Promise.all([
+        manager.resumeCohort(request),
+        manager.resumeCohort(request)
+      ])
+      const third = await manager.resumeCohort(request)
+
+      expect(second).toBe(first)
+      expect(third).toBe(first)
+      expect(spawns).toHaveLength(1)
+      await expect(manager.health()).resolves.toMatchObject({ liveSessions: 1 })
+    } finally {
+      database.close()
+    }
+  })
+
+  it('stops after the first failure, keeps the started row and never starts the rest', async () => {
+    const { database, manager, created, spawns, spawnFailures } = await interruptedSessions(3)
+    try {
+      spawnFailures.add('session-1')
+      const cohort = (await manager.interruptedCohort())!
+      const result = await manager.resumeCohort({
+        cohortId: cohort.cohortId,
+        idempotencyKey: 'action-1',
+        entries: [0, 1, 2].map((index) => ({
+          sessionId: created[index]!.sessionId,
+          action: 'relaunch' as const,
+          command: relaunchCommand(index),
+          cols: 80,
+          rows: 24
+        }))
+      })
+
+      expect(result.entries.map((entry) => entry.outcome)).toEqual(['started', 'failed', 'not-started'])
+      expect(result.entries[1]?.error).toContain('no pseudo-terminal was available')
+      expect(result.entries[2]?.error).toBeUndefined()
+      expect(spawns.map((spawn) => spawn.argv[1])).toEqual(['session-0'])
+      // Nothing is rolled back: the session that started keeps running.
+      await expect(manager.health()).resolves.toMatchObject({ liveSessions: 1 })
+    } finally {
+      database.close()
+    }
+  })
+
+  it('refuses a row whose command is no longer the one the owner read', async () => {
+    const { database, manager, created, spawns } = await interruptedSessions(1)
+    try {
+      const cohort = (await manager.interruptedCohort())!
+      const result = await manager.resumeCohort({
+        cohortId: cohort.cohortId,
+        idempotencyKey: 'action-1',
+        entries: [{
+          sessionId: created[0]!.sessionId,
+          action: 'relaunch' as const,
+          command: '/bin/sh -c "something else"',
+          cols: 80,
+          rows: 24
+        }]
+      })
+
+      expect(result.entries[0]).toMatchObject({ outcome: 'failed' })
+      expect(result.entries[0]?.error).toContain('The command changed since it was shown')
+      expect(spawns).toHaveLength(0)
+      await expect(manager.health()).resolves.toMatchObject({ liveSessions: 0 })
+    } finally {
+      database.close()
+    }
+  })
+
+  it('refuses a row whose session is already running and does not start the row after it', async () => {
+    const { database, manager, created, spawns } = await interruptedSessions(2)
+    try {
+      const cohort = (await manager.interruptedCohort())!
+      await manager.relaunch({ sessionId: created[0]!.sessionId, cols: 80, rows: 24 })
+      spawns.length = 0
+      const result = await manager.resumeCohort({
+        cohortId: cohort.cohortId,
+        idempotencyKey: 'action-1',
+        entries: [0, 1].map((index) => ({
+          sessionId: created[index]!.sessionId,
+          action: 'relaunch' as const,
+          command: relaunchCommand(index),
+          cols: 80,
+          rows: 24
+        }))
+      })
+
+      expect(result.entries.map((entry) => entry.outcome)).toEqual(['failed', 'not-started'])
+      expect(result.entries[0]?.error).toContain('no longer one a stop interrupted')
+      expect(spawns).toHaveLength(0)
+    } finally {
+      database.close()
+    }
+  })
+
+  /**
+   * A stop whose exit never arrived leaves a process BMN has lost track of. It is recorded
+   * interrupted, so it would otherwise read as resumable; it is not offered, and naming it anyway
+   * is refused by the same launch claim a single Start again takes.
+   */
+  it('never offers a session whose previous process has not confirmed its exit, and refuses it if named', async () => {
+    const database = new BetterSqlite3(':memory:') as DatabaseConnection
+    try {
+      initializeDatabase(database, '2026-09-21T09:00:00.000Z')
+      const spawns: string[] = []
+      const manager = new SessionManager({
+        store: sqliteSessionStore(database),
+        spawnPty: (_executable, argv) => {
+          spawns.push(String(argv[1]))
+          return new NonExitingFakePty()
+        },
+        processStartIdentity: async (pid) => `linux-proc-start:${pid}`,
+        signalProcess: () => true,
+        stopGraceMs: 1,
+        stopKillWaitMs: 1,
+        sendTerminalMessage: () => undefined
+      })
+      const created = await manager.create({
+        ...DEFAULT_SESSION_CREATION,
+        cwd: tmpdir(),
+        executable: process.execPath,
+        argv: ['--version', 'session-0'],
+        cols: 80,
+        rows: 24
+      })
+      await expect(manager.stop(created, 'update-restart')).rejects.toMatchObject({
+        code: ERROR_CODES.ioError
+      })
+      spawns.length = 0
+
+      expect(await manager.interruptedCohort()).toBeNull()
+      const result = await manager.resumeCohort({
+        cohortId: created.incarnationId,
+        idempotencyKey: 'action-1',
+        entries: [{
+          sessionId: created.sessionId,
+          action: 'relaunch' as const,
+          command: `${process.execPath} --version session-0`,
+          cols: 80,
+          rows: 24
+        }]
+      })
+
+      expect(result.entries[0]).toMatchObject({ outcome: 'failed' })
+      expect(result.entries[0]?.error).toContain('has not confirmed its exit')
+      expect(spawns).toEqual([])
+    } finally {
+      database.close()
+    }
   })
 })

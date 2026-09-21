@@ -185,6 +185,102 @@ export interface SessionStopParams {
   cause: SessionStopCause
 }
 
+/**
+ * The lifecycle stops BMN offers to resume from. A session that ended any other way — a single
+ * Stop, the last window closing, an app crash — is never in a cohort, because the owner did not
+ * ask for that process to end and come back.
+ */
+export type ResumableStopCause = Extract<LifecycleStopCause, 'application-quit' | 'update-restart'>
+export const RESUMABLE_STOP_CAUSES: readonly ResumableStopCause[] =
+  Object.freeze(['update-restart', 'application-quit'])
+
+/** How long after the newest interruption another one still belongs to the same stop. */
+export const INTERRUPTION_COHORT_WINDOW_MS = 60_000
+
+/** One session the stop interrupted, with the exact command starting it again would run. */
+export interface InterruptedSessionEntry {
+  sessionId: string
+  incarnationId: string
+  workspaceId: string
+  workspaceName: string
+  name: string
+  /** `resume` reopens the bound conversation; `relaunch` runs the stored command again. */
+  action: 'resume' | 'relaunch'
+  /** Byte-for-byte what the start will run, so the row is the confirmation. */
+  command: string
+  /** Stored arguments the CLI's own resume will not take; empty when none. */
+  notCarried: string
+  /** The recorded interruption detail, for example `update restart · exit code 0`. */
+  detail: string
+  interruptedAt: string
+  /** Why this session can only be started again: no binding, or the binding's own detail. */
+  relaunchReason: string | null
+}
+
+/**
+ * Everything one stop interrupted. `offeredAt` is set once the dialog has been shown for this
+ * cohort, so a dismissed offer never returns by itself; the palette command still reopens it.
+ */
+export interface InterruptedSessionCohort {
+  cohortId: string
+  cause: ResumableStopCause
+  stoppedAt: string
+  offeredAt: string | null
+  entries: InterruptedSessionEntry[]
+}
+
+/** Only the newest cohort is ever offered, so the parameter set is closed and empty. */
+export type SessionCohortListParams = Record<string, never>
+
+export interface SessionCohortOfferedParams {
+  cohortId: string
+}
+
+export interface SessionCohortOfferedResult {
+  cohortId: string
+  offeredAt: string
+}
+
+export interface SessionCohortResumeEntry {
+  sessionId: string
+  action: 'resume' | 'relaunch'
+  /** The command the row showed; a start whose command differs is refused, never substituted. */
+  command: string
+  cols: number
+  rows: number
+}
+
+export interface SessionCohortResumeParams {
+  cohortId: string
+  /** One dialog action. Repeated calls with this key return the recorded result unchanged. */
+  idempotencyKey: string
+  entries: SessionCohortResumeEntry[]
+}
+
+/** What the started row attached to, so the window can adopt the new process as an ordinary pane. */
+export interface SessionCohortStartedProcess {
+  sessionId: string
+  incarnationId: string
+  attachmentId: string
+  streamSeq: 0
+  captureStartedAt: string
+  cwd: string
+  executable: string
+}
+
+export interface SessionCohortResumeEntryResult {
+  sessionId: string
+  outcome: 'started' | 'failed' | 'not-started'
+  /** The failure in the host's own words; absent unless the outcome is `failed`. */
+  error?: string
+  started?: SessionCohortStartedProcess
+}
+
+export interface SessionCohortResumeResult {
+  cohortId: string
+  entries: SessionCohortResumeEntryResult[]
+}
+
 export type TemplateListParams = Record<string, never>
 
 export interface TemplateCreateParams {
@@ -476,6 +572,43 @@ export function isSessionStopParams(value: unknown): value is SessionStopParams 
       value.cause === 'close-last-window' ||
       value.cause === 'update-restart')
   )
+}
+
+/** At most one row per session, and never more rows than a dialog could honestly have listed. */
+export const MAX_COHORT_RESUME_ENTRIES = 64
+
+function isCohortResumeEntry(value: unknown): value is SessionCohortResumeEntry {
+  if (!isRecord(value) || !hasExactKeys(value, ['sessionId', 'action', 'command', 'cols', 'rows'])) {
+    return false
+  }
+  return (
+    isIdentifier(value.sessionId) &&
+    (value.action === 'resume' || value.action === 'relaunch') &&
+    typeof value.command === 'string' &&
+    value.command.length > 0 &&
+    Number.isSafeInteger(value.cols) &&
+    Number.isSafeInteger(value.rows)
+  )
+}
+
+export function isSessionCohortResumeParams(value: unknown): value is SessionCohortResumeParams {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ['cohortId', 'idempotencyKey', 'entries']) ||
+    !isIdentifier(value.cohortId) ||
+    !isIdentifier(value.idempotencyKey) ||
+    !Array.isArray(value.entries) ||
+    value.entries.length === 0 ||
+    value.entries.length > MAX_COHORT_RESUME_ENTRIES
+  ) {
+    return false
+  }
+  const sessionIds = new Set<string>()
+  for (const entry of value.entries) {
+    if (!isCohortResumeEntry(entry) || sessionIds.has(entry.sessionId)) return false
+    sessionIds.add(entry.sessionId)
+  }
+  return true
 }
 
 export function isTemplateCreateParams(value: unknown): value is TemplateCreateParams {

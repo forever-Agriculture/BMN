@@ -15,6 +15,7 @@ import {
   type ConversationResumePreview,
   type ExplicitConversationBinding,
   type InputDraftRecord,
+  type InterruptedSessionCohort,
   type LaunchTemplateRecord,
   type ProgressRecord,
   type ClosePromptRequest,
@@ -23,6 +24,7 @@ import {
   type WorkspaceLayoutState,
   type WorkspaceRecord
 } from '@bmn/protocol'
+import type { RendererCohortResumeResult } from '../../preload/bridge'
 import './styles.css'
 import { failureDetail } from './bridge-error'
 import { CommandPalette, type PaletteCommand } from './command-palette'
@@ -31,6 +33,8 @@ import { FileReferenceDialog, type FileReferenceRequest } from './file-reference
 import { FilesPanel } from './files-panel'
 import { HookEventsDialog } from './hook-events-dialog'
 import { ProgressEvidenceDialog } from './progress-evidence-dialog'
+import { ResumeInterruptedDialog } from './resume-interrupted-dialog'
+import { interruptedStopWords } from './resume-interrupted-presentation'
 import { ProgressStrip } from './progress-strip'
 import { Icon } from './icons'
 import { isModifierOnly, resolveShortcut, SHORTCUT_LABELS, type AppCommand } from './keymap'
@@ -128,6 +132,8 @@ type ShellDialog =
   /** Shows the exact command before Resume starts anything. */
   | { kind: 'resume'; session: SessionRecord; preview: ConversationResumePreview }
   | { kind: 'file-reference'; request: FileReferenceRequest }
+  /** The one offer to resume what an update or a quit stopped; every row shows its command. */
+  | { kind: 'resume-interrupted'; cohort: InterruptedSessionCohort }
   /** Read-only: what this session's harness reported, for a request that did or did not arrive. */
   | { kind: 'hook-events'; session: SessionRecord }
   /**
@@ -151,6 +157,8 @@ function App(): React.JSX.Element {
   const liveRef = useRef(new Map<string, LiveStartup>())
   const sessionsRef = useRef<SessionRecord[]>([])
   const armedRef = useRef(false)
+  /** The resume-after-stop offer is read once per window, not on every renderer recovery. */
+  const interruptedOfferChecked = useRef(false)
   const commandRef = useRef<(command: AppCommand) => void>(() => undefined)
   const needsYouButton = useRef<HTMLButtonElement>(null)
   const sessionArea = useRef<HTMLElement>(null)
@@ -184,6 +192,8 @@ function App(): React.JSX.Element {
   const [focusMode, setFocusMode] = useState(false)
   const [menu, setMenu] = useState<MenuAnchor | null>(null)
   const [dialog, setDialog] = useState<ShellDialog | null>(null)
+  /** What the newest update or quit interrupted, so the palette knows whether there is an offer. */
+  const [interrupted, setInterrupted] = useState<InterruptedSessionCohort | null>(null)
   /** Its own state, not a ShellDialog: a close question must not replace work the owner has open. */
   const [closePrompt, setClosePrompt] = useState<ClosePromptRequest | null>(null)
   const [needsYouOpen, setNeedsYouOpen] = useState(false)
@@ -344,6 +354,24 @@ function App(): React.JSX.Element {
     }
   }, [startup?.testMode])
 
+  /**
+   * The offer BMN makes once per stop, after the window has loaded the sessions. It is recorded as
+   * offered the moment it opens, so dismissing it with Escape is an answer: the same stop never
+   * asks again, and the palette command is the way back to it.
+   */
+  useEffect(() => {
+    if (!startup || interruptedOfferChecked.current) return
+    interruptedOfferChecked.current = true
+    void reloadInterruptedCohort()
+      .then((cohort) => {
+        if (!cohort || cohort.offeredAt !== null) return undefined
+        setDialog((current) => current ?? { kind: 'resume-interrupted', cohort })
+        return window.aiTerminal.markCohortOffered(cohort.cohortId)
+          .then((offer) => setInterrupted({ ...cohort, offeredAt: offer.offeredAt }))
+      })
+      .catch(fail('The resume offer could not be read'))
+  }, [startup])
+
   const applyStartup = (next: SuccessfulStartup): void => {
     setStartup(next)
     setWorkspaces(next.workspaces)
@@ -374,6 +402,12 @@ function App(): React.JSX.Element {
     window.aiTerminal.listSessions(workspaceId).then((refreshed) => {
       const byId = new Map(refreshed.map((item) => [item.sessionId, item]))
       setSessions((current) => current.map((item) => byId.get(item.sessionId) ?? item))
+    })
+
+  const reloadInterruptedCohort = (): Promise<InterruptedSessionCohort | null> =>
+    window.aiTerminal.listInterruptedCohort().then((cohort) => {
+      setInterrupted(cohort)
+      return cohort
     })
 
   /**
@@ -1274,6 +1308,16 @@ function App(): React.JSX.Element {
         context: selectedRecord?.name,
         disabled: !selectedRecord || !live[selectedRecord.sessionId]
       }),
+      command('resume-interrupted', 'Resume interrupted sessions…', () => {
+        void reloadInterruptedCohort()
+          .then((cohort) => setDialog(cohort ? { kind: 'resume-interrupted', cohort } : null))
+          .catch(fail('The resume offer could not be read'))
+      }, {
+        disabled: !interrupted,
+        context: interrupted
+          ? `${interrupted.entries.length} stopped by ${interruptedStopWords(interrupted.cause)}`
+          : undefined
+      }),
       command('quit', 'Quit BMN…', () => void window.aiTerminal.quitApplication())
     ]
   }
@@ -1817,6 +1861,17 @@ function App(): React.JSX.Element {
       </div>
       <div className="live-announcer" aria-live="polite">{announcement}</div>
       {menu ? <PopupMenu anchor={menu} onClose={() => setMenu(null)} /> : null}
+      {dialog?.kind === 'resume-interrupted' ? (
+        <ResumeInterruptedDialog
+          cohort={dialog.cohort}
+          onClose={() => {
+            setDialog(null)
+            void reloadInterruptedCohort().catch(fail('The resume offer could not be read'))
+          }}
+          onResume={(idempotencyKey, entries) =>
+            resumeInterruptedCohort(dialog.cohort.cohortId, idempotencyKey, entries)}
+        />
+      ) : null}
       {dialog?.kind === 'palette' ? <CommandPalette commands={paletteCommands()} onClose={() => setDialog(null)} /> : null}
       {dialog?.kind === 'split-picker' ? (
         <CommandPalette
@@ -1941,6 +1996,36 @@ function App(): React.JSX.Element {
       setLive((current) => ({ ...current, [next.sessionId]: next }))
       setFailure(undefined)
     }).catch(fail('Resume failed'))
+  }
+
+  /**
+   * The dialog's one action. Every started row becomes an ordinary live pane; the rows that failed
+   * or never started keep their own words in the dialog, and nothing here retries or stops anything.
+   */
+  function resumeInterruptedCohort(
+    cohortId: string,
+    idempotencyKey: string,
+    entries: ReadonlyArray<{ sessionId: string; action: 'resume' | 'relaunch'; command: string }>
+  ): Promise<RendererCohortResumeResult> {
+    return window.aiTerminal.resumeCohort({ cohortId, idempotencyKey, entries: [...entries] })
+      .then((result) => {
+        const started = result.entries.flatMap((entry) => (entry.startup ? [entry.startup] : []))
+        if (started.length > 0) {
+          setLive((current) => ({
+            ...current,
+            ...Object.fromEntries(started.map((item) => [item.sessionId, item]))
+          }))
+          setFailure(undefined)
+          const workspaceIds = new Set(started.map((item) => item.workspaceId))
+          for (const workspaceId of workspaceIds) {
+            void reloadWorkspaceSessions(workspaceId).catch(fail('Session refresh failed'))
+          }
+          brief(started.length === 1
+            ? `Resumed ${started[0]!.name}.`
+            : `Resumed ${started.length} sessions.`)
+        }
+        return result
+      })
   }
 
   function relaunchSession(record: SessionRecord): void {

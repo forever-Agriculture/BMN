@@ -22,7 +22,7 @@ afterEach(async () => {
 describe('owned database schema', () => {
   it('contains the eleven ordered migrations and only the owned tables', () => {
     expect(DATABASE_MIGRATIONS.map((migration) => migration.version))
-      .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+      .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
     expect(STORY_SCHEMA_TABLES).toEqual([
       'app_setting',
       'artifact',
@@ -188,7 +188,7 @@ describe('owned database schema', () => {
         .toEqual([
           { version: 1 }, { version: 2 }, { version: 3 }, { version: 4 },
           { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 },
-          { version: 10 }, { version: 11 }
+          { version: 10 }, { version: 11 }, { version: 12 }
         ])
       expect(database.prepare('SELECT applied_at FROM schema_migration WHERE version = 3').get())
         .toEqual({ applied_at: migratedAt })
@@ -295,7 +295,8 @@ describe('owned database schema', () => {
           { version: 8, applied_at: migratedAt },
           { version: 9, applied_at: migratedAt },
           { version: 10, applied_at: migratedAt },
-          { version: 11, applied_at: migratedAt }
+          { version: 11, applied_at: migratedAt },
+          { version: 12, applied_at: migratedAt }
         ])
       expect(database.prepare('SELECT COUNT(*) AS count FROM workspace_layout').get())
         .toEqual({ count: 2 })
@@ -340,7 +341,7 @@ describe('owned database schema', () => {
         state: 'draft'
       })
       expect(database.prepare('SELECT version FROM schema_migration ORDER BY version DESC LIMIT 1').get())
-        .toEqual({ version: 11 })
+        .toEqual({ version: 12 })
     } finally {
       database.close()
     }

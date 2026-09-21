@@ -24,7 +24,9 @@ import {
   type ClosePromptDecision,
   type ClosePromptRequest,
   type InputDraftRecord,
+  type InterruptedSessionCohort,
   type ProgressRecord,
+  type SessionCohortOfferedResult,
   type TelegramStatus,
   type VoiceLanguage,
   type VoiceModelId,
@@ -74,6 +76,22 @@ interface StartupFailure {
   ok: false
   message: string
   code: string
+}
+
+interface RendererCohortResumeRequest {
+  cohortId: string
+  idempotencyKey: string
+  entries: Array<{ sessionId: string; action: 'resume' | 'relaunch'; command: string }>
+}
+
+interface RendererCohortResumeResult {
+  cohortId: string
+  entries: Array<{
+    sessionId: string
+    outcome: 'started' | 'failed' | 'not-started'
+    error?: string
+    startup?: StartupSuccess
+  }>
 }
 
 interface ApplicationStartupSuccess {
@@ -356,6 +374,23 @@ contextBridge.exposeInMainWorld('aiTerminal', {
     latestExit = undefined
     recordLiveSession(startup)
     return startup
+  },
+  /** What the newest update or quit interrupted. Reads records only; nothing starts here. */
+  listInterruptedCohort(): Promise<InterruptedSessionCohort | null> {
+    return invokeBridge('aiterm:session:cohort-list')
+  },
+  markCohortOffered(cohortId: string): Promise<SessionCohortOfferedResult> {
+    return invokeBridge('aiterm:session:cohort-offered', cohortId)
+  },
+  async resumeCohort(request: RendererCohortResumeRequest): Promise<RendererCohortResumeResult> {
+    const result = await invokeBridge<RendererCohortResumeResult>('aiterm:session:cohort-resume', request)
+    for (const entry of result.entries) {
+      if (entry.startup) {
+        latestExit = undefined
+        recordLiveSession(entry.startup)
+      }
+    }
+    return result
   },
   listWorkspaces(includeArchived = false): Promise<WorkspaceRecord[]> {
     return invokeBridge('aiterm:workspace:list', { includeArchived })
