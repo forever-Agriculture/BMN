@@ -1087,3 +1087,40 @@ Board: `epic-17`, `17-1-…` and `17-2-…` set to `done`; `epic-17-retrospectiv
 
 Not pushed: `ed76aab..92c4199` sit on local `main`. Push and `pnpm run update:desktop` were not
 authorized for this run.
+
+## Owner-requested second opinions (2026-09-21)
+
+"Double test, check review with GLM and GLM flash. When you're absolutely confident - update local,
+push to GH and write me a summary what we have now and how it helps us."
+
+Two reviews of the same scope (`a3c92ae..92c4199`), read-only tools, same prompt, dispatched
+together: GLM-5.3 at max ($3.37, 81 turns) and GLM-5.3-Flash at max ($3.26, 74 turns). Both read
+the tree and cited file:line; both reported no material finding and confirmed the four earlier
+repairs are in place and fenced. Neither could read `review-brief.md` (outside the workspace, tool
+permission denied) and neither had a shell, so both reviewed the final revision's files plus the
+recorded evidence rather than the commit diffs.
+
+Dispositions:
+
+- Flash, "a palette-dismissed offer can return on the next start": ACCEPTED and repaired in
+  `64ac5e3`. The stamp lived only in the start-up effect, so if that offer was suppressed by an
+  open dialog and the owner reached it through the palette instead, dismissing it there left the
+  stop unrecorded. `offerNeedsRecording` now carries the rule and both paths use it; fenced
+  (`offer-recorded-when-seen`).
+- Flash, "stamp-before-paint window": REJECTED as a defect, recorded as the accepted trade. The
+  stamp is deliberately issued when the dialog opens so Escape counts as an answer
+  (`main.tsx:360-364`); a crash in the few milliseconds before paint leaves the palette as the way
+  back, which is the documented recovery.
+- GLM-5.3, "`startCohortEntry` does not check the row still belongs to `cohortId`'s cohort":
+  REJECTED with its own refutation. AC3 lists what a row is re-validated against — still
+  interrupted, not live, not archived, not exit-unconfirmed — and cohort membership is not among
+  them. A row that a newer stop interrupted again is still a session the owner asked to resume, and
+  the byte-for-byte command check still gates what runs. The reviewer itself recorded it as a
+  deliberate-looking reading rather than a defect.
+- GLM-5.3, "a rejected cohort action stays under its key": REJECTED as theoretical, which the
+  reviewer said itself. Every per-row error becomes an outcome, so only a store-level failure can
+  reject the action, and Epic 10's contract asks for exactly this replay.
+- GLM-5.3, "a superseded cohort surfaces the generic read-failure notice": cosmetic, left alone.
+
+Checks after `64ac5e3`: unit 1185 passed / 1 skipped (`unit-glm.log`), lint and typecheck clean,
+`test:electron` exit 0 (`electron-11-palette-stamp.log`), `test:visual` PASS (`visual-glm.log`).
