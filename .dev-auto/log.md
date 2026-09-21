@@ -977,3 +977,113 @@ Sources read before any edit:
 - `AGENTS.md`, `_bmad-output/implementation-artifacts/sprint-status.yaml`.
 
 Baseline: `a3c92ae`, clean tree, identical to `origin/main`.
+
+## Story 17.1 delivered (2026-09-21)
+
+Committed `ed76aab`. Electron evidence `electron-1.log`; fences `fences-17-1.log`.
+
+Failed attempts and corrections worth keeping:
+
+- The first cohort gate validated the whole action against the newest cohort id. Hand-resuming one
+  member re-anchors the cohort, so every row failed. Replaced by per-row re-validation in
+  `startCohortEntry`; the test now expects `['failed', 'not-started']` with "no longer one a stop
+  interrupted".
+- Rows left `not-started` after a partial run could not be started by a second press: the button
+  read "Resume 0 sessions". Added `startableRows()`, shared by the label and the dialog; only
+  `started` and `failed` rows are frozen.
+- An exit-unconfirmed session is never offered, because the host still holds it live. The test was
+  rewritten to assert both the exclusion and the refusal when the session is named directly.
+- The first fence helper read `tail -3`, which cut off vitest's `Tests …` summary and reported
+  false GREENs. It now greps `^ +Tests +` over the whole output.
+- The 17.1 self-test phase first sat after "request provenance and hook events" and broke it: that
+  phase stops its hook sessions, and the close-prompt phase was relying on a `runtimes` entry my
+  renderer reloads legitimately clean up. Moved the whole phase before it.
+
+## Story 17.2 delivered (2026-09-21)
+
+Committed `63b9b3c`.
+
+- AC1 test-before-fix: `.dev-auto/evidence/epic-17/electron-2-modes-red.log` —
+  `{"before":{"bracketedPasteMode":true,…},"after":{"bracketedPasteMode":false,"sendFocusMode":false,
+  "mouseTrackingMode":"none"},"pasteArrivedBare":true,"focusReported":false}`, exactly what the
+  source read predicted.
+- The mode fixture first received nothing: its PTY was in canonical mode, so the line discipline
+  held the paste back. Fixed with `process.stdin.setRawMode(true)` in the fixture.
+- `focusReported` stayed false after the fix. The self-test window is never shown, so Chromium
+  gives it no focus and `textarea.focus()` raises no focus event. The driver now dispatches the
+  `focus`/`blur` events on the same textarea, through the same listeners a click would reach; the
+  program then received `\u001b[I`. This is the same synthetic-event idiom the phase already uses
+  for Ctrl+V.
+- `TRACKED_DECSET_MODES` and `decsetRestoreSequence` were first placed in
+  `apps/desktop/src/utility/decset-modes.ts` and re-exported from the renderer, which the web
+  tsconfig rejects (TS6307). They now live in `shared/protocol/src/terminal.ts`, beside the `modes`
+  field that carries them, and both sides import from `@bmn/protocol`.
+- `pnpm run test:unit` failed twice after the fences: `@bmn/protocol`'s `tsc -b` had kept a `dist`
+  built from a mutated source, because `mv`-ing the backup back gives the source an older mtime
+  than the output. Touching the protocol sources and rebuilding restored `INTERRUPTION_COHORT_WINDOW_MS
+  = 60_000`; the Electron suite was then re-run on a verified-fresh build (`electron-7-clean-build.log`).
+- `session-manager.test.ts`'s closed-key assertion for a relaunch result now lists `modes` and
+  asserts a just-started process reports `[]`.
+- Two 17.2 fences needed better mutations before they went RED, and one 17.1 claim
+  ("leaves out a session the owner already resumed by hand") has three independent guards, so no
+  single-line break reddens it; each guard's own fence is recorded in `fences-17-1.log`.
+
+## Epic 17 review dispatched (2026-09-21 15:19 local)
+
+Route: `codex exec --skip-git-repo-check -C /home/oleksandr/code/BMN -m gpt-6-astra
+-c model_reasoning_effort=medium -c 'mcp_servers={}' --sandbox read-only --json`, the whole-epic
+tier in `references/models.md`. Prompt: scratchpad `review-17-prompt.md`; receipt
+`review-17-astra.json`. The packet gives the epic text by coordinate, both revisions, the risk map,
+every evidence path, and forbids the build/launch commands that would collide with the owner's
+running BMN.
+
+## Epic 17 review received and repaired (2026-09-21)
+
+Astra medium, read-only, over `a3c92ae..63b9b3c`. Four material findings, all P2, all accepted and
+repaired in `754879c`; the reviewer ran source-level probes against the installed xterm and could
+not execute vitest inside the read-only sandbox.
+
+1. Explicitly disabled modes were lost: a fresh xterm has autowrap and the cursor on, so `?7l` and
+   `?25l` were dropped by a tracker that only recorded what was switched on. The tracker now holds
+   the whole state from a fresh terminal's defaults and reports deviations; `decsetRestoreSequence`
+   writes `l` for `DEFAULT_ON_DECSET_MODES` and `h` for the rest. The wire field's meaning changed
+   with it, and is documented at each declaration.
+2. Mouse protocol and encoding were treated as independent flags: `?1003h` then `?1000h` restored
+   "any" instead of vt200, and `?1000h` then `?1003l` restored vt200 instead of none. Both are
+   slots now, as xterm treats them.
+3. The start-up offer stamped a cohort as offered even when another dialog kept it from opening,
+   which would suppress it forever. `shouldOfferInterrupted` now gates both the opening and the
+   stamp on the screen being free.
+4. A retried cohort action re-adopted the recorded attachment, which a renderer recovery of the
+   same incarnation would have revoked. `adoptsStartedAttachment` keeps the current lease.
+
+Also closed the reviewer's evidence limit: the coordinator now has four bound-Resume-row tests,
+including AC4's changed command and a binding that went stale between the preview and the button.
+
+Fences for the repairs: `fences-repairs.log`, seven RED. The runtime fence
+`electron-9-wrap-fence.log` reproduces finding 1 through the self-test (`"wraparoundMode":true` in
+the rebuilt view) and shows the new assertion catching it.
+
+Recheck dispatched on the same route over `63b9b3c..754879c`; prompt `recheck-17-prompt.md`,
+receipt `recheck-17-astra.json`.
+
+## Epic 17 accepted (2026-09-21)
+
+Recheck round two closed finding 2 against `92c4199`: the reviewer re-probed the final tracker and
+restore function against installed xterm 6.0.0 and found live and restored state matching for
+`1000h→1006h→1005l`, `1000h→1006h→1005h` and `1000h→1006h→1003h→1002h`, plus SGR reset, a protocol
+reset under SGR and UTF-8-only requests. It noted that dropping 1005 creates no BMN gap, since
+xterm ignores it before and after restoration; a terminal that does implement the UTF-8 encoding
+would need its own tracking, which BMN does not have either way.
+
+Findings 1, 3 and 4 were closed in the first recheck. On 4 the reviewer checked that the early
+return in `adoptRestartedRuntime` loses nothing a caller needed: cwd and executable are set at the
+first adoption, dimensions keep later resize results, and keeping `processState` avoids marking an
+exited or exit-unconfirmed process live. On 3 it noted it did not exercise the dialog overlap in
+Electron; on 4, not the whole retry-after-recovery flow. Both are recorded as the limits of the
+runtime evidence.
+
+Board: `epic-17`, `17-1-…` and `17-2-…` set to `done`; `epic-17-retrospective` left `optional`.
+
+Not pushed: `ed76aab..92c4199` sit on local `main`. Push and `pnpm run update:desktop` were not
+authorized for this run.
