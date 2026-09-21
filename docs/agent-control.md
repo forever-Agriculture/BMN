@@ -187,9 +187,15 @@ rather than replacing somebody's configuration. If the file changed while `insta
 nothing is written and it says so; run it again.
 
 That check closes the window it can. If your harness writes the same file in the instant between
-that check and the rename, its change is lost — no program can prevent that without the other writer
-agreeing to a lock, and neither harness offers one. The backup is what recovers it. In practice this
-means: close the harness, or at least do not let it rewrite its settings, while `install` runs.
+that check and the rename, **its change is lost and the backup does not contain it** — the backup is
+taken before the check, so it holds the configuration as it was before `install` started, not the
+edit that raced it. No program can close that window without the other writer agreeing to a lock,
+and neither harness offers one. So: close the harness, or at least do not let it rewrite its
+settings, while `install` runs.
+
+One more limit worth knowing: the file is rewritten by a JSON writer, so your indent, key order and
+values survive, but an escape does not stay an escape — `"\u0061"` comes back as `"a"`. It is the
+same string; it is not the same bytes.
 
 Both commands read the file each harness actually reads: `~/.claude/settings.json` and
 `~/.codex/hooks.json`, or the same file under `CLAUDE_CONFIG_DIR` or `CODEX_HOME` when you have

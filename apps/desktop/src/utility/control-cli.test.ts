@@ -971,21 +971,37 @@ describe('bmn hooks check', () => {
     ['the older AITERM wording', OLDER_CLAUDE, 'wired (older wording)'],
     ['an absolute path to bmn', '"/usr/bin/bmn" hook claude', 'wired (older wording)'],
     ['a quoted subcommand', "bmn 'hook' claude", 'wired (older wording)'],
+    // A wrapper only puts words in front of the program, so these all still run it.
     ['an env prefix', 'env BMN_X=1 bmn hook claude', 'wired (older wording)'],
-    // Not ours: a different program, a different agent, or the words inside some other command.
+    ['a leading assignment', 'BMN_X=1 bmn hook claude', 'wired (older wording)'],
+    ['a timeout wrapper', 'timeout 5 bmn hook claude', 'wired (older wording)'],
+    ['the command builtin', 'command bmn hook claude', 'wired (older wording)'],
+
+    ['a subshell', '(bmn hook claude)', 'wired (older wording)'],
+    ['nohup in the background', 'nohup bmn hook claude &', 'wired (older wording)'],
+    ['a shell keyword in front', 'if true; then bmn hook claude; fi', 'wired (older wording)'],
+    ['the right-hand side of a pipe', 'echo x | bmn hook claude', 'wired (older wording)'],
+    ['a shell asked to run it', "sh -c 'bmn hook claude'", 'wired (older wording)'],
+    // A redirection says nothing about which program runs, wherever it sits.
+    ['a redirection before the arguments', 'bmn > /dev/null hook claude', 'wired (older wording)'],
+    ['a redirection with no space', 'bmn hook claude>/dev/null', 'wired (older wording)'],
+    // Not ours: a different program, a different agent, or the words as text rather than a command.
     ['a program whose name ends in bmn', 'other.bmn hook claude', 'missing'],
     ['a different agent argument', 'bmn hook claude.extra', 'missing'],
-    ['the words echoed, not run', 'echo bmn hook claude', 'missing'],
-    ['only a lookup of bmn', 'command -v bmn >/dev/null', 'missing'],
     ['another agent', 'bmn hook codex', 'missing'],
-    // A wrapper still runs it: three consecutive words of one command are what count.
-    ['a wrapper that runs it', 'timeout 5 bmn hook claude', 'wired (older wording)'],
-    ['the command builtin', 'command bmn hook claude', 'wired (older wording)'],
-    ['env with its own options', 'env -i bmn hook claude', 'wired (older wording)'],
-    ['a subshell', '(bmn hook claude)', 'wired (older wording)'],
-    // ...and these do not run it, however much they look like it.
+    ['the words echoed, not run', 'echo bmn hook claude', 'missing'],
+    ['the words quoted inside an echo', "echo 'example; bmn hook claude; end'", 'missing'],
+    ['the words echoed through env', 'env echo bmn hook claude', 'missing'],
+    ['only a lookup of bmn', 'command -v bmn >/dev/null', 'missing'],
+    ['a lookup that takes the words as arguments', 'command -v bmn hook claude', 'missing'],
+    ['the words as arguments to another script', "sh -c 'printf x' bmn hook claude", 'missing'],
+    ['the words as a here-string', 'cat <<< bmn hook claude', 'missing'],
+    ['the words in an array assignment', 'args=( bmn hook claude )', 'missing'],
+    ['the words in a comment', '# bmn hook claude', 'missing'],
+    ['a quoted bracket that is part of the agent', 'bmn hook "claude)"', 'missing'],
     ['an assignment between bmn and hook', 'bmn X=1 hook claude', 'missing'],
-    ['the words quoted inside an echo', "echo 'example; bmn hook claude; end'", 'missing']
+    // `env -i` empties PATH, so the shell never finds bmn and the hook never runs.
+    ['env with the environment emptied', 'env -i bmn hook claude', 'missing']
   ])('reads %s as %s', async (_label, command, state) => {
     const path = await hookFileFixture({ hooks: { Stop: [entryGroup(command)] } })
 
@@ -993,6 +1009,67 @@ describe('bmn hooks check', () => {
 
     expect(JSON.parse(result.stdout).agents[0].events.find((row: { event: string }) => row.event === 'Stop'))
       .toMatchObject({ state })
+  })
+
+  it('agrees with a real shell about which commands run the hook', async () => {
+    // Ground truth, not judgement: each command is run by sh with a stub `bmn` on PATH that records
+    // being called with `hook claude`, and `hooks check` must agree with what actually happened.
+    // The asymmetry is the point. Saying "wired" about a command that did not run the hook leaves
+    // the owner with no hook and no warning, so it is never allowed. Saying "missing" about one that
+    // did run it only adds a second entry, so it is allowed where it is listed and explained.
+    const root = dirname(await hookFileFixture({ hooks: {} }, 'unused.json'))
+    const bin = join(root, 'bin')
+    await mkdir(bin, { recursive: true })
+    const ran = join(root, 'ran')
+    await writeFile(
+      join(bin, 'bmn'),
+      `#!/bin/sh\nif [ "$1" = hook ] && [ "$2" = claude ]; then echo yes >> ${ran}; fi\nexit 0\n`,
+      { mode: 0o755 }
+    )
+
+    // Known unrecognised, and safe: the hook runs inside a command substitution. Reading
+    // substitutions as calls would widen the grammar for a shape nobody writes a hook entry in.
+    const allowedMisses = ['x=$(bmn hook claude)', 'echo $(bmn hook claude)']
+    const commands = [
+      DOCUMENTED_CLAUDE, OLDER_CLAUDE, 'bmn hook claude', "bmn 'hook' claude", 'bmn hook "claude"',
+      'BMN_X=1 bmn hook claude', 'env BMN_X=1 bmn hook claude', 'env -i bmn hook claude',
+      'timeout 5 bmn hook claude', 'command bmn hook claude', 'nice bmn hook claude',
+      '(bmn hook claude)', 'if true; then bmn hook claude; fi', 'echo x | bmn hook claude',
+      "sh -c 'bmn hook claude'", 'bmn > /dev/null hook claude', 'bmn hook claude>/dev/null',
+      'bmn hook claude 2>/dev/null', 'bmn hook claude # run it', 'true && bmn hook claude',
+      ...allowedMisses,
+      'echo bmn hook claude', "echo 'example; bmn hook claude; end'", 'env echo bmn hook claude',
+      'command -v bmn hook claude', 'command -v bmn >/dev/null', "sh -c 'printf x' bmn hook claude",
+      'cat <<< bmn hook claude', 'args=( bmn hook claude )', '# bmn hook claude',
+      'bmn hook "claude)"', 'bmn X=1 hook claude', 'bmn hook codex', 'bmn hook claude.extra',
+      'other.bmn hook claude', ':'
+    ]
+
+    const disagreements: string[] = []
+    for (const command of commands) {
+      await rm(ran, { force: true })
+      // bash, because some shapes here are bashisms; the entries themselves are run by the harness.
+      await new Promise<void>((resolve) => {
+        execFile('/bin/bash', ['-c', `${command}\nwait`], {
+          env: { PATH: `${bin}:${process.env.PATH ?? ''}`, BMN_CONTROL_SOCKET: '/x', AITERM_CONTROL_SOCKET: '/x' },
+          cwd: root, timeout: 10_000
+        }, () => resolve())
+      })
+      const shellRanIt = existsSync(ran)
+      const path = await hookFileFixture({ hooks: { Stop: [entryGroup(command)] } })
+      const report = JSON.parse((await runHooks(['check', 'claude', '--file', path, '--json'])).stdout)
+      const state = report.agents[0].events.find((row: { event: string }) => row.event === 'Stop').state
+      const weSayWired = state !== 'missing'
+      if (weSayWired && !shellRanIt) disagreements.push(`UNSAFE: called wired but the shell never ran it: ${command}`)
+      if (!weSayWired && shellRanIt && !allowedMisses.includes(command)) {
+        disagreements.push(`called missing but the shell ran it: ${command}`)
+      }
+      if (weSayWired && allowedMisses.includes(command)) {
+        disagreements.push(`now recognises a listed exception, so the list is stale: ${command}`)
+      }
+    }
+
+    expect(disagreements).toEqual([])
   })
 
   it('ignores an entry that names bmn but is not a command entry', async () => {
@@ -1162,6 +1239,44 @@ describe('bmn hooks install', () => {
     expect((await lstat(link)).isSymbolicLink()).toBe(true)
     expect(Object.keys(JSON.parse(await readFile(real, 'utf8')).hooks)).toEqual(CLAUDE_EVENTS)
     expect((await stat(real)).mode & 0o777).toBe(0o640)
+  })
+
+  it('writes through a symlinked parent to the file the kernel would, not one of the same name', async () => {
+    // alias -> real/nested, and real/nested/settings.json -> ../target.json. The kernel lands on
+    // real/target.json; resolving the written path lexically would land on target.json beside alias
+    // and overwrite whatever is there.
+    const root = dirname(await hookFileFixture({ hooks: {} }, 'unused.json'))
+    await mkdir(join(root, 'real', 'nested'), { recursive: true })
+    await symlink(join('real', 'nested'), join(root, 'alias'))
+    await symlink(join('..', 'target.json'), join(root, 'real', 'nested', 'settings.json'))
+    await writeFile(join(root, 'target.json'), 'SENTINEL: nothing to do with any harness\n')
+    await writeFile(join(root, 'real', 'target.json'), '{"real":"target"}\n')
+
+    const install = await runHooks(['install', 'claude', '--file', join(root, 'alias', 'settings.json')])
+
+    expect(install.code).toBe(0)
+    expect(await readFile(join(root, 'target.json'), 'utf8')).toBe('SENTINEL: nothing to do with any harness\n')
+    const written = JSON.parse(await readFile(join(root, 'real', 'target.json'), 'utf8'))
+    expect(written.real).toBe('target')
+    expect(Object.keys(written.hooks)).toEqual(CLAUDE_EVENTS)
+  })
+
+  it('refuses a chain of symlinks too long to resolve rather than replacing one of them', async () => {
+    const root = dirname(await hookFileFixture({ hooks: {} }, 'unused.json'))
+    await writeFile(join(root, 'final.json'), '{}\n')
+    let previous = join(root, 'final.json')
+    for (let step = 1; step <= 12; step += 1) {
+      await symlink(previous, join(root, `l${step}.json`))
+      previous = join(root, `l${step}.json`)
+    }
+
+    const install = await runHooks(['install', 'claude', '--file', join(root, 'l12.json')])
+
+    expect(install.code).toBe(1)
+    expect(install.stderr).toContain('passes through more than 10 symlinks')
+    // Every link in the chain is still a link, and the file at the end is untouched.
+    expect((await lstat(join(root, 'l10.json'))).isSymbolicLink()).toBe(true)
+    expect(await readFile(join(root, 'final.json'), 'utf8')).toBe('{}\n')
   })
 
   it('follows a symlink whose target does not exist yet instead of replacing the link', async () => {

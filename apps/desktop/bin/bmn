@@ -2,7 +2,7 @@
 // MODULE: bmn - command-line client for the BMN control socket (one connection per invocation)
 import { randomUUID } from 'node:crypto'
 import {
-  chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readlinkSync, renameSync, statSync, unlinkSync, writeFileSync
+  chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync
 } from 'node:fs'
 import { createConnection } from 'node:net'
 import { homedir } from 'node:os'
@@ -651,21 +651,53 @@ function hookEntry(agent) {
 }
 
 /**
- * The commands in one shell line, each as its words with one level of quoting removed. Quoting is
- * read before the separators are, so `echo 'a; bmn hook claude'` stays one word of text rather than
- * becoming a command of its own. It is deliberately small: it exists only to decide whether a hook
- * entry runs `bmn hook <agent>`, and what it cannot read confidently it reads as "not ours".
+ * BMN reads a defined subset of shell, not shell. A hook entry counts as running `bmn hook <agent>`
+ * only when it is the program of one command in the line, reached through the wrappers below, and
+ * everything outside that grammar reads as "not ours". That direction is deliberate: reading a real
+ * hook as missing adds a second entry, which is noisy, while reading something else as wired would
+ * leave the owner with no hook at all and never say so.
+ *
+ * Known not to be recognised, and left that way: a call inside a command substitution
+ * (`x=$(bmn hook claude)`) runs the hook, but writing a hook entry that way is not a thing anyone
+ * does, and accepting it would mean reading substitutions as calls everywhere.
+ */
+const COMMAND_WRAPPERS = {
+  // `env -i` empties the environment, PATH included, so a bare `bmn` is not found and nothing runs.
+  // Whether an absolute path would still run is more than this grammar reads, so it says "not ours".
+  env: { valueFlags: ['-u'], positional: 0, assignments: true, notACall: ['-i', '--ignore-environment', '-'] },
+  command: { valueFlags: [], positional: 0, notACall: ['-v', '-V'] },
+  exec: { valueFlags: ['-a'], positional: 0 },
+  nohup: { valueFlags: [], positional: 0 },
+  setsid: { valueFlags: [], positional: 0 },
+  stdbuf: { valueFlags: ['-i', '-o', '-e'], positional: 0 },
+  nice: { valueFlags: ['-n'], positional: 0 },
+  ionice: { valueFlags: ['-c', '-n'], positional: 0 },
+  timeout: { valueFlags: ['-k', '-s'], positional: 1 }
+}
+const SHELL_PROGRAMS = ['sh', 'bash', 'dash', 'zsh', 'ksh']
+/** Words that begin a command without being one; the command follows them. */
+const SHELL_KEYWORDS = ['then', 'else', 'elif', 'do', '{', '!']
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=[^(]*$/
+const MAX_SHELL_DEPTH = 3
+
+/**
+ * The commands in one shell line, each as its words. Quoting is read before the separators are, so
+ * `echo 'a; bmn hook claude'` stays one word of text rather than becoming a command of its own, and
+ * each word remembers whether it was quoted, because `"claude)"` is a different argument from the
+ * `claude)` that ends a subshell.
  */
 function commandSegments(command) {
   const segments = []
   let words = []
   let word = ''
   let started = false
+  let quoted = false
   let quote = ''
   const endWord = () => {
-    if (started) words.push(word)
+    if (started) words.push({ text: word, quoted })
     word = ''
     started = false
+    quoted = false
   }
   const endSegment = () => {
     endWord()
@@ -684,6 +716,7 @@ function commandSegments(command) {
     if (character === '"' || character === "'") {
       quote = character
       started = true
+      quoted = true
       continue
     }
     if (character === '\\' && index + 1 < command.length) {
@@ -691,9 +724,15 @@ function commandSegments(command) {
       started = true
       continue
     }
-    // The separators that end one command and start the next, outside quotes only.
     if (character === ';' || character === '\n' || character === '&' || character === '|') {
       endSegment()
+      continue
+    }
+    // A redirection and what it points at say nothing about which program runs.
+    if (character === '>' || character === '<') {
+      endWord()
+      while (index + 1 < command.length && (command[index + 1] === '>' || command[index + 1] === '<')) index += 1
+      words.push({ text: character, quoted: false, redirect: true })
       continue
     }
     if (/\s/.test(character)) {
@@ -707,34 +746,68 @@ function commandSegments(command) {
   return segments
 }
 
-/** Shell grouping around a word; it changes nothing about which program runs. */
-function bareWord(word) {
-  return word.replace(/^[({]+/, '').replace(/[)}]+$/, '')
+/** Drops each redirection, the word it points at, and the file number in front of it. */
+function withoutRedirections(words) {
+  const kept = []
+  for (let index = 0; index < words.length; index += 1) {
+    if (words[index].redirect) {
+      if (kept.length > 0 && /^\d+$/.test(kept[kept.length - 1].text)) kept.pop()
+      index += 1
+      continue
+    }
+    kept.push(words[index])
+  }
+  return kept
 }
 
-/** The last path component, so `/usr/bin/bmn` is bmn and `other.bmn` is not. */
+/** The word as an argument: shell grouping counts only when the shell saw it, not when it was quoted. */
+function wordText(word) {
+  return word.quoted ? word.text : word.text.replace(/^[({]+/, '').replace(/[)}]+$/, '')
+}
+
+/** The last path component of the program, so `/usr/bin/bmn` is bmn and `other.bmn` is not. */
 function programName(word) {
-  const bare = bareWord(word)
-  return bare.slice(bare.lastIndexOf('/') + 1)
+  const text = wordText(word)
+  return text.slice(text.lastIndexOf('/') + 1)
 }
 
-/** Commands that print their arguments rather than running them: what follows is text, not a call. */
-const PRINTING_COMMANDS = ['echo', 'printf', ':', 'true', 'false']
+function runsHookInSegment(words, agent, depth) {
+  let index = 0
+  while (index < words.length && !words[index].quoted && SHELL_KEYWORDS.includes(words[index].text)) index += 1
+  while (index < words.length && !words[index].quoted && ASSIGNMENT.test(words[index].text)) index += 1
+  for (let step = 0; step < 8 && index < words.length; step += 1) {
+    const program = programName(words[index])
+    if (SHELL_PROGRAMS.includes(program)) {
+      // `sh -c '<command>'`: what it runs is the word after -c, read as a command of its own.
+      const flag = words.findIndex((word, at) => at > index && !word.quoted && word.text === '-c')
+      const script = flag === -1 ? undefined : words[flag + 1]
+      return script !== undefined && depth < MAX_SHELL_DEPTH && runsHook(script.text, agent, depth + 1)
+    }
+    const wrapper = COMMAND_WRAPPERS[program]
+    if (wrapper === undefined) break
+    index += 1
+    while (index < words.length && !words[index].quoted && words[index].text.startsWith('-')) {
+      const flag = words[index].text
+      // `command -v` looks a program up instead of running it, so nothing after it runs either.
+      if (wrapper.notACall?.includes(flag)) return false
+      index += wrapper.valueFlags.includes(flag) ? 2 : 1
+    }
+    if (wrapper.assignments) {
+      while (index < words.length && !words[index].quoted && ASSIGNMENT.test(words[index].text)) index += 1
+    }
+    index += wrapper.positional
+  }
+  const [program, second, third] = words.slice(index, index + 3)
+  if (program === undefined || second === undefined || third === undefined) return false
+  return programName(program) === 'bmn' && wordText(second) === 'hook' && wordText(third) === agent
+}
 
-/**
- * Whether this entry's command runs `bmn hook <agent>`. The three words must be consecutive words of
- * one command, which lets a wrapper run it (`timeout 5 bmn hook claude`, `command bmn hook claude`,
- * `env -i bmn hook claude`) without BMN having to know every wrapper there is, and keeps
- * `bmn X=1 hook claude` out because there the subcommand is not `hook`.
- */
-function runsHook(command, agent) {
+/** Whether this entry's command runs `bmn hook <agent>`; see COMMAND_WRAPPERS for what is read. */
+function runsHook(command, agent, depth = 0) {
   if (typeof command !== 'string') return false
   for (const words of commandSegments(command)) {
-    if (PRINTING_COMMANDS.includes(programName(words[0]))) continue
-    for (let index = 0; index + 2 < words.length; index += 1) {
-      if (programName(words[index]) !== 'bmn') continue
-      if (bareWord(words[index + 1]) === 'hook' && bareWord(words[index + 2]) === agent) return true
-    }
+    // A comment needs no special case: `#` is not a program, so command position already rejects it.
+    if (runsHookInSegment(withoutRedirections(words), agent, depth)) return true
   }
   return false
 }
@@ -907,9 +980,11 @@ function unifiedDiff(beforeText, afterText, path) {
  * often links a settings file that is created later, and the harness reads the end of the link, so
  * that is the file BMN must write rather than the link it would otherwise replace.
  */
+const MAX_LINK_HOPS = 10
+
 function linkTarget(path) {
   let current = path
-  for (let hops = 0; hops < 10; hops += 1) {
+  for (let hops = 0; hops <= MAX_LINK_HOPS; hops += 1) {
     let link
     try {
       link = readlinkSync(current)
@@ -917,9 +992,21 @@ function linkTarget(path) {
       // Not a symlink, or nothing there at all: either way this is the file to write.
       return current
     }
-    current = resolve(dirname(current), link)
+    // Against the directory the link really lives in, the way the kernel resolves it. Resolving the
+    // written path instead would follow a symlinked parent to a file of the same name in the wrong
+    // folder, and overwrite whatever happened to be there.
+    let directory = dirname(current)
+    try {
+      directory = realpathSync(directory)
+    } catch {
+      // It does not exist yet; the write creates it, and the lexical path is the only answer there is.
+    }
+    current = resolve(directory, link)
   }
-  return current
+  // Never write to a path still unresolved: that would replace a link in the middle of the chain.
+  throw new CliError(
+    'TOO_MANY_LINKS', `${path} passes through more than ${MAX_LINK_HOPS} symlinks; resolve it by hand`
+  )
 }
 
 function writeAtomically(path, text, verify) {

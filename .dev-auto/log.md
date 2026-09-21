@@ -1358,3 +1358,65 @@ at a time, with `python3 -u`, so an empty log is never mistaken for a dead proce
 
 No committed revision was affected: this was entirely in the working tree, and the fence results
 from the overlapping runs were discarded and re-run from scratch rather than reported.
+
+## 2026-09-22 — Astra's second recheck refused `e8f2628`; a P1 regression of mine, and a defined grammar
+
+Receipt: `.dev-auto/evidence/epic-15/reviews/epic-15-recheck2-astra.md`. Verdict: **"Epic 15 is not
+acceptable at `e8f2628`."** Findings 1-4 stay closed and the queue gap is confirmed closed. Finding 7
+still open with seven *new* false positives; finding 6 turned into two regressions, one of them P1.
+
+**I introduced a P1 data-loss bug and it was caught by a reviewer, not by me.** `linkTarget` resolved
+each link with a lexical `resolve(dirname(...))` instead of resolving against the directory the link
+really lives in. With `alias -> real/nested` and `real/nested/settings.json -> ../target.json`, the
+kernel lands on `real/target.json`; mine landed on `target.json` beside `alias`. Reproduced exactly:
+install reported success, overwrote an unrelated sentinel file, and left the real settings untouched.
+`8392017` handled that fixture correctly, so this was a regression the dangling-symlink fix caused.
+Fixed by resolving each hop against `realpathSync(dirname(current))`, which is what the kernel does.
+Second regression, P2: a chain longer than ten hops returned an unresolved link as the write target,
+so `l10` was replaced by a regular file. It now refuses with a message naming the limit. Both pinned.
+
+**Finding 7: the "three consecutive words" rule was wrong, and another exception would not have saved
+it.** Astra's seven new false positives (`env echo`, `command -v bmn hook claude`, `sh -c 'printf x'`
+with positional arguments, a here-string, an array assignment, a comment, and `bmn hook "claude)"`
+where `bareWord` stripped a *quoted* bracket) all reproduced. So did four false negatives. Rewritten
+as what Astra asked for: a defined grammar. A hook entry counts only when `bmn hook <agent>` is the
+program of one command, reached through a named wrapper table (`env`, `command`, `exec`, `nohup`,
+`setsid`, `stdbuf`, `nice`, `ionice`, `timeout`) or a shell's `-c`; quoting is read before separators;
+redirections and their targets are dropped; grouping is stripped only from words the shell saw
+unquoted. The asymmetry is stated in the code: calling a real hook missing adds a duplicate entry,
+which is noisy; calling something else wired leaves the owner with no hook and never says so, which
+is not allowed. The explicit comment skip was removed after its fence came back GREEN — `#` is not a
+program, so command position already rejects it, and dead code no test can distinguish is not kept.
+
+**New evidence, because this is the third round on the same function.** Rather than reason about
+cases a fourth time, there is now a differential test: 36 command shapes are each run by a real bash
+with a stub `bmn` on PATH that records being called with `hook claude`, and `hooks check` must agree
+with what actually happened. Saying "wired" about a command the shell did not run fails outright;
+saying "missing" about one it did run is allowed only for two listed, explained exceptions (the hook
+inside a command substitution), and the test also fails if the grammar ever starts recognising a
+listed exception, so the list cannot go stale.
+
+It paid for itself immediately. It failed on `env -i bmn hook claude`, which **Astra had listed as a
+false negative and I had "fixed" on its say-so**. `env -i` empties the environment, PATH included, so
+a bare `bmn` is never found and the hook does not run. My original answer was right, the reviewer was
+wrong, and I had turned a correct answer into an unsafe false positive by trusting it. `env -i` now
+reads as not-a-call, and it is fenced.
+
+**Corrections to claims I made about my own tests.** Astra checked the four I called repairs and it
+is right that they are not all regression fences:
+- Byte preservation is **coverage, not a fence**: the fixture's assertions also pass at `a25ed3f`,
+  because `JSON.stringify` already preserves those key orders and escapes. Recorded as coverage.
+  The real limit is now documented instead of implied: a `"a"` escape comes back as `"a"`,
+  verified against the binary, which AC2 allows ("where the JSON writer allows").
+- The conflict handshake fences the *first* check only. Removing the final verification leaves every
+  assertion passing — which is finding 5's unclosable window, so there is nothing there to fence.
+- Electron element identity and the coalescing page count are **coverage**. The original coalescing
+  defect is caught by the revision and `seen_at` assertions, not by the page count, because the old
+  code suppressed `pager.opened` with its `silent` flag.
+These are relabelled rather than defended; the 22 earlier RED mutations support the guards they name
+and nothing more.
+
+**Also corrected, on Astra's point:** `docs/agent-control.md` said "The backup is what recovers it"
+about the racing edit. That is false — the backup is taken before the check, so it holds the
+configuration from before `install` started, never the edit that raced it. It now says the racing
+edit is lost and the backup does not contain it.
