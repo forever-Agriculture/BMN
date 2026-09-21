@@ -1420,3 +1420,54 @@ and nothing more.
 about the racing edit. That is false — the backup is taken before the check, so it holds the
 configuration from before `install` started, never the edit that raced it. It now says the racing
 edit is lost and the backup does not contain it.
+
+## 2026-09-22 — Third recheck refused `c5ef4d7`; the P1 was still live and the grammar got smaller
+
+Receipt: `.dev-auto/evidence/epic-15/reviews/epic-15-recheck3-astra.md`. Verdict: **"Epic 15 is not
+acceptable at `c5ef4d7`."** Findings 1-4 and the queue gap stay closed; finding 5's unclosable
+disposition stands, and Astra **accepted the `env -i` correction and withdrew its own earlier
+finding** — its witness recorded `env: 'bmn': No such file or directory`.
+
+**The P1 was still live, and my explanation of it had been wrong.** `settings.json -> branch/../target.json`
+with `branch -> real/nested` still overwrote an unrelated sentinel. I had "fixed" it by calling
+`realpathSync` on the parent, believing that resolves the way the kernel does. It does not: **Node's
+`realpathSync` collapses `..` textually before resolving**, so `branch/..` becomes nothing and the
+path lands beside the link. Verified directly — `cat`, `open()` and `os.path.realpath` all agree the
+kernel lands on `real/target.json`, while Node's `realpathSync(dirname(joined))` returned the wrong
+parent. Replaced with a real resolver that walks the path one component at a time, following each
+symlink as it is met, so `..` steps back from where the link landed. A second fixture,
+`missing/../target.json`, now refuses: where `..` lands after a missing component is unknowable, and
+guessing writes somewhere arbitrary. A missing component with no `..` after it is still just a
+directory the install creates, so the fresh-machine case is untouched.
+
+**The recogniser is smaller, not cleverer.** Every round of false positives came from interpreting
+flags: `command -v`, `command -p`, `command -pv`, `env -i`, `env --help`, `bash -n -c`. So it no
+longer interprets flags at all — **a wrapper carrying any flag reads as "not ours"**. Comments and
+here-document bodies are removed before tokenizing (the comment check had been deleted in wave 3 on
+the strength of a GREEN fence; Astra was right that the fence only showed the *fixture* was
+redundant, not that comments were handled — `# example; bmn hook claude` split on the `;` and the
+tail read as a command). Grouping is stripped only from characters the shell saw bare, so
+`bmn hook "claude)"`, `bmn hook claude\)` and `bmn hook {claude}` are arguments. `2>` is told apart
+from `2 >` by whether the number touched the redirection. The shell `-c` recursion is gone entirely:
+`sh -c '…'` now reads as missing, which costs a duplicate entry instead of risking a wrong answer.
+
+That is a deliberate scope reduction after four rounds. What it gives up is named in
+`docs/agent-control.md` so a duplicate entry is explicable rather than mysterious.
+
+**Corrections to my own work, found while doing this.**
+- My wider differential probe reported `/usr/bin/bmn hook claude` as UNSAFE. That was the probe's
+  fault: the stub `bmn` lives in a temp directory, not `/usr/bin`, so the shell could not run it.
+  The case now uses the stub's real absolute path and agrees.
+- My new symlink test did not build the fixture it described. `path.join('branch', '..', 'target.json')`
+  normalises to `target.json`, so the link never pointed through `branch`. Built from a raw string now.
+- I had told the owner the differential test would catch this class of defect. It did not catch
+  these, because its case list did not contain them. That is the honest limit of the technique: it
+  is only as good as the shapes fed to it, and it is a fence against regression, not a search.
+
+**The differential test, rebuilt to Astra's four critiques.** It now runs 60 shapes, including two
+backgrounded commands (so the appended `wait` is exercised rather than assumed), multi-line
+here-documents, and a `conditional` category for commands whose execution depends on a condition —
+`check` reports what is *configured*, and the documented entry is itself guarded, so the shell is not
+the right oracle for those. A runner timeout now fails the test instead of being read as "the hook
+did not run", and each listed exception must still be seen to run, so the list cannot quietly go
+stale on both sides.

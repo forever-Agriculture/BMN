@@ -6,7 +6,7 @@ import {
 } from 'node:fs'
 import { createConnection } from 'node:net'
 import { homedir } from 'node:os'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 
 const TIMEOUT_MS = 10_000
 /** A hook runs inside the agent's turn, so a stalled app must not hold the agent up for long. */
@@ -651,53 +651,91 @@ function hookEntry(agent) {
 }
 
 /**
- * BMN reads a defined subset of shell, not shell. A hook entry counts as running `bmn hook <agent>`
- * only when it is the program of one command in the line, reached through the wrappers below, and
- * everything outside that grammar reads as "not ours". That direction is deliberate: reading a real
- * hook as missing adds a second entry, which is noisy, while reading something else as wired would
- * leave the owner with no hook at all and never say so.
+ * BMN reads a small, named set of command shapes, not shell. An entry counts as running
+ * `bmn hook <agent>` only when those three words are the program of one command, reached at most
+ * through a bare wrapper that takes no options. Anything else reads as "not ours".
  *
- * Known not to be recognised, and left that way: a call inside a command substitution
- * (`x=$(bmn hook claude)`) runs the hook, but writing a hook entry that way is not a thing anyone
- * does, and accepting it would mean reading substitutions as calls everywhere.
+ * The asymmetry is the whole design. Calling a real hook missing adds a second entry, which is
+ * noisy; calling something else wired leaves the owner with no hook and never says so. So wherever
+ * the shape cannot be read with certainty - any wrapper carrying a flag, a shell asked to run a
+ * script, a command substitution - BMN says "not ours" and installs its own entry beside it.
+ *
+ * It reports what is *configured*, which is not the same as what will run: the documented entry
+ * itself is guarded and does nothing when BMN is not running. That distinction is in the docs.
  */
 const COMMAND_WRAPPERS = {
-  // `env -i` empties the environment, PATH included, so a bare `bmn` is not found and nothing runs.
-  // Whether an absolute path would still run is more than this grammar reads, so it says "not ours".
-  env: { valueFlags: ['-u'], positional: 0, assignments: true, notACall: ['-i', '--ignore-environment', '-'] },
-  command: { valueFlags: [], positional: 0, notACall: ['-v', '-V'] },
-  exec: { valueFlags: ['-a'], positional: 0 },
-  nohup: { valueFlags: [], positional: 0 },
-  setsid: { valueFlags: [], positional: 0 },
-  stdbuf: { valueFlags: ['-i', '-o', '-e'], positional: 0 },
-  nice: { valueFlags: ['-n'], positional: 0 },
-  ionice: { valueFlags: ['-c', '-n'], positional: 0 },
-  timeout: { valueFlags: ['-k', '-s'], positional: 1 }
+  // Each runs the command that follows it. A flag is never read, because reading flags is where
+  // every wrong answer came from: `command -v` looks up, `command -p` and `env -i` change PATH,
+  // `env --help` exits, `bash -n` parses without running. A wrapper with a flag is "not ours".
+  env: { assignments: true, positional: 0 },
+  command: { assignments: false, positional: 0 },
+  exec: { assignments: false, positional: 0 },
+  eval: { assignments: false, positional: 0 },
+  nohup: { assignments: false, positional: 0 },
+  setsid: { assignments: false, positional: 0 },
+  nice: { assignments: false, positional: 0 },
+  timeout: { assignments: false, positional: 1 }
 }
-const SHELL_PROGRAMS = ['sh', 'bash', 'dash', 'zsh', 'ksh']
 /** Words that begin a command without being one; the command follows them. */
 const SHELL_KEYWORDS = ['then', 'else', 'elif', 'do', '{', '!']
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=[^(]*$/
-const MAX_SHELL_DEPTH = 3
+const HEREDOC = /<<-?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1/
+
+/**
+ * The line with everything the shell would never run taken out: a comment to the end of its line,
+ * and the body of a here-document. Both are text that reads exactly like a command.
+ */
+function withoutInertText(command) {
+  const lines = []
+  let skipUntil = null
+  for (const line of command.split('\n')) {
+    if (skipUntil !== null) {
+      if (line.trim() === skipUntil) skipUntil = null
+      continue
+    }
+    let quote = ''
+    let kept = line
+    for (let index = 0; index < line.length; index += 1) {
+      const character = line[index]
+      if (quote) {
+        if (character === quote) quote = ''
+        continue
+      }
+      if (character === '"' || character === "'") { quote = character; continue }
+      if (character === '\\') { index += 1; continue }
+      // A `#` starts a comment only where a word starts, never inside one.
+      if (character === '#' && (index === 0 || /\s/.test(line[index - 1]))) {
+        kept = line.slice(0, index)
+        break
+      }
+    }
+    lines.push(kept)
+    const heredoc = HEREDOC.exec(kept)
+    if (heredoc !== null && !kept.includes('<<<')) skipUntil = heredoc[2]
+  }
+  return lines.join('\n')
+}
 
 /**
  * The commands in one shell line, each as its words. Quoting is read before the separators are, so
- * `echo 'a; bmn hook claude'` stays one word of text rather than becoming a command of its own, and
- * each word remembers whether it was quoted, because `"claude)"` is a different argument from the
- * `claude)` that ends a subshell.
+ * `echo 'a; bmn hook claude'` stays one word of text. Each word remembers whether any of it was
+ * quoted or escaped, because `"claude)"` and `claude\)` are arguments while the `)` of a subshell
+ * is punctuation, and whether it touched the redirection after it, because `2>` is a file
+ * descriptor while `2 >` is an argument.
  */
 function commandSegments(command) {
   const segments = []
   let words = []
   let word = ''
   let started = false
-  let quoted = false
+  let literal = false
   let quote = ''
+  let spaced = true
   const endWord = () => {
-    if (started) words.push({ text: word, quoted })
+    if (started) words.push({ text: word, literal })
     word = ''
     started = false
-    quoted = false
+    literal = false
   }
   const endSegment = () => {
     endWord()
@@ -716,42 +754,53 @@ function commandSegments(command) {
     if (character === '"' || character === "'") {
       quote = character
       started = true
-      quoted = true
+      literal = true
+      spaced = false
       continue
     }
     if (character === '\\' && index + 1 < command.length) {
       word += command[++index]
       started = true
+      literal = true
+      spaced = false
       continue
     }
     if (character === ';' || character === '\n' || character === '&' || character === '|') {
       endSegment()
+      spaced = true
       continue
     }
-    // A redirection and what it points at say nothing about which program runs.
     if (character === '>' || character === '<') {
+      const attached = !spaced && started
       endWord()
       while (index + 1 < command.length && (command[index + 1] === '>' || command[index + 1] === '<')) index += 1
-      words.push({ text: character, quoted: false, redirect: true })
+      words.push({ text: character, literal: false, redirect: true, attached })
+      spaced = false
       continue
     }
     if (/\s/.test(character)) {
       endWord()
+      spaced = true
       continue
     }
     word += character
     started = true
+    spaced = false
   }
   endSegment()
   return segments
 }
 
-/** Drops each redirection, the word it points at, and the file number in front of it. */
+/** Drops each redirection and its target, and the file descriptor written against it. */
 function withoutRedirections(words) {
   const kept = []
   for (let index = 0; index < words.length; index += 1) {
     if (words[index].redirect) {
-      if (kept.length > 0 && /^\d+$/.test(kept[kept.length - 1].text)) kept.pop()
+      const previous = kept[kept.length - 1]
+      // `2>file` writes a descriptor; `bmn 2 >file` passes 2 to bmn and is a different command.
+      if (words[index].attached && previous !== undefined && !previous.literal && /^\d+$/.test(previous.text)) {
+        kept.pop()
+      }
       index += 1
       continue
     }
@@ -760,9 +809,9 @@ function withoutRedirections(words) {
   return kept
 }
 
-/** The word as an argument: shell grouping counts only when the shell saw it, not when it was quoted. */
+/** The word as the shell read it: `(` and `)` are punctuation only where the shell saw them bare. */
 function wordText(word) {
-  return word.quoted ? word.text : word.text.replace(/^[({]+/, '').replace(/[)}]+$/, '')
+  return word.literal ? word.text : word.text.replace(/^\(+/, '').replace(/\)+$/, '')
 }
 
 /** The last path component of the program, so `/usr/bin/bmn` is bmn and `other.bmn` is not. */
@@ -771,30 +820,20 @@ function programName(word) {
   return text.slice(text.lastIndexOf('/') + 1)
 }
 
-function runsHookInSegment(words, agent, depth) {
+function runsHookInSegment(all, agent) {
+  const words = all.filter((word) => wordText(word) !== '')
   let index = 0
-  while (index < words.length && !words[index].quoted && SHELL_KEYWORDS.includes(words[index].text)) index += 1
-  while (index < words.length && !words[index].quoted && ASSIGNMENT.test(words[index].text)) index += 1
+  while (index < words.length && !words[index].literal && SHELL_KEYWORDS.includes(words[index].text)) index += 1
+  while (index < words.length && !words[index].literal && ASSIGNMENT.test(words[index].text)) index += 1
   for (let step = 0; step < 8 && index < words.length; step += 1) {
-    const program = programName(words[index])
-    if (SHELL_PROGRAMS.includes(program)) {
-      // `sh -c '<command>'`: what it runs is the word after -c, read as a command of its own.
-      const flag = words.findIndex((word, at) => at > index && !word.quoted && word.text === '-c')
-      const script = flag === -1 ? undefined : words[flag + 1]
-      return script !== undefined && depth < MAX_SHELL_DEPTH && runsHook(script.text, agent, depth + 1)
-    }
-    const wrapper = COMMAND_WRAPPERS[program]
+    const wrapper = COMMAND_WRAPPERS[programName(words[index])]
     if (wrapper === undefined) break
     index += 1
-    while (index < words.length && !words[index].quoted && words[index].text.startsWith('-')) {
-      const flag = words[index].text
-      // `command -v` looks a program up instead of running it, so nothing after it runs either.
-      if (wrapper.notACall?.includes(flag)) return false
-      index += wrapper.valueFlags.includes(flag) ? 2 : 1
-    }
     if (wrapper.assignments) {
-      while (index < words.length && !words[index].quoted && ASSIGNMENT.test(words[index].text)) index += 1
+      while (index < words.length && !words[index].literal && ASSIGNMENT.test(words[index].text)) index += 1
     }
+    // A flag means BMN cannot say what the wrapper will do, so it stops reading rather than guess.
+    if (index < words.length && !words[index].literal && words[index].text.startsWith('-')) return false
     index += wrapper.positional
   }
   const [program, second, third] = words.slice(index, index + 3)
@@ -803,11 +842,10 @@ function runsHookInSegment(words, agent, depth) {
 }
 
 /** Whether this entry's command runs `bmn hook <agent>`; see COMMAND_WRAPPERS for what is read. */
-function runsHook(command, agent, depth = 0) {
+function runsHook(command, agent) {
   if (typeof command !== 'string') return false
-  for (const words of commandSegments(command)) {
-    // A comment needs no special case: `#` is not a program, so command position already rejects it.
-    if (runsHookInSegment(withoutRedirections(words), agent, depth)) return true
+  for (const words of commandSegments(withoutInertText(command))) {
+    if (runsHookInSegment(withoutRedirections(words), agent)) return true
   }
   return false
 }
@@ -983,30 +1021,45 @@ function unifiedDiff(beforeText, afterText, path) {
 const MAX_LINK_HOPS = 10
 
 function linkTarget(path) {
-  let current = path
-  for (let hops = 0; hops <= MAX_LINK_HOPS; hops += 1) {
+  // Resolved the way the kernel resolves a path: one component at a time, following each symlink as
+  // it is met, so `..` after a symlink steps back from where the link landed and not from where it
+  // was written. Neither `resolve()` nor `realpathSync()` can be used here - both collapse `..` as
+  // text first, which lands on a different file and would overwrite whatever happens to be there.
+  let pending = resolve(path).split('/').filter((part) => part !== '')
+  let out = ''
+  let hops = 0
+  while (pending.length > 0) {
+    const part = pending.shift()
+    if (part === '.') continue
+    if (part === '..') {
+      out = out.slice(0, out.lastIndexOf('/'))
+      continue
+    }
+    const next = `${out}/${part}`
     let link
     try {
-      link = readlinkSync(current)
-    } catch {
-      // Not a symlink, or nothing there at all: either way this is the file to write.
-      return current
+      link = readlinkSync(next)
+    } catch (error) {
+      // A component that is not a link is simply itself, and one that is not there at all is a
+      // directory the install will create. Only a `..` after a missing component is unanswerable:
+      // where it steps back to depends on what that component would have been.
+      if (error.code === 'ENOENT' && pending.includes('..')) {
+        throw new CliError('UNRESOLVED_LINK', `${path} leads through ${next}, which does not exist; resolve it by hand`)
+      }
+      out = next
+      continue
     }
-    // Against the directory the link really lives in, the way the kernel resolves it. Resolving the
-    // written path instead would follow a symlinked parent to a file of the same name in the wrong
-    // folder, and overwrite whatever happened to be there.
-    let directory = dirname(current)
-    try {
-      directory = realpathSync(directory)
-    } catch {
-      // It does not exist yet; the write creates it, and the lexical path is the only answer there is.
+    hops += 1
+    if (hops > MAX_LINK_HOPS) {
+      throw new CliError(
+        'TOO_MANY_LINKS', `${path} passes through more than ${MAX_LINK_HOPS} symlinks; resolve it by hand`
+      )
     }
-    current = resolve(directory, link)
+    const target = isAbsolute(link) ? link : `${out}/${link}`
+    pending = [...target.split('/').filter((part) => part !== ''), ...pending]
+    out = ''
   }
-  // Never write to a path still unresolved: that would replace a link in the middle of the chain.
-  throw new CliError(
-    'TOO_MANY_LINKS', `${path} passes through more than ${MAX_LINK_HOPS} symlinks; resolve it by hand`
-  )
+  return out === '' ? '/' : out
 }
 
 function writeAtomically(path, text, verify) {

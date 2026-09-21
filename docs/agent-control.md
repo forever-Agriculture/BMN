@@ -173,7 +173,7 @@ bmn hooks install codex
 ```
 
 `check` prints one line per event: `wired` for the documented command, `wired (older wording)` for a
-command that runs `bmn hook <agent>` but is spelled differently (BMN also reads the older
+command BMN can see runs `bmn hook <agent>` but spelled differently (BMN also reads the older
 `AITERM_CONTROL_SOCKET` name, so those keep working), or `missing`. It exits `0` when nothing is
 missing and `1` otherwise, and `--json` prints the same report as one object. Run it after a Claude
 Code or Codex update rewrites your settings file.
@@ -202,7 +202,16 @@ Both commands read the file each harness actually reads: `~/.claude/settings.jso
 moved that directory. `--file PATH` replaces it, for tests.
 
 Both commands say what is **configured**. Neither says that a hook has ever fired; the session's
-**Hook events…** list is what shows that.
+**Hook events…** list is what shows that. Nor does either say the command *will* run: the documented
+entry is guarded and does nothing while BMN is not running, which is the point of the guard.
+
+BMN reads a small set of command shapes, not shell. It sees `bmn hook <agent>` when those are the
+words of the command, including through a bare wrapper that carries no options — `timeout 5`,
+`nohup`, `command`, `env FOO=1`, a subshell, a pipe, a redirection. It deliberately does **not** try
+to read a wrapper carrying a flag, a shell handed a script (`sh -c '…'`), or a command substitution,
+because what those do depends on the flag or the script. Those read as `missing`, so `install` adds
+its own entry beside yours and the hook fires twice rather than not at all. If you see a duplicate,
+that is why, and removing either one is safe.
 
 The entries themselves, for wiring them by hand. `~/.claude/settings.json` needs `Notification`,
 `PostToolUse`, `UserPromptSubmit`, `Stop`, `SessionStart` and `SessionEnd`, next to any hooks

@@ -42,5 +42,5 @@
 
 ## Resume
 
-- Next safe action: commit wave 3, run its Electron and visual set against the committed revision, and take one more focused recheck before accepting Epic 15; then implement Epic 16 from `scratchpad/epic-16-plan.md`.
-- Status: ACTIVE — Epic 15 in its third repair wave after two rechecks refused it; Epics 16 and 18 not started.
+- Next safe action: commit wave 4, run its Electron and visual set against the committed revision, and take one more focused recheck before accepting Epic 15; then implement Epic 16 from `scratchpad/epic-16-plan.md`.
+- Status: ACTIVE — Epic 15 in its fourth repair wave after three rechecks refused it; Epics 16 and 18 not started.
