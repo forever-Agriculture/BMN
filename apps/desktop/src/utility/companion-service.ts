@@ -238,14 +238,23 @@ export class CompanionService {
   private readonly draftOperations = new Map<string, Promise<void>>()
   /** The last `HOOK_EVENT_LOG_LIMIT` hook events per session, in memory only; a restart clears them. */
   private readonly hookEvents = new Map<string, HookEventRecord[]>()
+  /**
+   * The incarnation of each session whose harness has reported a hook of its own. It is kept apart
+   * from `hookEvents` on purpose: that log is bounded at 30 entries and is a diagnostic, so reading
+   * suppression out of it would let 30 suppressed notices evict the hook and switch suppression off.
+   */
+  private readonly hookReporters = new Map<string, string>()
   /** The terminal notice each session has open, so a burst becomes more lines and not more rows. */
   private readonly terminalNotices = new Map<string, {
     requestId: string
     requestKey: string
+    incarnationId: string
     title: string
     openedAt: number
     lines: string[]
   }>()
+  /** One notice at a time per session: two arriving together must not each open their own row. */
+  private readonly noticeOperations = new Map<string, Promise<unknown>>()
   /** Refusals are appended one at a time, so two rejected reports cannot interleave in the file. */
   private refusalWrites: Promise<void> = Promise.resolve()
 
@@ -582,9 +591,12 @@ export class CompanionService {
     for (const session of lists.flat()) {
       this.knownSessions.set(session.sessionId, this.options.manager.sessionWithCurrentProcessState(session))
     }
-    // A deleted session keeps no hook events: the log follows the sessions that still exist.
-    for (const sessionId of this.hookEvents.keys()) {
-      if (!this.knownSessions.has(sessionId)) this.hookEvents.delete(sessionId)
+    // A deleted session keeps no hook events: the log, and everything else kept per session in
+    // memory here, follows the sessions that still exist.
+    for (const map of [this.hookEvents, this.hookReporters, this.terminalNotices]) {
+      for (const sessionId of map.keys()) {
+        if (!this.knownSessions.has(sessionId)) map.delete(sessionId)
+      }
     }
   }
 
@@ -731,8 +743,6 @@ export class CompanionService {
     expiresAt?: string
     phoneNotified?: boolean
     origin?: string
-    /** A row the owner has already been told about; more text on it is not a second interruption. */
-    silent?: boolean
   }): Promise<AttentionRecord> {
     const record = await this.options.database.companion('openAttention', {
       sessionId: p.sessionId,
@@ -745,7 +755,7 @@ export class CompanionService {
       ...(p.origin !== undefined ? { origin: p.origin } : {})
     }, randomUUID(), this.iso())
     this.emit('attention', p.sessionId)
-    if (!p.phoneNotified && !p.silent) this.pager.opened(record)
+    if (!p.phoneNotified) this.pager.opened(record)
     return record
   }
 
@@ -766,42 +776,48 @@ export class CompanionService {
     title: string
     body?: string
   }): Promise<{ opened: boolean; requestKey: string; reason?: string }> {
+    // One at a time per session: a program can write two sequences in the same breath, and two
+    // concurrent calls that each found no open row would each open one.
+    const previous = this.noticeOperations.get(p.sessionId) ?? Promise.resolve()
+    const result = previous.then(() => this.terminalNoticeLocked(p), () => this.terminalNoticeLocked(p))
+    const tail = result.then(() => undefined, () => undefined)
+    this.noticeOperations.set(p.sessionId, tail)
+    return result.finally(() => {
+      if (this.noticeOperations.get(p.sessionId) === tail) this.noticeOperations.delete(p.sessionId)
+    })
+  }
+
+  private async terminalNoticeLocked(p: {
+    sessionId: string
+    incarnationId: string
+    code: TerminalNoticeCode
+    title: string
+    body?: string
+  }): Promise<{ opened: boolean; requestKey: string; reason?: string }> {
     const requestKey = terminalNoticeOrigin(p.code)
-    const reported = this.hookEvents.get(p.sessionId)
-      ?.some((record) => record.agent !== 'terminal' && record.incarnationId === p.incarnationId)
-    if (reported === true) {
+    if (this.hookReporters.get(p.sessionId) === p.incarnationId) {
       // Counted but not acted on, so "why is there no request for this?" still has an answer.
-      this.observeHookEvent({
-        sessionId: p.sessionId,
-        incarnationId: p.incarnationId,
-        agent: 'terminal',
-        event: requestKey,
-        source: null,
-        toolName: null,
-        effects: []
-      })
+      this.observeTerminalNotice(p, requestKey, [])
       return { opened: false, requestKey, reason: 'this session reports through its own BMN hook' }
     }
     const now = this.now().getTime()
-    const open = await this.openTerminalNotice(p.sessionId, now)
+    const open = this.terminalNotices.get(p.sessionId)
     const text = p.body === undefined ? p.title : `${p.title}\n${p.body}`
-    if (open) {
+    if (open && open.incarnationId === p.incarnationId && now - open.openedAt < TERMINAL_NOTICE_WINDOW_MS) {
       open.lines.push(text)
       // Oldest first out: the newest line is the one the owner has not read yet.
       while (open.lines.join('\n').length > TERMINAL_NOTICE_BODY_MAX && open.lines.length > 1) open.lines.shift()
-      const record = await this.openAttention({
-        sessionId: p.sessionId,
-        incarnationId: p.incarnationId,
-        requestKey: open.requestKey,
-        kind: 'notice',
-        title: open.title,
-        body: open.lines.join('\n').slice(0, TERMINAL_NOTICE_BODY_MAX),
-        origin: requestKey,
-        silent: true
-      })
-      open.requestId = record.requestId
-      this.observeTerminalNotice(p, requestKey, 'opened')
-      return { opened: true, requestKey: open.requestKey }
+      // One statement, so the owner answering the row between the read and the write cannot lose the
+      // race: a row that is no longer open takes no more text and a fresh one is opened instead.
+      const appended = await this.options.database.companion(
+        'appendAttentionBody', open.requestId, open.lines.join('\n').slice(0, TERMINAL_NOTICE_BODY_MAX)
+      )
+      if (appended !== null) {
+        this.emit('attention', p.sessionId)
+        this.observeTerminalNotice(p, requestKey, ['opened'])
+        return { opened: true, requestKey: open.requestKey }
+      }
+      this.terminalNotices.delete(p.sessionId)
     }
     const record = await this.openAttention({
       sessionId: p.sessionId,
@@ -815,34 +831,20 @@ export class CompanionService {
     this.terminalNotices.set(p.sessionId, {
       requestId: record.requestId,
       requestKey,
+      // Per run of the program: a restart's first word opens its own row, never a line under the last.
+      incarnationId: p.incarnationId,
       title: p.title,
       openedAt: now,
       lines: p.body === undefined ? [] : [p.body]
     })
-    this.observeTerminalNotice(p, requestKey, 'opened')
+    this.observeTerminalNotice(p, requestKey, ['opened'])
     return { opened: true, requestKey }
-  }
-
-  /** The row a further notice joins: this session's own, opened moments ago and still open. */
-  private async openTerminalNotice(
-    sessionId: string,
-    now: number
-  ): Promise<{ requestId: string; requestKey: string; title: string; openedAt: number; lines: string[] } | null> {
-    const open = this.terminalNotices.get(sessionId)
-    if (!open || now - open.openedAt >= TERMINAL_NOTICE_WINDOW_MS) return null
-    // The owner may have answered it in between; adding lines to a closed row would reopen what they read.
-    const current = await this.options.database.companion('getAttention', open.requestId).catch(() => null)
-    if (current === null || current.state !== 'open') {
-      this.terminalNotices.delete(sessionId)
-      return null
-    }
-    return open
   }
 
   private observeTerminalNotice(
     p: { sessionId: string; incarnationId: string },
     event: string,
-    effect: HookEventEffect
+    effects: readonly HookEventEffect[]
   ): void {
     this.observeHookEvent({
       sessionId: p.sessionId,
@@ -851,7 +853,7 @@ export class CompanionService {
       event,
       source: null,
       toolName: null,
-      effects: [effect]
+      effects
     })
   }
 
@@ -883,6 +885,10 @@ export class CompanionService {
     toolName: string | null
     effects: readonly HookEventEffect[]
   }): { recorded: true } {
+    // Which incarnation has a harness reporting for it, kept whatever the log later drops.
+    if (p.agent !== 'terminal' && p.incarnationId !== null) {
+      this.hookReporters.set(p.sessionId, p.incarnationId)
+    }
     const log = this.hookEvents.get(p.sessionId) ?? []
     log.push({
       sessionId: p.sessionId,

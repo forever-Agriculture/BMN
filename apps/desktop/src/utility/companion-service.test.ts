@@ -945,6 +945,26 @@ describe('terminal notices (OSC 9, 99, 777)', () => {
     expect(rows[0]?.body).toBeNull()
   })
 
+  it('measures the window from the row it opened, so a steady trickle cannot hold it open forever', async () => {
+    await service.sessionsChanged()
+    let clock = Date.parse(now)
+    ;(service as unknown as { now(): Date }).now = () => new Date(clock)
+
+    await notice({ title: 'First' })
+    // Inside the window, so this joins the row. If the window rolled, it would also extend it.
+    clock += TERMINAL_NOTICE_WINDOW_MS - 1
+    await notice({ title: 'Second' })
+    clock += 2
+    await notice({ title: 'Third' })
+    const rows = await openRows()
+
+    expect(rows).toHaveLength(1)
+    // The third is past two seconds from the row opening, so it interrupts afresh rather than
+    // appending: the body the trickle had built up is gone, replaced by the newest word alone.
+    expect(rows[0]).toMatchObject({ title: 'Third' })
+    expect(rows[0]?.body).toBeNull()
+  })
+
   it('starts a new row rather than reopening one the owner already answered', async () => {
     await service.sessionsChanged()
     await notice({ title: 'First' })
@@ -966,6 +986,82 @@ describe('terminal notices (OSC 9, 99, 777)', () => {
     await expect(notice({ sessionId: 'nobody' })).rejects.toThrow(/unknown/)
     await expect(notice({ code: 8 })).rejects.toThrow(/BMN reads/)
     expect(await openRows()).toEqual([])
+  })
+
+  it('keeps suppressing after the diagnostic log has been filled with suppressed notices', async () => {
+    await service.sessionsChanged()
+    observeHook('s1', 'incarnation-1')
+
+    // The hook event log holds 30 entries; each suppressed notice adds one, so reading suppression
+    // out of that log would let the hook fall off the end and switch suppression back on.
+    for (let index = 0; index < HOOK_EVENT_LOG_LIMIT + 5; index += 1) await notice({ title: `n${index}` })
+    const log = await service.route(METHOD_REGISTRY.hookEventsList, { sessionId: 's1' }) as HookEventRecord[]
+
+    expect(await openRows()).toEqual([])
+    expect(log.some((entry) => entry.agent === 'claude')).toBe(false)
+    expect(await notice({ title: 'still suppressed' })).toMatchObject({ opened: false })
+  })
+
+  it('adds a coalesced line without a second interruption: same revision, and what was seen stays seen', async () => {
+    await service.sessionsChanged()
+    await notice({ title: 'First' })
+    const [opened] = await openRows()
+    await service.route(METHOD_REGISTRY.attentionSeen, { requestId: opened?.requestId })
+
+    await notice({ title: 'Second' })
+    const [after] = await openRows()
+
+    expect(after?.requestId).toBe(opened?.requestId)
+    // The desktop notifier keys on requestId:revision and the pending Telegram page refuses a
+    // revision that moved, so a bumped revision would mean a second pop-up and no page at all.
+    expect(after?.revision).toBe(opened?.revision)
+    expect(after?.seenAt).not.toBeNull()
+    expect(after?.body).toBe('Second')
+  })
+
+  it('opens one row for two notices that arrive together', async () => {
+    await service.sessionsChanged()
+
+    const [first, second] = await Promise.all([notice({ code: 9, title: 'A' }), notice({ code: 777, title: 'B' })])
+    const rows = await openRows()
+
+    expect(rows).toHaveLength(1)
+    expect([first, second].filter((result) => (result as { opened: boolean }).opened)).toHaveLength(2)
+    expect(rows[0]?.body).toContain('B')
+  })
+
+  it('gives a restarted program its own row instead of a line under the last run', async () => {
+    await service.sessionsChanged()
+    await notice({ title: 'Before the restart' })
+    const [before] = await openRows()
+    // The program is restarted inside the coalescing window; the window belongs to the run, not the clock.
+    liveIncarnations.set('s1', 'incarnation-restarted')
+
+    await notice({ incarnationId: 'incarnation-restarted', title: 'After the restart' })
+    const rows = await openRows()
+
+    // The new run's word replaces the old one the way an expired window does, rather than being
+    // appended silently under it: a restart is a fresh interruption, not more of the last one.
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ requestKey: 'osc:9', title: 'After the restart' })
+    expect(rows[0]?.body).toBeNull()
+    expect(rows[0]?.revision).toBeGreaterThan(before?.revision ?? 0)
+  })
+
+  it('forgets a deleted session rather than keeping its notice and hook state for ever', async () => {
+    await service.sessionsChanged()
+    observeHook('s1', 'incarnation-1')
+    await notice({ sessionId: 's2', incarnationId: 'incarnation-2', title: 'Still open' })
+    const kept = service as unknown as { hookReporters: Map<string, unknown>; terminalNotices: Map<string, unknown> }
+    expect([kept.hookReporters.size, kept.terminalNotices.size]).toEqual([1, 1])
+
+    database.prepare("DELETE FROM attention_request WHERE session_id IN ('s1', 's2')").run()
+    database.prepare("DELETE FROM session WHERE session_id IN ('s1', 's2')").run()
+    await service.sessionsChanged()
+
+    // These are in memory and per session, so a long-lived app must not accumulate one entry per
+    // session it has ever had. They are pruned with the hook log, on the same pass.
+    expect([kept.hookReporters.size, kept.terminalNotices.size]).toEqual([0, 0])
   })
 
   it('never lets a session token claim a terminal origin on a request of its own', () => {

@@ -453,6 +453,8 @@ describe('control server validation', () => {
     ['unknown observation parameter', 'conversation.observe',
       { agentCli: 'claude', conversationReference: OBSERVED_REFERENCE, source: 'startup', pid: 12 }],
     ['unknown hook agent', 'hook.observe', { agent: 'gemini', event: 'Stop', effects: [] }],
+    // Only the window sees a session's own output, so no token may file an event as the terminal.
+    ['the window own terminal label', 'hook.observe', { agent: 'terminal', event: 'osc:9', effects: [] }],
     ['control character hook event', 'hook.observe', { agent: 'claude', event: 'Stop\u0007', effects: [] }],
     ['oversize hook event', 'hook.observe', { agent: 'claude', event: 'E'.repeat(65), effects: [] }],
     ['missing hook event', 'hook.observe', { agent: 'claude', effects: [] }],
@@ -535,12 +537,18 @@ describe('control server validation', () => {
   it.each([
     ['an invented word', 'guess'],
     ['an unknown hook agent', 'hook:gemini:Stop'],
+    // `terminal` is the window's own label for what it read out of a session's output.
+    ['the window own terminal label', 'hook:terminal:osc:9'],
     ['an oversize hook event', `hook:claude:${'E'.repeat(65)}`],
     ['a control character', 'cli\nowner'],
     ["the owner's own word", 'owner'],
     ['a typed answer', 'input'],
     ['a Telegram reply', 'telegram'],
-    ['expiry', 'expiry']
+    ['expiry', 'expiry'],
+    // Only the window sees a session's own output, so only the window may say a notice came from it.
+    ['a terminal notification', 'osc:9'],
+    ['a kitty notification', 'osc:99'],
+    ['an urxvt notification', 'osc:777']
   ])('drops %s as provenance and still opens, withdraws and resolves the request', async (_label, origin) => {
     const fixture = await serverFixture()
     const client = await authenticated(fixture, sessionToken(fixture))
@@ -567,6 +575,23 @@ describe('control server validation', () => {
     // The refused word is never echoed back into the log.
     expect(fixture.handlers.reportRefusal.mock.calls.every(([, , reason]) => !String(reason).includes(origin)))
       .toBe(true)
+  })
+
+  it('has no socket method for a terminal notice, for either credential', async () => {
+    const fixture = await serverFixture()
+    const asSession = await authenticated(fixture, sessionToken(fixture))
+    const asOwner = await authenticated(fixture, fixture.auth.ownerToken)
+    const params = { sessionId: 'session-1', incarnationId: 'incarnation-1', code: 9, title: 'Hello' }
+
+    const bySession = await asSession.request('attention.terminalNotice', params)
+    const byOwner = await asOwner.request('attention.terminalNotice', params)
+
+    // It is the window's own channel: putting it on the socket would widen what an agent can reach.
+    for (const outcome of [bySession, byOwner]) {
+      expect(outcome.error?.data?.code).toBe(ERROR_CODES.invalidArgument)
+      expect(String(outcome.error?.message)).toContain('Unknown method')
+    }
+    expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
   })
 
   it("lets the owner token record the owner's own routes", async () => {

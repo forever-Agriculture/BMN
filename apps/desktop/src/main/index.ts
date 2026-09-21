@@ -272,7 +272,8 @@ interface TerminalNoticeProbe {
   kind: string
   provenance: string
   ptyInputEvents: number
-  refitCount: number
+  /** The terminal around a second notice: AC5 says reading one never resizes or retypes anything. */
+  aroundSecondNotice: { title: string; openedBy: string; sameSize: boolean; sameElement: boolean; refits: number; inputEvents: number }
   hookedSessionRows: number
   hookedSessionEvents: { agent: string; event: string; effects: string[] }[]
   resolvedState: string
@@ -2145,9 +2146,11 @@ function writeIsolationHookHarness(directory: string): { executable: string; fir
 function writeTerminalNoticeHarness(
   directory: string,
   options: { hookFirst: boolean }
-): { executable: string; printed: string } {
+): { executable: string; printed: string; trigger: string; second: string } {
   mkdirSync(directory, { recursive: true })
   const printed = join(directory, 'printed')
+  const trigger = join(directory, 'trigger')
+  const second = join(directory, 'second')
   const executable = join(directory, 'notice-harness')
   writeFileSync(join(directory, 'package.json'), '{"type":"commonjs"}\n')
   writeFileSync(
@@ -2167,12 +2170,20 @@ function writeTerminalNoticeHarness(
       // OSC 9, the plainest of the three: ESC ] 9 ; text BEL.
       "process.stdout.write('\\u001b]9;BMN self-test notice\\u0007')",
       `writeFileSync(${JSON.stringify(printed)}, '')`,
+      // A second notice on demand, so the probe can snapshot the terminal on both sides of one.
+      "const { existsSync } = require('node:fs')",
+      'const waiting = setInterval(() => {',
+      `  if (!existsSync(${JSON.stringify(trigger)})) return`,
+      '  clearInterval(waiting)',
+      "  process.stdout.write('\\u001b]9;BMN self-test second notice\\u0007')",
+      `  writeFileSync(${JSON.stringify(second)}, '')`,
+      '}, 25)',
       'setInterval(() => undefined, 1_000)',
       ''
     ].join('\n'),
     { mode: 0o700 }
   )
-  return { executable, printed }
+  return { executable, printed, trigger, second }
 }
 
 /** Waits for one of the harness's marker files; the harness writes each one after its event landed. */
@@ -4314,7 +4325,6 @@ async function runSelfTest(): Promise<void> {
           kind: opened.kind,
           provenance,
           ptyInputEvents: before.inputEvents,
-          refitCount: before.refitCount,
           hookedSessionRows: (await rowsOf(hookedId)).length,
           hookedSessionEvents: (await window.aiTerminal.listHookEvents(hookedId))
             .map((event) => ({ agent: event.agent, event: event.event, effects: event.effects })),
@@ -4323,6 +4333,43 @@ async function runSelfTest(): Promise<void> {
         };
       })()
     `) as TerminalNoticeProbe
+    // AC5 again, this time measured: a notice arriving into a live pane changes nothing about it.
+    const beforeSecond = await applicationWindow.webContents.executeJavaScript(`
+      (() => {
+        const hook = window.__aitermTest;
+        const snapshot = hook.snapshot(${JSON.stringify(plainSession.session.sessionId)});
+        return { cols: snapshot.cols, rows: snapshot.rows, refits: snapshot.refits, inputEvents: snapshot.inputEvents };
+      })()
+    `) as { cols: number; rows: number; refits: number; inputEvents: number }
+    writeFileSync(plainHarness.trigger, '')
+    await untilFileExists(plainHarness.second, 'printed its second notification')
+    terminalNotice.aroundSecondNotice = await applicationWindow.webContents.executeJavaScript(`
+      (async () => {
+        const plainId = ${JSON.stringify(plainSession.session.sessionId)};
+        const before = ${JSON.stringify(beforeSecond)};
+        const deadline = Date.now() + 10000;
+        let row;
+        for (;;) {
+          row = (await window.aiTerminal.listAttention())
+            .find((request) => request.sessionId === plainId && request.title === 'BMN self-test second notice');
+          if (row) break;
+          if (Date.now() >= deadline) throw new Error('the second terminal notice never opened');
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        // Give any refit or write a chance to land before reading the terminal again.
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        const after = window.__aitermTest.snapshot(plainId);
+        const element = document.querySelector('.session-terminal[data-session-id="' + plainId + '"] .xterm-screen');
+        return {
+          title: row.title,
+          openedBy: row.openedBy,
+          sameSize: after.cols === before.cols && after.rows === before.rows,
+          sameElement: !!element && element.isConnected,
+          refits: after.refits - before.refits,
+          inputEvents: after.inputEvents - before.inputEvents
+        };
+      })()
+    `) as TerminalNoticeProbe['aroundSecondNotice']
     for (const runtime of [plainSession, hookedSession]) {
       await client.request(METHOD_REGISTRY.sessionStop, {
         sessionId: runtime.session.sessionId,

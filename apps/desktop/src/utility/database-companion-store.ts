@@ -585,6 +585,24 @@ export function createDraft(
   return { record: getDraft(database, draft.draftId), created: true }
 }
 
+/**
+ * Adds text to a request that is already open, without touching its revision or `seen_at`. That is
+ * the difference between "more of the same interruption" and a new one: the desktop notifier keys
+ * on `requestId:revision`, and the pending Telegram page refuses a revision that moved under it, so
+ * re-opening the row would notify twice on the desktop and never page at all. Returns null when the
+ * request is no longer open, which is also what makes the read and the write one atomic step.
+ */
+export function appendAttentionBody(
+  database: DatabaseConnection,
+  requestId: string,
+  body: string
+): AttentionRecord | null {
+  const changed = database.prepare(
+    "UPDATE attention_request SET body = ? WHERE request_id = ? AND state = 'open'"
+  ).run(body, requestId)
+  return Number(changed.changes) === 0 ? null : getAttention(database, requestId)
+}
+
 export function getDraft(database: DatabaseConnection, draftId: string): InputDraftRecord {
   const row = database.prepare('SELECT * FROM input_draft WHERE draft_id = ?').get(draftId) as DraftRow | undefined
   if (!row) throw new WorkspaceStoreError(ERROR_CODES.notFound, 'The draft was not found')
@@ -875,6 +893,7 @@ export const COMPANION_OPERATIONS = Object.freeze({
   setArtifactState,
   artifactBytesUsed,
   openAttention,
+  appendAttentionBody,
   getAttention,
   closeAttention,
   expireAttention,

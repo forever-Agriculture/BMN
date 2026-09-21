@@ -1,7 +1,7 @@
 // MODULE: control-cli.test.ts - the bmn CLI drives a real control server with truthful output and exit codes
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -876,8 +876,8 @@ async function backupsOf(path: string): Promise<string[]> {
 }
 
 /** `hooks` is an owner command: no socket, no token, nothing on the wire. */
-function runHooks(args: string[]): Promise<CliResult> {
-  return runCli(['hooks', ...args])
+function runHooks(args: string[], env?: Record<string, string>): Promise<CliResult> {
+  return runCli(['hooks', ...args], env === undefined ? {} : { env })
 }
 
 describe('bmn hooks check', () => {
@@ -965,6 +965,86 @@ describe('bmn hooks check', () => {
     expect(report.agents[0].missing).toEqual(CLAUDE_EVENTS.filter((event) => event !== 'Stop'))
   })
 
+  it.each([
+    ['the documented command', DOCUMENTED_CLAUDE, 'wired'],
+    ['the older AITERM wording', OLDER_CLAUDE, 'wired (older wording)'],
+    ['an absolute path to bmn', '"/usr/bin/bmn" hook claude', 'wired (older wording)'],
+    ['a quoted subcommand', "bmn 'hook' claude", 'wired (older wording)'],
+    ['an env prefix', 'env BMN_X=1 bmn hook claude', 'wired (older wording)'],
+    // Not ours: a different program, a different agent, or the words inside some other command.
+    ['a program whose name ends in bmn', 'other.bmn hook claude', 'missing'],
+    ['a different agent argument', 'bmn hook claude.extra', 'missing'],
+    ['the words echoed, not run', 'echo bmn hook claude', 'missing'],
+    ['only a lookup of bmn', 'command -v bmn >/dev/null', 'missing'],
+    ['another agent', 'bmn hook codex', 'missing']
+  ])('reads %s as %s', async (_label, command, state) => {
+    const path = await hookFileFixture({ hooks: { Stop: [entryGroup(command)] } })
+
+    const result = await runHooks(['check', 'claude', '--file', path, '--json'])
+
+    expect(JSON.parse(result.stdout).agents[0].events.find((row: { event: string }) => row.event === 'Stop'))
+      .toMatchObject({ state })
+  })
+
+  it('ignores an entry that names bmn but is not a command entry', async () => {
+    const path = await hookFileFixture({
+      hooks: { Stop: [{ hooks: [{ type: 'notify', command: DOCUMENTED_CLAUDE }] }] }
+    })
+
+    const result = await runHooks(['check', 'claude', '--file', path, '--json'])
+
+    expect(JSON.parse(result.stdout).agents[0].events.find((row: { event: string }) => row.event === 'Stop'))
+      .toMatchObject({ state: 'missing' })
+  })
+
+  it('reads both harnesses at the paths they actually read, with no agent named', async () => {
+    const home = await cliFixture()
+    const codexHome = join(home.root, 'moved-codex')
+    await mkdir(join(home.root, '.claude'), { recursive: true })
+    await writeFile(
+      join(home.root, '.claude', 'settings.json'),
+      `${JSON.stringify({ hooks: { Stop: [entryGroup(DOCUMENTED_CLAUDE)] } }, null, 2)}\n`
+    )
+
+    const result = await runHooks(['check', '--json'], { HOME: home.root, CODEX_HOME: codexHome })
+
+    // Both agents, each at its own default path, and the moved Codex directory is the one consulted.
+    const report = JSON.parse(result.stdout)
+    expect(report.agents.map((agent: { agent: string }) => agent.agent)).toEqual(['claude', 'codex'])
+    expect(report.agents[0].file).toBe(join(home.root, '.claude', 'settings.json'))
+    expect(report.agents[1].file).toBe(join(codexHome, 'hooks.json'))
+    expect(report.agents[0].events.find((row: { event: string }) => row.event === 'Stop').state).toBe('wired')
+    expect(report.agents[1].events.every((row: { state: string }) => row.state === 'missing')).toBe(true)
+    expect(result.code).toBe(1)
+  })
+
+  it('installs into the harness own file when no --file says otherwise', async () => {
+    const home = await cliFixture()
+    const codexHome = join(home.root, 'moved-codex')
+    const env = { HOME: home.root, CODEX_HOME: codexHome }
+
+    const install = await runHooks(['install', 'codex'], env)
+    const check = await runHooks(['check', 'codex'], env)
+
+    expect(install.code).toBe(0)
+    expect(install.stdout).toContain(join(codexHome, 'hooks.json'))
+    expect(Object.keys(JSON.parse(await readFile(join(codexHome, 'hooks.json'), 'utf8')).hooks))
+      .toEqual(expect.arrayContaining(CODEX_EVENTS))
+    expect(check.code).toBe(0)
+    // Nothing was read or written outside the temporary home (AC5).
+    expect(install.stdout).not.toContain(homedir())
+  })
+
+  it('refuses to install without an agent rather than writing two files at once', async () => {
+    const home = await cliFixture()
+
+    const install = await runHooks(['install'], { HOME: home.root })
+
+    expect(install.code).toBe(2)
+    expect(install.stderr).toContain('hooks install expects one agent')
+    expect(await readdir(home.root)).not.toContain('.claude')
+  })
+
   it('refuses an unknown agent and --file without one', async () => {
     const unknown = await runHooks(['check', 'gemini'])
     const ambiguous = await runHooks(['check', '--file', '/tmp/nothing.json'])
@@ -998,6 +1078,60 @@ describe('bmn hooks install', () => {
       expect(after.hooks[event]).toEqual([{ hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] }])
     }
     expect(install.stdout).toContain('Notification, PostToolUse, UserPromptSubmit, SessionStart, SessionEnd')
+    // Byte level, not just parsed equality: every line the file had, it still has.
+    const beforeText = `${JSON.stringify(before, null, 2)}\n`
+    const afterText = await readFile(path, 'utf8')
+    for (const line of beforeText.split('\n')) expect(afterText).toContain(line)
+    expect(install.stdout.split('\n').filter((line) => /^-[^-]/.test(line))).toEqual([])
+  })
+
+  it.each([
+    ['a hooks value that is not an object', { hooks: 'KEEP' }, '"hooks" is not an object'],
+    ['an event that is not a list', { hooks: { Stop: { foreign: 'KEEP' } } }, '"hooks.Stop" is not a list']
+  ])('refuses to install into a file with %s, and leaves it untouched', async (_label, contents, reason) => {
+    const path = await hookFileFixture(contents)
+    const before = await readFile(path, 'utf8')
+
+    const install = await runHooks(['install', 'claude', '--file', path])
+    const check = await runHooks(['check', 'claude', '--file', path])
+
+    expect(install.code).toBe(1)
+    expect(install.stderr).toContain(reason)
+    expect(await readFile(path, 'utf8')).toBe(before)
+    expect(await backupsOf(path)).toEqual([])
+    // The check says why rather than claiming every event is simply missing.
+    expect(check.code).toBe(1)
+    expect(check.stdout).toContain(reason)
+  })
+
+  it('updates the file a symlink points at, keeps the link and keeps the file mode', async () => {
+    const real = await hookFileFixture({ hooks: {} }, 'real-settings.json')
+    const link = join(dirname(real), 'settings.json')
+    await chmod(real, 0o640)
+    await symlink(real, link)
+
+    const install = await runHooks(['install', 'claude', '--file', link])
+
+    expect(install.code).toBe(0)
+    expect((await lstat(link)).isSymbolicLink()).toBe(true)
+    expect(Object.keys(JSON.parse(await readFile(real, 'utf8')).hooks)).toEqual(CLAUDE_EVENTS)
+    expect((await stat(real)).mode & 0o777).toBe(0o640)
+  })
+
+  it('refuses rather than overwriting a file another writer changed while it was reading', async () => {
+    const path = await hookFileFixture({ hooks: {} })
+
+    // The pause seam holds the installer open between its read and its rename.
+    const installing = runHooks(['install', 'claude', '--file', path], { BMN_HOOKS_TEST_PAUSE_MS: '400' })
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    await writeFile(path, `${JSON.stringify({ hooks: {}, other: 'ADDED BY SOMEBODY ELSE' }, null, 2)}\n`)
+    const install = await installing
+
+    expect(install.code).toBe(1)
+    expect(install.stderr).toContain('changed while bmn was reading it')
+    expect(JSON.parse(await readFile(path, 'utf8')).other).toBe('ADDED BY SOMEBODY ELSE')
+    expect(await backupsOf(path)).toEqual([])
+    expect((await readdir(dirname(path))).filter((entry) => entry.endsWith('.tmp'))).toEqual([])
   })
 
   it('writes a backup first and prints its path with a unified diff of what it added', async () => {
@@ -1106,7 +1240,14 @@ describe('the hook event lists check and hook share', () => {
       Interrupt: {}
     }
 
-    for (const [agent, events] of [['claude', CLAUDE_EVENTS], ['codex', CODEX_EVENTS]] as const) {
+    for (const agent of ['claude', 'codex'] as const) {
+      // The list comes from `hooks check` itself, so the fence breaks if either side drifts.
+      const path = await hookFileFixture({})
+      const reported = JSON.parse((await runHooks(['check', agent, '--file', path, '--json'])).stdout)
+      const events: string[] = reported.agents[0].events
+        .filter((row: { optional: boolean }) => !row.optional)
+        .map((row: { event: string }) => row.event)
+      expect(events.length).toBeGreaterThan(0)
       for (const event of events) {
         fixture.handlers.observeHookEvent.mockClear()
         const before = fixture.handlers.openAttention.mock.calls.length +

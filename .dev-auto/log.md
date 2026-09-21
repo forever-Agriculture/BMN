@@ -1160,3 +1160,121 @@ were for Epic 17. Astra remains the escalation for a serious issue. Release auth
 and `bin/bmn` → `bin/bmn.mjs`), so a sibling module would need a packaging change and would be
 missing from every packaged build until that change shipped. The read/diff/merge functions are pure
 and exercised through the real binary, as the story's verification asks.
+
+## 2026-09-22 — Epic 15 review round: three reviews of `a25ed3f`, one repair wave
+
+Route as the owner asked ("follow normal dev-auto reviews", "GLM/GLM-Flash for EXTRA reviews!"):
+the normal dev-auto strong review by gpt-6-astra/medium, plus GLM-5.3/max and GLM-5.3-Flash/max as
+extra second opinions. All three ran read-only against `a25ed3f`, independently, from the same
+brief. Receipts (git-ignored):
+
+- `.dev-auto/evidence/epic-15/reviews/epic-15-astra.json` sha256 14adf07b8724e9cdb80d3189c497dc11e4f9d12e8317b76ad2892c6744e540d6
+- `.dev-auto/evidence/epic-15/reviews/epic-15-glm53.json` sha256 71ef2a245f0da0524e18d52f9afbe7f53d3abbc8922e10ff3716032e3a8cc1a6 (101 turns, $4.62)
+- `.dev-auto/evidence/epic-15/reviews/epic-15-glmflash.json` sha256 c2b7353989b14b8494def70000a6ade5f24193a91b2a47093df7571871fd66f9 (89 turns, $3.72)
+
+Astra: "Epic 15 is not ready for acceptance at `a25ed3f`" — 5 P1, 2 P2, 7 named test gaps. GLM-5.3:
+8 findings, 3 blocking. GLM-Flash: no blocking finding but "do not accept yet". The three converge
+almost entirely; nothing material was raised by only one of them that the others contradicted.
+
+Both GLM runs noticed the working tree moving under them mid-review and correctly excluded the
+uncommitted repairs from their verdict. Both asked for the same closure: freeze the repairs, commit,
+re-run the whole evidence set against the committed revision, and recheck the delta.
+
+Accepted deviations, all three reviewers agreeing with the handoff's recorded reasoning: exit 2 for
+an unknown agent; no control-socket method for the notice; the hooks code living inside `bin/bmn`.
+
+Two reviewer notes were rejected rather than actioned:
+- GLM-Flash "install can leave backup litter after a failed write": the backup is the recovery copy;
+  deleting it on failure is the one thing that could lose the owner's file. Kept deliberately.
+- GLM-Flash "a warning when install severs a symlink": no longer applicable — the symlink is now
+  resolved and followed, so nothing is severed to warn about.
+
+One bookkeeping correction GLM-Flash caught: the handoff said "13 RED" for `fences-15-2.log`; the
+log records 12 RED, 2 GREEN and 1 NOTE across 15 probes. The two GREENs were both honest and already
+described: the Codex trust-line fence that was re-probed to RED after its assertion was fixed, and
+the atomic-write claim recorded as structurally untestable at the unit layer. Corrected in the handoff.
+
+One defect none of the three reviewers found, caught by a test written to close GLM-5.3's "the
+no-agent path has no unit test" gap: `bmn hooks install` failed with ENOENT when the harness's config
+directory does not exist yet — the fresh-machine case story 15.2 exists for. Every existing test
+passed `--file` into a directory that already existed. Fixed with `mkdirSync(dirname(target))` and
+fenced.
+
+While closing it, `hookFilePath` was also taught `CLAUDE_CONFIG_DIR` and `CODEX_HOME`: both harnesses
+let the owner move their config directory, `conversation-binding.ts:924` and `bmn:1081` already
+follow them there, and writing hooks into a file the harness never reads would be a silent no-op.
+Documented in `docs/agent-control.md`.
+
+### Every material finding, and where it was closed
+
+Consolidated across the three reviews (they overlap heavily; the same defect is listed once with all
+three reviewers' labels). Every one is closed with a test and, where the claim is a guard, a
+mutation fence that goes RED when the guard is removed.
+
+1. Suppression evictable from the bounded hook log (Astra P1-1, GLM53 2, Flash M1) — CLOSED.
+   `hookReporters` keeps the fact apart from the 30-entry diagnostic log. Test "keeps suppressing
+   after the diagnostic log has been filled with suppressed notices"; fence RED.
+2. A coalesced line re-notified the desktop, un-saw the row and lost the pending Telegram page
+   (Astra P1-2, GLM53 1) — CLOSED. New `appendAttentionBody` store call updates the body alone, so
+   the revision and `seen_at` stand still. Test asserts same revision and kept `seenAt`; fence RED.
+3. Concurrent notices bypassed the per-session window (Astra P1-3, GLM53 7, Flash M2) — CLOSED.
+   `noticeOperations` serializes per session. Test "opens one row for two notices that arrive
+   together"; fence RED.
+4. Install discarded malformed existing configuration (Astra P1-4, GLM53 6, Flash Q1) — CLOSED.
+   `unusableShape` refuses and says which key; two tests assert unchanged bytes and no backup; fence RED.
+5. A concurrent writer's changes could be lost (Astra P1-5, GLM53 7) — CLOSED. One read, and a
+   `verify` step before the rename that refuses with REVISION_CONFLICT. Test drives it
+   deterministically through the new `BMN_HOOKS_TEST_PAUSE_MS` seam; fence RED.
+6. Rename replaced a symlink, and the mode was not preserved (Astra P2-6, GLM53 4 and 5, Flash
+   non-blocking) — CLOSED. `realpathSync` before the write, `chmodSync` on the temp file. Test
+   asserts the link survives, the target is updated and mode 640 is kept; two fences RED.
+7. Hook recognition had false positives and false negatives (Astra P2-7, GLM53 8, Flash Q2) — CLOSED.
+   `runsHook` tokenizes the command and requires `type === 'command'`. Eleven recognition tests cover
+   every case the reviewers named, in both directions; three fences RED.
+8. The Electron probe read a field that does not exist, so AC5's "never refits" was asserted nowhere
+   (Astra gap, GLM53 3) — CLOSED, and made real rather than renamed: the harness now emits a second
+   notice on demand, and the probe snapshots the terminal on both sides of it. Receipt reads
+   `aroundSecondNotice: {sameSize: true, sameElement: true, refits: 0, inputEvents: 0}`.
+9. The drift test duplicated the event arrays (Astra gap, Flash gap) — CLOSED. It now reads the list
+   from `bmn hooks check --json`, so a new event added only to `HOOK_FILES` is still driven.
+10. Foreign-entry preservation was asserted on parsed equality, not bytes (Astra gap) — CLOSED.
+    Line-by-line byte assertions plus "the diff removed nothing".
+11. The "session token" test checked constants, not socket authorization (Astra gap, Flash gap) —
+    CLOSED. The three `osc:*` origins are in the socket's origin-drop table, driven by a real session
+    token and asserted never to reach the handler, plus a new test that there is no socket method for
+    a terminal notice under either credential.
+12. The fixed (not rolling) 2 s window was unpinned (Flash gap) — CLOSED. Test drives a trickle
+    across the boundary; fence RED on a rolling window.
+13. The no-agent default-path branch was untested (GLM53 AC1 note) — CLOSED. Two tests under a
+    temporary HOME. These are what found the ENOENT defect above.
+14. A stale coalescing entry could absorb a restarted program's first notice (GLM53 edge) — CLOSED.
+    The window is scoped to the incarnation; test; fence RED.
+15. `terminal` became claimable by a session token as hook provenance (Astra Q5, GLM53 5, Flash Q5) —
+    All three judged it non-escalating and acceptable; Astra alone asked to separate the labels.
+    Actioned anyway, because it is cheap and Astra is right: `terminal` is the window's own word for
+    what it read out of a session's output, so nothing on the socket may wear it. The socket's
+    agent list is back to the real harnesses, `acceptableOrigin` accepts a `hook:` origin only for
+    one of them, and two socket tests pin both refusals. The internal path is untouched, and the
+    Electron receipt still shows the suppressed `{agent: terminal, event: osc:9, effects: []}` row.
+
+Also fixed while in there, not from a review: `hookReporters` and `terminalNotices` are now pruned
+with `hookEvents` when a session is deleted, instead of keeping one entry per dead session forever.
+
+### What each Epic 15 commit carried (moved out of the handoff to keep it under the hook's limit)
+
+- 15.2 in `ac400aa`: `HOOK_FILES` (the one event-list constant), `hookEntryState`, `readHookFile`,
+  `checkHooks`, `installHooks`, `jsonIndent`, `commonLines`/`unifiedDiff`, `writeAtomically` and
+  `runHooks` in `apps/desktop/bin/bmn`; `USAGE`/`HOOKS_USAGE`; `docs/agent-control.md` ("Wiring the
+  hooks", the exit-status sentence, the command block) and the README agent-control bullet.
+- 15.1 in `a25ed3f`: `terminal-notice.ts` parser plus its test file; `registerOscHandler` for 9/99/777
+  in `session-terminal.tsx`; `reportTerminalNotice` in preload and `bridge.d.ts`;
+  `aiterm:attention:terminal-notice` in `companion-ipc.ts`; `attentionTerminalNotice` in
+  `constants.ts`; `TERMINAL_NOTICE_*`, `terminalNoticeOrigin`, the three `osc:*` origins, `terminal`
+  in `HOOK_EVENT_AGENTS` and `HookEventRecord.incarnationId` in `companion.ts`; `terminalNotice`,
+  `openTerminalNotice` and `observeTerminalNotice` plus the host-route case in
+  `companion-service.ts`; `incarnationId` on `observeHookEvent` in `control-server.ts`; `originName`
+  words in `session-presentation.ts`; the `terminalNotice` self-test phase in `main/index.ts` and its
+  receipt check in `electron-self-test.mjs`; `docs/agent-control.md` "Notifications from any program".
+- The repair wave: see the disposition list above. `openTerminalNotice` is gone (its read-then-write
+  was the non-atomic race Astra found); `openAttention`'s `silent` flag is gone with it, since
+  nothing now re-opens a row to add a line to it.

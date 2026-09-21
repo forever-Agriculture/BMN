@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // MODULE: bmn - command-line client for the BMN control socket (one connection per invocation)
 import { randomUUID } from 'node:crypto'
-import { copyFileSync, existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync
+} from 'node:fs'
 import { createConnection } from 'node:net'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
@@ -630,8 +632,14 @@ const HOOK_FILES = {
 /** The entry docs/agent-control.md documents, and the only one `hooks install` ever writes. */
 const HOOK_ENTRY_TIMEOUT = 5
 
+/**
+ * The file that harness actually reads. Both harnesses let the owner move their config directory,
+ * and BMN follows them there rather than writing a file the harness will never look at.
+ */
 function hookFilePath(agent) {
-  return join(homedir(), ...HOOK_FILES[agent].path)
+  const [directory, ...rest] = HOOK_FILES[agent].path
+  const moved = agent === 'claude' ? process.env.CLAUDE_CONFIG_DIR : process.env.CODEX_HOME
+  return join(moved || join(homedir(), directory), ...rest)
 }
 
 function hookEntryCommand(agent) {
@@ -642,9 +650,66 @@ function hookEntry(agent) {
   return { type: 'command', timeout: HOOK_ENTRY_TIMEOUT, command: hookEntryCommand(agent) }
 }
 
-/** `bmn hook <agent>` inside a command, however the rest of the line is spelled. */
-function mentionsHook(command, agent) {
-  return typeof command === 'string' && new RegExp(`(?:^|[^-\\w])bmn\\s+hook\\s+${agent}(?![-\\w])`).test(command)
+/**
+ * The words of one shell command, split on the separators that start a new command and with one
+ * level of quoting removed. It is deliberately small: it exists to decide whether a hook entry
+ * *runs* `bmn hook <agent>`, and anything it cannot read confidently it reads as "not ours".
+ */
+function commandWords(segment) {
+  const words = []
+  let word = ''
+  let quote = ''
+  let started = false
+  for (let index = 0; index < segment.length; index += 1) {
+    const character = segment[index]
+    if (quote) {
+      if (character === quote) quote = ''
+      else word += character
+      started = true
+      continue
+    }
+    if (character === '"' || character === "'") {
+      quote = character
+      started = true
+      continue
+    }
+    if (character === '\\' && index + 1 < segment.length) {
+      word += segment[index + 1]
+      index += 1
+      started = true
+      continue
+    }
+    if (/\s/.test(character)) {
+      if (started) words.push(word)
+      word = ''
+      started = false
+      continue
+    }
+    word += character
+    started = true
+  }
+  if (started) words.push(word)
+  return words
+}
+
+/**
+ * True when this command actually runs `bmn hook <agent>`: the agent's own hook file is full of
+ * wrappers and guards, so the test is per command, not per line. `command -v bmn`, `echo bmn hook
+ * claude` and a different program whose name merely ends in `bmn` are not it; `/usr/bin/bmn`,
+ * `"bmn"` and `bmn 'hook' claude` are.
+ */
+function runsHook(command, agent) {
+  if (typeof command !== 'string') return false
+  for (const segment of command.split(/;|\n|&&|\|\||&|\|/)) {
+    // An entry may start with VAR=value assignments or `env`; neither changes which program runs.
+    const words = commandWords(segment).filter((word) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word))
+    const start = words[0] === 'env' ? 1 : 0
+    const program = words[start]
+    if (program === undefined) continue
+    const name = program.slice(program.lastIndexOf('/') + 1)
+    if (name === 'bmn' && words[start + 1] === 'hook' && words[start + 2] === agent) return true
+  }
+  return false
 }
 
 /**
@@ -659,7 +724,8 @@ function hookEventState(groups, agent) {
     if (!isObject(group)) continue
     const entries = Array.isArray(group.hooks) ? group.hooks : []
     for (const entry of entries) {
-      if (!isObject(entry) || !mentionsHook(entry.command, agent)) continue
+      // Only a command entry runs anything; another hook type that names bmn still never calls it.
+      if (!isObject(entry) || entry.type !== 'command' || !runsHook(entry.command, agent)) continue
       if (entry.command === hookEntryCommand(agent)) return 'wired'
       mentioned = true
     }
@@ -667,8 +733,12 @@ function hookEventState(groups, agent) {
   return mentioned ? 'wired (older wording)' : 'missing'
 }
 
-/** A hook file as the commands see it: its text, its parsed object and why it could not be used. */
-function readHookFile(path) {
+/**
+ * A hook file as the commands see it: its text, its parsed object and why it could not be used.
+ * A file BMN cannot merge into safely - `hooks` that is not an object, an event that is not a list
+ * of groups - is `unusable`, never something to overwrite: it is somebody's configuration.
+ */
+function readHookFile(path, agent) {
   let text
   try {
     text = readFileSync(path, 'utf8')
@@ -683,12 +753,25 @@ function readHookFile(path) {
     return { state: 'unparsable', detail: error.message, text, data: {} }
   }
   if (!isObject(data)) return { state: 'unparsable', detail: 'the file is not a JSON object', text, data: {} }
+  const unusable = unusableShape(data, agent)
+  if (unusable !== undefined) return { state: 'unusable', detail: unusable, text, data }
   return { state: 'read', text, data }
 }
 
-/** One agent's report: every expected event with its state, and whether anything is missing. */
-function checkHooks(agent, path) {
-  const file = readHookFile(path)
+/** The one shape rule: what `hooks` and each expected event must be for a merge to add and remove nothing. */
+function unusableShape(data, agent) {
+  if (data.hooks !== undefined && !isObject(data.hooks)) return '"hooks" is not an object'
+  if (!isObject(data.hooks)) return undefined
+  const spec = HOOK_FILES[agent]
+  for (const event of [...spec.events, ...spec.optional]) {
+    const groups = data.hooks[event]
+    if (groups !== undefined && !Array.isArray(groups)) return `"hooks.${event}" is not a list`
+  }
+  return undefined
+}
+
+/** One agent's report, from one already-read snapshot so a check and an install cannot disagree. */
+function checkHooks(agent, path, file = readHookFile(path, agent)) {
   const spec = HOOK_FILES[agent]
   const hooks = isObject(file.data.hooks) ? file.data.hooks : {}
   const events = [...spec.events, ...spec.optional].map((event) => ({
@@ -791,17 +874,36 @@ function unifiedDiff(beforeText, afterText, path) {
   return lines.length === 2 ? '' : lines.join('\n')
 }
 
-/** Temp file in the same folder, then rename: a crash mid-write leaves the old file intact. */
-function writeAtomically(path, text) {
-  const temporary = join(dirname(path), `.${basename(path)}.bmn-${process.pid}.tmp`)
-  writeFileSync(temporary, text, { mode: 0o600 })
+/**
+ * Temp file in the same folder, then rename: a crash mid-write leaves the old file intact. The
+ * rename replaces whatever `path` names, so a symlinked settings file is resolved first and the
+ * link itself survives, still pointing at the file that was updated. `verify` runs with the temp
+ * written and the original still in place: it is the last chance to refuse rather than replace.
+ */
+function writeAtomically(path, text, verify) {
+  const target = existsSync(path) ? realpathSync(path) : path
+  const temporary = join(dirname(target), `.${basename(target)}.bmn-${process.pid}.tmp`)
   try {
-    const mode = statSync(path).mode & 0o777
-    writeFileSync(temporary, text, { mode })
-  } catch {
-    // A new file keeps the restrictive mode above; a hook file names the owner's own machine.
+    // A fresh machine has no ~/.codex yet, and that is the machine this command is for.
+    mkdirSync(dirname(target), { recursive: true })
+    writeFileSync(temporary, text, { mode: 0o600 })
+    try {
+      // chmod, not a second write: the mode option applies only when the file is created.
+      chmodSync(temporary, statSync(target).mode & 0o777)
+    } catch {
+      // A new file keeps the restrictive mode above; a hook file names the owner's own machine.
+    }
+    verify?.(target)
+    renameSync(temporary, target)
+  } catch (error) {
+    try {
+      unlinkSync(temporary)
+    } catch {
+      // The temp file is already gone, or was never created.
+    }
+    throw error
   }
-  renameSync(temporary, path)
+  return target
 }
 
 function hookAgentsFor(agent) {
@@ -817,6 +919,7 @@ function describeHookCheck(report) {
   if (report.state === 'missing') lines.push('  the file does not exist; every event is missing')
   if (report.state === 'unreadable') lines.push(`  cannot read the file (${report.detail})`)
   if (report.state === 'unparsable') lines.push(`  the file is not valid JSON (${report.detail})`)
+  if (report.state === 'unusable') lines.push(`  BMN cannot add to this file: ${report.detail}`)
   for (const row of report.events) {
     const optional = row.optional ? ' (optional)' : ''
     lines.push(`  ${row.event.padEnd(18)}${row.state}${optional}`)
@@ -880,16 +983,29 @@ function checkHooksCommand(agents, pathFor, asJson) {
   return ok ? 0 : 1
 }
 
+/** The bytes on disk now, or null when the file is gone; used to refuse an overwrite of somebody else's edit. */
+function currentText(path) {
+  try {
+    return readFileSync(path, 'utf8')
+  } catch (error) {
+    if (error.code === 'ENOENT') return null
+    throw error
+  }
+}
+
 function installHooksCommand(agent, path, asJson) {
-  const file = readHookFile(path)
-  if (file.state === 'unreadable' || file.state === 'unparsable') {
+  // One read: the report, the merge and the conflict check all describe the same bytes.
+  const file = readHookFile(path, agent)
+  if (file.state !== 'read' && file.state !== 'missing') {
     const reason = file.state === 'unparsable'
       ? `${path} is not valid JSON (${file.detail}); it was left untouched`
-      : `cannot read ${path} (${file.detail})`
+      : file.state === 'unusable'
+        ? `${path} is not a hook file BMN can add to: ${file.detail}; it was left untouched`
+        : `cannot read ${path} (${file.detail})`
     process.stderr.write(`bmn: ${reason}\n`)
     return 1
   }
-  const report = checkHooks(agent, path)
+  const report = checkHooks(agent, path, file)
   if (report.missing.length === 0) {
     const message = `Nothing to do: every hook BMN expects is already in ${path}.`
     process.stdout.write(`${asJson ? JSON.stringify({ installed: [], backup: null, file: path }, null, 2) : message}\n`)
@@ -897,14 +1013,30 @@ function installHooksCommand(agent, path, asJson) {
   }
   const indent = jsonIndent(file.text)
   const nextText = `${JSON.stringify(installHooks(agent, file.data, report.missing), null, indent)}\n`
+  const unchanged = () => {
+    // A test seam, like BMN_PROC_ROOT: it holds the installer open so another writer can get in
+    // between the read and the rename, which is the only way to exercise the conflict refusal.
+    const pause = Number(process.env.BMN_HOOKS_TEST_PAUSE_MS ?? 0)
+    if (pause > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, pause)
+    const now = currentText(path)
+    if ((now ?? '') !== file.text) {
+      throw new CliError('REVISION_CONFLICT', `${path} changed while bmn was reading it; nothing was written`)
+    }
+  }
   let backup = null
   try {
+    unchanged()
     if (file.state === 'read') {
       backup = `${path}.bmn-backup-${new Date().toISOString()}`
       copyFileSync(path, backup)
     }
-    writeAtomically(path, nextText)
+    // Checked once more with the replacement already staged, so the window is as small as a rename.
+    writeAtomically(path, nextText, unchanged)
   } catch (error) {
+    if (error instanceof CliError) {
+      process.stderr.write(`bmn: ${error.message}\n`)
+      return 1
+    }
     process.stderr.write(`bmn: cannot write ${path} (${error.code ?? error.message})\n`)
     return 1
   }

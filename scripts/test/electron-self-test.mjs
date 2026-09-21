@@ -302,7 +302,14 @@ const receiptContract = [
       JSON.stringify(receipt.terminalNotice?.hookedSessionEvents?.filter((event) => event.agent === 'terminal')) ===
         JSON.stringify([{ agent: 'terminal', event: 'osc:9', effects: [] }]) &&
       receipt.terminalNotice?.resolvedBy === 'input' &&
-      receipt.terminalNotice?.resolvedState !== 'open'
+      receipt.terminalNotice?.resolvedState !== 'open' &&
+      // A second notice into a live pane: a row opened, and the terminal itself was left alone.
+      receipt.terminalNotice?.aroundSecondNotice?.title === 'BMN self-test second notice' &&
+      receipt.terminalNotice?.aroundSecondNotice?.openedBy === 'osc:9' &&
+      receipt.terminalNotice?.aroundSecondNotice?.sameSize === true &&
+      receipt.terminalNotice?.aroundSecondNotice?.sameElement === true &&
+      receipt.terminalNotice?.aroundSecondNotice?.refits === 0 &&
+      receipt.terminalNotice?.aroundSecondNotice?.inputEvents === 0
   ],
   [
     'conversationFromHook',

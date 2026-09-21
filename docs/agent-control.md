@@ -181,7 +181,14 @@ Code or Codex update rewrites your settings file.
 `install` copies the file to `<file>.bmn-backup-<timestamp>`, adds the missing entries next to the
 hooks already registered for that event, writes the file atomically and prints a unified diff. It
 never removes, reorders or rewrites an entry, including one with the older wording, and writes
-nothing when nothing is missing. A file that is not valid JSON is reported and left untouched.
+nothing when nothing is missing. A file that is not valid JSON is reported and left untouched, as is
+one whose `hooks` is not an object or whose event is not a list: BMN says what it cannot add to
+rather than replacing somebody's configuration. If the file changed while `install` was reading it,
+nothing is written and it says so; run it again.
+
+Both commands read the file each harness actually reads: `~/.claude/settings.json` and
+`~/.codex/hooks.json`, or the same file under `CLAUDE_CONFIG_DIR` or `CODEX_HOME` when you have
+moved that directory. `--file PATH` replaces it, for tests.
 
 Both commands say what is **configured**. Neither says that a hook has ever fired; the session's
 **Hook events…** list is what shows that.

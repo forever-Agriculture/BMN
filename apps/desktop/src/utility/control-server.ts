@@ -171,7 +171,11 @@ const PROGRESS_STATES: readonly ProgressState[] = [
   'running', 'waiting', 'blocked', 'claimed-done', 'verified', 'failed', 'unknown'
 ]
 const ATTENTION_KINDS: readonly AttentionKind[] = ['question', 'permission', 'review', 'notice']
-const HOOK_EVENT_AGENTS: readonly HookEventAgent[] = ['claude', 'codex', 'terminal']
+/**
+ * The harnesses a session token may report as. `terminal` is BMN's own label for a notification the
+ * window read out of a session's output, so nothing on the socket may wear it.
+ */
+const HOOK_EVENT_AGENTS: readonly HookEventAgent[] = ['claude', 'codex']
 const HOOK_EVENT_EFFECTS: readonly HookEventEffect[] = ['opened', 'withdrew', 'answered']
 const MAX_HOOK_EVENT_EFFECTS = 8
 const CONVERSATION_AGENT_CLIS: readonly ConversationAgentCli[] = ['claude', 'codex']
@@ -291,9 +295,12 @@ function requireEnum<T extends string>(params: Params, key: string, allowed: rea
  */
 function acceptableOrigin(value: unknown, scope: ControlScope): boolean {
   if (typeof value !== 'string' || !isAttentionOrigin(value)) return false
-  return scope.kind === 'owner' ||
-    value.startsWith('hook:') ||
-    (AGENT_ATTENTION_ORIGINS as readonly string[]).includes(value)
+  if (scope.kind === 'owner') return true
+  // ...and only as a harness it could actually be running, never as the window's own label.
+  if (value.startsWith('hook:')) {
+    return HOOK_EVENT_AGENTS.some((agent) => value.startsWith(`hook:${agent}:`))
+  }
+  return (AGENT_ATTENTION_ORIGINS as readonly string[]).includes(value)
 }
 
 /** One dropped origin per caller per this long reaches the refusal log; the reason never varies. */
