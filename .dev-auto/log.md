@@ -1278,3 +1278,83 @@ with `hookEvents` when a session is deleted, instead of keeping one entry per de
 - The repair wave: see the disposition list above. `openTerminalNotice` is gone (its read-then-write
   was the non-atomic race Astra found); `openAttention`'s `silent` flag is gone with it, since
   nothing now re-opens a row to add a line to it.
+
+## 2026-09-22 — Astra's focused recheck of `8392017`, and the second repair wave
+
+Receipt: `.dev-auto/evidence/epic-15/reviews/epic-15-recheck-astra.md`. Verdict: **"Epic 15 is not
+acceptable at `8392017`."** Findings 1, 2, 3 and 4 closed; 5 partially closed; 6 closed for existing
+targets but not dangling ones; 7 not closed.
+
+Every one of Astra's concrete claims was reproduced against the real binary before being acted on,
+rather than taken on trust. All six of its tokenizer cases reproduced exactly as reported.
+
+**Finding 7 — the tokenizer was worse than I thought.** My `runsHook` split on separators *before*
+reading quotes, and stripped `VAR=`-shaped words from every argument position, not just the leading
+ones. Reproduced: `bmn X=1 hook claude` and `echo 'example; bmn hook claude; end'` both read as
+wired; `command bmn hook claude`, `timeout 5 bmn hook claude`, `env -i bmn hook claude` and
+`(bmn hook claude)` all read as missing.
+
+Rewritten rather than patched. `commandSegments` now tokenizes quote-aware and only then splits on
+the separators it finds outside quotes, and `runsHook` looks for `bmn`, `hook`, `<agent>` as three
+*consecutive words of one command*. That single rule replaced the whole wrapper problem: a wrapper
+is just words in front, so `timeout`, `command`, `env -i`, `nohup` and a subshell all work without
+BMN knowing any of them, while `bmn X=1 hook claude` fails because the subcommand is not `hook`, and
+quoted text stays one word so an `echo` of the command is not a command. The only special case left
+is a four-name list of commands that print their arguments. All 15 recognition cases now read
+correctly, including the six Astra named and the six the first round fixed; every one is pinned.
+
+**Finding 6 — dangling symlinks.** `existsSync` follows a link, so a link to a file that does not
+exist yet read as "missing" and the rename replaced the link. A dotfiles repository that links a
+settings file it writes later is exactly that case. `linkTarget` now walks `readlinkSync` itself,
+which does not care whether the end of the link exists. Verified by hand and pinned.
+
+**A gap in the new queue that no earlier review had seen.** Astra found that the incarnation is
+checked at the door, before the notice is queued, and `terminalNoticeLocked` never checked again — so
+a notice could wait behind another for as long as that one took and then run for a process that had
+already gone. Rechecked inside the lock now, with a test that holds the first notice open and
+replaces the process while the second waits.
+
+**Finding 5 is not closed, and cannot be.** Astra is right: verification and rename are separate
+operations, so a writer that saves in between still wins. This is not a bug I can fix. There is no
+POSIX operation for "rename only if the target still holds these bytes", and closing it would need
+the other writer to take a lock — neither Claude Code nor Codex offers one. What the repair does is
+narrow the window from the whole install to the gap between two adjacent syscalls, refuse the common
+case (an editor saving while `install` reads), and keep the backup. Recorded as a rejected finding
+with that reasoning rather than left open or pretended closed, and said plainly in
+`docs/agent-control.md` so the owner knows to keep the harness quiet during an install.
+
+**Test quality.** Astra was right that four of the new tests would also pass against the unrepaired
+code. Two are now real: byte preservation is asserted against a fixture written by hand with a
+four-space indent, keys in an order no writer would choose and a value carrying a tab, an escaped
+quote and a non-ASCII letter (the old assertion rebuilt "before" with `JSON.stringify`, so both
+sides used the same writer and it proved nothing); and the conflict test is now a handshake — the
+installer writes a marker when it reaches its check, the other writer goes then, and only then is it
+let go — instead of a 150 ms sleep. The Electron element check is now identity against the element
+captured before the notice, not "an element is there and connected". Coalescing now counts actual
+pages by replacing `pager.opened`, so "no second interruption" is measured rather than inferred.
+The two Astra called merely-extra coverage (the fixed window, the literal `osc:*` socket refusal)
+are kept as coverage; they are honest about being that.
+
+Astra also asked that the `CLAUDE_CONFIG_DIR`/`CODEX_HOME` support not be described as confining
+writes to the home directory — it does not, since a relative or `..` path is honoured. Nothing in
+the docs or the handoff claimed that, and nothing now does.
+
+### Process failure: two mutation-fence runs overlapped and one left a mutation in the tree
+
+While re-running the repair fences I started a second batch believing the first had died, because its
+log was empty. It had not died — Python was buffering its output through the redirect. Two fence
+runners were then mutating `apps/desktop/bin/bmn` at once, each holding its own idea of the
+original. Stopping one of them left its mutation in place: `runsHook` was sitting in the working
+tree with `programName(...).endsWith('bmn')` instead of `!== 'bmn'` — the exact false positive Astra
+had just made me fix.
+
+Caught by checking rather than assuming: every fence spec's `old` and `new` string was searched for
+in the tree, which found both the missing original and the present mutation. Restored, verified the
+recognition cases behave correctly again, and confirmed no other anchor had moved.
+
+Two changes so it cannot recur. `fence.py` now traps SIGTERM, SIGINT and SIGHUP and restores every
+mutated file before exiting, so a killed run leaves the tree as it found it. And fence runs go one
+at a time, with `python3 -u`, so an empty log is never mistaken for a dead process again.
+
+No committed revision was affected: this was entirely in the working tree, and the fence results
+from the overlapping runs were discarded and re-run from scratch rather than reported.

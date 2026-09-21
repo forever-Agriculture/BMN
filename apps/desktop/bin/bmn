@@ -2,7 +2,7 @@
 // MODULE: bmn - command-line client for the BMN control socket (one connection per invocation)
 import { randomUUID } from 'node:crypto'
 import {
-  chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync
+  chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readlinkSync, renameSync, statSync, unlinkSync, writeFileSync
 } from 'node:fs'
 import { createConnection } from 'node:net'
 import { homedir } from 'node:os'
@@ -651,19 +651,32 @@ function hookEntry(agent) {
 }
 
 /**
- * The words of one shell command, split on the separators that start a new command and with one
- * level of quoting removed. It is deliberately small: it exists to decide whether a hook entry
- * *runs* `bmn hook <agent>`, and anything it cannot read confidently it reads as "not ours".
+ * The commands in one shell line, each as its words with one level of quoting removed. Quoting is
+ * read before the separators are, so `echo 'a; bmn hook claude'` stays one word of text rather than
+ * becoming a command of its own. It is deliberately small: it exists only to decide whether a hook
+ * entry runs `bmn hook <agent>`, and what it cannot read confidently it reads as "not ours".
  */
-function commandWords(segment) {
-  const words = []
+function commandSegments(command) {
+  const segments = []
+  let words = []
   let word = ''
-  let quote = ''
   let started = false
-  for (let index = 0; index < segment.length; index += 1) {
-    const character = segment[index]
+  let quote = ''
+  const endWord = () => {
+    if (started) words.push(word)
+    word = ''
+    started = false
+  }
+  const endSegment = () => {
+    endWord()
+    if (words.length > 0) segments.push(words)
+    words = []
+  }
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index]
     if (quote) {
       if (character === quote) quote = ''
+      else if (quote === '"' && character === '\\' && index + 1 < command.length) word += command[++index]
       else word += character
       started = true
       continue
@@ -673,50 +686,59 @@ function commandWords(segment) {
       started = true
       continue
     }
-    if (character === '\\' && index + 1 < segment.length) {
-      word += segment[index + 1]
-      index += 1
+    if (character === '\\' && index + 1 < command.length) {
+      word += command[++index]
       started = true
       continue
     }
+    // The separators that end one command and start the next, outside quotes only.
+    if (character === ';' || character === '\n' || character === '&' || character === '|') {
+      endSegment()
+      continue
+    }
     if (/\s/.test(character)) {
-      if (started) words.push(word)
-      word = ''
-      started = false
+      endWord()
       continue
     }
     word += character
     started = true
   }
-  if (started) words.push(word)
-  return words
+  endSegment()
+  return segments
 }
 
+/** Shell grouping around a word; it changes nothing about which program runs. */
+function bareWord(word) {
+  return word.replace(/^[({]+/, '').replace(/[)}]+$/, '')
+}
+
+/** The last path component, so `/usr/bin/bmn` is bmn and `other.bmn` is not. */
+function programName(word) {
+  const bare = bareWord(word)
+  return bare.slice(bare.lastIndexOf('/') + 1)
+}
+
+/** Commands that print their arguments rather than running them: what follows is text, not a call. */
+const PRINTING_COMMANDS = ['echo', 'printf', ':', 'true', 'false']
+
 /**
- * True when this command actually runs `bmn hook <agent>`: the agent's own hook file is full of
- * wrappers and guards, so the test is per command, not per line. `command -v bmn`, `echo bmn hook
- * claude` and a different program whose name merely ends in `bmn` are not it; `/usr/bin/bmn`,
- * `"bmn"` and `bmn 'hook' claude` are.
+ * Whether this entry's command runs `bmn hook <agent>`. The three words must be consecutive words of
+ * one command, which lets a wrapper run it (`timeout 5 bmn hook claude`, `command bmn hook claude`,
+ * `env -i bmn hook claude`) without BMN having to know every wrapper there is, and keeps
+ * `bmn X=1 hook claude` out because there the subcommand is not `hook`.
  */
 function runsHook(command, agent) {
   if (typeof command !== 'string') return false
-  for (const segment of command.split(/;|\n|&&|\|\||&|\|/)) {
-    // An entry may start with VAR=value assignments or `env`; neither changes which program runs.
-    const words = commandWords(segment).filter((word) => !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word))
-    const start = words[0] === 'env' ? 1 : 0
-    const program = words[start]
-    if (program === undefined) continue
-    const name = program.slice(program.lastIndexOf('/') + 1)
-    if (name === 'bmn' && words[start + 1] === 'hook' && words[start + 2] === agent) return true
+  for (const words of commandSegments(command)) {
+    if (PRINTING_COMMANDS.includes(programName(words[0]))) continue
+    for (let index = 0; index + 2 < words.length; index += 1) {
+      if (programName(words[index]) !== 'bmn') continue
+      if (bareWord(words[index + 1]) === 'hook' && bareWord(words[index + 2]) === agent) return true
+    }
   }
   return false
 }
 
-/**
- * How one event reads in the file: `wired` for the documented command, `wired (older wording)` for a
- * `bmn hook <agent>` spelled differently (the owner's own files still say `AITERM_CONTROL_SOCKET`,
- * which bmn still reads), `missing` when no entry mentions it at all.
- */
 function hookEventState(groups, agent) {
   if (!Array.isArray(groups)) return 'missing'
   let mentioned = false
@@ -880,8 +902,28 @@ function unifiedDiff(beforeText, afterText, path) {
  * link itself survives, still pointing at the file that was updated. `verify` runs with the temp
  * written and the original still in place: it is the last chance to refuse rather than replace.
  */
+/**
+ * The file at the end of a symlink, followed even when it does not exist yet: a dotfiles repository
+ * often links a settings file that is created later, and the harness reads the end of the link, so
+ * that is the file BMN must write rather than the link it would otherwise replace.
+ */
+function linkTarget(path) {
+  let current = path
+  for (let hops = 0; hops < 10; hops += 1) {
+    let link
+    try {
+      link = readlinkSync(current)
+    } catch {
+      // Not a symlink, or nothing there at all: either way this is the file to write.
+      return current
+    }
+    current = resolve(dirname(current), link)
+  }
+  return current
+}
+
 function writeAtomically(path, text, verify) {
-  const target = existsSync(path) ? realpathSync(path) : path
+  const target = linkTarget(path)
   const temporary = join(dirname(target), `.${basename(target)}.bmn-${process.pid}.tmp`)
   try {
     // A fresh machine has no ~/.codex yet, and that is the machine this command is for.
@@ -1015,9 +1057,16 @@ function installHooksCommand(agent, path, asJson) {
   const nextText = `${JSON.stringify(installHooks(agent, file.data, report.missing), null, indent)}\n`
   const unchanged = () => {
     // A test seam, like BMN_PROC_ROOT: it holds the installer open so another writer can get in
-    // between the read and the rename, which is the only way to exercise the conflict refusal.
-    const pause = Number(process.env.BMN_HOOKS_TEST_PAUSE_MS ?? 0)
-    if (pause > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, pause)
+    // between the read and the rename, which is the only way to exercise the conflict refusal. The
+    // hold is a handshake, not a timer: it says it is waiting, then waits to be let go.
+    const gate = process.env.BMN_HOOKS_TEST_GATE
+    if (gate) {
+      writeFileSync(`${gate}.waiting`, '')
+      const deadline = Date.now() + 10_000
+      while (!existsSync(gate) && Date.now() < deadline) {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5)
+      }
+    }
     const now = currentText(path)
     if ((now ?? '') !== file.text) {
       throw new CliError('REVISION_CONFLICT', `${path} changed while bmn was reading it; nothing was written`)

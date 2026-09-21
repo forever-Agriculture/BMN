@@ -1,5 +1,6 @@
 // MODULE: control-cli.test.ts - the bmn CLI drives a real control server with truthful output and exit codes
 import { execFile } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
@@ -976,7 +977,15 @@ describe('bmn hooks check', () => {
     ['a different agent argument', 'bmn hook claude.extra', 'missing'],
     ['the words echoed, not run', 'echo bmn hook claude', 'missing'],
     ['only a lookup of bmn', 'command -v bmn >/dev/null', 'missing'],
-    ['another agent', 'bmn hook codex', 'missing']
+    ['another agent', 'bmn hook codex', 'missing'],
+    // A wrapper still runs it: three consecutive words of one command are what count.
+    ['a wrapper that runs it', 'timeout 5 bmn hook claude', 'wired (older wording)'],
+    ['the command builtin', 'command bmn hook claude', 'wired (older wording)'],
+    ['env with its own options', 'env -i bmn hook claude', 'wired (older wording)'],
+    ['a subshell', '(bmn hook claude)', 'wired (older wording)'],
+    // ...and these do not run it, however much they look like it.
+    ['an assignment between bmn and hook', 'bmn X=1 hook claude', 'missing'],
+    ['the words quoted inside an echo', "echo 'example; bmn hook claude; end'", 'missing']
   ])('reads %s as %s', async (_label, command, state) => {
     const path = await hookFileFixture({ hooks: { Stop: [entryGroup(command)] } })
 
@@ -1078,11 +1087,48 @@ describe('bmn hooks install', () => {
       expect(after.hooks[event]).toEqual([{ hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] }])
     }
     expect(install.stdout).toContain('Notification, PostToolUse, UserPromptSubmit, SessionStart, SessionEnd')
-    // Byte level, not just parsed equality: every line the file had, it still has.
-    const beforeText = `${JSON.stringify(before, null, 2)}\n`
-    const afterText = await readFile(path, 'utf8')
-    for (const line of beforeText.split('\n')) expect(afterText).toContain(line)
     expect(install.stdout.split('\n').filter((line) => /^-[^-]/.test(line))).toEqual([])
+  })
+
+  it('keeps the bytes the owner wrote: their indent, their key order and their awkward values', async () => {
+    // Written by hand rather than serialized, so the assertions cannot pass by both sides using the
+    // same writer. Four-space indent, keys in an order no writer would choose, and a value with a
+    // tab, an escaped quote and a non-ASCII letter in it.
+    const original = [
+      '{',
+      '    "zzz_written_last": "kept",',
+      '    "hooks": {',
+      '        "Stop": [',
+      '            {',
+      '                "note": "a\\ttab, a \\"quote\\", a caf\u00e9",',
+      '                "hooks": [',
+      '                    {',
+      '                        "type": "command",',
+      `                        "command": ${JSON.stringify(OLDER_CLAUDE)}`,
+      '                    }',
+      '                ]',
+      '            }',
+      '        ]',
+      '    },',
+      '    "theme": "dark"',
+      '}',
+      ''
+    ].join('\n')
+    const path = await hookFileFixture(original)
+
+    const install = await runHooks(['install', 'claude', '--file', path])
+    const after = await readFile(path, 'utf8')
+
+    expect(install.code).toBe(0)
+    // Every line of the original is still there, spelling and indent included.
+    for (const line of original.split('\n').filter((line) => line.trim().length > 0 && line !== '}')) {
+      expect(after).toContain(line)
+    }
+    // The owner's indent is what the added entries are written with, not BMN's own.
+    expect(after).toContain('    "Notification": [')
+    // Their key order is untouched: what they wrote last is still last.
+    expect(after.indexOf('"zzz_written_last"')).toBeLessThan(after.indexOf('"theme"'))
+    expect(JSON.parse(after).hooks.Stop).toHaveLength(1)
   })
 
   it.each([
@@ -1118,13 +1164,34 @@ describe('bmn hooks install', () => {
     expect((await stat(real)).mode & 0o777).toBe(0o640)
   })
 
+  it('follows a symlink whose target does not exist yet instead of replacing the link', async () => {
+    // A dotfiles repository often links a settings file it has not written yet.
+    const root = dirname(await hookFileFixture({ hooks: {} }, 'unused.json'))
+    const real = join(root, 'later.json')
+    const link = join(root, 'settings.json')
+    await symlink(real, link)
+
+    const install = await runHooks(['install', 'claude', '--file', link])
+
+    expect(install.code).toBe(0)
+    expect((await lstat(link)).isSymbolicLink()).toBe(true)
+    expect(Object.keys(JSON.parse(await readFile(real, 'utf8')).hooks)).toEqual(CLAUDE_EVENTS)
+  })
+
   it('refuses rather than overwriting a file another writer changed while it was reading', async () => {
     const path = await hookFileFixture({ hooks: {} })
 
-    // The pause seam holds the installer open between its read and its rename.
-    const installing = runHooks(['install', 'claude', '--file', path], { BMN_HOOKS_TEST_PAUSE_MS: '400' })
-    await new Promise((resolve) => setTimeout(resolve, 150))
+    // A handshake, not a race: the installer says when it is between its read and its rename, the
+    // other writer goes then, and only then is the installer let go.
+    const gate = join(dirname(path), 'gate')
+    const installing = runHooks(['install', 'claude', '--file', path], { BMN_HOOKS_TEST_GATE: gate })
+    const deadline = Date.now() + 10_000
+    while (!existsSync(`${gate}.waiting`)) {
+      if (Date.now() > deadline) throw new Error('the installer never reached its check')
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
     await writeFile(path, `${JSON.stringify({ hooks: {}, other: 'ADDED BY SOMEBODY ELSE' }, null, 2)}\n`)
+    await writeFile(gate, '')
     const install = await installing
 
     expect(install.code).toBe(1)

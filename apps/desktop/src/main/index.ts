@@ -4338,6 +4338,8 @@ async function runSelfTest(): Promise<void> {
       (() => {
         const hook = window.__aitermTest;
         const snapshot = hook.snapshot(${JSON.stringify(plainSession.session.sessionId)});
+        // Kept so the check after the notice is identity, not "some element is there".
+        window.__bmnNoticeElement = document.querySelector('.session-terminal[data-session-id="${plainSession.session.sessionId}"] .xterm-screen');
         return { cols: snapshot.cols, rows: snapshot.rows, refits: snapshot.refits, inputEvents: snapshot.inputEvents };
       })()
     `) as { cols: number; rows: number; refits: number; inputEvents: number }
@@ -4364,7 +4366,7 @@ async function runSelfTest(): Promise<void> {
           title: row.title,
           openedBy: row.openedBy,
           sameSize: after.cols === before.cols && after.rows === before.rows,
-          sameElement: !!element && element.isConnected,
+          sameElement: !!element && element.isConnected && element === window.__bmnNoticeElement,
           refits: after.refits - before.refits,
           inputEvents: after.inputEvents - before.inputEvents
         };

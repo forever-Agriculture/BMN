@@ -186,6 +186,11 @@ one whose `hooks` is not an object or whose event is not a list: BMN says what i
 rather than replacing somebody's configuration. If the file changed while `install` was reading it,
 nothing is written and it says so; run it again.
 
+That check closes the window it can. If your harness writes the same file in the instant between
+that check and the rename, its change is lost — no program can prevent that without the other writer
+agreeing to a lock, and neither harness offers one. The backup is what recovers it. In practice this
+means: close the harness, or at least do not let it rewrite its settings, while `install` runs.
+
 Both commands read the file each harness actually reads: `~/.claude/settings.json` and
 `~/.codex/hooks.json`, or the same file under `CLAUDE_CONFIG_DIR` or `CODEX_HOME` when you have
 moved that directory. `--file PATH` replaces it, for tests.

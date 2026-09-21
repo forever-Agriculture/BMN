@@ -1004,12 +1004,20 @@ describe('terminal notices (OSC 9, 99, 777)', () => {
 
   it('adds a coalesced line without a second interruption: same revision, and what was seen stays seen', async () => {
     await service.sessionsChanged()
+    // The two surfaces that actually interrupt the owner, counted rather than inferred: the pager
+    // is what sends a Telegram page, and the desktop notifier keys on requestId:revision.
+    const pager = service['pager'] as { opened(record: AttentionRecord): void }
+    const paged: string[] = []
+    pager.opened = (record) => { paged.push(`${record.requestId}:${record.revision}`) }
     await notice({ title: 'First' })
     const [opened] = await openRows()
     await service.route(METHOD_REGISTRY.attentionSeen, { requestId: opened?.requestId })
 
     await notice({ title: 'Second' })
     const [after] = await openRows()
+
+    // One page and one desktop notification key for the pair, not two.
+    expect(paged).toEqual([`${opened?.requestId}:${opened?.revision}`])
 
     expect(after?.requestId).toBe(opened?.requestId)
     // The desktop notifier keys on requestId:revision and the pending Telegram page refuses a
@@ -1062,6 +1070,34 @@ describe('terminal notices (OSC 9, 99, 777)', () => {
     // These are in memory and per session, so a long-lived app must not accumulate one entry per
     // session it has ever had. They are pruned with the hook log, on the same pass.
     expect([kept.hookReporters.size, kept.terminalNotices.size]).toEqual([0, 0])
+  })
+
+  it('drops a notice whose process ended while it waited behind another one', async () => {
+    await service.sessionsChanged()
+    let release = (): void => undefined
+    const held = new Promise<void>((resolve) => { release = resolve })
+    const database = service['options'].database as { companion: (op: string, ...rest: unknown[]) => Promise<unknown> }
+    const companion = database.companion.bind(database)
+    // The first notice is held open, so the second is still queued when the process is replaced.
+    database.companion = async (op, ...rest) => {
+      if (op === 'openAttention') await held
+      return companion(op, ...rest)
+    }
+    const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+    const first = notice({ title: 'First' })
+    await tick()
+    const second = notice({ title: 'Second' })
+    await tick()
+    liveIncarnations.set('s1', 'incarnation-replaced')
+    release()
+    const results = [await first, await second]
+    database.companion = companion
+
+    // The door checked the incarnation before either was queued; only the second waited long enough
+    // for it to change, and it must not speak for the process that replaced its own.
+    expect(results[0]).toMatchObject({ opened: true })
+    expect(results[1]).toMatchObject({ opened: false, reason: 'the session is running a different process now' })
+    expect((await openRows()).map((row) => row.title)).toEqual(['First'])
   })
 
   it('never lets a session token claim a terminal origin on a request of its own', () => {

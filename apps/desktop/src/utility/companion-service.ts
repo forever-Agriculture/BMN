@@ -795,6 +795,11 @@ export class CompanionService {
     body?: string
   }): Promise<{ opened: boolean; requestKey: string; reason?: string }> {
     const requestKey = terminalNoticeOrigin(p.code)
+    // Checked again here, not only at the door: a notice can wait behind another one for as long as
+    // that one takes, and the process that wrote it may be gone by the time its turn comes.
+    if (this.options.manager.liveIncarnationId(p.sessionId) !== p.incarnationId) {
+      return { opened: false, requestKey, reason: 'the session is running a different process now' }
+    }
     if (this.hookReporters.get(p.sessionId) === p.incarnationId) {
       // Counted but not acted on, so "why is there no request for this?" still has an answer.
       this.observeTerminalNotice(p, requestKey, [])
