@@ -9,6 +9,8 @@ export interface TerminalTestSnapshot {
   refits: number
   /** Everything xterm would send to the PTY for this pane, counted since the terminal opened. */
   inputEvents: number
+  /** The view's own belief about the modes the program set; what paste, focus and mouse read. */
+  modes: { bracketedPasteMode: boolean; sendFocusMode: boolean; mouseTrackingMode: string }
   ptyCols?: number
   ptyRows?: number
 }
@@ -119,6 +121,7 @@ interface TerminalLine {
 interface TestableTerminal {
   cols: number
   rows: number
+  modes: { bracketedPasteMode: boolean; sendFocusMode: boolean; mouseTrackingMode: string }
   buffer: {
     active: {
       length: number
@@ -166,6 +169,11 @@ export function installTerminalTestHook(options: {
         rows: options.terminal.rows,
         refits: options.getRefitCount(),
         inputEvents: options.getInputCount(),
+        modes: {
+          bracketedPasteMode: options.terminal.modes.bracketedPasteMode,
+          sendFocusMode: options.terminal.modes.sendFocusMode,
+          mouseTrackingMode: options.terminal.modes.mouseTrackingMode
+        },
         ...(ptyDimensions ? { ptyCols: ptyDimensions.cols, ptyRows: ptyDimensions.rows } : {})
       }
     },

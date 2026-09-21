@@ -113,7 +113,7 @@ agent has to guess.
 | Close the window and stop the sessions | Stopped, recorded *interrupted · last window close* | Ends with the process | A final capture is taken before the stop | Unchanged; the pane keeps its place | Resume reopens a bound conversation | Stay open; a harness that sends `SessionEnd` withdraws the ones its hook opened |
 | Quit | Stopped after BMN lists the running sessions and asks, recorded *interrupted · application quit* | Ends with the process | A final capture is taken before the stop | Unchanged | Resume reopens a bound conversation; the next start offers to resume them all in one dialog | Stay open; `SessionEnd` withdraws the hook's own |
 | Stop a session | Stopped; an unconfirmed stop stays *exit unconfirmed* until the host reports the exit | Ends with the process | A final capture is taken before the stop | Unchanged | Resume reopens a bound conversation | Stay open; `SessionEnd` withdraws the hook's own |
-| Renderer crash | Keeps running | A new view is created and the program is asked to repaint; bytes from before the crash are not replayed | Unaffected | Unchanged: order, selection, scroll position and follow-tail are restored | Not needed; nothing stopped | Stay open |
+| Renderer crash | Keeps running | A new view is created, brought up to the private terminal modes the program had set, and the program is asked to repaint once; bytes from before the crash are not replayed | Unaffected | Unchanged: order, selection, scroll position and follow-tail are restored | Not needed; nothing stopped | Stay open |
 | App crash or reboot | Ends when its pseudo-terminal closes (UNVERIFIED); the next start marks earlier incarnations *interrupted* and starts nothing by itself | Gone | The last periodic capture; output written after it is lost | Unchanged | Resume reopens a bound conversation, including one a `SessionStart` hook reported | Stay open |
 | Desktop update | Stopped: packaging waits for BMN to exit, and an update installed while it runs stops the sessions, recorded *interrupted · update restart* | Ends with the process | A final capture is taken before the stop | Unchanged | Resume reopens a bound conversation; the next start offers to resume them all in one dialog | Stay open |
 
@@ -122,6 +122,12 @@ it is never replayed into a terminal. *Resume* reopens the stored Claude Code or
 through the CLI's own resume, and only for a session whose conversation BMN knows: one it pinned at
 launch, one you located by hand, or one the harness reported through its `SessionStart` hook. A
 session without that stays honest about it and offers **Start again** instead.
+
+A rebuilt view is brought up to the modes the program set before it existed. The host reads the
+private modes out of the bytes it already streams — paste bracketing, focus reports, the mouse
+encodings and the alternate screen — and hands them to the new view, which sets them in itself. The
+program is never written to and never asked to repeat the modes, so it neither redraws twice nor
+learns the view was replaced.
 
 Resume shows the exact command first. The confirmation is built from the same launch the process is
 started with, so what you read is what runs, and it names any stored argument the CLI's own resume
@@ -135,7 +141,8 @@ in order, one at a time, stopping after the first failure — every row ends up 
 once per stop; **Resume interrupted sessions…** in the palette reopens it.
 
 The Electron self-test checks two of these rows against the running app: the renderer-crash row (the
-processes and the layout survive a new view) and the Quit row (the interruption and its recorded
+processes, the layout and the program's terminal modes survive a new view, so paste stays bracketed
+and focus and mouse reports keep arriving) and the Quit row (the interruption and its recorded
 reason survive an application restart, with the open requests intact). The other rows are documented
 behaviour derived from the rules above and the [hook contract](agent-control.md); closing the window
 while keeping the sessions, an app crash or a reboot, and a desktop update are **UNVERIFIED** by any

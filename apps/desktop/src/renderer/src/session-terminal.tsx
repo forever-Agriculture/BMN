@@ -4,14 +4,15 @@ import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
-import type {
-  ColorModeName,
-  SessionRecord,
-  TerminalExitMessage,
-  TerminalOutputMessage,
-  TerminalViewDisconnectReason,
-  VoiceSettings,
-  WorkspaceMarker
+import {
+  decsetRestoreSequence,
+  type ColorModeName,
+  type SessionRecord,
+  type TerminalExitMessage,
+  type TerminalOutputMessage,
+  type TerminalViewDisconnectReason,
+  type VoiceSettings,
+  type WorkspaceMarker
 } from '@bmn/protocol'
 import { failureDetail, isBridgeError } from './bridge-error'
 import { createFileReferenceLinkProvider } from './file-reference-links'
@@ -181,6 +182,14 @@ export function SessionTerminal(props: {
     terminal.loadAddon(fit)
     terminal.loadAddon(search)
     terminal.open(container)
+    /**
+     * Epic 17.2: this view is new, the program is not. It set these modes before the view existed,
+     * so the view is brought up to date with them — written into this xterm only, never to the
+     * PTY, and before the first fit, so paste, focus reports and the mouse work from the first
+     * keystroke. The program is not asked to repeat itself: nothing here reaches it.
+     */
+    const restoredModes = decsetRestoreSequence(props.startup.modes)
+    if (restoredModes) terminal.write(restoredModes)
     const flow = new TerminalOutputFlow()
     flow.attach(startup.current.attachmentId)
     const capture = startSavedOutputCapture(

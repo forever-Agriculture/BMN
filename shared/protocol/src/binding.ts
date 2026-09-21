@@ -86,6 +86,8 @@ export interface SessionResumeResult {
   attachmentId: string
   streamSeq: 0
   captureStartedAt: string
+  /** The private terminal modes the new process has set so far; empty for one that set none. */
+  modes: number[]
   binding: BoundConversationBinding
 }
 

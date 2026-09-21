@@ -15,6 +15,29 @@ export const SAVED_OUTPUT_FORMAT_VERSION = 2
 export const RESTORED_VIEW_NOTICE =
   'View restored after renderer loss. The process kept running. Earlier output is in Saved Output.'
 
+/**
+ * The private (DECSET) modes a rebuilt view must come back with: the ones that change what the
+ * terminal sends the program (paste bracketing, focus reports, mouse encodings) or which screen it
+ * draws on. Anything else is the program's own business and is deliberately not carried.
+ *
+ * `1049` is the alternate screen; a view that came back without it would draw a TUI over the
+ * scrollback the owner was reading. The order here is the order the modes are restored in.
+ */
+export const TRACKED_DECSET_MODES: readonly number[] = Object.freeze([
+  1, 6, 7, 25, 1000, 1002, 1003, 1004, 1005, 1006, 1049, 2004
+])
+
+/**
+ * The sequences that bring a fresh terminal view up to the modes the program set. They are written
+ * into the view and never to the process: the program is not asked to repeat itself, and its own
+ * idea of the modes is untouched. Modes outside `TRACKED_DECSET_MODES` are ignored.
+ */
+export function decsetRestoreSequence(modes: readonly number[]): string {
+  return TRACKED_DECSET_MODES.filter((mode) => modes.includes(mode))
+    .map((mode) => `\x1b[?${mode}h`)
+    .join('')
+}
+
 export interface TerminalByteMessage {
   attachmentId: string
   streamSeq: number

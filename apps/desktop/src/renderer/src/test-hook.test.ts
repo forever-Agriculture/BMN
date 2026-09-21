@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { installTerminalTestHook } from './test-hook'
 
-function fakeTerminal(cols = 101, rows = 37, lines = ['prompt', 'AITERM-1-1-OK']) {
+function fakeTerminal(
+  cols = 101,
+  rows = 37,
+  lines = ['prompt', 'AITERM-1-1-OK'],
+  modes = { bracketedPasteMode: false, sendFocusMode: false, mouseTrackingMode: 'none' }
+) {
   return {
     cols,
     rows,
+    modes,
     buffer: {
       active: {
         length: lines.length,
@@ -33,7 +39,7 @@ describe('renderer acceptance hook', () => {
     dispose()
   })
 
-  it('exposes buffer and terminal dimensions only in explicit test mode', () => {
+  it('exposes buffer, dimensions and the view’s modes only in explicit test mode', () => {
     const target: Record<string, unknown> = {}
     const dispose = installTerminalTestHook({
       enabled: true,
@@ -52,6 +58,8 @@ describe('renderer acceptance hook', () => {
       rows: 37,
       refits: 2,
       inputEvents: 5,
+      // The modes a rebuilt view must come back with, read from the view itself.
+      modes: { bracketedPasteMode: false, sendFocusMode: false, mouseTrackingMode: 'none' },
       ptyCols: 101,
       ptyRows: 37
     })

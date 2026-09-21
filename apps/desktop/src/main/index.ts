@@ -1664,6 +1664,112 @@ async function runPaletteCommand(
   `) as Promise<'ran' | 'missing'>
 }
 
+/** The text a paste must carry into the program, chosen so it cannot appear in ordinary output. */
+const MODE_PASTE_TEXT = 'MODE-PASTE-PAYLOAD'
+
+/** What one pane's view believes the program's modes are, read from the view itself. */
+async function terminalViewModes(
+  window: BrowserWindow,
+  sessionId: string,
+  waitForThem: boolean
+): Promise<{ bracketedPasteMode: boolean; sendFocusMode: boolean; mouseTrackingMode: string }> {
+  return window.webContents.executeJavaScript(`
+    new Promise((resolve, reject) => {
+      const deadline = Date.now() + 10000;
+      const probe = () => {
+        const hook = window.__aitermTest;
+        let modes;
+        try { modes = hook?.snapshot(${JSON.stringify(sessionId)})?.modes; } catch { modes = undefined; }
+        const settled = modes && (!${waitForThem ? 'true' : 'false'} ||
+          (modes.bracketedPasteMode && modes.sendFocusMode && modes.mouseTrackingMode !== 'none'));
+        if (settled) { resolve(modes); return; }
+        if (Date.now() >= deadline) {
+          if (modes) resolve(modes);
+          else reject(new Error('the mode session has no view to read'));
+          return;
+        }
+        setTimeout(probe, 25);
+      };
+      probe();
+    })
+  `) as Promise<{ bracketedPasteMode: boolean; sendFocusMode: boolean; mouseTrackingMode: string }>
+}
+
+/**
+ * Drives the two things the modes change: one paste through the app's own clipboard command, and
+ * one focus change on the pane. Both go the way the owner's keyboard and mouse would.
+ */
+async function driveModeSensitiveInput(
+  window: BrowserWindow,
+  sessionId: string,
+  text: string
+): Promise<{ clipboard: string; ptyWrites: number; notice: string }> {
+  return window.webContents.executeJavaScript(`
+    (async () => {
+      const wait = async (probe, what) => {
+        const deadline = Date.now() + 8000;
+        for (;;) {
+          const value = probe();
+          if (value) return value;
+          if (Date.now() >= deadline) throw new Error('terminal modes: ' + what);
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+      };
+      const row = await wait(
+        () => [...document.querySelectorAll('.session-row > button[data-session-id]')]
+          .find((candidate) => candidate.dataset.sessionId === ${JSON.stringify(sessionId)}),
+        'the session row'
+      );
+      row.click();
+      // The paste must land in this program's pane, not whichever pane happens to be first.
+      const pane = await wait(
+        () => document.querySelector('.session-terminal[data-session-id=' +
+          JSON.stringify(${JSON.stringify(sessionId)}) + ']:not(.session-terminal-hidden)'),
+        'the mode session pane'
+      );
+      const textarea = await wait(
+        () => pane.querySelector('.terminal-surface .xterm-helper-textarea'),
+        'the terminal textarea'
+      );
+      await window.aiTerminal.writeClipboardText(${JSON.stringify(text)});
+      const clipboard = (await window.aiTerminal.readClipboardText()).text;
+      const inputsBefore = window.__aitermTest.snapshot(${JSON.stringify(sessionId)}).inputEvents;
+      textarea.focus();
+      // Ctrl+V is the app's own paste command; xterm brackets it only if the program asked it to.
+      textarea.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'v', code: 'KeyV', ctrlKey: true, bubbles: true, cancelable: true
+      }));
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      // One focus change: out and back, so the program sees a report whichever way it started.
+      // The self-test window is never shown, so Chromium gives it no focus of its own and moving the
+      // caret raises no focus event; the events are raised here instead, on the same textarea and
+      // through the same listeners the owner's click would reach.
+      textarea.blur();
+      textarea.dispatchEvent(new FocusEvent('blur'));
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      textarea.focus();
+      textarea.dispatchEvent(new FocusEvent('focus'));
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      return {
+        clipboard,
+        ptyWrites: window.__aitermTest.snapshot(${JSON.stringify(sessionId)}).inputEvents - inputsBefore,
+        notice: document.querySelector('.app-notice, .app-failure')?.textContent?.trim() ?? ''
+      };
+    })()
+  `) as Promise<{ clipboard: string; ptyWrites: number; notice: string }>
+}
+
+async function untilModeProgramRead(input: string, before: string): Promise<string> {
+  const deadline = Date.now() + 8_000
+  let latest = before
+  while (Date.now() < deadline) {
+    latest = terminalModeProgramInput(input)
+    if (latest.length > before.length) return latest.slice(before.length)
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  return latest.slice(before.length)
+}
+
 async function recoveredStoppedLabel(
   window: BrowserWindow,
   stopped: { sessionId: string; name: string }
@@ -1858,6 +1964,47 @@ function writeArgvRecorder(directory: string, name: string): { executable: strin
     { mode: 0o700 }
   )
   return { executable, log }
+}
+
+/**
+ * A program that turns on the modes a TUI turns on — bracketed paste, focus reports and SGR mouse —
+ * and then records every byte the terminal sends it. What the log holds is what the program would
+ * actually have received, which is the only honest way to ask whether a rebuilt view still speaks
+ * to it the same way.
+ */
+function writeTerminalModeProgram(directory: string): { executable: string; input: string } {
+  mkdirSync(directory, { recursive: true })
+  const input = join(directory, 'stdin.log')
+  const executable = join(directory, 'modes')
+  writeFileSync(join(directory, 'package.json'), '{"type":"commonjs"}\n')
+  writeFileSync(
+    executable,
+    [
+      `#!${process.env.BMN_SELF_TEST_NODE ?? '/usr/bin/env node'}`,
+      "const { appendFileSync } = require('node:fs')",
+      // Bracketed paste, focus reports, and mouse tracking with SGR encoding.
+      "process.stdout.write('\\u001b[?2004h\\u001b[?1004h\\u001b[?1000h\\u001b[?1006h')",
+      "process.stdout.write('MODE-PROGRAM-READY\\r\\n')",
+      // Raw mode, as every TUI does: the line discipline must not hold a paste back until Enter.
+      "if (process.stdin.isTTY) process.stdin.setRawMode(true)",
+      "process.stdin.setEncoding('latin1')",
+      `process.stdin.on('data', (chunk) => appendFileSync(${JSON.stringify(input)}, JSON.stringify(chunk) + '\\n'))`,
+      'setInterval(() => undefined, 1_000)',
+      ''
+    ].join('\n'),
+    { mode: 0o700 }
+  )
+  return { executable, input }
+}
+
+/** Everything the mode program has been sent, as one string. */
+function terminalModeProgramInput(input: string): string {
+  if (!existsSync(input)) return ''
+  return readFileSync(input, 'utf8')
+    .split('\n')
+    .filter((line) => line.trim() !== '')
+    .map((line) => JSON.parse(line) as string)
+    .join('')
 }
 
 function harnessRuns(log: string): string[][] {
@@ -3053,7 +3200,8 @@ async function runSelfTest(): Promise<void> {
     ]) {
       await client.request(METHOD_REGISTRY.sessionStop, { ...stopping, cause: 'explicit' })
     }
-    const hookPhaseSessionIds = new Set([reportingSession.sessionId, rivalSession.sessionId])
+    /** Sessions deliberately stopped before the application restart: they are exited, not interrupted. */
+    const stoppedBeforeRestartSessionIds = new Set([reportingSession.sessionId, rivalSession.sessionId])
     // The rival's report was refused; the owner must be able to read why while BMN is still running.
     const refusalLog = join(resolveApplicationRoots().state, 'refused-requests.log')
     const refusalReason = await (async (): Promise<string | null> => {
@@ -3088,12 +3236,74 @@ async function runSelfTest(): Promise<void> {
         .filter((request) => request.state === 'open').length
     const openRequestsBeforeRendererRestart = await openRequestCount()
 
+    /**
+     * Epic 17.2: a program that turned bracketed paste, focus reports and SGR mouse on, so the
+     * renderer-crash row can be asked the question it never answered — does the rebuilt view still
+     * speak to the program the way the program asked to be spoken to?
+     */
+    const modeProgram = writeTerminalModeProgram(join(isolatedCwd, 'terminal-modes'))
+    const { session: modeRecord, startup: modeStartup } = await createSessionRuntime({
+      workspaceId: DEFAULT_WORKSPACE_ID,
+      name: 'Terminal modes',
+      cwd: isolatedCwd,
+      executable: modeProgram.executable,
+      argv: [],
+      cols: 80,
+      rows: 24
+    }, true)
+    await recoverApplicationRenderer(applicationWindow)
+    const modesBeforeRestart = await terminalViewModes(applicationWindow, modeRecord.sessionId, true)
+
     console.error('[BMN] self-test phase: renderer restart')
     const reloaded = waitForRendererLoad(applicationWindow)
     applicationWindow.webContents.reload()
     await reloaded
     await waitForRendererHook(applicationWindow)
     console.error('[BMN] self-test phase: renderer restart loaded')
+    // The view is new; the program is the same one, still believing the modes it set.
+    const modesAfterRestart = await terminalViewModes(applicationWindow, modeRecord.sessionId, false)
+    const inputBeforeDriving = terminalModeProgramInput(modeProgram.input)
+    const driven = await driveModeSensitiveInput(applicationWindow, modeRecord.sessionId, MODE_PASTE_TEXT)
+    const programSaw = await untilModeProgramRead(modeProgram.input, inputBeforeDriving)
+    const terminalModes = {
+      before: modesBeforeRestart,
+      after: modesAfterRestart,
+      // What the program was actually sent, so a failure says which half of the path broke.
+      saw: JSON.stringify(programSaw).slice(0, 200),
+      clipboard: driven.clipboard,
+      ptyWrites: driven.ptyWrites,
+      notice: driven.notice,
+      pasteBracketed: programSaw.includes(`\u001b[200~${MODE_PASTE_TEXT}\u001b[201~`),
+      pasteArrivedBare: programSaw.includes(MODE_PASTE_TEXT) &&
+        !programSaw.includes(`\u001b[200~${MODE_PASTE_TEXT}`),
+      focusReported: programSaw.includes('\u001b[I') || programSaw.includes('\u001b[O')
+    }
+    console.error(`[BMN] self-test phase: terminal modes ${JSON.stringify(terminalModes)}`)
+    if (
+      !modesBeforeRestart.bracketedPasteMode ||
+      !modesBeforeRestart.sendFocusMode ||
+      modesBeforeRestart.mouseTrackingMode === 'none'
+    ) {
+      throw new Error(`the mode program never reached the first view: ${JSON.stringify(modesBeforeRestart)}`)
+    }
+    if (
+      !modesAfterRestart.bracketedPasteMode ||
+      !modesAfterRestart.sendFocusMode ||
+      modesAfterRestart.mouseTrackingMode === 'none'
+    ) {
+      throw new Error(
+        `the rebuilt view lost the program's terminal modes: ${JSON.stringify(terminalModes)}`
+      )
+    }
+    if (!terminalModes.pasteBracketed || !terminalModes.focusReported) {
+      throw new Error(`the rebuilt view no longer speaks to the program: ${JSON.stringify(terminalModes)}`)
+    }
+    await client.request(METHOD_REGISTRY.sessionStop, {
+      sessionId: modeStartup.sessionId,
+      incarnationId: modeStartup.incarnationId,
+      cause: 'explicit'
+    })
+    stoppedBeforeRestartSessionIds.add(modeRecord.sessionId)
     // Epic 17.1 AC2: the offer was made once; a rebuilt view is not a new start, so it stays away.
     const offerStayedAwayAfterRendererRestart = await resumeOfferStaysAway(applicationWindow, 750)
     if (!offerStayedAwayAfterRendererRestart) {
@@ -3159,9 +3369,10 @@ async function runSelfTest(): Promise<void> {
     console.error(`[BMN] self-test phase: resume confirmation ${JSON.stringify(resumeConfirmationShownToOwner)}`)
 
     const afterRenderer = await client.request<HostHealth>(METHOD_REGISTRY.healthGet, {})
-    // The voice flow stops and starts the destination session once, and the hook-reported Codex
-    // phase starts two sessions and resumes one, all stopped again; each adds one record.
-    if (afterRenderer.liveSessions !== 3 || afterRenderer.incarnationRecords !== 8) {
+    // The voice flow stops and starts the destination session once, the hook-reported Codex phase
+    // starts two sessions and resumes one, and the terminal-mode program is one more; all are
+    // stopped again, and each adds one record.
+    if (afterRenderer.liveSessions !== 3 || afterRenderer.incarnationRecords !== 9) {
       throw new Error('renderer restart duplicated or stopped a process')
     }
     // "What survives", renderer-crash row: the processes, the layout and the open requests outlive the view.
@@ -3271,9 +3482,10 @@ async function runSelfTest(): Promise<void> {
     ) {
       throw new Error('application restart did not interrupt every prior live incarnation')
     }
-    // The hook-reported Codex sessions were stopped before the restart, so they are exited, not interrupted.
+    // The sessions stopped before the restart are exited, not interrupted: only what the restart
+    // itself ended is interrupted here.
     const priorLiveSessions = [...restoredDefaultSessions, ...restoredArchivedSessions]
-      .filter((record) => !hookPhaseSessionIds.has(record.sessionId))
+      .filter((record) => !stoppedBeforeRestartSessionIds.has(record.sessionId))
     if (!priorLiveSessions.every((record) =>
       record.lastProcess?.state === 'interrupted' &&
       record.lastProcess.exitCode === null &&
@@ -3295,7 +3507,7 @@ async function runSelfTest(): Promise<void> {
     }
     if (
       restoredWorkspaces.length !== 2 ||
-      restoredDefaultSessions.filter((item) => !hookPhaseSessionIds.has(item.sessionId))
+      restoredDefaultSessions.filter((item) => !stoppedBeforeRestartSessionIds.has(item.sessionId))
         .map((item) => item.sessionId).join(',') !==
         defaultSessionsAfterLifecycleStop.map((item) => item.sessionId).join(',') ||
       restoredArchivedSessions[0]?.sessionId !== thirdSession.sessionId ||
@@ -4038,6 +4250,20 @@ async function runSelfTest(): Promise<void> {
         // Rows no automated check exercises; docs/architecture.md marks them UNVERIFIED.
         documented: ['close-window-keep-sessions', 'app-crash-or-reboot', 'desktop-update']
       },
+      // Epic 17.1: what the offer said after an update stop, what the button started, and that it asked once.
+      resumeOffer: {
+        heading: offerAfterUpdate.heading,
+        summary: offerAfterUpdate.summary,
+        button: offerAfterUpdate.button,
+        startsUnchecked: offerAfterUpdate.rows.every((row) => !row.checked),
+        dismissedStartedNothing: true,
+        reopenedFromPalette: reopenedOffer.rows.length,
+        outcomes: offerResult.rows.map((row) => row.outcome),
+        argv: restartedArgv.map((runs) => runs[1] ?? null),
+        askedAgain: !(offerStayedAwayAfterRendererRestart && offerStayedAwayAfterSecondStart)
+      },
+      // Epic 17.2: the modes the rebuilt view came back with, and what the program was sent through them.
+      terminalModes,
       rendererRestarted: true,
       schemaTables: restoredHealth.schemaTables,
       nativeFailureBeforeDatabase: true,

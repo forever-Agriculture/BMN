@@ -59,6 +59,7 @@ import {
 } from './interrupted-cohort'
 import { HostOutputQueue, type HostOutputQueueTransition } from './transport'
 import { TerminalByteFramer } from './terminal-byte-framer'
+import { DecsetModeTracker } from './decset-modes'
 import {
   agentCli,
   applyCapturedLaunchEnvironment,
@@ -197,6 +198,11 @@ export interface AttachmentIdentity extends SessionIdentity {
   attachmentId: string
   streamSeq: 0
   captureStartedAt: string
+  /**
+   * The private modes the program has set, so a view created now can be brought up to date. Empty
+   * for a process that set none, and for one that has exited.
+   */
+  modes: number[]
 }
 
 interface SpawnOptions {
@@ -250,6 +256,8 @@ interface LiveSession extends SessionIdentity {
   attachmentId?: string
   outputQueue?: HostOutputQueue
   outputFramer: TerminalByteFramer
+  /** The private modes this program has turned on, read from its own output as it streams. */
+  decsetModes: DecsetModeTracker
   undeliveredOutput: Uint8Array[]
   undeliveredOutputState: UndeliveredOutputState
   exitComplete: Promise<void>
@@ -848,6 +856,7 @@ export class SessionManager {
       attachmentId: resumed.attachmentId,
       streamSeq: resumed.streamSeq,
       captureStartedAt: resumed.captureStartedAt,
+      modes: resumed.modes,
       cwd: resumed.binding.launchContext.cwd,
       executable: resumed.binding.launchContext.executable
     }
@@ -1136,6 +1145,7 @@ export class SessionManager {
       executable: params.executable,
       captureStartedAt,
       outputFramer: new TerminalByteFramer(),
+      decsetModes: new DecsetModeTracker(),
       undeliveredOutput: [],
       undeliveredOutputState: {
         limitBytes: this.undeliveredOutputLimitBytes,
@@ -1348,7 +1358,8 @@ export class SessionManager {
       incarnationId: identity.incarnationId,
       attachmentId,
       streamSeq: 0,
-      captureStartedAt: session.captureStartedAt
+      captureStartedAt: session.captureStartedAt,
+      modes: session.decsetModes.modes()
     }
   }
 
@@ -1902,6 +1913,9 @@ export class SessionManager {
   }
 
   private onPtyData(session: LiveSession, bytes: Uint8Array): void {
+    // Read before anything is queued or dropped: the mode set must follow the program even when
+    // the view is gone, because that is exactly when the next view will need it.
+    session.decsetModes.read(bytes)
     const frames = session.outputFramer.push(bytes)
     if (session.outputQueue) {
       for (const frame of frames) session.outputQueue.enqueue(frame)
@@ -1913,6 +1927,8 @@ export class SessionManager {
   private async onPtyExit(session: LiveSession, exit: IncarnationExit): Promise<void> {
     if (session.exited) return session.exitComplete
     session.exited = true
+    // The program is gone; its modes go with it, so nothing stale can reach a later view.
+    session.decsetModes.clear()
     this.onSessionStateChange({
       kind: 'session-process-state-changed',
       sessionId: session.sessionId,

@@ -328,7 +328,7 @@ const receiptContract = [
     'survivalTable',
     (receipt) =>
       receipt.survivalTable?.rendererCrash?.liveProcesses === 3 &&
-      receipt.survivalTable.rendererCrash.incarnationRecords === 8 &&
+      receipt.survivalTable.rendererCrash.incarnationRecords === 9 &&
       receipt.survivalTable.rendererCrash.openRequestsBefore > 0 &&
       receipt.survivalTable.rendererCrash.openRequestsAfter ===
         receipt.survivalTable.rendererCrash.openRequestsBefore &&
@@ -338,6 +338,35 @@ const receiptContract = [
         receipt.survivalTable.rendererCrash.openRequestsAfter &&
       JSON.stringify(receipt.survivalTable.documented) ===
         JSON.stringify(['close-window-keep-sessions', 'app-crash-or-reboot', 'desktop-update'])
+  ],
+  [
+    // Epic 17.1: one dialog after an update stop, starting nothing until the owner presses it.
+    'resumeOffer',
+    (receipt) =>
+      receipt.resumeOffer?.heading === 'Resume what the update stopped?' &&
+      receipt.resumeOffer.summary ===
+        'a desktop update stopped 2 sessions. Nothing has started since.' &&
+      receipt.resumeOffer.button === 'Resume 0 sessions' &&
+      receipt.resumeOffer.startsUnchecked === true &&
+      receipt.resumeOffer.dismissedStartedNothing === true &&
+      receipt.resumeOffer.reopenedFromPalette === 2 &&
+      JSON.stringify(receipt.resumeOffer.outcomes) === JSON.stringify(['Started', 'Started']) &&
+      JSON.stringify(receipt.resumeOffer.argv) ===
+        JSON.stringify([['--keep-going'], ['--keep-going']]) &&
+      receipt.resumeOffer.askedAgain === false
+  ],
+  [
+    // Epic 17.2: a rebuilt view keeps the program's modes, so paste stays bracketed and focus reports arrive.
+    'terminalModes',
+    (receipt) =>
+      receipt.terminalModes?.before?.bracketedPasteMode === true &&
+      receipt.terminalModes.after?.bracketedPasteMode === true &&
+      receipt.terminalModes.after.sendFocusMode === true &&
+      receipt.terminalModes.after.mouseTrackingMode ===
+        receipt.terminalModes.before.mouseTrackingMode &&
+      receipt.terminalModes.pasteBracketed === true &&
+      receipt.terminalModes.pasteArrivedBare === false &&
+      receipt.terminalModes.focusReported === true
   ],
   [
     'sessionProcessStatus',

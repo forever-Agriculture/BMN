@@ -846,7 +846,9 @@ describe('shell session lifecycle', () => {
 
       expect(relaunched).toMatchObject({ sessionId: created.sessionId, streamSeq: 0 })
       // The result crosses Electron IPC, so it must be plain data rather than the live process record.
-      expect(Object.keys(structuredClone(relaunched)).sort()).toEqual(['attachmentId', 'captureStartedAt', 'incarnationId', 'sessionId', 'streamSeq'])
+      expect(Object.keys(structuredClone(relaunched)).sort()).toEqual(['attachmentId', 'captureStartedAt', 'incarnationId', 'modes', 'sessionId', 'streamSeq'])
+      // A process that has just started has printed nothing, so its new view has no modes to restore.
+      expect(relaunched.modes).toEqual([])
       expect(relaunched.incarnationId).not.toBe(created.incarnationId)
       expect(relaunched.attachmentId).toEqual(expect.any(String))
       expect(spawns).toEqual([
