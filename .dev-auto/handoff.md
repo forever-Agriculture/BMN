@@ -55,5 +55,5 @@
 
 ## Resume
 
-- Next safe action: none for Epic 17 once the push and `pnpm run update:desktop` finish. The next epic in the owner's order is 15.
-- Status: ACTIVE — Epic 17 accepted at `92c4199`; the owner asked for two more reviews (GLM-5.3 and GLM-5.3-Flash) before pushing and updating the desktop build.
+- Next safe action: none. `main` is pushed (`a3c92ae..bf11648`) and `pnpm run update:desktop` is queued for `bf11648`; it waits for BMN to close and reports its own result (`~/.local/state/bmn/source-update/latest.log`). The next epic in the owner's order is 15, which needs its own `/dev-auto` run.
+- Status: COMPLETE — Epic 17 accepted at `64ac5e3`; `main` pushed and the desktop update queued.
