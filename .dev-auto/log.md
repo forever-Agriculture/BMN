@@ -1471,3 +1471,15 @@ here-documents, and a `conditional` category for commands whose execution depend
 the right oracle for those. A runner timeout now fails the test instead of being read as "the hook
 did not run", and each listed exception must still be seen to run, so the list cannot quietly go
 stale on both sides.
+
+### Discarded evidence: I edited the tree during its own check run, twice
+
+`checks-8a0ae46.log` was started against committed `8a0ae46` with a clean tree, and then I edited
+`bin/bmn` and `control-cli.test.ts` while it was still running. Its unit and Electron phases
+therefore ran against a tree that is not any committed revision. The log is renamed
+`DISCARDED-checks-8a0ae46-tree-edited-mid-run.log` and is not cited as evidence for anything; the
+revision is re-checked from scratch after the next commit.
+
+This is the second time in this run: the same thing happened with two overlapping mutation-fence
+runs earlier. The rule I am holding myself to from here: while a check or fence run is in flight,
+the working tree is read-only, and the only safe edits are to `.dev-auto/` files no run touches.

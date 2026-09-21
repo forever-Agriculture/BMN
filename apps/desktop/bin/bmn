@@ -765,15 +765,22 @@ function commandSegments(command) {
       spaced = false
       continue
     }
-    if (character === ';' || character === '\n' || character === '&' || character === '|') {
+    // `&>` and `|&` are redirections; a bare `&` or `|` ends the command.
+    if ((character === ';' || character === '\n' || character === '|' ||
+      (character === '&' && command[index + 1] !== '>')) && !(character === '|' && command[index + 1] === '&')) {
       endSegment()
       spaced = true
       continue
     }
-    if (character === '>' || character === '<') {
+    if (character === '>' || character === '<' || character === '&' || character === '|') {
       const attached = !spaced && started
       endWord()
-      while (index + 1 < command.length && (command[index + 1] === '>' || command[index + 1] === '<')) index += 1
+      while (index + 1 < command.length && '><&|'.includes(command[index + 1])) index += 1
+      // `>&2` names the descriptor it duplicates in the same breath, so it is part of the redirection.
+      if (command[index + 1] === '&') {
+        index += 1
+        while (index + 1 < command.length && /[\d-]/.test(command[index + 1])) index += 1
+      }
       words.push({ text: character, literal: false, redirect: true, attached })
       spaced = false
       continue

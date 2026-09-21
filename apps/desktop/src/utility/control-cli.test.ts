@@ -986,6 +986,9 @@ describe('bmn hooks check', () => {
     ['a redirection before the arguments', 'bmn > /dev/null hook claude', 'wired (older wording)'],
     ['a redirection with no space', 'bmn hook claude>/dev/null', 'wired (older wording)'],
     ['a file descriptor redirection', 'bmn 2>/dev/null hook claude', 'wired (older wording)'],
+    ['a descriptor duplicated before the arguments', 'bmn 1>&2 hook claude', 'wired (older wording)'],
+    ['both streams redirected', 'bmn hook claude &>/dev/null', 'wired (older wording)'],
+    ['a pipe that carries stderr too', 'bmn hook claude |& cat', 'wired (older wording)'],
     ['a trailing comment', 'bmn hook claude # run it', 'wired (older wording)'],
     // Not ours: a different program or agent, the words as text, or a shape BMN will not guess at.
     ['a program whose name ends in bmn', 'other.bmn hook claude', 'missing'],
@@ -1046,12 +1049,20 @@ describe('bmn hooks check', () => {
     const allowedMisses = [
       "sh -c 'bmn hook claude'",
       'bash -lc \'bmn hook claude\'',
-      'x=$(bmn hook claude)'
+      'x=$(bmn hook claude)',
+      // Any flag on a wrapper stops BMN reading, because what the flag does is the whole question.
+      'env -- bmn hook claude', 'command -- bmn hook claude', 'nice -- bmn hook claude',
+      'exec -a name bmn hook claude', 'timeout -- 5 bmn hook claude'
     ]
     // Whether these run depends on a condition, and `check` reports what is configured rather than
     // what will run - the documented entry itself is guarded and does nothing when BMN is not up.
     // So the shell is not the right oracle for them, and they are only required to be recognised.
-    const conditional = ['false && bmn hook claude', 'true && bmn hook claude']
+    const conditional = [
+      'false && bmn hook claude', 'true && bmn hook claude',
+      // A loop whose condition is already satisfied never runs its body, but the entry still says
+      // what it would run, which is what `check` reports.
+      'until true; do bmn hook claude; done', 'while false; do bmn hook claude; done'
+    ]
     const commands = [
       DOCUMENTED_CLAUDE, OLDER_CLAUDE, 'bmn hook claude', "bmn 'hook' claude", 'bmn hook "claude"',
       `${join(bin, 'bmn')} hook claude`,
@@ -1062,6 +1073,8 @@ describe('bmn hooks check', () => {
       'if true; then bmn hook claude; fi', 'for i in 1; do bmn hook claude; done',
       'echo x | bmn hook claude', 'bmn hook claude || true', 'true; bmn hook claude',
       'bmn > /dev/null hook claude', 'bmn hook claude>/dev/null', 'bmn 2>/dev/null hook claude',
+      'bmn 1>&2 hook claude', 'bmn hook claude 2>&1 1>/dev/null', 'bmn hook claude &>/dev/null',
+      'bmn hook claude |& cat', "bmn hook 'claude' # and a comment", 'bmn hook claude ; :',
       'bmn hook claude # run it', 'bmn hook claude 0<&1',
       // Backgrounded, so the appended `wait` is exercised rather than assumed.
       'nohup bmn hook claude &', 'bmn hook claude &',
@@ -1072,6 +1085,9 @@ describe('bmn hooks check', () => {
       'command -v bmn >/dev/null', 'env -i bmn hook claude', 'env --help bmn hook claude',
       'bash -n -c "bmn hook claude"', 'sh /dev/null -c "bmn hook claude"',
       "sh -c 'printf x' bmn hook claude",
+      // Flag-carrying wrappers: read as missing by design, so each costs a duplicate, never a gap.
+      'env -- bmn hook claude', 'command -- bmn hook claude', 'nice -- bmn hook claude',
+      'exec -a name bmn hook claude', 'timeout -- 5 bmn hook claude',
       'cat <<< bmn hook claude', "cat <<'EOF'\nbmn hook claude\nEOF", 'args=( bmn hook claude )',
       '# example; bmn hook claude', 'echo "# bmn hook claude"',
       'bmn hook "claude)"', 'bmn hook {claude}', 'bmn hook claude\\)',
