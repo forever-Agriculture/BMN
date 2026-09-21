@@ -1124,3 +1124,39 @@ Dispositions:
 
 Checks after `64ac5e3`: unit 1185 passed / 1 skipped (`unit-glm.log`), lint and typecheck clean,
 `test:electron` exit 0 (`electron-11-palette-stamp.log`), `test:visual` PASS (`visual-glm.log`).
+
+## 2026-09-21T21:30+03:00 — /dev-auto 15-18 begins; owner grants autonomy, review route and release authority
+
+Owner, verbatim, mid-turn on 2026-09-21 (two messages):
+
+> finish everything autonomously, I'm going to bed. Double check everything with GLM and GLM flash models. just ot be sure. when you're confident you can update local and push to GH
+
+> if you face serious issues - consult with Astra
+
+Reading applied to this run:
+- Autonomous completion of Epics 15, 16 and 18; no owner presence available tonight. Owner-presence acceptance items (18.1 AC5 real permission flow, 18.2 AC4 resting titles) stay DOCUMENTED/UNVERIFIED and are named in the handoff rather than blocking.
+- Review route for this run: GLM-5.3 (max, read tools) as the per-epic strong review and GLM-5.3-Flash (max, read tools) as the second opinion, for each of the three epics. This narrows `references/models.md`'s default whole-epic first route (gpt-6-astra/medium) on an explicit owner instruction; gpt-6-astra is the escalation for a serious or unresolved issue ("if you face serious issues - consult with Astra"). Route and reason recorded per dispatch.
+- Release authority: `pnpm run update:desktop` ("update local") and pushing `main` to `origin` ("push to GH"), once the reviews leave no blocking finding. `main` only; never the old private `feat/epic-1/2` branches. Merge remains unauthorized.
+
+## 2026-09-21T21:40+03:00 — owner corrects the review route
+
+Owner, verbatim, mid-turn:
+
+> follow normal dev-auto reviews
+
+> GLM/GLM-Flash for EXTRA reviews!
+
+Supersedes the reading recorded above at 21:30. The route for this run is the skill's normal one:
+each epic gets its independent strong review from `gpt-6-astra` at `medium` (the whole-epic first
+tier in `references/models.md`), with consolidated repairs and a focused recheck; GLM-5.3 (max, read
+tools) and GLM-5.3-Flash (max, read tools) are then run as the owner's extra second opinions, as they
+were for Epic 17. Astra remains the escalation for a serious issue. Release authority (push to
+`origin/main` and `pnpm run update:desktop`) is unchanged.
+
+## 2026-09-21T21:45+03:00 — 15.2 implementation decision: the hooks code lives inside `bin/bmn`
+
+`epics.md:790` allows a pure module "`hook-files.mjs` next to the binary or inside it". Inside it:
+`apps/desktop/electron-builder.yml:17-20` ships exactly two CLI files (`resources/cli/bmn` launcher
+and `bin/bmn` → `bin/bmn.mjs`), so a sibling module would need a packaging change and would be
+missing from every packaged build until that change shipped. The read/diff/merge functions are pure
+and exercised through the real binary, as the story's verification asks.

@@ -1,8 +1,8 @@
 // MODULE: control-cli.test.ts - the bmn CLI drives a real control server with truthful output and exit codes
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ControlAuth, writeOwnerToken } from './control-auth'
@@ -847,5 +847,278 @@ describe('bmn hook provenance and the hook event log', () => {
 
     expect(result).toEqual(QUIET)
     expect(fixture.handlers.observeHookEvent).not.toHaveBeenCalled()
+  })
+})
+
+const DOCUMENTED_CLAUDE = '[ -n "$BMN_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook claude; exit 0'
+const OLDER_CLAUDE = '[ -n "$AITERM_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook claude; exit 0'
+const CLAUDE_EVENTS = ['Notification', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd']
+const CODEX_EVENTS = ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd', 'Interrupt']
+
+/** Every hook fixture lives under a fresh temporary folder, so a public clone carries no owner data. */
+async function hookFileFixture(contents?: unknown, name = 'settings.json'): Promise<string> {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'aithooks-')))
+  createdRoots.add(root)
+  const path = join(root, name)
+  if (contents !== undefined) {
+    await writeFile(path, typeof contents === 'string' ? contents : `${JSON.stringify(contents, null, 2)}\n`)
+  }
+  return path
+}
+
+function entryGroup(command: string, timeout = 5): unknown {
+  return { hooks: [{ type: 'command', command, timeout }] }
+}
+
+async function backupsOf(path: string): Promise<string[]> {
+  const entries = await readdir(dirname(path))
+  return entries.filter((entry) => entry.startsWith(`${basename(path)}.bmn-backup-`))
+}
+
+/** `hooks` is an owner command: no socket, no token, nothing on the wire. */
+function runHooks(args: string[]): Promise<CliResult> {
+  return runCli(['hooks', ...args])
+}
+
+describe('bmn hooks check', () => {
+  it('reads a missing file as every event missing and exits 1 without a socket or a token', async () => {
+    const path = await hookFileFixture()
+
+    const result = await runHooks(['check', 'claude', '--file', path])
+
+    expect(result.code).toBe(1)
+    expect(result.stderr).toBe('')
+    for (const event of CLAUDE_EVENTS) expect(result.stdout).toMatch(new RegExp(`${event}\\s+missing`))
+    expect(result.stdout).toContain('the file does not exist')
+  })
+
+  it('reads an empty object as every event missing', async () => {
+    const path = await hookFileFixture({})
+
+    const result = await runHooks(['check', 'claude', '--file', path])
+
+    expect(result.code).toBe(1)
+    for (const event of CLAUDE_EVENTS) expect(result.stdout).toMatch(new RegExp(`${event}\\s+missing`))
+  })
+
+  it('calls the documented command wired and the older AITERM wording wired (older wording)', async () => {
+    const path = await hookFileFixture({
+      hooks: {
+        ...Object.fromEntries(CLAUDE_EVENTS.slice(0, 3).map((event) => [event, [entryGroup(DOCUMENTED_CLAUDE)]])),
+        ...Object.fromEntries(CLAUDE_EVENTS.slice(3).map((event) => [event, [entryGroup(OLDER_CLAUDE)]]))
+      }
+    })
+
+    const result = await runHooks(['check', 'claude', '--file', path])
+
+    expect(result.code).toBe(0)
+    for (const event of CLAUDE_EVENTS.slice(0, 3)) {
+      expect(result.stdout).toMatch(new RegExp(`${event}\\s+wired$`, 'm'))
+    }
+    for (const event of CLAUDE_EVENTS.slice(3)) {
+      expect(result.stdout).toMatch(new RegExp(`${event}\\s+wired \\(older wording\\)`))
+    }
+    expect(result.stdout).toContain('not proof that a hook fired')
+  })
+
+  it('reports the events that are wired and the ones that are not, and exits 1 for the gap', async () => {
+    const path = await hookFileFixture({ hooks: { Stop: [entryGroup(DOCUMENTED_CLAUDE)] } })
+
+    const result = await runHooks(['check', 'claude', '--file', path])
+
+    expect(result.code).toBe(1)
+    expect(result.stdout).toMatch(/Stop\s+wired$/m)
+    expect(result.stdout).toMatch(/Notification\s+missing/)
+  })
+
+  it('shows Codex PermissionRequest as optional and does not fail the check for it', async () => {
+    const codex = CODEX_EVENTS.map((event) => [event, [entryGroup(`bmn hook codex`)]])
+    const path = await hookFileFixture({ hooks: Object.fromEntries(codex) }, 'hooks.json')
+
+    const result = await runHooks(['check', 'codex', '--file', path])
+
+    expect(result.code).toBe(0)
+    expect(result.stdout).toMatch(/PermissionRequest\s+missing \(optional\)/)
+  })
+
+  it('reports an unparsable file as such with exit 1 and claims nothing about any event', async () => {
+    const path = await hookFileFixture('{ "hooks": ')
+
+    const result = await runHooks(['check', 'claude', '--file', path])
+
+    expect(result.code).toBe(1)
+    expect(result.stdout).toContain('not valid JSON')
+    expect(result.stdout).not.toContain('wired')
+  })
+
+  it('prints the same report as one object with --json', async () => {
+    const path = await hookFileFixture({ hooks: { Stop: [entryGroup(OLDER_CLAUDE)] } })
+
+    const result = await runHooks(['check', 'claude', '--file', path, '--json'])
+    const report = JSON.parse(result.stdout)
+
+    expect(result.code).toBe(1)
+    expect(report.ok).toBe(false)
+    expect(report.agents).toHaveLength(1)
+    expect(report.agents[0]).toMatchObject({ agent: 'claude', file: path, state: 'read' })
+    expect(report.agents[0].events).toContainEqual({ event: 'Stop', optional: false, state: 'wired (older wording)' })
+    expect(report.agents[0].missing).toEqual(CLAUDE_EVENTS.filter((event) => event !== 'Stop'))
+  })
+
+  it('refuses an unknown agent and --file without one', async () => {
+    const unknown = await runHooks(['check', 'gemini'])
+    const ambiguous = await runHooks(['check', '--file', '/tmp/nothing.json'])
+
+    expect(unknown.code).toBe(2)
+    expect(unknown.stderr).toContain('claude|codex')
+    expect(ambiguous.code).toBe(2)
+    expect(ambiguous.stderr).toContain('--file needs the agent')
+  })
+})
+
+describe('bmn hooks install', () => {
+  it('adds only the missing entries, keeps foreign hooks byte for byte and leaves an older wording alone', async () => {
+    const foreign = entryGroup('echo foreign', 9)
+    const path = await hookFileFixture({
+      theme: 'dark',
+      hooks: { PostToolUse: [{ matcher: 'Write', ...(foreign as object) }], Stop: [entryGroup(OLDER_CLAUDE)] }
+    })
+    const before = JSON.parse(await readFile(path, 'utf8'))
+
+    const install = await runHooks(['install', 'claude', '--file', path])
+    const after = JSON.parse(await readFile(path, 'utf8'))
+
+    expect(install.code).toBe(0)
+    expect(after.theme).toBe('dark')
+    // The foreign entry and the older-wording entry are exactly what they were.
+    expect(after.hooks.PostToolUse[0]).toEqual(before.hooks.PostToolUse[0])
+    expect(after.hooks.Stop).toEqual(before.hooks.Stop)
+    expect(after.hooks.PostToolUse[1]).toEqual({ hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] })
+    for (const event of ['Notification', 'UserPromptSubmit', 'SessionStart', 'SessionEnd']) {
+      expect(after.hooks[event]).toEqual([{ hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] }])
+    }
+    expect(install.stdout).toContain('Notification, PostToolUse, UserPromptSubmit, SessionStart, SessionEnd')
+  })
+
+  it('writes a backup first and prints its path with a unified diff of what it added', async () => {
+    const path = await hookFileFixture({ hooks: { Stop: [entryGroup(DOCUMENTED_CLAUDE)] } })
+    const original = await readFile(path, 'utf8')
+
+    const install = await runHooks(['install', 'claude', '--file', path])
+    const [backup, ...extra] = await backupsOf(path)
+
+    expect(install.code).toBe(0)
+    expect(extra).toEqual([])
+    expect(backup).toBeDefined()
+    expect(await readFile(join(dirname(path), backup ?? ''), 'utf8')).toBe(original)
+    expect(install.stdout).toContain(`Backup: ${path}.bmn-backup-`)
+    // The atomic write renames a temp file in the same folder; none of them is left behind.
+    expect((await readdir(dirname(path))).filter((entry) => entry.endsWith('.tmp'))).toEqual([])
+    expect(install.stdout).toContain(`--- ${path}`)
+    expect(install.stdout).toContain(`+++ ${path}`)
+    expect(install.stdout).toMatch(/^\+.*bmn hook claude/m)
+    // A diff that only adds never prints a removed line.
+    expect(install.stdout.split('\n').filter((line) => /^-[^-]/.test(line))).toEqual([])
+  })
+
+  it('creates a missing file with only the hooks object and no backup', async () => {
+    const path = await hookFileFixture()
+
+    const install = await runHooks(['install', 'claude', '--file', path])
+    const written = JSON.parse(await readFile(path, 'utf8'))
+
+    expect(install.code).toBe(0)
+    expect(Object.keys(written)).toEqual(['hooks'])
+    expect(Object.keys(written.hooks)).toEqual(CLAUDE_EVENTS)
+    expect(await backupsOf(path)).toEqual([])
+  })
+
+  it('installs nothing when nothing is missing and says so', async () => {
+    const path = await hookFileFixture({
+      hooks: Object.fromEntries(CLAUDE_EVENTS.map((event) => [event, [entryGroup(DOCUMENTED_CLAUDE)]]))
+    })
+    const before = await readFile(path, 'utf8')
+
+    const install = await runHooks(['install', 'claude', '--file', path])
+
+    expect(install.code).toBe(0)
+    expect(install.stdout).toContain('Nothing to do')
+    expect(await readFile(path, 'utf8')).toBe(before)
+    expect(await backupsOf(path)).toEqual([])
+  })
+
+  it('leaves an unparsable file untouched, writes no backup and exits 1', async () => {
+    const broken = '{ "hooks": { "Stop": [ }'
+    const path = await hookFileFixture(broken)
+
+    const install = await runHooks(['install', 'claude', '--file', path])
+
+    expect(install.code).toBe(1)
+    expect(install.stderr).toContain('not valid JSON')
+    expect(await readFile(path, 'utf8')).toBe(broken)
+    expect(await backupsOf(path)).toEqual([])
+  })
+
+  it('tells the owner about the Codex trust step, and only for Codex', async () => {
+    const codexPath = await hookFileFixture({}, 'hooks.json')
+    const claudePath = await hookFileFixture({})
+
+    const codex = await runHooks(['install', 'codex', '--file', codexPath])
+    const claude = await runHooks(['install', 'claude', '--file', claudePath])
+
+    // The whole sentence, not just "/hooks": the fixture's own path ends in hooks.json.
+    expect(codex.stdout).toContain('Codex must trust the hooks once: run /hooks in Codex.')
+    expect(codex.stdout).toContain('reports configuration, not that a hook fired')
+    expect(claude.stdout).not.toContain('trust the hooks once')
+    // Install writes the required events only; PermissionRequest stays the owner's own choice.
+    expect(Object.keys(JSON.parse(await readFile(codexPath, 'utf8')).hooks)).toEqual(CODEX_EVENTS)
+  })
+
+  it('leaves check reporting everything wired afterwards', async () => {
+    const path = await hookFileFixture({ hooks: { Stop: [entryGroup(OLDER_CLAUDE)] } })
+
+    await runHooks(['install', 'claude', '--file', path])
+    const check = await runHooks(['check', 'claude', '--file', path])
+
+    expect(check.code).toBe(0)
+    expect(check.stdout).toContain('Every hook BMN expects is wired')
+  })
+
+  it('refuses install without an agent', async () => {
+    const result = await runHooks(['install'])
+
+    expect(result.code).toBe(2)
+    expect(result.stderr).toContain('hooks install expects one agent')
+  })
+})
+
+describe('the hook event lists check and hook share', () => {
+  it('drives bmn hook with every event check expects, and each one reaches the app', async () => {
+    const fixture = await cliFixture()
+    const payloads: Record<string, unknown> = {
+      Notification: { notification_type: 'permission_prompt', message: 'needs permission' },
+      PreToolUse: { tool_name: 'request_user_input', tool_input: { questions: [{ question: 'Which?' }] } },
+      PostToolUse: { tool_name: 'Bash', tool_input: {} },
+      UserPromptSubmit: {},
+      Stop: {},
+      SessionStart: { source: 'startup', session_id: OBSERVED_REFERENCE },
+      SessionEnd: {},
+      Interrupt: {}
+    }
+
+    for (const [agent, events] of [['claude', CLAUDE_EVENTS], ['codex', CODEX_EVENTS]] as const) {
+      for (const event of events) {
+        fixture.handlers.observeHookEvent.mockClear()
+        const before = fixture.handlers.openAttention.mock.calls.length +
+          fixture.handlers.withdrawAttention.mock.calls.length +
+          fixture.handlers.resolveAttention.mock.calls.length
+        await runHook(fixture, agent, { hook_event_name: event, ...(payloads[event] as object) })
+        const after = fixture.handlers.openAttention.mock.calls.length +
+          fixture.handlers.withdrawAttention.mock.calls.length +
+          fixture.handlers.resolveAttention.mock.calls.length
+        expect(after, `${agent} ${event} changed nothing in Needs you`).toBeGreaterThan(before)
+        expect(fixture.handlers.observeHookEvent, `${agent} ${event} was not logged`).toHaveBeenCalled()
+      }
+    }
   })
 })

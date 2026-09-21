@@ -37,6 +37,8 @@ bmn withdraw <request-key>                     Withdraw your request
 bmn resolve <request-key> <resolution>         Mark a request resolved
 bmn send <text> [--submit] [--key K]           Paste text into the session; --submit presses Enter
 bmn hook <agent>                               Turn an agent hook event on stdin into Needs you requests
+bmn hooks check [agent] [--file PATH]          Say which of BMN's hook entries each hook file carries
+bmn hooks install <agent> [--file PATH]        Add the missing entries, after backing the file up
 bmn help [agents]                              Show usage; `help agents` prints the agent brief
 ```
 
@@ -54,7 +56,8 @@ Options:
 Progress states: `running`, `waiting`, `blocked`, `claimed-done`, `verified`, `failed`, `unknown`.
 Request kinds: `question` (default), `permission`, `review`, `notice`.
 
-Exit status: `0` success, `1` remote or connection error, `2` usage error.
+Exit status: `0` success, `1` remote or connection error, `2` usage error. `bmn hooks` uses `1` for
+"something is missing or unreadable": it reads and writes files instead of talking to the socket.
 
 ## Examples
 
@@ -142,20 +145,45 @@ Typing, pasting or dictating into a session answers its open prompts and notices
 clears a session's status on a keystroke, so they leave **Needs you** as soon as you respond, even
 when the agent sends no hook for it (a denied permission, or Esc). Review requests stay open.
 
-Add the hook to `~/.claude/settings.json` for `Notification`, `PostToolUse`, `UserPromptSubmit`,
-`Stop`, `SessionStart` and `SessionEnd`, next to any hooks already there:
+### Wiring the hooks
+
+Two commands do it, and neither needs BMN to be running:
+
+```bash
+bmn hooks check              # what each agent's own hook file carries, for every event BMN expects
+bmn hooks install claude     # add only the missing entries, after backing the file up
+bmn hooks install codex
+```
+
+`check` prints one line per event: `wired` for the documented command, `wired (older wording)` for a
+command that runs `bmn hook <agent>` but is spelled differently (BMN also reads the older
+`AITERM_CONTROL_SOCKET` name, so those keep working), or `missing`. It exits `0` when nothing is
+missing and `1` otherwise, and `--json` prints the same report as one object. Run it after a Claude
+Code or Codex update rewrites your settings file.
+
+`install` copies the file to `<file>.bmn-backup-<timestamp>`, adds the missing entries next to the
+hooks already registered for that event, writes the file atomically and prints a unified diff. It
+never removes, reorders or rewrites an entry, including one with the older wording, and writes
+nothing when nothing is missing. A file that is not valid JSON is reported and left untouched.
+
+Both commands say what is **configured**. Neither says that a hook has ever fired; the session's
+**Hook events…** list is what shows that.
+
+The entries themselves, for wiring them by hand. `~/.claude/settings.json` needs `Notification`,
+`PostToolUse`, `UserPromptSubmit`, `Stop`, `SessionStart` and `SessionEnd`, next to any hooks
+already there:
 
 ```json
 { "hooks": [{ "type": "command", "timeout": 5,
   "command": "[ -n \"$BMN_CONTROL_SOCKET\" ] && command -v bmn >/dev/null && bmn hook claude; exit 0" }] }
 ```
 
-For Codex, add the same entries with `bmn hook codex` to `~/.codex/hooks.json` for `PreToolUse`,
-`PostToolUse`, `UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd` and `Interrupt`, then trust
-them once with `/hooks` in Codex. `PreToolUse` is required for queued `request_user_input_async`
-questions because Codex has no `Notification` hook event. Add `PermissionRequest` only without Auto
-Review: Codex fires it before Auto Review decides whether you must approve, so it would flag tools
-that never need you.
+For Codex, the same entries with `bmn hook codex` go in `~/.codex/hooks.json` for `PreToolUse`,
+`PostToolUse`, `UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd` and `Interrupt`. Codex must
+then trust them once with `/hooks`, which no command can do for you. `PreToolUse` is required for
+queued `request_user_input_async` questions because Codex has no `Notification` hook event. Add
+`PermissionRequest` only without Auto Review: Codex fires it before Auto Review decides whether you
+must approve, so it would flag tools that never need you, and `install` therefore never adds it.
 
 BMN shows a desktop notification for a new request unless you are looking at that session. Telegram
 gets it only while you are away from the desk (a minute without keyboard or mouse input), only if it

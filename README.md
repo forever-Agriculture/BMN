@@ -29,7 +29,9 @@ Everything runs on your computer. There is no account, cloud backend or telemetr
   [What survives](docs/architecture.md#what-survives) says what each ending keeps.
 - **Agent control (`bmn`).** Every session gets the `bmn` command. An agent can list sessions,
   publish a file, report progress, ask you a question, or send text to its own session. Each session
-  gets a token scoped to that session. See [docs/agent-control.md](docs/agent-control.md).
+  gets a token scoped to that session. `bmn hooks check` says which of BMN's hook entries each
+  harness's own settings file carries, and `bmn hooks install <agent>` adds the missing ones without
+  touching anything else. See [docs/agent-control.md](docs/agent-control.md).
 - **Files.** Published files, attachments and pasted images are stored as immutable originals with
   a hash. The Files panel previews them and offers Open, Save As, Show in Folder and Deliver to
   session.
