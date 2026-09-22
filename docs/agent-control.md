@@ -262,9 +262,9 @@ The line is only printed when the event is missing. An event something else alre
 duplicate coming and nothing to explain, so nothing is printed for it.
 
 **About matchers.** A matcher names the tools its group's hooks run for. BMN does not read one, so
-it does not answer for an entry inside a group that has one — only an absent, `null` or empty
-matcher leaves a group ungated. That is a rule about what BMN recognises, not a claim that the entry
-never fires: a harness may ignore the matcher on some events (Codex does on `Stop`,
+it does not answer for an entry inside a group that has one — only an absent or empty matcher
+leaves a group ungated, and for Codex a `null` one as well. That is a rule about what BMN
+recognises, not a claim that the entry never fires: a harness may ignore the matcher on some events (Codex does on `Stop`,
 `UserPromptSubmit` and `Interrupt`), in which case the entry `install` adds beside yours is simply a
 duplicate.
 
@@ -296,12 +296,14 @@ ends with the limit instead, and `epics.md:787` says the same thing: this comman
 under Hook events. That is the check BMN cannot do for you.
 
 What BMN still refuses to add to, for both harnesses, is a file it cannot merge into without
-removing something: `hooks` that is not an object, or an event whose value is not a list of groups.
-That is about the merge, not about the harness.
+removing something: `hooks` that is not an object, or an event whose value is not a list. That is
+about the merge, not about the harness.
 
 One more thing `install` will not do: rewrite a number it cannot reproduce. It reserializes the
 file, and `JSON.stringify` turns `18446744073709551615` into `18446744073709552000`. Rather than
-silently edit a value nobody asked it to touch, it declines and names the number.
+silently edit a value nobody asked it to touch, it declines and names the number. Node hands a
+parser the literal source only from 21 on, so under an older node this guard finds nothing and
+`install` writes as it always did.
 
 
 `install` then adds BMN's own entry beside yours, so the hook fires from BMN's entry whatever yours

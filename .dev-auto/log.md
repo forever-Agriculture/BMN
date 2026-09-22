@@ -2518,3 +2518,64 @@ raw is tracked by git.
 `73942b8..HEAD` is committed on local `main` and **unpushed** (accepted code through `8bd263e`,
 plus this handoff commit); `pnpm run update:desktop` was not
 run. Both need the owner's word, as does the one-line `saved-output-store` timeout.
+
+### Post-acceptance round, at the owner's word (2026-09-22 ~13:45+03:00)
+
+Owner: *"you can dispatch extra review with glm models"* and *"and you can discuss the most
+importand or complex things with Astra/med"*, then *"when you're confident - update local and push
+to GH"*. Three read-only dispatches, aimed at the two things nobody had looked at.
+
+**GLM-5.3/max — the unreviewed delta `924f467..8bd263e`** ($0.81, 23 turns).
+`reviews/final-glm53.json` (sha256 `b73dd98a9f9fae10…`). **`VERDICT: acceptable at 8bd263e`, no
+P1/P2/P3.** It confirmed the no-behaviour-change claim by three independent routes, checked the
+page's Codex timeout rule against `runnableEntry` case by case, and checked the new
+`1152921504606846976` row asserts the strong thing (a real `install codex` run, exit 1, the literal
+named in stderr, the file byte-identical). It also swept for leftovers and correctly *declined* to
+flag `log.md:2308`, which states the old rule inside a dated wave-15 entry: "rewriting it would
+falsify history". Right call.
+
+**GLM-5.3-Flash/max — does `docs/agent-control.md` match `bin/bmn` exactly** ($0.74, 15 turns).
+`reviews/final-glmflash.json` (sha256 `75a90a6f0a92cbdd…`). **`VERDICT: 1 real mismatch`**, plus
+three style notes. All verified against the source and **two were worth fixing**:
+
+1. `agent-control.md:299` said `install` refuses "an event whose value is not a list of groups".
+   `unusableShape` (`bin/bmn:870`) tests `Array.isArray` and nothing else, so `{"Stop": [42]}`
+   passes and `hookEventState` just skips the non-object member (`bin/bmn:799`). The page said it
+   correctly at `:184` and wrongly at `:299`. Fixed: "not a list".
+2. The number-rewrite refusal was stated unconditionally, but `context.source` only exists from
+   Node 21 (`bin/bmn:953-955` says so in a comment); under an older node the guard finds nothing
+   and `install` writes as it always did. The page now says that.
+3. The matcher summary — "only an absent, `null` or empty matcher leaves a group ungated" — is the
+   union of two different rules and is wrong for Claude taken alone, though the next paragraph
+   corrects it. Split: absent or empty for both, `null` for Codex as well.
+
+Flash's own scope was doc-vs-code only, and it verified all six focus points with `file:line` on
+both sides. This is the second time in this epic that the cheap route found something the expensive
+ones did not — both times in prose, not code.
+
+**gpt-6-astra/medium — the one design question left open** (rollout
+`~/.codex/sessions/2026/09/22/rollout-2026-09-22T12-42-31-01a0c87e-dab8-7711-9d23-dadd0a05d08d.jsonl`,
+61,909 tokens; answer `reviews/final-astra.md`, sha256 `99ce17f812543683…`).
+
+I asked whether shipping an *unmeasured* Codex `timeout` rule that can produce a false `wired`
+breaks the asymmetry the epic was built on, and offered (a) keep it, (b) bias every Codex
+uncertainty to `missing`, (c) a fourth state.
+
+He answered **(d), and refuted (b) with a fact I had missed**: BMN installs `timeout: 5` itself
+(`bin/bmn:661`, `:687`), so a rule that rejects every numeric timeout would report BMN's **own
+installed entry** as missing forever and add another on every run. (b) is not merely costly, it is
+self-defeating. He also pointed out that absent and `null` have exactly as many measured Codex runs
+as a number does — zero — so (b) does not restore the guarantee it claims to.
+
+His answer: keep the three configuration states, qualify Codex's `wired` as *"entry present;
+runtime unverified"* and apply that uncertainty **uniformly, including to BMN's own entries** —
+which is what keeps it clear of wave 14, whose distinction came from familiarity rather than from
+evidence. **"Do not block the push or reopen Epic 15."** Named follow-up: *"Separate Codex
+configuration detection from runtime verification."* Evidence that would change it: a controlled
+Codex run showing an accepted entry rejected.
+
+So: yes, the footer discloses the limit but does not make the predicate sound. That is now recorded
+as a follow-up rather than argued away.
+
+Docs-only fixes verified: `control-cli.test.ts` drives `docs/agent-control.md` directly
+(`control-cli.test.ts:14`) and all **288 tests pass** after the edits.
