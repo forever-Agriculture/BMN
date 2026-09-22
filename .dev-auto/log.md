@@ -2329,3 +2329,75 @@ and spent five waves building something the acceptance criteria did not ask for 
 available here could support. The reviewer who was asked the narrower question answered it; the
 reviewer who was asked the wider one said to delete it. Astra's endorsement was of an option I
 wrote, and the option set I offered did not include "ship what the story says".
+
+## 2026-09-22 ~12:55 — Wave 16: the installer, and both reviewers on the reversal
+
+### Both reviewers accept the reversal
+
+**gpt-6-astra/medium, recheck 14: withdrew its endorsement of D.** Verbatim: *"The epic asks for
+configuration recognition and explicitly separates that from firing. No evidence supplied
+establishes Codex acceptance for the supposedly stronger `read` class. Familiarity with a partial
+schema was the wrong confidence boundary."* Dissolving its three earlier findings by deletion is
+legitimate; no entry-only execution defect needs the deleted machinery.
+
+**GLM-5.3/max, extra 14 ($1.25, 30 turns): accepts Epic 15 at `43bac51`**, and made the strongest
+case it could for D before rejecting it: *"my condition ('reserve `wired` for stronger evidence')
+attached an evidential requirement to a configurational criterion... the condition was
+unsatisfiable, and I should have seen it... every Codex file, every event, `unverified`, forever. A
+constant carries less information than the three-state model plus the unconditional closing line."*
+
+### Two installer defects, both real, both mine
+
+**P1 — the number guard was wrong in a way I had reasoned my way into.** It compared the source
+token to `BigInt(value)`, the parsed double, rather than to what `JSON.stringify` would emit. Astra
+reproduced three more corruptions through the real CLI, all exiting 0:
+
+| in the file | written back |
+| --- | --- |
+| `1000000000000000128` | `1000000000000000100` |
+| `9007199254740993.0` | `9007199254740992` |
+| `1e400` | `null` |
+
+and I reproduced a fourth myself: `1152921504606846976` passes a `BigInt(value)` comparison exactly,
+because the double *is* that value, yet the writer emits `1152921504606847000` — a different `u64`.
+The integer-only regex was the other half of the error: `9007199254740993.0` and `1e400` never
+reached the check at all. So "only integer tokens can lose their value this way" was false, and the
+comment asserting it was the tell.
+
+The guard now compares the literal in the file with the literal the writer would emit, both reduced
+to exact decimals (sign, digits, power of ten, trailing zeros stripped). `1.0` → `1` and `1e3` →
+`1000` are the same numbers and pass; everything above is refused by name. A non-finite value is
+refused outright, which is the `1e400` → `null` case.
+
+**P2 — the guard ran before the "nothing to do" branch**, so a fully wired file holding such a
+number failed `install` with advice to add the entry by hand when there was nothing to add. That
+contradicts `epics.md:786`, which gives an already-wired file a successful no-op. It now runs where
+the write is.
+
+### Two corrections to my own words
+
+- Astra: *"'being wrong costs a duplicate' describes false negatives only; false positives suppress
+  installation."* Right. The Codex timeout rule is now the whole number its `u64` declares, which
+  moves `1.5` to the duplicate-costing side, and the comment says plainly that the rule can be wrong
+  either way and that the closing line is why that is tolerable.
+- GLM reported `fences-15-wave15.log` lines 8-9 as naming tests that do not exist at `43bac51`, and
+  concluded two fences had run against a pre-final tree. **That is a misreading and the log is
+  sound:** `it.each` fills `%s` from the first tuple elements in order, so the titles carry the
+  timeout value, not the asserted state. Verified by running the suite with `--reporter=verbose`.
+  It does expose a real flaw in those titles — they state the input twice and never the assertion —
+  which is the same slip this epic already fixed once for the recognition table. Retitled.
+
+### Carried, restated honestly
+
+Codex's cheap rules can be wrong in the direction that suppresses an install: an entry whose
+`timeout` Codex rejects per-entry would read `wired` and no duplicate would be added. Whether Codex
+drops such an entry or refuses the whole file is unmeasurable here. Named on the carried list in
+those terms rather than as "costs a duplicate".
+
+Also carried, at both reviewers' suggestion and **not fixed inside this epic**:
+`saved-output-store.test.ts:172` has now timed out in both recent full gate runs and passed in all
+three isolated re-runs — 101 sequential awaited saves against a fixed 5s budget with 88 workers. It
+is Epic 5's subsystem. GLM: *"it will keep eating gates. Fix it out-of-epic... and don't fold that
+edit into this wave."* Agreed; it needs the owner's go-ahead as its own change.
+
+287 CLI tests. Twelve mutation probes (`fences-15-wave16.log`).

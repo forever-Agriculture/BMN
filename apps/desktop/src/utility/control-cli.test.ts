@@ -1585,12 +1585,13 @@ it('ends every Codex report with the limit of what it checked', async () => {
   })
 
   it.each([
-    ['null', null, 'wired'],
-    ['zero', 0, 'wired'],
-    ['a plain number', 30, 'wired'],
-    ['negative', -1, 'missing'],
-    ['a string', '5', 'missing']
-  ])('reads a Codex timeout of %s as %s', async (_label, timeout, state) => {
+    ['wired', 'null', null],
+    ['wired', 'zero', 0],
+    ['wired', 'a plain number', 30],
+    ['missing', 'a fraction, which u64 does not hold', 1.5],
+    ['missing', 'negative', -1],
+    ['missing', 'a string', '5']
+  ])('reads %s for a Codex timeout of %s', async (state, _label, timeout) => {
     const path = await hookFileFixture({
       hooks: { Stop: [{ hooks: [{ type: 'command', timeout, command: DOCUMENTED_CODEX }] }] }
     }, 'hooks.json')
@@ -1616,35 +1617,63 @@ it('ends every Codex report with the limit of what it checked', async () => {
       .find((row: { event: string }) => row.event === 'Stop').state).toBe('missing')
   })
 
-  it('will not install into a file holding a number it cannot write back unchanged', async () => {
+  it.each([
+    ['a big integer past what a double holds', '18446744073709551615'],
+    ['an integer a double rounds to a different one', '1000000000000000128'],
+    ['a decimal-form integer that loses its last digit', '9007199254740993.0'],
+    ['an exponent past what a double holds, which the writer turns into null', '1e400'],
+    ['a long decimal the writer shortens', '3.14159265358979323846']
+  ])('will not install into a file holding %s', async (_label, token) => {
+    const path = await hookFileFixture(`{ "keepMe": ${token}, "hooks": {} }`, 'hooks.json')
+    const before = await readFile(path, 'utf8')
+
+    const install = await runHooks(['install', 'codex', '--file', path])
+
+    // `install` reserializes the file, and `JSON.stringify` does not promise the digits it was
+    // handed. Silently editing a number BMN was not asked to touch is worse than declining, so it
+    // declines and names the number. Judging this by the shape of the token missed three of these.
+    expect(install.code).toBe(1)
+    expect(install.stderr).toContain(token)
+    expect(await readFile(path, 'utf8')).toBe(before)
+    expect(await backupsOf(path)).toEqual([])
+  })
+
+  it.each([
+    ['a trailing zero', '1.0'],
+    ['exponent form', '1e3'],
+    ['the largest integer a double holds exactly', '9007199254740991'],
+    ['minus zero', '-0']
+  ])('installs normally into a file whose number is only respelled: %s', async (_label, token) => {
+    const path = await hookFileFixture(`{ "keepMe": ${token}, "hooks": {} }`, 'hooks.json')
+
+    const install = await runHooks(['install', 'codex', '--file', path])
+    const after = JSON.parse(await readFile(path, 'utf8'))
+
+    // `1.0` comes back as `1` and `1e3` as `1000`: the same numbers, written differently. That is
+    // not a reason to refuse an install.
+    expect(install.code).toBe(0)
+    // `-0` is written as `0`; `Object.is` tells them apart while JSON does not, and the number the
+    // file denotes is the same either way.
+    expect(after.keepMe).toBe(JSON.parse(token) === 0 ? 0 : JSON.parse(token))
+    expect(after.hooks.Stop).toHaveLength(1)
+  })
+
+  it('does nothing, successfully, for a wired file holding a number it could not write back', async () => {
     const path = await hookFileFixture(
-      '{ "keepMe": 18446744073709551615, "hooks": {} }',
+      `{ "keepMe": 1e400, "hooks": ${JSON.stringify(Object.fromEntries(
+        CODEX_EVENTS.map((each) => [each, [{ hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CODEX }] }]])
+      ))} }`,
       'hooks.json'
     )
     const before = await readFile(path, 'utf8')
 
     const install = await runHooks(['install', 'codex', '--file', path])
 
-    // `install` reserializes the file, and JSON.stringify writes that back as
-    // 18446744073709552000. Silently editing a number BMN was not asked to touch is worse than
-    // declining, so it declines and says which number.
-    expect(install.code).toBe(1)
-    expect(install.stderr).toContain('18446744073709551615')
-    expect(await readFile(path, 'utf8')).toBe(before)
-    expect(await backupsOf(path)).toEqual([])
-  })
-
-  it('installs normally into a file whose numbers all survive the writer', async () => {
-    const path = await hookFileFixture({ keepMe: 1.0, alsoMe: 9007199254740991, hooks: {} }, 'hooks.json')
-
-    const install = await runHooks(['install', 'codex', '--file', path])
-    const after = JSON.parse(await readFile(path, 'utf8'))
-
-    // `1.0` comes back as `1`, which is the same number, so it is not a reason to decline.
+    // `epics.md:786` gives an already-wired file a successful no-op. The number matters only to a
+    // write, and there is no write, so refusing here would fail an install that had nothing to do.
     expect(install.code).toBe(0)
-    expect(after.keepMe).toBe(1)
-    expect(after.alsoMe).toBe(9007199254740991)
-    expect(after.hooks.Stop).toHaveLength(1)
+    expect(install.stdout).toContain('Nothing to do')
+    expect(await readFile(path, 'utf8')).toBe(before)
   })
 
   it('shortens a long unrecognised entry to one line', async () => {

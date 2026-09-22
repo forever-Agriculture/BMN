@@ -648,13 +648,15 @@ const HOOK_FILES = {
     path: ['.codex', 'hooks.json'],
     events: ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd', 'Interrupt'],
     optional: ['PermissionRequest'],
-// Codex's own rule for `timeout` is stricter than this - it is declared `Option<u64>` - but
-    // BMN does not police somebody else's schema, so it asks only what it needs: would an entry
-    // carrying this run. Being wrong costs a duplicate entry.
-    timeout: 'non-negative-number',
-        ungated: ['absent', 'null', 'empty']
+    // Codex declares `Option<u64>`, so a whole number at or above zero is the closest cheap rule.
+    // BMN does not police the rest of somebody else's schema. This can be wrong either way: too
+    // strict costs the owner a duplicate entry, too loose calls an entry wired that Codex will not
+    // load - which is why every Codex report closes by saying BMN does not check that it loads.
+    timeout: 'whole-non-negative-number',
+    ungated: ['absent', 'null', 'empty']
   }
 }
+
 /** The entry docs/agent-control.md documents, and the only one `hooks install` ever writes. */
 const HOOK_ENTRY_TIMEOUT = 5
 
@@ -883,9 +885,9 @@ function runnableEntry(entry, agent) {
   const timeout = entry.timeout
   if (timeout === undefined) return true
   if (HOOK_FILES[agent].timeout === 'positive-number') return typeof timeout === 'number' && timeout > 0
-  // Codex was never run here, so its rule is the cheap safe one: a number it could plausibly use,
-  // or the `null` its `Option` reads as absence. Being wrong costs a duplicate entry.
-  return timeout === null || (typeof timeout === 'number' && timeout >= 0)
+  // Codex was never run here, so its rule is the cheap one: the whole number its `u64` declares,
+  // or the `null` its `Option` reads as absence.
+  return timeout === null || (Number.isInteger(timeout) && timeout >= 0)
 }
 
 /** Whether this matcher leaves its group gated, by what the harness in question treats as absence. */
@@ -919,10 +921,34 @@ function checkHooks(agent, path, file = readHookFile(path, agent)) {
 }
 
 /**
- * Integer literals `install` would write back as a different number. It reserializes the file, and
- * `JSON.stringify` turns `18446744073709551615` into `18446744073709552000` - a silent edit to a
- * value BMN was not asked to touch, in a file it had just called fine. Only integer tokens can
- * lose their value this way; `1.0` becoming `1` is the same number and is left alone.
+ * A JSON number literal as an exact decimal: sign, digits and a power of ten, with trailing zeros
+ * removed so `1.0`, `1` and `1e0` all come out the same. Comparing these compares the numbers two
+ * spellings denote, which is the only question worth asking about a rewrite.
+ */
+function decimalParts(token) {
+  const parsed = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(token)
+  if (parsed === null) return null
+  const [, sign, whole, fraction = '', exponent = '0'] = parsed
+  let digits = `${whole}${fraction}`.replace(/^0+(?=\d)/, '')
+  let scale = BigInt(exponent) - BigInt(fraction.length)
+  while (digits.length > 1 && digits.endsWith('0')) {
+    digits = digits.slice(0, -1)
+    scale += 1n
+  }
+  return digits === '0' ? { sign: '', digits: '0', scale: 0n } : { sign, digits, scale }
+}
+
+/**
+ * Numbers `install` would write back as a different number. It reserializes the file, and
+ * `JSON.stringify` does not promise the digits it was handed: `18446744073709551615` comes out as
+ * `18446744073709552000`, `1000000000000000128` as `1000000000000000100`, `9007199254740993.0` as
+ * `9007199254740992`, and `1e400` as `null`. Each is a silent edit to a value BMN was not asked to
+ * touch, in a file it had just called fine.
+ *
+ * So the comparison is between the literal in the file and the literal the writer would emit, as
+ * exact decimals. `1.0` becoming `1` is the same number and is allowed; the rest are not. Judging
+ * this from the shape of the token was the previous version of this guard, and it was wrong in
+ * both directions.
  *
  * Node hands the reviver the literal source from 21 on. `bin/bmn` runs under whatever node the
  * machine has, so where that is missing this finds nothing and `install` behaves as it always did
@@ -933,8 +959,12 @@ function rewrittenNumbers(text) {
   try {
     JSON.parse(text, function compareToken(key, value, context) {
       const source = context?.source
-      if (typeof value === 'number' && typeof source === 'string' && /^-?\d+$/.test(source)) {
-        if (!Number.isInteger(value) || BigInt(source) !== BigInt(value)) changed.push(source)
+      if (typeof value !== 'number' || typeof source !== 'string') return value
+      const before = decimalParts(source)
+      const after = Number.isFinite(value) ? decimalParts(JSON.stringify(value)) : null
+      if (before === null || after === null || before.sign !== after.sign
+        || before.digits !== after.digits || before.scale !== after.scale) {
+        changed.push(source)
       }
       return value
     })
@@ -1235,8 +1265,14 @@ function installHooksCommand(agent, path, asJson) {
     process.stderr.write(`bmn: ${reason}\n`)
     return 1
   }
-  // Checked before anything is written, and before the "nothing to do" path, so the answer does
-  // not depend on whether this run happens to have something to add.
+  const report = checkHooks(agent, path, file)
+  if (report.missing.length === 0) {
+    const message = `Nothing to do: every hook BMN expects is already in ${path}.`
+    process.stdout.write(`${asJson ? JSON.stringify({ installed: [], backup: null, file: path }, null, 2) : message}\n`)
+    return 0
+  }
+  // Only now, when there is a write to do. AC2 gives an already-wired file a successful no-op, and
+  // a number elsewhere in it is no reason to fail that.
   const rewritten = rewrittenNumbers(file.text)
   if (rewritten.length > 0) {
     process.stderr.write(
@@ -1244,12 +1280,6 @@ function installHooksCommand(agent, path, asJson) {
       + 'it was left untouched. Add the entry by hand, or shorten that number.\n'
     )
     return 1
-  }
-  const report = checkHooks(agent, path, file)
-  if (report.missing.length === 0) {
-    const message = `Nothing to do: every hook BMN expects is already in ${path}.`
-    process.stdout.write(`${asJson ? JSON.stringify({ installed: [], backup: null, file: path }, null, 2) : message}\n`)
-    return 0
   }
   const indent = jsonIndent(file.text)
   const nextText = `${JSON.stringify(installHooks(agent, file.data, report.missing), null, indent)}\n`
