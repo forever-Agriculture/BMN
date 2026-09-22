@@ -281,8 +281,10 @@ so `check` does not call it one. Under Claude Code this was measured one entry a
 real tool call, each with a control that fired: an absent `timeout` ran, `1` and `1.5` ran, and
 `"5"`, `-1`, `null` and `0` did not. So BMN counts a Claude entry only when its `timeout` is absent
 or a positive number, and prints the entry under the event like any other it did not count. For
-Codex, which has never been run here, the rule is the cheap safe one: absent, `null`, or a number at
-or above zero. Being wrong there costs a duplicate entry.
+Codex, which has never been run here, the rule is the cheap one its `Option<u64>` suggests: absent,
+`null`, or a whole number at or above zero. That can be wrong either way — too strict and you get a
+duplicate entry, too loose and BMN calls an entry wired that Codex will not load — which is what the
+next paragraph is for.
 
 **What `check` does not do: read your harness's config file for it.** Codex in particular loads its
 hook file strictly, so a mistake anywhere in that file can stop every hook in it, BMN's included.

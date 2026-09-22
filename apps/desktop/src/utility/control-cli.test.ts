@@ -1598,8 +1598,9 @@ it('ends every Codex report with the limit of what it checked', async () => {
 
     const result = await runHooks(['check', 'codex', '--file', path, '--json'])
 
-    // Codex was never run here, so the rule is the cheap safe one: a number it could plausibly
-    // use, or the null its Option reads as absence. Being wrong costs a duplicate entry.
+    // Codex was never run here, so the rule is the cheap one its `Option<u64>` suggests: a whole
+    // number, or the null it reads as absence. Wrong either way: too strict costs a duplicate, too
+    // loose calls an entry wired that Codex will not load.
     expect(JSON.parse(result.stdout).agents[0].events
       .find((row: { event: string }) => row.event === 'Stop').state).toBe(state)
   })
@@ -1619,7 +1620,8 @@ it('ends every Codex report with the limit of what it checked', async () => {
 
   it.each([
     ['a big integer past what a double holds', '18446744073709551615'],
-    ['an integer a double rounds to a different one', '1000000000000000128'],
+    ['an integer the double holds but the writer shortens', '1000000000000000128'],
+    ['the integer that passes a parsed-value comparison exactly', '1152921504606846976'],
     ['a decimal-form integer that loses its last digit', '9007199254740993.0'],
     ['an exponent past what a double holds, which the writer turns into null', '1e400'],
     ['a long decimal the writer shortens', '3.14159265358979323846']

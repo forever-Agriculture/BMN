@@ -2401,3 +2401,53 @@ is Epic 5's subsystem. GLM: *"it will keep eating gates. Fix it out-of-epic... a
 edit into this wave."* Agreed; it needs the owner's go-ahead as its own change.
 
 287 CLI tests. Twelve mutation probes (`fences-15-wave16.log`).
+
+### Wave 16 gates, and a third flake
+
+`checks-924f467.log`: lint, typecheck, unit (1,439 passed / 1 skipped over 88 files) and Electron
+all exit 0; **the visual step failed once**. The fixture's own attention request was answered 69 ms
+after it opened — `state: "answered"`, `resolvedBy: "input"`, "Answered in the terminal" — so the
+`.needs-you` dot never appeared and the 15 s wait timed out. `checks-924f467-visual-reruns.log` has
+it PASS twice more at the same revision with a clean tree.
+
+`git diff 43bac51..HEAD` touches only the `hooks` subcommand in `bin/bmn` and its tests, and the
+visual harness drives `ask`/`withdraw` and the terminal, not `hooks`. So nothing in waves 15-16 is
+on that path. **What I cannot rule out from a diff:** Story 15.1 is part of this epic and does
+touch attention routing, and the failure is an attention request resolving by terminal input. It
+shipped at `a25ed3f` and the visual gate has passed at every revision since, including three times
+today, so there is no evidence of a regression — but "not caused by this epic" is more than the
+evidence supports, and the honest statement is "not attributed". Named for the reviewer to weigh.
+
+Three flakes now stand in the record, all timing-shaped and none an assertion failure:
+`companion-service.test.ts` (reproduced at baseline), `saved-output-store.test.ts:172` (2-for-2 in
+full gates, green in all three isolated re-runs), and this one.
+
+### Both reviewers accept Epic 15 at `924f467`
+
+**gpt-6-astra/medium, recheck 15: accepted.** P1 and P2 closed. It checked `decimalParts` against
+exact rational arithmetic for **20,015 literals** — the fourth integer case, overflow, underflow,
+subnormals, signed zero — with zero mismatches, and accepted the visual failure retained as
+unattributed, noting the Electron receipt exercises Story 15.1 directly with unchanged geometry and
+zero input around the second notice.
+
+**GLM-5.3/max, extra 15 ($1.06, 27 turns): accepted, no blocking conditions.** It proved the guard
+correct in both directions from the canonical form: same value implies same canonical form, so a
+false positive is impossible; different value implies different canonical form, so a false negative
+is impossible. It independently confirmed my rejection of its own earlier stale-fence report:
+*"grepping the source for them finds nothing — the inference 'tests absent at 43bac51' was an
+artifact of grepping generated titles."*
+
+### The five named follow-ups, all fixed here
+
+1. `docs/agent-control.md` still stated the *previous* Codex timeout rule ("a number at or above
+   zero") after the code had moved to a whole number — so the page said `timeout: 1.5` reads wired
+   where `check` reads it missing. Corrected.
+2. The same retracted "costs a duplicate entry" framing sat in the page and in a test comment.
+   Both now say the rule can be wrong either way.
+3. `handoff.md`'s carried list carried it too (Astra's one correction). Fixed.
+4. The label "an integer a double rounds to a different one" was wrong about its own token: the
+   double holds `1000000000000000128` exactly; it is the writer's shortest form that changes it.
+5. `1152921504606846976`, the literal that motivated the whole fix, was not pinned by a test — only
+   its class was. Added.
+
+288 CLI tests.
