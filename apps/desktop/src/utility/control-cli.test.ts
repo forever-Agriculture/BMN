@@ -980,6 +980,7 @@ const DOCUMENTED_CLAUDE = '[ -n "$BMN_CONTROL_SOCKET" ] && command -v bmn >/dev/
 const OLDER_CLAUDE = '[ -n "$AITERM_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook claude; exit 0'
 const CLAUDE_EVENTS = ['Notification', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd']
 const CODEX_EVENTS = ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd', 'Interrupt']
+const DOCUMENTED_CODEX = DOCUMENTED_CLAUDE.replace('bmn hook claude', 'bmn hook codex')
 
 /** Every hook fixture lives under a fresh temporary folder, so a public clone carries no owner data. */
 async function hookFileFixture(contents?: unknown, name = 'settings.json'): Promise<string> {
@@ -1337,6 +1338,96 @@ describe('bmn hooks check', () => {
     expect(install.code).toBe(1)
     expect(await readFile(path, 'utf8')).toBe(before)
     expect(await backupsOf(path)).toEqual([])
+  })
+
+  it.each(['PreCompact', 'PostCompact', 'SubagentStart', 'SubagentStop', 'PreToolUse'])(
+    'refuses a file whose matcher under %s it cannot read, though it reports no such event',
+    async (event) => {
+      const path = await hookFileFixture({
+        hooks: {
+          ...Object.fromEntries(CLAUDE_EVENTS.map((each) => [each, [entryGroup(DOCUMENTED_CLAUDE)]])),
+          [event]: [{ matcher: 42, hooks: [{ type: 'command', timeout: 5, command: 'true' }] }]
+        }
+      })
+
+      const result = await runHooks(['check', 'claude', '--file', path, '--json'])
+      const report = JSON.parse(result.stdout)
+
+      // The events BMN expects are all wired, and it must still not say so: a matcher the harness
+      // cannot read stops it loading the file, and those hooks are in the same file.
+      expect(result.code).toBe(1)
+      expect(report.ok).toBe(false)
+      expect(report.agents[0].state).toBe('unusable')
+      expect(report.agents[0].detail).toContain(event)
+    }
+  )
+
+  it.each([
+    ['claude', 'settings.json', CLAUDE_EVENTS, DOCUMENTED_CLAUDE, 'read'],
+    ['codex', 'hooks.json', CODEX_EVENTS, DOCUMENTED_CODEX, 'unusable']
+  ] as const)('reads a list matcher as %s expects', async (agent, file, events, documented, state) => {
+    const path = await hookFileFixture({
+      hooks: {
+        ...Object.fromEntries(events.map((each) => [each, [entryGroup(documented)]])),
+        PostToolUse: [entryGroup(documented), { matcher: ['Write'], hooks: [{ type: 'command', timeout: 5, command: 'true' }] }]
+      }
+    }, file)
+
+    const result = await runHooks(['check', agent, '--file', path, '--json'])
+
+    // Claude Code takes a list of patterns; Codex's matcher is one optional pattern, so a list
+    // fails its schema and its loader refuses the whole file. The rule is per harness.
+    expect(JSON.parse(result.stdout).agents[0].state).toBe(state)
+  })
+
+  it('refuses a file holding something that is not a hook group', async () => {
+    const path = await hookFileFixture({
+      hooks: {
+        ...Object.fromEntries(CLAUDE_EVENTS.map((each) => [each, [entryGroup(DOCUMENTED_CLAUDE)]])),
+        Stop: [entryGroup(DOCUMENTED_CLAUDE), 'oops']
+      }
+    })
+    const before = await readFile(path, 'utf8')
+
+    const check = await runHooks(['check', 'claude', '--file', path, '--json'])
+    const install = await runHooks(['install', 'claude', '--file', path])
+
+    expect(JSON.parse(check.stdout).agents[0].state).toBe('unusable')
+    expect(JSON.parse(check.stdout).agents[0].detail).toContain('not a hook group')
+    expect(install.code).toBe(1)
+    expect(await readFile(path, 'utf8')).toBe(before)
+    expect(await backupsOf(path)).toEqual([])
+  })
+
+  it.each([
+    ['a variation selector', 'bmn hook claude\ufe0f', 'bmn hook claude\\ufe0f'],
+    ['a combining grapheme joiner', 'bmn\u034fhook claude', 'bmn\\u034fhook claude'],
+    ['an astral character', 'bmn hook claude \u{1f600}', 'bmn hook claude \\u1f600'],
+    // The literal text and the character it names must not print the same, or the note cannot be
+    // trusted to mean what it says.
+    ['the text of an escape', '\\u00a0bmn hook claude', '\\\\u00a0bmn hook claude']
+  ])('prints %s as its code point rather than as itself', async (_label, command, shown) => {
+    const path = await hookFileFixture({ hooks: { Stop: [entryGroup(command)] } })
+
+    const result = await runHooks(['check', 'claude', '--file', path, '--json'])
+
+    expect(JSON.parse(result.stdout).agents[0].events
+      .find((row: { event: string }) => row.event === 'Stop').unrecognised).toEqual([shown])
+  })
+
+  it('never cuts an escape in half when it shortens a long entry', async () => {
+    const path = await hookFileFixture({
+      hooks: { Stop: [entryGroup(`bmn hook claude ${'a'.repeat(100)}\u00a0${'b'.repeat(40)}`)] }
+    })
+
+    const result = await runHooks(['check', 'claude', '--file', path, '--json'])
+    const shown = JSON.parse(result.stdout).agents[0].events
+      .find((row: { event: string }) => row.event === 'Stop').unrecognised[0]
+
+    expect(shown.endsWith('\u2026')).toBe(true)
+    expect(shown.length).toBeLessThanOrEqual(120)
+    // A trailing `\u00a` would name a character that is not the one in the file.
+    expect(/\\u[0-9a-f]{0,3}\u2026$/.test(shown)).toBe(false)
   })
 
   it('shows the invisible character that stopped an entry being recognised', async () => {

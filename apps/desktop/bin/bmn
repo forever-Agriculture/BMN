@@ -76,6 +76,7 @@ check   reads each agent's own hook file and prints one line per event BMN expec
         or missing. Nothing else is recognised, apart from space, tab and newline
         around it, which bash drops too; an entry that names the hook without being
         one of the three is printed under the event, and so is one inside a matcher.
+        A file whose matcher this harness cannot read is reported, never added to.
         Exit 0 when nothing is missing, 1 otherwise.
 install adds only the missing entries, next to the hooks already registered for that
         event, after copying the file to <file>.bmn-backup-<timestamp>. It never
@@ -625,12 +626,19 @@ const HOOK_FILES = {
   claude: {
     path: ['.claude', 'settings.json'],
     events: ['Notification', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd'],
-    optional: []
+    optional: [],
+    // Claude Code takes a list of tool patterns as well as one pattern; a file carrying either
+    // loaded without complaint when it was tried. What that did not establish is whether the
+    // group's hooks then run, which is why BMN answers for neither: a matcher gates the group.
+    matchers: ['string', 'list']
   },
   codex: {
     path: ['.codex', 'hooks.json'],
     events: ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd', 'Interrupt'],
-    optional: ['PermissionRequest']
+    optional: ['PermissionRequest'],
+    // Codex's matcher is one optional pattern. A list fails its schema and its loader refuses the
+    // whole file, so a file carrying one has no working hook at all, whatever else is in it.
+    matchers: ['string']
   }
 }
 /** The entry docs/agent-control.md documents, and the only one `hooks install` ever writes. */
@@ -717,29 +725,45 @@ function hookEntryState(command, agent) {
  */
 const SHELL_BLANKS = /^[ \t\n]+|[ \t\n]+$/g
 
-/** The command as one line of single-spaced words: for reading past whitespace, and for printing. */
+/** The command as a person reads it, for deciding whether an entry is worth showing the owner. */
 function collapsed(command) {
-  return command.replace(/\s+/g, ' ').trim()
+  // Whitespace, and every character a reader cannot see, become one space. This decides only
+  // whether the owner is shown the entry at all, so it is deliberately generous: `bmn\u034fhook`
+  // reads as two words to a person and must not slip past unmentioned. The line printed afterwards
+  // shows the command exactly, character for character.
+  return command.replace(/[\p{C}\p{Z}\p{M}\s]+/gu, ' ').trim()
 }
 
 /**
- * A command short enough to sit under the event it was registered for, with every character a
- * reader cannot see made visible.
+ * A command short enough to sit under the event it was registered for, written so that what is
+ * printed says exactly what is in the file.
  *
- * Collapsing whitespace the way `collapsed` does would erase the very thing worth showing: a
- * non-breaking space in a pasted entry reads as `missing`, and printing it folded would show
- * `bmn hook claude` under the line saying that is not an entry BMN recognises. Space, tab and
- * newline are the blanks bash drops and read as spacing; every other invisible character is part
- * of a word to bash, which is why the entry was refused, so it is printed as its code point.
+ * The rule is one line: printable ASCII is printed, and every other code point is printed as
+ * `\uXXXX`. Nothing else is safe to fold away. A pasted entry refused for a non-breaking space
+ * would otherwise print as `bmn hook claude`, byte-identical to the bare call the same command
+ * calls wired, under a line saying it is not an entry BMN recognises. Deciding character by
+ * character which ones a reader can see is the same guessing game the shell grammar lost: a
+ * combining mark and a variation selector are invisible and are in neither `\p{C}` nor `\p{Z}`.
+ *
+ * A backslash is escaped too, so the literal text `\u00a0` in a command cannot be mistaken for
+ * the character. Space, tab and newline are the blanks bash drops, so they stay as spacing.
  */
 function oneLine(command) {
-  const shown = [...command].map((character) => (
-    ' \t\n'.includes(character) || !/[\p{C}\p{Z}]/u.test(character)
-      ? character
-      : `\\u${character.codePointAt(0).toString(16).padStart(4, '0')}`
-  )).join('')
-  const text = shown.replace(/[ \t\n]+/g, ' ').trim()
-  return text.length > 120 ? `${text.slice(0, 119)}\u2026` : text
+  const shown = []
+  let length = 0
+  // Only the blanks bash drops, and only those - `trim` here would silently eat the very
+  // character the line exists to show.
+  for (const character of command.replace(/[ \t\n]+/g, ' ').replace(SHELL_BLANKS, '')) {
+    const code = character.codePointAt(0)
+    const token = character === '\\'
+      ? '\\\\'
+      : (code >= 0x20 && code <= 0x7e ? character : `\\u${code.toString(16).padStart(4, '0')}`)
+    // Never half an escape: the line stops at the last whole token that fits.
+    if (length + token.length > 119) return `${shown.join('')}\u2026`
+    shown.push(token)
+    length += token.length
+  }
+  return shown.join('')
 }
 
 /**
@@ -811,22 +835,33 @@ function unusableShape(data, agent) {
   for (const event of [...spec.events, ...spec.optional]) {
     const groups = data.hooks[event]
     if (groups !== undefined && !Array.isArray(groups)) return `"hooks.${event}" is not a list`
+  }
+  // Every event the file carries, not only the ones BMN reports on. A matcher the harness cannot
+  // read stops it loading the file, and it does not matter that the event it sits on is one BMN
+  // never asks about: the hooks BMN does expect are in the same file and would not run either.
+  for (const [event, groups] of Object.entries(data.hooks)) {
     for (const group of Array.isArray(groups) ? groups : []) {
-      // A matcher is a pattern or a list of them. Anything else is a shape the harness itself
-      // rejects - Codex refuses the whole file over it - so no event in this file can be reported
-      // and nothing may be added to it. BMN says which one, and leaves somebody's file alone.
-      if (isObject(group) && !matcherShape(group.matcher)) {
-        return `"hooks.${event}" has a matcher that is not a pattern or a list of them`
+      // A group is an object. An element that is not one fails the same strict parse a matcher of
+      // the wrong type fails, so the file does not load and no hook in it runs.
+      if (!isObject(group)) return `"hooks.${event}" holds something that is not a hook group`
+      if (!matcherShape(group.matcher, agent)) {
+        return `"hooks.${event}" has a matcher this harness cannot read`
       }
     }
   }
   return undefined
 }
 
-/** Whether a matcher is one of the shapes a harness accepts: absent, null, a string, or a list. */
-function matcherShape(matcher) {
-  if (matcher === undefined || matcher === null || typeof matcher === 'string') return true
-  return Array.isArray(matcher) && matcher.every((each) => typeof each === 'string')
+/**
+ * Whether a matcher is a shape this harness accepts. Absence is always one of them, and each
+ * harness's own set is beside its events in HOOK_FILES. Anything else means the file will not load,
+ * so BMN reports it rather than adding to it - somebody's configuration is not something to repair.
+ */
+function matcherShape(matcher, agent) {
+  if (matcher === undefined || matcher === null) return true
+  const allowed = HOOK_FILES[agent].matchers
+  if (typeof matcher === 'string') return allowed.includes('string')
+  return allowed.includes('list') && Array.isArray(matcher) && matcher.every((each) => typeof each === 'string')
 }
 
 /** One agent's report, from one already-read snapshot so a check and an install cannot disagree. */
