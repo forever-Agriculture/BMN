@@ -651,7 +651,7 @@ describe('conversation identity reported by the harness SessionStart hook', () =
 
 describe('OpenCode 1.18.31 conversation binding', () => {
   // One real id read locally and confirmed by `opencode export` on 2026-09-22.
-  const reference = 'ses_f5656e404ffehVbLiXJ8YHJQjV'
+  const reference = 'ses_0123456789abSyntheticTest0'
   const context = {
     cwd: '/repo', executable: '/usr/bin/opencode', argv: [] as string[],
     environment: captureRelevantLaunchEnvironment({})

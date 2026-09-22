@@ -3703,8 +3703,8 @@ describe('conversation identity reported by the harness', () => {
   it('refuses rival OpenCode claims and releases swapped and exited conversations', async () => {
     const fixture = await codexFixture([], ['First', 'Second'], 'opencode')
     const [first, second] = fixture.sessions
-    const observed = 'ses_f5656e404ffehVbLiXJ8YHJQjV'
-    const other = 'ses_f5656e404ffehVbLiXJ8YHJQjW'
+    const observed = 'ses_0123456789abSyntheticTest0'
+    const other = 'ses_0123456789abSyntheticTest1'
     const observe = (session: typeof first, reference: string) => fixture.manager.observeConversation({
       sessionId: session!.sessionId, incarnationId: session!.incarnationId,
       agentCli: 'opencode', conversationReference: reference, source: 'resume'

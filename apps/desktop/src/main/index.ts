@@ -3314,7 +3314,7 @@ async function runSelfTest(): Promise<void> {
         JSON.stringify(Object.keys(petitionSnapshot.handoffs[0]).sort()) === JSON.stringify(['destinationSessionId', 'draftId', 'state', 'updatedAt'])
     }
     const openCodeDirectory = join(isolatedCwd, 'opencode-acceptance')
-    const openCodeReference = 'ses_f5656e404ffehVbLiXJ8YHJQjV'
+    const openCodeReference = 'ses_0123456789abSyntheticTest0'
     const openCodeExecutable = writeAcceptanceHarness(openCodeDirectory, 'opencode', [
       `const sessionID = ${JSON.stringify(openCodeReference)}`,
       "const event = (hook_event_name, props = {}) => cli(['hook', 'opencode'], JSON.stringify({ hook_event_name, sessionID, ...props }))",

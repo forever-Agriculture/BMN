@@ -2301,7 +2301,7 @@ describe('the hook event lists check and hook share', () => {
 })
 
 // Session shape observed from OpenCode 1.18.31 on 2026-09-22.
-const OPENCODE_SESSION = 'ses_f5656e404ffehVbLiXJ8YHJQjV'
+const OPENCODE_SESSION = 'ses_0123456789abSyntheticTest0'
 const OPENCODE_FOREGROUND = { ...HOLDS_TERMINAL, comm: 'opencode' }
 
 describe('OpenCode hooks', () => {

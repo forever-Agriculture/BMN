@@ -28,7 +28,7 @@ const receiptContract = [
   }],
   ['openCodeAcceptance', (receipt) => {
     const row = receipt.openCodeAcceptance
-    const reference = 'ses_f5656e404ffehVbLiXJ8YHJQjV'
+    const reference = 'ses_0123456789abSyntheticTest0'
     return row?.provenance === 'from OpenCode permission.asked' &&
       row.openedBy === 'hook:opencode:permission.asked' &&
       row.resolvedBy === 'hook:opencode:permission.replied' && row.permissionState === 'answered' &&
