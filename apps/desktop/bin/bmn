@@ -71,8 +71,11 @@ const HOOKS_USAGE = `Usage: bmn hooks check [agent] [--file PATH] [--json]
 Agents: ${['claude', 'codex'].join('|')}. With no agent, check reads every one of them.
 
 check   reads each agent's own hook file and prints one line per event BMN expects:
-        wired, wired (older wording) when the command runs bmn hook <agent> but is
-        spelled differently, or missing. Exit 0 when nothing is missing, 1 otherwise.
+        wired for the entry BMN writes, wired (older wording) for the two other entries
+        it recognises (the $AITERM_CONTROL_SOCKET wording and a bare bmn hook <agent>),
+        or missing. Nothing else is recognised, however it is written; an entry that
+        names the hook without being one of the three is printed under the event.
+        Exit 0 when nothing is missing, 1 otherwise.
 install adds only the missing entries, next to the hooks already registered for that
         event, after copying the file to <file>.bmn-backup-<timestamp>. It never
         removes, reorders or rewrites an entry, and writes nothing when nothing is
@@ -696,15 +699,31 @@ function recognisedEntries(agent) {
  */
 function hookEntryState(command, agent) {
   if (typeof command !== 'string') return 'missing'
-  const text = command.trim()
+  const text = command.replace(SHELL_BLANKS, '')
   if (text === hookEntryCommand(agent)) return 'wired'
   if (recognisedEntries(agent).includes(text)) return 'older'
-  return text.includes(`bmn hook ${agent}`) ? 'named' : 'missing'
+  // The note is for the owner to read, not a verdict, so it may look past any whitespace at all.
+  return collapsed(command).includes(`bmn hook ${agent}`) ? 'named' : 'missing'
 }
 
-/** A command on one line and short enough to sit under the event it was registered for. */
+/**
+ * The only whitespace bash separates words with. JavaScript's own `trim` also removes a
+ * non-breaking space, a byte-order mark, a carriage return, a vertical tab and every other Unicode
+ * space - none of which bash does. Each of those stays part of the first or last word, so
+ * `<NBSP>bmn hook claude` runs a program named `<NBSP>bmn`, which does not exist, and reports
+ * nothing. Trimming them would call that entry wired: the exact outcome this command exists to
+ * prevent, and a plausible one, since a pasted entry is where a non-breaking space comes from.
+ */
+const SHELL_BLANKS = /^[ \t\n]+|[ \t\n]+$/g
+
+/** The command as one line of single-spaced words: for reading past whitespace, and for printing. */
+function collapsed(command) {
+  return command.replace(/\s+/g, ' ').trim()
+}
+
+/** A command short enough to sit under the event it was registered for. */
 function oneLine(command) {
-  const text = command.replace(/\s+/g, ' ').trim()
+  const text = collapsed(command)
   return text.length > 120 ? `${text.slice(0, 119)}\u2026` : text
 }
 
@@ -719,11 +738,16 @@ function hookEventState(groups, agent) {
   const unrecognised = []
   for (const group of groups) {
     if (!isObject(group)) continue
+    // A matcher gates its group: the harness runs those hooks only for the tools it names, so an
+    // entry inside one wires part of the event, not the event. BMN does not read matchers either,
+    // so such an entry is one it does not recognise, and `install` adds an ungated one beside it.
+    const gated = typeof group.matcher === 'string' && group.matcher.trim() !== ''
     const entries = Array.isArray(group.hooks) ? group.hooks : []
     for (const entry of entries) {
       // Only a command entry runs anything; another hook type that names bmn still never calls it.
       if (!isObject(entry) || entry.type !== 'command') continue
-      const state = hookEntryState(entry.command, agent)
+      const read = hookEntryState(entry.command, agent)
+      const state = gated && read !== 'missing' ? 'named' : read
       // Nothing is missing for this event, so there is nothing for the owner to look at.
       if (state === 'wired') return { state: 'wired', unrecognised: [] }
       if (state === 'older') older = true

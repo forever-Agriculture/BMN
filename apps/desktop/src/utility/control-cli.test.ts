@@ -1113,13 +1113,15 @@ describe('bmn hooks check', () => {
   // wired that the shell could not report from, which is the one outcome `check` exists to prevent.
   // Every row below is a command that must never be called wired again.
   it.each([
-    ['the documented command', DOCUMENTED_CLAUDE, 'wired'],
-    ['the older AITERM wording', OLDER_CLAUDE, 'wired (older wording)'],
-    ['the bare call', 'bmn hook claude', 'wired (older wording)'],
-    // The whitespace around an entry belongs to the JSON file, not to the command.
-    ['the documented command indented in the file', `\n   ${DOCUMENTED_CLAUDE}\n`, 'wired'],
-    ['the bare call with spaces around it', '  bmn hook claude  ', 'wired (older wording)']
-  ])('reads %s as %s', async (_label, command, state) => {
+    ['the documented command', 'wired', DOCUMENTED_CLAUDE],
+    ['the older AITERM wording', 'wired (older wording)', OLDER_CLAUDE],
+    ['the bare call', 'wired (older wording)', 'bmn hook claude'],
+    // Space, tab and newline around the command are the only whitespace bash drops, so they are
+    // the only whitespace that leaves the same command. Everything else is part of a word.
+    ['the documented command padded with newlines', 'wired', `\n${DOCUMENTED_CLAUDE}\n`],
+    ['the bare call padded with spaces', 'wired (older wording)', '  bmn hook claude  '],
+    ['the bare call padded with tabs', 'wired (older wording)', '\tbmn hook claude\t']
+  ])('reads %s as %s', async (_label, state, command) => {
     const path = await hookFileFixture({ hooks: { Stop: [entryGroup(command)] } })
 
     const result = await runHooks(['check', 'claude', '--file', path, '--json'])
@@ -1131,6 +1133,25 @@ describe('bmn hooks check', () => {
   it.each([
     // One character away from an entry BMN writes. Nothing here is "close enough".
     ['a doubled space inside the call', 'bmn  hook claude'],
+    // The blocker of wave 7, found by both reviewers. JavaScript's `trim` drops these; bash does
+    // not, so each stays part of the first or last word and the command never runs. Trimming them
+    // would call the entry wired with no event delivered - the one outcome this command prevents.
+    ['a leading non-breaking space', '\u00a0bmn hook claude'],
+    ['a leading non-breaking space on the documented command', `\u00a0${DOCUMENTED_CLAUDE}`],
+    ['a leading byte-order mark', '\ufeffbmn hook claude'],
+    ['a leading byte-order mark on the documented command', `\ufeff${DOCUMENTED_CLAUDE}`],
+    ['a leading line separator', '\u2028bmn hook claude'],
+    ['a leading ideographic space', '\u3000bmn hook claude'],
+    ['a leading narrow no-break space', '\u202fbmn hook claude'],
+    ['a leading en quad', '\u2000bmn hook claude'],
+    ['a leading vertical tab', '\vbmn hook claude'],
+    ['a leading form feed', '\fbmn hook claude'],
+    ['a leading carriage return', '\rbmn hook claude'],
+    ['a trailing non-breaking space', 'bmn hook claude\u00a0'],
+    ['a trailing carriage return', 'bmn hook claude\r'],
+    ['a trailing vertical tab', 'bmn hook claude\v'],
+    ['a trailing form feed', 'bmn hook claude\f'],
+    ['a trailing byte-order mark', `${DOCUMENTED_CLAUDE}\ufeff`],
     ['the guard left off the documented command', 'command -v bmn >/dev/null && bmn hook claude; exit 0'],
     ['the documented command exiting non-zero', DOCUMENTED_CLAUDE.replace('exit 0', 'exit 1')],
     ['the documented command without its exit', DOCUMENTED_CLAUDE.replace('; exit 0', '')],
@@ -1264,6 +1285,43 @@ describe('bmn hooks check', () => {
       .toEqual({ event: 'Stop', optional: false, state: 'wired' })
   })
 
+  it('does not read an entry inside a matcher-gated group as wiring the event', async () => {
+    const path = await hookFileFixture({
+      hooks: { PostToolUse: [{ matcher: 'Write', hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] }] }
+    })
+
+    const result = await runHooks(['check', 'claude', '--file', path, '--json'])
+
+    // The harness runs a gated group only for the tools its matcher names, so the event is wired
+    // for some of them and not for others. BMN does not read matchers, so it says missing and
+    // names the entry, and `install` adds an ungated one beside it.
+    expect(JSON.parse(result.stdout).agents[0].events.find((row: { event: string }) => row.event === 'PostToolUse'))
+      .toEqual({ event: 'PostToolUse', optional: false, state: 'missing', unrecognised: [DOCUMENTED_CLAUDE] })
+  })
+
+  it('reads an entry in a group whose matcher is empty as wiring the whole event', async () => {
+    const path = await hookFileFixture({
+      hooks: { PostToolUse: [{ matcher: '', hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] }] }
+    })
+
+    const result = await runHooks(['check', 'claude', '--file', path, '--json'])
+
+    // An empty matcher gates nothing, which is what both harnesses do with one.
+    expect(JSON.parse(result.stdout).agents[0].events.find((row: { event: string }) => row.event === 'PostToolUse'))
+      .toEqual({ event: 'PostToolUse', optional: false, state: 'wired' })
+  })
+
+  it('names an entry whose only difference is whitespace', async () => {
+    const path = await hookFileFixture({ hooks: { Stop: [entryGroup('bmn  hook\tclaude')] } })
+
+    const result = await runHooks(['check', 'claude', '--file', path, '--json'])
+
+    // The verdict compares the command as bash would read it; the note may look past any
+    // whitespace at all, because the owner needs to see the entry however it is spaced.
+    expect(JSON.parse(result.stdout).agents[0].events.find((row: { event: string }) => row.event === 'Stop'))
+      .toEqual({ event: 'Stop', optional: false, state: 'missing', unrecognised: ['bmn hook claude'] })
+  })
+
   it('says nothing about an entry that names a different agent', async () => {
     const path = await hookFileFixture({ hooks: { Stop: [entryGroup('timeout 5 bmn hook codex')] } })
 
@@ -1328,7 +1386,7 @@ describe('bmn hooks check', () => {
       .toEqual({ event: 'Stop', optional: false, state: 'wired' })
   })
 
-  it('runs the hook, in a real shell, for every entry it calls wired', async () => {
+  it('runs the hook, in a real shell, for every command it accepts', async () => {
     // The only claim `check` makes is about the commands it recognises, so that is what is checked
     // against ground truth: each is run by a real bash with a stub `bmn` on PATH holding the real
     // binary's contract - exactly one agent argument, and the event on standard input - and must be
@@ -1348,7 +1406,14 @@ describe('bmn hooks check', () => {
     const EVENT = '{"hook_event_name":"Stop"}'
 
     const problems: string[] = []
-    for (const command of [DOCUMENTED_CLAUDE, OLDER_CLAUDE, 'bmn hook claude']) {
+    // Every string `check` accepts, including the whitespace it drops: if a padded form is called
+    // wired, a real bash has to run it. This is where the wave-7 blocker would have been caught.
+    const accepted = [
+      DOCUMENTED_CLAUDE, OLDER_CLAUDE, 'bmn hook claude',
+      `\n${DOCUMENTED_CLAUDE}\n`, '  bmn hook claude  ', '\tbmn hook claude\t',
+      `${OLDER_CLAUDE}\n`
+    ]
+    for (const command of accepted) {
       await rm(ran, { force: true })
       const failure = await new Promise<string | null>((resolve) => {
         const child = execFile('/bin/bash', ['-c', `${command}\nwait`], {
@@ -1389,9 +1454,16 @@ describe('bmn hooks check', () => {
       const check = await runHooks(['check', agent, '--file', path, '--json'])
 
       expect(check.code).toBe(0)
-      for (const row of JSON.parse(check.stdout).agents[0].events) {
-        expect(row.optional === true || row.state).toBe(row.optional === true || 'wired')
-      }
+      const report = JSON.parse(check.stdout).agents[0]
+      const required = report.events.filter((row: { optional: boolean }) => !row.optional)
+      expect(required.length).toBeGreaterThan(0)
+      expect(required.map((row: { state: string }) => row.state))
+        .toEqual(required.map(() => 'wired'))
+      // The optional one is never installed and never fails the check, so the pair still settles.
+      expect(report.events.filter((row: { optional: boolean }) => row.optional)
+        .map((row: { state: string }) => row.state).every((state: string) => state === 'missing'))
+        .toBe(true)
+      expect(report.missing).toEqual([])
     }
   })
 

@@ -205,18 +205,33 @@ Both commands say what is **configured**. Neither says that a hook has ever fire
 entry is guarded and does nothing while BMN is not running, which is the point of the guard.
 
 BMN recognises its own entry by what it is, not by reading the shell it is written in. Exactly three
-commands count, compared whole after trimming and never parsed:
+commands count, compared whole and never parsed. `wired`:
 
 ```bash
-[ -n "$BMN_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook claude; exit 0   # wired
-[ -n "$AITERM_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook claude; exit 0  # older wording
-bmn hook claude                                                                        # older wording
+[ -n "$BMN_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook claude; exit 0
 ```
 
-The second is the wording from before BMN was renamed, which `bmn hook` still reads. The third is the
-call with nothing around it. **Everything else reads as `missing`** — a wrapper, a redirection, a
-condition, a group, your own variant with one extra space. When such an entry mentions
-`bmn hook <agent>`, `check` prints it under the event, so you can see what it declined to read:
+and `wired (older wording)` for these two — the wording from before BMN was renamed, which
+`bmn hook` still reads, and the call with nothing around it:
+
+```bash
+[ -n "$AITERM_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook claude; exit 0
+```
+
+```bash
+bmn hook claude
+```
+
+Copy one of those three exactly. Only the whitespace bash itself drops — space, tab and newline at
+either end — is ignored; a non-breaking space or a byte-order mark picked up from a paste is part of
+the command as far as bash is concerned, so it is part of the command as far as `check` is concerned
+too, and such an entry reads `missing`.
+
+**Everything else reads as `missing`** — a wrapper, a redirection, a condition, a group, your own
+variant with one extra space, and BMN's own entry inside a group carrying a `matcher` (which the
+harness runs only for the tools it names, so it wires part of the event rather than the event). When
+such an entry names `bmn hook <agent>`, `check` prints it under the event, so you can see what it
+declined to read:
 
 ```
   Stop              missing
@@ -224,9 +239,14 @@ condition, a group, your own variant with one extra space. When such an entry me
       timeout 5 bmn hook claude
 ```
 
-`install` then adds BMN's own entry beside yours, and the hook fires twice rather than not at all.
-If you see a duplicate, that is why, and **either entry may be removed**: yours is the one BMN did
-not read, not one it judged broken.
+`install` then adds BMN's own entry beside yours, so the hook fires from BMN's entry whatever yours
+does. If you see a duplicate, that is why.
+
+**Which one you may remove:** BMN's own entry is the one `check` answers for, so removing it puts the
+event back to `missing`. Yours is one BMN declined to read — which is not the same as one it judged
+broken, and not the same as one that works. `check` no longer has an opinion either way, so if you
+want to keep only yours, confirm it delivers first (make the harness fire that event and look at the
+session's **Hook events…** list), then remove BMN's and accept that `check` will read `missing`.
 
 That is the whole rule, and it is deliberate. Earlier versions of this command read the shell around
 the call and tried to say whether it would deliver the event. Seven rounds of review each found a
@@ -237,7 +257,7 @@ A duplicate entry is visible and harmless; a silent gap is neither. So BMN stopp
 
 The consequence to be clear about: `check` tells you what is **configured**, and now makes no claim
 at all about a command it does not recognise. A hand-written entry that works perfectly still reads
-`missing`. Run `bmn hooks install <agent>` and let BMN write its own, or paste the documented entry
+`missing`. Run `bmn hooks install <agent>` and let BMN write its own, or paste one of the three
 exactly, and `check` will answer for it.
 
 The entries themselves, for wiring them by hand. `~/.claude/settings.json` needs `Notification`,
