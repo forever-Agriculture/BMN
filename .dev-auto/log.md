@@ -2104,3 +2104,28 @@ first matcher rule was written, not after the fourth.
 **Still not run:** Codex's side of all of this. Its strictness, its `null`-is-absence and its
 string-only matcher are Astra's source citations, not measurements. A Codex probe of the same
 shape would settle it and has not been done.
+
+### The Codex probe: attempted twice, inconclusive both times
+
+Same harness as the Claude probes, with a control case so a null result could be told from a real
+one: a temp `CODEX_HOME` holding a valid `hooks.json` whose ungated `SessionStart` entry appends to
+a marker file, then `codex exec` with a trivial prompt.
+
+- Attempt 1 (`probes/result-codex-attempt1.txt`): **the control hook did not fire.** Codex itself
+  ran and answered, so the run worked; the hooks never loaded. That matches the `/hooks` trust step
+  `epics.md` AC3 already documents.
+- Attempt 2 (`probes/result-codex-attempt2.txt`): retried with `-c bypass_hook_trust=true`, a config
+  key found in the Codex binary's own key strings. **The control still did not fire.**
+
+Because the control never fired, the four bad-shape runs beside it say nothing at all, and none of
+them is read as evidence in either direction. Two attempts was the budget; a third would need the
+interactive trust step, which is an owner action.
+
+**So Codex's side of the per-harness rule remains source-cited, not measured:** its strict whole-file
+refusal, its `null`-is-absence and its string-only matcher are Astra's citations of `hook_config.rs`
+and `discovery.rs`. This is recorded as an unverified boundary rather than closed.
+
+What it would cost to be wrong: if Codex is in fact lenient like Claude Code, BMN's `unusable`
+verdicts for it are false refusals — `install` declines a file whose other hooks work, visibly and
+with a reason. It cannot produce a false `wired`, which is the direction that matters. So the
+residual is an accuracy debt in a documented claim, not a live hazard.
