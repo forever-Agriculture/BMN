@@ -77,6 +77,9 @@ check   reads each agent's own hook file and prints one line per event BMN expec
         around it, which bash drops too; an entry that names the hook without being
         one of the three is printed under the event, and so is one inside a matcher.
         A file whose matcher this harness cannot read is reported, never added to.
+        Codex refuses a hook file it cannot read whole, so a Codex file holding
+        something BMN does not model is reported as unverified: the entries are
+        listed, nothing is called wired, and install still adds to it.
         An entry this harness would not run - under Claude Code, one whose timeout
         is not a positive number - is never counted wired, whatever its command.
         Exit 0 when nothing is missing, 1 otherwise.
@@ -655,16 +658,28 @@ const HOOK_FILES = {
     // Codex declares `timeout` as `Option<u64>`, so absence and `null` are both fine and anything
     // that is not a whole number at or above zero fails to deserialize. Source, not measured.
     timeout: 'optional-u64',
+    // Everything below is BMN's *model* of a Codex hooks file, not a parser for one. Codex
+    // deserializes strictly, so a shape BMN does not model could stop the whole file loading and
+    // BMN would never see it. Rather than guess, `inspectShape` reports a file that steps outside
+    // this model as `unverified`: the events are still listed, and BMN says it cannot confirm
+    // Codex accepts the file. Each list here is meant to be corrected as the schema is learned.
+    //
     // Every event BMN knows Codex has, which is more than it reports on: a shape it cannot read
-    // stops the file loading, and BMN's own events are in that same file. Codex has no
-    // `Notification`; a file carrying one is a Claude file's key, which Codex ignores. This is not
-    // a claim to know them all - a key BMN does not know is left alone, and `unusableShape` says why.
+    // stops the file loading, and BMN's own events are in that same file.
     known: [
       'PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd',
       'Interrupt', 'PermissionRequest', 'PreCompact', 'PostCompact', 'SubagentStart', 'SubagentStop'
     ],
     // Its matcher is `Option<String>`, so `null` deserializes to absence; a list does not
     // deserialize at all.
+    // The keys BMN models at each level. Anything else is not refused and not waved through: it
+    // is named, and the file's verdicts are marked unconfirmed.
+    rootKeys: ['hooks', 'description'],
+    groupKeys: ['matcher', 'hooks'],
+    entryTypes: ['command', 'prompt', 'mcp_tool'],
+    // Only the command variant is modelled field by field; BMN has no rules for the others, so an
+    // entry of one of those types is honestly unverified rather than dishonestly fine.
+    commandKeys: ['type', 'command', 'timeout'],
     ungated: ['absent', 'null', 'empty'],
     matchers: ['string']
   }
@@ -857,14 +872,76 @@ function readHookFile(path, agent) {
   }
   let data
   try {
-    data = JSON.parse(text)
+    data = parseHookJson(text)
   } catch (error) {
     return { state: 'unparsable', detail: error.message, text, data: {} }
   }
   if (!isObject(data)) return { state: 'unparsable', detail: 'the file is not a JSON object', text, data: {} }
-  const unusable = unusableShape(data, agent)
-  if (unusable !== undefined) return { state: 'unusable', detail: unusable, text, data }
-  return { state: 'read', text, data }
+  const shape = inspectShape(data, agent)
+  return { ...shape, text, data }
+}
+
+/**
+ * The literal `timeout` token for each entry. Parsing destroys the one thing that decides whether
+ * Codex can hold the value: `1.0` and `1e3` arrive as integers JavaScript cannot tell from `1`,
+ * and `18446744073709551616` is the same number as `18446744073709551615`. Node is pinned to 24
+ * (`package.json:6`), where the reviver is handed the source text.
+ */
+const TIMEOUT_TOKENS = new WeakMap()
+
+function parseHookJson(text) {
+  return JSON.parse(text, function keepTimeoutToken(key, value, context) {
+    if (key === 'timeout' && isObject(this) && typeof context?.source === 'string') {
+      TIMEOUT_TOKENS.set(this, context.source)
+    }
+    return value
+  })
+}
+
+/**
+ * What BMN can say about the shape of this file: `read` when every part of it is inside BMN's
+ * model and valid, `unusable` when BMN is sure the harness refuses it, and - for a strict harness
+ * only - `unverified` when the file holds something BMN does not model. `unverified` is the honest
+ * answer to a question BMN cannot settle: Codex refuses a file it cannot deserialize, so an
+ * unmodelled shape could silence every hook in it, including BMN's, and saying `wired` would be a
+ * guess dressed as a verdict.
+ */
+function inspectShape(data, agent) {
+  const refusal = unusableShape(data, agent)
+  if (refusal !== undefined) return { state: 'unusable', detail: refusal }
+  const unmodelled = HOOK_FILES[agent].strict ? unmodelledShape(data, agent) : undefined
+  if (unmodelled !== undefined) return { state: 'unverified', detail: unmodelled }
+  return { state: 'read' }
+}
+
+/** The first part of the file BMN has no rules for, named the way the owner would find it. */
+function unmodelledShape(data, agent) {
+  const spec = HOOK_FILES[agent]
+  for (const key of Object.keys(data)) {
+    if (!spec.rootKeys.includes(key)) return `"${key}" is a top-level key BMN does not model`
+  }
+  if (!isObject(data.hooks)) return undefined
+  for (const [event, groups] of Object.entries(data.hooks)) {
+    if (!spec.known.includes(event)) return `"hooks.${event}" is an event BMN does not model`
+    for (const group of Array.isArray(groups) ? groups : []) {
+      if (!isObject(group)) continue
+      for (const key of Object.keys(group)) {
+        if (!spec.groupKeys.includes(key)) return `"hooks.${event}" has a group key BMN does not model: "${key}"`
+      }
+      for (const entry of Array.isArray(group.hooks) ? group.hooks : []) {
+        if (!isObject(entry)) continue
+        if (entry.type !== 'command') {
+          return `"hooks.${event}" has a "${entry.type}" entry, a hook type BMN does not model`
+        }
+        for (const key of Object.keys(entry)) {
+          if (!spec.commandKeys.includes(key)) {
+            return `"hooks.${event}" has an entry field BMN does not model: "${key}"`
+          }
+        }
+      }
+    }
+  }
+  return undefined
 }
 
 /** The one shape rule: what `hooks` and each expected event must be for a merge to add and remove nothing. */
@@ -907,15 +984,14 @@ function unusableShape(data, agent) {
       }
       for (const entry of Array.isArray(group.hooks) ? group.hooks : []) {
         if (!isObject(entry)) return `"hooks.${event}" holds an entry that is not an object`
-        // Only the fields BMN and both harnesses share, and only their types - not which values
-        // a harness's own enum carries, which is its business and not something to guess at.
-        for (const [field, type] of [['type', 'string'], ['command', 'string']]) {
-          if (entry[field] !== undefined && typeof entry[field] !== type) {
-            return `"hooks.${event}" has an entry whose "${field}" is not a ${type}`
-          }
-        }
-        // `timeout` is its own shape per harness: Codex's `Option<u64>` takes `null` and refuses
-        // `-1` and `1.5`, none of which "is a number" describes.
+        // `type` picks the variant, so nothing else can be judged without it.
+        if (entry.type === undefined) return `"hooks.${event}" has an entry with no "type"`
+        if (typeof entry.type !== 'string') return `"hooks.${event}" has an entry whose "type" is not a string`
+        // A variant BMN does not model is not a variant BMN refuses; `unmodelledShape` has it.
+        if (entry.type !== 'command') continue
+        if (entry.command === undefined) return `"hooks.${event}" has a command entry with no "command"`
+        if (typeof entry.command !== 'string') return `"hooks.${event}" has an entry whose "command" is not a string`
+        // `timeout` is its own shape per harness, and for Codex it is the spelling that decides.
         if (!runnableEntry(entry, agent)) {
           return `"hooks.${event}" has an entry whose "timeout" this harness cannot read`
         }
@@ -937,9 +1013,15 @@ function namesHook(command, agent) {
 function runnableEntry(entry, agent) {
   const timeout = entry.timeout
   if (timeout === undefined) return true
-  return HOOK_FILES[agent].timeout === 'positive-number'
-    ? typeof timeout === 'number' && timeout > 0
-    : timeout === null || (Number.isInteger(timeout) && timeout >= 0)
+  // Claude Code's rule was measured on the parsed value, and `1.5` ran, so the spelling does not
+  // decide anything there.
+  if (HOOK_FILES[agent].timeout === 'positive-number') return typeof timeout === 'number' && timeout > 0
+  if (timeout === null) return true
+  const token = TIMEOUT_TOKENS.get(entry)
+  // Without the token BMN cannot tell `1.0` from `1`, and it does not guess in the direction that
+  // would call a dead entry wired.
+  if (token === undefined) return false
+  return /^(0|[1-9][0-9]*)$/.test(token) && BigInt(token) <= 0xffffffffffffffffn
 }
 
 /** Whether this matcher leaves its group gated, by what the harness in question treats as absence. */
@@ -968,8 +1050,9 @@ function checkHooks(agent, path, file = readHookFile(path, agent)) {
   const spec = HOOK_FILES[agent]
   const hooks = isObject(file.data.hooks) ? file.data.hooks : {}
   const events = [...spec.events, ...spec.optional].map((event) => {
-    // An unusable file says nothing about any event, so nothing is reported as wired.
-    const read = file.state === 'read'
+    // An unusable file says nothing about any event, so nothing is reported as wired. An
+    // unverified one does: BMN can see the entries, it just cannot promise the harness loads them.
+    const read = file.state === 'read' || file.state === 'unverified'
       ? hookEventState(hooks[event], agent)
       : { state: 'missing', unrecognised: [], gated: [] }
     return {
@@ -1171,9 +1254,19 @@ function describeHookCheck(report) {
   if (report.state === 'unreadable') lines.push(`  cannot read the file (${report.detail})`)
   if (report.state === 'unparsable') lines.push(`  the file is not valid JSON (${report.detail})`)
   if (report.state === 'unusable') lines.push(`  BMN cannot add to this file: ${report.detail}`)
+  if (report.state === 'unverified') {
+    lines.push(`  ${HOOK_AGENTS[report.agent]} refuses a hook file it cannot read, and this one holds`)
+    lines.push(`  something BMN does not model: ${report.detail}.`)
+    lines.push('  So the entries below are what is written, not a promise that any of them runs.')
+  }
   for (const row of report.events) {
     const optional = row.optional ? ' (optional)' : ''
-    lines.push(`  ${row.event.padEnd(18)}${row.state}${optional}`)
+    // `wired` is a claim that the hook runs. In a file BMN cannot account for, it has no business
+    // making that claim, so it reports what it found and says the acceptance is unconfirmed.
+    const state = report.state === 'unverified' && row.state.startsWith('wired')
+      ? `found (${row.state}), acceptance unverified`
+      : row.state
+    lines.push(`  ${row.event.padEnd(18)}${state}${optional}`)
     // Not a command BMN recognises, so it reads as missing; show it rather than leave the owner
     // wondering where the duplicate `install` is about to add came from.
     for (const command of row.unrecognised ?? []) {
@@ -1259,7 +1352,9 @@ function currentText(path) {
 function installHooksCommand(agent, path, asJson) {
   // One read: the report, the merge and the conflict check all describe the same bytes.
   const file = readHookFile(path, agent)
-  if (file.state !== 'read' && file.state !== 'missing') {
+  // `unverified` is not a refusal: adding a group to a file BMN cannot vouch for cannot make it
+  // worse, and declining would be exactly the false refusal this wave exists to stop.
+  if (file.state !== 'read' && file.state !== 'unverified' && file.state !== 'missing') {
     const reason = file.state === 'unparsable'
       ? `${path} is not valid JSON (${file.detail}); it was left untouched`
       : file.state === 'unusable'
@@ -1296,7 +1391,9 @@ function installHooksCommand(agent, path, asJson) {
   let backup = null
   try {
     unchanged()
-    if (file.state === 'read') {
+    // Every file that exists is copied first, whatever BMN thinks of its shape. Keying this on one
+    // state meant a file BMN could not vouch for was written over without a copy of it.
+    if (file.state !== 'missing') {
       backup = `${path}.bmn-backup-${new Date().toISOString()}`
       copyFileSync(path, backup)
     }

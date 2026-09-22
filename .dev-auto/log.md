@@ -2180,3 +2180,71 @@ group that happened to be scanned before it. Both orders were measured
 (`result-bmgf3qr2a.txt`): a valid entry beside a malformed one in the same group still fires.
 
 290 CLI tests. Ten mutation probes (`fences-15-wave13.log`).
+
+## 2026-09-22 ~11:25 — Wave 14: BMN stops reimplementing Codex's parser
+
+### Both reviewers refused `b98a8d2`, on the same class
+
+Astra, blocking: (1) `Option<u64>` had no upper bound — `timeout: 2^64` and `1e100` read `wired`;
+(2) schema-invalid siblings still read `wired` — missing required fields, unknown entry `type`,
+unknown variant fields, root `deny_unknown_fields` violations; (3) a false refusal in the other
+direction — `{"type":"prompt","timeout":-1}` was refused though Codex's `Prompt` ignores the field.
+He confirmed the Claude side matches the measurements, passed the known-event fence 16/16, and
+accepted all five carried residuals.
+
+GLM-5.3/max ($1.54, 33 turns) refused independently and added cases Astra did not: float-spelled
+whole numbers (`1.0`, `1e3`) that `JSON.parse` destroys, `-0`, entries missing required fields, and
+top-level unknown keys. Also two evidence nits, both right: the wave-13 log said 290 CLI tests where
+the commit said 291, and "all 16 reproductions have a test row" overstated a four-row table.
+
+### Why this was not another patch
+
+Waves 9, 10, 11, 12 and 13 were all defects in code modelling Codex from source citations, each fix
+introducing the next, in both directions every time. And Codex's runtime is not measurable from
+here. Three attempts now: hooks untrusted (control never fired), `-c bypass_hook_trust=true` (same),
+and a fresh `CODEX_HOME` where Codex ran and answered normally but the hook did not fire and no
+trust state was written. Trust is per entry in `config.toml` as
+`[hooks.state."<file>:<snake_event>:<group>:<entry>"] trusted_hash`; establishing it needs the
+interactive step, which is an owner action. A fourth route — deriving the hash from the owner's own
+config — was refused by the permission classifier, correctly, and was not worked around.
+
+So the question was put to Astra directly as a design question, not a review: A, complete the
+reimplementation; B, stop claiming the file loads and document it; C, whitelist and refuse; D,
+refuse what BMN can prove, and report everything else as unverified.
+
+His answer, verbatim in `design-q-astra.stdout`: **ship D**, on the condition that uncertainty
+covers *all* unvalidated schema constraints — "Report recognised events as 'found; Codex acceptance
+unverified', identify the uncertainty, explain that rejection could disable every hook, and exit
+non-zero. Reserve `wired` for stronger evidence." He named the cost: "The owner pays in warnings and
+a failing automation status for potentially valid configurations... D cannot honestly promise 'no
+false refusal' when callers treat non-zero as refusal." Accepted, with finding 2 recorded as a
+limitation under that contract.
+
+### What shipped
+
+A Codex file now gets one of three answers. `read`: every part of it is inside BMN's model and
+valid. `unusable`: BMN is sure Codex refuses it — `install` writes nothing. `unverified`: it holds
+something BMN has no rules for — the entries are listed, none is called `wired`, the exit is
+non-zero, and `install` still adds, because adding a group cannot make a file Codex already refuses
+any worse and declining would punish a file that may be fine.
+
+The model lives in `HOOK_FILES.codex` as four named lists (`rootKeys`, `groupKeys`, `entryTypes`,
+`commandKeys`) and is meant to be corrected as the schema is learned rather than guessed around.
+
+`timeout` for Codex is now decided by the **spelling**. `1.0` and `1e3` reach JavaScript as the
+integer `1000`, and `18446744073709551616` as the same number as `18446744073709551615`, so a value
+rule accepts three things `u64` cannot hold. Node is pinned to `>=24 <25` (`package.json:6`), where
+`JSON.parse` hands the reviver the literal token; BMN keeps it in a `WeakMap` keyed by the entry.
+
+Variant-aware validation closes Astra's finding 3: only a `type: "command"` entry has its `command`
+and `timeout` judged.
+
+### Two defects found while implementing it, both mine
+
+- An entry with no `type`, and a command entry with no `command`, passed the fence. Both are
+  required fields; both now refuse.
+- **Introduced by this wave:** a file in the new `unverified` state was written over without a
+  backup, because the backup was keyed on `file.state === 'read'` rather than on the file existing.
+  Caught by the install test. The condition is now `file.state !== 'missing'`.
+
+305 CLI tests. Fifteen mutation probes (`fences-15-wave14.log`).

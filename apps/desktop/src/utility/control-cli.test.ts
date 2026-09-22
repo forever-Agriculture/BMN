@@ -997,6 +997,18 @@ function entryGroup(command: string, timeout = 5): unknown {
   return { hooks: [{ type: 'command', command, timeout }] }
 }
 
+/**
+ * A Codex file with every expected event wired, plus whatever the case under test adds: `hooks`
+ * replaces an event, `beside` adds a second group to `Stop` next to the wired one, and anything
+ * else is a top-level key.
+ */
+async function codexFixture(extra: Record<string, unknown> = {}, events: readonly string[] = CODEX_EVENTS): Promise<string> {
+  const { hooks, beside, ...root } = extra as { hooks?: Record<string, unknown>; beside?: unknown }
+  const wired = Object.fromEntries(events.map((each) => [each, [entryGroup(DOCUMENTED_CODEX)]]))
+  if (beside !== undefined) wired.Stop = [entryGroup(DOCUMENTED_CODEX), beside]
+  return hookFileFixture({ ...root, hooks: { ...wired, ...(hooks ?? {}) } }, 'hooks.json')
+}
+
 async function backupsOf(path: string): Promise<string[]> {
   const entries = await readdir(dirname(path))
   return entries.filter((entry) => entry.startsWith(`${basename(path)}.bmn-backup-`))
@@ -1484,6 +1496,7 @@ describe('bmn hooks check', () => {
     expect(result.stdout).toContain('apart from space, tab and newline')
     expect(result.stdout).toContain('inside a matcher')
     expect(result.stdout).toContain('is not a positive number')
+    expect(result.stdout).toContain('something BMN does not model is reported as unverified')
   })
 
   it('names an entry whose only difference is whitespace', async () => {
@@ -1698,22 +1711,114 @@ describe('bmn hooks check', () => {
   })
 
   it.each([
-    ['a key no harness event is named by', '_comment', ['owner note']],
-    ['an event this harness does not have', 'Notification', [{ matcher: ['Write'], hooks: [] }]]
-  ])('leaves %s alone rather than refusing the file', async (_label, key, value) => {
-    const path = await hookFileFixture({
-      hooks: {
-        ...Object.fromEntries(CODEX_EVENTS.map((each) => [each, [entryGroup(DOCUMENTED_CODEX)]])),
-        [key]: value
-      }
-    }, 'hooks.json')
+    ['a key no Codex event is named by', { hooks: { _comment: ['owner note'] } }, '_comment'],
+    ['an event Codex does not have', { hooks: { Notification: [] } }, 'Notification'],
+    ['a top-level key BMN has no rules for', { $schema: 'https://example.invalid/s.json' }, '$schema'],
+    ['a hook type BMN has no rules for', { beside: { hooks: [{ type: 'prompt' }] } }, 'prompt'],
+    ['an entry field BMN has no rules for', { beside: { hooks: [{ type: 'command', command: 'true', async: true }] } }, 'async'],
+    ['a group key BMN has no rules for', { beside: { hooks: [], description: 'mine' } }, 'description']
+  ])('cannot vouch for a Codex file holding %s, and says so instead of guessing', async (_label, extra, named) => {
+    const path = await codexFixture(extra)
+
+    const result = await runHooks(['check', 'codex', '--file', path, '--json'])
+    const report = JSON.parse(result.stdout).agents[0]
+
+    // Codex refuses a file it cannot deserialize, so an unmodelled shape could silence every hook
+    // in the file including BMN's. `wired` would be a guess dressed as a verdict; the events are
+    // still listed, and the exit code says the check did not pass.
+    expect(result.code).toBe(1)
+    expect(report.state).toBe('unverified')
+    expect(report.detail).toContain(named)
+    expect(report.events.find((row: { event: string }) => row.event === 'Stop').state).toBe('wired')
+  })
+
+  it('says a wired event is only what is written when it cannot vouch for the file', async () => {
+    const path = await codexFixture({ $schema: 'https://example.invalid/s.json' })
+
+    const result = await runHooks(['check', 'codex', '--file', path])
+
+    // The plain report is what the owner reads, so the qualification has to be on the line itself,
+    // not only in the JSON.
+    expect(result.stdout).toContain('acceptance unverified')
+    expect(result.stdout).toContain('not a promise that any of them runs')
+    expect(result.stdout).not.toMatch(/Stop\s+wired/)
+  })
+
+  it('still installs into a file it cannot vouch for, rather than refusing it', async () => {
+    const path = await codexFixture(
+      { $schema: 'https://example.invalid/s.json' },
+      CODEX_EVENTS.filter((each) => each !== 'Stop')
+    )
+    const before = JSON.parse(await readFile(path, 'utf8'))
+
+    const install = await runHooks(['install', 'codex', '--file', path])
+    const after = JSON.parse(await readFile(path, 'utf8'))
+
+    // Adding a group to a file BMN cannot vouch for cannot make it worse, and declining would be
+    // the false refusal this wave exists to stop.
+    expect(install.code).toBe(0)
+    expect(after.$schema).toBe(before.$schema)
+    expect(before.hooks.Stop).toBeUndefined()
+    expect(after.hooks.Stop).toEqual([{ hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CODEX }] }])
+    expect(await backupsOf(path)).toHaveLength(1)
+  })
+
+  it.each([
+    ['a whole number spelled as a float', '1.0'],
+    ['a whole number in exponent form', '1e3'],
+    ['a number past what u64 holds', '18446744073709551616'],
+    ['minus zero', '-0']
+  ])('refuses a Codex timeout written as %s, which parsing would hide', async (_label, token) => {
+    const wired = CODEX_EVENTS.map((each) => `"${each}": [{ "hooks": [{ "type": "command", "command": ${JSON.stringify(DOCUMENTED_CODEX)} }] }]`)
+    const path = await hookFileFixture(
+      `{ "hooks": { ${wired.join(', ')}, "Stop": [{ "hooks": [{ "type": "command", "timeout": ${token}, "command": "true" }] }] } }`,
+      'hooks.json'
+    )
 
     const result = await runHooks(['check', 'codex', '--file', path, '--json'])
 
-    // Both harnesses ignore keys they do not recognise, so refusing over one would stop `install`
-    // on a file that works. Refusing a real file is not a safer answer than reading it.
+    // `JSON.parse` turns every one of these into a number BMN cannot tell from a valid one, so the
+    // rule reads the literal token. Codex's `u64` holds none of them.
+    expect(result.code).toBe(1)
+    expect(JSON.parse(result.stdout).agents[0].state).toBe('unusable')
+    expect(JSON.parse(result.stdout).agents[0].detail).toContain('timeout')
+  })
+
+  it('accepts the largest timeout u64 holds, one past which it refuses', async () => {
+    const wired = CODEX_EVENTS.map((each) => `"${each}": [{ "hooks": [{ "type": "command", "timeout": 18446744073709551615, "command": ${JSON.stringify(DOCUMENTED_CODEX)} }] }]`)
+    const path = await hookFileFixture(`{ "hooks": { ${wired.join(', ')} } }`, 'hooks.json')
+
+    const result = await runHooks(['check', 'codex', '--file', path, '--json'])
+
+    // The neighbouring token is refused by the test above; both parse to the same JavaScript
+    // number, which is the whole reason the token is read.
     expect(result.code).toBe(0)
     expect(JSON.parse(result.stdout).agents[0].state).toBe('read')
+  })
+
+  it.each([
+    ['an entry with no type', { type: undefined, command: 'true' }, 'no "type"'],
+    ['a command entry with no command', { type: 'command' }, 'no "command"']
+  ])('refuses a Codex file holding %s', async (_label, entry, detail) => {
+    const path = await codexFixture({ hooks: { Stop: [{ hooks: [entry] }] } })
+
+    const result = await runHooks(['check', 'codex', '--file', path, '--json'])
+
+    // A field Codex declares without a default stops the file deserializing, and then no hook in
+    // it runs - including the ones BMN put there.
+    expect(result.code).toBe(1)
+    expect(JSON.parse(result.stdout).agents[0].state).toBe('unusable')
+    expect(JSON.parse(result.stdout).agents[0].detail).toContain(detail)
+  })
+
+  it('does not refuse a Codex entry whose type it has no rules for over a field that type ignores', async () => {
+    const path = await codexFixture({ hooks: { Stop: [{ hooks: [{ type: 'prompt', timeout: -1 }] }] } })
+
+    const result = await runHooks(['check', 'codex', '--file', path, '--json'])
+
+    // `timeout` belongs to the command variant. Judging another variant by it refuses a file the
+    // harness would load - which is a worse answer than saying BMN does not model that type.
+    expect(JSON.parse(result.stdout).agents[0].state).toBe('unverified')
   })
 
   it('claims nothing about any event in a file it cannot add to', async () => {

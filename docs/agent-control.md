@@ -291,17 +291,39 @@ What happens to the *rest* of the file differs too, and matters more:
   both orders, so it is not an artifact of which one is written first. So BMN never refuses a Claude settings file over a shape: it reads the
   file, reports that group's event by what is left, and `install` works normally.
 - **Codex refuses the whole file.** It deserializes strictly, so one wrong type anywhere leaves no
-  working hook at all. BMN therefore checks every event it knows Codex has — not only the ones it
-  reports on — along with the entries inside: a group whose `hooks` is not a list, an entry that is
-  not an object, an event whose value is not a list of groups at all, or a `type`, `command` or
-  `timeout` of the wrong type. `check` reports such a file as one it cannot add to, names the event,
-  and `install` writes nothing and takes no backup.
+  working hook at all — including the ones BMN put there.
 
-Two limits worth knowing. A key BMN does not recognise is **left alone** — `_comment`, or a Claude
-event in a Codex file — because both harnesses ignore keys they do not know, and refusing over one
-would stop `install` on a file that works; the cost is that a Codex event BMN has not heard of could
-carry a shape BMN never looks at. And Codex's side of this rests on its source rather than on a run
-here, while Claude Code's was exercised directly.
+That second case is why a Codex file gets one of three answers rather than two. BMN does not
+reimplement Codex's parser, and a check that quietly assumed it had would be the worst of both
+worlds: green over a file Codex throws away.
+
+| answer | what it means | what `install` does |
+| --- | --- | --- |
+| read | every part of the file is inside BMN's model of it, and valid | adds the missing entries |
+| unusable | BMN is sure Codex refuses this file | writes nothing, takes no backup |
+| unverified | the file holds something BMN has no rules for | adds the missing entries anyway |
+
+**`unverified` is the honest answer to a question BMN cannot settle.** The entries are still listed,
+so you can see what is written; none of them is called `wired`, because that word claims the hook
+runs; and the exit code is non-zero, because the check did not pass. `install` still works, since
+adding a group cannot make a file Codex already refuses any worse, and declining would punish a file
+that may be perfectly good. You get it for a top-level key BMN does not model, an event or hook type
+it has no rules for, a group key or entry field outside the small set it knows. The model is in
+`HOOK_FILES.codex` and is meant to be corrected as the schema is learned, not guessed around.
+
+What BMN *is* sure of, and calls `unusable`: `hooks` that is not an object, an event whose value is
+not a list of groups, a group that is not an object, a matcher Codex cannot read, a group whose
+`hooks` is not a list, an entry that is not an object, an entry with no `type`, a command entry with
+no `command`, and a `type`, `command` or `timeout` of the wrong shape.
+
+One more thing about `timeout`: for Codex the *spelling* decides. `1.0` and `1e3` reach JavaScript
+as the integer `1000`, and `18446744073709551616` reaches it as the same number as
+`18446744073709551615`, so a rule that read the parsed value would accept three things `u64` cannot
+hold. BMN reads the literal token instead, which Node hands it during parsing.
+
+Codex's side of all of this rests on its source rather than on a run here — three attempts to fire a
+Codex hook from a throwaway `CODEX_HOME` failed at the trust step — while Claude Code's was
+exercised directly.
 
 `install` then adds BMN's own entry beside yours, so the hook fires from BMN's entry whatever yours
 does. If you see a duplicate, that is why.
