@@ -1865,3 +1865,54 @@ reads `missing` with a printed note. Astra's own conclusion is that the directio
 should be amended to the three-form contract rather than the grammar restored. `epics.md` is a
 planning artifact and is not edited from inside a build run — the four earlier intent changes were
 recorded here the same way. **This one is for the owner to fold into the story text.**
+
+### Both reviews of `79cc2d7`: REFUSED, and the defect was in wave 8's own addition
+
+- gpt-6-astra/medium recheck 8 — `reviews/epic-15-recheck8-astra.md`. 913,582 input / 4,287 output.
+- GLM-5.3/max extra 8 — `reviews/epic-15-extra8-glm53.json`, $0.94, 22 turns, read tools only.
+
+**Both confirm the trim blocker is closed.** Astra ran 324 real-bash boundary probes and found no
+unsafe accepted case; GLM reasoned it closed by construction and named the one accepted false
+negative, a line continuation (`bmn hook claude\<newline>` runs and reads `missing`), which is the
+priced direction. `collapsed`/`oneLine` affect the printed note only and cannot grant recognition.
+
+**Both refuse on the matcher rule I added in wave 8.** It gated only a non-empty string after
+trimming, so every other shape read as ungated and a recognised entry inside such a group returned
+to `wired`, exit 0 — the same class the whole epic exists to prevent, one layer up. I reproduced
+eight shapes through the real CLI before repairing: `" "`, `"\t"`, `" "`, `["Write"]`, `[]`,
+`42`, `false`, `{}`, every one reporting the event as wired. Astra cited Codex's matcher source and
+schema; GLM cited Claude Code's list-valued matcher, which I had not considered at all.
+
+**Astra also corrected the reasoning, not just the code.** My comment claimed every non-empty
+matcher limits coverage. That is false: Codex ignores matchers on `Stop`, `UserPromptSubmit` and
+`Interrupt`. Refusing a gated group is a recognition policy, not a delivery claim, and both the
+comment and the docs now say so.
+
+**My own error, recorded before either reviewer raised it.** The recheck-8 prompt told both
+reviewers that the note's suppression-when-already-wired was documented. It was not — it was
+implemented and fenced, but absent from `docs/agent-control.md`. Astra checked and said so
+(`agent-control.md:229`). The sentence is now there. A disposition stated to a reviewer has to be
+true when it is stated.
+
+**Astra answered the AC1 question.** Recording the change as an explicit acceptance variance is
+sufficient for technical acceptance; editing `epics.md` is a tracked reconciliation task, not a
+precondition. It stays an owner item.
+
+### Wave 9 — `e19e0b9`, every finding dispositioned
+
+1. **The matcher predicate** (both, blocking). Only absence gates nothing: absent, `null`, `''`.
+   Everything else gates. Ten-row shape table, four RED fences.
+2. **A matcher that is neither a pattern nor a list of them** (Astra 2, blocking). `matcherShape`
+   in `unusableShape`: the file is reported as one BMN cannot add to, naming the event, and
+   `install` writes nothing and takes no backup. Four-row table, four RED fences.
+3. **The note erased its own cause** (GLM 2). `oneLine` now prints every character bash keeps in a
+   word but a reader cannot see as its code point, so the NBSP entry shows ` bmn hook claude`
+   instead of `bmn hook claude`. Two RED fences.
+4. **`HOOKS_USAGE` overclaimed and nothing pinned it** (GLM 3). Corrected, and a test pins it.
+5. **The differential run's accepted list was hand-written** (Astra 4). It is generated from the
+   blanks bash drops — 75 commands, three forms under every padding combination. A hand-written
+   list is how the wave-7 blocker got past this test.
+6. **The preview-suppression sentence** (Astra, and my own prompt error above). Documented.
+7. **The matcher rationale** (Astra). Corrected in the code comment and the docs.
+
+**Rejected, with the refutation:** nothing. Every material finding from both reviews is closed.
