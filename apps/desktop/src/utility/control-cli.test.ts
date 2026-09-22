@@ -448,6 +448,17 @@ describe('bmn hook', () => {
     expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
   })
 
+  it('opens nothing for a tool whose name merely contains the words it looks for', async () => {
+    const fixture = await cliFixture()
+
+    const result = await runHook(fixture, 'codex', {
+      hook_event_name: 'PreToolUse', tool_name: 'myapp_request_user_input', tool_input: {}
+    })
+
+    expect(result).toEqual(QUIET)
+    expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
+  })
+
   it('opens a Codex permission request with the command and closes it once the tool ran, past requests that are not open', async () => {
     const fixture = await cliFixture()
     fixture.handlers.withdrawAttention.mockRejectedValue(new ControlError(ERROR_CODES.notFound, 'No open request'))
@@ -713,6 +724,54 @@ describe('bmn hook', () => {
     expect(fixture.handlers.withdrawAttention).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ['no agent at all', []],
+    ['an extra word after the agent', ['claude', 'extra']],
+    ['an agent it does not know', ['gemini']]
+  ])('refuses %s without sending anything, and still exits 0', async (_label, rest) => {
+    // The recogniser reads an entry as wired only when `bmn hook <agent>` is the whole command,
+    // and this is the contract that makes that the right rule. It was mirrored only in a test stub.
+    const fixture = await cliFixture()
+    const proc = await procTree(fixture.root, HOLDS_TERMINAL)
+
+    const result = await runCli(['hook', ...rest], {
+      env: { ...fixture.sessionEnv, BMN_PROC_ROOT: proc },
+      input: JSON.stringify({ hook_event_name: 'Stop' })
+    })
+
+    expect(result.code).toBe(0)
+    expect(result.stdout).toBe('')
+    expect(result.stderr).toContain('hook expects one agent')
+    expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
+    expect(fixture.handlers.observeHookEvent).not.toHaveBeenCalled()
+  })
+
+  it('stays silent for input that parses but is not an event object', async () => {
+    const fixture = await cliFixture()
+
+    const list = await runHook(fixture, 'claude', [{ hook_event_name: 'Stop' }])
+    const bare = await runHook(fixture, 'claude', 'Stop')
+
+    expect(list).toEqual(QUIET)
+    expect(bare).toEqual(QUIET)
+    expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
+  })
+
+  it('gives up on a socket that accepts and never answers, rather than holding the agent up', async () => {
+    // The ceiling is the whole reason a hook may talk to BMN at all: an app that has wedged must
+    // cost the agent three seconds, not its turn.
+    const fixture = await cliFixture()
+    fixture.handlers.openAttention.mockImplementation(() => new Promise(() => {}))
+    const started = Date.now()
+
+    const result = await runHook(fixture, 'claude', {
+      hook_event_name: 'Notification', notification_type: 'permission_prompt', message: 'May I?'
+    })
+
+    expect(result).toEqual(QUIET)
+    expect(Date.now() - started).toBeLessThan(8_000)
+  }, 20_000)
+
   it('still reports when it cannot read the process tree at all, rather than falling silent', async () => {
     // Failing closed here would silently disable every hook on a system whose /proc reads
     // differently. "Cannot tell" means report: a duplicate request is visible, a missing one is not.
@@ -959,6 +1018,22 @@ describe('bmn hooks check', () => {
     expect(result.stdout).toContain('the file does not exist')
   })
 
+  it('reports a file it cannot read as unreadable, and installs nothing over it', async () => {
+    const path = await hookFileFixture({ hooks: {} })
+    await chmod(path, 0o000)
+
+    const check = await runHooks(['check', 'claude', '--file', path])
+    const install = await runHooks(['install', 'claude', '--file', path])
+    await chmod(path, 0o600)
+
+    expect(check.code).toBe(1)
+    expect(check.stdout).toContain('EACCES')
+    expect(install.code).toBe(1)
+    // Somebody's configuration BMN could not read is never something to overwrite.
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ hooks: {} })
+    expect(await backupsOf(path)).toEqual([])
+  })
+
   it('reads an empty object as every event missing', async () => {
     const path = await hookFileFixture({})
 
@@ -1042,9 +1117,6 @@ describe('bmn hooks check', () => {
     ['env carrying a variable', 'env BMN_X=1 bmn hook claude', 'wired (older wording)'],
     ['a timeout wrapper', 'timeout 5 bmn hook claude', 'wired (older wording)'],
     ['the command builtin', 'command bmn hook claude', 'wired (older wording)'],
-    ['a subshell', '(bmn hook claude)', 'wired (older wording)'],
-    ['nested subshells', '( ( bmn hook claude ) )', 'wired (older wording)'],
-    ['a brace group', '{ bmn hook claude; }', 'wired (older wording)'],
 
     ['a shell keyword in front', 'if true; then bmn hook claude; fi', 'wired (older wording)'],
 
@@ -1058,8 +1130,6 @@ describe('bmn hooks check', () => {
     ['three descriptors moved around', 'bmn hook claude 3>&1 1>&2 2>&3', 'wired (older wording)'],
     ['a redirection that refuses to clobber', 'bmn hook claude >|/dev/null', 'wired (older wording)'],
     ['an appending redirection in front', 'bmn >>/dev/null hook claude', 'wired (older wording)'],
-    ['a subshell with its output redirected', '(bmn hook claude) >/dev/null', 'wired (older wording)'],
-    ['a brace group with its streams joined', '{ bmn hook claude; } 2>&1', 'wired (older wording)'],
     ['a negated command', '! bmn hook claude', 'wired (older wording)'],
     // What is configured, not what will run: `check` reports the entry, and the documented entry is
     // itself guarded. The differential test only requires these to be recognised, so pin the words.
@@ -1067,11 +1137,28 @@ describe('bmn hooks check', () => {
     ['a loop body the condition never reaches', 'until true; do bmn hook claude; done', 'wired (older wording)'],
     ['a while loop that never starts', 'while false; do bmn hook claude; done', 'wired (older wording)'],
     ['a trailing comment', 'bmn hook claude # run it', 'wired (older wording)'],
+    // Grouping, substitution and `exec` all decide where the event goes in ways BMN will not work
+    // out: a redirection or a `&` on the group reaches the command inside it, `exec` changes the
+    // shell's own descriptors, and a substitution consumes the input before the command runs.
+    ['a subshell', '(bmn hook claude)', 'missing'],
+    ['a brace group', '{ bmn hook claude; }', 'missing'],
+    ['a group whose input is redirected', '{ bmn hook claude; } </dev/null', 'missing'],
+    ['a subshell whose input is redirected', '(bmn hook claude; :) </dev/null', 'missing'],
+    ['a group in the background', '{ bmn hook claude; } &', 'missing'],
+    ['exec changing descriptors first', 'exec </dev/null; bmn hook claude', 'missing'],
+    ['exec as a wrapper', 'exec bmn hook claude', 'missing'],
+    ['a substitution that eats the event first', 'x=$(cat); bmn hook claude', 'missing'],
+    ['a whole list put in the background', 'bmn hook claude && true &', 'missing'],
+    ['a command that may read the event first', 'read x; bmn hook claude', 'missing'],
+    ['another command that may read it first', 'cat >/dev/null; bmn hook claude', 'missing'],
     // Configured, but with nothing to read. A hook event arrives only on the command's standard
     // input, so anything that takes that away leaves an entry that runs and reports nothing.
     ['a backgrounded command, which is handed /dev/null', 'bmn hook claude &', 'missing'],
     ['a backgrounded command under nohup', 'nohup bmn hook claude &', 'missing'],
     ['the right-hand side of a pipe', 'echo x | bmn hook claude', 'missing'],
+    ['the right-hand side of a pipe that carries stderr', 'echo x |& bmn hook claude', 'missing'],
+    ['the right-hand side of a pipe broken by a newline', 'echo x |\nbmn hook claude', 'missing'],
+    ['standard input on a descriptor written with a leading zero', 'bmn hook claude 00</dev/null', 'missing'],
     ['standard input taken from a file', 'bmn hook claude </dev/null', 'missing'],
     ['standard input closed', 'bmn hook claude <&-', 'missing'],
     ['standard input duplicated from elsewhere', 'bmn hook claude 0<&1', 'missing'],
@@ -1082,9 +1169,21 @@ describe('bmn hooks check', () => {
     ['a word left over by a descriptor duplication', 'bmn hook claude >&2 file', 'missing'],
     // Syntax errors, which run nothing at all.
     ['a redirection with no target', 'bmn hook claude >', 'missing'],
+    ['an operator that is not a redirection', 'bmn hook claude >>&/dev/null', 'missing'],
+    ['another operator that is not a redirection', 'bmn hook claude >&|/dev/null', 'missing'],
+    ['a quoted empty argument after the agent', 'bmn hook claude ""', 'missing'],
     ['a keyword after its construct closed', 'if true; then :; fi; then bmn hook claude', 'missing'],
+    ['an operator with nothing in front of it', '&& bmn hook claude', 'missing'],
+    ['a semicolon with nothing in front of it', '; bmn hook claude', 'missing'],
+    ['an if that is never closed', 'if true; then bmn hook claude', 'missing'],
+    ['a for loop that is never closed', 'for i in 1; do bmn hook claude', 'missing'],
+    ['a while loop that is never closed', 'while true; do bmn hook claude', 'missing'],
+    ['a descriptor nothing opened', 'bmn hook claude 2>&3', 'missing'],
     // Shapes where the shell reads one word and BMN must not read three.
     ['words joined by a non-breaking space', 'bmn\u00a0hook\u00a0claude', 'missing'],
+    ['words joined by a carriage return', 'bmn\rhook\rclaude', 'missing'],
+    ['words joined by a form feed', 'bmn\fhook\fclaude', 'missing'],
+    ['words joined by a vertical tab', 'bmn\vhook\vclaude', 'missing'],
     ['a case pattern that names bmn', 'case $x in\nbmn) hook claude\nesac', 'missing'],
     // Not ours: a different program or agent, the words as text, or a shape BMN will not guess at.
     ['a program whose name ends in bmn', 'other.bmn hook claude', 'missing'],
@@ -1168,6 +1267,12 @@ describe('bmn hooks check', () => {
       'cat < <(bmn hook claude)',
       // Stdin is redirected but not taken away, and a named descriptor is not a number BMN reads.
       'bmn hook claude <&0', 'bmn hook claude {fd}>/dev/null',
+      // Grouping and `exec` reach the command inside them, so BMN stops reading rather than say
+      // which part of the structure a redirection or a `&` applied to.
+      '(bmn hook claude)', '( ( bmn hook claude ) )', '{ bmn hook claude; }',
+      '(bmn hook claude) >/dev/null', '{ bmn hook claude; } 2>&1', 'exec bmn hook claude',
+      // A pipe whose left-hand side passes the event straight through still reports.
+      'cat | bmn hook claude',
       // `eval` assembles a script out of its arguments and runs that, so what is written is not
       // what runs; `time` is a keyword rather than a program. Neither is read.
       'eval bmn hook claude', 'time bmn hook claude',
@@ -1191,8 +1296,7 @@ describe('bmn hooks check', () => {
       `${join(bin, 'bmn')} hook claude`,
       'BMN_X=1 bmn hook claude', 'env BMN_X=1 bmn hook claude', 'env bmn hook claude',
       'timeout 5 bmn hook claude', 'command bmn hook claude',
-      'exec bmn hook claude', 'nohup bmn hook claude', 'setsid bmn hook claude',
-      '(bmn hook claude)', '( ( bmn hook claude ) )', '{ bmn hook claude; }',
+      'nohup bmn hook claude', 'setsid bmn hook claude',
       'if true; then bmn hook claude; fi', 'for i in 1; do bmn hook claude; done',
       'echo x | bmn hook claude', 'bmn hook claude || true', 'true; bmn hook claude',
       'true && bmn hook claude',
@@ -1206,10 +1310,24 @@ describe('bmn hooks check', () => {
       'bmn hook claude --json', 'bmn hook claude >&2 file', 'bmn hook claude >',
       'if true; then :; fi; then bmn hook claude', 'bmn\u00a0hook\u00a0claude',
       'case $x in\nbmn) hook claude\nesac',
+      // Everything the fifth recheck found: structure that decides where the event goes, a
+      // descriptor written differently, a real empty argument, separators bash keeps inside a word,
+      // and operator runs that are syntax errors.
+      'exec </dev/null; bmn hook claude', 'x=$(cat); bmn hook claude',
+      '{ bmn hook claude; } </dev/null', '(bmn hook claude; :) </dev/null',
+      '{ bmn hook claude; } &', 'bmn hook claude && true &',
+      'echo x |& bmn hook claude', 'echo x |\nbmn hook claude',
+      'bmn hook claude 00</dev/null', 'bmn hook claude ""',
+      'bmn\rhook\rclaude', 'bmn\fhook\fclaude', 'bmn\vhook\vclaude',
+      'bmn hook claude >>&/dev/null', 'bmn hook claude >&|/dev/null',
+      // Malformed or event-eating entries the sixth round found.
+      '&& bmn hook claude', '; bmn hook claude', 'if true; then bmn hook claude',
+      'for i in 1; do bmn hook claude', 'while true; do bmn hook claude',
+      'bmn hook claude 2>&3', 'read x; bmn hook claude', 'cat >/dev/null; bmn hook claude',
       // Redirection forms that must not swallow a word or end a command in the wrong place.
       'bmn hook claude 2>&-', 'bmn hook claude 3>&1 1>&2 2>&3', 'bmn hook claude >|/dev/null',
-      'bmn >>/dev/null hook claude', 'bmn hook claude <&0', 'bmn hook claude {fd}>/dev/null',
-      '(bmn hook claude) >/dev/null', '{ bmn hook claude; } 2>&1', '! bmn hook claude',
+      'bmn >>/dev/null hook claude',
+      '! bmn hook claude',
       'bmn |& true hook claude', 'bmn hook |& true claude',
       'bmn 1&>/dev/null hook claude', 'bmn 1&>>/dev/null hook claude',
       // A comment can begin straight after an operator, not only after a space.

@@ -138,6 +138,11 @@ describe('companion store', () => {
 
     expect(grown).toMatchObject({ body: 'one\ntwo', revision: opened.revision, seenAt: seen.seenAt, state: 'open' })
 
+    // It replaces the body rather than adding to it: the caller owns the whole text, because the
+    // lines it keeps are the ones the owner has not read yet.
+    expect(appendAttentionBody(database, opened.requestId, 'two\nthree'))
+      .toMatchObject({ body: 'two\nthree', revision: opened.revision })
+
     closeAttention(database, { requestId: opened.requestId }, 'answered', 'done', now)
 
     expect(appendAttentionBody(database, opened.requestId, 'three')).toBeNull()

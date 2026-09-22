@@ -1624,3 +1624,104 @@ for stripping `)` was dead, because a third word ending in `)` is always the las
 The guard that actually matters is on the program word, and it is now fenced separately and RED.
 Two further probes, on `appendAttentionBody`'s open-only update and the notice body's oldest-first
 eviction, are also RED. 1,340 unit tests pass; lint and typecheck are clean.
+
+## 2026-09-22 — Fifth recheck refused `b342658`: seven more, one of them P1, and a fourth process failure
+
+Receipt: `.dev-auto/evidence/epic-15/reviews/epic-15-recheck5-astra.md`. Verdict: **"Epic 15 is not
+acceptable at `b342658`."** Astra built its own harness — the real CLI against bash, with an event on
+stdin and a stub enforcing the two-argument contract — and every finding below reproduced exactly
+when I ran it myself. Fifteen command shapes, all reading as wired while the shell cannot report.
+
+1. **P1: the default HOME branch still collapsed `..`.** I had fixed `--file` and a moved
+   `CLAUDE_CONFIG_DIR` and left `join(homedir(), …)` alone, with a comment asserting the owner's own
+   home cannot contain a `..`. It can. With `HOME=/bin/..` the CLI selected `/.claude/settings.json`
+   where the kernel resolves `/usr/.claude/settings.json`. That is the fourth appearance of this one
+   class, and the third time a comment of mine asserted the very thing that was false.
+2. Standard input is not local to a segment: `exec </dev/null; bmn hook claude`,
+   `x=$(cat); bmn hook claude`, `{ bmn hook claude; } </dev/null`, `(bmn hook claude; :) </dev/null`,
+   `{ bmn hook claude; } &`, `bmn hook claude && true &`.
+3. Pipe state was cleared by an empty segment, so `echo x |& bmn hook claude` and a newline straight
+   after a `|` both read as wired.
+4. A descriptor was compared as text, so `00</dev/null` was not descriptor zero.
+5. A quoted empty argument was filtered out before counting, so `bmn hook claude ""` read as three
+   words when the binary sees four and refuses.
+6. Carriage return, form feed and vertical tab were treated as word separators. Bash keeps all three
+   inside a word, so `bmn\rhook\rclaude` is one command name. The NBSP fix closed one member of a
+   class and I described it as the class.
+7. Whole-operator capture accepted any run of `><&|`, so `>>&` and `>&|` — syntax errors — read as
+   clean redirections.
+
+**The repair is a narrowing, not another exception.** Five rounds have all had the same cause:
+trying to read more shell. BMN now refuses outright to read a command containing a here-document, a
+command or process substitution, a group or a subshell, a background `&` anywhere, an `exec`, or an
+operator that is not one of the ten redirections bash accepts. `exec` is gone from the wrapper
+table. That costs duplicate entries for `(bmn hook claude)`, `{ bmn hook claude; }` and
+`exec bmn hook claude`, which are now listed exceptions that must still be seen to run. Every one of
+Astra's fifteen shapes now reads as missing, and the documented entry and the ordinary wrapper and
+redirection shapes still read as wired.
+
+Astra is also right that **the stdin rule is about event delivery, not about redirection**: `<&0`
+and `cat | bmn hook claude` do deliver, and both are now listed misses rather than claimed defects.
+
+**Two corrections to my evidence and my documentation, both fair.**
+- `fences-15-wave5.log` was captured through `tail -30`, so it shows a footer of 18/19 over nine
+  detail rows. It does not substantiate the claim it is cited for. The fences are being re-run with
+  the whole output captured, and the truncated file is not cited until then.
+- `docs/agent-control.md` grouped dead entries with working duplicates and said removing either one
+  is safe. For a dead entry that is false: BMN's own entry is the only one that works.
+
+### I edited the tree during a review run for the fourth time
+
+I wrote `scratchpad/who-reads-the-tree.sh` after the third time, ran it before the previous wave,
+and then started this wave the moment Astra's verdict arrived — forgetting the two GLM runs I had
+dispatched alongside it and which were still reading. Running a guard once and then trusting my own
+memory is not a mechanism.
+
+What changes: the guard now runs **in the same shell command as the patch**, as
+`who-reads-the-tree.sh && python3 - <<'PY' …`, so an edit cannot start while something is reading.
+It is not a rule I have to remember at the right moment; it is part of how the edit is issued.
+
+### The two GLM opinions on `b342658`, and what the sixth wave closed
+
+Both read a tree that changed under them — my fourth process failure — and both say so themselves.
+Their findings are leads I verified, not reviews of a revision.
+
+**GLM-5.3-Flash/max, 30 turns, $2.05** (`epic-15-extra5-glmflash.json`), on the tests. It compared
+the stub against `runHook` line by line and found the oracle faithful within the fixed-event
+harness, with the two ways the stub is more permissive both unexercisable as written. It judged all
+seven new tests real fences, naming the assertion each regression would fail. Four gaps, now closed:
+
+- **The real binary's argv contract had no test at all.** The whole tightening rests on
+  `bmn hook` refusing a second argument, and that contract lived only in a bash stub — loosen the
+  length check and nothing in the suite would fail. Now three cases through the real binary.
+- Valid JSON that is not an object, the three-second ceiling against a socket that accepts and never
+  answers, and `readHookFile`'s unreadable state. All three now tested.
+
+It also found my dedup claim false: **eight** shapes were running twice, written literally into
+`commands` and spread in again through `allowedMisses`. Removed. And it noted two rows whose
+agreement is accidental — `env -i` passes because the stub's directory is not on the default `PATH`,
+and `bash -lc` depends on this machine's profile files. Both verdicts are right for the real reason,
+and the rows stay.
+
+**GLM-5.3/max, 8 turns, $2.97** (`epic-15-extra5-glm53.json`), on the recogniser. Its two top-ranked
+items were the ones Astra had just raised, independently reached. Its second group was new:
+malformed entries the shell rejects outright. Verified and closed: a leading `;`, `&&` or `|`; an
+`if`, `for` or `while` never closed; `read x;` and `cat >/dev/null;` before the hook. It also found
+`2>&3`, where the descriptor is not open — refused now unless something earlier in the same command
+opened it, so `3>&1 1>&2 2>&3` still reads as wired. On `linkTarget` it constructed fixtures for
+relative targets, link-to-link, symlinked parents, `..` above root, missing components and trailing
+slashes and found **no fourth instance of the wrong-file class**, only two rough edges that fail
+safe.
+
+**Fences: `fences-15-wave6.log`, 17 probes, 14 RED, captured whole this time.** The three GREENs
+were each worth having:
+
+- The `$(`/backtick scan and the `isObject` check are **defence in depth**: every shape either
+  reviewer produced also fails a later check, so no test distinguishes them. Both now say so in the
+  code and are not claimed as fenced. They are not deleted — the last guard deleted here on the
+  strength of a green mutation was the comment check, and it was load-bearing.
+- The whole-command `exec` refusal was both redundant and **over-broad**: `bmn hook claude; exec x`
+  does report, and it read as missing. Removed; what actually stops `exec </dev/null; bmn hook claude`
+  is `harmlessBeforeHook`, which looks only at segments before the hook and is RED under mutation.
+
+1,368 unit tests pass over 88 files; lint and typecheck clean.

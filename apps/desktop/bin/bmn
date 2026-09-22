@@ -647,8 +647,8 @@ function absoluteUncollapsed(path) {
 function hookFilePath(agent) {
   const [directory, ...rest] = HOOK_FILES[agent].path
   const moved = agent === 'claude' ? process.env.CLAUDE_CONFIG_DIR : process.env.CODEX_HOME
-  // The owner's own directory cannot contain a `..`; a directory they moved it to can.
-  return moved ? `${absoluteUncollapsed(moved)}/${rest.join('/')}` : join(homedir(), directory, ...rest)
+  // The owner's own home can hold a `..` as easily as a directory they moved the config to.
+  return `${absoluteUncollapsed(moved || `${homedir()}/${directory}`)}/${rest.join('/')}`
 }
 
 function hookEntryCommand(agent) {
@@ -678,7 +678,6 @@ const COMMAND_WRAPPERS = {
   // `env --help` exits, `bash -n` parses without running. A wrapper with a flag is "not ours".
   env: { assignments: true, positional: 0 },
   command: { assignments: false, positional: 0 },
-  exec: { assignments: false, positional: 0 },
   nohup: { assignments: false, positional: 0 },
   setsid: { assignments: false, positional: 0 },
   nice: { assignments: false, positional: 0 },
@@ -692,6 +691,22 @@ const CONTINUATION_KEYWORDS = ['then', 'else', 'elif', 'do']
 const OPENING_KEYWORDS = ['if', 'while', 'until', 'for', 'case', 'select']
 /** And the words that close one again, so `if true; then :; fi; then …` is a syntax error too. */
 const CLOSING_KEYWORDS = ['fi', 'done', 'esac']
+/** Every redirection bash accepts. Anything else built from these characters is a syntax error. */
+const REDIRECTIONS = ['<', '>', '>>', '<>', '>|', '<&', '>&', '&>', '&>>', '<<<']
+/** The descriptors certain to be open. Duplicating any other one fails and the command never runs. */
+const OPEN_DESCRIPTORS = ['0', '1', '2', '-']
+/**
+ * What BMN will read *before* the hook call in the same entry. Anything else may consume the event
+ * before the hook reaches it - `read`, `cat` and a substitution all do - and which commands read
+ * standard input is not something that can be decided by looking at the name. So this is a closed
+ * list that fails towards "not ours": the guard in the documented entry, and little else.
+ */
+const HARMLESS_BEFORE_HOOK = [
+  '[', 'test', 'command', 'true', 'false', ':', 'echo', 'printf',
+  'if', 'then', 'elif', 'else', 'fi', 'for', 'while', 'until', 'do', 'done', 'select', '!', '{'
+]
+/** Each construct has to be closed in the same entry, or the shell runs none of it. */
+const KEYWORD_PAIRS = { if: 'fi', for: 'done', while: 'done', until: 'done', select: 'done', case: 'esac' }
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=[^(]*$/
 
 /**
@@ -732,8 +747,9 @@ function withoutInertText(command) {
  * once. BMN reads none of that. It stops reading a command that contains one, which costs a
  * duplicate entry and never a silent gap.
  */
-function hasHereDocument(command) {
+function unreadableShape(command) {
   let quote = ''
+  let leading = true
   for (let index = 0; index < command.length; index += 1) {
     const character = command[index]
     if (quote) {
@@ -742,11 +758,21 @@ function hasHereDocument(command) {
     }
     if (character === '"' || character === "'") { quote = character; continue }
     if (character === '\\') { index += 1; continue }
+    // Defence in depth: every substitution BMN has been shown also fails a later check, so no test
+    // distinguishes this line. It stays because a substitution can run anything at all.
+    if (character === '`') return 'a command substitution'
+    if (leading && (character === ';' || character === '&' || character === '|')) {
+      return 'an operator with nothing in front of it'
+    }
+    if (!/\s/.test(character)) leading = false
+    if (character === '$' && command[index + 1] === '(') return 'a command substitution'
+    if ((character === '<' || character === '>') && command[index + 1] === '(') return 'a process substitution'
     // `<<<` is a here-string: one word, no body, nothing to tell apart.
-    if (character === '<' && command[index + 1] === '<' && command[index + 2] !== '<') return true
+    if (character === '<' && command[index + 1] === '<' && command[index + 2] !== '<') return 'a here-document'
     if (character === '<' && command[index + 1] === '<') index += 2
+    if ('(){}'.includes(character)) return 'a group or a subshell'
   }
-  return false
+  return null
 }
 
 /**
@@ -773,7 +799,12 @@ function commandSegments(command) {
   let piped = false
   const endSegment = (separator = '') => {
     endWord()
-    if (words.length > 0) segments.push({ words, backgrounded: separator === '&', piped })
+    if (words.length === 0) {
+      // Nothing between the two separators, so nothing has changed about what follows them.
+      if (separator === '|') piped = true
+      return
+    }
+    segments.push({ words, backgrounded: separator === '&', piped })
     words = []
     // Only the left-hand side of a pipe keeps the standard input the harness handed the entry.
     piped = separator === '|'
@@ -819,7 +850,7 @@ function commandSegments(command) {
       spaced = false
       continue
     }
-    if (/[ \t\n\r\f\v]/.test(character)) {
+    if (/[ \t\n]/.test(character)) {
       endWord()
       spaced = true
       continue
@@ -839,6 +870,8 @@ function commandSegments(command) {
  */
 function withoutRedirections(words) {
   const kept = []
+  // Nothing else is certain to be open, but a redirection earlier in the same command can open one.
+  const open = new Set(OPEN_DESCRIPTORS)
   for (let index = 0; index < words.length; index += 1) {
     if (words[index].redirect) {
       const operator = words[index].text
@@ -850,7 +883,14 @@ function withoutRedirections(words) {
         previous !== undefined && !previous.literal && /^\d+$/.test(previous.text)
       const descriptor = attachedDescriptor ? previous.text : null
       if (attachedDescriptor) kept.pop()
-      if (descriptor === '0' || (descriptor === null && operator[0] === '<')) return null
+      if (!REDIRECTIONS.includes(operator)) return null
+      // `2>&3` needs a descriptor 3 that a hook command has no reason to have, unless something
+      // earlier in the same command opened it; bash fails the redirection and runs nothing.
+      const duplicated = operator.endsWith('&') ? words[index + 1] : undefined
+      if (duplicated !== undefined && !duplicated.literal && /^[\d-]+$/.test(duplicated.text) &&
+        !open.has(String(Number(duplicated.text) || duplicated.text))) return null
+      if (descriptor !== null) open.add(String(Number(descriptor)))
+      if (descriptor === null ? operator[0] === '<' : Number(descriptor) === 0) return null
       if (index + 1 >= words.length) return null
       index += 1
       continue
@@ -878,7 +918,7 @@ function programName(word) {
 }
 
 function runsHookInSegment(all, agent, opened) {
-  const words = all.filter((word) => wordText(word) !== '')
+  const words = all.filter((word) => word.literal || wordText(word) !== '')
   const begins = (word) =>
     SHELL_KEYWORDS.includes(word) && (opened || !CONTINUATION_KEYWORDS.includes(word))
   let index = 0
@@ -905,21 +945,56 @@ function runsHookInSegment(all, agent, opened) {
 /** Whether this entry's command runs `bmn hook <agent>`; see COMMAND_WRAPPERS for what is read. */
 function runsHook(command, agent) {
   if (typeof command !== 'string') return false
-  if (hasHereDocument(command)) return false
+  const text = withoutInertText(command)
+  if (unreadableShape(text) !== null) return false
+  const segments = commandSegments(text)
+  // A `&` anywhere backgrounds something, and what it backgrounds may be a whole list rather than
+  // the command it follows. A backgrounded command is handed /dev/null, and the hook event arrives
+  // only on standard input, so BMN stops reading the entry rather than work out which part ran.
+  if (segments.some((segment) => segment.backgrounded)) return false
+  // A construct left open is a syntax error, and the shell runs none of the entry.
+  const firstWords = segments.map((segment) => {
+    const word = segment.words.find((each) => !each.redirect && wordText(each) !== '')
+    return word === undefined || word.literal ? null : wordText(word)
+  })
+  // Several openers share one closer - `for`, `while`, `until` and `select` all end at `done` - so
+  // the count is per closing word, not per pair.
+  for (const closer of new Set(Object.values(KEYWORD_PAIRS))) {
+    const opens = firstWords.filter(
+      (word) => word !== null && KEYWORD_PAIRS[word] === closer
+    ).length
+    if (opens !== firstWords.filter((word) => word === closer).length) return false
+  }
   let opened = false
-  for (const segment of commandSegments(withoutInertText(command))) {
+  let safeSoFar = true
+  for (const [index, segment] of segments.entries()) {
     const kept = withoutRedirections(segment.words)
-    if (kept === null) continue
-    // The hook event arrives only on standard input, and a backgrounded command is handed
-    // /dev/null while the right-hand side of a pipe is handed whatever the left-hand side wrote.
-    const reads = !segment.backgrounded && !segment.piped
-    if (reads && runsHookInSegment(kept, agent, opened)) return true
+    if (kept === null) {
+      // A segment BMN will not read may still be one that eats the event before the hook runs.
+      safeSoFar = false
+      continue
+    }
+    // The right-hand side of a pipe is handed whatever the left-hand side wrote, not the event.
+    if (!segment.piped && runsHookInSegment(kept, agent, opened)) return safeSoFar
     const first = kept.find((word) => wordText(word) !== '')
-    if (first === undefined || first.literal) continue
-    if (OPENING_KEYWORDS.includes(first.text)) opened = true
-    if (CLOSING_KEYWORDS.includes(first.text)) opened = false
+    if (first !== undefined && !first.literal) {
+      if (OPENING_KEYWORDS.includes(first.text)) opened = true
+      if (CLOSING_KEYWORDS.includes(first.text)) opened = false
+    }
+    if (!harmlessBeforeHook(kept)) safeSoFar = false
+    void index
   }
   return false
+}
+
+/** Whether this segment is one of the few BMN knows cannot consume the hook event first. */
+function harmlessBeforeHook(words) {
+  const named = words.filter((word) => wordText(word) !== '')
+  let index = 0
+  while (index < named.length && !named[index].literal && ASSIGNMENT.test(named[index].text)) index += 1
+  if (index >= named.length) return true
+  const word = named[index]
+  return !word.literal && HARMLESS_BEFORE_HOOK.includes(programName(word))
 }
 
 function hookEventState(groups, agent) {
@@ -1377,6 +1452,8 @@ async function runHook(args) {
   } catch {
     return 0
   }
+  // Defence in depth: every branch below keys on `hook_event_name`, so nothing that is not an
+  // object reaches one. No test can tell this line from its neighbours; it is not claimed as fenced.
   if (!isObject(event)) return 0
   const requests = hookRequests(agent, event)
   const opens = requests.filter((request) => request.method === 'attention.open')
