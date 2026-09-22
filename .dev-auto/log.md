@@ -2248,3 +2248,84 @@ and `timeout` judged.
   Caught by the install test. The condition is now `file.state !== 'missing'`.
 
 305 CLI tests. Fifteen mutation probes (`fences-15-wave14.log`).
+
+## 2026-09-22 ~12:20 — Wave 15: the reversal, at the owner's prompting
+
+The owner, mid-run: *"if you struggle so much consult with Fable regarding the most complicated
+things"*. That was the right instruction and it changed the outcome.
+
+### Three opinions on `cf1bd81`
+
+- **gpt-6-astra/medium, recheck 13: refused.** Accepts design D, four implementation defects.
+  P1 `install` corrupts an accepted timeout — `18446744073709551615` is read correctly through the
+  token and written back by `JSON.stringify` as `18446744073709552000`, after which `check` calls
+  the file `unusable`. P1 `description` is allowlisted by name with no rule for its value, so
+  `description: {}` reads `read` with wired events. P2 `--json` still says `wired` under an
+  `unverified` file. P2 `install` exits 0 without reporting the uncertainty. Also: "`1.0` parses to
+  **1**, not 1000" — my doc and commit message were wrong.
+- **GLM-5.3/max, extra 13 ($1.43, 34 turns): accepted**, carrying the same two leaks Astra found
+  first (the `description` value slot, the `--json` row) as P3s.
+- **fable/high ($1.98, 18 turns), asked the design question rather than for a line review: the
+  design is an evasion and the epic asked for a smaller tool.**
+
+### Why Fable won the argument
+
+Its central point, which I could not see from inside fourteen waves: for Codex, the line between
+`read` and `unverified` is drawn by **BMN's familiarity with the file, not by evidence quality**.
+Both rest on zero Codex runs. Astra's own condition was "reserve `wired` for stronger evidence" —
+and there is no stronger evidence for any Codex file, so the condition cannot be met. The contract
+only looked honest.
+
+Three load-bearing claims, each verified here before acting:
+
+1. **AC1 names exactly three per-event states** (`epics.md:785`): `wired`, `wired (older wording)`,
+   `missing`. The `found (...), acceptance unverified` rendering contradicts the criterion it was
+   built to serve. Astra's P2 and GLM's 1b are both symptoms of that extra state.
+2. **AC3 already prescribes the disclosure** (`epics.md:787`): `install codex` must say Codex has to
+   trust the hooks once with `/hooks`, and that "`check` reports configuration, not that a hook
+   fired". The epic never asked BMN to answer "will Codex load this file". Waves 9-14 were solving a
+   problem the story does not pose.
+3. **`bin/bmn` runs under `#!/usr/bin/env node`** — the system node, not the repo's pinned 24. I had
+   justified the token reader with `package.json`'s `engines`, which governs the repo's tooling and
+   not the installed CLI. On an older system node every numeric timeout would read as unrunnable and
+   **every Codex file would report `unusable`** — on the fresh machine this story exists for.
+
+Fable also noted that Astra himself blocked this over-refusal shape at `e211130`, and wave 14
+brought it back under a softer word. That is exactly what happened.
+
+### What wave 15 deletes
+
+`strict`, `known`, `rootKeys`, `groupKeys`, `entryTypes`, `commandKeys`, `matchers`,
+`unmodelledShape`, `inspectShape`, `matcherShape`, the strict half of `unusableShape`, the
+`TIMEOUT_TOKENS` reviver and `parseHookJson`, the `unverified` state and its rendering. 183 lines
+out, 31 in. All of it the part no run here could check.
+
+### What it keeps or adds
+
+- Exact-string recognition and the bash-blank trimming, untouched since wave 7.
+- The measured Claude rules. `unusableShape` is merge safety only: `hooks` not an object, an
+  expected event not a list.
+- Codex's cheap safe rules: `timeout` absent, `null` or a number at or above zero; matcher absent,
+  `null` or empty leaves the group ungated. Wrong costs a duplicate entry.
+- **Every Codex report ends with the limit**, unconditionally, since it is the same whatever the
+  file holds: Codex loads this file strictly, BMN does not check that it will, run `/hooks` and
+  confirm the event appears.
+- **Astra's P1 survives the reversal and is fixed:** `install` refuses to write a file holding an
+  integer literal it cannot reproduce, naming the number. Only integers can lose their value that
+  way; `1.0` becoming `1` is the same number and is allowed. The reviver is feature-detected and
+  used at install time only, so no `check` verdict depends on the node version.
+- **Claude `timeout: 0` is now measured, not assumed.** A first probe was invalid — I passed
+  `--mcp-config` before a positional prompt and the CLI took the prompt as a config path, so the
+  control did not fire and nothing was concluded. Rerun correctly
+  (`probes/result-timeout-zero.txt`): absent FIRED, `0` did not fire, `1` FIRED. The conservative
+  guess was right and is now evidence.
+- Fable's doc corrections: the matcher measurement was on `PostToolUse` only and the page said it
+  universally; the stale "left alone rather than refused" comment went with the code it described.
+
+278 CLI tests. Nine mutation probes (`fences-15-wave15.log`).
+
+**What I got wrong, plainly:** I took a strong reviewer's endorsement of a design as settling it,
+and spent five waves building something the acceptance criteria did not ask for and no evidence
+available here could support. The reviewer who was asked the narrower question answered it; the
+reviewer who was asked the wider one said to delete it. Astra's endorsement was of an option I
+wrote, and the option set I offered did not include "ship what the story says".

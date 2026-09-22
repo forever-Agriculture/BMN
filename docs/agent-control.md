@@ -270,60 +270,37 @@ duplicate.
 
 What counts as *no matcher at all* differs by harness, and it was measured rather than assumed. A
 Claude Code hook was run against a real tool call with each shape in turn: only an absent matcher
-and an empty one fired. `null` did not, nor did `["Bash"]`, nor `42` — so under Claude Code all
-three gate their group, and a `null` matcher is a dead hook rather than an unmatched one. Codex's
-matcher is one optional pattern, where `null` is genuine absence and so leaves the group ungated.
+and an empty one fired. `null` did not, nor did `["Bash"]`, nor `42` — so BMN treats all three as
+gating, and a `null` matcher as a dead hook rather than an unmatched one. That was measured on
+`PostToolUse`; an event where the harness ignores matchers entirely could fire anyway, which would
+cost a duplicate entry and nothing worse. For Codex, which has never been run here, `null` is taken
+as absence.
 
 **About `timeout`.** A recognised command in an entry the harness will not run is not a wired hook,
-so `check` does not call it one. This too was measured one entry at a time against a real tool call:
-under Claude Code an entry whose `timeout` is `"5"`, `-1` or `null` did not fire, while `1.5` did.
-So BMN counts a Claude entry only when its `timeout` is absent or a positive number, and prints the
-entry under the event like any other it did not count. `0` was not tried and is treated as dead,
-which costs a duplicate entry rather than a silent gap. Codex declares `timeout` as `Option<u64>`,
-so there absence, `null` and any whole number at or above zero are all fine and anything else stops
-the file loading.
+so `check` does not call it one. Under Claude Code this was measured one entry at a time against a
+real tool call, each with a control that fired: an absent `timeout` ran, `1` and `1.5` ran, and
+`"5"`, `-1`, `null` and `0` did not. So BMN counts a Claude entry only when its `timeout` is absent
+or a positive number, and prints the entry under the event like any other it did not count. For
+Codex, which has never been run here, the rule is the cheap safe one: absent, `null`, or a number at
+or above zero. Being wrong there costs a duplicate entry.
 
-What happens to the *rest* of the file differs too, and matters more:
+**What `check` does not do: read your harness's config file for it.** Codex in particular loads its
+hook file strictly, so a mistake anywhere in that file can stop every hook in it, BMN's included.
+BMN does not check for that and does not pretend to: it was tried, over five rounds, and every rule
+rested on a reading of somebody else's schema that no run here could confirm — the rules were wrong
+in both directions, refusing files that work and passing files that do not. So every Codex report
+ends with the limit instead, and `epics.md:787` says the same thing: this command reports what is
+*configured*, never that a hook fired. Run `/hooks` in Codex once, then confirm the event shows up
+under Hook events. That is the check BMN cannot do for you.
 
-- **Claude Code drops the group and keeps going.** A bad matcher, a malformed entry, a group whose
-  `hooks` is not a list — each kills that group only. A sibling group in the same event still fires,
-  a valid entry beside a malformed one in the same group fires, and so do other events — measured in
-  both orders, so it is not an artifact of which one is written first. So BMN never refuses a Claude settings file over a shape: it reads the
-  file, reports that group's event by what is left, and `install` works normally.
-- **Codex refuses the whole file.** It deserializes strictly, so one wrong type anywhere leaves no
-  working hook at all — including the ones BMN put there.
+What BMN still refuses to add to, for both harnesses, is a file it cannot merge into without
+removing something: `hooks` that is not an object, or an event whose value is not a list of groups.
+That is about the merge, not about the harness.
 
-That second case is why a Codex file gets one of three answers rather than two. BMN does not
-reimplement Codex's parser, and a check that quietly assumed it had would be the worst of both
-worlds: green over a file Codex throws away.
+One more thing `install` will not do: rewrite a number it cannot reproduce. It reserializes the
+file, and `JSON.stringify` turns `18446744073709551615` into `18446744073709552000`. Rather than
+silently edit a value nobody asked it to touch, it declines and names the number.
 
-| answer | what it means | what `install` does |
-| --- | --- | --- |
-| read | every part of the file is inside BMN's model of it, and valid | adds the missing entries |
-| unusable | BMN is sure Codex refuses this file | writes nothing, takes no backup |
-| unverified | the file holds something BMN has no rules for | adds the missing entries anyway |
-
-**`unverified` is the honest answer to a question BMN cannot settle.** The entries are still listed,
-so you can see what is written; none of them is called `wired`, because that word claims the hook
-runs; and the exit code is non-zero, because the check did not pass. `install` still works, since
-adding a group cannot make a file Codex already refuses any worse, and declining would punish a file
-that may be perfectly good. You get it for a top-level key BMN does not model, an event or hook type
-it has no rules for, a group key or entry field outside the small set it knows. The model is in
-`HOOK_FILES.codex` and is meant to be corrected as the schema is learned, not guessed around.
-
-What BMN *is* sure of, and calls `unusable`: `hooks` that is not an object, an event whose value is
-not a list of groups, a group that is not an object, a matcher Codex cannot read, a group whose
-`hooks` is not a list, an entry that is not an object, an entry with no `type`, a command entry with
-no `command`, and a `type`, `command` or `timeout` of the wrong shape.
-
-One more thing about `timeout`: for Codex the *spelling* decides. `1.0` and `1e3` reach JavaScript
-as the integer `1000`, and `18446744073709551616` reaches it as the same number as
-`18446744073709551615`, so a rule that read the parsed value would accept three things `u64` cannot
-hold. BMN reads the literal token instead, which Node hands it during parsing.
-
-Codex's side of all of this rests on its source rather than on a run here — three attempts to fire a
-Codex hook from a throwaway `CODEX_HOME` failed at the trust step — while Claude Code's was
-exercised directly.
 
 `install` then adds BMN's own entry beside yours, so the hook fires from BMN's entry whatever yours
 does. If you see a duplicate, that is why.
