@@ -729,8 +729,8 @@ describe('bmn hook', () => {
     ['an extra word after the agent', ['claude', 'extra']],
     ['an agent it does not know', ['gemini']]
   ])('refuses %s without sending anything, and still exits 0', async (_label, rest) => {
-    // The recogniser reads an entry as wired only when `bmn hook <agent>` is the whole command,
-    // and this is the contract that makes that the right rule. It was mirrored only in a test stub.
+    // `bmn hooks check` recognises the bare `bmn hook <agent>` as an entry, and this refusal is
+    // what makes the third word part of the command's identity rather than a hint.
     const fixture = await cliFixture()
     const proc = await procTree(fixture.root, HOLDS_TERMINAL)
 
@@ -1107,126 +1107,18 @@ describe('bmn hooks check', () => {
     expect(report.agents[0].missing).toEqual(CLAUDE_EVENTS.filter((event) => event !== 'Stop'))
   })
 
+  // The recogniser compares whole commands and never parses one, so this table has two halves: the
+  // few exact strings BMN answers for, and - much longer - everything that only looks like one.
+  // The second half is the point. Seven rounds of review each found a command a grammar here called
+  // wired that the shell could not report from, which is the one outcome `check` exists to prevent.
+  // Every row below is a command that must never be called wired again.
   it.each([
     ['the documented command', DOCUMENTED_CLAUDE, 'wired'],
     ['the older AITERM wording', OLDER_CLAUDE, 'wired (older wording)'],
-    ['an absolute path to bmn', '"/usr/bin/bmn" hook claude', 'wired (older wording)'],
-    ['a quoted subcommand', "bmn 'hook' claude", 'wired (older wording)'],
-    // A bare wrapper only puts words in front of the program, so these still run it.
-    ['a leading assignment', 'BMN_X=1 bmn hook claude', 'wired (older wording)'],
-    ['env carrying a variable', 'env BMN_X=1 bmn hook claude', 'wired (older wording)'],
-    ['a timeout wrapper', 'timeout 5 bmn hook claude', 'wired (older wording)'],
-    ['the command builtin', 'command bmn hook claude', 'wired (older wording)'],
-
-    ['a shell keyword in front', 'if true; then bmn hook claude; fi', 'wired (older wording)'],
-
-    ['a redirection before the arguments', 'bmn > /dev/null hook claude', 'wired (older wording)'],
-    ['a redirection with no space', 'bmn hook claude>/dev/null', 'wired (older wording)'],
-    ['a file descriptor redirection', 'bmn 2>/dev/null hook claude', 'wired (older wording)'],
-    ['a descriptor duplicated before the arguments', 'bmn 1>&2 hook claude', 'wired (older wording)'],
-    ['both streams redirected', 'bmn hook claude &>/dev/null', 'wired (older wording)'],
-    ['a pipe that carries stderr too', 'bmn hook claude |& cat', 'wired (older wording)'],
-    ['a descriptor closed', 'bmn hook claude 2>&-', 'wired (older wording)'],
-    ['three descriptors moved around', 'bmn hook claude 3>&1 1>&2 2>&3', 'wired (older wording)'],
-    ['a redirection that refuses to clobber', 'bmn hook claude >|/dev/null', 'wired (older wording)'],
-    ['an appending redirection in front', 'bmn >>/dev/null hook claude', 'wired (older wording)'],
-    ['a negated command', '! bmn hook claude', 'wired (older wording)'],
-    // What is configured, not what will run: `check` reports the entry, and the documented entry is
-    // itself guarded. The differential test only requires these to be recognised, so pin the words.
-    ['a call a condition skips', 'false && bmn hook claude', 'wired (older wording)'],
-    ['a loop body the condition never reaches', 'until true; do bmn hook claude; done', 'wired (older wording)'],
-    ['a while loop that never starts', 'while false; do bmn hook claude; done', 'wired (older wording)'],
-    ['a trailing comment', 'bmn hook claude # run it', 'wired (older wording)'],
-    // Grouping, substitution and `exec` all decide where the event goes in ways BMN will not work
-    // out: a redirection or a `&` on the group reaches the command inside it, `exec` changes the
-    // shell's own descriptors, and a substitution consumes the input before the command runs.
-    ['a subshell', '(bmn hook claude)', 'missing'],
-    ['a brace group', '{ bmn hook claude; }', 'missing'],
-    ['a group whose input is redirected', '{ bmn hook claude; } </dev/null', 'missing'],
-    ['a subshell whose input is redirected', '(bmn hook claude; :) </dev/null', 'missing'],
-    ['a group in the background', '{ bmn hook claude; } &', 'missing'],
-    ['exec changing descriptors first', 'exec </dev/null; bmn hook claude', 'missing'],
-    ['exec as a wrapper', 'exec bmn hook claude', 'missing'],
-    ['a substitution that eats the event first', 'x=$(cat); bmn hook claude', 'missing'],
-    ['a whole list put in the background', 'bmn hook claude && true &', 'missing'],
-    ['a command that may read the event first', 'read x; bmn hook claude', 'missing'],
-    ['another command that may read it first', 'cat >/dev/null; bmn hook claude', 'missing'],
-    // Configured, but with nothing to read. A hook event arrives only on the command's standard
-    // input, so anything that takes that away leaves an entry that runs and reports nothing.
-    ['a backgrounded command, which is handed /dev/null', 'bmn hook claude &', 'missing'],
-    ['a backgrounded command under nohup', 'nohup bmn hook claude &', 'missing'],
-    ['the right-hand side of a pipe', 'echo x | bmn hook claude', 'missing'],
-    ['the right-hand side of a pipe that carries stderr', 'echo x |& bmn hook claude', 'missing'],
-    ['the right-hand side of a pipe broken by a newline', 'echo x |\nbmn hook claude', 'missing'],
-    ['standard input on a descriptor written with a leading zero', 'bmn hook claude 00</dev/null', 'missing'],
-    ['standard input taken from a file', 'bmn hook claude </dev/null', 'missing'],
-    ['standard input closed', 'bmn hook claude <&-', 'missing'],
-    ['standard input duplicated from elsewhere', 'bmn hook claude 0<&1', 'missing'],
-    // `bmn hook` takes exactly one agent and refuses any more, so a fourth word is a dead entry.
-    ['an extra argument after the agent', 'bmn hook claude extra', 'missing'],
-    ['an option after the agent', 'bmn hook claude --json', 'missing'],
-    ['a number after the agent', 'bmn hook claude 2 >/dev/null', 'missing'],
-    ['a word left over by a descriptor duplication', 'bmn hook claude >&2 file', 'missing'],
-    // Syntax errors, which run nothing at all.
-    ['a redirection with no target', 'bmn hook claude >', 'missing'],
-    ['an operator that is not a redirection', 'bmn hook claude >>&/dev/null', 'missing'],
-    ['another operator that is not a redirection', 'bmn hook claude >&|/dev/null', 'missing'],
-    ['a quoted empty argument after the agent', 'bmn hook claude ""', 'missing'],
-    ['a keyword after its construct closed', 'if true; then :; fi; then bmn hook claude', 'missing'],
-    ['an operator with nothing in front of it', '&& bmn hook claude', 'missing'],
-    ['a semicolon with nothing in front of it', '; bmn hook claude', 'missing'],
-    ['an if that is never closed', 'if true; then bmn hook claude', 'missing'],
-    ['a for loop that is never closed', 'for i in 1; do bmn hook claude', 'missing'],
-    ['a while loop that is never closed', 'while true; do bmn hook claude', 'missing'],
-    ['a descriptor nothing opened', 'bmn hook claude 2>&3', 'missing'],
-    // Shapes where the shell reads one word and BMN must not read three.
-    ['words joined by a non-breaking space', 'bmn\u00a0hook\u00a0claude', 'missing'],
-    ['words joined by a carriage return', 'bmn\rhook\rclaude', 'missing'],
-    ['words joined by a form feed', 'bmn\fhook\fclaude', 'missing'],
-    ['words joined by a vertical tab', 'bmn\vhook\vclaude', 'missing'],
-    ['a case pattern that names bmn', 'case $x in\nbmn) hook claude\nesac', 'missing'],
-    // Not ours: a different program or agent, the words as text, or a shape BMN will not guess at.
-    ['a program whose name ends in bmn', 'other.bmn hook claude', 'missing'],
-    ['a different agent argument', 'bmn hook claude.extra', 'missing'],
-    ['another agent', 'bmn hook codex', 'missing'],
-    ['the words echoed, not run', 'echo bmn hook claude', 'missing'],
-    ['the words quoted inside an echo', "echo 'example; bmn hook claude; end'", 'missing'],
-    ['the words echoed through env', 'env echo bmn hook claude', 'missing'],
-    ['the words after a comment', '# example; bmn hook claude', 'missing'],
-    ['the words after a comment that follows an operator', ':;# example; bmn hook claude', 'missing'],
-    ['the words in a here-document', "cat <<'EOF'\nbmn hook claude\nEOF", 'missing'],
-    ['the words in a here-document with a numeric delimiter', 'cat <<123\nbmn hook claude\n123', 'missing'],
-    ['the words after an indented terminator that ends nothing', "cat <<'EOF'\n  EOF\nbmn hook claude\nEOF", 'missing'],
-    ['the words in the second of two here-documents', 'cat <<A <<B\nA\nbmn hook claude\nB', 'missing'],
-    ['the words as a here-string', 'cat <<< bmn hook claude', 'missing'],
-    ['the words in an array assignment', 'args=( bmn hook claude )', 'missing'],
-    ['a number passed to bmn before a redirection', 'bmn 2 >/dev/null hook claude', 'missing'],
-    ['a number before a redirection that takes no descriptor', 'bmn 1&>/dev/null hook claude', 'missing'],
-    ['the same before an appending one', 'bmn 1&>>/dev/null hook claude', 'missing'],
-    ['words split across a pipe that carries stderr', 'bmn |& true hook claude', 'missing'],
-    ['arguments that belong to the far side of such a pipe', 'bmn hook |& true claude', 'missing'],
-    ['a quoted number before a redirection', 'bmn "2">/dev/null hook claude', 'missing'],
-    ['an escaped bracket that is part of the agent', 'bmn hook claude\\)', 'missing'],
-    ['a quoted bracket that is part of the agent', 'bmn hook "claude)"', 'missing'],
-    ['braces that are part of the agent', 'bmn hook {claude}', 'missing'],
-    ['an assignment between bmn and hook', 'bmn X=1 hook claude', 'missing'],
-    // Any flag on a wrapper: BMN stops reading rather than guess what the flag does.
-    ['env with the environment emptied', 'env -i bmn hook claude', 'missing'],
-    ['env asked only to explain itself', 'env --help bmn hook claude', 'missing'],
-    ['a lookup rather than a call', 'command -v bmn hook claude', 'missing'],
-    ['a lookup on the default path', 'command -p bmn hook claude', 'missing'],
-    ['clustered lookup flags', 'command -pv bmn hook claude', 'missing'],
-    ['only a lookup of bmn', 'command -v bmn >/dev/null', 'missing'],
-    // A keyword that continues a construct is only a keyword where one opened; on its own it is a
-    // syntax error, and the shell runs nothing at all.
-    ['a continuation keyword with nothing to continue', 'then bmn hook claude', 'missing'],
-    // `eval` builds a script out of its arguments and runs that, so what runs is not what is written.
-    ['eval, which runs what it assembles', 'eval bmn hook claude', 'missing'],
-    ['eval assembling something that will not parse', "eval bmn hook claude '|'", 'missing'],
-    // A shell asked to run a script: BMN does not read the script, so it installs beside it.
-    ['a shell asked to run it', "sh -c 'bmn hook claude'", 'missing'],
-    ['a shell parsing without running', 'bash -n -c "bmn hook claude"', 'missing'],
-    ['the words as arguments to another script', "sh -c 'printf x' bmn hook claude", 'missing']
+    ['the bare call', 'bmn hook claude', 'wired (older wording)'],
+    // The whitespace around an entry belongs to the JSON file, not to the command.
+    ['the documented command indented in the file', `\n   ${DOCUMENTED_CLAUDE}\n`, 'wired'],
+    ['the bare call with spaces around it', '  bmn hook claude  ', 'wired (older wording)']
   ])('reads %s as %s', async (_label, command, state) => {
     const path = await hookFileFixture({ hooks: { Stop: [entryGroup(command)] } })
 
@@ -1236,18 +1128,216 @@ describe('bmn hooks check', () => {
       .toMatchObject({ state })
   })
 
-  it('agrees with a real shell about which commands run the hook', async () => {
-    // Ground truth, not judgement: each command is run by a real bash with a stub `bmn` on PATH that
-    // records being called with `hook claude`, and `hooks check` must agree with what happened.
-    // The asymmetry is the point. Saying "wired" about a command that did not run the hook leaves
-    // the owner with no hook and no warning, so it is never allowed. Saying "missing" about one that
-    // did run it only adds a second entry, so it is allowed where it is listed and explained.
+  it.each([
+    // One character away from an entry BMN writes. Nothing here is "close enough".
+    ['a doubled space inside the call', 'bmn  hook claude'],
+    ['the guard left off the documented command', 'command -v bmn >/dev/null && bmn hook claude; exit 0'],
+    ['the documented command exiting non-zero', DOCUMENTED_CLAUDE.replace('exit 0', 'exit 1')],
+    ['the documented command without its exit', DOCUMENTED_CLAUDE.replace('; exit 0', '')],
+    ['the documented command with the test spelled out', DOCUMENTED_CLAUDE.replace('[ -n', 'test -n').replace(' ]', '')],
+    ['a newline inside the documented command', DOCUMENTED_CLAUDE.replace('&& bmn', '&&\nbmn')],
+    // Containing a recognised entry is not being one: whatever is wrapped around it decides what runs.
+    ['the documented command with a comment after it', `${DOCUMENTED_CLAUDE} # mine`],
+    ['the documented command after something else', `cat >/dev/null; ${DOCUMENTED_CLAUDE}`],
+    ['the bare call inside a longer command', 'cd / && bmn hook claude'],
+    ['the other agent inside a claude entry', OLDER_CLAUDE.replace('claude', 'codex')],
+
+    // Shapes that do run the hook. `install` adds BMN's entry beside them; that duplicate is the
+    // stated cost of never reading shell, and `check` names them so the duplicate is explained.
+    ['a bare wrapper', 'timeout 5 bmn hook claude'],
+    ['the command builtin', 'command bmn hook claude'],
+    ['env carrying a variable', 'env BMN_X=1 bmn hook claude'],
+    ['a leading assignment', 'BMN_X=1 bmn hook claude'],
+    ['an absolute path to bmn', '"/usr/bin/bmn" hook claude'],
+    ['a quoted subcommand', "bmn 'hook' claude"],
+    ['a shell keyword in front', 'if true; then bmn hook claude; fi'],
+    ['a nested construct', 'if true; then if true; then bmn hook claude; fi; fi'],
+    ['a redirection of stderr', 'bmn hook claude 2>/dev/null'],
+    ['three descriptors moved around', 'bmn hook claude 3>&1 1>&2 2>&3'],
+    ['a trailing comment', 'bmn hook claude # run it'],
+    ['a negated command', '! bmn hook claude'],
+    ['a harmless command in front', 'cd /; bmn hook claude'],
+    ['a subshell', '(bmn hook claude)'],
+    ['a brace group', '{ bmn hook claude; }'],
+    ['exec as a wrapper', 'exec bmn hook claude'],
+    ['a shell asked to run it', "sh -c 'bmn hook claude'"],
+    ['eval, which runs what it assembles', 'eval bmn hook claude'],
+    ['a pipe that passes the event straight through', 'cat | bmn hook claude'],
+
+    // Shapes that would run but could never report: the event arrives only on standard input.
+    ['a backgrounded command, which is handed /dev/null', 'bmn hook claude &'],
+    ['a backgrounded command under nohup', 'nohup bmn hook claude &'],
+    ['a whole list put in the background', 'bmn hook claude && true &'],
+    ['the right-hand side of a pipe', 'echo x | bmn hook claude'],
+    ['the right-hand side of a pipe that carries stderr', 'echo x |& bmn hook claude'],
+    ['standard input taken from a file', 'bmn hook claude </dev/null'],
+    ['standard input closed', 'bmn hook claude <&-'],
+    ['standard input duplicated from elsewhere', 'bmn hook claude 0<&1'],
+    ['a group whose input is redirected', '{ bmn hook claude; } </dev/null'],
+    ['exec changing descriptors first', 'exec </dev/null; bmn hook claude'],
+    ['a substitution that eats the event first', 'x=$(cat); bmn hook claude'],
+    ['a quoted substitution that eats it', 'echo "$(cat)" >/dev/null; bmn hook claude'],
+    ['a command that reads the event first', 'read x; bmn hook claude'],
+    ['another command that reads it first', 'cat >/dev/null; bmn hook claude'],
+    ['the command builtin delegating to one that reads it', 'command cat >/dev/null; bmn hook claude'],
+    ['a negation delegating to one that reads it', '! cat >/dev/null; bmn hook claude'],
+    ['a condition that reads it', 'if read x; then :; fi; bmn hook claude'],
+    ['a select loop, which reads it itself', 'select x in one; do bmn hook claude; break; done'],
+    ['an extra argument after the agent', 'bmn hook claude extra'],
+    ['an option after the agent', 'bmn hook claude --json'],
+
+    // Shapes the shell rejects outright, so none of the entry runs.
+    ['a redirection with no target', 'bmn hook claude >'],
+    ['an operator that is not a redirection', 'bmn hook claude >>&/dev/null'],
+    ['an operator with nothing in front of it', '&& bmn hook claude'],
+    ['a semicolon with nothing in front of it', '; bmn hook claude'],
+    ['a doubled separator', 'true;; bmn hook claude'],
+    ['a trailing operator', 'bmn hook claude &&'],
+    ['an unterminated quote', 'bmn hook "claude'],
+    ['an if that is never closed', 'if true; then bmn hook claude'],
+    ['a closer before its opener', 'fi; if true; then bmn hook claude'],
+    ['the wrong continuation keyword', 'if true; do bmn hook claude; fi'],
+    ['crossed nesting', 'while false; do :; fi; done; bmn hook claude'],
+    ['a keyword after its construct closed', 'if true; then :; fi; then bmn hook claude'],
+    ['a continuation keyword with nothing to continue', 'then bmn hook claude'],
+    ['a descriptor nothing opened', 'bmn hook claude 2>&3'],
+    ['a descriptor that was closed first', 'bmn hook claude 3>&- 2>&3'],
+    ['stdout closed and then duplicated', 'bmn hook claude 1>&- 2>&1'],
+    ['a quoted descriptor', "bmn hook claude 2>&'3'"],
+    ['a descriptor that is not a number', 'bmn hook claude 2>&x'],
+
+    // The words are there, but nothing runs them.
+    ['the words echoed, not run', 'echo bmn hook claude'],
+    ['the words quoted inside an echo', "echo 'example; bmn hook claude; end'"],
+    ['the words after a comment', '# example; bmn hook claude'],
+    ['the words after a comment that follows an operator', ':;# example; bmn hook claude'],
+    ['the words in a here-document', "cat <<'EOF'\nbmn hook claude\nEOF"],
+    ['the words as a here-string', 'cat <<< bmn hook claude'],
+    ['the words in an array assignment', 'args=( bmn hook claude )'],
+    ['a case pattern that names bmn', 'case $x in\nbmn) hook claude\nesac'],
+    ['a lookup rather than a call', 'command -v bmn hook claude'],
+    ['a shell parsing without running', 'bash -n -c "bmn hook claude"'],
+    ['env asked only to explain itself', 'env --help bmn hook claude'],
+
+    // Not ours at all.
+    ['a program whose name ends in bmn', 'other.bmn hook claude'],
+    ['a different agent argument', 'bmn hook claude.extra'],
+    ['another agent', 'bmn hook codex'],
+    ['words joined by a non-breaking space', 'bmn hook claude'],
+    ['words joined by a carriage return', 'bmn\rhook\rclaude'],
+    ['a command that has nothing to do with bmn', 'echo hello']
+  ])('reads %s as missing', async (_label, command) => {
+    const path = await hookFileFixture({ hooks: { Stop: [entryGroup(command)] } })
+
+    const result = await runHooks(['check', 'claude', '--file', path, '--json'])
+
+    expect(JSON.parse(result.stdout).agents[0].events.find((row: { event: string }) => row.event === 'Stop'))
+      .toMatchObject({ state: 'missing' })
+  })
+
+  it('names an entry that mentions the hook without being one it recognises, in both formats', async () => {
+    const written = '  timeout 5 bmn hook claude   # mine  '
+    const path = await hookFileFixture({ hooks: { Stop: [entryGroup(written)] } })
+
+    const plain = await runHooks(['check', 'claude', '--file', path])
+    const json = await runHooks(['check', 'claude', '--file', path, '--json'])
+
+    // Missing, because BMN does not read it - but never silently: the owner has to be able to see
+    // why `install` is about to add a second entry for an event that already mentions the hook.
+    expect(plain.code).toBe(1)
+    expect(plain.stdout).toMatch(/Stop\s+missing/)
+    expect(plain.stdout).toContain('names bmn hook claude but is not one BMN recognises')
+    expect(plain.stdout).toContain('timeout 5 bmn hook claude # mine')
+    expect(JSON.parse(json.stdout).agents[0].events.find((row: { event: string }) => row.event === 'Stop'))
+      .toEqual({ event: 'Stop', optional: false, state: 'missing', unrecognised: ['timeout 5 bmn hook claude # mine'] })
+  })
+
+  it('says nothing about an unrecognised entry for an event that is already wired', async () => {
+    const path = await hookFileFixture({
+      hooks: { Stop: [entryGroup('timeout 5 bmn hook claude'), entryGroup(DOCUMENTED_CLAUDE)] }
+    })
+
+    const result = await runHooks(['check', 'claude', '--file', path, '--json'])
+
+    // Nothing is missing for this event, so there is no duplicate coming and nothing to explain.
+    expect(JSON.parse(result.stdout).agents[0].events.find((row: { event: string }) => row.event === 'Stop'))
+      .toEqual({ event: 'Stop', optional: false, state: 'wired' })
+  })
+
+  it('says nothing about an entry that names a different agent', async () => {
+    const path = await hookFileFixture({ hooks: { Stop: [entryGroup('timeout 5 bmn hook codex')] } })
+
+    const result = await runHooks(['check', 'claude', '--file', path, '--json'])
+
+    // The agent is part of the entry's identity, so a codex entry is not a claude entry BMN
+    // declined to read - it is nothing to do with claude, and there is nothing to tell the owner.
+    expect(JSON.parse(result.stdout).agents[0].events.find((row: { event: string }) => row.event === 'Stop'))
+      .toEqual({ event: 'Stop', optional: false, state: 'missing' })
+  })
+
+  it('reads an entry whose command is not a string as missing', async () => {
+    const path = await hookFileFixture({
+      hooks: { Stop: [{ hooks: [{ type: 'command', timeout: 5, command: 5 }] }] }
+    })
+
+    const result = await runHooks(['check', 'claude', '--file', path, '--json'])
+
+    expect(JSON.parse(result.stdout).agents[0].events.find((row: { event: string }) => row.event === 'Stop'))
+      .toEqual({ event: 'Stop', optional: false, state: 'missing' })
+  })
+
+  it('claims nothing about any event in a file it cannot add to', async () => {
+    const path = await hookFileFixture({
+      hooks: { Stop: [entryGroup(DOCUMENTED_CLAUDE)], Notification: 'not a list' }
+    })
+
+    const result = await runHooks(['check', 'claude', '--file', path, '--json'])
+    const report = JSON.parse(result.stdout).agents[0]
+
+    // `install` cannot merge into this file, so `check` reports nothing about it rather than a
+    // wired event beside an event it could not read: a half-read file is not a report.
+    expect(result.code).toBe(1)
+    expect(report.state).toBe('unusable')
+    expect(report.events.map((row: { state: string }) => row.state)).toEqual(report.events.map(() => 'missing'))
+  })
+
+  it('shortens a long unrecognised entry to one line', async () => {
+    const written = `bmn hook claude\n${'# padding '.repeat(30)}`
+    const path = await hookFileFixture({ hooks: { Stop: [entryGroup(written)] } })
+
+    const result = await runHooks(['check', 'claude', '--file', path, '--json'])
+
+    const row = JSON.parse(result.stdout).agents[0].events.find((r: { event: string }) => r.event === 'Stop')
+    expect(row.unrecognised[0]).toHaveLength(120)
+    expect(row.unrecognised[0].endsWith('…')).toBe(true)
+    expect(row.unrecognised[0]).not.toContain('\n')
+  })
+
+  it('leaves an unrecognised entry exactly as it was when install adds its own beside it', async () => {
+    const written = 'timeout 5 bmn hook claude'
+    const path = await hookFileFixture({ hooks: { Stop: [entryGroup(written)] } })
+
+    const install = await runHooks(['install', 'claude', '--file', path])
+    const after = JSON.parse(await readFile(path, 'utf8'))
+
+    expect(install.code).toBe(0)
+    expect(after.hooks.Stop[0].hooks[0].command).toBe(written)
+    expect(after.hooks.Stop.at(-1).hooks[0].command).toBe(DOCUMENTED_CLAUDE)
+    const check = JSON.parse((await runHooks(['check', 'claude', '--file', path, '--json'])).stdout)
+    expect(check.agents[0].events.find((row: { event: string }) => row.event === 'Stop'))
+      .toEqual({ event: 'Stop', optional: false, state: 'wired' })
+  })
+
+  it('runs the hook, in a real shell, for every entry it calls wired', async () => {
+    // The only claim `check` makes is about the commands it recognises, so that is what is checked
+    // against ground truth: each is run by a real bash with a stub `bmn` on PATH holding the real
+    // binary's contract - exactly one agent argument, and the event on standard input - and must be
+    // seen to report. Nothing else is ever called wired, so nothing else can be wrong in the
+    // direction that matters; a command BMN declines to read costs a duplicate entry, never a gap.
     const root = dirname(await hookFileFixture({ hooks: {} }, 'unused.json'))
     const bin = join(root, 'bin')
     await mkdir(bin, { recursive: true })
     const ran = join(root, 'ran')
-    // The stub holds the real binary's contract, or a shape passes here and is dead in use:
-    // `bmn hook` takes exactly one agent and refuses more, and the event arrives only on stdin.
     await writeFile(
       join(bin, 'bmn'),
       ['#!/bin/sh', '[ "$#" -eq 2 ] || exit 0', '[ "$1" = hook ] && [ "$2" = claude ] || exit 0',
@@ -1257,152 +1347,53 @@ describe('bmn hooks check', () => {
     )
     const EVENT = '{"hook_event_name":"Stop"}'
 
-    // Runs the hook, but BMN will not read it, so it installs its own entry beside it: a duplicate,
-    // never a silent gap. Each of these must still be seen to run, or the reason for listing it has
-    // gone and the list is stale.
-    const allowedMisses = [
-      "sh -c 'bmn hook claude'",
-      'bash -lc \'bmn hook claude\'',
-      'x=$(bmn hook claude)',
-      'cat < <(bmn hook claude)',
-      // Stdin is redirected but not taken away, and a named descriptor is not a number BMN reads.
-      'bmn hook claude <&0', 'bmn hook claude {fd}>/dev/null',
-      // Grouping and `exec` reach the command inside them, so BMN stops reading rather than say
-      // which part of the structure a redirection or a `&` applied to.
-      '(bmn hook claude)', '( ( bmn hook claude ) )', '{ bmn hook claude; }',
-      '(bmn hook claude) >/dev/null', '{ bmn hook claude; } 2>&1', 'exec bmn hook claude',
-      // A pipe whose left-hand side passes the event straight through still reports.
-      'cat | bmn hook claude',
-      // `eval` assembles a script out of its arguments and runs that, so what is written is not
-      // what runs; `time` is a keyword rather than a program. Neither is read.
-      'eval bmn hook claude', 'time bmn hook claude',
-      // A line continuation is a shape BMN does not join back together.
-      'bmn hook \\\n claude',
-      // Any flag on a wrapper stops BMN reading, because what the flag does is the whole question.
-      'env -- bmn hook claude', 'command -- bmn hook claude', 'nice -- bmn hook claude',
-      'exec -a name bmn hook claude', 'timeout -- 5 bmn hook claude'
-    ]
-    // Whether these run depends on a condition, and `check` reports what is configured rather than
-    // what will run - the documented entry itself is guarded and does nothing when BMN is not up.
-    // So the shell is not the right oracle for them, and they are only required to be recognised.
-    const conditional = [
-      'false && bmn hook claude',
-      // A loop whose condition is already satisfied never runs its body, but the entry still says
-      // what it would run, which is what `check` reports.
-      'until true; do bmn hook claude; done', 'while false; do bmn hook claude; done'
-    ]
-    const commands = [
-      DOCUMENTED_CLAUDE, OLDER_CLAUDE, 'bmn hook claude', "bmn 'hook' claude", 'bmn hook "claude"',
-      `${join(bin, 'bmn')} hook claude`,
-      'BMN_X=1 bmn hook claude', 'env BMN_X=1 bmn hook claude', 'env bmn hook claude',
-      'timeout 5 bmn hook claude', 'command bmn hook claude',
-      'nohup bmn hook claude', 'setsid bmn hook claude',
-      'if true; then bmn hook claude; fi', 'for i in 1; do bmn hook claude; done',
-      'echo x | bmn hook claude', 'bmn hook claude || true', 'true; bmn hook claude',
-      'true && bmn hook claude',
-      'bmn > /dev/null hook claude', 'bmn hook claude>/dev/null', 'bmn 2>/dev/null hook claude',
-      'bmn 1>&2 hook claude', 'bmn hook claude 2>&1 1>/dev/null', 'bmn hook claude &>/dev/null',
-      'bmn hook claude |& cat', "bmn hook 'claude' # and a comment", 'bmn hook claude ; :',
-      'bmn hook claude # run it',
-      // `bmn hook claude 0<&1` is pinned in the table above but not run here: duplicating the
-      // runner's own stdout onto stdin makes `cat` block, and a hung runner is not ground truth.
-      'bmn hook claude </dev/null', 'bmn hook claude <&-', 'bmn hook claude extra',
-      'bmn hook claude --json', 'bmn hook claude >&2 file', 'bmn hook claude >',
-      'if true; then :; fi; then bmn hook claude', 'bmn\u00a0hook\u00a0claude',
-      'case $x in\nbmn) hook claude\nesac',
-      // Everything the fifth recheck found: structure that decides where the event goes, a
-      // descriptor written differently, a real empty argument, separators bash keeps inside a word,
-      // and operator runs that are syntax errors.
-      'exec </dev/null; bmn hook claude', 'x=$(cat); bmn hook claude',
-      '{ bmn hook claude; } </dev/null', '(bmn hook claude; :) </dev/null',
-      '{ bmn hook claude; } &', 'bmn hook claude && true &',
-      'echo x |& bmn hook claude', 'echo x |\nbmn hook claude',
-      'bmn hook claude 00</dev/null', 'bmn hook claude ""',
-      'bmn\rhook\rclaude', 'bmn\fhook\fclaude', 'bmn\vhook\vclaude',
-      'bmn hook claude >>&/dev/null', 'bmn hook claude >&|/dev/null',
-      // Malformed or event-eating entries the sixth round found.
-      '&& bmn hook claude', '; bmn hook claude', 'if true; then bmn hook claude',
-      'for i in 1; do bmn hook claude', 'while true; do bmn hook claude',
-      'bmn hook claude 2>&3', 'read x; bmn hook claude', 'cat >/dev/null; bmn hook claude',
-      // Redirection forms that must not swallow a word or end a command in the wrong place.
-      'bmn hook claude 2>&-', 'bmn hook claude 3>&1 1>&2 2>&3', 'bmn hook claude >|/dev/null',
-      'bmn >>/dev/null hook claude',
-      '! bmn hook claude',
-      'bmn |& true hook claude', 'bmn hook |& true claude',
-      'bmn 1&>/dev/null hook claude', 'bmn 1&>>/dev/null hook claude',
-      // A comment can begin straight after an operator, not only after a space.
-      ':;# example; bmn hook claude',
-      // Here-documents BMN refuses to read rather than model: a numeric delimiter, a terminator
-      // that only looks indented, and two documents pending at once.
-      'cat <<123\nbmn hook claude\n123', "cat <<'EOF'\n  EOF\nbmn hook claude\nEOF",
-      'cat <<A <<B\nA\nbmn hook claude\nB',
-      // A keyword with nothing to continue, and an eval whose assembled script will not parse.
-      'then bmn hook claude', "eval bmn hook claude '|'",
-      // Backgrounded, so the appended `wait` is exercised rather than assumed.
-      'nohup bmn hook claude &', 'bmn hook claude &',
-      ...allowedMisses, ...conditional,
-      'echo bmn hook claude', "echo 'example; bmn hook claude; end'", 'env echo bmn hook claude',
-      'nice echo bmn hook claude', 'timeout 5 echo bmn hook claude',
-      'command -v bmn hook claude', 'command -p bmn hook claude', 'command -pv bmn hook claude',
-      'command -v bmn >/dev/null', 'env -i bmn hook claude', 'env --help bmn hook claude',
-      'bash -n -c "bmn hook claude"', 'sh /dev/null -c "bmn hook claude"',
-      "sh -c 'printf x' bmn hook claude",
-      'cat <<< bmn hook claude', "cat <<'EOF'\nbmn hook claude\nEOF", 'args=( bmn hook claude )',
-      '# example; bmn hook claude', 'echo "# bmn hook claude"',
-      'bmn hook "claude)"', 'bmn hook {claude}', 'bmn hook claude\\)',
-      'bmn X=1 hook claude', 'bmn hook codex', 'bmn hook claude.extra', 'other.bmn hook claude',
-      'bmnx hook claude', ':'
-    ]
-
     const problems: string[] = []
-    for (const command of commands) {
+    for (const command of [DOCUMENTED_CLAUDE, OLDER_CLAUDE, 'bmn hook claude']) {
       await rm(ran, { force: true })
       const failure = await new Promise<string | null>((resolve) => {
         const child = execFile('/bin/bash', ['-c', `${command}\nwait`], {
           env: { PATH: `${bin}:${process.env.PATH ?? ''}`, BMN_CONTROL_SOCKET: '/x', AITERM_CONTROL_SOCKET: '/x' },
           cwd: root, timeout: 10_000
-          // A command failing is ordinary and expected; the runner failing to run one is not, and
-          // must not be read as "the hook did not run".
         }, (error) => {
           if (error === null) return resolve(null)
           const failure = error as { killed?: boolean; code?: number | string }
           if (failure.killed === true) return resolve('the runner timed out')
-          // A command exiting non-zero is ordinary and expected, and `code` is then its status.
-          // A string `code` is the runner itself failing to start, which is evidence of nothing.
+          // A command exiting non-zero is ordinary; a string `code` is the runner failing to start.
           return resolve(typeof failure.code === 'string' ? `the runner failed (${failure.code})` : null)
         })
-        // The harness hands the entry its event on standard input; anything that takes that away -
-        // a pipe, a redirection, the background - leaves the hook with nothing to report.
+        // The harness hands the entry its event on standard input, and nowhere else.
         child.stdin?.end(EVENT)
       })
       if (failure !== null) {
         problems.push(`${failure} on: ${command}`)
         continue
       }
-      const shellRanIt = existsSync(ran)
+      if (!existsSync(ran)) problems.push(`called wired but the shell never ran it: ${command}`)
+
       const path = await hookFileFixture({ hooks: { Stop: [entryGroup(command)] } })
       const report = JSON.parse((await runHooks(['check', 'claude', '--file', path, '--json'])).stdout)
       const state = report.agents[0].events.find((row: { event: string }) => row.event === 'Stop').state
-      const weSayWired = state !== 'missing'
-
-      if (conditional.includes(command)) {
-        if (!weSayWired) problems.push(`a configured call went unrecognised: ${command}`)
-        continue
-      }
-      if (weSayWired && !shellRanIt) problems.push(`UNSAFE: called wired but the shell never ran it: ${command}`)
-      if (!weSayWired && shellRanIt && !allowedMisses.includes(command)) {
-        problems.push(`called missing but the shell ran it: ${command}`)
-      }
-      if (allowedMisses.includes(command)) {
-        if (weSayWired) problems.push(`a listed exception is now recognised, so the list is stale: ${command}`)
-        // ...and if it no longer runs the hook, the reason it was listed has gone.
-        if (!shellRanIt) problems.push(`a listed exception no longer runs the hook: ${command}`)
-      }
+      if (state === 'missing') problems.push(`a command BMN answers for went unrecognised: ${command}`)
     }
 
     expect(problems).toEqual([])
-    // Every shape is a real bash run plus a real CLI run, so the list costs seconds, not milliseconds.
-  }, 120_000)
+  }, 60_000)
+
+  it('recognises exactly what install writes, for every agent and every event', async () => {
+    // The two commands have to agree about the same string, or `install` writes an entry its own
+    // `check` will not accept and the pair loops forever.
+    for (const [agent, file] of [['claude', 'settings.json'], ['codex', 'hooks.json']] as const) {
+      const path = await hookFileFixture({}, file)
+
+      expect((await runHooks(['install', agent, '--file', path])).code).toBe(0)
+      const check = await runHooks(['check', agent, '--file', path, '--json'])
+
+      expect(check.code).toBe(0)
+      for (const row of JSON.parse(check.stdout).agents[0].events) {
+        expect(row.optional === true || row.state).toBe(row.optional === true || 'wired')
+      }
+    }
+  })
 
   it('ignores an entry that names bmn but is not a command entry', async () => {
     const path = await hookFileFixture({

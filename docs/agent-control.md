@@ -172,11 +172,10 @@ bmn hooks install claude     # add only the missing entries, after backing the f
 bmn hooks install codex
 ```
 
-`check` prints one line per event: `wired` for the documented command, `wired (older wording)` for a
-command BMN can see runs `bmn hook <agent>` but spelled differently (BMN also reads the older
-`AITERM_CONTROL_SOCKET` name, so those keep working), or `missing`. It exits `0` when nothing is
-missing and `1` otherwise, and `--json` prints the same report as one object. Run it after a Claude
-Code or Codex update rewrites your settings file.
+`check` prints one line per event: `wired` for the documented command, `wired (older wording)` for
+the two other entries BMN recognises (see below), or `missing`. It exits `0` when nothing is missing
+and `1` otherwise, and `--json` prints the same report as one object. Run it after a Claude Code or
+Codex update rewrites your settings file.
 
 `install` copies the file to `<file>.bmn-backup-<timestamp>`, adds the missing entries next to the
 hooks already registered for that event, writes the file atomically and prints a unified diff. It
@@ -205,38 +204,41 @@ Both commands say what is **configured**. Neither says that a hook has ever fire
 **Hook events…** list is what shows that. Nor does either say the command *will* run: the documented
 entry is guarded and does nothing while BMN is not running, which is the point of the guard.
 
-BMN reads a small set of command shapes, not shell. It sees `bmn hook <agent>` when those three
-words are the whole command, reached at most through a bare wrapper that carries no options —
-`timeout 5`, `nohup`, `command`, `env FOO=1` — and through redirections that leave standard input
-alone. Everything else reads as `missing`, in three groups.
+BMN recognises its own entry by what it is, not by reading the shell it is written in. Exactly three
+commands count, compared whole after trimming and never parsed:
 
-**Shapes whose meaning depends on something BMN does not read:** a wrapper carrying a flag, a shell
-handed a script (`sh -c '…'`), a command or process substitution, an `eval` that assembles its own
-script, a `time`, a line continuation, a here-document, and any group or subshell — a redirection or
-a `&` written after `}` or `)` reaches the command inside it, and saying which part it applied to
-needs a shell.
+```bash
+[ -n "$BMN_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook claude; exit 0   # wired
+[ -n "$AITERM_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook claude; exit 0  # older wording
+bmn hook claude                                                                        # older wording
+```
 
-**Shapes that would run but could never report.** The hook event arrives only on the command's
-standard input, so it is `missing` when the command is in the background (`bmn hook claude &` is
-handed `/dev/null`), on the right-hand side of a pipe, has standard input redirected or closed,
-follows an `exec` or any command BMN cannot vouch for not reading the event first, or duplicates a
-descriptor nothing opened. A fourth word is `missing` too: `bmn hook <agent>` takes exactly one
-agent and refuses more.
+The second is the wording from before BMN was renamed, which `bmn hook` still reads. The third is the
+call with nothing around it. **Everything else reads as `missing`** — a wrapper, a redirection, a
+condition, a group, your own variant with one extra space. When such an entry mentions
+`bmn hook <agent>`, `check` prints it under the event, so you can see what it declined to read:
 
-**Shapes the shell would reject:** an unbalanced construct, a leading `;`, `&&` or `|`, a redirection
-with no target, and an operator run like `>>&` that is not a redirection at all.
+```
+  Stop              missing
+    an entry here names bmn hook claude but is not one BMN recognises:
+      timeout 5 bmn hook claude
+```
 
-So `install` adds its own entry beside yours, and the hook fires twice rather than not at all. If
-you see a duplicate, that is why. **Which one you may remove depends on why it is there:** if your
-entry is one BMN merely declines to read, either will do; if it is one of the shapes above that can
-never report, BMN's is the only one that works. `bmn hooks check` does not tell the two apart —
-it reports what is configured, not what would run.
+`install` then adds BMN's own entry beside yours, and the hook fires twice rather than not at all.
+If you see a duplicate, that is why, and **either entry may be removed**: yours is the one BMN did
+not read, not one it judged broken.
 
-The rule behind all of it: every shape BMN cannot read with certainty errs towards a duplicate
-entry, never towards a silent gap, because a gap leaves you with no hook and no warning. It is
-checked rather than asserted — the test suite runs every shape above through a real `bash` with a
-stub holding the binary's own contract, and fails if `check` ever says "wired" about a command that
-did not report.
+That is the whole rule, and it is deliberate. Earlier versions of this command read the shell around
+the call and tried to say whether it would deliver the event. Seven rounds of review each found a
+command it called `wired` that could not report — a group carrying a redirection, a substitution that
+consumed the event first, a construct that balanced but that bash refuses to parse. Every one of them
+left the owner with no hook and no warning, which is the one outcome this command exists to prevent.
+A duplicate entry is visible and harmless; a silent gap is neither. So BMN stopped reading shell.
+
+The consequence to be clear about: `check` tells you what is **configured**, and now makes no claim
+at all about a command it does not recognise. A hand-written entry that works perfectly still reads
+`missing`. Run `bmn hooks install <agent>` and let BMN write its own, or paste the documented entry
+exactly, and `check` will answer for it.
 
 The entries themselves, for wiring them by hand. `~/.claude/settings.json` needs `Notification`,
 `PostToolUse`, `UserPromptSubmit`, `Stop`, `SessionStart` and `SessionEnd`, next to any hooks
