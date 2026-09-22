@@ -2579,3 +2579,20 @@ as a follow-up rather than argued away.
 
 Docs-only fixes verified: `control-cli.test.ts` drives `docs/agent-control.md` directly
 (`control-cli.test.ts:14`) and all **288 tests pass** after the edits.
+
+### Pushed, and the desktop update queued
+
+`git push origin main`: **`73942b8..f7e170d`**, 31 commits, `main` only — the old private
+`feat/epic-1/2` branches were not touched. Before pushing I scanned the whole
+`origin/main..HEAD` diff for credentials, keys and the owner's address: nothing, and the only
+absolute path anywhere in it is the repository's own.
+
+`pnpm run update:desktop` then queued the packaging run per the repository's `AGENTS.md`:
+`~/.local/state/bmn/source-update/latest.json` reads `phase: "waiting-for-exit"` at commit
+`f7e170d`, with `bmn-desktop-update.service` active. Packaged BMN is open — I am running inside it
+— so the service waits, as designed. **It installs when the owner closes BMN**, and opening BMN
+from the desktop launcher waits for the update and then starts the new build. Nothing was packaged
+while BMN was open.
+
+The packaged build will carry `f7e170d`; the handoff correction committed after it is
+documentation only and does not change the application.

@@ -3,9 +3,9 @@
 - Project / selected epics: `/home/oleksandr/code/BMN`; **Epic 15 only** (`/dev-auto 15`, 2026-09-22 ~08:30). Epics 16 and 18, selected by the earlier `/dev-auto 15-18`, stayed out of this run's scope and are untouched.
 - Original request and intended outcomes: Epic 15 "Attention from Any Harness" (`epics.md:767-814`) — Story 15.2 `bmn hooks check|install`, Story 15.1 OSC notice → Needs you. Design: `reference-context-15-18.md:84-123`. Both delivered.
 - Mode: build
-- Stopping condition: Epic 15 accepted — met at `8bd263e`.
+- Stopping condition: Epic 15 accepted — met.
 - Explicit user stop (if any; only a later user instruction clears it): none — the 2026-09-22 04:10 stop was cleared by `/dev-auto 15`; quoted verbatim in `.dev-auto/log.md`.
-- Restrictions and authorization boundaries: local work, checks, isolated Electron runs, helper dispatches, board/handoff updates and checked local commits. **Push, merge and `pnpm run update:desktop` were NOT authorized** and none were done; `73942b8..HEAD` sits unpushed on local `main`, accepted code through `8bd263e`. `main` only; never push the old private `feat/epic-1/2` branches.
+- Restrictions and authorization boundaries: local work, checks, isolated Electron runs, helper dispatches, board/handoff updates and checked local commits. Push and `pnpm run update:desktop` were authorized at ~13:40 ("when you're confident - update local and push to GH") and both done: `73942b8..f7e170d` is on `origin/main`, and the desktop update is queued at `f7e170d`, waiting for packaged BMN to exit. Merge was never authorized. `main` only; never push the old private `feat/epic-1/2` branches.
 - Decision and history log: `.dev-auto/log.md`
 - Authorized provider routes: Codex CLI, Claude CLI and the configured GLM profile per `references/models.md`. Epic review is gpt-6-astra/medium; GLM read-tool runs are the owner's standing extra opinion ("GLM/GLM-Flash for EXTRA reviews!", 2026-09-21).
 - Lead host / requested model / observed model: Claude Code; none requested; observed `claude-opus-5/xhigh` (`claude-opus-5[1m]`), sessions `3ab48671-decc-4010-af8f-b9548f6dd157` and `8cb84739-653a-4e46-bc7d-4329aca415c1` under `~/.claude/projects/-home-oleksandr-code-BMN/`.
@@ -32,14 +32,14 @@
 - Tests: 288 CLI tests through the real binary against temp fixtures and a temporary HOME (no owner data, AC5), including a differential test against real bash; 15.1 has 10 parser and 17 service tests. The Electron receipt's `terminalNotice` carries `aroundSecondNotice: {sameSize: true, sameElement: true, refits: 0, inputEvents: 0}` — 15.1 AC5 measured around a real second notice. Untested: `writeAtomically`'s crash window and a real `pnpm run update:desktop` cycle.
 - Runtime probes (untracked, `.dev-auto/evidence/epic-15/probes/`): five Claude Code runs, each with a control that fired; three Codex attempts whose control never fired, so nothing beside them is evidence.
 - Mutation fences: `fences-15-*.log` — the final set is 12 probes, 12 RED.
-- Discarded evidence and corrected claims are listed in `.dev-auto/log.md`.
+- Discarded evidence and corrected claims: `.dev-auto/log.md`.
 - Baseline and reviewed revisions: baseline `73942b8`; full read-only review at `a25ed3f` three times; fifteen focused rechecks of the repair deltas; accepted at `924f467` by both reviewers with no blocking conditions. `8bd263e` fixes their five named follow-ups and changes documentation, comments and tests only — no behaviour change, re-gated and re-fenced. A post-acceptance GLM-5.3/max pass found nothing in that delta; a GLM-5.3-Flash/max doc-vs-code pass found three prose errors, fixed after it.
 - Unverified: Codex's runtime behaviour entirely; Epics 16 and 18 (out of scope).
 - Flakes, all timeouts under load and none an assertion failure: `companion-service.test.ts > 'trims back to the newest refusals…'`, reproduced at baseline `73942b8`; `saved-output-store.test.ts:172` — 101 sequential awaited saves against a fixed 5s budget with 88 workers, in Epic 5's subsystem and untouched by `73942b8..HEAD`, so not edited under Epic 15, and its fix is a one-line explicit timeout needing the owner's go-ahead as its own change; and one visual fixture answered 69ms after opening, recorded as not attributed rather than not caused.
 
 ## Measurement
 
-- Timing: 2026-09-21T21:25+03:00 to the 2026-09-22 04:10 stop; resumed ~08:30, accepted ~13:10+03:00. Receipts are under each session's scratchpad `reviews/`; paths and hashes in `.dev-auto/log.md`.
+- Timing: 2026-09-21T21:25+03:00 to the 04:10 stop; resumed ~08:30, accepted ~13:10. Receipts under each session's scratchpad `reviews/`; paths and hashes in `.dev-auto/log.md`.
 - Dispatches:
   - full epic review of `a25ed3f` | epic-review | gpt-6-astra/medium | reviews/epic-15-astra.stdout | first
   - fifteen focused rechecks | epic-review | gpt-6-astra/medium | reviews/recheck15-astra.stdout | first
@@ -51,5 +51,5 @@
 
 ## Resume
 
-- Next safe action: none required for Epic 15. Push, `pnpm run update:desktop` and the `saved-output-store.test.ts:172` timeout fix each need the owner's word before anyone does them.
-- Status: COMPLETE — Epic 15 accepted at `8bd263e`; both reviewers cleared `924f467` with no blocking conditions and `8bd263e` only corrects wording. Nothing pushed, nothing packaged.
+- Next safe action: none required for Epic 15. The queued desktop update installs once the owner closes BMN. The `saved-output-store.test.ts:172` timeout fix still needs the owner's word.
+- Status: COMPLETE — Epic 15 accepted at `8bd263e`, pushed through `f7e170d`, desktop update queued. Two post-acceptance GLM passes and an Astra discussion added three doc fixes and one named follow-up.
