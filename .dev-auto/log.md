@@ -2451,3 +2451,70 @@ artifact of grepping generated titles."*
    its class was. Added.
 
 288 CLI tests.
+
+## Acceptance — Epic 15 accepted at `8bd263e` (2026-09-22 ~13:10+03:00)
+
+### The final gate
+
+`checks-8bd263e.log` (sha256 `1ec5c8d999edc739…`): revision `8bd263e` and a clean tree at both
+ends. `lint` 0, `typecheck` 0, `test:electron` 0, `test:visual` 0. `test:unit` exited 1 on
+`saved-output-store.test.ts:172` alone — the known flake, named in the log, "Test timed out in
+5000ms", 1 failed / 1,439 passed / 1 skipped.
+
+`checks-8bd263e-unit-reruns.log` (sha256 `2c46f126a01eb7c2…`): eight isolated unit re-runs at the
+same revision. Re-runs 2-8 green, 1,440 passed / 1 skipped each. **Re-run 1 failed with one test
+and I cannot name it** — the log filter I used kept only the summary tail, and by the time I
+noticed, the run was gone. The honest record is: one unnamed single-test failure in eight isolated
+re-runs, against a gate failure that *was* named. I did not re-derive the name by guessing.
+
+So `saved-output-store.test.ts:172` now stands at 3-for-3 in full gate runs and green in seven of
+eight isolated ones. Its cause is unchanged: 101 sequential awaited saves against a fixed 5,000 ms
+budget with 88 workers spawned, in Epic 5's subsystem, untouched by `73942b8..HEAD`. The fix is one
+line — an explicit timeout on that `it` — and it is **not Epic 15's change to make**; it needs the
+owner's go-ahead as its own edit.
+
+Fences: `fences-15-wave16.log` (sha256 `6c136ede4e9497c2…`), 12 probes, 12 RED.
+
+### Receipts read with `scripts/check.py usage`
+
+Lead, both sessions under `~/.claude/projects/-home-oleksandr-code-BMN/`:
+
+- `3ab48671-decc-4010-af8f-b9548f6dd157.jsonl` — `claude-opus-5/xhigh`, 507 responses,
+  2026-09-22T05:31:58Z → 09:32:42Z; 437,921 output tokens, 123,952,049 cache-read.
+- `8cb84739-653a-4e46-bc7d-4329aca415c1.jsonl` — `claude-opus-5/xhigh`, 706 responses,
+  2026-09-21T20:58:37Z → 2026-09-22T05:26:17Z; 599,098 output tokens, 170,891,384 cache-read;
+  its own cost state reports $115.56 cumulative for that session including native subagents.
+
+Helpers. Codex rollouts for this run (cwd `/home/oleksandr/code/BMN`, from 2026-09-21T21:00Z):
+**17 at `gpt-6-astra/medium`, 9,891,064 tokens total.** Six further rollouts in the same window are
+`codex-auto-review/low` (382,605 tokens) — not dev-auto dispatches; they are the repository's own
+commit-time auto-review, listed here only so the rollout count reconciles.
+
+- recheck 15, the accepting one:
+  `~/.codex/sessions/2026/09/22/rollout-2026-09-22T12-21-38-01a0c86b-bc08-7c32-9b71-317641d9d89b.jsonl`
+  (sha256 `7f29727637a73c4b…`), `gpt-6-astra/medium`, 394,592 total tokens.
+  Transcript `reviews/recheck15-astra.stdout` (sha256 `6ec5463b9099aca5…`).
+- full review of `a25ed3f`: `reviews/epic-15-astra.stdout` (sha256 `13b66bfe9fade3cf…`).
+
+Claude CLI on the GLM profile, `Read,Grep,Glob` only — 12 GLM-5.3 runs and 3 GLM-5.3-Flash runs,
+**$29.36 together**:
+
+- extra 15, the accepting one: `reviews/extra15-glm53.json` (sha256 `12f159ad46b35b90…`), GLM-5.3,
+  $1.0605, 27 turns.
+- first pass: `reviews/epic-15-glm53.json` (sha256 `71ef2a245f0da052…`, $4.62, 101 turns) and
+  `reviews/epic-15-glmflash.json` (sha256 `c2b7353989b14b84…`, $3.72, 89 turns).
+
+Claude CLI, `fable`/high — the design consultation the owner asked for, which reversed wave 14:
+`reviews/fable-design.json` (sha256 `9d43a95898ae6737…`), `claude-fable-5-1`, $1.9835, 18 turns.
+
+Helper spend for the epic on the Claude CLI routes: **$31.34**. `reviews/` lives under each
+session's scratchpad in `/tmp/claude-1000/-home-oleksandr-code-BMN/<session>/scratchpad/`; nothing
+raw is tracked by git.
+
+### Board and closing state
+
+`sprint-status.yaml` records `epic-15`, `15-2-check-and-install-the-hooks-with-one-command` and
+`15-1-a-terminal-notification-becomes-a-notice` as `done` under the existing schema, `last_updated: 09-22-2026 13:20`.
+`73942b8..HEAD` is committed on local `main` and **unpushed** (accepted code through `8bd263e`,
+plus this handoff commit); `pnpm run update:desktop` was not
+run. Both need the owner's word, as does the one-line `saved-output-store` timeout.
