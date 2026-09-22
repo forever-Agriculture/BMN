@@ -1285,30 +1285,87 @@ describe('bmn hooks check', () => {
       .toEqual({ event: 'Stop', optional: false, state: 'wired' })
   })
 
-  it('does not read an entry inside a matcher-gated group as wiring the event', async () => {
-    const path = await hookFileFixture({
-      hooks: { PostToolUse: [{ matcher: 'Write', hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] }] }
-    })
+  // Only the three shapes that name no tool leave a group ungated. Everything else gates it, and
+  // BMN does not read matchers, so it will not answer for an entry inside one. A whitespace-only
+  // matcher is the sharp case: it is a pattern matching no tool name, not an absent matcher.
+  it.each([
+    ['no matcher at all', undefined, 'wired'],
+    ['a matcher that is null', null, 'wired'],
+    ['an empty matcher', '', 'wired'],
+    ['a matcher of one space', ' ', 'missing'],
+    ['a matcher of one tab', '\t', 'missing'],
+    ['a matcher of a non-breaking space', '\u00a0', 'missing'],
+    ['a matcher naming a tool', 'Write', 'missing'],
+    ['a matcher that would match everything', '.*', 'missing'],
+    ['a list of patterns', ['Write'], 'missing'],
+    ['an empty list of patterns', [], 'missing']
+  ])('reads an entry under %s as %s', async (_label, matcher, state) => {
+    const group: Record<string, unknown> = { hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] }
+    if (matcher !== undefined) group.matcher = matcher
+    const path = await hookFileFixture({ hooks: { PostToolUse: [group] } })
 
     const result = await runHooks(['check', 'claude', '--file', path, '--json'])
 
-    // The harness runs a gated group only for the tools its matcher names, so the event is wired
-    // for some of them and not for others. BMN does not read matchers, so it says missing and
-    // names the entry, and `install` adds an ungated one beside it.
-    expect(JSON.parse(result.stdout).agents[0].events.find((row: { event: string }) => row.event === 'PostToolUse'))
-      .toEqual({ event: 'PostToolUse', optional: false, state: 'missing', unrecognised: [DOCUMENTED_CLAUDE] })
+    const row = JSON.parse(result.stdout).agents[0].events
+      .find((each: { event: string }) => each.event === 'PostToolUse')
+    expect(row.state).toBe(state)
+    // A gated entry is named, so the duplicate `install` adds is explained rather than unexplained.
+    expect(row.unrecognised).toEqual(state === 'wired' ? undefined : [DOCUMENTED_CLAUDE])
   })
 
-  it('reads an entry in a group whose matcher is empty as wiring the whole event', async () => {
+  it.each([
+    ['a number', 42],
+    ['a boolean', false],
+    ['an object', {}],
+    ['a list that is not all patterns', [1]]
+  ])('refuses a whole file whose matcher is %s, and installs nothing over it', async (_label, matcher) => {
     const path = await hookFileFixture({
-      hooks: { PostToolUse: [{ matcher: '', hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] }] }
+      hooks: { PostToolUse: [{ matcher, hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] }] }
+    })
+    const before = await readFile(path, 'utf8')
+
+    const check = await runHooks(['check', 'claude', '--file', path, '--json'])
+    const install = await runHooks(['install', 'claude', '--file', path])
+
+    // A matcher of this shape is one the harness itself rejects, and Codex refuses the whole file
+    // over it - so no event in it can be reported, and adding a group beside it would not help.
+    const report = JSON.parse(check.stdout).agents[0]
+    expect(report.state).toBe('unusable')
+    expect(report.detail).toContain('matcher')
+    expect(report.events.map((row: { state: string }) => row.state))
+      .toEqual(report.events.map(() => 'missing'))
+    expect(install.code).toBe(1)
+    expect(await readFile(path, 'utf8')).toBe(before)
+    expect(await backupsOf(path)).toEqual([])
+  })
+
+  it('shows the invisible character that stopped an entry being recognised', async () => {
+    const path = await hookFileFixture({
+      hooks: {
+        Stop: [entryGroup('\u00a0bmn hook claude')],
+        Notification: [entryGroup('bmn\rhook\rclaude')]
+      }
     })
 
     const result = await runHooks(['check', 'claude', '--file', path, '--json'])
+    const events = JSON.parse(result.stdout).agents[0].events
 
-    // An empty matcher gates nothing, which is what both harnesses do with one.
-    expect(JSON.parse(result.stdout).agents[0].events.find((row: { event: string }) => row.event === 'PostToolUse'))
-      .toEqual({ event: 'PostToolUse', optional: false, state: 'wired' })
+    // Folding the whitespace away would print `bmn hook claude` under a line saying that is not an
+    // entry BMN recognises - true, self-contradictory, and with the cause erased.
+    expect(events.find((row: { event: string }) => row.event === 'Stop').unrecognised)
+      .toEqual(['\\u00a0bmn hook claude'])
+    expect(events.find((row: { event: string }) => row.event === 'Notification').unrecognised)
+      .toEqual(['bmn\\u000dhook\\u000dclaude'])
+  })
+
+  it('says what check recognises in its own usage text', async () => {
+    const result = await runHooks(['--help'])
+
+    // Nothing else pins this text, and it described the deleted grammar for one whole revision.
+    expect(result.stdout).toContain('wired for the entry BMN writes')
+    expect(result.stdout).toContain('$AITERM_CONTROL_SOCKET')
+    expect(result.stdout).toContain('apart from space, tab and newline')
+    expect(result.stdout).toContain('inside a matcher')
   })
 
   it('names an entry whose only difference is whitespace', async () => {
@@ -1406,13 +1463,13 @@ describe('bmn hooks check', () => {
     const EVENT = '{"hook_event_name":"Stop"}'
 
     const problems: string[] = []
-    // Every string `check` accepts, including the whitespace it drops: if a padded form is called
-    // wired, a real bash has to run it. This is where the wave-7 blocker would have been caught.
-    const accepted = [
-      DOCUMENTED_CLAUDE, OLDER_CLAUDE, 'bmn hook claude',
-      `\n${DOCUMENTED_CLAUDE}\n`, '  bmn hook claude  ', '\tbmn hook claude\t',
-      `${OLDER_CLAUDE}\n`
-    ]
+    // Every string `check` accepts: the three commands, under every combination of the blanks bash
+    // drops. Generated rather than listed, so the set cannot fall behind the rule it is checking -
+    // a hand-written list is how the wave-7 blocker got past this test.
+    const BLANKS = ['', ' ', '\t', '\n', ' \t\n']
+    const accepted = [DOCUMENTED_CLAUDE, OLDER_CLAUDE, 'bmn hook claude'].flatMap((command) =>
+      BLANKS.flatMap((before) => BLANKS.map((after) => `${before}${command}${after}`))
+    )
     for (const command of accepted) {
       await rm(ran, { force: true })
       const failure = await new Promise<string | null>((resolve) => {
@@ -1442,7 +1499,7 @@ describe('bmn hooks check', () => {
     }
 
     expect(problems).toEqual([])
-  }, 60_000)
+  }, 300_000)
 
   it('recognises exactly what install writes, for every agent and every event', async () => {
     // The two commands have to agree about the same string, or `install` writes an entry its own

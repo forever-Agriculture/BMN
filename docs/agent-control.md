@@ -228,16 +228,35 @@ the command as far as bash is concerned, so it is part of the command as far as 
 too, and such an entry reads `missing`.
 
 **Everything else reads as `missing`** — a wrapper, a redirection, a condition, a group, your own
-variant with one extra space, and BMN's own entry inside a group carrying a `matcher` (which the
-harness runs only for the tools it names, so it wires part of the event rather than the event). When
-such an entry names `bmn hook <agent>`, `check` prints it under the event, so you can see what it
-declined to read:
+variant with one extra space, and BMN's own entry inside a group carrying a `matcher`. When such an
+entry names `bmn hook <agent>`, `check` prints it under the event, so you can see what it declined
+to read:
 
 ```
   Stop              missing
     an entry here names bmn hook claude but is not one BMN recognises:
       timeout 5 bmn hook claude
 ```
+
+A character you cannot see is printed as its code point, because it is usually the whole reason:
+
+```
+  Stop              missing
+    an entry here names bmn hook claude but is not one BMN recognises:
+      \u00a0bmn hook claude
+```
+
+The line is only printed when the event is missing. An event something else already wires has no
+duplicate coming and nothing to explain, so nothing is printed for it.
+
+**About matchers.** A matcher is a pattern, or a list of them, naming the tools its group's hooks
+run for. BMN does not read one, so it does not answer for an entry inside a group that has one —
+only an absent, `null` or empty matcher leaves a group ungated. That is a rule about what BMN
+recognises, not a claim that the entry never fires: a harness may ignore the matcher on some events
+(Codex does on `Stop`, `UserPromptSubmit` and `Interrupt`), in which case the entry `install` adds
+beside yours is simply a duplicate. A `matcher` that is neither a pattern nor a list of them is a
+shape the harness itself rejects — Codex refuses the whole file over it — so `check` reports the
+file as one it cannot add to, names the event, and `install` writes nothing.
 
 `install` then adds BMN's own entry beside yours, so the hook fires from BMN's entry whatever yours
 does. If you see a duplicate, that is why.

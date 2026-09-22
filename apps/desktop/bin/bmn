@@ -73,8 +73,9 @@ Agents: ${['claude', 'codex'].join('|')}. With no agent, check reads every one o
 check   reads each agent's own hook file and prints one line per event BMN expects:
         wired for the entry BMN writes, wired (older wording) for the two other entries
         it recognises (the $AITERM_CONTROL_SOCKET wording and a bare bmn hook <agent>),
-        or missing. Nothing else is recognised, however it is written; an entry that
-        names the hook without being one of the three is printed under the event.
+        or missing. Nothing else is recognised, apart from space, tab and newline
+        around it, which bash drops too; an entry that names the hook without being
+        one of the three is printed under the event, and so is one inside a matcher.
         Exit 0 when nothing is missing, 1 otherwise.
 install adds only the missing entries, next to the hooks already registered for that
         event, after copying the file to <file>.bmn-backup-<timestamp>. It never
@@ -721,9 +722,23 @@ function collapsed(command) {
   return command.replace(/\s+/g, ' ').trim()
 }
 
-/** A command short enough to sit under the event it was registered for. */
+/**
+ * A command short enough to sit under the event it was registered for, with every character a
+ * reader cannot see made visible.
+ *
+ * Collapsing whitespace the way `collapsed` does would erase the very thing worth showing: a
+ * non-breaking space in a pasted entry reads as `missing`, and printing it folded would show
+ * `bmn hook claude` under the line saying that is not an entry BMN recognises. Space, tab and
+ * newline are the blanks bash drops and read as spacing; every other invisible character is part
+ * of a word to bash, which is why the entry was refused, so it is printed as its code point.
+ */
 function oneLine(command) {
-  const text = collapsed(command)
+  const shown = [...command].map((character) => (
+    ' \t\n'.includes(character) || !/[\p{C}\p{Z}]/u.test(character)
+      ? character
+      : `\\u${character.codePointAt(0).toString(16).padStart(4, '0')}`
+  )).join('')
+  const text = shown.replace(/[ \t\n]+/g, ' ').trim()
   return text.length > 120 ? `${text.slice(0, 119)}\u2026` : text
 }
 
@@ -738,10 +753,15 @@ function hookEventState(groups, agent) {
   const unrecognised = []
   for (const group of groups) {
     if (!isObject(group)) continue
-    // A matcher gates its group: the harness runs those hooks only for the tools it names, so an
-    // entry inside one wires part of the event, not the event. BMN does not read matchers either,
-    // so such an entry is one it does not recognise, and `install` adds an ungated one beside it.
-    const gated = typeof group.matcher === 'string' && group.matcher.trim() !== ''
+    // BMN does not read matchers, so it does not answer for an entry inside one. Only the three
+    // shapes that name no tool at all - absent, null, and the empty string - leave a group
+    // ungated; every other matcher gates it, including a whitespace-only one, which is a pattern
+    // that matches no tool name rather than a matcher that is not there.
+    //
+    // This is a recognition policy, not a claim about delivery: a harness may ignore the matcher on
+    // some events (Codex does on `Stop`, `UserPromptSubmit` and `Interrupt`), in which case the
+    // entry `install` adds beside it is a duplicate rather than the only one that works.
+    const gated = group.matcher !== undefined && group.matcher !== null && group.matcher !== ''
     const entries = Array.isArray(group.hooks) ? group.hooks : []
     for (const entry of entries) {
       // Only a command entry runs anything; another hook type that names bmn still never calls it.
@@ -791,8 +811,22 @@ function unusableShape(data, agent) {
   for (const event of [...spec.events, ...spec.optional]) {
     const groups = data.hooks[event]
     if (groups !== undefined && !Array.isArray(groups)) return `"hooks.${event}" is not a list`
+    for (const group of Array.isArray(groups) ? groups : []) {
+      // A matcher is a pattern or a list of them. Anything else is a shape the harness itself
+      // rejects - Codex refuses the whole file over it - so no event in this file can be reported
+      // and nothing may be added to it. BMN says which one, and leaves somebody's file alone.
+      if (isObject(group) && !matcherShape(group.matcher)) {
+        return `"hooks.${event}" has a matcher that is not a pattern or a list of them`
+      }
+    }
   }
   return undefined
+}
+
+/** Whether a matcher is one of the shapes a harness accepts: absent, null, a string, or a list. */
+function matcherShape(matcher) {
+  if (matcher === undefined || matcher === null || typeof matcher === 'string') return true
+  return Array.isArray(matcher) && matcher.every((each) => typeof each === 'string')
 }
 
 /** One agent's report, from one already-read snapshot so a check and an install cannot disagree. */
