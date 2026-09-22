@@ -13,7 +13,7 @@
 ## Progress
 
 - Sprint board: `_bmad-output/implementation-artifacts/sprint-status.yaml` (git-ignored). Order 15.2, 15.1; `epic-16`/`epic-18` backlog and out of scope; `epic-17` done.
-- Baseline `73942b8` (clean). 15.2 shipped in `ac400aa`, 15.1 in `a25ed3f` (untouched since). Sixteen repair waves followed, the last at `9cd2b6f`. File lists and per-wave reasoning in `.dev-auto/log.md`.
+- Baseline `73942b8` (clean). 15.2 shipped in `ac400aa`, 15.1 in `a25ed3f` (untouched since). Sixteen repair waves followed, the last at `60797e2`. File lists and per-wave reasoning in `.dev-auto/log.md`.
 - Associated loop and native helpers: none. In flight: none.
 - Current work: wave 16 is committed, gated and fenced; both reviewers accepted the wave-15 reversal, so what is open is only wave 16 itself.
 
@@ -34,7 +34,7 @@
 - Mutation fences: `fences-15-*.log` — wave 16's set is 12 probes, 12 RED.
 - **Discarded evidence and corrected claims** (`.dev-auto/log.md`): the `8a0ae46` checks log and two GLM runs read a tree that changed under them, never cited; `recheck11-prompt.md:13` wrongly called the probe files "committed"; and a first `timeout: 0` probe was invalid (its control never fired) and nothing was concluded from it.
 - Reviewed scope and route: `73942b8..a25ed3f` reviewed three times read-only, then a focused gpt-6-astra/medium recheck of each repair delta. Receipts and raw transcripts in both sessions' scratchpads under `reviews/`.
-- Baseline and reviewed revisions: baseline `73942b8`; reviewed at `a25ed3f`; thirteen rechecked repair waves, each refused. `43bac51` is under recheck 14.
+- Baseline and reviewed revisions: baseline `73942b8`; reviewed at `a25ed3f`; fourteen rechecked repair waves. `43bac51` was accepted by GLM and refused by Astra on two installer defects, both fixed in `60797e2`, which is unreviewed.
 - Unreviewed or unverified areas: wave 16; Codex's runtime behaviour entirely; Epics 16 and 18 (out of scope).
 - Flakes, both timeouts under load and neither in code this epic touches: `companion-service.test.ts > 'trims back to the newest refusals…'`, reproduced at baseline `73942b8`, roughly one run in four; and `saved-output-store.test.ts:172`, which timed out in the unit step of both recent full gate runs and passed in all three isolated re-runs — 101 sequential awaited saves against a fixed 5s budget with 88 workers. In Epic 5's subsystem, untouched by `73942b8..HEAD`, so **not edited under Epic 15**; the fix is a one-line explicit timeout and needs the owner's go-ahead as its own change.
 
@@ -47,5 +47,5 @@
 
 ## Resume
 
-- Next safe action: read recheck 14 (`reviews/recheck14-astra.stdout`) and the GLM extra (`reviews/extra14-glm53.json`) in the session scratchpad, disposition every finding against `43bac51`; then the acceptance steps — board update under the existing schema, `scripts/check.py usage PATH` on every lead and helper receipt, `scripts/check.py check`, `bmn publish` the handoff.
-- Status: ACTIVE — Epic 15 only; wave 15 committed at `43bac51`, gated and fenced, under recheck 14. Nothing pushed, nothing packaged.
+- Next safe action: dispatch the fifteenth gpt-6-astra/medium recheck of `43bac51..60797e2` plus a GLM-5.3/max extra; then the acceptance steps — board update under the existing schema, `scripts/check.py usage PATH` on every lead and helper receipt, `scripts/check.py check`, `bmn publish` the handoff.
+- Status: ACTIVE — Epic 15 only; wave 16 committed at `60797e2` and fenced, gates running. Both reviewers accepted the wave-15 reversal; only wave 16 is unreviewed. Nothing pushed, nothing packaged.
