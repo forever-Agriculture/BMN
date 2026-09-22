@@ -77,6 +77,8 @@ check   reads each agent's own hook file and prints one line per event BMN expec
         around it, which bash drops too; an entry that names the hook without being
         one of the three is printed under the event, and so is one inside a matcher.
         A file whose matcher this harness cannot read is reported, never added to.
+        An entry this harness would not run - under Claude Code, one whose timeout
+        is not a positive number - is never counted wired, whatever its command.
         Exit 0 when nothing is missing, 1 otherwise.
 install adds only the missing entries, next to the hooks already registered for that
         event, after copying the file to <file>.bmn-backup-<timestamp>. It never
@@ -632,6 +634,11 @@ const HOOK_FILES = {
     // the same event still fired, and so did another event's. So BMN never refuses a Claude file
     // over a shape; a group it cannot read is simply one it will not answer for.
     strict: false,
+    // Measured, one entry at a time, against a real tool call: `timeout` of `"5"`, `-1` and `null`
+    // each stopped the entry running, while `1.5` ran. So Claude Code wants a positive number, and
+    // an entry without one is dead however its command reads. `0` was not tried; it is treated as
+    // dead, which costs a duplicate entry rather than a silent gap.
+    timeout: 'positive-number',
     // Measured the same way. Only an absent matcher and an empty one fired. `null`, `["Bash"]` and
     // `42` each did not - so `null` is not absence here, whatever Codex's serde makes of it, and a
     // list is not a matcher Claude Code honours either.
@@ -645,6 +652,9 @@ const HOOK_FILES = {
     // error, so one bad shape anywhere leaves no working hook at all. That is from its source
     // (`hook_config.rs`, `discovery.rs`) by way of the Epic 15 reviewer, not from a run here.
     strict: true,
+    // Codex declares `timeout` as `Option<u64>`, so absence and `null` are both fine and anything
+    // that is not a whole number at or above zero fails to deserialize. Source, not measured.
+    timeout: 'optional-u64',
     // Every event BMN knows Codex has, which is more than it reports on: a shape it cannot read
     // stops the file loading, and BMN's own events are in that same file. Codex has no
     // `Notification`; a file carrying one is a Claude file's key, which Codex ignores. This is not
@@ -731,7 +741,7 @@ function hookEntryState(command, agent) {
   if (text === hookEntryCommand(agent)) return 'wired'
   if (recognisedEntries(agent).includes(text)) return 'older'
   // The note is for the owner to read, not a verdict, so it may look past any whitespace at all.
-  return collapsed(command).includes(`bmn hook ${agent}`) ? 'named' : 'missing'
+  return namesHook(command, agent) ? 'named' : 'missing'
 }
 
 /**
@@ -813,7 +823,11 @@ function hookEventState(groups, agent) {
     for (const entry of entries) {
       // Only a command entry runs anything; another hook type that names bmn still never calls it.
       if (!isObject(entry) || entry.type !== 'command') continue
-      const read = hookEntryState(entry.command, agent)
+      // An entry the harness will not run is not an entry BMN can answer for. It still names the
+      // hook, so the owner is shown it rather than left with an unexplained duplicate.
+      const read = runnableEntry(entry, agent)
+        ? hookEntryState(entry.command, agent)
+        : (namesHook(entry.command, agent) ? 'named' : 'missing')
       if (gated && read !== 'missing') {
         gatedEntries.push(oneLine(entry.command))
         continue
@@ -878,6 +892,9 @@ function unusableShape(data, agent) {
   // file loading, and BMN would not see it. That is a gap in this list, and the list is here to be
   // corrected rather than guessed around.
   for (const [event, groups] of Object.entries(data.hooks).filter(([name]) => spec.known.includes(name))) {
+    // Declared as a list of groups, so anything else fails to deserialize - and an empty scan of a
+    // non-list is how three of these events slipped through the last wave.
+    if (groups !== undefined && !Array.isArray(groups)) return `"hooks.${event}" is not a list`
     for (const group of Array.isArray(groups) ? groups : []) {
       // A group is an object. An element that is not one fails the same strict parse a matcher of
       // the wrong type fails, so the file does not load and no hook in it runs.
@@ -892,15 +909,37 @@ function unusableShape(data, agent) {
         if (!isObject(entry)) return `"hooks.${event}" holds an entry that is not an object`
         // Only the fields BMN and both harnesses share, and only their types - not which values
         // a harness's own enum carries, which is its business and not something to guess at.
-        for (const [field, type] of [['type', 'string'], ['command', 'string'], ['timeout', 'number']]) {
+        for (const [field, type] of [['type', 'string'], ['command', 'string']]) {
           if (entry[field] !== undefined && typeof entry[field] !== type) {
             return `"hooks.${event}" has an entry whose "${field}" is not a ${type}`
           }
+        }
+        // `timeout` is its own shape per harness: Codex's `Option<u64>` takes `null` and refuses
+        // `-1` and `1.5`, none of which "is a number" describes.
+        if (!runnableEntry(entry, agent)) {
+          return `"hooks.${event}" has an entry whose "timeout" this harness cannot read`
         }
       }
     }
   }
   return undefined
+}
+
+/**
+ * Whether the harness would run this entry at all. An entry it drops cannot report, so it must
+ * never read as wired - that is the same false `wired` this command exists to prevent, arriving
+ * through a field rather than through the command.
+ */
+function namesHook(command, agent) {
+  return typeof command === 'string' && collapsed(command).includes(`bmn hook ${agent}`)
+}
+
+function runnableEntry(entry, agent) {
+  const timeout = entry.timeout
+  if (timeout === undefined) return true
+  return HOOK_FILES[agent].timeout === 'positive-number'
+    ? typeof timeout === 'number' && timeout > 0
+    : timeout === null || (Number.isInteger(timeout) && timeout >= 0)
 }
 
 /** Whether this matcher leaves its group gated, by what the harness in question treats as absence. */

@@ -274,17 +274,28 @@ and an empty one fired. `null` did not, nor did `["Bash"]`, nor `42` — so unde
 three gate their group, and a `null` matcher is a dead hook rather than an unmatched one. Codex's
 matcher is one optional pattern, where `null` is genuine absence and so leaves the group ungated.
 
+**About `timeout`.** A recognised command in an entry the harness will not run is not a wired hook,
+so `check` does not call it one. This too was measured one entry at a time against a real tool call:
+under Claude Code an entry whose `timeout` is `"5"`, `-1` or `null` did not fire, while `1.5` did.
+So BMN counts a Claude entry only when its `timeout` is absent or a positive number, and prints the
+entry under the event like any other it did not count. `0` was not tried and is treated as dead,
+which costs a duplicate entry rather than a silent gap. Codex declares `timeout` as `Option<u64>`,
+so there absence, `null` and any whole number at or above zero are all fine and anything else stops
+the file loading.
+
 What happens to the *rest* of the file differs too, and matters more:
 
 - **Claude Code drops the group and keeps going.** A bad matcher, a malformed entry, a group whose
   `hooks` is not a list — each kills that group only. A sibling group in the same event still fires,
-  and so do other events. So BMN never refuses a Claude settings file over a shape: it reads the
+  a valid entry beside a malformed one in the same group fires, and so do other events — measured in
+  both orders, so it is not an artifact of which one is written first. So BMN never refuses a Claude settings file over a shape: it reads the
   file, reports that group's event by what is left, and `install` works normally.
 - **Codex refuses the whole file.** It deserializes strictly, so one wrong type anywhere leaves no
   working hook at all. BMN therefore checks every event it knows Codex has — not only the ones it
   reports on — along with the entries inside: a group whose `hooks` is not a list, an entry that is
-  not an object, or a `type`, `command` or `timeout` of the wrong type. `check` reports such a file
-  as one it cannot add to, names the event, and `install` writes nothing and takes no backup.
+  not an object, an event whose value is not a list of groups at all, or a `type`, `command` or
+  `timeout` of the wrong type. `check` reports such a file as one it cannot add to, names the event,
+  and `install` writes nothing and takes no backup.
 
 Two limits worth knowing. A key BMN does not recognise is **left alone** — `_comment`, or a Claude
 event in a Codex file — because both harnesses ignore keys they do not know, and refusing over one

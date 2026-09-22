@@ -2129,3 +2129,54 @@ What it would cost to be wrong: if Codex is in fact lenient like Claude Code, BM
 verdicts for it are false refusals — `install` declines a file whose other hooks work, visibly and
 with a reason. It cannot produce a false `wired`, which is the direction that matters. So the
 residual is an accuracy debt in a documented claim, not a live hazard.
+
+## 2026-09-22 ~10:50 — Wave 13: the timeout field, and a correction
+
+### Correction first
+
+`recheck11-prompt.md:13` told the reviewers the probe results and fixtures were **committed** under
+`.dev-auto/evidence/epic-15/probes/`. They are not: `.gitignore:43` ignores all of
+`/.dev-auto/evidence/`, deliberately, and only `handoff.md` and `log.md` are tracked. The files are
+on disk at that path and a read-only reviewer working in this tree can open them, so nothing was
+unreadable — the word was wrong, not the coordinate. Astra caught it. Every later prompt says
+"untracked, on disk at".
+
+### What wave 13 fixes
+
+Three defects, all in the same region, and the first of them is the class this command exists to
+prevent.
+
+**1. A false `wired` through a field rather than through the command (mine, measured).** Astra's
+recheck 11 reproduced a recognised Claude command with `timeout: "5"` reading `wired` and correctly
+refused to call it a runtime failure without a measurement. So I measured it, one entry at a time,
+with the same probe harness (`result-bmgf3qr2a.txt`, untracked, on disk under
+`.dev-auto/evidence/epic-15/probes/`):
+
+| `timeout` | `"5"` | `-1` | `1.5` | `null` |
+| --- | --- | --- | --- | --- |
+| fires under Claude Code | no | no | **yes** | no |
+
+An entry that does not run cannot report, so calling it `wired` leaves the owner with no hook and
+no warning — the same silent gap as an unrecognised command, arriving through a field. `check` now
+counts a Claude entry only when its `timeout` is absent or a positive number, and prints the entry
+under the event the way it prints any other it did not count. `0` was not tried; it is treated as
+dead, which costs a duplicate entry rather than a silent gap, and that choice is in the doc.
+
+**2. A known Codex event whose value is not a list was scanned as empty (Astra, blocking).** The
+list check covered only the events BMN reports on; past it, `for (const group of Array.isArray(groups)
+? groups : [])` turned `PreCompact: 42` into a no-op. Astra reproduced all 16 combinations of four
+events and four values: every one exited 0, `ok: true`, `state: "read"`, with the expected events
+wired. Now a known event that is not a list refuses the file, like any other shape Codex cannot
+deserialize.
+
+**3. Codex's `timeout` is `Option<u64>`, not "a JavaScript number" (Astra, blocking).** The wave-12
+check refused `null`, which Codex deserializes as absence — a regression this delta introduced
+against `e211130` — and accepted `-1` and `1.5`, which it cannot. `runnableEntry` now carries both
+rules, one per harness, from `HOOK_FILES[agent].timeout`.
+
+Also added, at Astra's request: Claude tests with a malformed-only group and with the malformed
+group or entry written **first**, so `hookEventState` cannot pass by returning early on a valid
+group that happened to be scanned before it. Both orders were measured
+(`result-bmgf3qr2a.txt`): a valid entry beside a malformed one in the same group still fires.
+
+290 CLI tests. Ten mutation probes (`fences-15-wave13.log`).
