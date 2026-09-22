@@ -2594,5 +2594,8 @@ absolute path anywhere in it is the repository's own.
 from the desktop launcher waits for the update and then starts the new build. Nothing was packaged
 while BMN was open.
 
-The packaged build will carry `f7e170d`; the handoff correction committed after it is
-documentation only and does not change the application.
+`f7e170d` in that status file is only the commit at queue time. When the service wakes it re-reads
+the tree (`update-desktop.mjs:149`, `:183`) and packages the latest clean `origin/main`, refusing to
+build at all while local `main` and `origin/main` differ (`:61`). So the build will carry whatever is
+on `origin/main` when BMN closes — which means anything committed from here on has to be pushed
+before then, or the update stops with "local main does not match origin/main".
