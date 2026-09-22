@@ -1916,3 +1916,67 @@ precondition. It stays an owner item.
 7. **The matcher rationale** (Astra). Corrected in the code comment and the docs.
 
 **Rejected, with the refutation:** nothing. Every material finding from both reviews is closed.
+
+### Both reviews of `726a72c`: REFUSED, same blocker reached independently
+
+- gpt-6-astra/medium recheck 9 — `reviews/epic-15-recheck9-astra.md`. 394,187 input / 2,873 output.
+- GLM-5.3/max extra 9 — `reviews/epic-15-extra9-glm53.json`, $1.58, 29 turns, read tools only.
+
+Both confirm the wave-9 closures: the gating predicate is absence-only in both directions, the note
+no longer launders, `HOOKS_USAGE` matches, and no install/report/exit regression. Astra confirmed
+the trim closure again with its 324 boundary probes retained.
+
+**The blocker, both: the shape scan was scoped to the events BMN reports on.** A matcher the harness
+cannot read stops it loading the file, and BMN's own events are in that file. Astra reproduced
+`PreCompact`, `PostCompact`, `SubagentStart`, `SubagentStop`; it also noted Claude's expected list
+omits `PreToolUse`, the event matchers are actually for. GLM reached the same scope hole from the
+code and added a second case: a group list element that is not an object at all
+(`hooks.Stop: ["oops"]`), which fails the same strict parse and was not scanned.
+
+**Astra's second blocker: I applied Claude's rule to Codex.** A list of patterns is a matcher for
+Claude Code; Codex's is `Option<String>`, so a list invalidates its file. Gating it is not enough —
+Codex needs `unusable`. The rule is now per harness, in `HOOK_FILES`.
+
+**What I did and did not establish about Claude Code.** I loaded a settings file with a string, a
+list and a number matcher through the real CLI; all three loaded without complaint. That shows the
+file is not rejected. It does **not** show whether the group's hooks then run, and the code comment
+says exactly that rather than claiming more. Codex's side rests on Astra's source citations
+(`hook_config.rs`, `discovery.rs`), which is stronger evidence than mine and is why the two agents
+are treated differently.
+
+**`oneLine` was overclaimed** (Astra, GLM F1): U+034F and U+FE0F are invisible and in neither
+`\p{C}` nor `\p{Z}`, so they printed raw. Deciding character by character which ones a reader can
+see is the same guessing game the grammar lost, so the rule is now one line: printable ASCII prints,
+everything else prints as its code point.
+
+**Two I found myself, before the reviews, and two more found by the new tests.** The 120-character
+cap could cut an escape in half, and the literal text ` ` printed identically to the character
+— both closed by the rewrite. Then its own tests caught that `oneLine` still used `trim()`, which
+ate the character the line exists to show, and that no note appeared at all when an invisible
+character sat between the hook's words.
+
+### Wave 10 — `d1ce323`, every finding dispositioned
+
+1. **Scan scope** (both, blocking). Every event the file carries, plus a refusal of any group list
+   element that is not an object. Five-row table, two RED fences.
+2. **Per-harness matcher shapes** (Astra 2, blocking). `HOOK_FILES[agent].matchers`: claude
+   string|list, codex string. Two-row table, three RED fences.
+3. **`oneLine` overclaim** (both). Printable ASCII prints, everything else is its code point;
+   backslash doubled; truncation stops at the last whole token. Five tests, four RED fences.
+4. **The note trigger** (found by its own tests). `collapsed` now reads past anything invisible, so
+   the trigger is generous while the printed line stays exact. One RED fence.
+5. **Docs** (both). The matcher paragraph now states the file-wide scope and the per-harness shapes;
+   the escaping paragraph states the printable-ASCII rule and the doubled backslash.
+
+**Rejected, with the refutation:** nothing.
+
+**Carried, not closed, with what would settle each:**
+- GLM: `matcher: ''` is the only ungated non-empty-absence shape, and that it means "match all"
+  rather than "match nothing" is inferred from Claude Code's falsy check and regex compilation, not
+  run. A live probe on each harness would settle it.
+- GLM: `hooks: null` reads `unusable` rather than absence, inconsistent with the null-is-absence
+  policy used for matchers. Safe direction; noted, not changed.
+- Astra: the differential run's 75 cases are five padding samples per side, not every accepted
+  string. It is sampling coupled to the blank set, and is described that way rather than as
+  exhaustive.
+- Whether a group's hooks run under a list matcher in Claude Code, per the probe note above.
