@@ -2043,3 +2043,64 @@ the last guard deleted here on a green mutation turned out to be load-bearing.
 **Carried, not closed:** the four above, plus GLM M2 — Claude's `matcher: null` is unprobed, and if
 Claude's schema is optional-not-nullable it is one more shape of the same class. One load probe
 would settle it.
+
+## 2026-09-22 ~10:15 — I stopped reasoning about the harnesses and ran them
+
+Three waves of matcher rules rested on reading somebody's schema — Astra's Codex citations, GLM's
+claim about Claude Code lists, and my own inference joining them. Before dispatching recheck 11 I
+built a probe harness instead: a temp settings file per shape, the real `claude` CLI with
+`--settings`, a PostToolUse hook that appends to a marker file, and a prompt that makes one real
+Bash tool call. Raw results and every fixture are under
+`.dev-auto/evidence/epic-15/probes/` (`result-bcoa639tn.txt`, `result-b7hpwpk4o.txt`,
+`result-bndfcu3p4.txt`).
+
+**Probe 1 — which matcher shapes fire, Claude Code:**
+
+| absent | `""` | `"Bash"` | `["Bash"]` | `null` | `42` |
+| --- | --- | --- | --- | --- | --- |
+| FIRED | FIRED | FIRED | did not fire | **did not fire** | did not fire |
+
+**This found a false `wired` that neither reviewer did, and it was mine.** I treated `null` as
+absence on Astra's `Option<String>` reasoning and carried it to a harness that reasoning does not
+describe. An entry under `matcher: null` read `wired`; the hook does not fire. Ten rounds of review
+had not caught it because neither reviewer can run Claude Code.
+
+It also settles carried item 1 with runtime evidence rather than inference — `matcher: ''` really
+does mean match-all — and **refutes GLM's list claim**: `["Bash"]` does not fire. BMN already gated
+it, so the verdict was right, but the reason recorded for it was wrong.
+
+**Probe 2 — blast radius of a bad matcher, Claude Code.** For `42`, `null` and `["Bash"]`: the
+gated hook did not fire, and **another event's hook fired every time**.
+
+**Probe 3 — blast radius of a malformed group or entry, Claude Code.** For `hooks` a string, an
+entry that is not an object, and `command`/`timeout`/`type` of the wrong type: the **sibling group
+in the same event fired every time**, and so did another event's.
+
+So Claude Code drops what it cannot use and runs the rest. The `unusable` verdicts waves 10 and 11
+built for it are **false refusals** — the same class Astra blocked on at `e211130`, which I then
+reintroduced one level down while fixing it. Codex is the strict one; that stays source-based.
+
+### Wave 12 — `208e2bd`
+
+`strict` and `ungated` now sit beside each harness's events, each carrying how it was established:
+Claude Code's by running it, Codex's from the source Astra cited. `gatesEvent` reads `ungated` per
+harness; the whole shape fence runs only when `strict`. Claude: `ungated: ['absent', 'empty']`,
+never unusable over a shape. Codex: `ungated: ['absent', 'null', 'empty']`, `matchers: ['string']`,
+unusable over anything else.
+
+`hookEntryState`'s non-string-command guard is reachable again — a lenient harness's file is read,
+not refused — so its "defence in depth" label from wave 11 is withdrawn.
+
+Tests: the shape refusals moved to Codex fixtures and gained Claude counterparts asserting the file
+still reads and the sibling group still wires the event; the `null` matcher has one test per agent
+with the measurement in its comment. 276 pass. Nine mutation probes, all RED
+(`fences-15-wave12.log`).
+
+**What this says about the previous four waves.** Each one repaired a real defect and introduced
+the next, and the ones since wave 9 were all in code written to model harness behaviour from
+citations. The probe harness costs about a minute per question. It should have existed before the
+first matcher rule was written, not after the fourth.
+
+**Still not run:** Codex's side of all of this. Its strictness, its `null`-is-absence and its
+string-only matcher are Astra's source citations, not measurements. A Codex probe of the same
+shape would settle it and has not been done.
