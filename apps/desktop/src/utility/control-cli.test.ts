@@ -1291,7 +1291,7 @@ describe('bmn hooks check', () => {
   // matcher is the sharp case: it is a pattern matching no tool name, not an absent matcher.
   it.each([
     ['no matcher at all', undefined, 'wired'],
-    ['a matcher that is null', null, 'wired'],
+    ['a matcher that is null', null, 'missing'],
     ['an empty matcher', '', 'wired'],
     ['a matcher of one space', ' ', 'missing'],
     ['a matcher of one tab', '\t', 'missing'],
@@ -1321,17 +1321,17 @@ describe('bmn hooks check', () => {
     ['a boolean', false],
     ['an object', {}],
     ['a list that is not all patterns', [1]]
-  ])('refuses a whole file whose matcher is %s, and installs nothing over it', async (_label, matcher) => {
+  ])('refuses a whole Codex file whose matcher is %s, and installs nothing over it', async (_label, matcher) => {
     const path = await hookFileFixture({
-      hooks: { PostToolUse: [{ matcher, hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] }] }
-    })
+      hooks: { PostToolUse: [{ matcher, hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CODEX }] }] }
+    }, 'hooks.json')
     const before = await readFile(path, 'utf8')
 
-    const check = await runHooks(['check', 'claude', '--file', path, '--json'])
-    const install = await runHooks(['install', 'claude', '--file', path])
+    const check = await runHooks(['check', 'codex', '--file', path, '--json'])
+    const install = await runHooks(['install', 'codex', '--file', path])
 
-    // A matcher of this shape is one the harness itself rejects, and Codex refuses the whole file
-    // over it - so no event in it can be reported, and adding a group beside it would not help.
+    // Codex deserializes the file strictly and refuses it outright over one bad shape, so no event
+    // in it can be reported and adding a group beside this one would not make anything run.
     const report = JSON.parse(check.stdout).agents[0]
     expect(report.state).toBe('unusable')
     expect(report.detail).toContain('matcher')
@@ -1342,21 +1342,45 @@ describe('bmn hooks check', () => {
     expect(await backupsOf(path)).toEqual([])
   })
 
-  it.each(['PreCompact', 'PostCompact', 'SubagentStart', 'SubagentStop', 'PreToolUse'])(
-    'refuses a file whose matcher under %s it cannot read, though it reports no such event',
+  it.each([
+    ['a number', 42],
+    ['a boolean', false],
+    ['an object', {}],
+    ['a list that is not all patterns', [1]]
+  ])('reads a Claude file whose matcher is %s, gating only that group', async (_label, matcher) => {
+    const path = await hookFileFixture({
+      hooks: {
+        ...Object.fromEntries(CLAUDE_EVENTS.map((each) => [each, [entryGroup(DOCUMENTED_CLAUDE)]])),
+        PostToolUse: [{ matcher, hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] }]
+      }
+    })
+
+    const result = await runHooks(['check', 'claude', '--file', path, '--json'])
+    const report = JSON.parse(result.stdout).agents[0]
+
+    // Measured against the real CLI: Claude Code drops a group it cannot use and runs the rest of
+    // the file, including sibling groups in the same event. Refusing the file would stop `install`
+    // over one dead group, which is a worse answer than reading it.
+    expect(report.state).toBe('read')
+    expect(report.events.find((row: { event: string }) => row.event === 'PostToolUse').state).toBe('missing')
+    expect(report.events.find((row: { event: string }) => row.event === 'Stop').state).toBe('wired')
+  })
+
+  it.each(['PreCompact', 'PostCompact', 'SubagentStart', 'SubagentStop', 'PermissionRequest'])(
+    'refuses a Codex file whose matcher under %s it cannot read, though it reports no such event',
     async (event) => {
       const path = await hookFileFixture({
         hooks: {
-          ...Object.fromEntries(CLAUDE_EVENTS.map((each) => [each, [entryGroup(DOCUMENTED_CLAUDE)]])),
+          ...Object.fromEntries(CODEX_EVENTS.map((each) => [each, [entryGroup(DOCUMENTED_CODEX)]])),
           [event]: [{ matcher: 42, hooks: [{ type: 'command', timeout: 5, command: 'true' }] }]
         }
-      })
+      }, 'hooks.json')
 
-      const result = await runHooks(['check', 'claude', '--file', path, '--json'])
+      const result = await runHooks(['check', 'codex', '--file', path, '--json'])
       const report = JSON.parse(result.stdout)
 
-      // The events BMN expects are all wired, and it must still not say so: a matcher the harness
-      // cannot read stops it loading the file, and those hooks are in the same file.
+      // The events BMN expects are all wired, and it must still not say so: one shape Codex cannot
+      // read stops it loading the file, and those hooks are in the same file.
       expect(result.code).toBe(1)
       expect(report.ok).toBe(false)
       expect(report.agents[0].state).toBe('unusable')
@@ -1382,17 +1406,17 @@ describe('bmn hooks check', () => {
     expect(JSON.parse(result.stdout).agents[0].state).toBe(state)
   })
 
-  it('refuses a file holding something that is not a hook group', async () => {
+  it('refuses a Codex file holding something that is not a hook group', async () => {
     const path = await hookFileFixture({
       hooks: {
-        ...Object.fromEntries(CLAUDE_EVENTS.map((each) => [each, [entryGroup(DOCUMENTED_CLAUDE)]])),
-        Stop: [entryGroup(DOCUMENTED_CLAUDE), 'oops']
+        ...Object.fromEntries(CODEX_EVENTS.map((each) => [each, [entryGroup(DOCUMENTED_CODEX)]])),
+        Stop: [entryGroup(DOCUMENTED_CODEX), 'oops']
       }
-    })
+    }, 'hooks.json')
     const before = await readFile(path, 'utf8')
 
-    const check = await runHooks(['check', 'claude', '--file', path, '--json'])
-    const install = await runHooks(['install', 'claude', '--file', path])
+    const check = await runHooks(['check', 'codex', '--file', path, '--json'])
+    const install = await runHooks(['install', 'codex', '--file', path])
 
     expect(JSON.parse(check.stdout).agents[0].state).toBe('unusable')
     expect(JSON.parse(check.stdout).agents[0].detail).toContain('not a hook group')
@@ -1489,17 +1513,17 @@ describe('bmn hooks check', () => {
     ['an entry whose command is not a string', { hooks: [{ type: 'command', command: 5 }] }, '"command" is not a string'],
     ['an entry whose timeout is not a number', { hooks: [{ type: 'command', command: 'true', timeout: '5' }] }, '"timeout" is not a number'],
     ['an entry whose type is not a string', { hooks: [{ type: 7, command: 'true' }] }, '"type" is not a string']
-  ])('refuses a file holding %s', async (_label, group, detail) => {
+  ])('refuses a Codex file holding %s', async (_label, group, detail) => {
     const path = await hookFileFixture({
       hooks: {
-        ...Object.fromEntries(CLAUDE_EVENTS.map((each) => [each, [entryGroup(DOCUMENTED_CLAUDE)]])),
-        Stop: [entryGroup(DOCUMENTED_CLAUDE), group]
+        ...Object.fromEntries(CODEX_EVENTS.map((each) => [each, [entryGroup(DOCUMENTED_CODEX)]])),
+        Stop: [entryGroup(DOCUMENTED_CODEX), group]
       }
-    })
+    }, 'hooks.json')
     const before = await readFile(path, 'utf8')
 
-    const check = await runHooks(['check', 'claude', '--file', path, '--json'])
-    const install = await runHooks(['install', 'claude', '--file', path])
+    const check = await runHooks(['check', 'codex', '--file', path, '--json'])
+    const install = await runHooks(['install', 'codex', '--file', path])
 
     // A field of the wrong type fails the same strict parse a matcher of the wrong type fails, so
     // the file does not load and none of its hooks run - including the ones BMN expects.
@@ -1510,6 +1534,50 @@ describe('bmn hooks check', () => {
     expect(install.code).toBe(1)
     expect(await readFile(path, 'utf8')).toBe(before)
     expect(await backupsOf(path)).toEqual([])
+  })
+
+  it.each([
+    ['a group whose hooks is not a list', { hooks: 'echo hi' }],
+    ['an entry that is not an object', { hooks: ['echo hi'] }],
+    ['an entry whose command is not a string', { hooks: [{ type: 'command', command: 5 }] }],
+    ['an entry whose timeout is not a number', { hooks: [{ type: 'command', command: 'true', timeout: '5' }] }]
+  ])('reads a Claude file holding %s, and still sees the rest', async (_label, group) => {
+    const path = await hookFileFixture({
+      hooks: {
+        ...Object.fromEntries(CLAUDE_EVENTS.map((each) => [each, [entryGroup(DOCUMENTED_CLAUDE)]])),
+        Stop: [entryGroup(DOCUMENTED_CLAUDE), group]
+      }
+    })
+
+    const result = await runHooks(['check', 'claude', '--file', path, '--json'])
+    const report = JSON.parse(result.stdout)
+
+    // Measured: a malformed group does not stop a sibling group in the same event from firing, so
+    // the file is read and `Stop` is wired by the group beside it.
+    expect(result.code).toBe(0)
+    expect(report.ok).toBe(true)
+    expect(report.agents[0].state).toBe('read')
+    expect(report.agents[0].events.find((row: { event: string }) => row.event === 'Stop').state).toBe('wired')
+  })
+
+  it.each([
+    ['claude', 'settings.json', CLAUDE_EVENTS, DOCUMENTED_CLAUDE, 'missing'],
+    ['codex', 'hooks.json', CODEX_EVENTS, DOCUMENTED_CODEX, 'wired']
+  ] as const)('reads a null matcher the way %s does', async (agent, file, events, documented, state) => {
+    const path = await hookFileFixture({
+      hooks: {
+        ...Object.fromEntries(events.map((each) => [each, [entryGroup(documented)]])),
+        PostToolUse: [{ matcher: null, hooks: [{ type: 'command', timeout: 5, command: documented }] }]
+      }
+    }, file)
+
+    const result = await runHooks(['check', agent, '--file', path, '--json'])
+
+    // Not the same answer for both, and not a matter of taste. Claude Code was run with a null
+    // matcher against a real tool call and the hook did not fire, so it gates. Codex's matcher is
+    // `Option<String>`, where null deserializes to absence, so it does not.
+    expect(JSON.parse(result.stdout).agents[0].events
+      .find((row: { event: string }) => row.event === 'PostToolUse').state).toBe(state)
   })
 
   it.each([

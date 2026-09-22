@@ -268,23 +268,29 @@ never fires: a harness may ignore the matcher on some events (Codex does on `Sto
 `UserPromptSubmit` and `Interrupt`), in which case the entry `install` adds beside yours is simply a
 duplicate.
 
-What a matcher may *be* differs by harness. Claude Code takes one pattern or a list of them; Codex
-takes one pattern, so a list there fails its schema. BMN checks this across **every event it knows
-that harness has**, not only the ones it reports on, because a shape the harness cannot read stops
-it loading the file — and the hooks BMN does expect are in that same file. It checks the entries the
-same way: a group whose `hooks` is not a list, an entry that is not an object, or a `type`,
-`command` or `timeout` of the wrong type.
+What counts as *no matcher at all* differs by harness, and it was measured rather than assumed. A
+Claude Code hook was run against a real tool call with each shape in turn: only an absent matcher
+and an empty one fired. `null` did not, nor did `["Bash"]`, nor `42` — so under Claude Code all
+three gate their group, and a `null` matcher is a dead hook rather than an unmatched one. Codex's
+matcher is one optional pattern, where `null` is genuine absence and so leaves the group ungated.
 
-`check` reports such a file as one it cannot add to, names the event, and `install` writes nothing
-and takes no backup. It is your configuration to repair, not BMN's to guess at.
+What happens to the *rest* of the file differs too, and matters more:
+
+- **Claude Code drops the group and keeps going.** A bad matcher, a malformed entry, a group whose
+  `hooks` is not a list — each kills that group only. A sibling group in the same event still fires,
+  and so do other events. So BMN never refuses a Claude settings file over a shape: it reads the
+  file, reports that group's event by what is left, and `install` works normally.
+- **Codex refuses the whole file.** It deserializes strictly, so one wrong type anywhere leaves no
+  working hook at all. BMN therefore checks every event it knows Codex has — not only the ones it
+  reports on — along with the entries inside: a group whose `hooks` is not a list, an entry that is
+  not an object, or a `type`, `command` or `timeout` of the wrong type. `check` reports such a file
+  as one it cannot add to, names the event, and `install` writes nothing and takes no backup.
 
 Two limits worth knowing. A key BMN does not recognise is **left alone** — `_comment`, or a Claude
 event in a Codex file — because both harnesses ignore keys they do not know, and refusing over one
-would stop `install` on a file that works; the cost is that a harness event BMN has not heard of
-could carry a shape BMN never looks at. And what happens to a file the harness cannot read is the
-harness's business: Codex's loader refuses the whole file, which is why BMN refuses too, while a
-Claude settings file carrying a bad matcher loaded without complaint when it was tried — so for
-Claude this is BMN declining to guess, not a statement that nothing would run.
+would stop `install` on a file that works; the cost is that a Codex event BMN has not heard of could
+carry a shape BMN never looks at. And Codex's side of this rests on its source rather than on a run
+here, while Claude Code's was exercised directly.
 
 `install` then adds BMN's own entry beside yours, so the hook fires from BMN's entry whatever yours
 does. If you see a duplicate, that is why.

@@ -627,29 +627,35 @@ const HOOK_FILES = {
     path: ['.claude', 'settings.json'],
     events: ['Notification', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd'],
     optional: [],
-    // Every event BMN knows this harness has, which is more than it reports on: a shape the harness
-    // cannot read stops it loading the file, and BMN's own events are in that same file. It is not
-    // a claim to know them all - see `unusableShape` for what an unknown key gets.
-    known: [
-      'PreToolUse', 'PostToolUse', 'Notification', 'UserPromptSubmit', 'Stop', 'SubagentStart',
-      'SubagentStop', 'PreCompact', 'PostCompact', 'SessionStart', 'SessionEnd', 'PermissionRequest'
-    ],
-    // Claude Code takes a list of tool patterns as well as one pattern; a file carrying either
-    // loaded without complaint when it was tried. What that did not establish is whether the
-    // group's hooks then run, which is why BMN answers for neither: a matcher gates the group.
-    matchers: ['string', 'list']
+// Measured against the real CLI, firing a PostToolUse hook on a real tool call: a matcher,
+    // group or entry Claude Code cannot use kills that group and nothing else - a sibling group in
+    // the same event still fired, and so did another event's. So BMN never refuses a Claude file
+    // over a shape; a group it cannot read is simply one it will not answer for.
+    strict: false,
+    // Measured the same way. Only an absent matcher and an empty one fired. `null`, `["Bash"]` and
+    // `42` each did not - so `null` is not absence here, whatever Codex's serde makes of it, and a
+    // list is not a matcher Claude Code honours either.
+    ungated: ['absent', 'empty']
   },
   codex: {
     path: ['.codex', 'hooks.json'],
     events: ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd', 'Interrupt'],
     optional: ['PermissionRequest'],
-    // Codex has no `Notification`; a file carrying one is a Claude file's key, which Codex ignores.
+// Codex deserializes the whole file strictly and its loader refuses it outright on a type
+    // error, so one bad shape anywhere leaves no working hook at all. That is from its source
+    // (`hook_config.rs`, `discovery.rs`) by way of the Epic 15 reviewer, not from a run here.
+    strict: true,
+    // Every event BMN knows Codex has, which is more than it reports on: a shape it cannot read
+    // stops the file loading, and BMN's own events are in that same file. Codex has no
+    // `Notification`; a file carrying one is a Claude file's key, which Codex ignores. This is not
+    // a claim to know them all - a key BMN does not know is left alone, and `unusableShape` says why.
     known: [
       'PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd',
       'Interrupt', 'PermissionRequest', 'PreCompact', 'PostCompact', 'SubagentStart', 'SubagentStop'
     ],
-    // Codex's matcher is one optional pattern. A list fails its schema and its loader refuses the
-    // whole file, so a file carrying one has no working hook at all, whatever else is in it.
+    // Its matcher is `Option<String>`, so `null` deserializes to absence; a list does not
+    // deserialize at all.
+    ungated: ['absent', 'null', 'empty'],
     matchers: ['string']
   }
 }
@@ -719,9 +725,7 @@ function recognisedEntries(agent) {
  * read works - but `check` shows it, because it is the one the owner needs to look at.
  */
 function hookEntryState(command, agent) {
-  // Defence in depth, not a fenced guard: a command of the wrong type makes the whole file
-  // unusable before any event is read, so nothing reaches here with one. It stays because the
-  // last guard removed here on the strength of a green mutation turned out to be load-bearing.
+  // Reachable for a lenient harness, whose file is read rather than refused over a bad entry.
   if (typeof command !== 'string') return 'missing'
   const text = command.replace(SHELL_BLANKS, '')
   if (text === hookEntryCommand(agent)) return 'wired'
@@ -795,15 +799,16 @@ function hookEventState(groups, agent) {
   const gatedEntries = []
   for (const group of groups) {
     if (!isObject(group)) continue
-    // BMN does not read matchers, so it does not answer for an entry inside one. Only the three
-    // shapes that name no tool at all - absent, null, and the empty string - leave a group
-    // ungated; every other matcher gates it, including a whitespace-only one, which is a pattern
-    // that matches no tool name rather than a matcher that is not there.
+    // BMN does not read matchers, so it does not answer for an entry inside one. What counts as
+    // "no matcher" is the harness's business and differs between them: Claude Code fires only for
+    // an absent or empty matcher, while Codex's `Option<String>` makes `null` absence too. Every
+    // other shape gates, including a whitespace-only pattern, which matches no tool name.
     //
-    // This is a recognition policy, not a claim about delivery: a harness may ignore the matcher on
-    // some events (Codex does on `Stop`, `UserPromptSubmit` and `Interrupt`), in which case the
-    // entry `install` adds beside it is a duplicate rather than the only one that works.
-    const gated = group.matcher !== undefined && group.matcher !== null && group.matcher !== ''
+    // Refusing a gated group is a recognition policy, not a claim about delivery: a harness may
+    // ignore the matcher on some events (Codex does on `Stop`, `UserPromptSubmit` and `Interrupt`),
+    // in which case the entry `install` adds beside it is a duplicate rather than the only one
+    // that works.
+    const gated = gatesEvent(group.matcher, agent)
     const entries = Array.isArray(group.hooks) ? group.hooks : []
     for (const entry of entries) {
       // Only a command entry runs anything; another hook type that names bmn still never calls it.
@@ -857,9 +862,14 @@ function unusableShape(data, agent) {
     const groups = data.hooks[event]
     if (groups !== undefined && !Array.isArray(groups)) return `"hooks.${event}" is not a list`
   }
-  // Every event BMN knows this harness has, not only the ones it reports on: a matcher the harness
-  // cannot read stops it loading the file, and it does not matter that the event it sits on is one
-  // BMN never asks about, because the hooks BMN does expect are in the same file.
+  // Past here, only for a harness that refuses the whole file over a shape it cannot read. A
+  // lenient one drops that group and runs everything else, so refusing to add to the file would
+  // stop `install` over a group that is merely dead - the false refusal this check exists to avoid
+  // causing, not to cause.
+  if (!spec.strict) return undefined
+  // Every event BMN knows this harness has, not only the ones it reports on: one bad shape stops
+  // the file loading, and it does not matter that the event it sits on is one BMN never asks
+  // about, because the hooks BMN does expect are in the same file.
   //
   // A key BMN does not know is left alone rather than refused. Both harnesses ignore keys they do
   // not recognise - `_comment` is somebody's note, and a Claude event in a Codex file is a key
@@ -893,10 +903,19 @@ function unusableShape(data, agent) {
   return undefined
 }
 
+/** Whether this matcher leaves its group gated, by what the harness in question treats as absence. */
+function gatesEvent(matcher, agent) {
+  const ungated = HOOK_FILES[agent].ungated
+  if (matcher === undefined) return !ungated.includes('absent')
+  if (matcher === null) return !ungated.includes('null')
+  if (matcher === '') return !ungated.includes('empty')
+  return true
+}
+
 /**
- * Whether a matcher is a shape this harness accepts. Absence is always one of them, and each
- * harness's own set is beside its events in HOOK_FILES. Anything else means the file will not load,
- * so BMN reports it rather than adding to it - somebody's configuration is not something to repair.
+ * Whether a matcher is a shape this harness's parser accepts. Only asked of a harness that refuses
+ * the whole file over one; a lenient harness drops the group it cannot use and loads the rest, so
+ * there is nothing for BMN to report and nothing it should refuse to add to.
  */
 function matcherShape(matcher, agent) {
   if (matcher === undefined || matcher === null) return true
