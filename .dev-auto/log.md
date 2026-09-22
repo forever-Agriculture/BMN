@@ -1725,3 +1725,143 @@ were each worth having:
   is `harmlessBeforeHook`, which looks only at segments before the hook and is RED under mutation.
 
 1,368 unit tests pass over 88 files; lint and typecheck clean.
+
+## 2026-09-22 ~04:10 — owner stop
+
+Owner, verbatim: "wait no, stop everythin, but update sprint-status.yaml"
+
+Stopped immediately. Nothing was applied to the working tree: `apps/desktop/bin/bmn` and the tests
+are untouched at `88eee46`, and `scratchpad/apply-wave7.py` remains a draft. No commit, no push, no
+`pnpm run update:desktop`. The 2026-09-21 overnight-autonomy instruction is superseded by this stop
+until the owner resumes.
+
+Updated at the stop: `_bmad-output/implementation-artifacts/sprint-status.yaml` (15.2 back to
+`in-progress` with the refusal, the receipts and the undecided narrowing named; 15.1 left at
+`review` with no open finding; `epic-15` marked stopped and not accepted) and `.dev-auto/handoff.md`
+(explicit stop, PAUSED status, open owner decision, no next safe action without the owner).
+
+### Both wave-6 verdicts on `88eee46`: REFUSED, not dispositioned
+
+- gpt-6-astra/medium recheck 6 — `scratchpad/reviews/epic-15-recheck6-astra.md`. Reproduced against
+  the real CLI plus a stub shell: `command cat >/dev/null; bmn hook claude`, `! cat >/dev/null; …`,
+  `if read x; then :; fi; …`, `select x in one; do bmn hook claude; break; done`,
+  `echo "$(cat)" >/dev/null; bmn hook claude`, `fi; if true; then bmn hook claude`,
+  `bmn hook claude 3>&- 2>&3`, `bmn hook claude 2>&'3'`, `true;; bmn hook claude`,
+  `bmn hook "claude`, `bmn hook claude &&` — every one read `wired (older wording)` with no report.
+  Also the converse: `if true; then if true; then bmn hook claude; fi; fi` reports but reads missing.
+- GLM-5.3/max extra 6 — `scratchpad/reviews/epic-15-extra6-glm53.json` ($1.69, 6 turns, read tools
+  only). Reached the same two root causes independently: `harmlessBeforeHook` vouches for a whole
+  segment from its first word while `if`/`while`/`until`/`then`/`do`/`!`/`command` put real commands
+  after it in that same segment, and counting openers/closers never establishes that the shell would
+  parse the result. It confirmed the descriptor, pipe, background, substitution and `linkTarget`
+  handling as correct, and flagged that the differential oracle only ever runs `/bin/bash`.
+
+That is seven rounds and roughly fifty false positives, every one in the direction that leaves the
+owner with no hook and no warning.
+
+### The undecided narrowing (drafted, NOT applied)
+
+`scratchpad/apply-wave7.py` deletes the ~330-line shell grammar (`bin/bmn:663-998`) and recognises
+three exact strings per agent, compared whole after trimming and never parsed: the entry BMN writes,
+its older `$AITERM_CONTROL_SOCKET` wording, and the bare `bmn hook <agent>`. Cost: a duplicate entry
+beside any hand-written variant, since `install` never removes or rewrites what is already there.
+Benefit: no command can be read wrongly because none is being read. `epics.md:785` still gets
+`wired (older wording)` for an entry that mentions `bmn hook <agent>` but differs. Reversible from
+git history. Applying it also requires rewriting the recognition table and the differential test in
+`apps/desktop/src/utility/control-cli.test.ts` and the grammar section of `docs/agent-control.md`,
+then a fresh fence run and a recheck. This is the owner's call to confirm on resume.
+
+## 2026-09-22 08:30 — owner resumed, scoped to Epic 15
+
+Owner, verbatim: `/dev-auto 15`
+
+That clears the 04:10 stop and narrows the run: Epics 16 and 18 leave the selected scope until the
+owner selects them again. Push, merge and `pnpm run update:desktop` are **not** re-authorized — the
+overnight instruction that allowed them died with the stop, and a resume is not a new grant.
+
+### The narrowing, decided rather than asked
+
+The handoff left the narrowing as the owner's call. I made it, under the standing delegation of
+design and methodology decisions. Two things settled it:
+
+- I read the owner's real files before deciding. `~/.claude/settings.json` (6 events) and
+  `~/.codex/hooks.json` (7 events) carry the `$AITERM_CONTROL_SOCKET` entry **byte-for-byte**, so
+  the case `epics.md:785` names by hand still reports `wired (older wording)` under exact matching.
+- Seven rounds had produced roughly fifty false positives, every one in the direction that leaves
+  the owner with no hook and no warning. The grammar was not converging; each repair created the
+  next round's defects.
+
+One addition to the drafted patch: an entry that mentions `bmn hook <agent>` without being
+recognised reads `missing` **and is printed under the event**. The drafted version was silent about
+it, which would have traded a false "wired" for an unexplained duplicate.
+
+### Wave 7 — `0de0e45`
+
+`apps/desktop/bin/bmn:663-998` deleted: 338 lines of shell grammar. `recognisedEntries`,
+`hookEntryState`, `oneLine` and a rewritten `hookEventState` replace it; `checkHooks` carries the
+unrecognised commands into the report and `describeHookCheck` prints them. Tests: the recognition
+table became five `wired` rows plus ~85 `missing` rows (every false positive the seven rounds
+produced), the differential run against a real bash was scoped to the commands BMN accepts, and
+five tests were added for the note, install-beside and convergence. `docs/agent-control.md:208-240`
+rewritten.
+
+Before touching the tests I ran every command both reviewers reproduced at `88eee46` through the
+real binary: all read `missing`, each with a note.
+
+**Fences: 11/15 RED on the first pass** (`fences-15-wave7.log`). The four GREENs were each a missing
+test rather than a wrong guard — whole-command comparison, the agent's part in an entry's identity,
+the unusable-file guard and a non-string command. Four tests added; the same four probes re-run all
+RED (`fences-15-wave7b.log`). The union is 15/15, and the commit message's "15 mutation probes, all
+RED" is that union across two logs, which Astra and GLM both flagged as unsupported by the single
+log named. Recorded here rather than restated.
+
+### Both reviews of `0de0e45`: REFUSED, one defect, found independently
+
+- gpt-6-astra/medium recheck 7 — `reviews/epic-15-recheck7-astra.md`. 642,274 input / 3,407 output.
+- GLM-5.3/max extra 7 — `reviews/epic-15-extra7-glm53.json`, $1.04, 23 turns, read tools only.
+
+**The blocker, reached by both: `String.prototype.trim()` is not bash's.** JavaScript drops every
+Unicode whitespace — NBSP, BOM, VT, FF, CR, U+2028/9, U+3000, U+202F, U+2000–200A — and bash drops
+only space, tab and newline. So a leading non-breaking space trimmed away to a recognised string and
+read `wired`, while bash looked for a program named `<NBSP>bmn` and reported nothing. Astra
+reproduced two cases, GLM derived the same from the character classes and named the paste-corruption
+path that makes it plausible: `docs/agent-control.md` tells the owner to paste the entry exactly.
+
+I reproduced **eight** UNSAFE cases myself through the real CLI and a real bash with a reporting
+stub before repairing: leading NBSP on both the bare and documented forms, BOM, U+2028, U+3000, and
+trailing NBSP, FF, VT and CR. Trailing newline, space padding and tab padding are safe and still
+read wired — bash drops those.
+
+### Wave 8 — `a8bf6b2`, every finding dispositioned
+
+Closed with a test and a RED fence:
+
+1. **The trim blocker.** `SHELL_BLANKS = /^[ \t\n]+|[ \t\n]+$/g`. Zero UNSAFE across the fifteen
+   whitespace shapes after the fix. 17 table rows and the padded forms added to the differential run.
+2. **Matcher-gated groups** (GLM 2). An entry inside a group whose `matcher` is a non-empty string
+   wires the event only for the tools it names, so it now reads `missing` and is named; an empty
+   matcher gates nothing and still counts. Two tests, two fences.
+3. **The note's trigger was stricter than the docs implied** (GLM 5). It now reads the
+   whitespace-collapsed command, so `bmn  hook claude` — the docs' own near-miss example — is named.
+4. **`HOOKS_USAGE` still described the deleted grammar** (GLM 3). Rewritten to the three-form contract.
+5. **The convergence test's optional-row assertion was `expect(true).toBe(true)`** (both reviewers).
+   Replaced with an assertion over the required rows plus the optional row's actual state.
+6. **Docs: "either entry may be removed" was unqualified** (Astra 4). BMN no longer knows whether a
+   custom entry works, so the docs now say to confirm it delivers before removing BMN's, and that
+   doing so puts the event back to `missing`.
+7. **The three copyable examples carried inline `# wired` comments** (Astra 4) which would themselves
+   have made the pasted strings unrecognised. Split into three plain blocks.
+8. **Test comment claimed the whitespace belonged to JSON formatting** (Astra 5) — it does not; the
+   comment now says which blanks bash drops and why only those are ignored.
+9. **The parameterised title printed the command where it implied the state** (Astra 5). Tuple
+   reordered to `[label, state, command]`.
+
+**Rejected, with the refutation:** nothing. Every material finding from both reviews is closed above.
+
+**Recorded intent change, the fifth.** Astra 1: the narrowing does not merely satisfy AC1, it
+changes it. `epics.md:785` says `wired (older wording)` covers a command that *mentions*
+`bmn hook <agent>` but differs from the documented one; under the three-form contract such a command
+reads `missing` with a printed note. Astra's own conclusion is that the direction is right and AC1
+should be amended to the three-form contract rather than the grammar restored. `epics.md` is a
+planning artifact and is not edited from inside a build run — the four earlier intent changes were
+recorded here the same way. **This one is for the owner to fold into the story text.**
