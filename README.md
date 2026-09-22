@@ -3,57 +3,73 @@
 *Be a man: use a proper terminal.*
 
 A desktop terminal for working with coding agents on Linux and macOS. It runs your shells and your
-installed agent CLIs (Claude Code, Codex, or any other command) in real terminals, keeps them
-organized in workspaces, and gives the agents a small local API for sharing files, reporting
+installed agent CLIs (Claude Code, Codex, OpenCode, or any other command) in real terminals, keeps
+them organized in workspaces, and gives the agents a small local API for sharing files, reporting
 progress and asking for your attention.
 
 Everything runs on your computer. There is no account, cloud backend or telemetry.
 
 > Status: early and personal. It is built and used on Ubuntu 24.04 (x64), and builds and runs on
-> macOS (Apple Silicon). Other Linux distributions may work; Windows is not supported.
+> macOS (Apple Silicon). Other Linux distributions may work; Windows is not supported. There are no
+> distribution packages: the build is an unpacked folder for the computer that made it, and the
+> macOS build is ad-hoc signed, so it is not distributable.
+
+New here? The [feature guide](docs/features.md) walks through the main workflows — launching
+and resuming sessions, answering agents, files, voice, Telegram, backups — and says where each
+feature stops. This page sums up the product and how to install it.
 
 ## What it does
 
 - **Workspaces and sessions.** Named workspaces hold independent sessions. A session is a shell,
-  Claude Code, Codex, OpenCode, or any command, with its own working directory. Launch templates, rename,
-  archive and edit launch settings. Layout, order and selection survive a restart, but nothing
-  starts automatically; after an update or a quit, BMN offers to resume what the stop interrupted,
-  in one dialog that shows each command and starts nothing until you press the button.
-- **Real terminals.** Each session is a real PTY rendered by one live [xterm.js](https://xtermjs.org/)
-  view. There is no tmux layer and no replayed output, so key encodings, colors, bell and OSC
-  notifications reach the program unchanged. Your CLIs keep their own configuration,
-  authentication, hooks and permissions.
-- **Process control.** Stop a process and keep its last screen as saved output. Start it again, or
-  resume the stored Claude Code / Codex / OpenCode conversation through the CLI's own resume.
-  Closing the window with sessions running asks whether to keep them running or stop them.
+  Claude Code, Codex, OpenCode, or any command, with its own working directory. Launch templates,
+  rename, archive and edit launch settings. Layout, order and selection survive a restart, but
+  nothing starts automatically; after an update or a quit, BMN offers to resume what the stop
+  interrupted, in one dialog that shows each command and starts nothing until you press the button.
+  ([Workspaces and sessions](docs/features.md#workspaces-and-sessions))
+- **Real terminals.** Each session is a real PTY rendered by one live
+  [xterm.js](https://xtermjs.org/) view. There is no tmux layer and no replayed output, so key
+  encodings, colors, bell and OSC notifications reach the program unchanged. Your CLIs keep their
+  own configuration, authentication, hooks and permissions.
+  ([The terminal and panes](docs/features.md#the-terminal-and-panes))
+- **Process control and resume.** Stop a process and keep its last screen as saved output. Start it
+  again, or resume the stored Claude Code / Codex / OpenCode conversation through the CLI's own
+  resume. When you close the window, BMN asks about sessions set to **Ask** and applies saved
+  keep-running or stop choices for the others.
   [What survives](docs/architecture.md#what-survives) says what each ending keeps.
+  ([Process lifecycle and resume](docs/features.md#process-lifecycle-and-resume))
 - **Agent control (`bmn`).** Every session gets the `bmn` command. An agent can list sessions,
-  publish a file, report progress, ask you a question, prepare an owner-delivered handoff, or send text to its own session. Each session
-  gets a token scoped to that session. `bmn hooks check` says which of BMN's hook entries each
-  harness's own settings file carries, and `bmn hooks install <agent>` adds the missing ones without
-  touching anything else. See [docs/agent-control.md](docs/agent-control.md).
+  publish a file, report progress, ask you a question, prepare an owner-delivered handoff, or send
+  text to its own session. Each session gets a token scoped to that session. `bmn hooks check` says
+  which of BMN's hook entries each harness's own settings file carries, and
+  `bmn hooks install <agent>` adds the missing ones without touching anything else.
+  ([Agent attention](docs/features.md#agent-attention-needs-you-progress-and-handoffs),
+  [docs/agent-control.md](docs/agent-control.md))
+- **Needs you.** Agent questions stay open until you answer them or the agent withdraws them. A
+  header count and `Ctrl+Shift+U` take you to the next one. Progress reports are shown as the
+  agent's claims, with any files it published as evidence.
 - **Files.** Published files, attachments and pasted images are stored as immutable originals with
   a hash. The Files panel previews them and offers Open, Save As, Show in Folder and Deliver to
-  session.
+  session. ([Files and file references](docs/features.md#files-and-file-references))
 - **File references.** `Ctrl+click` a path an agent printed, such as `src/parser.ts:42:7`, or use
-  **Open file reference…** in the palette, to see a read-only snapshot of that file at the line, with
-  Copy reference and Show in Folder. Relative paths resolve from the session's launch directory, which
-  the preview names; you can pick another folder for one opening. Nothing is edited, run or stored.
-- **Needs you.** Agent questions stay open until you answer them or the agent withdraws them. A
-  header count and `Ctrl+Shift+U` take you to the next one.
-- **Local voice dictation.** Hold Space in any terminal to talk; release to paste the text into
-  the session, without pressing Enter. Transcription runs on your CPU with
+  **Open file reference…** in the palette, to see a read-only snapshot of that file at the line,
+  with Copy reference and Show in Folder. Relative paths resolve from the session's launch
+  directory, which the preview names; you can pick another folder for one opening. Nothing is
+  edited, run or stored.
+- **Local voice dictation.** Hold Space in any terminal to talk; release to paste the text into the
+  session, without pressing Enter. Transcription runs on your CPU with
   [whisper.cpp](https://github.com/ggml-org/whisper.cpp). No audio leaves the computer. Approve
-  suggested project names and identifiers once, and Whisper gets them as a hint. See
-  [docs/voice.md](docs/voice.md).
+  suggested project names and identifiers once, and Whisper gets them as a hint.
+  ([Voice dictation](docs/features.md#voice-dictation), [docs/voice.md](docs/voice.md))
 - **Optional Telegram.** Connect your own bot to get a message when a session needs you, and reply
-  to that message to answer the session. See [docs/telegram.md](docs/telegram.md).
-- **Backups.** Export a consistent snapshot of the database and stored files with a hash
-  manifest, and verify it later.
-- **Appearance.** Four color palettes for the app and the terminal: near-black Black (default), Steel,
-  Brown and Dark, plus a Knight, Cross or Boss header.
-- **Keyboard first.** `Ctrl+Shift+P` opens the command palette, and every action is reachable
-  from the keyboard.
+  to that message to answer the session. ([Telegram](docs/features.md#telegram),
+  [docs/telegram.md](docs/telegram.md))
+- **Backups.** Export a consistent snapshot of the database and stored files with a hash manifest,
+  and verify it later. ([Backups](docs/features.md#backups))
+- **Appearance.** Four color modes for the app and the terminal: near-black Black (default), Steel,
+  Brown and Dark, plus a Knight, Cross or Boss header identity.
+  ([Customization](docs/features.md#customization))
+- **Keyboard first.** `Ctrl+Shift+P` opens the command palette to search commands, workspaces and
+  sessions. Shortcuts handle navigation and common terminal actions.
 
 ## Keyboard
 
@@ -77,8 +93,18 @@ Everything runs on your computer. There is no account, cloud backend or telemetr
 
 Selecting text with the mouse copies it. Right-click goes to programs that read the mouse, such as
 vim, unless you hold Shift. While such a program reads the mouse, `Ctrl+click` belongs to it too;
-use **Open file reference…** in the palette instead. Send a literal `Ctrl+V` with `Ctrl+Shift+\` first. The shortcuts are
-the same on macOS: they use `Ctrl`, not `Cmd`, so the keys a terminal program expects reach it.
+use **Open file reference…** in the palette instead. Send a literal `Ctrl+V` with `Ctrl+Shift+\`
+first. The shortcuts are the same on macOS: they use `Ctrl`, not `Cmd`, so the keys a terminal
+program expects reach it.
+
+## Documentation
+
+- [Features](docs/features.md): a user guide to the main workflows and their limits
+- [Architecture](docs/architecture.md): processes, data flow and the rules they follow
+- [Agent control](docs/agent-control.md): the `bmn` command and its local API
+- [Voice dictation](docs/voice.md): engine, models, speed and privacy
+- [Telegram](docs/telegram.md): connecting your own bot
+- [Development](docs/development.md): building, testing, packaging and troubleshooting
 
 ## Install from source
 
@@ -117,7 +143,8 @@ pnpm run install:desktop              # copies BMN.app into ~/Applications
 
 On Ubuntu 24.04 and later, AppArmor blocks the user namespaces that Chromium's sandbox needs. If
 the app exits immediately with `SIGTRAP`, install the AppArmor profile described in
-[docs/development.md](docs/development.md#ubuntu-2404-apparmor). The app never turns the sandbox off.
+[docs/development.md](docs/development.md#ubuntu-2404-apparmor). The app never turns the sandbox
+off.
 
 To try it without touching your real data, run the development build. It uses a throwaway
 temporary folder:
@@ -125,6 +152,23 @@ temporary folder:
 ```bash
 pnpm --filter @bmn/desktop run dev
 ```
+
+## Your first session
+
+1. Press `Ctrl+Shift+P`, choose **New workspace…**, and name a project. You can give it a default
+   directory.
+2. Choose **New session…** in that workspace. Pick a launch template or enter a command and working
+   directory. A shell works without agent integration; an agent CLI uses its own existing settings
+   and authentication.
+3. Use the terminal normally. `Ctrl+Shift+Enter` opens a second session beside it; the Files panel
+   accepts attachments and shows agent-published output.
+4. If you use Claude Code, Codex or OpenCode, run `bmn hooks check` inside its session to see
+   whether its questions can appear in **Needs you**. `bmn hooks install <agent>` adds missing BMN
+   entries after backing up the harness settings file.
+5. Stop a session to keep its saved screen. **Start again** runs a fresh process; **Resume** reopens
+   a conversation BMN knows, after showing the command it will run.
+
+The [feature guide](docs/features.md) follows each workflow in more detail.
 
 ## Where data lives
 
@@ -140,14 +184,6 @@ The `XDG_*` variables are respected. Folders are created owner-only. macOS sets 
 other three folders are the same as on Linux. Existing installations continue using legacy
 `ai-terminal` config, data and state folders when those already exist; BMN leaves them in place
 rather than risking an automatic move.
-
-## Documentation
-
-- [Architecture](docs/architecture.md): processes, data flow and the rules they follow
-- [Agent control](docs/agent-control.md): the `bmn` command and its local API
-- [Voice dictation](docs/voice.md): engine, models, speed and privacy
-- [Telegram](docs/telegram.md): connecting your own bot
-- [Development](docs/development.md): building, testing, packaging and troubleshooting
 
 ## Privacy and security
 

@@ -6,8 +6,9 @@ session. It uses a bot you create and own. It is off by default.
 ## What it does
 
 - When an agent asks for your attention (`bmn ask`, `bmn handoff`, or a Claude Code, Codex or OpenCode hook), the bot
-  sends you the request, but only while you are away from the desk and the request is still
-  unanswered. Claude sessions connected to Remote Control are left to the Claude app. Optionally it
+  sends you the request while you are away from the desk and the request is still unanswered. If
+  BMN cannot read idle time, it treats you as away. On Linux, Claude sessions connected to Remote
+  Control are left to the Claude app; that detection is unavailable on macOS. Optionally it
   also tells you when a session's process exits while you are away. See
   [agent-control.md](agent-control.md#agent-hooks-needs-you-for-claude-code-codex-and-opencode).
 - Reply to that message in Telegram. By default the reply is saved as a **draft** for that exact

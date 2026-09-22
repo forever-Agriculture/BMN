@@ -49,13 +49,13 @@ read-only plain-text snapshot of the live screen, written periodically, on stop 
 renderer crash, a new view is created and the program is asked to repaint; the process keeps
 running.
 
-**Windows and processes have separate lifetimes.** Closing the window never silently kills a
-process. With sessions running, Close asks whether to keep them running (the window minimizes) or
-stop them; Quit lists the running sessions and asks first. A Stop whose outcome is unknown keeps
-the process listed as *exit unconfirmed* until the host reports the exit. Launching the app again
-brings the existing window forward. After a crash or reboot, earlier processes are marked
-interrupted and nothing restarts on its own; Resume reopens a Claude Code or Codex conversation
-through the CLI's own resume.
+**Windows and processes have separate lifetimes.** Closing the window applies each session's
+saved keep-running or stop choice; it asks about running sessions set to Ask. Keeping a session
+running minimizes the window. Quit lists the running sessions and asks first. A Stop whose outcome
+is unknown keeps the process listed as *exit unconfirmed* until the host reports the exit.
+Launching the app again brings the existing window forward. After a crash or reboot, earlier
+processes are marked interrupted and nothing restarts on its own; Resume reopens a known Claude
+Code, Codex or OpenCode conversation through its CLI.
 
 **A narrow local control boundary.** Agents use JSON-RPC over a Unix socket in an owner-only
 runtime folder. There is no TCP listener. Each session receives a token that only works for that
