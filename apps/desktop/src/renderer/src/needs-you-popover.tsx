@@ -79,12 +79,12 @@ export function NeedsYouPopover(props: {
         </p>
         <div className="actions">
           <button type="button" className="primary" onClick={() => props.onOpenSession(request.sessionId, request)}>
-            {actionable ? 'Open session' : 'Open update'}
+            {request.kind === 'handoff' ? 'Open handoff' : actionable ? 'Open session' : 'Open update'}
           </button>
           <button type="button" onClick={() => props.onAcknowledge(request)} disabled={actionable && !!request.seenAt}>
             {actionable ? 'Acknowledge' : 'Dismiss'}
           </button>
-          {actionable ? (
+          {actionable && request.kind !== 'handoff' ? (
             <button type="button" className="ghost" title="Close this request after answering it in the terminal" onClick={() => props.onMarkAnswered(request)}>
               Mark answered
             </button>

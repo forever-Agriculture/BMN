@@ -289,12 +289,25 @@ export function closeAttention(
   return getAttention(database, row.request_id)
 }
 
-export function expireAttention(database: DatabaseConnection, now: string): number {
+export function expireAttention(database: DatabaseConnection, now: string, activeDraftIds: readonly string[] = []): number {
+  // Protect only active owner operations. A recovered uncertain paste has no such operation;
+  // its petition may expire while the draft keeps its truthful uncertain state.
   const result = database.prepare(
     `UPDATE attention_request SET state = 'expired', resolved_at = ?, resolved_by = 'expiry',
        revision = revision + 1
-     WHERE state = 'open' AND expires_at IS NOT NULL AND expires_at <= ?`
-  ).run(now, now)
+     WHERE state = 'open' AND expires_at IS NOT NULL AND expires_at <= ?
+       AND NOT (kind = 'handoff' AND EXISTS (
+         SELECT 1 FROM input_draft AS draft
+         WHERE draft.request_id = attention_request.request_id
+           AND draft.prepared_by = 'agent'
+           AND draft.draft_id IN (SELECT value FROM json_each(?))
+       ))`
+  ).run(now, now, JSON.stringify(activeDraftIds))
+  database.prepare(
+    `UPDATE input_draft SET state = 'discarded', detail = 'The handoff request expired', updated_at = ?
+     WHERE prepared_by = 'agent' AND state = 'draft' AND request_id IN
+       (SELECT request_id FROM attention_request WHERE state = 'expired')`
+  ).run(now)
   return Number(result.changes)
 }
 
@@ -515,6 +528,7 @@ interface DraftRow {
   origin: 'telegram' | 'control' | 'handoff'
   origin_key: string | null
   source_session_id: string | null
+  prepared_by: 'agent' | null
   request_id: string | null
   text: string | null
   artifact_id: string | null
@@ -532,6 +546,7 @@ function draftFromRow(row: DraftRow): InputDraftRecord {
     sessionId: row.session_id,
     origin: row.origin,
     sourceSessionId: row.source_session_id,
+    preparedBy: row.prepared_by,
     requestId: row.request_id,
     text: row.text,
     artifactId: row.artifact_id,
@@ -547,11 +562,12 @@ function draftFromRow(row: DraftRow): InputDraftRecord {
 /** A draft keyed by its origin (for example one Telegram update) is created once. */
 export function createDraft(
   database: DatabaseConnection,
-  draft: Omit<InputDraftRecord, 'createdAt' | 'updatedAt' | 'sourceSessionId' | 'artifactIds' | 'attemptedIncarnationId'> & {
+  draft: Omit<InputDraftRecord, 'createdAt' | 'updatedAt' | 'sourceSessionId' | 'artifactIds' | 'attemptedIncarnationId' | 'preparedBy'> & {
     originKey: string | null
     sourceSessionId?: string | null
     artifactIds?: string[]
     attemptedIncarnationId?: string | null
+    preparedBy?: 'agent' | null
   },
   now: string
 ): { record: InputDraftRecord; created: boolean } {
@@ -564,8 +580,8 @@ export function createDraft(
   database.prepare(
     `INSERT INTO input_draft(
        draft_id, session_id, origin, origin_key, source_session_id, request_id, text, artifact_id,
-       artifact_ids_json, attempted_incarnation_id, state, detail, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       artifact_ids_json, attempted_incarnation_id, state, detail, created_at, updated_at, prepared_by
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     draft.draftId,
     draft.sessionId,
@@ -580,7 +596,8 @@ export function createDraft(
     draft.state,
     draft.detail,
     now,
-    now
+    now,
+    draft.preparedBy ?? null
   )
   return { record: getDraft(database, draft.draftId), created: true }
 }
@@ -698,7 +715,141 @@ export function finishHandoffDraft(
   }
   database.prepare('UPDATE input_draft SET state = ?, detail = ?, updated_at = ? WHERE draft_id = ?')
     .run(state, detail, monotonicDraftTime(current.updatedAt, now), draftId)
+  if (state === 'accepted' && current.preparedBy === 'agent' && current.requestId) {
+    if (getAttention(database, current.requestId).state === 'open') {
+      closeAttention(database, { requestId: current.requestId }, 'answered', 'pasted, not submitted', now, 'owner')
+    }
+  }
   return getDraft(database, draftId)
+}
+
+/** One worker transaction owns the cap, draft and source request, so no partial petition appears. */
+export function prepareAgentHandoff(database: DatabaseConnection, p: {
+  draftId: string
+  requestId: string
+  sourceSessionId: string
+  sourceIncarnationId: string
+  destinationSessionId: string
+  destinationName: string
+  text: string
+  artifactIds: string[]
+}, now: string): { draftId: string; requestId: string; state: 'draft' } {
+  const pending = database.prepare(
+    "SELECT COUNT(*) AS count FROM input_draft WHERE prepared_by = 'agent' AND source_session_id = ? AND state = 'draft'"
+  ).get(p.sourceSessionId) as { count: number }
+  if (pending.count >= 3) invalid('This session already has three pending handoffs')
+  const recent = database.prepare(
+    "SELECT created_at FROM input_draft WHERE prepared_by = 'agent' AND source_session_id = ? ORDER BY created_at DESC LIMIT 1"
+  ).get(p.sourceSessionId) as { created_at: string } | undefined
+  if (recent && Date.parse(now) - Date.parse(recent.created_at) < 10_000) {
+    invalid('Wait 10 seconds before preparing another handoff')
+  }
+  createDraft(database, {
+    draftId: p.draftId,
+    sessionId: p.destinationSessionId,
+    origin: 'handoff',
+    originKey: null,
+    sourceSessionId: p.sourceSessionId,
+    requestId: p.requestId,
+    text: p.text,
+    artifactId: null,
+    artifactIds: p.artifactIds,
+    attemptedIncarnationId: null,
+    state: 'draft',
+    detail: null,
+    preparedBy: 'agent'
+  }, now)
+  const titlePrefix = 'Asks to hand off to "'
+  const title = `${titlePrefix}${p.destinationName.slice(0, 200 - titlePrefix.length - 1)}"`
+  const body = `${p.text.slice(0, 200)}${p.artifactIds.length ? `\n${p.artifactIds.length} files` : ''}`
+  openAttention(database, {
+    sessionId: p.sourceSessionId,
+    incarnationId: p.sourceIncarnationId,
+    requestKey: `handoff:${p.draftId}`,
+    kind: 'handoff',
+    title,
+    body,
+    expiresAt: new Date(Date.parse(now) + 24 * 60 * 60 * 1000).toISOString(),
+    origin: 'cli'
+  }, p.requestId, now)
+  return { draftId: p.draftId, requestId: p.requestId, state: 'draft' }
+}
+
+/** A token reads only its own agent-prepared metadata, never the owner's edits or other sessions. */
+export interface AgentHandoffSummary {
+  draftId: string
+  destinationSessionId: string
+  state: InputDraftState
+  updatedAt: string
+}
+
+export function listAgentHandoffs(database: DatabaseConnection, sourceSessionId: string): AgentHandoffSummary[] {
+  const rows = database.prepare(
+    "SELECT draft_id, session_id, state, updated_at FROM input_draft WHERE prepared_by = 'agent' AND source_session_id = ? ORDER BY created_at DESC"
+  ).all(sourceSessionId) as Pick<DraftRow, 'draft_id' | 'session_id' | 'state' | 'updated_at'>[]
+  return rows.map((row) => ({
+    draftId: row.draft_id, destinationSessionId: row.session_id,
+    state: row.state, updatedAt: row.updated_at
+  }))
+}
+
+/** The source may withdraw its petition, but an owner-edited draft remains for the owner to judge. */
+export function withdrawAgentHandoff(
+  database: DatabaseConnection, sourceSessionId: string, draftId: string, now: string
+): AttentionRecord {
+  const draft = getDraft(database, draftId)
+  if (draft.preparedBy !== 'agent' || draft.sourceSessionId !== sourceSessionId ||
+      draft.state !== 'draft' || !draft.requestId) {
+    invalid('Only an open handoff from this session can be withdrawn')
+  }
+  const request = getAttention(database, draft.requestId)
+  if (request.state !== 'open' || request.sessionId !== sourceSessionId ||
+      request.requestKey !== `handoff:${draftId}`) {
+    invalid('Only an open handoff from this session can be withdrawn')
+  }
+  if (draft.updatedAt === draft.createdAt) {
+    updateDraft(database, draftId, 'discarded', 'Withdrawn by the agent', now)
+  } else {
+    updateDraft(database, draftId, 'draft', "The agent withdrew this; the owner's edits are kept", now)
+    appendAttentionBody(database, draft.requestId,
+      `${request.body ?? ''}\nThe agent withdrew this; the owner's edits are kept`.trim())
+  }
+  return closeAttention(database, { requestId: draft.requestId }, 'withdrawn', 'withdrawn by agent', now, 'cli')
+}
+
+/** Owner discard and its attention resolution are one stored outcome. */
+export function discardHandoffDraft(database: DatabaseConnection, draftId: string, now: string): InputDraftRecord {
+  const draft = getDraft(database, draftId)
+  if (draft.origin === 'handoff' && draft.state !== 'draft') invalid('Only an unsent handoff can be discarded')
+  const record = updateDraft(database, draftId, 'discarded', null, now)
+  if (draft.preparedBy === 'agent' && draft.requestId) {
+    const request = getAttention(database, draft.requestId)
+    if (request.state === 'open') {
+      closeAttention(database, { requestId: draft.requestId }, 'answered', 'discarded', now, 'owner')
+    }
+  }
+  return record
+}
+
+/** A restarted source makes its old petition visibly stale without changing the draft's state. */
+export function markStaleAgentHandoffs(
+  database: DatabaseConnection, liveIncarnations: Readonly<Record<string, string>>
+): number {
+  const rows = database.prepare(
+    `SELECT a.request_id, a.body, a.incarnation_id, d.source_session_id
+     FROM attention_request a JOIN input_draft d ON d.request_id = a.request_id
+     WHERE d.prepared_by = 'agent' AND d.state = 'draft' AND a.state = 'open'`
+  ).all() as { request_id: string; body: string | null; incarnation_id: string | null; source_session_id: string }[]
+  let changed = 0
+  for (const row of rows) {
+    const current = liveIncarnations[row.source_session_id]
+    if (!current || current === row.incarnation_id) continue
+    if (row.body?.includes('prepared by an earlier process of this session')) continue
+    appendAttentionBody(database, row.request_id,
+      `${row.body ?? ''}\nprepared by an earlier process of this session`.trim())
+    changed += 1
+  }
+  return changed
 }
 
 export function listDrafts(database: DatabaseConnection): InputDraftRecord[] {
@@ -909,6 +1060,11 @@ export const COMPANION_OPERATIONS = Object.freeze({
   updateHandoffDraft,
   claimHandoffDraft,
   finishHandoffDraft,
+  prepareAgentHandoff,
+  listAgentHandoffs,
+  withdrawAgentHandoff,
+  discardHandoffDraft,
+  markStaleAgentHandoffs,
   listDrafts,
   putTelegramMessage,
   getTelegramMessage,

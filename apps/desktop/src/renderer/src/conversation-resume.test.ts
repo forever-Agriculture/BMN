@@ -66,4 +66,19 @@ describe('the confirmation shown before Resume starts anything', () => {
     expect(resumeConfirmationPresentation({ ...preview, agentCli: 'claude' }, 'Review').message)
       .toBe('Resume the Claude Code conversation in "Review". This command runs:')
   })
+
+  it('names OpenCode and shows its own session command', () => {
+    const shown = resumeConfirmationPresentation({
+      ...preview,
+      agentCli: 'opencode',
+      conversationReference: 'ses_f5656e404ffehVbLiXJ8YHJQjV',
+      command: '/usr/bin/opencode --session ses_f5656e404ffehVbLiXJ8YHJQjV --model provider/model',
+      notCarried: '--prompt'
+    }, 'Research')
+    expect(shown).toEqual({
+      message: 'Resume the OpenCode conversation in "Research". This command runs:',
+      command: '/usr/bin/opencode --session ses_f5656e404ffehVbLiXJ8YHJQjV --model provider/model',
+      notCarried: { names: '--prompt', reason: 'opencode resume does not accept them.' }
+    })
+  })
 })

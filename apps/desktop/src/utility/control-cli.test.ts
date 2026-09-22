@@ -1,7 +1,10 @@
 // MODULE: control-cli.test.ts - the bmn CLI drives a real control server with truthful output and exit codes
 import { execFile } from 'node:child_process'
+import { createServer } from 'node:net'
 import { existsSync } from 'node:fs'
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { stripTypeScriptTypes } from 'node:module'
+import { runInNewContext } from 'node:vm'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -65,6 +68,7 @@ async function cliFixture() {
     publishArtifact: vi.fn(async (): Promise<unknown> => ({ artifactId: 'artifact-1' })),
     reportProgress: vi.fn<ControlHandlers['reportProgress']>(async () => ({ recorded: true })),
     openAttention: vi.fn<ControlHandlers['openAttention']>(async () => ({ opened: true })),
+    prepareHandoff: vi.fn(async (): Promise<unknown> => ({ draftId: 'draft-1', requestId: 'request-1', state: 'draft' })),
     reportRefusal: vi.fn<ControlHandlers['reportRefusal']>(),
     observeConversation: vi.fn<ControlHandlers['observeConversation']>(async () => ({ accepted: true, detail: 'observed' })),
     withdrawAttention: vi.fn<ControlHandlers['withdrawAttention']>(async () => ({ withdrawn: true })),
@@ -318,6 +322,48 @@ async function runHook(
     input: JSON.stringify(event)
   })
 }
+
+describe('bmn handoff CLI', () => {
+  it('prepares once with a required key and exact source token, then reads bounded status', async () => {
+    const fixture = await cliFixture()
+    const args = ['handoff', 'session-2', '--text', 'A result', '--file-id', 'output-1', '--key', 'handoff-1']
+    const first = await runCli(args, { env: fixture.sessionEnv })
+    const repeat = await runCli(args, { env: fixture.sessionEnv })
+
+    expect(first).toEqual({ code: 0, stdout: 'Handoff prepared as draft draft-1; the owner must deliver it\n', stderr: '' })
+    expect(repeat.stdout).toContain('already done earlier; not repeated')
+    expect(fixture.handlers.prepareHandoff).toHaveBeenCalledTimes(1)
+    expect(fixture.handlers.prepareHandoff).toHaveBeenCalledWith({
+      sourceSessionId: 'session-1', sourceIncarnationId: 'incarnation-1',
+      destinationSessionId: 'session-2', text: 'A result', artifactIds: ['output-1']
+    })
+
+    fixture.handlers.snapshot.mockResolvedValue({ watermark: 14, sessions: [], attention: [],
+      handoffs: [{ draftId: 'draft-1', destinationSessionId: 'session-2', state: 'accepted',
+        updatedAt: '2026-09-22T12:00:00.000Z' }] })
+    const status = await runCli(['handoff', 'status', 'draft-1'], { env: fixture.sessionEnv })
+    expect(status.stdout).toBe('draft-1\tpasted (not submitted)\tsession-2\t2026-09-22T12:00:00.000Z\n')
+    expect(status.stdout).not.toContain('A result')
+  })
+
+  it('takes literal text after -- and refuses missing keys, duplicate IDs and cross-session options', async () => {
+    const fixture = await cliFixture()
+    const literal = await runCli(['handoff', 'session-2', '--key', 'literal-1', '--', 'first', 'second'], {
+      env: fixture.sessionEnv
+    })
+    expect(literal.code).toBe(0)
+    expect(fixture.handlers.prepareHandoff).toHaveBeenCalledWith(expect.objectContaining({ text: 'first second' }))
+    for (const args of [
+      ['handoff', 'session-2', '--text', 'result'],
+      ['handoff', 'session-2', '--text', 'result', '--key', 'k', '--file-id', 'same', '--file-id', 'same'],
+      ['handoff', 'session-2', '--text', 'result', '--key', 'k', '--session', 'session-2']
+    ]) {
+      const refused = await runCli(args, { env: fixture.sessionEnv })
+      expect(refused.code).toBe(2)
+    }
+    expect(fixture.handlers.prepareHandoff).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe('bmn help agents', () => {
   it('prints a brief an agent can read in one screen, and sends nothing to the socket', async () => {
@@ -1810,7 +1856,7 @@ it('ends every Codex report with the limit of what it checked', async () => {
 
     // Both agents, each at its own default path, and the moved Codex directory is the one consulted.
     const report = JSON.parse(result.stdout)
-    expect(report.agents.map((agent: { agent: string }) => agent.agent)).toEqual(['claude', 'codex'])
+    expect(report.agents.map((agent: { agent: string }) => agent.agent)).toEqual(['claude', 'codex', 'opencode'])
     expect(report.agents[0].file).toBe(join(home.root, '.claude', 'settings.json'))
     expect(report.agents[1].file).toBe(join(codexHome, 'hooks.json'))
     expect(report.agents[0].events.find((row: { event: string }) => row.event === 'Stop').state).toBe('wired')
@@ -2251,5 +2297,218 @@ describe('the hook event lists check and hook share', () => {
         expect(fixture.handlers.observeHookEvent, `${agent} ${event} was not logged`).toHaveBeenCalled()
       }
     }
+  })
+})
+
+// Session shape observed from OpenCode 1.18.31 on 2026-09-22.
+const OPENCODE_SESSION = 'ses_f5656e404ffehVbLiXJ8YHJQjV'
+const OPENCODE_FOREGROUND = { ...HOLDS_TERMINAL, comm: 'opencode' }
+
+describe('OpenCode hooks', () => {
+  it('runs the printed plugin with a process-local session pin, stdin JSON and swallowed errors', async () => {
+    const printed = await runHooks(['print', 'opencode'])
+    expect(printed, printed.stderr).toMatchObject({ code: 0 })
+    expect(printed.stdout).toContain('export const BMNPlugin')
+    const javascript = stripTypeScriptTypes(printed.stdout).replace('export const BMNPlugin', 'const BMNPlugin')
+    const env: Record<string, string> = {}
+    const calls: Array<{ command: string; payload: string; env: Record<string, string> | undefined }> = []
+    let fail = false
+    const shell = (strings: TemplateStringsArray, payload: string, deadline: string[]) => {
+      const call = { command: strings[0] + '<payload>' + strings[1] + (deadline?.join(' ') ?? '') + (strings[2] ?? ''), payload, env: undefined as Record<string, string> | undefined }
+      calls.push(call)
+      const result = {
+        env: (value: Record<string, string>) => { call.env = value; return result },
+        quiet: () => result,
+        nothrow: () => fail ? Promise.reject(new Error('missing bmn')) : Promise.resolve()
+      }
+      return result
+    }
+    const create = runInNewContext(`${javascript}; BMNPlugin`, { process: { env } })
+    const plugin = await create({ $: shell })
+    const root = { type: 'session.created', properties: { sessionID: OPENCODE_SESSION } }
+    await plugin.event({ event: root })
+    expect(calls).toHaveLength(0)
+    env.AITERM_CONTROL_SOCKET = '/fixture/socket'
+    await plugin.event({ event: root })
+    expect(JSON.parse(calls[0]?.payload ?? "null")).toEqual({ hook_event_name: root.type, ...root.properties })
+    expect(calls[0]?.command).toBe("printf '%s' <payload> | timeout -s KILL 3s bmn hook opencode")
+    expect(calls[0]?.env?.BMN_OPENCODE_SESSION_ID).toBe(OPENCODE_SESSION)
+    await plugin.event({ event: { type: 'permission.asked', properties: { sessionID: 'ses_child' } } })
+    expect(calls[1]?.env?.BMN_OPENCODE_SESSION_ID).toBe(OPENCODE_SESSION)
+    await plugin.event({ event: { type: 'tui.session.select', properties: { sessionID: 'ses_selected' } } })
+    expect(calls[2]?.env?.BMN_OPENCODE_SESSION_ID).toBe('ses_selected')
+    fail = true
+    await expect(plugin.event({ event: root })).resolves.toBeUndefined()
+  })
+
+  it.each(['linux', 'darwin'])('kills a stalled plugin child within 3 seconds on %s', async (platform) => {
+    const printed = await runHooks(['print', 'opencode'])
+    expect(printed, printed.stderr).toMatchObject({ code: 0 })
+    expect(printed.stdout).toContain('export const BMNPlugin')
+    const javascript = stripTypeScriptTypes(printed.stdout).replace('export const BMNPlugin', 'const BMNPlugin')
+    const root = await mkdtemp(join(tmpdir(), 'bmn-plugin-deadline-'))
+    createdRoots.add(root)
+    const pidFile = join(root, 'pid')
+    await writeFile(join(root, 'bmn'), `#!${process.execPath}\nrequire('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000)\n`)
+    await chmod(join(root, 'bmn'), 0o700)
+    let child: ReturnType<typeof execFile> | undefined
+    let safetyTimeout = false
+    const shell = (strings: TemplateStringsArray, ...values: unknown[]) => {
+      let env = { ...process.env, PATH: `${root}:${process.env.PATH}` }
+      const result = {
+        env: (value: Record<string, string>) => { env = { ...env, ...value }; return result },
+        quiet: () => result,
+        nothrow: () => new Promise<void>((resolve) => {
+          const quote = (value: unknown): string => `'${String(value).replaceAll("'", "'\"'\"'")}'`
+          const command = strings.reduce((text, part, index) => text + part + (index < values.length
+            ? (Array.isArray(values[index]) ? values[index].map(quote).join(' ') : quote(values[index])) : ''), '')
+          child = execFile('/bin/sh', ['-c', command], { env }, () => resolve())
+        })
+      }
+      return result
+    }
+    const create = runInNewContext(`${javascript}; BMNPlugin`, { process: { platform, env: { BMN_CONTROL_SOCKET: '/fixture/socket' } } })
+    const plugin = await create({ $: shell })
+    const started = Date.now()
+    const safety = setTimeout(() => {
+      safetyTimeout = true
+      void readFile(pidFile, 'utf8').then((pid) => {
+        try { process.kill(Number(pid), 'SIGKILL') } catch { /* already exited */ }
+      }).catch(() => undefined)
+      child?.kill('SIGKILL')
+    }, 4500)
+    try {
+      await plugin.event({ event: { type: 'session.idle', properties: { sessionID: OPENCODE_SESSION } } })
+      expect(safetyTimeout).toBe(false)
+      expect(Date.now() - started).toBeLessThan(4200)
+      const pid = Number(await readFile(pidFile, 'utf8'))
+      await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow())
+    } finally {
+      clearTimeout(safety)
+      child?.kill('SIGKILL')
+      if (existsSync(pidFile)) {
+        try { process.kill(Number(await readFile(pidFile, 'utf8')), 'SIGKILL') } catch { /* already exited */ }
+      }
+    }
+  }, 8000)
+
+  it.each([
+    ['permission.asked', { permission: 'edit', patterns: ['src/**'] }, 'openAttention', { requestKey: 'opencode:permission', kind: 'permission', title: 'OpenCode asks to edit', body: 'src/**' }],
+    ['permission.replied', { reply: 'once' }, 'resolveAttention', { requestKey: 'opencode:permission', resolution: 'answered in the terminal' }],
+    ['permission.replied', { reply: 'always' }, 'resolveAttention', { requestKey: 'opencode:permission' }],
+    ['permission.replied', { reply: 'reject' }, 'withdrawAttention', { requestKey: 'opencode:permission' }],
+    ['session.status', { status: { type: 'busy' } }, 'resolveAttention', { requestKey: 'opencode:question' }],
+    ['session.idle', {}, 'openAttention', { requestKey: 'opencode:turn', title: 'OpenCode finished a turn', kind: 'notice' }],
+    ['session.error', { error: { data: { message: 'Provider unavailable' } } }, 'openAttention', { requestKey: 'opencode:error', body: 'Provider unavailable' }],
+    ['session.deleted', {}, 'withdrawAttention', { requestKey: 'opencode:error' }],
+    ['question.asked', { questions: [{ question: 'Which one?', options: [{ label: 'First' }, { label: 'Second' }] }] }, 'openAttention', { requestKey: 'opencode:question', kind: 'question', body: '1. Which one?\n   First | Second' }],
+    ['question.replied', {}, 'resolveAttention', { requestKey: 'opencode:question' }],
+    ['question.rejected', {}, 'withdrawAttention', { requestKey: 'opencode:question' }]
+  ])('maps %s and records provenance', async (event, properties, handler, expected) => {
+    const fixture = await cliFixture()
+    expect(await runHook(fixture, 'opencode', { hook_event_name: event, sessionID: OPENCODE_SESSION, ...properties }, OPENCODE_FOREGROUND)).toEqual(QUIET)
+    const spy = fixture.handlers[handler as 'openAttention']
+    expect(spy.mock.calls.some(([params]) => {
+      try { expect(params).toMatchObject({ ...expected, origin: `hook:opencode:${event}` }); return true } catch { return false }
+    })).toBe(true)
+    expect(fixture.handlers.observeHookEvent).toHaveBeenCalledWith(expect.objectContaining({ agent: 'opencode', event, effects: expect.arrayContaining([handler === 'openAttention' ? 'opened' : handler === 'resolveAttention' ? 'answered' : 'withdrew']) }))
+  })
+
+  it('drops an OpenCode session reference that the binding store would refuse', async () => {
+    const fixture = await cliFixture()
+    const malformed = 'ses_zzzzzzzzzzzzhVbLiXJ8YHJQjV'
+    const methods: string[] = []
+    const socketPath = join(fixture.root, 'raw-hook.sock')
+    const rawServer = createServer((socket) => {
+      socket.setEncoding('utf8')
+      let buffer = ''
+      socket.on('data', (chunk: string) => {
+        buffer += chunk
+        let newline = buffer.indexOf('\n')
+        while (newline !== -1) {
+          const message = JSON.parse(buffer.slice(0, newline)) as { id: number; method: string }
+          buffer = buffer.slice(newline + 1)
+          methods.push(message.method)
+          socket.write(`${JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { recorded: true } })}\n`)
+          newline = buffer.indexOf('\n')
+        }
+      })
+    })
+    await new Promise<void>((resolve, reject) => {
+      rawServer.once('error', reject)
+      rawServer.listen(socketPath, resolve)
+    })
+    try {
+      const proc = await procTree(fixture.root, OPENCODE_FOREGROUND)
+      const env = { ...fixture.sessionEnv, BMN_CONTROL_SOCKET: socketPath, BMN_PROC_ROOT: proc }
+      expect(await runCli(['hook', 'opencode'], { env, input: JSON.stringify({
+        hook_event_name: 'session.created', sessionID: malformed, info: { id: malformed }
+      }) })).toEqual(QUIET)
+      expect(methods).toEqual(['auth', 'hook.observe'])
+
+      methods.length = 0
+      expect(await runCli(['hook', 'opencode'], { env, input: JSON.stringify({
+        hook_event_name: 'session.created', sessionID: OPENCODE_SESSION, info: { id: OPENCODE_SESSION }
+      }) })).toEqual(QUIET)
+      expect(methods).toEqual(['auth', 'conversation.observe', 'hook.observe'])
+    } finally {
+      await new Promise<void>((resolve) => rawServer.close(() => resolve()))
+    }
+  })
+
+  it.each([['session.created', 'startup'], ['tui.session.select', 'resume']])('captures %s with the OpenCode reference', async (event, source) => {
+    const fixture = await cliFixture()
+    await runHook(fixture, 'opencode', { hook_event_name: event, sessionID: OPENCODE_SESSION }, OPENCODE_FOREGROUND)
+    expect(fixture.handlers.observeConversation).toHaveBeenCalledWith(expect.objectContaining({ agentCli: 'opencode', conversationReference: OPENCODE_SESSION, source }))
+    if (source === 'resume') expect(fixture.handlers.withdrawAttention).toHaveBeenCalledTimes(4)
+  })
+
+  it('ignores sub-sessions, malformed references and nested agent processes', async () => {
+    const fixture = await cliFixture()
+    await runHook(fixture, 'opencode', { hook_event_name: 'session.created', info: { id: OPENCODE_SESSION, parentID: 'parent' } }, OPENCODE_FOREGROUND)
+    await runHook(fixture, 'opencode', { hook_event_name: 'session.created', sessionID: OBSERVED_REFERENCE }, OPENCODE_FOREGROUND)
+    expect(fixture.handlers.observeConversation).not.toHaveBeenCalled()
+    const proc = await procTree(fixture.root, OPENCODE_FOREGROUND)
+    await runCli(['hook', 'opencode'], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: proc, BMN_OPENCODE_SESSION_ID: 'ses_other' }, input: JSON.stringify({ hook_event_name: 'permission.asked', sessionID: OPENCODE_SESSION }) })
+    expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
+    expect(fixture.handlers.observeHookEvent).toHaveBeenLastCalledWith(expect.objectContaining({ event: 'permission.asked', effects: [] }))
+    fixture.handlers.observeHookEvent.mockClear()
+    await runHook(fixture, 'opencode', { hook_event_name: 'session.idle', sessionID: OPENCODE_SESSION }, { ...OPENCODE_FOREGROUND, tty: 0 })
+    expect(fixture.handlers.observeHookEvent).not.toHaveBeenCalled()
+  })
+
+  it('prints, installs, compares, backs up and repairs the exact shipped plugin', async () => {
+    const path = await hookFileFixture(undefined, 'bmn.ts')
+    const printed = await runHooks(['print', 'opencode'])
+    expect(printed.code).toBe(0)
+    expect(printed.stdout).toContain('export const BMNPlugin: Plugin')
+    expect(printed.stdout).toContain('bmn hook opencode')
+    expect((await runHooks(['check', 'opencode', '--file', path])).code).toBe(1)
+    const install = await runHooks(['install', 'opencode', '--file', path, '--json'])
+    expect(install.code).toBe(0)
+    expect(await readFile(path, 'utf8')).toBe(printed.stdout)
+    expect((await runHooks(['check', 'opencode', '--file', path])).code).toBe(0)
+    expect(JSON.parse((await runHooks(['install', 'opencode', '--file', path, '--json'])).stdout).installed).toEqual([])
+    await writeFile(path, '// unrelated plugin\n')
+    expect((await runHooks(['check', 'opencode', '--file', path])).stdout).toMatch(/plugin\s+missing/)
+    await writeFile(path, '// Shipped by BMN\n// bmn hook opencode\n')
+    expect((await runHooks(['check', 'opencode', '--file', path])).stdout).toContain('wired (older wording)')
+    const repair = JSON.parse((await runHooks(['install', 'opencode', '--file', path, '--json'])).stdout)
+    expect(await readFile(repair.backup, 'utf8')).toBe('// Shipped by BMN\n// bmn hook opencode\n')
+    expect(await readFile(path, 'utf8')).toBe(printed.stdout)
+  })
+
+  it('uses the existing singular folder or the documented plural folder in an isolated config', async () => {
+    const fixture = await cliFixture()
+    const config = join(fixture.root, 'opencode')
+    const env = { OPENCODE_CONFIG_DIR: config }
+    const first = JSON.parse((await runHooks(['check', 'opencode', '--json'], env)).stdout)
+    expect(first.agents[0].file).toBe(join(config, 'plugins', 'bmn.ts'))
+    const fresh = JSON.parse((await runHooks(['install', 'opencode', '--json'], env)).stdout)
+    expect(fresh.file).toBe(join(config, 'plugins', 'bmn.ts'))
+    expect(await readFile(fresh.file, 'utf8')).toContain('export const BMNPlugin')
+    await mkdir(join(config, 'plugin'), { recursive: true })
+    const installed = JSON.parse((await runHooks(['install', 'opencode', '--json'], env)).stdout)
+    expect(installed.file).toBe(join(config, 'plugin', 'bmn.ts'))
   })
 })

@@ -40,7 +40,9 @@ let database: DatabaseConnection
 let service: CompanionService
 let writes: Array<{ sessionId: string; bytes: Uint8Array }>
 let liveIncarnations: Map<string, string>
+let reportedProcesses: Map<string, string>
 let emitted: AppEventMessage[]
+let clock: string
 
 /** Runs the real store operations the worker would, on an in-memory database. */
 function workerLike(connection: DatabaseConnection): DatabaseWorkerClient {
@@ -67,6 +69,7 @@ function workerLike(connection: DatabaseConnection): DatabaseWorkerClient {
 }
 
 beforeEach(() => {
+  clock = now
   root = mkdtempSync(join(tmpdir(), 'bmn-companion-'))
   database = new BetterSqlite3(':memory:')
   initializeDatabase(database, now)
@@ -81,10 +84,19 @@ beforeEach(() => {
   writes = []
   emitted = []
   liveIncarnations = new Map([['s1', 'incarnation-1'], ['s2', 'incarnation-2']])
+  reportedProcesses = new Map()
   const manager = {
     liveIncarnationId: (sessionId: string) => liveIncarnations.get(sessionId),
     writeToSession: (sessionId: string, bytes: Uint8Array) => writes.push({ sessionId, bytes }),
-    sessionWithCurrentProcessState: (session: SessionRecord) => session
+    sessionWithCurrentProcessState: (session: SessionRecord) => {
+      const incarnationId = reportedProcesses.get(session.sessionId)
+      return incarnationId === undefined
+        ? session
+        : {
+            ...session,
+            lastProcess: { incarnationId, state: 'live', exitCode: null, signal: null, detail: null }
+          }
+    }
   } as unknown as SessionManager
   service = new CompanionService({
     database: workerLike(database),
@@ -92,7 +104,7 @@ beforeEach(() => {
     roots: { config: join(root, 'config'), data: join(root, 'data'), state: join(root, 'state'), runtime: join(root, 'runtime') },
     cliPath: join(root, 'bin', 'bmn'),
     emit: (message) => emitted.push(message),
-    now: () => new Date(now)
+    now: () => new Date(clock)
   })
 })
 
@@ -130,10 +142,46 @@ async function storeArtifacts(count: number): Promise<ArtifactRecord[]> {
   return records
 }
 
+async function storePublishedArtifact(artifactId: string, sessionId = 's1'): Promise<ArtifactRecord> {
+  const originals = join(root, 'data', 'artifacts', 'originals')
+  await mkdir(originals, { recursive: true })
+  const bytes = Buffer.from(`published ${artifactId}`)
+  const storedPath = join(originals, artifactId)
+  await writeFile(storedPath, bytes)
+  return insertArtifact(database, {
+    artifactId,
+    sessionId,
+    incarnationId: sessionId === 's1' ? 'incarnation-1' : 'incarnation-2',
+    direction: 'output',
+    source: 'agent',
+    originalName: `${artifactId}.txt`,
+    mediaType: 'text/plain',
+    byteLength: bytes.byteLength,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    storedPath,
+    sourcePath: null,
+    state: 'ready',
+    createdAt: now
+  })
+}
+
 const exportBackup = (parent: string) =>
   service.route('backup.export', { directory: parent }) as Promise<{ directory: string; manifest: BackupManifest }>
 const verifyBackup = (directory: string) =>
   service.route('backup.verify', { directory }) as Promise<BackupVerifyResult>
+
+type AgentHandoffParams = {
+  sourceSessionId: string
+  sourceIncarnationId: string
+  destinationSessionId: string
+  text: string
+  artifactIds: string[]
+}
+
+const prepareAgentHandoff = (params: AgentHandoffParams) =>
+  (service as unknown as {
+    prepareAgentHandoff(value: AgentHandoffParams): Promise<{ draftId: string; requestId: string; state: 'draft' }>
+  }).prepareAgentHandoff(params)
 
 describe('session environment', () => {
   it('publishes BMN credentials and matching legacy aliases for existing hooks', () => {
@@ -299,6 +347,224 @@ describe('handoff drafts', () => {
       state: 'uncertain', detail: 'Pasting…', attemptedIncarnationId: 'incarnation-2'
     })
     expect(emitted).toEqual([{ kind: 'app-event', topic: 'drafts', sessionId: 's2' }])
+  })
+})
+
+describe('agent-prepared handoffs', () => {
+  it('derives the source identity and validates destination and published files', async () => {
+    const published = await storePublishedArtifact('published-source')
+    const input = (await storeArtifacts(1))[0]!
+    const foreign = await storePublishedArtifact('published-foreign', 's2')
+    const common = { sourceSessionId: 's1', destinationSessionId: 's2', text: 'result', artifactIds: [] }
+
+    await expect(prepareAgentHandoff({ ...common, sourceIncarnationId: 'old-incarnation' }))
+      .rejects.toThrow(/different process/i)
+    await expect(prepareAgentHandoff({
+      ...common, sourceIncarnationId: 'incarnation-1', destinationSessionId: 's1'
+    })).rejects.toThrow(/different destination/i)
+    await expect(prepareAgentHandoff({
+      ...common, sourceIncarnationId: 'incarnation-1', destinationSessionId: 'missing-session'
+    })).rejects.toThrow(/destination is unavailable/i)
+    await expect(prepareAgentHandoff({
+      ...common, sourceIncarnationId: 'incarnation-1', artifactIds: [input.artifactId]
+    })).rejects.toThrow(/published output/i)
+    await expect(prepareAgentHandoff({
+      ...common, sourceIncarnationId: 'incarnation-1', artifactIds: [foreign.artifactId]
+    })).rejects.toThrow(/belong to the source/i)
+    await expect(prepareAgentHandoff({
+      ...common, sourceIncarnationId: 'incarnation-1', text: 'bad\u0007text'
+    })).rejects.toThrow(/newline and tab/i)
+
+    const result = await prepareAgentHandoff({
+      ...common,
+      sourceIncarnationId: 'incarnation-1',
+      text: 'result\nwith\ttab',
+      artifactIds: [published.artifactId]
+    })
+    expect(result.state).toBe('draft')
+
+    const draft = (await service.route(METHOD_REGISTRY.draftList, {}) as import('@bmn/protocol').InputDraftRecord[])
+      .find((record) => record.draftId === result.draftId)
+    expect(draft).toMatchObject({
+      sessionId: 's2', sourceSessionId: 's1', preparedBy: 'agent',
+      requestId: result.requestId, text: 'result\nwith\ttab', artifactIds: [published.artifactId], state: 'draft'
+    })
+    const request = (await service.route(METHOD_REGISTRY.attentionList, {}) as AttentionRecord[])
+      .find((record) => record.requestId === result.requestId)
+    expect(request).toMatchObject({
+      sessionId: 's1', incarnationId: 'incarnation-1', kind: 'handoff',
+      requestKey: `handoff:${result.draftId}`, title: 'Asks to hand off to "Two"',
+      body: 'result\nwith\ttab\n1 files', openedBy: 'cli', state: 'open'
+    })
+    expect(writes).toEqual([])
+  })
+
+  it('delivers an agent petition with its stamp and resolves the source request', async () => {
+    const result = await prepareAgentHandoff({
+      sourceSessionId: 's1', sourceIncarnationId: 'incarnation-1', destinationSessionId: 's2',
+      text: 'owner delivery', artifactIds: []
+    })
+    const draft = (await service.route(METHOD_REGISTRY.draftList, {}) as import('@bmn/protocol').InputDraftRecord[])
+      .find((record) => record.draftId === result.draftId)
+    if (!draft) throw new Error('expected prepared draft')
+
+    const delivered = await service.route(METHOD_REGISTRY.draftSend, {
+      draftId: result.draftId,
+      submit: false,
+      expectedIncarnationId: 'incarnation-2',
+      expectedUpdatedAt: draft.updatedAt
+    }) as import('@bmn/protocol').InputDraftRecord
+    expect(delivered).toMatchObject({ state: 'accepted', detail: 'Pasted to terminal — not submitted' })
+    const payload = new TextDecoder().decode(writes[0]!.bytes)
+    expect(payload).toContain('[BMN handoff from One · /bin/bash · /work · prepared by the agent, delivered by the owner]')
+    expect(payload).toContain('owner delivery')
+    expect(payload.endsWith('\r')).toBe(false)
+    expect((await service.route(METHOD_REGISTRY.attentionList, {}) as AttentionRecord[])
+      .find((record) => record.requestId === result.requestId)).toMatchObject({
+        state: 'answered', resolution: 'pasted, not submitted', resolvedBy: 'owner'
+      })
+  })
+
+  it('keeps a claimed petition open when its expiry arrives during owner paste', async () => {
+    const result = await prepareAgentHandoff({
+      sourceSessionId: 's1', sourceIncarnationId: 'incarnation-1', destinationSessionId: 's2',
+      text: 'late delivery', artifactIds: []
+    })
+    const draft = COMPANION_OPERATIONS.getDraft(database, result.draftId)
+    clock = '2026-09-15T12:00:00.000Z'
+    let sweep: Promise<void> | undefined
+    service['options'].manager.writeToSession = (sessionId, bytes) => {
+      expect(service['draftOperations'].has(result.draftId)).toBe(true)
+      sweep = service['sweepAttention']()
+      writes.push({ sessionId, bytes })
+    }
+
+    const delivered = await service.route(METHOD_REGISTRY.draftSend, {
+      draftId: result.draftId, submit: false,
+      expectedIncarnationId: 'incarnation-2', expectedUpdatedAt: draft.updatedAt
+    }) as import('@bmn/protocol').InputDraftRecord
+
+    await sweep
+    expect(delivered.state).toBe('accepted')
+    expect(writes).toHaveLength(1)
+    expect(COMPANION_OPERATIONS.getAttention(database, result.requestId)).toMatchObject({
+      state: 'answered', resolution: 'pasted, not submitted', resolvedBy: 'owner'
+    })
+  })
+
+  it('expires a recovered uncertain petition and abandoned retry without claiming a paste failed', async () => {
+    const result = await prepareAgentHandoff({
+      sourceSessionId: 's1', sourceIncarnationId: 'incarnation-1', destinationSessionId: 's2',
+      text: 'possible paste', artifactIds: []
+    })
+    const original = COMPANION_OPERATIONS.getDraft(database, result.draftId)
+    COMPANION_OPERATIONS.claimHandoffDraft(
+      database, result.draftId, original.updatedAt, 'incarnation-2', '2026-09-14T12:00:01.000Z'
+    )
+    const retry = await service.route(METHOD_REGISTRY.draftRetry, { draftId: result.draftId }) as
+      import('@bmn/protocol').InputDraftRecord
+    clock = '2026-09-15T12:00:00.000Z'
+    expect(service['draftOperations'].size).toBe(0)
+
+    await service['sweepAttention']()
+
+    expect(COMPANION_OPERATIONS.getAttention(database, result.requestId)).toMatchObject({
+      state: 'expired', resolvedBy: 'expiry'
+    })
+    expect(COMPANION_OPERATIONS.getDraft(database, result.draftId)).toMatchObject({ state: 'uncertain' })
+    expect(COMPANION_OPERATIONS.getDraft(database, retry.draftId)).toMatchObject({
+      state: 'discarded', detail: 'The handoff request expired'
+    })
+    expect(writes).toEqual([])
+  })
+
+  it('keeps agent authorship and resolves its petition after an explicit uncertain-paste retry', async () => {
+    const result = await prepareAgentHandoff({
+      sourceSessionId: 's1', sourceIncarnationId: 'incarnation-1', destinationSessionId: 's2',
+      text: 'retry result', artifactIds: []
+    })
+    const original = COMPANION_OPERATIONS.getDraft(database, result.draftId)
+    COMPANION_OPERATIONS.claimHandoffDraft(
+      database, result.draftId, original.updatedAt, 'incarnation-2', '2026-09-14T12:00:01.000Z'
+    )
+
+    const retry = await service.route(METHOD_REGISTRY.draftRetry, { draftId: result.draftId }) as
+      import('@bmn/protocol').InputDraftRecord
+    expect(retry).toMatchObject({
+      state: 'draft', text: 'retry result', preparedBy: 'agent', requestId: result.requestId
+    })
+    expect(writes).toEqual([])
+    const delivered = await service.route(METHOD_REGISTRY.draftSend, {
+      draftId: retry.draftId, submit: false,
+      expectedIncarnationId: 'incarnation-2', expectedUpdatedAt: retry.updatedAt
+    }) as import('@bmn/protocol').InputDraftRecord
+    expect(delivered.state).toBe('accepted')
+    expect(new TextDecoder().decode(writes[0]!.bytes)).toContain('prepared by the agent, delivered by the owner')
+    expect(COMPANION_OPERATIONS.getAttention(database, result.requestId)).toMatchObject({
+      state: 'answered', resolution: 'pasted, not submitted', resolvedBy: 'owner'
+    })
+    expect(COMPANION_OPERATIONS.getDraft(database, result.draftId).state).toBe('uncertain')
+  })
+
+  it('keeps source snapshots to handoff metadata and marks an old source incarnation', async () => {
+    const published = await storePublishedArtifact('snapshot-source')
+    const result = await prepareAgentHandoff({
+      sourceSessionId: 's1', sourceIncarnationId: 'incarnation-1', destinationSessionId: 's2',
+      text: 'agent text', artifactIds: [published.artifactId]
+    })
+    const draft = (await service.route(METHOD_REGISTRY.draftList, {}) as import('@bmn/protocol').InputDraftRecord[])
+      .find((record) => record.draftId === result.draftId)
+    if (!draft) throw new Error('expected prepared draft')
+    const edited = await service.route(METHOD_REGISTRY.draftSave, {
+      draftId: result.draftId,
+      sourceSessionId: 's1', sessionId: 's2', text: 'owner-only edited text', artifactIds: [],
+      expectedUpdatedAt: draft.updatedAt
+    }) as import('@bmn/protocol').InputDraftRecord
+
+    const reach = service as unknown as {
+      snapshot(scope: unknown): Promise<{
+        handoffs: unknown[]
+        attention: AttentionRecord[]
+      }>
+    }
+    const sessionSnapshot = await reach.snapshot({ kind: 'session', sessionId: 's1', incarnationId: 'incarnation-1' })
+    expect(sessionSnapshot.handoffs).toEqual([{
+      draftId: result.draftId, destinationSessionId: 's2', state: 'draft', updatedAt: edited.updatedAt
+    }])
+    expect(JSON.stringify(sessionSnapshot)).not.toContain('owner-only edited text')
+    expect(JSON.stringify(sessionSnapshot)).not.toContain(published.artifactId)
+
+    const ownerSnapshot = await reach.snapshot({ kind: 'owner' })
+    expect(ownerSnapshot.handoffs).toEqual([expect.objectContaining({
+      draftId: result.draftId, text: 'owner-only edited text', preparedBy: 'agent'
+    })])
+
+    reportedProcesses.set('s1', 'incarnation-new')
+    const staleSnapshot = await reach.snapshot({ kind: 'session', sessionId: 's1', incarnationId: 'incarnation-new' })
+    expect(staleSnapshot.attention.find((record) => record.requestId === result.requestId)?.body)
+      .toContain('prepared by an earlier process of this session')
+  })
+
+  it('resolves an owner discard and refuses a second delivery', async () => {
+    const result = await prepareAgentHandoff({
+      sourceSessionId: 's1', sourceIncarnationId: 'incarnation-1', destinationSessionId: 's2',
+      text: 'discard me', artifactIds: []
+    })
+    const discarded = await service.route(METHOD_REGISTRY.draftDiscard, { draftId: result.draftId }) as
+      import('@bmn/protocol').InputDraftRecord
+    expect(discarded).toMatchObject({ state: 'discarded' })
+    expect((await service.route(METHOD_REGISTRY.attentionList, {}) as AttentionRecord[])
+      .find((record) => record.requestId === result.requestId)).toMatchObject({
+        state: 'answered', resolution: 'discarded', resolvedBy: 'owner'
+      })
+    const repeated = await service.route(METHOD_REGISTRY.draftSend, {
+      draftId: result.draftId,
+      submit: false,
+      expectedIncarnationId: 'incarnation-2',
+      expectedUpdatedAt: discarded.updatedAt
+    }) as import('@bmn/protocol').InputDraftRecord
+    expect(repeated).toMatchObject({ draftId: result.draftId, state: 'discarded' })
+    expect(writes).toEqual([])
   })
 })
 
@@ -549,6 +815,45 @@ describe('Telegram attention notifications', () => {
     expect(COMPANION_OPERATIONS.getAttention(database, request.requestId)).toMatchObject({
       state: 'answered', resolution: 'current answer'
     })
+  })
+
+  it('keeps a handoff page reply as a source draft even when automatic replies are enabled', async () => {
+    const sent: string[] = []
+    service['telegram'] = {
+      sendMessage: async (message: string) => {
+        sent.push(message)
+        return { messageId: sent.length }
+      }
+    } as unknown as TelegramConnector
+    await service.sessionsChanged()
+    COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', {
+      enabled: true, allowedChatId: 1, allowedUserId: null,
+      notifyOn: 'attention-and-exit', autoSubmitReplies: true
+    }, now)
+    const request = COMPANION_OPERATIONS.openAttention(database, {
+      sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'handoff:source-draft',
+      kind: 'handoff', title: 'Asks to hand off to another session'
+    }, 'telegram-handoff-request', now)
+    COMPANION_OPERATIONS.putTelegramMessage(
+      database, 77, 's1', request.requestId, 'incarnation-1', now
+    )
+
+    await service['handleTelegramReply']({
+      updateId: 88,
+      chatId: 1,
+      fromUserId: 1,
+      messageId: 99,
+      replyToMessageId: 77,
+      text: 'Please revise the summary',
+      file: null
+    })
+
+    expect(writes).toEqual([])
+    expect(sent).toEqual(['Saved as a draft in BMN for that session.'])
+    expect(COMPANION_OPERATIONS.getAttention(database, request.requestId)).toMatchObject({ state: 'open' })
+    expect(COMPANION_OPERATIONS.listDrafts(database)).toContainEqual(
+      expect.objectContaining({ sessionId: 's1', origin: 'telegram', state: 'draft', text: 'Please revise the summary' })
+    )
   })
 
   it('keeps the reply as a draft when the process changes immediately before the write', async () => {

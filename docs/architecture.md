@@ -115,12 +115,13 @@ agent has to guess.
 | Stop a session | Stopped; an unconfirmed stop stays *exit unconfirmed* until the host reports the exit | Ends with the process | A final capture is taken before the stop | Unchanged | Resume reopens a bound conversation | Stay open; `SessionEnd` withdraws the hook's own |
 | Renderer crash | Keeps running | A new view is created, brought to the private terminal mode state the program is in, and the program is asked to repaint once; bytes from before the crash are not replayed | Unaffected | Unchanged: order, selection, scroll position and follow-tail are restored | Not needed; nothing stopped | Stay open |
 | App crash or reboot | Ends when its pseudo-terminal closes (UNVERIFIED); the next start marks earlier incarnations *interrupted* and starts nothing by itself | Gone | The last periodic capture; output written after it is lost | Unchanged | Resume reopens a bound conversation, including one a `SessionStart` hook reported | Stay open |
-| Desktop update | Stopped: packaging waits for BMN to exit, and an update installed while it runs stops the sessions, recorded *interrupted · update restart* | Ends with the process | A final capture is taken before the stop | Unchanged | Resume reopens a bound conversation; the next start offers to resume them all in one dialog | Stay open |
+| Desktop update | Stopped: packaging waits for BMN to exit, and an update installed while it runs stops the sessions, recorded *interrupted · update restart* | Ends with the process | A final capture is taken before the stop | Unchanged | Resume reopens a bound Claude/Codex conversation or OpenCode with `--session`; the next start offers to resume them all in one dialog | Stay open |
 
 Saved output is a plain-text snapshot of the live screen, taken periodically, on stop and on quit;
 it is never replayed into a terminal. *Resume* reopens the stored Claude Code or Codex conversation
-through the CLI's own resume, and only for a session whose conversation BMN knows: one it pinned at
-launch, one you located by hand, or one the harness reported through its `SessionStart` hook. A
+through each CLI's own resume, or an OpenCode conversation with `opencode --session <id>`, and only
+for a session whose conversation BMN knows: one it pinned at launch, one you located by hand, or one
+the harness reported through its `SessionStart` hook or OpenCode plugin. A
 session without that stays honest about it and offers **Start again** instead.
 
 A rebuilt view is brought to the mode state the program was already in. The host reads the private

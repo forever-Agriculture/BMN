@@ -17,6 +17,30 @@ const waylandDisplay =
 /** Receipt fields the self-test must prove; a receipt missing any of them fails the run. */
 const receiptContract = [
   ['graceful', (receipt) => receipt.graceful === true],
+  ['agentHandoff', (receipt) => {
+    const row = receipt.agentHandoff
+    return row?.preparedWithoutDelivery === true && row.destinationMatches === true && row.text === 'Synthetic agent handoff result' &&
+      row.byline.includes('Prepared by the agent in Petition source') &&
+      row.provenance === 'from bmn handoff' && row.resolvedBy === 'owner' &&
+      row.state !== 'open' && row.resolution === 'pasted, not submitted' &&
+      row.payloadOccurrences === 1 && row.agentOwnerStamp === true && row.publishedFile === true && row.bracketedPaste === true &&
+      row.noSubmit === true && row.status.includes('pasted (not submitted)') && row.bounded === true
+  }],
+  ['openCodeAcceptance', (receipt) => {
+    const row = receipt.openCodeAcceptance
+    const reference = 'ses_f5656e404ffehVbLiXJ8YHJQjV'
+    return row?.provenance === 'from OpenCode permission.asked' &&
+      row.openedBy === 'hook:opencode:permission.asked' &&
+      row.resolvedBy === 'hook:opencode:permission.replied' && row.permissionState === 'answered' &&
+      row.notice === true && row.binding.status === 'bound' && row.binding.agentCli === 'opencode' &&
+      row.binding.captureRoute === 'hook-session-start' && row.binding.conversationReference === reference &&
+      row.preview.includes('--session ' + reference) &&
+      JSON.stringify(row.resumedArguments) === JSON.stringify(['--session', reference, '--model', 'fixture/model']) &&
+      JSON.stringify(row.events.map(event => event.event)) ===
+        JSON.stringify(['session.created', 'permission.asked', 'permission.replied', 'session.idle']) &&
+      row.events.every(event => event.agent === 'opencode') &&
+      row.events[1].effects.includes('opened') && row.events[2].effects.includes('answered')
+  }],
   [
     'hiddenPaneSize',
     (receipt) =>
@@ -349,7 +373,7 @@ const receiptContract = [
     'survivalTable',
     (receipt) =>
       receipt.survivalTable?.rendererCrash?.liveProcesses === 3 &&
-      receipt.survivalTable.rendererCrash.incarnationRecords === 9 &&
+      receipt.survivalTable.rendererCrash.incarnationRecords === 13 &&
       receipt.survivalTable.rendererCrash.openRequestsBefore > 0 &&
       receipt.survivalTable.rendererCrash.openRequestsAfter ===
         receipt.survivalTable.rendererCrash.openRequestsBefore &&

@@ -1,4 +1,4 @@
-export type AgentCli = 'claude' | 'codex' | 'other'
+export type AgentCli = 'claude' | 'codex' | 'opencode' | 'other'
 
 export interface ConversationLaunchContext {
   cwd: string
@@ -16,7 +16,7 @@ interface ConversationBindingBase {
 }
 
 export interface BoundConversationBinding extends ConversationBindingBase {
-  agentCli: 'claude' | 'codex'
+  agentCli: 'claude' | 'codex' | 'opencode'
   status: 'bound'
   conversationReference: string
   captureRoute: 'claude-session-id' | 'explicit-resume-reference' | 'hook-session-start'
@@ -28,7 +28,7 @@ export type ConversationObservationSource = 'startup' | 'resume' | 'clear' | 'fo
 export interface ConversationObservation {
   sessionId: string
   incarnationId: string | null
-  agentCli: 'claude' | 'codex'
+  agentCli: 'claude' | 'codex' | 'opencode'
   conversationReference: string
   source: ConversationObservationSource
   transcriptPath?: string
@@ -40,7 +40,7 @@ export interface ConversationObservationResult {
 }
 
 export interface MissingConversationBinding extends ConversationBindingBase {
-  agentCli: 'claude' | 'codex'
+  agentCli: 'claude' | 'codex' | 'opencode'
   status: 'missing'
   conversationReference: string
   captureRoute: BoundConversationBinding['captureRoute']
@@ -97,7 +97,7 @@ export interface SessionResumeResult {
  */
 export interface ConversationResumePreview {
   sessionId: string
-  agentCli: 'claude' | 'codex'
+  agentCli: 'claude' | 'codex' | 'opencode'
   conversationReference: string
   command: string
   /** Stored arguments `<cli> resume` will not accept, named for the owner; empty when none. */

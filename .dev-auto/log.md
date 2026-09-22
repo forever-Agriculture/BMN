@@ -2599,3 +2599,159 @@ the tree (`update-desktop.mjs:149`, `:183`) and packages the latest clean `origi
 build at all while local `main` and `origin/main` differ (`:61`). So the build will carry whatever is
 on `origin/main` when BMN closes — which means anything committed from here on has to be pushed
 before then, or the update stops with "local main does not match origin/main".
+
+## Run: Epics 16–18 (`$dev-auto 16-18`), 2026-09-22
+
+Owner request, verbatim: `$dev-auto 16-18`. Baseline `42faa76`, clean tree. Epic 17 was already accepted at `92c4199` in the earlier run, with all four review findings closed; this run reuses that evidence unless a changed boundary requires a new check. Epics 16 and 18 are backlog. No push, merge or desktop update requested.
+
+## Epic 18.2 binding helper dispatched (2026-09-22 ~14:56 Europe/Kyiv)
+
+Native Codex helper `/root/opencode_binding`, requested `gpt-6-astra/low`, complex bounded implementation. First tier GLM-5.3/max cannot edit files. Ownership: binding protocol and conversation-binding source/test only. Receipt and observed usage pending.
+
+## Epic 16 renderer helper dispatched (2026-09-22 ~15:02 Europe/Kyiv)
+
+Native Codex helper `/root/handoff_ui`, requested `gpt-6-astra/low`, complex bounded implementation. First tier GLM-5.3/max cannot edit files. Ownership: renderer main, Files panel, Needs you and session presentation/tests only. Receipt and observed usage pending.
+
+## First native helper results (2026-09-22)
+
+`/root/opencode_binding` returned `RESULT: done`: widened binding unions, classified OpenCode, added an observed `ses_` reference grammar from a read-only local DB ID, unsupported launch-time capture, option-filtered `--session` Resume, 149 focused tests passing and node TS check passing. `opencode export` exited 1; exported-ID confirmation and runtime remain unverified. Lead spot-checked source anchors/diff.
+
+`/root/handoff_ui` returned `RESULT: done`: Needs you routes handoff requests into existing Files editor, agent attribution and stale-source wording, no typing resolution or Mark answered; 39 focused tests and changed-file ESLint/diff check passed. Web typecheck pending protocol build. Desktop click-through unverified. Lead inspected the changed files and route anchors. Both requested `gpt-6-astra/low`; observed rollout/usage receipts pending.
+
+## Epic 18 CLI/plugin helper dispatched (2026-09-22)
+
+Native Codex `/root/opencode_cli`, requested `gpt-6-astra/low`; complex bounded edit route escalated because GLM-5.3/max first tier cannot edit. Owns only `apps/desktop/bin/bmn` and `control-cli.test.ts`; prohibited from installing into owner config. Receipt pending.
+
+## Epic 16 backend test helper dispatched (2026-09-22)
+
+Native Codex `/root/handoff_tests`, requested `gpt-5.6-luna/max`; routine test-writing route escalated because GLM-5.3-Flash/max first tier cannot edit. Owns only database, schema, service and socket test files. Local AF_UNIX socket tests currently fail EPERM in sandbox; an unsandboxed run is needed before acceptance. Receipt pending.
+
+## Epic 18 CLI/plugin helper returned (2026-09-22)
+
+`/root/opencode_cli` returned `RESULT: done`. Own files: bin/bmn and control-cli.test.ts; 17 new tests PASS, 288 existing tests PASS after OpenCode allowlists, node typecheck PASS, printed plugin SDK compile PASS. It observed the installed OpenCode loader accepts both `plugin/` and `plugins/`; no owner config touched. Real interactive process ancestry and event delivery unverified. Lead spot-checked plugin source, mappings, installer and mock anchors. Observed rollout/usage pending.
+
+## Electron acceptance helper dispatched (2026-09-22)
+
+Native Codex `/root/epic_electron`, requested `gpt-6-astra/low`, complex bounded self-test writing. First tier GLM-5.3/max cannot edit. Owns main/index.ts and electron-self-test.mjs only. No full Electron run until lead integration; receipt pending.
+
+## Electron acceptance helper returned (2026-09-22)
+
+`/root/epic_electron` returned `RESULT: done`; new synthetic session phases for Epic 16 owner handoff and Epic 18 OpenCode hook/binding/Resume, with mandatory receipt validators. Syntax and isolated main-entry TS check passed. Whole node check was red in concurrent test-file edits, not attributed. Electron runtime not run yet. Lead spot-checked acceptance phase and receipt source. Observed usage pending.
+
+## Epic 16 backend test helper returned (2026-09-22)
+
+`/root/handoff_tests` returned `RESULT: done`; added transaction/cap/rate/withdraw/delivery/expiry/snapshot/schema/control tests in four assigned test files. Store/schema/service 93/93 PASS, typecheck PASS. Socket tests failed before assertions due sandbox AF_UNIX `listen EPERM`; no code failure observed there, unsandboxed run pending. Lead spot-checked raw test anchors and diff. Observed usage pending.
+
+## Integration and review boundary (2026-09-22)
+
+Electron self-test run 2 exited 0, including the agent handoff and OpenCode synthetic phases. Raw `.dev-auto/evidence/epics-16-18/electron-2.log` sha256 `48c78326b2cdee34620cc77277717c3b8084eabb510465c0d0e0f1a55a4f9bce`. The earlier Electron run reached the new phases but failed a stale incumbent session-incarnation count assertion; corrected count is 13 and run 2 passed. Telegram handoff-page reply test failed on original auto-submit path (PTY write), then passed after `request.kind !== handoff` guard. Plugin command test failed on GNU `timeout 3s` dependency; replaced with direct `bmn hook opencode` whose own socket call has `HOOK_TIMEOUT_MS=3000`, portable on macOS; focused final recheck pending. Review fingerprint: `.dev-auto/evidence/epics-16-18/review-working.diff` sha256 `4b5e0cb358b3380231fef1727808203ed3410375230fc091ba4670f0999efdaa`, baseline `42faa76`.
+
+Two read-only whole-epic native reviews queued: Epic 16 and Epic 18, each gpt-6-astra/medium, required by dev-auto; separate findings and observed receipts pending.
+Review dispatches active: native `/root/epic_16_review` and `/root/epic_18_review`, both requested gpt-6-astra/medium, read-only against the recorded fingerprint.
+
+## Epic 18 whole-epic review returned (2026-09-22)
+
+Native `/root/epic_18_review`, requested gpt-6-astra/medium, verified implementation fingerprint and Electron receipt hashes. Three material P2 findings: printed plugin waits indefinitely if its shell child stalls before `bmn hook` socket timer (in-memory stalled promise remained pending 3,253 ms); OpenCode-specific competing-claim/swap acceptance missing; migration test does not seed a legacy `hook-session-start` row and reinitialize. Additional nonmaterial note: CLI ID regex is broader than utility regex. Real interactive OpenCode remains unverified; title probe yields only `OpenCode`, no resting rule. Reviewer modified nothing. Exact return is in the agent transcript; receipt pending. All three material findings unresolved at this boundary.
+
+## Epic 16 whole-epic review returned (2026-09-22)
+
+Native `/root/epic_16_review`, requested gpt-6-astra/medium, verified the same fingerprint/receipt hashes. Two material findings reproduced against real in-memory store: expiry after a paste claim but before finalization yields accepted draft with expired request; `retryHandoffDraft` creates an owner-prepared/requestless copy of an uncertain agent draft, losing provenance and petition resolution. Electron receipt omitted `--file-id`, leaving agent published-file end-to-end unverified. Reviewer read-only; exact return in agent transcript. All material findings unresolved at this boundary.
+
+Full unit rerun at the working revision: 1487 passed, 1 skipped, 1 failed (`saved-output-store.test.ts:172` five-second timeout). Raw `.dev-auto/evidence/epics-16-18/unit-final.log`. That test and implementation are unchanged; prior accepted Epic 15 baseline at `8bd263e` documented the same full-gate timeout and isolated green runs in `.dev-auto/log.md:2450-2475`. A lower-concurrency full run remains planned to get a green broad gate. Lint and typecheck passed.
+
+## Epic 18 focused repair queued (2026-09-22)
+
+Brief `.dev-auto/evidence/epics-16-18/repair-18.md`; native gpt-6-astra/low requested (first GLM-5.3/max route lacks edit capability). Scope is printed plugin+CLI tests, OpenCode claim manager test, migration test; lead owns 16 and Electron.
+Focused repair dispatched as `/root/epic_18_repair`, requested gpt-6-astra/low, file ownership per brief.
+
+## Focused repair result (2026-09-22)
+
+Epic 16 lead repair: two service regression tests each failed on original behavior (expiry count 1 during claimed paste; retry preparedBy/requestId null), then passed after store expiry excludes in-flight uncertain agent handoffs and explicit retry copies preparedBy/requestId. Companion store/service 90/90 PASS. Electron self-test expanded to publish a source-owned output via real `bmn publish`, include `--file-id` in `bmn handoff`, assert UI lists it and paste carries its link; new phase not yet rerun. Telegram page reply RED (PTY write) then GREEN as source draft; docs now explicit.
+
+Epic 18 focused helper `/root/epic_18_repair` returned: overall timeout through `input.$` via GNU `timeout -s KILL 3s` on Linux and Perl alarm+exec on macOS; stalled child tests RED against original at 4.5s then GREEN at ~3s, PID gone; OpenCode rival/swap/exit and hook-binding migration/reapply tests. Helper reported 452/452 changed tests, changed ESLint, node TS, syntax and diff checks PASS. Lead source verification and final checks pending; native macOS and real OpenCode remain unverified.
+
+## Focused rechecks queued (2026-09-22)
+
+Review brief `.dev-auto/evidence/epics-16-18/recheck-brief.md`; candidate diff SHA256 `01730bb617ba8cd0676fca9c0ce11699b6604e3823cc087b66d97290eed5dbdf`; final Electron exit 0 SHA256 `2355af09b55f5bea1e0e5582bf2ff67c86184fb358c6cab621e6028b0e715c17`, parsed file/paste and OpenCode receipt true; visual exit 0 SHA256 `7580eeb43e8e1b48939298cf33be84130db008a559f9afab32bb67e50cf77d26`. Two read-only gpt-6-astra/low focused rechecks queued for material findings, one per epic; 4-worker full unit running.
+Focused rechecks dispatched as `/root/epic_16_recheck` and `/root/epic_18_recheck`, both requested gpt-6-astra/low, read-only against candidate `01730bb6...`.
+
+## Epic 16 focused recheck returned (2026-09-22)
+
+Native `/root/epic_16_recheck`, requested gpt-6-astra/low: original claimed-paste expiry, retry provenance, and published-file Electron gap CLOSED with 90/90 focused tests and runtime receipt. New material finding: SQL exemption for every persisted uncertain draft leaves an expired request open forever after process loss; direct discard/withdraw reject uncertain, UI lacks direct resolution. Actual SQL probe returned zero changes one year later. Need distinguish active paste from recovered uncertain, preserve uncertain draft, close stale request at deadline. Finding unresolved; reviewer edited nothing.
+
+## Epic 18 focused recheck returned and broad gate (2026-09-22)
+
+Native `/root/epic_18_recheck`, requested gpt-6-astra/low, found all three prior material findings CLOSED against `01730bb6...`: real stalled-child cleanup tests 2/2 PASS unsandboxed (Linux and Perl branches exercised), OpenCode rival/swap/exit focused PASS, legacy hook binding migration/reapply focused PASS. Local SDK type supports array shell expressions; Bun runtime array expansion/native macOS remains unverified; real interactive OpenCode owner confirmation remains unverified. No new material issue. Reviewer read-only. Full `vitest run --maxWorkers=4` exit 0, 88 files/1493 PASS/1 SKIP, raw `.dev-auto/evidence/epics-16-18/unit-4workers.log` sha256 `a7426343bb3bb8238e89ae2f04e7a03b562dd8f8df313d92c8c55bab264f38e1`.
+
+## Epic 16 recovered-uncertain expiry repair and recheck (2026-09-22)
+
+After prior focused review exposed the persistent uncertain exemption, added a service regression: uncertain petition + abandoned retry, advance clock to deadline, sweep; original SQL left request open (RED). New `expireAttention` accepts active draft IDs from the service per-draft operation map and protects only those requests; a recovered uncertain request expires, its uncertain draft retains that state, and a pending retry is discarded. The earlier in-flight paste regression still protects an active write and records owner resolution. Both tests GREEN; store/service 91/91 PASS, lint/typecheck PASS. Candidate diff `.dev-auto/evidence/epics-16-18/review-final-delta.diff` sha256 `6f5963275f2e996dd942e6b07ad540ca00a8f23510f3ceb7fabc8de84d969f1b`. Read-only low-tier reviewer follow-up queued to settle the new material finding.
+Follow-up delivered to `/root/epic_16_recheck`, requested gpt-6-astra/low, read-only delta scope.
+
+## Epic 16 recovery delta recheck returned (2026-09-22)
+
+Native `/root/epic_16_recheck` follow-up, gpt-6-astra/low, verified final delta fingerprint `6f596327...` and CLOSED the last material finding. Active operation IDs protect a paste; after process loss no ID remains, expiry closes petition, discards pending retry, and preserves uncertain original. Service regression drives sweep inside the write callback and recovered/abandoned retry; store/service 91/91 PASS. Reviewer inspected database-client synchronous posting and worker serial transactions, found no remaining ordering race, and edited nothing. All selected-scope material findings now closed. Real OpenCode owner confirmation remains the explicit acceptance limitation.
+
+## Owner authorization update (2026-09-22)
+
+Owner follow-up, verbatim: "when you're done and if you're fully confident - update local and push to GH". This authorizes pushing the ready `main` changes to GitHub and the repository-prescribed local desktop update after a clean, reviewed acceptance. Repository `AGENTS.md` directs `pnpm run update:desktop` after commit+push to main; it queues and waits for packaged BMN to exit. No broader merge/deployment scope inferred.
+
+## Observed Codex usage receipts (2026-09-22)
+
+`scripts/check.py usage PATH` was run for the lead and each of ten native helper/reviewer rollouts. Cached input is included in total tokens; session totals are not an epic cost estimate.
+
+| Role | Observed route | Total tokens | Receipt |
+| --- | --- | ---: | --- |
+| lead | gpt-5.6-sol/xhigh | 65,051,621 | `/home/oleksandr/.codex/sessions/2026/09/22/rollout-2026-09-22T14-51-55-01a0c8f5-51e5-7102-8904-8bc1d7167157.jsonl` |
+| 18.2 binding | gpt-6-astra/low | 573,746 | `/home/oleksandr/.codex/sessions/2026/09/22/rollout-2026-09-22T14-55-36-01a0c8f8-afbd-7350-a3cb-9e7da9ee5527.jsonl` |
+| 16 renderer | gpt-6-astra/low | 443,798 | `/home/oleksandr/.codex/sessions/2026/09/22/rollout-2026-09-22T14-56-47-01a0c8f9-c52b-7cd2-83fd-595dc202d2b8.jsonl` |
+| 18 CLI/plugin | gpt-6-astra/low | 1,527,090 | `/home/oleksandr/.codex/sessions/2026/09/22/rollout-2026-09-22T15-00-17-01a0c8fc-fbf7-7920-a30e-34dc9a75dbc9.jsonl` |
+| 16 backend tests | gpt-5.6-luna/max | 6,675,807 | `/home/oleksandr/.codex/sessions/2026/09/22/rollout-2026-09-22T15-06-46-01a0c902-e9c2-7b31-ae32-063f9b2c9962.jsonl` |
+| Electron phases | gpt-6-astra/low | 948,793 | `/home/oleksandr/.codex/sessions/2026/09/22/rollout-2026-09-22T15-13-04-01a0c908-aec3-70f3-907c-cda8c9b5ab4e.jsonl` |
+| 16 whole review | gpt-6-astra/medium | 1,040,679 | `/home/oleksandr/.codex/sessions/2026/09/22/rollout-2026-09-22T15-33-43-01a0c91b-96a6-73e1-ac60-426d9aaf832f.jsonl` |
+| 18 whole review | gpt-6-astra/medium | 844,757 | `/home/oleksandr/.codex/sessions/2026/09/22/rollout-2026-09-22T15-33-56-01a0c91b-c935-7982-9e8b-da589165d5a0.jsonl` |
+| 18 repair | gpt-6-astra/low | 1,481,068 | `/home/oleksandr/.codex/sessions/2026/09/22/rollout-2026-09-22T15-39-02-01a0c920-7474-74a0-8d34-810309927854.jsonl` |
+| 16 focused recheck + delta | gpt-6-astra/low | 589,664 | `/home/oleksandr/.codex/sessions/2026/09/22/rollout-2026-09-22T15-47-52-01a0c928-89ce-7e53-9daa-43afd4c6806a.jsonl` |
+| 18 focused recheck | gpt-6-astra/low | 540,102 | `/home/oleksandr/.codex/sessions/2026/09/22/rollout-2026-09-22T15-47-59-01a0c928-a5b5-7ee2-9b0e-adeb371a2a13.jsonl` |
+
+## Owner extra review request (2026-09-22)
+
+Owner follow-up, verbatim: "I suggest that before pushing to GH you double review / test with glm flash and glm for extra confidence". Push is held until both named routes return, material findings resolved and affected checks rerun. GLM provider routing is authorized by this explicit request and dev-auto; only task-relevant source, requirements and evidence summaries will be sent, without credentials or unrelated private data.
+
+## Owner-requested GLM reviews queued (2026-09-22)
+
+GLM-5.3-Flash/max via configured Claude profile, routine code/docs review, tools disabled; prompt `.dev-auto/evidence/epics-16-18/flash-review-prompt.txt` sha256 `d68f04ccb4a131d4811e13e2efe02ac0d66092c50b9eef5f0651c7ded5e36e6f`. GLM-5.3/max via same profile, complex adversarial cross-boundary review, tools disabled; prompt `glm-review-prompt.txt` sha256 `17e30fe1fd911c0307d6434eaa614a292098659a2cbdc5d65333124781d85df1`. Both prompts contain only original task-relevant requirements, sanitized selected source diff and summarized evidence. Config credentials are sourced without reading or printing. Direct CLI receipts pending.
+Both direct GLM CLI calls launched concurrently with tools/MCP disabled and output redirected to ignored receipts; requested routes GLM-5.3-Flash/max and GLM-5.3/max. Results pending.
+
+Final complete unit rerun after recovered-uncertain expiry delta: `vitest run --maxWorkers=4` exit 0, 88 files, 1494 PASS/1 SKIP. Raw `.dev-auto/evidence/epics-16-18/unit-accepted.log` sha256 `d109a3b13d5d830d6734f87c70fca68676480c35d1e3566f9aee237baa8ab310`. GLM reviews still active.
+Final isolated Electron acceptance rerun after expiry delta exited 0; raw `.dev-auto/evidence/epics-16-18/electron-accepted.log` sha256 `33ea7174f230e2bac960e0bd92574a4b7b63186657e8163f650bb266bbff1968`. Parsed receipt again confirms published handoff file, one owner-stamped bracketed paste/no Enter, bounded status, and OpenCode permission notice/binding/Resume argv. GLM reviews still active.
+
+## Owner-requested GLM-5.3 review returned (2026-09-22)
+
+Direct Claude profile receipt `.dev-auto/evidence/epics-16-18/glm-review.json` sha256 `ef378b9c6991f8953d84b20030683276a3df7e346437d7a787e84d65580300ab`; `scripts/check.py usage` observed GLM-5.3, 59,053 input/18,655 output tokens, $0.76164, one turn, success. One material finding: OpenCode CLI accepts all 26 alphanumerics after `ses_`, while utility/binding require first 12 hex and remaining 14 alphanumerics; a CLI-accepted ID can be refused by server, swallowed by hook, and never bind/Resume. Other notes on destination/withdraw coverage and worker/index evidence boundaries were classified nonmaterial pending lead verification. Finding unresolved at this boundary. GLM Flash still active.
+
+## GLM OpenCode reference finding repair and recheck queued (2026-09-22)
+
+Verified source mismatch. First fixture checked only server handler and was GREEN on original because server validation refused the claim; replaced with raw-socket test of outbound methods. Original CLI sent `conversation.observe` for malformed `ses_zzzzzzzzzzzzhVbLiXJ8YHJQjV` (RED); after changing its regex to match utility exactly, no such method is sent (GREEN), while observed real-shape ID still sends it. Full CLI 310/310 PASS, lint/typecheck PASS. Read-only local OpenCode DB: 7 session IDs, all 7 strict grammar, no broad-only or other shapes; IDs/content not printed or transferred. Focused GLM-5.3/max recheck prompt `.dev-auto/evidence/epics-16-18/glm-reference-recheck-prompt.txt` sha256 `cbd3ba8dfbcc04cfef9848092ed49b643111a97996e945ef4fcf63ccaf181b49`, receipt pending. Final candidate diff `.dev-auto/evidence/epics-16-18/review-after-glm.diff` sha256 `df369acb078ea0dedd6062a1fae9a57368d05cb77281d83908b50996e72a8894`.
+Focused GLM-5.3/max direct review call launched with tools/MCP disabled; receipt pending.
+
+## Owner-requested GLM-5.3-Flash review returned (2026-09-22)
+
+Direct Claude profile receipt `.dev-auto/evidence/epics-16-18/glm-flash-review.json` sha256 `3d16ebf18b2112b34b7b53cde38d544cbf73da450dbb66c7dcdeff0c4c01ce09`; `scripts/check.py usage` observed GLM-5.3-Flash, 24,789 input/29,768 output tokens, $0.868145, one turn, success. Three findings: same OpenCode regex mismatch (already reproduced/fixed, GLM focused recheck active), possible missing plugin directory on fresh config (`writeAtomically` internals omitted from its packet), and stale anchor in `docs/telegram.md` after heading rename. Folder and anchor claims pending source/isolated verification. Other limitations are packet scope or documented runtime unknowns; no automatic code verdict.
+
+## GLM reference recheck and Flash findings disposition (2026-09-22)
+
+GLM-5.3/max focused receipt `.dev-auto/evidence/epics-16-18/glm-reference-recheck.json` sha256 `8c29a2f57d0c686b958470bf0285ae0bd0006fe0fb5db2d2246480a90474975b`; observed model GLM-5.3, 3,560 input/974 output tokens, $0.04215. It CLOSED the CLI/server reference mismatch: regex literal now identical, raw-socket fixture checks method presence/absence before server validation, valid ID still sent.
+
+Flash finding #2 (fresh OpenCode plugin folder) is refuted: `writeAtomically` in `bin/bmn:1208-1222` calls `mkdirSync(dirname(target), { recursive: true })`. Isolated real CLI with empty `OPENCODE_CONFIG_DIR` created `plugins/bmn.ts`, exact printed text, `hooks check` wired; focused test added to `control-cli.test.ts`. Flash finding #3 was real: `docs/telegram.md` anchor did not match renamed OpenCode heading; link-check script RED before one-line fix, GREEN afterward. Focused Flash disposition queued.
+
+GLM Flash focused recheck prompt `.dev-auto/evidence/epics-16-18/glm-flash-recheck-prompt.txt` sha256 `e93f9387c37c6f93bd4631644f81998891a443ca2fc5c4de6d7970eb04d9f322` contains exact `writeAtomically`/installer source, fresh-config test, renamed heading/link. Candidate diff `review-glm-final.diff` sha256 `791c45c6eea26b519b47f08420abf5e8b092dd049fe4a57cb5d51d3c82bebfd4`. Review dispatch is queued in handoff before call.
+Focused GLM-5.3-Flash/max direct review launched with tools/MCP disabled; receipt pending.
+
+## GLM Flash focused recheck and final unit gate (2026-09-22)
+
+Flash focused receipt `.dev-auto/evidence/epics-16-18/glm-flash-recheck.json` sha256 `69a535e26fba9719cbc1a0164c9439a048c38898f4bb07fd6b62cc8b99db7c7e`; `scripts/check.py usage` observed GLM-5.3-Flash, 3,420 input/2,658 output tokens, $0.08355. It CLOSED/refuted its two remaining findings: recursive mkdir in `writeAtomically` plus isolated fresh install means no ENOENT, and Telegram anchor now matches renamed heading exactly. No new material finding. All owner-requested GLM material findings are disposed of. Final full unit rerun after GLM regex/test/doc changes exit 0, 88 files, 1495 PASS/1 SKIP; raw `.dev-auto/evidence/epics-16-18/unit-after-glm.log` sha256 `c54dd65e7272c4380515263eeeafbe6d70f6949a55718f9d58281605de41b1ad`. Lint/typecheck and focused fresh install/anchor checks PASS.
+
+## Acceptance gates after owner-requested double review (2026-09-22)
+
+Full unit at final source `vitest run --maxWorkers=4`: 88 files, 1495 PASS/1 SKIP, exit 0; raw `.dev-auto/evidence/epics-16-18/unit-after-glm.log` sha256 `c54dd65e7272c4380515263eeeafbe6d70f6949a55718f9d58281605de41b1ad`. Final isolated Electron exit 0; raw `.dev-auto/evidence/epics-16-18/electron-after-glm.log` sha256 `68db6f6f4869f3e417c20a9a8079a3a274451bf186c003d67fa3031d9d5d95bc`, parsed published-file owner handoff and OpenCode permission/binding/Resume all true. CLI 310/310, store/service 91/91, lint/typecheck/diff, visual, anchor and fresh isolated plugin install all pass. Final source fingerprint `.dev-auto/evidence/epics-16-18/review-glm-final.diff` sha256 `791c45c6eea26b519b47f08420abf5e8b092dd049fe4a57cb5d51d3c82bebfd4`; sensitive-pattern scan zero keys/private paths. Board marks selected epics/stories done. All Astra and GLM material findings have closed/refuted dispositions. Real interactive OpenCode confirmation remains documented per AC; native macOS remains unverified.

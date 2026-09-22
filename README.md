@@ -15,7 +15,7 @@ Everything runs on your computer. There is no account, cloud backend or telemetr
 ## What it does
 
 - **Workspaces and sessions.** Named workspaces hold independent sessions. A session is a shell,
-  Claude Code, Codex, or any command, with its own working directory. Launch templates, rename,
+  Claude Code, Codex, OpenCode, or any command, with its own working directory. Launch templates, rename,
   archive and edit launch settings. Layout, order and selection survive a restart, but nothing
   starts automatically; after an update or a quit, BMN offers to resume what the stop interrupted,
   in one dialog that shows each command and starts nothing until you press the button.
@@ -24,11 +24,11 @@ Everything runs on your computer. There is no account, cloud backend or telemetr
   notifications reach the program unchanged. Your CLIs keep their own configuration,
   authentication, hooks and permissions.
 - **Process control.** Stop a process and keep its last screen as saved output. Start it again, or
-  resume the stored Claude Code / Codex conversation through the CLI's own resume.
+  resume the stored Claude Code / Codex / OpenCode conversation through the CLI's own resume.
   Closing the window with sessions running asks whether to keep them running or stop them.
   [What survives](docs/architecture.md#what-survives) says what each ending keeps.
 - **Agent control (`bmn`).** Every session gets the `bmn` command. An agent can list sessions,
-  publish a file, report progress, ask you a question, or send text to its own session. Each session
+  publish a file, report progress, ask you a question, prepare an owner-delivered handoff, or send text to its own session. Each session
   gets a token scoped to that session. `bmn hooks check` says which of BMN's hook entries each
   harness's own settings file carries, and `bmn hooks install <agent>` adds the missing ones without
   touching anything else. See [docs/agent-control.md](docs/agent-control.md).

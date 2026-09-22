@@ -397,5 +397,85 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
     sql: `
       ALTER TABLE process_incarnation ADD COLUMN cohort_offered_at TEXT;
     `
+  },
+  {
+    // Agent handoff provenance is additive. SQLite needs an attention table rebuild to widen its
+    // kind CHECK; preserve every request and the partial open-key index without changing its IDs.
+    version: 13,
+    sql: `
+      ALTER TABLE input_draft ADD COLUMN prepared_by TEXT CHECK (prepared_by IN ('agent'));
+
+      CREATE TABLE attention_request_next (
+        request_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES session(session_id),
+        incarnation_id TEXT,
+        request_key TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('question', 'permission', 'review', 'notice', 'handoff')),
+        title TEXT NOT NULL,
+        body TEXT,
+        state TEXT NOT NULL CHECK (state IN ('open', 'answered', 'withdrawn', 'expired')),
+        resolution TEXT,
+        opened_at TEXT NOT NULL,
+        expires_at TEXT,
+        resolved_at TEXT,
+        seen_at TEXT,
+        revision INTEGER NOT NULL,
+        opened_by TEXT,
+        resolved_by TEXT
+      );
+      INSERT INTO attention_request_next
+        SELECT request_id, session_id, incarnation_id, request_key, kind, title, body,
+               state, resolution, opened_at, expires_at, resolved_at, seen_at, revision,
+               opened_by, resolved_by FROM attention_request;
+      DROP TABLE attention_request;
+      ALTER TABLE attention_request_next RENAME TO attention_request;
+      CREATE UNIQUE INDEX attention_open_key ON attention_request(session_id, request_key)
+        WHERE state = 'open';
+      CREATE INDEX input_draft_agent_source ON input_draft(source_session_id, created_at)
+        WHERE prepared_by = 'agent';
+    `
+  },
+  {
+    // OpenCode adds a third bound harness. Rebuild both CHECKs unconditionally so every legacy row
+    // survives verbatim, including unsupported rows and bindings captured before this release.
+    version: 14,
+    sql: `
+      CREATE TABLE conversation_binding_next (
+        session_id TEXT PRIMARY KEY REFERENCES session(session_id),
+        agent_cli TEXT NOT NULL CHECK (agent_cli IN ('claude', 'codex', 'opencode', 'other')),
+        status TEXT NOT NULL CHECK (status IN ('bound', 'unsupported')),
+        conversation_reference TEXT,
+        capture_route TEXT NOT NULL CHECK (
+          capture_route IN (
+            'claude-session-id', 'explicit-resume-reference', 'hook-session-start', 'unsupported'
+          )
+        ),
+        launch_cwd TEXT NOT NULL,
+        launch_executable TEXT NOT NULL,
+        launch_argv_json TEXT NOT NULL,
+        launch_environment_json TEXT NOT NULL,
+        detail TEXT NOT NULL,
+        captured_at TEXT NOT NULL,
+        CHECK (
+          (
+            status = 'bound' AND agent_cli IN ('claude', 'codex', 'opencode') AND
+            conversation_reference IS NOT NULL AND capture_route != 'unsupported'
+          ) OR (
+            status = 'unsupported' AND conversation_reference IS NULL AND
+            capture_route = 'unsupported'
+          )
+        )
+      );
+      INSERT INTO conversation_binding_next(
+        session_id, agent_cli, status, conversation_reference, capture_route,
+        launch_cwd, launch_executable, launch_argv_json, launch_environment_json,
+        detail, captured_at
+      )
+      SELECT session_id, agent_cli, status, conversation_reference, capture_route,
+        launch_cwd, launch_executable, launch_argv_json, launch_environment_json,
+        detail, captured_at FROM conversation_binding;
+      DROP TABLE conversation_binding;
+      ALTER TABLE conversation_binding_next RENAME TO conversation_binding;
+    `
   }
 ])

@@ -1,6 +1,6 @@
 import { access, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, join, resolve } from 'node:path'
 import type {
   AgentCli,
   BoundConversationBinding,
@@ -12,6 +12,15 @@ import type {
 } from '@bmn/protocol'
 
 export const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+// OpenCode 1.18.31: a local session ID was confirmed by `opencode export` on 2026-09-22.
+export const OPENCODE_REFERENCE_PATTERN = /^ses_[0-9a-f]{12}[A-Za-z0-9]{14}$/
+
+export function isConversationReference(agent: AgentCli, value: unknown): value is string {
+  return typeof value === 'string' && (agent === 'opencode'
+    ? OPENCODE_REFERENCE_PATTERN.test(value)
+    : (agent === 'claude' || agent === 'codex') && UUID_PATTERN.test(value))
+}
 
 export const RELEVANT_ENVIRONMENT_KEYS: ReadonlySet<string> = new Set([
   'CLAUDE_CONFIG_DIR',
@@ -241,6 +250,7 @@ export function agentCli(executable: string): AgentCli {
   const command = basename(executable).toLowerCase()
   if (command === 'claude' || command === 'claude.exe') return 'claude'
   if (command === 'codex' || command === 'codex.exe') return 'codex'
+  if (command === 'opencode' || command === 'opencode.exe') return 'opencode'
   return 'other'
 }
 
@@ -261,7 +271,7 @@ function invalidBoundBinding(input: unknown, reason: string): UnsupportedConvers
   const context = record(candidate?.launchContext)
   const executable = typeof context?.executable === 'string' ? context.executable : ''
   const candidateCli = candidate?.agentCli
-  const cli: AgentCli = candidateCli === 'claude' || candidateCli === 'codex' || candidateCli === 'other'
+  const cli: AgentCli = candidateCli === 'claude' || candidateCli === 'codex' || candidateCli === 'opencode' || candidateCli === 'other'
     ? candidateCli
     : agentCli(executable)
   return {
@@ -297,6 +307,7 @@ export function parseBoundBinding(input: unknown): PersistedConversationBinding 
   if (
     candidate.agentCli !== 'claude' &&
     candidate.agentCli !== 'codex' &&
+    candidate.agentCli !== 'opencode' &&
     candidate.agentCli !== 'other'
   ) {
     return invalidBoundBinding(input, 'stored agent CLI is invalid')
@@ -338,16 +349,18 @@ export function parseBoundBinding(input: unknown): PersistedConversationBinding 
   }
   if (candidate.status === 'bound') {
     if (
-      (candidate.agentCli !== 'claude' && candidate.agentCli !== 'codex') ||
-      !isLowercaseConversationReference(String(candidate.conversationReference ?? ''))
+      candidate.agentCli === 'other' ||
+      !isConversationReference(candidate.agentCli, candidate.conversationReference) ||
+      (candidate.agentCli !== 'opencode' && !isLowercaseConversationReference(String(candidate.conversationReference ?? '')))
     ) {
-      return invalidBoundBinding(input, 'stored conversation reference must be a lowercase UUID')
+      return invalidBoundBinding(input, 'stored conversation reference must match the agent format (lowercase UUID for Claude and Codex)')
     }
     if (
       (candidate.agentCli === 'claude' &&
         candidate.captureRoute !== 'claude-session-id' &&
         candidate.captureRoute !== 'explicit-resume-reference' &&
         candidate.captureRoute !== 'hook-session-start') ||
+      (candidate.agentCli === 'opencode' && candidate.captureRoute !== 'hook-session-start') ||
       (candidate.agentCli === 'codex' &&
         candidate.captureRoute !== 'explicit-resume-reference' &&
         candidate.captureRoute !== 'hook-session-start')
@@ -528,9 +541,16 @@ export async function prepareConversationLaunch(
         sessionId,
         cli,
         launchContext,
-        'Native conversation resume is available only for direct Claude or Codex CLI launches',
+        'Native conversation resume is available only for direct Claude, Codex or OpenCode CLI launches',
         capturedAt
       )
+    }
+  }
+  if (cli === 'opencode') {
+    return {
+      executable: input.executable, argv: [...input.argv], injectedArguments: [],
+      binding: unsupportedBinding(sessionId, cli, launchContext,
+        'OpenCode reports its session when it starts; Resume becomes available then', capturedAt)
     }
   }
   if (cli === 'codex') {
@@ -759,9 +779,10 @@ export function codexResumeCommand(binding: BoundConversationBinding): string {
 /** The control socket's detail limit, so every composed binding detail fits a request field. */
 export const MAX_BINDING_DETAIL_CHARACTERS = 2_000
 
-const OBSERVATION_AGENT_NAMES: Readonly<Record<'claude' | 'codex', string>> = {
+const OBSERVATION_AGENT_NAMES: Readonly<Record<'claude' | 'codex' | 'opencode', string>> = {
   claude: 'Claude Code',
-  codex: 'Codex'
+  codex: 'Codex',
+  opencode: 'OpenCode'
 }
 
 const OBSERVATION_SOURCE_PHRASES: Readonly<Record<ConversationObservationSource, string>> = {
@@ -779,14 +800,14 @@ export function conversationObservationDetail(
 
 /** "Reported by Codex at session start" - the harness's own word, named by its source. */
 export function conversationObservationSourceDetail(
-  agent: 'claude' | 'codex',
+  agent: 'claude' | 'codex' | 'opencode',
   source: ConversationObservationSource
 ): string {
   return `Reported by ${OBSERVATION_AGENT_NAMES[agent]} ${OBSERVATION_SOURCE_PHRASES[source]}`
 }
 
 export interface ConversationObservationInput {
-  agentCli: 'claude' | 'codex'
+  agentCli: 'claude' | 'codex' | 'opencode'
   conversationReference: string
   source: ConversationObservationSource
   transcriptPath?: string
@@ -822,7 +843,9 @@ export function bindingFromObservation(
   }
   const dropped = observation.agentCli === 'codex'
     ? describeDroppedCodexArguments(codexResumeArguments(binding.launchContext.argv))
-    : undefined
+    : observation.agentCli === 'opencode'
+      ? describeDroppedOpenCodeArguments(opencodeResumeArguments(binding.launchContext.argv))
+      : undefined
   return {
     ...binding,
     // The transcript path goes last: it is the only unbounded part, so the detail cap cuts it
@@ -830,11 +853,72 @@ export function bindingFromObservation(
     detail: conversationObservationDetail([
       conversationObservationSourceDetail(observation.agentCli, observation.source),
       replaced,
-      observation.agentCli === 'codex' ? `Resume runs: ${codexResumeCommand(binding)}` : undefined,
+      observation.agentCli === 'codex' ? `Resume runs: ${codexResumeCommand(binding)}`
+        : observation.agentCli === 'opencode'
+          ? `Resume runs: ${shownCommand(binding.launchContext.executable, ['--session', binding.conversationReference, ...opencodeResumeArguments(binding.launchContext.argv).carried])}`
+          : undefined,
       dropped === undefined ? undefined : `not carried: ${dropped}`,
       observation.transcriptPath === undefined ? undefined : `transcript ${observation.transcriptPath}`
     ])
   }
+}
+
+/** TUI resume policy checked against OpenCode --help on 2026-09-22. */
+export const OPENCODE_RESUME_OPTIONS_CLI_VERSION = '1.18.31'
+export const OPENCODE_RESUME_OPTIONS: ReadonlySet<string> = new Set([
+  '--model', '-m', '--agent', '--port', '--hostname'
+])
+
+export interface OpenCodeResumeArguments extends CodexResumeArguments {
+  projectPath?: string
+}
+
+export function opencodeResumeArguments(argv: readonly string[]): OpenCodeResumeArguments {
+  const result: OpenCodeResumeArguments = { carried: [], droppedOptions: [], droppedPositionals: 0 }
+  const droppedValues = new Set([
+    '--session', '-s', '--prompt', '--log-level', '--mdns-domain', '--cors', '--replay-limit'
+  ])
+  const droppedBooleans = new Set([
+    '--continue', '-c', '--fork', '--auto', '--help', '-h', '--version', '-v',
+    '--print-logs', '--pure', '--mdns', '--mini', '--no-replay'
+  ])
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index]!
+    if (token === '--') {
+      const rest = argv.slice(index + 1)
+      const keepProject = result.projectPath === undefined && rest[0] !== undefined
+      if (keepProject) result.projectPath = rest[0]!
+      result.droppedPositionals += rest.length - (keepProject ? 1 : 0)
+      break
+    }
+    if (!token.startsWith('-')) {
+      if (!result.projectPath) result.projectPath = token
+      else result.droppedPositionals += 1
+      continue
+    }
+    const equals = token.indexOf('=')
+    const name = equals < 0 ? token : token.slice(0, equals)
+    const next = argv[index + 1]
+    if (OPENCODE_RESUME_OPTIONS.has(name)) {
+      if (equals >= 0 && token.slice(equals + 1).length > 0) result.carried.push(token)
+      else if (equals < 0 && next !== undefined && !next.startsWith('-')) {
+        result.carried.push(token, next)
+        index += 1
+      } else result.droppedOptions.push(name)
+    } else {
+      result.droppedOptions.push(name)
+      // Consume unknown values conservatively: never mistake them for a project directory.
+      if (equals < 0 && !droppedBooleans.has(name) && next !== undefined && !next.startsWith('-')) {
+        index += 1
+        if (!droppedValues.has(name)) result.droppedPositionals += 1
+      }
+    }
+  }
+  return result
+}
+
+export function describeDroppedOpenCodeArguments(dropped: OpenCodeResumeArguments): string | undefined {
+  return describeDroppedCodexArguments(dropped)
 }
 
 export function buildNativeResumeLaunch(
@@ -859,6 +943,8 @@ export function buildNativeResumeLaunch(
       throw new Error(parsed.unsafeReason ?? 'Stored Claude launch context contains a selector')
     }
     argv = [...parsed.contextArgv, '--resume', binding.conversationReference]
+  } else if (binding.agentCli === 'opencode') {
+    argv = ['--session', binding.conversationReference, ...opencodeResumeArguments(binding.launchContext.argv).carried]
   } else if (binding.captureRoute === 'hook-session-start') {
     // A hook-captured binding keeps the session's full argv, so Resume carries what `codex resume`
     // still accepts and drops the rest, which the binding detail names.
@@ -870,7 +956,9 @@ export function buildNativeResumeLaunch(
     argv = ['resume', binding.conversationReference]
   }
   return {
-    cwd: binding.launchContext.cwd,
+    cwd: binding.agentCli === 'opencode'
+      ? resolve(binding.launchContext.cwd, opencodeResumeArguments(binding.launchContext.argv).projectPath ?? '.')
+      : binding.launchContext.cwd,
     executable: binding.launchContext.executable,
     argv,
     environment: { ...binding.launchContext.environment }
@@ -921,6 +1009,7 @@ export async function conversationReferenceExists(
       )
     )
   }
+  if (binding.agentCli === 'opencode') return true
   const codexRoot = binding.launchContext.environment.CODEX_HOME ?? join(homedir(), '.codex')
   return codexRolloutExists(
     join(codexRoot, 'sessions'),

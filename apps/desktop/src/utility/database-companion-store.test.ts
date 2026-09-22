@@ -15,26 +15,33 @@ import {
   claimHandoffDraft,
   closeAttention,
   createDraft,
+  discardHandoffDraft,
   expireAttention,
   finishHandoffDraft,
+  getAttention,
+  getDraft,
   getReceipt,
   getSettings,
   getTelegramMessage,
   insertArtifact,
+  listAgentHandoffs,
   listArtifacts,
   listAttention,
   listDrafts,
   listProgress,
   markAttentionSeen,
+  markStaleAgentHandoffs,
   appendAttentionBody,
   openAttention,
+  prepareAgentHandoff,
   putReceipt,
   putSettingsSection,
   putTelegramMessage,
   setArtifactState,
   updateDraft,
   updateHandoffDraft,
-  upsertProgress
+  upsertProgress,
+  withdrawAgentHandoff
 } from './database-companion-store'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
 import { DEFAULT_WORKSPACE_ID } from './store-schema'
@@ -86,6 +93,20 @@ function progress(observedAt: string, state: ProgressState = 'claimed-done'): Om
   return {
     sessionId: 's1', source: 'agent', incarnationId: 'i1', state, label: 'Story 12.1',
     detail: null, observedAt, receivedAt: now
+  }
+}
+
+function agentHandoff(draftId: string, requestId: string, createdAt: string = now) {
+  return {
+    draftId,
+    requestId,
+    sourceSessionId: 's1',
+    sourceIncarnationId: 'incarnation-1',
+    destinationSessionId: 's2',
+    destinationName: 'Two',
+    text: 'A result for the other session',
+    artifactIds: [] as string[],
+    createdAt
   }
 }
 
@@ -421,6 +442,119 @@ describe('companion store', () => {
       sessionId: 's2', sourceSessionId: 's1', text: 'Too late', artifactIds: [],
       expectedUpdatedAt: accepted.updatedAt
     }, now)).toThrow(/Only an unsent handoff/)
+  })
+
+  it('creates an agent petition and exposes only its own metadata projection', () => {
+    const prepared = prepareAgentHandoff(database, agentHandoff('agent-draft', 'agent-request'), now)
+
+    expect(prepared).toEqual({ draftId: 'agent-draft', requestId: 'agent-request', state: 'draft' })
+    expect(getDraft(database, 'agent-draft')).toMatchObject({
+      draftId: 'agent-draft', sessionId: 's2', sourceSessionId: 's1', preparedBy: 'agent',
+      requestId: 'agent-request', text: 'A result for the other session', state: 'draft'
+    })
+    expect(getAttention(database, 'agent-request')).toMatchObject({
+      sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'handoff:agent-draft',
+      kind: 'handoff', title: 'Asks to hand off to "Two"', body: 'A result for the other session',
+      state: 'open', openedBy: 'cli', expiresAt: '2026-09-15T12:00:00.000Z'
+    })
+    expect(listAgentHandoffs(database, 's1')).toEqual([{
+      draftId: 'agent-draft', destinationSessionId: 's2', state: 'draft',
+      updatedAt: now
+    }])
+    expect(listAgentHandoffs(database, 's2')).toEqual([])
+  })
+
+  it('rolls back a petition when the draft and attention cannot commit together', () => {
+    openAttention(database, {
+      sessionId: 's2', incarnationId: null, requestKey: 'occupied', kind: 'notice', title: 'Occupied'
+    }, 'request-clash', now)
+
+    expect(() => database.transaction(() => prepareAgentHandoff(
+      database, agentHandoff('rolled-back-draft', 'request-clash'), now
+    ))()).toThrow()
+    expect(() => getDraft(database, 'rolled-back-draft')).toThrow(expect.objectContaining({ code: ERROR_CODES.notFound }))
+    expect(listAgentHandoffs(database, 's1')).toEqual([])
+    expect(listAttention(database)).toHaveLength(1)
+  })
+
+  it('enforces the ten-second rate limit and three pending handoff cap', () => {
+    const at = (seconds: number) => new Date(Date.parse(now) + seconds * 1000).toISOString()
+    const prepare = (number: number, seconds: number) => prepareAgentHandoff(
+      database, agentHandoff(`agent-draft-${number}`, `agent-request-${number}`, at(seconds)), at(seconds)
+    )
+
+    prepare(1, 0)
+    expect(() => prepare(2, 1)).toThrow(/Wait 10 seconds/)
+    prepare(2, 10)
+    prepare(3, 20)
+    expect(() => prepare(4, 30)).toThrow(/three pending handoffs/)
+    expect(listAgentHandoffs(database, 's1')).toHaveLength(3)
+    expect(listAttention(database).filter((record) => record.kind === 'handoff' && record.state === 'open'))
+      .toHaveLength(3)
+  })
+
+  it('withdraws a draft before owner editing and keeps owner edits after withdrawal', () => {
+    const first = prepareAgentHandoff(database, agentHandoff('withdraw-before', 'withdraw-before-request'), now)
+    const firstRequest = withdrawAgentHandoff(database, 's1', first.draftId, '2026-09-14T12:00:01.000Z')
+    expect(firstRequest).toMatchObject({ state: 'withdrawn', resolution: 'withdrawn by agent', resolvedBy: 'cli' })
+    expect(getDraft(database, first.draftId)).toMatchObject({ state: 'discarded', detail: 'Withdrawn by the agent' })
+
+    const second = prepareAgentHandoff(
+      database, agentHandoff('withdraw-after', 'withdraw-after-request', '2026-09-14T12:00:10.000Z'),
+      '2026-09-14T12:00:10.000Z'
+    )
+    const edited = updateHandoffDraft(database, second.draftId, {
+      sessionId: 's2', sourceSessionId: 's1', text: 'Owner edit kept here', artifactIds: [],
+      expectedUpdatedAt: getDraft(database, second.draftId).updatedAt
+    }, '2026-09-14T12:00:11.000Z')
+    const secondRequest = withdrawAgentHandoff(database, 's1', second.draftId, '2026-09-14T12:00:12.000Z')
+    expect(secondRequest).toMatchObject({ state: 'withdrawn', resolution: 'withdrawn by agent', resolvedBy: 'cli' })
+    expect(secondRequest.body).toContain('The agent withdrew this; the owner\'s edits are kept')
+    expect(getDraft(database, second.draftId)).toMatchObject({
+      state: 'draft', text: 'Owner edit kept here',
+      detail: "The agent withdrew this; the owner's edits are kept"
+    })
+    expect(Date.parse(getDraft(database, second.draftId).updatedAt)).toBeGreaterThan(Date.parse(edited.updatedAt))
+  })
+
+  it('resolves delivery, owner discard, and expiry with the draft state', () => {
+    const delivered = prepareAgentHandoff(database, agentHandoff('delivered', 'delivered-request'), now)
+    const claimed = claimHandoffDraft(database, delivered.draftId, now, 'incarnation-2', '2026-09-14T12:00:01.000Z')
+    expect(claimed.claimed).toBe(true)
+    const accepted = finishHandoffDraft(
+      database, delivered.draftId, 'accepted', 'Pasted to terminal — not submitted', '2026-09-14T12:00:02.000Z'
+    )
+    expect(accepted).toMatchObject({ state: 'accepted', detail: 'Pasted to terminal — not submitted' })
+    expect(getAttention(database, delivered.requestId)).toMatchObject({
+      state: 'answered', resolution: 'pasted, not submitted', resolvedBy: 'owner'
+    })
+
+    const discarded = prepareAgentHandoff(
+      database, agentHandoff('discarded', 'discarded-request', '2026-09-14T12:00:10.000Z'),
+      '2026-09-14T12:00:10.000Z'
+    )
+    expect(discardHandoffDraft(database, discarded.draftId, '2026-09-14T12:00:11.000Z')).toMatchObject({
+      state: 'discarded'
+    })
+    expect(getAttention(database, discarded.requestId)).toMatchObject({
+      state: 'answered', resolution: 'discarded', resolvedBy: 'owner'
+    })
+
+    const expiredAt = '2026-09-14T12:00:20.000Z'
+    const expired = prepareAgentHandoff(database, agentHandoff('expired', 'expired-request', expiredAt), expiredAt)
+    expect(expireAttention(database, '2026-09-15T12:00:20.000Z')).toBe(1)
+    expect(getAttention(database, expired.requestId)).toMatchObject({ state: 'expired', resolvedBy: 'expiry' })
+    expect(getDraft(database, expired.draftId)).toMatchObject({
+      state: 'discarded', detail: 'The handoff request expired'
+    })
+  })
+
+  it('marks a pending source request stale once its incarnation changes', () => {
+    const prepared = prepareAgentHandoff(database, agentHandoff('stale', 'stale-request'), now)
+    expect(markStaleAgentHandoffs(database, { s1: 'incarnation-new' })).toBe(1)
+    expect(getAttention(database, prepared.requestId).body)
+      .toContain('prepared by an earlier process of this session')
+    expect(markStaleAgentHandoffs(database, { s1: 'incarnation-new' })).toBe(0)
   })
 
   it('maps Telegram messages to sessions', () => {

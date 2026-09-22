@@ -5,6 +5,7 @@ import type { AttentionKind, AttentionRecord } from '@bmn/protocol'
 export const PAGE_AFTER_MS: Readonly<Record<AttentionKind, number>> = Object.freeze({
   permission: 15_000,
   question: 15_000,
+  handoff: 15_000,
   review: 15_000,
   notice: 60_000
 })

@@ -75,6 +75,7 @@ import {
   openRequests,
   progressPresentation,
   requestsAnsweredByTyping,
+  handoffDraftForAttention,
   sessionAttention,
   sessionProcessLive,
   sessionStatus,
@@ -193,6 +194,7 @@ function App(): React.JSX.Element {
   const [drafts, setDrafts] = useState<InputDraftRecord[]>([])
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS)
   const [panel, setPanel] = useState<SidePanel>(null)
+  const [requestedHandoffDraftId, setRequestedHandoffDraftId] = useState<string | null>(null)
   const [focusMode, setFocusMode] = useState(false)
   const [menu, setMenu] = useState<MenuAnchor | null>(null)
   const [dialog, setDialog] = useState<ShellDialog | null>(null)
@@ -1093,6 +1095,19 @@ function App(): React.JSX.Element {
   }
 
   const recordAttentionOpened = (request: AttentionRecord): void => {
+    if (request.kind === 'handoff') {
+      const draft = handoffDraftForAttention(request, drafts)
+      const draftId = draft?.draftId ?? (request.requestKey.startsWith('handoff:')
+        ? request.requestKey.slice('handoff:'.length) : '')
+      if (draftId) {
+        setRequestedHandoffDraftId(draftId)
+        setPanel('files')
+        if (!draft) void refresh.drafts().catch(fail('Draft refresh failed'))
+      } else {
+        brief('This handoff is no longer available. Refreshing drafts.')
+        void refresh.drafts().catch(fail('Draft refresh failed'))
+      }
+    }
     const opening = attentionActionWhenOpened(request)
     if (!opening) return
     const action = opening === 'resolve-notice'
@@ -1715,6 +1730,9 @@ function App(): React.JSX.Element {
               sessionIncarnationId={selectedSessionId ? live[selectedSessionId]?.incarnationId ?? null : null}
               artifacts={artifacts}
               drafts={drafts}
+              attention={attention}
+              requestedHandoffDraftId={requestedHandoffDraftId}
+              onHandoffOpened={() => setRequestedHandoffDraftId(null)}
               sessions={sessions}
               workspaces={workspaces}
               onOpenSession={openSession}

@@ -8,6 +8,7 @@ import {
   ERROR_CODES,
   HOOK_EVENT_LOG_LIMIT,
   isAttentionOrigin,
+  hasDisallowedHandoffControl,
   METHOD_REGISTRY,
   PROGRESS_STALE_AFTER_MS,
   TERMINAL_NOTICE_BODY_MAX,
@@ -283,6 +284,7 @@ export class CompanionService {
         publishArtifact: (p) => this.controlCall(() => this.publishArtifact(p)),
         reportProgress: (p) => this.controlCall(() => this.reportProgress(p)),
         openAttention: (p) => this.controlCall(() => this.openAttention(p)),
+        prepareHandoff: (p) => this.controlCall(() => this.prepareAgentHandoff(p)),
         reportRefusal: (method, sessionId, reason) => this.logRefusal(method, sessionId, reason),
         observeConversation: (p) => this.controlCall(async () => {
           const result = await options.manager.observeConversation(p)
@@ -291,8 +293,9 @@ export class CompanionService {
           else this.emit('conversations', p.sessionId)
           return result
         }),
-        withdrawAttention: (p) => this.controlCall(
-          () => this.closeAttentionByKey(p.sessionId, p.requestKey, 'withdrawn', null, p.origin ?? null)
+        withdrawAttention: (p) => this.controlCall(() => p.requestKey.startsWith('handoff:')
+          ? this.withdrawAgentHandoff(p.sessionId, p.requestKey.slice('handoff:'.length))
+          : this.closeAttentionByKey(p.sessionId, p.requestKey, 'withdrawn', null, p.origin ?? null)
         ),
         resolveAttention: (p) => this.controlCall(
           () => this.closeAttentionByKey(p.sessionId, p.requestKey, 'answered', p.resolution, p.origin ?? null)
@@ -435,6 +438,7 @@ export class CompanionService {
       case METHOD_REGISTRY.artifactDeliver:
         return this.deliver(text(params, 'artifactId'), text(params, 'sessionId'))
       case METHOD_REGISTRY.attentionList:
+        await this.refreshHandoffStaleness()
         return database.companion('listAttention')
       case METHOD_REGISTRY.hookEventsList:
         // Read-only and scoped to one session; the log never reaches `state.snapshot` or another session.
@@ -474,6 +478,7 @@ export class CompanionService {
           expectedKind !== undefined &&
           expectedKind !== 'question' && expectedKind !== 'permission' &&
           expectedKind !== 'review' && expectedKind !== 'notice'
+          && expectedKind !== 'handoff'
         ) invalid('The expected attention kind is invalid')
         const expectedRevision = params.expectedRevision
         if (expectedRevision !== undefined && (!Number.isSafeInteger(expectedRevision) || Number(expectedRevision) < 1)) {
@@ -514,12 +519,9 @@ export class CompanionService {
       case METHOD_REGISTRY.draftDiscard: {
         const draftId = text(params, 'draftId')
         return this.withDraft(draftId, async () => {
-          const draft = await database.companion('getDraft', draftId)
-          if (draft.origin === 'handoff' && draft.state !== 'draft') {
-            invalid('Only an unsent handoff can be discarded')
-          }
-          const record = await database.companion('updateDraft', draftId, 'discarded', null, this.iso())
+          const record = await database.companion('discardHandoffDraft', draftId, this.iso())
           this.emit('drafts', record.sessionId)
+          if (record.preparedBy === 'agent' && record.sourceSessionId) this.emit('attention', record.sourceSessionId)
           return record
         })
       }
@@ -628,11 +630,15 @@ export class CompanionService {
   }
 
   private async snapshot(scope: ControlScope): Promise<unknown> {
+    await this.refreshHandoffStaleness()
     const sessions = await this.listedSessions(scope)
     const visible = new Set(sessions.map((session) => session.sessionId))
-    const [attention, progress] = await Promise.all([
+    const [attention, progress, handoffs] = await Promise.all([
       this.options.database.companion('listAttention'),
-      this.options.database.companion('listProgress')
+      this.options.database.companion('listProgress'),
+      scope.kind === 'owner'
+        ? this.options.database.companion('listDrafts')
+        : this.options.database.companion('listAgentHandoffs', scope.sessionId)
     ])
     const nowMs = this.now().getTime()
     return {
@@ -645,6 +651,9 @@ export class CompanionService {
         conversation: session.conversation
       })),
       attention: attention.filter((request) => request.state === 'open' && visible.has(request.sessionId)),
+      handoffs: scope.kind === 'owner'
+        ? handoffs.filter((draft) => 'origin' in draft && draft.origin === 'handoff')
+        : handoffs,
       progress: progress
         .filter((row) => visible.has(row.sessionId))
         .map((row) => ({ ...row, stale: nowMs - Date.parse(row.observedAt) > PROGRESS_STALE_AFTER_MS }))
@@ -916,8 +925,12 @@ export class CompanionService {
   }
 
   private async sweepAttention(): Promise<void> {
-    const expired = await this.options.database.companion('expireAttention', this.iso()).catch(() => 0)
-    if (expired > 0) this.emit('attention', null)
+    const activeDraftIds = [...this.draftOperations.keys()]
+    const expired = await this.options.database.companion('expireAttention', this.iso(), activeDraftIds).catch(() => 0)
+    if (expired > 0) {
+      this.emit('attention', null)
+      this.emit('drafts', null)
+    }
   }
 
   private async readyArtifact(artifactId: string): Promise<ArtifactRecord> {
@@ -1007,6 +1020,21 @@ export class CompanionService {
     return /[\s'"\\]/.test(path) ? `'${path.replaceAll("'", "'\\''")}'` : path
   }
 
+  private handoffPayload(
+    source: SessionRecord,
+    handoffText: string,
+    links: readonly { artifact: ArtifactRecord; path: string }[],
+    preparedByAgent: boolean
+  ): string {
+    return [
+      `[BMN handoff from ${source.name} · ${source.executable} · ${source.cwd}${preparedByAgent ? ' · prepared by the agent, delivered by the owner' : ''}]`,
+      handoffText,
+      ...(links.length > 0
+        ? ['', 'Files:', ...links.map(({ artifact, path }) => `- ${artifact.originalName}: ${this.quotePath(path)}`)]
+        : [])
+    ].join('\n')
+  }
+
   private withDraft<Result>(draftId: string, operation: () => Promise<Result>): Promise<Result> {
     const previous = this.draftOperations.get(draftId) ?? Promise.resolve()
     const result = previous.then(operation, operation)
@@ -1066,9 +1094,67 @@ export class CompanionService {
     return artifacts
   }
 
+  private async prepareAgentHandoff(p: {
+    sourceSessionId: string
+    sourceIncarnationId: string
+    destinationSessionId: string
+    text: string
+    artifactIds: string[]
+  }): Promise<{ draftId: string; requestId: string; state: 'draft' }> {
+    if (this.options.manager.liveIncarnationId(p.sourceSessionId) !== p.sourceIncarnationId) {
+      invalid('The source session is running a different process now')
+    }
+    const { source, target } = await this.availableHandoffSessions(p.sourceSessionId, p.destinationSessionId)
+    this.handoffText(p.text)
+    if (hasDisallowedHandoffControl(p.text)) {
+      invalid('Handoff text may contain only newline and tab control characters')
+    }
+    const artifactIds = this.handoffArtifactIds(p.artifactIds)
+    const artifacts = await this.validateHandoffArtifacts(p.sourceSessionId, artifactIds)
+    if (artifacts.some((artifact) => artifact.direction !== 'output')) {
+      invalid('Every agent handoff file must be a published output from its session')
+    }
+    const predictedLinks = artifacts.map((artifact) => ({ artifact,
+      path: join(this.options.roots.data, 'artifacts', 'links', `${artifact.artifactId}${linkExtension(artifact)}`)
+    }))
+    if (new TextEncoder().encode(this.handoffPayload(source, p.text, predictedLinks, true)).byteLength > HANDOFF_PAYLOAD_BYTES) {
+      invalid('The assembled handoff must be at most 64 KiB')
+    }
+    const result = await this.options.database.companion('prepareAgentHandoff', {
+      draftId: randomUUID(), requestId: randomUUID(), sourceSessionId: p.sourceSessionId,
+      sourceIncarnationId: p.sourceIncarnationId, destinationSessionId: p.destinationSessionId,
+      destinationName: target.name, text: p.text, artifactIds
+    }, this.iso())
+    this.emit('drafts', p.destinationSessionId)
+    this.emit('attention', p.sourceSessionId)
+    void this.options.database.companion('getAttention', result.requestId)
+      .then((record) => this.pager.opened(record)).catch(() => undefined)
+    return result
+  }
+
+  private async withdrawAgentHandoff(sourceSessionId: string, draftId: string): Promise<AttentionRecord> {
+    return this.withDraft(draftId, async () => {
+      const record = await this.options.database.companion('withdrawAgentHandoff', sourceSessionId, draftId, this.iso())
+      this.emit('attention', sourceSessionId)
+      this.emit('drafts', null)
+      return record
+    })
+  }
+
+  private async refreshHandoffStaleness(): Promise<void> {
+    await this.sessionsChanged()
+    const live = Object.fromEntries([...this.knownSessions.values()]
+      .filter((session) => session.lastProcess?.state === 'live')
+      .map((session) => [session.sessionId, session.lastProcess!.incarnationId]))
+    if (Object.keys(live).length > 0) {
+      await this.options.database.companion('markStaleAgentHandoffs', live)
+    }
+  }
+
   private async saveHandoffDraft(
     raw: Record<string, unknown>,
-    detail: string | null = null
+    detail: string | null = null,
+    sourcePetition: Pick<InputDraftRecord, 'preparedBy' | 'requestId'> | null = null
   ): Promise<InputDraftRecord> {
     const draftId = optionalText(raw, 'draftId')
     const sourceSessionId = text(raw, 'sourceSessionId')
@@ -1084,13 +1170,14 @@ export class CompanionService {
         origin: 'handoff',
         originKey: null,
         sourceSessionId,
-        requestId: null,
+        requestId: sourcePetition?.requestId ?? null,
         text: handoffText,
         artifactId: null,
         artifactIds,
         attemptedIncarnationId: null,
         state: 'draft',
-        detail
+        detail,
+        preparedBy: sourcePetition?.preparedBy ?? null
       }, this.iso())
       this.emit('drafts', sessionId)
       return record
@@ -1121,7 +1208,7 @@ export class CompanionService {
         sessionId: draft.sessionId,
         text: draft.text,
         artifactIds: draft.artifactIds
-      }, `Retry of ${draft.draftId}; check the destination for a possible earlier paste`)
+      }, `Retry of ${draft.draftId}; check the destination for a possible earlier paste`, draft)
     })
   }
 
@@ -1163,13 +1250,7 @@ export class CompanionService {
         artifact,
         path: await this.prepareArtifactLink(artifact)
       })))
-      const payload = [
-        `[BMN handoff from ${source.name} · ${source.executable} · ${source.cwd}]`,
-        draft.text,
-        ...(links.length > 0
-          ? ['', 'Files:', ...links.map(({ artifact, path }) => `- ${artifact.originalName}: ${this.quotePath(path)}`)]
-          : [])
-      ].join('\n')
+      const payload = this.handoffPayload(source, draft.text, links, draft.preparedBy === 'agent')
       if (new TextEncoder().encode(payload).byteLength > HANDOFF_PAYLOAD_BYTES) {
         invalid('The assembled handoff must be at most 64 KiB')
       }
@@ -1198,6 +1279,7 @@ export class CompanionService {
         'finishHandoffDraft', draftId, 'accepted', 'Pasted to terminal — not submitted', this.iso()
       )
       this.emit('drafts', draft.sessionId)
+      if (draft.preparedBy === 'agent' && draft.sourceSessionId) this.emit('attention', draft.sourceSessionId)
       return record
     }
     if (draft.state !== 'draft' && draft.state !== 'uncertain') invalid('Only an unsent draft can be sent')
@@ -1469,7 +1551,7 @@ export class CompanionService {
       request?.state === 'open' &&
       request.sessionId === target.sessionId &&
       (request.incarnationId === null || request.incarnationId === target.incarnationId)
-    if (settings.telegram.autoSubmitReplies && currentTarget) {
+    if (settings.telegram.autoSubmitReplies && currentTarget && request.kind !== 'handoff') {
       try {
         await this.sendDraft(record.draftId, true, target.incarnationId)
         if (reply.text) {

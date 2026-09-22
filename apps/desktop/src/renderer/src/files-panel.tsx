@@ -2,13 +2,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import type {
   ArtifactRecord,
+  AttentionRecord,
   InputDraftRecord,
   SessionRecord,
   WorkspaceRecord
 } from '@bmn/protocol'
 import { Dialog } from './dialog'
 import { failureDetail } from './bridge-error'
-import { agentTag } from './session-presentation'
+import { agentTag, handoffPreparedBy } from './session-presentation'
 import {
   ImageViewport,
   artifactIcon,
@@ -66,6 +67,9 @@ export function FilesPanel(props: {
   sessionIncarnationId: string | null
   artifacts: ArtifactRecord[]
   drafts: InputDraftRecord[]
+  attention?: AttentionRecord[]
+  requestedHandoffDraftId?: string | null
+  onHandoffOpened?(): void
   sessions: SessionRecord[]
   workspaces: WorkspaceRecord[]
   onOpenSession(sessionId: string): boolean
@@ -127,6 +131,10 @@ export function FilesPanel(props: {
     setHandoffOpen(true)
   }
 
+  const editingDraft = props.drafts.find((draft) => draft.draftId === handoffDraftId)
+  const preparation = handoffPreparedBy(editingDraft,
+    props.sessions.find((session) => session.sessionId === editingDraft?.sourceSessionId), props.attention ?? [])
+
   const featured = useMemo<ArtifactRecord | null>(() => {
     if (sessionArtifacts.length === 0) return null
     if (selectedId) {
@@ -147,6 +155,15 @@ export function FilesPanel(props: {
     setSelectedId(null)
     setHandoffOpen(false)
   }, [props.session?.sessionId])
+
+  useEffect(() => {
+    if (!props.requestedHandoffDraftId) return
+    const draft = props.drafts.find((item) => item.draftId === props.requestedHandoffDraftId &&
+      item.origin === 'handoff' && item.state === 'draft' && item.sourceSessionId === props.session?.sessionId)
+    if (!draft) return
+    beginHandoff(draft)
+    props.onHandoffOpened?.()
+  }, [props.requestedHandoffDraftId, props.drafts, props.session?.sessionId])
 
   const { preview, error: previewError, loading: previewLoading } = useArtifactPreview(featuredId)
 
@@ -380,6 +397,8 @@ export function FilesPanel(props: {
             {handoffTargetId && !availableDestinations.some((item) => item.sessionId === handoffTargetId) ? (
               <p className="inline-error" role="status">The saved destination is unavailable. Choose another session.</p>
             ) : null}
+            {preparation ? <p className="handoff-note">{preparation.byline}</p> : null}
+            {preparation?.stale ? <p className="handoff-note" role="status">prepared by an earlier process of this session</p> : null}
             <label>Summary or question
               <textarea rows={6} required value={handoffText} onChange={(event) => setHandoffText(event.target.value)} />
             </label>

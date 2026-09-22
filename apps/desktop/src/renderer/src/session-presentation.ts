@@ -3,6 +3,7 @@ import type { SessionActivity } from './session-activity'
 import {
   PROGRESS_STALE_AFTER_MS,
   type AttentionRecord,
+  type InputDraftRecord,
   type ProgressEvidence,
   type ProgressRecord,
   type ProgressState,
@@ -110,6 +111,7 @@ export function relativeAge(fromIso: string, now: number): string {
 const ORIGIN_AGENT_NAMES: Readonly<Record<string, string>> = Object.freeze({
   claude: 'Claude',
   codex: 'Codex',
+  opencode: 'OpenCode',
   terminal: 'the terminal'
 })
 
@@ -141,9 +143,10 @@ function originName(origin: string | null, action: 'opened' | 'closed'): string 
  * "resolved by typing", "withdrawn by Claude Stop", "expired". A row with no provenance says so.
  */
 export function attentionProvenance(
-  request: Pick<AttentionRecord, 'state' | 'openedBy' | 'resolvedBy'>
+  request: Pick<AttentionRecord, 'state' | 'openedBy' | 'resolvedBy'> & Partial<Pick<AttentionRecord, 'kind'>>
 ): string {
   if (request.state === 'open') {
+    if (request.kind === 'handoff' && request.openedBy === 'cli') return 'from bmn handoff'
     const name = originName(request.openedBy, 'opened')
     return name === null ? 'from unknown' : `from ${name}`
   }
@@ -278,10 +281,10 @@ export function sessionAttention(
 
 /**
  * The open requests the owner answers by typing, pasting or dictating into their session, the way agterm clears a
- * session's status on a keystroke. A review waits for its own verdict.
+ * session's status on a keystroke. Reviews and handoffs wait for their own owner action.
  */
 export function requestsAnsweredByTyping(records: readonly AttentionRecord[], sessionId: string): AttentionRecord[] {
-  return openRequests(records).filter((record) => record.sessionId === sessionId && record.kind !== 'review')
+  return openRequests(records).filter((record) => record.sessionId === sessionId && record.kind !== 'review' && record.kind !== 'handoff')
 }
 
 export type OpenAttentionAction = 'mark-seen' | 'resolve-notice' | null
@@ -329,4 +332,29 @@ export function neighbor<T>(items: readonly T[], current: T | null, direction: -
   const index = current === null ? -1 : items.indexOf(current)
   if (index === -1) return items[0] ?? null
   return items[(index + direction + items.length) % items.length] ?? null
+}
+
+/** Only an open petition's pending draft can enter the handoff editor. */
+export function handoffDraftForAttention(
+  request: AttentionRecord,
+  drafts: readonly InputDraftRecord[]
+): InputDraftRecord | null {
+  if (request.kind !== 'handoff' || request.state !== 'open') return null
+  return drafts.find((draft) => draft.origin === 'handoff' && draft.state === 'draft' &&
+    draft.sourceSessionId === request.sessionId && request.requestKey === `handoff:${draft.draftId}`) ?? null
+}
+
+export function handoffPreparedBy(
+  draft: InputDraftRecord | undefined,
+  source: Pick<SessionRecord, 'name' | 'lastProcess'> | undefined,
+  requests: readonly AttentionRecord[]
+): { byline: string; stale: boolean } | null {
+  if (draft?.preparedBy !== 'agent') return null
+  const request = requests.find((item) => item.kind === 'handoff' &&
+    item.sessionId === draft.sourceSessionId && item.requestKey === `handoff:${draft.draftId}`)
+  return {
+    byline: `Prepared by the agent in ${source?.name ?? 'Removed session'}`,
+    stale: !!request?.incarnationId && !!source?.lastProcess &&
+      request.incarnationId !== source.lastProcess.incarnationId
+  }
 }

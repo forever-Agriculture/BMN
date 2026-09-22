@@ -9,16 +9,19 @@ import {
   MAX_CONTROL_FRAME_BYTES,
   MAX_PROGRESS_EVIDENCE,
   isAttentionOrigin,
+  hasDisallowedHandoffControl,
   isHookEventName,
   isProtocolErrorCode,
   type AttentionKind,
   type ConversationObservationSource,
   type HookEventAgent,
   type HookEventEffect,
+  type AgentCli,
   type ProgressState,
   type ProtocolErrorCode
 } from '@bmn/protocol'
 import type { ControlAuth, ControlScope } from './control-auth'
+import { OPENCODE_REFERENCE_PATTERN } from './conversation-binding'
 
 export class ControlError extends Error {
   constructor(readonly code: ProtocolErrorCode, message: string, readonly retryable = false) {
@@ -28,7 +31,7 @@ export class ControlError extends Error {
 }
 
 /** The narrowing this server does on purpose: a conversation belongs to an agent CLI, not to a shell. */
-export type ConversationAgentCli = 'claude' | 'codex'
+export type ConversationAgentCli = Exclude<AgentCli, 'other'>
 
 export interface ControlHandlers {
   /** Revocation: session tokens are valid only while their incarnation is the current live one. */
@@ -67,6 +70,14 @@ export interface ControlHandlers {
     phoneNotified?: boolean
     /** What opened it, from the closed origin vocabulary. */
     origin?: string
+  }): Promise<unknown>
+  /** A session may address one destination; only the handler creates the owner-delivered draft. */
+  prepareHandoff(p: {
+    sourceSessionId: string
+    sourceIncarnationId: string
+    destinationSessionId: string
+    text: string
+    artifactIds: string[]
   }): Promise<unknown>
   /** Records why a conversation report was refused, so a refusal is not silent to the owner. */
   reportRefusal(method: string, sessionId: string | null, reason: string): void
@@ -175,10 +186,10 @@ const ATTENTION_KINDS: readonly AttentionKind[] = ['question', 'permission', 're
  * The harnesses a session token may report as. `terminal` is BMN's own label for a notification the
  * window read out of a session's output, so nothing on the socket may wear it.
  */
-const HOOK_EVENT_AGENTS: readonly HookEventAgent[] = ['claude', 'codex']
+const HOOK_EVENT_AGENTS: readonly HookEventAgent[] = ['claude', 'codex', 'opencode']
 const HOOK_EVENT_EFFECTS: readonly HookEventEffect[] = ['opened', 'withdrew', 'answered']
 const MAX_HOOK_EVENT_EFFECTS = 8
-const CONVERSATION_AGENT_CLIS: readonly ConversationAgentCli[] = ['claude', 'codex']
+const CONVERSATION_AGENT_CLIS: readonly ConversationAgentCli[] = ['claude', 'codex', 'opencode']
 const CONVERSATION_OBSERVATION_SOURCES: readonly ConversationObservationSource[] = [
   'startup', 'resume', 'clear', 'fork'
 ]
@@ -735,6 +746,26 @@ export class ControlServer {
           source: scope.kind === 'session' ? 'agent' : 'owner'
         }))
       }
+      case 'handoff.prepare': {
+        const params = closedParams(rawParams, ['destinationSessionId', 'text', 'artifactIds', 'idempotencyKey'])
+        if (scope.kind !== 'session') throw unauthorized('Only a session may prepare a handoff')
+        const destinationSessionId = requireText(params, 'destinationSessionId', RULES.sessionId)
+        const handoffText = requireText(params, 'text', {
+          min: 1, max: 16 * 1024, unit: 'bytes', controls: 'allow-whitespace'
+        })
+        if (hasDisallowedHandoffControl(handoffText)) {
+          throw invalid('Handoff text may contain only newline and tab control characters')
+        }
+        const artifactIds = readIdentifiers(params, 'artifactIds', 10)
+        const idempotencyKey = requireText(params, 'idempotencyKey', RULES.idempotencyKey)
+        return this.idempotent(scope, method, idempotencyKey, params, () => handlers.prepareHandoff({
+          sourceSessionId: scope.sessionId,
+          sourceIncarnationId: scope.incarnationId,
+          destinationSessionId,
+          text: handoffText,
+          artifactIds
+        }))
+      }
       case 'progress.report': {
         const params = closedParams(rawParams, [
           'sessionId', 'source', 'state', 'label', 'detail', 'observedAt', 'evidenceIds'
@@ -763,6 +794,7 @@ export class ControlServer {
           'origin'
         ])
         const requestKey = requireText(params, 'requestKey', RULES.requestKey)
+        if (requestKey.startsWith('handoff:')) throw invalid('The handoff request key is reserved')
         const kind = requireEnum(params, 'kind', ATTENTION_KINDS)
         const title = requireText(params, 'title', RULES.title)
         const body = readText(params, 'body', RULES.body)
@@ -794,9 +826,16 @@ export class ControlServer {
             throw unauthorized('Only a session credential may report its own conversation')
           }
           const observedCli = requireEnum(params, 'agentCli', CONVERSATION_AGENT_CLIS)
-          const conversationReference = requireText(params, 'conversationReference', RULES.conversationReference)
-          if (!CONVERSATION_REFERENCE.test(conversationReference)) {
-            throw invalid('conversationReference must be a UUID')
+          const conversationReference = requireText(params, 'conversationReference',
+            observedCli === 'opencode'
+              ? { min: 30, max: 30, unit: 'characters', controls: 'reject' }
+              : RULES.conversationReference)
+          if (observedCli === 'opencode'
+            ? !OPENCODE_REFERENCE_PATTERN.test(conversationReference)
+            : !CONVERSATION_REFERENCE.test(conversationReference)) {
+            throw invalid(observedCli === 'opencode'
+              ? 'conversationReference must be an OpenCode session ID'
+              : 'conversationReference must be a UUID')
           }
           const source = requireEnum(params, 'source', CONVERSATION_OBSERVATION_SOURCES)
           const transcriptPath = readText(params, 'transcriptPath', RULES.path)
@@ -808,7 +847,7 @@ export class ControlServer {
             sessionId,
             incarnationId: incarnationOf(scope),
             agentCli: observedCli,
-            conversationReference: conversationReference.toLowerCase(),
+            conversationReference: observedCli === 'opencode' ? conversationReference : conversationReference.toLowerCase(),
             source,
             ...(transcriptPath === undefined ? {} : { transcriptPath })
           })
@@ -824,6 +863,9 @@ export class ControlServer {
       case 'attention.withdraw': {
         const params = closedParams(rawParams, ['sessionId', 'requestKey', 'origin'])
         const requestKey = requireText(params, 'requestKey', RULES.requestKey)
+        if (requestKey.startsWith('handoff:') && scope.kind !== 'session') {
+          throw unauthorized('Only the source session may withdraw its handoff')
+        }
         const origin = this.usableOrigin(params, scope, method, handlers)
         const sessionId = this.target(scope, params)
         return handlers.withdrawAttention({ sessionId, requestKey, ...(origin === undefined ? {} : { origin }) })
@@ -831,6 +873,7 @@ export class ControlServer {
       case 'attention.resolve': {
         const params = closedParams(rawParams, ['sessionId', 'requestKey', 'resolution', 'origin'])
         const requestKey = requireText(params, 'requestKey', RULES.requestKey)
+        if (requestKey.startsWith('handoff:')) throw invalid('Deliver or discard the handoff to resolve it')
         const resolution = requireText(params, 'resolution', RULES.resolution)
         const origin = this.usableOrigin(params, scope, method, handlers)
         const sessionId = this.target(scope, params)

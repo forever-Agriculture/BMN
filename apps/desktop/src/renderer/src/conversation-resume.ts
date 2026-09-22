@@ -76,7 +76,8 @@ export function resumeConfirmationPresentation(
   preview: ConversationResumePreview,
   sessionName: string
 ): ResumeConfirmationPresentation {
-  const cli = preview.agentCli === 'claude' ? 'Claude Code' : 'Codex'
+  const cli = preview.agentCli === 'claude' ? 'Claude Code'
+    : preview.agentCli === 'opencode' ? 'OpenCode' : 'Codex'
   return {
     message: `Resume the ${cli} conversation in "${sessionName}". This command runs:`,
     command: preview.command,

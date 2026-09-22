@@ -1,8 +1,13 @@
 // MODULE: session-presentation.test.ts - status, tags, progress staleness and needs-you navigation
-import type { AttentionRecord, ProgressRecord } from '@bmn/protocol'
+import type { AttentionRecord, InputDraftRecord, ProgressRecord } from '@bmn/protocol'
 import { describe, expect, it } from 'vitest'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { NeedsYouPopover } from './needs-you-popover'
 import {
   agentTag,
+  handoffDraftForAttention,
+  handoffPreparedBy,
   attentionActionWhenOpened,
   displayPath,
   inferHome,
@@ -288,11 +293,12 @@ describe('session presentation', () => {
     expect(sessionAttention(records, 'missing')).toBeNull()
   })
 
-  it('closes a session\'s open prompts and notices, but not a review, when the owner types into it', () => {
+  it('closes a session\'s open prompts and notices, but not a review or handoff, when the owner types into it', () => {
     const records = [
       { ...request('turn', 's1', '2026-09-14T11:20:00.000Z'), kind: 'notice' as const },
       request('question', 's1', '2026-09-14T11:10:00.000Z'),
       { ...request('review', 's1', '2026-09-14T11:00:00.000Z'), kind: 'review' as const },
+      { ...request('petition', 's1', '2026-09-14T11:00:00.000Z'), kind: 'handoff' as const },
       request('other', 's2', '2026-09-14T11:00:00.000Z'),
       request('closed', 's1', '2026-09-14T11:00:00.000Z', 'answered')
     ]
@@ -341,5 +347,64 @@ describe('session presentation', () => {
     [{ state: 'open', openedBy: 'hook:codex:Custom Event', resolvedBy: null }, 'from Codex Custom Event']
   ] as const)('says %o in plain words', (request, words) => {
     expect(attentionProvenance(request)).toBe(words)
+  })
+})
+
+
+describe('agent handoff entry and provenance', () => {
+  const petition: AttentionRecord = {
+    ...request('petition', 'source', '2026-09-14T11:00:00.000Z'),
+    kind: 'handoff', requestKey: 'handoff:draft-1', incarnationId: 'process-1', openedBy: 'cli'
+  }
+  const draft: InputDraftRecord = {
+    draftId: 'draft-1', sessionId: 'destination', sourceSessionId: 'source', origin: 'handoff',
+    preparedBy: 'agent', requestId: null, text: 'Result for you', artifactId: null, artifactIds: ['file-1'],
+    attemptedIncarnationId: null, state: 'draft', detail: null,
+    createdAt: '2026-09-14T11:00:00.000Z', updatedAt: '2026-09-14T11:00:00.000Z'
+  }
+  const source = {
+    name: 'Builder',
+    lastProcess: { incarnationId: 'process-1', state: 'live' as const, exitCode: null, signal: null, detail: null }
+  }
+
+  it('opens the petition’s addressed editable draft and keeps it actionable without typing resolution', () => {
+    expect(handoffDraftForAttention(petition, [draft])).toBe(draft)
+    expect(draft.sessionId).toBe('destination')
+    expect(draft.text).toBe('Result for you')
+    expect(draft.artifactIds).toEqual(['file-1'])
+    expect(openAttentionGroups([petition]).responses).toEqual([petition])
+    expect(attentionActionWhenOpened(petition)).toBe('mark-seen')
+    expect(requestsAnsweredByTyping([petition], 'source')).toEqual([])
+    expect(attentionProvenance(petition)).toBe('from bmn handoff')
+  })
+
+  it('offers Open handoff and acknowledgement without a terminal-answer action', () => {
+    const markup = renderToStaticMarkup(createElement(NeedsYouPopover, {
+      requests: [petition], unread: [], now, anchor: null,
+      place: () => ({ workspace: 'Work', session: 'Builder' }),
+      onOpenSession: () => undefined, onAcknowledge: () => undefined,
+      onMarkAnswered: () => undefined, onClose: () => undefined
+    }))
+    expect(markup).toContain('Open handoff')
+    expect(markup).toContain('from bmn handoff')
+    expect(markup).toContain('Acknowledge')
+    expect(markup).not.toContain('Mark answered')
+  })
+
+  it('does not open another source’s draft, a completed draft, or a closed petition', () => {
+    expect(handoffDraftForAttention(petition, [{ ...draft, sourceSessionId: 'other' }])).toBeNull()
+    expect(handoffDraftForAttention(petition, [{ ...draft, state: 'accepted' }])).toBeNull()
+    expect(handoffDraftForAttention({ ...petition, state: 'withdrawn' }, [draft])).toBeNull()
+    expect(handoffDraftForAttention({ ...petition, requestKey: 'handoff:other' }, [draft])).toBeNull()
+  })
+
+  it('attributes agent preparation and detects only that draft’s earlier source process', () => {
+    expect(handoffPreparedBy(draft, source, [petition])).toEqual({
+      byline: 'Prepared by the agent in Builder', stale: false
+    })
+    const restarted = { ...source, lastProcess: { ...source.lastProcess, incarnationId: 'process-2' } }
+    expect(handoffPreparedBy(draft, restarted, [petition])?.stale).toBe(true)
+    expect(handoffPreparedBy(draft, restarted, [{ ...petition, requestKey: 'handoff:other' }])?.stale).toBe(false)
+    expect(handoffPreparedBy({ ...draft, preparedBy: null }, source, [petition])).toBeNull()
   })
 })

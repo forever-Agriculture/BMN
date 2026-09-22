@@ -28,8 +28,17 @@ export interface ArtifactPreview {
   truncated: boolean
 }
 
-export type AttentionKind = 'question' | 'permission' | 'review' | 'notice'
+export type AttentionKind = 'question' | 'permission' | 'review' | 'notice' | 'handoff'
 export type AttentionState = 'open' | 'answered' | 'withdrawn' | 'expired'
+
+/** Agent-authored handoff text may contain line breaks and tabs, but no other C0/C1 controls. */
+export function hasDisallowedHandoffControl(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if ((code < 0x20 && code !== 0x09 && code !== 0x0a) || (code >= 0x7f && code <= 0x9f)) return true
+  }
+  return false
+}
 
 /** A request stays open until correlated resolution arrives; seeing it only changes `seenAt`. */
 export interface AttentionRecord {
@@ -88,7 +97,7 @@ export const ATTENTION_ORIGINS = Object.freeze([
 export const AGENT_ATTENTION_ORIGINS = Object.freeze(['cli'] as const)
 
 /** `terminal` is not a harness: it is what a program's own OSC notification is logged as. */
-export const HOOK_EVENT_AGENTS = Object.freeze(['claude', 'codex', 'terminal'] as const)
+export const HOOK_EVENT_AGENTS = Object.freeze(['claude', 'codex', 'opencode', 'terminal'] as const)
 export type HookEventAgent = (typeof HOOK_EVENT_AGENTS)[number]
 
 /** `RULES.source` size: the whole origin and a hook event name alike are at most this many characters. */
@@ -193,6 +202,8 @@ export interface InputDraftRecord {
   sessionId: string
   origin: 'telegram' | 'control' | 'handoff'
   sourceSessionId: string | null
+  /** Null for owner and legacy drafts; an agent-prepared handoff still needs owner delivery. */
+  preparedBy: 'agent' | null
   requestId: string | null
   text: string | null
   artifactId: string | null

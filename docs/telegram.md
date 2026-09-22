@@ -5,17 +5,19 @@ session. It uses a bot you create and own. It is off by default.
 
 ## What it does
 
-- When an agent asks for your attention (`bmn ask`, or a Claude Code or Codex hook), the bot
+- When an agent asks for your attention (`bmn ask`, `bmn handoff`, or a Claude Code, Codex or OpenCode hook), the bot
   sends you the request, but only while you are away from the desk and the request is still
   unanswered. Claude sessions connected to Remote Control are left to the Claude app. Optionally it
   also tells you when a session's process exits while you are away. See
-  [agent-control.md](agent-control.md#agent-hooks-needs-you-for-claude-code-and-codex).
+  [agent-control.md](agent-control.md#agent-hooks-needs-you-for-claude-code-codex-and-opencode).
 - Reply to that message in Telegram. By default the reply is saved as a **draft** for that exact
   session, and you send it from the Files panel. If you turn on **Type replies into the session and
-  press Enter**, the reply is typed into the session directly.
+  press Enter**, the reply is typed into the session directly. Replies to handoff pages always stay
+  drafts for the source session.
 - A message that is not a reply to a notification gets a short answer asking you to reply to one,
   so text never lands in whichever session happens to be focused.
-- It cannot approve permission prompts or manage sessions remotely. Answer those in the terminal.
+- It cannot approve permission prompts, deliver handoffs or manage sessions remotely. Answer prompts
+  in the terminal; inspect and deliver handoffs in BMN's Files panel.
 
 ## Setup
 

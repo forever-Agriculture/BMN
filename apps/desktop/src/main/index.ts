@@ -1969,6 +1969,27 @@ function writeCodexHarness(
   return { executable, log, listing }
 }
 
+/** Gated real-CLI fixture: every step finishes before its receipt is published. */
+function writeAcceptanceHarness(directory: string, name: string, steps: string[]): string {
+  mkdirSync(directory, { recursive: true })
+  writeFileSync(join(directory, 'package.json'), '{"type":"commonjs"}\n')
+  const executable = join(directory, name)
+  writeFileSync(executable, [
+    `#!${process.env.BMN_SELF_TEST_NODE ?? '/usr/bin/env node'}`,
+    "const { spawnSync } = require('node:child_process')",
+    "const { existsSync, appendFileSync, writeFileSync } = require('node:fs')",
+    `const directory = ${JSON.stringify(directory)}`,
+    "const file = (name) => directory + '/' + name",
+    "const wait = async (name) => { while (!existsSync(file(name))) await new Promise(r => setTimeout(r, 25)) }",
+    "const cli = (args, input) => { const r = spawnSync('bmn', args, { input, encoding: 'utf8' }); if (r.status !== 0) throw new Error(r.stderr); return r.stdout }",
+    "appendFileSync(file('argv.log'), JSON.stringify(process.argv.slice(2)) + '\\n')",
+    "setInterval(() => undefined, 1000)",
+    ";(async () => {", ...steps,
+    "})().catch(error => writeFileSync(file('error'), String(error)))", ''
+  ].join('\n'), { mode: 0o700 })
+  return executable
+}
+
 /** What a session's own `bmn list --json` says about its conversation, once the hook has reported. */
 function listedConversation(listing: string): { sessions: number; conversation: unknown } {
   if (!existsSync(listing)) return { sessions: 0, conversation: null }
@@ -3216,6 +3237,146 @@ async function runSelfTest(): Promise<void> {
     const showArchivedReachable = await applicationWindow.webContents.executeJavaScript(
       "document.body.innerText.includes('Show archived')"
     ) as boolean
+    console.error('[BMN] self-test phase: agent handoff and OpenCode acceptance')
+    const acceptanceWait = async <T>(read: () => Promise<T | undefined>, label: string): Promise<T> => {
+      const deadline = Date.now() + 10_000
+      while (Date.now() < deadline) {
+        const value = await read()
+        if (value !== undefined) return value
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      throw new Error(`acceptance timed out: ${label}`)
+    }
+    const destinationHarness = writeTerminalModeProgram(join(isolatedCwd, 'petition-destination'))
+    const petitionDestination = await createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
+      name: 'Petition destination', cwd: isolatedCwd, executable: destinationHarness.executable,
+      argv: [], cols: 80, rows: 24 }, true)
+    const petitionDirectory = join(isolatedCwd, 'petition-source')
+    const petitionText = 'Synthetic agent handoff result'
+    const petitionExecutable = writeAcceptanceHarness(petitionDirectory, 'petition', [
+      "writeFileSync(file('petition-result.txt'), 'Published by the petition source\\n')",
+      "const published = JSON.parse(cli(['publish', file('petition-result.txt'), '--key', 'electron-petition-file', '--json']))",
+      "writeFileSync(file('published.json'), JSON.stringify(published))",
+      `writeFileSync(file('prepared.json'), cli(['handoff', ${JSON.stringify(petitionDestination.session.sessionId)}, '--text', ${JSON.stringify(petitionText)}, '--file-id', published.artifactId, '--key', 'electron-petition', '--json']))`,
+      "await wait('status-gate')",
+      "writeFileSync(file('status.txt'), cli(['handoff', 'status']))",
+      "writeFileSync(file('snapshot.json'), cli(['snapshot', '--json']))"
+    ])
+    const petitionSource = await createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
+      name: 'Petition source', cwd: isolatedCwd, executable: petitionExecutable,
+      argv: [], cols: 80, rows: 24 }, true)
+    await untilFileExists(join(petitionDirectory, 'prepared.json'), 'prepared an agent handoff')
+    const petitionPublished = JSON.parse(readFileSync(join(petitionDirectory, 'published.json'), 'utf8')) as { artifactId: string }
+    const petitionRequest = await acceptanceWait(async () =>
+      (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
+        .find(row => row.sessionId === petitionSource.session.sessionId && row.kind === 'handoff' && row.state === 'open'), 'source handoff request')
+    await recoverApplicationRenderer(applicationWindow)
+    const beforePetitionPaste = terminalModeProgramInput(destinationHarness.input)
+    const petitionEditor = await applicationWindow.webContents.executeJavaScript(`(async () => {
+      const wait = async (read) => { const end = Date.now() + 10000; while (Date.now() < end) {
+        const value = read(); if (value) return value; await new Promise(r => setTimeout(r, 25));
+      } throw new Error('petition UI timed out'); };
+      (await wait(() => document.querySelector('.needs-you-button'))).click();
+      const row = await wait(() => [...document.querySelectorAll('.attention-item')].find(r => r.textContent.includes('Petition source') && r.textContent.includes('Handoff')));
+      const provenance = row.querySelector('.provenance').textContent;
+      [...row.querySelectorAll('button')].find(b => b.textContent === 'Open handoff').click();
+      const form = await wait(() => document.querySelector('.handoff-form'));
+      const result = { destination: form.querySelector('select').value, text: form.querySelector('textarea').value, byline: form.textContent, provenance,
+        fileListed: form.textContent.includes('petition-result.txt') };
+      [...form.querySelectorAll('button')].find(b => b.textContent === 'Cancel').click();
+      const card = await wait(() => [...document.querySelectorAll('.handoff-card')].find(r => r.textContent.includes(${JSON.stringify(petitionText)})));
+      [...card.querySelectorAll('button')].find(b => b.textContent === 'Open destination').click();
+      const paste = await wait(() => [...document.querySelectorAll('.handoff-card button')].find(b => b.textContent === 'Paste handoff' && !b.disabled));
+      paste.click(); return result;
+    })()`) as { destination: string; text: string; byline: string; provenance: string; fileListed: boolean }
+    const petitionResolved = await acceptanceWait(async () =>
+      (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
+        .find(row => row.requestId === petitionRequest.requestId && row.state !== 'open'), 'owner paste resolution')
+    const petitionPayload = await acceptanceWait(async () => {
+      const input = terminalModeProgramInput(destinationHarness.input).slice(beforePetitionPaste.length)
+      return input.includes(petitionText) ? input : undefined
+    }, 'destination PTY paste')
+    writeFileSync(join(petitionDirectory, 'status-gate'), '')
+    await untilFileExists(join(petitionDirectory, 'snapshot.json'), 'read bounded handoff status')
+    const petitionSnapshot = JSON.parse(readFileSync(join(petitionDirectory, 'snapshot.json'), 'utf8'))
+    const agentHandoff = {
+      preparedWithoutDelivery: !beforePetitionPaste.includes(petitionText),
+      ...petitionEditor, destinationMatches: petitionEditor.destination === petitionDestination.session.sessionId,
+      state: petitionResolved.state, resolvedBy: petitionResolved.resolvedBy, resolution: petitionResolved.resolution,
+      payloadOccurrences: petitionPayload.split(petitionText).length - 1,
+      agentOwnerStamp: petitionPayload.includes('prepared by the agent, delivered by the owner'),
+      publishedFile: petitionEditor.fileListed && petitionPayload.includes('- petition-result.txt: ') &&
+        petitionPayload.includes(petitionPublished.artifactId),
+      bracketedPaste: petitionPayload.includes('\u001b[200~') && petitionPayload.includes('\u001b[201~'),
+      noSubmit: !petitionPayload.includes('\r'),
+      status: readFileSync(join(petitionDirectory, 'status.txt'), 'utf8'),
+      bounded: petitionSnapshot.handoffs?.length === 1 &&
+        JSON.stringify(Object.keys(petitionSnapshot.handoffs[0]).sort()) === JSON.stringify(['destinationSessionId', 'draftId', 'state', 'updatedAt'])
+    }
+    const openCodeDirectory = join(isolatedCwd, 'opencode-acceptance')
+    const openCodeReference = 'ses_f5656e404ffehVbLiXJ8YHJQjV'
+    const openCodeExecutable = writeAcceptanceHarness(openCodeDirectory, 'opencode', [
+      `const sessionID = ${JSON.stringify(openCodeReference)}`,
+      "const event = (hook_event_name, props = {}) => cli(['hook', 'opencode'], JSON.stringify({ hook_event_name, sessionID, ...props }))",
+      "event('session.created', { info: { id: sessionID } })",
+      "event('permission.asked', { permission: 'bash', patterns: ['echo acceptance'] })",
+      "writeFileSync(file('opened'), '')",
+      "await wait('reply-gate')",
+      "event('permission.replied', { reply: 'once' })",
+      "event('session.idle')",
+      "writeFileSync(file('finished'), '')"
+    ])
+    const openCodeSession = await createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
+      name: 'OpenCode acceptance', cwd: isolatedCwd, executable: openCodeExecutable,
+      argv: ['--model', 'fixture/model'], cols: 80, rows: 24 }, true)
+    await untilFileExists(join(openCodeDirectory, 'opened'), 'opened OpenCode permission')
+    const openCodePermission = await acceptanceWait(async () =>
+      (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
+        .find(row => row.sessionId === openCodeSession.session.sessionId && row.kind === 'permission' && row.state === 'open'), 'OpenCode permission')
+    await recoverApplicationRenderer(applicationWindow)
+    const openCodeProvenance = await applicationWindow.webContents.executeJavaScript(`(async () => {
+      const wait = async (read) => { const end = Date.now() + 10000; while (Date.now() < end) {
+        const value = read(); if (value) return value; await new Promise(r => setTimeout(r, 25));
+      } throw new Error('OpenCode provenance UI timed out'); };
+      (await wait(() => document.querySelector('.needs-you-button'))).click();
+      const row = await wait(() => [...document.querySelectorAll('.attention-item')]
+        .find(r => r.textContent.includes('OpenCode asks to bash')));
+      const provenance = row.querySelector('.provenance').textContent;
+      document.querySelector('.needs-you-button').click();
+      return provenance;
+    })()`) as string
+    writeFileSync(join(openCodeDirectory, 'reply-gate'), '')
+    await untilFileExists(join(openCodeDirectory, 'finished'), 'finished OpenCode events')
+    const openCodeRequests = (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
+      .filter(row => row.sessionId === openCodeSession.session.sessionId)
+    const openCodeBinding = await client.request<PersistedConversationBinding>(METHOD_REGISTRY.sessionBindingGet, { sessionId: openCodeSession.session.sessionId })
+    const openCodeEvents = await client.request<Array<{ agent: string; event: string; effects: string[] }>>(METHOD_REGISTRY.hookEventsList, { sessionId: openCodeSession.session.sessionId })
+    await client.request(METHOD_REGISTRY.sessionStop, { sessionId: openCodeSession.session.sessionId,
+      incarnationId: openCodeSession.session.lastProcess?.incarnationId, cause: 'explicit' })
+    const openCodePreview = await client.request<{ command: string }>(METHOD_REGISTRY.sessionResumePreview, { sessionId: openCodeSession.session.sessionId })
+    const openCodeResumed = await client.request<SessionIdentity>(METHOD_REGISTRY.sessionResume, { sessionId: openCodeSession.session.sessionId, cols: 80, rows: 24 })
+    const openCodeArguments = await untilHarnessRuns(join(openCodeDirectory, 'argv.log'), 2)
+    const openCodeAcceptance = {
+      provenance: openCodeProvenance,
+      openedBy: openCodePermission.openedBy,
+      resolvedBy: openCodeRequests.find(row => row.requestId === openCodePermission.requestId)?.resolvedBy,
+      permissionState: openCodeRequests.find(row => row.requestId === openCodePermission.requestId)?.state,
+      notice: openCodeRequests.some(row => row.kind === 'notice' && row.title === 'OpenCode finished a turn'),
+      events: openCodeEvents, binding: openCodeBinding, preview: openCodePreview.command,
+      resumedArguments: openCodeArguments[1]
+    }
+    for (const stopped of [
+      { sessionId: petitionSource.session.sessionId, incarnationId: petitionSource.session.lastProcess?.incarnationId },
+      { sessionId: petitionDestination.session.sessionId, incarnationId: petitionDestination.session.lastProcess?.incarnationId },
+      { sessionId: openCodeResumed.sessionId, incarnationId: openCodeResumed.incarnationId }
+    ]) await client.request(METHOD_REGISTRY.sessionStop, { ...stopped, cause: 'explicit' })
+
+    // Return selection to the lifecycle fixture expected by the existing restart checks.
+    await applicationWindow.webContents.executeJavaScript(`(() => {
+      const row = document.querySelector('.session-row button[data-session-id="' + ${JSON.stringify(preloadProbe.templateCreatedSession.sessionId)} + '"]');
+      if (!row) throw new Error('the lifecycle fixture disappeared after acceptance');
+      row.click();
+    })()`)
     console.error('[BMN] self-test phase: conversation reported by a session hook')
     const hookReference = '01a0b657-21a8-7f00-addd-b73646828f5b'
     const rolloutDirectory = join(process.env.CODEX_HOME!, 'sessions', '2026', '09', '20')
@@ -3281,7 +3442,7 @@ async function runSelfTest(): Promise<void> {
       await client.request(METHOD_REGISTRY.sessionStop, { ...stopping, cause: 'explicit' })
     }
     /** Sessions deliberately stopped before the application restart: they are exited, not interrupted. */
-    const stoppedBeforeRestartSessionIds = new Set([reportingSession.sessionId, rivalSession.sessionId])
+    const stoppedBeforeRestartSessionIds = new Set([reportingSession.sessionId, rivalSession.sessionId, petitionSource.session.sessionId, petitionDestination.session.sessionId, openCodeSession.session.sessionId])
     // The rival's report was refused; the owner must be able to read why while BMN is still running.
     const refusalLog = join(resolveApplicationRoots().state, 'refused-requests.log')
     const refusalReason = await (async (): Promise<string | null> => {
@@ -3453,10 +3614,10 @@ async function runSelfTest(): Promise<void> {
 
     const afterRenderer = await client.request<HostHealth>(METHOD_REGISTRY.healthGet, {})
     // The voice flow stops and starts the destination session once, the hook-reported Codex phase
-    // starts two sessions and resumes one, and the terminal-mode program is one more; all are
-    // stopped again, and each adds one record.
-    if (afterRenderer.liveSessions !== 3 || afterRenderer.incarnationRecords !== 9) {
-      throw new Error('renderer restart duplicated or stopped a process')
+    // starts two sessions and resumes one, the terminal-mode program adds one, and Epic 16/18's
+    // three synthetic sessions plus OpenCode Resume add four; all are stopped again.
+    if (afterRenderer.liveSessions !== 3 || afterRenderer.incarnationRecords !== 13) {
+      throw new Error(`renderer restart duplicated or stopped a process: ${afterRenderer.liveSessions} live, ${afterRenderer.incarnationRecords} incarnations`)
     }
     // "What survives", renderer-crash row: the processes, the layout and the open requests outlive the view.
     const survivingRendererCrash = {
@@ -4465,6 +4626,8 @@ async function runSelfTest(): Promise<void> {
       progressEvidenceSurface: preloadProbe.progressEvidenceSurface,
       hiddenPaneSize: preloadProbe.hiddenPaneSize,
       handoffFlow: { ...preloadProbe.handoffFlow, persistedAfterRestart: true },
+      agentHandoff,
+      openCodeAcceptance,
       voiceFlow: {
         ...preloadProbe.voiceFlow,
         transcriptions: selfTestVoiceTranscriptions,

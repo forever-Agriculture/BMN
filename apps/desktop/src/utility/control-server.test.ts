@@ -128,6 +128,7 @@ function fakeHandlers(current: Map<string, string>) {
     })),
     reportProgress: vi.fn(async (): Promise<unknown> => ({ recorded: true })),
     openAttention: vi.fn(async (): Promise<unknown> => ({ opened: true })),
+    prepareHandoff: vi.fn(async (): Promise<unknown> => ({ draftId: 'draft-1', requestId: 'request-1', state: 'draft' })),
     reportRefusal: vi.fn(),
     observeConversation: vi.fn(async (): Promise<unknown> => ({ accepted: true, detail: 'observed' })),
     withdrawAttention: vi.fn(async (): Promise<unknown> => ({ withdrawn: true })),
@@ -406,6 +407,74 @@ describe('control server targeting', () => {
       { sessionId: 'session-2', incarnationId: null, path: '/tmp/a.txt', source: 'owner' },
       { sessionId: 'session-1', incarnationId: 'incarnation-1', path: '/tmp/b.txt', name: 'b', source: 'agent' }
     ])
+  })
+})
+
+describe('control server handoff preparation', () => {
+  const handoff = {
+    destinationSessionId: 'session-2',
+    text: 'A bounded result',
+    artifactIds: ['published-1'],
+    idempotencyKey: 'handoff-1'
+  }
+
+  it('refuses the owner token and rejects closed params', async () => {
+    const fixture = await serverFixture()
+    const owner = await authenticated(fixture, fixture.auth.ownerToken)
+    expectError(await owner.request('handoff.prepare', handoff), ERROR_CODES.unauthorized)
+    expect(fixture.handlers.prepareHandoff).not.toHaveBeenCalled()
+
+    const agent = await authenticated(fixture, sessionToken(fixture))
+    expectError(
+      await agent.request('handoff.prepare', { ...handoff, extra: true }),
+      ERROR_CODES.invalidArgument
+    )
+    expect(fixture.handlers.prepareHandoff).not.toHaveBeenCalled()
+  })
+
+  it('derives the source session and incarnation and forwards the destination and files', async () => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+
+    const response = await agent.request('handoff.prepare', handoff)
+
+    expect(response.result).toEqual({ draftId: 'draft-1', requestId: 'request-1', state: 'draft' })
+    expect(fixture.handlers.prepareHandoff).toHaveBeenLastCalledWith({
+      sourceSessionId: 'session-1',
+      sourceIncarnationId: 'incarnation-1',
+      destinationSessionId: 'session-2',
+      text: 'A bounded result',
+      artifactIds: ['published-1']
+    })
+  })
+
+  it.each([
+    ['missing text', { ...handoff, text: undefined }],
+    ['carriage return', { ...handoff, text: 'line\rbreak' }],
+    ['oversized text', { ...handoff, text: 'x'.repeat(16 * 1024 + 1) }],
+    ['too many files', { ...handoff, artifactIds: Array.from({ length: 11 }, (_, index) => `file-${index}`) }],
+    ['non-array files', { ...handoff, artifactIds: 'published-1' }]
+  ])('rejects %s before invoking the handler', async (_label, params) => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+
+    expectError(await agent.request('handoff.prepare', params), ERROR_CODES.invalidArgument)
+    expect(fixture.handlers.prepareHandoff).not.toHaveBeenCalled()
+  })
+
+  it('replays durable idempotency and refuses a rekeyed request', async () => {
+    const fixture = await serverFixture()
+    const agent = await authenticated(fixture, sessionToken(fixture))
+
+    const first = await agent.request('handoff.prepare', handoff)
+    const duplicate = await agent.request('handoff.prepare', handoff)
+    const conflict = await agent.request('handoff.prepare', { ...handoff, text: 'Changed result' })
+
+    expect(first.result).toEqual({ draftId: 'draft-1', requestId: 'request-1', state: 'draft' })
+    expect(duplicate.result).toEqual({ draftId: 'draft-1', requestId: 'request-1', state: 'draft', duplicate: true })
+    expectError(conflict, ERROR_CODES.revisionConflict)
+    expect(conflict.error?.message).toBe('idempotency key reused with different parameters')
+    expect(fixture.handlers.prepareHandoff).toHaveBeenCalledTimes(1)
   })
 })
 

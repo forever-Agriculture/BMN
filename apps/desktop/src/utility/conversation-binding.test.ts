@@ -2,6 +2,11 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import type { BoundConversationBinding } from '@bmn/protocol'
 import {
+  agentCli,
+  isConversationReference,
+  opencodeResumeArguments,
+  OPENCODE_RESUME_OPTIONS_CLI_VERSION,
+  shownCommand,
   CLAUDE_IDENTITY_NEUTRAL_OPTIONS,
   CODEX_RESUME_OPTIONS,
   CODEX_RESUME_OPTIONS_CLI_VERSION,
@@ -641,5 +646,64 @@ describe('conversation identity reported by the harness SessionStart hook', () =
       conversationReference: conversationId,
       detail: `Reported by Codex at session start; Resume runs: /usr/bin/codex resume ${conversationId}`
     })
+  })
+})
+
+describe('OpenCode 1.18.31 conversation binding', () => {
+  // One real id read locally and confirmed by `opencode export` on 2026-09-22.
+  const reference = 'ses_f5656e404ffehVbLiXJ8YHJQjV'
+  const context = {
+    cwd: '/repo', executable: '/usr/bin/opencode', argv: [] as string[],
+    environment: captureRelevantLaunchEnvironment({})
+  }
+  const bound: BoundConversationBinding = {
+    sessionId: 'bmn-session', agentCli: 'opencode', status: 'bound', conversationReference: reference,
+    captureRoute: 'hook-session-start', launchContext: context, detail: 'Reported by OpenCode', capturedAt
+  }
+
+  it('classifies direct launches and waits for the hook without probing Claude', async () => {
+    expect(agentCli('/bin/opencode')).toBe('opencode')
+    const capability = vi.fn(supportedCapability)
+    const result = await prepareConversationLaunch('bmn-session', context, {}, () => conversationId, capturedAt, capability)
+    expect(result.binding).toMatchObject({ agentCli: 'opencode', status: 'unsupported', detail: 'OpenCode reports its session when it starts; Resume becomes available then' })
+    expect(result.injectedArguments).toEqual([])
+    expect(capability).not.toHaveBeenCalled()
+  })
+
+  it('pins the observed case-sensitive id grammar independently from UUIDs', () => {
+    expect(OPENCODE_RESUME_OPTIONS_CLI_VERSION).toBe('1.18.31')
+    expect(isConversationReference('opencode', reference)).toBe(true)
+    expect(isConversationReference('opencode', conversationId)).toBe(false)
+    expect(isConversationReference('claude', reference)).toBe(false)
+    expect(isConversationReference('codex', reference)).toBe(false)
+    expect(isConversationReference('claude', conversationId)).toBe(true)
+    for (const value of [reference + '\n', reference.slice(0, -1), 'SES_' + reference.slice(4), 'ses_' + 'x'.repeat(26)]) {
+      expect(isConversationReference('opencode', value)).toBe(false)
+    }
+    expect(parseBoundBinding(bound)).toEqual(bound)
+    expect(parseBoundBinding({ ...bound, captureRoute: 'claude-session-id' }).status).toBe('unsupported')
+  })
+
+  it('observes an exact mixed-case reference and describes carried and dropped arguments', () => {
+    const argv = ['project', '--model', 'provider/model', '--agent=build', '--port', '4096', '--hostname=localhost', '--prompt', 'private prompt', '--continue', '--fork', '--session', reference]
+    const observed = bindingFromObservation({ agentCli: 'opencode', conversationReference: reference, source: 'startup' }, { ...bound, launchContext: { ...context, argv } }, capturedAt)
+    const launch = buildNativeResumeLaunch(observed)
+    expect(launch.cwd).toBe('/repo/project')
+    expect(launch.argv).toEqual(['--session', reference, '--model', 'provider/model', '--agent=build', '--port', '4096', '--hostname=localhost'])
+    expect(observed.detail).toContain('Reported by OpenCode at session start')
+    expect(observed.detail).toContain(`Resume runs: ${shownCommand(launch.executable, launch.argv)}`)
+    expect(observed.detail).toContain('not carried: --prompt, --continue, --fork, --session')
+    expect(observed.detail).not.toContain('private prompt')
+    expect(observed.conversationReference).toBe(reference)
+  })
+
+  it('drops malformed options without swallowing selectors and retains the project as cwd', () => {
+    expect(opencodeResumeArguments(['--model', '--fork', '--agent=', '--unknown', 'value', '/project'])).toEqual({
+      carried: [], droppedOptions: ['--model', '--fork', '--agent', '--unknown'], droppedPositionals: 1, projectPath: '/project'
+    })
+    expect(buildNativeResumeLaunch({ ...bound, launchContext: { ...context, argv: ['--', '/other'] } }).cwd).toBe('/other')
+    expect(opencodeResumeArguments(['--mini', '--no-replay', '--mdns', '--replay-limit', '20', '/project']))
+      .toEqual({ carried: [], droppedOptions: ['--mini', '--no-replay', '--mdns', '--replay-limit'],
+        droppedPositionals: 0, projectPath: '/project' })
   })
 })

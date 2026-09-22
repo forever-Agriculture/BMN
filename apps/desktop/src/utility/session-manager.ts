@@ -71,7 +71,10 @@ import {
   conversationReferenceExists,
   codexResumeArguments,
   describeDroppedCodexArguments,
+  describeDroppedOpenCodeArguments,
+  isConversationReference,
   isLowercaseConversationReference,
+  opencodeResumeArguments,
   parseBoundBinding,
   parseClaudeHelpOptionGrammar,
   prepareConversationLaunch,
@@ -633,9 +636,12 @@ export class SessionManager {
     if (launched !== observation.agentCli) {
       return refuse(`the session was launched as ${launched}, not ${observation.agentCli}`)
     }
-    // The control socket admits any 8-4-4-4-12 hex reference; only a storable UUID can be bound.
-    if (!isLowercaseConversationReference(observation.conversationReference)) {
-      return refuse('the reported conversation reference is not a storable UUID')
+    if (observation.agentCli === 'opencode'
+      ? !isConversationReference('opencode', observation.conversationReference)
+      : !isLowercaseConversationReference(observation.conversationReference)) {
+      return refuse(observation.agentCli === 'opencode'
+        ? 'the reported conversation reference is not an OpenCode session ID'
+        : 'the reported conversation reference is not a storable UUID')
     }
     // A harness can report before its own session record has been written: the process is spawned
     // and registered live before `createStarting` completes, so wait for the record it needs.
@@ -1053,6 +1059,8 @@ export class SessionManager {
     const { launch } = await this.prepareResumeLaunch(binding)
     const dropped = binding.agentCli === 'codex' && binding.captureRoute === 'hook-session-start'
       ? describeDroppedCodexArguments(codexResumeArguments(binding.launchContext.argv))
+      : binding.agentCli === 'opencode'
+        ? describeDroppedOpenCodeArguments(opencodeResumeArguments(binding.launchContext.argv))
       : undefined
     return {
       sessionId,
@@ -1091,7 +1099,8 @@ export class SessionManager {
       resumeEnvironment,
       startedAt,
       (record) => this.store.createResuming(record),
-      binding.agentCli === 'claude' ? ['--resume'] : ['resume'],
+      binding.agentCli === 'claude' ? ['--resume']
+        : binding.agentCli === 'opencode' ? ['--session'] : ['resume'],
       reservation
     )
     try {
