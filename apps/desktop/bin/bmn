@@ -627,6 +627,13 @@ const HOOK_FILES = {
     path: ['.claude', 'settings.json'],
     events: ['Notification', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd'],
     optional: [],
+    // Every event BMN knows this harness has, which is more than it reports on: a shape the harness
+    // cannot read stops it loading the file, and BMN's own events are in that same file. It is not
+    // a claim to know them all - see `unusableShape` for what an unknown key gets.
+    known: [
+      'PreToolUse', 'PostToolUse', 'Notification', 'UserPromptSubmit', 'Stop', 'SubagentStart',
+      'SubagentStop', 'PreCompact', 'PostCompact', 'SessionStart', 'SessionEnd', 'PermissionRequest'
+    ],
     // Claude Code takes a list of tool patterns as well as one pattern; a file carrying either
     // loaded without complaint when it was tried. What that did not establish is whether the
     // group's hooks then run, which is why BMN answers for neither: a matcher gates the group.
@@ -636,6 +643,11 @@ const HOOK_FILES = {
     path: ['.codex', 'hooks.json'],
     events: ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd', 'Interrupt'],
     optional: ['PermissionRequest'],
+    // Codex has no `Notification`; a file carrying one is a Claude file's key, which Codex ignores.
+    known: [
+      'PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd',
+      'Interrupt', 'PermissionRequest', 'PreCompact', 'PostCompact', 'SubagentStart', 'SubagentStop'
+    ],
     // Codex's matcher is one optional pattern. A list fails its schema and its loader refuses the
     // whole file, so a file carrying one has no working hook at all, whatever else is in it.
     matchers: ['string']
@@ -707,6 +719,9 @@ function recognisedEntries(agent) {
  * read works - but `check` shows it, because it is the one the owner needs to look at.
  */
 function hookEntryState(command, agent) {
+  // Defence in depth, not a fenced guard: a command of the wrong type makes the whole file
+  // unusable before any event is read, so nothing reaches here with one. It stays because the
+  // last guard removed here on the strength of a green mutation turned out to be load-bearing.
   if (typeof command !== 'string') return 'missing'
   const text = command.replace(SHELL_BLANKS, '')
   if (text === hookEntryCommand(agent)) return 'wired'
@@ -755,9 +770,11 @@ function oneLine(command) {
   // character the line exists to show.
   for (const character of command.replace(/[ \t\n]+/g, ' ').replace(SHELL_BLANKS, '')) {
     const code = character.codePointAt(0)
+    // Delimited, because a bare `\u10000` is both U+10000 and U+1000 followed by a `0`, and the
+    // whole point of the line is that two different commands never print the same.
     const token = character === '\\'
       ? '\\\\'
-      : (code >= 0x20 && code <= 0x7e ? character : `\\u${code.toString(16).padStart(4, '0')}`)
+      : (code >= 0x20 && code <= 0x7e ? character : `\\u{${code.toString(16)}}`)
     // Never half an escape: the line stops at the last whole token that fits.
     if (length + token.length > 119) return `${shown.join('')}\u2026`
     shown.push(token)
@@ -772,9 +789,10 @@ function oneLine(command) {
  * `check` can print them beside it.
  */
 function hookEventState(groups, agent) {
-  if (!Array.isArray(groups)) return { state: 'missing', unrecognised: [] }
+  if (!Array.isArray(groups)) return { state: 'missing', unrecognised: [], gated: [] }
   let older = false
   const unrecognised = []
+  const gatedEntries = []
   for (const group of groups) {
     if (!isObject(group)) continue
     // BMN does not read matchers, so it does not answer for an entry inside one. Only the three
@@ -791,15 +809,18 @@ function hookEventState(groups, agent) {
       // Only a command entry runs anything; another hook type that names bmn still never calls it.
       if (!isObject(entry) || entry.type !== 'command') continue
       const read = hookEntryState(entry.command, agent)
-      const state = gated && read !== 'missing' ? 'named' : read
+      if (gated && read !== 'missing') {
+        gatedEntries.push(oneLine(entry.command))
+        continue
+      }
       // Nothing is missing for this event, so there is nothing for the owner to look at.
-      if (state === 'wired') return { state: 'wired', unrecognised: [] }
-      if (state === 'older') older = true
-      if (state === 'named') unrecognised.push(oneLine(entry.command))
+      if (read === 'wired') return { state: 'wired', unrecognised: [], gated: [] }
+      if (read === 'older') older = true
+      if (read === 'named') unrecognised.push(oneLine(entry.command))
     }
   }
-  if (older) return { state: 'wired (older wording)', unrecognised: [] }
-  return { state: 'missing', unrecognised }
+  if (older) return { state: 'wired (older wording)', unrecognised: [], gated: [] }
+  return { state: 'missing', unrecognised, gated: gatedEntries }
 }
 
 /**
@@ -836,16 +857,36 @@ function unusableShape(data, agent) {
     const groups = data.hooks[event]
     if (groups !== undefined && !Array.isArray(groups)) return `"hooks.${event}" is not a list`
   }
-  // Every event the file carries, not only the ones BMN reports on. A matcher the harness cannot
-  // read stops it loading the file, and it does not matter that the event it sits on is one BMN
-  // never asks about: the hooks BMN does expect are in the same file and would not run either.
-  for (const [event, groups] of Object.entries(data.hooks)) {
+  // Every event BMN knows this harness has, not only the ones it reports on: a matcher the harness
+  // cannot read stops it loading the file, and it does not matter that the event it sits on is one
+  // BMN never asks about, because the hooks BMN does expect are in the same file.
+  //
+  // A key BMN does not know is left alone rather than refused. Both harnesses ignore keys they do
+  // not recognise - `_comment` is somebody's note, and a Claude event in a Codex file is a key
+  // Codex never reads - so refusing over one would stop `install` on a file that works. The cost is
+  // the other direction: a harness event BMN has not heard of could carry a shape that stops the
+  // file loading, and BMN would not see it. That is a gap in this list, and the list is here to be
+  // corrected rather than guessed around.
+  for (const [event, groups] of Object.entries(data.hooks).filter(([name]) => spec.known.includes(name))) {
     for (const group of Array.isArray(groups) ? groups : []) {
       // A group is an object. An element that is not one fails the same strict parse a matcher of
       // the wrong type fails, so the file does not load and no hook in it runs.
       if (!isObject(group)) return `"hooks.${event}" holds something that is not a hook group`
       if (!matcherShape(group.matcher, agent)) {
         return `"hooks.${event}" has a matcher this harness cannot read`
+      }
+      if (group.hooks !== undefined && !Array.isArray(group.hooks)) {
+        return `"hooks.${event}" has a group whose "hooks" is not a list`
+      }
+      for (const entry of Array.isArray(group.hooks) ? group.hooks : []) {
+        if (!isObject(entry)) return `"hooks.${event}" holds an entry that is not an object`
+        // Only the fields BMN and both harnesses share, and only their types - not which values
+        // a harness's own enum carries, which is its business and not something to guess at.
+        for (const [field, type] of [['type', 'string'], ['command', 'string'], ['timeout', 'number']]) {
+          if (entry[field] !== undefined && typeof entry[field] !== type) {
+            return `"hooks.${event}" has an entry whose "${field}" is not a ${type}`
+          }
+        }
       }
     }
   }
@@ -872,12 +913,13 @@ function checkHooks(agent, path, file = readHookFile(path, agent)) {
     // An unusable file says nothing about any event, so nothing is reported as wired.
     const read = file.state === 'read'
       ? hookEventState(hooks[event], agent)
-      : { state: 'missing', unrecognised: [] }
+      : { state: 'missing', unrecognised: [], gated: [] }
     return {
       event,
       optional: spec.optional.includes(event),
       state: read.state,
-      ...(read.unrecognised.length === 0 ? {} : { unrecognised: read.unrecognised })
+      ...(read.unrecognised.length === 0 ? {} : { unrecognised: read.unrecognised }),
+      ...(read.gated.length === 0 ? {} : { gated: read.gated })
     }
   })
   const missing = events.filter((row) => !row.optional && row.state === 'missing').map((row) => row.event)
@@ -1078,6 +1120,12 @@ function describeHookCheck(report) {
     // wondering where the duplicate `install` is about to add came from.
     for (const command of row.unrecognised ?? []) {
       lines.push(`    an entry here names bmn hook ${report.agent} but is not one BMN recognises:`)
+      lines.push(`      ${command}`)
+    }
+    // An entry BMN would otherwise answer for, sitting inside a matcher. Saying it is "not one BMN
+    // recognises" would be self-contradictory: it is, and the matcher is the whole reason.
+    for (const command of row.gated ?? []) {
+      lines.push('    an entry here is inside a matcher, so it wires only part of this event:')
       lines.push(`      ${command}`)
     }
   }

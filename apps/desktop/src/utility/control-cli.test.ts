@@ -1310,8 +1310,10 @@ describe('bmn hooks check', () => {
     const row = JSON.parse(result.stdout).agents[0].events
       .find((each: { event: string }) => each.event === 'PostToolUse')
     expect(row.state).toBe(state)
-    // A gated entry is named, so the duplicate `install` adds is explained rather than unexplained.
-    expect(row.unrecognised).toEqual(state === 'wired' ? undefined : [DOCUMENTED_CLAUDE])
+    // A gated entry is one BMN does recognise, so saying it is "not one BMN recognises" would
+    // contradict itself. It gets its own line, and the duplicate is still explained.
+    expect(row.gated).toEqual(state === 'wired' ? undefined : [DOCUMENTED_CLAUDE])
+    expect(row.unrecognised).toBeUndefined()
   })
 
   it.each([
@@ -1400,9 +1402,9 @@ describe('bmn hooks check', () => {
   })
 
   it.each([
-    ['a variation selector', 'bmn hook claude\ufe0f', 'bmn hook claude\\ufe0f'],
-    ['a combining grapheme joiner', 'bmn\u034fhook claude', 'bmn\\u034fhook claude'],
-    ['an astral character', 'bmn hook claude \u{1f600}', 'bmn hook claude \\u1f600'],
+    ['a variation selector', 'bmn hook claude\ufe0f', 'bmn hook claude\\u{fe0f}'],
+    ['a combining grapheme joiner', 'bmn\u034fhook claude', 'bmn\\u{34f}hook claude'],
+    ['an astral character', 'bmn hook claude \u{1f600}', 'bmn hook claude \\u{1f600}'],
     // The literal text and the character it names must not print the same, or the note cannot be
     // trusted to mean what it says.
     ['the text of an escape', '\\u00a0bmn hook claude', '\\\\u00a0bmn hook claude']
@@ -1444,9 +1446,9 @@ describe('bmn hooks check', () => {
     // Folding the whitespace away would print `bmn hook claude` under a line saying that is not an
     // entry BMN recognises - true, self-contradictory, and with the cause erased.
     expect(events.find((row: { event: string }) => row.event === 'Stop').unrecognised)
-      .toEqual(['\\u00a0bmn hook claude'])
+      .toEqual(['\\u{a0}bmn hook claude'])
     expect(events.find((row: { event: string }) => row.event === 'Notification').unrecognised)
-      .toEqual(['bmn\\u000dhook\\u000dclaude'])
+      .toEqual(['bmn\\u{d}hook\\u{d}claude'])
   })
 
   it('says what check recognises in its own usage text', async () => {
@@ -1481,15 +1483,52 @@ describe('bmn hooks check', () => {
       .toEqual({ event: 'Stop', optional: false, state: 'missing' })
   })
 
-  it('reads an entry whose command is not a string as missing', async () => {
+  it.each([
+    ['a group whose hooks is not a list', { hooks: 'echo hi' }, 'is not a list'],
+    ['an entry that is not an object', { hooks: ['echo hi'] }, 'not an object'],
+    ['an entry whose command is not a string', { hooks: [{ type: 'command', command: 5 }] }, '"command" is not a string'],
+    ['an entry whose timeout is not a number', { hooks: [{ type: 'command', command: 'true', timeout: '5' }] }, '"timeout" is not a number'],
+    ['an entry whose type is not a string', { hooks: [{ type: 7, command: 'true' }] }, '"type" is not a string']
+  ])('refuses a file holding %s', async (_label, group, detail) => {
     const path = await hookFileFixture({
-      hooks: { Stop: [{ hooks: [{ type: 'command', timeout: 5, command: 5 }] }] }
+      hooks: {
+        ...Object.fromEntries(CLAUDE_EVENTS.map((each) => [each, [entryGroup(DOCUMENTED_CLAUDE)]])),
+        Stop: [entryGroup(DOCUMENTED_CLAUDE), group]
+      }
     })
+    const before = await readFile(path, 'utf8')
 
-    const result = await runHooks(['check', 'claude', '--file', path, '--json'])
+    const check = await runHooks(['check', 'claude', '--file', path, '--json'])
+    const install = await runHooks(['install', 'claude', '--file', path])
 
-    expect(JSON.parse(result.stdout).agents[0].events.find((row: { event: string }) => row.event === 'Stop'))
-      .toEqual({ event: 'Stop', optional: false, state: 'missing' })
+    // A field of the wrong type fails the same strict parse a matcher of the wrong type fails, so
+    // the file does not load and none of its hooks run - including the ones BMN expects.
+    const report = JSON.parse(check.stdout)
+    expect(report.ok).toBe(false)
+    expect(report.agents[0].state).toBe('unusable')
+    expect(report.agents[0].detail).toContain(detail)
+    expect(install.code).toBe(1)
+    expect(await readFile(path, 'utf8')).toBe(before)
+    expect(await backupsOf(path)).toEqual([])
+  })
+
+  it.each([
+    ['a key no harness event is named by', '_comment', ['owner note']],
+    ['an event this harness does not have', 'Notification', [{ matcher: ['Write'], hooks: [] }]]
+  ])('leaves %s alone rather than refusing the file', async (_label, key, value) => {
+    const path = await hookFileFixture({
+      hooks: {
+        ...Object.fromEntries(CODEX_EVENTS.map((each) => [each, [entryGroup(DOCUMENTED_CODEX)]])),
+        [key]: value
+      }
+    }, 'hooks.json')
+
+    const result = await runHooks(['check', 'codex', '--file', path, '--json'])
+
+    // Both harnesses ignore keys they do not recognise, so refusing over one would stop `install`
+    // on a file that works. Refusing a real file is not a safer answer than reading it.
+    expect(result.code).toBe(0)
+    expect(JSON.parse(result.stdout).agents[0].state).toBe('read')
   })
 
   it('claims nothing about any event in a file it cannot add to', async () => {

@@ -238,14 +238,24 @@ to read:
       timeout 5 bmn hook claude
 ```
 
-Anything that is not printable ASCII is printed as its code point, because an invisible character
-is usually the whole reason — and a backslash is doubled, so the text `\u00a0` and the character it
-names cannot be confused:
+Anything that is not printable ASCII is printed as `\u{...}`, because an invisible character is
+usually the whole reason — delimited so that `\u{10000}` and `\u{1000}0` cannot be read as each
+other, and with a backslash doubled so the text `\u00a0` and the character it names cannot be
+confused either:
 
 ```
   Stop              missing
     an entry here names bmn hook claude but is not one BMN recognises:
-      \u00a0bmn hook claude
+      \u{a0}bmn hook claude
+```
+
+An entry BMN *does* recognise, sitting inside a matcher, gets its own line instead — it is not an
+entry BMN failed to recognise, and the matcher is the whole reason:
+
+```
+  PostToolUse       missing
+    an entry here is inside a matcher, so it wires only part of this event:
+      [ -n "$BMN_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook claude; exit 0
 ```
 
 The line is only printed when the event is missing. An event something else already wires has no
@@ -258,13 +268,23 @@ never fires: a harness may ignore the matcher on some events (Codex does on `Sto
 `UserPromptSubmit` and `Interrupt`), in which case the entry `install` adds beside yours is simply a
 duplicate.
 
-What a matcher may *be* differs by harness, and BMN checks that across the **whole file**, not only
-the events it reports on — a shape the harness cannot read stops it loading the file, and the hooks
-BMN does expect are in that same file. Claude Code takes one pattern or a list of them; Codex takes
-one pattern, so a list there makes the file unreadable. The same goes for anything in an event's
-list that is not a hook group at all. `check` reports such a file as one it cannot add to, names the
-event, and `install` writes nothing and takes no backup — it is your configuration to repair, not
-BMN's to guess at.
+What a matcher may *be* differs by harness. Claude Code takes one pattern or a list of them; Codex
+takes one pattern, so a list there fails its schema. BMN checks this across **every event it knows
+that harness has**, not only the ones it reports on, because a shape the harness cannot read stops
+it loading the file — and the hooks BMN does expect are in that same file. It checks the entries the
+same way: a group whose `hooks` is not a list, an entry that is not an object, or a `type`,
+`command` or `timeout` of the wrong type.
+
+`check` reports such a file as one it cannot add to, names the event, and `install` writes nothing
+and takes no backup. It is your configuration to repair, not BMN's to guess at.
+
+Two limits worth knowing. A key BMN does not recognise is **left alone** — `_comment`, or a Claude
+event in a Codex file — because both harnesses ignore keys they do not know, and refusing over one
+would stop `install` on a file that works; the cost is that a harness event BMN has not heard of
+could carry a shape BMN never looks at. And what happens to a file the harness cannot read is the
+harness's business: Codex's loader refuses the whole file, which is why BMN refuses too, while a
+Claude settings file carrying a bad matcher loaded without complaint when it was tried — so for
+Claude this is BMN declining to guess, not a statement that nothing would run.
 
 `install` then adds BMN's own entry beside yours, so the hook fires from BMN's entry whatever yours
 does. If you see a duplicate, that is why.
