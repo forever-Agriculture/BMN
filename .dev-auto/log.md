@@ -1980,3 +1980,66 @@ character sat between the hook's words.
   string. It is sampling coupled to the blank set, and is described that way rather than as
   exhaustive.
 - Whether a group's hooks run under a list matcher in Claude Code, per the probe note above.
+
+### Both reviews of `e211130`: REFUSED, one regression of mine and one deeper gap
+
+- gpt-6-astra/medium recheck 10 — `reviews/epic-15-recheck10-astra.md`. 457,769 input / 3,399 output.
+- GLM-5.3/max extra 10 — `reviews/epic-15-extra10-glm53.json`, $1.13, 25 turns, read tools only.
+
+Both confirm wave 10's three closures: the scan scope, the printable-ASCII rule and the truncation.
+
+**Astra: my widened scan over-refuses — a regression, not a missed case.** Treating every
+array-valued key under `hooks` as a harness event refused `_comment: ["owner note"]` and a
+Claude-only `Notification` list in a Codex file, both of which checked and installed cleanly at
+`726a72c`. Codex ignores unknown keys inside `hooks`; its `deny_unknown_fields` is on the outer
+struct. GLM looked for over-referral and found none — it tried string matchers under a
+cross-harness event, which pass; Astra's cases were a list matcher and a non-object element, which
+did not. Astra's finding stands and GLM's sweep missed it.
+
+**GLM: the scan stopped at the group boundary.** A group whose `hooks` is a string, an element that
+is not an object, or a `command`/`type`/`timeout` of the wrong type all fail the same strict parse.
+Reproduced: `{"hooks":{"Stop":[{"hooks":"echo hi"}]}}` as a Codex file read `read`, installed at
+exit 0, and then checked green — over a file the cited loader refuses. Same class as the blocker
+wave 10 had just closed, one level deeper.
+
+**Astra: the note's escapes were ambiguous.** `က0` is both U+10000 and U+1000 followed by an
+ASCII `0`. Delimited `\u{...}` now, which is the one property that line exists for.
+
+**GLM M1: a recognised entry inside a matcher was printed under "not one BMN recognises".** It is
+one BMN recognises, and the matcher is the reason. It gets its own line.
+
+**Both accept all four carried items as carried, and Astra improved one.** `matcher: ''` meaning
+match-all now has explicit support in Codex's implementation tests and Claude Code's hooks
+documentation, so it is no longer only my inference — live execution is still unverified. `hooks:
+null`, the sampled differential coverage and Claude list-matcher execution do not block.
+
+**Astra: my doc line was stronger than my evidence.** "Anything else means the file will not load"
+is not what the Claude probe established — numbers loaded too. The docs now separate the two: Codex
+refuses the file, which is why BMN does; for Claude this is BMN declining to guess.
+
+### Wave 11 — `0c57667`, every finding dispositioned
+
+1. **Scan scope, corrected in both directions** (Astra, blocking). `HOOK_FILES[agent].known` — the
+   events BMN knows that harness has. A key it does not know is left alone, and the comment states
+   the residual: an unknown harness event could carry a shape BMN never looks at. Two-row table,
+   three RED fences.
+2. **Entry-level shapes** (GLM B1, blocking). `group.hooks` a list, each element an object, and
+   `type`/`command`/`timeout` type-checked — only the fields both harnesses share, never which
+   values an enum carries. Five-row table, three RED fences.
+3. **Delimited escapes** (Astra 3). `\u{...}`. One RED fence.
+4. **The gated line** (GLM M1). Its own sentence and its own `gated` field in `--json`. Two RED fences.
+5. **Docs** (Astra 2). The Claude and Codex claims are now separated by the strength of their evidence.
+
+**Changed a test rather than kept it:** `reads an entry whose command is not a string as missing`
+pinned behaviour GLM showed is unsafe for Codex. It now pins `unusable`. Recorded because changing
+a passing test to match new code is exactly the move that needs to be visible.
+
+**Newly unfenced, by design:** `hookEntryState`'s non-string-command guard is unreachable now that
+the file is refused first. Labelled defence in depth in the code, not claimed as fenced, and kept —
+the last guard deleted here on a green mutation turned out to be load-bearing.
+
+**Rejected, with the refutation:** nothing.
+
+**Carried, not closed:** the four above, plus GLM M2 — Claude's `matcher: null` is unprobed, and if
+Claude's schema is optional-not-nullable it is one more shape of the same class. One load probe
+would settle it.
