@@ -2855,3 +2855,10 @@ Four first-route GLM CLI implementation receipts (`epic20-renderer.json`, `epic1
 - Gates on `d9cb4a8` (lead): typecheck, lint, unit 89 files 1552 PASS/1 SKIP, Electron exit 0 with `repeatAcceptance` unchanged. Visual gate reused from the earlier pass: no renderer change since.
 - Known limits carried forward: Claude's Bash `tool_input.description` can differ between otherwise identical calls (measured 2.1.280), so some Claude loops will not share a fingerprint; `repeat-watch.log` calibration will show it. Palette dormant styling has no automated check. OpenCode provider-backed checks and owner orientation remain UNVERIFIED as recorded above.
 - Delivery: push `main` to `origin` and `pnpm run update:desktop` follow this record commit.
+
+## Description-label fix (2026-09-23, Claude Code)
+
+- Payload measurement (GLM-5.3-Flash, $0.047, Claude Code 2.1.280): a failing Bash retry carried a new `tool_input.description` each time ("first/second/third time"), so the loop above would not have reached eight matching fingerprints. Successful Bash `tool_response` was stable. A repeated Read returns `file_unchanged` from the second call, so a pure Read loop reaches the notice at nine calls, not eight; accepted.
+- Fix via GLM-5.3-Flash sandboxed edit route ($0.27): the CLI drops the `description` key from Claude's tool input before hashing (shallow copy, Claude only; Codex input unchanged). New CLI tests RED on the old code (`cf49c059155e1ff9` vs expected `b3007d80dab67bfd`), then GREEN. Lead added the sentence to `docs/agent-control.md`. This supersedes the description limit in the previous section.
+- Gates (lead): `node --check`, `git diff --check`, typecheck, lint, unit 1554 PASS/1 SKIP, Electron exit 0 with `repeatAcceptance` unchanged (`noticeCount` 1, `ptyInputEvents` 0). No renderer change, visual gate reused.
+- After the desktop update, `bmn hooks install claude` is needed to add Claude's `PostToolUseFailure` hook to the owner's settings; it was not edited on their behalf.
