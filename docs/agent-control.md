@@ -187,7 +187,7 @@ again after BMN restarts.
 
 ### Repeated tool calls
 
-For Claude Code and Codex, BMN counts identical completed tool calls since your last message. Eight
+For Claude Code and Codex, BMN counts identical tool calls, failed ones included, since your last message. Eight
 matching calls among the last 20 open one **Needs you** notice; the hook log shows the count as
 `same call ×8`. The watch only tells you and never changes the agent or its process. The threshold
 is the `REPEAT_NOTICE_AT` constant in `repeat-watch.ts`; the bounded local `repeat-watch.log` under

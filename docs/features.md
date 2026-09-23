@@ -150,7 +150,7 @@ the terminal's own OSC 9, 777 or 99 notification. BMN presents it as a notice, w
 you type into the session. The session's ⋯ menu has **Hook events…**, a short in-memory list of
 what the harness actually reported, which answers "why is there no request for this?".
 OpenCode subagent permissions and questions use their own requests, so they do not replace the
-main session's prompt. For Claude Code and Codex, eight identical completed tool calls among the
+main session's prompt. For Claude Code and Codex, eight identical tool calls (failed ones count too) among the
 last 20 since your last message open one notice; the hook event list shows the repeat count. BMN
 only tells you and leaves the agent running.
 

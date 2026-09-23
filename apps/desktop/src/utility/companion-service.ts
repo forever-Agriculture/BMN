@@ -914,21 +914,16 @@ export class CompanionService {
         repeat = result.repeat
         if (result.closed) await this.writeRepeatSegment(p.sessionId, result.closed)
         if (p.event === 'UserPromptSubmit' || result.fire) {
-          const rows = await this.options.database.companion('listAttention')
-          const open = rows.find((row) => row.sessionId === p.sessionId &&
-            row.requestKey === 'watch:repeat' && row.state === 'open')
-          if (p.event === 'UserPromptSubmit' && open) {
-            try {
+          try {
+            const rows = await this.options.database.companion('listAttention')
+            const open = rows.find((row) => row.sessionId === p.sessionId &&
+              row.requestKey === 'watch:repeat' && row.state === 'open')
+            if (p.event === 'UserPromptSubmit' && open) {
               await this.closeAttentionByKey(p.sessionId, 'watch:repeat', 'withdrawn', null,
                 `hook:${p.agent}:${p.event}`)
               if (!effects.includes('withdrew')) effects.push('withdrew')
-            } catch (error) {
-              // Owner resolution may win after the list; keep the hook record without a false effect.
-              if (!(error instanceof Error && 'code' in error && error.code === ERROR_CODES.notFound)) throw error
-            }
-          } else if (result.fire && !open && p.incarnationId !== null &&
-            this.options.manager.liveIncarnationId(p.sessionId) === p.incarnationId) {
-            try {
+            } else if (result.fire && !open && p.incarnationId !== null &&
+              this.options.manager.liveIncarnationId(p.sessionId) === p.incarnationId) {
               const opened = await this.openAttention({
                 sessionId: p.sessionId, incarnationId: p.incarnationId,
                 requestKey: 'watch:repeat', kind: 'notice', origin: 'watch:repeat',
@@ -939,9 +934,9 @@ export class CompanionService {
                 result.state.notified = true
                 if (!effects.includes('opened')) effects.push('opened')
               }
-            } catch {
-              // A failed notice must not invent an effect or lose the original observation.
             }
+          } catch {
+            // A failed store call must not invent an effect or lose the original observation.
           }
         }
       }

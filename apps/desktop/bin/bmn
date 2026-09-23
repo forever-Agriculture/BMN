@@ -1552,11 +1552,7 @@ async function runHook(args) {
   return 0
 }
 
-/**
- * One `hook.observe` call describing this event and what it changed. An effect is recorded only for a call
- * the host accepted: a Stop that found nothing to withdraw, or an open the host refused, leaves the list
- * empty, which is what the owner needs to see when a request they expected never arrived.
- */
+/** JSON with object keys sorted at every depth and no whitespace; absent reads as `null`. */
 function canonicalHookPart(value) {
   if (value === undefined || value === null) return 'null'
   if (Array.isArray(value)) return `[${value.map(canonicalHookPart).join(',')}]`
@@ -1574,6 +1570,11 @@ function toolFingerprint(event) {
   return createHash('sha256').update(text.slice(0, 1_000_000)).digest('hex').slice(0, 16)
 }
 
+/**
+ * One `hook.observe` call describing this event and what it changed. An effect is recorded only for a call
+ * the host accepted: a Stop that found nothing to withdraw, or an open the host refused, leaves the list
+ * empty, which is what the owner needs to see when a request they expected never arrived.
+ */
 function hookObservation(agent, event, requests, outcomes) {
   const eventName = hookEventName(event.hook_event_name)
   if (eventName === undefined) return undefined

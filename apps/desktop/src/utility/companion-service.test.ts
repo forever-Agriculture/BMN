@@ -1555,6 +1555,48 @@ describe('repeat watch notices and calibration', () => {
     expect(service.listHookEvents('s1').at(-1)).toMatchObject({ event: 'UserPromptSubmit', effects: ['answered'] })
   })
 
+  it('records the firing call when the repeat watch store lookup fails', async () => {
+    await service.sessionsChanged()
+    await calls(7)
+    const databaseClient = service['options'].database as {
+      companion: (op: string, ...args: unknown[]) => Promise<unknown>
+    }
+    const companion = databaseClient.companion.bind(databaseClient)
+    databaseClient.companion = async (op, ...args) => {
+      if (op === 'listAttention') throw new Error('store failed')
+      return companion(op, ...args)
+    }
+    try {
+      await expect(observe()).resolves.toEqual({ recorded: true })
+    } finally {
+      databaseClient.companion = companion
+    }
+    expect(service.listHookEvents('s1').at(-1)).toMatchObject({ repeat: 8 })
+    expect(service.listHookEvents('s1').at(-1)!.effects).not.toContain('opened')
+  })
+
+  it('records a prompt when the store lookup fails before its hook withdrawal', async () => {
+    await service.sessionsChanged()
+    await calls(8)
+    expect((await rows()).filter((row) => row.state === 'open')).toHaveLength(1)
+    const databaseClient = service['options'].database as {
+      companion: (op: string, ...args: unknown[]) => Promise<unknown>
+    }
+    const companion = databaseClient.companion.bind(databaseClient)
+    databaseClient.companion = async (op, ...args) => {
+      if (op === 'listAttention') throw new Error('store failed')
+      return companion(op, ...args)
+    }
+    try {
+      await expect(observe({ event: 'UserPromptSubmit', fingerprint: undefined })).resolves.toEqual({ recorded: true })
+    } finally {
+      databaseClient.companion = companion
+    }
+    expect(service.listHookEvents('s1').at(-1)).toMatchObject({ event: 'UserPromptSubmit', repeat: null })
+    expect(service.listHookEvents('s1').at(-1)!.effects).not.toContain('withdrew')
+    expect((await rows()).filter((row) => row.state === 'open')).toHaveLength(1)
+  })
+
   it('bounds calibration by keeping complete newest lines and clears deleted session state', async () => {
     await service.sessionsChanged()
     const path = join(root, 'state/repeat-watch.log')
