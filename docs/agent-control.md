@@ -192,7 +192,8 @@ matching calls among the last 20 open one **Needs you** notice; the hook log sho
 `same call ×8`. The watch only tells you and never changes the agent or its process. The threshold
 is the `REPEAT_NOTICE_AT` constant in `repeat-watch.ts`; the bounded local `repeat-watch.log` under
 BMN's state directory records counts, tool names and whether a notice opened for calibration. BMN
-keeps no tool input or output in that log.
+keeps no tool input or output in that log. Claude Code's free-text `description` label is left out
+of the comparison, so a relabelled retry still counts.
 
 An agent passes its environment to agents it starts from a tool call (`claude -p`), so the hook
 also checks that the agent above it holds the terminal; nested, non-interactive agents are ignored.

@@ -1563,10 +1563,16 @@ function canonicalHookPart(value) {
 }
 
 /** Tool content never leaves this short-lived CLI process; the utility receives only a hash prefix. */
-function toolFingerprint(event) {
+function toolFingerprint(event, agent) {
   const result = Object.hasOwn(event, 'tool_response') ? event.tool_response
     : Object.hasOwn(event, 'error') ? event.error : null
-  const text = `${typeof event.tool_name === 'string' ? event.tool_name : ''}\0${canonicalHookPart(event.tool_input)}\0${canonicalHookPart(result)}`
+  // Claude writes a free-text `description` label, not part of the call, so retries with new labels still match.
+  let input = event.tool_input
+  if (agent === 'claude' && isObject(input) && Object.hasOwn(input, 'description')) {
+    input = { ...input }
+    delete input.description
+  }
+  const text = `${typeof event.tool_name === 'string' ? event.tool_name : ''}\0${canonicalHookPart(input)}\0${canonicalHookPart(result)}`
   return createHash('sha256').update(text.slice(0, 1_000_000)).digest('hex').slice(0, 16)
 }
 
@@ -1593,7 +1599,7 @@ function hookObservation(agent, event, requests, outcomes) {
   const source = hookEventName(event.source)
   const toolName = hookEventName(event.tool_name)
   const fingerprint = (agent === 'claude' && ['PostToolUse', 'PostToolUseFailure'].includes(eventName)) ||
-    (agent === 'codex' && eventName === 'PostToolUse') ? toolFingerprint(event) : undefined
+    (agent === 'codex' && eventName === 'PostToolUse') ? toolFingerprint(event, agent) : undefined
   return {
     method: 'hook.observe',
     params: {

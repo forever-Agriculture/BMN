@@ -1000,6 +1000,38 @@ describe('bmn hook provenance and the hook event log', () => {
     expect(fixture.handlers.observeHookEvent.mock.lastCall?.[0]).toMatchObject({ fingerprint: expected })
   })
 
+  it('fingerprints a Claude call without its free-text description label', async () => {
+    const fixture = await cliFixture()
+    const expected = createHash('sha256').update('Bash\0{"command":"false"}\0"Exit code 1"').digest('hex').slice(0, 16)
+    await runHook(fixture, 'claude', {
+      hook_event_name: 'PostToolUseFailure', tool_name: 'Bash',
+      tool_input: { command: 'false', description: 'Run it (first time)' }, error: 'Exit code 1'
+    })
+    expect(fixture.handlers.observeHookEvent.mock.lastCall?.[0]).toMatchObject({ fingerprint: expected })
+    await runHook(fixture, 'claude', {
+      hook_event_name: 'PostToolUseFailure', tool_name: 'Bash',
+      tool_input: { command: 'false', description: 'Run it again' }, error: 'Exit code 1'
+    })
+    expect(fixture.handlers.observeHookEvent.mock.lastCall?.[0]).toMatchObject({ fingerprint: expected })
+  })
+
+  it('fingerprints a Codex call with its description label kept verbatim', async () => {
+    const fixture = await cliFixture()
+    await runHook(fixture, 'codex', {
+      hook_event_name: 'PostToolUse', tool_name: 'Bash',
+      tool_input: { command: 'false', description: 'Run it (first time)' }
+    })
+    const one = fixture.handlers.observeHookEvent.mock.lastCall?.[0]?.fingerprint
+    await runHook(fixture, 'codex', {
+      hook_event_name: 'PostToolUse', tool_name: 'Bash',
+      tool_input: { command: 'false', description: 'Run it again' }
+    })
+    const two = fixture.handlers.observeHookEvent.mock.lastCall?.[0]?.fingerprint
+    expect(one).toMatch(/^[0-9a-f]{16}$/)
+    expect(two).toMatch(/^[0-9a-f]{16}$/)
+    expect(two).not.toBe(one)
+  })
+
   it('canonicalizes absent tool input and result as null', async () => {
     const fixture = await cliFixture()
     await runHook(fixture, 'claude', { hook_event_name: 'PostToolUse', tool_name: 'Bash' })
