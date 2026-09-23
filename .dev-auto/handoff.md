@@ -5,7 +5,7 @@
 - Mode: build
 - Stopping condition: selected Epics 19–21 accepted; no automatic time limit. Owner requested autonomous work for two hours, not a stop deadline, and later said continue.
 - Explicit user stop: none
-- Restrictions and authorization boundaries: `$dev-auto 19-21` and project `AGENTS.md` authorize local implementation/checks/task commits; no push, merge, deployment or desktop update authorization. Preserve unrelated work. Project `AGENTS.md` forbids packaging while packaged BMN runs and requires `pnpm run update:desktop` only after commit and push to main. Configured GLM/Codex/Claude routes authorized by the dev-auto skill; no other provider.
+- Restrictions and authorization boundaries: `$dev-auto 19-21` and project `AGENTS.md` authorize local implementation/checks/task commits. Later owner request to Claude Code authorized push of `main` and the desktop update after a quality check; no merge or other deploy authorization. Preserve unrelated work. Project `AGENTS.md` forbids packaging while packaged BMN runs and requires `pnpm run update:desktop` only after commit and push to main. Configured GLM/Codex/Claude routes authorized by the dev-auto skill; no other provider.
 - Decision/history log: `.dev-auto/log.md` append-only. Raw receipts under ignored `.dev-auto/evidence/epics-19-21/` and `.dev-auto/evidence/epic-20/`.
 - Lead host / requested model / observed model: Codex API / no owner-requested model / gpt-6-sol/xhigh, rollout `01a0ce20-bc21`.
 
@@ -40,4 +40,4 @@
 ## Resume
 
 - Next safe action: none
-- Status: COMPLETE — Epics 19–21 and all six stories accepted; implementation commit `49e7a36` local, checks and reviews passed, four material findings closed.
+- Status: COMPLETE — Epics 19–21 and all six stories accepted; implementation `49e7a36` plus follow-up fix `d9cb4a8` (delivery check in `.dev-auto/log.md`), pushed to `origin/main` with the desktop update queued.
