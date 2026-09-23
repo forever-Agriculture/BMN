@@ -45,8 +45,10 @@ feature stops. This page sums up the product and how to install it.
   ([Agent attention](docs/features.md#agent-attention-needs-you-progress-and-handoffs),
   [docs/agent-control.md](docs/agent-control.md))
 - **Needs you.** Agent questions stay open until you answer them or the agent withdraws them. A
-  header count and `Ctrl+Shift+U` take you to the next one. Progress reports are shown as the
-  agent's claims, with any files it published as evidence.
+  header count, a dot on each workspace that has a waiting session or open update, and
+  `Ctrl+Shift+U` take you to the right one. OpenCode subagent requests appear here too. Repeated
+  Claude Code or Codex tool calls can open one informational notice; BMN never stops the agent.
+  Progress reports are shown as the agent's claims, with any files it published as evidence.
 - **Files.** Published files, attachments and pasted images are stored as immutable originals with
   a hash. The Files panel previews them and offers Open, Save As, Show in Folder and Deliver to
   session. ([Files and file references](docs/features.md#files-and-file-references))

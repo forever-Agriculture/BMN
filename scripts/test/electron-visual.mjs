@@ -15,6 +15,7 @@ const appDirectory = join(repoRoot, 'apps/desktop')
 const evidenceDirectory = join(repoRoot, '.dev-auto/evidence/epic-5')
 const activityEvidenceDirectory = join(repoRoot, '.dev-auto/evidence/epic-14')
 const markerEvidenceDirectory = join(repoRoot, '.dev-auto/evidence/epic-11')
+const glanceEvidenceDirectory = join(repoRoot, '.dev-auto/evidence/epic-20')
 const requireFromApp = createRequire(join(appDirectory, 'package.json'))
 const electronBinary = requireFromApp('electron')
 const execFileAsync = promisify(execFile)
@@ -46,6 +47,13 @@ const baselineCss = `
   .popup-menu [role='menuitem']:focus-visible,
   .app-dialog-body button:focus-visible,
   .needs-you-popover button:focus-visible { outline-offset: 2px !important; }
+`
+
+const epic20BaselineCss = `
+  .workspace-row .status-dot.needs-you { display: none !important; }
+  .session-row[data-live='false'] .session-name { color: var(--text) !important; }
+  .workspace-row .row-menu-button,
+  .session-row .row-menu-button { opacity: 1 !important; }
 `
 
 function ratio(first, second) {
@@ -144,6 +152,7 @@ async function pointerStates(page, locator, activeScreenshotName) {
 await mkdir(evidenceDirectory, { recursive: true })
 await mkdir(activityEvidenceDirectory, { recursive: true })
 await mkdir(markerEvidenceDirectory, { recursive: true })
+await mkdir(glanceEvidenceDirectory, { recursive: true })
 
 const evidence = await withTemporaryRoot(
   temporaryRootContracts.electronDevelopment,
@@ -1680,6 +1689,308 @@ const evidence = await withTemporaryRoot(
       assert.equal(afterNone.nameLeftEdges.length, 1, afterNoneDetail)
       phase('workspace identity marker checks passed')
 
+      // ---------- Epic 20: workspace attention, dormant rows and quiet controls ----------
+      phase('workspace glance states')
+      const glanceScreenshots = []
+      const glanceFixture = {
+        liveSessionId: fixture.selectedSessionId,
+        dormantSessionId: fixture.sessionIds[1],
+        dormantSessionName: 'Implementation — renderer hierarchy and interaction polish',
+        attentionSessionId: fixture.foreignSessionId,
+        workspaceName: fixture.secondWorkspaceName
+      }
+      await setContentSize(application, page, 1440, 900)
+      await setAppearance(page, 'knight', 'black')
+      await settleTerminalLayout(page)
+
+      const ensureWorkspaceExpanded = async (workspaceName) => {
+        await page.evaluate((name) => {
+          const group = [...document.querySelectorAll('.workspace-group')]
+            .find((candidate) => candidate.getAttribute('aria-label') === name)
+          if (!group) throw new Error(`workspace group unavailable: ${name}`)
+          if (group.querySelectorAll('.session-row').length === 0) {
+            const button = group.querySelector('.workspace-row > button:first-child')
+            if (!(button instanceof HTMLElement)) throw new Error(`workspace toggle unavailable: ${name}`)
+            button.click()
+          }
+        }, workspaceName)
+        await page.waitForFunction((name) => [...document.querySelectorAll('.workspace-group')]
+          .find((candidate) => candidate.getAttribute('aria-label') === name)
+          ?.querySelectorAll('.session-row').length > 0, workspaceName)
+      }
+
+      await ensureWorkspaceExpanded(glanceFixture.workspaceName)
+      const stopForGlance = async (sessionId) => {
+        await page.evaluate(async (id) => {
+          const sessionButton = document.querySelector(`.session-row button[data-session-id="${id}"]`)
+          const row = sessionButton?.closest('.session-row')
+          if (row?.getAttribute('data-live') === 'true') await window.aiTerminal.stopSession(id)
+        }, sessionId)
+      }
+      await stopForGlance(glanceFixture.dormantSessionId)
+      await stopForGlance(glanceFixture.attentionSessionId)
+      await page.waitForFunction(({ dormantSessionId, attentionSessionId }) => {
+        const live = (sessionId) => document
+          .querySelector(`.session-row button[data-session-id="${sessionId}"]`)
+          ?.closest('.session-row')?.getAttribute('data-live')
+        return live(dormantSessionId) === 'false' && live(attentionSessionId) === 'false'
+      }, glanceFixture)
+      await runControlCli(
+        roots,
+        glanceFixture.attentionSessionId,
+        'ask',
+        'epic20-visual',
+        'Review the visual states?',
+        '--kind',
+        'question'
+      )
+      await page.waitForFunction(({ attentionSessionId, workspaceName }) => {
+        const sessionRow = document.querySelector(
+          `.session-row button[data-session-id="${attentionSessionId}"]`
+        )
+        const group = [...document.querySelectorAll('.workspace-group')]
+          .find((candidate) => candidate.getAttribute('aria-label') === workspaceName)
+        return !!sessionRow?.querySelector('.status-dot.needs-you') &&
+          !!group?.querySelector('.workspace-row .status-dot.needs-you')
+      }, glanceFixture)
+
+      const readGlanceState = () => page.evaluate((state) => {
+        const group = [...document.querySelectorAll('.workspace-group')]
+          .find((candidate) => candidate.getAttribute('aria-label') === state.workspaceName)
+        const workspaceButton = group?.querySelector('.workspace-row > button:first-child')
+        const workspaceDot = group?.querySelector('.workspace-row .status-dot.needs-you')
+        const hiddenText = group?.querySelector('.workspace-row .visually-hidden')
+        const buttonFor = (sessionId) => document
+          .querySelector(`.session-row button[data-session-id="${sessionId}"]`)
+        const readRow = (sessionId) => {
+          const button = buttonFor(sessionId)
+          const row = button?.closest('.session-row')
+          const name = row?.querySelector('.session-name')
+          const dot = row?.querySelector('.status-dot')
+          return {
+            dataLive: row?.getAttribute('data-live') ?? null,
+            nameColor: name ? getComputedStyle(name).color : null,
+            nameWeight: name ? getComputedStyle(name).fontWeight : null,
+            selected: row?.classList.contains('selected') ?? false,
+            borderColor: button ? getComputedStyle(button).borderLeftColor : null,
+            backgroundColor: button ? getComputedStyle(button).backgroundColor : null,
+            dot: dot?.className ?? null,
+            dotShown: !!dot && dot.getClientRects().length > 0
+          }
+        }
+        const probe = document.createElement('span')
+        probe.style.color = 'var(--muted)'
+        probe.style.borderLeft = '2px solid var(--identity)'
+        probe.style.backgroundColor = 'var(--selected)'
+        probe.style.position = 'fixed'
+        probe.style.visibility = 'hidden'
+        document.body.append(probe)
+        const mutedColor = getComputedStyle(probe).color
+        const identityColor = getComputedStyle(probe).borderLeftColor
+        const selectedColor = getComputedStyle(probe).backgroundColor
+        probe.remove()
+        return {
+          workspace: {
+            expanded: workspaceButton?.getAttribute('aria-expanded') === 'true',
+            dotShown: !!workspaceDot && workspaceDot.getClientRects().length > 0 &&
+              getComputedStyle(workspaceDot).display !== 'none',
+            hiddenText: hiddenText?.textContent?.trim() ?? '',
+            title: workspaceButton?.getAttribute('title') ?? ''
+          },
+          mutedColor,
+          identityColor,
+          selectedColor,
+          rows: {
+            live: readRow(state.liveSessionId),
+            dormant: readRow(state.dormantSessionId),
+            attention: readRow(state.attentionSessionId)
+          }
+        }
+      }, glanceFixture)
+
+      const captureGlancePair = async (identity, stateName) => {
+        await setAppearance(page, identity, 'black')
+        await page.mouse.move(0, 0)
+        const baseline = await page.addStyleTag({ content: epic20BaselineCss })
+        glanceScreenshots.push(await screenshot(
+          page,
+          `black-${identity}-epic20-${stateName}-before.png`,
+          glanceEvidenceDirectory
+        ))
+        await baseline.evaluate((element) => element.remove())
+        glanceScreenshots.push(await screenshot(
+          page,
+          `black-${identity}-epic20-${stateName}-after.png`,
+          glanceEvidenceDirectory
+        ))
+      }
+
+      const glanceIdentities = ['knight', 'cross']
+      for (const identity of glanceIdentities) await captureGlancePair(identity, 'expanded')
+      const expandedGlance = await readGlanceState()
+      const expandedDetail = JSON.stringify(expandedGlance)
+      assert.equal(expandedGlance.workspace.expanded, true, expandedDetail)
+      assert.equal(expandedGlance.workspace.dotShown, true, expandedDetail)
+      assert.equal(expandedGlance.workspace.hiddenText, '1 waiting for your response', expandedDetail)
+      assert.ok(expandedGlance.workspace.title.includes('1 waiting for your response'), expandedDetail)
+      assert.equal(expandedGlance.rows.live.dataLive, 'true', expandedDetail)
+      assert.equal(expandedGlance.rows.dormant.dataLive, 'false', expandedDetail)
+      assert.equal(expandedGlance.rows.attention.dataLive, 'false', expandedDetail)
+      assert.equal(expandedGlance.rows.dormant.nameColor, expandedGlance.mutedColor, expandedDetail)
+      assert.notEqual(expandedGlance.rows.attention.nameColor, expandedGlance.mutedColor, expandedDetail)
+      assert.ok(expandedGlance.rows.attention.dot?.includes('needs-you'), expandedDetail)
+      const selectedGlanceButton = page.locator('.session-row.selected > button:first-child')
+      await selectedGlanceButton.focus()
+      await page.keyboard.press('Shift+Tab')
+      await page.keyboard.press('Tab')
+      const glanceGrayscaleFocus = await selectedGlanceButton.evaluate((button) => {
+        const ring = getComputedStyle(button, '::after')
+        return {
+          keyboardVisible: button.matches(':focus-visible') && document.activeElement === button,
+          ringWidth: ring.borderTopWidth,
+          ringStyle: ring.borderTopStyle,
+          ringColor: ring.borderTopColor,
+          selectedBar: getComputedStyle(button).borderLeftColor,
+          workspaceDot: !!document.querySelector('.workspace-row .status-dot.needs-you')
+        }
+      })
+      assert.equal(glanceGrayscaleFocus.keyboardVisible, true, JSON.stringify(glanceGrayscaleFocus))
+      assert.equal(glanceGrayscaleFocus.ringWidth, '2px', JSON.stringify(glanceGrayscaleFocus))
+      assert.equal(glanceGrayscaleFocus.ringStyle, 'solid', JSON.stringify(glanceGrayscaleFocus))
+      assert.equal(glanceGrayscaleFocus.workspaceDot, true, JSON.stringify(glanceGrayscaleFocus))
+      const glanceGrayscale = await page.addStyleTag({ content: '.shell-window { filter: grayscale(1); }' })
+      glanceScreenshots.push(await screenshot(page, 'black-cross-epic20-expanded-grayscale.png', glanceEvidenceDirectory))
+      await glanceGrayscale.evaluate((element) => element.remove())
+
+      const selectedExitedStates = []
+      await page.locator(`.session-row button[data-session-id="${glanceFixture.dormantSessionId}"]`).click()
+      for (const identity of glanceIdentities) {
+        await captureGlancePair(identity, 'selected-exited')
+        const state = await readGlanceState()
+        const row = state.rows.dormant
+        const detail = JSON.stringify({ identity, row, state })
+        assert.equal(row.dataLive, 'false', detail)
+        assert.equal(row.selected, true, detail)
+        assert.equal(row.nameColor, state.mutedColor, detail)
+        assert.equal(row.nameWeight, '500', detail)
+        assert.equal(row.borderColor, state.identityColor, detail)
+        assert.equal(row.backgroundColor, state.selectedColor, detail)
+        selectedExitedStates.push({ identity, row })
+      }
+      await page.locator(`.session-row button[data-session-id="${glanceFixture.liveSessionId}"]`).click()
+
+      await page.evaluate((name) => {
+        const group = [...document.querySelectorAll('.workspace-group')]
+          .find((candidate) => candidate.getAttribute('aria-label') === name)
+        if (!group) throw new Error(`workspace group unavailable: ${name}`)
+        const button = group.querySelector('.workspace-row > button:first-child')
+        if (!(button instanceof HTMLElement)) throw new Error(`workspace toggle unavailable: ${name}`)
+        button.click()
+      }, glanceFixture.workspaceName)
+      await page.waitForFunction((name) => [...document.querySelectorAll('.workspace-group')]
+        .find((candidate) => candidate.getAttribute('aria-label') === name)
+        ?.querySelectorAll('.session-row').length === 0, glanceFixture.workspaceName)
+      await settleTerminalLayout(page)
+      for (const identity of glanceIdentities) await captureGlancePair(identity, 'collapsed')
+      const collapsedGlance = await readGlanceState()
+      const collapsedDetail = JSON.stringify(collapsedGlance)
+      assert.equal(collapsedGlance.workspace.expanded, false, collapsedDetail)
+      assert.equal(collapsedGlance.workspace.dotShown, true, collapsedDetail)
+      assert.equal(collapsedGlance.workspace.hiddenText, '1 waiting for your response', collapsedDetail)
+
+      await setContentSize(application, page, 780, 600)
+      await settleTerminalLayout(page)
+      for (const identity of glanceIdentities) await captureGlancePair(identity, 'rail')
+      const narrowGlance = await readGlanceState()
+      const narrowDetail = JSON.stringify(narrowGlance)
+      assert.equal(narrowGlance.workspace.expanded, false, narrowDetail)
+      assert.equal(narrowGlance.workspace.dotShown, true, narrowDetail)
+      assert.equal(narrowGlance.workspace.hiddenText, '1 waiting for your response', narrowDetail)
+
+      const glanceContrastTokens = await page.evaluate(() => {
+        const modes = ['steel', 'brown', 'dark', 'black']
+        const root = document.documentElement
+        const previousMode = root.dataset.colorMode
+        const output = []
+        for (const colorMode of modes) {
+          root.dataset.colorMode = colorMode
+          const probe = document.createElement('span')
+          probe.style.color = 'var(--muted)'
+          probe.style.position = 'fixed'
+          probe.style.visibility = 'hidden'
+          document.body.append(probe)
+          const style = getComputedStyle(root)
+          output.push({
+            colorMode,
+            muted: getComputedStyle(probe).color,
+            surface: style.getPropertyValue('--surface').trim()
+          })
+          probe.remove()
+        }
+        root.dataset.colorMode = previousMode
+        return output
+      })
+      const glanceMutedContrasts = glanceContrastTokens.map((item) => ({
+        colorMode: item.colorMode,
+        mutedOnSurface: ratio(item.muted, item.surface)
+      }))
+      for (const measurement of glanceMutedContrasts) {
+        assert.ok(measurement.mutedOnSurface >= 4.5, JSON.stringify(measurement))
+      }
+
+      await setContentSize(application, page, 1440, 900)
+      await setAppearance(page, 'knight', 'black')
+      await settleTerminalLayout(page)
+      const dormantMain = page.locator(
+        `.session-row > button[data-session-id="${glanceFixture.dormantSessionId}"]`
+      )
+      const dormantRow = dormantMain.locator('..')
+      const dormantMenu = dormantRow.locator('.row-menu-button')
+      await page.mouse.move(0, 0)
+      await page.evaluate(() => {
+        if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
+      })
+      const menuIdleOpacity = await dormantMenu.evaluate((element) => getComputedStyle(element).opacity)
+      assert.equal(menuIdleOpacity, '0', menuIdleOpacity)
+      await dormantRow.hover()
+      const menuHoverOpacity = await dormantMenu.evaluate((element) => getComputedStyle(element).opacity)
+      assert.equal(menuHoverOpacity, '1', menuHoverOpacity)
+      glanceScreenshots.push(await screenshot(
+        page,
+        'black-knight-epic20-menu-hover.png',
+        glanceEvidenceDirectory
+      ))
+      await page.mouse.move(0, 0)
+      await dormantMain.focus()
+      const menuFocusOpacity = await dormantMenu.evaluate((element) => getComputedStyle(element).opacity)
+      assert.equal(menuFocusOpacity, '1', menuFocusOpacity)
+      await page.keyboard.press('Tab')
+      const menuTab = await page.evaluate(() => {
+        const active = document.activeElement
+        return {
+          label: active?.getAttribute('aria-label') ?? null,
+          opacity: active instanceof HTMLElement ? getComputedStyle(active).opacity : null
+        }
+      })
+      const menuDetail = JSON.stringify(menuTab)
+      assert.equal(menuTab.label, `Actions for ${glanceFixture.dormantSessionName}`, menuDetail)
+      assert.equal(menuTab.opacity, '1', menuDetail)
+      await dormantMenu.click()
+      await page.waitForSelector('.popup-menu')
+      const menuOpen = await dormantMenu.evaluate((element) => ({
+        expanded: element.getAttribute('aria-expanded'),
+        opacity: getComputedStyle(element).opacity
+      }))
+      assert.equal(menuOpen.expanded, 'true', JSON.stringify(menuOpen))
+      assert.equal(menuOpen.opacity, '1', JSON.stringify(menuOpen))
+      glanceScreenshots.push(await screenshot(
+        page,
+        'black-knight-epic20-menu-open.png',
+        glanceEvidenceDirectory
+      ))
+      await page.keyboard.press('Escape')
+      phase('workspace glance checks passed')
+
       phase('all runtime checks passed')
       return {
         fixture,
@@ -1690,6 +2001,17 @@ const evidence = await withTemporaryRoot(
         markerLongName: longNameRow,
         markerRail,
         markerAfterNone: afterNone,
+        epic20Glance: {
+          fixture: glanceFixture,
+          expanded: expandedGlance,
+          collapsed: collapsedGlance,
+          narrowRail: narrowGlance,
+          mutedContrasts: glanceMutedContrasts,
+          grayscaleFocus: glanceGrayscaleFocus,
+          selectedExitedStates,
+          menu: { idleOpacity: menuIdleOpacity, hoverOpacity: menuHoverOpacity, focusOpacity: menuFocusOpacity, tab: menuTab, open: menuOpen },
+          screenshots: glanceScreenshots
+        },
         activityMeasurements,
         activityPaletteFiltering,
         activityAttentionPrecedence: precedence,
@@ -1739,6 +2061,149 @@ const evidence = await withTemporaryRoot(
     }
   }
 )
+
+// A real application restart gives this fixture an interrupted row alongside live, exited,
+// exited-with-question and selected-exited rows. All five are visible in each identity capture.
+const interruptedGlance = await withTemporaryRoot(
+  temporaryRootContracts.electronDevelopment,
+  async ({ root, roots }) => {
+    const launch = () => electron.launch({
+      executablePath: electronBinary,
+      args: [appDirectory, '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
+      cwd: repoRoot,
+      env: {
+        ...process.env,
+        XDG_CONFIG_HOME: roots.config,
+        XDG_DATA_HOME: roots.data,
+        XDG_STATE_HOME: roots.state,
+        XDG_CACHE_HOME: roots.cache,
+        XDG_RUNTIME_DIR: roots.runtime,
+        BMN_CONFIG_HOME: join(roots.config, 'bmn'),
+        BMN_DATA_HOME: join(roots.data, 'bmn'),
+        BMN_STATE_HOME: join(roots.state, 'bmn'),
+        BMN_RUNTIME_HOME: join(roots.runtime, 'bmn'),
+        BMN_LAUNCH_CWD: root,
+        ...(waylandDisplay ? { WAYLAND_DISPLAY: waylandDisplay } : {})
+      }
+    })
+    const exit = async (application) => {
+      const process = application.process()
+      const exited = process.exitCode === null && process.signalCode === null
+        ? new Promise((resolveExit) => process.once('exit', resolveExit))
+        : Promise.resolve()
+      await application.evaluate(({ app }) => app.exit(0)).catch(() => undefined)
+      await exited
+    }
+    phase('creating real interrupted sidebar fixture')
+    let application = await launch()
+    try {
+      let page = await application.firstWindow()
+      page.setDefaultTimeout(15_000)
+      await page.waitForSelector('.session-row')
+      const fixture = await page.evaluate(async (cwd) => {
+        const workspace = (await window.aiTerminal.listWorkspaces()).find((item) => !item.archivedAt)
+        if (!workspace) throw new Error('interrupted visual fixture has no workspace')
+        const initial = (await window.aiTerminal.listSessions(workspace.workspaceId))[0]
+        if (!initial) throw new Error('interrupted visual fixture has no initial session')
+        const create = async (name) => (await window.aiTerminal.createSession({
+          workspaceId: workspace.workspaceId, name, cwd, executable: '/bin/bash',
+          argv: ['--noprofile', '--norc'], cols: 80, rows: 24, backgroundChoice: 'stop'
+        })).session
+        const exited = await create('Exited visual fixture')
+        const question = await create('Exited with question visual fixture')
+        const selected = await create('Selected exited visual fixture')
+        for (const session of [exited, question, selected]) await window.aiTerminal.stopSession(session.sessionId)
+        return { workspaceId: workspace.workspaceId, interrupted: initial.sessionId,
+          exited: exited.sessionId, question: question.sessionId, selected: selected.sessionId }
+      }, root)
+      await page.reload({ waitUntil: 'domcontentloaded' })
+      await page.waitForSelector(`.session-row button[data-session-id="${fixture.question}"]`)
+      await runControlCli(roots, fixture.question, 'ask', 'epic20-interrupted-question',
+        'Review the interrupted fixture?', '--kind', 'question')
+      await page.waitForFunction((id) => document.querySelector(
+        `.session-row button[data-session-id="${id}"] .status-dot.needs-you`
+      ), fixture.question)
+      await exit(application)
+
+      application = await launch()
+      page = await application.firstWindow()
+      page.setDefaultTimeout(15_000)
+      await page.waitForSelector(`.session-row button[data-session-id="${fixture.selected}"]`)
+      fixture.live = await page.evaluate(async (ids) => {
+        const records = await window.aiTerminal.listSessions(ids.workspaceId)
+        const live = records.find((row) => row.lastProcess?.state === 'live' &&
+          ![ids.interrupted, ids.exited, ids.question, ids.selected].includes(row.sessionId))
+        if (!live) throw new Error('restart did not launch a fresh live shell')
+        return live.sessionId
+      }, fixture)
+      await page.waitForSelector(`.session-row[data-live="true"] button[data-session-id="${fixture.live}"]`)
+      await page.locator(`.session-row button[data-session-id="${fixture.selected}"]`).click()
+      await setContentSize(application, page, 1440, 900)
+      const screenshots = []
+      const measurements = []
+      for (const identity of ['knight', 'cross']) {
+        await setAppearance(page, identity, 'black')
+        await settleTerminalLayout(page)
+        const baseline = await page.addStyleTag({ content: epic20BaselineCss })
+        screenshots.push(await screenshot(page, `black-${identity}-epic20-interrupted-before.png`, glanceEvidenceDirectory))
+        await baseline.evaluate((element) => element.remove())
+        screenshots.push(await screenshot(page, `black-${identity}-epic20-interrupted-after.png`, glanceEvidenceDirectory))
+        const measured = await page.evaluate(async (ids) => {
+          const records = await window.aiTerminal.listSessions(ids.workspaceId)
+          const state = (id) => records.find((row) => row.sessionId === id)?.lastProcess?.state ?? null
+          const live = records.find((row) => row.sessionId === ids.live)
+          const row = (id) => {
+            const button = document.querySelector(`.session-row button[data-session-id="${id}"]`)
+            const host = button?.closest('.session-row')
+            const name = host?.querySelector('.session-name')
+            return { live: host?.getAttribute('data-live') ?? null,
+              selected: host?.classList.contains('selected') ?? false,
+              mutedName: name ? getComputedStyle(name).color : null,
+              weight: name ? getComputedStyle(name).fontWeight : null,
+              attention: !!host?.querySelector('.status-dot.needs-you'),
+              bar: button ? getComputedStyle(button).borderLeftColor : null,
+              fill: button ? getComputedStyle(button).backgroundColor : null }
+          }
+          const probe = document.createElement('span')
+          probe.style.color = 'var(--muted)'
+          probe.style.borderLeft = '2px solid var(--identity)'
+          probe.style.backgroundColor = 'var(--selected)'
+          document.body.append(probe)
+          const tokens = { muted: getComputedStyle(probe).color,
+            identity: getComputedStyle(probe).borderLeftColor,
+            selected: getComputedStyle(probe).backgroundColor }
+          probe.remove()
+          return { records: { interrupted: state(ids.interrupted), exited: state(ids.exited),
+            question: state(ids.question), selected: state(ids.selected), live: live?.lastProcess?.state ?? null },
+          rows: { interrupted: row(ids.interrupted), exited: row(ids.exited),
+            question: row(ids.question), selected: row(ids.selected), live: live ? row(live.sessionId) : null },
+          tokens, workspaceDot: !!document.querySelector('.workspace-row .status-dot.needs-you') }
+        }, fixture)
+        const detail = JSON.stringify({ identity, measured })
+        assert.deepEqual(measured.records, { interrupted: 'interrupted', exited: 'exited',
+          question: 'exited', selected: 'exited', live: 'live' }, detail)
+        assert.equal(measured.rows.live?.live, 'true', detail)
+        assert.equal(measured.rows.interrupted.live, 'false', detail)
+        assert.equal(measured.rows.interrupted.mutedName, measured.tokens.muted, detail)
+        assert.equal(measured.rows.exited.mutedName, measured.tokens.muted, detail)
+        assert.equal(measured.rows.question.attention, true, detail)
+        assert.notEqual(measured.rows.question.mutedName, measured.tokens.muted, detail)
+        assert.equal(measured.rows.selected.selected, true, detail)
+        assert.equal(measured.rows.selected.mutedName, measured.tokens.muted, detail)
+        assert.equal(measured.rows.selected.weight, '500', detail)
+        assert.equal(measured.rows.selected.bar, measured.tokens.identity, detail)
+        assert.equal(measured.rows.selected.fill, measured.tokens.selected, detail)
+        assert.equal(measured.workspaceDot, true, detail)
+        measurements.push({ identity, ...measured })
+      }
+      phase('real interrupted sidebar fixture passed')
+      return { fixture, measurements, screenshots }
+    } finally {
+      await exit(application)
+    }
+  }
+)
+evidence.epic20Glance.interrupted = interruptedGlance
 
 await writeFile(
   join(evidenceDirectory, 'runtime-evidence.json'),

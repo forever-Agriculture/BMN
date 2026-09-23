@@ -1,5 +1,6 @@
 // MODULE: control-cli.test.ts - the bmn CLI drives a real control server with truthful output and exit codes
 import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { createServer } from 'node:net'
 import { existsSync } from 'node:fs'
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
@@ -859,6 +860,7 @@ describe('bmn hook provenance and the hook event log', () => {
     ['claude', { hook_event_name: 'Notification', notification_type: 'permission_prompt', message: 'Allow Bash?' },
       ['opened']],
     ['claude', { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: {} }, ['answered', 'withdrew']],
+    ['claude', { hook_event_name: 'PostToolUseFailure', tool_name: 'Bash', tool_input: { command: 'false' }, error: 'Exit code 1' }, ['answered', 'withdrew']],
     ['claude', { hook_event_name: 'UserPromptSubmit' }, ['answered', 'withdrew']],
     ['claude', { hook_event_name: 'Stop', last_assistant_message: 'Done' }, ['withdrew', 'opened']],
     ['claude', { hook_event_name: 'SessionEnd' }, ['withdrew']],
@@ -962,6 +964,49 @@ describe('bmn hook provenance and the hook event log', () => {
     })
   })
 
+  it('fingerprints canonical tool calls without sending their input or result to hook.observe', async () => {
+    const fixture = await cliFixture()
+    const first = {
+      hook_event_name: 'PostToolUse', tool_name: 'Bash',
+      tool_input: { nested: { b: 2, a: 1 }, args: [{ z: '✓', x: 1 }] },
+      tool_response: { lines: ['α', 'β'], ok: true }
+    }
+    const reordered = {
+      hook_event_name: 'PostToolUse', tool_name: 'Bash',
+      tool_input: { args: [{ x: 1, z: '✓' }], nested: { a: 1, b: 2 } },
+      tool_response: { ok: true, lines: ['α', 'β'] }
+    }
+    await runHook(fixture, 'claude', first)
+    const one = fixture.handlers.observeHookEvent.mock.lastCall?.[0]
+    const expected = createHash('sha256').update('Bash\0{"args":[{"x":1,"z":"✓"}],"nested":{"a":1,"b":2}}\0{"lines":["α","β"],"ok":true}').digest('hex').slice(0, 16)
+    expect(one).toMatchObject({ fingerprint: expected })
+    expect(one).not.toHaveProperty('tool_input')
+    expect(one).not.toHaveProperty('tool_response')
+    await runHook(fixture, 'claude', reordered)
+    expect(fixture.handlers.observeHookEvent.mock.lastCall?.[0]).toMatchObject({ fingerprint: expected })
+    await runHook(fixture, 'claude', { ...reordered, tool_input: { ...reordered.tool_input, args: [{ x: 1, z: 'x' }] } })
+    expect(fixture.handlers.observeHookEvent.mock.lastCall?.[0]?.fingerprint).not.toBe(expected)
+    await runHook(fixture, 'claude', { hook_event_name: 'Notification', notification_type: 'idle_prompt' })
+    expect(fixture.handlers.observeHookEvent.mock.lastCall?.[0]).not.toHaveProperty('fingerprint')
+  })
+
+  it('fingerprints the measured Claude failed-tool error when no tool response exists', async () => {
+    const fixture = await cliFixture()
+    await runHook(fixture, 'claude', {
+      hook_event_name: 'PostToolUseFailure', tool_name: 'Bash',
+      tool_input: { command: 'false' }, error: 'Exit code 1'
+    })
+    const expected = createHash('sha256').update('Bash\0{"command":"false"}\0"Exit code 1"').digest('hex').slice(0, 16)
+    expect(fixture.handlers.observeHookEvent.mock.lastCall?.[0]).toMatchObject({ fingerprint: expected })
+  })
+
+  it('canonicalizes absent tool input and result as null', async () => {
+    const fixture = await cliFixture()
+    await runHook(fixture, 'claude', { hook_event_name: 'PostToolUse', tool_name: 'Bash' })
+    const absent = createHash('sha256').update('Bash\0null\0null').digest('hex').slice(0, 16)
+    expect(fixture.handlers.observeHookEvent.mock.lastCall?.[0]).toMatchObject({ fingerprint: absent })
+  })
+
   it('records an open the host says changed nothing as changing nothing', async () => {
     const fixture = await cliFixture()
     fixture.handlers.openAttention.mockImplementation(async () => ({ opened: true, changed: false }))
@@ -1024,7 +1069,7 @@ describe('bmn hook provenance and the hook event log', () => {
 
 const DOCUMENTED_CLAUDE = '[ -n "$BMN_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook claude; exit 0'
 const OLDER_CLAUDE = '[ -n "$AITERM_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook claude; exit 0'
-const CLAUDE_EVENTS = ['Notification', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd']
+const CLAUDE_EVENTS = ['Notification', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd']
 const CODEX_EVENTS = ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd', 'Interrupt']
 const DOCUMENTED_CODEX = DOCUMENTED_CLAUDE.replace('bmn hook claude', 'bmn hook codex')
 
@@ -1923,7 +1968,7 @@ describe('bmn hooks install', () => {
     for (const event of ['Notification', 'UserPromptSubmit', 'SessionStart', 'SessionEnd']) {
       expect(after.hooks[event]).toEqual([{ hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] }])
     }
-    expect(install.stdout).toContain('Notification, PostToolUse, UserPromptSubmit, SessionStart, SessionEnd')
+    expect(install.stdout).toContain('Notification, PostToolUse, PostToolUseFailure, UserPromptSubmit, SessionStart, SessionEnd')
     expect(install.stdout.split('\n').filter((line) => /^-[^-]/.test(line))).toEqual([])
   })
 
@@ -2269,6 +2314,7 @@ describe('the hook event lists check and hook share', () => {
       Notification: { notification_type: 'permission_prompt', message: 'needs permission' },
       PreToolUse: { tool_name: 'request_user_input', tool_input: { questions: [{ question: 'Which?' }] } },
       PostToolUse: { tool_name: 'Bash', tool_input: {} },
+      PostToolUseFailure: { tool_name: 'Bash', tool_input: { command: 'false' }, error: 'Exit code 1' },
       UserPromptSubmit: {},
       Stop: {},
       SessionStart: { source: 'startup', session_id: OBSERVED_REFERENCE },
@@ -2414,6 +2460,61 @@ describe('OpenCode hooks', () => {
     expect(fixture.handlers.observeHookEvent).toHaveBeenCalledWith(expect.objectContaining({ agent: 'opencode', event, effects: expect.arrayContaining([handler === 'openAttention' ? 'opened' : handler === 'resolveAttention' ? 'answered' : 'withdrew']) }))
   })
 
+  it.each([
+    ['permission.asked', { permission: 'edit', patterns: ['src/**', 'docs/**'] }, 'openAttention', { requestKey: 'opencode:subagent-permission', kind: 'permission', title: 'OpenCode subagent asks to edit', body: 'src/**\ndocs/**' }],
+    ['permission.replied', { reply: 'once' }, 'resolveAttention', { requestKey: 'opencode:subagent-permission', resolution: 'answered in the terminal' }],
+    ['permission.replied', { reply: 'always' }, 'resolveAttention', { requestKey: 'opencode:subagent-permission', resolution: 'answered in the terminal' }],
+    ['permission.replied', { reply: 'reject' }, 'withdrawAttention', { requestKey: 'opencode:subagent-permission' }],
+    ['question.asked', { questions: [{ question: 'Which one?', options: [{ label: 'First' }] }] }, 'openAttention', { requestKey: 'opencode:subagent-question', kind: 'question', title: 'OpenCode subagent asks: Which one?', body: '1. Which one?\n   First' }],
+    ['question.replied', {}, 'resolveAttention', { requestKey: 'opencode:subagent-question', resolution: 'answered in the terminal' }],
+    ['question.rejected', {}, 'withdrawAttention', { requestKey: 'opencode:subagent-question' }]
+  ])('maps child %s to its own slot', async (event, properties, handler, expected) => {
+    const fixture = await cliFixture()
+    const bound = { ...fixture, sessionEnv: { ...fixture.sessionEnv, BMN_OPENCODE_SESSION_ID: 'ses_main' } }
+    expect(await runHook(bound, 'opencode', { hook_event_name: event, sessionID: 'ses_child', ...properties }, OPENCODE_FOREGROUND)).toEqual(QUIET)
+    expect(fixture.handlers[handler as 'openAttention']).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ ...expected, origin: `hook:opencode:${event}` }))
+    expect(fixture.handlers.observeConversation).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { info: { id: 'ses_main', parentID: 'ses_parent' } },
+    { info: { id: 'ses_sibling' } },
+    { sessionID: 'ses_sibling' }
+  ])('routes parentID and sibling identities to child slots: %j', async (identity) => {
+    const fixture = await cliFixture()
+    const bound = { ...fixture, sessionEnv: { ...fixture.sessionEnv, BMN_OPENCODE_SESSION_ID: 'ses_main' } }
+    await runHook(bound, 'opencode', { hook_event_name: 'permission.asked', permission: 'edit', ...identity }, OPENCODE_FOREGROUND)
+    expect(fixture.handlers.openAttention).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ requestKey: 'opencode:subagent-permission' }))
+  })
+
+  it.each(['session.status', 'session.idle', 'session.error', 'session.created', 'session.deleted', 'tui.session.select', 'unknown'])('ignores child %s', async (event) => {
+    const fixture = await cliFixture()
+    const bound = { ...fixture, sessionEnv: { ...fixture.sessionEnv, BMN_OPENCODE_SESSION_ID: 'ses_main' } }
+    await runHook(bound, 'opencode', { hook_event_name: event, sessionID: 'ses_child', status: { type: 'busy' } }, OPENCODE_FOREGROUND)
+    expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
+    expect(fixture.handlers.resolveAttention).not.toHaveBeenCalled()
+    expect(fixture.handlers.withdrawAttention).not.toHaveBeenCalled()
+    expect(fixture.handlers.observeConversation).not.toHaveBeenCalled()
+    expect(fixture.handlers.observeHookEvent).toHaveBeenCalledWith(expect.objectContaining({ effects: [] }))
+  })
+
+  it.each(['session.idle', 'session.deleted', 'tui.session.select', 'session.status'])('handles child slots during main %s', async (event) => {
+    const fixture = await cliFixture()
+    const bound = { ...fixture, sessionEnv: { ...fixture.sessionEnv, BMN_OPENCODE_SESSION_ID: OPENCODE_SESSION } }
+    const openKeys = new Set<string>()
+    fixture.handlers.openAttention.mockImplementation(async (params) => { openKeys.add(params.requestKey); return { opened: true } })
+    fixture.handlers.withdrawAttention.mockImplementation(async (params) => { openKeys.delete(params.requestKey); return { withdrawn: true } })
+    fixture.handlers.resolveAttention.mockImplementation(async (params) => { openKeys.delete(params.requestKey); return { resolved: true } })
+    for (const hook of ['permission.asked', 'question.asked']) {
+      await runHook(bound, 'opencode', { hook_event_name: hook, sessionID: 'ses_child' }, OPENCODE_FOREGROUND)
+    }
+    expect([...openKeys].sort()).toEqual(['opencode:subagent-permission', 'opencode:subagent-question'])
+    await runHook(bound, 'opencode', { hook_event_name: event, sessionID: OPENCODE_SESSION, status: { type: 'busy' } }, OPENCODE_FOREGROUND)
+    for (const key of ['opencode:subagent-permission', 'opencode:subagent-question']) {
+      expect(openKeys.has(key)).toBe(event === 'session.status')
+    }
+  })
+
   it('drops an OpenCode session reference that the binding store would refuse', async () => {
     const fixture = await cliFixture()
     const malformed = 'ses_zzzzzzzzzzzzhVbLiXJ8YHJQjV'
@@ -2460,18 +2561,18 @@ describe('OpenCode hooks', () => {
     const fixture = await cliFixture()
     await runHook(fixture, 'opencode', { hook_event_name: event, sessionID: OPENCODE_SESSION }, OPENCODE_FOREGROUND)
     expect(fixture.handlers.observeConversation).toHaveBeenCalledWith(expect.objectContaining({ agentCli: 'opencode', conversationReference: OPENCODE_SESSION, source }))
-    if (source === 'resume') expect(fixture.handlers.withdrawAttention).toHaveBeenCalledTimes(4)
+    if (source === 'resume') expect(fixture.handlers.withdrawAttention).toHaveBeenCalledTimes(6)
   })
 
-  it('ignores sub-sessions, malformed references and nested agent processes', async () => {
+  it('ignores child conversation bindings, malformed references and nested agent processes', async () => {
     const fixture = await cliFixture()
     await runHook(fixture, 'opencode', { hook_event_name: 'session.created', info: { id: OPENCODE_SESSION, parentID: 'parent' } }, OPENCODE_FOREGROUND)
     await runHook(fixture, 'opencode', { hook_event_name: 'session.created', sessionID: OBSERVED_REFERENCE }, OPENCODE_FOREGROUND)
     expect(fixture.handlers.observeConversation).not.toHaveBeenCalled()
     const proc = await procTree(fixture.root, OPENCODE_FOREGROUND)
     await runCli(['hook', 'opencode'], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: proc, BMN_OPENCODE_SESSION_ID: 'ses_other' }, input: JSON.stringify({ hook_event_name: 'permission.asked', sessionID: OPENCODE_SESSION }) })
-    expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
-    expect(fixture.handlers.observeHookEvent).toHaveBeenLastCalledWith(expect.objectContaining({ event: 'permission.asked', effects: [] }))
+    expect(fixture.handlers.openAttention).toHaveBeenCalledWith(expect.objectContaining({ requestKey: 'opencode:subagent-permission', title: 'OpenCode subagent asks to use a tool' }))
+    expect(fixture.handlers.observeHookEvent).toHaveBeenLastCalledWith(expect.objectContaining({ event: 'permission.asked', effects: ['opened'] }))
     fixture.handlers.observeHookEvent.mockClear()
     await runHook(fixture, 'opencode', { hook_event_name: 'session.idle', sessionID: OPENCODE_SESSION }, { ...OPENCODE_FOREGROUND, tty: 0 })
     expect(fixture.handlers.observeHookEvent).not.toHaveBeenCalled()

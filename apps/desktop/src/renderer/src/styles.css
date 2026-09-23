@@ -555,6 +555,14 @@ input[type='radio'] {
   letter-spacing: 0;
 }
 
+.workspace-row .status-dot {
+  margin-left: auto;
+}
+
+.workspace-row .status-dot + .visually-hidden + .count {
+  margin-left: 6px;
+}
+
 .row-menu-button {
   min-width: 24px;
   min-height: 24px;
@@ -562,6 +570,15 @@ input[type='radio'] {
   border-color: transparent;
   color: var(--faint);
   font-size: 14px;
+  opacity: 0;
+}
+
+.workspace-row:hover .row-menu-button,
+.session-row:hover .row-menu-button,
+.workspace-row:focus-within .row-menu-button,
+.session-row:focus-within .row-menu-button,
+.row-menu-button[aria-expanded='true'] {
+  opacity: 1;
 }
 
 .row-menu-button:hover:not(:disabled),
@@ -642,6 +659,10 @@ input[type='radio'] {
 }
 
 .session-row.archived .session-name {
+  color: var(--muted);
+}
+
+.session-row[data-live='false']:not(:has(.status-dot.needs-you, .unread-mark)) .session-name {
   color: var(--muted);
 }
 
@@ -2172,6 +2193,10 @@ input[type='radio'] {
 /* A session row carries the same mark as its sidebar row, so the palette shows state, not only names it. */
 .palette-results [role='option'] .status-dot {
   flex: none;
+}
+
+.palette-results [role='option'][data-live='false']:not(:has(.status-dot.needs-you)) .label {
+  color: var(--muted);
 }
 
 .palette-results [role='option'][aria-selected='true'] {

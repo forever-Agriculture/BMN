@@ -133,6 +133,7 @@ function originName(origin: string | null, action: 'opened' | 'closed'): string 
     case 'owner': return 'BMN'
     case 'input': return 'typing'
     case 'telegram': return 'Telegram'
+    case 'watch:repeat': return "BMN's repeat watch"
     case 'expiry': return 'expiry'
     default: return origin
   }
@@ -277,6 +278,24 @@ export function sessionAttention(
   const open = records.filter((request) => request.sessionId === sessionId && request.state === 'open')
   if (open.some(isActionableAttention)) return 'response'
   return open.some((request) => request.kind === 'notice') ? 'update' : null
+}
+
+/** Includes hidden archived sessions: attention belongs to the whole workspace. */
+export function workspaceAttention(
+  sessions: readonly Pick<SessionRecord, 'sessionId' | 'workspaceId' | 'lastProcess'>[],
+  workspaceId: string,
+  requests: readonly Pick<AttentionRecord, 'sessionId' | 'state' | 'kind'>[],
+  liveBySession: Readonly<Record<string, { incarnationId: string } | undefined>>
+): { waiting: number; updates: number; live: number } {
+  const counts = { waiting: 0, updates: 0, live: 0 }
+  for (const session of sessions) {
+    if (session.workspaceId !== workspaceId) continue
+    const attention = sessionAttention(requests, session.sessionId)
+    if (attention === 'response') counts.waiting += 1
+    if (attention === 'update') counts.updates += 1
+    if (sessionProcessLive(session, liveBySession[session.sessionId]?.incarnationId)) counts.live += 1
+  }
+  return counts
 }
 
 /**

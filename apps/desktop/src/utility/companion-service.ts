@@ -41,6 +41,7 @@ import type { DatabaseWorkerClient } from './database-client'
 import type { ApplicationRoots } from './roots'
 import { HostControlError, type SessionIdentity, type SessionManager } from './session-manager'
 import { createAttentionPager } from './attention-pager'
+import { observeRepeat, REPEAT_NOTICE_AT, type RepeatState, type RepeatSegment } from './repeat-watch'
 import { TelegramConnector, maskToken, redactToken, type ConnectorHealth, type InboundReply } from './telegram-connector'
 
 /** A listed session plus its conversation route; `null` when the session has no stored binding. */
@@ -256,7 +257,9 @@ export class CompanionService {
   }>()
   /** One notice at a time per session: two arriving together must not each open their own row. */
   private readonly noticeOperations = new Map<string, Promise<unknown>>()
-  /** Refusals are appended one at a time, so two rejected reports cannot interleave in the file. */
+  private readonly repeatStates = new Map<string, RepeatState>()
+  /** Each bounded log has its own serialized append queue. */
+  private repeatWrites: Promise<void> = Promise.resolve()
   private refusalWrites: Promise<void> = Promise.resolve()
 
   constructor(private readonly options: CompanionServiceOptions) {
@@ -331,7 +334,10 @@ export class CompanionService {
    * back to half of it, so a refused report costs one append and not a rewrite of the whole log.
    */
   private async appendRefusal(line: string): Promise<void> {
-    const path = this.refusalLogPath
+    return this.appendBoundedLog(this.refusalLogPath, line)
+  }
+
+  private async appendBoundedLog(path: string, line: string): Promise<void> {
     await mkdir(dirname(path), { recursive: true, mode: 0o700 })
     await appendFile(path, line, { mode: 0o600 })
     const { size } = await stat(path)
@@ -595,7 +601,7 @@ export class CompanionService {
     }
     // A deleted session keeps no hook events: the log, and everything else kept per session in
     // memory here, follows the sessions that still exist.
-    for (const map of [this.hookEvents, this.hookReporters, this.terminalNotices]) {
+    for (const map of [this.hookEvents, this.hookReporters, this.terminalNotices, this.repeatStates]) {
       for (const sessionId of map.keys()) {
         if (!this.knownSessions.has(sessionId)) map.delete(sessionId)
       }
@@ -752,7 +758,7 @@ export class CompanionService {
     expiresAt?: string
     phoneNotified?: boolean
     origin?: string
-  }): Promise<AttentionRecord> {
+  }): Promise<AttentionRecord & { changed: boolean }> {
     const record = await this.options.database.companion('openAttention', {
       sessionId: p.sessionId,
       incarnationId: p.incarnationId,
@@ -860,13 +866,14 @@ export class CompanionService {
     event: string,
     effects: readonly HookEventEffect[]
   ): void {
-    this.observeHookEvent({
+    this.recordHookEvent({
       sessionId: p.sessionId,
       incarnationId: p.incarnationId,
       agent: 'terminal',
       event,
       source: null,
       toolName: null,
+      repeat: null,
       effects
     })
   }
@@ -885,20 +892,80 @@ export class CompanionService {
     return record
   }
 
-  /**
-   * One hook event, kept in memory only. It is a record of what the harness reported, so it never
-   * opens, withdraws or resolves anything; the log is bounded per session and never leaves the
-   * session it belongs to. A restart starts an empty log, which the agent docs say plainly.
-   */
-  private observeHookEvent(p: {
+  /** The repeat watch is the sole exception to the otherwise diagnostic hook log. */
+  private async observeHookEvent(p: {
     sessionId: string
     incarnationId: string | null
     agent: HookEventRecord['agent']
     event: string
     source: string | null
     toolName: string | null
+    fingerprint?: string | undefined
     effects: readonly HookEventEffect[]
-  }): { recorded: true } {
+  }): Promise<{ recorded: true }> {
+    // Share the notice queue: observe/reset/open must complete in arrival order.
+    const previous = this.noticeOperations.get(p.sessionId) ?? Promise.resolve()
+    const operation = async (): Promise<{ recorded: true }> => {
+      let repeat: number | null = null
+      const effects = [...p.effects]
+      if (p.agent === 'claude' || p.agent === 'codex') {
+        const result = observeRepeat(this.repeatStates.get(p.sessionId), { ...p, agent: p.agent })
+        this.repeatStates.set(p.sessionId, result.state)
+        repeat = result.repeat
+        if (result.closed) await this.writeRepeatSegment(p.sessionId, result.closed)
+        if (p.event === 'UserPromptSubmit' || result.fire) {
+          const rows = await this.options.database.companion('listAttention')
+          const open = rows.find((row) => row.sessionId === p.sessionId &&
+            row.requestKey === 'watch:repeat' && row.state === 'open')
+          if (p.event === 'UserPromptSubmit' && open) {
+            try {
+              await this.closeAttentionByKey(p.sessionId, 'watch:repeat', 'withdrawn', null,
+                `hook:${p.agent}:${p.event}`)
+              if (!effects.includes('withdrew')) effects.push('withdrew')
+            } catch (error) {
+              // Owner resolution may win after the list; keep the hook record without a false effect.
+              if (!(error instanceof Error && 'code' in error && error.code === ERROR_CODES.notFound)) throw error
+            }
+          } else if (result.fire && !open && p.incarnationId !== null &&
+            this.options.manager.liveIncarnationId(p.sessionId) === p.incarnationId) {
+            try {
+              const opened = await this.openAttention({
+                sessionId: p.sessionId, incarnationId: p.incarnationId,
+                requestKey: 'watch:repeat', kind: 'notice', origin: 'watch:repeat',
+                title: `${this.knownSessions.get(p.sessionId)?.name ?? 'Session'} repeated the same ${p.toolName ?? 'tool'} call ${REPEAT_NOTICE_AT} times`.slice(0, TERMINAL_NOTICE_TITLE_MAX),
+                body: 'BMN counted identical calls since your last message. It did not stop or change anything.'
+              })
+              if (opened.changed) {
+                result.state.notified = true
+                if (!effects.includes('opened')) effects.push('opened')
+              }
+            } catch {
+              // A failed notice must not invent an effect or lose the original observation.
+            }
+          }
+        }
+      }
+      return this.recordHookEvent({ ...p, repeat, effects })
+    }
+    const result = previous.then(operation, operation)
+    const tail = result.then(() => undefined, () => undefined)
+    this.noticeOperations.set(p.sessionId, tail)
+    return result.finally(() => {
+      if (this.noticeOperations.get(p.sessionId) === tail) this.noticeOperations.delete(p.sessionId)
+    })
+  }
+
+  private writeRepeatSegment(sessionId: string, segment: RepeatSegment): Promise<void> {
+    const line = `${JSON.stringify({ at: this.iso(), agent: segment.agent, sessionId,
+      toolName: segment.toolName, maxRepeat: segment.maxRepeat, toolEvents: segment.toolEvents,
+      notified: segment.notified })}\n`
+    this.repeatWrites = this.repeatWrites
+      .then(() => this.appendBoundedLog(join(this.options.roots.state, 'repeat-watch.log'), line))
+      .catch(() => undefined)
+    return this.repeatWrites
+  }
+
+  private recordHookEvent(p: Omit<HookEventRecord, 'observedAt'>): { recorded: true } {
     // Which incarnation has a harness reporting for it, kept whatever the log later drops.
     if (p.agent !== 'terminal' && p.incarnationId !== null) {
       this.hookReporters.set(p.sessionId, p.incarnationId)
@@ -911,6 +978,7 @@ export class CompanionService {
       event: p.event,
       source: p.source,
       toolName: p.toolName,
+      repeat: p.repeat,
       effects: [...p.effects],
       observedAt: this.iso()
     })

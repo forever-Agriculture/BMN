@@ -42,6 +42,12 @@ arguments and working directory. The app adds no bypass flags and never copies C
 Terminal variables that identify another terminal (tmux, other emulators) are removed; sessions get
 `TERM=xterm-256color` and `COLORTERM=truecolor`.
 
+**What a new session inherits.** BMN passes its own environment to each new shell after removing
+Electron and Chromium internals, BMN's own variables (which it re-issues for that session), the
+launching terminal's identity and the launching agent's session identity. The exact exclusions are
+`SHELL_ENVIRONMENT_PRIVATE_KEYS` in `session-manager.ts`; owner configuration such as
+`CLAUDE_CODE_FORCE_SESSION_PERSISTENCE` passes through.
+
 **One live view per session.** Output goes from the PTY to one xterm.js instance over a dedicated,
 bounded MessagePort. There is no tmux, no headless mirror and no replay of old bytes into a live
 terminal, because a second emulator tracking the same state drifts. *Saved output* is a separate,

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // MODULE: bmn - command-line client for the BMN control socket (one connection per invocation)
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import {
   chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync
 } from 'node:fs'
@@ -598,7 +598,24 @@ function hookRequests(agent, event) {
   if (agent === 'opencode') {
     const id = event.sessionID ?? event.info?.id
     const first = process.env.BMN_OPENCODE_SESSION_ID
-    if (event.info?.parentID || (first && id && id !== first)) return []
+    const child = event.info?.parentID || (first && id && id !== first)
+    if (child) {
+      switch (event.hook_event_name) {
+        case 'permission.asked':
+          return open('subagent-permission', 'permission', titleText(`OpenCode subagent asks to ${titleText(event.permission, 'use a tool')}`, 'OpenCode subagent asks permission'),
+            bodyText(Array.isArray(event.patterns) ? event.patterns.join('\n') : undefined))
+        case 'permission.replied':
+          return event.reply === 'reject' ? withdraw('subagent-permission')
+            : ['once', 'always'].includes(event.reply) ? answered('subagent-permission') : []
+        case 'question.asked': {
+          const summary = userInputSummary('OpenCode subagent', event)
+          return open('subagent-question', 'question', summary.title, summary.body)
+        }
+        case 'question.replied': return answered('subagent-question')
+        case 'question.rejected': return withdraw('subagent-question')
+        default: return []
+      }
+    }
     switch (event.hook_event_name) {
       case 'permission.asked':
         return open('permission', 'permission', titleText(`OpenCode asks to ${titleText(event.permission, 'use a tool')}`, 'OpenCode asks permission'),
@@ -615,17 +632,17 @@ function hookRequests(agent, event) {
       case 'session.status':
         return event.status?.type === 'busy' ? [...answered('permission', 'question'), ...withdraw('turn', 'error')] : []
       case 'session.idle':
-        return [...withdraw('permission', 'question'), ...open('turn', 'notice', 'OpenCode finished a turn')]
+        return [...withdraw('permission', 'question', 'subagent-permission', 'subagent-question'), ...open('turn', 'notice', 'OpenCode finished a turn')]
       case 'session.error':
         return open('error', 'notice', 'OpenCode reported an error',
           bodyText(typeof event.error === 'string' ? event.error : event.error?.data?.message ?? event.error?.message ?? JSON.stringify(event.error)))
-      case 'session.deleted': return withdraw('permission', 'question', 'turn', 'error')
+      case 'session.deleted': return withdraw('permission', 'question', 'turn', 'error', 'subagent-permission', 'subagent-question')
       case 'session.created':
       case 'tui.session.select': {
         const observation = conversationObservation(agent, {
           session_id: id, source: event.hook_event_name === 'session.created' ? 'startup' : 'resume'
         })
-        const withdrawals = event.hook_event_name === 'tui.session.select' ? withdraw('permission', 'question', 'turn', 'error') : []
+        const withdrawals = event.hook_event_name === 'tui.session.select' ? withdraw('permission', 'question', 'turn', 'error', 'subagent-permission', 'subagent-question') : []
         return observation ? [...withdrawals, observation] : withdrawals
       }
       default: return []
@@ -656,7 +673,10 @@ function hookRequests(agent, event) {
         titleText(`${name} wants to use ${titleText(event.tool_name, 'a tool')}`, `${name} needs your permission`),
         bodyText(toolSummary(event.tool_input))
       )
+    case 'PostToolUseFailure':
     case 'PostToolUse':
+      // Claude reports a failed tool separately; it still completed and answered its prompt.
+      if (event.hook_event_name === 'PostToolUseFailure' && agent !== 'claude') return []
       // The async question has only been queued when this tool finishes; the owner has not answered it yet.
       if (agent === 'codex' && asyncUserInputTool(event.tool_name)) return withdraw('turn')
       // Later Codex tools may finish while that queued question is still waiting for its owner.
@@ -705,7 +725,7 @@ function hookRequests(agent, event) {
 const HOOK_FILES = {
   claude: {
     path: ['.claude', 'settings.json'],
-    events: ['Notification', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd'],
+    events: ['Notification', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd'],
     optional: [],
 // Measured against the real CLI, firing a PostToolUse hook on a real tool call: a matcher,
     // group or entry Claude Code cannot use kills that group and nothing else - a sibling group in
@@ -1247,7 +1267,7 @@ function describeHookCheck(report) {
   if (report.state === 'unusable') lines.push(`  BMN cannot add to this file: ${report.detail}`)
   for (const row of report.events) {
     const optional = row.optional ? ' (optional)' : ''
-    lines.push(`  ${row.event.padEnd(18)}${row.state}${optional}`)
+    lines.push(`  ${row.event.padEnd(19)}${row.state}${optional}`)
     // Not a command BMN recognises, so it reads as missing; show it rather than leave the owner
     // wondering where the duplicate `install` is about to add came from.
     for (const command of row.unrecognised ?? []) {
@@ -1537,6 +1557,23 @@ async function runHook(args) {
  * the host accepted: a Stop that found nothing to withdraw, or an open the host refused, leaves the list
  * empty, which is what the owner needs to see when a request they expected never arrived.
  */
+function canonicalHookPart(value) {
+  if (value === undefined || value === null) return 'null'
+  if (Array.isArray(value)) return `[${value.map(canonicalHookPart).join(',')}]`
+  if (isObject(value)) {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalHookPart(value[key])}`).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+/** Tool content never leaves this short-lived CLI process; the utility receives only a hash prefix. */
+function toolFingerprint(event) {
+  const result = Object.hasOwn(event, 'tool_response') ? event.tool_response
+    : Object.hasOwn(event, 'error') ? event.error : null
+  const text = `${typeof event.tool_name === 'string' ? event.tool_name : ''}\0${canonicalHookPart(event.tool_input)}\0${canonicalHookPart(result)}`
+  return createHash('sha256').update(text.slice(0, 1_000_000)).digest('hex').slice(0, 16)
+}
+
 function hookObservation(agent, event, requests, outcomes) {
   const eventName = hookEventName(event.hook_event_name)
   if (eventName === undefined) return undefined
@@ -1554,6 +1591,8 @@ function hookObservation(agent, event, requests, outcomes) {
   // belongs in the log as much as one called "Bash".
   const source = hookEventName(event.source)
   const toolName = hookEventName(event.tool_name)
+  const fingerprint = (agent === 'claude' && ['PostToolUse', 'PostToolUseFailure'].includes(eventName)) ||
+    (agent === 'codex' && eventName === 'PostToolUse') ? toolFingerprint(event) : undefined
   return {
     method: 'hook.observe',
     params: {
@@ -1561,7 +1600,8 @@ function hookObservation(agent, event, requests, outcomes) {
       event: eventName,
       effects,
       ...(source === undefined ? {} : { source }),
-      ...(toolName === undefined ? {} : { toolName })
+      ...(toolName === undefined ? {} : { toolName }),
+      ...(fingerprint === undefined ? {} : { fingerprint })
     }
   }
 }

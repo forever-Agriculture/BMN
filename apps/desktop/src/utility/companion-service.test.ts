@@ -1090,8 +1090,8 @@ describe('progress evidence through the service', () => {
 })
 
 describe('hook event log', () => {
-  const observe = (sessionId: string, event: string, effects: HookEventRecord['effects'] = []): void => {
-    (service as unknown as {
+  const observe = async (sessionId: string, event: string, effects: HookEventRecord['effects'] = []): Promise<void> => {
+    await (service as unknown as {
       observeHookEvent(p: {
         sessionId: string
         incarnationId: string | null
@@ -1113,8 +1113,8 @@ describe('hook event log', () => {
   }
 
   it('keeps only the newest events per session and never mixes two sessions', async () => {
-    for (let index = 0; index < HOOK_EVENT_LOG_LIMIT + 5; index += 1) observe('s1', `Event${index}`)
-    observe('s2', 'OnlyTheirs', ['opened'])
+    for (let index = 0; index < HOOK_EVENT_LOG_LIMIT + 5; index += 1) await observe('s1', `Event${index}`)
+    await observe('s2', 'OnlyTheirs', ['opened'])
 
     const mine = await service.route(METHOD_REGISTRY.hookEventsList, { sessionId: 's1' }) as HookEventRecord[]
     const theirs = await service.route(METHOD_REGISTRY.hookEventsList, { sessionId: 's2' }) as HookEventRecord[]
@@ -1127,7 +1127,7 @@ describe('hook event log', () => {
   })
 
   it('reads as empty for a session that reported nothing, and keeps the log out of the snapshot', async () => {
-    observe('s1', 'Stop', ['withdrew', 'opened'])
+    await observe('s1', 'Stop', ['withdrew', 'opened'])
 
     const empty = await service.route(METHOD_REGISTRY.hookEventsList, { sessionId: 's2' })
     const snapshot = await service.route(METHOD_REGISTRY.attentionList, {})
@@ -1147,8 +1147,8 @@ describe('terminal notices (OSC 9, 99, 777)', () => {
       ...params
     })
 
-  const observeHook = (sessionId: string, incarnationId: string | null): void => {
-    (service as unknown as {
+  const observeHook = async (sessionId: string, incarnationId: string | null): Promise<void> => {
+    await (service as unknown as {
       observeHookEvent(p: {
         sessionId: string
         incarnationId: string | null
@@ -1203,7 +1203,7 @@ describe('terminal notices (OSC 9, 99, 777)', () => {
 
   it('opens nothing for a session whose harness reported a hook this incarnation, and says so in the log', async () => {
     await service.sessionsChanged()
-    observeHook('s1', 'incarnation-1')
+    await observeHook('s1', 'incarnation-1')
 
     const result = await notice({})
     const log = await service.route(METHOD_REGISTRY.hookEventsList, { sessionId: 's1' }) as HookEventRecord[]
@@ -1215,7 +1215,7 @@ describe('terminal notices (OSC 9, 99, 777)', () => {
 
   it('opens the notice when the only hook events belong to a previous incarnation', async () => {
     await service.sessionsChanged()
-    observeHook('s1', 'incarnation-0')
+    await observeHook('s1', 'incarnation-0')
 
     const result = await notice({})
 
@@ -1296,7 +1296,7 @@ describe('terminal notices (OSC 9, 99, 777)', () => {
 
   it('keeps suppressing after the diagnostic log has been filled with suppressed notices', async () => {
     await service.sessionsChanged()
-    observeHook('s1', 'incarnation-1')
+    await observeHook('s1', 'incarnation-1')
 
     // The hook event log holds 30 entries; each suppressed notice adds one, so reading suppression
     // out of that log would let the hook fall off the end and switch suppression back on.
@@ -1380,7 +1380,7 @@ describe('terminal notices (OSC 9, 99, 777)', () => {
 
   it('forgets a deleted session rather than keeping its notice and hook state for ever', async () => {
     await service.sessionsChanged()
-    observeHook('s1', 'incarnation-1')
+    await observeHook('s1', 'incarnation-1')
     await notice({ sessionId: 's2', incarnationId: 'incarnation-2', title: 'Still open' })
     const kept = service as unknown as { hookReporters: Map<string, unknown>; terminalNotices: Map<string, unknown> }
     expect([kept.hookReporters.size, kept.terminalNotices.size]).toEqual([1, 1])
@@ -1427,5 +1427,160 @@ describe('terminal notices (OSC 9, 99, 777)', () => {
       expect(isAttentionOrigin(origin)).toBe(true)
       expect((AGENT_ATTENTION_ORIGINS as readonly string[]).includes(origin)).toBe(false)
     }
+  })
+})
+
+describe('repeat watch notices and calibration', () => {
+  const observe = (params: Partial<Parameters<CompanionService['observeHookEvent']>[0]> = {}) =>
+    service['observeHookEvent']({ sessionId: 's1', incarnationId: 'incarnation-1', agent: 'claude',
+      event: 'PostToolUse', source: null, toolName: 'Bash', fingerprint: 'aaaaaaaaaaaaaaaa', effects: [], ...params })
+  const calls = async (count: number) => { for (let i = 0; i < count; i++) await observe() }
+  const reset = (event = 'Interrupt') => observe({ event, fingerprint: undefined })
+  const rows = () => service.route(METHOD_REGISTRY.attentionList, {}) as Promise<AttentionRecord[]>
+
+  it('opens exactly once at eight, records the successful effect, and never writes to the PTY', async () => {
+    await service.sessionsChanged()
+    await calls(7)
+    expect(await rows()).toHaveLength(0)
+    await calls(1)
+    expect(await rows()).toEqual([expect.objectContaining({ requestKey: 'watch:repeat', kind: 'notice',
+      openedBy: 'watch:repeat', title: 'One repeated the same Bash call 8 times',
+      body: 'BMN counted identical calls since your last message. It did not stop or change anything.' })])
+    expect(service.listHookEvents('s1').at(-1)).toMatchObject({ repeat: 8, effects: ['opened'] })
+    await calls(12)
+    expect(await rows()).toHaveLength(1)
+    expect(service.listHookEvents('s1').filter((row) => row.effects.includes('opened'))).toHaveLength(1)
+    expect(JSON.stringify(service.listHookEvents('s1'))).not.toContain('aaaaaaaaaaaaaaaa')
+    expect(writes).toEqual([])
+  })
+
+  it('keeps an open notice across reset, then permits another after owner input withdraws it', async () => {
+    await service.sessionsChanged()
+    await calls(8)
+    const original = (await rows())[0]!.requestId
+    await reset()
+    await calls(8)
+    expect((await rows())[0]!.requestId).toBe(original)
+    await reset('UserPromptSubmit')
+    expect((await rows())[0]).toMatchObject({ state: 'withdrawn', resolvedBy: 'hook:claude:UserPromptSubmit' })
+    await calls(8)
+    const all = await rows()
+    expect(all.filter((row) => row.state === 'open')).toHaveLength(1)
+    expect(all.find((row) => row.state === 'open')!.requestId).not.toBe(original)
+  })
+
+  it('writes only calibration fields on qualifying resets, with successful notification status', async () => {
+    await service.sessionsChanged()
+    await calls(2)
+    await reset()
+    await expect(readFile(join(root, 'state/repeat-watch.log'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await calls(3)
+    await reset()
+    await calls(8)
+    await reset()
+    const lines = (await readFile(join(root, 'state/repeat-watch.log'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line))
+    expect(lines).toEqual([
+      { at: now, agent: 'claude', sessionId: 's1', toolName: 'Bash', maxRepeat: 3, toolEvents: 3, notified: false },
+      { at: now, agent: 'claude', sessionId: 's1', toolName: 'Bash', maxRepeat: 8, toolEvents: 8, notified: true }
+    ])
+  })
+
+  it('records original effects when the notice fails and does not retry within the segment', async () => {
+    await service.sessionsChanged()
+    const open = vi.spyOn(service as unknown as { openAttention: () => Promise<AttentionRecord> }, 'openAttention')
+      .mockRejectedValue(new Error('store failed'))
+    await calls(8)
+    expect(service.listHookEvents('s1').at(-1)).toMatchObject({ repeat: 8, effects: [] })
+    await calls(12)
+    expect(open).toHaveBeenCalledTimes(1)
+    await reset()
+    expect(JSON.parse((await readFile(join(root, 'state/repeat-watch.log'), 'utf8')).trim()).notified).toBe(false)
+  })
+
+  it('does not claim an opened effect when the store reports an unchanged request', async () => {
+    await service.sessionsChanged()
+    vi.spyOn(service as unknown as { openAttention: () => Promise<AttentionRecord & { changed: boolean }> }, 'openAttention')
+      .mockResolvedValue({ changed: false } as AttentionRecord & { changed: boolean })
+    await calls(8)
+    expect(service.listHookEvents('s1').at(-1)).toMatchObject({ repeat: 8, effects: [] })
+    await reset()
+    expect(JSON.parse((await readFile(join(root, 'state/repeat-watch.log'), 'utf8')).trim()).notified).toBe(false)
+  })
+
+  it('waits for the open before recording its effect and queues a prompt behind it', async () => {
+    await service.sessionsChanged()
+    await calls(7)
+    let release!: () => void
+    const held = new Promise<void>((resolve) => { release = resolve })
+    const actual = service['openAttention'].bind(service)
+    vi.spyOn(service as unknown as { openAttention: typeof actual }, 'openAttention')
+      .mockImplementation(async (params) => { await held; return actual(params) })
+    const eighth = observe()
+    const prompt = reset('UserPromptSubmit')
+    await new Promise((resolve) => setImmediate(resolve))
+    expect(service.listHookEvents('s1')).toHaveLength(7)
+    release()
+    await Promise.all([eighth, prompt])
+    expect(service.listHookEvents('s1').slice(-2).map((row) => row.effects)).toEqual([['opened'], ['withdrew']])
+    expect((await rows())[0]?.state).toBe('withdrawn')
+  })
+
+  it('records a prompt when the owner resolves the repeat notice before its hook withdrawal', async () => {
+    await service.sessionsChanged()
+    await calls(8)
+    const request = (await rows()).find((row) => row.requestKey === 'watch:repeat')!
+    const databaseClient = service['options'].database as {
+      companion: (op: string, ...args: unknown[]) => Promise<unknown>
+    }
+    const companion = databaseClient.companion.bind(databaseClient)
+    let raced = false
+    databaseClient.companion = async (op, ...args) => {
+      if (!raced && op === 'closeAttention' &&
+        (args[0] as { requestKey?: string }).requestKey === 'watch:repeat') {
+        raced = true
+        await service.route(METHOD_REGISTRY.attentionResolve, {
+          requestId: request.requestId, resolution: 'read'
+        })
+      }
+      return companion(op, ...args)
+    }
+    try {
+      await expect(observe({ event: 'UserPromptSubmit', fingerprint: undefined,
+        effects: ['answered'] })).resolves.toEqual({ recorded: true })
+    } finally {
+      databaseClient.companion = companion
+    }
+    expect(raced).toBe(true)
+    expect((await rows())[0]).toMatchObject({ state: 'answered' })
+    expect(service.listHookEvents('s1').at(-1)).toMatchObject({ event: 'UserPromptSubmit', effects: ['answered'] })
+  })
+
+  it('bounds calibration by keeping complete newest lines and clears deleted session state', async () => {
+    await service.sessionsChanged()
+    const path = join(root, 'state/repeat-watch.log')
+    await mkdir(join(root, 'state'), { recursive: true })
+    await writeFile(path, `${JSON.stringify({ old: 'x'.repeat(100) })}\n`.repeat(2400), { mode: 0o600 })
+    await calls(3)
+    await reset()
+    const content = await readFile(path, 'utf8')
+    expect(Buffer.byteLength(content)).toBeLessThanOrEqual(128 * 1024)
+    expect(content.trim().split('\n').every((line) => typeof JSON.parse(line) === 'object')).toBe(true)
+    expect(JSON.parse(content.trim().split('\n').at(-1)!)).toMatchObject({ maxRepeat: 3 })
+    expect(statSync(path).mode & 0o777).toBe(0o600)
+    await calls(2)
+    database.prepare("DELETE FROM session WHERE session_id = 's1'").run()
+    await service.sessionsChanged()
+    expect(service['repeatStates'].has('s1')).toBe(false)
+    expect(service.listHookEvents('s1')).toEqual([])
+  })
+
+  it('serializes concurrent observations before withdrawal and keeps sessions independent', async () => {
+    await service.sessionsChanged()
+    await Promise.all(Array.from({ length: 8 }, () => observe()))
+    await reset('UserPromptSubmit')
+    expect((await rows()).filter((row) => row.state === 'open')).toHaveLength(0)
+    expect(service.listHookEvents('s1').map((row) => row.repeat)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, null])
+    await observe({ sessionId: 's2', incarnationId: 'incarnation-2', agent: 'codex' })
+    expect(service.listHookEvents('s2')[0]?.repeat).toBe(1)
   })
 })

@@ -8,6 +8,7 @@ export interface PaletteCommand {
   label: string
   /** A `status-dot` class for a row that stands for something with a state, so the palette shows the mark too. */
   mark?: string | undefined
+  live?: boolean | undefined
   context?: string | undefined
   shortcut?: string | undefined
   disabled?: boolean | undefined
@@ -80,6 +81,7 @@ export function CommandPalette(props: {
               key={command.id}
               id={`palette-${command.id}`}
               role="option"
+              data-live={command.live === undefined ? undefined : String(command.live)}
               aria-selected={index === activeIndex}
               onMouseMove={() => setActive(index)}
               onClick={() => invoke(command)}

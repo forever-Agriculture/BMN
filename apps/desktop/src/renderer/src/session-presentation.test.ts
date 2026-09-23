@@ -23,6 +23,7 @@ import {
   sessionProcessLive,
   sessionStatus,
   windowTitle,
+  workspaceAttention,
   attentionProvenance
 } from './session-presentation'
 
@@ -45,6 +46,54 @@ const request = (requestId: string, sessionId: string, openedAt: string, state: 
   revision: 1,
   openedBy: null,
   resolvedBy: null
+})
+
+describe('workspace attention', () => {
+  const sessions = [
+    { sessionId: 's1', workspaceId: 'w1', lastProcess: null, archivedAt: null },
+    { sessionId: 's2', workspaceId: 'w1', lastProcess: null, archivedAt: '2026-09-14T11:00:00.000Z' },
+    { sessionId: 's3', workspaceId: 'w2', lastProcess: null, archivedAt: null }
+  ]
+  const question = (id: string) => request(`question-${id}`, id, '2026-09-14T11:00:00.000Z')
+  const notice = (id: string): AttentionRecord => ({ ...question(id), requestId: `notice-${id}`, kind: 'notice' })
+
+  it('returns zero counts for an empty workspace', () => {
+    expect(workspaceAttention([], 'w1', [question('s1')], {})).toEqual({ waiting: 0, updates: 0, live: 0 })
+  })
+
+  it('counts a waiting session once even with multiple questions and an update', () => {
+    expect(workspaceAttention(sessions, 'w1', [question('s1'), question('s1'), notice('s1')], {}))
+      .toEqual({ waiting: 1, updates: 0, live: 0 })
+  })
+
+  it('counts a session with only an update', () => {
+    expect(workspaceAttention(sessions, 'w1', [notice('s1')], {})).toEqual({ waiting: 0, updates: 1, live: 0 })
+  })
+
+  it('separates waiting sessions from sessions with updates', () => {
+    expect(workspaceAttention(sessions, 'w1', [question('s1'), notice('s2')], {}))
+      .toEqual({ waiting: 1, updates: 1, live: 0 })
+  })
+
+  it('includes an archived session hidden from the normal tree', () => {
+    expect(workspaceAttention(sessions, 'w1', [question('s2')], {})).toEqual({ waiting: 1, updates: 0, live: 0 })
+  })
+
+  it('excludes attention and live sessions in another workspace and closed requests', () => {
+    expect(workspaceAttention(sessions, 'w1', [notice('s3'), { ...question('s1'), state: 'answered' }], {
+      s3: { incarnationId: 'i3' }
+    })).toEqual({ waiting: 0, updates: 0, live: 0 })
+  })
+
+  it('counts live processes, excluding retained panes whose incarnation ended', () => {
+    const ended = {
+      incarnationId: 'old', state: 'exited' as const, exitCode: 0, signal: null, detail: null
+    }
+    const records = sessions.map((session) => ({ ...session, lastProcess: ended }))
+    expect(workspaceAttention(records, 'w1', [], {
+      s1: { incarnationId: 'old' }, s2: { incarnationId: 'new' }, s3: { incarnationId: 'new' }
+    })).toEqual({ waiting: 0, updates: 0, live: 1 })
+  })
 })
 
 describe('a view that outlives its process', () => {
@@ -334,6 +383,7 @@ describe('session presentation', () => {
     [{ state: 'open', openedBy: 'hook:claude:Notification', resolvedBy: null }, 'from Claude Notification'],
     [{ state: 'open', openedBy: 'hook:codex:PreToolUse', resolvedBy: null }, 'from Codex PreToolUse'],
     [{ state: 'open', openedBy: 'cli', resolvedBy: null }, 'from bmn ask'],
+    [{ state: 'open', openedBy: 'watch:repeat', resolvedBy: null }, "from BMN's repeat watch"],
     [{ state: 'open', openedBy: null, resolvedBy: null }, 'from unknown'],
     [{ state: 'answered', openedBy: 'cli', resolvedBy: 'input' }, 'resolved by typing'],
     [{ state: 'answered', openedBy: 'cli', resolvedBy: 'telegram' }, 'answered from Telegram'],

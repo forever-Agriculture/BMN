@@ -521,6 +521,8 @@ describe('control server validation', () => {
       { agentCli: 'claude', conversationReference: OBSERVED_REFERENCE, source: 'startup', transcriptPath: `/${'x'.repeat(4096)}` }],
     ['unknown observation parameter', 'conversation.observe',
       { agentCli: 'claude', conversationReference: OBSERVED_REFERENCE, source: 'startup', pid: 12 }],
+    ['invalid fingerprint', 'hook.observe', { agent: 'claude', event: 'PostToolUse', effects: [], fingerprint: 'XYZ' }],
+    ['uppercase fingerprint', 'hook.observe', { agent: 'claude', event: 'PostToolUse', effects: [], fingerprint: 'ABCDEF0123456789' }],
     ['unknown hook agent', 'hook.observe', { agent: 'gemini', event: 'Stop', effects: [] }],
     // Only the window sees a session's own output, so no token may file an event as the terminal.
     ['the window own terminal label', 'hook.observe', { agent: 'terminal', event: 'osc:9', effects: [] }],
@@ -562,7 +564,7 @@ describe('control server validation', () => {
     await client.request('attention.withdraw', { requestKey: 'q', origin: 'hook:codex:Stop' })
     await client.request('attention.resolve', { requestKey: 'q', resolution: 'done', origin: 'cli' })
     const observed = await client.request('hook.observe', {
-      agent: 'claude', event: 'PostToolUse', toolName: 'Bash', effects: ['answered', 'withdrew']
+      agent: 'claude', event: 'PostToolUse', toolName: 'Bash', fingerprint: '0123456789abcdef', effects: ['answered', 'withdrew']
     })
 
     expect(fixture.handlers.openAttention).toHaveBeenLastCalledWith(
@@ -583,6 +585,7 @@ describe('control server validation', () => {
       event: 'PostToolUse',
       source: null,
       toolName: 'Bash',
+      fingerprint: '0123456789abcdef',
       effects: ['answered', 'withdrew']
     })
   })
@@ -615,6 +618,7 @@ describe('control server validation', () => {
     ['a Telegram reply', 'telegram'],
     ['expiry', 'expiry'],
     // Only the window sees a session's own output, so only the window may say a notice came from it.
+    ['the repeat watch', 'watch:repeat'],
     ['a terminal notification', 'osc:9'],
     ['a kitty notification', 'osc:99'],
     ['an urxvt notification', 'osc:777']

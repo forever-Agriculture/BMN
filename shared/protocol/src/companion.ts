@@ -89,8 +89,9 @@ export function terminalNoticeOrigin(code: TerminalNoticeCode): string {
 
 export const ATTENTION_ORIGINS = Object.freeze([
   'cli', 'owner', 'input', 'telegram', 'expiry',
-  // App-assigned: the window saw the sequence in the session's own output. Never claimable by a token.
-  ...TERMINAL_NOTICE_CODES.map(terminalNoticeOrigin)
+  // App-assigned terminal notifications and repeat watch. Never claimable by a token.
+  ...TERMINAL_NOTICE_CODES.map(terminalNoticeOrigin),
+  'watch:repeat'
 ] as const)
 
 /** Origins a session's own token may claim: its harness's hook events, and the CLI it runs itself. */
@@ -144,6 +145,8 @@ export interface HookEventRecord {
   /** The harness's `source` field, when it sent one. */
   source: string | null
   toolName: string | null
+  /** Occurrences of this call in the last 20 fingerprinted tool events. */
+  repeat: number | null
   /** What the event changed in Needs you; empty when it changed nothing. */
   effects: readonly HookEventEffect[]
   observedAt: string

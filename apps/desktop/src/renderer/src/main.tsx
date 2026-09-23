@@ -81,6 +81,7 @@ import {
   sessionStatus,
   splitCandidates,
   windowTitle,
+  workspaceAttention,
   type ProgressPresentation
 } from './session-presentation'
 import { sessionProcessLabel } from './session-status'
@@ -1271,9 +1272,10 @@ function App(): React.JSX.Element {
       ({ id, group: 'Commands', label, run, ...extra })
     return [
       ...shown.flatMap((workspace) => visibleWorkspaceSessions(sessions, workspace.workspaceId, false).map((session): PaletteCommand => {
+        const isLive = sessionProcessLive(session, live[session.sessionId]?.incarnationId)
         const status = sessionStatus(
           session,
-          sessionProcessLive(session, live[session.sessionId]?.incarnationId),
+          isLive,
           unresolved,
           observedProgressFor(session),
           activity[session.sessionId] ?? null
@@ -1284,6 +1286,7 @@ function App(): React.JSX.Element {
           label: session.name,
           // The palette row carries the same mark and word as the sidebar row it stands for.
           mark: status.dot,
+          live: isLive,
           context: `${workspace.name} · ${agentTag(session.executable)} · ${status.word} · ${displayPath(session.cwd, home)}`,
           run: () => openSession(session.sessionId)
         }
@@ -1492,15 +1495,29 @@ function App(): React.JSX.Element {
                 // while every workspace is still on None.
                 const anyMarker = ordered.some((item) => item.marker !== 'none')
                 const workspaceSessions = visibleWorkspaceSessions(sessions, workspace.workspaceId, tree.showArchived)
+                const attention = workspaceAttention(sessions, workspace.workspaceId, unresolved, live)
+                const attentionParts = [
+                  attention.waiting ? `${attention.waiting} waiting for your response` : null,
+                  attention.updates ? `${attention.updates} with updates` : null
+                ].filter(Boolean)
+                const workspaceTitle = [
+                  workspace.name,
+                  attention.live ? `${attention.live} live` : null,
+                  ...attentionParts
+                ].filter(Boolean).join(' · ')
                 const isExpanded = tree.expandedWorkspaceIds.has(workspace.workspaceId)
                 return (
                   <section key={workspace.workspaceId} className="workspace-group" aria-label={workspace.name}>
                     <div className={`workspace-row${workspace.archivedAt ? ' archived' : ''}`}>
-                      <button type="button" aria-expanded={isExpanded} onClick={() => {
+                      <button type="button" title={workspaceTitle} aria-expanded={isExpanded} onClick={() => {
                         setTree((current) => toggleWorkspaceExpanded(current, workspace.workspaceId))
                       }}>
                         <WorkspaceIdentityMark workspaceName={workspace.name} marker={workspace.marker} reserveSlot={anyMarker} decorative />
                         <span className="eyebrow">{workspace.name}</span>
+                        {attentionParts.length > 0 ? <>
+                          <span className="status-dot needs-you" aria-hidden="true" />
+                          <span className="visually-hidden">{attentionParts.join(', ')}</span>
+                        </> : null}
                         <span className="count">{workspaceSessions.length}</span>
                       </button>
                       <button
@@ -1515,10 +1532,11 @@ function App(): React.JSX.Element {
                     {isExpanded ? workspaceSessions.map((session, sessionIndex) => {
                       const observedProgress = observedProgressFor(session)
                       const observedActivity = activity[session.sessionId] ?? null
-                      const status = sessionStatus(session, sessionProcessLive(session, live[session.sessionId]?.incarnationId), unresolved, observedProgress, observedActivity)
+                      const isLive = sessionProcessLive(session, live[session.sessionId]?.incarnationId)
+                      const status = sessionStatus(session, isLive, unresolved, observedProgress, observedActivity)
                       const selected = session.sessionId === selectedSessionId
                       return (
-                        <div className={`session-row${selected ? ' selected' : ''}${session.archivedAt ? ' archived' : ''}`} key={session.sessionId}>
+                        <div className={`session-row${selected ? ' selected' : ''}${session.archivedAt ? ' archived' : ''}`} data-live={String(isLive)} key={session.sessionId}>
                           <button
                             type="button"
                             data-session-id={session.sessionId}
@@ -1543,6 +1561,7 @@ function App(): React.JSX.Element {
                             className="row-menu-button"
                             aria-haspopup="menu"
                             aria-label={`Actions for ${session.name}`}
+                            aria-expanded={menu?.label === `${session.name} actions`}
                             onClick={(event) => openMenu(event.currentTarget, `${session.name} actions`, sessionMenuEntries(session, sessionIndex, workspaceSessions))}
                           >⋯</button>
                         </div>

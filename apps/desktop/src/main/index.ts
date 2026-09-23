@@ -3371,6 +3371,153 @@ async function runSelfTest(): Promise<void> {
       { sessionId: openCodeResumed.sessionId, incarnationId: openCodeResumed.incarnationId }
     ]) await client.request(METHOD_REGISTRY.sessionStop, { ...stopped, cause: 'explicit' })
 
+    console.error('[BMN] self-test phase: subagent routing and repeat watch')
+    const dormantSidebar = await applicationWindow.webContents.executeJavaScript(`(async () => {
+      const button = document.querySelector('button[data-session-id="${petitionDestination.session.sessionId}"]');
+      if (!button) throw new Error('dormant sidebar fixture missing');
+      button.click(); button.focus();
+      const row = button.closest('.session-row');
+      const end = Date.now() + 10000;
+      while (row.dataset.live !== 'false' || row.querySelector('.unread-mark')) {
+        if (Date.now() >= end) throw new Error('dormant row did not settle');
+        await new Promise(r => setTimeout(r, 25));
+      }
+      const sample = document.createElement('span'); sample.style.color = 'var(--muted)'; row.append(sample);
+      const muted = getComputedStyle(sample).color; sample.remove();
+      return { live: row.dataset.live, colour: getComputedStyle(row.querySelector('.session-name')).color, muted };
+    })()`) as { live: string; colour: string; muted: string }
+    applicationWindow.webContents.sendInputEvent({ type: 'mouseMove', x: 600, y: 400 })
+    applicationWindow.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Tab' })
+    applicationWindow.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Tab' })
+    const dormantMenu = await acceptanceWait(async () =>
+      await applicationWindow!.webContents.executeJavaScript(`(() => {
+        const menu = document.querySelector('[aria-label="Actions for Petition destination"]');
+        if (document.activeElement !== menu) return undefined;
+        return { focused: true, opacity: getComputedStyle(menu).opacity, hovered: menu.closest('.session-row').matches(':hover') };
+      })()`) as { focused: boolean; opacity: string; hovered: boolean } | undefined, 'Tab to dormant session actions')
+    const quietSidebarAcceptance = { ...dormantSidebar, ...dormantMenu }
+    const routingWorkspace = await client.request<WorkspaceRecord>(METHOD_REGISTRY.workspaceCreate, {
+      name: 'Routing acceptance B', defaultCwd: isolatedCwd, position: 20
+    })
+    const routingDirectory = join(isolatedCwd, 'routing-acceptance')
+    const routingExecutable = writeAcceptanceHarness(routingDirectory, 'opencode', [
+      "process.env.BMN_OPENCODE_SESSION_ID = 'ses_main'",
+      "const event = (hook_event_name, props = {}) => cli(['hook', 'opencode'], JSON.stringify({ hook_event_name, sessionID: 'ses_main', ...props }))",
+      "event('permission.asked', { permission: 'main-tool' })",
+      "event('permission.asked', { sessionID: 'ses_child', permission: 'child-tool', patterns: ['child-pattern'] })",
+      "event('question.asked', { sessionID: 'ses_child', questions: [{ question: 'Child routing question?' }] })",
+      "event('session.status', { status: { type: 'busy' } })",
+      "event('permission.asked', { permission: 'main-tool' })",
+      "writeFileSync(file('opened'), '')",
+      "await wait('reply')",
+      "event('permission.replied', { sessionID: 'ses_child', reply: 'once' })",
+      "event('question.rejected', { sessionID: 'ses_child' })",
+      "event('permission.replied', { reply: 'reject' })",
+      "writeFileSync(file('resolved'), '')"
+    ])
+    const routingSession = await createSessionRuntime({ workspaceId: routingWorkspace.workspaceId,
+      name: 'Child routing', cwd: isolatedCwd, executable: routingExecutable, argv: [], cols: 80, rows: 24 }, true)
+    await untilFileExists(join(routingDirectory, 'opened'), 'child permission and question after parent busy')
+    const routingRequests = async () => (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
+      .filter(row => row.sessionId === routingSession.session.sessionId)
+    const routingOpened = await routingRequests()
+    await recoverApplicationRenderer(applicationWindow)
+    const workspaceAttentionOpened = await applicationWindow.webContents.executeJavaScript(`(async () => {
+      document.querySelector('button[data-session-id="${petitionDestination.session.sessionId}"]')?.click();
+      const end = Date.now() + 10000;
+      while (Date.now() < end) {
+        const row = document.querySelector('.workspace-group[aria-label="Routing acceptance B"] .workspace-row');
+        if (row?.querySelector('.status-dot.needs-you')) return {
+          dot: true, text: row.querySelector('.visually-hidden')?.textContent,
+          selectedInA: !!document.querySelector('button[data-session-id="${petitionDestination.session.sessionId}"][aria-current="true"]')
+        };
+        await new Promise(r => setTimeout(r, 25));
+      } throw new Error('workspace B attention dot missing');
+    })()`) as { dot: boolean; text: string; selectedInA: boolean }
+    writeFileSync(join(routingDirectory, 'reply'), '')
+    await untilFileExists(join(routingDirectory, 'resolved'), 'matching child replies')
+    const routingResolved = await routingRequests()
+    const workspaceAttentionCleared = await acceptanceWait(async () =>
+      await applicationWindow!.webContents.executeJavaScript(`(() => {
+        const row = document.querySelector('.workspace-group[aria-label="Routing acceptance B"] .workspace-row');
+        return row && !row.querySelector('.status-dot.needs-you') && !row.querySelector('.visually-hidden') ? true : undefined;
+      })()`) as true | undefined, 'workspace B attention cleared')
+    const subagentAcceptance = {
+      open: routingOpened.map(({ requestKey, kind, title, body, state }) => ({ requestKey, kind, title, body, state })),
+      resolved: routingResolved.map(({ requestKey, state, resolvedBy }) => ({ requestKey, state, resolvedBy })),
+      workspaceAttentionOpened, workspaceAttentionCleared
+    }
+    await client.request(METHOD_REGISTRY.sessionStop, { sessionId: routingSession.session.sessionId,
+      incarnationId: routingSession.session.lastProcess?.incarnationId, cause: 'explicit' })
+
+    const repeatDirectory = join(isolatedCwd, 'repeat-acceptance')
+    // The Claude capability probe runs --help without a session credential; only the real PTY may publish markers.
+    const repeatExecutable = writeAcceptanceHarness(repeatDirectory, 'claude', [
+      "if (process.argv.includes('--help')) process.exit(0)",
+      "const event = (hook_event_name) => spawnSync('bmn', ['hook', 'claude'], { input: JSON.stringify({ hook_event_name, tool_name: 'Bash', tool_input: { command: 'synthetic-repeat' }, tool_response: { output: 'fixture' } }), stdio: ['pipe', 'ignore', 'ignore'] })",
+      "for (let i = 0; i < 3; i++) event('PostToolUse')",
+      "writeFileSync(file('three'), '')",
+      "await wait('eight-gate')",
+      "for (let i = 3; i < 8; i++) event('PostToolUse')",
+      "writeFileSync(file('eight'), '')",
+      "await wait('reset-gate')",
+      "event('UserPromptSubmit')",
+      "writeFileSync(file('reset'), '')"
+    ])
+    const repeatSession = await createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
+      name: 'Repeat acceptance', cwd: isolatedCwd, executable: repeatExecutable, argv: [], cols: 80, rows: 24 }, true)
+    await untilFileExists(join(repeatDirectory, 'three'), 'three repeated calls')
+    const repeatBeforeUi = await client.request<Array<{ event: string; toolName: string | null; repeat: number | null; effects: string[] }>>(
+      METHOD_REGISTRY.hookEventsList, { sessionId: repeatSession.session.sessionId })
+    if (JSON.stringify(repeatBeforeUi.map(({ repeat }) => repeat)) !== '[1,2,3]') {
+      throw new Error(`the three real hook calls were not counted: ${JSON.stringify(repeatBeforeUi)}`)
+    }
+    await recoverApplicationRenderer(applicationWindow)
+    const repeatLogProbe = await applicationWindow.webContents.executeJavaScript(`(async () => {
+      const wait = async (read, label) => { const end = Date.now() + 10000; while (Date.now() < end) {
+        const value = read(); if (value) return value; await new Promise(r => setTimeout(r, 25));
+      } throw new Error('repeat log UI timed out: ' + label); };
+      (await wait(() => document.querySelector('button[data-session-id="${repeatSession.session.sessionId}"]'), 'session row')).click();
+      await wait(() => window.__aitermTest?.snapshots()?.['${repeatSession.session.sessionId}'], 'terminal snapshot');
+      (await wait(() => document.querySelector('[aria-label="Actions for Repeat acceptance"]'), 'row menu')).click();
+      (await wait(() => [...document.querySelectorAll('.popup-menu [role="menuitem"]')].find(r => r.textContent.trim() === 'Hook events…'), 'Hook events action')).click();
+      const dialog = await wait(() => document.querySelector('dialog.hook-events-dialog[open]'), 'dialog');
+      const text = await wait(() => dialog.textContent.includes('same call ×3') && dialog.textContent, 'same call ×3');
+      dialog.dispatchEvent(new Event('cancel', { cancelable: true }));
+      return { text, inputEvents: window.__aitermTest.snapshot('${repeatSession.session.sessionId}').inputEvents };
+    })()`) as { text: string; inputEvents: number }
+    writeFileSync(join(repeatDirectory, 'eight-gate'), '')
+    await untilFileExists(join(repeatDirectory, 'eight'), 'eight repeated calls')
+    const repeatRows = (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
+      .filter(row => row.sessionId === repeatSession.session.sessionId && row.requestKey === 'watch:repeat' && row.state === 'open')
+    const repeatProvenance = await applicationWindow.webContents.executeJavaScript(`(async () => {
+      document.querySelector('.needs-you-button').click();
+      const end = Date.now() + 10000;
+      while (Date.now() < end) {
+        const row = [...document.querySelectorAll('.attention-item')].find(r => r.textContent.includes('Repeat acceptance repeated'));
+        if (row) { const text = row.querySelector('.provenance')?.textContent; document.querySelector('.needs-you-button').click(); return text; }
+        await new Promise(r => setTimeout(r, 25));
+      } throw new Error('repeat notice missing from Needs you');
+    })()`) as string
+    writeFileSync(join(repeatDirectory, 'reset-gate'), '')
+    await untilFileExists(join(repeatDirectory, 'reset'), 'repeat withdrawal on owner prompt')
+    const repeatAfterReset = (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
+      .find(row => row.requestId === repeatRows[0]?.requestId)
+    const repeatInputAfterNotice = await applicationWindow.webContents.executeJavaScript(
+      `window.__aitermTest.snapshot('${repeatSession.session.sessionId}').inputEvents`
+    ) as number
+    if (repeatInputAfterNotice !== 0 || repeatInputAfterNotice !== repeatLogProbe.inputEvents) {
+      throw new Error(`repeat notice wrote to the PTY: before=${repeatLogProbe.inputEvents}, after=${repeatInputAfterNotice}`)
+    }
+    const repeatAcceptance = {
+      logShowsThree: repeatLogProbe.text.includes('PostToolUse · Bash · same call ×3'),
+      noticeCount: repeatRows.length, kind: repeatRows[0]?.kind, openedBy: repeatRows[0]?.openedBy,
+      provenance: repeatProvenance, ptyInputEvents: repeatInputAfterNotice,
+      resetState: repeatAfterReset?.state
+    }
+    await client.request(METHOD_REGISTRY.sessionStop, { sessionId: repeatSession.session.sessionId,
+      incarnationId: repeatSession.session.lastProcess?.incarnationId, cause: 'explicit' })
+
     // Return selection to the lifecycle fixture expected by the existing restart checks.
     await applicationWindow.webContents.executeJavaScript(`(() => {
       const row = document.querySelector('.session-row button[data-session-id="' + ${JSON.stringify(preloadProbe.templateCreatedSession.sessionId)} + '"]');
@@ -3442,7 +3589,11 @@ async function runSelfTest(): Promise<void> {
       await client.request(METHOD_REGISTRY.sessionStop, { ...stopping, cause: 'explicit' })
     }
     /** Sessions deliberately stopped before the application restart: they are exited, not interrupted. */
-    const stoppedBeforeRestartSessionIds = new Set([reportingSession.sessionId, rivalSession.sessionId, petitionSource.session.sessionId, petitionDestination.session.sessionId, openCodeSession.session.sessionId])
+    const stoppedBeforeRestartSessionIds = new Set([
+      reportingSession.sessionId, rivalSession.sessionId,
+      petitionSource.session.sessionId, petitionDestination.session.sessionId,
+      openCodeSession.session.sessionId, routingSession.session.sessionId, repeatSession.session.sessionId
+    ])
     // The rival's report was refused; the owner must be able to read why while BMN is still running.
     const refusalLog = join(resolveApplicationRoots().state, 'refused-requests.log')
     const refusalReason = await (async (): Promise<string | null> => {
@@ -3615,8 +3766,9 @@ async function runSelfTest(): Promise<void> {
     const afterRenderer = await client.request<HostHealth>(METHOD_REGISTRY.healthGet, {})
     // The voice flow stops and starts the destination session once, the hook-reported Codex phase
     // starts two sessions and resumes one, the terminal-mode program adds one, and Epic 16/18's
-    // three synthetic sessions plus OpenCode Resume add four; all are stopped again.
-    if (afterRenderer.liveSessions !== 3 || afterRenderer.incarnationRecords !== 13) {
+    // three synthetic sessions plus OpenCode Resume add four; the new OpenCode routing and repeat
+    // fixtures add two more incarnations, and all are stopped again.
+    if (afterRenderer.liveSessions !== 3 || afterRenderer.incarnationRecords !== 15) {
       throw new Error(`renderer restart duplicated or stopped a process: ${afterRenderer.liveSessions} live, ${afterRenderer.incarnationRecords} incarnations`)
     }
     // "What survives", renderer-crash row: the processes, the layout and the open requests outlive the view.
@@ -3750,7 +3902,7 @@ async function runSelfTest(): Promise<void> {
       )
     }
     if (
-      restoredWorkspaces.length !== 2 ||
+      restoredWorkspaces.length !== 3 ||
       restoredDefaultSessions.filter((item) => !stoppedBeforeRestartSessionIds.has(item.sessionId))
         .map((item) => item.sessionId).join(',') !==
         defaultSessionsAfterLifecycleStop.map((item) => item.sessionId).join(',') ||
@@ -3771,6 +3923,39 @@ async function runSelfTest(): Promise<void> {
     hostRendererPort = applicationPort
     trackSessionProcessStates(client)
     await recoverApplicationRenderer(applicationWindow)
+    // The interrupted process is the selected dormant row after restart: its name quiets,
+    // while selection still has the identity bar, selected fill and stronger weight.
+    const interruptedSidebarAcceptance = await acceptanceWait(async () =>
+      await applicationWindow!.webContents.executeJavaScript(`(() => {
+        const button = document.querySelector('.session-row.selected > button[data-session-id="${preloadProbe.templateCreatedSession.sessionId}"]');
+        const row = button?.closest('.session-row');
+        const name = row?.querySelector('.session-name');
+        if (!button || !row || !name) return undefined;
+        const probe = document.createElement('span');
+        probe.style.color = 'var(--muted)';
+        probe.style.borderLeft = '2px solid var(--identity)';
+        probe.style.backgroundColor = 'var(--selected)';
+        document.body.append(probe);
+        const tokens = getComputedStyle(probe);
+        const result = { live: row.getAttribute('data-live'), nameColor: getComputedStyle(name).color,
+          muted: tokens.color, weight: getComputedStyle(name).fontWeight,
+          bar: getComputedStyle(button).borderLeftColor, identity: tokens.borderLeftColor,
+          fill: getComputedStyle(button).backgroundColor, selected: tokens.backgroundColor };
+        probe.remove();
+        return result;
+      })()`), 'interrupted selected sidebar row') as {
+        live: string; nameColor: string; muted: string; weight: string
+        bar: string; identity: string; fill: string; selected: string
+      }
+    if (lifecycleStoppedAfterRestart?.state !== 'interrupted' ||
+      interruptedSidebarAcceptance.live !== 'false' ||
+      interruptedSidebarAcceptance.nameColor !== interruptedSidebarAcceptance.muted ||
+      interruptedSidebarAcceptance.weight !== '500' ||
+      interruptedSidebarAcceptance.bar !== interruptedSidebarAcceptance.identity ||
+      interruptedSidebarAcceptance.fill !== interruptedSidebarAcceptance.selected) {
+      throw new Error(`the selected interrupted row lost its dormant or selection styling: ${JSON.stringify(interruptedSidebarAcceptance)}`)
+    }
+    console.error(`[BMN] self-test phase: interrupted selected sidebar ${JSON.stringify(interruptedSidebarAcceptance)}`)
     // Epic 12.1 AC4: the link and its name are still there after the database was closed and reopened.
     const restoredEvidence = (await client.request<ProgressRecord[]>(METHOD_REGISTRY.progressList, {}))
       .find((record) => record.sessionId === session.sessionId && record.source === 'evidence')
@@ -4628,6 +4813,10 @@ async function runSelfTest(): Promise<void> {
       handoffFlow: { ...preloadProbe.handoffFlow, persistedAfterRestart: true },
       agentHandoff,
       openCodeAcceptance,
+      subagentAcceptance,
+      repeatAcceptance,
+      quietSidebarAcceptance,
+      interruptedSidebarAcceptance,
       voiceFlow: {
         ...preloadProbe.voiceFlow,
         transcriptions: selfTestVoiceTranscriptions,

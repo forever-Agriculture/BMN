@@ -148,11 +148,11 @@ agent, and they do nothing outside BMN.
 | Claude `Notification` (permission prompt) or `PermissionRequest` | Opens a `permission` request |
 | Claude `Notification` (question dialog) | Opens a `question` request |
 | Codex `PreToolUse` for `request_user_input` or `request_user_input_async` | Opens a `question` request with the question text and choices |
-| OpenCode `permission.asked`, `permission.replied` | Opens, answers or withdraws a `permission` request |
-| OpenCode `question.asked`, `question.replied`, `question.rejected` | Opens, answers or withdraws a `question` request |
-| OpenCode `session.status` busy, `session.idle`, `session.error` | Clears open prompts, or opens a finished-turn or error notice |
-| OpenCode `session.created`, `tui.session.select`, `session.deleted` | Captures the conversation or clears the plugin's requests |
-| `PostToolUse`, `UserPromptSubmit` | Clears the turn notice. Claude resolves open prompts after a tool completes. Codex resolves permission after any tool and resolves a question only after synchronous `request_user_input` or `UserPromptSubmit`; an async question stays open while later tools run |
+| OpenCode `permission.asked`, `permission.replied` | Opens, answers or withdraws a `permission` request; subagents and other sessions in the same process share their own `subagent-permission` request |
+| OpenCode `question.asked`, `question.replied`, `question.rejected` | Opens, answers or withdraws a `question` request; subagents and other sessions in the same process share their own `subagent-question` request |
+| OpenCode main `session.status` busy, `session.idle`, `session.error` | Clears main prompts, or opens a finished-turn or error notice. Main idle also withdraws subagent requests; main busy leaves them open. Subagent status, idle and errors are not reported |
+| OpenCode main `session.created`, `tui.session.select`, `session.deleted` | Captures the conversation or clears the plugin's requests, including subagent requests on select/delete. These events from subagents are ignored |
+| `PostToolUse`, Claude `PostToolUseFailure`, `UserPromptSubmit` | Clears the turn notice. Claude resolves open prompts after a tool completes or fails. Codex resolves permission after any tool and resolves a question only after synchronous `request_user_input` or `UserPromptSubmit`; an async question stays open while later tools run |
 | `Stop` | Withdraws open prompts and opens a `notice` that the turn finished, with the last message. Codex keeps a queued async question open until the owner submits input. When Claude still has background tasks or a scheduled wake-up, it opens nothing: the agent resumes without you |
 | `SessionStart` (not after compaction), `SessionEnd` | Withdraws everything the hook opened |
 | `SessionStart` with `startup`, `resume`, `clear` or `fork` | Also reports the conversation the process is now in, so Resume reopens that one |
@@ -184,6 +184,15 @@ Each hook event also records itself, whether or not it changed anything: the ses
 what it changed. That list is the answer to "why is there no request for this?". It is kept in
 memory only, at most 30 events per session, is never shown to another session, and starts empty
 again after BMN restarts.
+
+### Repeated tool calls
+
+For Claude Code and Codex, BMN counts identical completed tool calls since your last message. Eight
+matching calls among the last 20 open one **Needs you** notice; the hook log shows the count as
+`same call ×8`. The watch only tells you and never changes the agent or its process. The threshold
+is the `REPEAT_NOTICE_AT` constant in `repeat-watch.ts`; the bounded local `repeat-watch.log` under
+BMN's state directory records counts, tool names and whether a notice opened for calibration. BMN
+keeps no tool input or output in that log.
 
 An agent passes its environment to agents it starts from a tool call (`claude -p`), so the hook
 also checks that the agent above it holds the terminal; nested, non-interactive agents are ignored.
@@ -367,7 +376,7 @@ at all about a command it does not recognise. A hand-written entry that works pe
 exactly, and `check` will answer for it.
 
 The entries themselves, for wiring them by hand. `~/.claude/settings.json` needs `Notification`,
-`PostToolUse`, `UserPromptSubmit`, `Stop`, `SessionStart` and `SessionEnd`, next to any hooks
+`PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `Stop`, `SessionStart` and `SessionEnd`, next to any hooks
 already there:
 
 ```json

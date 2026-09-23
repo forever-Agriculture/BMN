@@ -106,6 +106,7 @@ export interface ControlHandlers {
     event: string
     source: string | null
     toolName: string | null
+    fingerprint?: string | undefined
     effects: readonly HookEventEffect[]
   }): Promise<unknown>
   /** Writes text into the PTY as a bracketed paste; appends '\r' only when submit is true. */
@@ -885,13 +886,17 @@ export class ControlServer {
         })
       }
       case 'hook.observe': {
-        // The log is a record of what the harness reported, never a reason to act: it opens nothing.
-        const params = closedParams(rawParams, ['sessionId', 'agent', 'event', 'source', 'toolName', 'effects'])
+        // Observations are diagnostic; the repeat watch may open or withdraw its one notice.
+        const params = closedParams(rawParams, ['sessionId', 'agent', 'event', 'source', 'toolName', 'effects', 'fingerprint'])
         const agent = requireEnum(params, 'agent', HOOK_EVENT_AGENTS)
         const event = requireText(params, 'event', RULES.source)
         if (!isHookEventName(event)) throw invalid('event must be printable ASCII without spaces')
         const source = readText(params, 'source', RULES.source)
         const toolName = readText(params, 'toolName', RULES.source)
+        const fingerprint = readText(params, 'fingerprint', RULES.source)
+        if (fingerprint !== undefined && !/^[0-9a-f]{16}$/.test(fingerprint)) {
+          throw invalid('fingerprint must be 16 lowercase hexadecimal characters')
+        }
         const effects = requireEffects(params, 'effects')
         const sessionId = this.target(scope, params)
         return handlers.observeHookEvent({
@@ -901,6 +906,7 @@ export class ControlServer {
           event,
           source: source ?? null,
           toolName: toolName ?? null,
+          ...(fingerprint === undefined ? {} : { fingerprint }),
           effects
         })
       }

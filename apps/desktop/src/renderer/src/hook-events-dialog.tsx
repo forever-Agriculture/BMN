@@ -12,9 +12,11 @@ export function hookEffectWords(effects: readonly HookEventRecord['effects'][num
   return `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`
 }
 
-/** The event's own words: `PostToolUse · Bash`, `SessionStart · resume`. */
-export function hookEventWords(event: Pick<HookEventRecord, 'event' | 'source' | 'toolName'>): string {
-  return [event.event, event.toolName, event.source].filter((part) => !!part).join(' · ')
+/** The event's own words: `PostToolUse · Bash · same call ×3`, `SessionStart · resume`. */
+export function hookEventWords(event: Pick<HookEventRecord, 'event' | 'source' | 'toolName'> &
+  Partial<Pick<HookEventRecord, 'repeat'>>): string {
+  return [event.event, event.toolName, event.repeat !== undefined && event.repeat !== null && event.repeat >= 2
+    ? `same call ×${event.repeat}` : null, event.source].filter((part) => !!part).join(' · ')
 }
 
 /**

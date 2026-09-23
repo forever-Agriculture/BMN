@@ -5,6 +5,8 @@ import { hookEffectWords, hookEventWords } from './hook-events-dialog'
 describe('hook event words', () => {
   it('names the event, the tool it ran and the source the harness gave', () => {
     expect(hookEventWords({ event: 'PostToolUse', toolName: 'Bash', source: null })).toBe('PostToolUse · Bash')
+    expect(hookEventWords({ event: 'PostToolUseFailure', toolName: 'Bash', source: null, repeat: 3 }))
+      .toBe('PostToolUseFailure · Bash · same call ×3')
     expect(hookEventWords({ event: 'SessionStart', toolName: null, source: 'resume' })).toBe('SessionStart · resume')
     expect(hookEventWords({ event: 'Stop', toolName: null, source: null })).toBe('Stop')
   })

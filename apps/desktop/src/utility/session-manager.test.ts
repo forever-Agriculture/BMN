@@ -599,6 +599,63 @@ describe('shell session lifecycle', () => {
     ).toEqual({ PATH: '/usr/bin', TERM: 'xterm-256color', COLORTERM: 'truecolor' })
   })
 
+  it('drops exact launching-agent session identities while preserving owner configuration', () => {
+    const inheritedIdentities = [
+      'CLAUDECODE', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_ENTRYPOINT',
+      'CLAUDE_CODE_EXECPATH', 'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN',
+      'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_PID',
+      'CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CODEX_SANDBOX_NETWORK_DISABLED',
+      'OMPCODE', 'ITERM_SESSION_ID', 'WT_SESSION', 'STY',
+      'ZELLIJ', 'ZELLIJ_SESSION_NAME', 'ZELLIJ_PANE_ID'
+    ]
+    const configuration = {
+      CLAUDE_CODE_FORCE_SESSION_PERSISTENCE: '1',
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      CLAUDE_CONFIG_DIR: '/custom/claude',
+      CLAUDE_EFFORT: 'high',
+      ANTHROPIC_BASE_URL: 'https://example.test',
+      CODEX_HOME: '/custom/codex',
+      OPENCODE_CONFIG: '/custom/opencode.json',
+      PATH: '/usr/bin',
+      HOME: '/home/owner'
+    }
+    const result = buildShellEnvironment({
+      ...Object.fromEntries(inheritedIdentities.map((name) => [name, 'outer-session'])),
+      ...configuration
+    })
+    for (const name of inheritedIdentities) expect(result).not.toHaveProperty(name)
+    for (const [name, value] of Object.entries(configuration)) expect(result[name]).toBe(value)
+  })
+
+  it('issues fresh BMN and AITERM credentials even when launched inside another BMN session', () => {
+    let spawnedEnvironment: Readonly<Record<string, string | undefined>> | undefined
+    const manager = new SessionManager({
+      store: new FakeStore(),
+      spawnPty: (_executable, _argv, options) => {
+        spawnedEnvironment = options.env
+        return new FakePty()
+      },
+      sendTerminalMessage: () => undefined,
+      environment: {
+        BMN_CONTROL_SOCKET: '/outer/socket', BMN_SESSION_ID: 'outer', BMN_TOKEN: 'outer-token',
+        AITERM_CONTROL_SOCKET: '/outer/socket', AITERM_SESSION_ID: 'outer', AITERM_TOKEN: 'outer-token'
+      },
+      sessionEnvironment: (identity) => ({
+        BMN_CONTROL_SOCKET: '/new/socket', BMN_SESSION_ID: identity.sessionId, BMN_TOKEN: 'new-token',
+        AITERM_CONTROL_SOCKET: '/new/socket', AITERM_SESSION_ID: identity.sessionId, AITERM_TOKEN: 'new-token'
+      })
+    })
+    manager.spawnValidatedPty(
+      { cwd: '/tmp', executable: '/usr/bin/bash', argv: [], cols: 80, rows: 24 },
+      undefined,
+      { sessionId: 'new-session', incarnationId: 'new-incarnation' }
+    )
+    expect(spawnedEnvironment).toMatchObject({
+      BMN_CONTROL_SOCKET: '/new/socket', BMN_SESSION_ID: 'new-session', BMN_TOKEN: 'new-token',
+      AITERM_CONTROL_SOCKET: '/new/socket', AITERM_SESSION_ID: 'new-session', AITERM_TOKEN: 'new-token'
+    })
+  })
+
   it('rejects an invalid cwd before spawn/record and reports no live incarnation', async () => {
     const { manager, store, cwd } = await fixture()
     const spawn = vi.spyOn(manager, 'spawnValidatedPty')

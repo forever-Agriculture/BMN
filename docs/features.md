@@ -19,6 +19,9 @@ The sidebar groups sessions into workspaces. A workspace is a named group of ses
 layout. Create more with **New workspace…** (the palette or the workspace menu), rename them,
 reorder them, give each one a marker so its panes are easy to tell apart, and archive a workspace
 when you are done with it. Archived items can be restored until the retention setting deletes them.
+The workspace row shows an attention dot when any session in it, even an archived one, has an open
+request or update. Finished session names read more quietly; row action buttons appear on hover or
+keyboard focus and remain available to the keyboard and screen readers.
 
 A session is one command in one working directory: a shell, Claude Code, Codex, OpenCode, or
 anything else installed. **New session…** opens a form:
@@ -146,6 +149,10 @@ the missing ones after backing the file up. A harness with no hook can still pag
 the terminal's own OSC 9, 777 or 99 notification. BMN presents it as a notice, which clears when
 you type into the session. The session's ⋯ menu has **Hook events…**, a short in-memory list of
 what the harness actually reported, which answers "why is there no request for this?".
+OpenCode subagent permissions and questions use their own requests, so they do not replace the
+main session's prompt. For Claude Code and Codex, eight identical completed tool calls among the
+last 20 since your last message open one notice; the hook event list shows the repeat count. BMN
+only tells you and leaves the agent running.
 
 The full command reference, the hook contract and the security model are in
 [agent-control.md](agent-control.md). Two limits matter here: everything an agent reports is its

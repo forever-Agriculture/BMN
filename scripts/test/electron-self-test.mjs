@@ -17,6 +17,37 @@ const waylandDisplay =
 /** Receipt fields the self-test must prove; a receipt missing any of them fails the run. */
 const receiptContract = [
   ['graceful', (receipt) => receipt.graceful === true],
+  ['quietSidebarAcceptance', (receipt) => {
+    const row = receipt.quietSidebarAcceptance
+    return row?.live === 'false' && typeof row.muted === 'string' && row.colour === row.muted &&
+      row.focused === true && row.opacity === '1' && row.hovered === false
+  }],
+  ['interruptedSidebarAcceptance', (receipt) => {
+    const row = receipt.interruptedSidebarAcceptance
+    return row?.live === 'false' && row.nameColor === row.muted && row.weight === '500' &&
+      row.bar === row.identity && row.fill === row.selected
+  }],
+  ['subagentAcceptance', (receipt) => {
+    const row = receipt.subagentAcceptance
+    const opened = key => row?.open.find(request => request.requestKey === key && request.state === 'open')
+    const resolved = (key, state, event) => row?.resolved.some(request =>
+      request.requestKey === key && request.state === state && request.resolvedBy === event)
+    return opened('opencode:permission')?.kind === 'permission' &&
+      opened('opencode:subagent-permission')?.kind === 'permission' &&
+      opened('opencode:subagent-permission')?.title === 'OpenCode subagent asks to child-tool' &&
+      opened('opencode:subagent-permission')?.body === 'child-pattern' &&
+      opened('opencode:subagent-question')?.kind === 'question' &&
+      resolved('opencode:subagent-permission', 'answered', 'hook:opencode:permission.replied') &&
+      resolved('opencode:subagent-question', 'withdrawn', 'hook:opencode:question.rejected') &&
+      row.workspaceAttentionOpened.dot === true && row.workspaceAttentionOpened.selectedInA === true &&
+      row.workspaceAttentionOpened.text === '1 waiting for your response' && row.workspaceAttentionCleared === true
+  }],
+  ['repeatAcceptance', (receipt) => {
+    const row = receipt.repeatAcceptance
+    return row?.logShowsThree === true && row.noticeCount === 1 && row.kind === 'notice' &&
+      row.openedBy === 'watch:repeat' && row.provenance === "from BMN's repeat watch" &&
+      row.ptyInputEvents === 0 && row.resetState === 'withdrawn'
+  }],
   ['agentHandoff', (receipt) => {
     const row = receipt.agentHandoff
     return row?.preparedWithoutDelivery === true && row.destinationMatches === true && row.text === 'Synthetic agent handoff result' &&
@@ -373,7 +404,7 @@ const receiptContract = [
     'survivalTable',
     (receipt) =>
       receipt.survivalTable?.rendererCrash?.liveProcesses === 3 &&
-      receipt.survivalTable.rendererCrash.incarnationRecords === 13 &&
+      receipt.survivalTable.rendererCrash.incarnationRecords === 15 &&
       receipt.survivalTable.rendererCrash.openRequestsBefore > 0 &&
       receipt.survivalTable.rendererCrash.openRequestsAfter ===
         receipt.survivalTable.rendererCrash.openRequestsBefore &&

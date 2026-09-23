@@ -317,7 +317,29 @@ const SHELL_ENVIRONMENT_PRIVATE_KEYS = new Set([
   'VTE_VERSION',
   'WINDOWID',
   'LC_TERMINAL',
-  'LC_TERMINAL_VERSION'
+  'LC_TERMINAL_VERSION',
+  // Session identity of an agent that launched the app (Claude Code 2.1.280 measured 2026-09-23;
+  // Codex 0.156.1 measured 2026-09-23, and OMP from herdr src/pane.rs:166-180).
+  'CLAUDECODE',
+  'CLAUDE_CODE_CHILD_SESSION',
+  'CLAUDE_CODE_ENTRYPOINT',
+  'CLAUDE_CODE_EXECPATH',
+  'CLAUDE_CODE_MESSAGING_SOCKET',
+  'CLAUDE_CODE_MESSAGING_TOKEN',
+  'CLAUDE_CODE_SESSION_ATTENDED',
+  'CLAUDE_CODE_SESSION_ID',
+  'CLAUDE_PID',
+  'CODEX_THREAD_ID',
+  'CODEX_SESSION_ID',
+  'CODEX_SANDBOX_NETWORK_DISABLED',
+  'OMPCODE',
+  // Terminal handles herdr strips (src/pane.rs:101-117).
+  'ITERM_SESSION_ID',
+  'WT_SESSION',
+  'STY',
+  'ZELLIJ',
+  'ZELLIJ_SESSION_NAME',
+  'ZELLIJ_PANE_ID'
 ])
 
 export function buildShellEnvironment(
