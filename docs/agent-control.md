@@ -37,6 +37,7 @@ bmn withdraw <request-key>                     Withdraw your request
 bmn resolve <request-key> <resolution>         Mark a request resolved
 bmn send <text> [--submit] [--key K]           Paste text into the session; --submit presses Enter
 bmn hook <agent>                               Turn an agent hook event on stdin into Needs you requests
+bmn hooks print opencode                       Print the shipped OpenCode TypeScript plugin
 bmn hooks check [agent] [--file PATH]          Say which of BMN's hook entries each hook file carries
 bmn hooks install <agent> [--file PATH]        Add the missing entries, after backing the file up
 bmn help [agents]                              Show usage; `help agents` prints the agent brief
@@ -340,9 +341,9 @@ hook file strictly, so a mistake anywhere in that file can stop every hook in it
 BMN does not check for that and does not pretend to: it was tried, over five rounds, and every rule
 rested on a reading of somebody else's schema that no run here could confirm — the rules were wrong
 in both directions, refusing files that work and passing files that do not. So every Codex report
-ends with the limit instead, and `epics.md:787` says the same thing: this command reports what is
-*configured*, never that a hook fired. Run `/hooks` in Codex once, then confirm the event shows up
-under Hook events. That is the check BMN cannot do for you.
+ends with the limit instead: this command reports what is *configured*, never that a hook fired.
+Run `/hooks` in Codex once, then confirm the event shows up under Hook events. That is the check
+BMN cannot do for you.
 
 What BMN still refuses to add to, for both harnesses, is a file it cannot merge into without
 removing something: `hooks` that is not an object, or an event whose value is not a list. That is
@@ -403,8 +404,7 @@ While you are at the desk and looking at the session, BMN tells the agent its te
 after a minute without input it reports the focus lost, so Claude Code sends its own mobile
 notifications while you are away. A Claude session connected to Remote Control is never sent to
 Telegram: the Claude app already notifies your phone. The hook reads that from Claude Code's
-`~/.claude/sessions/<pid>.json` (or `$CLAUDE_CONFIG_DIR/sessions`), which needs `/proc`, so on macOS
-such sessions are still sent.
+`~/.claude/sessions/<pid>.json` (or `$CLAUDE_CONFIG_DIR/sessions`), which needs `/proc`.
 
 ## A brief for agents
 

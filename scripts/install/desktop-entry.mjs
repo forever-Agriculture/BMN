@@ -1,8 +1,8 @@
 // MODULE: desktop-entry.mjs - installs the packaged app where this desktop looks for applications; --pin adds it to the GNOME dock
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, dirname, join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { launcherPath, launcherScript, updateStateDirectory } from '../lib/desktop-launcher.mjs'
 import { packagedApp } from '../lib/packaged-app.mjs'
@@ -12,7 +12,7 @@ const DESKTOP_ID = 'bmn.desktop'
 const ICON_NAME = 'bmn'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-const { application, binary } = packagedApp(repoRoot)
+const { binary } = packagedApp(repoRoot)
 const iconSource = join(repoRoot, 'apps/desktop/resources/icons')
 const dataHome = process.env.XDG_DATA_HOME || join(homedir(), '.local/share')
 const pin = process.argv.includes('--pin')
@@ -27,24 +27,6 @@ function writeAtomically(path, content, mode = 0o644) {
   const temporary = `${path}.tmp-${process.pid}`
   writeFileSync(temporary, content, { mode })
   renameSync(temporary, path)
-}
-
-/** macOS finds applications by bundle, so the whole .app is copied into the user's Applications folder. */
-function installApplicationBundle() {
-  if (pin) {
-    console.error('--pin is a GNOME dock setting. On macOS, drag BMN from Applications to the Dock.')
-    process.exit(1)
-  }
-  const destination = join(homedir(), 'Applications', basename(application))
-  mkdirSync(dirname(destination), { recursive: true })
-  rmSync(destination, { recursive: true, force: true })
-  // ditto keeps the ad-hoc code signature that Gatekeeper checks; cp -R does not.
-  const copied = spawnSync('/usr/bin/ditto', [application, destination], { encoding: 'utf8' })
-  if (copied.status !== 0) {
-    console.error(`Could not install ${basename(application)}: ${copied.stderr.trim() || copied.error?.message}`)
-    process.exit(1)
-  }
-  console.log(`Installed ${destination}`)
 }
 
 function installDesktopEntry() {
@@ -109,5 +91,4 @@ function installDesktopEntry() {
   console.log('Pinned BMN to the dock.')
 }
 
-if (process.platform === 'darwin') installApplicationBundle()
-else installDesktopEntry()
+installDesktopEntry()

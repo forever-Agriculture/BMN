@@ -1,7 +1,6 @@
 #!/bin/sh
 # MODULE: bmn - packaged launcher that runs the bmn CLI on BMN's own runtime, so sessions need no Node install
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
-# Linux keeps the executable two levels above resources/bin; macOS keeps it in Contents/MacOS.
+# The executable sits two levels above resources/bin.
 runtime="$here/../../bmn"
-[ -x "$runtime" ] || runtime="$here/../../MacOS/BMN"
 ELECTRON_RUN_AS_NODE=1 exec "$runtime" "$here/bmn.mjs" "$@"

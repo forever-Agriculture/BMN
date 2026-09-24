@@ -55,7 +55,7 @@ function runCli(
 }
 
 async function cliFixture() {
-  // macOS reaches the temporary folder through a symlink, and the CLI child reports the real path.
+  // The temporary folder may be reached through a symlink, and the CLI child reports the real path.
   const root = await realpath(await mkdtemp(join(tmpdir(), 'aitcli-')))
   createdRoots.add(root)
   const socketPath = join(root, 'ctl', 'control.sock')
@@ -2419,7 +2419,7 @@ describe('OpenCode hooks', () => {
     await expect(plugin.event({ event: root })).resolves.toBeUndefined()
   })
 
-  it.each(['linux', 'darwin'])('kills a stalled plugin child within 3 seconds on %s', async (platform) => {
+  it('kills a stalled plugin child within 3 seconds', async () => {
     const printed = await runHooks(['print', 'opencode'])
     expect(printed, printed.stderr).toMatchObject({ code: 0 })
     expect(printed.stdout).toContain('export const BMNPlugin')
@@ -2445,7 +2445,7 @@ describe('OpenCode hooks', () => {
       }
       return result
     }
-    const create = runInNewContext(`${javascript}; BMNPlugin`, { process: { platform, env: { BMN_CONTROL_SOCKET: '/fixture/socket' } } })
+    const create = runInNewContext(`${javascript}; BMNPlugin`, { process: { env: { BMN_CONTROL_SOCKET: '/fixture/socket' } } })
     const plugin = await create({ $: shell })
     const started = Date.now()
     const safety = setTimeout(() => {

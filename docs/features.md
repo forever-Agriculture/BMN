@@ -36,7 +36,10 @@ Edit launch settings later from the session's or pane's menu. Sessions can be mo
 archived once stopped; **Restore session** brings an archived one back.
 
 Sessions are independent: each has its own process, its own terminal, and a token that reaches only
-itself. BMN tags common commands — Claude, Codex, OpenCode, Gemini, Aider, Shell — but the deeper
+itself. A session launched from inside an agent does not inherit that agent's session identity
+either: BMN strips agent session variables such as `CLAUDE_CODE_SESSION_ID` and `CODEX_THREAD_ID`
+from the environment the command runs in, so the new session starts clean. BMN tags common
+commands — Claude, Codex, OpenCode, Gemini, Aider, Shell — but the deeper
 integration (attention hooks and conversation resume) is built for Claude Code, Codex and OpenCode.
 Any other CLI still runs as a normal terminal session, without those.
 
@@ -202,9 +205,8 @@ BMN can page you on Telegram when a session needs you, and take your reply back 
 session. It is off by default and uses a bot you create and own. BMN normally pages while you are
 away from the desk (about a minute without keyboard or mouse), after checking that the request is
 still open and unseen. It sends each request once; optionally it also tells you when a session's
-process exits while you are away. If BMN cannot read idle time, it treats you as away. On Linux, a
-Claude Code session connected to Remote Control is left to the Claude app; that detection is
-unavailable on macOS.
+process exits while you are away. If BMN cannot read idle time, it treats you as away. A Claude Code
+session connected to Remote Control is left to the Claude app.
 
 By default a reply is saved as a **draft** for that session, which you send from the Files panel;
 if you turn on direct typing, the reply is typed into the session and Enter is pressed. Replies to
@@ -259,6 +261,5 @@ malicious program already running as your user.
 | Saved output, file staging | `~/.local/state/bmn/` |
 | Control socket | `$XDG_RUNTIME_DIR/bmn/control/` |
 
-The `XDG_*` variables are respected and each folder can be overridden. macOS sets no
-`XDG_RUNTIME_DIR`, so the control socket goes under the per-user temporary folder instead. Folders
-are created owner-only. [development.md](development.md) lists the override variables.
+The `XDG_*` variables are respected and each folder can be overridden. Folders are created
+owner-only. [development.md](development.md) lists the override variables.

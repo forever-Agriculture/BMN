@@ -43,15 +43,5 @@ describe.skipIf(!existsSync(archive))(
       }
       await expect(nativeFiles(`${archive}.unpacked`)).resolves.toEqual(nativeEntries)
     })
-
-    it.skipIf(process.platform !== 'darwin')(
-      'unpacks node-pty spawn-helper as an executable, because macOS forks the shell through it',
-      async () => {
-        const helper = resolve(`${archive}.unpacked`, 'node_modules/node-pty/build/Release/spawn-helper')
-        const info = await stat(helper)
-        expect(info.isFile()).toBe(true)
-        expect(info.mode & 0o111).not.toBe(0)
-      }
-    )
   }
 )

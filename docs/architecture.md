@@ -177,7 +177,7 @@ apps/desktop/
 shared/protocol/         message types and validation shared by every process
 scripts/
   build/                 native module rebuild for Electron
-  install/               Linux launcher and icons, or the macOS application bundle
+  install/               Linux launcher and icons
   lib/                   shared pieces of the packaging and launcher scripts
   sandbox/               AppArmor profile template for Ubuntu 24.04+
   smoke/                 packaged build smoke test

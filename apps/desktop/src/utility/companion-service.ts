@@ -197,8 +197,8 @@ function linkExtension(record: ArtifactRecord): string {
   return byType[record.mediaType] ?? ''
 }
 
-/** sockaddr_un.sun_path holds 108 bytes on Linux and 104 on macOS, in both cases including the terminator. */
-const MAX_SOCKET_PATH_BYTES = process.platform === 'darwin' ? 103 : 107
+/** sockaddr_un.sun_path holds 108 bytes on Linux, including the terminator. */
+const MAX_SOCKET_PATH_BYTES = 107
 
 export class CompanionService {
   readonly auth = new ControlAuth()

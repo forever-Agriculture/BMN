@@ -20,7 +20,7 @@ extraResources:
     to: bin/bmn.mjs
 npmRebuild: false
 # better-sqlite3 loads prebuilds/<platform>-<arch>.node, which is where @electron/rebuild puts its
-# from-source build; every other prebuild it ships is dead weight, so each target keeps only its own.
+# from-source build; every other prebuild it ships is dead weight, so the target keeps only its own.
 linux:
   target:
     - dir
@@ -30,20 +30,3 @@ linux:
   asarUnpack:
     - node_modules/better-sqlite3/prebuilds/linux-*.node
     - node_modules/node-pty/bin/linux-*/node-pty.node
-mac:
-  target:
-    - dir
-  category: public.app-category.developer-tools
-  icon: resources/icons/hicolor/512x512.png
-  # A `dir` build is for this computer, so it is ad-hoc signed rather than signed for distribution.
-  identity: null
-  extendInfo:
-    # macOS shows this sentence when Hold Space first asks for the microphone.
-    NSMicrophoneUsageDescription: BMN transcribes dictation on this computer, so nothing you say leaves it.
-  files:
-    - '!node_modules/better-sqlite3/prebuilds/!(darwin-${arch}).node'
-  asarUnpack:
-    - node_modules/better-sqlite3/prebuilds/darwin-*.node
-    - node_modules/node-pty/bin/darwin-*/node-pty.node
-    # node-pty forks through this helper on macOS, so it must be a real executable file on disk.
-    - node_modules/node-pty/build/Release/spawn-helper

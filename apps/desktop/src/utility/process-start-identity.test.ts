@@ -3,9 +3,8 @@ import { spawn } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { processStartIdentity, processStartIdentityFor } from './process-start-identity'
 
-const platform = process.platform
-const onLinuxOrMacOS = platform === 'linux' || platform === 'darwin'
-const expectedPrefix = platform === 'darwin' ? 'darwin-ps-start:' : 'linux-proc-start:'
+const onLinux = process.platform === 'linux'
+const expectedPrefix = 'linux-proc-start:'
 
 /** Starts a process that outlives the assertions, and stops it afterwards. */
 async function sleeper(): Promise<{ pid: number; stop: () => Promise<void> }> {
@@ -24,7 +23,7 @@ async function sleeper(): Promise<{ pid: number; stop: () => Promise<void> }> {
   }
 }
 
-describe.skipIf(!onLinuxOrMacOS)('process start identity', () => {
+describe.skipIf(!onLinux)('process start identity', () => {
   it('names this platform and answers the same token twice for one live process', async () => {
     const child = await sleeper()
     try {
