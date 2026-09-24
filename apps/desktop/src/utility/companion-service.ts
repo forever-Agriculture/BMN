@@ -27,6 +27,7 @@ import {
   type BackupVerifyResult,
   type ControlInfo,
   type HookEventEffect,
+  type HookObservation,
   type HookEventRecord,
   type InputDraftRecord,
   type ProgressRecord,
@@ -40,6 +41,7 @@ import { ControlError, ControlServer, type ReceiptRecord } from './control-serve
 import type { DatabaseWorkerClient } from './database-client'
 import type { ApplicationRoots } from './roots'
 import { HostControlError, type SessionIdentity, type SessionManager } from './session-manager'
+import { runHookConfigurationCheck } from './hook-configuration-check'
 import { createAttentionPager } from './attention-pager'
 import { observeRepeat, REPEAT_NOTICE_AT, type RepeatState, type RepeatSegment } from './repeat-watch'
 import { TelegramConnector, maskToken, redactToken, type ConnectorHealth, type InboundReply } from './telegram-connector'
@@ -246,6 +248,18 @@ export class CompanionService {
    * suppression out of it would let 30 suppressed notices evict the hook and switch suppression off.
    */
   private readonly hookReporters = new Map<string, string>()
+  /**
+   * The latest harness event each session's current run has actually reported, with its receipt
+   * time. Kept apart from `hookEvents` because that log is bounded at 30 entries: terminal notices
+   * can evict the very event this summary is about, and the summary must still name it.
+   */
+  private readonly hookObservations = new Map<string, {
+    sessionId: string
+    incarnationId: string
+    agent: Exclude<HookEventRecord['agent'], 'terminal'>
+    event: string
+    observedAt: string
+  }>()
   /** The terminal notice each session has open, so a burst becomes more lines and not more rows. */
   private readonly terminalNotices = new Map<string, {
     requestId: string
@@ -449,6 +463,12 @@ export class CompanionService {
       case METHOD_REGISTRY.hookEventsList:
         // Read-only and scoped to one session; the log never reaches `state.snapshot` or another session.
         return this.listHookEvents(text(params, 'sessionId'))
+      case METHOD_REGISTRY.hookObservationGet:
+        // Read-only and scoped to one session's run; no other session's observation reaches this answer.
+        return this.hookObservation(text(params, 'sessionId'), optionalText(params, 'incarnationId') ?? undefined)
+      case METHOD_REGISTRY.hooksCheck:
+        // The owner's own read-only check, dated on arrival; the window decides what a stale answer is worth.
+        return runHookConfigurationCheck(this.options.cliPath, { now: this.now })
       case METHOD_REGISTRY.attentionTerminalNotice: {
         // Only the owner's own window reaches this switch, and only it can see a session's output,
         // so a session token has no way in: the control socket has no method for this at all.
@@ -511,6 +531,14 @@ export class CompanionService {
         return database.companion('listProgress')
       case METHOD_REGISTRY.draftList:
         return database.companion('listDrafts')
+      case METHOD_REGISTRY.handoffReview: {
+        const expectedToken = optionalText(params, 'expectedToken')
+        if (expectedToken !== null && !/^[a-f0-9]{64}$/.test(expectedToken)) {
+          invalid('The handoff review revision is invalid')
+        }
+        return database.companion('readHandoffReview',
+          text(params, 'draftId'), text(params, 'workspaceId'), expectedToken)
+      }
       case METHOD_REGISTRY.draftSave:
         return this.saveHandoffDraft(params)
       case METHOD_REGISTRY.draftRetry:
@@ -601,7 +629,7 @@ export class CompanionService {
     }
     // A deleted session keeps no hook events: the log, and everything else kept per session in
     // memory here, follows the sessions that still exist.
-    for (const map of [this.hookEvents, this.hookReporters, this.terminalNotices, this.repeatStates]) {
+    for (const map of [this.hookEvents, this.hookReporters, this.hookObservations, this.terminalNotices, this.repeatStates]) {
       for (const sessionId of map.keys()) {
         if (!this.knownSessions.has(sessionId)) map.delete(sessionId)
       }
@@ -961,9 +989,21 @@ export class CompanionService {
   }
 
   private recordHookEvent(p: Omit<HookEventRecord, 'observedAt'>): { recorded: true } {
+    const observedAt = this.iso()
     // Which incarnation has a harness reporting for it, kept whatever the log later drops.
     if (p.agent !== 'terminal' && p.incarnationId !== null) {
       this.hookReporters.set(p.sessionId, p.incarnationId)
+      // Only this run's own report may speak for it, so a queued event from a process that has
+      // already been replaced never becomes the current run's observation.
+      if (this.options.manager.liveIncarnationId(p.sessionId) === p.incarnationId) {
+        this.hookObservations.set(p.sessionId, {
+          sessionId: p.sessionId,
+          incarnationId: p.incarnationId,
+          agent: p.agent,
+          event: p.event,
+          observedAt
+        })
+      }
     }
     const log = this.hookEvents.get(p.sessionId) ?? []
     log.push({
@@ -975,7 +1015,7 @@ export class CompanionService {
       toolName: p.toolName,
       repeat: p.repeat,
       effects: [...p.effects],
-      observedAt: this.iso()
+      observedAt
     })
     if (log.length > HOOK_EVENT_LOG_LIMIT) log.splice(0, log.length - HOOK_EVENT_LOG_LIMIT)
     this.hookEvents.set(p.sessionId, log)
@@ -985,6 +1025,33 @@ export class CompanionService {
   /** The window's read-only view of one session's log; a session never sees another session's events. */
   listHookEvents(sessionId: string): HookEventRecord[] {
     return [...(this.hookEvents.get(sessionId) ?? [])]
+  }
+
+  /**
+   * What one run of a session has actually reported to BMN, or the absence of such an event. The
+   * run is the one the caller names, else the session's live incarnation; an observation from any
+   * other incarnation is not attributed to it. This is evidence one event arrived, never a verdict
+   * that hooks work.
+   */
+  hookObservation(sessionId: string, incarnationId?: string): HookObservation {
+    const run = incarnationId ?? this.options.manager.liveIncarnationId(sessionId) ?? null
+    const stored = this.hookObservations.get(sessionId)
+    if (run === null || stored === undefined || stored.incarnationId !== run) {
+      return { state: 'none', sessionId, incarnationId: run }
+    }
+    return {
+      state: 'observed',
+      sessionId,
+      incarnationId: stored.incarnationId,
+      agent: stored.agent,
+      event: stored.event,
+      observedAt: stored.observedAt,
+      // The summary outlives its detail: the bounded log may have evicted this event's own row.
+      detailAvailable: (this.hookEvents.get(sessionId) ?? []).some(
+        (row) => row.incarnationId === stored.incarnationId && row.agent === stored.agent &&
+          row.event === stored.event && row.observedAt === stored.observedAt
+      )
+    }
   }
 
   private async sweepAttention(): Promise<void> {

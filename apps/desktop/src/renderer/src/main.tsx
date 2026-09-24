@@ -33,6 +33,9 @@ import { FileReferenceDialog, type FileReferenceRequest } from './file-reference
 import { FilesPanel } from './files-panel'
 import { HookEventsDialog } from './hook-events-dialog'
 import { ProgressEvidenceDialog } from './progress-evidence-dialog'
+import { WorkspaceResultsDialog } from './workspace-results'
+import { prepareWorkspaceHandoffReview, sameHandoffDraft } from './workspace-handoff-review'
+import { HookObservationView } from './hook-observation-view'
 import { ResumeInterruptedDialog } from './resume-interrupted-dialog'
 import { LaunchSetsDialog } from './launch-sets-dialog'
 import { RepositoryIdentityView, identityChanged, useRepositoryIdentity } from './repository-identity'
@@ -132,7 +135,8 @@ type ShellDialog =
   | { kind: 'palette' }
   /** Chooses the session for a second pane beside `sessionId`. */
   | { kind: 'split-picker'; sessionId: string | null }
-  | { kind: 'preferences' }
+  | { kind: 'preferences'; section?: 'agent-control' }
+  | { kind: 'workspace-results'; workspace: WorkspaceRecord; openedFromWorkspaceId: string | null }
   | { kind: 'new-workspace' }
   | { kind: 'rename-workspace'; workspace: WorkspaceRecord }
   | { kind: 'launch-sets'; workspace: WorkspaceRecord; initialMode: 'manage' | 'launch' }
@@ -153,6 +157,7 @@ type ShellDialog =
       kind: 'progress-evidence'
       session: SessionRecord
       opened: ProgressPresentation
+      reportedIncarnationId: string | null
       /** The process the observation belonged to; a different one closes the detail. */
       incarnationId: string | null
     }
@@ -165,6 +170,10 @@ function App(): React.JSX.Element {
   const controllers = useRef(new Map<string, TerminalController>())
   const liveRef = useRef(new Map<string, LiveStartup>())
   const sessionsRef = useRef<SessionRecord[]>([])
+  const workspacesRef = useRef<WorkspaceRecord[]>([])
+  const draftsRef = useRef<InputDraftRecord[]>([])
+  /** Mutations that can supersede a pending results-to-Files review in this window. */
+  const handoffReviewEpoch = useRef(0)
   const armedRef = useRef(false)
   /** The resume-after-stop offer is read once per window, not on every renderer recovery. */
   const interruptedOfferChecked = useRef(false)
@@ -201,6 +210,7 @@ function App(): React.JSX.Element {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS)
   const [panel, setPanel] = useState<SidePanel>(null)
   const [requestedHandoffDraftId, setRequestedHandoffDraftId] = useState<string | null>(null)
+  const [requestedHandoffReviewDraft, setRequestedHandoffReviewDraft] = useState<InputDraftRecord | null>(null)
   const [focusMode, setFocusMode] = useState(false)
   const [menu, setMenu] = useState<MenuAnchor | null>(null)
   const [dialog, setDialog] = useState<ShellDialog | null>(null)
@@ -255,11 +265,20 @@ function App(): React.JSX.Element {
 
   liveRef.current = new Map(Object.entries(live))
   sessionsRef.current = sessions
+  workspacesRef.current = workspaces
+  draftsRef.current = drafts
   activityRef.current = activity
   const activeWorkspaceId = tree.selectedWorkspaceId
   const activeWorkspaceRef = useRef(activeWorkspaceId)
   activeWorkspaceRef.current = activeWorkspaceId
+  const workspaceSelection = useRef({ id: activeWorkspaceId, generation: 0 })
+  if (workspaceSelection.current.id !== activeWorkspaceId) {
+    workspaceSelection.current = { id: activeWorkspaceId, generation: workspaceSelection.current.generation + 1 }
+  }
   const activeWorkspace = workspaces.find((item) => item.workspaceId === activeWorkspaceId)
+  useEffect(() => {
+    if (dialog?.kind === 'workspace-results' && dialog.openedFromWorkspaceId !== activeWorkspaceId) setDialog(null)
+  }, [activeWorkspaceId, dialog])
   const layout = activeWorkspaceId ? layouts[activeWorkspaceId] : undefined
   const selectedSessionId = layout?.selectedSessionId ?? null
   const activeSessions = useMemo(
@@ -490,6 +509,7 @@ function App(): React.JSX.Element {
     })
     const stopAppEvent = window.aiTerminal.onAppEvent((message) => {
       if (message.topic === 'telegram') return
+      if (message.topic === 'drafts') handoffReviewEpoch.current += 1
       void refresh[message.topic]().catch(fail('Companion data refresh failed'))
     })
     const stopOpenSession = window.aiTerminal.onOpenSession((sessionId) => openSessionRef.current(sessionId))
@@ -640,6 +660,7 @@ function App(): React.JSX.Element {
     workspace: WorkspaceRecord,
     change: Omit<Parameters<Window['aiTerminal']['updateWorkspace']>[0], 'workspaceId' | 'expectedRevision'>
   ): Promise<void> => {
+    handoffReviewEpoch.current += 1
     const updated = await window.aiTerminal.updateWorkspace({
       workspaceId: workspace.workspaceId,
       expectedRevision: workspace.revision,
@@ -673,6 +694,7 @@ function App(): React.JSX.Element {
   }
 
   const moveSession = async (records: readonly SessionRecord[], index: number, direction: -1 | 1): Promise<void> => {
+    handoffReviewEpoch.current += 1
     const changes = adjacentPositionUpdates(records, index, direction)
     const updated = await Promise.all(changes.map(({ record, position }) =>
       window.aiTerminal.updateSession({ sessionId: record.sessionId, expectedRevision: record.revision, position })
@@ -683,6 +705,7 @@ function App(): React.JSX.Element {
 
   /** Archive hides a stopped session and closes its pane; every record it owns is kept for Restore. */
   const archiveSession = async (record: SessionRecord, archived: boolean): Promise<void> => {
+    handoffReviewEpoch.current += 1
     const updated = await window.aiTerminal.updateSession({ sessionId: record.sessionId, expectedRevision: record.revision, archived })
     setSessions((current) => current.map((item) => item.sessionId === updated.sessionId ? updated : item))
     if (archived) {
@@ -1251,6 +1274,8 @@ function App(): React.JSX.Element {
 
   const workspaceMenuEntries = (workspace: WorkspaceRecord, index: number, ordered: readonly WorkspaceRecord[]): MenuEntry[] => [
     { label: 'New session here', onSelect: () => beginNewSession(workspace) },
+    { label: 'Review results…', onSelect: () =>
+      setDialog({ kind: 'workspace-results', workspace, openedFromWorkspaceId: activeWorkspaceId }) },
     { label: 'Save a launch set…', disabled: workspace.archivedAt !== null,
       onSelect: () => setDialog({ kind: 'launch-sets', workspace, initialMode: 'manage' }) },
     { label: 'Launch set…', disabled: workspace.archivedAt !== null,
@@ -1391,9 +1416,13 @@ function App(): React.JSX.Element {
   const sessionIncarnation = (session: SessionRecord): string | null =>
     live[session.sessionId]?.incarnationId ?? session.lastProcess?.incarnationId ?? null
   /** Freezes the observation the owner opened; the dialog renders from that and never from live state. */
-  const openProgressDetail = (session: SessionRecord | undefined, opened: ProgressPresentation | null): void => {
+  const openProgressDetail = (
+    session: SessionRecord | undefined, opened: ProgressPresentation | null,
+    reportedIncarnationId?: string | null
+  ): void => {
     if (session && opened) {
-      setDialog({ kind: 'progress-evidence', session, opened, incarnationId: sessionIncarnation(session) })
+      setDialog({ kind: 'progress-evidence', session, opened, incarnationId: sessionIncarnation(session),
+        reportedIncarnationId: reportedIncarnationId === undefined ? sessionIncarnation(session) : reportedIncarnationId })
     }
   }
   /**
@@ -1774,7 +1803,11 @@ function App(): React.JSX.Element {
               drafts={drafts}
               attention={attention}
               requestedHandoffDraftId={requestedHandoffDraftId}
-              onHandoffOpened={() => setRequestedHandoffDraftId(null)}
+              requestedHandoffReviewDraft={requestedHandoffReviewDraft}
+              onHandoffOpened={() => {
+                setRequestedHandoffDraftId(null)
+                setRequestedHandoffReviewDraft(null)
+              }}
               sessions={sessions}
               workspaces={workspaces}
               onOpenSession={openSession}
@@ -1805,6 +1838,15 @@ function App(): React.JSX.Element {
                   onRefresh={() => void detailsRepository.refresh()}
                 />
                 <ProgressStrip progress={selectedProgress} onOpen={() => openProgressDetail(selectedRecord, selectedProgress)} />
+                <HookObservationView
+                  key={`${selectedRecord.sessionId}:${sessionIncarnation(selectedRecord) ?? ''}`}
+                  sessionId={selectedRecord.sessionId}
+                  sessionName={selectedRecord.name}
+                  incarnationId={sessionIncarnation(selectedRecord)}
+                  refreshTick={now}
+                  onOpenEvents={() => setDialog({ kind: 'hook-events', session: selectedRecord })}
+                  onOpenConfiguration={() => setDialog({ kind: 'preferences', section: 'agent-control' })}
+                />
                 {selectedRecord.launchDisabledReason ? (
                   <p className="inline-error" role="status">
                     Launch unavailable: {selectedRecord.launchDisabledReason}
@@ -1843,6 +1885,7 @@ function App(): React.JSX.Element {
                     if (editingSessionId) {
                       const current = sessions.find((session) => session.sessionId === editingSessionId)
                       if (!current) throw new Error('The session being edited no longer exists')
+                      handoffReviewEpoch.current += 1
                       const updated = await window.aiTerminal.updateSession(sessionUpdateParams(current, sessionForm))
                       setSessions((records) => records.map((record) =>
                         record.sessionId === updated.sessionId ? updated : record
@@ -2001,10 +2044,61 @@ function App(): React.JSX.Element {
       {dialog?.kind === 'preferences' ? (
         <PreferencesDialog
           settings={settings}
+          initialSection={dialog.section}
           onSettings={setSettings}
           onClose={() => setDialog(null)}
           saveVoice={(change) => voiceSettingsWriter.update(change)}
           suggestVocabulary={suggestVoiceVocabulary}
+        />
+      ) : null}
+      {dialog?.kind === 'workspace-results' ? (
+        <WorkspaceResultsDialog
+          workspace={dialog.workspace}
+          now={now}
+          onClose={() => setDialog(null)}
+          onOpenReport={(session, report) => {
+            if (activeWorkspaceRef.current !== dialog.openedFromWorkspaceId ||
+              dialogRef.current?.kind !== 'workspace-results' ||
+              dialogRef.current.workspace.workspaceId !== dialog.workspace.workspaceId) return
+            const opened = progressPresentation([report], session.sessionId, now)
+            if (opened) {
+              setSessions((current) => current.some((item) => item.sessionId === session.sessionId)
+                ? current.map((item) => item.sessionId === session.sessionId ? session : item)
+                : [...current, session])
+              openProgressDetail(session, opened, report.incarnationId)
+            }
+          }}
+          onReviewHandoff={async (draft, signal) => {
+            const workspaceId = dialog.workspace.workspaceId
+            const openedFromWorkspaceId = dialog.openedFromWorkspaceId
+            const selectionGeneration = workspaceSelection.current.generation
+            const reviewEpoch = handoffReviewEpoch.current
+            const prepared = await prepareWorkspaceHandoffReview(draft, workspaceId, window.aiTerminal, () =>
+              activeWorkspaceRef.current === openedFromWorkspaceId &&
+              workspaceSelection.current.generation === selectionGeneration &&
+              handoffReviewEpoch.current === reviewEpoch &&
+              dialogRef.current === dialog, signal)
+            const { snapshot, route } = prepared
+            const currentDraft = draftsRef.current.find((item) => item.draftId === prepared.draft.draftId)
+            const currentSource = sessionsRef.current.find((item) => item.sessionId === snapshot.source.sessionId)
+            const currentDestination = sessionsRef.current.find((item) => item.sessionId === snapshot.destination.sessionId)
+            const currentSourceWorkspace = workspacesRef.current.find((item) => item.workspaceId === snapshot.sourceWorkspace.workspaceId)
+            const currentDestinationWorkspace = workspacesRef.current.find((item) => item.workspaceId === snapshot.destinationWorkspace.workspaceId)
+            if (!currentDraft || !sameHandoffDraft(currentDraft, prepared.draft) ||
+              currentSource?.revision !== snapshot.source.revision ||
+              currentDestination?.revision !== snapshot.destination.revision ||
+              currentSourceWorkspace?.revision !== snapshot.sourceWorkspace.revision ||
+              currentDestinationWorkspace?.revision !== snapshot.destinationWorkspace.revision ||
+              currentDestination?.archivedAt !== null || currentDestinationWorkspace?.archivedAt !== null ||
+              (prepared.draft.state === 'draft' &&
+                (currentSource?.archivedAt !== null || currentSourceWorkspace?.archivedAt !== null))) {
+              throw new Error('The handoff or destination changed. Refresh results before review.')
+            }
+            applyTreeSessionAction(selectTreeSession(sessionsRef.current, route.sessionId))
+            setRequestedHandoffReviewDraft(prepared.draft)
+            setPanel('files')
+            setDialog(null)
+          }}
         />
       ) : null}
       {dialog?.kind === 'new-workspace' ? (
@@ -2061,7 +2155,10 @@ function App(): React.JSX.Element {
         <ProgressEvidenceDialog
           sessionName={dialog.session.name}
           opened={dialog.opened}
-          current={observedProgressFor(dialog.session)}
+          current={progressPresentation(
+            progress.filter((record) => record.source === dialog.opened.source),
+            dialog.session.sessionId, now, dialog.reportedIncarnationId
+          )}
           gone={progressDetailGone(dialog.session, dialog.incarnationId)}
           artifacts={artifacts}
           now={now}

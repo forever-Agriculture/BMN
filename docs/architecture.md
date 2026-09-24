@@ -94,6 +94,15 @@ checked against the printed text again when clicked, and are off while a program
 **Progress and requests keep their evidence.** Process state, progress reports, unread state and
 the resolution of an agent's question are stored separately. An agent saying it is done is shown as
 a claim, not as verified success. A question stays open until it is answered or withdrawn.
+The optional workspace results view reads the latest report per session and named source,
+its evidence references and the bounded draft list. It rechecks the exact report or handoff
+before routing the owner to the existing detail or Files flow; the view cannot deliver a draft.
+
+**Hook configuration and observation are separate facts.** A bounded utility read runs BMN's
+existing hook checker, redacts configuration contents and gives Preferences a dated report.
+The utility also retains the latest attributable harness event per session and process
+incarnation in memory, independently of the 30-event diagnostic log. Session details reads
+that summary for its addressed run; a missing event is not a health verdict.
 
 **One transactional path for metadata.** SQLite in WAL mode with foreign keys and ordered
 migrations, through one worker. Backups hold a consistent database snapshot, the referenced files

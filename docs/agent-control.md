@@ -345,6 +345,12 @@ ends with the limit instead: this command reports what is *configured*, never th
 Run `/hooks` in Codex once, then confirm the event shows up under Hook events. That is the check
 BMN cannot do for you.
 
+Preferences → **Local agent control** can show a dated, read-only `hooks check` report for
+Claude Code, Codex and OpenCode. It shows configured and missing entries without exposing the
+file contents. Session details separately shows the latest hook event **Observed by BMN** in
+that session's run, or **Not observed in this run**. One received event proves only that event
+reached BMN; neither view says every hook or permission path works.
+
 What BMN still refuses to add to, for both harnesses, is a file it cannot merge into without
 removing something: `hooks` that is not an object, or an event whose value is not a list. That is
 about the merge, not about the harness.

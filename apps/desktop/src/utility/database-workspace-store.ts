@@ -239,7 +239,7 @@ function templateRecord(row: TemplateRow): LaunchTemplateRecord {
   return record
 }
 
-function selectWorkspace(database: DatabaseConnection, workspaceId: string): WorkspaceRecord {
+export function selectWorkspace(database: DatabaseConnection, workspaceId: string): WorkspaceRecord {
   const row = database
     .prepare(
       `SELECT workspace_id, name, default_cwd, position, marker, archived_at, revision
@@ -250,7 +250,7 @@ function selectWorkspace(database: DatabaseConnection, workspaceId: string): Wor
   return workspaceRecord(row)
 }
 
-function selectSession(database: DatabaseConnection, sessionId: string): SessionRecord {
+export function selectSession(database: DatabaseConnection, sessionId: string): SessionRecord {
   const row = database
     .prepare(
       `${SESSION_SELECT} WHERE s.session_id = ?`

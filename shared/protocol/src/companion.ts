@@ -1,3 +1,5 @@
+import type { SessionRecord, WorkspaceRecord } from './workspace'
+
 export type ArtifactDirection = 'input' | 'output'
 export type ArtifactSource = 'owner' | 'agent' | 'telegram'
 export type ArtifactState = 'ready' | 'missing' | 'corrupt'
@@ -158,6 +160,75 @@ export const HOOK_EVENT_LOG_LIMIT = 30
 /** At most one effect per slot the hook touches, so a malformed array is refused rather than stored. */
 export const MAX_HOOK_EVENT_EFFECTS = 8
 
+/**
+ * The harnesses whose own hook files `bmn hooks check` reads. A report says what is *configured*,
+ * never that a hook fired; the labels for that limit live with the report, not in the data.
+ */
+export const HOOK_CHECK_AGENTS = Object.freeze(['claude', 'codex', 'opencode'] as const)
+export type HookCheckAgent = (typeof HOOK_CHECK_AGENTS)[number]
+
+/** What the checker could do with one harness's hook file; the reason detail stays out of the window. */
+export const HOOK_CHECK_FILE_STATES = Object.freeze(['read', 'missing', 'unreadable', 'unparsable', 'unusable'] as const)
+export type HookCheckFileState = (typeof HOOK_CHECK_FILE_STATES)[number]
+
+/** One expected entry as the checker read it: wired by BMN's own wording, an older one, or absent. */
+export const HOOK_CHECK_ENTRY_STATES = Object.freeze(['wired', 'wired (older wording)', 'missing'] as const)
+export type HookCheckEntryState = (typeof HOOK_CHECK_ENTRY_STATES)[number]
+
+export interface HookCheckEntry {
+  /** The harness's own event name the entry belongs to; `plugin` for OpenCode. */
+  event: string
+  /** Optional entries are reported but never required of the owner. */
+  optional: boolean
+  state: HookCheckEntryState
+}
+
+/** One harness's file as the checker read it: a path and states, never the file's contents. */
+export interface HookCheckAgentReport {
+  agent: HookCheckAgent
+  file: string
+  state: HookCheckFileState
+  entries: readonly HookCheckEntry[]
+  /** The required entries the file did not carry; an exit code of 1 for this is report data. */
+  missing: readonly string[]
+}
+
+/**
+ * A dated snapshot of what the hook checker found configured, or why no snapshot could be taken.
+ * It is not a live watch of harness settings, and never a verdict that hooks work.
+ */
+export type HookCheckReport =
+  | { state: 'checked'; checkedAt: string; ok: boolean; agents: readonly HookCheckAgentReport[] }
+  | { state: 'failed'; checkedAt: string; reason: string }
+
+/**
+ * The latest harness event one run of a session actually reported to BMN, kept independently of the
+ * bounded hook-event log so a summary survives that log's evictions. Terminal OSC notices are logged
+ * as `terminal` and never count as a harness observation.
+ */
+export interface HookObservationObserved {
+  state: 'observed'
+  sessionId: string
+  incarnationId: string
+  agent: Exclude<HookEventAgent, 'terminal'>
+  /** The harness's own event name, for example `PostToolUse`. */
+  event: string
+  /** When BMN received the event, independent of when the harness says it happened. */
+  observedAt: string
+  /** False once the bounded log has evicted this event's row, so its detail is no longer readable. */
+  detailAvailable: boolean
+}
+
+export interface HookObservationNone {
+  state: 'none'
+  sessionId: string
+  /** The run the answer is about: the requested or live incarnation, or null when there is none. */
+  incarnationId: string | null
+}
+
+/** No attributable event in the run this answer is about; that is an absence of evidence, not a verdict. */
+export type HookObservation = HookObservationObserved | HookObservationNone
+
 export type ProgressState =
   | 'running'
   | 'waiting'
@@ -225,6 +296,17 @@ export interface HandoffDraftSaveParams {
   text: string
   artifactIds: string[]
   expectedUpdatedAt?: string
+}
+
+/** One coherent owner-only read of an exact handoff and its addressed sessions. */
+export interface HandoffReviewSnapshot {
+  draft: InputDraftRecord
+  source: SessionRecord
+  destination: SessionRecord
+  sourceWorkspace: WorkspaceRecord
+  destinationWorkspace: WorkspaceRecord
+  /** Opaque revision of rows needed for review; never an authorization token. */
+  token: string
 }
 
 export interface DraftSendExpectation {

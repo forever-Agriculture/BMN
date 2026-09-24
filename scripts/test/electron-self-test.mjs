@@ -16,6 +16,32 @@ const waylandDisplay =
 
 /** Receipt fields the self-test must prove; a receipt missing any of them fails the run. */
 const receiptContract = [
+  ['workspaceResults', (receipt) => {
+    const row = receipt.workspaceResults
+    return row?.reportShown === true && row.evidenceShown === true &&
+      row.pendingHandoffShown === true && row.exactDraftReviewed === true &&
+      row.ptyInputUnchanged === true && row.attentionUnchanged === true &&
+      row.terminalRefitsUnchanged === true
+  }],
+  ['crossWorkspaceResults', (receipt) => {
+    const row = receipt.crossWorkspaceResults
+    return row?.sourceReport === true && row.missingEvidence === true &&
+      row.sourceHandoffOnce === true && row.destinationNoReport === true &&
+      row.destinationHandoffOnce === true && row.routeExact === true &&
+      row.noAutoDelivery === true
+  }],
+  ['hookIntegration', (receipt) => {
+    const row = receipt.hookIntegration
+    return row?.observed === true && row.openedEvents === true &&
+      row.configured === true && row.missing === true && row.limit === true &&
+      row.notObserved === true && row.ptyInputUnchanged === true &&
+      row.attentionUnchanged === true && row.configUnchanged === true
+  }],
+  ['harnessObservations', (receipt) => ['opencode', 'codex'].every((agent) => {
+    const row = receipt.harnessObservations?.[agent]
+    return row?.observed === true && row.openedEvents === true &&
+      row.ptyInputUnchanged === true && row.attentionUnchanged === true
+  })],
   ['launchSetRepository', (receipt) => {
     const row = receipt.launchSetRepository
     return row?.savedWithoutStart === true && row.cancelledPendingStart === true &&
@@ -494,6 +520,11 @@ const exitCode = await withTemporaryRoot(temporaryRootContracts.electronSelfTest
       XDG_STATE_HOME: roots.state,
       XDG_CACHE_HOME: roots.cache,
       XDG_RUNTIME_DIR: roots.runtime,
+      // Hook checks in this isolated Electron run must see synthetic config paths, never the
+      // owner's real Claude, Codex or OpenCode files.
+      CLAUDE_CONFIG_DIR: join(roots.config, 'claude'),
+      CODEX_HOME: join(roots.config, 'codex'),
+      OPENCODE_CONFIG_DIR: join(roots.config, 'opencode'),
       BMN_CONFIG_HOME: join(roots.config, 'bmn'),
       BMN_DATA_HOME: join(roots.data, 'bmn'),
       BMN_STATE_HOME: join(roots.state, 'bmn'),

@@ -116,8 +116,10 @@ describe('protocol surface', () => {
         'attention.resolve',
         'attention.terminalNotice',
         'hookEvents.list',
+        'hooks.check',
+        'hookObservation.get',
         'progress.list',
-        'draft.list',
+        'draft.list', 'handoff.review',
         'draft.save',
         'draft.retry',
         'draft.send',
@@ -133,7 +135,7 @@ describe('protocol surface', () => {
         'presence.set'
       ])
     )
-    expect(Object.values(METHOD_REGISTRY)).toHaveLength(64)
+    expect(Object.values(METHOD_REGISTRY)).toHaveLength(67)
   })
 
   it('exports the initial stable error codes', () => {

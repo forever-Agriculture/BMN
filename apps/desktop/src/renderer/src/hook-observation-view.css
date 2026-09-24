@@ -1,0 +1,4 @@
+.hook-observation { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 12px; }
+.hook-observation h3 { margin: 0 0 8px; }
+.hook-observation p { overflow-wrap: anywhere; }
+.hook-observation-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }

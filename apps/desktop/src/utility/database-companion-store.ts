@@ -1,4 +1,5 @@
 // MODULE: database-companion-store.ts - artifacts, attention, progress, receipts, drafts, Telegram message map and settings rows
+import { createHash } from 'node:crypto'
 import {
   ARCHIVE_DELETE_AFTER_DAYS,
   COLOR_MODE_NAMES,
@@ -21,6 +22,7 @@ import {
   type IdentityName,
   type InputDraftRecord,
   type InputDraftState,
+  type HandoffReviewSnapshot,
   MAX_PROGRESS_EVIDENCE,
   type ProgressEvidence,
   type ProgressRecord,
@@ -30,7 +32,7 @@ import {
 } from '@bmn/protocol'
 import { isAbsolute, normalize } from 'node:path'
 import type { DatabaseConnection } from './database-initialization'
-import { WorkspaceStoreError } from './database-workspace-store'
+import { selectSession, selectWorkspace, WorkspaceStoreError } from './database-workspace-store'
 
 interface ArtifactRow {
   artifact_id: string
@@ -626,6 +628,46 @@ export function getDraft(database: DatabaseConnection, draftId: string): InputDr
   return draftFromRow(row)
 }
 
+/** One worker transaction reads the exact draft and both addressed sessions as a coherent revision. */
+export function readHandoffReview(
+  database: DatabaseConnection,
+  draftId: string,
+  workspaceId: string,
+  expectedToken: string | null = null
+): HandoffReviewSnapshot {
+  const unavailable = (): never => {
+    throw new WorkspaceStoreError(ERROR_CODES.revisionConflict,
+      'The handoff or destination changed. Refresh results before review.')
+  }
+  let draft: InputDraftRecord
+  try { draft = getDraft(database, draftId) } catch { return unavailable() }
+  if (draft.origin !== 'handoff' || (draft.state !== 'draft' && draft.state !== 'uncertain') ||
+    draft.sourceSessionId === null) return unavailable()
+  let source: HandoffReviewSnapshot['source']
+  let destination: HandoffReviewSnapshot['destination']
+  let sourceWorkspace: HandoffReviewSnapshot['sourceWorkspace']
+  let destinationWorkspace: HandoffReviewSnapshot['destinationWorkspace']
+  try {
+    source = selectSession(database, draft.sourceSessionId)
+    destination = selectSession(database, draft.sessionId)
+    sourceWorkspace = selectWorkspace(database, source.workspaceId)
+    destinationWorkspace = selectWorkspace(database, destination.workspaceId)
+  } catch { return unavailable() }
+  const route = draft.state === 'draft' ? source : destination
+  const routeWorkspace = draft.state === 'draft' ? sourceWorkspace : destinationWorkspace
+  if (destination.archivedAt !== null || destinationWorkspace.archivedAt !== null ||
+    route.archivedAt !== null || routeWorkspace.archivedAt !== null ||
+    (source.workspaceId !== workspaceId && destination.workspaceId !== workspaceId)) return unavailable()
+  const token = createHash('sha256').update(JSON.stringify([
+    draft, source.sessionId, source.workspaceId, source.revision, source.archivedAt,
+    destination.sessionId, destination.workspaceId, destination.revision, destination.archivedAt,
+    sourceWorkspace.workspaceId, sourceWorkspace.revision, sourceWorkspace.archivedAt,
+    destinationWorkspace.workspaceId, destinationWorkspace.revision, destinationWorkspace.archivedAt
+  ])).digest('hex')
+  if (expectedToken !== null && token !== expectedToken) return unavailable()
+  return { draft, source, destination, sourceWorkspace, destinationWorkspace, token }
+}
+
 export function updateDraft(
   database: DatabaseConnection,
   draftId: string,
@@ -1066,6 +1108,7 @@ export const COMPANION_OPERATIONS = Object.freeze({
   discardHandoffDraft,
   markStaleAgentHandoffs,
   listDrafts,
+  readHandoffReview,
   putTelegramMessage,
   getTelegramMessage,
   getSettings,

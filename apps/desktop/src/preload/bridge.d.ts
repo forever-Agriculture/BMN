@@ -14,7 +14,10 @@ import type {
   FileReferenceReadParams,
   FileReferenceReadResult,
   HandoffDraftSaveParams,
+  HandoffReviewSnapshot,
+  HookCheckReport,
   HookEventRecord,
+  HookObservation,
   InputDraftRecord,
   InterruptedSessionCohort,
   SessionCohortOfferedResult,
@@ -226,6 +229,17 @@ export interface AiTerminalBridge {
   /** Read-only: the recent hook events of one session, in memory only and never another session's. */
   listHookEvents(sessionId: string): Promise<HookEventRecord[]>
   /**
+   * Read-only: the latest harness event one run of a session actually reported, kept beyond the
+   * 30-event log's evictions. `none` is an absence of evidence, never a verdict that hooks are broken.
+   */
+  getHookObservation(sessionId: string, incarnationId?: string): Promise<HookObservation>
+  /**
+   * Read-only: a dated snapshot of what the hook checker found configured for Claude Code, Codex
+   * and OpenCode. Never writes a hook file, and carries no configuration contents; exit 1 with a
+   * report is report data.
+   */
+  checkHookConfiguration(): Promise<HookCheckReport>
+  /**
    * A terminal notification (OSC 9, 99 or 777) the view read out of this session's own output.
    * Only the window can see it, so only the window reports it; it opens a notice and nothing else.
    */
@@ -238,6 +252,8 @@ export interface AiTerminalBridge {
   }): Promise<{ opened: boolean; requestKey: string; reason?: string }>
   listProgress(): Promise<ProgressRecord[]>
   listDrafts(): Promise<InputDraftRecord[]>
+  /** Read-only exact handoff and addressed sessions in one stored revision. */
+  readHandoffReview(draftId: string, workspaceId: string, expectedToken?: string): Promise<HandoffReviewSnapshot>
   saveHandoffDraft(params: HandoffDraftSaveParams): Promise<InputDraftRecord>
   retryHandoffDraft(draftId: string): Promise<InputDraftRecord>
   sendDraft(draftId: string, submit: boolean, expected?: DraftSendExpectation): Promise<InputDraftRecord>

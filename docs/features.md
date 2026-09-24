@@ -148,6 +148,10 @@ the pane header. **Progress details** opens a read-only view of the report: who 
 and any files the session published as evidence. Read it by one rule: *done* is the agent's claim,
 shown as "Agent reports done", never BMN's verdict. A file the agent deleted later stays in the
 report as a named, unavailable reference.
+From a workspace's ⋯ menu, **Review results…** groups each session's latest report per named
+source, with observation time, current or previous run, ten-minute freshness and evidence
+availability. It names sessions with no report. This view reads current records; it does not
+judge whether an agent succeeded or promise a report history.
 
 **Handoffs.** An agent can prepare a package for another session — text plus up to ten of its
 published files — but cannot deliver it. The handoff opens in the source session's Needs you queue;
@@ -156,6 +160,9 @@ destination. Pasting appends the package to that session's input without pressin
 submit it yourself. A handoff reads *prepared*, *pasted (not submitted)*, *pasted, outcome
 uncertain* or *discarded*; after an uncertain paste you can create a separate retry draft. A
 handoff you receive conveys context, not authority.
+The same workspace results view lists pending and uncertain handoffs for either the source or
+destination workspace, with both names and a route to review the exact draft in Files. Opening
+that view never pastes or submits a handoff. Its draft list is bounded, not a complete history.
 
 ### How agents reach the app
 
@@ -163,7 +170,10 @@ Every session gets the `bmn` command and a token scoped to that session and run.
 sessions, publish a file, report progress, ask you a question, prepare a handoff, or send text to
 its own terminal. `bmn help agents` prints the etiquette page agents can read. Preferences →
 **Local agent control** shows whether the control socket is listening, with its path; a runtime
-path that is too long disables the socket, and Preferences says so.
+path that is too long disables the socket, and Preferences says so. **Check configured hooks**
+reads BMN's existing checker report for Claude Code, Codex and OpenCode, including missing
+entries and a check time. It changes no harness file. **Configured** describes entries in a
+file; it does not prove a hook fired.
 
 For Claude Code, Codex and OpenCode, `bmn hooks check` reports which of BMN's entries each
 harness's own settings file carries, and `bmn hooks install claude` (or `codex`, `opencode`) adds
@@ -171,6 +181,10 @@ the missing ones after backing the file up. A harness with no hook can still pag
 the terminal's own OSC 9, 777 or 99 notification. BMN presents it as a notice, which clears when
 you type into the session. The session's ⋯ menu has **Hook events…**, a short in-memory list of
 what the harness actually reported, which answers "why is there no request for this?".
+Session details shows the latest harness event **Observed by BMN** for that session's current
+process run, with its receipt time and a link to Hook events. **Not observed in this run**
+can simply mean no relevant event happened. The observation is in memory and disappears
+after BMN restarts; the recent event list can lose older detail.
 OpenCode subagent permissions and questions use their own requests, so they do not replace the
 main session's prompt. For Claude Code and Codex, eight identical tool calls (failed ones count too) among the
 last 20 since your last message open one notice; the hook event list shows the repeat count. BMN

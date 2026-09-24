@@ -7,6 +7,7 @@ import type {
   BackupManifest,
   BackupVerifyResult,
   ControlInfo,
+  HookCheckReport,
   NotificationSettings,
   TelegramStatus,
   VoiceSettings
@@ -17,6 +18,7 @@ import { COLOR_MODE_PRESENTATION, IDENTITY_PRESENTATION } from './theme'
 import { VoicePreferences } from './voice-preferences'
 import { Dialog } from './dialog'
 import { failureDetail } from './bridge-error'
+import { createHookCheckRunner } from './hook-check-runner'
 import { parseTelegramForm, type TelegramFormFields } from './telegram-form'
 import './preferences-dialog.css'
 
@@ -46,6 +48,7 @@ const TEST_MESSAGE_DISABLED_TITLE = 'Send a test message once Telegram is connec
 
 export function PreferencesDialog(props: {
   settings: AppSettings
+  initialSection?: 'agent-control' | undefined
   onSettings(next: AppSettings): void
   onClose(): void
   /** Saves the voice section through the app's queue, built from the latest settings. */
@@ -255,6 +258,28 @@ export function PreferencesDialog(props: {
   // --- Local agent control -------------------------------------------------
   const [controlInfo, setControlInfo] = useState<ControlInfo | null>(null)
   const [controlError, setControlError] = useState<string | null>(null)
+  const [hookCheck, setHookCheck] = useState<HookCheckReport | null>(null)
+  const [hookCheckBusy, setHookCheckBusy] = useState(false)
+  const [hookCheckError, setHookCheckError] = useState<string | null>(null)
+  const hookCheckRunner = useRef<ReturnType<typeof createHookCheckRunner> | null>(null)
+  if (hookCheckRunner.current === null) {
+    hookCheckRunner.current = createHookCheckRunner(
+      () => window.aiTerminal.checkHookConfiguration(),
+      (event) => {
+        if (event.kind === 'started') {
+          setHookCheckBusy(true)
+          setHookCheckError(null)
+        } else if (event.kind === 'checked') {
+          setHookCheck(event.report)
+          setHookCheckBusy(false)
+        } else {
+          setHookCheck(null)
+          setHookCheckError(failureDetail(event.cause, 'Hook configuration check unavailable'))
+          setHookCheckBusy(false)
+        }
+      }
+    )
+  }
   const [copying, setCopying] = useState<'socket' | 'cli' | null>(null)
   const [copyMessage, setCopyMessage] = useState<string | null>(null)
   const [copyError, setCopyError] = useState<string | null>(null)
@@ -273,6 +298,22 @@ export function PreferencesDialog(props: {
       cancelled = true
     }
   }, [])
+
+  useEffect(() => {
+    if (props.initialSection !== 'agent-control') return
+    const frame = requestAnimationFrame(() => {
+      const section = document.getElementById('agent-control-section')
+      section?.scrollIntoView({ block: 'start' })
+      section?.focus()
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [props.initialSection])
+
+  useEffect(() => () => { hookCheckRunner.current?.cancel() }, [])
+
+  async function checkHooks(): Promise<void> {
+    await hookCheckRunner.current?.run()
+  }
 
   async function copyText(kind: 'socket' | 'cli', text: string): Promise<void> {
     setCopying(kind)
@@ -672,7 +713,7 @@ export function PreferencesDialog(props: {
         )}
       </section>
 
-      <section className="preferences-section">
+      <section className="preferences-section" id="agent-control-section" tabIndex={-1}>
         <h3>Local agent control</h3>
         <div className="preferences-row">
           <div className="preferences-row-label">
@@ -719,6 +760,42 @@ export function PreferencesDialog(props: {
             {controlError}
           </p>
         )}
+        <div className="preferences-row">
+          <div className="preferences-row-label"><span>Harness hooks</span></div>
+          <div className="preferences-row-control">
+            <button type="button" onClick={() => void checkHooks()}>
+              {hookCheckBusy ? 'Checking…' : 'Check configured hooks'}
+            </button>
+            <p className="preferences-help">Configured entries do not prove hooks fired.</p>
+            <p className="preferences-help">For Codex, trust hooks with /hooks in Codex and check a real Hook events entry.</p>
+            {hookCheck ? (
+              <div className="hook-check-report" role="status">
+                <p>Checked {new Date(hookCheck.checkedAt).toLocaleString()} · snapshot of harness files</p>
+                {hookCheck.state === 'failed' ? (
+                  <p>Unavailable: {hookCheck.reason}</p>
+                ) : hookCheck.agents.map((agent) => (
+                  <section key={agent.agent} aria-label={agent.agent === 'claude' ? 'Claude Code hooks' : `${agent.agent} hooks`}>
+                    <h4>{agent.agent === 'claude' ? 'Claude Code' : agent.agent === 'codex' ? 'Codex' : 'OpenCode'}</h4>
+                    <p>{agent.state === 'read'
+                      ? agent.missing.length === 0 ? 'Configured' : 'Missing entry'
+                      : agent.state === 'missing' ? 'File missing · Missing entry' : 'Unable to read'}
+                      {' · '}file {agent.state}: <code>{agent.file}</code>
+                    </p>
+                    <ul>
+                      {agent.entries.map((entry) => <li key={entry.event}>
+                        {entry.event} · {entry.state === 'missing'
+                          ? entry.optional ? 'Optional entry absent' : 'Missing entry'
+                          : entry.state === 'wired (older wording)' ? 'Configured (older wording)' : 'Configured'}
+                      </li>)}
+                    </ul>
+                    {agent.missing.length > 0 ? <p>Missing entries: {agent.missing.join(', ')}</p> : null}
+                  </section>
+                ))}
+              </div>
+            ) : null}
+            {hookCheckError ? <p className="preferences-error" role="alert">{hookCheckError}</p> : null}
+          </div>
+        </div>
         {copyError && (
           <p className="preferences-error" role="alert">
             {copyError}

@@ -14,6 +14,8 @@ import {
   type AttentionOrigin,
   type AttentionRecord,
   type HookEventRecord,
+  type HookCheckReport,
+  type HookObservation,
   type BackupManifest,
   type BackupVerifyResult,
   type ControlInfo,
@@ -21,6 +23,7 @@ import {
   type FileReferenceReadParams,
   type FileReferenceReadResult,
   type HandoffDraftSaveParams,
+  type HandoffReviewSnapshot,
   type ClosePromptDecision,
   type ClosePromptRequest,
   type InputDraftRecord,
@@ -567,6 +570,15 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   listHookEvents(sessionId: string): Promise<HookEventRecord[]> {
     return invokeBridge('aiterm:hook-events:list', { sessionId })
   },
+  getHookObservation(sessionId: string, incarnationId?: string): Promise<HookObservation> {
+    return invokeBridge('aiterm:hook-observation:get', {
+      sessionId,
+      ...(incarnationId === undefined ? {} : { incarnationId })
+    })
+  },
+  checkHookConfiguration(): Promise<HookCheckReport> {
+    return invokeBridge('aiterm:hooks:check', {})
+  },
   reportTerminalNotice(params: {
     sessionId: string
     incarnationId: string
@@ -581,6 +593,11 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   listDrafts(): Promise<InputDraftRecord[]> {
     return invokeBridge('aiterm:draft:list', {})
+  },
+  readHandoffReview(draftId: string, workspaceId: string, expectedToken?: string): Promise<HandoffReviewSnapshot> {
+    return invokeBridge('aiterm:handoff:review', {
+      draftId, workspaceId, ...(expectedToken === undefined ? {} : { expectedToken })
+    })
   },
   saveHandoffDraft(params: HandoffDraftSaveParams): Promise<InputDraftRecord> {
     return invokeBridge('aiterm:draft:save', params)

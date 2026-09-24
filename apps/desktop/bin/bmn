@@ -2,7 +2,7 @@
 // MODULE: bmn - command-line client for the BMN control socket (one connection per invocation)
 import { createHash, randomUUID } from 'node:crypto'
 import {
-  chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync
+  chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync
 } from 'node:fs'
 import { createConnection } from 'node:net'
 import { homedir } from 'node:os'
@@ -1313,7 +1313,7 @@ function runHooks(argv) {
     }
     if (action === 'print') {
       if (agent !== 'opencode' || rest.length || parsed.options.file || parsed.options.json) throw new UsageError('hooks print expects opencode without options')
-      process.stdout.write(OPENCODE_PLUGIN)
+      writeSync(1, OPENCODE_PLUGIN)
       return 0
     }
     if (!['check', 'install'].includes(action)) throw new UsageError(`hooks expects check or install, not ${action}`)
@@ -1339,7 +1339,9 @@ function checkHooksCommand(agents, pathFor, asJson) {
   const reports = agents.map((name) => checkHooks(name, pathFor(name)))
   const ok = reports.every((report) => report.state === 'read' && report.missing.length === 0)
   if (asJson) {
-    process.stdout.write(`${JSON.stringify({ ok, agents: reports }, null, 2)}\n`)
+    // This owner command finishes synchronously; a pipe can lose an asynchronous stdout write
+    // before the CLI exits. The desktop checker reads that pipe, so finish the report first.
+    writeSync(1, `${JSON.stringify({ ok, agents: reports }, null, 2)}\n`)
     return ok ? 0 : 1
   }
   const lines = reports.map(describeHookCheck)

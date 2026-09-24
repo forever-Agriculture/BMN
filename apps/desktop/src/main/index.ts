@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, truncateSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, truncateSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import {
@@ -3337,6 +3337,43 @@ async function runSelfTest(): Promise<void> {
       }
       throw new Error(`acceptance timed out: ${label}`)
     }
+    const acceptanceWindow = applicationWindow
+    if (!acceptanceWindow) throw new Error('the acceptance window is unavailable')
+    const inspectHarnessObservation = async (
+      sessionId: string, sessionName: string, agentName: string, eventName: string,
+      recover = true
+    ): Promise<{ observed: boolean; openedEvents: boolean; ptyInputUnchanged: boolean; attentionUnchanged: boolean }> => {
+      if (recover) await recoverApplicationRenderer(acceptanceWindow)
+      return acceptanceWindow.webContents.executeJavaScript(`(async () => {
+        const wait = async (read, name) => { const end = Date.now() + 10000; while (Date.now() < end) {
+          const value = read(); if (value) return value; await new Promise(r => setTimeout(r, 25));
+        } throw new Error('harness observation timed out: ' + name); };
+        const sessionId = ${JSON.stringify(sessionId)};
+        const beforeRequests = (await window.aiTerminal.listAttention()).length;
+        (await wait(() => document.querySelector('[aria-label="Actions for ${sessionName}"]'), 'session menu')).click();
+        (await wait(() => [...document.querySelectorAll('.popup-menu [role="menuitem"]')]
+          .find(row => row.textContent.trim() === 'Session details'), 'details action')).click();
+        const view = await wait(() => {
+          const current = document.querySelector('.session-inspector .hook-observation');
+          return current?.textContent.includes('Observed by BMN') ? current : null;
+        }, 'observed summary');
+        const observed = view.textContent.includes(${JSON.stringify(agentName)}) &&
+          view.textContent.includes(${JSON.stringify(eventName)}) &&
+          view.textContent.includes(${JSON.stringify(sessionName)}) && view.textContent.includes('run ');
+        const beforeInput = window.__aitermTest.snapshots()[sessionId]?.inputEvents ?? 0;
+        (await wait(() => [...view.querySelectorAll('button')]
+          .find(button => button.textContent === 'Open Hook events'), 'Hook events link')).click();
+        const dialog = await wait(() => document.querySelector('dialog.hook-events-dialog[open]'), 'Hook events dialog');
+        const openedEvents = dialog.textContent.includes(${JSON.stringify(eventName)});
+        dialog.querySelector('.app-dialog-heading button').click();
+        await wait(() => !document.querySelector('dialog.hook-events-dialog') ? true : null, 'Hook events close');
+        document.querySelector('.session-inspector .panel-heading button')?.click();
+        await wait(() => !document.querySelector('.session-inspector') ? true : null, 'Session details close');
+        return { observed, openedEvents, ptyInputUnchanged:
+            (window.__aitermTest.snapshots()[sessionId]?.inputEvents ?? 0) === beforeInput,
+          attentionUnchanged: (await window.aiTerminal.listAttention()).length === beforeRequests };
+      })()`) as Promise<{ observed: boolean; openedEvents: boolean; ptyInputUnchanged: boolean; attentionUnchanged: boolean }>
+    }
     const destinationHarness = writeTerminalModeProgram(join(isolatedCwd, 'petition-destination'))
     const petitionDestination = await createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
       name: 'Petition destination', cwd: isolatedCwd, executable: destinationHarness.executable,
@@ -3361,6 +3398,91 @@ async function runSelfTest(): Promise<void> {
       (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
         .find(row => row.sessionId === petitionSource.session.sessionId && row.kind === 'handoff' && row.state === 'open'), 'source handoff request')
     await recoverApplicationRenderer(applicationWindow)
+    const beforeResultsInput = terminalModeProgramInput(destinationHarness.input)
+    const workspaceResultsUi = await applicationWindow.webContents.executeJavaScript(`(async () => {
+      const wait = async (read, name) => { const end = Date.now() + 10000; while (Date.now() < end) {
+        const value = read(); if (value) return value; await new Promise(r => setTimeout(r, 25));
+      } throw new Error('workspace results timed out: ' + name); };
+      const refits = () => JSON.stringify(Object.fromEntries(Object.entries(window.__aitermTest.snapshots())
+        .map(([id, row]) => [id, row.refits])));
+      await wait(() => {
+        const snapshots = window.__aitermTest.snapshots();
+        return snapshots[${JSON.stringify(petitionSource.session.sessionId)}] &&
+          snapshots[${JSON.stringify(petitionDestination.session.sessionId)}] ? true : null;
+      }, 'recovered petition panes');
+      let settled = false;
+      let previous = '';
+      let unchangedSince = Date.now();
+      const settleDeadline = Date.now() + 10000;
+      while (!settled && Date.now() < settleDeadline) {
+        const current = refits();
+        if (current !== previous) { previous = current; unchangedSince = Date.now(); }
+        else if (Date.now() - unchangedSince >= 1000) settled = true;
+        if (!settled) await new Promise(r => setTimeout(r, 25));
+      }
+      if (!settled) throw new Error('recovered terminal layout did not settle before results read');
+      const beforeRefits = refits();
+      const requestBefore = (await window.aiTerminal.listAttention())
+        .find(row => row.requestId === ${JSON.stringify(petitionRequest.requestId)});
+      const menuButton = await wait(() => [...document.querySelectorAll('.workspace-group')]
+        .find(group => group.textContent.includes('Petition source'))?.querySelector('.row-menu-button'), 'workspace menu');
+      const openResults = async () => {
+        menuButton.click();
+        (await wait(() => [...document.querySelectorAll('.popup-menu [role="menuitem"]')]
+          .find(row => row.textContent.trim() === 'Review results…'), 'results action')).click();
+        return wait(() => {
+          const dialog = document.querySelector('dialog.workspace-results-dialog[open]');
+          return dialog?.querySelector('.workspace-results-handoffs') ? dialog : null;
+        }, 'results dialog');
+      };
+      let dialog = await openResults();
+      const refitsAfterOpen = refits();
+      const report = [...dialog.querySelectorAll('.workspace-results-sessions > li > ul > li')]
+        .find(row => row.textContent.includes('Self-test checks passed'));
+      const reportShown = !!report && report.textContent.includes('Reported verified') &&
+        report.textContent.includes('evidence');
+      const evidenceShown = !!report && report.textContent.includes('checks.log');
+      const handoff = [...dialog.querySelectorAll('.workspace-results-handoffs > li')]
+        .find(row => row.textContent.includes('Petition source') && row.textContent.includes('Petition destination'));
+      const pendingHandoffShown = !!handoff && handoff.textContent.includes('Saved draft') &&
+        handoff.textContent.includes('Prepared by the agent');
+      report?.querySelector('button')?.click();
+      const progress = await wait(() => document.querySelector('dialog.progress-evidence-dialog[open]'), 'progress details');
+      const progressMatches = progress.textContent.includes('Self-test checks passed') &&
+        progress.textContent.includes('checks.log');
+      progress.querySelector('.app-dialog-heading button').click();
+      await wait(() => !document.querySelector('dialog.progress-evidence-dialog') ? true : null, 'progress close');
+      const refitsAfterRead = refits();
+      if (beforeRefits !== refitsAfterRead) {
+        throw new Error('results or progress detail refit after recovery: ' +
+          JSON.stringify({ beforeRefits, afterOpen: refitsAfterOpen, refitsAfterRead }));
+      }
+      dialog = await openResults();
+      const review = [...dialog.querySelectorAll('.workspace-results-handoffs > li')]
+        .find(row => row.textContent.includes('Petition source') && row.textContent.includes('Petition destination'));
+      review?.querySelector('button')?.click();
+      const form = await wait(() => document.querySelector('.handoff-form'), 'exact handoff review');
+      const exactDraftReviewed = form.querySelector('textarea')?.value === ${JSON.stringify(petitionText)} &&
+        form.querySelector('select')?.value === ${JSON.stringify(petitionDestination.session.sessionId)};
+      form.querySelector('button[type="button"]')?.click();
+      document.querySelector('.files-close')?.click();
+      const requestAfter = (await window.aiTerminal.listAttention())
+        .find(row => row.requestId === ${JSON.stringify(petitionRequest.requestId)});
+      return { reportShown: reportShown && progressMatches, evidenceShown, pendingHandoffShown,
+        exactDraftReviewed, attentionUnchanged: requestBefore?.state === 'open' &&
+          requestAfter?.state === 'open' && requestBefore.revision === requestAfter.revision,
+        terminalRefitsUnchanged: true };
+    })()`) as {
+      reportShown: boolean; evidenceShown: boolean; pendingHandoffShown: boolean;
+      exactDraftReviewed: boolean; attentionUnchanged: boolean; terminalRefitsUnchanged: boolean
+    }
+    const workspaceResultsAcceptance = {
+      ...workspaceResultsUi,
+      ptyInputUnchanged: terminalModeProgramInput(destinationHarness.input) === beforeResultsInput
+    }
+    if (Object.values(workspaceResultsAcceptance).some((value) => value !== true)) {
+      throw new Error(`workspace results did not read and review safely: ${JSON.stringify(workspaceResultsAcceptance)}`)
+    }
     const beforePetitionPaste = terminalModeProgramInput(destinationHarness.input)
     const petitionEditor = await applicationWindow.webContents.executeJavaScript(`(async () => {
       const wait = async (read) => { const end = Date.now() + 10000; while (Date.now() < end) {
@@ -3441,6 +3563,12 @@ async function runSelfTest(): Promise<void> {
       .filter(row => row.sessionId === openCodeSession.session.sessionId)
     const openCodeBinding = await client.request<PersistedConversationBinding>(METHOD_REGISTRY.sessionBindingGet, { sessionId: openCodeSession.session.sessionId })
     const openCodeEvents = await client.request<Array<{ agent: string; event: string; effects: string[] }>>(METHOD_REGISTRY.hookEventsList, { sessionId: openCodeSession.session.sessionId })
+    const openCodeObservationUi = await inspectHarnessObservation(
+      openCodeSession.session.sessionId, 'OpenCode acceptance', 'OpenCode', 'session.idle', false
+    )
+    if (Object.values(openCodeObservationUi).some((value) => value !== true)) {
+      throw new Error(`OpenCode observation view failed: ${JSON.stringify(openCodeObservationUi)}`)
+    }
     await client.request(METHOD_REGISTRY.sessionStop, { sessionId: openCodeSession.session.sessionId,
       incarnationId: openCodeSession.session.lastProcess?.incarnationId, cause: 'explicit' })
     const openCodePreview = await client.request<{ command: string }>(METHOD_REGISTRY.sessionResumePreview, { sessionId: openCodeSession.session.sessionId })
@@ -3465,7 +3593,11 @@ async function runSelfTest(): Promise<void> {
     const dormantSidebar = await applicationWindow.webContents.executeJavaScript(`(async () => {
       const button = document.querySelector('button[data-session-id="${petitionDestination.session.sessionId}"]');
       if (!button) throw new Error('dormant sidebar fixture missing');
-      button.click(); button.focus();
+      button.click();
+      // Selection focuses its terminal in a React effect; let that effect finish before this
+      // keyboard probe explicitly focuses the sidebar button.
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      button.focus();
       const row = button.closest('.session-row');
       const end = Date.now() + 10000;
       while (row.dataset.live !== 'false' || row.querySelector('.unread-mark')) {
@@ -3485,6 +3617,16 @@ async function runSelfTest(): Promise<void> {
         if (document.activeElement !== menu) return undefined;
         return { focused: true, opacity: getComputedStyle(menu).opacity, hovered: menu.closest('.session-row').matches(':hover') };
       })()`) as { focused: boolean; opacity: string; hovered: boolean } | undefined, 'Tab to dormant session actions')
+      .catch(async (error: unknown) => {
+        const diagnostic = await applicationWindow!.webContents.executeJavaScript(`(() => ({
+          active: document.activeElement?.outerHTML.slice(0, 260) ?? null,
+          menu: document.querySelector('[aria-label="Actions for Petition destination"]')?.outerHTML.slice(0, 260) ?? null,
+          button: document.querySelector('button[data-session-id="${petitionDestination.session.sessionId}"]')?.outerHTML.slice(0, 260) ?? null,
+          dialogs: [...document.querySelectorAll('dialog[open]')].map(row => row.getAttribute('aria-label')),
+          detailsOpen: !!document.querySelector('.session-inspector')
+        }))()`)
+        throw new Error(`Tab to dormant session actions diagnostic: ${JSON.stringify(diagnostic)}`, { cause: error })
+      })
     const quietSidebarAcceptance = { ...dormantSidebar, ...dormantMenu }
     const routingWorkspace = await client.request<WorkspaceRecord>(METHOD_REGISTRY.workspaceCreate, {
       name: 'Routing acceptance B', defaultCwd: isolatedCwd, position: 20
@@ -3647,6 +3789,12 @@ async function runSelfTest(): Promise<void> {
       }
       throw new Error('the reported conversation never reached the binding')
     })()
+    const codexObservationUi = await inspectHarnessObservation(
+      reportingSession.sessionId, 'Hook-reported Codex', 'Codex', 'SessionStart'
+    )
+    if (Object.values(codexObservationUi).some((value) => value !== true)) {
+      throw new Error(`Codex observation view failed: ${JSON.stringify(codexObservationUi)}`)
+    }
     const rivalSession = await client.request<SessionIdentity>(METHOD_REGISTRY.sessionCreate, {
       workspaceId: DEFAULT_WORKSPACE_ID,
       name: 'Rival Codex',
@@ -4032,7 +4180,8 @@ async function runSelfTest(): Promise<void> {
           bar: getComputedStyle(button).borderLeftColor, identity: tokens.borderLeftColor,
           fill: getComputedStyle(button).backgroundColor, selected: tokens.backgroundColor };
         probe.remove();
-        return result;
+        // Recovery posts startup before the renderer finishes its first selected-row paint.
+        return result.bar === result.identity && result.fill === result.selected ? result : undefined;
       })()`), 'interrupted selected sidebar row') as {
         live: string; nameColor: string; muted: string; weight: string
         bar: string; identity: string; fill: string; selected: string
@@ -4582,6 +4731,85 @@ async function runSelfTest(): Promise<void> {
         };
       })()
     `) as HookProvenanceProbe
+    const syntheticClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR
+    const syntheticCodexConfigDir = process.env.CODEX_HOME
+    const syntheticOpenCodeConfigDir = process.env.OPENCODE_CONFIG_DIR
+    if (!syntheticClaudeConfigDir || !syntheticCodexConfigDir || !syntheticOpenCodeConfigDir) {
+      throw new Error('hook integration self-test requires isolated harness config directories')
+    }
+    const syntheticClaudeSettings = join(syntheticClaudeConfigDir, 'settings.json')
+    mkdirSync(syntheticClaudeConfigDir, { recursive: true })
+    const configuredClaudeEvents = [
+      'Notification', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit',
+      'Stop', 'SessionStart', 'SessionEnd'
+    ]
+    writeFileSync(syntheticClaudeSettings, `${JSON.stringify({ hooks: Object.fromEntries(
+      configuredClaudeEvents.map((event) => [event, [{ hooks: [{ type: 'command', command: 'bmn hook claude' }] }]])
+    ) }, null, 2)}\n`)
+    const configBefore = readFileSync(syntheticClaudeSettings, 'utf8')
+    const codexFile = join(syntheticCodexConfigDir, 'hooks.json')
+    const openCodePlugin = join(syntheticOpenCodeConfigDir, 'plugins', 'bmn.ts')
+    const absentBefore = !existsSync(codexFile) && !existsSync(openCodePlugin)
+    const hookIntegrationUi = await applicationWindow.webContents.executeJavaScript(`(async () => {
+      const wait = async (read, name) => { const end = Date.now() + 10000; while (Date.now() < end) {
+        const value = read(); if (value) return value; await new Promise(r => setTimeout(r, 25));
+      } throw new Error('hook integration timed out: ' + name); };
+      const hookSessionId = ${JSON.stringify(hookSession.session.sessionId)};
+      const beforeRequests = (await window.aiTerminal.listAttention()).length;
+      const openDetails = async (name) => {
+        (await wait(() => document.querySelector('[aria-label="Actions for ' + name + '"]'), name + ' menu')).click();
+        (await wait(() => [...document.querySelectorAll('.popup-menu [role="menuitem"]')]
+          .find(row => row.textContent.trim() === 'Session details'), 'Session details action')).click();
+        return wait(() => document.querySelector('.session-inspector .hook-observation'), 'observation panel');
+      };
+      let observation = await openDetails('Hook provenance');
+      await wait(() => observation.textContent.includes('Observed by BMN') ? true : null, 'observed hook');
+      const observed = observation.textContent.includes('Claude Code') &&
+        observation.textContent.includes('Notification') &&
+        observation.textContent.includes('Hook provenance') &&
+        observation.textContent.includes('run ');
+      const inputBefore = window.__aitermTest.snapshot(hookSessionId).inputEvents;
+      (await wait(() => [...observation.querySelectorAll('button')]
+        .find(button => button.textContent === 'Open Hook events'), 'events link')).click();
+      const events = await wait(() => document.querySelector('dialog.hook-events-dialog[open]'), 'hook events from observation');
+      const openedEvents = events.textContent.includes('Notification');
+      events.querySelector('.app-dialog-heading button').click();
+      observation = await wait(() => document.querySelector('.session-inspector .hook-observation'), 'returned observation');
+      (await wait(() => [...observation.querySelectorAll('button')]
+        .find(button => button.textContent === 'Check configured hooks in Preferences'), 'configuration link')).click();
+      const preferences = await wait(() => document.querySelector('dialog.preferences-dialog[open]'), 'Preferences');
+      const limit = preferences.textContent.includes('Configured entries do not prove hooks fired.') &&
+        preferences.textContent.includes('trust hooks with /hooks');
+      (await wait(() => [...preferences.querySelectorAll('button')]
+        .find(button => button.textContent === 'Check configured hooks'), 'check button')).click();
+      const report = await wait(() => preferences.querySelector('.hook-check-report'), 'dated hook check');
+      const configured = report.textContent.includes('Claude Code') &&
+        report.textContent.includes('Configured') && report.textContent.includes('Checked ');
+      const missing = report.textContent.includes('Codex') &&
+        report.textContent.includes('OpenCode') && report.textContent.includes('Missing entry');
+      preferences.querySelector('.app-dialog-heading button').click();
+      const inputAfter = window.__aitermTest.snapshot(hookSessionId).inputEvents;
+      document.querySelector('.session-inspector .panel-heading button')?.click();
+      observation = await openDetails('Petition destination');
+      await wait(() => observation.textContent.includes('Not observed in this run') ? true : null, 'untouched run');
+      const notObserved = observation.textContent.includes('Not observed in this run') &&
+        !observation.textContent.includes('Broken');
+      document.querySelector('.session-inspector .panel-heading button')?.click();
+      return { observed, openedEvents, configured, missing, limit, notObserved,
+        ptyInputUnchanged: inputBefore === inputAfter,
+        attentionUnchanged: (await window.aiTerminal.listAttention()).length === beforeRequests };
+    })()`) as {
+      observed: boolean; openedEvents: boolean; configured: boolean; missing: boolean;
+      limit: boolean; notObserved: boolean; ptyInputUnchanged: boolean; attentionUnchanged: boolean
+    }
+    const hookIntegrationAcceptance = {
+      ...hookIntegrationUi,
+      configUnchanged: readFileSync(syntheticClaudeSettings, 'utf8') === configBefore &&
+        absentBefore && !existsSync(codexFile) && !existsSync(openCodePlugin)
+    }
+    if (Object.values(hookIntegrationAcceptance).some((value) => value !== true)) {
+      throw new Error(`hook integration view did not distinguish configured and observed: ${JSON.stringify(hookIntegrationAcceptance)}`)
+    }
     for (const runtime of [hookSession, isolationSession]) {
       await client.request(METHOD_REGISTRY.sessionStop, {
         sessionId: runtime.session.sessionId,
@@ -4870,6 +5098,82 @@ async function runSelfTest(): Promise<void> {
       throw new Error(`launch set or repository acceptance failed: ${JSON.stringify(launchSetRepository)}`)
     }
 
+    if (!progressEvidence) throw new Error('the results fixture has no evidence report')
+    const evidenceArtifactId = progressEvidence.artifactId
+    const evidenceOriginal = (await client.request<ArtifactRecord[]>(METHOD_REGISTRY.artifactList, {}))
+      .find((row) => row.artifactId === evidenceArtifactId)
+    const syntheticDataRoot = resolveApplicationRoots().data
+    if (!evidenceOriginal?.storedPath.startsWith(`${syntheticDataRoot}/`)) {
+      throw new Error('the results evidence original is outside the isolated data root')
+    }
+    unlinkSync(evidenceOriginal.storedPath)
+    await expectRemoteFailure(
+      client.request(METHOD_REGISTRY.artifactPreview, { artifactId: evidenceOriginal.artifactId }),
+      ERROR_CODES.notFound, 'The stored original is missing'
+    )
+    const crossWorkspaceDraft = await client.request<InputDraftRecord>(METHOD_REGISTRY.draftSave, {
+      sourceSessionId: petitionSource.session.sessionId,
+      sessionId: routingSession.session.sessionId,
+      text: 'Synthetic cross-workspace handoff',
+      artifactIds: []
+    })
+    const sourceWorkspace = (await client.request<WorkspaceRecord[]>(METHOD_REGISTRY.workspaceList, {
+      includeArchived: true
+    })).find((row) => row.workspaceId === DEFAULT_WORKSPACE_ID)
+    if (!sourceWorkspace) throw new Error('the source workspace is unavailable for results')
+    await recoverApplicationRenderer(applicationWindow)
+    const crossWorkspaceUi = await applicationWindow.webContents.executeJavaScript(`(async () => {
+      const wait = async (read, name) => { const end = Date.now() + 10000; while (Date.now() < end) {
+        const value = read(); if (value) return value; await new Promise(r => setTimeout(r, 25));
+      } throw new Error('cross-workspace results timed out: ' + name); };
+      const open = async (name) => {
+        const section = await wait(() => [...document.querySelectorAll('.workspace-group')]
+          .find(row => row.getAttribute('aria-label') === name), 'workspace ' + name);
+        section.querySelector('.row-menu-button').click();
+        (await wait(() => [...document.querySelectorAll('.popup-menu [role="menuitem"]')]
+          .find(row => row.textContent.trim() === 'Review results…'), 'results action')).click();
+        return wait(() => {
+          const dialog = document.querySelector('dialog.workspace-results-dialog[open]');
+          return dialog?.querySelector('.workspace-results-handoffs') ? dialog : null;
+        }, 'results ' + name);
+      };
+      const sourceName = ${JSON.stringify(sourceWorkspace.name)};
+      const destinationName = ${JSON.stringify(routingWorkspace.name)};
+      const sourceDialog = await open(sourceName);
+      const sourceReport = sourceDialog.textContent.includes('Self-test checks passed');
+      const missingEvidence = sourceDialog.textContent.includes('checks.log · Original unavailable');
+      const sourceRows = [...sourceDialog.querySelectorAll('.workspace-results-handoffs > li')]
+        .filter(row => row.textContent.includes('Petition source') && row.textContent.includes('Child routing'));
+      const sourceHandoffOnce = sourceRows.length === 1 &&
+        sourceRows[0].textContent.includes(sourceName) && sourceRows[0].textContent.includes(destinationName);
+      sourceDialog.querySelector('.app-dialog-heading button').click();
+      const destinationDialog = await open(destinationName);
+      const destinationNoReport = destinationDialog.textContent.includes('No progress reported') &&
+        !destinationDialog.textContent.includes('Self-test checks passed');
+      const destinationRows = [...destinationDialog.querySelectorAll('.workspace-results-handoffs > li')]
+        .filter(row => row.textContent.includes('Petition source') && row.textContent.includes('Child routing'));
+      const destinationHandoffOnce = destinationRows.length === 1 &&
+        destinationRows[0].textContent.includes(sourceName) && destinationRows[0].textContent.includes(destinationName);
+      destinationRows[0]?.querySelector('button')?.click();
+      const form = await wait(() => document.querySelector('.handoff-form'), 'cross-workspace review');
+      const routeExact = form.querySelector('textarea')?.value === 'Synthetic cross-workspace handoff' &&
+        form.querySelector('select')?.value === ${JSON.stringify(routingSession.session.sessionId)};
+      form.querySelector('button[type="button"]')?.click();
+      document.querySelector('.files-close')?.click();
+      return { sourceReport, missingEvidence, sourceHandoffOnce, destinationNoReport,
+        destinationHandoffOnce, routeExact };
+    })()`) as {
+      sourceReport: boolean; missingEvidence: boolean; sourceHandoffOnce: boolean;
+      destinationNoReport: boolean; destinationHandoffOnce: boolean; routeExact: boolean
+    }
+    const crossWorkspaceResults = {
+      ...crossWorkspaceUi,
+      noAutoDelivery: (await client.request<InputDraftRecord[]>(METHOD_REGISTRY.draftList, {}))
+        .find((row) => row.draftId === crossWorkspaceDraft.draftId)?.state === 'draft'
+    }
+    if (Object.values(crossWorkspaceResults).some((value) => value !== true)) {
+      throw new Error(`cross-workspace results failed: ${JSON.stringify(crossWorkspaceResults)}`)
+    }
 
     const secondClose = await client.close()
     console.error('[BMN] self-test phase: second host closed')
@@ -4931,6 +5235,8 @@ async function runSelfTest(): Promise<void> {
       workspaceMarkers: preloadProbe.workspaceMarkers,
       progressEvidence: { ...progressEvidence, persistedAfterRestart: true },
       progressEvidenceSurface: preloadProbe.progressEvidenceSurface,
+      workspaceResults: workspaceResultsAcceptance,
+      crossWorkspaceResults,
       hiddenPaneSize: preloadProbe.hiddenPaneSize,
       handoffFlow: { ...preloadProbe.handoffFlow, persistedAfterRestart: true },
       agentHandoff,
@@ -4961,6 +5267,8 @@ async function runSelfTest(): Promise<void> {
       conversationFromHook,
       sessionActivity,
       requestProvenance,
+      hookIntegration: hookIntegrationAcceptance,
+      harnessObservations: { opencode: openCodeObservationUi, codex: codexObservationUi },
       terminalNotice,
       launchSetRepository,
       survivalTable: {

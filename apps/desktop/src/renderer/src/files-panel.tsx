@@ -7,6 +7,7 @@ import type {
   SessionRecord,
   WorkspaceRecord
 } from '@bmn/protocol'
+import { sameHandoffDraft } from './workspace-handoff-review'
 import { Dialog } from './dialog'
 import { failureDetail } from './bridge-error'
 import { agentTag, handoffPreparedBy } from './session-presentation'
@@ -69,6 +70,7 @@ export function FilesPanel(props: {
   drafts: InputDraftRecord[]
   attention?: AttentionRecord[]
   requestedHandoffDraftId?: string | null
+  requestedHandoffReviewDraft?: InputDraftRecord | null
   onHandoffOpened?(): void
   sessions: SessionRecord[]
   workspaces: WorkspaceRecord[]
@@ -87,6 +89,7 @@ export function FilesPanel(props: {
   const [handoffTargetId, setHandoffTargetId] = useState('')
   const [handoffText, setHandoffText] = useState('')
   const [handoffArtifactIds, setHandoffArtifactIds] = useState<ReadonlySet<string>>(new Set())
+  const [requestedReviewError, setRequestedReviewError] = useState<string | null>(null)
 
   const sessionArtifacts = useMemo(
     () => props.artifacts.filter((artifact) => artifact.sessionId === props.session?.sessionId),
@@ -157,13 +160,25 @@ export function FilesPanel(props: {
   }, [props.session?.sessionId])
 
   useEffect(() => {
-    if (!props.requestedHandoffDraftId) return
-    const draft = props.drafts.find((item) => item.draftId === props.requestedHandoffDraftId &&
-      item.origin === 'handoff' && item.state === 'draft' && item.sourceSessionId === props.session?.sessionId)
-    if (!draft) return
-    beginHandoff(draft)
+    const requestedId = props.requestedHandoffReviewDraft?.draftId ?? props.requestedHandoffDraftId
+    if (!requestedId) return
+    const draft = props.drafts.find((item) => item.draftId === requestedId &&
+      item.origin === 'handoff' && (item.state === 'draft' || item.state === 'uncertain') &&
+      (item.sourceSessionId === props.session?.sessionId || item.sessionId === props.session?.sessionId))
+    const destination = props.sessions.find((item) => item.sessionId === draft?.sessionId)
+    const destinationWorkspace = props.workspaces.find((item) => item.workspaceId === destination?.workspaceId)
+    if (!props.requestedHandoffReviewDraft && !draft) return
+    if (!draft || (props.requestedHandoffReviewDraft && !sameHandoffDraft(draft, props.requestedHandoffReviewDraft)) ||
+      !destination || destination.archivedAt !== null || destinationWorkspace?.archivedAt !== null) {
+      setRequestedReviewError('The handoff or destination changed. Refresh results before review.')
+      props.onHandoffOpened?.()
+      return
+    }
+    setRequestedReviewError(null)
+    if (draft.state === 'draft' && draft.sourceSessionId === props.session?.sessionId) beginHandoff(draft)
+    else requestAnimationFrame(() => document.getElementById(`handoff-${draft.draftId}`)?.focus())
     props.onHandoffOpened?.()
-  }, [props.requestedHandoffDraftId, props.drafts, props.session?.sessionId])
+  }, [props.requestedHandoffDraftId, props.requestedHandoffReviewDraft, props.drafts, props.session?.sessionId])
 
   const { preview, error: previewError, loading: previewLoading } = useArtifactPreview(featuredId)
 
@@ -226,6 +241,8 @@ export function FilesPanel(props: {
           ×
         </button>
       </header>
+
+      {requestedReviewError ? <p className="inline-error" role="alert">{requestedReviewError}</p> : null}
 
       {sessionArtifacts.length === 0 ? (
         <div className="files-empty">
@@ -456,7 +473,7 @@ export function FilesPanel(props: {
                   ? 'Paste outcome uncertain — inspect the destination before retrying'
                   : draft.detail ?? 'Saved draft — nothing pasted'
               return (
-                <li key={draft.draftId} className="files-draft handoff-card">
+                <li key={draft.draftId} id={`handoff-${draft.draftId}`} tabIndex={-1} className="files-draft handoff-card">
                   <p className="files-draft-meta">{formatClock(draft.createdAt)} · {stateLabel}</p>
                   <p className="handoff-route"><span>From</span>{sessionDescription(draft.sourceSessionId)}</p>
                   <p className="handoff-route"><span>To</span>{sessionDescription(draft.sessionId)}</p>

@@ -19,6 +19,8 @@ import {
   type BackupManifest,
   type BackupVerifyResult,
   type HookEventRecord,
+  type HookObservation,
+  type HandoffReviewSnapshot,
   type SessionRecord
 } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -195,6 +197,35 @@ describe('session environment', () => {
 describe('handoff drafts', () => {
   const save = (params: Record<string, unknown>) =>
     service.route(METHOD_REGISTRY.draftSave, params) as Promise<import('@bmn/protocol').InputDraftRecord>
+  const review = (draftId: string, expectedToken?: string) =>
+    service.route(METHOD_REGISTRY.handoffReview, {
+      draftId, workspaceId: DEFAULT_WORKSPACE_ID, ...(expectedToken ? { expectedToken } : {})
+    }) as Promise<HandoffReviewSnapshot>
+
+  it('reads one exact handoff revision and rejects a draft changed before confirmation', async () => {
+    const draft = await save({ sourceSessionId: 's1', sessionId: 's2', text: 'First', artifactIds: [] })
+    const first = await review(draft.draftId)
+    expect(first).toMatchObject({ draft: { text: 'First' }, source: { sessionId: 's1' },
+      destination: { sessionId: 's2' } })
+    expect(first.token).toMatch(/^[a-f0-9]{64}$/)
+    await expect(review(draft.draftId, first.token)).resolves.toMatchObject({ token: first.token })
+
+    await save({ draftId: draft.draftId, sourceSessionId: 's1', sessionId: 's2',
+      text: 'Replacement', artifactIds: [], expectedUpdatedAt: draft.updatedAt })
+    await expect(review(draft.draftId, first.token)).rejects.toThrow('handoff or destination changed')
+    expect(writes).toEqual([])
+  })
+
+  it('rejects a destination archived between coherent review reads', async () => {
+    const draft = await save({ sourceSessionId: 's1', sessionId: 's2', text: 'Review', artifactIds: [] })
+    const first = await review(draft.draftId)
+    database.prepare("UPDATE session SET archived_at = ?, revision = revision + 1 WHERE session_id = 's2'")
+      .run('2026-09-24T12:01:00.000Z')
+
+    await expect(review(draft.draftId, first.token)).rejects.toThrow('handoff or destination changed')
+    await expect(review(draft.draftId)).rejects.toThrow('handoff or destination changed')
+    expect(writes).toEqual([])
+  })
 
   it('saves and edits an addressed handoff without terminal input', async () => {
     const [artifact] = await storeArtifacts(1)
@@ -1137,6 +1168,147 @@ describe('hook event log', () => {
   })
 })
 
+describe('hook observation summary', () => {
+  const observe = async (params: {
+    sessionId: string
+    incarnationId?: string | null
+    agent?: HookEventRecord['agent']
+    event: string
+  }): Promise<void> => {
+    const { sessionId, incarnationId = liveIncarnations.get(sessionId) ?? null, agent = 'claude', event } = params
+    await (service as unknown as {
+      observeHookEvent(p: {
+        sessionId: string
+        incarnationId: string | null
+        agent: HookEventRecord['agent']
+        event: string
+        source: string | null
+        toolName: string | null
+        effects: readonly HookEventRecord['effects'][number][]
+      }): unknown
+    }).observeHookEvent({
+      sessionId,
+      incarnationId,
+      agent,
+      event,
+      source: null,
+      toolName: null,
+      effects: []
+    })
+  }
+
+  const observation = (params: Record<string, unknown>) =>
+    service.route(METHOD_REGISTRY.hookObservationGet, params) as Promise<HookObservation>
+
+  it('retains the latest attributable harness event of the current run with its receipt time', async () => {
+    await observe({ sessionId: 's1', event: 'SessionStart' })
+    clock = '2026-09-14T12:00:01.000Z'
+    await observe({ sessionId: 's1', event: 'PostToolUse' })
+
+    await expect(observation({ sessionId: 's1' })).resolves.toEqual({
+      state: 'observed',
+      sessionId: 's1',
+      incarnationId: 'incarnation-1',
+      agent: 'claude',
+      event: 'PostToolUse',
+      observedAt: '2026-09-14T12:00:01.000Z',
+      detailAvailable: true
+    })
+  })
+
+  it('does not count terminal OSC notices as a harness observation', async () => {
+    await observe({ sessionId: 's1', agent: 'terminal', event: 'osc:9' })
+
+    await expect(observation({ sessionId: 's1' })).resolves.toEqual({
+      state: 'none', sessionId: 's1', incarnationId: 'incarnation-1'
+    })
+  })
+
+  it('does not attribute a prior incarnation\'s event to the run that replaced it', async () => {
+    await observe({ sessionId: 's1', event: 'Stop' })
+    liveIncarnations.set('s1', 'incarnation-2')
+
+    await expect(observation({ sessionId: 's1' })).resolves.toEqual({
+      state: 'none', sessionId: 's1', incarnationId: 'incarnation-2'
+    })
+    clock = '2026-09-14T12:00:02.000Z'
+    await observe({ sessionId: 's1', agent: 'codex', event: 'PreToolUse' })
+    await expect(observation({ sessionId: 's1' })).resolves.toMatchObject({
+      state: 'observed', incarnationId: 'incarnation-2', agent: 'codex', event: 'PreToolUse'
+    })
+  })
+
+  it('ignores a late event from an incarnation the host has already replaced', async () => {
+    liveIncarnations.set('s1', 'incarnation-2')
+    await observe({ sessionId: 's1', event: 'PostToolUse' })
+
+    await observe({ sessionId: 's1', incarnationId: 'incarnation-1', event: 'Stop' })
+
+    await expect(observation({ sessionId: 's1', incarnationId: 'incarnation-2' })).resolves.toMatchObject({
+      state: 'observed', event: 'PostToolUse', incarnationId: 'incarnation-2'
+    })
+  })
+
+  it('keeps two sessions\' observations independent, per session and harness', async () => {
+    await observe({ sessionId: 's1', agent: 'claude', event: 'Stop' })
+    await observe({ sessionId: 's2', agent: 'codex', event: 'PreToolUse' })
+
+    await expect(observation({ sessionId: 's1' })).resolves.toMatchObject({ agent: 'claude', event: 'Stop' })
+    await expect(observation({ sessionId: 's2' })).resolves.toMatchObject({
+      agent: 'codex', event: 'PreToolUse', incarnationId: 'incarnation-2'
+    })
+  })
+
+  it('says its detail is no longer available once the bounded log has evicted the event', async () => {
+    await observe({ sessionId: 's1', event: 'Stop' })
+    // Notices reach the same log without ever counting as the harness's own report.
+    for (let index = 0; index < HOOK_EVENT_LOG_LIMIT; index += 1) {
+      await observe({ sessionId: 's1', agent: 'terminal', event: 'osc:9' })
+    }
+
+    await expect(observation({ sessionId: 's1' })).resolves.toMatchObject({
+      state: 'observed', event: 'Stop', detailAvailable: false
+    })
+  })
+
+  it('answers for the incarnation the caller names, and names none when there is no live run', async () => {
+    await observe({ sessionId: 's1', event: 'Stop' })
+    liveIncarnations.delete('s1')
+
+    await expect(observation({ sessionId: 's1' })).resolves.toEqual({
+      state: 'none', sessionId: 's1', incarnationId: null
+    })
+    await expect(observation({ sessionId: 's1', incarnationId: 'incarnation-1' })).resolves.toMatchObject({
+      state: 'observed', incarnationId: 'incarnation-1', event: 'Stop', detailAvailable: true
+    })
+    await expect(observation({ sessionId: 's1', incarnationId: 'incarnation-9' })).resolves.toEqual({
+      state: 'none', sessionId: 's1', incarnationId: 'incarnation-9'
+    })
+  })
+
+  it('starts a fresh service with no observation from the earlier process', async () => {
+    await observe({ sessionId: 's1', event: 'Stop' })
+    const restarted = new CompanionService(service['options'])
+
+    await expect(restarted.route(METHOD_REGISTRY.hookObservationGet, {
+      sessionId: 's1', incarnationId: 'incarnation-1'
+    })).resolves.toEqual({ state: 'none', sessionId: 's1', incarnationId: 'incarnation-1' })
+  })
+
+  it('does not count an event no incarnation can be named for', async () => {
+    await observe({ sessionId: 's1', incarnationId: null, event: 'Stop' })
+
+    await expect(observation({ sessionId: 's1', incarnationId: 'incarnation-1' })).resolves.toEqual({
+      state: 'none', sessionId: 's1', incarnationId: 'incarnation-1'
+    })
+  })
+
+  it('requires a session to read', async () => {
+    await expect(observation({})).rejects.toMatchObject({ code: ERROR_CODES.invalidArgument })
+    await expect(observation({ sessionId: '' })).rejects.toMatchObject({ code: ERROR_CODES.invalidArgument })
+  })
+})
+
 describe('terminal notices (OSC 9, 99, 777)', () => {
   const notice = (params: Record<string, unknown>): Promise<unknown> =>
     service.route(METHOD_REGISTRY.attentionTerminalNotice, {
@@ -1382,8 +1554,10 @@ describe('terminal notices (OSC 9, 99, 777)', () => {
     await service.sessionsChanged()
     await observeHook('s1', 'incarnation-1')
     await notice({ sessionId: 's2', incarnationId: 'incarnation-2', title: 'Still open' })
-    const kept = service as unknown as { hookReporters: Map<string, unknown>; terminalNotices: Map<string, unknown> }
-    expect([kept.hookReporters.size, kept.terminalNotices.size]).toEqual([1, 1])
+    const kept = service as unknown as {
+      hookReporters: Map<string, unknown>; hookObservations: Map<string, unknown>; terminalNotices: Map<string, unknown>
+    }
+    expect([kept.hookReporters.size, kept.hookObservations.size, kept.terminalNotices.size]).toEqual([1, 1, 1])
 
     database.prepare("DELETE FROM attention_request WHERE session_id IN ('s1', 's2')").run()
     database.prepare("DELETE FROM session WHERE session_id IN ('s1', 's2')").run()
@@ -1391,7 +1565,10 @@ describe('terminal notices (OSC 9, 99, 777)', () => {
 
     // These are in memory and per session, so a long-lived app must not accumulate one entry per
     // session it has ever had. They are pruned with the hook log, on the same pass.
-    expect([kept.hookReporters.size, kept.terminalNotices.size]).toEqual([0, 0])
+    expect([kept.hookReporters.size, kept.hookObservations.size, kept.terminalNotices.size]).toEqual([0, 0, 0])
+    await expect(service.route(METHOD_REGISTRY.hookObservationGet, {
+      sessionId: 's1', incarnationId: 'incarnation-1'
+    })).resolves.toEqual({ state: 'none', sessionId: 's1', incarnationId: 'incarnation-1' })
   })
 
   it('drops a notice whose process ended while it waited behind another one', async () => {
