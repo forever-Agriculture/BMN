@@ -23,6 +23,7 @@ import {
 } from '@bmn/protocol'
 import {
   HostControlError,
+  PersistedSessionStartError,
   SessionManager,
   buildShellEnvironment,
   resolveHomeDirectory,
@@ -766,6 +767,17 @@ describe('shell session lifecycle', () => {
     await manager.create(launch)
 
     expect(store.startingRecords.map((record) => record.backgroundChoice)).toEqual(['hide', null])
+  })
+
+  it('names a saved session when its process fails after the record is created', async () => {
+    const { manager, store, cwd } = await fixture()
+    store.markRunning = async () => { throw new Error('synthetic startup failure after persistence') }
+    const error = await manager.create({
+      ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath, argv: [], cols: 80, rows: 24
+    }).catch((failure: unknown) => failure)
+    expect(error).toBeInstanceOf(PersistedSessionStartError)
+    expect(error).toMatchObject({ sessionId: store.startingRecords[0]?.sessionId })
+    expect(store.startingRecords).toHaveLength(1)
   })
 
   it('buffers initial output, grants one lease, forwards bytes in order, resizes, and stops the current incarnation', async () => {

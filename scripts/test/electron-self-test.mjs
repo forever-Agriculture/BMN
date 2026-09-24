@@ -16,6 +16,24 @@ const waylandDisplay =
 
 /** Receipt fields the self-test must prove; a receipt missing any of them fails the run. */
 const receiptContract = [
+  ['launchSetRepository', (receipt) => {
+    const row = receipt.launchSetRepository
+    return row?.savedWithoutStart === true && row.cancelledPendingStart === true &&
+      row.equivalentDirectoryWarning === true &&
+      row.previewBranch?.includes('Branch main') &&
+      row.changedBranchBlocked === true &&
+      JSON.stringify(row.startedOrder) === JSON.stringify(['First', 'Second', 'Third']) &&
+      row.selectionPreserved === true &&
+      JSON.stringify(row.partialOutcomes) === JSON.stringify(['started', 'failed', 'not-started']) &&
+      row.retryAddedSessions === 2 && row.reconnectAddedSessions === 0 &&
+      row.failedSessionLinked === true && row.ordinaryChangedBlocked === true &&
+      row.nonRepositoryStarted === true &&
+      row.preparationPreservedTerminals === true && row.keyboardFocusInDialog === true &&
+      row.editDeletePreservedSessions === true &&
+      JSON.stringify(row.reorderedEntries) === JSON.stringify(['First', 'Third', 'Second']) &&
+      row.detailRoots?.length === 2 && row.detailRoots[0] !== row.detailRoots[1] &&
+      /^git version /u.test(row.gitVersion)
+  }],
   ['graceful', (receipt) => receipt.graceful === true],
   ['quietSidebarAcceptance', (receipt) => {
     const row = receipt.quietSidebarAcceptance

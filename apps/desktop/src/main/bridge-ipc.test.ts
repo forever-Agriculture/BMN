@@ -210,7 +210,7 @@ describe('typed bridge error contract (main -> preload -> renderer)', () => {
       ok: false, code: ERROR_CODES.ioError, message: 'disk vanished'
     })
     await expect(unwrapBridgeInvoke(() => direct.get('aiterm:test:ok')!(event))).resolves.toBeUndefined()
-    expect(handlers.size).toBe(10)
+    expect(handlers.size).toBe(16)
   })
 
   it('rejects malformed envelopes and transport failures with typed codes', async () => {
@@ -228,7 +228,7 @@ describe('typed bridge error contract (main -> preload -> renderer)', () => {
     const event = { allowed: false } as unknown as IpcMainInvokeEvent
     const answers = await Promise.all(registrations.map((registration) => registration.invoke(event)))
 
-    expect(registrations.map((registration) => registration.channel)).toHaveLength(10)
+    expect(registrations.map((registration) => registration.channel)).toHaveLength(16)
     expect(answers).toEqual(registrations.map(() => ({
       ok: false,
       code: ERROR_CODES.unauthorized,

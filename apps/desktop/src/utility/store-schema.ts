@@ -9,6 +9,7 @@ export const STORY_SCHEMA_TABLES = Object.freeze([
   'control_receipt',
   'conversation_binding',
   'input_draft',
+  'launch_set',
   'launch_template',
   'process_incarnation',
   'progress_evidence',
@@ -476,6 +477,20 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
         detail, captured_at FROM conversation_binding;
       DROP TABLE conversation_binding;
       ALTER TABLE conversation_binding_next RENAME TO conversation_binding;
+    `
+  },
+  {
+    version: 15,
+    sql: `
+      CREATE TABLE launch_set (
+        set_id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspace(workspace_id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        entries_json TEXT NOT NULL,
+        revision INTEGER NOT NULL CHECK (revision >= 1),
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX launch_set_by_workspace ON launch_set(workspace_id);
     `
   }
 ])

@@ -21,7 +21,9 @@ feature stops. This page sums up the product and how to install it.
 
 - **Workspaces and sessions.** Named workspaces hold independent sessions. A session is a shell,
   Claude Code, Codex, OpenCode, or any command, with its own working directory. Launch templates,
-  rename, archive and edit launch settings. Layout, order and selection survive a restart, but
+  rename, archive and edit launch settings. Save a workspace launch set of up to eight copied
+  commands, review its one directory and repository identity, then start fresh sessions explicitly.
+  Session details also shows the saved directory's read-only Git identity. Layout, order and selection survive a restart, but
   nothing starts automatically; after an update or a quit, BMN offers to resume what the stop
   interrupted, in one dialog that shows each command and starts nothing until you press the button.
   ([Workspaces and sessions](docs/features.md#workspaces-and-sessions))

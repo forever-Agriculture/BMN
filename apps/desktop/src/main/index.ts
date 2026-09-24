@@ -1,8 +1,10 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, truncateSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import {
   ERROR_CODES,
   METHOD_REGISTRY,
+  isLaunchSetStartParams,
   isTerminalOutputMessage,
   type AppSettings,
   type ArtifactRecord,
@@ -15,6 +17,7 @@ import {
   type InputDraftRecord,
   type InterruptedSessionCohort,
   type LaunchTemplateRecord,
+  type LaunchSetStartResult,
   type LayoutGetResult,
   type PersistedConversationBinding,
   type ProgressRecord,
@@ -73,6 +76,8 @@ import { acquireRootScopedSingleInstance, focusExistingWindow } from './single-i
 import { trackAllowedSender } from './allowed-senders'
 import { createDevelopmentRoot } from './development-root'
 import { installSavedOutputIpcHandler } from './saved-output-ipc'
+import { runLaunchSetRepositorySelfTest } from './launch-set-repository-self-test'
+import { shouldAdoptLaunchSetRuntime } from './launch-set-runtime'
 import {
   bridgeInvokeRegistrar,
   type BridgeInvokeRegistration
@@ -247,6 +252,16 @@ let closePromptCoordinator: ClosePromptCoordinator | undefined
 /** Self-test hook: every renderer layout.put request main forwards, counted before the host answers. */
 let selfTestLayoutPutRequests = 0
 const selfTestLayoutPutSelections: Array<string | null> = []
+let selfTestLaunchSetStartRequests = 0
+let selfTestLaunchSetReadGate: { entered(): void; released: Promise<void> } | null = null
+function pauseNextSelfTestLaunchSetRead(): { entered: Promise<void>; release(): void } {
+  let enter!: () => void
+  let release!: () => void
+  const entered = new Promise<void>((resolve) => { enter = resolve })
+  const released = new Promise<void>((resolve) => { release = resolve })
+  selfTestLaunchSetReadGate = { entered: enter, released }
+  return { entered, release }
+}
 let selfTestBridgeInvokeRegistrations: readonly BridgeInvokeRegistration[] = []
 /** What the renderer's activity probe hands back for one self-test sampling window. */
 interface ActivitySampling {
@@ -583,6 +598,12 @@ function installIpcHandlers(): void {
   installWorkspaceIpcHandlers(bridgeIpc, senderIsAllowed, {
     client: () => ({
       request: async <Result,>(method: Parameters<PtyHostClient['request']>[0], params: object) => {
+        if (selfTest && method === METHOD_REGISTRY.launchSetGet && selfTestLaunchSetReadGate) {
+          const gate = selfTestLaunchSetReadGate
+          selfTestLaunchSetReadGate = null
+          gate.entered()
+          await gate.released
+        }
         if (selfTest && method === METHOD_REGISTRY.layoutPut) {
           selfTestLayoutPutRequests += 1
           const selectedSessionId = (params as { state?: { selectedSessionId?: unknown } })
@@ -611,6 +632,75 @@ function installIpcHandlers(): void {
         throw new MainIpcError(ERROR_CODES.invalidArgument, 'Session create parameters must be an object')
       }
       return createSessionRuntime(params as SessionCreateParams, rendererTestMode)
+    }
+  })
+  bridgeIpc.handle('aiterm:launch-directory:normalize', (event, value: unknown) => {
+    if (!senderIsAllowed(event)) {
+      throw new MainIpcError(ERROR_CODES.unauthorized, 'Renderer sender is not authorized')
+    }
+    const directories = (value as { directories?: unknown } | null)?.directories
+    if (!Array.isArray(directories) || directories.length > 256 ||
+        !directories.every((item) => typeof item === 'string' && item.length <= 4096)) {
+      throw new MainIpcError(ERROR_CODES.invalidArgument, 'Launch directories are invalid')
+    }
+    return directories.map((directory: string) => resolve(
+      directory === '~' || directory.startsWith('~/')
+        ? join(homedir(), directory.slice(1)) : directory
+    ))
+  })
+  bridgeIpc.handle('aiterm:launch-set:start', async (event, value: unknown) => {
+    if (!senderIsAllowed(event)) {
+      throw new MainIpcError(ERROR_CODES.unauthorized, 'Renderer sender is not authorized')
+    }
+    if (!isLaunchSetStartParams(value)) {
+      throw new MainIpcError(ERROR_CODES.invalidArgument, 'Launch set start parameters are invalid')
+    }
+    if (selfTest) selfTestLaunchSetStartRequests += 1
+    const client = requireHostClient()
+    const result = await client.request<LaunchSetStartResult>(METHOD_REGISTRY.launchSetStart, value)
+    const records = await client.request<SessionRecord[]>(METHOD_REGISTRY.sessionList, {
+      workspaceId: result.workspaceId
+    })
+    const byId = new Map(records.map((record) => [record.sessionId, record]))
+    const sessions: SessionRecord[] = []
+    const startups: StartupSuccess[] = []
+    for (const entry of result.entries) {
+      if (!entry.sessionId) continue
+      const record = byId.get(entry.sessionId)
+      if (!record) throw new Error(`Started session ${entry.sessionId} was not persisted`)
+      sessionRecords.set(record.sessionId, record)
+      sessions.push(record)
+      if (!shouldAdoptLaunchSetRuntime(
+        entry, record,
+        entry.incarnationId ? client.sessionProcessState(record.sessionId, entry.incarnationId) : undefined
+      )) continue
+      const existing = runtimes.get(record.sessionId)
+      if (existing) {
+        startups.push(startupForRuntime(existing))
+        continue
+      }
+      const attachment = { sessionId: entry.sessionId, incarnationId: entry.incarnationId,
+        ...entry.attachment }
+      const runtime: ApplicationRuntime = {
+        client, session: attachment, attachment, rendererPort: hostRendererPort!,
+        dimensions: { cols: value.cols, rows: value.rows },
+        cwd: record.cwd, executable: record.executable, workspaceId: record.workspaceId,
+        name: record.name, testMode: rendererTestMode, processState: 'live',
+        ...(record.backgroundChoice ? { backgroundChoice: record.backgroundChoice } : {})
+      }
+      runtimes.set(record.sessionId, runtime)
+      startups.push(startupForRuntime(runtime))
+    }
+    return {
+      ...result,
+      entries: result.entries.map((entry) => ({
+        entryId: entry.entryId, name: entry.name, outcome: entry.outcome,
+        ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
+        ...(entry.incarnationId ? { incarnationId: entry.incarnationId } : {}),
+        ...(entry.error ? { error: entry.error } : {})
+      })),
+      sessions,
+      startups
     }
   })
   installCompanionIpcHandlers(bridgeIpc, {
@@ -4748,6 +4838,38 @@ async function runSelfTest(): Promise<void> {
       throw new Error(`typing did not resolve the terminal notice: ${JSON.stringify(terminalNotice)}`)
     }
 
+    console.error('[BMN] self-test phase: launch sets and repository identity')
+    const launchSetRepository = await runLaunchSetRepositorySelfTest(applicationWindow, {
+      workspaceId: DEFAULT_WORKSPACE_ID,
+      workspaceName: restoredWorkspaces.find((item) => item.workspaceId === DEFAULT_WORKSPACE_ID)!.name,
+      directory: isolatedCwd,
+      existingSessionId: session.sessionId
+    }, {
+      pauseNextSetRead: pauseNextSelfTestLaunchSetRead,
+      startRequestCount: () => selfTestLaunchSetStartRequests
+    })
+    if (!launchSetRepository.savedWithoutStart ||
+        !launchSetRepository.cancelledPendingStart ||
+        !launchSetRepository.equivalentDirectoryWarning ||
+        !launchSetRepository.previewBranch.includes('Branch main') ||
+        !launchSetRepository.changedBranchBlocked ||
+        JSON.stringify(launchSetRepository.startedOrder) !== JSON.stringify(['First', 'Second', 'Third']) ||
+        !launchSetRepository.selectionPreserved ||
+        JSON.stringify(launchSetRepository.partialOutcomes) !== JSON.stringify(['started', 'failed', 'not-started']) ||
+        launchSetRepository.retryAddedSessions !== 2 ||
+        launchSetRepository.reconnectAddedSessions !== 0 ||
+        !launchSetRepository.failedSessionLinked ||
+        !launchSetRepository.preparationPreservedTerminals ||
+        !launchSetRepository.keyboardFocusInDialog ||
+        !launchSetRepository.editDeletePreservedSessions ||
+        JSON.stringify(launchSetRepository.reorderedEntries) !== JSON.stringify(['First', 'Third', 'Second']) ||
+        !launchSetRepository.ordinaryChangedBlocked ||
+        !launchSetRepository.nonRepositoryStarted ||
+        !launchSetRepository.detailRoots[0]?.includes(isolatedCwd) ||
+        !launchSetRepository.detailRoots[1]?.includes(join(isolatedCwd, 'nested-launch-repo'))) {
+      throw new Error(`launch set or repository acceptance failed: ${JSON.stringify(launchSetRepository)}`)
+    }
+
 
     const secondClose = await client.close()
     console.error('[BMN] self-test phase: second host closed')
@@ -4840,6 +4962,7 @@ async function runSelfTest(): Promise<void> {
       sessionActivity,
       requestProvenance,
       terminalNotice,
+      launchSetRepository,
       survivalTable: {
         rendererCrash: survivingRendererCrash,
         quit: {

@@ -3,6 +3,9 @@ import { createRequire } from 'node:module'
 import { parentPort, workerData } from 'node:worker_threads'
 import type {
   SessionUpdateParams,
+  LaunchSetCreateParams,
+  LaunchSetUpdateParams,
+  LaunchSetDeleteParams,
   TemplateCreateParams,
   WorkspaceCreateParams,
   WorkspaceUpdateParams
@@ -29,6 +32,11 @@ import {
 import {
   WorkspaceStoreError,
   createTemplate,
+  createLaunchSet,
+  updateLaunchSet,
+  deleteLaunchSet,
+  listLaunchSets,
+  getLaunchSet,
   createWorkspace,
   getLayout,
   listSessions,
@@ -199,6 +207,21 @@ function handle(request: WorkerRequest): unknown {
         randomUUID(),
         new Date().toISOString()
       ))()
+    case 'launch-set-list':
+      return listLaunchSets(database, requiredString(params, 'workspaceId'))
+    case 'launch-set-get':
+      return getLaunchSet(database, requiredString(params, 'workspaceId'), requiredString(params, 'setId'))
+    case 'launch-set-create':
+      return database.transaction(() => createLaunchSet(
+        database, params as unknown as LaunchSetCreateParams, randomUUID(), new Date().toISOString()
+      ))()
+    case 'launch-set-update':
+      return database.transaction(() => updateLaunchSet(database, params as unknown as LaunchSetUpdateParams))()
+    case 'launch-set-delete':
+      return database.transaction(() => {
+        deleteLaunchSet(database, params as unknown as LaunchSetDeleteParams)
+        return { deleted: true }
+      })()
     case 'layout-get':
       return getLayout(database, requiredString(params, 'workspaceId'))
     case 'layout-put':

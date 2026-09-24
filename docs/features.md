@@ -35,6 +35,25 @@ anything else installed. **New session…** opens a form:
 Edit launch settings later from the session's or pane's menu. Sessions can be moved up and down, and
 archived once stopped; **Restore session** brings an archived one back.
 
+**Launch sets** in a workspace menu or the palette save 1–8 ordered command definitions. You can
+copy an existing template into a set; later edits to either one do not change the other. The set
+editor stores arguments as an exact JSON array, so an argument containing spaces stays one
+argument. Saving, reordering or deleting a set starts and stops nothing. **Launch set…** shows
+every command and one directory for the whole set. It warns about matching live sessions and
+starts fresh sessions only after **Start N new sessions**. Entries start in order; a failure stops
+later entries, while already started sessions stay available. The result names each started,
+failed or not-started entry and links to saved sessions where BMN has one. A new deliberate launch
+uses a new preview.
+
+**Repository identity** in Session details reads the session's saved launch directory and shows
+its Git root, branch or detached/unborn state, linked worktree status and read time. The New
+session form and launch-set preview show the same read-only check beside their selected directory.
+BMN checks again when you press Create or Start; if a known identity changed, it shows the new
+value for review before another press. A non-repository or unavailable Git result is named and
+does not by itself block an otherwise valid launch. This describes the selected directory at the
+time shown, not where a running shell may have moved later. BMN never checks out a branch or
+creates a worktree for this feature.
+
 Sessions are independent: each has its own process, its own terminal, and a token that reaches only
 itself. A session launched from inside an agent does not inherit that agent's session identity
 either: BMN strips agent session variables such as `CLAUDE_CODE_SESSION_ID` and `CODEX_THREAD_ID`

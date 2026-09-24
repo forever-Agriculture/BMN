@@ -19,6 +19,7 @@ import type {
   InterruptedSessionCohort,
   SessionCohortOfferedResult,
   ProgressRecord,
+  RepositoryIdentity,
   TelegramStatus,
   TerminalNoticeCode,
   VoiceLanguage,
@@ -28,6 +29,12 @@ import type {
   ConversationResumePreview,
   ExplicitConversationBinding,
   LaunchTemplateRecord,
+  LaunchSetRecord,
+  LaunchSetCreateParams,
+  LaunchSetUpdateParams,
+  LaunchSetDeleteParams,
+  LaunchSetStartParams,
+  LaunchSetStartResult,
   LayoutGetResult,
   LayoutPutParams,
   ProtocolErrorCode,
@@ -162,6 +169,8 @@ export interface AiTerminalBridge {
   listSessions(workspaceId: string): Promise<SessionRecord[]>
   createSession(params: SessionCreateParams): Promise<CreatedSession>
   updateSession(params: SessionUpdateParams): Promise<SessionRecord>
+  inspectRepository(directory: string): Promise<RepositoryIdentity>
+  normalizeLaunchDirectories(directories: string[]): Promise<string[]>
   listTemplates(): Promise<LaunchTemplateRecord[]>
   createTemplate(params: {
     name: string
@@ -170,6 +179,15 @@ export interface AiTerminalBridge {
     cwd: string
     backgroundChoice?: 'hide' | 'stop' | null
   }): Promise<LaunchTemplateRecord>
+  listLaunchSets(workspaceId: string): Promise<LaunchSetRecord[]>
+  getLaunchSet(workspaceId: string, setId: string): Promise<LaunchSetRecord>
+  createLaunchSet(params: LaunchSetCreateParams): Promise<LaunchSetRecord>
+  updateLaunchSet(params: LaunchSetUpdateParams): Promise<LaunchSetRecord>
+  deleteLaunchSet(params: LaunchSetDeleteParams): Promise<{ deleted: true }>
+  startLaunchSet(params: LaunchSetStartParams): Promise<LaunchSetStartResult & {
+    sessions: SessionRecord[]
+    startups: TerminalStartupSuccess[]
+  }>
   getLayout(workspaceId: string): Promise<LayoutGetResult>
   putLayout(params: LayoutPutParams): Promise<WorkspaceLayoutState>
   /** Quits the app; the owner is asked first when sessions are running. */

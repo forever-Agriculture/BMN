@@ -372,6 +372,14 @@ export class HostControlError extends Error {
   }
 }
 
+/** A fresh process failed after its ordinary session row was saved; the owner can still inspect it. */
+export class PersistedSessionStartError extends HostControlError {
+  constructor(readonly sessionId: string, cause: HostControlError) {
+    super(cause.code, cause.message, cause.retryable)
+    this.name = 'PersistedSessionStartError'
+  }
+}
+
 export interface StoredSessionReader {
   listWorkspaces(includeArchived: boolean): Promise<readonly WorkspaceRecord[]>
   listSessions(workspaceId: string): Promise<readonly SessionRecord[]>
@@ -533,28 +541,40 @@ export class SessionManager {
     )
     const bindingIdentity = conversationIdentity(prepared.binding)
     const reservation = bindingIdentity ? this.claimConversation(bindingIdentity, sessionId) : undefined
-    const live = await this.startIncarnation(
-      sessionId,
-      {
-        ...params,
-        executable: prepared.executable,
-        argv: prepared.argv
-      },
-      this.environment,
-      captureStartedAt,
-      (record) => this.store.createStarting({
-        ...record,
-        workspaceId: params.workspaceId,
-        name: params.name.trim(),
-        cwd: params.cwd,
-        executable: params.executable,
-        argv: params.argv,
-        backgroundChoice: params.backgroundChoice ?? null,
-        binding: prepared.binding
-      }),
-      prepared.injectedArguments,
-      reservation
-    )
+    let recordPersisted = false
+    let live: LiveSession
+    try {
+      live = await this.startIncarnation(
+        sessionId,
+        {
+          ...params,
+          executable: prepared.executable,
+          argv: prepared.argv
+        },
+        this.environment,
+        captureStartedAt,
+        async (record) => {
+          await this.store.createStarting({
+            ...record,
+            workspaceId: params.workspaceId,
+            name: params.name.trim(),
+            cwd: params.cwd,
+            executable: params.executable,
+            argv: params.argv,
+            backgroundChoice: params.backgroundChoice ?? null,
+            binding: prepared.binding
+          })
+          recordPersisted = true
+        },
+        prepared.injectedArguments,
+        reservation
+      )
+    } catch (error) {
+      if (recordPersisted && error instanceof HostControlError) {
+        throw new PersistedSessionStartError(sessionId, error)
+      }
+      throw error
+    }
     this.conversationBindings.set(sessionId, prepared.binding)
     return {
       sessionId,

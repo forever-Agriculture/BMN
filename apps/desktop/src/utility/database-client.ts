@@ -3,6 +3,10 @@ import {
   ERROR_CODES,
   type ArtifactRecord,
   type LaunchTemplateRecord,
+  type LaunchSetRecord,
+  type LaunchSetCreateParams,
+  type LaunchSetUpdateParams,
+  type LaunchSetDeleteParams,
   type LayoutGetResult,
   type ConversationRouteSummary,
   type PersistedConversationBinding,
@@ -151,6 +155,26 @@ export class DatabaseWorkerClient implements SessionStore {
 
   async createTemplate(params: TemplateCreateParams): Promise<LaunchTemplateRecord> {
     return (await this.request('template-create', { ...params, argv: [...params.argv] })) as LaunchTemplateRecord
+  }
+
+  async listLaunchSets(workspaceId: string): Promise<LaunchSetRecord[]> {
+    return (await this.request('launch-set-list', { workspaceId })) as LaunchSetRecord[]
+  }
+
+  async getLaunchSet(workspaceId: string, setId: string): Promise<LaunchSetRecord> {
+    return (await this.request('launch-set-get', { workspaceId, setId })) as LaunchSetRecord
+  }
+
+  async createLaunchSet(params: LaunchSetCreateParams): Promise<LaunchSetRecord> {
+    return (await this.request('launch-set-create', { ...params })) as LaunchSetRecord
+  }
+
+  async updateLaunchSet(params: LaunchSetUpdateParams): Promise<LaunchSetRecord> {
+    return (await this.request('launch-set-update', { ...params })) as LaunchSetRecord
+  }
+
+  async deleteLaunchSet(params: LaunchSetDeleteParams): Promise<{ deleted: true }> {
+    return (await this.request('launch-set-delete', { ...params })) as { deleted: true }
   }
 
   async getLayout(workspaceId: string): Promise<LayoutGetResult> {

@@ -1,43 +1,53 @@
 # Dev Auto handoff
 
-- Project / selected epics: `/home/oleksandr/code/BMN`; Epics 19–21, six stories, owner `$dev-auto 19-21` (2026-09-23).
-- Original request and intended outcomes: `_bmad-output/planning-artifacts/epics.md:1018-1175`; clean child sessions, OpenCode subagent asks, glanceable sidebar, repeat watch. Decisions/measurements: `_bmad-output/planning-artifacts/reference-context-19-21.md`.
-- Mode: build
-- Stopping condition: selected Epics 19–21 accepted; no automatic time limit. Owner requested autonomous work for two hours, not a stop deadline, and later said continue.
+- Project / selected epics: `/home/oleksandr/code/BMN`; Epics 10 and 22, four stories. Owner `$dev-auto 10, 22` (2026-09-24), followed by `continue` after interrupted initial read.
+- Original request and intended outcomes: `_bmad-output/planning-artifacts/epics.md:387-462` (Epic 10; authoritative 2026-09-19 re-scope at :395) and :1192-1230 (Epic 22). Save/start reusable workspace launch sets; inspect read-only Git identity in Session details and launch previews.
+- Mode: resume
+- Stopping condition: both selected epics accepted; no automatic time limit.
 - Explicit user stop: none
-- Restrictions and authorization boundaries: `$dev-auto 19-21` and project `AGENTS.md` authorize local implementation/checks/task commits. Later owner request to Claude Code authorized push of `main` and the desktop update after a quality check; no merge or other deploy authorization. Preserve unrelated work. Project `AGENTS.md` forbids packaging while packaged BMN runs and requires `pnpm run update:desktop` only after commit and push to main. Configured GLM/Codex/Claude routes authorized by the dev-auto skill; no other provider.
-- Decision/history log: `.dev-auto/log.md` append-only. Raw receipts under ignored `.dev-auto/evidence/epics-19-21/` and `.dev-auto/evidence/epic-20/`.
-- Lead host / requested model / observed model: Codex API / no owner-requested model / gpt-6-sol/xhigh, rollout `01a0ce20-bc21`.
+- Restrictions and authorization boundaries: Owner `$dev-auto 10, 22` and project `AGENTS.md` authorize local implementation, checks, task commits, and dev-auto Codex/Claude/configured-GLM helper and review routes. Push requires separate authorization; `pnpm run update:desktop` follows only after task changes are committed and pushed to main. Do not package while packaged BMN runs. Preserve unrelated work. No other provider.
+- Decision and history log: `.dev-auto/log.md` append-only; raw receipts in ignored `.dev-auto/evidence/epics-10-22/`.
+- Authorized provider routes: `dev-auto/references/models.md` ordered tiers.
+- Lead host / requested model / observed model: Codex API / none requested / `gpt-6-sol/xhigh` with `gpt-6-astra/medium` also in lead rollout `01a0d2b8-8d48`; final usage snapshot pending.
 
 ## Progress
 
-- Sprint board: `_bmad-output/implementation-artifacts/sprint-status.yaml:107-120` (ignored local) marks Epics 19–21 and all six stories `done`, atomically written/read back. Baseline HEAD was `0dc003b`, initial worktree clean. Checked product source/docs committed locally as `49e7a36`; no post-review product edit or unrelated tracked change.
-- Implemented: 19.1 exact-key inherited agent/terminal identity filter and fresh BMN credentials; 19.2 OpenCode child/sibling permission/question slots; 20 workspace attention dot, dormant styling, hover/focus menus and palette liveness; 21 Claude failure hook and canonical fingerprints, bounded repeat counting/log, one app-owned notice at eight calls. README and architecture/features/agent-control docs updated.
-- Active helpers: none; five implementation helpers and three independent reviewers returned. Four GLM first routes failed EAI_AGAIN with no edit/$0; native fallback routes completed. Observed models/usage in `.dev-auto/log.md` under “Observed run usage”.
+- Sprint board and reconciled state: `_bmad-output/implementation-artifacts/sprint-status.yaml:122-130` marks Epics 10/22 and all four stories `done`, atomically written/read back; board is ignored by Git. Baseline HEAD `85c96cf`, initial worktree clean; no unrelated tracked changes. Epic 10 precedes 22.2.
+- Implemented: 10.1 workspace-owned copied definitions, migration 15, CRUD/revision/backup/archive cleanup and menu/palette editor. 10.2 one-directory preview, duplicate warning, full preflight, utility process-lifetime key, ordered starts, truthful partial results and saved failed-session link. 22.1 bounded read-only Git inspector and Session details. 22.2 identity/recheck in ordinary and set launch, including stale-response guards and changed-known-identity review. README/features/architecture updated.
 - Associated loop: none.
+- Active native helpers: none. Both full epic reviews and all focused rechecks completed.
+- Collected terminal helper results: GLM-5.3/max first route failed `EAI_AGAIN` before edits, 1 turn, $0 (`glm-store-receipt.json`). Native `/root/epic10_store`, gpt-6-astra/low, delivered definition layer; lead inspected diff and reran 38 SQLite tests PASS. Receipt rollout `01a0d2c2-2b8c`.
 
 ## Decisions and findings
 
-- Original or approved intent changes: none.
-- Material review findings: Epic 19 full review found none. Epic 20 full review found missing selected-exited/interrupted visual cases and grayscale keyboard focus proof; all CLOSED by two focused rechecks, final visual-only recheck against sha256 `9023281f0d7e554e2d86e21327129ead11fd786a384873d14960c6ce63b086b9`. Epic 21/project full review found owner-resolution race losing a hook record and premature PTY input sampling; both CLOSED by focused recheck with RED/GREEN race and RED PTY guard evidence. No open material findings; aggregate NFR24–28/pattern review found no drift.
-- Documented limits: OpenCode Go subscription inactive and live owner plugin absent, so provider-backed dev-BMN event log, OpenCode environment and subagent navigation are UNMEASURED/UNVERIFIED as allowed by 19.1/19.2 conditional measurements. Isolated OpenCode 1.18.31 TUI startup emitted no `session.idle` or `session.status`. Owner three-second orientation assessment UNVERIFIED. The 1,000,000-character fingerprint cut is code-inspected but not runtime tested; all normal canonicalization cases tested. No tool input/output persisted.
+- Original or approved intent changes: none. Epic 10 re-scope drops durable attempts/replay/retry; in-memory key and normal session records retained. Failed startup after persistence leaves an exited row linked from the failed result, as the normal create path does.
+- Material pending findings: none. Cancellation and equivalent-directory warning CLOSED by first focused rechecks with source plus Electron red/green receipts. Malformed Git HEAD CLOSED by second focused Epic 22 delta recheck: exact 40/64-digit guard, 41-digit RED/GREEN regression. No material introduced defect found.
+- Cross-epic obligations: 22.2 uses the frozen 10.2 preview and rechecks identity without changing its sequential/idempotent utility start.
 
 ## Evidence
 
-- Full unit at final product code: 89 files, 1550 PASS/1 SKIP, `.dev-auto/evidence/epics-19-21/unit-after-review.log` sha256 `f61b0fcb88c6dbedf854781e159c6fc7c432a6dce5ab578227e7c4f33e08e8fd`. Typecheck, lint (after final visual edit), node syntax and `git diff --check` PASS.
-- Electron full gate exit 0: `.dev-auto/evidence/epics-19-21/electron-after-review.log` sha256 `46107b738ac81fe1007525bfa0dc5c195605dc1269dadacd158ac12ce40cfe7d`. Receipt proves OpenCode child requests, workspace attention, actual interrupted selected styling, three-call log, eight-call notice/provenance/withdrawal and zero PTY input after notice. 19.1 isolated live-shell env grep printed only `CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1`: `session-env-runtime-final.log` sha256 `8bacdc2d01997f8c45216690c3e583ea59c47edb4b2082c4501f376da14aee61`.
-- Visual full gate exit 0: `.dev-auto/evidence/epics-19-21/visual-interrupted-pass.log` sha256 `92ff9dfc6594dc47cc213f6a4bf6666af290439706deffbf40da058ad922c45c`; JSON `.dev-auto/evidence/epic-5/runtime-evidence.json` sha256 `d07da10649c76ba8f419a7e6188b8566e4218e590d81895f585b37477001eaf1`. Black/Knight and Black/Cross screenshots inspected: live, exited, interrupted, exited-with-question and selected-exited rows together; grayscale selected bar, white keyboard focus ring and workspace dot.
-- Race test original candidate RED `repeat-race-red.log` sha256 `61552099ff0eb2c0dd0f22f95437e87a46e2de5773f98a609932709b373039ac`; repaired GREEN `repeat-race-green.log` sha256 `1e0ca095463ee3620c2845eba35571c6518f8b9331d76f7cde7a629cd1e091f5`. Real xterm key made zero-PTY guard RED `repeat-pty-guard-red.log` sha256 `aa0cb93593ed1688996d38ad557de35a78ac755f0aef09579372dac11490ff91`.
-- Reviewed revision: baseline `0dc003b`; original product diff sha256 `1d22ed8d49517c23e7cb56a5f8e01256ac4b0cb2a7a630a6661bf1d92a2b2650`; first repair sha256 `451cbbda1ecb0ac3c7d5e1c91fba5c707f0e52a5f8f03a93d6922d2a284bb767`; final product candidate `.dev-auto/evidence/epics-19-21/candidate-after-visual.diff` sha256 `9023281f0d7e554e2d86e21327129ead11fd786a384873d14960c6ce63b086b9`. Full reviews and focused rechecks all returned RESULT: done; dispositions in log.
+- Checks run and observed results: final candidate `pnpm run typecheck`, `pnpm run lint`, `git diff --check` PASS; focused Git/renderer tests 8/8 PASS (`review-repair-focused.log` sha256 `39b4d34c…`); exact-length Git regression RED then GREEN 5/5 (`git-oid-length-red.log` sha256 `988ce2b7…`, `git-oid-length-green.log` sha256 `f0da58c2…`). Full repaired candidate unit suite PASS 94 files/1572 outside shell sandbox (`unit-review-repair-unsandboxed.log` sha256 `6beae77bd85d6e6ea76ead27c5a9c21b697257c6a77341223919b5a131f4634c`). In-sandbox run failed 431 tests due Git/Unix socket EPERM; default parallel timeouts are documented in log. Only Git OID guard/test changed after full suite.
+- Electron full gate PASS/exit 0 on repaired product: `electron-review-repair-complete.log` sha256 `c03e2b3008befdde820f2e578fc4598645bf6ec88af8a17826a4d7263f78183d`. Receipt includes `cancelledPendingStart=true`, `equivalentDirectoryWarning=true`, ordered starts, partial results, reconnect zero extra sessions, Git changed-branch review and prior contract checks. The paused-read cancellation probe failed on original code (`electron-cancel-red.log`); two gate attempts failed before feature phase (preload Node import error, then known selected-row styling timing), and two intermediate feature probes exposed test timing corrected without product change.
+- Tests: all selected behavior has automated checks in project layers; Linux Electron exercises real preload/utility/UI routes. Native Tab traversal, dialog contrast, close/unmount during pending set read and macOS/Windows runtime were not separately measured; source guards cover close/unmount. Git fixtures cover nested, linked, detached, unborn, non-repo, missing Git, timeout, malformed output and stale responses. Paid harness calls were unnecessary.
+- Reviewed scope and route: two independent read-only gpt-6-astra/medium native epic reviews completed (`/root/epic10_review`, `/root/epic22_review`), using `dev-auto/references/review-brief.md`.
+- Baseline and reviewed revisions / material finding dispositions / recheck or delta evidence: baseline `85c96cf`; original reviewed tracked diff sha256 `484ac3f2…`, manifest `3ef2a381…`; first repaired tracked diff sha256 `5d3db169bcfe86b79f03d72dd9c75aa4f1b020b39e2aed476acdf6467ccd8efa`, manifest `3dabcbff…`; final 14-file untracked product manifest `product-final-manifest.json` sha256 `a8596559d883bb710031bfad27db1e3f777111fa7f27ba782fd0cfe8b4b652d2` with unchanged tracked diff. All three material findings CLOSED as above; no unrelated residual changes.
+- Unreviewed or unverified areas: native Tab/contrast and macOS/Windows runtime as stated above; no selected-scope material gap.
 
 ## Measurement
 
-- Timing: started about 2026-09-23 15:00 Europe/Kyiv; selected acceptance finished after owner’s later “continue”, about 3h44m elapsed.
-- Lead observed `gpt-6-sol/xhigh`; final `scripts/check.py usage` snapshot 79,839,303 cumulative tokens (79,063,552 cached), rollout `01a0ce20-bc21`. Five native implementation helper receipts: gpt-6-astra/low (four) and gpt-5.6-luna/max (one). Three reviewer receipts: gpt-6-astra/medium (Epics 19/20) and high (Epic 21+aggregate). GLM first routes unavailable/EAI_AGAIN, $0; Claude failure measurement GLM-5.3-Flash total $0.048670. Exact IDs, tier escalations and per-rollout usage in log. Codex receipts do not report dollar cost. No receipt gap.
-- Observed usage: lead 79,839,303 cumulative tokens (79,063,552 cached); five implementation helper and three reviewer per-rollout usages recorded in `.dev-auto/log.md` “Observed run usage”; four GLM failures $0, Claude Flash measurement $0.048670. No gap.
-- Owner interventions: initial scope request; autonomous-work instruction; later “continue”. No approval request. BMN cockpit mirror failed EPERM once, so no retry per skill.
+- Timing: started about 2026-09-24 12:21 Europe/Kyiv; accepted about 13:49; elapsed about 1h28m including test and review waits.
+- Dispatches:
+  - Epic 10.1 store | implement-complex | GLM-5.3/max | `glm-store-receipt.json` | first
+  - Epic 10.1 store | implement-complex | gpt-6-astra/low | `01a0d2c2` | escalated: GLM route EAI_AGAIN
+  - Epic 10 full review | epic-review | gpt-6-astra/medium | `01a0d2ec` | first
+  - Epic 22 full review | epic-review | gpt-6-astra/medium | `01a0d2ed` | first
+  - Epic 10 focused recheck | epic-review | gpt-6-astra/low | `01a0d302` | first
+  - Epic 22 focused recheck | epic-review | gpt-6-astra/low | `01a0d303` | first
+  - Epic 22 OID delta recheck | epic-review | gpt-6-astra/low | `01a0d306` | first
+- Owner interventions: initial scope request and `continue`; no approval or repeat request, 0 avoidable owner minutes.
+- Observed usage: `check.py usage` at 10:48 UTC: GLM first route 1 turn/$0, unavailable model after DNS; Codex lead `01a0d2b8` gpt-6-astra/medium + gpt-6-sol/xhigh, 60,199,461 total tokens (59,538,048 cached; 150,936 output); store helper `01a0d2c2` 928,917 total; full reviewers `01a0d2ec` 600,032 and `01a0d2ed` 424,782; first rechecks `01a0d302` 253,785 and `01a0d303` 293,935; delta recheck `01a0d306` 100,206. Codex receipts have no dollar cost.
 
 ## Resume
 
-- Next safe action: none
-- Status: COMPLETE — Epics 19–21 and all six stories accepted; implementation `49e7a36` plus follow-up fix `d9cb4a8` (delivery check in `.dev-auto/log.md`), pushed to `origin/main` with the desktop update queued.
+- Next safe action: none.
+- Status: COMPLETE — Epics 10/22 accepted locally; selected board rows done, gates passed, all material review findings closed.

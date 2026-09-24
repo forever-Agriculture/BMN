@@ -1309,6 +1309,47 @@ input[type='radio'] {
   color: var(--muted);
 }
 
+.repository-identity {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 8px 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.repository-identity strong {
+  color: var(--text);
+}
+
+.repository-identity code {
+  color: var(--text);
+}
+
+.launch-sets-dialog {
+  width: min(720px, calc(100vw - 32px));
+}
+
+.launch-sets-dialog :is(form, fieldset) {
+  display: grid;
+  gap: 8px;
+}
+
+.launch-sets-dialog fieldset {
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.launch-sets-dialog label {
+  display: grid;
+  gap: 4px;
+}
+
+.launch-sets-dialog code {
+  overflow-wrap: anywhere;
+}
+
 .session-inspector .actions {
   display: flex;
   flex-wrap: wrap;

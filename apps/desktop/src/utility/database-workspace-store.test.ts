@@ -15,6 +15,7 @@ import { insertConversationBinding } from './database-binding-store'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
 import {
   WorkspaceStoreError,
+  createLaunchSet, deleteLaunchSet, updateLaunchSet, listLaunchSets, getLaunchSet,
   createTemplate,
   createWorkspace,
   getLayout,
@@ -830,5 +831,69 @@ describe('workspace identity marker', () => {
       source.close()
       await rm(folder, { recursive: true, force: true })
     }
+  })
+})
+
+describe('copied launch set definitions', () => {
+  const entry = { entryId: 'entry-a', name: 'Shell', executable: '/bin/sh', argv: ['-c', 'printf "a b"'], backgroundChoice: null }
+  const params = { workspaceId: DEFAULT_WORKSPACE_ID, name: 'Daily', entries: [entry] }
+  it('persists copied commands, stable IDs, ordered edits and revision-checked deletion', () => {
+    const db = new BetterSqlite3(':memory:')
+    try {
+      initializeDatabase(db, now)
+      expect(listLaunchSets(db, DEFAULT_WORKSPACE_ID)).toEqual([])
+      const template = createTemplate(db, { cwd: '/template', name: 'Shell', executable: entry.executable, argv: entry.argv }, 'template-copy', now)
+      const copied = { entryId: entry.entryId, name: template.name, executable: template.executable, argv: template.argv, backgroundChoice: template.backgroundChoice }
+      const saved = createLaunchSet(db, { ...params, entries: [copied] }, 'set-a', now)
+      copied.argv.push('mutated')
+      db.prepare('DELETE FROM launch_template WHERE template_id = ?').run(template.templateId)
+      expect(getLaunchSet(db, params.workspaceId, saved.setId).entries[0]?.argv).toEqual(entry.argv)
+      const second = { ...entry, entryId: 'entry-b' }
+      const edited = updateLaunchSet(db, { ...params, setId: saved.setId, expectedRevision: 1, name: 'Renamed', entries: [second, entry] })
+      expect(edited).toMatchObject({ revision: 2, name: 'Renamed', entries: [second, entry] })
+      expect(() => updateLaunchSet(db, { ...params, setId: saved.setId, expectedRevision: 1 })).toThrow(/revision 2/)
+      expect(() => deleteLaunchSet(db, { workspaceId: params.workspaceId, setId: saved.setId, expectedRevision: 1 })).toThrow(/revision 2/)
+      expect(getLaunchSet(db, params.workspaceId, saved.setId)).toEqual(edited)
+      deleteLaunchSet(db, { workspaceId: params.workspaceId, setId: saved.setId, expectedRevision: 2 })
+      expect(listLaunchSets(db, params.workspaceId)).toEqual([])
+      expect(db.prepare('SELECT COUNT(*) AS n FROM session').get()).toEqual({ n: 0 })
+    } finally { db.close() }
+  })
+  it('rejects invalid commands, extra fields, duplicate IDs and inactive ownership without partial writes', () => {
+    const db = new BetterSqlite3(':memory:')
+    try {
+      initializeDatabase(db, now)
+      for (const invalidParams of [
+        { ...params, entries: [] }, { ...params, entries: Array(9).fill(entry) },
+        { ...params, entries: [entry, entry] }, { ...params, name: 'x'.repeat(300) },
+        { ...params, entries: [{ ...entry, cwd: '/hidden' }] },
+        { ...params, entries: [{ ...entry, executable: '\0' }] },
+        { ...params, entries: [{ ...entry, argv: ['x'.repeat(65537)] }] },
+        { ...params, workspaceId: 'missing' }
+      ]) expect(() => createLaunchSet(db, invalidParams, 'bad', now)).toThrow()
+      const saved = createLaunchSet(db, params, 'good', now)
+      updateWorkspace(db, { workspaceId: params.workspaceId, expectedRevision: 1, archived: true }, now)
+      expect(() => createLaunchSet(db, params, 'bad', now)).toThrow(/Archived/)
+      expect(() => updateLaunchSet(db, { ...params, setId: 'good', expectedRevision: 1 })).toThrow(/Archived/)
+      expect(() => deleteLaunchSet(db, { workspaceId: params.workspaceId, setId: 'good', expectedRevision: 1 })).toThrow(/Archived/)
+      expect(listLaunchSets(db, params.workspaceId)).toEqual([saved])
+    } finally { db.close() }
+  })
+  it('survives reopening and the actual VACUUM INTO backup operation', async () => {
+    const folder = await mkdtemp(join(tmpdir(), 'bmn-launch-set-'))
+    const path = join(folder, 'source.sqlite')
+    let db = new BetterSqlite3(path)
+    try {
+      initializeDatabase(db, now)
+      const saved = createLaunchSet(db, params, 'set-backup', now)
+      db.close()
+      db = new BetterSqlite3(path)
+      initializeDatabase(db, now)
+      expect(listLaunchSets(db, params.workspaceId)).toEqual([saved])
+      const backup = join(folder, 'backup.sqlite')
+      db.prepare('VACUUM INTO ?').run(backup)
+      const copy = new BetterSqlite3(backup)
+      try { expect(listLaunchSets(copy, params.workspaceId)).toEqual([saved]) } finally { copy.close() }
+    } finally { db.close(); await rm(folder, { recursive: true, force: true }) }
   })
 })

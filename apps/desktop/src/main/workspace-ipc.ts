@@ -49,8 +49,14 @@ const ROUTES = {
   'aiterm:workspace:update': METHOD_REGISTRY.workspaceUpdate,
   'aiterm:session:list': METHOD_REGISTRY.sessionList,
   'aiterm:session:update': METHOD_REGISTRY.sessionUpdate,
+  'aiterm:repository:inspect': METHOD_REGISTRY.repositoryInspect,
   'aiterm:template:list': METHOD_REGISTRY.templateList,
   'aiterm:template:create': METHOD_REGISTRY.templateCreate,
+  'aiterm:launch-set:list': METHOD_REGISTRY.launchSetList,
+  'aiterm:launch-set:get': METHOD_REGISTRY.launchSetGet,
+  'aiterm:launch-set:create': METHOD_REGISTRY.launchSetCreate,
+  'aiterm:launch-set:update': METHOD_REGISTRY.launchSetUpdate,
+  'aiterm:launch-set:delete': METHOD_REGISTRY.launchSetDelete,
   'aiterm:layout:get': METHOD_REGISTRY.layoutGet,
   'aiterm:layout:put': METHOD_REGISTRY.layoutPut
 } as const

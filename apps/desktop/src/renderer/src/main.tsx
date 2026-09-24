@@ -34,6 +34,8 @@ import { FilesPanel } from './files-panel'
 import { HookEventsDialog } from './hook-events-dialog'
 import { ProgressEvidenceDialog } from './progress-evidence-dialog'
 import { ResumeInterruptedDialog } from './resume-interrupted-dialog'
+import { LaunchSetsDialog } from './launch-sets-dialog'
+import { RepositoryIdentityView, identityChanged, useRepositoryIdentity } from './repository-identity'
 import {
   interruptedStopWords,
   offerNeedsRecording,
@@ -133,6 +135,7 @@ type ShellDialog =
   | { kind: 'preferences' }
   | { kind: 'new-workspace' }
   | { kind: 'rename-workspace'; workspace: WorkspaceRecord }
+  | { kind: 'launch-sets'; workspace: WorkspaceRecord; initialMode: 'manage' | 'launch' }
   | { kind: 'locate'; session: SessionRecord; binding: ConversationBindingState }
   | { kind: 'stop'; session: SessionRecord }
   /** Shows the exact command before Resume starts anything. */
@@ -183,6 +186,8 @@ function App(): React.JSX.Element {
   const [bindingRevision, setBindingRevision] = useState(0)
   const [savedOutput, setSavedOutput] = useState<SavedOutputCatalogPresentation>()
   const [sessionForm, setSessionForm] = useState<SessionLaunchForm>(INITIAL_SESSION_FORM)
+  const sessionFormRef = useRef(sessionForm)
+  sessionFormRef.current = sessionForm
   const [pickedTemplateId, setPickedTemplateId] = useState('')
   const [editingSessionId, setEditingSessionId] = useState<string>()
   /** The new-session form was opened from Split: the created session opens beside the current pane. */
@@ -252,6 +257,8 @@ function App(): React.JSX.Element {
   sessionsRef.current = sessions
   activityRef.current = activity
   const activeWorkspaceId = tree.selectedWorkspaceId
+  const activeWorkspaceRef = useRef(activeWorkspaceId)
+  activeWorkspaceRef.current = activeWorkspaceId
   const activeWorkspace = workspaces.find((item) => item.workspaceId === activeWorkspaceId)
   const layout = activeWorkspaceId ? layouts[activeWorkspaceId] : undefined
   const selectedSessionId = layout?.selectedSessionId ?? null
@@ -1244,6 +1251,10 @@ function App(): React.JSX.Element {
 
   const workspaceMenuEntries = (workspace: WorkspaceRecord, index: number, ordered: readonly WorkspaceRecord[]): MenuEntry[] => [
     { label: 'New session here', onSelect: () => beginNewSession(workspace) },
+    { label: 'Save a launch set…', disabled: workspace.archivedAt !== null,
+      onSelect: () => setDialog({ kind: 'launch-sets', workspace, initialMode: 'manage' }) },
+    { label: 'Launch set…', disabled: workspace.archivedAt !== null,
+      onSelect: () => setDialog({ kind: 'launch-sets', workspace, initialMode: 'launch' }) },
     { label: 'Rename…', onSelect: () => setDialog({ kind: 'rename-workspace', workspace }) },
     { label: 'Move up', disabled: index === 0, onSelect: () => moveWorkspace(ordered, index, -1) },
     { label: 'Move down', disabled: index === ordered.length - 1, onSelect: () => moveWorkspace(ordered, index, 1) },
@@ -1301,6 +1312,10 @@ function App(): React.JSX.Element {
       command('next-attention', 'Go to next request needing you', nextNeedingYou, { shortcut: SHORTCUT_LABELS['attention-next'], context: `${unresolved.length} waiting` }),
       command('new-workspace', 'New workspace…', () => setDialog({ kind: 'new-workspace' })),
       command('new-session', 'New session…', () => beginNewSession(activeWorkspace), { disabled: !activeWorkspace, context: activeWorkspace?.name }),
+      command('save-launch-set', 'Save a launch set…', () => activeWorkspace && setDialog({ kind: 'launch-sets', workspace: activeWorkspace, initialMode: 'manage' }),
+        { disabled: !activeWorkspace || activeWorkspace.archivedAt !== null, context: activeWorkspace?.name }),
+      command('launch-set', 'Launch set…', () => activeWorkspace && setDialog({ kind: 'launch-sets', workspace: activeWorkspace, initialMode: 'launch' }),
+        { disabled: !activeWorkspace || activeWorkspace.archivedAt !== null, context: activeWorkspace?.name }),
       command('split', (layout?.split.panes.length ?? 0) >= 2 ? 'Close split' : 'Split view…', () => toggleSplit(), { shortcut: SHORTCUT_LABELS['split-toggle'] }),
       command('pane-other', 'Switch to other pane', focusOtherPane, { shortcut: SHORTCUT_LABELS['pane-other'], disabled: (layout?.split.panes.length ?? 0) < 2 }),
       command('focus', focusMode ? 'Leave focus mode' : 'Focus mode', () => setFocusMode((value) => !value), { shortcut: SHORTCUT_LABELS['focus-toggle'] }),
@@ -1358,6 +1373,14 @@ function App(): React.JSX.Element {
   const bindingPresentation = conversationBindingPresentation(binding)
   const identity = IDENTITY_PRESENTATION[settings.appearance.identity]
   const selectedRecord = sessions.find((session) => session.sessionId === selectedSessionId)
+  const detailsRepository = useRepositoryIdentity(
+    panel === 'details' ? selectedRecord?.cwd ?? null : null,
+    selectedRecord ? `${selectedRecord.sessionId}:${selectedRecord.cwd}` : null
+  )
+  const formRepository = useRepositoryIdentity(
+    panel === 'details' && activeWorkspaceId && !editingSessionId ? sessionForm.cwd : null,
+    `new:${activeWorkspaceId ?? ''}:${sessionForm.cwd}`
+  )
   const observedProgressFor = (session: SessionRecord): ProgressPresentation | null => progressPresentation(
     progress,
     session.sessionId,
@@ -1775,6 +1798,12 @@ function App(): React.JSX.Element {
                   <p>{bindingPresentation.label}</p>
                   <small>{bindingPresentation.detail}</small>
                 </div>
+                <RepositoryIdentityView
+                  directory={selectedRecord.cwd}
+                  identity={detailsRepository.identity}
+                  loading={detailsRepository.loading}
+                  onRefresh={() => void detailsRepository.refresh()}
+                />
                 <ProgressStrip progress={selectedProgress} onOpen={() => openProgressDetail(selectedRecord, selectedProgress)} />
                 {selectedRecord.launchDisabledReason ? (
                   <p className="inline-error" role="status">
@@ -1822,9 +1851,17 @@ function App(): React.JSX.Element {
                       brief(`Saved ${updated.name}.`)
                       return
                     }
-                    const created = await window.aiTerminal.createSession(
-                      sessionCreateParams(activeWorkspaceId, sessionForm, { cols: 80, rows: 24 })
-                    )
+                    const params = sessionCreateParams(activeWorkspaceId, sessionForm, { cols: 80, rows: 24 })
+                    const refreshed = await formRepository.refresh()
+                    if (!refreshed || sessionFormRef.current !== sessionForm || activeWorkspaceRef.current !== activeWorkspaceId) {
+                      setFormError('The launch details changed. Review them before starting.')
+                      return
+                    }
+                    if (identityChanged(formRepository.identity, refreshed)) {
+                      setFormError('Repository identity changed. Review the new value before starting.')
+                      return
+                    }
+                    const created = await window.aiTerminal.createSession(params)
                     setSessions((current) => [...current, created.session])
                     setLive((current) => ({ ...current, [created.session.sessionId]: created.startup }))
                     const withCreated = [...sessions, created.session]
@@ -1891,6 +1928,12 @@ function App(): React.JSX.Element {
                     setSessionForm((current) => ({ ...current, cwd }))
                   }} />
                 </label>
+                {!editingSessionId ? <RepositoryIdentityView
+                  directory={sessionForm.cwd}
+                  identity={formRepository.identity}
+                  loading={formRepository.loading}
+                  onRefresh={() => void formRepository.refresh()}
+                /> : null}
                 <label>When windows close
                   <select aria-label="When windows close" value={sessionForm.backgroundChoice ?? ''} onChange={(event) => {
                     const value = event.target.value
@@ -1900,7 +1943,9 @@ function App(): React.JSX.Element {
                 </label>
                 {formError ? <span className="inline-error" role="alert">{formError}</span> : null}
                 <div className="actions">
-                  <button type="submit" className="primary">{editingSessionId ? 'Save session' : 'Create session'}</button>
+                  <button type="submit" className="primary" disabled={!editingSessionId && (formRepository.loading || !formRepository.identity)}>
+                    {editingSessionId ? 'Save session' : 'Create session'}
+                  </button>
                   {editingSessionId ? <button type="button" className="ghost" onClick={() => {
                     setEditingSessionId(undefined)
                     setFormError(undefined)
@@ -1924,6 +1969,22 @@ function App(): React.JSX.Element {
             resumeInterruptedCohort(dialog.cohort.cohortId, idempotencyKey, entries)}
         />
       ) : null}
+      {dialog?.kind === 'launch-sets' ? <LaunchSetsDialog
+        workspace={dialog.workspace}
+        templates={templates}
+        sessions={sessions}
+        liveSessionIds={new Set(Object.keys(live))}
+        initialMode={dialog.initialMode}
+        onClose={() => setDialog(null)}
+        onStarted={(started) => {
+          setSessions((current) => {
+            const ids = new Set(current.map((record) => record.sessionId))
+            return [...current, ...started.sessions.filter((record) => !ids.has(record.sessionId))]
+          })
+          setLive((current) => ({ ...current, ...Object.fromEntries(started.startups.map((startup) => [startup.sessionId, startup])) }))
+        }}
+        onOpenSession={(sessionId) => { openSession(sessionId); setDialog(null) }}
+      /> : null}
       {dialog?.kind === 'palette' ? <CommandPalette commands={paletteCommands()} onClose={() => setDialog(null)} /> : null}
       {dialog?.kind === 'split-picker' ? (
         <CommandPalette

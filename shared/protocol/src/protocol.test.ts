@@ -85,8 +85,15 @@ describe('protocol surface', () => {
         'session.cohort.list',
         'session.cohort.offered',
         'session.cohort.resume',
+        'repository.inspect',
         'template.list',
         'template.create',
+        'launchSet.list',
+        'launchSet.get',
+        'launchSet.create',
+        'launchSet.update',
+        'launchSet.delete',
+        'launchSet.start',
         'layout.get',
         'layout.put',
         'terminal.attach',
@@ -126,7 +133,7 @@ describe('protocol surface', () => {
         'presence.set'
       ])
     )
-    expect(Object.values(METHOD_REGISTRY)).toHaveLength(57)
+    expect(Object.values(METHOD_REGISTRY)).toHaveLength(64)
   })
 
   it('exports the initial stable error codes', () => {

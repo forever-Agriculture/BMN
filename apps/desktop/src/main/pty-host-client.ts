@@ -11,6 +11,7 @@ import {
   type ProtocolMethod,
   type RpcFailure,
   type RpcSuccess,
+  type SessionProcessState,
   type SessionProcessStateChangedMessage
 } from '@bmn/protocol'
 import { utilityProcess, type MessagePortMain, type UtilityProcess } from 'electron'
@@ -264,6 +265,12 @@ export class PtyHostClient {
       })
     }
     return () => this.sessionStateListeners.delete(listener)
+  }
+
+  /** Latest host observation, including an exit reported before main registered a new runtime. */
+  sessionProcessState(sessionId: string, incarnationId: string): SessionProcessState | undefined {
+    const message = this.latestSessionStates.get(sessionId)
+    return message?.incarnationId === incarnationId ? message.state : undefined
   }
 
   onAppEvent(listener: (message: AppEventMessage) => void): () => void {

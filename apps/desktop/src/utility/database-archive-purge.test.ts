@@ -264,3 +264,16 @@ describe('archive retention', () => {
     expect(result.layout.sessionView).toEqual({ kept: { scrollLine: null, followTail: true } })
   })
 })
+
+it('cascades only expired workspace launch sets while preserving unrelated definitions', () => {
+  workspace('expired-sets', daysAgo(40))
+  workspace('kept-sets', null)
+  for (const id of ['expired-sets', 'kept-sets']) {
+    database.prepare('INSERT INTO launch_set VALUES (?, ?, ?, ?, 1, ?)')
+      .run(id, id, 'Saved set', JSON.stringify([{ entryId: 'entry', name: 'Shell', executable: '/bin/sh', argv: [], backgroundChoice: null }]), now)
+  }
+  putSettingsSection(database, 'archive', { deleteAfterDays: 30 }, now)
+  database.transaction(() => purgeExpiredArchives(database, now))()
+  expect(database.prepare('SELECT set_id FROM launch_set').all()).toEqual([{ set_id: 'kept-sets' }])
+  expect(database.pragma('foreign_key_check')).toEqual([])
+})

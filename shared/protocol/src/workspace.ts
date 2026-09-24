@@ -683,3 +683,80 @@ export function isWorkspaceLayoutState(
   }
   return true
 }
+
+/** Copied command definitions: no template binding or per-entry directory. */
+export interface LaunchSetEntry {
+  entryId: string
+  name: string
+  executable: string
+  argv: string[]
+  backgroundChoice: BackgroundChoice | null
+}
+export interface LaunchSetCreateParams {
+  workspaceId: string
+  name: string
+  entries: LaunchSetEntry[]
+}
+export interface LaunchSetUpdateParams extends LaunchSetCreateParams {
+  setId: string
+  expectedRevision: number
+}
+export interface LaunchSetDeleteParams {
+  workspaceId: string
+  setId: string
+  expectedRevision: number
+}
+export interface LaunchSetListParams { workspaceId: string }
+export interface LaunchSetRecord extends LaunchSetCreateParams {
+  setId: string
+  revision: number
+  createdAt: string
+}
+
+function isLaunchSetText(value: unknown, max: number, empty = false): value is string {
+  return typeof value === 'string' && (empty || value.trim().length > 0) &&
+    value.length <= max && !value.includes('\0')
+}
+export function isLaunchSetEntry(value: unknown): value is LaunchSetEntry {
+  return isRecord(value) &&
+    hasExactKeys(value, ['entryId', 'name', 'executable', 'argv', 'backgroundChoice']) &&
+    isLaunchSetText(value.entryId, 128) && isName(value.name) &&
+    isLaunchSetText(value.name, WORKSPACE_NAME_MAX_LENGTH) &&
+    isLaunchSetText(value.executable, 4096) &&
+    isStringArray(value.argv) && value.argv.length <= 256 &&
+    value.argv.every((arg) => isLaunchSetText(arg, 16384, true)) &&
+    value.argv.reduce((total, arg) => total + arg.length, 0) <= 65536 &&
+    isBackgroundChoice(value.backgroundChoice)
+}
+function isLaunchSetDefinition(value: Record<string, unknown>): boolean {
+  return isLaunchSetText(value.workspaceId, 128) &&
+    isLaunchSetText(value.name, WORKSPACE_NAME_MAX_LENGTH) &&
+    Array.isArray(value.entries) && value.entries.length >= 1 && value.entries.length <= 8 &&
+    value.entries.every(isLaunchSetEntry) &&
+    new Set(value.entries.map((entry) => entry.entryId)).size === value.entries.length
+}
+export function isLaunchSetCreateParams(value: unknown): value is LaunchSetCreateParams {
+  return isRecord(value) && hasExactKeys(value, ['workspaceId', 'name', 'entries']) &&
+    isLaunchSetDefinition(value)
+}
+export function isLaunchSetUpdateParams(value: unknown): value is LaunchSetUpdateParams {
+  return isRecord(value) &&
+    hasExactKeys(value, ['workspaceId', 'name', 'entries', 'setId', 'expectedRevision']) &&
+    isLaunchSetDefinition(value) && isLaunchSetText(value.setId, 128) &&
+    isRevision(value.expectedRevision)
+}
+export function isLaunchSetDeleteParams(value: unknown): value is LaunchSetDeleteParams {
+  return isRecord(value) && hasExactKeys(value, ['workspaceId', 'setId', 'expectedRevision']) &&
+    isLaunchSetText(value.workspaceId, 128) && isLaunchSetText(value.setId, 128) &&
+    isRevision(value.expectedRevision)
+}
+export function isLaunchSetListParams(value: unknown): value is LaunchSetListParams {
+  return isRecord(value) && hasExactKeys(value, ['workspaceId']) &&
+    isLaunchSetText(value.workspaceId, 128)
+}
+export function isLaunchSetRecord(value: unknown): value is LaunchSetRecord {
+  return isRecord(value) &&
+    hasExactKeys(value, ['workspaceId', 'name', 'entries', 'setId', 'revision', 'createdAt']) &&
+    isLaunchSetDefinition(value) && isLaunchSetText(value.setId, 128) &&
+    isRevision(value.revision) && isRfc3339(value.createdAt)
+}
