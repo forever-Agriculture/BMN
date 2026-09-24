@@ -85,6 +85,8 @@ export interface CompanionServiceOptions {
   manager: SessionManager
   roots: ApplicationRoots
   cliPath: string
+  /** The script `cliPath` runs; the packaged `cliPath` is a shell launcher that node cannot load. */
+  cliScriptPath?: string
   emit(message: AppEventMessage): void
   fetch?: typeof fetch
   now?: () => Date
@@ -468,7 +470,7 @@ export class CompanionService {
         return this.hookObservation(text(params, 'sessionId'), optionalText(params, 'incarnationId') ?? undefined)
       case METHOD_REGISTRY.hooksCheck:
         // The owner's own read-only check, dated on arrival; the window decides what a stale answer is worth.
-        return runHookConfigurationCheck(this.options.cliPath, { now: this.now })
+        return runHookConfigurationCheck(this.options.cliScriptPath ?? this.options.cliPath, { now: this.now })
       case METHOD_REGISTRY.attentionTerminalNotice: {
         // Only the owner's own window reaches this switch, and only it can see a session's output,
         // so a session token has no way in: the control socket has no method for this at all.

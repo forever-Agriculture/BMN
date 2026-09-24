@@ -263,11 +263,13 @@ async function start(): Promise<void> {
     },
     sessionEnvironment: (sessionIdentity) => companionHolder.current?.sessionEnvironment(sessionIdentity) ?? {}
   })
+  const cliPath = process.env.BMN_CLI_PATH ?? join(__dirname, '..', '..', 'bin', 'bmn')
   const companion = new CompanionService({
     database,
     manager,
     roots,
-    cliPath: process.env.BMN_CLI_PATH ?? join(__dirname, '..', '..', 'bin', 'bmn'),
+    cliPath,
+    cliScriptPath: process.env.BMN_CLI_SCRIPT ?? cliPath,
     emit: (message) => parentPort.postMessage(message)
   })
   companionHolder.current = companion

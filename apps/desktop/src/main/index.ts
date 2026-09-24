@@ -429,8 +429,14 @@ function hostEnvironment(repoRoot: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
     BMN_REPO_ROOT: repoRoot,
-    BMN_CLI_PATH: bmnCliPath()
+    BMN_CLI_PATH: bmnCliPath(),
+    BMN_CLI_SCRIPT: bmnCliScript()
   }
+}
+
+/** The JavaScript the CLI runs; the packaged `bmn` is a shell launcher for it that node cannot load. */
+function bmnCliScript(): string {
+  return app.isPackaged ? join(process.resourcesPath, 'bin', 'bmn.mjs') : bmnCliPath()
 }
 
 /** Sessions get this file's directory on PATH; packaged builds carry a launcher for it under resources/bin. */

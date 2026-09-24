@@ -1,3 +1,4 @@
+// MODULE: packaged.mjs - smoke-tests the packaged BMN build in isolated roots without touching owner files
 import { spawnSync } from 'node:child_process'
 import { existsSync, lstatSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
@@ -82,6 +83,11 @@ await withTemporaryRoot(temporaryRootContracts.packagedSmoke, async ({ roots }) 
       XDG_STATE_HOME: roots.state,
       XDG_CACHE_HOME: roots.cache,
       XDG_RUNTIME_DIR: roots.runtime,
+      // Hook checks in the packaged self-test must see synthetic config paths, never the
+      // owner's real Claude, Codex or OpenCode files.
+      CLAUDE_CONFIG_DIR: join(roots.config, 'claude'),
+      CODEX_HOME: join(roots.config, 'codex'),
+      OPENCODE_CONFIG_DIR: join(roots.config, 'opencode'),
       BMN_CONFIG_HOME: join(roots.config, 'bmn'),
       BMN_DATA_HOME: join(roots.data, 'bmn'),
       BMN_STATE_HOME: join(roots.state, 'bmn'),
