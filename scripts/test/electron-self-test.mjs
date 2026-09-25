@@ -477,13 +477,11 @@ const receiptContract = [
       receipt.survivalTable.closeAndStop?.recordedInterrupted === true &&
       receipt.survivalTable.closeAndStop.recordedDetail.startsWith('last window close') &&
       receipt.survivalTable.closeAndStop.finalCaptureTookTheMarker === true &&
+      receipt.survivalTable.closeAndStop.lifecycleCaptureAcknowledged === true &&
       receipt.survivalTable.closeAndStop.keptSessionStillLive === true &&
       receipt.survivalTable.explicitStop?.neverInterrupted === true &&
       receipt.survivalTable.explicitStop.finalCaptureTookTheMarker === true &&
-      // The flush's burst signature is asserted where it is deterministic (the explicit stop);
-      // after the close dialog's teardown the harness delays sibling captures, so the close
-      // ending records its observed number instead of asserting it.
-      receipt.survivalTable.explicitStop.finalCaptureBurstSessions >= 3 &&
+      receipt.survivalTable.explicitStop.lifecycleCaptureAcknowledged === true &&
       JSON.stringify(receipt.survivalTable.documented) ===
         JSON.stringify(['app-crash-or-reboot', 'desktop-update'])
   ],

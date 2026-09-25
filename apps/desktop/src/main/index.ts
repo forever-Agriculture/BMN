@@ -249,6 +249,8 @@ let applicationWindow: BrowserWindow | undefined
 let quitRequested = false
 let developmentRoot: ReturnType<typeof createDevelopmentRoot>
 let savedOutputCaptureCoordinator: SavedOutputCaptureCoordinator | undefined
+/** Self-test only: acknowledgements from the production lifecycle flush, distinct from activity captures. */
+const selfTestLifecycleCaptures: Array<{ sessionId: string; status: SavedOutputCaptureOutcome['status'] }> = []
 let closePromptCoordinator: ClosePromptCoordinator | undefined
 /** Self-test hook: every renderer layout.put request main forwards, counted before the host answers. */
 let selfTestLayoutPutRequests = 0
@@ -4956,30 +4958,21 @@ async function runSelfTest(): Promise<void> {
       (await catalogFor(sessionId)).current?.content ?? null
 
     /**
-     * The final-capture proof each stop ending rests on. The pre-stop snapshot times are read
-     * BEFORE the marker is written, so any snapshot that did not exist then is new; the marker
-     * arrives only with a capture taken after the write. One capture is not itself proof of the
-     * lifecycle flush - the renderer also captures ~250 ms after terminal output - so the proof
-     * also requires the flush's signature: several sessions gaining their new snapshot inside the
-     * same one-second window, which per-terminal activity captures cannot produce. The periodic
-     * cadence is 30 seconds, far outside that window.
+     * The renderer also takes activity captures after output, so a marker in saved output alone
+     * cannot prove the lifecycle flush ran. The self-test recorder observes only calls made by
+     * flushAllSavedOutput through the production lifecycle, and only counts an acknowledged
+     * capture for this exact session after the ending begins.
      */
     const stopWithFinalCapture = async (
       sessionId: string,
       marker: string,
       stop: () => Promise<unknown> | void,
       description: string
-    ): Promise<{ captureStartedAt: string; burstSessions: number }> => {
-      // The snapshots that exist before the marker is written: the marker must be absent from
-      // all of them, so any snapshot carrying it was taken during this ending.
+    ): Promise<{ lifecycleCaptureAcknowledged: boolean }> => {
       const catalog = await catalogFor(sessionId)
-      const preTimes = new Set<string>()
-      for (const entry of [catalog.current, ...catalog.history]) {
-        if (entry) preTimes.add(entry.captureStartedAt)
+      if ([catalog.current, ...catalog.history].some((entry) => entry?.content.includes(marker))) {
+        throw new Error(`the ${marker} marker already exists in the saved output`)
       }
-      const markerAbsentBefore = !(await savedCurrent(sessionId))?.includes(marker) &&
-        ![catalog.current, ...catalog.history].some((entry) => entry?.content.includes(marker))
-      if (!markerAbsentBefore) throw new Error(`the ${marker} marker already exists in the saved output`)
       const runtime = runtimes.get(sessionId)
       if (!runtime) throw new Error(`the ${marker} target runtime is missing`)
       await client.request(METHOD_REGISTRY.terminalWrite, {
@@ -4987,56 +4980,16 @@ async function runSelfTest(): Promise<void> {
         bytes: new TextEncoder().encode(`echo ${marker}\r`)
       })
       await new Promise((resolve) => setTimeout(resolve, 500))
+      const firstCapture = selfTestLifecycleCaptures.length
       await stop()
-      // The final-capture check reads the stopped session's saved output after the stop: the
-      // marker was written after every earlier snapshot, so its presence is the flush's (or the
-      // post-output activity capture's) work, and the burst count - how many sessions gained a
-      // snapshot inside the same one-second window - is the lifecycle flush's signature, which
-      // per-terminal activity captures cannot produce.
-      const capture = await acceptanceWait(async () => {
-        const content = await savedCurrent(sessionId)
-        return content?.includes(marker) ? content : undefined
-      }, `the ${description} stop took a final capture carrying ${marker}`).catch(async (waitError) => {
-        const catalog = await catalogFor(sessionId)
-        throw new Error(`${waitError instanceof Error ? waitError.message : String(waitError)}; diagnostics ${JSON.stringify({
-          marker,
-          snapshots: [catalog.current, ...catalog.history].map((entry) => entry && {
-            at: entry.captureStartedAt, hasMarker: entry.content.includes(marker), bytes: entry.content.length
-          }),
-          unavailable: catalog.finalCaptureUnavailable,
-          processRow: await processRow(sessionId),
-          liveRuntimes: [...runtimes.keys()].length
-        })}`)
-      })
-      // The marker can be captured twice - once by the ~250 ms activity capture, once by the
-      // lifecycle flush (which the close dialog's teardown can delay by seconds in this harness) -
-      // so the burst is anchored on whichever marker snapshot has the most siblings: the flush is
-      // the only capture that advances several sessions inside one second. After a close, the
-      // dialog teardown can also stall the sibling captures themselves, so the burst is an
-      // observed number here; the explicit ending asserts it.
-      const stoppedCatalog = await catalogFor(sessionId)
-      const markerTimes = [stoppedCatalog.current, ...stoppedCatalog.history]
-        .filter((entry): entry is SavedOutputSnapshot =>
-          entry?.content.includes(marker) === true && !preTimes.has(entry.captureStartedAt))
-        .map((entry) => entry.captureStartedAt)
-      const siblingCounts = await Promise.all(markerTimes.map(async (at) => {
-        let burst = 0
-        for (const id of runtimes.keys()) {
-          const other = await catalogFor(id)
-          const counted = [other.current, ...other.history].some((entry) =>
-            entry && !preTimes.has(entry.captureStartedAt) &&
-            Math.abs(new Date(entry.captureStartedAt).getTime() - new Date(at).getTime()) <= 1_000)
-          if (counted) burst += 1
-        }
-        return burst
-      }))
-      const best = markerTimes.length > 0
-        ? markerTimes[siblingCounts.indexOf(Math.max(...siblingCounts))]
-        : ''
-      const stoppedAt = best ?? ''
-      const burstSessions = Math.max(0, ...siblingCounts)
-      const proof = { captureStartedAt: stoppedAt, burstSessions, content: capture }
-      return proof
+      await acceptanceWait(async () =>
+        selfTestLifecycleCaptures.slice(firstCapture).some((entry) =>
+          entry.sessionId === sessionId && entry.status === 'saved') ? true : undefined,
+        `the ${description} lifecycle acknowledged final capture for ${sessionId}`)
+      await acceptanceWait(async () =>
+        (await savedCurrent(sessionId))?.includes(marker) ? true : undefined,
+        `the ${description} saved output carries ${marker}`)
+      return { lifecycleCaptureAcknowledged: true }
     }
 
     const openRequestIds = async (): Promise<string[]> =>
@@ -5110,7 +5063,7 @@ async function runSelfTest(): Promise<void> {
       recordedSignal: explicitRow?.signal ?? null,
       neverInterrupted: explicitRow?.state === 'exited',
       finalCaptureTookTheMarker: (await savedCurrent(explicitId))?.includes('SURVIVAL-EXPLICIT-MARKER') === true,
-      finalCaptureBurstSessions: explicitProof.burstSessions
+      lifecycleCaptureAcknowledged: explicitProof.lifecycleCaptureAcknowledged
     }
 
     const answerTheClosePrompt = applicationWindow!.webContents.executeJavaScript(`
@@ -5174,7 +5127,7 @@ async function runSelfTest(): Promise<void> {
       recordedInterrupted: closeStopRow?.state === 'interrupted',
       recordedDetail: closeStopRow?.detail ?? '',
       finalCaptureTookTheMarker: (await savedCurrent(closeStopId))?.includes('SURVIVAL-CLOSE-STOP-MARKER') === true,
-      finalCaptureBurstSessions: closeProof.burstSessions,
+      lifecycleCaptureAcknowledged: closeProof.lifecycleCaptureAcknowledged,
       keptSessionStillLive: (await processRow(keptId))?.state === 'live'
     }
     // The close lifecycle minimized the window, as production does; the remaining phases need a
@@ -5665,6 +5618,7 @@ async function flushAllSavedOutput(): Promise<SavedOutputCaptureOutcome> {
         console.error(`[BMN] final-capture loss disclosure could not be persisted: ${message}`)
       }
     )
+    if (selfTest) selfTestLifecycleCaptures.push({ sessionId: runtime.session.sessionId, status: outcome.status })
     if (outcome.status === 'unavailable') aggregate = outcome
   }
   return aggregate

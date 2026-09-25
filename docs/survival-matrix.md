@@ -7,8 +7,9 @@ it, the outcome each column promises, and the current evidence state — **exerc
 
 ## Trials and receipts
 
-- Trials run against synthetic workspaces and conversations only; the owner's real workspaces,
-  profiles and sessions are never subjects (NFR35).
+- The trial contract uses synthetic workspaces and conversations and excludes the owner's real
+  workspaces, profiles and sessions (NFR35). The historical cross-harness runs below breached the
+  profile rule; they remain UNVERIFIED and are not acceptance evidence.
 - Non-disruptive endings (no process kill, no reboot, no update install) run in isolated Electron
   instances with throwaway XDG/BMN/`CLAUDE_CONFIG_DIR`/`CODEX_HOME`/`OPENCODE_CONFIG_DIR` roots,
   exactly as [electron-self-test.mjs](../scripts/test/electron-self-test.mjs) launches them.
@@ -59,10 +60,12 @@ The six columns are the survival table's own: **process**, **live screen**, **sa
   ([app-lifecycle.ts](../apps/desktop/src/main/app-lifecycle.ts), `captureThen`; expected by
   [host-loss.test.ts](../apps/desktop/src/main/host-loss.test.ts), the "flushes … before %s stops"
   and all-kept-flush cases). The flush is a capture, not a stop, so nothing the row promises is
-  lost, but the no-extra-capture reading does not hold; a tracked defect for separately authorized
-  work, not a quiet edit here.
-- Evidence: exercised-with-receipt, partial — through the real close lifecycle (closeLastWindow
-  plus its renderer prompt; the trial's target remembers Stop, every asked session is answered
+  lost, but the no-extra-capture reading does not hold. This row is **FAIL** for the saved-output
+  promise, based on the lifecycle source and its all-kept-flush unit test; the mixed Electron trial
+  did not itself measure capture cadence. The discrepancy remains visible for a separate decision.
+- Evidence: FAIL for the saved-output promise; the other columns are partially exercised through
+  the real close lifecycle (closeLastWindow plus its renderer prompt). The trial's target remembers
+  Stop, and every asked session is answered
   Keep running): process (kept session still live), no interruption recorded, and open-request
   identity retained are checked; the live-screen (minimized-not-destroyed) cell is observed only
   as the hide call running, not as a visible window state: the self-test window is forceHidden,
@@ -88,13 +91,11 @@ The six columns are the survival table's own: **process**, **live screen**, **sa
   lifecycle and its renderer prompt (remembered Stop choice for the target, Keep running for the
   asked sessions): the *interrupted · last window close* recording, the pre-stop marker in the
   post-stop saved output (the marker was asserted absent from every earlier snapshot) and the
-  kept sibling are proven. Capture attribution, honestly: the renderer schedules its own activity
-  capture ~250 ms after output, so a post-stop marker proves a capture happened, not which one
-  took it; the stop-time lifecycle flush's own signature — several sessions gaining a snapshot
-  inside one second — is asserted by the explicit ending in the same run (observed 6) and comes
-  from the one shared `captureThen` both endings drive, but this ending's own sibling captures are
-  delayed by the close dialog's teardown in the forceHidden harness (recorded 0). The resume and
-  `SessionEnd`-withdrawal cells were not re-driven (the synthetic session is not a direct CLI
+  kept sibling are proven. The self-test now also requires an acknowledged production lifecycle
+  capture request for this exact session during the close ending; the renderer's separate activity
+  capture cannot satisfy that assertion. The marker can still have entered the store through an
+  earlier activity capture, so the receipt proves both facts rather than attributing its bytes to
+  one request. The resume and `SessionEnd`-withdrawal cells were not re-driven (the synthetic session is not a direct CLI
   launch, so no bound conversation; resume and withdrawals are exercised by the same run's
   conversationFromHook and hook-contract checks). Result lines below.
 
@@ -229,7 +230,11 @@ The six columns are the survival table's own: **process**, **live screen**, **sa
   permission modes, synthetic files) once per direction; verify the paste count, no Enter, the
   retained input, and the destination reading the selected original after submission; record
   remaining friction.
-- Harnesses: cross-harness trial harness (`.dev-auto/evidence/cross-harness-trial.ts`).
+- Harnesses: tracked [cross-harness trial](../scripts/test/cross-harness-trial.ts), invoked only
+  with its [explicit Vitest config](../scripts/test/cross-harness.vitest.config.mjs). Its
+  launcher uses the tracked [disposable-provider-env.mjs](../scripts/lib/disposable-provider-env.mjs)
+  guard and refuses to start either provider without separately provisioned private profiles under
+  `/tmp/bmn-cross-harness-profiles-*`; no compliant rerun has yet been made.
 - Evidence: UNVERIFIED — method non-compliant. The 2026-09-25 re-run executed both directions end
   to end under the Epic 26 build (single bounded paste, no submit before the owner, destinations
   read the selected originals and answered; codex-cli 0.157.0 / claude 2.1.282), but the harness
@@ -242,7 +247,9 @@ The six columns are the survival table's own: **process**, **live screen**, **sa
   disposable roots and their spend is owner authorization the run does not carry. The harness's
   string-based input-retention check is also weaker than the promise (it finds tokens in the
   accumulated output, not in the rendered current input); a compliant rerun should assert the
-  submitted prompt directly. Result lines below.
+  submitted prompt directly. The tracked replacement now records exact PTY writes, labels actual
+  input retention UNVERIFIED, and writes only directions exercised in that run to its receipt;
+  it cannot turn a green method probe into acceptance evidence. Result lines below.
 
 ## Trial result lines
 
@@ -252,10 +259,10 @@ One line per distinct trial, newest last. Receipts live under `.dev-auto/evidenc
 | --- | --- | --- | --- | --- |
 | dry run (receipt format validation before any disruptive trial) | PASS | [dry-run-format-2026-09-25.md](../.dev-auto/evidence/survival/dry-run-format-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
 | renderer crash (processes, layout, terminal modes, requests; first exercised by the Epic 25 gate) | PASS | [renderer-crash-2026-09-25.md](../.dev-auto/evidence/survival/renderer-crash-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
-| quit (interruption recorded, reason survives an application restart, requests intact; first exercised by the Epic 25 gate) | PASS | [quit-columns-2026-09-25.md](../.dev-auto/evidence/survival/quit-columns-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
-| close-window-keep (partial: process/interruption/request identity through the real close decision; the minimized-window cell is observed only as the hide call) | PASS (partial) | [close-window-keep-2026-09-25.md](../.dev-auto/evidence/survival/close-window-keep-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
-| close-and-stop (partial: real lifecycle + prompt, recording, final capture with pre-marker exclusion, kept sibling; the flush burst is asserted by the explicit ending; resume/withdrawal cells rest on conversationFromHook) | PASS (partial) | [close-and-stop-2026-09-25.md](../.dev-auto/evidence/survival/close-and-stop-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
-| stop, explicit (partial: exited recording, final capture through the production Stop path with flush burst; resume/withdrawal cells rest on conversationFromHook) | PASS (partial) | [stop-2026-09-25.md](../.dev-auto/evidence/survival/stop-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
+| quit (partial: interruption recorded, reason survives restart and requests intact; prompt and final capture remain indirect) | PASS (partial) | [quit-columns-2026-09-25.md](../.dev-auto/evidence/survival/quit-columns-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
+| close-window-keep (saved-output promise conflicts with lifecycle flush; process and request cells partially exercised) | FAIL | [close-window-keep-2026-09-25.md](../.dev-auto/evidence/survival/close-window-keep-2026-09-25.md) | 0a71e47 (review tree) | 2026-09-25 |
+| close-and-stop (partial: real lifecycle + prompt, recording, acknowledged lifecycle capture, kept sibling; resume/withdrawal cells rest on conversationFromHook) | PASS (partial) | [close-and-stop-2026-09-25.md](../.dev-auto/evidence/survival/close-and-stop-2026-09-25.md) | 0a71e47 (review tree) | 2026-09-25 |
+| stop, explicit (partial: exited recording and acknowledged lifecycle capture; resume/withdrawal cells rest on conversationFromHook) | PASS (partial) | [stop-2026-09-25.md](../.dev-auto/evidence/survival/stop-2026-09-25.md) | 0a71e47 (review tree) | 2026-09-25 |
 | app crash | UNVERIFIED — no disposable OS user/VM exists to run it on; delegated consultant decision quoted | [app-crash-2026-09-25.md](../.dev-auto/evidence/survival/app-crash-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
 | reboot | UNVERIFIED — same blocker | [reboot-2026-09-25.md](../.dev-auto/evidence/survival/reboot-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
 | desktop update, while running | UNVERIFIED — needs a disposable OS user/VM owning its packaged binary and update service | [update-while-running-2026-09-25.md](../.dev-auto/evidence/survival/update-while-running-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
@@ -266,6 +273,6 @@ One line per distinct trial, newest last. Receipts live under `.dev-auto/evidenc
 
 One line per distinct trial, the latest receipt linked; FAIL and UNVERIFIED lines stay with their
 reasons rather than being dropped. PASS (partial) rows keep their unexercised cells named in the
-row above and in the receipt. The `b341724 (Epic 26 tree)` commit marker means the trial ran in
-the working tree that carries this epic's changes on baseline b341724; the epic's acceptance
-commit follows the trials.
+row above and in the receipt. `b341724 (Epic 26 tree)` identifies the original 26 trial baseline;
+`0a71e47 (review tree)` identifies the parent commit of the 2026-09-25 review fixes. Both sets of
+receipts ran with uncommitted task changes, stated in their local receipt files.
