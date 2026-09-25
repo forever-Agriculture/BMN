@@ -1627,7 +1627,9 @@ function App(): React.JSX.Element {
               <label className="show-archived">
                 <input type="checkbox" checked={tree.showArchived} onChange={() => setTree(toggleShowArchived)} /> Show archived
               </label>
-              <button type="button" className="new-workspace" onClick={() => setDialog({ kind: 'new-workspace' })}>+ New workspace</button>
+              <button type="button" className="new-workspace" aria-label="New workspace" title="New workspace" onClick={() => setDialog({ kind: 'new-workspace' })}>
+                <span aria-hidden="true">+</span><span className="new-workspace-label">New workspace</span>
+              </button>
             </div>
           </aside>
         )}

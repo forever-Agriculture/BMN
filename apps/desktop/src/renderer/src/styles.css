@@ -2315,6 +2315,15 @@ input[type='radio'] {
     display: none;
   }
 
+  .new-workspace {
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  .new-workspace-label {
+    display: none;
+  }
+
   .workspace-row .eyebrow {
     font-size: 9px;
   }

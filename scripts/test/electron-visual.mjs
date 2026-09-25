@@ -1102,6 +1102,19 @@ const evidence = await withTemporaryRoot(
       assert.equal(railRow.detailShown, false, railDetail)
       assert.equal(railRow.overflows, false, railDetail)
       assert.ok(railRow.title?.includes(' · Working · ') || railRow.title?.includes(' · Idle · '), railDetail)
+      const railWorkspaceAction = await page.evaluate(() => {
+        const button = document.querySelector('.sidebar-footer .new-workspace')
+        const label = button?.querySelector('.new-workspace-label')
+        if (!(button instanceof HTMLButtonElement)) throw new Error('rail New workspace action unavailable')
+        return {
+          title: button.title,
+          visibleText: button.innerText.trim(),
+          labelHidden: label instanceof HTMLElement && label.getClientRects().length === 0
+        }
+      })
+      assert.deepEqual(railWorkspaceAction, {
+        title: 'New workspace', visibleText: '+', labelHidden: true
+      })
 
       await setContentSize(application, page, 1440, 900)
       await setAppearance(page, 'knight', 'black')
