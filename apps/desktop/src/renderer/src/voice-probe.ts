@@ -26,4 +26,19 @@ export interface VoiceFlowProbe {
   restarted: { notice: string; pastedIntoNewIncarnation: boolean }
   /** Suggest with a stopped session selected explains why there are no candidates. */
   noLiveSessionMessage: string
+  /**
+   * The Small model download through renderer, preload and main with an in-memory transfer: two rapid
+   * requests run one transfer, cancelling releases the slot, and a failed transfer stays visible until
+   * Dismiss. Base is the chosen model again afterwards.
+   */
+  download: {
+    firstStarted: boolean
+    duplicateRefused: boolean
+    progressShown: boolean
+    cancelledReleased: boolean
+    failureText: string
+    dismissVisible: boolean
+    dismissed: boolean
+    modelRestored: boolean
+  }
 }

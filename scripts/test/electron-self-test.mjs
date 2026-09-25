@@ -224,7 +224,15 @@ const receiptContract = [
       receipt.voiceFlow.transcriptions[0].args.at(-2) === '--prompt' &&
       receipt.voiceFlow.transcriptions[0].args.at(-1) === 'SessionManager, BMN' &&
       JSON.stringify(receipt.voiceFlow.transcriptions[1].vocabulary) === JSON.stringify(['SessionManager', 'BMN', 'Changed']) &&
-      receipt.voiceFlow.persistedAfterRestart === true
+      receipt.voiceFlow.persistedAfterRestart === true &&
+      receipt.voiceFlow.download?.firstStarted === true &&
+      receipt.voiceFlow.download.duplicateRefused === true &&
+      receipt.voiceFlow.download.progressShown === true &&
+      receipt.voiceFlow.download.cancelledReleased === true &&
+      receipt.voiceFlow.download.failureText.includes('connection reset') &&
+      receipt.voiceFlow.download.dismissVisible === true &&
+      receipt.voiceFlow.download.dismissed === true &&
+      receipt.voiceFlow.download.modelRestored === true
   ],
   ['launchBackgroundChoiceRecorded', (receipt) => receipt.launchBackgroundChoiceRecorded === 'hide'],
   [

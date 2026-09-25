@@ -257,6 +257,48 @@ export async function runVoiceIntegration(options: {
   const restarted = { notice, pastedIntoNewIncarnation: bufferText(destination.sessionId).includes('VOICE-PASTE-3') }
   await selectSessionInTree(sessionId, workspaceId)
 
+  // The download flow end to end: renderer, preload and main with an in-memory transfer. Two rapid requests
+  // must run one transfer, cancelling must release the slot, and a failure must stay visible until Dismiss.
+  dialog = await openPreferences()
+  const smallRow = await waitFor('small model row', () =>
+    [...dialog.querySelectorAll('.voice-model')].find((row) => row.textContent?.includes('Small')))
+  const smallButton = (label: RegExp): HTMLButtonElement | undefined =>
+    [...smallRow.querySelectorAll('button')].find((button) => label.test(button.textContent ?? ''))
+  const firstStart = window.aiTerminal.downloadVoiceModel('small')
+  const duplicateStart = await window.aiTerminal.downloadVoiceModel('small')
+  const firstStarted = (await firstStart).started
+  // The refused duplicate needs the panel to refresh for the live transfer to appear; its own click is that refresh.
+  ;(await waitFor('small download button', () => smallButton(/Download/))).click()
+  await waitFor('small download progress', () => smallRow.querySelector('progress'))
+  const progressShown = !!smallRow.querySelector('progress')
+  ;(await waitFor('small cancel button', () => smallButton(/Cancel/))).click()
+  await waitFor('small download released', () => smallButton(/Download/))
+  const cancelledReleased = !!smallButton(/Download/) && !smallRow.querySelector('progress')
+  ;(await waitFor('small download button again', () => smallButton(/Download/))).click()
+  const failureText = await waitFor('small download failure', () =>
+    smallRow.querySelector('.preferences-error')?.textContent ?? undefined)
+  const dismissVisible = !!smallButton(/Dismiss/)
+  ;(await waitFor('small dismiss button', () => smallButton(/Dismiss/))).click()
+  await waitFor('small failure dismissed', () => smallButton(/Download/))
+  const dismissed = !smallRow.querySelector('.preferences-error')
+  // Downloading Small made it the choice; Base goes back for the settings the rest of the receipt reads.
+  const baseRadio = [...dialog.querySelectorAll<HTMLInputElement>('input[name="preferences-voice-model"]')].at(0)
+  if (!baseRadio) throw new Error('voice integration: the Base model radio was not rendered')
+  baseRadio.click()
+  const modelRestored = await waitFor('base restored', async () =>
+    (await window.aiTerminal.getSettings()).voice.model === 'base' ? true : undefined)
+  await closePreferences(dialog)
+  const download = {
+    firstStarted,
+    duplicateRefused: duplicateStart.started === false,
+    progressShown,
+    cancelledReleased,
+    failureText,
+    dismissVisible,
+    dismissed,
+    modelRestored
+  }
+
   return {
     suggested,
     editedApproved: 'pty-host',
@@ -270,6 +312,7 @@ export async function runVoiceIntegration(options: {
     recording,
     editDuringRecording,
     restarted,
-    noLiveSessionMessage
+    noLiveSessionMessage,
+    download
   }
 }

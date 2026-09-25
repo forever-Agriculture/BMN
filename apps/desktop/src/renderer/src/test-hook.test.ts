@@ -199,7 +199,17 @@ describe('renderer acceptance hook', () => {
         recording: { pastedOnce: true, commandNotRun: true, announced: 'Transcript pasted' },
         editDuringRecording: { savedWhileRecording: true, secondPastedOnce: true },
         restarted: { notice: 'restarted', pastedIntoNewIncarnation: false },
-        noLiveSessionMessage: 'Select a running session first'
+        noLiveSessionMessage: 'Select a running session first',
+        download: {
+          firstStarted: true,
+          duplicateRefused: true,
+          progressShown: true,
+          cancelledReleased: true,
+          failureText: 'connection reset',
+          dismissVisible: true,
+          dismissed: true,
+          modelRestored: true
+        }
       },
       fileReferenceFlow: {
         launchDirectory: '/work',

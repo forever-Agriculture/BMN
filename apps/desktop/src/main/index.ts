@@ -343,6 +343,20 @@ const selfTestTranscribe: typeof transcribeRecording = async (options) => {
   return `echo VOICE-PASTE-${selfTestVoiceTranscriptions.length}`
 }
 const allowedSenders = new Set<number>()
+/** The self-test's model transfer is served from memory: the first download holds one chunk open until
+ * cancelled, and every later fetch refuses the connection, so no network is touched and the download
+ * handler's reservation, cancel and failure paths run for real. */
+let selfTestVoiceFetchCalls = 0
+const selfTestVoiceFetch = async (_url: string, init: { signal: AbortSignal }): Promise<Response> => {
+  selfTestVoiceFetchCalls += 1
+  if (selfTestVoiceFetchCalls > 1) throw new TypeError('connection reset')
+  return new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array(1_000_000))
+      init.signal.addEventListener('abort', () => controller.error(new Error('aborted')))
+    }
+  }))
+}
 /** The session each renderer shows as selected, so a notification skips the session the owner is looking at. */
 const selectedSessions = new Map<number, string | null>()
 const allowedTargets = (): WebContents[] => [...allowedSenders]
@@ -743,7 +757,7 @@ function installIpcHandlers(): void {
   installVoiceIpcHandlers(bridgeIpc, {
     senderIsAllowed,
     binary: selfTest ? join(selfTestVoiceFolder(), 'whisper-cli') : whisperBinaryPath(),
-    ...(selfTest ? { transcribe: selfTestTranscribe } : {}),
+    ...(selfTest ? { transcribe: selfTestTranscribe, fetch: selfTestVoiceFetch } : {}),
     modelFolder: async () => {
       const settings = await requireHostClient().request<AppSettings>(METHOD_REGISTRY.settingsGet, {})
       const chosen = settings.voice.modelFolder
@@ -3027,6 +3041,17 @@ async function runSelfTest(): Promise<void> {
       !voiceFlow.restarted.notice.includes('nothing was pasted') ||
       voiceFlow.restarted.pastedIntoNewIncarnation ||
       !voiceFlow.noLiveSessionMessage.includes('Select a running session') ||
+      !voiceFlow.download.firstStarted ||
+      !voiceFlow.download.duplicateRefused ||
+      !voiceFlow.download.progressShown ||
+      !voiceFlow.download.cancelledReleased ||
+      !voiceFlow.download.failureText.includes('connection reset') ||
+      !voiceFlow.download.dismissVisible ||
+      !voiceFlow.download.dismissed ||
+      !voiceFlow.download.modelRestored ||
+      // Exactly two transfers were attempted: one held open and cancelled, one refused connection. The
+      // refused duplicate and the pre-transfer paths never reach fetch.
+      selfTestVoiceFetchCalls !== 2 ||
       selfTestVoiceTranscriptions.length !== 3 ||
       selfTestVoiceTranscriptions.some((run, index) =>
         JSON.stringify(run.vocabulary) !== JSON.stringify(expectedTranscriptions[index]) ||

@@ -37,6 +37,25 @@ and writes records. Every addressed action names its session and, for a live pro
 *incarnation* (one run of the session's command). The currently focused pane never fills in a
 missing target.
 
+**One owner per claim.** When a flow reserves something for the duration of asynchronous work, it
+holds one invariant: establish the reservation before the first `await`, revalidate it after every
+asynchronous gap, and release only the reservation you still own. Establishing is a synchronous
+check-and-set or one transactional state change; revalidation compares identity after the gap (the
+same reservation object, incarnation or update time); a stale finisher that no longer owns the
+claim changes nothing. The claim-shaped flows and their state:
+
+| Claim | Establish | Revalidate | Release | State |
+| --- | --- | --- | --- | --- |
+| Handoff draft paste | draft → *uncertain* in one database transaction, keyed by the draft's update time (`claimHandoffDraft`, `database-companion-store.ts`) | claim conflicts on a changed update time; destination re-read and incarnation re-checked after the claim (`sendDraftLocked`, `companion-service.ts`) | `finishHandoffDraft` accepts only the *uncertain* claim it holds: definite pre-write failures finish back to *draft*, and a PTY write of unknown outcome deliberately stays *uncertain* | Protected, gaps recorded |
+| Conversation identity | synchronous check-and-set (`claimConversation`, `session-manager.ts`) | swap re-checks the held identity around the in-flight store write | identity-checked rollback and teardown (`swapConversationClaim`, `removeIfCurrent`) | Protected, gaps recorded |
+| Cohort resume action | one recorded promise per idempotency key, set before any `await` (`resumeCohort`, `session-manager.ts`) | repeats return the recorded outcome | entries are kept for the process lifetime: the record *is* the idempotency | Protected |
+| Repeat-watch state | per-session notice queue; state read and written inside the queued operation (`observeHookEvent`, `companion-service.ts`) | the open notice row and the live incarnation are re-read before opening or withdrawing | queue tail removes itself when still current | Protected, gaps recorded |
+| Voice model download slot | claimed before the first `await`, before folder and install checks (`aiterm:voice:download`, `voice-ipc.ts`) | abort and slot identity re-checked after the checks | released only by its owner on every exit; a failure stays visible until Dismiss | Migrated (fenced) |
+
+A flow that already holds the invariant is not rewritten; a migration happens only behind a fence
+test that first fails on the demonstrated interleaving. An async gap that no test covers is recorded
+as unverified in the story audit, never as protected.
+
 **Your CLIs stay in charge.** Sessions run the installed executables in real PTYs with your saved
 arguments and working directory. The app adds no bypass flags and never copies CLI credentials.
 Terminal variables that identify another terminal (tmux, other emulators) are removed; sessions get

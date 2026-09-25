@@ -169,6 +169,11 @@ describe('file saved-output store', () => {
     })
   })
 
+  // Both retention-bound tests write TERMINAL_SAVED_OUTPUT_RETENTION + 1 records one awaited
+  // save at a time, and every save rescans the directory: ~850 ms alone, past the default 5 s
+  // budget under a full gate's parallel workers. The budget is sized to the saves, not raised globally.
+  const retentionBoundTimeout = (TERMINAL_SAVED_OUTPUT_RETENTION + 1) * 200
+
   it('prunes the oldest records at the named bound and discloses the durable count', async () => {
     const { directory, store } = await storeFixture()
     for (let index = 0; index <= TERMINAL_SAVED_OUTPUT_RETENTION; index += 1) {
@@ -184,7 +189,7 @@ describe('file saved-output store', () => {
     expect(catalog.snapshots.some(({ content }) => content === 'capture 0')).toBe(false)
     expect(catalog.pruned).toBe(1)
     await expect(readdir(directory)).resolves.toHaveLength(TERMINAL_SAVED_OUTPUT_RETENTION + 1)
-  })
+  }, retentionBoundTimeout)
 
   it('removes every file of deleted sessions and nothing of other sessions', async () => {
     const { directory, store } = await storeFixture()
@@ -221,5 +226,5 @@ describe('file saved-output store', () => {
       pruned: 1
     })
     await expect(readdir(directory)).resolves.toHaveLength(TERMINAL_SAVED_OUTPUT_RETENTION + 1)
-  })
+  }, retentionBoundTimeout)
 })

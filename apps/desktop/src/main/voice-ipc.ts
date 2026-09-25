@@ -120,28 +120,49 @@ export function installVoiceIpcHandlers(ipc: VoiceIpcRegistrar, options: VoiceIp
   ipc.handle('aiterm:voice:download', async (event, params) => {
     authorize(event)
     const model = modelParam(objectParams(params))
+    // The reservation is claimed before the first await: two rapid requests cannot both pass
+    // the check and start competing transfers into the same .part file. Every exit releases
+    // only this reservation, and a failure keeps its error visible until Dismiss.
     if (downloads.get(model.id)?.controller) return { started: false }
-    const folder = await currentFolder(options)
-    requireAvailable(folder)
-    if (await modelInstalled(folder.path, model)) return { started: false }
     const controller = new AbortController()
     const state: DownloadState = { receivedBytes: 0, controller }
     downloads.set(model.id, state)
-    // The renderer polls voice status for progress; the download outlives the request that started it.
-    void downloadModel(folder.path, model, {
-      fetch: options.fetch ?? ((url, init) => fetch(url, init)),
-      signal: controller.signal,
-      onProgress: (receivedBytes) => {
-        state.receivedBytes = receivedBytes
+    const release = (): void => {
+      if (downloads.get(model.id) === state) downloads.delete(model.id)
+    }
+    try {
+      const folder = await currentFolder(options)
+      requireAvailable(folder)
+      if (await modelInstalled(folder.path, model)) {
+        release()
+        return { started: false }
       }
-    }).then(
-      () => downloads.delete(model.id),
-      (error: unknown) => {
-        delete state.controller
-        if (controller.signal.aborted) downloads.delete(model.id)
-        else state.error = userMessage(error, 'Model download failed')
+      // Revalidated after the awaits: a cancel while the folder lookup was in flight gives up
+      // this slot instead of starting a transfer the owner already cancelled.
+      if (controller.signal.aborted || downloads.get(model.id) !== state) {
+        release()
+        return { started: false }
       }
-    )
+      // The renderer polls voice status for progress; the download outlives the request that started it.
+      void downloadModel(folder.path, model, {
+        fetch: options.fetch ?? ((url, init) => fetch(url, init)),
+        signal: controller.signal,
+        onProgress: (receivedBytes) => {
+          state.receivedBytes = receivedBytes
+        }
+      }).then(
+        () => release(),
+        (error: unknown) => {
+          if (downloads.get(model.id) !== state) return
+          delete state.controller
+          if (controller.signal.aborted) release()
+          else state.error = userMessage(error, 'Model download failed')
+        }
+      )
+    } catch (error) {
+      release()
+      throw error
+    }
     return { started: true }
   })
 

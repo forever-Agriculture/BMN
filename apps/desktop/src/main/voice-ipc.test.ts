@@ -186,4 +186,102 @@ describe('voice IPC', () => {
     handlers.get('aiterm:voice:cancel-download')!(allowed, { model: 'base' })
     await vi.waitFor(async () => expect((await status()).download).toBeUndefined())
   })
+
+  it('reserves the download slot before the first await, so two rapid requests run one transfer', async () => {
+    let resolveFolder!: (folder: { path: string; custom: boolean }) => void
+    // One shared gated promise: every caller of modelFolder awaits the same resolution.
+    const gatedFolder = new Promise<{ path: string; custom: boolean }>((resolve) => { resolveFolder = resolve })
+    const modelFolder = (): Promise<{ path: string; custom: boolean }> => gatedFolder
+    let fail: (error: Error) => void = () => undefined
+    const fetch = vi.fn(async (_url: string, init: { signal: AbortSignal }) => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        fail = (error) => controller.error(error)
+        init.signal.addEventListener('abort', () => controller.error(new Error('aborted')))
+      }
+    })))
+    const handlers = install({ modelFolder, fetch })
+    const download = handlers.get('aiterm:voice:download')!
+    const status = async () => (await handlers.get('aiterm:voice:status')!(allowed) as { models: Array<{ download?: unknown }> }).models[0]!
+
+    // Both requests pass the controller check while the folder lookup is still pending.
+    const first = download(allowed, { model: 'base' }) as Promise<{ started: boolean }>
+    const second = download(allowed, { model: 'base' }) as Promise<{ started: boolean }>
+    resolveFolder({ path: join(folder, 'models'), custom: false })
+    await expect(first).resolves.toEqual({ started: true })
+    await expect(second).resolves.toEqual({ started: false })
+    // The refused request never reached the transfer: the first one alone owns the model's .part file.
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
+    fail(new Error('connection reset'))
+    await vi.waitFor(async () => expect((await status()).download).toEqual({ receivedBytes: 0, error: 'connection reset' }))
+    expect(handlers.get('aiterm:voice:cancel-download')!(allowed, { model: 'base' })).toEqual({ cancelled: true })
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('releases the reservation on every early exit, and a later download starts cleanly', async () => {
+    const fetch = vi.fn(async (_url: string, init: { signal: AbortSignal }) => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        init.signal.addEventListener('abort', () => controller.error(new Error('aborted')))
+      }
+    })))
+    let chosen: { path: string; custom: boolean } | null = null
+    const handlers = install({
+      fetch,
+      modelFolder: async () => {
+        if (chosen) return chosen
+        throw new Error('folder settings unreadable')
+      }
+    })
+    const download = handlers.get('aiterm:voice:download')!
+    const cancel = handlers.get('aiterm:voice:cancel-download')!
+
+    // The folder lookup itself throws after the reservation was claimed.
+    await expect(download(allowed, { model: 'base' })).rejects.toThrow(/folder settings unreadable/)
+    // The chosen folder is unavailable, so the disk check refuses the download.
+    chosen = { path: join(folder, 'unmounted-disk', 'whisper'), custom: true }
+    await expect(download(allowed, { model: 'base' }))
+      .rejects.toMatchObject({ code: ERROR_CODES.notFound, message: expect.stringMatching(/not available; is its disk mounted/) })
+    expect(fetch).not.toHaveBeenCalled()
+    // The model is already installed, so no transfer is needed.
+    chosen = { path: join(folder, 'models'), custom: false }
+    await installEngineAndBase()
+    await expect(download(allowed, { model: 'base' })).resolves.toEqual({ started: false })
+    // Each early exit released its own reservation: with the model file gone, a download starts.
+    await rm(join(folder, 'models', 'ggml-base.bin'))
+    await expect(download(allowed, { model: 'base' })).resolves.toEqual({ started: true })
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
+    expect(cancel(allowed, { model: 'base' })).toEqual({ cancelled: true })
+    await vi.waitFor(async () => {
+      const status = await handlers.get('aiterm:voice:status')!(allowed) as { models: Array<{ download?: unknown }> }
+      expect(status.models[0]!.download).toBeUndefined()
+    })
+  })
+
+  it('gives up its reservation when cancelled before the transfer starts, without fetching', async () => {
+    let resolveFolder!: (folder: { path: string; custom: boolean }) => void
+    let settled = false
+    const modelFolder = (): Promise<{ path: string; custom: boolean }> =>
+      settled
+        ? Promise.resolve({ path: join(folder, 'models'), custom: false })
+        : new Promise((resolve) => { resolveFolder = resolve })
+    const fetch = vi.fn(async (_url: string, init: { signal: AbortSignal }) => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        init.signal.addEventListener('abort', () => controller.error(new Error('aborted')))
+      }
+    })))
+    const handlers = install({ modelFolder, fetch })
+    const download = handlers.get('aiterm:voice:download')!
+
+    const first = download(allowed, { model: 'base' }) as Promise<{ started: boolean }>
+    expect(handlers.get('aiterm:voice:cancel-download')!(allowed, { model: 'base' })).toEqual({ cancelled: true })
+    resolveFolder({ path: join(folder, 'models'), custom: false })
+    settled = true
+    await expect(first).resolves.toEqual({ started: false })
+    expect(fetch).not.toHaveBeenCalled()
+    // The cancelled request released its reservation, so the slot is free again.
+    await expect(download(allowed, { model: 'base' })).resolves.toEqual({ started: true })
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
+    handlers.get('aiterm:voice:cancel-download')!(allowed, { model: 'base' })
+    const status = async () => (await handlers.get('aiterm:voice:status')!(allowed) as { models: Array<{ download?: unknown }> }).models[0]!
+    await vi.waitFor(async () => expect((await status()).download).toBeUndefined())
+  })
 })
