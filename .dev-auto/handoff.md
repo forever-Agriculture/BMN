@@ -37,4 +37,4 @@
 ## Resume
 
 - Next safe action: none for the selected scope. Push and desktop updater require separate authorization.
-- Status: COMPLETE
+- Status: COMPLETE — owner-requested Sol review arc closed; dispositions in log.md.
