@@ -3049,6 +3049,7 @@ async function runSelfTest(): Promise<void> {
       !voiceFlow.download.retryRefusedWhileErrorVisible ||
       !voiceFlow.download.dismissVisible ||
       !voiceFlow.download.dismissed ||
+      !voiceFlow.download.dismissStayedDismissed ||
       !voiceFlow.download.modelRestored ||
       // Exactly two transfers were attempted: one held open and cancelled, one refused connection. The
       // refused duplicate and the pre-transfer paths never reach fetch.

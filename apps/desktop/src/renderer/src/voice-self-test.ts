@@ -284,6 +284,15 @@ export async function runVoiceIntegration(options: {
   ;(await waitFor('small dismiss button', () => smallButton(/Dismiss/))).click()
   await waitFor('small failure dismissed', () => smallButton(/Download/))
   const dismissed = !smallRow.querySelector('.preferences-error')
+  // Keep the panel open past further poll beats: the dismissal must hold (this observes persistence,
+  // not the response-ordering race; the deferred runner tests fence that race).
+  let dismissStayedDismissed = true
+  for (let beat = 0; beat < 6; beat += 1) {
+    await pause(250)
+    if (!smallButton(/Download/) || smallRow.querySelector('.preferences-error') || smallButton(/Dismiss/)) {
+      dismissStayedDismissed = false
+    }
+  }
   // Downloading Small made it the choice; Base goes back for the settings the rest of the receipt reads.
   const baseRadio = [...dialog.querySelectorAll<HTMLInputElement>('input[name="preferences-voice-model"]')].at(0)
   if (!baseRadio) throw new Error('voice integration: the Base model radio was not rendered')
@@ -300,6 +309,7 @@ export async function runVoiceIntegration(options: {
     retryRefusedWhileErrorVisible,
     dismissVisible,
     dismissed,
+    dismissStayedDismissed,
     modelRestored
   }
 

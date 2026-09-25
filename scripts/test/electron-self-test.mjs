@@ -233,6 +233,7 @@ const receiptContract = [
       receipt.voiceFlow.download.retryRefusedWhileErrorVisible === true &&
       receipt.voiceFlow.download.dismissVisible === true &&
       receipt.voiceFlow.download.dismissed === true &&
+      receipt.voiceFlow.download.dismissStayedDismissed === true &&
       receipt.voiceFlow.download.modelRestored === true
   ],
   ['launchBackgroundChoiceRecorded', (receipt) => receipt.launchBackgroundChoiceRecorded === 'hide'],

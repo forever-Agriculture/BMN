@@ -40,6 +40,8 @@ export interface VoiceFlowProbe {
     retryRefusedWhileErrorVisible: boolean
     dismissVisible: boolean
     dismissed: boolean
+    /** The dismissal held for further poll beats with the panel still open (persistence, not the ordering race). */
+    dismissStayedDismissed: boolean
     modelRestored: boolean
   }
 }

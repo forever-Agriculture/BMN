@@ -209,6 +209,7 @@ describe('renderer acceptance hook', () => {
           retryRefusedWhileErrorVisible: true,
           dismissVisible: true,
           dismissed: true,
+          dismissStayedDismissed: true,
           modelRestored: true
         }
       },

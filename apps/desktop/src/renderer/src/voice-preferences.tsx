@@ -73,9 +73,10 @@ export function VoicePreferences(props: {
   const downloading = status?.models.some((model) => model.download && !model.download.error) ?? false
   useEffect(() => {
     if (!downloading) return
-    const timer = setInterval(() => void refresh(), DOWNLOAD_POLL_MS)
+    // The interval polls: a read still in flight is skipped, never superseded, so a slow one still publishes.
+    const timer = setInterval(() => void statusRunner.current.poll(), DOWNLOAD_POLL_MS)
     return () => clearInterval(timer)
-  }, [downloading, refresh])
+  }, [downloading])
 
   /** Saves one change to the whole section; resolves the failure text when the save was refused, so a field can show it. */
   async function save(change: (current: VoiceSettings) => VoiceSettings): Promise<string | null> {
