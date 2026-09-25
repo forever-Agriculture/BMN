@@ -991,7 +991,7 @@ describe('Story 1.4 application lifecycle', () => {
     expect(harness.stopTargets).not.toHaveBeenCalled()
     expect(harness.hideWindow).toHaveBeenCalledOnce()
     expect(harness.quitApplication).not.toHaveBeenCalled()
-    expect(harness.flushSavedOutput).toHaveBeenCalledOnce()
+    expect(harness.flushSavedOutput).not.toHaveBeenCalled()
   })
 
   it('applies a saved Stop choice to the exact current incarnation without prompting', async () => {
@@ -1066,6 +1066,7 @@ describe('Story 1.4 application lifecycle', () => {
     await vi.waitFor(() => expect(harness.hideWindow).toHaveBeenCalledOnce())
     // An unmentioned session is kept, never stopped by omission.
     expect(harness.stopTargets).toHaveBeenCalledWith([second], 'close-last-window')
+    expect(harness.flushSavedOutput).toHaveBeenCalledWith([second])
     expect(harness.saveBackgroundChoice).not.toHaveBeenCalled()
     expect(harness.quitApplication).not.toHaveBeenCalled()
   })

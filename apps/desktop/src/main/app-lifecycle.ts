@@ -64,7 +64,7 @@ interface ApplicationLifecycleActions {
   saveBackgroundChoice(decisions: readonly BackgroundChoiceDecision[]): void | Promise<void>
   promptForClose(choice: CloseChoicePrompt): Promise<CloseDecision>
   promptForQuit(choice: QuitChoicePrompt): Promise<'quit' | 'cancel'>
-  flushSavedOutput(): Promise<SavedOutputCaptureOutcome>
+  flushSavedOutput(targets?: readonly RunningSessionTarget[]): Promise<SavedOutputCaptureOutcome>
   stopTargets(
     targets: readonly RunningSessionTarget[],
     cause: SessionStopCause
@@ -152,9 +152,10 @@ export function createApplicationLifecycle(
   }
 
   const captureThen = async (
-    complete: () => void | Promise<void>
+    complete: () => void | Promise<void>,
+    targets?: readonly RunningSessionTarget[]
   ): Promise<SavedOutputCaptureOutcome> => {
-    const outcome = await actions.flushSavedOutput()
+    const outcome = await actions.flushSavedOutput(targets)
     await complete()
     return outcome
   }
@@ -165,7 +166,7 @@ export function createApplicationLifecycle(
       decisionInProgress = false
       quitApproved = true
       actions.quitApplication()
-    })
+    }, targets)
   }
 
   const finishWithoutRunningTargets = async (cause: SessionStopCause): Promise<void> => {
@@ -215,18 +216,18 @@ export function createApplicationLifecycle(
 
         const stopTargets = targets.filter((target) => chosenFor(target, answered) === 'stop')
         const keepTargets = targets.filter((target) => chosenFor(target, answered) !== 'stop')
-        await captureThen(async () => {
-          if (stopTargets.length > 0) {
+        if (stopTargets.length > 0) {
+          await captureThen(async () => {
             await actions.stopTargets(stopTargets, 'close-last-window')
-          }
-          decisionInProgress = false
-          if (keepTargets.length > 0) {
-            actions.hideWindow()
-            return
-          }
-          quitApproved = true
-          actions.quitApplication()
-        })
+          }, stopTargets)
+        }
+        decisionInProgress = false
+        if (keepTargets.length > 0) {
+          actions.hideWindow()
+          return
+        }
+        quitApproved = true
+        actions.quitApplication()
       }
       void decide().catch(fail)
     },
@@ -275,7 +276,7 @@ export function createApplicationLifecycle(
 
     stopCurrentTarget(target?: RunningSessionTarget): Promise<SavedOutputCaptureOutcome> {
       const targets = target ? [target] : actions.runningTargets()
-      return captureThen(() => actions.stopTargets(targets, 'explicit'))
+      return captureThen(() => actions.stopTargets(targets, 'explicit'), targets)
     }
   }
 }

@@ -472,6 +472,7 @@ const receiptContract = [
       // captureThen the two endings below exercise for real.
       receipt.survivalTable.closeWindowKeep?.processesLive === true &&
       receipt.survivalTable.closeWindowKeep.noInterruption === true &&
+      receipt.survivalTable.closeWindowKeep.noLifecycleCapture === true &&
       (receipt.survivalTable.closeWindowKeep.requestsStayOpen === true ||
         receipt.survivalTable.closeWindowKeep.requestsStayOpen === 'none-open') &&
       receipt.survivalTable.closeAndStop?.recordedInterrupted === true &&

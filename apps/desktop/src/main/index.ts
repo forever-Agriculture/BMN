@@ -5103,6 +5103,7 @@ async function runSelfTest(): Promise<void> {
     await rememberChoice(closeStopId, 'stop')
     await rememberChoice(keptId, 'hide')
     const requestsBeforeClose = await openRequestIds()
+    const closeCaptureStart = selfTestLifecycleCaptures.length
     const closeProof = await stopWithFinalCapture(closeStopId, 'SURVIVAL-CLOSE-STOP-MARKER', async () => {
       applicationLifecycle.closeLastWindow({ preventDefault(): void {} })
       await answerTheClosePrompt
@@ -5117,6 +5118,9 @@ async function runSelfTest(): Promise<void> {
         (await processRow(keptId))?.state === 'live' ? true : undefined,
         'the kept sessions stayed live') === true,
       noInterruption: (await processRow(keptId))?.state === 'live',
+      noLifecycleCapture: !selfTestLifecycleCaptures.slice(closeCaptureStart).some((entry) =>
+        entry.sessionId === keptId
+      ),
       requestsStayOpen: requestsBeforeClose.length === 0
         ? 'none-open'
         : (JSON.stringify(requestsBeforeClose) === JSON.stringify(requestsAfterClose)
@@ -5603,8 +5607,13 @@ async function stopCurrentTargets(
   }
 }
 
-async function flushAllSavedOutput(): Promise<SavedOutputCaptureOutcome> {
-  const current = [...runtimes.values()]
+async function flushAllSavedOutput(targets?: readonly RunningSessionTarget[]): Promise<SavedOutputCaptureOutcome> {
+  const current = [...runtimes.values()].filter((runtime) =>
+    targets === undefined || targets.some((target) =>
+      target.sessionId === runtime.session.sessionId &&
+      target.incarnationId === runtime.session.incarnationId
+    )
+  )
   const view = captureWebContents(current.length > 0, applicationWindow)
   let aggregate: SavedOutputCaptureOutcome = { status: 'saved' }
   for (const runtime of current) {
