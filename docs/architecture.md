@@ -163,7 +163,7 @@ agent has to guess.
 | Stop a session | Stopped; an unconfirmed stop stays *exit unconfirmed* until the host reports the exit | Ends with the process | A final capture is taken before the stop | Unchanged | Resume reopens a bound conversation | Stay open; `SessionEnd` withdraws the hook's own |
 | Renderer crash | Keeps running | A new view is created, brought to the private terminal mode state the program is in, and the program is asked to repaint once; bytes from before the crash are not replayed | Unaffected | Unchanged: order, selection, scroll position and follow-tail are restored | Not needed; nothing stopped | Stay open |
 | App crash or reboot | Ends when its pseudo-terminal closes (UNVERIFIED); the next start marks earlier incarnations *interrupted* and starts nothing by itself | Gone | The last periodic capture; output written after it is lost | Unchanged | Resume reopens a bound conversation, including one a `SessionStart` hook reported | Stay open |
-| Desktop update | Stopped: packaging waits for BMN to exit, and an update installed while it runs stops the sessions, recorded *interrupted · update restart* | Ends with the process | A final capture is taken before the stop | Unchanged | Resume reopens a bound Claude/Codex conversation or OpenCode with `--session`; the next start offers to resume them all in one dialog | Stay open |
+| Desktop source update | The updater waits for BMN to exit; it does not stop sessions. Quit stops them as *interrupted · application quit*; closing the last window and choosing Stop records *interrupted · last window close*. Keep running leaves the updater waiting | Ends when BMN exits; a keep-running close minimizes the window | Quit or close-stop takes the final capture before stopping; the updater takes none | Unchanged | Individual Resume reopens a bound Claude/Codex conversation or OpenCode with `--session`; Quit offers resume-all on the next start, while close-stop does not | Stay open; a harness that sends `SessionEnd` withdraws its own |
 
 Saved output is a plain-text snapshot of the live screen, taken periodically, on stop and on quit;
 it is never replayed into a terminal. *Resume* reopens the stored Claude Code or Codex conversation
@@ -183,7 +183,7 @@ Resume shows the exact command first. The confirmation is built from the same la
 started with, so what you read is what runs, and it names any stored argument the CLI's own resume
 will not take — by kind, never quoting a prompt you typed.
 
-After an update or a quit, the next start offers the sessions that stop interrupted in one dialog:
+After Quit, the next start offers the sessions it stopped in one dialog:
 one row each with the exact Resume command, or **Start again** with the stored command for a session
 without a bound conversation. Resume rows are checked, Start again rows are not, and the rows start
 in order, one at a time, stopping after the first failure — every row ends up reading *started*,
@@ -195,8 +195,9 @@ a new view), the Quit row's interruption record and reason after restart, and pa
 and explicit-stop rows against the running app. A mixed close confirms that the kept session stays
 live without a lifecycle capture while the stopped session receives a final capture. The pure
 all-kept close and the visible minimized-window state remain unexercised by that self-test. App
-crash, reboot and desktop update still lack compliant end-to-end trials; see the
-[survival matrix](survival-matrix.md) for the exact PASS, FAIL and UNVERIFIED cells.
+crash, reboot and desktop update still lack compliant end-to-end trials. The source update's
+previous *update restart* and resume-all promise contradicts its actual wait-for-exit path; see
+the [survival matrix](survival-matrix.md) for the recorded FAIL and other evidence limits.
 
 ## Electron hardening
 

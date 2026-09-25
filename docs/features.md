@@ -119,7 +119,10 @@ Windows and processes end separately:
 - After an app crash or a reboot, the earlier processes are marked *interrupted* and nothing
   restarts on its own.
 
-When a quit or a desktop update stopped sessions, the next start offers them back in one dialog.
+When Quit stopped sessions, the next start offers them back in one dialog. A queued source desktop
+update waits for BMN to exit; it does not stop sessions itself. Quit to get the offer after the
+update. Closing the last window and choosing Stop records *last window close* instead, so those
+sessions remain individually resumable without a resume-all offer.
 Each row shows the exact command — *Resume*, or *Start again* for a session without a bound
 conversation. Resume rows are pre-checked; the rows start in order, one at a time, and stop after
 the first failure, so every row ends up reading *started*, *failed* with the reason, or *not

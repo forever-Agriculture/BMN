@@ -4529,8 +4529,9 @@ async function runSelfTest(): Promise<void> {
     // Epic 14.2: what opened a request and what closed it, and the log of events that says why a
     // request the owner expected never arrived. Real hook events through the installed `bmn hook`.
     /**
-     * Epic 17.1: the update loop itself. Two sessions are stopped exactly as `update:desktop` stops
-     * them, the window is reloaded as the next start would load it, and the offer is answered.
+     * Epic 17.1: exercise the resume cohort for an update-restart stop cause. The source updater
+     * waits for BMN to exit and does not issue that cause; this fixture tests the cohort UI, not
+     * the `update:desktop` use site.
      */
     console.error('[BMN] self-test phase: resume after an update stop')
     const resumeOfferDirectory = join(isolatedCwd, 'resume-offer')

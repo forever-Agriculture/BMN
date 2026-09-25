@@ -176,30 +176,40 @@ The six columns are the survival table's own: **process**, **live screen**, **sa
   UNVERIFIED rather than approximating a kill or a reboot on the owner's system. The process
   column stays UNVERIFIED by the table's own words. Result lines below.
 
-### Desktop update
+### Desktop source update
 
-- Promise per column — process: stopped; packaging waits for BMN to exit, and an update installed
-  while it runs stops the sessions, recorded *interrupted · update restart*. Live screen: ends
-  with the process. Saved output: a final capture is taken before the stop. Session record and
-  layout: unchanged. Conversation resume: resume reopens a bound Claude/Codex conversation or
-  OpenCode with `--session`; the next start offers to resume them all in one dialog. Open
-  requests: stay open.
-- Trial steps (while running): on the disposable OS user or VM, with packaged BMN running
-  synthetic sessions, queue the desktop update and let it stop the running app; verify the
-  *interrupted · update restart* recording, the final capture before the stop, the update
-  completing and the packaged version advancing, the resume-all offer on the next start, and
-  requests retained with `SessionEnd` withdrawals.
+- Current behavior per column — process: the updater waits for BMN to exit; it does not stop
+  sessions. The owner can Quit (records *interrupted · application quit*), close the last window
+  and choose Stop (records *interrupted · last window close*), or Keep running (updater still
+  waits). Live screen: ends with BMN, or stays in the minimized window when kept. Saved output:
+  Quit and close-stop take a final capture; the updater takes none. Session record and layout:
+  unchanged. Conversation resume: individual Resume reopens a bound Claude/Codex conversation or
+  OpenCode with `--session`; Quit offers resume-all on the next start, while close-stop does not.
+  Open requests: stay open unless their harness sends `SessionEnd`.
+- Original promise discrepancy: the previous table said an update installed while BMN ran
+  stopped sessions as *interrupted · update restart* and offered resume-all. The source updater
+  instead waits for BMN to exit ([update-desktop.mjs](../scripts/install/update-desktop.mjs),
+  `waitForPackagedAppToExit`); the app's downloaded-update handler returns without stopping when
+  any session runs ([app-lifecycle.ts](../apps/desktop/src/main/app-lifecycle.ts),
+  `updateDownloaded`). Its only `update-restart` stop passes an empty target list. The Electron
+  self-test directly manufactures that cause to exercise the cohort UI, so it does not prove the
+  update use site. The old process and resume-all promise is **FAIL** against source behavior.
+- Trial steps (while running): on a disposable OS user or VM with synthetic sessions, queue the
+  source update and confirm it waits. Explicitly Quit; verify the *application quit* record,
+  final capture, retained requests, next-start resume-all offer, update completion and packaged
+  version. In a separate run, close the last window and choose Stop; verify *last window close*,
+  final capture and individual Resume, with no automatic resume-all offer. Keep-running close
+  must leave the updater waiting.
 - Trial steps (while stopped): on the disposable OS user or VM, with sessions already stopped,
   queue and install the update; verify the already-stopped sessions' records unchanged (no new
   *interrupted*, no phantom exit), the update completing and the packaged version advancing, the
   sessions remaining resumable, and no resume-all offer.
 - Harnesses: disposable OS user or VM owning its own checkout, packaged binary and update service
   (`systemd` user unit); owner per-run go-ahead.
-- Evidence: UNVERIFIED, with receipts. The 2026-09-25 update-while-running and update-while-stopped
-  trials were not run: both need a disposable OS user or VM owning its own packaged binary and
-  update service, which does not exist here; the delegated consultant decision (Astra/medium,
-  quoted in the receipts) recorded both UNVERIFIED rather than installing anything on the owner's
-  system. Result lines below.
+- Evidence: FAIL for the old update-stop promise from the source audit and existing lifecycle
+  tests; packaged install, version advance and the exact owner Quit/close flows remain
+  UNVERIFIED. The 2026-09-25 disruptive trials were not run: both need a disposable OS user or VM
+  owning its packaged binary and update service, which does not exist here. Result lines below.
 
 ## Beyond the table: the other promises this epic exercises
 
@@ -262,7 +272,7 @@ One line per distinct trial, newest last. Receipts live under `.dev-auto/evidenc
 | stop, explicit (partial: exited recording and acknowledged lifecycle capture; resume/withdrawal cells rest on conversationFromHook) | PASS (partial) | [stop-2026-09-25.md](../.dev-auto/evidence/survival/stop-2026-09-25.md) | 0a71e47 (review tree) | 2026-09-25 |
 | app crash | UNVERIFIED — no disposable OS user/VM exists to run it on; delegated consultant decision quoted | [app-crash-2026-09-25.md](../.dev-auto/evidence/survival/app-crash-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
 | reboot | UNVERIFIED — same blocker | [reboot-2026-09-25.md](../.dev-auto/evidence/survival/reboot-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
-| desktop update, while running | UNVERIFIED — needs a disposable OS user/VM owning its packaged binary and update service | [update-while-running-2026-09-25.md](../.dev-auto/evidence/survival/update-while-running-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
+| desktop update, while running | FAIL — original update-restart/resume-all promise contradicts source; packaged install UNVERIFIED | [update-source-semantics-2026-09-25.md](../.dev-auto/evidence/survival/update-source-semantics-2026-09-25.md) | fd8c7e0 (source audit) | 2026-09-25 |
 | desktop update, while stopped | UNVERIFIED — same blocker; nothing installed on the owner's system | [update-while-stopped-2026-09-25.md](../.dev-auto/evidence/survival/update-while-stopped-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
 | OpenCode real harness | UNVERIFIED — isolated-config real-provider harness not built in this run's window; no synthetic run labelled real | [opencode-real-session-2026-09-25.md](../.dev-auto/evidence/survival/opencode-real-session-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
 | cross-harness claude→codex | UNVERIFIED — ran, but on the owner's inherited profiles (NFR35 method non-compliance); disposable-root credentials need owner authorization | [cross-harness-claude-to-codex-2026-09-25.md](../.dev-auto/evidence/survival/cross-harness-claude-to-codex-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |

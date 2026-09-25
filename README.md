@@ -24,8 +24,9 @@ feature stops. This page sums up the product and how to install it.
   rename, archive and edit launch settings. Save a workspace launch set of up to eight copied
   commands, review its one directory and repository identity, then start fresh sessions explicitly.
   Session details also shows the saved directory's read-only Git identity. Layout, order and selection survive a restart, but
-  nothing starts automatically; after an update or a quit, BMN offers to resume what the stop
-  interrupted, in one dialog that shows each command and starts nothing until you press the button.
+  nothing starts automatically. After Quit, BMN offers to resume what it stopped in one dialog
+  that shows each command and starts nothing until you press the button. A queued source update
+  waits for BMN to exit; Quit first if you want that resume-all offer after the update.
   ([Workspaces and sessions](docs/features.md#workspaces-and-sessions))
 - **Real terminals.** Each session is a real PTY rendered by one live
   [xterm.js](https://xtermjs.org/) view. There is no tmux layer and no replayed output, so key
