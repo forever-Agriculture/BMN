@@ -15,6 +15,7 @@ import {
 } from '@bmn/protocol'
 import { failureDetail } from './bridge-error'
 import { SHORTCUT_LABELS } from './keymap'
+import { createVoiceStatusRunner, type VoiceStatusEvent } from './voice-status-runner'
 
 const DOWNLOAD_POLL_MS = 500
 
@@ -51,17 +52,22 @@ export function VoicePreferences(props: {
   const [draftWord, setDraftWord] = useState('')
   const [draftError, setDraftError] = useState<string | null>(null)
   const nextCandidateId = useRef(1)
-
-  const refresh = useCallback(async (): Promise<void> => {
-    try {
-      setStatus(await window.aiTerminal.getVoiceStatus())
-    } catch (failure) {
-      setError(failureDetail(failure, 'Could not load voice status'))
+  // Only the newest status request publishes: a response that captured a download error before
+  // Dismiss must not restore it after the Dismiss's own refresh.
+  const statusRunner = useRef(createVoiceStatusRunner(
+    () => window.aiTerminal.getVoiceStatus(),
+    (event: VoiceStatusEvent) => {
+      if (event.kind === 'status') setStatus(event.status)
+      else setError(failureDetail(event.cause, 'Could not load voice status'))
     }
+  ))
+  const refresh = useCallback(async (): Promise<void> => {
+    await statusRunner.current.run()
   }, [])
 
   useEffect(() => {
     void refresh()
+    return () => statusRunner.current.cancel()
   }, [refresh])
 
   const downloading = status?.models.some((model) => model.download && !model.download.error) ?? false

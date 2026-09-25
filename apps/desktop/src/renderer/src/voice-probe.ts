@@ -37,6 +37,7 @@ export interface VoiceFlowProbe {
     progressShown: boolean
     cancelledReleased: boolean
     failureText: string
+    retryRefusedWhileErrorVisible: boolean
     dismissVisible: boolean
     dismissed: boolean
     modelRestored: boolean

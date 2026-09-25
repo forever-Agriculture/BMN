@@ -277,6 +277,9 @@ export async function runVoiceIntegration(options: {
   ;(await waitFor('small download button again', () => smallButton(/Download/))).click()
   const failureText = await waitFor('small download failure', () =>
     smallRow.querySelector('.preferences-error')?.textContent ?? undefined)
+  // The undismissed error owns the slot: a retry may not claim over it.
+  const retryOverError = await window.aiTerminal.downloadVoiceModel('small')
+  const retryRefusedWhileErrorVisible = retryOverError.started === false && !!smallRow.querySelector('.preferences-error')
   const dismissVisible = !!smallButton(/Dismiss/)
   ;(await waitFor('small dismiss button', () => smallButton(/Dismiss/))).click()
   await waitFor('small failure dismissed', () => smallButton(/Download/))
@@ -294,6 +297,7 @@ export async function runVoiceIntegration(options: {
     progressShown,
     cancelledReleased,
     failureText,
+    retryRefusedWhileErrorVisible,
     dismissVisible,
     dismissed,
     modelRestored

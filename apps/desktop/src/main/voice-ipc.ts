@@ -121,9 +121,10 @@ export function installVoiceIpcHandlers(ipc: VoiceIpcRegistrar, options: VoiceIp
     authorize(event)
     const model = modelParam(objectParams(params))
     // The reservation is claimed before the first await: two rapid requests cannot both pass
-    // the check and start competing transfers into the same .part file. Every exit releases
-    // only this reservation, and a failure keeps its error visible until Dismiss.
-    if (downloads.get(model.id)?.controller) return { started: false }
+    // the check and start competing transfers into the same .part file. A failed transfer's
+    // state stays until its owner dismisses it, so a retry may not claim over a visible error.
+    // Every exit releases only this reservation.
+    if (downloads.get(model.id)) return { started: false }
     const controller = new AbortController()
     const state: DownloadState = { receivedBytes: 0, controller }
     downloads.set(model.id, state)

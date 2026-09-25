@@ -256,6 +256,34 @@ describe('voice IPC', () => {
     })
   })
 
+  it('keeps a failed transfer\'s error until Dismiss: a retry over it is refused and the error survives', async () => {
+    let fail: (error: Error) => void = () => undefined
+    const fetch = vi.fn(async (_url: string, init: { signal: AbortSignal }) => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        fail = (error) => controller.error(error)
+        init.signal.addEventListener('abort', () => controller.error(new Error('aborted')))
+      }
+    })))
+    const handlers = install({ fetch })
+    const status = async () => (await handlers.get('aiterm:voice:status')!(allowed) as { models: Array<{ download?: unknown }> }).models[0]!
+    await expect(handlers.get('aiterm:voice:download')!(allowed, { model: 'base' })).resolves.toEqual({ started: true })
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
+    fail(new Error('connection reset'))
+    await vi.waitFor(async () => expect((await status()).download).toEqual({ receivedBytes: 0, error: 'connection reset' }))
+
+    // The owner has not dismissed the error, so a new request may not claim over it.
+    await expect(handlers.get('aiterm:voice:download')!(allowed, { model: 'base' })).resolves.toEqual({ started: false })
+    expect(fetch).toHaveBeenCalledTimes(1)
+    await expect((await status()).download).toEqual({ receivedBytes: 0, error: 'connection reset' })
+
+    // Dismiss is the only exit; afterwards a download starts cleanly.
+    expect(handlers.get('aiterm:voice:cancel-download')!(allowed, { model: 'base' })).toEqual({ cancelled: true })
+    await vi.waitFor(async () => expect((await status()).download).toBeUndefined())
+    await expect(handlers.get('aiterm:voice:download')!(allowed, { model: 'base' })).resolves.toEqual({ started: true })
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2))
+    handlers.get('aiterm:voice:cancel-download')!(allowed, { model: 'base' })
+  })
+
   it('gives up its reservation when cancelled before the transfer starts, without fetching', async () => {
     let resolveFolder!: (folder: { path: string; custom: boolean }) => void
     let settled = false

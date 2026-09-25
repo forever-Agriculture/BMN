@@ -206,6 +206,7 @@ describe('renderer acceptance hook', () => {
           progressShown: true,
           cancelledReleased: true,
           failureText: 'connection reset',
+          retryRefusedWhileErrorVisible: true,
           dismissVisible: true,
           dismissed: true,
           modelRestored: true

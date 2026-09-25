@@ -230,6 +230,7 @@ const receiptContract = [
       receipt.voiceFlow.download.progressShown === true &&
       receipt.voiceFlow.download.cancelledReleased === true &&
       receipt.voiceFlow.download.failureText.includes('connection reset') &&
+      receipt.voiceFlow.download.retryRefusedWhileErrorVisible === true &&
       receipt.voiceFlow.download.dismissVisible === true &&
       receipt.voiceFlow.download.dismissed === true &&
       receipt.voiceFlow.download.modelRestored === true

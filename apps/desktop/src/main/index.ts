@@ -3046,6 +3046,7 @@ async function runSelfTest(): Promise<void> {
       !voiceFlow.download.progressShown ||
       !voiceFlow.download.cancelledReleased ||
       !voiceFlow.download.failureText.includes('connection reset') ||
+      !voiceFlow.download.retryRefusedWhileErrorVisible ||
       !voiceFlow.download.dismissVisible ||
       !voiceFlow.download.dismissed ||
       !voiceFlow.download.modelRestored ||
