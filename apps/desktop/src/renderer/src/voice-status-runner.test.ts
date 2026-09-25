@@ -93,11 +93,11 @@ describe('voice status runner', () => {
     )
     const polling = runner.poll()
     const refresh = runner.run()
-    // The tick lands while the successor is still pending: it must not issue a third read.
-    await runner.poll()
-    expect(readCount).toBe(2)
+    // The obsolete read settles first: clearing the gate here would let the next tick start a third read.
     obsolete.resolve(statusWithError())
     await polling
+    await runner.poll()
+    expect(readCount).toBe(2)
     current.resolve(status(5_000))
     await refresh
     expect(publish).toHaveBeenCalledTimes(1)
