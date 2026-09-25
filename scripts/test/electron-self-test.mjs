@@ -466,8 +466,26 @@ const receiptContract = [
       receipt.survivalTable.quit.afterApplicationRestart === receipt.survivalTable.quit.recorded &&
       receipt.survivalTable.quit.openRequestsAfter ===
         receipt.survivalTable.rendererCrash.openRequestsAfter &&
+      // Epic 26.2: the endings this epic exercised — kept running, stopped by window close, stopped
+      // outright. The quit row's final-capture column is deliberately absent: the self-test cannot
+      // drive beforeQuit without quitting, so that cell rests on the lifecycle unit tests and the
+      // captureThen the two endings below exercise for real.
+      receipt.survivalTable.closeWindowKeep?.processesLive === true &&
+      receipt.survivalTable.closeWindowKeep.noInterruption === true &&
+      (receipt.survivalTable.closeWindowKeep.requestsStayOpen === true ||
+        receipt.survivalTable.closeWindowKeep.requestsStayOpen === 'none-open') &&
+      receipt.survivalTable.closeAndStop?.recordedInterrupted === true &&
+      receipt.survivalTable.closeAndStop.recordedDetail.startsWith('last window close') &&
+      receipt.survivalTable.closeAndStop.finalCaptureTookTheMarker === true &&
+      receipt.survivalTable.closeAndStop.keptSessionStillLive === true &&
+      receipt.survivalTable.explicitStop?.neverInterrupted === true &&
+      receipt.survivalTable.explicitStop.finalCaptureTookTheMarker === true &&
+      // The flush's burst signature is asserted where it is deterministic (the explicit stop);
+      // after the close dialog's teardown the harness delays sibling captures, so the close
+      // ending records its observed number instead of asserting it.
+      receipt.survivalTable.explicitStop.finalCaptureBurstSessions >= 3 &&
       JSON.stringify(receipt.survivalTable.documented) ===
-        JSON.stringify(['close-window-keep-sessions', 'app-crash-or-reboot', 'desktop-update'])
+        JSON.stringify(['app-crash-or-reboot', 'desktop-update'])
   ],
   [
     // Epic 17.1: one dialog after an update stop, starting nothing until the owner presses it.

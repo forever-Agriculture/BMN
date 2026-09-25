@@ -1728,6 +1728,123 @@ it('ends every Codex report with the limit of what it checked', async () => {
       .find((row: { event: string }) => row.event === 'Stop').state).toBe(state)
   })
 
+  // Epic 26.3 / FR47 / UX-DR24: when the cheap timeout rule contributes to a Codex verdict, the
+  // qualification sits beside that verdict line itself, and the same string is the machine-readable
+  // field, so text and JSON cannot drift.
+  const RULE_UNMEASURED =
+    'the timeout shape is BMN\'s reading of Codex\'s u64, not a measurement against a run'
+  const PAST_SAFE_INTEGER =
+    'timeout at or above 2^53 as BMN reads it, where a whole number cannot be verified; whether Codex\'s u64 loads the exact value is unmeasured'
+  const NOT_LOADABLE =
+    'an entry here is one of BMN\'s own commands whose timeout is not a whole number at or above zero or null; Codex\'s u64 would not load it'
+
+  it('qualifies a Codex wired verdict whose timeout is past the safe-integer range', async () => {
+    const path = await hookFileFixture({
+      hooks: { Stop: [{ hooks: [{ type: 'command', timeout: 1e30, command: DOCUMENTED_CODEX }] }] }
+    }, 'hooks.json')
+
+    const plain = await runHooks(['check', 'codex', '--file', path])
+    const json = await runHooks(['check', 'codex', '--file', path, '--json'])
+
+    expect(plain.stdout).toContain(`  Stop               wired  ${PAST_SAFE_INTEGER}`)
+    const stop = JSON.parse(json.stdout).agents[0].events
+      .find((row: { event: string }) => row.event === 'Stop')
+    expect(stop.timeoutQualification).toBe(PAST_SAFE_INTEGER)
+  })
+
+  it('qualifies the first double past the safe-integer range, including one u64 could hold', async () => {
+    // 2^53 exactly: u64 would load it if the literal is integral, but a JavaScript number cannot
+    // verify that, so the verdict still carries the qualification instead of silence.
+    const path = await hookFileFixture({
+      hooks: { Stop: [{ hooks: [{ type: 'command', timeout: 2 ** 53, command: DOCUMENTED_CODEX }] }] }
+    }, 'hooks.json')
+
+    const plain = await runHooks(['check', 'codex', '--file', path])
+    const json = await runHooks(['check', 'codex', '--file', path, '--json'])
+
+    expect(plain.stdout).toContain(`  Stop               wired  ${PAST_SAFE_INTEGER}`)
+    expect(JSON.parse(json.stdout).agents[0].events
+      .find((row: { event: string }) => row.event === 'Stop')
+      .timeoutQualification).toBe(PAST_SAFE_INTEGER)
+  })
+
+  it('qualifies an ordinary numeric timeout with the unmeasured-rule note, in text and JSON', async () => {
+    const path = await hookFileFixture({
+      hooks: { Stop: [{ hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CODEX }] }] }
+    }, 'hooks.json')
+
+    const plain = await runHooks(['check', 'codex', '--file', path])
+    const json = await runHooks(['check', 'codex', '--file', path, '--json'])
+
+    expect(plain.stdout).toContain(`  Stop               wired  ${RULE_UNMEASURED}`)
+    expect(JSON.parse(json.stdout).agents[0].events
+      .find((row: { event: string }) => row.event === 'Stop')
+      .timeoutQualification).toBe(RULE_UNMEASURED)
+  })
+
+  it('carries nothing where no timeout value was judged: absent or null', async () => {
+    const path = await hookFileFixture({
+      hooks: { Stop: [{ hooks: [{ type: 'command', command: DOCUMENTED_CODEX }] }] }
+    }, 'hooks.json')
+
+    const json = await runHooks(['check', 'codex', '--file', path, '--json'])
+
+    for (const row of JSON.parse(json.stdout).agents[0].events) {
+      expect(row.timeoutQualification).toBeUndefined()
+    }
+  })
+
+  it('qualifies a Codex missing verdict the timeout rule produced from one of BMN\'s own entries', async () => {
+    const path = await hookFileFixture({
+      hooks: { Stop: [{ hooks: [{ type: 'command', timeout: '5', command: DOCUMENTED_CODEX }] }] }
+    }, 'hooks.json')
+
+    const plain = await runHooks(['check', 'codex', '--file', path])
+    const json = await runHooks(['check', 'codex', '--file', path, '--json'])
+
+    expect(plain.stdout).toContain(`  Stop               missing  ${NOT_LOADABLE}`)
+    const stop = JSON.parse(json.stdout).agents[0].events
+      .find((row: { event: string }) => row.event === 'Stop')
+    expect(stop.timeoutQualification).toBe(NOT_LOADABLE)
+  })
+
+  it('a dead sibling the rule dropped does not stamp the wired verdict as not loadable', async () => {
+    const path = await hookFileFixture({
+      hooks: {
+        // The dead first entry did not produce the verdict: the wired one beside it did, so the
+        // verdict carries the ordinary unmeasured-rule note, not the not-loadable one.
+        Stop: [{ hooks: [{ type: 'command', timeout: '5', command: DOCUMENTED_CODEX }] }, entryGroup(DOCUMENTED_CODEX)]
+      }
+    }, 'hooks.json')
+
+    const plain = await runHooks(['check', 'codex', '--file', path])
+    const json = await runHooks(['check', 'codex', '--file', path, '--json'])
+
+    expect(plain.stdout).toContain(`  Stop               wired  ${RULE_UNMEASURED}`)
+    const stop = JSON.parse(json.stdout).agents[0].events
+      .find((row: { event: string }) => row.event === 'Stop')
+    expect(stop.timeoutQualification).toBe(RULE_UNMEASURED)
+  })
+
+  it('keeps Claude reports free of the Codex qualification', async () => {
+    const path = await hookFileFixture({
+      hooks: {
+        Notification: [{ hooks: [{ type: 'command', timeout: 0, command: DOCUMENTED_CLAUDE }] }],
+        Stop: [entryGroup(DOCUMENTED_CLAUDE)]
+      }
+    })
+
+    const plain = await runHooks(['check', 'claude', '--file', path])
+    const json = await runHooks(['check', 'claude', '--file', path, '--json'])
+
+    // Claude's rule is measured, not a guess: its verdicts carry nothing, and its bytes are
+    // unchanged by the Codex qualification (byte-compared before and after in the epic receipts).
+    expect(plain.stdout).not.toContain('u64')
+    for (const row of JSON.parse(json.stdout).agents[0].events) {
+      expect(row.timeoutQualification).toBeUndefined()
+    }
+  })
+
   it('does not call a Claude entry wired when its timeout is zero', async () => {
     const path = await hookFileFixture({
       hooks: { Stop: [{ hooks: [{ type: 'command', timeout: 0, command: DOCUMENTED_CLAUDE }] }] }

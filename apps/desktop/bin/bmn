@@ -896,6 +896,12 @@ function hookEventState(groups, agent) {
   let older = false
   const unrecognised = []
   const gatedEntries = []
+  // Only Codex's timeout rule is a guess rather than a measurement, so only a Codex verdict says
+  // so beside itself; a Claude or OpenCode report stays byte-for-byte as it was.
+  const qualifiedRule = HOOK_FILES[agent].timeout === 'whole-non-negative-number'
+  let looseTimeout = false
+  let olderTimeoutQualification
+  let droppedTimeout = false
   for (const group of groups) {
     if (!isObject(group)) continue
     // BMN does not read matchers, so it does not answer for an entry inside one. What counts as
@@ -914,21 +920,49 @@ function hookEventState(groups, agent) {
       if (!isObject(entry) || entry.type !== 'command') continue
       // An entry the harness will not run is not an entry BMN can answer for. It still names the
       // hook, so the owner is shown it rather than left with an unexplained duplicate.
-      const read = runnableEntry(entry, agent)
-        ? hookEntryState(entry.command, agent)
-        : (namesHook(entry.command, agent) ? 'named' : 'missing')
+      const recognition = hookEntryState(entry.command, agent)
+      const runnable = runnableEntry(entry, agent)
+      const read = runnable ? recognition : (namesHook(entry.command, agent) ? 'named' : 'missing')
       if (gated && read !== 'missing') {
         gatedEntries.push(oneLine(entry.command))
         continue
       }
+      // The timeout rule contributing to a verdict: an entry of BMN's own it kept from wiring, or
+      // one it counts wired although the timeout passes the cheap rule only past what u64 holds.
+      if (qualifiedRule && (recognition === 'wired' || recognition === 'older') && !runnable) {
+        droppedTimeout = true
+      }
       // Nothing is missing for this event, so there is nothing for the owner to look at.
-      if (read === 'wired') return { state: 'wired', unrecognised: [], gated: [] }
-      if (read === 'older') older = true
+      if (read === 'wired') {
+        return {
+          state: 'wired',
+          unrecognised: [],
+          gated: [],
+          ...((qualification) => qualification ? { timeoutQualification: qualification } : {})(qualifiedRule ? timeoutQualificationFor(entry) : undefined)
+        }
+      }
+      if (read === 'older') {
+        older = true
+        if (qualifiedRule && timeoutQualificationFor(entry) !== undefined) olderTimeoutQualification = timeoutQualificationFor(entry)
+        if (qualifiedRule && pastSafeInteger(entry.timeout)) looseTimeout = true
+      }
       if (read === 'named') unrecognised.push(oneLine(entry.command))
     }
   }
-  if (older) return { state: 'wired (older wording)', unrecognised: [], gated: [] }
-  return { state: 'missing', unrecognised, gated: gatedEntries }
+  if (older) {
+    return {
+      state: 'wired (older wording)',
+      unrecognised: [],
+      gated: [],
+      ...((qualification) => qualification ? { timeoutQualification: qualification } : {})(looseTimeout ? TIMEOUT_PAST_SAFE_INTEGER : olderTimeoutQualification)
+    }
+  }
+  return {
+    state: 'missing',
+    unrecognised,
+    gated: gatedEntries,
+    ...(droppedTimeout ? { timeoutQualification: TIMEOUT_NOT_LOADABLE } : {})
+  }
 }
 
 /**
@@ -991,6 +1025,36 @@ function runnableEntry(entry, agent) {
   return timeout === null || (Number.isInteger(timeout) && timeout >= 0)
 }
 
+/**
+ * The first double past Number.MAX_SAFE_INTEGER. Above it a parsed JSON number cannot be verified
+ * to be a whole number at all - neighbouring doubles are two or more apart, so a literal at 2^53+1
+ * parses to the same value as 2^53+2 - and at 2^64 the value is one Codex's `u64` cannot load. The
+ * qualification names exactly that uncertainty instead of claiming a measurement BMN never made.
+ */
+const UNVERIFIABLE_TIMEOUT_FROM = 2 ** 53
+
+function pastSafeInteger(timeout) {
+  return typeof timeout === 'number' && timeout >= UNVERIFIABLE_TIMEOUT_FROM
+}
+
+/** The rule contributed whenever it judged a timeout value; absent means BMN claims nothing. */
+function timeoutQualificationFor(entry) {
+  if (entry.timeout === undefined || entry.timeout === null) return undefined
+  return pastSafeInteger(entry.timeout) ? TIMEOUT_PAST_SAFE_INTEGER : TIMEOUT_RULE_UNMEASURED
+}
+
+/**
+ * What a Codex verdict says beside itself when the cheap timeout rule contributed to it. The same
+ * string is the machine-readable field in `--json`, so the two cannot drift. A Claude or OpenCode
+ * report never carries one: their rules are measured, and their bytes stay as they were.
+ */
+const TIMEOUT_PAST_SAFE_INTEGER =
+  'timeout at or above 2^53 as BMN reads it, where a whole number cannot be verified; whether Codex\'s u64 loads the exact value is unmeasured'
+const TIMEOUT_RULE_UNMEASURED =
+  'the timeout shape is BMN\'s reading of Codex\'s u64, not a measurement against a run'
+const TIMEOUT_NOT_LOADABLE =
+  'an entry here is one of BMN\'s own commands whose timeout is not a whole number at or above zero or null; Codex\'s u64 would not load it'
+
 /** Whether this matcher leaves its group gated, by what the harness in question treats as absence. */
 function gatesEvent(matcher, agent) {
   const ungated = HOOK_FILES[agent].ungated
@@ -1015,7 +1079,8 @@ function checkHooks(agent, path, file = agent === 'opencode' ? undefined : readH
       optional: spec.optional.includes(event),
       state: read.state,
       ...(read.unrecognised.length === 0 ? {} : { unrecognised: read.unrecognised }),
-      ...(read.gated.length === 0 ? {} : { gated: read.gated })
+      ...(read.gated.length === 0 ? {} : { gated: read.gated }),
+      ...(read.timeoutQualification === undefined ? {} : { timeoutQualification: read.timeoutQualification })
     }
   })
   const missing = events.filter((row) => !row.optional && row.state === 'missing').map((row) => row.event)
@@ -1265,7 +1330,10 @@ function describeHookCheck(report) {
   if (report.state === 'unusable') lines.push(`  BMN cannot add to this file: ${report.detail}`)
   for (const row of report.events) {
     const optional = row.optional ? ' (optional)' : ''
-    lines.push(`  ${row.event.padEnd(19)}${row.state}${optional}`)
+    // The timeout-rule qualification sits beside the verdict it contributed to, never only in the
+    // closing limit below: a `wired` line must not read stronger than what BMN measured.
+    const qualified = row.timeoutQualification === undefined ? '' : `  ${row.timeoutQualification}`
+    lines.push(`  ${row.event.padEnd(19)}${row.state}${optional}${qualified}`)
     // Not a command BMN recognises, so it reads as missing; show it rather than leave the owner
     // wondering where the duplicate `install` is about to add came from.
     for (const command of row.unrecognised ?? []) {

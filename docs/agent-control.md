@@ -333,8 +333,12 @@ real tool call, each with a control that fired: an absent `timeout` ran, `1` and
 or a positive number, and prints the entry under the event like any other it did not count. For
 Codex, which has never been run here, the rule is the cheap one its `Option<u64>` suggests: absent,
 `null`, or a whole number at or above zero. That can be wrong either way — too strict and you get a
-duplicate entry, too loose and BMN calls an entry wired that Codex will not load — which is what the
-next paragraph is for.
+duplicate entry, too loose and BMN calls an entry wired that Codex will not load. So when that rule
+contributes to a Codex verdict — any timeout value the rule judged, with the stronger note at or
+above 2^53 where a JavaScript number cannot verify a whole number at all (and at 2^64, one the
+`u64` cannot load), or one of BMN's own entries the rule kept from wiring — the report says so
+beside that verdict line itself, in text and in `--json`, not only in the closing limit the next
+paragraph describes. An entry with no timeout value carries nothing: BMN claims nothing about one.
 
 **What `check` does not do: read your harness's config file for it.** Codex in particular loads its
 hook file strictly, so a mistake anywhere in that file can stop every hook in it, BMN's included.
@@ -342,8 +346,9 @@ BMN does not check for that and does not pretend to: it was tried, over five rou
 rested on a reading of somebody else's schema that no run here could confirm — the rules were wrong
 in both directions, refusing files that work and passing files that do not. So every Codex report
 ends with the limit instead: this command reports what is *configured*, never that a hook fired.
-Run `/hooks` in Codex once, then confirm the event shows up under Hook events. That is the check
-BMN cannot do for you.
+Where the cheap timeout rule contributed to a verdict, its qualification sits beside that verdict
+too. Run `/hooks` in Codex once, then confirm the event shows up under Hook events. That is the
+check BMN cannot do for you.
 
 Preferences → **Local agent control** can show a dated, read-only `hooks check` report for
 Claude Code, Codex and OpenCode. It shows configured and missing entries without exposing the

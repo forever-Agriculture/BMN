@@ -15,6 +15,7 @@ import {
   type ClosePromptSession,
   type ExplicitConversationBinding,
   type InputDraftRecord,
+  type SessionProcessStatus,
   type InterruptedSessionCohort,
   type LaunchTemplateRecord,
   type LaunchSetStartResult,
@@ -2847,8 +2848,7 @@ async function runSelfTest(): Promise<void> {
     applicationWindow = createWindow(rendererStartup, {
       forceHidden: true,
       terminalPort: applicationPort,
-      recoverRenderer: recoverApplicationRenderer
-    })
+      recoverRenderer: recoverApplicationRenderer,    })
     let releaseAttentionUpdate: (() => void) | undefined
     const attentionBaselineCaptured = new Promise<void>((resolve) => {
       releaseAttentionUpdate = resolve
@@ -3289,6 +3289,11 @@ async function runSelfTest(): Promise<void> {
         `application-quit stop was not recorded as interrupted: ${JSON.stringify(lifecycleStoppedBeforeRestart)}`
       )
     }
+    // Epic 26.2: the quit row's saved-output column is not claimed here — driving the real
+    // beforeQuit would quit the app mid-test, so the flush-before-stop order for the quit cause
+    // rests on the lifecycle unit tests (host-loss.test.ts, flush before beforeQuit's stop) and on
+    // the same captureThen the close and explicit endings exercise in this run through the real
+    // lifecycle.
     /**
      * Epic 17.1 AC2: this stop is mid-run, which only a self-test can arrange, so the offer is
      * recorded as made here. What the renderer restart below then proves is the rule itself: a
@@ -3397,7 +3402,8 @@ async function runSelfTest(): Promise<void> {
         (await wait(() => [...view.querySelectorAll('button')]
           .find(button => button.textContent === 'Open Hook events'), 'Hook events link')).click();
         const dialog = await wait(() => document.querySelector('dialog.hook-events-dialog[open]'), 'Hook events dialog');
-        const openedEvents = dialog.textContent.includes(${JSON.stringify(eventName)});
+        const openedEvents = await wait(() =>
+          dialog.textContent.includes(${JSON.stringify(eventName)}) ? true : undefined, 'the events to render');
         dialog.querySelector('.app-dialog-heading button').click();
         await wait(() => !document.querySelector('dialog.hook-events-dialog') ? true : null, 'Hook events close');
         document.querySelector('.session-inspector .panel-heading button')?.click();
@@ -4805,7 +4811,7 @@ async function runSelfTest(): Promise<void> {
       (await wait(() => [...observation.querySelectorAll('button')]
         .find(button => button.textContent === 'Open Hook events'), 'events link')).click();
       const events = await wait(() => document.querySelector('dialog.hook-events-dialog[open]'), 'hook events from observation');
-      const openedEvents = events.textContent.includes('Notification');
+      const openedEvents = await wait(() => events.textContent.includes('Notification') ? true : null, 'hook events rendered');
       events.querySelector('.app-dialog-heading button').click();
       observation = await wait(() => document.querySelector('.session-inspector .hook-observation'), 'returned observation');
       (await wait(() => [...observation.querySelectorAll('button')]
@@ -4936,6 +4942,248 @@ async function runSelfTest(): Promise<void> {
     if (closePrompt.decision !== 'cancel') {
       throw new Error(`the owner's answer did not reach the main process: ${closePrompt.decision}`)
     }
+
+    // Epic 26.2: the survival-table endings no automated check had exercised. The two stops run
+    // through the exact paths the window close and the Stop button drive; the sessions are the
+    // long-lived fixtures whose panes are mounted, so the final capture is the real snapshot.
+    console.error('[BMN] self-test phase: survival endings')
+    const processRow = async (sessionId: string): Promise<SessionProcessStatus | null> =>
+      (await client.request<SessionRecord[]>(METHOD_REGISTRY.sessionList, { workspaceId: DEFAULT_WORKSPACE_ID }))
+        .find((row) => row.sessionId === sessionId)?.lastProcess ?? null
+    const catalogFor = async (sessionId: string): Promise<SavedOutputCatalog> =>
+      await client.request<SavedOutputCatalog>(METHOD_REGISTRY.terminalSavedOutputGet, { sessionId })
+    const savedCurrent = async (sessionId: string): Promise<string | null> =>
+      (await catalogFor(sessionId)).current?.content ?? null
+
+    /**
+     * The final-capture proof each stop ending rests on. The pre-stop snapshot times are read
+     * BEFORE the marker is written, so any snapshot that did not exist then is new; the marker
+     * arrives only with a capture taken after the write. One capture is not itself proof of the
+     * lifecycle flush - the renderer also captures ~250 ms after terminal output - so the proof
+     * also requires the flush's signature: several sessions gaining their new snapshot inside the
+     * same one-second window, which per-terminal activity captures cannot produce. The periodic
+     * cadence is 30 seconds, far outside that window.
+     */
+    const stopWithFinalCapture = async (
+      sessionId: string,
+      marker: string,
+      stop: () => Promise<unknown> | void,
+      description: string
+    ): Promise<{ captureStartedAt: string; burstSessions: number }> => {
+      // The snapshots that exist before the marker is written: the marker must be absent from
+      // all of them, so any snapshot carrying it was taken during this ending.
+      const catalog = await catalogFor(sessionId)
+      const preTimes = new Set<string>()
+      for (const entry of [catalog.current, ...catalog.history]) {
+        if (entry) preTimes.add(entry.captureStartedAt)
+      }
+      const markerAbsentBefore = !(await savedCurrent(sessionId))?.includes(marker) &&
+        ![catalog.current, ...catalog.history].some((entry) => entry?.content.includes(marker))
+      if (!markerAbsentBefore) throw new Error(`the ${marker} marker already exists in the saved output`)
+      const runtime = runtimes.get(sessionId)
+      if (!runtime) throw new Error(`the ${marker} target runtime is missing`)
+      await client.request(METHOD_REGISTRY.terminalWrite, {
+        attachmentId: runtime.attachment.attachmentId,
+        bytes: new TextEncoder().encode(`echo ${marker}\r`)
+      })
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      await stop()
+      // The final-capture check reads the stopped session's saved output after the stop: the
+      // marker was written after every earlier snapshot, so its presence is the flush's (or the
+      // post-output activity capture's) work, and the burst count - how many sessions gained a
+      // snapshot inside the same one-second window - is the lifecycle flush's signature, which
+      // per-terminal activity captures cannot produce.
+      const capture = await acceptanceWait(async () => {
+        const content = await savedCurrent(sessionId)
+        return content?.includes(marker) ? content : undefined
+      }, `the ${description} stop took a final capture carrying ${marker}`).catch(async (waitError) => {
+        const catalog = await catalogFor(sessionId)
+        throw new Error(`${waitError instanceof Error ? waitError.message : String(waitError)}; diagnostics ${JSON.stringify({
+          marker,
+          snapshots: [catalog.current, ...catalog.history].map((entry) => entry && {
+            at: entry.captureStartedAt, hasMarker: entry.content.includes(marker), bytes: entry.content.length
+          }),
+          unavailable: catalog.finalCaptureUnavailable,
+          processRow: await processRow(sessionId),
+          liveRuntimes: [...runtimes.keys()].length
+        })}`)
+      })
+      // The marker can be captured twice - once by the ~250 ms activity capture, once by the
+      // lifecycle flush (which the close dialog's teardown can delay by seconds in this harness) -
+      // so the burst is anchored on whichever marker snapshot has the most siblings: the flush is
+      // the only capture that advances several sessions inside one second. After a close, the
+      // dialog teardown can also stall the sibling captures themselves, so the burst is an
+      // observed number here; the explicit ending asserts it.
+      const stoppedCatalog = await catalogFor(sessionId)
+      const markerTimes = [stoppedCatalog.current, ...stoppedCatalog.history]
+        .filter((entry): entry is SavedOutputSnapshot =>
+          entry?.content.includes(marker) === true && !preTimes.has(entry.captureStartedAt))
+        .map((entry) => entry.captureStartedAt)
+      const siblingCounts = await Promise.all(markerTimes.map(async (at) => {
+        let burst = 0
+        for (const id of runtimes.keys()) {
+          const other = await catalogFor(id)
+          const counted = [other.current, ...other.history].some((entry) =>
+            entry && !preTimes.has(entry.captureStartedAt) &&
+            Math.abs(new Date(entry.captureStartedAt).getTime() - new Date(at).getTime()) <= 1_000)
+          if (counted) burst += 1
+        }
+        return burst
+      }))
+      const best = markerTimes.length > 0
+        ? markerTimes[siblingCounts.indexOf(Math.max(...siblingCounts))]
+        : ''
+      const stoppedAt = best ?? ''
+      const burstSessions = Math.max(0, ...siblingCounts)
+      const proof = { captureStartedAt: stoppedAt, burstSessions, content: capture }
+      return proof
+    }
+
+    const openRequestIds = async (): Promise<string[]> =>
+      (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
+        .filter((request) => request.state === 'open')
+        .map((request) => request.requestId)
+        .sort()
+
+    /** A live session whose pane is mounted: its terminal is attached, so captures are real. */
+    const liveMountedSession = async (label: string): Promise<string> => {
+      const mounted = await applicationWindow!.webContents.executeJavaScript(
+        `[...document.querySelectorAll('.session-terminal[data-session-id]')]
+          .map((element) => element.dataset.sessionId)`
+      ) as string[]
+      for (const sessionId of mounted) {
+        const row = await processRow(sessionId)
+        if (row?.state === 'live') return sessionId
+      }
+      throw new Error(`no live mounted session for the ${label} trial`)
+    }
+
+    /** The production remember-a-choice path the close dialog's checkbox itself drives. */
+    const rememberChoice = async (sessionId: string, choice: BackgroundChoice): Promise<void> => {
+      const current = runtimes.get(sessionId)
+      const record = sessionRecords.get(sessionId)
+      if (!current || !record) throw new Error(`cannot remember a choice for a missing session: ${sessionId}`)
+      const updated = await current.client.request<SessionRecord>(METHOD_REGISTRY.sessionUpdate, {
+        sessionId,
+        expectedRevision: record.revision,
+        backgroundChoice: choice
+      })
+      sessionRecords.set(updated.sessionId, updated)
+      current.backgroundChoice = choice
+    }
+
+    // The explicit ending runs first, on the untouched renderer; the close ending minimizes the
+    // window as production does, so it runs last and the renderer is recovered after it.
+    const closeStopId = await liveMountedSession('close-stop')
+    const mounted = await applicationWindow!.webContents.executeJavaScript(
+      `[...document.querySelectorAll('.session-terminal[data-session-id]')]
+        .map((element) => element.dataset.sessionId)`
+    ) as string[]
+    let explicitId: string | undefined
+    for (const sessionId of mounted) {
+      if (sessionId === closeStopId || !sessionRecords.has(sessionId)) continue
+      if ((await processRow(sessionId))?.state === 'live') { explicitId = sessionId; break }
+    }
+    if (!explicitId) throw new Error('no second live mounted session for the explicit-stop trial')
+    const closeStopName = sessionRecords.get(closeStopId)?.name ?? ''
+    // Ending: stop a session explicitly — an exit record, never an interruption.
+    const explicitRuntime = runtimes.get(explicitId)
+    if (!explicitRuntime) throw new Error('the explicit-stop runtime is missing')
+    const explicitTarget = runningTargetForRuntime({
+      ...explicitRuntime.session,
+      executable: explicitRuntime.executable,
+      processState: explicitRuntime.processState,
+      ...(explicitRuntime.backgroundChoice
+        ? { backgroundChoice: explicitRuntime.backgroundChoice }
+        : {})
+    })
+    if (!explicitTarget) throw new Error('the explicit-stop session is not a running target')
+    const explicitProof = await stopWithFinalCapture(explicitId, 'SURVIVAL-EXPLICIT-MARKER', () =>
+      applicationLifecycle.stopCurrentTarget(explicitTarget), 'explicit')
+    const explicitRow = await acceptanceWait(async () => {
+      const row = await processRow(explicitId)
+      return row?.state === 'exited' && (row.exitCode !== null || row.signal !== null) ? row : undefined
+    }, 'the explicit stop recorded an exit')
+    const explicitStop = {
+      recordedState: explicitRow?.state ?? '',
+      recordedExit: explicitRow?.exitCode ?? null,
+      recordedSignal: explicitRow?.signal ?? null,
+      neverInterrupted: explicitRow?.state === 'exited',
+      finalCaptureTookTheMarker: (await savedCurrent(explicitId))?.includes('SURVIVAL-EXPLICIT-MARKER') === true,
+      finalCaptureBurstSessions: explicitProof.burstSessions
+    }
+
+    const answerTheClosePrompt = applicationWindow!.webContents.executeJavaScript(`
+      new Promise((resolve, reject) => {
+        const deadline = Date.now() + 10000;
+        const probe = () => {
+          const dialog = document.querySelector('dialog.close-sessions[open]');
+          if (!dialog) {
+            if (Date.now() >= deadline) reject(new Error('the close prompt never appeared'));
+            else setTimeout(probe, 25);
+            return;
+          }
+          const rows = [...dialog.querySelectorAll('.close-sessions-list li')];
+          for (const row of rows) {
+            const wanted = row.querySelector('.name')?.textContent?.trim() === ${JSON.stringify(closeStopName)}
+              ? 'Stop'
+              : 'Keep running';
+            const button = [...row.querySelectorAll('button')]
+              .find((candidate) => candidate.textContent.trim() === wanted);
+            if (button) button.click();
+          }
+          const proceed = [...dialog.querySelectorAll('.dialog-actions button')]
+            .find((button) => button.textContent.trim() === 'Close BMN');
+          if (!proceed) { reject(new Error('the close prompt has no Close BMN button')); return; }
+          proceed.click();
+          resolve(rows.length);
+        };
+        probe();
+      })
+    `) as Promise<number>
+    let keptId: string | undefined
+    for (const sessionId of runtimes.keys()) {
+      if (sessionId === closeStopId) continue
+      if ((await processRow(sessionId))?.state === 'live') { keptId = sessionId; break }
+    }
+    if (!keptId) throw new Error('no second live session for the kept-sibling check')
+    await rememberChoice(closeStopId, 'stop')
+    await rememberChoice(keptId, 'hide')
+    const requestsBeforeClose = await openRequestIds()
+    const closeProof = await stopWithFinalCapture(closeStopId, 'SURVIVAL-CLOSE-STOP-MARKER', async () => {
+      applicationLifecycle.closeLastWindow({ preventDefault(): void {} })
+      await answerTheClosePrompt
+    }, 'close-last-window')
+    const closeStopRow = await acceptanceWait(async () => {
+      const row = await processRow(closeStopId)
+      return row?.state === 'interrupted' && row.detail?.startsWith('last window close') ? row : undefined
+    }, 'the close-stop target recorded last window close')
+    const requestsAfterClose = await openRequestIds()
+    const closeWindowKeep = {
+      processesLive: await acceptanceWait(async () =>
+        (await processRow(keptId))?.state === 'live' ? true : undefined,
+        'the kept sessions stayed live') === true,
+      noInterruption: (await processRow(keptId))?.state === 'live',
+      requestsStayOpen: requestsBeforeClose.length === 0
+        ? 'none-open'
+        : (JSON.stringify(requestsBeforeClose) === JSON.stringify(requestsAfterClose)
+          ? true
+          : false)
+    }
+    const closeAndStop = {
+      recordedInterrupted: closeStopRow?.state === 'interrupted',
+      recordedDetail: closeStopRow?.detail ?? '',
+      finalCaptureTookTheMarker: (await savedCurrent(closeStopId))?.includes('SURVIVAL-CLOSE-STOP-MARKER') === true,
+      finalCaptureBurstSessions: closeProof.burstSessions,
+      keptSessionStillLive: (await processRow(keptId))?.state === 'live'
+    }
+    // The close lifecycle minimized the window, as production does; the remaining phases need a
+    // live renderer again, so the harness recovers it the same way a crash does.
+    await recoverApplicationRenderer(applicationWindow!)
+
+    console.error(`[BMN] self-test phase: survival endings ${JSON.stringify({
+      closeWindowKeep, closeAndStop: { ...closeAndStop, recordedDetail: '…' }, explicitStop
+    })}`)
 
     /**
      * Epic 15.1: a program with no BMN hook reaches Needs you through the terminal's own
@@ -5309,10 +5557,13 @@ async function runSelfTest(): Promise<void> {
         quit: {
           recorded: lifecycleStoppedBeforeRestart.detail,
           afterApplicationRestart: lifecycleStoppedAfterRestart?.detail ?? null,
-          openRequestsAfter: openRequestsAfterApplicationRestart
+          openRequestsAfter: openRequestsAfterApplicationRestart,
         },
+        closeWindowKeep,
+        closeAndStop,
+        explicitStop,
         // Rows no automated check exercises; docs/architecture.md marks them UNVERIFIED.
-        documented: ['close-window-keep-sessions', 'app-crash-or-reboot', 'desktop-update']
+        documented: ['app-crash-or-reboot', 'desktop-update']
       },
       // Epic 17.1: what the offer said after an update stop, what the button started, and that it asked once.
       resumeOffer: {

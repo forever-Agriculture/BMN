@@ -1,0 +1,271 @@
+# Survival acceptance matrix
+
+[architecture.md](architecture.md)'s "What survives" table says what each way of ending sessions
+keeps. This matrix holds that same promise to evidence: every row names the trial that exercises
+it, the outcome each column promises, and the current evidence state — **exercised-with-receipt**,
+**documented-only**, or **UNVERIFIED**. Neither the owner nor an agent has to trust prose.
+
+## Trials and receipts
+
+- Trials run against synthetic workspaces and conversations only; the owner's real workspaces,
+  profiles and sessions are never subjects (NFR35).
+- Non-disruptive endings (no process kill, no reboot, no update install) run in isolated Electron
+  instances with throwaway XDG/BMN/`CLAUDE_CONFIG_DIR`/`CODEX_HOME`/`OPENCODE_CONFIG_DIR` roots,
+  exactly as [electron-self-test.mjs](../scripts/test/electron-self-test.mjs) launches them.
+  Reading of the story's "disposable OS user or VM" wording: NFR35's protection target is the
+  owner's system and data, and these endings perform no OS-level action — nothing outside the
+  throwaway app-data roots is killed, written or installed — so the isolated instance is the
+  disposable profile for them; the disposable OS user or VM is required the moment a step reaches
+  the OS (kill, reboot, update install), as the disruptive rows below state. Recorded here rather
+  than silently assumed.
+- Disruptive steps — process kill, reboot, update install — run only on a disposable OS user or VM
+  that owns its own checkout, packaged binary and update service, with the owner's per-run
+  go-ahead. An isolated app-data folder alone does not qualify: the updater replaces the packaged
+  build and queues a user systemd unit
+  ([update-desktop.mjs](../scripts/install/update-desktop.mjs)).
+- Each trial writes a dated receipt under `.dev-auto/evidence/survival/` (local by design; the
+  directory is git-ignored) naming BMN commit, OS, harness versions, steps, the observed outcome
+  and a verdict of PASS, FAIL or UNVERIFIED with its reason. A FAIL receipt quotes the matrix
+  promise and the observed behaviour verbatim, and becomes a tracked defect for separately
+  authorized work; documentation is never quietly edited to match behaviour inside these stories.
+- Because receipts stay local, each trial below also carries its result line in this file —
+  verdict, receipt filename, commit, date — one line per distinct trial, the latest receipt last.
+
+## Columns
+
+The six columns are the survival table's own: **process**, **live screen**, **saved output**,
+**session record and layout**, **conversation resume**, **open Needs you requests**.
+
+## Rows
+
+### Close the window, keep the sessions
+
+- Promise per column — process: keeps running. Live screen: kept: the window is minimized, not
+  destroyed. Saved output: captured on the same cadence. Session record and layout: unchanged.
+  Conversation resume: not needed; nothing stopped. Open requests: stay open.
+- Trial steps: in an isolated Electron instance with a live synthetic session, invoke the window
+  close and choose the keep-sessions answer in the close prompt; then read the session's process
+  state, verify the capture cadence continues with no final capture, the record and layout are
+  unchanged, no interruption is recorded, and open requests remain open.
+- Trial actually run (recorded honestly): one mixed-decision close — the target remembers Stop, a
+  sibling remembers Hide — which is the prompt's per-session answer model in one run. The pure
+  all-kept close (nothing stopped, window hidden) and the pure all-stopped close (which proceeds
+  to quit) were not run as separate isolated trials; their unrun cells read as unexercised by this
+  receipt rather than silently covered by the mixed run.
+- Harnesses: Electron self-test instance (isolated roots, synthetic workspace).
+- Recorded discrepancy (26.1 AC3, not repaired in-story): the row promises captures "on the same
+  cadence" with no final capture, while the close-with-keep path flushes saved output once when it
+  hides the window even though every target is kept
+  ([app-lifecycle.ts](../apps/desktop/src/main/app-lifecycle.ts), `captureThen`; expected by
+  [host-loss.test.ts](../apps/desktop/src/main/host-loss.test.ts), the "flushes … before %s stops"
+  and all-kept-flush cases). The flush is a capture, not a stop, so nothing the row promises is
+  lost, but the no-extra-capture reading does not hold; a tracked defect for separately authorized
+  work, not a quiet edit here.
+- Evidence: exercised-with-receipt, partial — through the real close lifecycle (closeLastWindow
+  plus its renderer prompt; the trial's target remembers Stop, every asked session is answered
+  Keep running): process (kept session still live), no interruption recorded, and open-request
+  identity retained are checked; the live-screen (minimized-not-destroyed) cell is observed only
+  as the hide call running, not as a visible window state: the self-test window is forceHidden,
+  and driving a real visible window close through it destabilizes the run. Result lines below.
+
+### Close the window and stop the sessions
+
+- Promise per column — process: stopped, recorded *interrupted · last window close*. Live screen:
+  ends with the process. Saved output: a final capture is taken before the stop. Session record
+  and layout: unchanged; the pane keeps its place. Conversation resume: resume reopens a bound
+  conversation. Open requests: stay open; a harness that sends `SessionEnd` withdraws the ones its
+  hook opened.
+- Trial steps: in an isolated Electron instance with a live synthetic session bound to a
+  conversation, invoke the window close and choose the stop-sessions answer; verify the
+  *interrupted · last window close* recording, the final capture before the stop, the unchanged
+  record with the pane's place kept, resume reopening the bound conversation, and hook-opened
+  requests withdrawn while the rest stay open.
+- Trial actually run (recorded honestly): the mixed-decision close above — the stopped target's
+  cells are this row's; an all-stopped close (every target Stop, which proceeds to quit the app)
+  was not run as its own isolated trial.
+- Harnesses: Electron self-test instance (isolated roots, synthetic workspace and conversation).
+- Evidence: exercised-with-receipt, partial — the close runs through the real application
+  lifecycle and its renderer prompt (remembered Stop choice for the target, Keep running for the
+  asked sessions): the *interrupted · last window close* recording, the pre-stop marker in the
+  post-stop saved output (the marker was asserted absent from every earlier snapshot) and the
+  kept sibling are proven. Capture attribution, honestly: the renderer schedules its own activity
+  capture ~250 ms after output, so a post-stop marker proves a capture happened, not which one
+  took it; the stop-time lifecycle flush's own signature — several sessions gaining a snapshot
+  inside one second — is asserted by the explicit ending in the same run (observed 6) and comes
+  from the one shared `captureThen` both endings drive, but this ending's own sibling captures are
+  delayed by the close dialog's teardown in the forceHidden harness (recorded 0). The resume and
+  `SessionEnd`-withdrawal cells were not re-driven (the synthetic session is not a direct CLI
+  launch, so no bound conversation; resume and withdrawals are exercised by the same run's
+  conversationFromHook and hook-contract checks). Result lines below.
+
+### Quit
+
+- Promise per column — process: stopped after BMN lists the running sessions and asks, recorded
+  *interrupted · application quit*. Live screen: ends with the process. Saved output: a final
+  capture is taken before the stop. Session record and layout: unchanged. Conversation resume:
+  resume reopens a bound conversation; the next start offers to resume them all in one dialog.
+  Open requests: stay open; `SessionEnd` withdraws the hook's own.
+- Trial steps: in an isolated Electron instance with live synthetic sessions (at least one bound
+  to a conversation and one with a hook-opened request), quit the application and confirm; verify
+  the *interrupted · application quit* recording after BMN lists and asks, the final capture
+  before the stop, unchanged records, the resume-all offer on the next start (one row per session,
+  nothing started until the button), resume reopening the bound conversation, and `SessionEnd`
+  withdrawals.
+- Harnesses: Electron self-test instance (isolated roots, synthetic workspace and conversation).
+- Saved-output cell evidence: the self-test cannot drive `beforeQuit` without quitting itself, so
+  the flush-before-stop order for the quit cause rests on the lifecycle unit tests
+  ([host-loss.test.ts](../apps/desktop/src/main/host-loss.test.ts), "flushes pending terminal
+  output before %s stops the process", quit case) and on the one `captureThen` the same run
+  exercises in-app through the real lifecycle for the close and explicit endings.
+- Evidence: exercised-with-receipt for the recording, its reason surviving an application
+  restart, and the open requests intact — through a direct stop with the quit cause, not a driven
+  `beforeQuit`: the owner prompt, the quit-time final capture and the next-start quit resume-all
+  dialog are indirect here (lifecycle unit tests for the flush and prompt order; the update-stop
+  scenario's resumeOffer fields for the same cohort mechanism). A regression confined to the quit
+  use site would escape this receipt; those cells read as indirect, not as driven. Result lines
+  below.
+
+### Stop a session
+
+- Promise per column — process: stopped; an unconfirmed stop stays *exit unconfirmed* until the
+  host reports the exit. Live screen: ends with the process. Saved output: a final capture is
+  taken before the stop. Session record and layout: unchanged. Conversation resume: resume
+  reopens a bound conversation. Open requests: stay open; `SessionEnd` withdraws the hook's own.
+- Trial steps: in an isolated Electron instance with a live synthetic session bound to a
+  conversation and carrying a hook-opened request, stop the session explicitly; verify the
+  *exited* recording with the host's exit code (or *exit unconfirmed* until the host reports it —
+  never *interrupted*), the final capture before the stop, the unchanged record, resume reopening
+  the bound conversation, and `SessionEnd` withdrawals with the remaining requests retained.
+- Harnesses: Electron self-test instance (isolated roots, synthetic workspace and conversation).
+- Evidence: exercised-with-receipt, partial — the stop runs through the production Stop path
+  (`stopCurrentTarget`: flush, then stop with cause explicit); the *exited* recording (code 0,
+  signal 1, never *interrupted*) and the final capture (pre-stop marker present, flush burst) are
+  proven; resume and `SessionEnd`-withdrawal cells for this session rest on the same run's
+  conversationFromHook and hook-contract checks rather than a re-drive. Result lines below.
+
+### Renderer crash
+
+- Promise per column — process: keeps running. Live screen: a new view is created, brought to the
+  private terminal mode state the program is in, and the program is asked to repaint once; bytes
+  from before the crash are not replayed. Saved output: unaffected. Session record and layout:
+  unchanged; order, selection, scroll position and follow-tail are restored. Conversation resume:
+  not needed; nothing stopped. Open requests: stay open.
+- Trial steps: in an isolated Electron instance with live synthetic sessions, crash the renderer
+  and let the app rebuild the view; verify every process still running, the rebuilt view's
+  terminal modes (paste bracketing, focus and mouse reports, autowrap), layout order, selection,
+  scroll and follow-tail restored, the saved output unaffected, no interruption recorded, and open
+  requests unchanged.
+- Harnesses: Electron self-test instance (isolated roots, synthetic workspace).
+- Evidence: exercised-with-receipt — the self-test checks the processes, the layout and the
+  program's terminal modes surviving a new view. Result lines below.
+
+### App crash or reboot
+
+- Promise per column — process: ends when its pseudo-terminal closes (UNVERIFIED); the next start
+  marks earlier incarnations *interrupted* and starts nothing by itself. Live
+  screen: gone. Saved output: the last periodic capture; output written after it is lost. Session
+  record and layout: unchanged. Conversation resume: resume reopens a bound conversation,
+  including one a `SessionStart` hook reported. Open requests: stay open.
+- Trial steps (app crash): on the disposable OS user or VM, with the app running synthetic
+  sessions and a periodic capture present, kill the app process; restart it; verify earlier
+  incarnations marked *interrupted*, nothing started by itself, the last periodic capture present
+  with no final capture, records unchanged, resume working, requests retained.
+- Trial steps (reboot): as above, replacing the kill with a reboot of the disposable machine.
+- Harnesses: disposable OS user or VM owning its own checkout and build; owner per-run go-ahead.
+- Evidence: UNVERIFIED, with receipts. The 2026-09-25 app-crash and reboot trials were not run:
+  no disposable OS user or VM exists on this machine, and the owner's delegation of the decision
+  to the consultant (Astra/medium, quoted in the receipts) was answered by recording both
+  UNVERIFIED rather than approximating a kill or a reboot on the owner's system. The process
+  column stays UNVERIFIED by the table's own words. Result lines below.
+
+### Desktop update
+
+- Promise per column — process: stopped; packaging waits for BMN to exit, and an update installed
+  while it runs stops the sessions, recorded *interrupted · update restart*. Live screen: ends
+  with the process. Saved output: a final capture is taken before the stop. Session record and
+  layout: unchanged. Conversation resume: resume reopens a bound Claude/Codex conversation or
+  OpenCode with `--session`; the next start offers to resume them all in one dialog. Open
+  requests: stay open.
+- Trial steps (while running): on the disposable OS user or VM, with packaged BMN running
+  synthetic sessions, queue the desktop update and let it stop the running app; verify the
+  *interrupted · update restart* recording, the final capture before the stop, the update
+  completing and the packaged version advancing, the resume-all offer on the next start, and
+  requests retained with `SessionEnd` withdrawals.
+- Trial steps (while stopped): on the disposable OS user or VM, with sessions already stopped,
+  queue and install the update; verify the already-stopped sessions' records unchanged (no new
+  *interrupted*, no phantom exit), the update completing and the packaged version advancing, the
+  sessions remaining resumable, and no resume-all offer.
+- Harnesses: disposable OS user or VM owning its own checkout, packaged binary and update service
+  (`systemd` user unit); owner per-run go-ahead.
+- Evidence: UNVERIFIED, with receipts. The 2026-09-25 update-while-running and update-while-stopped
+  trials were not run: both need a disposable OS user or VM owning its own packaged binary and
+  update service, which does not exist here; the delegated consultant decision (Astra/medium,
+  quoted in the receipts) recorded both UNVERIFIED rather than installing anything on the owner's
+  system. Result lines below.
+
+## Beyond the table: the other promises this epic exercises
+
+### OpenCode support (real harness)
+
+- Promise: one real interactive OpenCode session exercises hook delivery, capture and Resume via
+  `opencode --session <id>` (Epic 18; shipped on synthetic receipts only).
+- Trial steps: in an isolated-config environment (synthetic `OPENCODE_CONFIG_DIR` holding the BMN
+  plugin, synthetic workspace), run one real interactive OpenCode session through BMN; verify the
+  plugin's hook delivery reaches BMN, the conversation is captured, and Resume reopens it with
+  `--session`. If provider access blocks the run, the row records UNVERIFIED with the exact
+  blocker; a synthetic run is never labelled the real thing.
+- Harnesses: real `opencode` CLI over a PTY inside an isolated-config BMN session.
+- Evidence: UNVERIFIED, with receipt. A compliant isolated-config real-provider harness (synthetic
+  config root that still holds working provider credentials, bounded spend) was not built within
+  this run's window; the blocker is infrastructure, not a provider refusal. No synthetic run is
+  labelled real. Result lines below.
+
+### Cross-harness handoff, both directions (Epic 7 usefulness)
+
+- Promise: a real Claude→Codex and a real Codex→Claude handoff, synthetic content, normal harness
+  permissions — the chosen summary pasted once, existing destination input retained without
+  submission, every selected original readable after the owner submits.
+- Trial steps: run the cross-harness trial harness (real `claude` and `codex` CLIs over PTYs, real
+  permission modes, synthetic files) once per direction; verify the paste count, no Enter, the
+  retained input, and the destination reading the selected original after submission; record
+  remaining friction.
+- Harnesses: cross-harness trial harness (`.dev-auto/evidence/cross-harness-trial.ts`).
+- Evidence: UNVERIFIED — method non-compliant. The 2026-09-25 re-run executed both directions end
+  to end under the Epic 26 build (single bounded paste, no submit before the owner, destinations
+  read the selected originals and answered; codex-cli 0.157.0 / claude 2.1.282), but the harness
+  inherits the caller's environment, so both real CLIs ran against the owner's actual
+  Claude/Codex profiles — reading their config, writing session transcripts there and consuming
+  real quota — instead of disposable profile roots. NFR35 forbids touching the owner's real
+  profiles, so the runs stand as method evidence only and the row stays UNVERIFIED. Exact blocker:
+  a compliant harness needs disposable `HOME`/`CLAUDE_CONFIG_DIR`/`CODEX_HOME`/XDG roots that still
+  carry working provider credentials for the trial turn — provisioning credentials inside
+  disposable roots and their spend is owner authorization the run does not carry. The harness's
+  string-based input-retention check is also weaker than the promise (it finds tokens in the
+  accumulated output, not in the rendered current input); a compliant rerun should assert the
+  submitted prompt directly. Result lines below.
+
+## Trial result lines
+
+One line per distinct trial, newest last. Receipts live under `.dev-auto/evidence/survival/`.
+
+| Trial | Verdict | Receipt | Commit | Date |
+| --- | --- | --- | --- | --- |
+| dry run (receipt format validation before any disruptive trial) | PASS | [dry-run-format-2026-09-25.md](../.dev-auto/evidence/survival/dry-run-format-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
+| renderer crash (processes, layout, terminal modes, requests; first exercised by the Epic 25 gate) | PASS | [renderer-crash-2026-09-25.md](../.dev-auto/evidence/survival/renderer-crash-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
+| quit (interruption recorded, reason survives an application restart, requests intact; first exercised by the Epic 25 gate) | PASS | [quit-columns-2026-09-25.md](../.dev-auto/evidence/survival/quit-columns-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
+| close-window-keep (partial: process/interruption/request identity through the real close decision; the minimized-window cell is observed only as the hide call) | PASS (partial) | [close-window-keep-2026-09-25.md](../.dev-auto/evidence/survival/close-window-keep-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
+| close-and-stop (partial: real lifecycle + prompt, recording, final capture with pre-marker exclusion, kept sibling; the flush burst is asserted by the explicit ending; resume/withdrawal cells rest on conversationFromHook) | PASS (partial) | [close-and-stop-2026-09-25.md](../.dev-auto/evidence/survival/close-and-stop-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
+| stop, explicit (partial: exited recording, final capture through the production Stop path with flush burst; resume/withdrawal cells rest on conversationFromHook) | PASS (partial) | [stop-2026-09-25.md](../.dev-auto/evidence/survival/stop-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
+| app crash | UNVERIFIED — no disposable OS user/VM exists to run it on; delegated consultant decision quoted | [app-crash-2026-09-25.md](../.dev-auto/evidence/survival/app-crash-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
+| reboot | UNVERIFIED — same blocker | [reboot-2026-09-25.md](../.dev-auto/evidence/survival/reboot-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
+| desktop update, while running | UNVERIFIED — needs a disposable OS user/VM owning its packaged binary and update service | [update-while-running-2026-09-25.md](../.dev-auto/evidence/survival/update-while-running-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
+| desktop update, while stopped | UNVERIFIED — same blocker; nothing installed on the owner's system | [update-while-stopped-2026-09-25.md](../.dev-auto/evidence/survival/update-while-stopped-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
+| OpenCode real harness | UNVERIFIED — isolated-config real-provider harness not built in this run's window; no synthetic run labelled real | [opencode-real-session-2026-09-25.md](../.dev-auto/evidence/survival/opencode-real-session-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
+| cross-harness claude→codex | UNVERIFIED — ran, but on the owner's inherited profiles (NFR35 method non-compliance); disposable-root credentials need owner authorization | [cross-harness-claude-to-codex-2026-09-25.md](../.dev-auto/evidence/survival/cross-harness-claude-to-codex-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
+| cross-harness codex→claude | UNVERIFIED — same method non-compliance | [cross-harness-codex-to-claude-2026-09-25.md](../.dev-auto/evidence/survival/cross-harness-codex-to-claude-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
+
+One line per distinct trial, the latest receipt linked; FAIL and UNVERIFIED lines stay with their
+reasons rather than being dropped. PASS (partial) rows keep their unexercised cells named in the
+row above and in the receipt. The `b341724 (Epic 26 tree)` commit marker means the trial ran in
+the working tree that carries this epic's changes on baseline b341724; the epic's acceptance
+commit follows the trials.

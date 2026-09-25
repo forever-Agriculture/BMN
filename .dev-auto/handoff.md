@@ -1,40 +1,55 @@
 # Dev Auto handoff
 
-- Project / selected epics: /home/oleksandr/code/BMN; Epic 25, two stories (25.1, 25.2). Owner "$dev-auto 25" (2026-09-25); owner also asked mid-run to track this session as a dev-auto GLM-lead trial (brain note pending).
-- Original request and intended outcomes: _bmad-output/planning-artifacts/epics.md:1323-1356 (Epic 25 ACs and verification); census reviews/glm-flash-cleanup-census-2026-09-25.md items E1/E8.
+- Project / selected epics: /home/oleksandr/code/BMN; Epic 26 only (26.1, 26.2, 26.3). Owner "$dev-auto 26-27" then final scope change "complete epic 26 only" (2026-09-25); Epic 27 parked, untouched.
+- Original request and intended outcomes: _bmad-output/planning-artifacts/epics.md:1389-1421 (Epic 26 ACs, verification, FR45-47, NFR35); shared rules at :1302-1321.
 - Mode: build
-- Stopping condition: selected scope accepted; no automatic time limit.
+- Stopping condition: selected scope accepted; no automatic time limit. Owner window: "continue and finish autonomously" (2h), "so finish faster".
 - Explicit user stop: none
-- Restrictions and authorization boundaries: local implementation, checks and ready task commits authorized; push, merge, deploy and desktop update need separate authorization; do not package while packaged BMN is open. No customer/production/private data; dispatch followed models.md tiers.
-- Decision and history log: .dev-auto/log.md (complete finding history); raw receipts in ignored .dev-auto/evidence/epic-25/.
+- Restrictions and authorization boundaries: local implementation, checks and ready task commits authorized; push, merge, deploy and desktop update need separate authorization; no `pnpm run package` while packaged BMN is open. NFR35: trials never touch the owner's real workspaces, profiles or sessions; disruptive steps only on a disposable OS user/VM (none exists on this machine → 4 UNVERIFIED receipts per the delegated Astra/med consultant decision, .dev-auto/evidence/epic-26/consultant-output.md). Live paid attempts keep spend limits.
+- Decision and history log: .dev-auto/log.md (append-only; all 10 owner messages recorded verbatim). Raw receipts in ignored .dev-auto/evidence/.
 - Authorized provider routes: dev-auto/references/models.md ordered tiers.
-- Lead host / requested model / observed model: Claude Code via claude glm; GLM-5.3 max (transcripts under ~/.claude-glm/projects/-home-oleksandr-code-BMN/, session b8c01db8).
+- Lead host / requested model / observed model: Claude Code via claude glm; GLM-5.3 max.
 
 ## Progress
 
-- Sprint board: sprint-status.yaml:143-145 epic-25, 25-1, 25-2 done (atomically written, read back).
-- Implemented: 25.1 — voice download claim-before-first-await, post-await revalidation, identity-checked release on every exit (voice-ipc.ts:120-169); RED-first fence voice-ipc.test.ts:190 (receipt voice-fence-red.log) plus release fences :220, :259; explicit timeout (RETENTION+1)*200 on both retention-bound tests (saved-output-store.test.ts). 25.2 — "One owner per claim" rule + five-flow table in docs/architecture.md; audit matrix under Story 25.2 in epics.md with every await boundary fenced or labelled unverified (four gaps: handoff destination-unavailable post-claim window; repeat-watch incarnation-replacement-during-listAttention and queueing-behind-writeRepeatSegment; conversation teardown-inside-binding-read). Review repairs: Electron exercise of the changed flow (selfTestVoiceFetch in index.ts; Preferences-driven scenario in voice-self-test.ts; probe in voice-probe.ts; main pins fetch calls === 2; harness assertions; test-hook mock).
-- Associated loop: none. Active native helpers: none.
+- Implemented and checked (working tree, baseline b341724):
+  - 26.1 — docs/survival-matrix.md: 7 rows + OpenCode + cross-harness; result-line table updated with this run's trials (commit marker "b341724 (Epic 26 tree)").
+  - 26.2 — self-test survival endings (close-and-stop, explicit stop, quit final capture, close-window-keep partial) + 4 disruptive UNVERIFIED receipts + OpenCode UNVERIFIED receipt + dry-run format receipt under .dev-auto/evidence/survival/; acceptance run .dev-auto/evidence/epic-26/electron-26-final1.log EXIT 0 (final-receipt.json extracted).
+  - 26.3 — bin/bmn timeout qualifications beside verdicts (text + JSON timeoutQualification); 4 new tests; agent-control.md updated; Claude/OpenCode byte-identical (claude-before/after.*).
+  - Cross-harness trials: BOTH DIRECTIONS PASSED fresh 2026-09-25 under codex-cli 0.157.0 / claude 2.1.282 (run3 codex→claude; run4 claude→codex EXIT 0; cross-harness-receipt.json rewritten 14:45:21Z from today's payloads). Harness adaptations (git-ignored evidence file): ready-probe matches the codex 0.157 chip case-insensitively + empty-input hint; response detection = both tokens present (single responseIn test for wait/no-response/receipt fields) because 0.157 interleaves status-bar redraws through streamed responses. Dated receipts cross-harness-{claude-to-codex,codex-to-claude}-2026-09-25.md. Explicit-invocation vitest config: .dev-auto/evidence/cross-harness.vitest.config.mjs.
+  - Two pre-existing race fixes in index.ts self-test probes (await-wait; Epic-25-class gate repair, flagged for reviewers).
+- Sprint board: epic-26 + 26-1/26-2/26-3 still backlog; flip to done at acceptance.
+- Active helpers: cross-harness run2 background task.
+- Owner instructions: Sol/xhigh review after Astra; this session also evaluates the latest dev-auto (vault note at acceptance).
 
 ## Decisions and findings
 
-- Original or approved intent changes: none.
-- Material pending findings: none. Full disposition history in log.md; all review/recheck findings CLOSED.
-- Semantic note: retry claimed over a dismissable failed download that fails pre-transfer now clears the slot; transfer-failure error-until-Dismiss unchanged and fenced.
+- Original or approved intent changes: scope narrowed to Epic 26 only (owner); disruptive trials → UNVERIFIED with receipts (delegated consultant decision, quoted in receipts).
+- Material pending findings: none yet (reviews pending).
+- Known honest residuals recorded in matrix: close-window-keep minimize/capture-cadence cells and close-dialog choreography unexercised (forceHidden window instability, 20+ diagnostic runs); endings' resume/withdrawal cells rest on conversationFromHook in the same receipt; OpenCode real session UNVERIFIED.
 
 ## Evidence
 
-- Final candidate: tracked diff 621085b..worktree over 9 files sha256 94aa25847b2693acc87d965a604426b4991bcc7ee31daa639a92a12f909c146a. Gates: unit-run6.log/unit-run7.log two consecutive full-unit passes 98 files/1607 tests (clean env, default workers); electron-final.log exit 0 with download receipt (all eight fields true, failureText "connection reset"); typecheck.log/lint.log exit 0; repair 2 after those gates changed docs and the ignored matrix only. Ambient-environment unit failure diagnosed and receipted (env-failure-isolation.log); voice-engine speech test recorded as intermittent timeout with suspected load sensitivity (voice-engine-speech-isolated.log; one-line fix out of NFR34 scope, needs separate authorization).
-- Unreviewed or unverified areas: the four audit gaps (fenced-test gaps, not migrations); retry-over-error-then-pre-transfer-failure at runtime; real network downloads; packaging/deployment.
+- Checks: electron-26-final1.log EXIT 0 (full receipt all-true); control-cli-full.log 340/340; typecheck green (tsc -b inside the final1 build); lint-final.log EXIT 0; unit-gate1.log + unit-gate2.log EXIT 0 (1618/1618 each, consecutive, clean env).
+- Unreviewed or unverified areas: GLM pre-review SKIPPED (helper route failed: unrecognized model; logged); Astra/medium epic review IN FLIGHT (astra-review.json); owner-requested Sol/xhigh pending after it.
 
 ## Measurement
 
-- Timing: 2026-09-25 ~13:20 → ~14:50 Europe/Kyiv, about 90 minutes.
-- Dispatches: GLM-5.3 strong pre-review $0.565915/32 turns; gpt-6-astra/medium epic review 1,099,692 tokens; two gpt-6-astra/low rechecks 274,975 and 178,681 tokens. One codex dispatch retried for a detached-shell PATH failure (127) via absolute path, same route.
-- Owner interventions: initial request; mid-run dev-auto-tracking request. 0 avoidable repeat requests.
-- Observed usage: lead GLM-5.3 max session b8c01db8: 183,524 input / 91,250 output / 5,135,872 cache-read, $10.34 cumulative.
+- Observed usage: Astra/med review 1,091,838 in (1,001,600 cached) / 7,723 out; Astra/low recheck
+  403,108 in / 2,409 out; Sol/xhigh 1,291,100 in (1,161,984 cached) / 18,273 out (rollout
+  receipts in evidence/epic-26/*.launch.log); GLM helper dispatches failed before usage;
+  cross-harness: short read-only turns both directions on codex 0.157.0 / claude 2.1.282 (owner
+  quota; weekly limit <25% after).
+- Timing: started 2026-09-25 ~17:00 Europe/Kyiv, accepted ~21:30.
+- Dispatches: Astra/med consultant (decision quoted in 4 receipts); Astra/med review 1.09M in / 7.7K out; Astra/low recheck; Sol/xhigh review; GLM pre-review failed (unrecognized model, logged) and was skipped per route table.
+- Owner interventions: 10 messages, all in log.md.
+
+- Astra/medium review verdict "changes required" (5 material findings); ONE consolidated repair applied (real-lifecycle endings + burst final-capture proof; 2^53 qualification boundary; cross-harness downgraded to method evidence per NFR35; matrix/receipt honesty fixes); acceptance rerun electron-26-final2.log EXIT 0; unit-gate3/4 EXIT 0 (1618/1618 ×2); lint exit 0 in-log; all dispositions in log.md ("Astra/medium epic review dispositions").
+- Recheck follow-ups applied (reviewer's settle-instructions): double-stop() fixed, pre-marker snapshot exclusion restored, burst anchored on the flush snapshot; close ending's burst recorded as observed (harness dialog teardown delays sibling captures), explicit ending asserts >= 3 (observed 6). F5 accepted: every rule-contributed Codex verdict now carries a qualification (base note for judged timeout values, stronger 2^53 note, not-loadable for dropped entries; absent/null carries nothing); focused CLI suite 343/343.
+- Final gates: electron-26-final3.log EXIT 0; unit-gate5/6 1621/1621 consecutive; lint exit 0; tsc clean. Sprint board epic-26 done. Vault evaluation committed (98a0832).
+- Sol/xhigh owner-requested review received (sol-review.json): 26.3 clean; disruptive UNVERIFIEDs honest and sufficient; three labelling findings resolved by honest relabeling (matrix + receipts) with dispositions in log.md; unit-gate7.log EXIT 0 in-log.
 
 ## Resume
 
-- Next safe action: none for the selected scope. Push and desktop updater require separate authorization.
-- Status: COMPLETE — owner-requested Sol review arc closed; dispositions in log.md.
+- Next safe action: publish to cockpit, commit the accepted scope locally, end `DEV-AUTO: COMPLETE`.
+- Status: COMPLETE — Epic 26 accepted; gates green, reviews dispositioned, board done.
