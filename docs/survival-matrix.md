@@ -54,20 +54,17 @@ The six columns are the survival table's own: **process**, **live screen**, **sa
   to quit) were not run as separate isolated trials; their unrun cells read as unexercised by this
   receipt rather than silently covered by the mixed run.
 - Harnesses: Electron self-test instance (isolated roots, synthetic workspace).
-- Recorded discrepancy (26.1 AC3, not repaired in-story): the row promises captures "on the same
-  cadence" with no final capture, while the close-with-keep path flushes saved output once when it
-  hides the window even though every target is kept
-  ([app-lifecycle.ts](../apps/desktop/src/main/app-lifecycle.ts), `captureThen`; expected by
-  [host-loss.test.ts](../apps/desktop/src/main/host-loss.test.ts), the "flushes … before %s stops"
-  and all-kept-flush cases). The flush is a capture, not a stop, so nothing the row promises is
-  lost, but the no-extra-capture reading does not hold. This row is **FAIL** for the saved-output
-  promise, based on the lifecycle source and its all-kept-flush unit test; the mixed Electron trial
-  did not itself measure capture cadence. The discrepancy remains visible for a separate decision.
-- Evidence: FAIL for the saved-output promise; the other columns are partially exercised through
-  the real close lifecycle (closeLastWindow plus its renderer prompt). The trial's target remembers
-  Stop, and every asked session is answered
-  Keep running): process (kept session still live), no interruption recorded, and open-request
-  identity retained are checked; the live-screen (minimized-not-destroyed) cell is observed only
+- Follow-up repair `1757ec8`: the lifecycle skips final capture when every session is kept and
+  scopes a mixed close's capture to the exact sessions being stopped. The all-kept unit check
+  failed on the old code and passes on the repair; the mixed Electron run reports
+  `noLifecycleCapture: true` for the kept sibling while acknowledging a final capture for the
+  stopped target. The old discrepancy remains in the earlier local FAIL receipt. Periodic cadence
+  itself was not measured in the Electron run.
+- Evidence: PASS (partial) for the repaired no-extra-capture behavior; the other columns are
+  partially exercised through the real close lifecycle (closeLastWindow plus its renderer prompt).
+  The stopped target remembers Stop and every prompted sibling is answered Keep running. Process
+  (kept session still live), no interruption recorded, and open-request identity retained are
+  checked; the live-screen (minimized-not-destroyed) cell is observed only
   as the hide call running, not as a visible window state: the self-test window is forceHidden,
   and driving a real visible window close through it destabilizes the run. Result lines below.
 
@@ -260,7 +257,7 @@ One line per distinct trial, newest last. Receipts live under `.dev-auto/evidenc
 | dry run (receipt format validation before any disruptive trial) | PASS | [dry-run-format-2026-09-25.md](../.dev-auto/evidence/survival/dry-run-format-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
 | renderer crash (processes, layout, terminal modes, requests; first exercised by the Epic 25 gate) | PASS | [renderer-crash-2026-09-25.md](../.dev-auto/evidence/survival/renderer-crash-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
 | quit (partial: interruption recorded, reason survives restart and requests intact; prompt and final capture remain indirect) | PASS (partial) | [quit-columns-2026-09-25.md](../.dev-auto/evidence/survival/quit-columns-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |
-| close-window-keep (saved-output promise conflicts with lifecycle flush; process and request cells partially exercised) | FAIL | [close-window-keep-2026-09-25.md](../.dev-auto/evidence/survival/close-window-keep-2026-09-25.md) | 0a71e47 (review tree) | 2026-09-25 |
+| close-window-keep (no extra lifecycle capture in mixed close; pure all-kept and visible-window cells remain indirect) | PASS (partial) | [close-window-keep-repair-2026-09-25.md](../.dev-auto/evidence/survival/close-window-keep-repair-2026-09-25.md) | 1757ec8 | 2026-09-25 |
 | close-and-stop (partial: real lifecycle + prompt, recording, acknowledged lifecycle capture, kept sibling; resume/withdrawal cells rest on conversationFromHook) | PASS (partial) | [close-and-stop-2026-09-25.md](../.dev-auto/evidence/survival/close-and-stop-2026-09-25.md) | 0a71e47 (review tree) | 2026-09-25 |
 | stop, explicit (partial: exited recording and acknowledged lifecycle capture; resume/withdrawal cells rest on conversationFromHook) | PASS (partial) | [stop-2026-09-25.md](../.dev-auto/evidence/survival/stop-2026-09-25.md) | 0a71e47 (review tree) | 2026-09-25 |
 | app crash | UNVERIFIED — no disposable OS user/VM exists to run it on; delegated consultant decision quoted | [app-crash-2026-09-25.md](../.dev-auto/evidence/survival/app-crash-2026-09-25.md) | b341724 (Epic 26 tree) | 2026-09-25 |

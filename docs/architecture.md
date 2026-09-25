@@ -190,13 +190,13 @@ in order, one at a time, stopping after the first failure — every row ends up 
 *failed* with the reason, or *not started*. Nothing begins until the button, and the offer is made
 once per stop; **Resume interrupted sessions…** in the palette reopens it.
 
-The Electron self-test checks two of these rows against the running app: the renderer-crash row (the
-processes, the layout and the program's terminal modes survive a new view, so paste stays bracketed
-and focus and mouse reports keep arriving) and the Quit row (the interruption and its recorded
-reason survive an application restart, with the open requests intact). The other rows are documented
-behaviour derived from the rules above and the [hook contract](agent-control.md); closing the window
-while keeping the sessions, an app crash or a reboot, and a desktop update are **UNVERIFIED** by any
-automated check.
+The Electron self-test checks the renderer-crash row (processes, layout and terminal modes survive
+a new view), the Quit row's interruption record and reason after restart, and parts of the close
+and explicit-stop rows against the running app. A mixed close confirms that the kept session stays
+live without a lifecycle capture while the stopped session receives a final capture. The pure
+all-kept close and the visible minimized-window state remain unexercised by that self-test. App
+crash, reboot and desktop update still lack compliant end-to-end trials; see the
+[survival matrix](survival-matrix.md) for the exact PASS, FAIL and UNVERIFIED cells.
 
 ## Electron hardening
 
