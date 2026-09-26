@@ -5,7 +5,7 @@
 - Mode: build
 - Stopping condition: selected scope accepted; no automatic time limit.
 - Explicit user stop: none
-- Restrictions and authorization boundaries: Current owner request authorizes local implementation, checks and ready task commits. Push, merge, deploy and desktop update need separate authorization (owner AGENTS.md global rules); never package while packaged BMN is open (AGENTS.md). NFR35 forbids trials on real workspaces, profiles or sessions; use synthetic workspaces in isolated Electron. No credentials or personal data to helpers; provider routes only under owner dev-auto authorization.
+- Restrictions and authorization boundaries: Original request authorized implementation, checks and ready local task commits. A later owner request in the current conversation explicitly authorized GLM and GLM Flash read-only review, a push to GitHub and the local desktop update after checking Epic 27; that supersedes the prior push/update restriction for this delivery only. Merge and unrelated deployment remain unauthorized. Never package while packaged BMN is open (AGENTS.md); `update:desktop` waits for it to exit. NFR35 forbids trials on real workspaces, profiles or sessions; use synthetic workspaces in isolated Electron. No credentials or personal data to helpers.
 - Decision and history log: .dev-auto/log.md (append-only); prior Epic 26 handoff remains in git at baseline. Raw receipts under ignored .dev-auto/evidence/.
 - Authorized provider routes: /home/oleksandr/code/dev-auto/skills/dev-auto/references/models.md ordered tiers.
 - Lead host / requested model / observed model: Codex lead; observed gpt-6-sol/xhigh, rollout 01a0dc66-2ace-7681-8bb3-0ef3f54af2b5.
@@ -13,8 +13,9 @@
 ## Progress
 
 - Sprint board and reconciled state: Epic 25 and 26 done; Epic 27, 27.1 and 27.2 done, atomically written and read back in ignored sprint-status.yaml; baseline dd6550b.
-- Implemented: 27.1 utility paste claim, preview chooser and IPC; 27.2 bounded utility search and palette route in working tree. Second repair of F1/F4 frozen at fb91ab0cfff06e6de26318f5355046119bcd423847b1adb73d456be8b16824f5.
+- Implemented: 27.1 utility paste claim, preview chooser and IPC; 27.2 bounded utility search and palette route in commit 4d7b288. Second repair of F1/F4 frozen at fb91ab0cfff06e6de26318f5355046119bcd423847b1adb73d456be8b16824f5.
 - Active helpers: none. Astra/low second recheck completed read-only, receipt epic-27-astra-recheck2.md.
+- Owner delivery follow-up: product source remains commit 4d7b288. GLM-5.3 source review found no material defect in its inspected Epic 27 seams; GLM-5.3-Flash found eight documentation gaps, now closed by edits to README.md, docs/features.md and docs/architecture.md and a focused Flash recheck. Receipts are local under `.dev-auto/evidence/epic-27-owner-*`.
 
 ## Decisions and findings
 
@@ -30,6 +31,7 @@
 - Baseline and reviewed revisions / material finding dispositions / recheck or delta evidence: baseline dd6550b; full reviewed fingerprint 54ae818...; first repaired f5e360...; accepted fb91ab0cfff06e6de26318f5355046119bcd423847b1adb73d456be8b16824f5. F1-F4 all closed by reviewer with controlled/source and synthetic Electron evidence.
 - Review allowance at the current boundary: rechecks 2; consultation 0; no material gap remains.
 - Unreviewed or unverified areas: actual RPC/worker archive interleaving, Electron exit during pending search/Enter, real OS blur, receipt crash injection, slow I/O cancellation and symlink replacement; synthetic/source evidence only for these edges.
+- Owner follow-up gates on unchanged product source: test:unit 102 files/1641 tests PASS, typecheck and lint EXIT 0, isolated Electron EXIT 0 with all six `fileReferenceWire` checks true. GLM-5.3/max reviewed changed source and reported zero material issues; GLM-5.3-Flash/max documentation recheck closed all eight reported gaps. Logs and JSON receipts are ignored local evidence.
 
 ## Measurement
 
@@ -37,9 +39,10 @@
 - Dispatches: GLM-5.3/max quick pre-review, receipt epic-27-glm-pre-review.json; Astra/medium full review, receipt epic-27-astra-review.md; Astra/low first and second rechecks, receipts epic-27-astra-recheck.md and epic-27-astra-recheck2.md; all observed read-only/approval never for Astra.
 - Review yield: quick GLM 0 material, 2 minor; Astra full review 4 material (0 flagged by GLM); first recheck closed F2/F3; second closed F1/F4, no new material.
 - Owner interventions: 1 scope request; no corrections or repeat approvals.
+- Later owner intervention: explicit instruction to dispatch GLM and GLM Flash, double-check Epic 27, update BMN locally and push to GitHub. Observed new helper usage: GLM-5.3 48,420 input + 413,504 cache-read / 11,447 output; GLM-5.3-Flash audit 54,355 input + 355,776 cache-read / 7,152 output; Flash recheck 15,195 input + 30,784 cache-read / 3,328 output.
 - Observed usage: GLM-5.3 pre-review 48,192 input + 177,856 cache-read / 15,124 output, $0.707988; Astra full 926,797 input (836,096 cached) / 6,871 output; Astra low rechecks 489,363 input (416,768 cached) / 4,651 output and 361,554 input (299,520 cached) / 3,423 output. Lead gpt-6-sol/xhigh latest read: 52,207,054 input (51,516,032 cached) / 152,967 output. Auto-review sessions separate, not added.
 
 ## Resume
 
-- Next safe action: no selected work remains; push and desktop update require separate authorization.
-- Status: COMPLETE — Epic 27 accepted locally.
+- Next safe action: no selected implementation work remains; inspect Git and desktop update state before any follow-up delivery action under the owner's later authorization.
+- Status: COMPLETE — Epic 27 accepted; owner-authorized delivery is a separate follow-up.

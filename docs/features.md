@@ -216,6 +216,23 @@ launch directory, which the dialog names; you can pick another folder for one op
 reads regular UTF-8 text files of at most 1 MiB, refreshes only when you ask, and edits, runs and
 stores nothing.
 
+To put a reference into another session, open its preview and choose **Send to session**. The
+chooser lists unarchived sessions across visible workspaces and starts with no destination selected.
+**Review send…** shows the exact absolute path and line to append, plus the destination's workspace,
+name and current process. **Paste reference** appends that text to the chosen session's input without
+pressing Enter; BMN reports it as pasted, not submitted. If the window loses focus or the destination
+stops, restarts or is archived, choose it again. A path the reference grammar cannot represent
+cannot be sent.
+
+In the command palette (`Ctrl+Shift+P`), typing a query also searches filenames and paths in a
+labelled **Files** group. With a selected session, the root is that process's launch directory while
+it runs, or the session's stored directory after it stops. With no selected session, the root is the
+workspace's default directory; opening a match then asks you to select a session for the preview.
+The read is on demand and stops at six directory levels, 20,000 entries scanned or 50 matching files;
+the palette labels a cap. It skips `.git` and `node_modules`, does not follow symbolic links, and
+new typing supersedes an older search. An unavailable directory shows no files. There is no index,
+content search or watcher.
+
 ## Voice dictation
 
 Hold **Space** in any terminal to talk; recording starts after 0.3 seconds, and releasing pastes the
@@ -272,7 +289,7 @@ too. The session launch form offers templates and a close-behaviour choice; **Ed
 settings** lets you change the saved command and close behaviour. Elsewhere in Preferences are
 archive retention, the Hold Space toggle and voice settings, and the Telegram connection.
 
-`Ctrl+Shift+P` opens the command palette to search common actions, workspaces and sessions. The
+`Ctrl+Shift+P` opens the command palette to search common actions, workspaces, sessions and files. The
 full shortcut table is in the [README](../README.md#keyboard).
 
 ## Privacy and where data lives

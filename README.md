@@ -59,8 +59,9 @@ feature stops. This page sums up the product and how to install it.
 - **File references.** `Ctrl+click` a path an agent printed, such as `src/parser.ts:42:7`, or use
   **Open file reference…** in the palette, to see a read-only snapshot of that file at the line,
   with Copy reference and Show in Folder. Relative paths resolve from the session's launch
-  directory, which the preview names; you can pick another folder for one opening. Nothing is
-  edited, run or stored.
+  directory, which the preview names; you can pick another folder for one opening. **Send to
+  session** lets you choose a destination, review the exact absolute reference, and append it to
+  that session's input without pressing Enter. The preview does not edit, run or store the file.
 - **Local voice dictation.** Hold Space in any terminal to talk; release to paste the text into the
   session, without pressing Enter. Transcription runs on your CPU with
   [whisper.cpp](https://github.com/ggml-org/whisper.cpp). No audio leaves the computer. Approve
@@ -74,8 +75,9 @@ feature stops. This page sums up the product and how to install it.
 - **Appearance.** Four color modes for the app and the terminal: near-black Black (default), Steel,
   Brown and Dark, plus a Knight, Cross or Boss header identity.
   ([Customization](docs/features.md#customization))
-- **Keyboard first.** `Ctrl+Shift+P` opens the command palette to search commands, workspaces and
-  sessions. Shortcuts handle navigation and common terminal actions.
+- **Keyboard first.** `Ctrl+Shift+P` opens the command palette to search commands, workspaces,
+  sessions and files in the addressed directory. Shortcuts handle navigation and common terminal
+  actions.
 
 ## Keyboard
 

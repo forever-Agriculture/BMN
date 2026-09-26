@@ -51,6 +51,7 @@ claim changes nothing. The claim-shaped flows and their state:
 | Cohort resume action | one recorded promise per idempotency key, set before any `await` (`resumeCohort`, `session-manager.ts`) | repeats return the recorded outcome | entries are kept for the process lifetime: the record *is* the idempotency | Protected |
 | Repeat-watch state | per-session notice queue; state read and written inside the queued operation (`observeHookEvent`, `companion-service.ts`) | the open notice row and the live incarnation are re-read before opening or withdrawing | queue tail removes itself when still current | UNVERIFIED: three gaps |
 | Voice model download slot | claimed before the first `await`, before folder and install checks (`aiterm:voice:download`, `voice-ipc.ts`) | abort and slot identity re-checked after the checks | released only by its owner on every exit; a failure stays visible until Dismiss | Migrated (fenced) |
+| File-reference paste | request ID holds one in-memory operation; a staged database receipt precedes the PTY write (`pasteFileReference`, `companion-service.ts`) | destination availability, live incarnation and archive/move epoch are checked after the receipt write, immediately before one bounded append | settled in-memory claims are bounded; an uncertain staged receipt prevents a retry from pasting twice | UNVERIFIED: real RPC/worker archive timing; controlled race and duplicate-write fences pass |
 
 A flow that already holds the invariant is not rewritten; a migration happens only behind a fence
 test that first fails on the demonstrated interleaving. An async gap that no test covers is recorded
@@ -109,6 +110,22 @@ preview is a snapshot that refreshes only on request; it is never copied into th
 adds nothing to the agent control socket. Show in folder reveals only a file that window was shown.
 Terminal links are found only in the line xterm.js asks about, without touching the filesystem, are
 checked against the printed text again when clicked, and are off while a program reads the mouse.
+
+**Sending a file reference is an owner-confirmed input append.** The renderer shows an explicit
+destination and the exact absolute reference before sending. Main accepts a paste only from the
+focused owner window for a file previously shown in that window. The utility stages an idempotency
+receipt, checks that the destination and its process incarnation are still available, and checks
+that no archive or move started during the asynchronous gap. No `await` separates those final
+checks from one bounded PTY write. The write has no handoff stamp and does not press Enter. A
+possibly completed write is never silently retried; its receipt says pasted, not submitted. This
+adds no agent-control socket method.
+
+**Palette file search is an on-demand directory read.** It uses the selected session's live launch
+directory (or stored directory after exit), or the workspace's default directory when no session
+is selected. The utility caps traversal at six directory levels, 20,000 entries and 50 results,
+skips `.git` and `node_modules`, does not follow symbolic links and cancels superseded requests.
+The renderer shows the searched root and routes a chosen file through the existing file-reference
+preview. No index, content search or watcher is maintained.
 
 **Progress and requests keep their evidence.** Process state, progress reports, unread state and
 the resolution of an agent's question are stored separately. An agent saying it is done is shown as
