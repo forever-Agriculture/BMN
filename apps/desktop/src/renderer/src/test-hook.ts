@@ -9,10 +9,30 @@ export interface TerminalTestSnapshot {
   refits: number
   /** Everything xterm would send to the PTY for this pane, counted since the terminal opened. */
   inputEvents: number
+  imageStorageMB: number
+  imageLayerPresent: boolean
   /** The view's own belief about the modes the program set; what paste, focus, mouse and wrapping read. */
   modes: { bracketedPasteMode: boolean; sendFocusMode: boolean; mouseTrackingMode: string; wraparoundMode: boolean }
   ptyCols?: number
   ptyRows?: number
+}
+
+/** Where a view's images sit: buffer lines holding an image cell, and the cells they are cut into. */
+export interface TerminalImageCells {
+  lines: number[]
+  cssCellHeight: number
+  deviceCellHeight: number
+  devicePixelRatio: number
+  fontSize: number
+}
+
+/** Test-only reads and actions a view offers beyond its snapshot. */
+export interface TerminalViewProbe {
+  imageCells(): TerminalImageCells
+  /** Selects a buffer range as a user drag would and returns the selected text. */
+  select(column: number, row: number, length: number): string
+  selection(): string
+  clearSelection(): void
 }
 
 /** Result of the self-test probe that drives real preload methods through the contextBridge. */
@@ -111,6 +131,8 @@ export interface TerminalIntegrationProbe {
 export interface TerminalTestHook {
   snapshot(sessionId?: string): TerminalTestSnapshot
   snapshots(): Record<string, TerminalTestSnapshot>
+  sixelFixture(sessionId: string): Promise<{ storageMB: number; layer: boolean }>
+  view(sessionId: string): TerminalViewProbe
   integration?(): Promise<TerminalIntegrationProbe>
 }
 
@@ -136,6 +158,8 @@ interface HookTarget {
 
 interface RegisteredTerminalHook {
   snapshot(): TerminalTestSnapshot
+  sixelFixture(): Promise<{ storageMB: number; layer: boolean }>
+  view?: TerminalViewProbe
   integration?(): Promise<TerminalIntegrationProbe>
 }
 
@@ -150,6 +174,10 @@ export function installTerminalTestHook(options: {
   getPtyDimensions(): { cols: number; rows: number } | undefined
   getRefitCount(): number
   getInputCount(): number
+  getImageStorageMB(): number
+  imageLayerPresent(): boolean
+  sixelFixture(): Promise<{ storageMB: number; layer: boolean }>
+  view?: TerminalViewProbe
   integration?(): Promise<TerminalIntegrationProbe>
 }): () => void {
   if (!options.enabled) return () => undefined
@@ -169,6 +197,8 @@ export function installTerminalTestHook(options: {
         rows: options.terminal.rows,
         refits: options.getRefitCount(),
         inputEvents: options.getInputCount(),
+        imageStorageMB: options.getImageStorageMB(),
+        imageLayerPresent: options.imageLayerPresent(),
         modes: {
           bracketedPasteMode: options.terminal.modes.bracketedPasteMode,
           sendFocusMode: options.terminal.modes.sendFocusMode,
@@ -178,6 +208,8 @@ export function installTerminalTestHook(options: {
         ...(ptyDimensions ? { ptyCols: ptyDimensions.cols, ptyRows: ptyDimensions.rows } : {})
       }
     },
+    sixelFixture: options.sixelFixture,
+    ...(options.view ? { view: options.view } : {}),
     ...(options.integration ? { integration: options.integration } : {})
   }
   const registry = terminalHooks.get(options.target) ?? new Map<string, RegisteredTerminalHook>()
@@ -198,7 +230,17 @@ export function installTerminalTestHook(options: {
       snapshots: () => Object.fromEntries(
         [...(terminalHooks.get(options.target)?.entries() ?? [])]
           .map(([sessionId, registered]) => [sessionId, registered.snapshot()])
-      )
+      ),
+      sixelFixture: (sessionId) => {
+        const selected = terminalHooks.get(options.target)?.get(sessionId)
+        if (!selected) throw new Error(`terminal test fixture unavailable for ${sessionId}`)
+        return selected.sixelFixture()
+      },
+      view: (sessionId) => {
+        const selected = terminalHooks.get(options.target)?.get(sessionId)?.view
+        if (!selected) throw new Error(`terminal view probe unavailable for ${sessionId}`)
+        return selected
+      }
     }
     Object.defineProperty(facade, 'integration', {
       configurable: true,

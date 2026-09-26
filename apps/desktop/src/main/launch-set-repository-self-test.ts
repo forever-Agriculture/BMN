@@ -244,7 +244,8 @@ export async function runLaunchSetRepositorySelfTest(
     const good = ${JSON.stringify(good)};
     const entries = [0, 1, 2].map(index => ({
       entryId: crypto.randomUUID(), name: 'Partial ' + index, executable: good,
-      argv: index === 1 ? ['--bmn-self-test-fail-after-start'] : [], backgroundChoice: null
+      argv: index === 1 ? ['--bmn-self-test-fail-after-start'] : [], backgroundChoice: null,
+      terminalGraphics: null
     }));
     const set = await window.aiTerminal.createLaunchSet({ workspaceId, name: 'Partial synthetic set', entries });
     const before = (await window.aiTerminal.listSessions(workspaceId)).length;

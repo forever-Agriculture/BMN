@@ -59,8 +59,15 @@ as unverified in the [tracked claim audit](claim-audit.md), never as protected.
 
 **Your CLIs stay in charge.** Sessions run the installed executables in real PTYs with your saved
 arguments and working directory. The app adds no bypass flags and never copies CLI credentials.
-Terminal variables that identify another terminal (tmux, other emulators) are removed; sessions get
-`TERM=xterm-256color` and `COLORTERM=truecolor`.
+Terminal variables that identify another terminal (tmux, Zellij, other emulators) are removed;
+sessions get `COLORTERM=truecolor`. A direct `codex` command defaults to Sixel graphics, while
+other commands keep standard terminal behavior unless the owner chooses **Terminal images (Sixel)**.
+The graphics path uses `TERM=xterm-sixel-256color` only when the compiled terminfo entry in the
+profile's stable data root (`terminfo/x/xterm-sixel-256color`) passes a spawn-time check. It is
+installed from the app bundle; a missing or corrupt entry falls back to `TERM=xterm-256color`.
+BMN prepends that data directory to `TERMINFO_DIRS` while retaining owner and system lookup.
+An SSH host, privileged shell or container without the entry may need
+`TERM=xterm-256color` before its command.
 
 **What a new session inherits.** BMN passes its own environment to each new shell after removing
 Electron and Chromium internals, BMN's own variables (which it re-issues for that session), the
@@ -70,10 +77,16 @@ launching terminal's identity and the launching agent's session identity. The ex
 
 **One live view per session.** Output goes from the PTY to one xterm.js instance over a dedicated,
 bounded MessagePort. There is no tmux, no headless mirror and no replay of old bytes into a live
-terminal, because a second emulator tracking the same state drifts. *Saved output* is a separate,
+terminal, because a second emulator tracking the same state drifts. Each view loads bounded Sixel
+decoding; the addon is disposed with the view. *Saved output* is a separate,
 read-only plain-text snapshot of the live screen, written periodically, on stop and on quit. After a
 renderer crash, a new view is created and the program is asked to repaint; the process keeps
-running.
+running. Old image pixels are not replayed. A new view starts where a fresh terminal parser reads
+the output as the old view's parser does, so it skips the rest of an image or escape sequence whose
+start it never received instead of printing it. Output is cut into messages and xterm writes only
+between characters, and no write exceeds the 131,072 bytes xterm parses at once: xterm 6.0 can drop a
+character split after its 0x80 byte. A renderer decoder failure shows a pane notice while
+text remains usable; the running process's TERM is unchanged.
 
 **Windows and processes have separate lifetimes.** Closing the window applies each session's
 saved keep-running or stop choice; it asks about running sessions set to Ask. Keeping a session

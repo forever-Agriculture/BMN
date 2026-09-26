@@ -25,6 +25,7 @@ const record = (sessionId: string, workspaceId: string): SessionRecord => ({
   argv: [],
   position: 0,
   backgroundChoice: null,
+  terminalGraphics: null,
   revision: 1,
   createdAt: '2026-09-13T00:00:00.000Z',
   archivedAt: null,

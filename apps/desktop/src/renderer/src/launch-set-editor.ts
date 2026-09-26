@@ -4,7 +4,8 @@ import {
   type LaunchSetCreateParams,
   type LaunchSetEntry,
   type LaunchTemplateRecord,
-  type SessionRecord
+  type SessionRecord,
+  type TerminalGraphicsChoice
 } from '@bmn/protocol'
 
 export interface LaunchSetEntryForm {
@@ -13,6 +14,7 @@ export interface LaunchSetEntryForm {
   executable: string
   argvJson: string
   backgroundChoice: BackgroundChoice | null
+  terminalGraphics: TerminalGraphicsChoice
 }
 
 export function entryForm(entry: LaunchSetEntry): LaunchSetEntryForm {
@@ -22,7 +24,8 @@ export function entryForm(entry: LaunchSetEntry): LaunchSetEntryForm {
 export function seededEntry(template: LaunchTemplateRecord, entryId: string): LaunchSetEntryForm {
   return {
     entryId, name: template.name, executable: template.executable,
-    argvJson: JSON.stringify(template.argv), backgroundChoice: template.backgroundChoice
+    argvJson: JSON.stringify(template.argv), backgroundChoice: template.backgroundChoice,
+    terminalGraphics: template.terminalGraphics
   }
 }
 
@@ -41,7 +44,7 @@ export function launchSetParams(
     }
     return {
       entryId: form.entryId, name: form.name, executable: form.executable,
-      argv, backgroundChoice: form.backgroundChoice
+      argv, backgroundChoice: form.backgroundChoice, terminalGraphics: form.terminalGraphics
     }
   })
   const params = { workspaceId, name, entries }

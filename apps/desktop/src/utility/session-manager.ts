@@ -44,6 +44,7 @@ import {
   type SessionResumeParams,
   type SessionResumeResult,
   type SessionStopCause,
+  type TerminalGraphicsChoice,
   type SessionProcessStateChangedMessage,
   type TerminalAckMessage,
   type TerminalActivationResult,
@@ -58,7 +59,8 @@ import {
   type InterruptedIncarnationRow
 } from './interrupted-cohort'
 import { HostOutputQueue, type HostOutputQueueTransition } from './transport'
-import { TerminalByteFramer } from './terminal-byte-framer'
+import { TerminalByteFramer, type TerminalFrame } from './terminal-byte-framer'
+import { terminalGraphicsEnvironment, type TerminfoAsset } from './terminal-graphics'
 import { DecsetModeTracker } from './decset-modes'
 import {
   agentCli,
@@ -114,6 +116,7 @@ export interface CreateStartingRecord {
   executable: string
   argv: readonly string[]
   backgroundChoice: BackgroundChoice | null
+  terminalGraphics: TerminalGraphicsChoice
   processStartIdentity: string
   startedAt: string
   binding: PersistedConversationBinding
@@ -184,6 +187,7 @@ interface PtyLaunchParams {
   argv: readonly string[]
   cols: number
   rows: number
+  terminalGraphics?: TerminalGraphicsChoice
 }
 
 export interface CreateSessionParams extends PtyLaunchParams {
@@ -224,6 +228,7 @@ interface SessionManagerOptions {
   processStartIdentity?: (pid: number) => Promise<string>
   sendTerminalMessage: (message: TerminalPortMessage) => void
   environment?: Readonly<Record<string, string | undefined>>
+  terminfoAsset?: TerminfoAsset
   /** Where a launch directory written as ~ or ~/… points; the owner's home by default. */
   homeDirectory?: string
   signalProcess?: (pid: number, signal: NodeJS.Signals) => boolean
@@ -261,7 +266,7 @@ interface LiveSession extends SessionIdentity {
   outputFramer: TerminalByteFramer
   /** The private modes this program has turned on, read from its own output as it streams. */
   decsetModes: DecsetModeTracker
-  undeliveredOutput: Uint8Array[]
+  undeliveredOutput: TerminalFrame[]
   undeliveredOutputState: UndeliveredOutputState
   exitComplete: Promise<void>
   resolveExit: () => void
@@ -339,7 +344,8 @@ const SHELL_ENVIRONMENT_PRIVATE_KEYS = new Set([
   'STY',
   'ZELLIJ',
   'ZELLIJ_SESSION_NAME',
-  'ZELLIJ_PANE_ID'
+  'ZELLIJ_PANE_ID',
+  'ZELLIJ_VERSION'
 ])
 
 export function buildShellEnvironment(
@@ -471,6 +477,7 @@ export class SessionManager {
   private readonly identifyProcess: (pid: number) => Promise<string>
   private readonly sendTerminalMessage: (message: TerminalPortMessage) => void
   private readonly environment: Readonly<Record<string, string | undefined>>
+  private readonly terminfoAsset: TerminfoAsset | undefined
   private readonly homeDirectory: string
   private readonly sessionEnvironment:
     | ((identity: SessionIdentity) => Readonly<Record<string, string>>)
@@ -507,6 +514,7 @@ export class SessionManager {
     this.identifyProcess = options.processStartIdentity ?? processStartIdentity
     this.sendTerminalMessage = options.sendTerminalMessage
     this.environment = options.environment ?? process.env
+    this.terminfoAsset = options.terminfoAsset
     this.homeDirectory = options.homeDirectory ?? homedir()
     this.sessionEnvironment = options.sessionEnvironment
     this.signalProcess = options.signalProcess ?? signalProcessByPid
@@ -562,6 +570,7 @@ export class SessionManager {
             executable: params.executable,
             argv: params.argv,
             backgroundChoice: params.backgroundChoice ?? null,
+            terminalGraphics: params.terminalGraphics ?? null,
             binding: prepared.binding
           })
           recordPersisted = true
@@ -980,7 +989,8 @@ export class SessionManager {
         executable: stored.executable,
         argv: [...stored.argv],
         cols: params.cols,
-        rows: params.rows
+        rows: params.rows,
+        terminalGraphics: stored.terminalGraphics
       }
       await validateLaunch(launchParams)
       const live = await this.startIncarnation(
@@ -1131,7 +1141,8 @@ export class SessionManager {
       executable: launch.executable,
       argv: launch.argv,
       cols: params.cols,
-      rows: params.rows
+      rows: params.rows,
+      terminalGraphics: (await findStoredSession(this.store, params.sessionId))?.terminalGraphics ?? null
     }
     await validateLaunch(launchParams)
     const startedAt = new Date().toISOString()
@@ -1271,6 +1282,8 @@ export class SessionManager {
         rows: params.rows,
         env: {
           ...buildShellEnvironment(environment),
+          ...terminalGraphicsEnvironment(params.terminalGraphics ?? null, params.executable,
+            environment, this.terminfoAsset),
           ...(identity ? this.sessionEnvironment?.(identity) : undefined)
         }
       })
@@ -1422,7 +1435,18 @@ export class SessionManager {
         'The terminal attachment is already active'
       )
     }
-    session.outputQueue = new HostOutputQueue({
+    const disclosure = {
+      limitBytes: session.undeliveredOutputState.limitBytes,
+      droppedBytes: session.undeliveredOutputState.droppedBytes,
+      truncated: session.undeliveredOutputState.truncated
+    }
+    session.undeliveredOutputState = {
+      limitBytes: this.undeliveredOutputLimitBytes,
+      bufferedBytes: session.undeliveredOutputState.bufferedBytes,
+      droppedBytes: 0,
+      truncated: false
+    }
+    const queue = new HostOutputQueue({
       attachmentId,
       ...(this.outputQueueLimits ?? {}),
       send: (message) => this.sendTerminalMessage(message),
@@ -1433,20 +1457,19 @@ export class SessionManager {
         this.revokeAttachment(session, transition)
       }
     })
-    const buffered = session.undeliveredOutput
-    const disclosure = {
-      limitBytes: session.undeliveredOutputState.limitBytes,
-      droppedBytes: session.undeliveredOutputState.droppedBytes,
-      truncated: session.undeliveredOutputState.truncated
+    session.outputQueue = queue
+    // Replay straight from the session buffer: if the queue overflows, its unsent frames
+    // return ahead of the frames not yet replayed, and output arriving meanwhile queues behind them.
+    while (session.outputQueue === queue && session.undeliveredOutput.length > 0) {
+      const frame = session.undeliveredOutput.shift()!
+      session.undeliveredOutputState.bufferedBytes -= frame.bytes.byteLength
+      queue.enqueue(frame)
     }
-    session.undeliveredOutput = []
-    session.undeliveredOutputState = {
-      limitBytes: this.undeliveredOutputLimitBytes,
-      bufferedBytes: 0,
-      droppedBytes: 0,
-      truncated: false
+    // The disclosure covers output produced without a view, so only backlog skipped here counts.
+    if (queue.skippedBytes > 0) {
+      disclosure.droppedBytes += queue.skippedBytes
+      disclosure.truncated = true
     }
-    for (const bytes of buffered) session.outputQueue?.enqueue(bytes)
     return { activated: true, undeliveredOutput: disclosure }
   }
 
@@ -1967,12 +1990,20 @@ export class SessionManager {
     // Read before anything is queued or dropped: the mode set must follow the program even when
     // the view is gone, because that is exactly when the next view will need it.
     session.decsetModes.read(bytes)
-    const frames = session.outputFramer.push(bytes)
-    if (session.outputQueue) {
-      for (const frame of frames) session.outputQueue.enqueue(frame)
-      return
+    this.deliverFrames(session, session.outputFramer.push(bytes))
+  }
+
+  private deliverFrames(session: LiveSession, frames: readonly TerminalFrame[]): void {
+    for (const frame of frames) {
+      if (!session.outputQueue) this.retainUndeliveredFrames(session, [frame])
+      else if (session.undeliveredOutput.length === 0) session.outputQueue.enqueue(frame)
+      else {
+        // Activation is still replaying the backlog into this view. The frame follows it
+        // there untrimmed, so the view's stream stays contiguous; the queue bounds it.
+        session.undeliveredOutput.push(frame)
+        session.undeliveredOutputState.bufferedBytes += frame.bytes.byteLength
+      }
     }
-    this.retainUndeliveredFrames(session, frames)
   }
 
   private async onPtyExit(session: LiveSession, exit: IncarnationExit): Promise<void> {
@@ -1988,12 +2019,8 @@ export class SessionManager {
     })
     const pendingFrames = session.outputFramer.flush()
     const outputQueue = session.outputQueue
-    if (outputQueue) {
-      for (const frame of pendingFrames) outputQueue.enqueue(frame)
-      await outputQueue.whenPublished()
-    } else {
-      this.retainUndeliveredFrames(session, pendingFrames)
-    }
+    this.deliverFrames(session, pendingFrames)
+    if (outputQueue) await outputQueue.whenPublished()
     const lifecycleCause = session.stopCause && session.stopCause !== 'explicit'
       ? session.stopCause
       : undefined
@@ -2102,7 +2129,7 @@ export class SessionManager {
         ...session.undeliveredOutput
       ]
       session.undeliveredOutputState.bufferedBytes += returned.unsentFrames.reduce(
-        (total, frame) => total + frame.byteLength,
+        (total, frame) => total + frame.bytes.byteLength,
         0
       )
     }
@@ -2134,22 +2161,23 @@ export class SessionManager {
     }
   }
 
-  private retainUndeliveredFrames(session: LiveSession, frames: readonly Uint8Array[]): void {
+  private retainUndeliveredFrames(session: LiveSession, frames: readonly TerminalFrame[]): void {
     for (const frame of frames) {
       session.undeliveredOutput.push(frame)
-      session.undeliveredOutputState.bufferedBytes += frame.byteLength
+      session.undeliveredOutputState.bufferedBytes += frame.bytes.byteLength
     }
     this.trimUndeliveredFrames(session)
   }
 
   private trimUndeliveredFrames(session: LiveSession): void {
+    // A later view starts where its first frame lets a fresh parser start; see HostOutputQueue.
     while (
       session.undeliveredOutputState.bufferedBytes > session.undeliveredOutputState.limitBytes &&
       session.undeliveredOutput.length > 0
     ) {
       const dropped = session.undeliveredOutput.shift()!
-      session.undeliveredOutputState.bufferedBytes -= dropped.byteLength
-      session.undeliveredOutputState.droppedBytes += dropped.byteLength
+      session.undeliveredOutputState.bufferedBytes -= dropped.bytes.byteLength
+      session.undeliveredOutputState.droppedBytes += dropped.bytes.byteLength
       session.undeliveredOutputState.truncated = true
     }
   }

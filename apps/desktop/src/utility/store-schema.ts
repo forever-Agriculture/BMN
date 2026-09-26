@@ -492,5 +492,25 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
       );
       CREATE INDEX launch_set_by_workspace ON launch_set(workspace_id);
     `
+  },
+  {
+    version: 16,
+    sql: `
+      ALTER TABLE session ADD COLUMN terminal_graphics TEXT NULL CHECK (
+        terminal_graphics IN ('sixel', 'standard') OR terminal_graphics IS NULL
+      );
+      ALTER TABLE launch_template ADD COLUMN terminal_graphics TEXT NULL CHECK (
+        terminal_graphics IN ('sixel', 'standard') OR terminal_graphics IS NULL
+      );
+      UPDATE launch_set
+      SET entries_json = (
+        SELECT json_group_array(json_set(json(value), '$.terminalGraphics', NULL))
+        FROM json_each(launch_set.entries_json)
+      )
+      WHERE json_valid(entries_json) AND json_type(entries_json) = 'array'
+        AND NOT EXISTS (
+          SELECT 1 FROM json_each(launch_set.entries_json) WHERE type != 'object'
+        );
+    `
   }
 ])

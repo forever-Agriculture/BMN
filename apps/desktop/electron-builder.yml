@@ -11,6 +11,8 @@ asarUnpack:
   - node_modules/node-pty/build/Release/pty.node
 # Built by `pnpm run voice:build`; read at runtime from process.resourcesPath/whisper.
 extraResources:
+  - from: resources/terminfo/x/xterm-sixel-256color
+    to: terminfo/x/xterm-sixel-256color
   - from: resources/whisper
     to: whisper
   # The bmn CLI that sessions find on PATH: a launcher plus the script it runs on the bundled runtime.

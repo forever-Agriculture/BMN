@@ -9,7 +9,8 @@ function set(): LaunchSetRecord {
     setId: 'set-1', workspaceId: 'workspace-1', name: 'Morning', revision: 1,
     createdAt: '2026-09-24T10:00:00.000Z',
     entries: ['A', 'B', 'C'].map((name) => ({
-      entryId: `entry-${name}`, name, executable: '/bin/true', argv: [name], backgroundChoice: null
+      entryId: `entry-${name}`, name, executable: '/bin/true', argv: [name], backgroundChoice: null,
+      terminalGraphics: null
     }))
   }
 }

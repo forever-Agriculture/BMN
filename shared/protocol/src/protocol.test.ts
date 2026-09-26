@@ -41,6 +41,8 @@ import {
   isWorkspaceRecord,
   isWorkspaceUpdateParams,
   emptyWorkspaceLayout,
+  effectiveTerminalGraphics,
+  isLaunchSetEntry,
   type RpcRequest
 } from './index'
 
@@ -296,6 +298,7 @@ describe('protocol surface', () => {
     argv: [],
     position: 0,
     backgroundChoice: null,
+    terminalGraphics: null,
     revision: 1,
     createdAt: '2026-09-13T00:00:00.000Z',
     archivedAt: null,
@@ -314,6 +317,7 @@ describe('protocol surface', () => {
     argv: [],
     cwd: '/workspace',
     backgroundChoice: null,
+    terminalGraphics: null,
     revision: 1,
     createdAt: '2026-09-13T00:00:00.000Z'
   }
@@ -327,6 +331,23 @@ describe('protocol surface', () => {
     rows: 24
   }
   const templateCreate = { name: 'Shell', executable: '/bin/bash', argv: [], cwd: '/workspace' }
+
+  it('derives graphics only for the actual Codex executable and accepts explicit overrides', () => {
+    expect(effectiveTerminalGraphics(null, '/usr/bin/codex')).toBe('sixel')
+    expect(effectiveTerminalGraphics(null, '/bin/bash')).toBe('standard')
+    expect(effectiveTerminalGraphics(null, '/usr/bin/env')).toBe('standard')
+    expect(effectiveTerminalGraphics('standard', '/usr/bin/codex')).toBe('standard')
+    expect(effectiveTerminalGraphics('sixel', '/bin/bash')).toBe('sixel')
+    expect(isSessionCreateParams({ ...sessionCreate, terminalGraphics: 'sixel' })).toBe(true)
+    expect(isSessionCreateParams({ ...sessionCreate, terminalGraphics: 'kitty' })).toBe(false)
+    expect(isSessionUpdateParams({ sessionId: 's', expectedRevision: 1, terminalGraphics: null })).toBe(true)
+    expect(isTemplateCreateParams({ ...templateCreate, terminalGraphics: 'standard' })).toBe(true)
+    const entry = { entryId: 'e', name: 'Codex', executable: 'codex', argv: [],
+      backgroundChoice: null, terminalGraphics: null }
+    expect(isLaunchSetEntry(entry)).toBe(true)
+    expect(isLaunchSetEntry({ ...entry, terminalGraphics: 'kitty' })).toBe(false)
+    expect(isLaunchSetEntry({ ...entry, terminalGraphics: undefined })).toBe(false)
+  })
 
   it('accepts only a non-empty per-record launch-disabled reason', () => {
     expect(isSessionRecord({

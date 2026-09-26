@@ -1,4 +1,5 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, truncateSync, unlinkSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import {
@@ -2854,7 +2855,6 @@ async function runSelfTest(): Promise<void> {
     const deepSearchRoot = join(searchRoot, 'one', 'two', 'three', 'four', 'five', 'six', 'seven')
     mkdirSync(deepSearchRoot, { recursive: true })
     writeFileSync(join(deepSearchRoot, 'bmn-deep.ts'), 'fixture\n')
-    writeFixtureCommand(secondSession, "printf 'FILEREF %s/%s\\n' refs src/parser.ts:42:7; cd refs")
     writeFixtureInput(session, 'EXISTING-HANDOFF-PREFIX ')
     // Dictation needs an engine and an installed model to start; both are stand-ins, and transcription is synthetic.
     mkdirSync(join(selfTestVoiceFolder(), 'models'), { recursive: true })
@@ -2879,6 +2879,267 @@ async function runSelfTest(): Promise<void> {
       if (message.includes('attention baseline captured')) releaseAttentionUpdate?.()
     })
     await waitForRendererLoad(applicationWindow)
+    const cspProbe = await applicationWindow.webContents.executeJavaScript(`(async () => {
+      let evalRefused = false;
+      try { window.eval('1 + 1'); } catch { evalRefused = true; }
+      let wasmAllowed = false;
+      try {
+        await WebAssembly.compile(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]));
+        wasmAllowed = true;
+      } catch { /* reported below */ }
+      return { evalRefused, wasmAllowed };
+    })()`) as { evalRefused: boolean; wasmAllowed: boolean }
+    if (!cspProbe.evalRefused || !cspProbe.wasmAllowed) {
+      throw new Error(`Sixel CSP did not preserve the eval boundary: ${JSON.stringify(cspProbe)}`)
+    }
+    const sixelPtyPath = join(isolatedCwd, 'sixel-pty-frame.bin')
+    writeFileSync(sixelPtyPath,
+      `\u001bP9;1;0q"1;1;60;75#1;2;100;0;0#1${Array(13).fill('!60~').join('-')}\u001b\\`)
+    const sixelPtyBefore = await applicationWindow.webContents.executeJavaScript(`
+      new Promise((resolve, reject) => {
+        const deadline = Date.now() + 5000;
+        const probe = () => {
+          const snapshot = window.__aitermTest?.snapshots()[${JSON.stringify(secondSession.sessionId)}];
+          if (snapshot) resolve(snapshot.imageStorageMB);
+          else if (Date.now() >= deadline) reject(new Error('PTY Sixel pane did not mount'));
+          else setTimeout(probe, 25);
+        };
+        probe();
+      })
+    `) as number
+    const sixelPtyRuntime = runtimes.get(secondSession.sessionId)
+    if (!sixelPtyRuntime) throw new Error('PTY Sixel fixture runtime was unavailable')
+    await client.request(METHOD_REGISTRY.terminalWrite, {
+      attachmentId: sixelPtyRuntime.attachment.attachmentId,
+      bytes: new TextEncoder().encode(`cat '${sixelPtyPath.replaceAll("'", "'\\''")}'\r`)
+    })
+    const sixelPty = await applicationWindow.webContents.executeJavaScript(`
+      new Promise((resolve, reject) => {
+        const deadline = Date.now() + 5000;
+        const probe = () => {
+          const snapshot = window.__aitermTest?.snapshot(${JSON.stringify(secondSession.sessionId)});
+          if (snapshot?.imageStorageMB > ${sixelPtyBefore} && snapshot.imageLayerPresent) {
+            resolve({ beforeMB: ${sixelPtyBefore}, afterMB: snapshot.imageStorageMB,
+              layer: snapshot.imageLayerPresent });
+          } else if (Date.now() >= deadline) reject(new Error('PTY Sixel frame did not reach the live pane: ' +
+            JSON.stringify({ storageMB: snapshot?.imageStorageMB,
+              lines: snapshot?.bufferLines.slice(-8) })));
+          else setTimeout(probe, 25);
+        };
+        probe();
+      })
+    `) as { beforeMB: number; afterMB: number; layer: boolean }
+    if (!(sixelPtyBefore === 0 && sixelPty.afterMB > 0 && sixelPty.layer)) {
+      throw new Error(`PTY Sixel transport did not decode in the live pane: ${JSON.stringify(sixelPty)}`)
+    }
+    // Decode a known frame in one real pane. This bypasses shell command timing so a failure names
+    // the renderer itself; transport has its own framing and queue checks.
+    const sixelDirect = await applicationWindow.webContents.executeJavaScript(`
+      new Promise((resolve, reject) => {
+        const deadline = Date.now() + 5000;
+        const probe = () => {
+          const hook = window.__aitermTest;
+          if (hook?.snapshots()[${JSON.stringify(secondSession.sessionId)}]) {
+            const otherBefore = hook.snapshot(${JSON.stringify(session.sessionId)});
+            hook.sixelFixture(${JSON.stringify(secondSession.sessionId)}).then((fixture) => {
+              const otherAfter = hook.snapshot(${JSON.stringify(session.sessionId)});
+              resolve({ fixture, otherBefore, otherAfter });
+            }, reject);
+          } else if (Date.now() >= deadline) reject(new Error('the Sixel pane did not mount'));
+          else setTimeout(probe, 25);
+        };
+        probe();
+      })
+    `) as { fixture: { storageMB: number; layer: boolean };
+      otherBefore: { imageStorageMB: number; imageLayerPresent: boolean };
+      otherAfter: { imageStorageMB: number; imageLayerPresent: boolean } }
+    const sixelRender = {
+      ownStorageMB: sixelDirect.fixture.storageMB,
+      ownLayer: sixelDirect.fixture.layer,
+      otherStorageMB: sixelDirect.otherAfter.imageStorageMB,
+      otherImageUnchanged: sixelDirect.otherBefore.imageStorageMB === sixelDirect.otherAfter.imageStorageMB &&
+        sixelDirect.otherBefore.imageLayerPresent === sixelDirect.otherAfter.imageLayerPresent
+    }
+    if (!(sixelRender.ownStorageMB > 0 && sixelRender.ownLayer)) {
+      throw new Error(`the real pane could not decode the Sixel fixture: ${JSON.stringify(sixelRender)}`)
+    }
+    if (!sixelRender.otherImageUnchanged) {
+      throw new Error('Sixel output changed the other pane image layer')
+    }
+
+    // Epic 28.1 AC2/AC3/AC5: a Codex-style animation in one of two visible panes. Codex 0.157.1's
+    // built-in pets change frame every 120–150 ms (pets/model.rs) and allow up to 60 fps; each
+    // frame blanks the pet's rows, draws the next image there and restores the cursor.
+    const animationDirectory = join(isolatedCwd, 'sixel-animation')
+    mkdirSync(animationDirectory, { recursive: true })
+    const codexFrame = (seed: number): string => {
+      let body = ''
+      for (let color = 0; color < 8; color += 1) {
+        body += `#${color};2;${(color * 37 + seed * 11) % 100};${(color * 53) % 100};${(color * 71 + seed * 5) % 100}`
+      }
+      for (let row = 0; row < 13; row += 1) {
+        for (let color = 0; color < 8; color += 1) {
+          body += `#${color}`
+          for (let x = 0; x < 96; x += 1) body += String.fromCharCode(63 + ((x * 7 + row * 13 + color * 5 + seed) % 64))
+          if (color < 7) body += '$'
+        }
+        if (row < 12) body += '-'
+      }
+      return `\u001bP9;1;0q"1;1;96;75${body}\u001b\\`
+    }
+    writeFileSync(join(animationDirectory, 'frame0.six'), codexFrame(0))
+    writeFileSync(join(animationDirectory, 'frame1.six'), codexFrame(1))
+    const animationScript = join(animationDirectory, 'animate.sh')
+    writeFileSync(animationScript, [
+      '#!/bin/sh',
+      'frames=$1; delay=$2; label=$3; dir=$(dirname "$0"); i=0',
+      'while [ "$i" -lt "$frames" ]; do',
+      "  printf '\\0337'",
+      "  r=2; while [ \"$r\" -le 7 ]; do printf '\\033[%d;40H%24s' \"$r\" ''; r=$((r + 1)); done",
+      "  printf '\\033[2;40H'; cat \"$dir/frame$((i % 2)).six\"; printf '\\0338'",
+      '  i=$((i + 1)); sleep "$delay"',
+      'done',
+      "printf '%s-DONE\\r\\n' \"$label\""
+    ].join('\n') + '\n', { mode: 0o700 })
+    const animatedRuntime = runtimes.get(secondSession.sessionId)
+    if (!animatedRuntime) throw new Error('the animation pane runtime was unavailable')
+    const animatedAttachment = animatedRuntime.attachment.attachmentId
+    const typeIntoAnimatedPane = (text: string) => client.request(METHOD_REGISTRY.terminalWrite, {
+      attachmentId: (runtimes.get(secondSession.sessionId) ?? animatedRuntime).attachment.attachmentId,
+      bytes: new TextEncoder().encode(text)
+    })
+    const animatedId = JSON.stringify(secondSession.sessionId)
+    const quietId = JSON.stringify(session.sessionId)
+    const waitForAnimatedLine = (marker: string, timeoutMs: number) => applicationWindow!.webContents.executeJavaScript(`(async () => {
+      const end = Date.now() + ${timeoutMs};
+      while (Date.now() < end) {
+        if (window.__aitermTest?.snapshot(${animatedId}).bufferLines.some((line) => line.includes(${JSON.stringify(marker)}))) return;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      throw new Error(${JSON.stringify(`the animation pane never printed ${marker}`)});
+    })()`) as Promise<void>
+    const quietBefore = await applicationWindow.webContents.executeJavaScript(`(() => {
+      const hook = window.__aitermTest;
+      const selection = hook.view(${quietId}).select(0, 0, 12);
+      const snapshot = hook.snapshot(${quietId});
+      return { lines: snapshot.bufferLines, storageMB: snapshot.imageStorageMB, layer: snapshot.imageLayerPresent, selection };
+    })()`) as { lines: string[]; storageMB: number; layer: boolean; selection: string }
+    await typeIntoAnimatedPane(`clear; '${animationScript}' 64 0.12 CODEX-RATE; '${animationScript}' 120 0.016 MAX-RATE\r`)
+    await waitForAnimatedLine('CODEX-RATE-DONE', 30_000)
+    await waitForAnimatedLine('MAX-RATE-DONE', 30_000)
+    // Scroll the pane well past its rows: only the last frame drawn may remain in the buffer.
+    await typeIntoAnimatedPane(`i=0; while [ $i -lt 80 ]; do echo scroll-$i; i=$((i + 1)); done; printf '%s%s\\n' SCROLL ED\r`)
+    await waitForAnimatedLine('SCROLLED', 10_000)
+    const animation = await applicationWindow.webContents.executeJavaScript(`(() => {
+      const hook = window.__aitermTest;
+      const own = hook.snapshot(${animatedId});
+      const quiet = hook.snapshot(${quietId});
+      return { storageMB: own.imageStorageMB, imageLines: hook.view(${animatedId}).imageCells().lines,
+        quiet: { lines: quiet.bufferLines, storageMB: quiet.imageStorageMB, layer: quiet.imageLayerPresent,
+          selection: (() => {
+            const selection = hook.view(${quietId}).selection();
+            hook.view(${quietId}).clearSelection();
+            return selection;
+          })() } };
+    })()`) as { storageMB: number; imageLines: number[];
+      quiet: { lines: string[]; storageMB: number; layer: boolean; selection: string } }
+    const sixelAnimation = {
+      frames: 184,
+      noViewRebuild: runtimes.get(secondSession.sessionId)?.attachment.attachmentId === animatedAttachment,
+      storageMB: animation.storageMB,
+      imageLinesAfterScroll: animation.imageLines.length,
+      quietPaneUnchanged: JSON.stringify(animation.quiet.lines) === JSON.stringify(quietBefore.lines) &&
+        animation.quiet.storageMB === quietBefore.storageMB && animation.quiet.layer === quietBefore.layer,
+      quietSelectionKept: quietBefore.selection.length > 0 && animation.quiet.selection === quietBefore.selection
+    }
+    // One 75 px frame covers at most 7 rows at the smallest font; more means stale frames stayed.
+    if (!sixelAnimation.noViewRebuild || !(sixelAnimation.storageMB > 0) || sixelAnimation.imageLinesAfterScroll > 7 ||
+      !sixelAnimation.quietPaneUnchanged || !sixelAnimation.quietSelectionKept) {
+      throw new Error(`the two-pane Sixel animation failed: ${JSON.stringify(sixelAnimation)}`)
+    }
+
+    // AC3: both visible panes animate at once, at Codex's cadence; neither view is rebuilt.
+    const quietRuntime = runtimes.get(session.sessionId)
+    if (!quietRuntime) throw new Error('the second animation pane runtime was unavailable')
+    const quietAttachment = quietRuntime.attachment.attachmentId
+    const animatedAttachmentBoth = runtimes.get(secondSession.sessionId)!.attachment.attachmentId
+    await client.request(METHOD_REGISTRY.terminalWrite, { attachmentId: quietAttachment,
+      // Ctrl+U first: this prompt holds unsent handoff-fixture input, restored below.
+      bytes: new TextEncoder().encode(`\u0015clear; '${animationScript}' 64 0.12 BOTH-B\r`) })
+    await typeIntoAnimatedPane(`clear; '${animationScript}' 64 0.12 BOTH-A\r`)
+    await waitForAnimatedLine('BOTH-A-DONE', 30_000)
+    await applicationWindow.webContents.executeJavaScript(`(async () => {
+      const end = Date.now() + 30000;
+      while (Date.now() < end) {
+        if (window.__aitermTest?.snapshot(${quietId}).bufferLines.some((line) => line.includes('BOTH-B-DONE'))) return;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      throw new Error('the second animated pane never finished');
+    })()`)
+    const sixelTwoPaneAnimation = {
+      framesPerPane: 64,
+      noViewRebuild: runtimes.get(session.sessionId)?.attachment.attachmentId === quietAttachment &&
+        runtimes.get(secondSession.sessionId)?.attachment.attachmentId === animatedAttachmentBoth,
+      storageMB: await applicationWindow.webContents.executeJavaScript(`(() => {
+        const snapshots = window.__aitermTest.snapshots();
+        return [snapshots[${animatedId}].imageStorageMB, snapshots[${quietId}].imageStorageMB];
+      })()`) as number[]
+    }
+    if (!sixelTwoPaneAnimation.noViewRebuild || sixelTwoPaneAnimation.storageMB.some((value) => !(value > 0))) {
+      throw new Error(`the two-pane animation rebuilt a view or lost its images: ${JSON.stringify(sixelTwoPaneAnimation)}`)
+    }
+    await client.request(METHOD_REGISTRY.terminalWrite, { attachmentId: quietAttachment,
+      bytes: new TextEncoder().encode(`clear; printf '%s-%s\\n' QUIET-PANE CLEARED\r`) })
+    await applicationWindow.webContents.executeJavaScript(`(async () => {
+      const end = Date.now() + 10000;
+      while (Date.now() < end) {
+        if (window.__aitermTest?.snapshot(${quietId}).bufferLines.some((line) => line.includes('QUIET-PANE-CLEARED'))) return;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      throw new Error('the second animated pane did not clear');
+    })()`)
+    await client.request(METHOD_REGISTRY.terminalWrite, { attachmentId: quietAttachment,
+      bytes: new TextEncoder().encode('EXISTING-HANDOFF-PREFIX ') })
+    await applicationWindow.webContents.executeJavaScript(`(async () => {
+      const end = Date.now() + 5000;
+      while (Date.now() < end) {
+        if (window.__aitermTest?.snapshot(${quietId}).bufferLines.some((line) => line.includes('EXISTING-HANDOFF-PREFIX'))) return;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      throw new Error('the handoff fixture input was not restored: ' +
+        JSON.stringify(window.__aitermTest?.snapshot(${quietId}).bufferLines.filter((line) => line.trim()).slice(-4)));
+    })()`)
+
+    // The alternate screen keeps its image out of the normal buffer.
+    // A known image above the prompt, so the commands typed below it overwrite no image cell.
+    await typeIntoAnimatedPane(`clear; cat '${join(animationDirectory, 'frame0.six')}'; printf '\\n%s-%s\\n' ALT BASE\r`)
+    await waitForAnimatedLine('ALT-BASE', 10_000)
+    const imageLinesBeforeAlternate = await applicationWindow.webContents.executeJavaScript(
+      `window.__aitermTest.view(${animatedId}).imageCells().lines`) as number[]
+    await typeIntoAnimatedPane(`printf '\\033[?1049h'; cat '${join(animationDirectory, 'frame0.six')}'; printf '%s-%s' ALT-SCREEN TEXT; sleep 1.5; printf '\\033[?1049l'; printf '%s-%s\\n' ALT DONE\r`)
+    // While the alternate screen is active, its own image and text are what the view shows.
+    await waitForAnimatedLine('ALT-SCREEN-TEXT', 10_000)
+    const duringAlternate = await applicationWindow.webContents.executeJavaScript(
+      `window.__aitermTest.view(${animatedId}).imageCells().lines.length`) as number
+    await waitForAnimatedLine('ALT-DONE', 10_000)
+    const alternate = await applicationWindow.webContents.executeJavaScript(`(() => {
+      const hook = window.__aitermTest;
+      return { lines: hook.snapshot(${animatedId}).bufferLines, imageLines: hook.view(${animatedId}).imageCells().lines };
+    })()`) as { lines: string[]; imageLines: number[] }
+    const sixelAlternateScreen = {
+      imageRowsWhileActive: duringAlternate,
+      alternateTextLeftBehind: alternate.lines.some((line) => line.includes('ALT-SCREEN-TEXT')),
+      normalImagesKept: JSON.stringify(alternate.imageLines) === JSON.stringify(imageLinesBeforeAlternate)
+    }
+    if (!(duringAlternate > 0) || sixelAlternateScreen.alternateTextLeftBehind || !sixelAlternateScreen.normalImagesKept) {
+      throw new Error(`the alternate screen changed the normal buffer images: ${JSON.stringify(sixelAlternateScreen)}`)
+    }
+
+
+    // Later steps read this pane from its first rows, as a fresh shell leaves it.
+    await typeIntoAnimatedPane(`clear; printf '%s-%s\\n' ANIMATION-PANE CLEARED\r`)
+    await waitForAnimatedLine('ANIMATION-PANE-CLEARED', 10_000)
+
     const layoutSelectionsBeforeRendererProbe = selfTestLayoutPutSelections.length
     const incomingAttentionUpdate = attentionBaselineCaptured.then(async () => {
       console.error('[BMN] self-test phase: sending live attention revision')
@@ -2886,7 +3147,10 @@ async function runSelfTest(): Promise<void> {
       if (!runtime) throw new Error('the incoming attention fixture runtime was unavailable')
       await client.request(METHOD_REGISTRY.terminalWrite, {
         attachmentId: runtime.attachment.attachmentId,
-        bytes: new TextEncoder().encode('bmn ask self-update "Self-test turn revised" --kind notice\r')
+        bytes: new TextEncoder().encode(
+          'bmn ask self-update "Self-test turn revised" --kind notice; ' +
+          "printf 'FILEREF %s/%s\\n' refs src/parser.ts:42:7; cd refs\r"
+        )
       })
       console.error('[BMN] self-test phase: live attention revision accepted by host')
       const deadline = Date.now() + 5_000
@@ -2896,7 +3160,12 @@ async function runSelfTest(): Promise<void> {
             request.requestKey === 'self-update' &&
             request.kind === 'notice' &&
             request.title === 'Self-test turn revised')
-        if (found) {
+        const markerPrinted = await applicationWindow!.webContents.executeJavaScript(
+          `window.__aitermTest?.snapshot(${JSON.stringify(secondSession.sessionId)}).bufferLines
+            .some((line) => line.includes('FILEREF refs/src/parser.ts:42:7'))`
+        ) as boolean
+        if (found && markerPrinted) {
+          await new Promise((resolve) => setTimeout(resolve, 100))
           console.error('[BMN] self-test phase: live attention revision observed')
           return found
         }
@@ -5518,6 +5787,349 @@ async function runSelfTest(): Promise<void> {
       throw new Error(`cross-workspace results failed: ${JSON.stringify(crossWorkspaceResults)}`)
     }
 
+    // AC5: the frame's rows at font sizes 10, 14 and 24, and at 14 px with 150 % zoom, against
+    // the 5 rows Codex reserves. Overflow is measured and reported, not hidden.
+    // Its own shell: the panes used earlier may be stopped by now.
+    const placementShell = await createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
+      name: 'Sixel placement', cwd: isolatedCwd, executable: '/bin/sh', argv: [], cols: 80, rows: 24 }, true)
+    await recoverApplicationRenderer(applicationWindow)
+    const placementId = JSON.stringify(placementShell.session.sessionId)
+    const typeIntoPlacementPane = (text: string) => client.request(METHOD_REGISTRY.terminalWrite, {
+      attachmentId: runtimes.get(placementShell.session.sessionId)!.attachment.attachmentId,
+      bytes: new TextEncoder().encode(text)
+    })
+    const waitForPlacementLine = (marker: string) => applicationWindow!.webContents.executeJavaScript(`(async () => {
+      const end = Date.now() + 10000;
+      while (Date.now() < end) {
+        if (window.__aitermTest?.snapshots()[${placementId}]?.bufferLines.some((line) => line.includes(${JSON.stringify(marker)}))) return;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      throw new Error(${JSON.stringify('the placement pane never printed ')} + ${JSON.stringify(marker)});
+    })()`) as Promise<void>
+    const appearanceBefore = await applicationWindow.webContents.executeJavaScript(
+      'window.aiTerminal.getSettings().then((settings) => settings.appearance)') as { terminalFontSize: number }
+    const placement = async (fontSize: number, zoom: number) => {
+      await applicationWindow!.webContents.executeJavaScript(
+        `window.aiTerminal.putSettings('appearance', ${JSON.stringify({ ...appearanceBefore, terminalFontSize: fontSize })})`)
+      applicationWindow!.webContents.setZoomFactor(zoom)
+      // The frame is drawn only once the view uses the new font size.
+      await applicationWindow!.webContents.executeJavaScript(`(async () => {
+        const end = Date.now() + 5000;
+        while (Date.now() < end && window.__aitermTest.view(${placementId}).imageCells().fontSize !== ${fontSize}) {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+      })()`)
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      await typeIntoPlacementPane(`clear; cat '${sixelPtyPath}'; echo; printf 'PLACED-%s\\n' ${fontSize}-${zoom * 100}\r`)
+      await waitForPlacementLine(`PLACED-${fontSize}-${zoom * 100}`)
+      const cells = await applicationWindow!.webContents.executeJavaScript(`(async () => {
+        const end = Date.now() + 3000;
+        let cells = window.__aitermTest.view(${placementId}).imageCells();
+        while (cells.lines.length === 0 && Date.now() < end) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          cells = window.__aitermTest.view(${placementId}).imageCells();
+        }
+        return { ...cells, storageMB: window.__aitermTest.snapshots()[${placementId}].imageStorageMB };
+      })()`) as { lines: number[]; cssCellHeight: number; deviceCellHeight: number; devicePixelRatio: number;
+        fontSize: number; storageMB: number }
+      return { fontSize: cells.fontSize, fontApplied: cells.fontSize === fontSize, zoom, cssCellHeight: cells.cssCellHeight, devicePixelRatio: cells.devicePixelRatio,
+        rows: cells.lines.length, withinReservedRows: cells.lines.length <= 5, storageMB: cells.storageMB }
+    }
+    const sixelPlacement = []
+    for (const [fontSize, zoom] of [[10, 1], [14, 1], [24, 1], [14, 1.5]] as const) {
+      sixelPlacement.push(await placement(fontSize, zoom))
+    }
+    applicationWindow.webContents.setZoomFactor(1)
+    await applicationWindow.webContents.executeJavaScript(
+      `window.aiTerminal.putSettings('appearance', ${JSON.stringify(appearanceBefore)})`)
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    if (sixelPlacement.some((row) => !row.fontApplied || row.rows === 0 || row.cssCellHeight <= 0)) {
+      throw new Error(`Sixel placement could not be measured: ${JSON.stringify(sixelPlacement)}`)
+    }
+
+    // Resizing the window refits the panes; the placement pane's text and image stay usable.
+    // (Run last: an earlier resize changes the layout later integration steps read.)
+    const [windowWidth, windowHeight] = applicationWindow.getSize() as [number, number]
+    applicationWindow.setSize(Math.max(800, windowWidth - 240), Math.max(600, windowHeight - 160))
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    await typeIntoPlacementPane(`cat '${join(animationDirectory, 'frame1.six')}'; echo; printf '%sD\\n' RESIZE\r`)
+    await waitForPlacementLine('RESIZED')
+    applicationWindow.setSize(windowWidth, windowHeight)
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+    const [restoredWidth, restoredHeight] = applicationWindow.getSize() as [number, number]
+    if (restoredWidth !== windowWidth || restoredHeight !== windowHeight) {
+      throw new Error(`the self-test window size was not restored: ${restoredWidth}x${restoredHeight}`)
+    }
+    const sixelResize = await applicationWindow.webContents.executeJavaScript(`(() => {
+      const hook = window.__aitermTest;
+      const own = hook.snapshot(${placementId}); return { storageMB: own.imageStorageMB, imageLines: hook.view(${placementId}).imageCells().lines.length, cols: own.cols, rows: own.rows, layer: own.imageLayerPresent };
+    })()`) as { storageMB: number; imageLines: number; cols: number; rows: number; layer: boolean }
+    if (!(sixelResize.storageMB > 0) || sixelResize.imageLines === 0) {
+      throw new Error(`a resized pane lost its image: ${JSON.stringify(sixelResize)}`)
+    }
+
+    // AC1 cap pressure and AC4/AC7 cold views: nine programs fill image storage and a program
+    // named codex draws its first frame, all before any view exists. After renderer recovery,
+    // each new view receives that output in its first writes.
+    const coldDirectory = join(isolatedCwd, 'sixel-cold-views')
+    mkdirSync(join(coldDirectory, 'bin'), { recursive: true })
+    const largeImage = `\u001bP9;1;0q"1;1;256;256#1;2;0;0;100#1${Array(43).fill('!256~').join('-')}\u001b\\`
+    writeFileSync(join(coldDirectory, 'large.six'), largeImage)
+    writeFileSync(join(coldDirectory, 'frame.six'), codexFrame(2))
+    const capProgram = join(coldDirectory, 'fill-images')
+    writeFileSync(capProgram, [
+      '#!/bin/sh',
+      'i=0; while [ "$i" -lt 40 ]; do cat "$(dirname "$0")/large.six"; i=$((i + 1)); done',
+      "printf 'CAP-AFTER\\r\\n'",
+      'sleep 60'
+    ].join('\n') + '\n', { mode: 0o700 })
+    const coldCodex = join(coldDirectory, 'bin', 'codex')
+    writeFileSync(coldCodex, [
+      '#!/bin/sh',
+      `date +%s%3N > '${join(coldDirectory, 'started').replaceAll("'", "'\\''")}'`,
+      `cat '${join(coldDirectory, 'frame.six').replaceAll("'", "'\\''")}'`,
+      "printf 'COLD-AFTER TERM=%s\\r\\n' \"$TERM\"",
+      'sleep 60'
+    ].join('\n') + '\n', { mode: 0o700 })
+    const capSessions = []
+    for (let index = 0; index < 9; index += 1) {
+      capSessions.push((await createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
+        name: `Sixel cap ${index + 1}`, cwd: isolatedCwd, executable: capProgram, argv: [], cols: 80, rows: 24 }, true)).session.sessionId)
+    }
+    const coldRequestedAt = Date.now()
+    const coldSession = (await createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
+      name: 'Sixel cold codex', cwd: isolatedCwd, executable: coldCodex, argv: [], cols: 80, rows: 24,
+      terminalGraphics: null }, true)).session.sessionId
+    const coldStartedAt = await acceptanceWait(async () => existsSync(join(coldDirectory, 'started'))
+      ? Number(readFileSync(join(coldDirectory, 'started'), 'utf8').trim()) : undefined, 'cold codex start')
+    await recoverApplicationRenderer(applicationWindow)
+    const coldViews = await applicationWindow.webContents.executeJavaScript(`(async () => {
+      const capIds = ${JSON.stringify(capSessions)};
+      const coldId = ${JSON.stringify(coldSession)};
+      const end = Date.now() + 30000;
+      while (Date.now() < end) {
+        const snapshots = window.__aitermTest?.snapshots() ?? {};
+        const shown = (id, marker) => snapshots[id]?.bufferLines.some((line) => line.includes(marker));
+        if (capIds.every((id) => shown(id, 'CAP-AFTER')) && shown(coldId, 'COLD-AFTER')) {
+          // Let a decoder that was still being created finish, so a dropped frame shows as zero storage.
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          const latest = window.__aitermTest.snapshots();
+          const views = Object.keys(latest).length;
+          const storage = Object.values(latest).map((row) => row.imageStorageMB);
+          return {
+            views,
+            viewLimitMB: Math.min(16, 128 / views),
+            capStorageMB: capIds.map((id) => latest[id].imageStorageMB),
+            totalStorageMB: storage.reduce((sum, value) => sum + value, 0),
+            coldStorageMB: latest[coldId].imageStorageMB,
+            coldTerm: (latest[coldId].bufferLines.find((line) => line.includes('COLD-AFTER')) ?? '').split('TERM=')[1]?.trim()
+          };
+        }
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      throw new Error('the cap-pressure and cold views did not show their text after images');
+    })()`) as { views: number; viewLimitMB: number; capStorageMB: number[]; totalStorageMB: number;
+      coldStorageMB: number; coldTerm: string }
+    const sixelCapPressure = {
+      views: coldViews.views,
+      viewLimitMB: coldViews.viewLimitMB,
+      largestViewMB: Math.max(...coldViews.capStorageMB),
+      totalStorageMB: coldViews.totalStorageMB,
+      textAfterImages: true,
+      withinLimits: coldViews.capStorageMB.every((value) => value > 0 && value <= coldViews.viewLimitMB + 0.01) &&
+        coldViews.totalStorageMB <= 128
+    }
+    const sixelColdView = {
+      firstFrameDecoded: coldViews.coldStorageMB > 0,
+      storageMB: coldViews.coldStorageMB,
+      term: coldViews.coldTerm,
+      startMs: coldStartedAt - coldRequestedAt
+    }
+    if (!sixelCapPressure.withinLimits || coldViews.views <= 8) {
+      throw new Error(`image storage exceeded its caps: ${JSON.stringify(sixelCapPressure)}`)
+    }
+    if (!sixelColdView.firstFrameDecoded || sixelColdView.term !== 'xterm-sixel-256color' || sixelColdView.startMs > 2000) {
+      throw new Error(`a view-less codex start or its first frame failed: ${JSON.stringify(sixelColdView)}`)
+    }
+
+    // 28.2 AC3: ordinary shells under each terminal entry, clean (/etc/skel/.bashrc) and with the
+    // owner's own ~/.bashrc: colors, dircolors, prompt color and title, the addon's device
+    // attributes reply, bracketed paste at the prompt, and a full-screen mouse TUI (less).
+    const regressionDirectory = join(isolatedCwd, 'shell-regression')
+    mkdirSync(regressionDirectory, { recursive: true })
+    const regressionChecks = join(regressionDirectory, 'checks.sh')
+    writeFileSync(regressionChecks, [
+      "old=$(stty -g); stty raw -echo min 0 time 10; printf '\\033[c'; reply=$(dd bs=64 count=1 2>/dev/null); stty \"$old\"",
+      "da1=$(printf '%s' \"$reply\" | od -An -c | tr -d ' \\n')",
+      'lscolors=$(eval "$(dircolors -b)"; [ -n "$LS_COLORS" ] && echo yes || echo no)',
+      "case \"$PS1\" in *'[01;32m'*) prompt=color;; *) prompt=plain;; esac",
+      "case \"$PS1\" in *']0;'*) title=yes;; *) title=no;; esac",
+      "printf 'REGRESSION term=%s colors=%s lscolors=%s\\n' \"$TERM\" \"$(tput colors)\" \"$lscolors\"",
+      "printf 'REGRESSION2 prompt=%s title=%s da1=%s\\n' \"$prompt\" \"$title\" \"$da1\""
+    ].join('\n') + '\n')
+    const regressionShells = [
+      { label: 'clean-sixel', graphics: 'sixel' as const, argv: ['--rcfile', '/etc/skel/.bashrc', '-i'] },
+      { label: 'clean-standard', graphics: 'standard' as const, argv: ['--rcfile', '/etc/skel/.bashrc', '-i'] },
+      { label: 'owner-sixel', graphics: 'sixel' as const, argv: ['-i'] }
+    ]
+    const regressionIds: Record<string, string> = {}
+    for (const shell of regressionShells) {
+      regressionIds[shell.label] = (await createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
+        name: `Shell regression ${shell.label}`, cwd: isolatedCwd, executable: '/bin/bash', argv: shell.argv,
+        cols: 100, rows: 30, terminalGraphics: shell.graphics }, true)).session.sessionId
+    }
+    await recoverApplicationRenderer(applicationWindow)
+    const shellRegression: Record<string, Record<string, unknown>> = {}
+    for (const shell of regressionShells) {
+      const id = JSON.stringify(regressionIds[shell.label])
+      const type = (text: string) => client.request(METHOD_REGISTRY.terminalWrite, {
+        attachmentId: runtimes.get(regressionIds[shell.label]!)!.attachment.attachmentId,
+        bytes: new TextEncoder().encode(text)
+      })
+      const read = (marker: string) => applicationWindow!.webContents.executeJavaScript(`(async () => {
+        const end = Date.now() + 15000;
+        while (Date.now() < end) {
+          const snapshot = window.__aitermTest?.snapshots()[${id}];
+          const line = snapshot?.bufferLines.find((row) => row.includes(${JSON.stringify(marker)}));
+          if (line) return { line, modes: snapshot.modes };
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        throw new Error(${JSON.stringify(`the ${shell.label} shell never printed `)} + ${JSON.stringify(marker)});
+      })()`) as Promise<{ line: string; modes: { bracketedPasteMode: boolean; mouseTrackingMode: string } }>
+      await type(`. '${regressionChecks}'\r`)
+      const result = await read('REGRESSION term=')
+      const result2 = await read('REGRESSION2 prompt=')
+      // Readline turns bracketed paste on at the prompt; the view's modes show what the program asked for.
+      await type(`printf '%s-%s\\n' PROMPT READY\r`)
+      const prompt = await read('PROMPT-READY')
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      const atPrompt = await applicationWindow.webContents.executeJavaScript(
+        `window.__aitermTest.snapshots()[${id}].modes`) as { bracketedPasteMode: boolean }
+      await type(`less --mouse '${regressionChecks}'\r`)
+      await new Promise((resolve) => setTimeout(resolve, 800))
+      const inLess = await applicationWindow.webContents.executeJavaScript(
+        `window.__aitermTest.snapshots()[${id}].modes`) as { mouseTrackingMode: string }
+      await type('q')
+      await type(`printf '%s-%s\\n' LESS DONE\r`)
+      await read('LESS-DONE')
+      const fields = Object.fromEntries(`${result.line.replace(/^.*REGRESSION /, '')} ${result2.line.replace(/^.*REGRESSION2 /, '')}`
+        .trim().split(' ').map((pair) => pair.split('=') as [string, string]))
+      shellRegression[shell.label] = { ...fields, bracketedPaste: atPrompt.bracketedPasteMode,
+        lessMouse: inLess.mouseTrackingMode, lessQuit: true, promptSeen: prompt.line.includes('PROMPT-READY') }
+    }
+    const expectedTerms: Record<string, string> = { 'clean-sixel': 'xterm-sixel-256color',
+      'clean-standard': 'xterm-256color', 'owner-sixel': 'xterm-sixel-256color' }
+    for (const [label, row] of Object.entries(shellRegression)) {
+      if (row.term !== expectedTerms[label] || row.colors !== '256' || row.lscolors !== 'yes' || row.prompt !== 'color' ||
+        row.title !== 'yes' || row.da1 !== '033[?62;4;9;22c' || row.bracketedPaste !== true || row.lessMouse === 'none') {
+        throw new Error(`an ordinary shell regressed under its terminal entry: ${JSON.stringify(shellRegression)}`)
+      }
+    }
+
+    // A pane's view is replaced while its program is inside a Sixel image, after ESC and a line
+    // feed that xterm executes without leaving the sequence. The new view must read the next
+    // DCS as a DCS, not print its payload, and still show later text and a fresh image.
+    const viewSwapDirectory = join(isolatedCwd, 'sixel-view-swap')
+    mkdirSync(viewSwapDirectory, { recursive: true })
+    writeFileSync(join(viewSwapDirectory, 'part1.bin'),
+      `\u001bP9;1;0q"1;1;60;75#1;2;0;100;0${'#1'.repeat(40_000)}\u001b\n`)
+    writeFileSync(join(viewSwapDirectory, 'part2.bin'),
+      `PqLEAK${'~'.repeat(200)}\u001b\\VISIBLE-AFTER\r\n` +
+      `\u001bP9;1;0q"1;1;60;75#1;2;100;0;0#1${Array(13).fill('!60~').join('-')}\u001b\\\r\n`)
+    const viewSwapScript = join(viewSwapDirectory, 'program')
+    writeFileSync(viewSwapScript, [
+      '#!/bin/sh',
+      `cd '${viewSwapDirectory.replaceAll("'", "'\\''")}'`,
+      "printf 'VIEW-SWAP-START\\n'",
+      'cat part1.bin',
+      // The rest waits until the replacement view is live.
+      'while [ ! -e go ]; do sleep 0.05; done',
+      'cat part2.bin',
+      'sleep 30'
+    ].join('\n') + '\n', { mode: 0o700 })
+    const viewSwap = await createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
+      name: 'Sixel view swap', cwd: isolatedCwd, executable: viewSwapScript,
+      argv: [], cols: 80, rows: 24 }, true)
+    const viewSwapId = JSON.stringify(viewSwap.session.sessionId)
+    await recoverApplicationRenderer(applicationWindow)
+    await applicationWindow.webContents.executeJavaScript(`(async () => {
+      const end = Date.now() + 10000;
+      while (Date.now() < end) {
+        if (window.__aitermTest?.snapshots()[${viewSwapId}]?.bufferLines.some((line) => line.includes('VIEW-SWAP-START'))) return;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      throw new Error('the first view of the Sixel view swap pane did not show its start');
+    })()`)
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    await recoverApplicationRenderer(applicationWindow)
+    await applicationWindow.webContents.executeJavaScript(`(async () => {
+      const end = Date.now() + 10000;
+      while (Date.now() < end) {
+        if (window.__aitermTest?.snapshots()[${viewSwapId}]) return;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      throw new Error('the replacement view of the Sixel view swap pane did not mount');
+    })()`)
+    writeFileSync(join(viewSwapDirectory, 'go'), '')
+    const sixelViewSwap = await applicationWindow.webContents.executeJavaScript(`(async () => {
+      const end = Date.now() + 20000;
+      while (Date.now() < end) {
+        const snapshots = window.__aitermTest?.snapshots() ?? {};
+        const own = snapshots[${viewSwapId}];
+        // The pane may be off screen, so decoded image storage, not a drawn layer, shows the image.
+        if (own?.bufferLines.some((line) => line.includes('VISIBLE-AFTER')) && own.imageStorageMB > 0) {
+          return {
+            visibleAfter: true,
+            leakedText: own.bufferLines.some((line) => line.includes('LEAK') || line.includes('#1#1')),
+            storageMB: own.imageStorageMB,
+            layer: own.imageLayerPresent,
+            otherPanesLeak: Object.entries(snapshots).some(([id, row]) =>
+              id !== ${viewSwapId} && row.bufferLines.some((line) => line.includes('LEAK')))
+          };
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      const own = window.__aitermTest?.snapshots()[${viewSwapId}];
+      throw new Error('the replacement view did not show text after the image: ' + JSON.stringify({
+        text: own?.bufferLines.filter((line) => line.trim()).slice(-8),
+        storageMB: own?.imageStorageMB, layer: own?.imageLayerPresent }));
+    })()`) as { visibleAfter: boolean; leakedText: boolean; storageMB: number; layer: boolean;
+      otherPanesLeak: boolean }
+    if (!sixelViewSwap.visibleAfter || sixelViewSwap.leakedText || !(sixelViewSwap.storageMB > 0) ||
+      sixelViewSwap.otherPanesLeak) {
+      throw new Error(`a replacement view misread output after an interrupted image: ${JSON.stringify(sixelViewSwap)}`)
+    }
+
+    const graphicsRoot = process.env.BMN_DATA_HOME
+    if (!graphicsRoot) throw new Error('self-test graphics entry requires BMN_DATA_HOME')
+    const terminfoDirectory = join(graphicsRoot, 'terminfo')
+    const terminfoEntry = join(terminfoDirectory, 'x', 'xterm-sixel-256color')
+    const sixelResolved = existsSync(terminfoEntry) && spawnSync('infocmp',
+      ['-A', terminfoDirectory, 'xterm-sixel-256color'], { stdio: 'ignore' }).status === 0
+    const standardResolved = spawnSync('infocmp', ['xterm-256color'], {
+      stdio: 'ignore', env: { ...process.env, TERMINFO_DIRS: `${terminfoDirectory}:` }
+    }).status === 0
+    const fakeCodex = join(isolatedCwd, 'graphics-probe', 'codex')
+    mkdirSync(join(isolatedCwd, 'graphics-probe'), { recursive: true })
+    writeFileSync(fakeCodex, '#!/bin/sh\nprintf "%s\\n" "$TERM" > "$1"\nsleep 2\n', { mode: 0o700 })
+    const probeTerm = async (file: string): Promise<string> => {
+      await client.request(METHOD_REGISTRY.sessionCreate, {
+        workspaceId: DEFAULT_WORKSPACE_ID, name: 'Synthetic graphics TERM probe',
+        cwd: isolatedCwd, executable: fakeCodex, argv: [file], cols: 80, rows: 24,
+        terminalGraphics: null
+      })
+      return acceptanceWait(async () => existsSync(file) ? readFileSync(file, 'utf8').trim() : undefined,
+        'synthetic Codex TERM receipt')
+    }
+    const initialTerm = await probeTerm(join(isolatedCwd, 'graphics-before.txt'))
+    writeFileSync(terminfoEntry, 'corrupt test entry')
+    const fallbackTerm = await probeTerm(join(isolatedCwd, 'graphics-after.txt'))
+    const graphicsTerminfo = { sixelResolved, standardResolved, initialTerm, fallbackTerm }
+    if (!sixelResolved || !standardResolved || initialTerm !== 'xterm-sixel-256color' ||
+      fallbackTerm !== 'xterm-256color') {
+      throw new Error(`isolated terminfo fallback failed: ${JSON.stringify(graphicsTerminfo)}`)
+    }
+
     const secondClose = await client.close()
     console.error('[BMN] self-test phase: second host closed')
     clientClosed = true
@@ -5584,6 +6196,19 @@ async function runSelfTest(): Promise<void> {
       handoffFlow: { ...preloadProbe.handoffFlow, persistedAfterRestart: true },
       agentHandoff,
       fileReferenceWire,
+      sixelRender,
+      sixelPty,
+      sixelAnimation,
+      sixelTwoPaneAnimation,
+      sixelAlternateScreen,
+      sixelPlacement,
+      sixelResize,
+      sixelCapPressure,
+      sixelColdView,
+      shellRegression,
+      sixelViewSwap,
+      cspProbe,
+      graphicsTerminfo,
       openCodeAcceptance,
       subagentAcceptance,
       repeatAcceptance,

@@ -1,48 +1,45 @@
 # Dev Auto handoff
 
-- Project / selected epics: /home/oleksandr/code/BMN; Epic 27 only (27.1, 27.2). Owner request: `$dev-auto 27` (2026-09-26, current conversation).
-- Original request and intended outcomes: _bmad-output/planning-artifacts/epics.md:1438-1482; FR48-49, NFR36, UX-DR25, shared NFR34-35 at :1302-1321.
-- Mode: build
+- Project / selected epics: /home/oleksandr/code/BMN; Epic 28 (28.1, 28.2), requested as `$dev-auto 28` on 2026-09-26.
+- Original request and intended outcomes: `_bmad-output/planning-artifacts/epics.md:1476-1540`; Sixel rendering in live panes and Codex `/pets` through a graphics-capable TERM and bundled terminfo.
+- Mode: resume
 - Stopping condition: selected scope accepted; no automatic time limit.
-- Explicit user stop: none
-- Restrictions and authorization boundaries: Original request authorized implementation, checks and ready local task commits. A later owner request in the current conversation explicitly authorized GLM and GLM Flash read-only review, a push to GitHub and the local desktop update after checking Epic 27; that supersedes the prior push/update restriction for this delivery only. Merge and unrelated deployment remain unauthorized. Never package while packaged BMN is open (AGENTS.md); `update:desktop` waits for it to exit. NFR35 forbids trials on real workspaces, profiles or sessions; use synthetic workspaces in isolated Electron. No credentials or personal data to helpers.
-- Decision and history log: .dev-auto/log.md (append-only); prior Epic 26 handoff remains in git at baseline. Raw receipts under ignored .dev-auto/evidence/.
-- Authorized provider routes: /home/oleksandr/code/dev-auto/skills/dev-auto/references/models.md ordered tiers.
-- Lead host / requested model / observed model: Codex lead; observed gpt-6-sol/xhigh, rollout 01a0dc66-2ace-7681-8bb3-0ef3f54af2b5.
+- Explicit user stop: none; owner resumed with `$dev-auto resume` on 2026-09-26 (Codex) and `/dev-auto resume` on 2026-09-26 (Claude Code).
+- Restrictions and authorization boundaries: Requested implementation, checks and ready local task commit authorized by user AGENTS.md. Owner later authorized an Opus consultation, GitHub push and local desktop update after completion in current conversation; merge is not authorized. Owner answered "Keep BMN open for now" to the packaging-closure request; do not package or update until the owner later closes BMN or changes that instruction. Do not copy Codex credentials or change owner pet settings. AC2 real `/pets` is owner-run with normal CODEX_HOME and owner-approved screenshots; it blocks story acceptance until performed. Synthetic profiles only for agent tests.
+- Decision and history log: `.dev-auto/log.md` (append only). Prior Epic 27 handoff was COMPLETE at baseline `6565c05` and is in Git.
+- Authorized provider routes: `/home/oleksandr/code/dev-auto/skills/dev-auto/references/models.md`; required pre-review GLM then strong review Astra.
+- Lead host / requested model / observed model: Codex lead through final recheck; Claude Code Opus 5.5 (`claude-opus-5-5`) lead from the 2026-09-26 `/dev-auto resume`; both usages pending receipts.
 
 ## Progress
 
-- Sprint board and reconciled state: Epic 25 and 26 done; Epic 27, 27.1 and 27.2 done, atomically written and read back in ignored sprint-status.yaml; baseline dd6550b.
-- Implemented: 27.1 utility paste claim, preview chooser and IPC; 27.2 bounded utility search and palette route in commit 4d7b288. Second repair of F1/F4 frozen at fb91ab0cfff06e6de26318f5355046119bcd423847b1adb73d456be8b16824f5.
-- Active helpers: none. Astra/low second recheck completed read-only, receipt epic-27-astra-recheck2.md.
-- Owner delivery follow-up: product source remains commit 4d7b288. GLM-5.3 source review found no material defect in its inspected Epic 27 seams; GLM-5.3-Flash found eight documentation gaps, now closed by edits to README.md, docs/features.md and docs/architecture.md and a focused Flash recheck. Receipts are local under `.dev-auto/evidence/epic-27-owner-*`.
+- Sprint board and reconciled state: `epic-28`, 28.1 and 28.2 remain backlog in ignored `sprint-status.yaml`; implementation is not accepted yet. Dependency 28.2 after 28.1.
+- Implemented: Sixel addon/CSP, per-view/aggregate caps, renderer check; tri-state graphics choice (protocol, migration, forms/templates/launch sets, spawn/resume); bundled terminfo + fallback; docs/CLI help. F1 replay redesign (xterm 6.0 VT500 tracking, `freshStart`, per-view sync). D1: `terminalWriteCut` (protocol) cuts host chunks and ≤131,072-byte renderer writes only between characters; view credit must be ≥4 bytes. Test-only: xterm fixtures, provenance spans in the session model, test-hook `view()` probe (image rows, selection), 9 new Electron phases. All uncommitted.
+- Active helpers: none. Owner trial app: isolated dev BMN running (Electron main PID 2692898, scratch launcher because baseline `scripts/test/electron-dev.mjs:11` fails ERR_PACKAGE_PATH_NOT_EXPORTED; see log). Astra/low recheck4 of `4c8f198a…` done (`astra-recheck4.md` SHA256 `653ee6dd…`, receipt `e42ccb53…`, gpt-6-astra/low read-only/never, 694,964 input (618,624 cached)/5,836 output).
 
 ## Decisions and findings
 
 - Original or approved intent changes: none.
-- Material pending findings: none. F1/F4 closed by second Astra/low recheck; F2/F3 closed by first and reaffirmed by second. Receipts epic-27-astra-{review,recheck,recheck2}.md.
-- Cross-epic obligations: reuse Epic 7 guarded send and Epic 8 file preview; preserve no Enter and no new search index or inspection surface.
+- Material pending findings: none open in production code. Recheck4: C1 CLOSED; no production regression; C4 publication gap → closed by transport chunk-provenance test (`oracle-publication-mutation.log`: slice-from-0 mutation fails 27 transport tests, 70/72 session seeds); C2 accepted scoped (Sixel pixels only); C3 residual UNVERIFIED for a truly cold renderer process (addon drops Sixel until its async decoder exists; exercised views decoded). Evidence-strength fixes after recheck4 (not re-reviewed, delta evidence): markers no longer match command echo; simultaneous two-pane animation; alt-screen image checked while active; applied font size asserted; handoff fixture input restored. Earlier: D1, C1, C4-frames, F1 R1, F2 CLOSED.
+- Cross-epic obligations: preserve PTY/text/ANSI, terminal geometry, shell identity and existing resume behavior; do not add daemon, image persistence or Codex configuration edits.
 
 ## Evidence
 
-- Checks run and observed results: final second candidate focused 157/157 PASS, full unit 1641/1641 PASS with host Git access, typecheck/lint EXIT 0, isolated Electron EXIT 0 on one retry with foreign-pane preview, exact colon file, numeric-suffix rejection and six true wire checks; logs .dev-auto/evidence/epic-27-second-{focused-final,unit-final,typecheck-final,lint-final,electron-retry}.log. Initial second Electron gate failed before Epic 27 in native-dependency probe with empty child stderr; retry passed.
-- Tests: RED F1 original and response-gap, F2 Electron, F3 foreign root, F4 exit-root; GREEN repaired focused/full/Electron. Untested: workspace-root palette UI case with no selected session; persisted receipt restart replay, live directory transition during in-flight I/O and real OS blur not directly exercised.
-- Reviewed scope and route: GLM-5.3/max quick pre-review on 7d62aa... (0 material, 2 minor); Astra/medium full review on 54ae818... (4 material), observed read-only/approval never, receipt epic-27-astra-review.md.
-- Baseline and reviewed revisions / material finding dispositions / recheck or delta evidence: baseline dd6550b; full reviewed fingerprint 54ae818...; first repaired f5e360...; accepted fb91ab0cfff06e6de26318f5355046119bcd423847b1adb73d456be8b16824f5. F1-F4 all closed by reviewer with controlled/source and synthetic Electron evidence.
-- Review allowance at the current boundary: rechecks 2; consultation 0; no material gap remains.
-- Unreviewed or unverified areas: actual RPC/worker archive interleaving, Electron exit during pending search/Enter, real OS blur, receipt crash injection, slow I/O cancellation and symlink replacement; synthetic/source evidence only for these edges.
-- Owner follow-up gates on unchanged product source: test:unit 102 files/1641 tests PASS, typecheck and lint EXIT 0, isolated Electron EXIT 0 with all six `fileReferenceWire` checks true. GLM-5.3/max reviewed changed source and reported zero material issues; GLM-5.3-Flash/max documentation recheck closed all eight reported gaps. Logs and JSON receipts are ignored local evidence.
+- Checks run and observed results: D1/C1: `d1-red.log`, `d1-mutation.log`, transport 37/37. `phases-electron-9.log` EXIT 0 (isolated dev Electron): sixelAnimation 184 frames (64 @120 ms Codex rate, 120 @16 ms) two visible panes, no view rebuild, quiet pane text/image/selection unchanged, 3 image rows after scroll; sixelAlternateScreen clean; sixelPlacement rows 10px=7 (exceeds Codex's 5: limitation), 14px=5, 24px=3, 14px@150%=5; sixelCapPressure 19 views, limit 6.74 MB, max 6.55, total 59 MB, text after images; sixelColdView fake codex TERM=xterm-sixel-256color, start 18 ms, first frame decoded; shellRegression clean/owner bashrc × sixel/standard: 256 colours, LS_COLORS, colour prompt+title, DA1 `?62;4;9;22c`, bracketed paste, less mouse; sixelViewSwap/Render/Pty/CSP/terminfo unchanged. Earlier: `redesign2-*` logs, `term-boundary-checks.log` (container fallback).
+- Tests: unit (see final-unit.log), focused transport/session/framer, isolated Electron. Not run: packaged smoke/update, owner `/pets`, vim/neovim (not installed), Claude Code/OpenCode TUIs (not launched: owner-account hooks), SSH/sudo, img2sixel (not installed), hide/show and split with images; resize measured only on an off-screen pane.
+- Reviewed scope and route: GLM-5.3/max quick pre-review; Astra/medium strong review (F1/F2); Astra/low rechecks; details in log.
+- Baseline and reviewed revisions / material finding dispositions / recheck or delta evidence: baseline `6565c05`; consult3 `93378251…`; recheck4 `4c8f198a…`; later test/self-test-only delta verified by `phases-electron-15/16.log`, unit/typecheck/lint.
+- Review allowance: redesign boundary (owner-opened 2026-09-26): full review done, one consolidated repair done, focused recheck found a repair-introduced material defect → consultant once, then one consolidated repair and recheck; remaining material defects block the boundary.
+- Unreviewed or unverified areas: packaged asset/runtime and stable-path update (owner keeps BMN open), owner `/pets` and real pet restoration after renderer loss (AC2/AC4), vim/neovim, Claude Code/OpenCode TUIs, SSH/sudo, img2sixel, hide/show/split with images, cohort-resume path specifically.
 
 ## Measurement
 
-- Timing: started and accepted 2026-09-26.
-- Dispatches: GLM-5.3/max quick pre-review, receipt epic-27-glm-pre-review.json; Astra/medium full review, receipt epic-27-astra-review.md; Astra/low first and second rechecks, receipts epic-27-astra-recheck.md and epic-27-astra-recheck2.md; all observed read-only/approval never for Astra.
-- Review yield: quick GLM 0 material, 2 minor; Astra full review 4 material (0 flagged by GLM); first recheck closed F2/F3; second closed F1/F4, no new material.
-- Owner interventions: 1 scope request; no corrections or repeat approvals.
-- Later owner intervention: explicit instruction to dispatch GLM and GLM Flash, double-check Epic 27, update BMN locally and push to GitHub. Observed new helper usage: GLM-5.3 48,420 input + 413,504 cache-read / 11,447 output; GLM-5.3-Flash audit 54,355 input + 355,776 cache-read / 7,152 output; Flash recheck 15,195 input + 30,784 cache-read / 3,328 output.
-- Observed usage: GLM-5.3 pre-review 48,192 input + 177,856 cache-read / 15,124 output, $0.707988; Astra full 926,797 input (836,096 cached) / 6,871 output; Astra low rechecks 489,363 input (416,768 cached) / 4,651 output and 361,554 input (299,520 cached) / 3,423 output. Lead gpt-6-sol/xhigh latest read: 52,207,054 input (51,516,032 cached) / 152,967 output. Auto-review sessions separate, not added.
+- Timing: started 2026-09-26; acceptance pending.
+- Dispatches: GLM-5.3/max quick pre-review, receipt `glm-pre-review.json`, 13 turns, $0.530236. Astra medium strong review completed after a pre-provider PATH failure. Astra/low first recheck 408,063 input (347,904 cached)/3,868 output; second 520,545 input (455,040 cached)/5,793 output; Astra/medium consultant 197,735 input (154,240 cached)/2,878 output; Astra/low final recheck 463,893 input (414,464 cached)/5,720 output; all read-only. Astra/high consultant 629,027 input (557,184 cached)/6,200 output, read-only. Astra/low recheck3 602,431 input (528,640 cached)/3,438 output, refused. Fable/medium recheck3 69,002 cache-write + 5,562 cache-read/26,081 output, $2.6855. Astra/high consult3 1,503,845 input (1,388,160 cached)/17,473 output.
+- Review yield: GLM quick 0 code defects; Astra strong F1/F2; F2 closed in rechecks, F1 material after final recheck. No acceptance.
+- Owner interventions: one scope request, one delivery/consultation instruction, one temporary keep-BMN-open instruction; no corrections.
+- Observed usage: GLM-5.3 47,950 input + 190,272 cache-read / 7,814 output, $0.530236; Astra/medium read-only 1,372,495 input (1,268,864 cached) / 7,621 output; lead pending.
 
 ## Resume
 
-- Next safe action: no selected implementation work remains; inspect Git and desktop update state before any follow-up delivery action under the owner's later authorization.
-- Status: COMPLETE — Epic 27 accepted; owner-authorized delivery is a separate follow-up.
+- Next safe action: after `update:desktop` finishes (it waits for the owner to close packaged BMN), owner runs `/pets` in the packaged app (28.2 AC2) and checks the packaged update receipt (28.2 AC5); renderer-loss pet repaint (28.1 AC4) remains UNVERIFIED unless measured. Then accept or reopen 28.1/28.2.
+- Status: SHIPPED FOR OWNER TRIAL — owner chose "Push + update" (AskUserQuestion, 2026-09-26) before acceptance; stories stay in review until the owner `/pets` trial and packaged receipt.

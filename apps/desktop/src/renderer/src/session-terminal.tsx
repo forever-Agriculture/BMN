@@ -35,6 +35,7 @@ import { TerminalOutputFlow } from './terminal-output-flow'
 import { applyTerminalExit } from './terminal-exit'
 import { createFocusReports } from './terminal-focus-reports'
 import { trackTerminalView } from './terminal-view-tracking'
+import { SIXEL_SMOKE_FRAME, checkSixelRenderer, createTerminalImageAddon, registerTerminalImages } from './terminal-images'
 import { searchStatusText } from './terminal-view'
 import { TERMINAL_THEMES } from './theme'
 import { readRecentLines } from './voice-suggestions'
@@ -149,6 +150,7 @@ export function SessionTerminal(props: {
   const [searchTerm, setSearchTerm] = useState('')
   const [searchResult, setSearchResult] = useState('')
   const [dropTarget, setDropTarget] = useState(false)
+  const [imageWarning, setImageWarning] = useState(false)
 
   startup.current = props.startup
   record.current = props.record
@@ -182,10 +184,22 @@ export function SessionTerminal(props: {
     terminalRef.current = terminal
     const fit = new FitAddon()
     const search = new SearchAddon()
+    const images = createTerminalImageAddon()
     searchAddon.current = search
     terminal.loadAddon(fit)
     terminal.loadAddon(search)
+    let unregisterImages = (): void => undefined
+    try {
+      terminal.loadAddon(images)
+      unregisterImages = registerTerminalImages(images)
+    } catch {
+      setImageWarning(true)
+    }
     terminal.open(container)
+    let mounted = true
+    void checkSixelRenderer().then((ready) => {
+      if (mounted && !ready) setImageWarning(true)
+    })
     /**
      * Epic 17.2: this view is new, the program is not. It set these modes before the view existed,
      * so the view is brought up to date with them — written into this xterm only, never to the
@@ -395,6 +409,44 @@ export function SessionTerminal(props: {
       getPtyDimensions: () => ptyDimensions,
       getRefitCount: () => refitCount,
       getInputCount: () => inputEvents,
+      getImageStorageMB: () => images.storageUsage,
+      imageLayerPresent: () => !!container.querySelector('.xterm-image-layer'),
+      view: {
+        imageCells: () => {
+          const buffer = terminal.buffer.active
+          const lines: number[] = []
+          for (let line = 0; images.storageUsage > 0 && line < buffer.length; line += 1) {
+            for (let column = 0; column < terminal.cols; column += 1) {
+              if (images.getImageAtBufferCell(column, line)) {
+                lines.push(line)
+                break
+              }
+            }
+          }
+          const cell = (terminal as unknown as { _core: { _renderService: { dimensions: {
+            css: { cell: { height: number } }; device: { cell: { height: number } } } } } })._core._renderService.dimensions
+          return { lines, cssCellHeight: cell.css.cell.height, deviceCellHeight: cell.device.cell.height,
+            devicePixelRatio: window.devicePixelRatio, fontSize: terminal.options.fontSize ?? 0 }
+        },
+        select: (column, row, length) => {
+          terminal.select(column, row, length)
+          return terminal.getSelection()
+        },
+        selection: () => terminal.getSelection(),
+        clearSelection: () => terminal.clearSelection()
+      },
+      sixelFixture: () => new Promise((resolve) => {
+        terminal.write(SIXEL_SMOKE_FRAME, () => {
+          terminal.refresh(0, terminal.rows - 1)
+          const deadline = Date.now() + 1000
+          const readLayer = (): void => {
+            const layer = !!container.querySelector('.xterm-image-layer')
+            if (layer || Date.now() >= deadline) resolve({ storageMB: images.storageUsage, layer })
+            else setTimeout(readLayer, 25)
+          }
+          readLayer()
+        })
+      }),
       ...(props.selected ? { integration: async () => {
         console.warn('[BMN] renderer behavioural integration: started')
         const workspaces = await window.aiTerminal.listWorkspaces(true)
@@ -958,6 +1010,8 @@ export function SessionTerminal(props: {
       if (props.selected) terminal.focus()
     })
     return () => {
+      mounted = false
+      unregisterImages()
       removeTestHook()
       props.register(props.startup.sessionId, undefined)
       stopPresence()
@@ -1127,6 +1181,9 @@ export function SessionTerminal(props: {
         </div>
       ) : null}
       <div ref={element} className="terminal-surface" />
+      {imageWarning ? <div className="terminal-image-warning" role="status">
+        Terminal images are unavailable in this pane. Text remains usable.
+      </div> : null}
       <footer className="pane-footer">
         <span className={`input-state${props.armed && props.selected ? ' armed' : ''}${props.voice?.phase === 'recording' ? ' listening' : ''}`}>
           {props.armed && props.selected

@@ -3,6 +3,7 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Terminal } from '@xterm/headless'
 import {
@@ -56,6 +57,11 @@ import {
   selectInterruptedIncarnations
 } from './database-session-store'
 import { listSessions, listWorkspaces } from './database-workspace-store'
+import { installBundledTerminfo } from './terminal-graphics'
+import { TerminalByteFramer, type TerminalFrame } from './terminal-byte-framer'
+import { HostOutputQueue } from './transport'
+import { generatedTerminalOutput, pick, seeded } from './test-fixtures/terminal-output'
+import { XtermStream } from './test-fixtures/xterm-parser'
 import type { InterruptedIncarnationRow } from './interrupted-cohort'
 
 const testRequire = createRequire(import.meta.url)
@@ -341,6 +347,7 @@ class FakeStore implements SessionStore {
         argv: [...(created?.argv ?? [])],
         position,
         backgroundChoice: created?.backgroundChoice ?? null,
+        terminalGraphics: created?.terminalGraphics ?? null,
         revision: 1,
         createdAt: created?.startedAt ?? '2026-09-13T00:00:00.000Z',
         archivedAt: null,
@@ -607,7 +614,7 @@ describe('shell session lifecycle', () => {
       'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_PID',
       'CODEX_THREAD_ID', 'CODEX_SESSION_ID', 'CODEX_SANDBOX_NETWORK_DISABLED',
       'OMPCODE', 'ITERM_SESSION_ID', 'WT_SESSION', 'STY',
-      'ZELLIJ', 'ZELLIJ_SESSION_NAME', 'ZELLIJ_PANE_ID'
+      'ZELLIJ', 'ZELLIJ_SESSION_NAME', 'ZELLIJ_PANE_ID', 'ZELLIJ_VERSION'
     ]
     const configuration = {
       CLAUDE_CODE_FORCE_SESSION_PERSISTENCE: '1',
@@ -655,6 +662,42 @@ describe('shell session lifecycle', () => {
       BMN_CONTROL_SOCKET: '/new/socket', BMN_SESSION_ID: 'new-session', BMN_TOKEN: 'new-token',
       AITERM_CONTROL_SOCKET: '/new/socket', AITERM_SESSION_ID: 'new-session', AITERM_TOKEN: 'new-token'
     })
+  })
+
+  it('selects graphics at spawn from the command and saved choice, then falls back if terminfo changes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bmn-terminal-env-'))
+    try {
+      const bundled = fileURLToPath(new URL('../../resources/terminfo/x/xterm-sixel-256color', import.meta.url))
+      const asset = installBundledTerminfo(root, bundled)
+      const environments: Array<Readonly<Record<string, string | undefined>>> = []
+      const manager = new SessionManager({
+        store: new FakeStore(),
+        spawnPty: (_executable, _argv, options) => {
+          environments.push(options.env)
+          return new FakePty()
+        },
+        sendTerminalMessage: () => undefined,
+        environment: { HOME: join(root, 'home'), TERMINFO_DIRS: '/owner/entries', ZELLIJ_VERSION: '0.40' },
+        terminfoAsset: asset
+      })
+      const launch = (executable: string, terminalGraphics: 'sixel' | 'standard' | null): void => {
+        manager.spawnValidatedPty({ cwd: '/tmp', executable, argv: [], cols: 80, rows: 24,
+          terminalGraphics })
+      }
+      launch('/usr/bin/codex', null)
+      expect(environments.at(-1)).toMatchObject({ TERM: 'xterm-sixel-256color', COLORTERM: 'truecolor' })
+      expect(environments.at(-1)).not.toHaveProperty('ZELLIJ_VERSION')
+      expect(environments.at(-1)?.TERMINFO_DIRS).toContain('/owner/entries')
+      launch('/bin/bash', null)
+      expect(environments.at(-1)?.TERM).toBe('xterm-256color')
+      launch('/bin/bash', 'sixel')
+      expect(environments.at(-1)?.TERM).toBe('xterm-sixel-256color')
+      launch('/usr/bin/codex', 'standard')
+      expect(environments.at(-1)?.TERM).toBe('xterm-256color')
+      await writeFile(join(asset.directory, 'x', 'xterm-sixel-256color'), 'damaged')
+      launch('/usr/bin/codex', null)
+      expect(environments.at(-1)?.TERM).toBe('xterm-256color')
+    } finally { await rm(root, { recursive: true, force: true }) }
   })
 
   it('rejects an invalid cwd before spawn/record and reports no live incarnation', async () => {
@@ -2409,6 +2452,7 @@ describe('shell session lifecycle', () => {
       argv: [],
       position: 0,
       backgroundChoice: null,
+      terminalGraphics: null,
       revision: 1,
       createdAt: '2026-09-13T00:00:00.000Z',
       archivedAt: null,
@@ -2798,6 +2842,104 @@ describe('shell session lifecycle', () => {
     )
   })
 
+  it('does not replay a Sixel tail as text after the renderer disconnects mid-frame', async () => {
+    const { manager, pty, sent, cwd } = await fixture()
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION,
+      cwd, executable: process.execPath, argv: [], cols: 80, rows: 24
+    })
+    const first = manager.attach(created)
+    manager.activateAttachment(first.attachmentId)
+    pty.emit(`\u001bP9;1;0q"1;1;1;1#1;2;100;0;0#1${'1#1'.repeat(22_000)}`)
+    // The first 64 KiB parser atom of the image reached the view; the rest waits for its end.
+    expect(terminalOutput(sent, first.attachmentId).byteLength).toBe(64 * 1024)
+
+    manager.rendererDisconnected()
+    pty.emit(`${'1#1'.repeat(2_000)}\u001b\\safe-after-image`)
+    const replacement = manager.attach(created)
+    manager.activateAttachment(replacement.attachmentId)
+
+    expect(terminalOutput(sent, replacement.attachmentId)).toEqual(encoder.encode('\u001b\\safe-after-image'))
+  })
+
+  // With 64 KiB + 1 credit the old view starts the frame holding the terminator, so the rest of
+  // that frame is dropped rather than replayed. Every replacement discloses the image tail it lacks.
+  it.each([
+    // The replacement's credit is the same, so it holds the first 4 bytes after the fresh start.
+    [4, '\u001b\\sa'],
+    [65_536, '\u001b\\safe-after-image'],
+    [65_537, '']
+  ])('does not replay a completed Sixel tail with %i byte old-view credit', async (credit, expected) => {
+    const { manager, pty, sent, cwd } = await fixture(undefined, {
+      consumerBytes: credit, hostBytes: 128 * 1024
+    })
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION,
+      cwd, executable: process.execPath, argv: [], cols: 80, rows: 24
+    })
+    const first = manager.attach(created)
+    manager.activateAttachment(first.attachmentId)
+    pty.emit(`\u001bP9;1;0q${'1#1'.repeat(22_000)}`)
+    expect(terminalOutput(sent, first.attachmentId).byteLength).toBe(Math.min(credit, 64 * 1024))
+    pty.emit(`${'1#1'.repeat(2_000)}\u001b\\safe-after-image`)
+    manager.rendererDisconnected()
+    const replacement = manager.attach(created)
+    const activation = manager.activateAttachment(replacement.attachmentId)
+
+    expect(new TextDecoder().decode(terminalOutput(sent, replacement.attachmentId))).toBe(expected)
+    expect(activation.undeliveredOutput.truncated).toBe(true)
+  })
+
+  it('does not replay a Sixel tail after the undelivered cap drops its header', async () => {
+    const { manager, pty, sent, cwd } = await fixture(10 * 1024)
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION,
+      cwd, executable: process.execPath, argv: [], cols: 80, rows: 24
+    })
+    pty.emit(`\u001bP9;1;0q${'1#1'.repeat(22_000)}`)
+    pty.emit(`${'1#1'.repeat(2_000)}\u001b\\safe-after-image`)
+    const replacement = manager.attach(created)
+    const activation = manager.activateAttachment(replacement.attachmentId)
+
+    expect(activation.undeliveredOutput.truncated).toBe(true)
+    expect(terminalOutput(sent, replacement.attachmentId)).toEqual(encoder.encode('\u001b\\safe-after-image'))
+  })
+
+  it('keeps an evicted Sixel tail out when a view activates before its terminator', async () => {
+    const { manager, pty, sent, cwd } = await fixture(10 * 1024)
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION,
+      cwd, executable: process.execPath, argv: [], cols: 80, rows: 24
+    })
+    pty.emit(`\u001bP9;1;0q${'1#1'.repeat(22_000)}`)
+    const replacement = manager.attach(created)
+    expect(manager.activateAttachment(replacement.attachmentId).undeliveredOutput.truncated).toBe(true)
+    pty.emit(`${'1#1'.repeat(2_000)}\u001b\\safe-after-image`)
+    const fresh = encoder.encode('\u001bP9;1;0q"1;1;1;1#1~\u001b\\')
+    pty.emit(fresh)
+
+    const output = terminalOutput(sent, replacement.attachmentId)
+    expect(new TextDecoder().decode(output.subarray(0, '\u001b\\safe-after-image'.length)))
+      .toBe('\u001b\\safe-after-image')
+    expect(Buffer.from(output).includes(Buffer.from(fresh))).toBe(true)
+  })
+
+  it('replays a buffered Sixel image whole after views attach and leave without activating', async () => {
+    const { manager, pty, sent, cwd } = await fixture()
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION,
+      cwd, executable: process.execPath, argv: [], cols: 80, rows: 24
+    })
+    const image = `\u001bP9;1;0q${'1#1'.repeat(22_000)}`
+    pty.emit(image)
+    const unactivated = manager.attach(created)
+    manager.detach({ attachmentId: unactivated.attachmentId })
+    const stillUnactivated = manager.attach(created)
+    manager.detach({ attachmentId: stillUnactivated.attachmentId })
+    pty.emit(`${'1#1'.repeat(2_000)}\u001b\\safe-after-image`)
+    const replacement = manager.attach(created)
+    manager.activateAttachment(replacement.attachmentId)
+
+    expect(terminalOutput(sent, replacement.attachmentId)).toEqual(
+      encoder.encode(`${image}${'1#1'.repeat(2_000)}\u001b\\safe-after-image`)
+    )
+  })
+
   it('flushes an incomplete parser atom before publishing terminal exit', async () => {
     const { manager, pty, sent, cwd } = await fixture()
     const created = await manager.create({ ...DEFAULT_SESSION_CREATION,
@@ -2919,6 +3061,54 @@ describe('shell session lifecycle', () => {
 
     expect(terminalOutput(sent, replacement.attachmentId)).toEqual(encoder.encode('efghij'))
     expect(pty.paused).toBe(false)
+  })
+
+  it('retains later buffered frames if activation overflows and revokes its queue', async () => {
+    const { manager, pty, sent, cwd } = await fixture(64, {
+      consumerBytes: 4, hostBytes: 4
+    })
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION,
+      cwd, executable: process.execPath, argv: [], cols: 80, rows: 24
+    })
+    pty.emit('abcd')
+    pty.emit('efgh')
+    pty.emit('ij')
+    const first = manager.attach(created)
+    manager.activateAttachment(first.attachmentId)
+
+    expect(terminalOutput(sent, first.attachmentId)).toEqual(encoder.encode('abcd'))
+    expect(manager.hasAttachment(first.attachmentId)).toBe(false)
+    expect(manager.undeliveredOutputState(created)).toMatchObject({
+      bufferedBytes: 6, droppedBytes: 0, truncated: false
+    })
+  })
+
+  it('keeps output from a PTY resumed by replay overflow behind the unreplayed backlog', async () => {
+    const { manager, pty, sent, cwd } = await fixture(64, {
+      consumerBytes: 4, hostBytes: 8
+    })
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION,
+      cwd, executable: process.execPath, argv: [], cols: 80, rows: 24
+    })
+    pty.emit('abcd')
+    pty.emit('efgh')
+    pty.emit('ij')
+    pty.emit('k')
+    const resume = pty.resume.bind(pty)
+    pty.resume = () => {
+      pty.resume = resume
+      resume()
+      pty.emit('N')
+    }
+    const first = manager.attach(created)
+    manager.activateAttachment(first.attachmentId)
+    expect(manager.hasAttachment(first.attachmentId)).toBe(false)
+
+    const replacement = manager.attach(created)
+    manager.activateAttachment(replacement.attachmentId)
+    manager.acknowledge({ attachmentId: replacement.attachmentId, streamSeq: 0 })
+
+    expect(terminalOutput(sent, replacement.attachmentId)).toEqual(encoder.encode('efghijkN'))
   })
 
   it('revokes a stalled attachment after the acknowledgement deadline and continues draining without a view', async () => {
@@ -3600,12 +3790,14 @@ describe('conversation identity reported by the harness', () => {
   const OBSERVED = '01a0b657-21a8-7f00-addd-b73646828f5b'
   const OTHER = '01a0b659-2862-7d93-a4c5-bc1bd2a47915'
 
-  async function codexFixture(argv: readonly string[] = [], names: readonly string[] = ['Codex'], agent = 'codex'): Promise<{
+  async function codexFixture(argv: readonly string[] = [], names: readonly string[] = ['Codex'], agent = 'codex',
+    graphics: 'sixel' | 'standard' | null = null, bundledTerminfo = false): Promise<{
     manager: SessionManager
     store: FakeStore
     executable: string
     cwd: string
     spawns: Array<{ executable: string; argv: readonly string[] }>
+    environments: Array<Readonly<Record<string, string | undefined>>>
     ptys: FakePty[]
     sessions: Array<SessionIdentity & { binding: PersistedConversationBinding }>
   }> {
@@ -3616,11 +3808,16 @@ describe('conversation identity reported by the harness', () => {
     await chmod(executable, 0o700)
     const store = new FakeStore()
     const spawns: Array<{ executable: string; argv: readonly string[] }> = []
+    const environments: Array<Readonly<Record<string, string | undefined>>> = []
     const ptys: FakePty[] = []
+    const asset = bundledTerminfo ? installBundledTerminfo(cwd,
+      fileURLToPath(new URL('../../resources/terminfo/x/xterm-sixel-256color', import.meta.url))) : undefined
     const manager = new SessionManager({
       store,
-      spawnPty: (command, spawnArgv) => {
+      ...(asset ? { terminfoAsset: asset } : {}),
+      spawnPty: (command, spawnArgv, options) => {
         spawns.push({ executable: command, argv: [...spawnArgv] })
+        environments.push(options.env)
         const pty = new FakePty()
         ptys.push(pty)
         return pty
@@ -3632,10 +3829,11 @@ describe('conversation identity reported by the harness', () => {
     const sessions = []
     for (const name of names) {
       sessions.push(await manager.create({
-        ...DEFAULT_SESSION_CREATION, name, cwd, executable, argv: [...argv], cols: 80, rows: 24
+        ...DEFAULT_SESSION_CREATION, name, cwd, executable, argv: [...argv], cols: 80, rows: 24,
+        terminalGraphics: graphics
       }))
     }
-    return { manager, store, executable, cwd, spawns, ptys, sessions }
+    return { manager, store, executable, cwd, spawns, environments, ptys, sessions }
   }
 
   it('binds an unsupported Codex session from its own word and resumes the conversation it named', async () => {
@@ -3672,6 +3870,35 @@ describe('conversation identity reported by the harness', () => {
       executable: fixture.executable,
       argv: ['resume', OBSERVED, '--model', 'gpt-6']
     })
+  })
+
+  it('takes Codex resume and Start again TERM from the current stored graphics choice', async () => {
+    const fixture = await codexFixture([], ['Codex'], 'codex', null, true)
+    const created = fixture.sessions[0]!
+    expect(fixture.environments[0]?.TERM).toBe('xterm-sixel-256color')
+    await fixture.manager.observeConversation({
+      sessionId: created.sessionId, incarnationId: created.incarnationId,
+      agentCli: 'codex', conversationReference: OBSERVED, source: 'startup'
+    })
+    fixture.ptys[0]!.emitExit({ exitCode: 0 })
+    await vi.waitFor(async () => expect((await fixture.manager.health()).liveSessions).toBe(0))
+    await fixture.manager.resume({ sessionId: created.sessionId, cols: 80, rows: 24 })
+    expect(fixture.environments.at(-1)?.TERM).toBe('xterm-sixel-256color')
+    fixture.ptys[1]!.emitExit({ exitCode: 0 })
+    await vi.waitFor(async () => expect((await fixture.manager.health()).liveSessions).toBe(0))
+    fixture.store.startingRecords[0]!.terminalGraphics = 'standard'
+    await fixture.manager.resume({ sessionId: created.sessionId, cols: 80, rows: 24 })
+    expect(fixture.environments.at(-1)?.TERM).toBe('xterm-256color')
+    fixture.ptys[2]!.emitExit({ exitCode: 0 })
+    await vi.waitFor(async () => expect((await fixture.manager.health()).liveSessions).toBe(0))
+    fixture.store.startingRecords[0]!.terminalGraphics = 'sixel'
+    await fixture.manager.relaunch({ sessionId: created.sessionId, cols: 80, rows: 24 })
+    expect(fixture.environments.at(-1)?.TERM).toBe('xterm-sixel-256color')
+    fixture.ptys[3]!.emitExit({ exitCode: 0 })
+    await vi.waitFor(async () => expect((await fixture.manager.health()).liveSessions).toBe(0))
+    await writeFile(join(fixture.cwd, 'terminfo', 'x', 'xterm-sixel-256color'), 'damaged')
+    await fixture.manager.resume({ sessionId: created.sessionId, cols: 80, rows: 24 })
+    expect(fixture.environments.at(-1)?.TERM).toBe('xterm-256color')
   })
 
   it('refreshes the capture time when the harness repeats the conversation it already reported', async () => {
@@ -4589,4 +4816,279 @@ describe('resuming what a lifecycle stop interrupted', () => {
       database.close()
     }
   })
+})
+
+/**
+ * Test-only provenance: every frame a framer emits is tagged with its offset in that framer's
+ * stream, and every frame a view's queue accepts after synchronizing is recorded as a span of
+ * the stream. A view's bytes can then be checked against where they came from, not only
+ * against matching content.
+ */
+function recordViewSpans(): { spans(attachmentId: string): Array<{ start: number; length: number }> } {
+  const streamed = new WeakMap<TerminalByteFramer, number>()
+  const origins = new WeakMap<ArrayBufferLike, number>()
+  const tag = (framer: TerminalByteFramer, frames: TerminalFrame[]): TerminalFrame[] => {
+    let offset = streamed.get(framer) ?? 0
+    for (const frame of frames) {
+      origins.set(frame.bytes.buffer, offset - frame.bytes.byteOffset)
+      offset += frame.bytes.byteLength
+    }
+    streamed.set(framer, offset)
+    return frames
+  }
+  const push = TerminalByteFramer.prototype.push
+  const flush = TerminalByteFramer.prototype.flush
+  vi.spyOn(TerminalByteFramer.prototype, 'push').mockImplementation(function (this: TerminalByteFramer, bytes) {
+    return tag(this, push.call(this, bytes))
+  })
+  vi.spyOn(TerminalByteFramer.prototype, 'flush').mockImplementation(function (this: TerminalByteFramer) {
+    return tag(this, flush.call(this))
+  })
+  const views = new Map<string, Array<{ start: number; length: number }>>()
+  const queue = HostOutputQueue.prototype as unknown as {
+    synchronize(frame: TerminalFrame): TerminalFrame | undefined
+  }
+  const synchronize = queue.synchronize
+  vi.spyOn(queue, 'synchronize').mockImplementation(function (this: { options: { attachmentId: string } }, frame) {
+    const accepted = synchronize.call(this, frame)
+    if (accepted) {
+      const origin = origins.get(accepted.bytes.buffer)
+      if (origin === undefined) throw new Error('a view accepted a frame no framer emitted')
+      const spans = views.get(this.options.attachmentId) ?? []
+      spans.push({ start: origin + accepted.bytes.byteOffset, length: accepted.bytes.byteLength })
+      views.set(this.options.attachmentId, spans)
+    }
+    return accepted
+  })
+  return { spans: (attachmentId) => views.get(attachmentId) ?? [] }
+}
+
+describe('terminal replay across view changes', () => {
+  const DCS_HEADER = '\u001bP9;1;0q'
+
+  async function liveShell(
+    undeliveredOutputLimitBytes?: number,
+    outputQueueLimits?: { consumerBytes: number; hostBytes: number }
+  ) {
+    const context = await fixture(undeliveredOutputLimitBytes, outputQueueLimits)
+    const created = await context.manager.create({ ...DEFAULT_SESSION_CREATION,
+      cwd: context.cwd, executable: process.execPath, argv: [], cols: 80, rows: 24
+    })
+    return { ...context, created }
+  }
+
+  it('strips a Sixel continuation left buffered after replay overflow revokes a view', async () => {
+    const { manager, pty, sent, created } = await liveShell(undefined, {
+      consumerBytes: 65_537, hostBytes: 65_537
+    })
+    // Three frames: the 64 KiB parser atom with the header, one more atom, then the terminator.
+    pty.emit(`${DCS_HEADER}${'~'.repeat(65_537 - DCS_HEADER.length)}`)
+    pty.emit('~'.repeat(65_537))
+    pty.emit(`${'~'.repeat(6_900)}\u001b\\safe-after-image`)
+    const first = manager.attach(created)
+    manager.activateAttachment(first.attachmentId)
+    expect(terminalOutput(sent, first.attachmentId).byteLength).toBe(65_536)
+    expect(manager.hasAttachment(first.attachmentId)).toBe(false)
+
+    const replacement = manager.attach(created)
+    const activation = manager.activateAttachment(replacement.attachmentId)
+    const fresh = encoder.encode(`${DCS_HEADER}"1;1;1;1#1~\u001b\\`)
+    pty.emit(fresh)
+
+    expect(activation.undeliveredOutput.truncated).toBe(true)
+    expect(terminalOutput(sent, replacement.attachmentId)).toEqual(
+      Uint8Array.of(...encoder.encode('\u001b\\safe-after-image'), ...fresh)
+    )
+  })
+
+  it('resumes a replacement view at an ST whose ESC reached the parser atom edge', async () => {
+    const { manager, pty, sent, created } = await liveShell()
+    const first = manager.attach(created)
+    manager.activateAttachment(first.attachmentId)
+    // The header and payload fill one 64 KiB parser atom; the ESC starts the next frame.
+    pty.emit(`${DCS_HEADER}${'~'.repeat(65_536 - DCS_HEADER.length)}\u001b`)
+    expect(terminalOutput(sent, first.attachmentId).byteLength).toBe(65_536)
+    manager.detach({ attachmentId: first.attachmentId })
+    pty.emit('\\safe-after-image')
+    const replacement = manager.attach(created)
+    manager.activateAttachment(replacement.attachmentId)
+
+    expect(terminalOutput(sent, replacement.attachmentId)).toEqual(encoder.encode('\u001b\\safe-after-image'))
+  })
+
+  it.each([
+    ['CAN at the parser atom edge', true, '\u0018'],
+    ['SUB at the parser atom edge', true, '\u001a'],
+    ['CAN inside the continuation', false, '\u0018'],
+    ['SUB inside the continuation', false, '\u001a'],
+    ['a shell prompt after an interrupted image', false, '[01;32muser@host\u001b[0m$ ']
+  ])('keeps text and a fresh image after ESC ends a string with %s', async (_name, atEdge, after) => {
+    const { manager, pty, sent, created } = await liveShell()
+    const first = manager.attach(created)
+    manager.activateAttachment(first.attachmentId)
+    const payload = '~'.repeat(65_536 - DCS_HEADER.length)
+    pty.emit(atEdge ? `${DCS_HEADER}${payload}\u001b` : `${DCS_HEADER}${payload}~`)
+    manager.detach({ attachmentId: first.attachmentId })
+    const fresh = `${DCS_HEADER}"1;1;1;1#1~\u001b\\`
+    const tail = `${after}safe-after-cancel${fresh}later`
+    pty.emit(atEdge ? tail : `~~\u001b${tail}`)
+    const replacement = manager.attach(created)
+    manager.activateAttachment(replacement.attachmentId)
+
+    expect(terminalOutput(sent, replacement.attachmentId)).toEqual(encoder.encode(`\u001b${tail}`))
+  })
+
+  // xterm executes a C0 control, or ignores DEL, after ESC and stays in the sequence, so `P` then
+  // starts a DCS. These five controls leaked `PqLEAK` into a replacement view before.
+  it.each([
+    ['LF', '\n'],
+    ['CR', '\r'],
+    ['TAB', '\t'],
+    ['BEL', '\u0007'],
+    ['DEL', '\u007f']
+  ])('keeps a DCS that ESC %s P starts out of a replacement view as text', async (_name, control) => {
+    const { manager, pty, sent, created } = await liveShell()
+    const first = manager.attach(created)
+    manager.activateAttachment(first.attachmentId)
+    pty.emit(`\u001bPq${'~'.repeat(65_534)}`)
+    // The old view reads as far as the control; the replacement starts with the output after it.
+    pty.emit(`\u001b${control}`)
+    manager.detach({ attachmentId: first.attachmentId })
+    pty.emit('PqLEAK\u001b\\after')
+    const replacement = manager.attach(created)
+    manager.activateAttachment(replacement.attachmentId)
+
+    expect(new TextDecoder().decode(terminalOutput(sent, replacement.attachmentId)))
+      .toBe(`\u001b${control}PqLEAK\u001b\\after`)
+  })
+
+  /**
+   * Output random in content and in how it is read and viewed. Each view's bytes must be one
+   * exact range of the stream, later than any earlier view's, starting where a fresh xterm
+   * parser reads on as xterm reading the whole stream does.
+   */
+  it.each(Array.from({ length: 72 }, (_, index) => index + 1))(
+    'gives every view an exact stream range that a fresh xterm reads as the whole stream does (seed %i)',
+    async (seed) => {
+      const random = seeded(seed)
+      const consumerBytes = pick(random, [4, 7, 4_096, 65_537, 131_072])
+      const hostBytes = pick(random, consumerBytes > 70_000 ? [140_000, 262_144] : [70_000, 140_000, 262_144])
+      // A frame is at most one retained 64 KiB atom plus one PTY read, so every frame fits the host queue.
+      const largestRead = hostBytes - 65_600
+      const limit = consumerBytes < 4_096 ? 10_240 : pick(random, [10_240, 150_000, 300_000])
+      // Rare activations let a view-less backlog span several atoms of one string before replay.
+      const activationRate = pick(random, [0.01, 0.03, 0.08, 0.16])
+      const provenance = recordViewSpans()
+      const { manager, pty, sent, created } = await liveShell(limit, { consumerBytes, hostBytes })
+      const output = generatedTerminalOutput(random, { segments: 60, largestString: 200_000 })
+      const suffix = encoder.encode(`after-everything${DCS_HEADER}~?AB\u001b\\final-text`)
+      const stream = Buffer.concat([output, suffix])
+      // The same reads through a second framer give each frame's offset and fresh start.
+      const shadow = new TerminalByteFramer()
+      const freshStarts: number[] = []
+      let framed = 0
+      const read = (bytes: Uint8Array) => {
+        for (const emitted of shadow.push(bytes)) {
+          if (emitted.freshStart !== null) freshStarts.push(framed + emitted.freshStart)
+          framed += emitted.bytes.byteLength
+        }
+        pty.emit(bytes)
+      }
+      const views: string[] = []
+      const acknowledged = new Map<string, number>()
+      const published = new Map<string, number>()
+      let scanned = 0
+      let current: string | undefined
+      const observe = () => {
+        for (; scanned < sent.length; scanned += 1) {
+          const message = sent[scanned]!
+          if (message.kind === 'terminal-output') {
+            published.set(message.attachmentId, (published.get(message.attachmentId) ?? 0) + 1)
+          }
+        }
+        if (current && !manager.hasAttachment(current)) current = undefined
+      }
+      const acknowledge = (id: string, count: number) => {
+        for (let step = 0; step < count && manager.hasAttachment(id); step += 1) {
+          observe()
+          const next = acknowledged.get(id) ?? 0
+          if (next >= (published.get(id) ?? 0)) return
+          manager.acknowledge({ attachmentId: id, streamSeq: next })
+          acknowledged.set(id, next + 1)
+        }
+        observe()
+      }
+      const activate = () => {
+        const attached = manager.attach(created)
+        views.push(attached.attachmentId)
+        current = attached.attachmentId
+        manager.activateAttachment(attached.attachmentId)
+        observe()
+      }
+      let position = 0
+      while (position < output.byteLength) {
+        const roll = random()
+        if (roll < activationRate) {
+          if (!current) activate()
+        } else if (roll < 0.5) {
+          const size = random()
+          const end = Math.min(output.byteLength, position + (size < 0.5
+            ? 1 + Math.floor(random() * 500)
+            : size < 0.85 ? 500 + Math.floor(random() * 8_000) : 500 + Math.floor(random() * (largestRead - 500))))
+          read(output.subarray(position, end))
+          position = end
+          observe()
+        } else if (roll < 0.75) {
+          if (current) acknowledge(current, 1 + Math.floor(random() * 3))
+        } else if (roll < 0.85) {
+          if (current) manager.detach({ attachmentId: current })
+          observe()
+        } else if (roll < 0.9) {
+          manager.rendererDisconnected()
+          observe()
+        } else if (roll < 0.95 && !current) {
+          manager.detach({ attachmentId: manager.attach(created).attachmentId })
+        }
+      }
+
+      if (current) manager.detach({ attachmentId: current })
+      observe()
+      for (let round = 0; round < 64 && !current; round += 1) {
+        activate()
+        if (current) acknowledge(current, Number.MAX_SAFE_INTEGER)
+      }
+      expect(current).toBeDefined()
+      read(suffix)
+      acknowledge(current!, Number.MAX_SAFE_INTEGER)
+      expect(manager.hasAttachment(current!)).toBe(true)
+      // An unfinished string may swallow `after-everything`; the fresh image and text after it always arrive.
+      const image = encoder.encode(`${DCS_HEADER}~?AB\u001b\\final-text`)
+      const finalOutput = Buffer.from(terminalOutput(sent, current!))
+      expect(finalOutput.subarray(finalOutput.byteLength - image.byteLength).equals(image), 'fresh image and text').toBe(true)
+
+      const reference = new XtermStream(stream)
+      try {
+        let earliest = 0
+        for (const [index, id] of views.entries()) {
+          const received = Buffer.from(terminalOutput(sent, id))
+          if (received.byteLength === 0) continue
+          const label = `seed ${seed} view ${index}`
+          // Where the view's bytes came from: frames that follow each other in the stream.
+          const spans = provenance.spans(id)
+          const start = spans[0]?.start ?? -1
+          for (const [next, span] of spans.entries()) {
+            if (next > 0) expect(span.start, `${label}: frame ${next} does not follow the one before`).toBe(spans[next - 1]!.start + spans[next - 1]!.length)
+          }
+          expect(stream.subarray(start, start + received.byteLength).equals(received), `${label}: bytes differ from their stream range`).toBe(true)
+          expect(freshStarts, `${label}: starts where no frame recorded a fresh start`).toContain(start)
+          expect(start, `${label}: starts before the previous view's end`).toBeGreaterThanOrEqual(earliest)
+          expect(reference.freshStartProblem(start), label).toBeUndefined()
+          earliest = start + received.byteLength
+        }
+      } finally {
+        reference.dispose()
+        vi.restoreAllMocks()
+      }
+    }
+  )
 })

@@ -154,6 +154,8 @@ function handle(request: WorkerRequest): unknown {
           params.backgroundChoice === 'hide' || params.backgroundChoice === 'stop'
             ? params.backgroundChoice
             : null,
+        terminalGraphics: params.terminalGraphics === 'sixel' || params.terminalGraphics === 'standard'
+          ? params.terminalGraphics : null,
         processStartIdentity: requiredString(params, 'processStartIdentity'),
         startedAt: requiredString(params, 'startedAt'),
         binding: params.binding as never

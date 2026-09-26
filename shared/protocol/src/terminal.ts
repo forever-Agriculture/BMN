@@ -5,6 +5,25 @@ import { isLifecycleStopCause, type LifecycleStopCause } from './workspace'
 export const CONSUMER_OUTPUT_QUEUE_BYTES = 4 * 1024 * 1024
 export const PTY_HOST_OUTPUT_QUEUE_BYTES = 16 * 1024 * 1024
 export const TERMINAL_PARSER_ATOM_BYTES = 64 * 1024
+/** xterm 6.0 parses a longer write in pieces of this many bytes, cut wherever that falls. */
+export const TERMINAL_WRITE_BYTES = 128 * 1024
+
+/**
+ * The last offset at or before `end` where output can be cut into separate xterm writes that
+ * read as the uncut bytes do. xterm 6.0's UTF-8 decoder counts the bytes it kept from a split
+ * character with `& 0x3F`, so a character cut right after a 0x80 byte is dropped. A cut goes
+ * before a byte that does not continue a character, or where every byte since three bytes back
+ * (or since `start`) does, as no character is then open. `start` must be such a point; it is
+ * returned when no later one is found.
+ */
+export function terminalWriteCut(bytes: Uint8Array, start: number, end: number): number {
+  if (end >= bytes.byteLength) return bytes.byteLength
+  for (let cut = end; cut > start; cut -= 1) {
+    if ((bytes[cut]! & 0xc0) !== 0x80) return cut
+    if (end - cut === 3) return end
+  }
+  return (bytes[start]! & 0xc0) === 0x80 ? end : start
+}
 // Output produced without a streaming attachment is retained only for the next view.
 export const TERMINAL_UNDELIVERED_OUTPUT_BYTES = 16 * 1024 * 1024
 export const TERMINAL_ACKNOWLEDGEMENT_DEADLINE_MS = 5_000

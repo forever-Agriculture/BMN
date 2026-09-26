@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
+import { existsSync } from 'node:fs'
 import {
   ERROR_CODES,
   METHOD_REGISTRY,
@@ -40,6 +41,7 @@ import { inspectRepositoryIdentity } from './repository-identity'
 import { LaunchSetCoordinator } from './launch-set-coordinator'
 import { nativeLoadFailureMessage } from './native-load-error'
 import { ensureApplicationRoots, resolveApplicationRoots } from './roots'
+import { installBundledTerminfo } from './terminal-graphics'
 import { FileSavedOutputStore } from './saved-output-store'
 import { routeTerminalSavedOutputGet } from './saved-output-route'
 import {
@@ -236,6 +238,15 @@ async function purgeExpiredArchives(
 async function start(): Promise<void> {
   const roots = resolveApplicationRoots()
   await ensureApplicationRoots(roots)
+  const packagedTerminfo = join(process.resourcesPath, 'terminfo', 'x', 'xterm-sixel-256color')
+  const developmentTerminfo = join(__dirname, '..', '..', 'resources', 'terminfo', 'x', 'xterm-sixel-256color')
+  let terminfoAsset
+  try {
+    terminfoAsset = installBundledTerminfo(roots.data,
+      existsSync(packagedTerminfo) ? packagedTerminfo : developmentTerminfo)
+  } catch {
+    // A missing asset leaves every new process on the standard TERM.
+  }
   const database = new DatabaseWorkerClient(
     join(__dirname, 'database-worker.js'),
     join(roots.data, 'state.sqlite3')
@@ -248,6 +259,7 @@ async function start(): Promise<void> {
   // The manager's callbacks run before the companion exists, so they read it through a holder.
   const companionHolder: { current?: CompanionService } = {}
   const manager = new SessionManager({
+    ...(terminfoAsset ? { terminfoAsset } : {}),
     store: database,
     savedOutputStore,
     spawnPty: (executable, argv, options) =>
@@ -403,6 +415,7 @@ async function start(): Promise<void> {
           workspaceId: params.workspaceId,
           name: params.name,
           ...('backgroundChoice' in params ? { backgroundChoice: params.backgroundChoice ?? null } : {}),
+          ...('terminalGraphics' in params ? { terminalGraphics: params.terminalGraphics ?? null } : {}),
           cwd: stringValue(params, 'cwd'),
           executable: stringValue(params, 'executable'),
           argv: params.argv,

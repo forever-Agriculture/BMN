@@ -3,9 +3,11 @@ import {
   MAX_TERMINAL_CHUNK_BYTES,
   PTY_HOST_OUTPUT_QUEUE_BYTES,
   TERMINAL_ACKNOWLEDGEMENT_DEADLINE_MS,
+  terminalWriteCut,
   type TerminalOutputMessage
 } from '@bmn/protocol'
 import type { TerminalViewDisconnectReason } from '@bmn/protocol'
+import type { TerminalFrame } from './terminal-byte-framer'
 
 interface HostOutputQueueOptions {
   attachmentId: string
@@ -19,12 +21,12 @@ interface HostOutputQueueOptions {
 }
 
 interface PendingFrame {
-  bytes: Uint8Array
+  frame: TerminalFrame
   offset: number
 }
 
 export interface HostOutputQueueTransition {
-  unsentFrames: Uint8Array[]
+  unsentFrames: TerminalFrame[]
   discardedPartialFrameBytes: number
 }
 
@@ -43,22 +45,36 @@ export class HostOutputQueue {
   private draining = false
   private stallTimer: ReturnType<typeof setTimeout> | undefined
   private readonly publicationWaiters = new Set<() => void>()
+  /** False until this view's stream reaches a point a fresh terminal parser can start from. */
+  private synchronized = false
+  private skipped = 0
 
   constructor(private readonly options: HostOutputQueueOptions) {
     this.consumerBytes = options.consumerBytes ?? CONSUMER_OUTPUT_QUEUE_BYTES
+    // Chunks end between characters, so a view's credit must hold the longest UTF-8 character.
+    if (!Number.isInteger(this.consumerBytes) || this.consumerBytes < 4) {
+      throw new RangeError('A terminal view needs at least 4 bytes of output credit')
+    }
     this.hostBytes = options.hostBytes ?? PTY_HOST_OUTPUT_QUEUE_BYTES
     this.acknowledgementDeadlineMs =
       options.acknowledgementDeadlineMs ?? TERMINAL_ACKNOWLEDGEMENT_DEADLINE_MS
   }
 
-  enqueue(bytes: Uint8Array): void {
+  /** Bytes this view skipped before the first point where its fresh parser could start. */
+  get skippedBytes(): number {
+    return this.skipped
+  }
+
+  enqueue(output: TerminalFrame): void {
     if (this.disconnected) return
-    if (this.inFlightBytes + this.pendingBytes + bytes.byteLength > this.hostBytes) {
-      this.disconnect('output-overflow', [bytes])
+    const frame = this.synchronize(output)
+    if (!frame) return
+    if (this.inFlightBytes + this.pendingBytes + frame.bytes.byteLength > this.hostBytes) {
+      this.disconnect('output-overflow', [frame])
       return
     }
-    this.pending.push({ bytes, offset: 0 })
-    this.pendingBytes += bytes.byteLength
+    this.pending.push({ frame, offset: 0 })
+    this.pendingBytes += frame.bytes.byteLength
     this.drain()
   }
 
@@ -86,16 +102,16 @@ export class HostOutputQueue {
   }
 
   close(
-    additionalUnsentFrames: readonly Uint8Array[] = [],
+    additionalUnsentFrames: readonly TerminalFrame[] = [],
     accept: (transition: HostOutputQueueTransition) => void = () => undefined
   ): HostOutputQueueTransition {
     const transition: HostOutputQueueTransition = {
       unsentFrames: [],
       discardedPartialFrameBytes: 0
     }
-    for (const frame of this.pending) {
-      if (frame.offset === 0) transition.unsentFrames.push(frame.bytes)
-      else transition.discardedPartialFrameBytes += frame.bytes.byteLength - frame.offset
+    for (const pending of this.pending) {
+      if (pending.offset === 0) transition.unsentFrames.push(pending.frame)
+      else transition.discardedPartialFrameBytes += pending.frame.bytes.byteLength - pending.offset
     }
     transition.unsentFrames.push(...additionalUnsentFrames)
     this.clearStallDeadline()
@@ -114,23 +130,45 @@ export class HostOutputQueue {
     return transition
   }
 
+  /**
+   * A view's parser starts in its ground state, so the view starts where its frame says such
+   * a parser reads the stream as a parser that read all of it does. Before that point, bytes
+   * such as a string whose introducer the view never received would be misread. Once
+   * synchronized, the view's frames are contiguous and pass unchanged.
+   */
+  private synchronize(frame: TerminalFrame): TerminalFrame | undefined {
+    if (this.synchronized) return frame
+    const start = frame.freshStart
+    if (start === null) {
+      this.skipped += frame.bytes.byteLength
+      return undefined
+    }
+    this.synchronized = true
+    this.skipped += start
+    if (start === 0) return frame
+    return start === frame.bytes.byteLength
+      ? undefined
+      : { bytes: frame.bytes.subarray(start), freshStart: 0 }
+  }
+
   private drain(): void {
     if (this.draining || this.disconnected) return
     this.draining = true
     try {
       while (this.pending.length > 0) {
-        const frame = this.pending[0]!
+        const pending = this.pending[0]!
+        const bytes = pending.frame.bytes
         const available = this.consumerBytes - this.inFlightBytes
         if (available <= 0) break
-        const chunkBytes = Math.min(
-          MAX_TERMINAL_CHUNK_BYTES,
-          available,
-          frame.bytes.byteLength - frame.offset
-        )
-        const chunk = frame.bytes.slice(frame.offset, frame.offset + chunkBytes)
-        frame.offset += chunkBytes
+        const limit = pending.offset + Math.min(MAX_TERMINAL_CHUNK_BYTES, available)
+        const end = terminalWriteCut(bytes, pending.offset, limit)
+        // Too little credit for the next whole character: acknowledgements free more.
+        if (end === pending.offset) break
+        const chunkBytes = end - pending.offset
+        const chunk = bytes.slice(pending.offset, pending.offset + chunkBytes)
+        pending.offset += chunkBytes
         this.pendingBytes -= chunkBytes
-        if (frame.offset === frame.bytes.byteLength) this.pending.shift()
+        if (pending.offset === bytes.byteLength) this.pending.shift()
         const streamSeq = this.nextSequence++
         this.sizes.set(streamSeq, chunk.byteLength)
         this.inFlightBytes += chunk.byteLength
@@ -182,7 +220,7 @@ export class HostOutputQueue {
 
   private disconnect(
     reason: TerminalViewDisconnectReason = 'output-overflow',
-    additionalUnsentFrames: readonly Uint8Array[] = []
+    additionalUnsentFrames: readonly TerminalFrame[] = []
   ): void {
     this.close(additionalUnsentFrames, (transition) => {
       this.options.disconnect(reason, transition)

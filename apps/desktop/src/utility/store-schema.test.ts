@@ -20,9 +20,9 @@ afterEach(async () => {
 })
 
 describe('owned database schema', () => {
-  it('contains the fifteen ordered migrations and only the owned tables', () => {
+  it('contains the sixteen ordered migrations and only the owned tables', () => {
     expect(DATABASE_MIGRATIONS.map((migration) => migration.version))
-      .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])
+      .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
     expect(STORY_SCHEMA_TABLES).toEqual([
       'app_setting',
       'artifact',
@@ -189,7 +189,8 @@ describe('owned database schema', () => {
         .toEqual([
           { version: 1 }, { version: 2 }, { version: 3 }, { version: 4 },
           { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 },
-          { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 }, { version: 15 }
+          { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 },
+          { version: 15 }, { version: 16 }
         ])
       expect(database.prepare('SELECT applied_at FROM schema_migration WHERE version = 3').get())
         .toEqual({ applied_at: migratedAt })
@@ -300,7 +301,8 @@ describe('owned database schema', () => {
           { version: 12, applied_at: migratedAt },
           { version: 13, applied_at: migratedAt },
           { version: 14, applied_at: migratedAt },
-          { version: 15, applied_at: migratedAt }
+          { version: 15, applied_at: migratedAt },
+          { version: 16, applied_at: migratedAt }
         ])
       expect(database.prepare('SELECT COUNT(*) AS count FROM workspace_layout').get())
         .toEqual({ count: 2 })
@@ -347,7 +349,7 @@ describe('owned database schema', () => {
         state: 'draft'
       })
       expect(database.prepare('SELECT version FROM schema_migration ORDER BY version DESC LIMIT 1').get())
-        .toEqual({ version: 15 })
+        .toEqual({ version: 16 })
     } finally {
       database.close()
     }
@@ -547,7 +549,7 @@ describe('owned database schema', () => {
   })
 })
 
-it('upgrades schema 14 additively without seeding launch sets or changing templates', () => {
+it('upgrades schema 14 additively without seeding launch sets or changing template definitions', () => {
   const database = new BetterSqlite3(':memory:')
   try {
     for (const migration of DATABASE_MIGRATIONS.filter((item) => item.version <= 14)) {
@@ -559,7 +561,9 @@ it('upgrades schema 14 additively without seeding launch sets or changing templa
     const before = database.prepare('SELECT * FROM launch_template').all()
     initializeDatabase(database, '2026-09-24T00:00:00.000Z')
     expect(database.prepare('SELECT * FROM launch_set').all()).toEqual([])
-    expect(database.prepare('SELECT * FROM launch_template').all()).toEqual(before)
+    expect(database.prepare('SELECT * FROM launch_template').all()).toEqual(
+      before.map((row) => ({ ...row as object, terminal_graphics: null }))
+    )
     expect(database.pragma('foreign_key_check')).toEqual([])
   } finally { database.close() }
 })

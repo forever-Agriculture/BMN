@@ -1,6 +1,8 @@
 import { failureDetail } from './bridge-error'
 import {
   CONSUMER_OUTPUT_QUEUE_BYTES,
+  TERMINAL_WRITE_BYTES,
+  terminalWriteCut,
   type TerminalOutputMessage,
   type TerminalViewDisconnectReason
 } from '@bmn/protocol'
@@ -86,11 +88,20 @@ export class TerminalOutputFlow {
     this.expectedSequence += 1
     this.queuedBytes += message.bytes.byteLength
     const generation = this.generation
-    actions.write(message.bytes, () => {
-      if (generation !== this.generation || message.attachmentId !== this.attachmentId) return
-      this.queuedBytes -= message.bytes.byteLength
-      actions.acknowledge(message.attachmentId, message.streamSeq)
-    })
+    // Writes no longer than xterm's parse piece, cut between characters, so xterm never cuts one.
+    const bytes = message.bytes
+    let start = 0
+    do {
+      let end = terminalWriteCut(bytes, start, start + TERMINAL_WRITE_BYTES)
+      if (end === start) end = start + TERMINAL_WRITE_BYTES
+      const last = end >= bytes.byteLength
+      actions.write(bytes.subarray(start, end), () => {
+        if (!last || generation !== this.generation || message.attachmentId !== this.attachmentId) return
+        this.queuedBytes -= bytes.byteLength
+        actions.acknowledge(message.attachmentId, message.streamSeq)
+      })
+      start = end
+    } while (start < bytes.byteLength)
     return true
   }
 

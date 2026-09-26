@@ -21,12 +21,14 @@ import {
   type ClosePromptRequest,
   type SessionRecord,
   exactAbsoluteFileReference,
+  effectiveTerminalGraphics,
   isWorkspaceMarker,
   type WorkspaceLayoutState,
   type WorkspaceRecord
 } from '@bmn/protocol'
 import type { RendererCohortResumeResult } from '../../preload/bridge'
 import './styles.css'
+import { checkSixelRenderer } from './terminal-images'
 import { failureDetail } from './bridge-error'
 import { CommandPalette, paletteFileSearchRootLabel, type PaletteCommand } from './command-palette'
 import { conversationBindingPresentation } from './conversation-resume'
@@ -1987,6 +1989,21 @@ function App(): React.JSX.Element {
                     setSessionForm((current) => ({ ...current, backgroundChoice }))
                   }}>{BACKGROUND_CHOICE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
                 </label>
+                <label>Terminal images (Sixel)
+                  <select aria-label="Terminal images (Sixel)" value={sessionForm.terminalGraphics ?? ''}
+                    onChange={(event) => {
+                      const choice = event.target.value
+                      setSessionForm((current) => ({ ...current,
+                        terminalGraphics: choice === 'sixel' || choice === 'standard' ? choice : null }))
+                    }}>
+                    <option value="">Automatic</option>
+                    <option value="sixel">On</option>
+                    <option value="standard">Off</option>
+                  </select>
+                </label>
+                <p className="field-help">Effective: {effectiveTerminalGraphics(sessionForm.terminalGraphics, sessionForm.executable) === 'sixel'
+                  ? 'Sixel images' : 'standard terminal'}. Codex uses images by default; other commands need On.
+                  For SSH, sudo or containers without BMN terminfo, run the command with <code>TERM=xterm-256color</code>.</p>
                 {formError ? <span className="inline-error" role="alert">{formError}</span> : null}
                 <div className="actions">
                   <button type="submit" className="primary" disabled={!editingSessionId && (formRepository.loading || !formRepository.identity)}>
@@ -2295,4 +2312,5 @@ function App(): React.JSX.Element {
 
 const root = document.getElementById('root')
 if (!root) throw new Error('renderer root is missing')
+void checkSixelRenderer()
 createRoot(root).render(<App />)

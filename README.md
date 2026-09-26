@@ -31,7 +31,8 @@ feature stops. This page sums up the product and how to install it.
 - **Real terminals.** Each session is a real PTY rendered by one live
   [xterm.js](https://xtermjs.org/) view. There is no tmux layer and no replayed output, so key
   encodings, colors, bell and OSC notifications reach the program unchanged. Your CLIs keep their
-  own configuration, authentication, hooks and permissions.
+  own configuration, authentication, hooks and permissions. Live panes support Sixel images;
+  direct Codex sessions choose them automatically, and shells can opt in when starting Codex inside.
   ([The terminal and panes](docs/features.md#the-terminal-and-panes))
 - **Process control and resume.** Stop a process and keep its last screen as saved output. Start it
   again, or resume the stored Claude Code / Codex / OpenCode conversation through the CLI's own

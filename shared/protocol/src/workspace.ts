@@ -21,6 +21,13 @@ export function isWorkspaceMarker(value: unknown): value is WorkspaceMarker {
 }
 
 export type BackgroundChoice = 'hide' | 'stop'
+export type TerminalGraphicsChoice = 'sixel' | 'standard' | null
+
+export function effectiveTerminalGraphics(choice: TerminalGraphicsChoice, executable: string): 'sixel' | 'standard' {
+  if (choice !== null) return choice
+  const name = executable.split(/[\\/]/).at(-1)?.toLowerCase()
+  return name === 'codex' || name === 'codex.exe' ? 'sixel' : 'standard'
+}
 export type SessionStopCause =
   | 'explicit'
   | 'application-quit'
@@ -94,6 +101,7 @@ export interface SessionRecord {
   argv: string[]
   position: number
   backgroundChoice: BackgroundChoice | null
+  terminalGraphics: TerminalGraphicsChoice
   revision: number
   createdAt: string
   /** Set while the session is archived: hidden from navigation, with all its data kept. */
@@ -110,6 +118,7 @@ export interface LaunchTemplateRecord {
   argv: string[]
   cwd: string
   backgroundChoice: BackgroundChoice | null
+  terminalGraphics: TerminalGraphicsChoice
   revision: number
   createdAt: string
   /** Actionable reason persisted launch metadata cannot currently be applied. */
@@ -164,6 +173,7 @@ export interface SessionCreateParams {
   cols: number
   rows: number
   backgroundChoice?: BackgroundChoice | null
+  terminalGraphics?: TerminalGraphicsChoice
 }
 
 export interface SessionUpdateParams {
@@ -176,6 +186,7 @@ export interface SessionUpdateParams {
   argv?: string[]
   position?: number
   backgroundChoice?: BackgroundChoice | null
+  terminalGraphics?: TerminalGraphicsChoice
   archived?: boolean
 }
 
@@ -291,6 +302,7 @@ export interface TemplateCreateParams {
   argv: string[]
   cwd: string
   backgroundChoice?: BackgroundChoice | null
+  terminalGraphics?: TerminalGraphicsChoice
 }
 
 export interface LayoutGetParams {
@@ -356,18 +368,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 const WORKSPACE_RECORD_KEYS = ['workspaceId', 'name', 'defaultCwd', 'position', 'marker', 'archivedAt', 'revision'] as const
 const SESSION_RECORD_KEYS = [
-  'sessionId', 'workspaceId', 'name', 'cwd', 'executable', 'argv', 'position', 'backgroundChoice',
+  'sessionId', 'workspaceId', 'name', 'cwd', 'executable', 'argv', 'position', 'backgroundChoice', 'terminalGraphics',
   'revision', 'createdAt', 'archivedAt', 'lastProcess'
 ] as const
 const SESSION_RECORD_OPTIONAL_KEYS = ['launchDisabledReason'] as const
 const SESSION_PROCESS_KEYS = ['incarnationId', 'state', 'exitCode', 'signal', 'detail'] as const
 const TEMPLATE_RECORD_KEYS = [
-  'templateId', 'name', 'executable', 'argv', 'cwd', 'backgroundChoice', 'revision', 'createdAt'
+  'templateId', 'name', 'executable', 'argv', 'cwd', 'backgroundChoice', 'terminalGraphics', 'revision', 'createdAt'
 ] as const
 const TEMPLATE_RECORD_OPTIONAL_KEYS = ['launchDisabledReason'] as const
 const WORKSPACE_UPDATE_FIELDS = ['name', 'defaultCwd', 'position', 'marker', 'archived'] as const
 const SESSION_UPDATE_FIELDS = [
-  'workspaceId', 'name', 'cwd', 'executable', 'argv', 'position', 'backgroundChoice', 'archived'
+  'workspaceId', 'name', 'cwd', 'executable', 'argv', 'position', 'backgroundChoice', 'terminalGraphics', 'archived'
 ] as const
 const SESSION_STOP_KEYS = ['sessionId', 'incarnationId', 'cause'] as const
 const LAYOUT_KEYS = ['workspaceId', 'selectedSessionId', 'split', 'sessionView', 'revision'] as const
@@ -412,6 +424,10 @@ function isNullableText(value: unknown): value is string | null {
 
 function isBackgroundChoice(value: unknown): value is BackgroundChoice | null {
   return value === null || value === 'hide' || value === 'stop'
+}
+
+function isTerminalGraphicsChoice(value: unknown): value is TerminalGraphicsChoice {
+  return value === null || value === 'sixel' || value === 'standard'
 }
 
 function isRfc3339(value: unknown): value is string {
@@ -465,6 +481,7 @@ export function isSessionRecord(value: unknown): value is SessionRecord {
     isStringArray(value.argv) &&
     isPosition(value.position) &&
     isBackgroundChoice(value.backgroundChoice) &&
+    isTerminalGraphicsChoice(value.terminalGraphics) &&
     isRevision(value.revision) &&
     isRfc3339(value.createdAt) &&
     (value.archivedAt === null || isRfc3339(value.archivedAt)) &&
@@ -486,6 +503,7 @@ export function isLaunchTemplateRecord(value: unknown): value is LaunchTemplateR
     isStringArray(value.argv) &&
     typeof value.cwd === 'string' &&
     isBackgroundChoice(value.backgroundChoice) &&
+    isTerminalGraphicsChoice(value.terminalGraphics) &&
     isRevision(value.revision) &&
     isRfc3339(value.createdAt) &&
     (!('launchDisabledReason' in value) ||
@@ -527,7 +545,7 @@ export function isSessionCreateParams(value: unknown): value is SessionCreatePar
     !hasExactKeys(
       value,
       ['workspaceId', 'name', 'cwd', 'executable', 'argv', 'cols', 'rows'],
-      ['backgroundChoice']
+      ['backgroundChoice', 'terminalGraphics']
     )
   ) {
     return false
@@ -536,6 +554,7 @@ export function isSessionCreateParams(value: unknown): value is SessionCreatePar
     isIdentifier(value.workspaceId) &&
     isName(value.name) &&
     (!('backgroundChoice' in value) || isBackgroundChoice(value.backgroundChoice)) &&
+    (!('terminalGraphics' in value) || isTerminalGraphicsChoice(value.terminalGraphics)) &&
     typeof value.cwd === 'string' &&
     isIdentifier(value.executable) &&
     isStringArray(value.argv) &&
@@ -560,6 +579,7 @@ export function isSessionUpdateParams(value: unknown): value is SessionUpdatePar
   if ('argv' in value && !isStringArray(value.argv)) return false
   if ('position' in value && !isPosition(value.position)) return false
   if ('backgroundChoice' in value && !isBackgroundChoice(value.backgroundChoice)) return false
+  if ('terminalGraphics' in value && !isTerminalGraphicsChoice(value.terminalGraphics)) return false
   if ('archived' in value && typeof value.archived !== 'boolean') return false
   return SESSION_UPDATE_FIELDS.some((key) => key in value)
 }
@@ -616,7 +636,7 @@ export function isSessionCohortResumeParams(value: unknown): value is SessionCoh
 export function isTemplateCreateParams(value: unknown): value is TemplateCreateParams {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ['name', 'executable', 'argv', 'cwd'], ['backgroundChoice'])
+    !hasExactKeys(value, ['name', 'executable', 'argv', 'cwd'], ['backgroundChoice', 'terminalGraphics'])
   ) {
     return false
   }
@@ -625,7 +645,8 @@ export function isTemplateCreateParams(value: unknown): value is TemplateCreateP
     isIdentifier(value.executable) &&
     isStringArray(value.argv) &&
     typeof value.cwd === 'string' &&
-    (!('backgroundChoice' in value) || isBackgroundChoice(value.backgroundChoice))
+    (!('backgroundChoice' in value) || isBackgroundChoice(value.backgroundChoice)) &&
+    (!('terminalGraphics' in value) || isTerminalGraphicsChoice(value.terminalGraphics))
   )
 }
 
@@ -691,6 +712,7 @@ export interface LaunchSetEntry {
   executable: string
   argv: string[]
   backgroundChoice: BackgroundChoice | null
+  terminalGraphics: TerminalGraphicsChoice
 }
 export interface LaunchSetCreateParams {
   workspaceId: string
@@ -719,14 +741,14 @@ function isLaunchSetText(value: unknown, max: number, empty = false): value is s
 }
 export function isLaunchSetEntry(value: unknown): value is LaunchSetEntry {
   return isRecord(value) &&
-    hasExactKeys(value, ['entryId', 'name', 'executable', 'argv', 'backgroundChoice']) &&
+    hasExactKeys(value, ['entryId', 'name', 'executable', 'argv', 'backgroundChoice', 'terminalGraphics']) &&
     isLaunchSetText(value.entryId, 128) && isName(value.name) &&
     isLaunchSetText(value.name, WORKSPACE_NAME_MAX_LENGTH) &&
     isLaunchSetText(value.executable, 4096) &&
     isStringArray(value.argv) && value.argv.length <= 256 &&
     value.argv.every((arg) => isLaunchSetText(arg, 16384, true)) &&
     value.argv.reduce((total, arg) => total + arg.length, 0) <= 65536 &&
-    isBackgroundChoice(value.backgroundChoice)
+    isBackgroundChoice(value.backgroundChoice) && isTerminalGraphicsChoice(value.terminalGraphics)
 }
 function isLaunchSetDefinition(value: Record<string, unknown>): boolean {
   return isLaunchSetText(value.workspaceId, 128) &&

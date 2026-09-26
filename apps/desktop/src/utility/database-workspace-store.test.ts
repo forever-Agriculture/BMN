@@ -26,7 +26,7 @@ import {
   updateSession,
   updateWorkspace
 } from './database-workspace-store'
-import { DEFAULT_WORKSPACE_ID } from './store-schema'
+import { DATABASE_MIGRATIONS, DEFAULT_WORKSPACE_ID } from './store-schema'
 
 const testRequire = createRequire(import.meta.url)
 const BetterSqlite3 = testRequire('better-sqlite3') as new (path: string) => DatabaseConnection
@@ -835,7 +835,8 @@ describe('workspace identity marker', () => {
 })
 
 describe('copied launch set definitions', () => {
-  const entry = { entryId: 'entry-a', name: 'Shell', executable: '/bin/sh', argv: ['-c', 'printf "a b"'], backgroundChoice: null }
+  const entry = { entryId: 'entry-a', name: 'Shell', executable: '/bin/sh', argv: ['-c', 'printf "a b"'],
+    backgroundChoice: null, terminalGraphics: null }
   const params = { workspaceId: DEFAULT_WORKSPACE_ID, name: 'Daily', entries: [entry] }
   it('persists copied commands, stable IDs, ordered edits and revision-checked deletion', () => {
     const db = new BetterSqlite3(':memory:')
@@ -843,7 +844,8 @@ describe('copied launch set definitions', () => {
       initializeDatabase(db, now)
       expect(listLaunchSets(db, DEFAULT_WORKSPACE_ID)).toEqual([])
       const template = createTemplate(db, { cwd: '/template', name: 'Shell', executable: entry.executable, argv: entry.argv }, 'template-copy', now)
-      const copied = { entryId: entry.entryId, name: template.name, executable: template.executable, argv: template.argv, backgroundChoice: template.backgroundChoice }
+      const copied = { entryId: entry.entryId, name: template.name, executable: template.executable, argv: template.argv,
+        backgroundChoice: template.backgroundChoice, terminalGraphics: template.terminalGraphics }
       const saved = createLaunchSet(db, { ...params, entries: [copied] }, 'set-a', now)
       copied.argv.push('mutated')
       db.prepare('DELETE FROM launch_template WHERE template_id = ?').run(template.templateId)
@@ -896,4 +898,56 @@ describe('copied launch set definitions', () => {
       try { expect(listLaunchSets(copy, params.workspaceId)).toEqual([saved]) } finally { copy.close() }
     } finally { db.close(); await rm(folder, { recursive: true, force: true }) }
   })
+})
+
+it('migrates pre-graphics sessions, templates and ordered launch-set JSON to null choices', () => {
+  const db = new BetterSqlite3(':memory:')
+  try {
+    db.exec('CREATE TABLE schema_migration (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)')
+    for (const migration of DATABASE_MIGRATIONS.filter((item) => item.version < 16)) {
+      db.exec(migration.sql)
+      db.prepare('INSERT INTO schema_migration(version, applied_at) VALUES (?, ?)').run(migration.version, now)
+    }
+    insertSession(db, { sessionId: 'old-codex', workspaceId: DEFAULT_WORKSPACE_ID,
+      position: 0, cwd: '/tmp', argv: [] })
+    db.prepare(`INSERT INTO launch_template(template_id, name, executable, argv_json, cwd,
+      background_choice, revision, created_at) VALUES ('old-template', 'Old', '/bin/bash', '[]', '/tmp', NULL, 1, ?)`)
+      .run(now)
+    const oldEntries = [
+      { entryId: 'first', name: 'Codex', executable: 'codex', argv: ['--help'], backgroundChoice: null },
+      { entryId: 'second', name: 'Shell', executable: '/bin/bash', argv: [], backgroundChoice: 'hide' }
+    ]
+    db.prepare(`INSERT INTO launch_set(set_id, workspace_id, name, entries_json, revision, created_at)
+      VALUES ('old-set', ?, 'Old', ?, 1, ?)`).run(DEFAULT_WORKSPACE_ID, JSON.stringify(oldEntries), now)
+    initializeDatabase(db, now)
+    expect(listSessions(db, DEFAULT_WORKSPACE_ID)[0]?.terminalGraphics).toBeNull()
+    expect(listTemplates(db)[0]?.terminalGraphics).toBeNull()
+    expect(getLaunchSet(db, DEFAULT_WORKSPACE_ID, 'old-set').entries).toEqual(
+      oldEntries.map((entry) => ({ ...entry, terminalGraphics: null }))
+    )
+  } finally { db.close() }
+})
+
+it('leaves damaged legacy launch-set arrays invalid without blocking the graphics migration', () => {
+  const db = new BetterSqlite3(':memory:')
+  try {
+    db.exec('CREATE TABLE schema_migration (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)')
+    for (const migration of DATABASE_MIGRATIONS.filter((item) => item.version < 16)) {
+      db.exec(migration.sql)
+      db.prepare('INSERT INTO schema_migration(version, applied_at) VALUES (?, ?)').run(migration.version, now)
+    }
+    insertSession(db, { sessionId: 'old-session', workspaceId: DEFAULT_WORKSPACE_ID,
+      position: 0, cwd: '/tmp', argv: [] })
+    const invalid = ['["broken entry"]', '[null]', '[42]', 'not json']
+    for (const [index, entries] of invalid.entries()) {
+      db.prepare(`INSERT INTO launch_set(set_id, workspace_id, name, entries_json, revision, created_at)
+        VALUES (?, ?, 'Damaged', ?, 1, ?)`).run(`damaged-${index}`, DEFAULT_WORKSPACE_ID, entries, now)
+    }
+    initializeDatabase(db, now)
+    for (const [index, entries] of invalid.entries()) {
+      expect(db.prepare('SELECT entries_json FROM launch_set WHERE set_id = ?').get(`damaged-${index}`))
+        .toMatchObject({ entries_json: entries })
+      expect(() => getLaunchSet(db, DEFAULT_WORKSPACE_ID, `damaged-${index}`)).toThrow(/invalid/)
+    }
+  } finally { db.close() }
 })

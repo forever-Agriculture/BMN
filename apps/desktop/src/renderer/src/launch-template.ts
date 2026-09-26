@@ -4,7 +4,8 @@ import type {
   LaunchTemplateRecord,
   SessionCreateParams,
   SessionRecord,
-  SessionUpdateParams
+  SessionUpdateParams,
+  TerminalGraphicsChoice
 } from '@bmn/protocol'
 
 export interface SessionLaunchForm {
@@ -13,6 +14,7 @@ export interface SessionLaunchForm {
   argv: string
   cwd: string
   backgroundChoice: BackgroundChoice | null
+  terminalGraphics: TerminalGraphicsChoice
 }
 
 export const INITIAL_SESSION_FORM: SessionLaunchForm = Object.freeze({
@@ -20,7 +22,8 @@ export const INITIAL_SESSION_FORM: SessionLaunchForm = Object.freeze({
   executable: '/bin/bash',
   argv: '',
   cwd: '/',
-  backgroundChoice: null
+  backgroundChoice: null,
+  terminalGraphics: null
 })
 
 export const BACKGROUND_CHOICE_OPTIONS: ReadonlyArray<{ value: '' | BackgroundChoice; label: string }> = [
@@ -40,7 +43,8 @@ export function applyLaunchTemplate(
     executable: template.executable,
     argv: template.argv.join(' '),
     cwd: template.cwd,
-    backgroundChoice: template.backgroundChoice
+    backgroundChoice: template.backgroundChoice,
+    terminalGraphics: form.terminalGraphics ?? template.terminalGraphics
   }
 }
 
@@ -50,7 +54,8 @@ export function sessionLaunchForm(session: SessionRecord): SessionLaunchForm {
     executable: session.executable,
     argv: session.argv.join(' '),
     cwd: session.cwd,
-    backgroundChoice: session.backgroundChoice
+    backgroundChoice: session.backgroundChoice,
+    terminalGraphics: session.terminalGraphics
   }
 }
 
@@ -72,7 +77,8 @@ export function sessionCreateParams(
     argv: formArgv(form),
     cols: size.cols,
     rows: size.rows,
-    backgroundChoice: form.backgroundChoice
+    backgroundChoice: form.backgroundChoice,
+    terminalGraphics: form.terminalGraphics
   }
 }
 
@@ -87,6 +93,7 @@ export function sessionUpdateParams(
     cwd: form.cwd,
     executable: form.executable,
     argv: formArgv(form),
-    backgroundChoice: form.backgroundChoice
+    backgroundChoice: form.backgroundChoice,
+    terminalGraphics: form.terminalGraphics
   }
 }

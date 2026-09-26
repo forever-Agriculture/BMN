@@ -16,6 +16,41 @@ const waylandDisplay =
 
 /** Receipt fields the self-test must prove; a receipt missing any of them fails the run. */
 const receiptContract = [
+  ['sixelPty', (receipt) => receipt.sixelPty?.beforeMB === 0 &&
+    receipt.sixelPty?.afterMB > 0 && receipt.sixelPty?.layer === true],
+  ['sixelRender', (receipt) => receipt.sixelRender?.ownStorageMB > 0 &&
+    receipt.sixelRender?.ownLayer === true && receipt.sixelRender?.otherStorageMB === 0 &&
+    receipt.sixelRender?.otherImageUnchanged === true],
+  ['sixelAnimation', (receipt) => receipt.sixelAnimation?.noViewRebuild === true &&
+    receipt.sixelAnimation?.storageMB > 0 && receipt.sixelAnimation?.imageLinesAfterScroll <= 7 &&
+    receipt.sixelAnimation?.quietPaneUnchanged === true && receipt.sixelAnimation?.quietSelectionKept === true],
+  ['sixelTwoPaneAnimation', (receipt) => receipt.sixelTwoPaneAnimation?.noViewRebuild === true &&
+    receipt.sixelTwoPaneAnimation?.storageMB?.length === 2 && receipt.sixelTwoPaneAnimation.storageMB.every((value) => value > 0)],
+  ['sixelAlternateScreen', (receipt) => receipt.sixelAlternateScreen?.imageRowsWhileActive > 0 &&
+    receipt.sixelAlternateScreen?.alternateTextLeftBehind === false &&
+    receipt.sixelAlternateScreen?.normalImagesKept === true],
+  ['sixelPlacement', (receipt) => Array.isArray(receipt.sixelPlacement) && receipt.sixelPlacement.length === 4 &&
+    receipt.sixelPlacement.every((row) => row.fontApplied === true && row.rows > 0 && row.cssCellHeight > 0)],
+  ['sixelResize', (receipt) => receipt.sixelResize?.storageMB > 0 && receipt.sixelResize?.imageLines > 0],
+  ['sixelCapPressure', (receipt) => receipt.sixelCapPressure?.withinLimits === true &&
+    receipt.sixelCapPressure?.views > 8 && receipt.sixelCapPressure?.textAfterImages === true],
+  ['sixelColdView', (receipt) => receipt.sixelColdView?.firstFrameDecoded === true &&
+    receipt.sixelColdView?.term === 'xterm-sixel-256color' && receipt.sixelColdView?.startMs <= 2000],
+  ['shellRegression', (receipt) => ['clean-sixel', 'clean-standard', 'owner-sixel'].every((label) => {
+    const row = receipt.shellRegression?.[label]
+    return row?.colors === '256' && row.lscolors === 'yes' && row.prompt === 'color' && row.title === 'yes' &&
+      row.da1 === '033[?62;4;9;22c' && row.bracketedPaste === true && row.lessMouse !== 'none'
+  }) && receipt.shellRegression['clean-standard'].term === 'xterm-256color' &&
+    receipt.shellRegression['clean-sixel'].term === 'xterm-sixel-256color'],
+  ['sixelViewSwap', (receipt) => receipt.sixelViewSwap?.visibleAfter === true &&
+    receipt.sixelViewSwap?.leakedText === false && receipt.sixelViewSwap?.storageMB > 0 &&
+    receipt.sixelViewSwap?.otherPanesLeak === false],
+  ['sixelCsp', (receipt) => receipt.cspProbe?.evalRefused === true &&
+    receipt.cspProbe?.wasmAllowed === true],
+  ['graphicsTerminfo', (receipt) => receipt.graphicsTerminfo?.sixelResolved === true &&
+    receipt.graphicsTerminfo?.standardResolved === true &&
+    receipt.graphicsTerminfo?.initialTerm === 'xterm-sixel-256color' &&
+    receipt.graphicsTerminfo?.fallbackTerm === 'xterm-256color'],
   ['workspaceResults', (receipt) => {
     const row = receipt.workspaceResults
     return row?.reportShown === true && row.evidenceShown === true &&

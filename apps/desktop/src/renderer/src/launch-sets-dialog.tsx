@@ -101,7 +101,7 @@ export function LaunchSetsDialog({
     setEditRevision(null)
     setName('')
     setForms([{ entryId: crypto.randomUUID(), name: 'Shell', executable: '/bin/bash',
-      argvJson: '[]', backgroundChoice: null }])
+      argvJson: '[]', backgroundChoice: null, terminalGraphics: null }])
     setMessage('')
     setMode('edit')
   }
@@ -255,6 +255,15 @@ export function LaunchSetsDialog({
           })}>
           <option value="">Ask</option><option value="hide">Keep running</option><option value="stop">Stop</option>
         </select></label>
+        <label>Terminal images (Sixel) <select aria-label={`Entry ${index + 1} terminal images`}
+          value={entry.terminalGraphics ?? ''} onChange={(event) => updateEntry(index, {
+            terminalGraphics: event.target.value === 'sixel' || event.target.value === 'standard'
+              ? event.target.value : null
+          })}>
+          <option value="">Automatic (Codex on)</option><option value="sixel">On</option><option value="standard">Off</option>
+        </select></label>
+        <small>Codex uses images automatically. For SSH, sudo or containers without BMN terminfo,
+          prefix the command with <code>TERM=xterm-256color</code>.</small>
         <div className="actions">
           <button type="button" disabled={index === 0} onClick={() => moveEntry(index, -1)}>Move up</button>
           <button type="button" disabled={index === forms.length - 1} onClick={() => moveEntry(index, 1)}>Move down</button>
@@ -263,7 +272,8 @@ export function LaunchSetsDialog({
       </fieldset>)}
       <div className="actions">
         <button type="button" disabled={forms.length >= 8} onClick={() => setForms((current) => [...current, {
-          entryId: crypto.randomUUID(), name: 'Shell', executable: '/bin/bash', argvJson: '[]', backgroundChoice: null
+          entryId: crypto.randomUUID(), name: 'Shell', executable: '/bin/bash', argvJson: '[]', backgroundChoice: null,
+          terminalGraphics: null
         }])}>Add entry</button>
         <select aria-label="Copy from template" value={seedTemplateId} disabled={forms.length >= 8}
           onChange={(event) => {

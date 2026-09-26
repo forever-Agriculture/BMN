@@ -56,7 +56,7 @@ Commands:
                                             carries: wired, wired (older wording) or missing
   hooks install <agent> [--file PATH]       Add the missing entries next to the hooks already there,
                                             after backing the file up; OpenCode replaces its BMN plugin
-  help [agents]                             Show this help; "help agents" prints the agent brief
+  help [agents|terminal]                    Show this help or a short agent/terminal guide
 
 Options:
   --session ID       Target session (defaults to your own; required with owner credentials)
@@ -141,6 +141,18 @@ Submission is not delivery
 
 bmn hook is not yours
   bmn hook <agent> is how BMN reads your harness's own hook events. Never run it by hand.`
+
+const TERMINAL_BRIEF = `BMN terminal images
+
+Every live pane can display Sixel images; saved output remains text only.
+The New session form has Terminal images (Sixel): Automatic, On, or Off.
+Automatic enables images for a direct Codex command. Choose On for a shell where you start Codex.
+Off keeps TERM=xterm-256color. On uses TERM=xterm-sixel-256color when BMN's terminfo entry works.
+If the entry is missing or corrupt, BMN starts that process with standard TERM instead.
+
+For SSH, sudo, or a container without BMN's terminfo entry, prefix the command with
+TERM=xterm-256color. A standard shell needs no prefix.
+Inside tmux or Zellij, Codex follows the multiplexer's own image support.`
 
 class UsageError extends Error {}
 
@@ -1780,7 +1792,8 @@ async function main(argv) {
     parsed = parseArguments(argv)
     ;[command, ...positionals] = parsed.positionals
     if (command === 'help' || parsed.options.help) {
-      const page = command === 'help' && positionals[0] === 'agents' ? AGENT_BRIEF : USAGE
+      const page = command === 'help' && positionals[0] === 'agents' ? AGENT_BRIEF
+        : command === 'help' && positionals[0] === 'terminal' ? TERMINAL_BRIEF : USAGE
       process.stdout.write(`${page}\n`)
       return 0
     }

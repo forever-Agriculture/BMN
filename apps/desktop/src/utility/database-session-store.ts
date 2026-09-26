@@ -46,9 +46,9 @@ export function createStartingSession(
       .prepare(
         `INSERT INTO session(
           session_id, workspace_id, name, cwd, executable, argv_json,
-          revision, created_at, position, background_choice
+          revision, created_at, position, background_choice, terminal_graphics
         ) VALUES (?, ?, ?, ?, ?, ?, 1, ?,
-          COALESCE((SELECT MAX(position) + 1 FROM session WHERE workspace_id = ?), 0), ?)`
+          COALESCE((SELECT MAX(position) + 1 FROM session WHERE workspace_id = ?), 0), ?, ?)`
       )
       .run(
         record.sessionId,
@@ -59,7 +59,8 @@ export function createStartingSession(
         JSON.stringify(record.argv),
         record.startedAt,
         record.workspaceId,
-        record.backgroundChoice
+        record.backgroundChoice,
+        record.terminalGraphics
       )
     insertConversationBinding(database, record.binding)
     insertIncarnation(database, record)

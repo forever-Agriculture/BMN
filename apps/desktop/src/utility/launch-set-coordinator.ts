@@ -62,7 +62,8 @@ export class LaunchSetCoordinator {
       name: entry.name,
       executable: entry.executable,
       argv: [...entry.argv],
-      backgroundChoice: entry.backgroundChoice
+      backgroundChoice: entry.backgroundChoice,
+      terminalGraphics: entry.terminalGraphics
     }))
     if (entries.length < 1 || entries.length > 8) {
       throw new HostControlError(ERROR_CODES.invalidArgument, 'A launch set must have 1–8 entries')
@@ -74,6 +75,7 @@ export class LaunchSetCoordinator {
       executable: entry.executable,
       argv: entry.argv,
       backgroundChoice: entry.backgroundChoice,
+      terminalGraphics: entry.terminalGraphics,
       cols: request.cols,
       rows: request.rows
     }))

@@ -21,6 +21,7 @@ const template: LaunchTemplateRecord = {
   argv: ['--model', 'o4'],
   cwd: '/workspace/review',
   backgroundChoice: 'hide',
+  terminalGraphics: 'sixel',
   revision: 1,
   createdAt: '2026-09-13T00:00:00.000Z'
 }
@@ -33,9 +34,12 @@ describe('launch template application', () => {
       executable: '/usr/bin/codex',
       argv: '--model o4',
       cwd: '/workspace/review',
-      backgroundChoice: 'hide'
+      backgroundChoice: 'hide',
+      terminalGraphics: 'sixel'
     })
     expect(applyLaunchTemplate(edited, { ...template, backgroundChoice: null }).backgroundChoice).toBeNull()
+    expect(applyLaunchTemplate({ ...edited, terminalGraphics: 'standard' }, template).terminalGraphics)
+      .toBe('standard')
     expect(edited.name).toBe('Typed name')
   })
 
@@ -63,7 +67,8 @@ describe('launch template application', () => {
       argv: ['--model', 'o4'],
       cols: 80,
       rows: 24,
-      backgroundChoice: 'hide'
+      backgroundChoice: 'hide',
+      terminalGraphics: 'sixel'
     })
     expect(isSessionCreateParams(params)).toBe(true)
     expect(isSessionCreateParams({ ...params, templateId: template.templateId })).toBe(false)
@@ -79,13 +84,15 @@ describe('launch template application', () => {
       argv: ['-l'],
       position: 0,
       backgroundChoice: 'stop',
+      terminalGraphics: null,
       revision: 4,
       createdAt: '2026-09-13T00:00:00.000Z',
       archivedAt: null,
       lastProcess: null
     }
     const form = sessionLaunchForm(session)
-    expect(form).toEqual({ name: 'Shell', executable: '/bin/bash', argv: '-l', cwd: '/workspace', backgroundChoice: 'stop' })
+    expect(form).toEqual({ name: 'Shell', executable: '/bin/bash', argv: '-l', cwd: '/workspace',
+      backgroundChoice: 'stop', terminalGraphics: null })
     const params = sessionUpdateParams(session, { ...form, backgroundChoice: 'hide' })
     expect(params).toMatchObject({ sessionId: 'session-1', expectedRevision: 4, argv: ['-l'], backgroundChoice: 'hide' })
     expect(isSessionUpdateParams(params)).toBe(true)

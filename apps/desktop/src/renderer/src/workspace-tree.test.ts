@@ -29,6 +29,7 @@ const sessions: SessionRecord[] = ['a-2', 'a-1', 'b-1', 'b-2'].map((sessionId, i
   argv: [],
   position: index === 0 || index === 3 ? 1 : 0,
   backgroundChoice: null,
+  terminalGraphics: null,
   revision: 1,
   createdAt: `2026-09-13T00:00:0${index}Z`,
   archivedAt: null,

@@ -33,7 +33,10 @@ describe('renderer acceptance hook', () => {
       terminal: fakeTerminal(),
       getPtyDimensions: () => ({ cols: 101, rows: 37 }),
       getRefitCount: () => 2,
-      getInputCount: () => 5
+      getInputCount: () => 5,
+      getImageStorageMB: () => 0,
+      imageLayerPresent: () => false,
+      sixelFixture: async () => ({ storageMB: 0, layer: false })
     })
     expect(Object.hasOwn(target, '__aitermTest')).toBe(false)
     dispose()
@@ -48,7 +51,10 @@ describe('renderer acceptance hook', () => {
       terminal: fakeTerminal(),
       getPtyDimensions: () => ({ cols: 101, rows: 37 }),
       getRefitCount: () => 2,
-      getInputCount: () => 5
+      getInputCount: () => 5,
+      getImageStorageMB: () => 0,
+      imageLayerPresent: () => false,
+      sixelFixture: async () => ({ storageMB: 0, layer: false })
     })
     const hook = target.__aitermTest as { snapshot(sessionId?: string): unknown; snapshots(): unknown }
     expect(hook).toBeTypeOf('object')
@@ -58,6 +64,8 @@ describe('renderer acceptance hook', () => {
       rows: 37,
       refits: 2,
       inputEvents: 5,
+      imageStorageMB: 0,
+      imageLayerPresent: false,
       // The modes a rebuilt view must come back with, read from the view itself.
       modes: { bracketedPasteMode: false, sendFocusMode: false, mouseTrackingMode: 'none', wraparoundMode: true },
       ptyCols: 101,
@@ -271,6 +279,9 @@ describe('renderer acceptance hook', () => {
       getPtyDimensions: () => undefined,
       getRefitCount: () => 2,
       getInputCount: () => 5,
+      getImageStorageMB: () => 0,
+      imageLayerPresent: () => false,
+      sixelFixture: async () => ({ storageMB: 0, layer: false }),
       integration
     })
     await expect((target.__aitermTest as { integration(): Promise<unknown> }).integration())
@@ -286,7 +297,10 @@ describe('renderer acceptance hook', () => {
       terminal: fakeTerminal(),
       getPtyDimensions: () => ({ cols: 101, rows: 37 }),
       getRefitCount: () => 2,
-      getInputCount: () => 5
+      getInputCount: () => 5,
+      getImageStorageMB: () => 0,
+      imageLayerPresent: () => false,
+      sixelFixture: async () => ({ storageMB: 0, layer: false })
     })
     const disposeB = installTerminalTestHook({
       enabled: true,
@@ -295,7 +309,10 @@ describe('renderer acceptance hook', () => {
       terminal: fakeTerminal(80, 24, ['foreign']),
       getPtyDimensions: () => ({ cols: 80, rows: 24 }),
       getRefitCount: () => 3,
-      getInputCount: () => 7
+      getInputCount: () => 7,
+      getImageStorageMB: () => 0,
+      imageLayerPresent: () => false,
+      sixelFixture: async () => ({ storageMB: 0, layer: false })
     })
     const hook = target.__aitermTest as {
       snapshot(sessionId?: string): { cols: number; rows: number; refits: number }

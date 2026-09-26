@@ -63,6 +63,7 @@ interface SessionRow {
   argv_json: string
   position: number
   background_choice: string | null
+  terminal_graphics: string | null
   revision: number
   created_at: string
   archived_at: string | null
@@ -78,7 +79,7 @@ interface SessionRow {
  * it never claims a process is live — the host liveness owner decides that.
  */
 const SESSION_SELECT = `SELECT s.session_id, s.workspace_id, s.name, s.cwd, s.executable, s.argv_json,
-              s.position, s.background_choice, s.revision, s.created_at, s.archived_at,
+              s.position, s.background_choice, s.terminal_graphics, s.revision, s.created_at, s.archived_at,
               i.incarnation_id AS last_incarnation_id, i.state AS last_state,
               i.exit_code AS last_exit_code, i.exit_signal AS last_exit_signal,
               i.exit_detail AS last_exit_detail
@@ -96,6 +97,7 @@ interface TemplateRow {
   argv_json: string
   cwd: string
   background_choice: string | null
+  terminal_graphics: string | null
   revision: number
   created_at: string
 }
@@ -204,6 +206,8 @@ function sessionRecord(row: SessionRow): SessionRecord {
       row.background_choice === 'hide' || row.background_choice === 'stop'
         ? row.background_choice
         : null,
+    terminalGraphics: row.terminal_graphics === 'sixel' || row.terminal_graphics === 'standard'
+      ? row.terminal_graphics : null,
     revision: row.revision,
     createdAt: row.created_at,
     archivedAt: row.archived_at,
@@ -230,6 +234,8 @@ function templateRecord(row: TemplateRow): LaunchTemplateRecord {
       row.background_choice === 'hide' || row.background_choice === 'stop'
         ? row.background_choice
         : null,
+    terminalGraphics: row.terminal_graphics === 'sixel' || row.terminal_graphics === 'standard'
+      ? row.terminal_graphics : null,
     revision: row.revision,
     createdAt: row.created_at
   }
@@ -378,7 +384,7 @@ export function updateSession(
     .prepare(
       `UPDATE session
        SET workspace_id = ?, name = ?, cwd = ?, executable = ?, argv_json = ?,
-           position = ?, background_choice = ?, archived_at = ?, revision = ?
+           position = ?, background_choice = ?, terminal_graphics = ?, archived_at = ?, revision = ?
        WHERE session_id = ? AND revision = ?`
     )
     .run(
@@ -389,6 +395,7 @@ export function updateSession(
       params.argv !== undefined ? JSON.stringify(params.argv) : storedArgv.argv_json,
       params.position ?? current.position,
       'backgroundChoice' in params ? params.backgroundChoice ?? null : current.backgroundChoice,
+      'terminalGraphics' in params ? params.terminalGraphics ?? null : current.terminalGraphics,
       'archived' in params ? (params.archived ? current.archivedAt ?? now : null) : current.archivedAt,
       current.revision + 1,
       current.sessionId,
@@ -400,7 +407,7 @@ export function updateSession(
 export function listTemplates(database: DatabaseConnection): LaunchTemplateRecord[] {
   const rows = database
     .prepare(
-      `SELECT template_id, name, executable, argv_json, cwd, background_choice,
+      `SELECT template_id, name, executable, argv_json, cwd, background_choice, terminal_graphics,
               revision, created_at
        FROM launch_template ORDER BY name, created_at, template_id`
     )
@@ -418,8 +425,8 @@ export function createTemplate(
   database
     .prepare(
       `INSERT INTO launch_template(
-        template_id, name, executable, argv_json, cwd, background_choice, revision, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, 1, ?)`
+        template_id, name, executable, argv_json, cwd, background_choice, terminal_graphics, revision, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`
     )
     .run(
       templateId,
@@ -428,11 +435,12 @@ export function createTemplate(
       JSON.stringify(params.argv),
       params.cwd,
       params.backgroundChoice ?? null,
+      params.terminalGraphics ?? null,
       now
     )
   const row = database
     .prepare(
-      `SELECT template_id, name, executable, argv_json, cwd, background_choice,
+      `SELECT template_id, name, executable, argv_json, cwd, background_choice, terminal_graphics,
               revision, created_at
        FROM launch_template WHERE template_id = ?`
     )

@@ -11,6 +11,7 @@ import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(scriptDirectory, '../..')
 const { binary: packagedBinary, resources: packagedResources } = packagedApp(repoRoot)
+const packagedTerminfo = join(packagedResources, 'terminfo/x/xterm-sixel-256color')
 const ownerRoots = [
   join(homedir(), '.config/bmn'),
   join(homedir(), '.local/share/bmn'),
@@ -37,6 +38,7 @@ function parseReceipt(stdout) {
 }
 
 if (!existsSync(packagedBinary)) throw new Error(`packaged binary is missing: ${packagedBinary}`)
+if (!existsSync(packagedTerminfo)) throw new Error(`packaged Sixel terminfo is missing: ${packagedTerminfo}`)
 const packagedWhisper = join(packagedResources, 'whisper/whisper-cli')
 if (!existsSync(packagedWhisper) || (statSync(packagedWhisper).mode & 0o111) === 0) {
   throw new Error(`packaged voice engine is missing or not executable: ${packagedWhisper}`)
@@ -112,6 +114,15 @@ await withTemporaryRoot(temporaryRootContracts.packagedSmoke, async ({ roots }) 
     receipt.resized?.cols !== 101 ||
     receipt.resized?.rows !== 37 ||
     receipt.rendererRestartNoDuplicateProcesses !== true ||
+    receipt.sixelPty?.beforeMB !== 0 || !(receipt.sixelPty?.afterMB > 0) ||
+    receipt.sixelPty?.layer !== true ||
+    !(receipt.sixelRender?.ownStorageMB > 0 && receipt.sixelRender?.ownLayer === true &&
+      receipt.sixelRender?.otherStorageMB === 0 && receipt.sixelRender?.otherImageUnchanged === true) ||
+    receipt.cspProbe?.evalRefused !== true || receipt.cspProbe?.wasmAllowed !== true ||
+    receipt.graphicsTerminfo?.sixelResolved !== true ||
+    receipt.graphicsTerminfo?.standardResolved !== true ||
+    receipt.graphicsTerminfo?.initialTerm !== 'xterm-sixel-256color' ||
+    receipt.graphicsTerminfo?.fallbackTerm !== 'xterm-256color' ||
     receipt.applicationRestartNoAutoStart !== true ||
     receipt.graceful !== true
   ) {

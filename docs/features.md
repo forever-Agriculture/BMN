@@ -73,6 +73,14 @@ There is no tmux layer and no replayed output, so key encodings, colors, bell an
 reach the program unchanged, and your CLIs keep their own configuration, authentication, hooks and
 permissions.
 
+Live panes display Sixel images. A direct Codex session chooses **Terminal images (Sixel)**
+automatically, so Codex can use `/pets`; a shell needs **On** in the New session form if you plan
+to start Codex inside it. **Off** opts out. Standard shells keep `TERM=xterm-256color`.
+Graphics sessions use BMN's `xterm-sixel-256color` terminfo entry. On SSH hosts, under `sudo`, or
+inside containers without that entry, run the remote or privileged command with
+`TERM=xterm-256color`, or start a standard shell. A Codex process inside tmux or Zellij follows
+that multiplexer and may reject pets. Saved output is text only; pet pixels are not saved.
+
 - **Split.** `Ctrl+Shift+Enter` opens a second pane beside the current one (it asks which session)
   or closes the split. `Ctrl+Tab` switches panes; the pane menu arranges them side by side or
   stacked.

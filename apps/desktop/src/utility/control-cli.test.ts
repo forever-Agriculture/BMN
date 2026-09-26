@@ -414,9 +414,20 @@ describe('bmn help agents', () => {
     const usage = await runCli(['help'])
 
     expect(usage.code).toBe(0)
-    expect(usage.stdout).toContain('help [agents]')
+    expect(usage.stdout).toContain('help [agents|terminal]')
     expect(usage.stdout).toContain('Usage: bmn <command> [arguments] [options]')
   })
+})
+
+it('explains the graphics-shell terminfo boundary without connecting to BMN', async () => {
+  const result = await runCli(['help', 'terminal'], {
+    env: { BMN_CONTROL_SOCKET: '/nonexistent/bmn-help-terminal.sock', BMN_TOKEN: 'unused' }
+  })
+  expect(result.code).toBe(0)
+  expect(result.stderr).toBe('')
+  expect(result.stdout).toContain('Terminal images (Sixel)')
+  expect(result.stdout).toContain('TERM=xterm-256color')
+  expect(result.stdout).toContain('SSH, sudo, or a container')
 })
 
 describe('bmn hook', () => {
