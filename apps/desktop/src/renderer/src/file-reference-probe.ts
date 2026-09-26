@@ -51,4 +51,24 @@ export interface FileReferenceFlowProbe {
   /** Grid size and refit count before and after, and whether the same xterm element stayed mounted. */
   terminalGeometry: { before: string; after: string; sameElement: boolean }
   attentionUnchanged: boolean
+  epic27: {
+    chooserDefaultEmpty: boolean
+    chooserCrossWorkspace: boolean
+    previewPayload: string
+    previewTarget: string
+    previewIncarnation: string
+    pastedFeedback: string
+    pastedIntoTarget: boolean
+    focusLossClearedTarget: boolean
+    searchCapLabel: string
+    searchRows: number
+    skippedRowsAbsent: boolean
+    supersededRowsAbsent: boolean
+    openedFromSession: string
+    openedFile: string
+    colonFile: string
+    foreignSearchSession: string
+    foreignSearchFile: string
+    numericSuffixRejected: boolean
+  } | null
 }

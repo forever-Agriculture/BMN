@@ -85,6 +85,51 @@ export interface FileReferenceUnavailable extends FileReferenceTarget {
 
 export type FileReferenceReadResult = FileReferenceSnapshot | FileReferenceUnavailable
 
+/** One owner-confirmed paste of a reference already shown in the file preview. */
+export interface FileReferencePasteParams {
+  requestId: string
+  sessionId: string
+  expectedIncarnationId: string
+  sourcePath: string
+  line: number | null
+  column: number | null
+}
+
+export interface FileReferencePasteReceipt {
+  requestId: string
+  sessionId: string
+  incarnationId: string
+  payload: string
+  pastedAt: string
+  status: 'pasted-not-submitted'
+}
+
+export interface FileReferenceSearchParams {
+  ownerId: string
+  requestId: string
+  workspaceId: string
+  sessionId: string | null
+  query: string
+}
+
+export interface FileReferenceSearchResult {
+  root: string | null
+  files: Array<{ name: string; directory: string; path: string }>
+  scanned: number
+  capped: boolean
+  unavailable: boolean
+  cancelled: boolean
+}
+
+/** A formatted reference may be sent only when the existing parser reads it back exactly. */
+export function exactAbsoluteFileReference(path: string, line: number | null, column: number | null): string | null {
+  if (!path.startsWith('/')) return null
+  const text = formatFileReference(path, line, column)
+  const parsed = parseFileReference(text)
+  if (!parsed.ok || parsed.reference.path !== path || parsed.reference.line !== line || parsed.reference.column !== column) return null
+  return text
+}
+
 /**
  * C0/C1 control characters and invisible format characters (such as a right-to-left override), which no typed
  * path or folder may carry: they could make the shown path read differently from the one opened.

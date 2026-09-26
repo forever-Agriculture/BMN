@@ -258,7 +258,8 @@ describe('renderer acceptance hook', () => {
         },
         terminalUnchanged: true,
         terminalGeometry: { before: '80x24 refits 2', after: '80x24 refits 2', sameElement: true },
-        attentionUnchanged: true
+        attentionUnchanged: true,
+        epic27: null
       }
     }
     const integration = async () => probe

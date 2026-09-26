@@ -195,12 +195,33 @@ const receiptContract = [
       receipt.fileReferenceFlow.mouseMode.reportsToProgram >= 1 &&
       receipt.fileReferenceFlow.redraw?.staleOpened === false &&
       receipt.fileReferenceFlow.redraw.reference === 'refs/src/parser.ts:7' &&
-      receipt.fileReferenceFlow.reads?.length === 9 &&
+      receipt.fileReferenceFlow.reads?.length === 15 &&
       receipt.fileReferenceFlow.contextMenuClick?.reference === 'refs/src/parser.ts:42:7' &&
       receipt.fileReferenceFlow.crossWorkspace?.session === 'Archived running chat · Self-test archived workspace' &&
       receipt.fileReferenceFlow.ptyInputEvents === 0 &&
       receipt.fileReferenceFlow.terminalUnchanged === true &&
-      receipt.fileReferenceFlow.attentionUnchanged === true
+      receipt.fileReferenceFlow.attentionUnchanged === true &&
+      receipt.fileReferenceFlow.epic27?.chooserDefaultEmpty === true &&
+      receipt.fileReferenceFlow.epic27.chooserCrossWorkspace === true &&
+      receipt.fileReferenceFlow.epic27.previewPayload?.endsWith('/refs/src/parser.ts:42:7') &&
+      receipt.fileReferenceFlow.epic27.previewTarget.includes('without pressing Enter') &&
+      receipt.fileReferenceFlow.epic27.pastedFeedback.includes('not submitted') &&
+      receipt.fileReferenceFlow.epic27.pastedIntoTarget === true &&
+      receipt.fileReferenceFlow.epic27.focusLossClearedTarget === true &&
+      receipt.fileReferenceFlow.epic27.searchRows === 50 &&
+      receipt.fileReferenceFlow.epic27.searchCapLabel.includes('Showing first 50') &&
+      receipt.fileReferenceFlow.epic27.skippedRowsAbsent === true &&
+      receipt.fileReferenceFlow.epic27.supersededRowsAbsent === true &&
+      receipt.fileReferenceFlow.epic27.openedFile?.endsWith('/refs/src/parser.ts') &&
+      receipt.fileReferenceFlow.epic27.foreignSearchSession?.includes('Archived running chat') &&
+      receipt.fileReferenceFlow.epic27.foreignSearchFile?.endsWith('/refs/src/parser.ts') &&
+      receipt.fileReferenceFlow.epic27.colonFile?.endsWith('/file-search-fixture/a:b.ts') &&
+      receipt.fileReferenceFlow.epic27.numericSuffixRejected === true
+  ],
+  [
+    'fileReferenceWire',
+    (receipt) => Object.values(receipt.fileReferenceWire ?? {}).length === 6 &&
+      Object.values(receipt.fileReferenceWire).every((value) => value === true)
   ],
   [
     'voiceFlow',

@@ -4,6 +4,7 @@ import {
   fileReferenceLines,
   findFileReferences,
   formatFileReference,
+  exactAbsoluteFileReference,
   parseFileReference,
   type FileReference
 } from './file-reference'
@@ -82,6 +83,32 @@ describe('parseFileReference', () => {
     expect(parsed('apps/desktop/bin/bmn', 'terminal').path).toBe('apps/desktop/bin/bmn')
     expect(parsed('/usr/bin/env', 'terminal').path).toBe('/usr/bin/env')
     expect(parsed('bin/bmn.sh', 'terminal').path).toBe('bin/bmn.sh')
+  })
+})
+
+describe('exactAbsoluteFileReference', () => {
+  it('round-trips absolute paths, line and column across the supported filename grammar', () => {
+    for (const path of [
+      '/tmp/hello world.ts', '/tmp/звіт.md', '/tmp/a[b].ts', '/tmp/a:b.ts',
+      "/tmp/a'quote.ts", '/tmp/a"quote.ts'
+    ]) {
+      const payload = exactAbsoluteFileReference(path, 42, 7)
+      expect(payload).not.toBeNull()
+      expect(parsed(payload!)).toEqual({ path, line: 42, column: 7 })
+    }
+    expect(exactAbsoluteFileReference('/tmp/file.ts', null, null)).toBe('/tmp/file.ts')
+    expect(exactAbsoluteFileReference('relative/file.ts', 1, null)).toBeNull()
+  })
+
+  it('rejects paths the existing grammar cannot represent exactly', () => {
+    for (const path of [
+      '/tmp/a\u0024b.ts', '/tmp/a`b.ts', '/tmp/a\\b.ts', '/tmp/a*.ts',
+      '/tmp/both\'"quotes.ts', '/tmp/a\u0007b.ts', '~/notes.ts', 'file:///tmp/a.ts'
+    ]) {
+      expect(exactAbsoluteFileReference(path, 1, null)).toBeNull()
+    }
+    // A trailing numeric filename segment is parsed as a line suffix even when quoted.
+    expect(exactAbsoluteFileReference('/tmp/report:42', null, null)).toBeNull()
   })
 })
 

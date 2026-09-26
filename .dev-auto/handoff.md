@@ -1,55 +1,45 @@
 # Dev Auto handoff
 
-- Project / selected epics: /home/oleksandr/code/BMN; Epic 26 only (26.1, 26.2, 26.3). Owner "$dev-auto 26-27" then final scope change "complete epic 26 only" (2026-09-25); Epic 27 parked, untouched.
-- Original request and intended outcomes: _bmad-output/planning-artifacts/epics.md:1389-1421 (Epic 26 ACs, verification, FR45-47, NFR35); shared rules at :1302-1321.
+- Project / selected epics: /home/oleksandr/code/BMN; Epic 27 only (27.1, 27.2). Owner request: `$dev-auto 27` (2026-09-26, current conversation).
+- Original request and intended outcomes: _bmad-output/planning-artifacts/epics.md:1438-1482; FR48-49, NFR36, UX-DR25, shared NFR34-35 at :1302-1321.
 - Mode: build
-- Stopping condition: selected scope accepted; no automatic time limit. Owner window: "continue and finish autonomously" (2h), "so finish faster".
+- Stopping condition: selected scope accepted; no automatic time limit.
 - Explicit user stop: none
-- Restrictions and authorization boundaries: local implementation, checks and ready task commits authorized; push, merge, deploy and desktop update need separate authorization; no `pnpm run package` while packaged BMN is open. NFR35: trials never touch the owner's real workspaces, profiles or sessions; disruptive steps only on a disposable OS user/VM (none exists on this machine → 4 UNVERIFIED receipts per the delegated Astra/med consultant decision, .dev-auto/evidence/epic-26/consultant-output.md). Live paid attempts keep spend limits.
-- Decision and history log: .dev-auto/log.md (append-only; all 10 owner messages recorded verbatim). Raw receipts in ignored .dev-auto/evidence/.
-- Authorized provider routes: dev-auto/references/models.md ordered tiers.
-- Lead host / requested model / observed model: Claude Code via claude glm; GLM-5.3 max.
+- Restrictions and authorization boundaries: Current owner request authorizes local implementation, checks and ready task commits. Push, merge, deploy and desktop update need separate authorization (owner AGENTS.md global rules); never package while packaged BMN is open (AGENTS.md). NFR35 forbids trials on real workspaces, profiles or sessions; use synthetic workspaces in isolated Electron. No credentials or personal data to helpers; provider routes only under owner dev-auto authorization.
+- Decision and history log: .dev-auto/log.md (append-only); prior Epic 26 handoff remains in git at baseline. Raw receipts under ignored .dev-auto/evidence/.
+- Authorized provider routes: /home/oleksandr/code/dev-auto/skills/dev-auto/references/models.md ordered tiers.
+- Lead host / requested model / observed model: Codex lead; observed gpt-6-sol/xhigh, rollout 01a0dc66-2ace-7681-8bb3-0ef3f54af2b5.
 
 ## Progress
 
-- Implemented and checked (working tree, baseline b341724):
-  - 26.1 — docs/survival-matrix.md: 7 rows + OpenCode + cross-harness; result-line table updated with this run's trials (commit marker "b341724 (Epic 26 tree)").
-  - 26.2 — self-test survival endings (close-and-stop, explicit stop, quit final capture, close-window-keep partial) + 4 disruptive UNVERIFIED receipts + OpenCode UNVERIFIED receipt + dry-run format receipt under .dev-auto/evidence/survival/; acceptance run .dev-auto/evidence/epic-26/electron-26-final1.log EXIT 0 (final-receipt.json extracted).
-  - 26.3 — bin/bmn timeout qualifications beside verdicts (text + JSON timeoutQualification); 4 new tests; agent-control.md updated; Claude/OpenCode byte-identical (claude-before/after.*).
-  - Cross-harness trials: BOTH DIRECTIONS PASSED fresh 2026-09-25 under codex-cli 0.157.0 / claude 2.1.282 (run3 codex→claude; run4 claude→codex EXIT 0; cross-harness-receipt.json rewritten 14:45:21Z from today's payloads). Harness adaptations (git-ignored evidence file): ready-probe matches the codex 0.157 chip case-insensitively + empty-input hint; response detection = both tokens present (single responseIn test for wait/no-response/receipt fields) because 0.157 interleaves status-bar redraws through streamed responses. Dated receipts cross-harness-{claude-to-codex,codex-to-claude}-2026-09-25.md. Explicit-invocation vitest config: .dev-auto/evidence/cross-harness.vitest.config.mjs.
-  - Two pre-existing race fixes in index.ts self-test probes (await-wait; Epic-25-class gate repair, flagged for reviewers).
-- Sprint board: epic-26 + 26-1/26-2/26-3 still backlog; flip to done at acceptance.
-- Active helpers: cross-harness run2 background task.
-- Owner instructions: Sol/xhigh review after Astra; this session also evaluates the latest dev-auto (vault note at acceptance).
+- Sprint board and reconciled state: Epic 25 and 26 done; Epic 27, 27.1 and 27.2 done, atomically written and read back in ignored sprint-status.yaml; baseline dd6550b.
+- Implemented: 27.1 utility paste claim, preview chooser and IPC; 27.2 bounded utility search and palette route in working tree. Second repair of F1/F4 frozen at fb91ab0cfff06e6de26318f5355046119bcd423847b1adb73d456be8b16824f5.
+- Active helpers: none. Astra/low second recheck completed read-only, receipt epic-27-astra-recheck2.md.
 
 ## Decisions and findings
 
-- Original or approved intent changes: scope narrowed to Epic 26 only (owner); disruptive trials → UNVERIFIED with receipts (delegated consultant decision, quoted in receipts).
-- Material pending findings: none yet (reviews pending).
-- Known honest residuals recorded in matrix: close-window-keep minimize/capture-cadence cells and close-dialog choreography unexercised (forceHidden window instability, 20+ diagnostic runs); endings' resume/withdrawal cells rest on conversationFromHook in the same receipt; OpenCode real session UNVERIFIED.
+- Original or approved intent changes: none.
+- Material pending findings: none. F1/F4 closed by second Astra/low recheck; F2/F3 closed by first and reaffirmed by second. Receipts epic-27-astra-{review,recheck,recheck2}.md.
+- Cross-epic obligations: reuse Epic 7 guarded send and Epic 8 file preview; preserve no Enter and no new search index or inspection surface.
 
 ## Evidence
 
-- Checks: electron-26-final1.log EXIT 0 (full receipt all-true); control-cli-full.log 340/340; typecheck green (tsc -b inside the final1 build); lint-final.log EXIT 0; unit-gate1.log + unit-gate2.log EXIT 0 (1618/1618 each, consecutive, clean env).
-- Unreviewed or unverified areas: GLM pre-review SKIPPED (helper route failed: unrecognized model; logged); Astra/medium epic review IN FLIGHT (astra-review.json); owner-requested Sol/xhigh pending after it.
+- Checks run and observed results: final second candidate focused 157/157 PASS, full unit 1641/1641 PASS with host Git access, typecheck/lint EXIT 0, isolated Electron EXIT 0 on one retry with foreign-pane preview, exact colon file, numeric-suffix rejection and six true wire checks; logs .dev-auto/evidence/epic-27-second-{focused-final,unit-final,typecheck-final,lint-final,electron-retry}.log. Initial second Electron gate failed before Epic 27 in native-dependency probe with empty child stderr; retry passed.
+- Tests: RED F1 original and response-gap, F2 Electron, F3 foreign root, F4 exit-root; GREEN repaired focused/full/Electron. Untested: workspace-root palette UI case with no selected session; persisted receipt restart replay, live directory transition during in-flight I/O and real OS blur not directly exercised.
+- Reviewed scope and route: GLM-5.3/max quick pre-review on 7d62aa... (0 material, 2 minor); Astra/medium full review on 54ae818... (4 material), observed read-only/approval never, receipt epic-27-astra-review.md.
+- Baseline and reviewed revisions / material finding dispositions / recheck or delta evidence: baseline dd6550b; full reviewed fingerprint 54ae818...; first repaired f5e360...; accepted fb91ab0cfff06e6de26318f5355046119bcd423847b1adb73d456be8b16824f5. F1-F4 all closed by reviewer with controlled/source and synthetic Electron evidence.
+- Review allowance at the current boundary: rechecks 2; consultation 0; no material gap remains.
+- Unreviewed or unverified areas: actual RPC/worker archive interleaving, Electron exit during pending search/Enter, real OS blur, receipt crash injection, slow I/O cancellation and symlink replacement; synthetic/source evidence only for these edges.
 
 ## Measurement
 
-- Observed usage: Astra/med review 1,091,838 in (1,001,600 cached) / 7,723 out; Astra/low recheck
-  403,108 in / 2,409 out; Sol/xhigh 1,291,100 in (1,161,984 cached) / 18,273 out (rollout
-  receipts in evidence/epic-26/*.launch.log); GLM helper dispatches failed before usage;
-  cross-harness: short read-only turns both directions on codex 0.157.0 / claude 2.1.282 (owner
-  quota; weekly limit <25% after).
-- Timing: started 2026-09-25 ~17:00 Europe/Kyiv, accepted ~21:30.
-- Dispatches: Astra/med consultant (decision quoted in 4 receipts); Astra/med review 1.09M in / 7.7K out; Astra/low recheck; Sol/xhigh review; GLM pre-review failed (unrecognized model, logged) and was skipped per route table.
-- Owner interventions: 10 messages, all in log.md.
-
-- Astra/medium review verdict "changes required" (5 material findings); ONE consolidated repair applied (real-lifecycle endings + burst final-capture proof; 2^53 qualification boundary; cross-harness downgraded to method evidence per NFR35; matrix/receipt honesty fixes); acceptance rerun electron-26-final2.log EXIT 0; unit-gate3/4 EXIT 0 (1618/1618 ×2); lint exit 0 in-log; all dispositions in log.md ("Astra/medium epic review dispositions").
-- Recheck follow-ups applied (reviewer's settle-instructions): double-stop() fixed, pre-marker snapshot exclusion restored, burst anchored on the flush snapshot; close ending's burst recorded as observed (harness dialog teardown delays sibling captures), explicit ending asserts >= 3 (observed 6). F5 accepted: every rule-contributed Codex verdict now carries a qualification (base note for judged timeout values, stronger 2^53 note, not-loadable for dropped entries; absent/null carries nothing); focused CLI suite 343/343.
-- Final gates: electron-26-final3.log EXIT 0; unit-gate5/6 1621/1621 consecutive; lint exit 0; tsc clean. Sprint board epic-26 done. Vault evaluation committed (98a0832).
-- Sol/xhigh owner-requested review received (sol-review.json): 26.3 clean; disruptive UNVERIFIEDs honest and sufficient; three labelling findings resolved by honest relabeling (matrix + receipts) with dispositions in log.md; unit-gate7.log EXIT 0 in-log.
+- Timing: started and accepted 2026-09-26.
+- Dispatches: GLM-5.3/max quick pre-review, receipt epic-27-glm-pre-review.json; Astra/medium full review, receipt epic-27-astra-review.md; Astra/low first and second rechecks, receipts epic-27-astra-recheck.md and epic-27-astra-recheck2.md; all observed read-only/approval never for Astra.
+- Review yield: quick GLM 0 material, 2 minor; Astra full review 4 material (0 flagged by GLM); first recheck closed F2/F3; second closed F1/F4, no new material.
+- Owner interventions: 1 scope request; no corrections or repeat approvals.
+- Observed usage: GLM-5.3 pre-review 48,192 input + 177,856 cache-read / 15,124 output, $0.707988; Astra full 926,797 input (836,096 cached) / 6,871 output; Astra low rechecks 489,363 input (416,768 cached) / 4,651 output and 361,554 input (299,520 cached) / 3,423 output. Lead gpt-6-sol/xhigh latest read: 52,207,054 input (51,516,032 cached) / 152,967 output. Auto-review sessions separate, not added.
 
 ## Resume
 
-- Next safe action: publish to cockpit, commit the accepted scope locally, end `DEV-AUTO: COMPLETE`.
-- Status: COMPLETE — Epic 26 accepted; gates green, reviews dispositioned, board done.
+- Next safe action: no selected work remains; push and desktop update require separate authorization.
+- Status: COMPLETE — Epic 27 accepted locally.

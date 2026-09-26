@@ -17,7 +17,7 @@ import {
 } from '@bmn/protocol'
 import { failureDetail, isBridgeError } from './bridge-error'
 import { createFileReferenceLinkProvider } from './file-reference-links'
-import { openReferenceFromPane, runFileReferenceIntegration } from './file-reference-self-test'
+import { openReferenceFromPane, runEpic27FileReferenceIntegration, runFileReferenceIntegration } from './file-reference-self-test'
 import { runProgressEvidenceIntegration } from './progress-evidence-self-test'
 import { runVoiceIntegration } from './voice-self-test'
 import { Icon } from './icons'
@@ -822,6 +822,15 @@ export function SessionTerminal(props: {
           workspaceId: props.startup.workspaceId,
           sessionId: sourceSession.sessionId,
           reference: 'refs/src/parser.ts:42:7'
+        })
+        fileReferenceFlow.epic27 = await runEpic27FileReferenceIntegration({
+          sourcePane,
+          sourceSessionId: sourceSession.sessionId,
+          workspaceId: props.startup.workspaceId,
+          targetPane: section.current!,
+          targetSessionId: props.startup.sessionId,
+          targetName: props.startup.name,
+          targetTerminal: terminal
         })
         section.current?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
         const focusedLayout = await waitFor(async () => {

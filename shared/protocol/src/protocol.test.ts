@@ -111,6 +111,9 @@ describe('protocol surface', () => {
         'artifact.preview',
         'artifact.deliver',
         'file.reference.read',
+        'file.reference.paste',
+        'file.reference.search',
+        'file.reference.search.cancel',
         'attention.list',
         'attention.seen',
         'attention.resolve',
@@ -135,7 +138,7 @@ describe('protocol surface', () => {
         'presence.set'
       ])
     )
-    expect(Object.values(METHOD_REGISTRY)).toHaveLength(67)
+    expect(Object.values(METHOD_REGISTRY)).toHaveLength(70)
   })
 
   it('exports the initial stable error codes', () => {

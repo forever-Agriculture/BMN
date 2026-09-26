@@ -1077,8 +1077,50 @@ export function putRawSetting(database: DatabaseConnection, key: string, value: 
   ).run(key, JSON.stringify(value), now)
 }
 
+/** One worker read observes the session and its workspace at the same revision boundary. */
+function fileReferenceSessionAddress(database: DatabaseConnection, sessionId: string): {
+  session: ReturnType<typeof selectSession>
+  workspace: ReturnType<typeof selectWorkspace>
+} | null {
+  try {
+    const session = selectSession(database, sessionId)
+    return { session, workspace: selectWorkspace(database, session.workspaceId) }
+  } catch (error) {
+    if (error instanceof WorkspaceStoreError && error.code === ERROR_CODES.notFound) return null
+    throw error
+  }
+}
+
+/** Used immediately before an owner-confirmed PTY write; no cached session may authorize it. */
+export function fileReferenceTargetAvailability(database: DatabaseConnection, sessionId: string): boolean {
+  const address = fileReferenceSessionAddress(database, sessionId)
+  return address !== null && address.session.archivedAt === null && address.workspace.archivedAt === null
+}
+
+/** A selected session owns its root even when shown in another workspace's split pane. */
+export function fileReferenceSearchAddress(
+  database: DatabaseConnection,
+  workspaceId: string,
+  sessionId: string | null
+): { root: string | null } {
+  if (sessionId !== null) {
+    const address = fileReferenceSessionAddress(database, sessionId)
+    return { root: address && address.session.archivedAt === null && address.workspace.archivedAt === null
+      ? address.session.cwd : null }
+  }
+  try {
+    const workspace = selectWorkspace(database, workspaceId)
+    return { root: workspace.archivedAt === null ? workspace.defaultCwd : null }
+  } catch (error) {
+    if (error instanceof WorkspaceStoreError && error.code === ERROR_CODES.notFound) return { root: null }
+    throw error
+  }
+}
+
 /** Store functions reachable through the database worker; each runs in one transaction. */
 export const COMPANION_OPERATIONS = Object.freeze({
+  fileReferenceTargetAvailability,
+  fileReferenceSearchAddress,
   insertArtifact,
   listArtifacts,
   listAllArtifacts,

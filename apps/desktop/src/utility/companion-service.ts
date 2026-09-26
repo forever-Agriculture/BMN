@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, join, relative } from 'node:path'
 import {
   ERROR_CODES,
+  exactAbsoluteFileReference,
   HOOK_EVENT_LOG_LIMIT,
   isAttentionOrigin,
   hasDisallowedHandoffControl,
@@ -30,6 +31,8 @@ import {
   type HookObservation,
   type HookEventRecord,
   type InputDraftRecord,
+  type FileReferencePasteReceipt,
+  type FileReferenceSearchResult,
   type ProgressRecord,
   type SessionRecord,
   type TelegramStatus,
@@ -42,6 +45,7 @@ import type { DatabaseWorkerClient } from './database-client'
 import type { ApplicationRoots } from './roots'
 import { HostControlError, type SessionIdentity, type SessionManager } from './session-manager'
 import { runHookConfigurationCheck } from './hook-configuration-check'
+import { searchFileReferences } from './file-reference-search'
 import { createAttentionPager } from './attention-pager'
 import { observeRepeat, REPEAT_NOTICE_AT, type RepeatState, type RepeatSegment } from './repeat-watch'
 import { TelegramConnector, maskToken, redactToken, type ConnectorHealth, type InboundReply } from './telegram-connector'
@@ -242,6 +246,33 @@ export class CompanionService {
     now: () => this.now().getTime()
   })
   private readonly draftOperations = new Map<string, Promise<void>>()
+  /** A request key claims the one PTY write before any asynchronous availability check. */
+  private readonly fileReferencePastes = new Map<string, {
+    fingerprint: string
+    result: Promise<FileReferencePasteReceipt>
+    settled: boolean
+  }>()
+  private readonly fileReferenceSearches = new Map<string, { requestId: string; controller: AbortController }>()
+  private fileReferenceAvailabilityEpoch = 0
+  private fileReferenceAvailabilityChanges = 0
+  /** A host archive/move request announces itself before its first await, invalidating in-flight pastes. */
+  beginFileReferenceAvailabilityChange(): () => void {
+    this.fileReferenceAvailabilityEpoch += 1
+    this.fileReferenceAvailabilityChanges += 1
+    let finished = false
+    return () => {
+      if (finished) return
+      finished = true
+      this.fileReferenceAvailabilityChanges -= 1
+    }
+  }
+
+  private ensureFileReferenceAvailabilityUnchanged(epoch: number): void {
+    if (this.fileReferenceAvailabilityEpoch !== epoch || this.fileReferenceAvailabilityChanges > 0) {
+      throw new HostControlError(ERROR_CODES.revisionConflict,
+        'An archive or move request overlapped delivery; choose the destination again')
+    }
+  }
   /** The last `HOOK_EVENT_LOG_LIMIT` hook events per session, in memory only; a restart clears them. */
   private readonly hookEvents = new Map<string, HookEventRecord[]>()
   /**
@@ -459,6 +490,17 @@ export class CompanionService {
         return this.preview(text(params, 'artifactId'))
       case METHOD_REGISTRY.artifactDeliver:
         return this.deliver(text(params, 'artifactId'), text(params, 'sessionId'))
+      case METHOD_REGISTRY.fileReferencePaste:
+        return this.pasteFileReference(params)
+      case METHOD_REGISTRY.fileReferenceSearch:
+        return this.searchFileReferences(params)
+      case METHOD_REGISTRY.fileReferenceSearchCancel: {
+        const ownerId = text(params, 'ownerId', 128)
+        const requestId = text(params, 'requestId', 128)
+        const active = this.fileReferenceSearches.get(ownerId)
+        if (active?.requestId === requestId) active.controller.abort()
+        return { cancelled: true }
+      }
       case METHOD_REGISTRY.attentionList:
         await this.refreshHandoffStaleness()
         return database.companion('listAttention')
@@ -1175,6 +1217,135 @@ export class CompanionService {
     return result.finally(() => {
       if (this.draftOperations.get(draftId) === tail) this.draftOperations.delete(draftId)
     })
+  }
+
+  private pasteFileReference(raw: Record<string, unknown>): Promise<FileReferencePasteReceipt> {
+    const requestId = text(raw, 'requestId', 128)
+    const sessionId = text(raw, 'sessionId', 128)
+    const expectedIncarnationId = text(raw, 'expectedIncarnationId', 128)
+    const sourcePath = text(raw, 'sourcePath')
+    const line = raw.line
+    const column = raw.column
+    if ((line !== null && (!Number.isSafeInteger(line) || Number(line) < 1)) ||
+      (column !== null && (!Number.isSafeInteger(column) || Number(column) < 1))) {
+      invalid('The reference position is invalid')
+    }
+    const payload = exactAbsoluteFileReference(sourcePath, line as number | null, column as number | null)
+    if (!payload) invalid('This path cannot be sent as an exact file reference')
+    const fingerprint = JSON.stringify([sessionId, expectedIncarnationId, payload])
+    const paramsHash = createHash('sha256').update(fingerprint).digest('hex')
+    const receiptKey = `file-reference-paste:${requestId}`
+    const previous = this.fileReferencePastes.get(requestId)
+    if (previous) {
+      if (previous.fingerprint !== fingerprint) invalid('The paste request changed; choose the target again')
+      return previous.result
+    }
+    const availabilityEpoch = this.fileReferenceAvailabilityEpoch
+    const result = (async (): Promise<FileReferencePasteReceipt> => {
+      this.ensureFileReferenceAvailabilityUnchanged(availabilityEpoch)
+      const database = this.options.database
+      const previousReceipt = await database.companion('getReceipt', receiptKey)
+      if (previousReceipt) {
+        if (previousReceipt.paramsHash !== paramsHash) invalid('The paste request changed; choose the target again')
+        if (previousReceipt.state === 'done' && previousReceipt.result) {
+          return previousReceipt.result as FileReferencePasteReceipt
+        }
+        if (previousReceipt.state === 'failed') {
+          throw new HostControlError(ERROR_CODES.revisionConflict,
+            'The earlier paste was rejected before writing; choose the destination again')
+        }
+        throw new HostControlError(ERROR_CODES.revisionConflict,
+          'An earlier paste may have reached the input; inspect the destination before choosing it again')
+      }
+      await this.availableFileReferenceTarget(sessionId, expectedIncarnationId)
+      // The staged receipt survives a host crash. A retry with the same key never repeats an uncertain write.
+      await database.companion('putReceipt', { key: receiptKey, paramsHash, state: 'staged' }, this.iso())
+      let live: string
+      try {
+        live = await this.availableFileReferenceTarget(sessionId, expectedIncarnationId)
+        // Host archive/move requests enter through this same event loop and mark the epoch before awaiting the DB.
+        // No await separates this guard and the PTY write, so a response-gap archive cannot sneak past it.
+        this.ensureFileReferenceAvailabilityUnchanged(availabilityEpoch)
+      } catch (error) {
+        await database.companion('putReceipt', {
+          key: receiptKey, paramsHash, state: 'failed',
+          error: { code: error instanceof HostControlError ? error.code : ERROR_CODES.ioError,
+            message: error instanceof Error ? error.message : 'Destination unavailable before paste' }
+        }, this.iso())
+        throw error
+      }
+      // No await separates the final checks and the bounded write.
+      try {
+        this.options.manager.writeToSession(sessionId, bracketedPaste(payload, false))
+      } catch {
+        throw new HostControlError(ERROR_CODES.ioError,
+          'Paste outcome is uncertain; inspect the destination before choosing it again')
+      }
+      const receipt: FileReferencePasteReceipt = {
+        requestId, sessionId, incarnationId: live, payload,
+        pastedAt: this.iso(), status: 'pasted-not-submitted'
+      }
+      try {
+        await database.companion('putReceipt', {
+          key: receiptKey, paramsHash, state: 'done', result: receipt
+        }, this.iso())
+      } catch {
+        throw new HostControlError(ERROR_CODES.ioError,
+          'Paste reached the destination, but its receipt is uncertain; inspect it before choosing again')
+      }
+      return receipt
+    })()
+    this.fileReferencePastes.set(requestId, { fingerprint, result, settled: false })
+    void result.then(() => {
+      const claim = this.fileReferencePastes.get(requestId)
+      if (claim?.result === result) claim.settled = true
+    }, () => undefined)
+    // Failed preflight may be tried again after the owner explicitly reselects with a fresh key.
+    void result.catch(() => {
+      if (this.fileReferencePastes.get(requestId)?.result === result) this.fileReferencePastes.delete(requestId)
+    })
+    if (this.fileReferencePastes.size > 512) {
+      for (const [key, claim] of this.fileReferencePastes) {
+        if (key !== requestId && claim.settled) this.fileReferencePastes.delete(key)
+        if (this.fileReferencePastes.size <= 512) break
+      }
+    }
+    return result
+  }
+
+  private async availableFileReferenceTarget(sessionId: string, expectedIncarnationId: string): Promise<string> {
+    if (!await this.options.database.companion('fileReferenceTargetAvailability', sessionId)) {
+      throw new HostControlError(ERROR_CODES.revisionConflict, 'The destination was archived or removed; choose it again')
+    }
+    const live = this.options.manager.liveIncarnationId(sessionId)
+    if (!live) throw new HostControlError(ERROR_CODES.revisionConflict, 'The destination stopped; choose it again')
+    if (live !== expectedIncarnationId) {
+      throw new HostControlError(ERROR_CODES.revisionConflict, 'The destination process changed; choose it again')
+    }
+    return live
+  }
+
+  private async searchFileReferences(raw: Record<string, unknown>): Promise<FileReferenceSearchResult> {
+    const ownerId = text(raw, 'ownerId', 128)
+    const requestId = text(raw, 'requestId', 128)
+    const workspaceId = text(raw, 'workspaceId', 128)
+    const sessionId = optionalText(raw, 'sessionId')
+    const query = text(raw, 'query', 256).trim()
+    if (!query || /[\p{Cc}\p{Cf}]/u.test(query)) invalid('Search needs visible text')
+    this.fileReferenceSearches.get(ownerId)?.controller.abort()
+    const controller = new AbortController()
+    this.fileReferenceSearches.set(ownerId, { requestId, controller })
+    try {
+      const address = await this.options.database.companion('fileReferenceSearchAddress', workspaceId, sessionId)
+      const root = sessionId && address.root
+        ? this.options.manager.liveLaunchDirectory(sessionId) ?? address.root
+        : address.root
+      return await searchFileReferences(root, query, controller.signal)
+    } finally {
+      if (this.fileReferenceSearches.get(ownerId)?.requestId === requestId) {
+        this.fileReferenceSearches.delete(ownerId)
+      }
+    }
   }
 
   private async availableHandoffSessions(sourceSessionId: string, sessionId: string): Promise<{

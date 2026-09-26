@@ -22,6 +22,10 @@ import {
   type DraftSendExpectation,
   type FileReferenceReadParams,
   type FileReferenceReadResult,
+  type FileReferencePasteParams,
+  type FileReferencePasteReceipt,
+  type FileReferenceSearchParams,
+  type FileReferenceSearchResult,
   type HandoffDraftSaveParams,
   type HandoffReviewSnapshot,
   type ClosePromptDecision,
@@ -541,6 +545,15 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   readFileReference(params: FileReferenceReadParams): Promise<FileReferenceReadResult> {
     return invokeBridge('aiterm:file-reference:read', params)
+  },
+  pasteFileReference(params: FileReferencePasteParams): Promise<FileReferencePasteReceipt> {
+    return invokeBridge('aiterm:file-reference:paste', params)
+  },
+  searchFileReferences(params: FileReferenceSearchParams): Promise<FileReferenceSearchResult> {
+    return invokeBridge('aiterm:file-reference:search', params)
+  },
+  async cancelFileReferenceSearch(ownerId: string, requestId: string): Promise<void> {
+    await invokeBridge('aiterm:file-reference:search-cancel', { ownerId, requestId })
   },
   chooseFileReferenceBase(): Promise<string | null> {
     return invokeBridge('aiterm:file-reference:choose-base', {})

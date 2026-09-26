@@ -379,11 +379,19 @@ async function start(): Promise<void> {
         if (!isWorkspaceUpdateParams(params)) {
           throw new HostControlError(ERROR_CODES.invalidArgument, 'Workspace update parameters are invalid')
         }
-        return database.updateWorkspace(
-          typeof params.defaultCwd === 'string'
-            ? { ...params, defaultCwd: resolveHomeDirectory(params.defaultCwd) }
-            : params
-        )
+        {
+          const finish = params.archived === true
+            ? companionService.beginFileReferenceAvailabilityChange() : () => undefined
+          try {
+            return await database.updateWorkspace(
+              typeof params.defaultCwd === 'string'
+                ? { ...params, defaultCwd: resolveHomeDirectory(params.defaultCwd) }
+                : params
+            )
+          } finally {
+            finish()
+          }
+        }
       case METHOD_REGISTRY.sessionCreate: {
         if (!isSessionCreateParams(params)) {
           throw new HostControlError(
@@ -423,25 +431,31 @@ async function start(): Promise<void> {
         const update = typeof params.cwd === 'string'
           ? { ...params, cwd: resolveHomeDirectory(params.cwd) }
           : params
-        if (update.archived === true) {
-          const current = await findStoredSession(database, update.sessionId)
-          if (!current) throw new HostControlError(ERROR_CODES.notFound, 'The session was not found')
-          if (manager.sessionWithCurrentProcessState(current).lastProcess?.state === 'live') {
-            throw new HostControlError(ERROR_CODES.invalidArgument, 'Stop the session before archiving it')
+        const finish = update.archived === true || typeof update.workspaceId === 'string'
+          ? companionService.beginFileReferenceAvailabilityChange() : () => undefined
+        try {
+          if (update.archived === true) {
+            const current = await findStoredSession(database, update.sessionId)
+            if (!current) throw new HostControlError(ERROR_CODES.notFound, 'The session was not found')
+            if (manager.sessionWithCurrentProcessState(current).lastProcess?.state === 'live') {
+              throw new HostControlError(ERROR_CODES.invalidArgument, 'Stop the session before archiving it')
+            }
           }
+          if ('cwd' in update || 'executable' in update || 'argv' in update) {
+            const current = await findStoredSession(database, update.sessionId)
+            if (!current) throw new HostControlError(ERROR_CODES.notFound, 'The session was not found')
+            await validateLaunch({
+              cwd: update.cwd ?? current.cwd,
+              executable: update.executable ?? current.executable,
+              argv: update.argv ?? current.argv,
+              cols: 80,
+              rows: 24
+            })
+          }
+          return manager.sessionWithCurrentProcessState(await database.updateSession(update))
+        } finally {
+          finish()
         }
-        if ('cwd' in update || 'executable' in update || 'argv' in update) {
-          const current = await findStoredSession(database, update.sessionId)
-          if (!current) throw new HostControlError(ERROR_CODES.notFound, 'The session was not found')
-          await validateLaunch({
-            cwd: update.cwd ?? current.cwd,
-            executable: update.executable ?? current.executable,
-            argv: update.argv ?? current.argv,
-            cols: 80,
-            rows: 24
-          })
-        }
-        return manager.sessionWithCurrentProcessState(await database.updateSession(update))
       }
       case METHOD_REGISTRY.sessionBindingGet:
         return manager.conversationBinding(stringValue(params, 'sessionId'))

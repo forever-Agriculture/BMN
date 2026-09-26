@@ -26,6 +26,7 @@ function install(overrides: Partial<FileReferenceIpcActions> = {}): {
       }
     }),
     senderIsAllowed: (event) => (event as unknown as { allowed: boolean }).allowed,
+    ownerFocused: () => true,
     chooseFolder: async () => '/home/me/project',
     showInFolder: (path) => shown.push(path),
     ...overrides
@@ -92,5 +93,44 @@ describe('file-reference IPC', () => {
     }
     expect((await failure(() => show(stranger, { path: '/home/me/a.ts' }))).code).toBe('UNAUTHORIZED')
     expect(shown).toEqual(['/home/me/project/src/a.ts'])
+  })
+
+  it('pastes only from a focused owner window after that window previewed the exact file', async () => {
+    const { handlers, requests } = install()
+    const paste = handlers.get('aiterm:file-reference:paste')!
+    const request = {
+      requestId: 'one', sessionId: 'target', expectedIncarnationId: 'run-1',
+      sourcePath: '/home/me/project/src/a.ts', line: 7, column: null
+    }
+    expect((await failure(() => paste(allowed, request))).code).toBe('INVALID_ARGUMENT')
+    await handlers.get('aiterm:file-reference:read')!(allowed, { sessionId: 'source', reference: 'src/a.ts' })
+    expect((await failure(() => paste(otherWindow, request))).code).toBe('INVALID_ARGUMENT')
+    expect((await failure(() => paste(stranger, request))).code).toBe('UNAUTHORIZED')
+    await paste(allowed, { ...request, extra: 'ignored' })
+    expect(requests.at(-1)).toEqual({ method: METHOD_REGISTRY.fileReferencePaste, params: request })
+    const blurred = install({ ownerFocused: () => false })
+    await blurred.handlers.get('aiterm:file-reference:read')!(allowed, { sessionId: 'source', reference: 'src/a.ts' })
+    expect((await failure(() => blurred.handlers.get('aiterm:file-reference:paste')!(allowed, request))).message)
+      .toMatch(/lost focus/)
+  })
+
+  it('forwards one bounded search and its matching cancellation request', async () => {
+    const { handlers, requests } = install()
+    const search = {
+      ownerId: 'palette', requestId: 'query-one', workspaceId: 'workspace',
+      sessionId: 'session', query: 'parser'
+    }
+    await handlers.get('aiterm:file-reference:search')!(allowed, { ...search, extra: 'ignored' })
+    await handlers.get('aiterm:file-reference:search-cancel')!(allowed, {
+      ownerId: search.ownerId, requestId: search.requestId
+    })
+    expect(requests).toEqual([
+      { method: METHOD_REGISTRY.fileReferenceSearch, params: search },
+      { method: METHOD_REGISTRY.fileReferenceSearchCancel, params: { ownerId: 'palette', requestId: 'query-one' } }
+    ])
+    expect((await failure(() => handlers.get('aiterm:file-reference:search')!(allowed, { ...search, query: 'x'.repeat(257) }))).code)
+      .toBe('INVALID_ARGUMENT')
+    expect((await failure(() => handlers.get('aiterm:file-reference:search')!(stranger, search))).code)
+      .toBe('UNAUTHORIZED')
   })
 })

@@ -20,6 +20,7 @@ import {
   type ProgressRecord,
   type ClosePromptRequest,
   type SessionRecord,
+  exactAbsoluteFileReference,
   isWorkspaceMarker,
   type WorkspaceLayoutState,
   type WorkspaceRecord
@@ -27,9 +28,9 @@ import {
 import type { RendererCohortResumeResult } from '../../preload/bridge'
 import './styles.css'
 import { failureDetail } from './bridge-error'
-import { CommandPalette, type PaletteCommand } from './command-palette'
+import { CommandPalette, paletteFileSearchRootLabel, type PaletteCommand } from './command-palette'
 import { conversationBindingPresentation } from './conversation-resume'
-import { FileReferenceDialog, type FileReferenceRequest } from './file-reference-dialog'
+import { FileReferenceDialog, type FileReferenceRequest, type FileReferenceSendTarget } from './file-reference-dialog'
 import { FilesPanel } from './files-panel'
 import { HookEventsDialog } from './hook-events-dialog'
 import { ProgressEvidenceDialog } from './progress-evidence-dialog'
@@ -2030,7 +2031,35 @@ function App(): React.JSX.Element {
         }}
         onOpenSession={(sessionId) => { openSession(sessionId); setDialog(null) }}
       /> : null}
-      {dialog?.kind === 'palette' ? <CommandPalette commands={paletteCommands()} onClose={() => setDialog(null)} /> : null}
+      {dialog?.kind === 'palette' ? (
+        <CommandPalette
+          commands={paletteCommands()}
+          fileSearch={activeWorkspaceId ? {
+            workspaceId: selectedSessionId
+              ? sessions.find((item) => item.sessionId === selectedSessionId)?.workspaceId ?? activeWorkspaceId
+              : activeWorkspaceId,
+            sessionId: selectedSessionId,
+            rootLabel: selectedSessionId
+              ? paletteFileSearchRootLabel(
+                sessions.find((item) => item.sessionId === selectedSessionId), live[selectedSessionId]
+              )
+              : activeWorkspace?.defaultCwd ?? 'unavailable workspace directory',
+            open: (path, sessionId) => {
+              if (!sessionId) {
+                openFileReference(null, path, true)
+                return
+              }
+              const reference = exactAbsoluteFileReference(path, null, null)
+              if (!reference) {
+                brief('This filename cannot be represented as a file reference.')
+                return
+              }
+              openFileReference(sessionId, reference, true)
+            }
+          } : undefined}
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
       {dialog?.kind === 'split-picker' ? (
         <CommandPalette
           label="Split with"
@@ -2041,7 +2070,21 @@ function App(): React.JSX.Element {
         />
       ) : null}
       {dialog?.kind === 'file-reference' ? (
-        <FileReferenceDialog request={dialog.request} onClose={() => setDialog(null)} />
+        <FileReferenceDialog
+          request={dialog.request}
+          targets={visibleWorkspaces(workspaces, false).flatMap((workspace) =>
+            visibleWorkspaceSessions(sessions, workspace.workspaceId, false).map((session): FileReferenceSendTarget => ({
+              sessionId: session.sessionId,
+              sessionName: session.name,
+              workspaceName: workspace.name,
+              harness: agentTag(session.executable),
+              path: live[session.sessionId]?.cwd ?? session.cwd,
+              incarnationId: sessionProcessLive(session, live[session.sessionId]?.incarnationId)
+                ? live[session.sessionId]!.incarnationId : null
+            }))
+          )}
+          onClose={() => setDialog(null)}
+        />
       ) : null}
       {dialog?.kind === 'preferences' ? (
         <PreferencesDialog

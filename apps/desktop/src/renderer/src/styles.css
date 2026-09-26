@@ -1944,6 +1944,58 @@ input[type='radio'] {
   font-size: 12px;
 }
 
+.file-reference-send {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.file-reference-send label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.file-reference-send select {
+  width: 100%;
+  min-height: 36px;
+}
+
+.file-reference-send p {
+  margin: 0;
+  font-size: 12px;
+}
+
+.file-reference-send-preview {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+}
+
+.file-reference-send-preview pre {
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--ground);
+  font: 12px/1.5 var(--font-mono);
+  user-select: text;
+}
+
+.palette-file-status {
+  margin: 4px 12px 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .needs-you-popover {
   position: absolute;
   top: 40px;

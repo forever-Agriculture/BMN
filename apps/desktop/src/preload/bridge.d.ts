@@ -13,6 +13,10 @@ import type {
   DraftSendExpectation,
   FileReferenceReadParams,
   FileReferenceReadResult,
+  FileReferencePasteParams,
+  FileReferencePasteReceipt,
+  FileReferenceSearchParams,
+  FileReferenceSearchResult,
   HandoffDraftSaveParams,
   HandoffReviewSnapshot,
   HookCheckReport,
@@ -214,6 +218,9 @@ export interface AiTerminalBridge {
   showArtifact(artifactId: string): Promise<{ shown: true }>
   /** A read-only snapshot of a live local file; the utility resolves and checks the reference again. */
   readFileReference(params: FileReferenceReadParams): Promise<FileReferenceReadResult>
+  pasteFileReference(params: FileReferencePasteParams): Promise<FileReferencePasteReceipt>
+  searchFileReferences(params: FileReferenceSearchParams): Promise<FileReferenceSearchResult>
+  cancelFileReferenceSearch(ownerId: string, requestId: string): Promise<void>
   /** A native folder picker for resolving one reference; null when cancelled. */
   chooseFileReferenceBase(): Promise<string | null>
   /** Reveals the displayed file in the system file manager without opening it. */

@@ -386,6 +386,168 @@ export async function runFileReferenceIntegration(options: {
       after: `${terminal.cols}x${terminal.rows} refits ${options.refitCount()}`,
       sameElement: terminal.element === elementBefore && !!elementBefore?.isConnected
     },
-    attentionUnchanged: (await openRequestTitles()) === attentionBefore
+    attentionUnchanged: (await openRequestTitles()) === attentionBefore,
+    epic27: null
+  }
+}
+
+/** Drives the new chooser and palette through the real bridge in the isolated Electron self-test. */
+export async function runEpic27FileReferenceIntegration(options: {
+  sourcePane: HTMLElement
+  sourceSessionId: string
+  workspaceId: string
+  targetPane: HTMLElement
+  targetSessionId: string
+  targetName: string
+  targetTerminal: Terminal
+}): Promise<NonNullable<FileReferenceFlowProbe['epic27']>> {
+  const openFromSource = async (): Promise<HTMLDialogElement> => {
+    options.sourcePane.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    await waitFor('source selected', async () =>
+      (await window.aiTerminal.getLayout(options.workspaceId)).layout.selectedSessionId === options.sourceSessionId || undefined)
+    window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'P', code: 'KeyP', ctrlKey: true, shiftKey: true, bubbles: true
+    }))
+    const paletteInput = await waitFor('source palette', () => document.querySelector<HTMLInputElement>('.command-palette input'))
+    setInputValue(paletteInput, 'Open file reference')
+    await waitFor('open reference command', () => document.querySelector('#palette-file-reference[aria-selected="true"]'))
+    paletteInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    const dialog = await waitFor('source file dialog', openDialog)
+    const referenceInput = await waitFor('source reference input', () =>
+      dialog.querySelector<HTMLInputElement>('input[aria-label="File reference"]'))
+    setInputValue(referenceInput, LINK_TEXT)
+    referenceInput.closest('form')?.requestSubmit()
+    await waitFor('source reference ready', () => dialog.querySelector('.file-reference-line'))
+    return dialog
+  }
+  const chooseTarget = async (dialog: HTMLDialogElement): Promise<HTMLSelectElement> => {
+    const chooser = await waitFor('send chooser', () => dialog.querySelector<HTMLSelectElement>('select[aria-label="Send to session"]'))
+    chooser.value = options.targetSessionId
+    chooser.dispatchEvent(new Event('change', { bubbles: true }))
+    await waitFor('review send enabled', () => {
+      const review = button(dialog, 'Review send…')
+      return review.disabled ? undefined : review
+    })
+    return chooser
+  }
+
+  const dialog = await openFromSource()
+  const chooser = await waitFor('empty send chooser', () => dialog.querySelector<HTMLSelectElement>('select[aria-label="Send to session"]'))
+  const chooserDefaultEmpty = chooser.value === ''
+  const chooserCrossWorkspace = [...chooser.options].some((option) => option.textContent?.includes('Self-test archived workspace')) &&
+    [...chooser.options].some((option) => option.value === options.targetSessionId)
+  await chooseTarget(dialog)
+  button(dialog, 'Review send…').click()
+  const sendPreview = await waitFor('send preview', () => dialog.querySelector<HTMLElement>('.file-reference-send-preview'))
+  const previewPayload = sendPreview.querySelector('pre')?.textContent ?? ''
+  const previewTarget = sendPreview.textContent ?? ''
+  const previewIncarnation = sendPreview.querySelector('.mono')?.textContent ?? ''
+  button(dialog, 'Paste reference').click()
+  const pastedFeedback = await waitFor('paste receipt', () => {
+    const error = dialog.querySelector('[role="alert"]')?.textContent?.trim()
+    if (error) throw new Error(`file-reference paste rejected: ${error}`)
+    const value = dialog.querySelector('.file-reference-feedback')?.textContent?.trim()
+    return value?.includes('not submitted') ? value : undefined
+  })
+  const pastedIntoTarget = await waitFor('target input contains reference', () => {
+    const buffer = options.targetTerminal.buffer.active
+    const visible = Array.from({ length: buffer.length }, (_, index) =>
+      buffer.getLine(index)?.translateToString(true) ?? '').join('')
+    return visible.includes(previewPayload) ? true : undefined
+  }).catch((error: unknown) => {
+    const buffer = options.targetTerminal.buffer.active
+    const lines = Array.from({ length: Math.min(buffer.length, 12) }, (_, offset) =>
+      buffer.getLine(buffer.length - Math.min(buffer.length, 12) + offset)?.translateToString(true) ?? '')
+    throw new Error(`target input assertion: ${String(error)}; payload=${JSON.stringify(previewPayload)}; tail=${JSON.stringify(lines)}`)
+  })
+  // Readline owns the unsubmitted input. Clear this synthetic target before later self-test commands.
+  options.targetTerminal.input('\x15', false)
+  await closeWithEscape(dialog)
+
+  const focusDialog = await openFromSource()
+  const focusChooser = await chooseTarget(focusDialog)
+  button(focusDialog, 'Review send…').click()
+  await waitFor('focus-loss preview', () => focusDialog.querySelector('.file-reference-send-preview'))
+  window.dispatchEvent(new Event('blur'))
+  const focusLossClearedTarget = await waitFor('focus-loss reset', () =>
+    focusChooser.value === '' && !focusDialog.querySelector('.file-reference-send-preview') || undefined)
+  await closeWithEscape(focusDialog)
+
+  options.sourcePane.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+  await waitFor('foreign search session selected', async () =>
+    (await window.aiTerminal.getLayout(options.workspaceId)).layout.selectedSessionId === options.sourceSessionId || undefined)
+  window.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'P', code: 'KeyP', ctrlKey: true, shiftKey: true, bubbles: true
+  }))
+  const foreignPalette = await waitFor('foreign file palette', () => document.querySelector<HTMLInputElement>('.command-palette input'))
+  setInputValue(foreignPalette, 'parser.ts')
+  await waitFor('foreign file row', () => document.querySelector('.palette-results [data-group="Files"][aria-selected="true"]'))
+  foreignPalette.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  const foreignDialog = await waitFor('foreign file preview', openDialog)
+  await waitFor('foreign file loaded', () => foreignDialog.querySelector('.file-reference-line') ??
+    foreignDialog.querySelector('.file-reference-preview'))
+  const foreignSearchSession = detail(foreignDialog, 'Session')
+  const foreignSearchFile = detail(foreignDialog, 'File')
+  await closeWithEscape(foreignDialog)
+
+  options.targetPane.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+  await waitFor('search session selected', async () =>
+    (await window.aiTerminal.getLayout(options.workspaceId)).layout.selectedSessionId === options.targetSessionId || undefined)
+  window.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'P', code: 'KeyP', ctrlKey: true, shiftKey: true, bubbles: true
+  }))
+  const paletteInput = await waitFor('file search palette', () => document.querySelector<HTMLInputElement>('.command-palette input'))
+  const searchStatus = (): string => document.querySelector('.palette-file-status')?.textContent?.trim() ?? ''
+  const fileRows = (): HTMLElement[] => [...document.querySelectorAll<HTMLElement>('.palette-results [data-group="Files"]')]
+  setInputValue(paletteInput, 'search-cap')
+  const searchCapLabel = await waitFor('file search cap', () =>
+    searchStatus().includes('Showing first 50') ? searchStatus() : undefined)
+  const searchRows = fileRows().length
+  setInputValue(paletteInput, 'bmn-excluded')
+  await waitFor('skipped search trees', () => searchStatus().includes('0 found') ? true : undefined)
+  const skippedRowsAbsent = fileRows().length === 0
+  setInputValue(paletteInput, 'search-cap')
+  await waitFor('second capped search started', () => searchStatus().includes('Searching') ? true : undefined)
+  setInputValue(paletteInput, 'parser.ts')
+  await waitFor('superseding file row', () => fileRows().some((row) => row.textContent?.includes('parser.ts')) ? true : undefined)
+  const supersededRowsAbsent = fileRows().every((row) => !row.textContent?.includes('search-cap'))
+  await waitFor('file row selected', () => document.querySelector('.palette-results [data-group="Files"][aria-selected="true"]'))
+  paletteInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  const foundDialog = await waitFor('palette file preview', openDialog)
+  await waitFor('palette file loaded', () => foundDialog.querySelector('.file-reference-line') ??
+    foundDialog.querySelector('.file-reference-preview'))
+  const openedFromSession = detail(foundDialog, 'Session')
+  const openedFile = detail(foundDialog, 'File')
+  await closeWithEscape(foundDialog)
+  window.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'P', code: 'KeyP', ctrlKey: true, shiftKey: true, bubbles: true
+  }))
+  const colonPalette = await waitFor('colon file palette', () => document.querySelector<HTMLInputElement>('.command-palette input'))
+  setInputValue(colonPalette, 'a:b.ts')
+  await waitFor('colon file row', () => [...document.querySelectorAll<HTMLElement>('.palette-results [data-group="Files"]')]
+    .find((row) => row.textContent?.includes('a:b.ts')))
+  await waitFor('colon file selected', () => document.querySelector('.palette-results [data-group="Files"][aria-selected="true"]'))
+  colonPalette.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  const colonDialog = await waitFor('colon file preview', openDialog)
+  await waitFor('colon file loaded', () => colonDialog.querySelector('.file-reference-preview'))
+  const colonFile = detail(colonDialog, 'File')
+  await closeWithEscape(colonDialog)
+  window.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 'P', code: 'KeyP', ctrlKey: true, shiftKey: true, bubbles: true
+  }))
+  const numericPalette = await waitFor('numeric suffix palette', () => document.querySelector<HTMLInputElement>('.command-palette input'))
+  setInputValue(numericPalette, 'report:42')
+  await waitFor('numeric suffix row', () => [...document.querySelectorAll<HTMLElement>('.palette-results [data-group="Files"]')]
+    .find((row) => row.textContent?.includes('report:42')))
+  await waitFor('numeric suffix selected', () => document.querySelector('.palette-results [data-group="Files"][aria-selected="true"]'))
+  numericPalette.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+  const numericSuffixRejected = await waitFor('numeric suffix rejection', () =>
+    !openDialog() && [...document.querySelectorAll<HTMLElement>('.feedback-notice.brief')]
+      .some((notice) => notice.textContent?.includes('cannot be represented')) || undefined)
+  return {
+    chooserDefaultEmpty, chooserCrossWorkspace, previewPayload, previewTarget, previewIncarnation,
+    pastedFeedback, pastedIntoTarget, focusLossClearedTarget, searchCapLabel, searchRows,
+    skippedRowsAbsent, supersededRowsAbsent, openedFromSession, openedFile, colonFile,
+    foreignSearchSession, foreignSearchFile, numericSuffixRejected
   }
 }

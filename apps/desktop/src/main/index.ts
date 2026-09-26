@@ -737,13 +737,17 @@ function installIpcHandlers(): void {
       if (!selfTest) return client
       return {
         request: <Result>(method: ProtocolMethod, params: object) => {
-          const { sessionId, reference } = params as { sessionId?: unknown; reference?: unknown }
-          selfTestReadFileReferences.push({ sessionId: String(sessionId), reference: String(reference) })
+          if (method === METHOD_REGISTRY.fileReferenceRead) {
+            const { sessionId, reference } = params as { sessionId?: unknown; reference?: unknown }
+            selfTestReadFileReferences.push({ sessionId: String(sessionId), reference: String(reference) })
+          }
           return client.request<Result>(method, params)
         }
       }
     },
     senderIsAllowed,
+    // The isolated self-test window is deliberately hidden, so it has no OS focus to report.
+    ownerFocused: (event) => selfTest || BrowserWindow.fromWebContents(event.sender)?.isFocused() === true,
     chooseFolder: async (event) => {
       if (selfTest) throw new MainIpcError(ERROR_CODES.invalidArgument, 'File dialogs are unavailable in this run')
       const options = { title: 'Resolve the reference from this folder', properties: ['openDirectory'] as Array<'openDirectory'> }
@@ -2835,6 +2839,21 @@ async function runSelfTest(): Promise<void> {
       Array.from({ length: 60 }, (_, index) => index === 41 ? 'FILE-REFERENCE-TARGET line 42' : `line ${index + 1}`)
         .join('\n') + '\n'
     )
+    const searchRoot = join(isolatedCwd, 'file-search-fixture')
+    mkdirSync(searchRoot, { recursive: true })
+    for (let index = 0; index < 120; index += 1) {
+      writeFileSync(join(searchRoot, `search-cap-${String(index).padStart(3, '0')}.ts`), 'fixture\n')
+    }
+    writeFileSync(join(searchRoot, 'report:42'), 'exact colon-named file\n')
+    writeFileSync(join(searchRoot, 'report'), Array.from({ length: 60 }, () => 'wrong sibling').join('\n'))
+    writeFileSync(join(searchRoot, 'a:b.ts'), 'representable colon-named file\n')
+    mkdirSync(join(searchRoot, 'node_modules'), { recursive: true })
+    mkdirSync(join(searchRoot, '.git'), { recursive: true })
+    writeFileSync(join(searchRoot, 'node_modules', 'bmn-excluded.ts'), 'fixture\n')
+    writeFileSync(join(searchRoot, '.git', 'bmn-excluded.ts'), 'fixture\n')
+    const deepSearchRoot = join(searchRoot, 'one', 'two', 'three', 'four', 'five', 'six', 'seven')
+    mkdirSync(deepSearchRoot, { recursive: true })
+    writeFileSync(join(deepSearchRoot, 'bmn-deep.ts'), 'fixture\n')
     writeFixtureCommand(secondSession, "printf 'FILEREF %s/%s\\n' refs src/parser.ts:42:7; cd refs")
     writeFixtureInput(session, 'EXISTING-HANDOFF-PREFIX ')
     // Dictation needs an engine and an installed model to start; both are stand-ins, and transcription is synthetic.
@@ -2948,7 +2967,12 @@ async function runSelfTest(): Promise<void> {
       'refs/src/parser.ts:42:7',
       'refs/src/parser.ts:7',
       'refs/src/parser.ts:42:7',
-      'refs/src/parser.ts:42:7'
+      'refs/src/parser.ts:42:7',
+      'refs/src/parser.ts:42:7',
+      'refs/src/parser.ts:42:7',
+      referencedFile,
+      referencedFile,
+      '"' + join(searchRoot, 'a:b.ts') + '"'
     ]
     if (
       !fileReferenceFlow.palette.focusedInput ||
@@ -2997,7 +3021,26 @@ async function runSelfTest(): Promise<void> {
       fileReferenceFlow.redraw.ptyInputEvents !== 0 ||
       JSON.stringify(selfTestReadFileReferences.map((read) => read.reference)) !==
         JSON.stringify(expectedFileReferenceReads) ||
-      selfTestReadFileReferences.at(-1)?.sessionId !== thirdSession.sessionId ||
+      selfTestReadFileReferences.at(-1)?.sessionId !== secondSession.sessionId ||
+      !fileReferenceFlow.epic27?.chooserDefaultEmpty ||
+      !fileReferenceFlow.epic27.chooserCrossWorkspace ||
+      fileReferenceFlow.epic27.previewPayload !== `${referencedFile}:42:7` ||
+      !fileReferenceFlow.epic27.previewTarget.includes('Same CLI chat B') ||
+      !fileReferenceFlow.epic27.previewTarget.includes('without pressing Enter') ||
+      fileReferenceFlow.epic27.previewIncarnation !== secondSession.incarnationId ||
+      !fileReferenceFlow.epic27.pastedFeedback.includes('not submitted') ||
+      !fileReferenceFlow.epic27.pastedIntoTarget ||
+      !fileReferenceFlow.epic27.focusLossClearedTarget ||
+      !fileReferenceFlow.epic27.searchCapLabel.includes('Showing first 50') ||
+      fileReferenceFlow.epic27.searchRows !== 50 ||
+      !fileReferenceFlow.epic27.skippedRowsAbsent ||
+      !fileReferenceFlow.epic27.supersededRowsAbsent ||
+      !fileReferenceFlow.epic27.openedFromSession.includes('Same CLI chat B') ||
+      fileReferenceFlow.epic27.openedFile !== referencedFile ||
+      !fileReferenceFlow.epic27.foreignSearchSession.includes('Archived running chat') ||
+      fileReferenceFlow.epic27.foreignSearchFile !== referencedFile ||
+      fileReferenceFlow.epic27.colonFile !== join(searchRoot, 'a:b.ts') ||
+      !fileReferenceFlow.epic27.numericSuffixRejected ||
       fileReferenceFlow.ptyInputEvents !== 0 ||
       !fileReferenceFlow.terminalUnchanged ||
       !fileReferenceFlow.attentionUnchanged
@@ -3565,6 +3608,64 @@ async function runSelfTest(): Promise<void> {
       status: readFileSync(join(petitionDirectory, 'status.txt'), 'utf8'),
       bounded: petitionSnapshot.handoffs?.length === 1 &&
         JSON.stringify(Object.keys(petitionSnapshot.handoffs[0]).sort()) === JSON.stringify(['destinationSessionId', 'draftId', 'state', 'updatedAt'])
+    }
+    // The raw-mode synthetic receiver records the exact PTY bytes for this owner-confirmed file send.
+    const beforeFileReferenceWire = terminalModeProgramInput(destinationHarness.input)
+    const fileReferenceWireUi = await applicationWindow.webContents.executeJavaScript(`(async () => {
+      const wait = async (read, label) => { const end = Date.now() + 10000; while (Date.now() < end) {
+        const value = read(); if (value) return value; await new Promise(r => setTimeout(r, 25));
+      } throw new Error('file reference wire probe: ' + label); };
+      const setInput = (input, value) => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, value);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      };
+      window.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'P', code: 'KeyP', ctrlKey: true, shiftKey: true, bubbles: true
+      }));
+      const palette = await wait(() => document.querySelector('.command-palette input'), 'palette');
+      setInput(palette, 'Open file reference');
+      await wait(() => document.querySelector('#palette-file-reference[aria-selected="true"]'), 'command');
+      palette.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      const dialog = await wait(() => document.querySelector('dialog.file-reference-dialog[open]'), 'dialog');
+      const input = await wait(() => dialog.querySelector('input[aria-label="File reference"]'), 'reference input');
+      setInput(input, 'refs/src/parser.ts:42:7');
+      input.closest('form').requestSubmit();
+      await wait(() => dialog.querySelector('.file-reference-line'), 'file ready');
+      const chooser = await wait(() => dialog.querySelector('select[aria-label="Send to session"]'), 'chooser');
+      chooser.value = ${JSON.stringify(petitionDestination.session.sessionId)};
+      chooser.dispatchEvent(new Event('change', { bubbles: true }));
+      const review = await wait(() => [...dialog.querySelectorAll('button')]
+        .find(button => button.textContent.trim() === 'Review send…' && !button.disabled), 'review');
+      review.click();
+      const preview = await wait(() => dialog.querySelector('.file-reference-send-preview'), 'preview');
+      const payloadShown = preview.querySelector('pre')?.textContent ?? '';
+      const targetShown = preview.textContent ?? '';
+      [...preview.querySelectorAll('button')].find(button => button.textContent.trim() === 'Paste reference').click();
+      const feedback = await wait(() => {
+        const error = dialog.querySelector('[role="alert"]')?.textContent?.trim();
+        if (error) throw new Error('paste rejected: ' + error);
+        const text = dialog.querySelector('.file-reference-feedback')?.textContent?.trim();
+        return text?.includes('not submitted') ? text : null;
+      }, 'receipt');
+      dialog.dispatchEvent(new Event('cancel', { cancelable: true }));
+      return { payloadShown, targetShown, feedback };
+    })()`) as { payloadShown: string; targetShown: string; feedback: string }
+    const fileReferenceWirePayload = `${referencedFile}:42:7`
+    const fileReferenceWireBytes = await acceptanceWait(async () => {
+      const input = terminalModeProgramInput(destinationHarness.input).slice(beforeFileReferenceWire.length)
+      return input.includes(fileReferenceWirePayload) ? input : undefined
+    }, 'file-reference PTY bytes')
+    const fileReferenceWire = {
+      payloadExact: fileReferenceWireUi.payloadShown === fileReferenceWirePayload,
+      targetNamed: fileReferenceWireUi.targetShown.includes('Petition destination') &&
+        fileReferenceWireUi.targetShown.includes(petitionDestination.startup.incarnationId),
+      receiptShown: fileReferenceWireUi.feedback.includes('not submitted'),
+      exactPaste: fileReferenceWireBytes.includes(`\x1b[200~${fileReferenceWirePayload}\x1b[201~`),
+      noEnter: !fileReferenceWireBytes.includes('\r'),
+      onePaste: fileReferenceWireBytes.split(fileReferenceWirePayload).length - 1 === 1
+    }
+    if (Object.values(fileReferenceWire).some((value) => value !== true)) {
+      throw new Error(`the file-reference wire proof failed: ${JSON.stringify(fileReferenceWire)}`)
     }
     const openCodeDirectory = join(isolatedCwd, 'opencode-acceptance')
     const openCodeReference = 'ses_0123456789abSyntheticTest0'
@@ -5479,6 +5580,7 @@ async function runSelfTest(): Promise<void> {
       hiddenPaneSize: preloadProbe.hiddenPaneSize,
       handoffFlow: { ...preloadProbe.handoffFlow, persistedAfterRestart: true },
       agentHandoff,
+      fileReferenceWire,
       openCodeAcceptance,
       subagentAcceptance,
       repeatAcceptance,

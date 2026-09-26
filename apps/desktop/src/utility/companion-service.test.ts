@@ -29,7 +29,7 @@ import type { DatabaseWorkerClient } from './database-client'
 import { COMPANION_OPERATIONS, insertArtifact, listReadyArtifacts, type CompanionOperationName } from './database-companion-store'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
 import { selectConversationRoutes } from './database-binding-store'
-import { listSessions, listWorkspaces } from './database-workspace-store'
+import { createWorkspace, listSessions, listWorkspaces } from './database-workspace-store'
 import type { SessionManager } from './session-manager'
 import type { TelegramConnector } from './telegram-connector'
 import { DEFAULT_WORKSPACE_ID } from './store-schema'
@@ -42,16 +42,28 @@ let database: DatabaseConnection
 let service: CompanionService
 let writes: Array<{ sessionId: string; bytes: Uint8Array }>
 let liveIncarnations: Map<string, string>
+let liveDirectories: Map<string, string>
 let reportedProcesses: Map<string, string>
 let emitted: AppEventMessage[]
 let clock: string
+let archiveAtFinalTargetRead: (() => void) | null
+let workspaceReads: number
+let targetAvailabilityReads: number
+let holdFinalAvailabilityResponse: (() => Promise<void>) | null
 
 /** Runs the real store operations the worker would, on an in-memory database. */
 function workerLike(connection: DatabaseConnection): DatabaseWorkerClient {
   return {
     companion: async (name: CompanionOperationName, ...args: unknown[]) => {
+      if (String(name) === 'fileReferenceTargetAvailability' && ++targetAvailabilityReads === 2) {
+        archiveAtFinalTargetRead?.()
+      }
       const operation = COMPANION_OPERATIONS[name] as (connection: DatabaseConnection, ...args: unknown[]) => unknown
-      return connection.transaction(() => operation(connection, ...args))()
+      const value = connection.transaction(() => operation(connection, ...args))()
+      if (String(name) === 'fileReferenceTargetAvailability' && targetAvailabilityReads === 2) {
+        await holdFinalAvailabilityResponse?.()
+      }
+      return value
     },
     backupInto: async (path: string) => {
       connection.prepare('VACUUM INTO ?').run(path)
@@ -64,7 +76,10 @@ function workerLike(connection: DatabaseConnection): DatabaseWorkerClient {
         snapshot.close()
       }
     },
-    listWorkspaces: async (includeArchived = false) => listWorkspaces(connection, includeArchived),
+    listWorkspaces: async (includeArchived = false) => {
+      if (includeArchived && ++workspaceReads === 4) archiveAtFinalTargetRead?.()
+      return listWorkspaces(connection, includeArchived)
+    },
     listSessions: async (workspaceId: string) => listSessions(connection, workspaceId),
     listConversationRoutes: async () => selectConversationRoutes(connection)
   } as unknown as DatabaseWorkerClient
@@ -72,6 +87,10 @@ function workerLike(connection: DatabaseConnection): DatabaseWorkerClient {
 
 beforeEach(() => {
   clock = now
+  archiveAtFinalTargetRead = null
+  workspaceReads = 0
+  targetAvailabilityReads = 0
+  holdFinalAvailabilityResponse = null
   root = mkdtempSync(join(tmpdir(), 'bmn-companion-'))
   database = new BetterSqlite3(':memory:')
   initializeDatabase(database, now)
@@ -86,9 +105,11 @@ beforeEach(() => {
   writes = []
   emitted = []
   liveIncarnations = new Map([['s1', 'incarnation-1'], ['s2', 'incarnation-2']])
+  liveDirectories = new Map()
   reportedProcesses = new Map()
   const manager = {
     liveIncarnationId: (sessionId: string) => liveIncarnations.get(sessionId),
+    liveLaunchDirectory: (sessionId: string) => liveDirectories.get(sessionId),
     writeToSession: (sessionId: string, bytes: Uint8Array) => writes.push({ sessionId, bytes }),
     sessionWithCurrentProcessState: (session: SessionRecord) => {
       const incarnationId = reportedProcesses.get(session.sessionId)
@@ -107,6 +128,170 @@ beforeEach(() => {
     cliPath: join(root, 'bin', 'bmn'),
     emit: (message) => emitted.push(message),
     now: () => new Date(clock)
+  })
+})
+
+describe('file reference paste', () => {
+  const request = {
+    requestId: 'paste-one', sessionId: 's2', expectedIncarnationId: 'incarnation-2',
+    sourcePath: '/synthetic/notes and [plans]:v2.ts', line: 42, column: 7
+  }
+
+  it('claims concurrent duplicate clicks and writes the exact unstamped reference once without Enter', async () => {
+    const [first, duplicate] = await Promise.all([
+      service.route(METHOD_REGISTRY.fileReferencePaste, request),
+      service.route(METHOD_REGISTRY.fileReferencePaste, request)
+    ])
+    expect(first).toEqual(duplicate)
+    expect(first).toMatchObject({
+      sessionId: 's2', incarnationId: 'incarnation-2', status: 'pasted-not-submitted'
+    })
+    expect(writes).toHaveLength(1)
+    const bytes = new TextDecoder().decode(writes[0]!.bytes)
+    expect(bytes).toBe(`\u001b[200~"/synthetic/notes and [plans]:v2.ts":42:7\u001b[201~`)
+    expect(bytes).not.toContain('[BMN handoff')
+    const receipt = await workerLike(database).companion('getReceipt', 'file-reference-paste:paste-one')
+    expect(receipt).toMatchObject({ state: 'done', result: first })
+    await expect(service.route(METHOD_REGISTRY.fileReferencePaste, { ...request, sourcePath: '/other.ts' }))
+      .rejects.toMatchObject({ code: ERROR_CODES.invalidArgument })
+  })
+
+  it('rejects a stopped, restarted or archived destination before writing', async () => {
+    liveIncarnations.delete('s2')
+    await expect(service.route(METHOD_REGISTRY.fileReferencePaste, request))
+      .rejects.toThrow(/stopped/)
+    liveIncarnations.set('s2', 'new-process')
+    await expect(service.route(METHOD_REGISTRY.fileReferencePaste, { ...request, requestId: 'restarted' }))
+      .rejects.toThrow(/changed/)
+    liveIncarnations.set('s2', 'incarnation-2')
+    database.prepare('UPDATE session SET archived_at = ? WHERE session_id = ?').run(now, 's2')
+    await expect(service.route(METHOD_REGISTRY.fileReferencePaste, { ...request, requestId: 'archived' }))
+      .rejects.toThrow(/archived/)
+    database.prepare('UPDATE session SET archived_at = NULL WHERE session_id = ?').run('s2')
+    database.prepare('UPDATE workspace SET archived_at = ? WHERE workspace_id = ?')
+      .run(now, DEFAULT_WORKSPACE_ID)
+    await expect(service.route(METHOD_REGISTRY.fileReferencePaste, { ...request, requestId: 'archived-workspace' }))
+      .rejects.toThrow(/archived/)
+    expect(writes).toEqual([])
+  })
+
+  it('rejects an archive committed during the final availability read before any PTY write', async () => {
+    let archived = false
+    archiveAtFinalTargetRead = () => {
+      database.prepare('UPDATE session SET archived_at = ? WHERE session_id = ?').run(now, 's2')
+      archived = true
+    }
+    await expect(service.route(METHOD_REGISTRY.fileReferencePaste, {
+      ...request, requestId: 'archive-race'
+    })).rejects.toThrow(/archived/)
+    expect(archived).toBe(true)
+    expect(writes).toEqual([])
+  })
+
+  it('rejects a workspace archive requested while the final worker response is held', async () => {
+    let releaseResponse!: () => void
+    let reachedSnapshot!: () => void
+    const held = new Promise<void>((resolve) => { releaseResponse = resolve })
+    const snapshot = new Promise<void>((resolve) => { reachedSnapshot = resolve })
+    holdFinalAvailabilityResponse = async () => { reachedSnapshot(); await held }
+    const pending = service.route(METHOD_REGISTRY.fileReferencePaste, {
+      ...request, requestId: 'response-gap'
+    })
+    await snapshot
+    const finishArchive = service.beginFileReferenceAvailabilityChange()
+    database.prepare('UPDATE workspace SET archived_at = ? WHERE workspace_id = ?')
+      .run(now, DEFAULT_WORKSPACE_ID)
+    finishArchive()
+    releaseResponse()
+    await expect(pending).rejects.toThrow(/archiv/)
+    expect(writes).toEqual([])
+  })
+
+  it('treats a staged receipt from an interrupted host as uncertain and never replays the write', async () => {
+    const payload = '"/synthetic/notes and [plans]:v2.ts":42:7'
+    const paramsHash = createHash('sha256')
+      .update(JSON.stringify([request.sessionId, request.expectedIncarnationId, payload])).digest('hex')
+    await workerLike(database).companion('putReceipt', {
+      key: 'file-reference-paste:paste-one', paramsHash, state: 'staged'
+    }, now)
+    await expect(service.route(METHOD_REGISTRY.fileReferencePaste, request))
+      .rejects.toThrow(/may have reached/)
+    await workerLike(database).companion('putReceipt', {
+      key: 'file-reference-paste:known-failure', paramsHash, state: 'failed',
+      error: { code: ERROR_CODES.revisionConflict, message: 'Destination stopped before paste' }
+    }, now)
+    await expect(service.route(METHOD_REGISTRY.fileReferencePaste, { ...request, requestId: 'known-failure' }))
+      .rejects.toThrow(/rejected before writing/)
+    expect(writes).toEqual([])
+  })
+
+  it('rejects grammar failures and malformed positions before any PTY write', async () => {
+    for (const sourcePath of ['/synthetic/$HOME.ts', '/synthetic/a`b.ts', '/synthetic/a\\b.ts', '/synthetic/a*.ts', '/synthetic/a\'"b.ts']) {
+      await expect(service.route(METHOD_REGISTRY.fileReferencePaste, { ...request, requestId: sourcePath, sourcePath }))
+        .rejects.toMatchObject({ code: ERROR_CODES.invalidArgument })
+    }
+    await expect(service.route(METHOD_REGISTRY.fileReferencePaste, { ...request, requestId: 'bad-line', line: 0 }))
+      .rejects.toMatchObject({ code: ERROR_CODES.invalidArgument })
+    expect(writes).toEqual([])
+  })
+})
+
+describe('file search address', () => {
+  it('uses the selected session directory or the workspace root and keeps them distinct', async () => {
+    const workspaceRoot = join(root, 'workspace')
+    const sessionRoot = join(root, 'session')
+    const liveRoot = join(root, 'live')
+    await mkdir(workspaceRoot)
+    await mkdir(sessionRoot)
+    await mkdir(liveRoot)
+    await writeFile(join(workspaceRoot, 'workspace-match.ts'), 'x')
+    await writeFile(join(sessionRoot, 'session-match.ts'), 'x')
+    await writeFile(join(liveRoot, 'live-match.ts'), 'x')
+    database.prepare('UPDATE workspace SET default_cwd = ? WHERE workspace_id = ?')
+      .run(workspaceRoot, DEFAULT_WORKSPACE_ID)
+    database.prepare('UPDATE session SET cwd = ? WHERE session_id = ?').run(sessionRoot, 's2')
+    const base = { ownerId: 'palette', workspaceId: DEFAULT_WORKSPACE_ID, query: 'match' }
+    const fromSession = await service.route(METHOD_REGISTRY.fileReferenceSearch, {
+      ...base, requestId: 'session', sessionId: 's2'
+    }) as import('@bmn/protocol').FileReferenceSearchResult
+    const fromWorkspace = await service.route(METHOD_REGISTRY.fileReferenceSearch, {
+      ...base, requestId: 'workspace', sessionId: null
+    }) as import('@bmn/protocol').FileReferenceSearchResult
+    expect(fromSession.files.map((file) => file.name)).toEqual(['session-match.ts'])
+    expect(fromSession.root).toBe(sessionRoot)
+    expect(fromWorkspace.files.map((file) => file.name)).toEqual(['workspace-match.ts'])
+    expect(fromWorkspace.root).toBe(workspaceRoot)
+    liveDirectories.set('s2', liveRoot)
+    const fromLive = await service.route(METHOD_REGISTRY.fileReferenceSearch, {
+      ...base, requestId: 'live', sessionId: 's2'
+    }) as import('@bmn/protocol').FileReferenceSearchResult
+    expect(fromLive.root).toBe(liveRoot)
+    expect(fromLive.files.map((file) => file.name)).toEqual(['live-match.ts'])
+    // The retained renderer startup is no longer the search root after its process exits.
+    liveDirectories.delete('s2')
+    await writeFile(join(workspaceRoot, 'after-exit.ts'), 'x')
+    database.prepare('UPDATE session SET cwd = ? WHERE session_id = ?').run(workspaceRoot, 's2')
+    const afterExit = await service.route(METHOD_REGISTRY.fileReferenceSearch, {
+      ...base, requestId: 'after-exit', sessionId: 's2', query: 'after-exit'
+    }) as import('@bmn/protocol').FileReferenceSearchResult
+    expect(afterExit.root).toBe(workspaceRoot)
+    expect(afterExit.files.map((file) => file.name)).toEqual(['after-exit.ts'])
+  })
+
+  it('searches a foreign split-pane session in its owning workspace', async () => {
+    const foreignRoot = join(root, 'foreign')
+    await mkdir(foreignRoot)
+    await writeFile(join(foreignRoot, 'foreign-match.ts'), 'x')
+    createWorkspace(database, { name: 'Foreign', defaultCwd: foreignRoot }, 'foreign-workspace', now)
+    database.prepare('UPDATE session SET workspace_id = ?, cwd = ? WHERE session_id = ?')
+      .run('foreign-workspace', foreignRoot, 's2')
+    const result = await service.route(METHOD_REGISTRY.fileReferenceSearch, {
+      ownerId: 'foreign-palette', requestId: 'foreign-query',
+      workspaceId: DEFAULT_WORKSPACE_ID, sessionId: 's2', query: 'foreign-match'
+    }) as import('@bmn/protocol').FileReferenceSearchResult
+    expect(result.unavailable).toBe(false)
+    expect(result.root).toBe(foreignRoot)
+    expect(result.files.map((file) => file.name)).toEqual(['foreign-match.ts'])
   })
 })
 
