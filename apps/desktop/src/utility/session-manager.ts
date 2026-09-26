@@ -1282,8 +1282,7 @@ export class SessionManager {
         rows: params.rows,
         env: {
           ...buildShellEnvironment(environment),
-          ...terminalGraphicsEnvironment(params.terminalGraphics ?? null, params.executable,
-            environment, this.terminfoAsset),
+          ...terminalGraphicsEnvironment(params.terminalGraphics ?? null, environment, this.terminfoAsset),
           ...(identity ? this.sessionEnvironment?.(identity) : undefined)
         }
       })

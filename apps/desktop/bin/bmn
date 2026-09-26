@@ -145,13 +145,13 @@ bmn hook is not yours
 const TERMINAL_BRIEF = `BMN terminal images
 
 Every live pane can display Sixel images; saved output remains text only.
-The New session form has Terminal images (Sixel): Automatic, On, or Off.
-Automatic enables images for a direct Codex command. Choose On for a shell where you start Codex.
-Off keeps TERM=xterm-256color. On uses TERM=xterm-sixel-256color when BMN's terminfo entry works.
+The New session form has Terminal images (Sixel): Default (on), On, or Off.
+Every session, whatever agent or shell it runs, gets TERM=xterm-sixel-256color when BMN's
+terminfo entry works, so Codex /pets and other Sixel programs work. Off keeps TERM=xterm-256color.
 If the entry is missing or corrupt, BMN starts that process with standard TERM instead.
 
 For SSH, sudo, or a container without BMN's terminfo entry, prefix the command with
-TERM=xterm-256color. A standard shell needs no prefix.
+TERM=xterm-256color, or set that session to Off.
 Inside tmux or Zellij, Codex follows the multiplexer's own image support.`
 
 class UsageError extends Error {}

@@ -23,10 +23,9 @@ export function isWorkspaceMarker(value: unknown): value is WorkspaceMarker {
 export type BackgroundChoice = 'hide' | 'stop'
 export type TerminalGraphicsChoice = 'sixel' | 'standard' | null
 
-export function effectiveTerminalGraphics(choice: TerminalGraphicsChoice, executable: string): 'sixel' | 'standard' {
-  if (choice !== null) return choice
-  const name = executable.split(/[\\/]/).at(-1)?.toLowerCase()
-  return name === 'codex' || name === 'codex.exe' ? 'sixel' : 'standard'
+/** Every session, whatever agent runs in it, gets terminal images unless the owner turned them off. */
+export function effectiveTerminalGraphics(choice: TerminalGraphicsChoice): 'sixel' | 'standard' {
+  return choice ?? 'sixel'
 }
 export type SessionStopCause =
   | 'explicit'

@@ -60,8 +60,8 @@ as unverified in the [tracked claim audit](claim-audit.md), never as protected.
 **Your CLIs stay in charge.** Sessions run the installed executables in real PTYs with your saved
 arguments and working directory. The app adds no bypass flags and never copies CLI credentials.
 Terminal variables that identify another terminal (tmux, Zellij, other emulators) are removed;
-sessions get `COLORTERM=truecolor`. A direct `codex` command defaults to Sixel graphics, while
-other commands keep standard terminal behavior unless the owner chooses **Terminal images (Sixel)**.
+sessions get `COLORTERM=truecolor`. Every session defaults to Sixel graphics, whatever command or
+agent it runs; the owner can set **Terminal images (Sixel)** to Off per session.
 The graphics path uses `TERM=xterm-sixel-256color` only when the compiled terminfo entry in the
 profile's stable data root (`terminfo/x/xterm-sixel-256color`) passes a spawn-time check. It is
 installed from the app bundle; a missing or corrupt entry falls back to `TERM=xterm-256color`.

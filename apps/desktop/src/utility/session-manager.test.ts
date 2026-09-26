@@ -664,7 +664,7 @@ describe('shell session lifecycle', () => {
     })
   })
 
-  it('selects graphics at spawn from the command and saved choice, then falls back if terminfo changes', async () => {
+  it('selects graphics at spawn from the saved choice, Sixel by default, then falls back if terminfo changes', async () => {
     const root = await mkdtemp(join(tmpdir(), 'bmn-terminal-env-'))
     try {
       const bundled = fileURLToPath(new URL('../../resources/terminfo/x/xterm-sixel-256color', import.meta.url))
@@ -688,10 +688,14 @@ describe('shell session lifecycle', () => {
       expect(environments.at(-1)).toMatchObject({ TERM: 'xterm-sixel-256color', COLORTERM: 'truecolor' })
       expect(environments.at(-1)).not.toHaveProperty('ZELLIJ_VERSION')
       expect(environments.at(-1)?.TERMINFO_DIRS).toContain('/owner/entries')
+      // A shell the owner starts Codex, Claude Code or OpenCode inside gets graphics too.
       launch('/bin/bash', null)
-      expect(environments.at(-1)?.TERM).toBe('xterm-256color')
+      expect(environments.at(-1)?.TERM).toBe('xterm-sixel-256color')
+      expect(environments.at(-1)?.TERMINFO_DIRS).toContain('/owner/entries')
       launch('/bin/bash', 'sixel')
       expect(environments.at(-1)?.TERM).toBe('xterm-sixel-256color')
+      launch('/bin/bash', 'standard')
+      expect(environments.at(-1)?.TERM).toBe('xterm-256color')
       launch('/usr/bin/codex', 'standard')
       expect(environments.at(-1)?.TERM).toBe('xterm-256color')
       await writeFile(join(asset.directory, 'x', 'xterm-sixel-256color'), 'damaged')

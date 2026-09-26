@@ -42,4 +42,4 @@
 ## Resume
 
 - Next safe action: after `update:desktop` finishes (it waits for the owner to close packaged BMN), owner runs `/pets` in the packaged app (28.2 AC2) and checks the packaged update receipt (28.2 AC5); renderer-loss pet repaint (28.1 AC4) remains UNVERIFIED unless measured. Then accept or reopen 28.1/28.2.
-- Status: SHIPPED FOR OWNER TRIAL — owner chose "Push + update" (AskUserQuestion, 2026-09-26) before acceptance; stories stay in review until the owner `/pets` trial and packaged receipt.
+- Status: SHIPPED FOR OWNER TRIAL — owner chose "Push + update" (AskUserQuestion, 2026-09-26) before acceptance; 2026-09-27 owner report fixed: graphics default on for every session (log 2026-09-27). Stories stay in review until the owner `/pets` trial and packaged receipt.

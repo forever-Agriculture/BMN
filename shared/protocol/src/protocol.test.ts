@@ -332,12 +332,10 @@ describe('protocol surface', () => {
   }
   const templateCreate = { name: 'Shell', executable: '/bin/bash', argv: [], cwd: '/workspace' }
 
-  it('derives graphics only for the actual Codex executable and accepts explicit overrides', () => {
-    expect(effectiveTerminalGraphics(null, '/usr/bin/codex')).toBe('sixel')
-    expect(effectiveTerminalGraphics(null, '/bin/bash')).toBe('standard')
-    expect(effectiveTerminalGraphics(null, '/usr/bin/env')).toBe('standard')
-    expect(effectiveTerminalGraphics('standard', '/usr/bin/codex')).toBe('standard')
-    expect(effectiveTerminalGraphics('sixel', '/bin/bash')).toBe('sixel')
+  it('gives every session graphics by default and accepts explicit overrides', () => {
+    expect(effectiveTerminalGraphics(null)).toBe('sixel')
+    expect(effectiveTerminalGraphics('standard')).toBe('standard')
+    expect(effectiveTerminalGraphics('sixel')).toBe('sixel')
     expect(isSessionCreateParams({ ...sessionCreate, terminalGraphics: 'sixel' })).toBe(true)
     expect(isSessionCreateParams({ ...sessionCreate, terminalGraphics: 'kitty' })).toBe(false)
     expect(isSessionUpdateParams({ sessionId: 's', expectedRevision: 1, terminalGraphics: null })).toBe(true)

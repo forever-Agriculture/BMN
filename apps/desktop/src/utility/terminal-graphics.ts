@@ -57,11 +57,10 @@ export function sixelTerminfoReady(asset: TerminfoAsset): boolean {
 
 export function terminalGraphicsEnvironment(
   choice: TerminalGraphicsChoice,
-  executable: string,
   environment: Readonly<Record<string, string | undefined>>,
   asset?: TerminfoAsset
 ): Record<string, string> {
-  if (effectiveTerminalGraphics(choice, executable) !== 'sixel' || !asset || !sixelTerminfoReady(asset)) {
+  if (effectiveTerminalGraphics(choice) !== 'sixel' || !asset || !sixelTerminfoReady(asset)) {
     return { TERM: STANDARD_TERM }
   }
   return {

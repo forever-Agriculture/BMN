@@ -1996,14 +1996,14 @@ function App(): React.JSX.Element {
                       setSessionForm((current) => ({ ...current,
                         terminalGraphics: choice === 'sixel' || choice === 'standard' ? choice : null }))
                     }}>
-                    <option value="">Automatic</option>
+                    <option value="">Default (on)</option>
                     <option value="sixel">On</option>
                     <option value="standard">Off</option>
                   </select>
                 </label>
-                <p className="field-help">Effective: {effectiveTerminalGraphics(sessionForm.terminalGraphics, sessionForm.executable) === 'sixel'
-                  ? 'Sixel images' : 'standard terminal'}. Codex uses images by default; other commands need On.
-                  For SSH, sudo or containers without BMN terminfo, run the command with <code>TERM=xterm-256color</code>.</p>
+                <p className="field-help">Effective: {effectiveTerminalGraphics(sessionForm.terminalGraphics) === 'sixel'
+                  ? 'Sixel images' : 'standard terminal'}. Every session uses images unless set to Off.
+                  For SSH, sudo or containers without BMN terminfo, choose Off or run the command with <code>TERM=xterm-256color</code>.</p>
                 {formError ? <span className="inline-error" role="alert">{formError}</span> : null}
                 <div className="actions">
                   <button type="submit" className="primary" disabled={!editingSessionId && (formRepository.loading || !formRepository.identity)}>

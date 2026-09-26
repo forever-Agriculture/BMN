@@ -260,10 +260,10 @@ export function LaunchSetsDialog({
             terminalGraphics: event.target.value === 'sixel' || event.target.value === 'standard'
               ? event.target.value : null
           })}>
-          <option value="">Automatic (Codex on)</option><option value="sixel">On</option><option value="standard">Off</option>
+          <option value="">Default (on)</option><option value="sixel">On</option><option value="standard">Off</option>
         </select></label>
-        <small>Codex uses images automatically. For SSH, sudo or containers without BMN terminfo,
-          prefix the command with <code>TERM=xterm-256color</code>.</small>
+        <small>Every session uses images unless set to Off. For SSH, sudo or containers without BMN
+          terminfo, choose Off or prefix the command with <code>TERM=xterm-256color</code>.</small>
         <div className="actions">
           <button type="button" disabled={index === 0} onClick={() => moveEntry(index, -1)}>Move up</button>
           <button type="button" disabled={index === forms.length - 1} onClick={() => moveEntry(index, 1)}>Move down</button>
