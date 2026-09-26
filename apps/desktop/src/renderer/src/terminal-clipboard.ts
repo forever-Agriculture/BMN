@@ -9,10 +9,6 @@ export interface MouseClipboardButton {
 export interface MouseClipboardHost {
   hasSelection(): boolean
   getSelection(): string
-  /** The program asked for mouse reports, so an unforced click belongs to it. */
-  mouseTracking(): boolean
-  /** A CLI that leaves right-click to the terminal can keep BMN's paste gesture in mouse mode. */
-  pasteInMouseMode(): boolean
   copy(text: string): void
   paste(): void
 }
@@ -50,8 +46,6 @@ export function createMouseClipboard(host: MouseClipboardHost): MouseClipboard {
     contextMenu: (event) => {
       // macOS reports Ctrl+click as a context menu; Ctrl with the primary button belongs to file links, not paste.
       if (event.ctrlKey && event.button === PRIMARY) return false
-      // Pasting into a program reading the mouse (vim, htop) could run keys it never asked for; Shift forces it.
-      if (host.mouseTracking() && !event.shiftKey && !host.pasteInMouseMode()) return false
       host.paste()
       return true
     }

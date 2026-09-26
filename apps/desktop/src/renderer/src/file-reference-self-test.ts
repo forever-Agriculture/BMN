@@ -325,7 +325,8 @@ export async function runFileReferenceIntegration(options: {
     reportsToProgram,
     dragReportsToProgram: ptyInput - reportsBeforeDrag,
     copiedSelection: expectedMouseModeSelection.length > 0 &&
-      (await window.aiTerminal.readClipboardText()).text === expectedMouseModeSelection
+      (await window.aiTerminal.readClipboardText()).text === expectedMouseModeSelection,
+    rightClickPasted: false
   }
   terminal.clearSelection()
   await window.aiTerminal.writeClipboardText(clipboardBeforeDrag.text)
@@ -383,6 +384,28 @@ export async function runFileReferenceIntegration(options: {
     const layout = (await window.aiTerminal.getLayout(options.workspaceId)).layout
     return layout.selectedSessionId === options.sessionId ? true : undefined
   })
+  const attentionUnchanged = (await openRequestTitles()) === attentionBefore
+  // This is intentional input, so run it after the passive file-reference and attention checks.
+  await new Promise<void>((resolve) => terminal.write('\x1b[?1000h\x1b[?1006h', resolve))
+  const rightClickPayload = 'MOUSE-MODE-RIGHT-CLICK-PASTE'
+  await window.aiTerminal.writeClipboardText(rightClickPayload)
+  let rightClickInput = ''
+  const rightClickCounter = terminal.onData((data) => { rightClickInput += data })
+  const rightClick = new MouseEvent('contextmenu', {
+    clientX: rect.left + (column + 0.5) * cellWidth,
+    clientY: rect.top + (viewportRow + 0.5) * cellHeight,
+    button: 2,
+    bubbles: true,
+    cancelable: true,
+    view: window
+  })
+  screen.dispatchEvent(rightClick)
+  await pause(300)
+  mouseMode.rightClickPasted = rightClick.defaultPrevented && rightClickInput.includes(rightClickPayload)
+  rightClickCounter.dispose()
+  await window.aiTerminal.writeClipboardText(clipboardBeforeDrag.text)
+  await new Promise<void>((resolve) => terminal.write('\x1b[?1006l\x1b[?1000l', resolve))
+  terminal.input('\x15', false)
   return {
     launchDirectory,
     palette,
@@ -409,7 +432,7 @@ export async function runFileReferenceIntegration(options: {
       after: `${terminal.cols}x${terminal.rows} refits ${options.refitCount()}`,
       sameElement: terminal.element === elementBefore && !!elementBefore?.isConnected
     },
-    attentionUnchanged: (await openRequestTitles()) === attentionBefore,
+    attentionUnchanged,
     epic27: null
   }
 }

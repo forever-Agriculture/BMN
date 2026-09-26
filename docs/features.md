@@ -83,9 +83,8 @@ permissions.
   with `Ctrl+V`, `Ctrl+Shift+V`, `Shift+Insert` or right-click. Dragging across text also copies when
   a program enables mouse reporting, as Codex does. `Ctrl+Shift+A` selects all.
 - **Keys that belong to the program.** `Ctrl+Shift+\` sends the next key straight to the terminal —
-  use it first for a literal `Ctrl+V`. Programs that read the mouse, such as vim, get right-click
-  and `Ctrl+click` too; hold `Shift` for BMN's right-click in those programs. Codex keeps plain
-  right-click paste. Use **Open file reference…** in the
+  use it first for a literal `Ctrl+V`. Right-click pastes even while a program reads mouse input;
+  `Ctrl+click` remains available to that program. Use **Open file reference…** in the
   palette while the mouse is captured.
 - **Font size** with `Ctrl +`, `Ctrl −`, `Ctrl 0`.
 

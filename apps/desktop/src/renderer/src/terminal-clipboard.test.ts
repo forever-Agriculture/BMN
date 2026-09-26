@@ -7,15 +7,11 @@ const right: MouseClipboardButton = { button: 2, shiftKey: false, ctrlKey: false
 
 let calls: string[]
 let selection: string
-let tracking: boolean
-let pasteInMouseMode: boolean
 
 function clipboard() {
   return createMouseClipboard({
     hasSelection: () => selection.length > 0,
     getSelection: () => selection,
-    mouseTracking: () => tracking,
-    pasteInMouseMode: () => pasteInMouseMode,
     copy: (text) => calls.push(`copy:${text}`),
     paste: () => calls.push('paste')
   })
@@ -24,8 +20,6 @@ function clipboard() {
 beforeEach(() => {
   calls = []
   selection = ''
-  tracking = false
-  pasteInMouseMode = false
 })
 
 describe('mouse clipboard', () => {
@@ -76,22 +70,6 @@ describe('mouse clipboard', () => {
   })
 
   it('pastes on right-click', () => {
-    expect(clipboard().contextMenu(right)).toBe(true)
-    expect(calls).toEqual(['paste'])
-  })
-
-  it('leaves right-click to a program reading the mouse unless Shift is held', () => {
-    tracking = true
-    const mouse = clipboard()
-    expect(mouse.contextMenu(right)).toBe(false)
-    expect(calls).toEqual([])
-    expect(mouse.contextMenu({ button: 2, shiftKey: true, ctrlKey: false })).toBe(true)
-    expect(calls).toEqual(['paste'])
-  })
-
-  it('pastes on right-click for a tracked CLI that leaves that gesture to BMN', () => {
-    tracking = true
-    pasteInMouseMode = true
     expect(clipboard().contextMenu(right)).toBe(true)
     expect(calls).toEqual(['paste'])
   })

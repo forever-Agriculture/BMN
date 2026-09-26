@@ -275,8 +275,6 @@ export function SessionTerminal(props: {
     const mouse = createMouseClipboard({
       hasSelection: () => terminal.hasSelection(),
       getSelection: () => terminal.getSelection(),
-      mouseTracking: () => terminal.modes.mouseTrackingMode !== 'none',
-      pasteInMouseMode: () => agentTag(record.current?.executable ?? '') === 'Codex',
       copy: (text) => {
         void window.aiTerminal.writeClipboardText(text)
           .catch((error: unknown) => onFailure.current(failureDetail(error, 'Copy failed')))
