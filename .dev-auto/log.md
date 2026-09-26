@@ -3077,3 +3077,17 @@ Owner 2026-09-26 (Claude Code): "update my local BMN I want to use pets finally"
 - Owner: "epic 28 does't work, pets still don't work in codex". Packaged `06f3ed5` was installed (update receipt `phase: complete`), terminfo copy in `~/.local/share/ai-terminal/terminfo` byte-identical to the bundle and `infocmp` resolves it. Cause: every session row is `/bin/bash` with `terminal_graphics` NULL and Codex is typed inside, so `effectiveTerminalGraphics` (workspace.ts:26-30) returned standard; Codex 0.157.1 decides only from `TERM` (image_protocol.rs:112-195).
 - Owner decision: "it doesn't matter what my session is, if i'm in codex or i claude or opencode or any other aget this functionality should be availlable for my agents via BMN". Default now Sixel for every session; Off is the opt-out. Epic amendment in epics.md Epic 28.
 - Checks: session-manager regression assertion (bash + null → sixel TERM) RED on original production files (`Received: "xterm-256color"`), GREEN after; typecheck EXIT 0; changed-file lint EXIT 0; full unit 104 files / 1,815 tests EXIT 0. Electron and packaged runtime not rerun before commit; post-update check is the live session env.
+
+## 2026-09-27 — Epic 28 accepted (Claude Code, Opus 5.5)
+
+- Owner: "seems like epic 28 works. commit ad push to GH and move in to done". Taken as the `/pets` trial passing on the packaged app (28.2 AC2).
+- State checked before closing: tree clean; `06f3ed5` and `56c99da` already on origin/main (no unpushed commits); desktop update receipt `~/.local/state/bmn/source-update/latest.json` `phase: complete`, commit `56c99da` (28.2 AC5).
+- Sprint board: `epic-28`, 28.1, 28.2 → done (ignored `sprint-status.yaml`, atomic write, read back). 28.1 AC4 renderer-loss pet repaint stays UNVERIFIED, as do the other residuals in the handoff.
+- No repackaging: this commit changes only `.dev-auto/` records.
+Handoff lines superseded (verbatim):
+- Sprint board and reconciled state: `epic-28`, 28.1 and 28.2 remain backlog in ignored `sprint-status.yaml`; implementation is not accepted yet. Dependency 28.2 after 28.1.
+- Next safe action: after `update:desktop` finishes (it waits for the owner to close packaged BMN), owner runs `/pets` in the packaged app (28.2 AC2) and checks the packaged update receipt (28.2 AC5); renderer-loss pet repaint (28.1 AC4) remains UNVERIFIED unless measured. Then accept or reopen 28.1/28.2.
+- Status: SHIPPED FOR OWNER TRIAL — owner chose "Push + update" (AskUserQuestion, 2026-09-26) before acceptance; 2026-09-27 owner report fixed: graphics default on for every session (log 2026-09-27). Stories stay in review until the owner `/pets` trial and packaged receipt.
+- Timing: started 2026-09-26; acceptance pending.
+- Active helpers: none. Owner trial app: isolated dev BMN running (Electron main PID 2692898, scratch launcher because baseline `scripts/test/electron-dev.mjs:11` fails ERR_PACKAGE_PATH_NOT_EXPORTED; see log).
+- Review yield: ... F2 closed in rechecks, F1 material after final recheck. No acceptance.

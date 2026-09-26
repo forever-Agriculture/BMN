@@ -12,9 +12,9 @@
 
 ## Progress
 
-- Sprint board and reconciled state: `epic-28`, 28.1 and 28.2 remain backlog in ignored `sprint-status.yaml`; implementation is not accepted yet. Dependency 28.2 after 28.1.
+- Sprint board and reconciled state: `epic-28`, 28.1 and 28.2 done in ignored `sprint-status.yaml` (written atomically and read back 2026-09-27); owner accepted on packaged `56c99da`.
 - Implemented: Sixel addon/CSP, per-view/aggregate caps, renderer check; tri-state graphics choice (protocol, migration, forms/templates/launch sets, spawn/resume); bundled terminfo + fallback; docs/CLI help. F1 replay redesign (xterm 6.0 VT500 tracking, `freshStart`, per-view sync). D1: `terminalWriteCut` (protocol) cuts host chunks and ≤131,072-byte renderer writes only between characters; view credit must be ≥4 bytes. Test-only: xterm fixtures, provenance spans in the session model, test-hook `view()` probe (image rows, selection), 9 new Electron phases. All uncommitted.
-- Active helpers: none. Owner trial app: isolated dev BMN running (Electron main PID 2692898, scratch launcher because baseline `scripts/test/electron-dev.mjs:11` fails ERR_PACKAGE_PATH_NOT_EXPORTED; see log). Astra/low recheck4 of `4c8f198a…` done (`astra-recheck4.md` SHA256 `653ee6dd…`, receipt `e42ccb53…`, gpt-6-astra/low read-only/never, 694,964 input (618,624 cached)/5,836 output).
+- Active helpers: none. The isolated dev BMN trial app exited (see log); the owner trial ran on packaged `56c99da`. Astra/low recheck4 of `4c8f198a…` done (`astra-recheck4.md` SHA256 `653ee6dd…`, receipt `e42ccb53…`, gpt-6-astra/low read-only/never, 694,964 input (618,624 cached)/5,836 output).
 
 ## Decisions and findings
 
@@ -33,13 +33,13 @@
 
 ## Measurement
 
-- Timing: started 2026-09-26; acceptance pending.
+- Timing: started 2026-09-26; accepted 2026-09-27.
 - Dispatches: GLM-5.3/max quick pre-review, receipt `glm-pre-review.json`, 13 turns, $0.530236. Astra medium strong review completed after a pre-provider PATH failure. Astra/low first recheck 408,063 input (347,904 cached)/3,868 output; second 520,545 input (455,040 cached)/5,793 output; Astra/medium consultant 197,735 input (154,240 cached)/2,878 output; Astra/low final recheck 463,893 input (414,464 cached)/5,720 output; all read-only. Astra/high consultant 629,027 input (557,184 cached)/6,200 output, read-only. Astra/low recheck3 602,431 input (528,640 cached)/3,438 output, refused. Fable/medium recheck3 69,002 cache-write + 5,562 cache-read/26,081 output, $2.6855. Astra/high consult3 1,503,845 input (1,388,160 cached)/17,473 output.
-- Review yield: GLM quick 0 code defects; Astra strong F1/F2; F2 closed in rechecks, F1 material after final recheck. No acceptance.
+- Review yield: GLM quick 0 code defects; Astra strong F1/F2; F1 and F2 closed after the redesign rechecks; owner accepted 2026-09-27.
 - Owner interventions: one scope request, one delivery/consultation instruction, one temporary keep-BMN-open instruction; no corrections.
 - Observed usage: GLM-5.3 47,950 input + 190,272 cache-read / 7,814 output, $0.530236; Astra/medium read-only 1,372,495 input (1,268,864 cached) / 7,621 output; lead pending.
 
 ## Resume
 
-- Next safe action: after `update:desktop` finishes (it waits for the owner to close packaged BMN), owner runs `/pets` in the packaged app (28.2 AC2) and checks the packaged update receipt (28.2 AC5); renderer-loss pet repaint (28.1 AC4) remains UNVERIFIED unless measured. Then accept or reopen 28.1/28.2.
-- Status: SHIPPED FOR OWNER TRIAL — owner chose "Push + update" (AskUserQuestion, 2026-09-26) before acceptance; 2026-09-27 owner report fixed: graphics default on for every session (log 2026-09-27). Stories stay in review until the owner `/pets` trial and packaged receipt.
+- Next safe action: no selected implementation work remains; UNVERIFIED residuals (pet repaint after renderer loss, vim/neovim, Claude Code/OpenCode TUIs, SSH/sudo, img2sixel, hide/show/split with images) are follow-up candidates only.
+- Status: COMPLETE — Epic 28 accepted by the owner on 2026-09-27 ("seems like epic 28 works"); code shipped in `06f3ed5` and `56c99da`, both on origin/main.
