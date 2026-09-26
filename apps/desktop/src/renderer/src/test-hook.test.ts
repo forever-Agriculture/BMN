@@ -240,7 +240,7 @@ describe('renderer acceptance hook', () => {
         plainClick: { underlined: false, opened: false },
         ctrlDrag: { selected: 'refs/src/', copiedSelection: true, opened: false },
         missingSessionCode: 'NOT_FOUND',
-        mouseMode: { underlined: false, opened: false, reportsToProgram: 2 },
+        mouseMode: { underlined: false, opened: false, reportsToProgram: 2, dragReportsToProgram: 2, copiedSelection: true },
         ptyInputEvents: 0,
         crossWorkspace: {
           session: 'Archived running chat · Self-test archived workspace',

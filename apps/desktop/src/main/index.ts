@@ -3009,6 +3009,8 @@ async function runSelfTest(): Promise<void> {
       fileReferenceFlow.mouseMode.underlined ||
       fileReferenceFlow.mouseMode.opened ||
       fileReferenceFlow.mouseMode.reportsToProgram < 1 ||
+      fileReferenceFlow.mouseMode.dragReportsToProgram < 1 ||
+      !fileReferenceFlow.mouseMode.copiedSelection ||
       fileReferenceFlow.crossWorkspace?.session !== 'Archived running chat · Self-test archived workspace' ||
       fileReferenceFlow.crossWorkspace.base !== fileReferenceFlow.palette.base ||
       fileReferenceFlow.crossWorkspace.file !== referencedFile ||

@@ -33,7 +33,7 @@ export interface FileReferenceFlowProbe {
   ctrlDrag: { selected: string; copiedSelection: boolean; opened: boolean }
   /** The typed error code when the source session no longer exists. */
   missingSessionCode: string
-  mouseMode: { underlined: boolean; opened: boolean; reportsToProgram: number }
+  mouseMode: { underlined: boolean; opened: boolean; reportsToProgram: number; dragReportsToProgram: number; copiedSelection: boolean }
   /** Palette opening from a pane that shows another workspace's session: its own name, workspace and base. */
   crossWorkspace: { session: string; base: string; file: string; marked: string } | null
   /** Output rewrote a hovered link: the old link stays shut, and the reference printed in its place opens as itself. */

@@ -305,7 +305,30 @@ export async function runFileReferenceIntegration(options: {
   const mouseModeUnderlined = hover(column + 4, true)
   click(column + 4, true)
   await pause(300)
-  const mouseMode = { underlined: mouseModeUnderlined, opened: openDialog() !== null, reportsToProgram: ptyInput - ptyInputEvents }
+  const reportsToProgram = ptyInput - ptyInputEvents
+  await window.aiTerminal.writeClipboardText('OLD-CLIPBOARD-CONTENT')
+  const reportsBeforeDrag = ptyInput
+  mouse('mousedown', { x: column, y: viewportRow }, false)
+  document.dispatchEvent(new MouseEvent('mousemove', {
+    clientX: rect.left + (column + 8.5) * cellWidth,
+    clientY: rect.top + (viewportRow + 0.5) * cellHeight,
+    buttons: 1,
+    bubbles: true,
+    view: window
+  }))
+  mouse('mouseup', { x: column + 8, y: viewportRow }, false)
+  await pause(100)
+  const expectedMouseModeSelection = buffer.getLine(row)!.translateToString(true).slice(column, column + 8)
+  const mouseMode = {
+    underlined: mouseModeUnderlined,
+    opened: openDialog() !== null,
+    reportsToProgram,
+    dragReportsToProgram: ptyInput - reportsBeforeDrag,
+    copiedSelection: expectedMouseModeSelection.length > 0 &&
+      (await window.aiTerminal.readClipboardText()).text === expectedMouseModeSelection
+  }
+  terminal.clearSelection()
+  await window.aiTerminal.writeClipboardText(clipboardBeforeDrag.text)
   await new Promise<void>((resolve) => terminal.write('\x1b[?1006l\x1b[?1000l', resolve))
   inputCounter.dispose()
   // The mouse reports landed on the shell's input line; clear it the way the owner would.

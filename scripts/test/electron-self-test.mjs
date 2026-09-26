@@ -193,6 +193,8 @@ const receiptContract = [
       receipt.fileReferenceFlow.mouseMode?.opened === false &&
       receipt.fileReferenceFlow.mouseMode.underlined === false &&
       receipt.fileReferenceFlow.mouseMode.reportsToProgram >= 1 &&
+      receipt.fileReferenceFlow.mouseMode.dragReportsToProgram >= 1 &&
+      receipt.fileReferenceFlow.mouseMode.copiedSelection === true &&
       receipt.fileReferenceFlow.redraw?.staleOpened === false &&
       receipt.fileReferenceFlow.redraw.reference === 'refs/src/parser.ts:7' &&
       receipt.fileReferenceFlow.reads?.length === 15 &&

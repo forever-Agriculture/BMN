@@ -132,6 +132,7 @@ export function SessionTerminal(props: {
   const searchAddon = useRef<SearchAddon>(null)
   const searchInput = useRef<HTMLInputElement>(null)
   const startup = useRef(props.startup)
+  const record = useRef(props.record)
   const view = useRef(props.view)
   const visible = useRef(props.visible)
   const onView = useRef(props.onView)
@@ -150,6 +151,7 @@ export function SessionTerminal(props: {
   const [dropTarget, setDropTarget] = useState(false)
 
   startup.current = props.startup
+  record.current = props.record
   view.current = props.view
   visible.current = props.visible
   onView.current = props.onView
@@ -274,6 +276,7 @@ export function SessionTerminal(props: {
       hasSelection: () => terminal.hasSelection(),
       getSelection: () => terminal.getSelection(),
       mouseTracking: () => terminal.modes.mouseTrackingMode !== 'none',
+      pasteInMouseMode: () => agentTag(record.current?.executable ?? '') === 'Codex',
       copy: (text) => {
         void window.aiTerminal.writeClipboardText(text)
           .catch((error: unknown) => onFailure.current(failureDetail(error, 'Copy failed')))
@@ -286,14 +289,48 @@ export function SessionTerminal(props: {
       hasSelection: () => terminal.hasSelection(),
       open: (reference) => onOpenFileReference.current(reference)
     })
+    const cellAt = (event: MouseEvent): { col: number; row: number } | null => {
+      const screen = terminal.element?.querySelector<HTMLElement>('.xterm-screen')
+      const bounds = screen?.getBoundingClientRect()
+      if (!bounds || bounds.width <= 0 || bounds.height <= 0) return null
+      const col = Math.max(0, Math.min(terminal.cols - 1,
+        Math.floor((event.clientX - bounds.left) / (bounds.width / terminal.cols))))
+      const viewportRow = Math.max(0, Math.min(terminal.rows - 1,
+        Math.floor((event.clientY - bounds.top) / (bounds.height / terminal.rows))))
+      return { col, row: terminal.buffer.active.viewportY + viewportRow }
+    }
+    let trackedDragStart: { col: number; row: number } | null = null
     const mouseDown = (event: MouseEvent): void => {
+      const screen = terminal.element?.querySelector('.xterm-screen')
+      trackedDragStart = event.button === 0 && terminal.modes.mouseTrackingMode !== 'none' &&
+        event.target instanceof Node && !!screen?.contains(event.target)
+        ? cellAt(event) : null
       fileLinks.pressStarted(event)
       mouse.mouseDown(event)
     }
-    // The window hears the release after xterm's document listener has finished the selection, even outside the pane.
+    // xterm consumes mouseup and clears its selection while reporting mouse events. Capture the
+    // release, derive a drag selection from the visible grid, and copy before xterm handles it.
     const mouseUp = (event: MouseEvent): void => {
-      mouse.mouseUp(event)
-      fileLinks.pressEnded()
+      if (event.button === 0 && trackedDragStart) {
+        const end = cellAt(event)
+        const start = trackedDragStart
+        trackedDragStart = null
+        if (end) {
+          const first = start.row * terminal.cols + start.col
+          const last = end.row * terminal.cols + end.col
+          if (first !== last) {
+            const low = Math.min(first, last)
+            terminal.select(low % terminal.cols, Math.floor(low / terminal.cols), Math.abs(last - first))
+          }
+        }
+        mouse.mouseUp(event)
+        fileLinks.pressEnded()
+        return
+      }
+      queueMicrotask(() => {
+        mouse.mouseUp(event)
+        fileLinks.pressEnded()
+      })
     }
     const contextMenu = (event: MouseEvent): void => {
       // macOS turns Ctrl+click into this event; the hovered file link opens here, and the release adds nothing.
@@ -301,9 +338,9 @@ export function SessionTerminal(props: {
     }
     container.addEventListener('mousedown', mouseDown, true)
     container.addEventListener('contextmenu', contextMenu, true)
-    window.addEventListener('mouseup', mouseUp)
+    window.addEventListener('mouseup', mouseUp, true)
     // xterm's linkifier hears the click on the screen after the capture listeners above and the window hears the
-    // release last: a Ctrl+click on a link opens it and, with no selection made, the clipboard is left alone.
+    // A Ctrl+click on a link opens it; with no drag selection the clipboard is left alone.
     const fileLinkRegistration = terminal.registerLinkProvider(fileLinks)
     const trackLinkModifier = (event: MouseEvent | KeyboardEvent): void => fileLinks.modifierChanged(event.ctrlKey)
     const releaseLinkModifier = (): void => fileLinks.modifierChanged(false)
@@ -935,7 +972,7 @@ export function SessionTerminal(props: {
       for (const notice of notices) notice.dispose()
       container.removeEventListener('mousedown', mouseDown, true)
       container.removeEventListener('contextmenu', contextMenu, true)
-      window.removeEventListener('mouseup', mouseUp)
+      window.removeEventListener('mouseup', mouseUp, true)
       fileLinkRegistration.dispose()
       container.removeEventListener('mousemove', trackLinkModifier, true)
       window.removeEventListener('keydown', trackLinkModifier, true)
