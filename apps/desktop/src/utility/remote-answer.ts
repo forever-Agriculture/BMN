@@ -34,6 +34,8 @@ export type AnswerRefusal =
   | 'claimed'
   /** OpenCode's plugin did not collect the answer in time; nothing was sent. */
   | 'not-delivered'
+  /** OpenCode's server refused the reply the plugin posted; nothing was applied. */
+  | 'api-refused'
 
 export type AnswerOutcome =
   | { state: 'refused'; reason: AnswerRefusal }
@@ -204,8 +206,11 @@ export class RemoteAnswers {
   /** Plugin answers handed out and not yet reported on, by session and harness request id. */
   private readonly handedOut = new Map<string, { requestId: string; incarnationId: string }>()
   private readonly watches = new Map<string, Watch>()
-  /** Sessions BMN is typing into right now; its own keys move the dialog through its steps. */
-  private readonly typing = new Set<string>()
+  /**
+   * The one request per session whose keys BMN is writing right now, from the first key to the last; its own
+   * keys move its dialog through its steps, so only its departures are not counted meanwhile.
+   */
+  private readonly typing = new Map<string, string>()
   /** OpenCode permission requests still waiting, per session: its `reject` answers all of them at once. */
   private readonly openCodePermissions = new Map<string, Set<string>>()
   private readonly lateListeners = new Set<(requestId: string, outcome: AnswerOutcome) => void>()
@@ -305,6 +310,8 @@ export class RemoteAnswers {
 
   /** Forgets every request not in `open`, for requests that closed by expiry or a route that does not report. */
   retain(open: ReadonlySet<string>): void {
+    // As after any close, only a report naming the prompt's own id may still confirm an answer in flight.
+    for (const [requestId, pending] of this.pending) if (!open.has(requestId)) pending.closed = true
     for (const [requestId, entry] of this.tracked) {
       if (open.has(requestId)) continue
       this.tracked.delete(requestId)
@@ -406,13 +413,13 @@ export class RemoteAnswers {
     this.handedOut.delete(key)
     const pending = this.pending.get(handed.requestId)
     if (!pending) return
-    if (report.delivered) {
-      const outcome: AnswerOutcome = { state: 'confirmed', sent: pending.sent }
-      if (pending.settled) for (const listener of this.lateListeners) listener(handed.requestId, outcome)
-      pending.settle(outcome)
-    } else {
-      pending.settle({ state: 'refused', reason: 'gone' })
-    }
+    const outcome: AnswerOutcome = report.delivered
+      ? { state: 'confirmed', sent: pending.sent }
+      : { state: 'refused', reason: 'api-refused' }
+    if (pending.settled) for (const listener of this.lateListeners) listener(handed.requestId, outcome)
+    pending.settle(outcome)
+    // OpenCode applied nothing, so the request is free for another tap; nothing is resent by itself.
+    if (!report.delivered) this.claims.delete(handed.requestId)
     this.finishPending(handed.requestId)
   }
 
@@ -444,12 +451,25 @@ export class RemoteAnswers {
       this.deps.liveIncarnationId(record.sessionId) === request.incarnationId
     if (route === 'opencode-api') return this.deliverToPlugin(record, prompt, request, current, markWritten)
     // While BMN types, its own keys walk the dialog through its steps, and each step is verified on its own.
-    this.typing.add(record.sessionId)
+    // One answer types into a session at a time; only the one typing may end that.
+    const sessionId = record.sessionId
+    const typing = {
+      begin: (): boolean => {
+        const owner = this.typing.get(sessionId)
+        if (owner !== undefined && owner !== record.requestId) return false
+        this.typing.set(sessionId, record.requestId)
+        return true
+      },
+      end: (): void => {
+        if (this.typing.get(sessionId) !== record.requestId) return
+        this.typing.delete(sessionId)
+        this.watches.get(sessionId)?.check()
+      }
+    }
     try {
-      return await this.deliverKeys(record, prompt, request, route === 'claude-keys' ? 'claude' : 'codex', current, markWritten)
+      return await this.deliverKeys(record, prompt, request, route === 'claude-keys' ? 'claude' : 'codex', current, markWritten, typing)
     } finally {
-      this.typing.delete(record.sessionId)
-      this.watches.get(record.sessionId)?.check()
+      typing.end()
     }
   }
 
@@ -459,7 +479,8 @@ export class RemoteAnswers {
     request: AnswerRequest,
     harness: QuestionHarness,
     current: () => boolean,
-    markWritten: () => void
+    markWritten: () => void,
+    typing: { begin(): boolean; end(): void }
   ): Promise<AnswerOutcome> {
     const screen = this.deps.screen(record.sessionId, request.incarnationId)
     if (!screen) return { state: 'refused', reason: 'gone' }
@@ -475,13 +496,17 @@ export class RemoteAnswers {
       const dialog = claudePermissionOnScreen(screen.lines(), prompt.tool, prompt.command!, prompt.description ?? null)
       if (!dialog) return { state: 'refused', reason: 'not-on-screen' }
       if (request.answer.type !== 'permission') return { state: 'refused', reason: 'unsupported' }
+      if (!typing.begin()) return { state: 'refused', reason: 'changed' }
       if (request.answer.decision === 'deny') {
         // Claude reports a deny through no hook at all, so it can only ever be sent, never confirmed.
         write(dialog.deny)
+        typing.end()
         return { state: 'sent-unconfirmed', sent }
       }
       const confirmation = this.expectConfirmation(record, prompt, request.answer, sent)
       write(dialog.allow)
+      // The wait for the report is not typing: a successor's dialog is watched again from here.
+      typing.end()
       return confirmation
     }
 
@@ -496,6 +521,7 @@ export class RemoteAnswers {
       const shown = (lines: string[]): boolean => questionOnScreen(lines, harness, question, step)
       if (index === 0) {
         if (!shown(screen.lines())) return { state: 'refused', reason: 'not-on-screen' }
+        if (!typing.begin()) return { state: 'refused', reason: 'changed' }
       } else if (!(await this.waitForScreen(screen, (lines) => shown(lines) || null)) || !current()) {
         return { state: 'partial', sent: sent.slice(0, index), total: count }
       }
@@ -503,11 +529,13 @@ export class RemoteAnswers {
       if (index === count - 1 && !review) confirmation = this.expectConfirmation(record, prompt, request.answer, sent)
       write(choices[index]! + 1)
     }
+    if (!review) typing.end()
     if (review) {
       const submit = await this.waitForScreen(screen, (lines) => claudeReviewOnScreen(lines, prompt.questions, sent))
       if (submit === null || !current()) return { state: 'partial', sent, total: count }
       confirmation = this.expectConfirmation(record, prompt, request.answer, sent)
       write(submit)
+      typing.end()
     }
     return confirmation!
   }
@@ -546,7 +574,8 @@ export class RemoteAnswers {
       },
       // OpenCode's reject denies every permission still waiting, so a Deny stays valid only while this
       // request is the session's one pending permission, up to the moment it is handed out.
-      valid: () => this.tracked.has(record.requestId) &&
+      // It also stays valid only while the dialog is the one the tap was for.
+      valid: () => this.tracked.has(record.requestId) && current() &&
         (payload.kind !== 'permission' || payload.reply !== 'reject' || this.canDeny(record)),
       onDropped: () => dropped()
     }
@@ -629,10 +658,10 @@ export class RemoteAnswers {
     const watch: Watch = { unsubscribe: () => undefined, check: () => undefined }
     // Every change is read as it lands: a dialog that leaves and comes back between two samples is still over.
     const check = (): void => {
-      if (this.typing.has(sessionId)) return
+      const typing = this.typing.get(sessionId)
       const lines = screen.lines()
-      for (const entry of this.tracked.values()) {
-        if (entry.sessionId !== sessionId) continue
+      for (const [requestId, entry] of this.tracked) {
+        if (entry.sessionId !== sessionId || requestId === typing) continue
         const visible = dialogOnScreen(lines, entry.prompt)
         // A dialog that leaves the screen is over: whatever shows next is a different one.
         if (entry.visible && !visible) entry.epoch += 1

@@ -2663,10 +2663,10 @@ describe('OpenCode hooks', () => {
       return result
     }
     const posts: Array<{ url: string; body: unknown }> = []
-    let accept = true
+    let status = 200
     const fetcher = async (request: Request) => {
       posts.push({ url: request.url, body: JSON.parse(await request.text()) })
-      return { ok: accept }
+      return { ok: status < 300, status }
     }
     const create = runInNewContext(`${javascript}; BMNPlugin`, {
       process: { env: { BMN_CONTROL_SOCKET: '/fixture/socket' } }, URL, Request, setTimeout, Buffer
@@ -2695,14 +2695,19 @@ describe('OpenCode hooks', () => {
     expect(takes[2]).toBe('timeout -s KILL 10s bmn answer take --wait 0 --reported per_2=ok --json')
     await event('permission.replied', { sessionID: OPENCODE_SESSION, requestID: 'per_2', reply: 'once' })
     await answer([], 4)
-    accept = false
+    // A server error may still have applied the reply: nothing is reported, so BMN keeps it uncertain.
+    status = 503
     await answer([{ requestRef: 'per_1', kind: 'permission', reply: 'reject' }], 5)
     expect(posts[1]).toEqual({ url: 'http://127.0.0.1:4096/permission/per_1/reply?directory=%2Fwork', body: { reply: 'reject' } })
-    expect(takes[4]).toBe('timeout -s KILL 10s bmn answer take --wait 0 --reported per_1=failed --json')
+    expect(takes[4]).toBe('timeout -s KILL 35s bmn answer take --wait 25 --json')
+    // A refused request (4xx) applied nothing.
+    status = 404
+    await answer([{ requestRef: 'per_1', kind: 'permission', reply: 'reject' }], 6)
+    expect(takes[5]).toBe('timeout -s KILL 10s bmn answer take --wait 0 --reported per_1=failed --json')
     await event('session.idle', { sessionID: OPENCODE_SESSION })
     answerNext.shift()!([])
     await new Promise((resolve) => setTimeout(resolve, 50))
-    expect(takes).toHaveLength(5)
+    expect(takes).toHaveLength(6)
   })
 
   it('kills a stalled plugin child within 3 seconds', async () => {

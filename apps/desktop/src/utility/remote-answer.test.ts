@@ -349,6 +349,63 @@ describe('the dialog epoch (decision 3)', () => {
   })
 })
 
+describe('dialogs that leave while another answer is in flight (Astra recheck)', () => {
+  it('counts a departure and return drawn back to back, with no time between them', async () => {
+    const h = harness({ record: record(CLAUDE_BASH), lines: screen('claude-bash-permission.txt') })
+    await settle()
+    const sent = h.engine.epochOf('request-1')!
+    h.screens.get('s1')!.show(BLANK)
+    h.screens.get('s1')!.show(screen('claude-bash-permission.txt'))
+    await expect(ask(h, allow, { epoch: sent })).resolves.toEqual({ state: 'refused', reason: 'changed' })
+    expect(h.writes).toEqual([])
+  })
+
+  it('keeps watching a successor dialog while an earlier answer waits for its report (R1)', async () => {
+    const h = harness({ record: record(CLAUDE_BASH), lines: screen('claude-bash-permission.txt') })
+    const first = ask(h, allow)
+    await settle()
+    expect(h.writes).toEqual(['1'])
+    h.engine.closed(record(CLAUDE_BASH, { state: 'answered' }))
+    const successor = record(CLAUDE_BASH, { requestId: 'request-2' })
+    const drawn = open(h, successor)
+    h.screens.get('s1')!.show(screen('claude-bash-permission.txt'))
+    h.screens.get('s1')!.show(BLANK)
+    h.screens.get('s1')!.show(screen('claude-bash-permission.txt'))
+    await first
+    const outcome = await h.engine.answer({ requestId: 'request-2', revision: 1, epoch: drawn, incarnationId: 'inc-1', answer: allow })
+    expect(outcome).toEqual({ state: 'refused', reason: 'changed' })
+    expect(h.writes).toEqual(['1'])
+  })
+})
+
+describe('one answer types into a session at a time', () => {
+  it('refuses a second answer while the first is still walking its steps, so neither loses its guard', async () => {
+    const h = harness({ record: record(CODEX_TWO), lines: screen('codex-two-step1.txt') })
+    const first = ask(h, choose(1, 0))
+    await settle()
+    expect(h.writes).toEqual(['2'])
+    const second = open(h, record(CODEX_TWO, { requestId: 'request-2' }))
+    await expect(h.engine.answer({ requestId: 'request-2', revision: 1, epoch: second, incarnationId: 'inc-1', answer: choose(0, 0) }))
+      .resolves.toEqual({ state: 'refused', reason: 'changed' })
+    expect(h.writes).toEqual(['2'])
+    await expect(first).resolves.toEqual({ state: 'partial', sent: ['SQLite'], total: 2 })
+  })
+})
+
+describe('reports that speak for another dialog after expiry or an owner close (R2)', () => {
+  it('never lets a successor confirm an answer whose request was dropped by retain', async () => {
+    const h = harness({ record: record(CLAUDE_BASH), lines: screen('claude-bash-permission.txt') })
+    const late: string[] = []
+    h.engine.onLateOutcome((requestId) => late.push(requestId))
+    await expect(ask(h, allow)).resolves.toEqual({ state: 'sent-unconfirmed', sent: ['Allow once'] })
+    h.engine.retain(new Set())
+    open(h, record(CLAUDE_BASH, { requestId: 'request-2' }))
+    const report = evidence({ permission: 'allowed', tool: 'Bash', command: 'touch spike-allow.txt' })
+    expect(h.engine.evidence('s1', 'claude:permission', report)).toBeNull()
+    expect(late).toEqual([])
+  })
+})
+
 describe('reports that speak for another dialog (Astra A5)', () => {
   it('never lets an identical successor\'s report confirm an earlier answer or credit it to the phone', async () => {
     const h = harness({ record: record(CLAUDE_BASH), lines: screen('claude-bash-permission.txt') })
@@ -421,6 +478,30 @@ describe('answering OpenCode through its plugin', () => {
     await expect(pending).resolves.toEqual({ state: 'refused', reason: 'changed' })
   })
 
+  it('tells the card when OpenCode refuses the reply after the answer was already reported unconfirmed, and frees the request (R3)', async () => {
+    const h = harness({ record: record(OPENCODE_QUESTION) })
+    const late: Array<[string, unknown]> = []
+    h.engine.onLateOutcome((requestId, outcome) => late.push([requestId, outcome]))
+    const pending = ask(h, choose(1))
+    await expect(h.engine.take('s1', 'inc-1', 500)).resolves.toHaveLength(1)
+    await expect(pending).resolves.toEqual({ state: 'sent-unconfirmed', sent: ['Session cookies'] })
+    await h.engine.take('s1', 'inc-1', 0, { requestRef: 'que_1', delivered: false })
+    expect(late).toEqual([['request-1', { state: 'refused', reason: 'api-refused' }]])
+    // Nothing was applied, so the owner may tap again.
+    const retry = ask(h, choose(0), { epoch: h.engine.epochOf('request-1')! })
+    await expect(h.engine.take('s1', 'inc-1', 500)).resolves.toHaveLength(1)
+    await expect(retry).resolves.toEqual({ state: 'sent-unconfirmed', sent: ['JWT'] })
+  })
+
+  it('drops a queued answer whose dialog changed before the plugin collected it (R4)', async () => {
+    const h = harness({ record: record(OPENCODE_QUESTION) })
+    const pending = ask(h, choose(1))
+    await settle()
+    h.engine.hookReported('s1')
+    await expect(h.engine.take('s1', 'inc-1', 0)).resolves.toEqual([])
+    await expect(pending).resolves.toEqual({ state: 'refused', reason: 'changed' })
+  })
+
   it('confirms or refuses from what OpenCode\'s server told the plugin, and only for the process it handed the answer to', async () => {
     const h = harness({ record: record(OPENCODE_QUESTION) })
     const pending = ask(h, choose(1))
@@ -435,6 +516,6 @@ describe('answering OpenCode through its plugin', () => {
     const failed = ask(refused, choose(1))
     await expect(refused.engine.take('s1', 'inc-1', 500)).resolves.toHaveLength(1)
     await refused.engine.take('s1', 'inc-1', 0, { requestRef: 'que_1', delivered: false })
-    await expect(failed).resolves.toEqual({ state: 'refused', reason: 'gone' })
+    await expect(failed).resolves.toEqual({ state: 'refused', reason: 'api-refused' })
   })
 })

@@ -272,8 +272,9 @@ before replacing it. The plugin forwards OpenCode events to `bmn hook opencode` 
 the hook log shows what actually arrived. While a question or permission of the plugin's own main
 session waits, it also runs `bmn answer take --wait 25` in a loop and posts any answer it receives to
 its own OpenCode server by request id (`question/<id>/reply`, `permission/<id>/reply`), then tells
-BMN what the server answered with `--reported <id>=ok|failed` (nothing when the connection failed, as
-the reply may still have landed). It posts a reject only while that permission is the only one of
+BMN what the server answered with `--reported <id>=ok|failed`: `ok` for an accepted reply, `failed`
+only for a refused request (4xx, nothing applied), and nothing for a lost connection or a server
+error, as the reply may still have landed. It posts a reject only while that permission is the only one of
 its session still waiting, because OpenCode's reject answers them all. It stops when nothing waits
 and after three failed calls, so an absent BMN costs nothing. A plugin installed before
 Epic 30 shows as `wired (older wording)` until `bmn hooks install opencode` replaces it. This was checked against OpenCode CLI 1.18.31 and locally

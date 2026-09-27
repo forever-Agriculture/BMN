@@ -263,12 +263,23 @@ export class TelegramCardKeeper {
     void this.deliver(card, { type: 'choices', choices: card.chosen }, card.labels, binding)
   }
 
-  /** A report that confirmed an answer after the card already said it was not confirmed. */
+  /**
+   * A report that came after the card already said the answer was not confirmed: a confirmation, or OpenCode
+   * refusing the reply (nothing applied, so fresh buttons while the request is open). Queued behind the card's
+   * own settlement, which may still be on its way.
+   */
   lateOutcome(requestId: string, outcome: AnswerOutcome): void {
     const card = this.cardFor(requestId)
-    if (!card || !card.upgradable || outcome.state !== 'confirmed') return
-    card.upgradable = false
-    void this.enqueue(card, () => this.finish(card, { type: 'outcome', outcome, permission: card.permission }))
+    if (!card || (outcome.state !== 'confirmed' && outcome.state !== 'refused')) return
+    void this.enqueue(card, async () => {
+      if (!card.upgradable) return
+      card.upgradable = false
+      // The unconfirmed ending still waiting to be written must not overwrite what is true now.
+      if (card.unwritten?.timer) clearTimeout(card.unwritten.timer)
+      card.unwritten = null
+      if (outcome.state === 'confirmed') await this.finish(card, { type: 'outcome', outcome, permission: card.permission })
+      else await this.settle(card, outcome)
+    })
   }
 
   /**

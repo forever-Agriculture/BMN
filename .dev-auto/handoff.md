@@ -14,12 +14,12 @@
 
 - Sprint board and reconciled state: epic-30 in-progress; 30-1, 30-2, 30-3 all `review`. Commits 251b1e2 (30.1), 8ee22dd (30.2 engine), 9ac0872 (30.3 + 30.2/30.3 Electron phases) = frozen review candidate. Live harness kept untracked at `.dev-auto/evidence/e30-live-remote-answers.live.test.ts.txt`.
 - Implemented: 30.1 (spike, structured prompt, v17, CLI mappers, setting, docs); 30.2 (mirror, engine, evidence, `answer.take`, plugin polling); 30.3 telegram-cards.ts, telegram-card-keeper.ts, connector HTML/edit/toast/callback_query/apiOrigin, schema v18 card columns, companion wiring, structured-dialog drafts, docs telegram.md/features.md, Electron fake Bot API phase (main/fake-bot-api.ts).
-- Active helpers: none. GLM-5.3 pre-review collected (`e30-glm-prereview.json`, $2.04); Astra medium epic review collected (`e30-astra-review.md` sha ca85a5e1b5876c41, log ~19:45-20:10). Pre-review repair committed a2f7456.
+- Active helpers: Astra `medium` consultant on R1-R4 (codex exec read-only), started ~21:55, prompt `e30-consult-prompt.md`, output `e30-consult.md`. Recheck collected (`e30-astra-recheck.md` sha f41fbe3ef659210d). GLM-5.3 pre-review collected (`e30-glm-prereview.json`, $2.04); Astra medium epic review collected (`e30-astra-review.md` sha ca85a5e1b5876c41, log ~19:45-20:10). Pre-review repair committed a2f7456.
 
 ## Decisions and findings
 
 - Original or approved intent changes: none.
-- Material pending findings: Astra A1-A8 (log ~19:45-20:10) OPEN, consolidated repair in progress (uncommitted): A3, A5, A8 done in engine/socket/CLI/plugin (A2 plugin Deny guard done) with tests; A4, A6, A1, A7 next. Then unit gate, Electron, Claude live allow/deny rerun (A4 changes recognition), commit, Astra `low` focused recheck. Earlier: GLM pre-review G1 (oversize card lost), G2 (minor) and lead finding L1 (OpenCode resolvedBy) closed in the consolidated repair (log ~19:30); repaired tree: unit 110 files / 2058 PASS (`e30-unit-repair1.log` sha 03d962deb62eb4d8), Electron EXIT 0 (`e30-electron-repair1.log` sha b8e9112993629a39).
+- Material pending findings: OPEN R1 (P1, introduced by the A3 repair), R2 (P1), R3 (P2), R4 (P2) from the Astra recheck (log ~21:40-21:50); reproduced by 4 failing tests (`e30-recheck-repro.log`). A1, A2, A4, A6, A7 closed by the recheck; A3/A5/A8 residuals are R1-R3. Earlier findings G1, G2, L1 closed (a2f7456).
 - 30.2 AC1 FAIL recorded (1.49×) → mirror gated to Claude/Codex hook sessions (log 2026-09-27 ~18:05).
 - Known residuals (log ~18:35-19:00): under heavy CPU load the plugin's 3 s hook deadline can lose a replied report → honest sent-unconfirmed. Final cards stay in the keeper's memory until restart (small).
 - Cross-epic obligations: Epic 29 hook origin reused for card headers (flag seen in Electron header); old `bmn` CLI ↔ new server; Remote Control sessions stay skipped; text-reply path unchanged except structured-dialog drafts.
@@ -30,7 +30,7 @@
 - Electron self-test incl. "remote answers" (30.2) and "telegram cards" (30.3, fake Bot API taps a three-question card; edits in order; keys 1,2,1,1; resolvedBy telegram): EXIT 0, `e30-electron-30.3-run1.log` sha 20a3b134a7a18d3b.
 - Real agents through the internal answer function, isolated BMN (log ~18:35-19:00): Claude 4/4 as designed, Codex 2/2 confirmed, OpenCode 3/3 confirmed on a quiet machine (run 1 under load: 1 confirmed, 2 sent-unconfirmed).
 - Reviewed scope and route: Astra (gpt-6-astra medium, codex exec read-only) full review of ec7c517..a2f7456 → not ready (A1-A8). Baseline ec7c517.
-- Review allowance at the current boundary: rechecks 0 / consultation 0 / final repair 0.
+- Review allowance at the current boundary: rechecks 1 used (found a repair-introduced defect) / consultation 1 running / final repair 0 of 1, then one recheck; remaining material defects then block the boundary.
 - Unverified: owner real-phone run on the packaged build (needs push + `pnpm run update:desktop` authorization and the owner's phone); Telegram's real rendering of the HTML cards.
 
 ## Measurement
@@ -43,5 +43,5 @@
 
 ## Resume
 
-- Next safe action: finish the consolidated Astra repair (A4, A6, A1, A7) with RED/GREEN, gates, commit, then Astra `low` focused recheck (review allowance applies); then ask the owner to authorize push + update:desktop for the phone walk-through.
-- Status: ACTIVE — Astra review found A1-A8; consolidated repair in progress.
+- Next safe action: collect the consultation; make the ONE final consolidated repair of R1-R4 per its answer; gates; commit; one Astra `low` recheck. Any remaining material defect → report the boundary BLOCKED with options.
+- Status: ACTIVE — recheck found R1-R4; consultation running before the final repair.

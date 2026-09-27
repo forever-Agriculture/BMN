@@ -32,7 +32,8 @@ edits the same card to say what happened:
 - **⚠ Sent — not confirmed, check the laptop.** when it was sent but nothing confirmed it; BMN never
   sends it twice. A late confirmation still turns it into ✓.
 - **Nothing was sent: …** with the reason (the dialog changed, it is not on the screen, …) and fresh
-  buttons while the question is still open.
+  buttons while the question is still open. **OpenCode rejected the answer; nothing was applied.**
+  does the same, even after the card first said not confirmed.
 - **Answered at the laptop.** or **No longer open.** when it ended some other way; the buttons go.
 
 Several questions in one dialog are shown one at a time on the same card, earlier answers quoted

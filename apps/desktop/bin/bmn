@@ -490,9 +490,11 @@ export const BMNPlugin: Plugin = async (input) => {
     url.searchParams.set("directory", input.directory)
     const body = route === "question" ? { answers: answer.answers } : { reply: reject ? "reject" : "once" }
     const fetcher = (input.client as any)?._client?.getConfig?.().fetch ?? fetch
-    // A lost connection may still have delivered the reply, so only a response is reported.
+    // A lost connection or a server error may still have applied the reply, so only an accepted reply or a
+    // refused request (4xx: nothing was applied) is reported.
     const response = await fetcher(new Request(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }))
-    reports.push(\`\${answer.requestRef}=\${response.ok ? "ok" : "failed"}\`)
+    if (response.ok) reports.push(\`\${answer.requestRef}=ok\`)
+    else if (response.status >= 400 && response.status < 500) reports.push(\`\${answer.requestRef}=failed\`)
   }
   // Asks BMN only while something waits, and gives up after three failures so an absent BMN costs nothing.
   const poll = async () => {
