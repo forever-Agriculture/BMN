@@ -297,11 +297,12 @@ handoff pages always stay drafts. Anything that is not a reply gets a short poin
 never lands in whichever session happens to be focused.
 
 Pages are cards with buttons: tap an option to answer an agent's question (Claude Code, Codex in Plan
-mode, OpenCode; several questions one at a time), or **Allow once** / **Deny** a Claude `Bash` or
+mode, OpenCode; several questions one at a time, with **‹ Back**; multi-select as toggles; **Other…** to
+reply in your own words), or **Allow once** / **Deny** a Claude `Bash` or
 OpenCode permission once you turn on **Answer permission prompts from Telegram** (never "always
 allow"). The card then says what happened: ✓ only when the agent confirmed the answer, ⚠ when it was
-sent but not confirmed, or why nothing was sent. Multi-select, typed answers, Codex permissions,
-subagent and sandbox prompts still say to answer at the laptop. Telegram cannot deliver handoffs or
+sent but not confirmed, or why nothing was sent. Codex permissions, subagent and sandbox prompts still
+say to answer at the laptop. Telegram cannot deliver handoffs or
 manage sessions.
 
 Setup: create a bot with [@BotFather](https://t.me/BotFather), read your chat ID from `getUpdates`,

@@ -1,0 +1,63 @@
+{
+  "session_id": "0748822a-ae4d-4937-80e7-b1041d444890",
+  "cwd": "/work/project",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolUse",
+  "tool_name": "AskUserQuestion",
+  "tool_input": {
+    "questions": [
+      {
+        "question": "Which features should the first release include?",
+        "header": "Features",
+        "options": [
+          {
+            "label": "Rate limiting",
+            "description": "Per-key request caps."
+          },
+          {
+            "label": "Audit log",
+            "description": "Record every admin action."
+          },
+          {
+            "label": "Webhooks",
+            "description": "Notify other services on change."
+          }
+        ],
+        "multiSelect": true
+      }
+    ],
+    "answers": {
+      "Which features should the first release include?": "Audit log, Passkeys"
+    },
+    "annotations": {}
+  },
+  "tool_response": {
+    "questions": [
+      {
+        "question": "Which features should the first release include?",
+        "header": "Features",
+        "options": [
+          {
+            "label": "Rate limiting",
+            "description": "Per-key request caps."
+          },
+          {
+            "label": "Audit log",
+            "description": "Record every admin action."
+          },
+          {
+            "label": "Webhooks",
+            "description": "Notify other services on change."
+          }
+        ],
+        "multiSelect": true
+      }
+    ],
+    "answers": {
+      "Which features should the first release include?": "Audit log, Passkeys"
+    },
+    "annotations": {}
+  },
+  "tool_use_id": "toolu_01Pd9EAurvjWHxD64APHtyZ9",
+  "duration_ms": 1
+}

@@ -1,8 +1,16 @@
 // MODULE: telegram-card-keeper.ts - keeps each Telegram card true to its request: sends, edits in place, taps and outcomes (Story 30.3)
 import { randomBytes } from 'node:crypto'
-import type { AttentionRecord } from '@bmn/protocol'
+import type { AttentionQuestionsPrompt, AttentionRecord } from '@bmn/protocol'
 import type { TelegramCardData, TelegramCardRecord, TelegramCardState } from './database-companion-store'
-import type { AnswerOutcome, AnswerRequest, RemoteAnswer } from './remote-answer'
+import {
+  cleanTypedAnswer,
+  shownChoice,
+  typedAnswerable,
+  type AnswerOutcome,
+  type AnswerRequest,
+  type QuestionChoice,
+  type RemoteAnswer
+} from './remote-answer'
 import {
   endedCard,
   endingReply,
@@ -19,7 +27,7 @@ import {
   type InlineKeyboard,
   type RenderedCard
 } from './telegram-cards'
-import { TelegramConnectorError, type CardMessageOptions, type InboundTap } from './telegram-connector'
+import { TelegramConnectorError, type CardMessageOptions, type InboundReply, type InboundTap } from './telegram-connector'
 
 export interface CardConnector {
   sendMessage(text: string, options?: CardMessageOptions): Promise<{ messageId: number }>
@@ -55,7 +63,26 @@ export interface CardKeeperDependencies {
   token?: () => string
 }
 
-type TapAction = { type: 'choice'; step: number; index: number } | { type: 'permission'; decision: 'allow' | 'deny' }
+type TapAction =
+  | { type: 'choice' | 'toggle'; step: number; index: number }
+  /** Send or Next on a multi-select question; Other…; ‹ Options back from a typed reply; ‹ Back a question. */
+  | { type: 'submit' | 'other' | 'options' | 'back'; step: number }
+  | { type: 'permission'; decision: 'allow' | 'deny' }
+
+/** Where the owner is in a question card: nothing is sent before the last question is answered. */
+interface Progress {
+  step: number
+  /** The answers of the questions before `step`. */
+  choices: QuestionChoice[]
+  /** Multi-select: the options toggled on at `step`. */
+  toggled: number[]
+  /** Single choice after Back: the option chosen before. */
+  marked: number | null
+  /** The card waits for a typed reply after Other…. */
+  typing: boolean
+}
+
+const START: Readonly<Progress> = Object.freeze({ step: 0, choices: [], toggled: [], marked: null, typing: false })
 
 /** What a set of buttons was drawn for, fixed when they are minted: a tap answers exactly this, never a later revision. */
 interface Binding {
@@ -76,9 +103,9 @@ interface LiveCard {
   format: TelegramCardData['format']
   base: string
   permission: boolean
-  step: number
-  chosen: number[]
-  labels: string[]
+  progress: Progress
+  /** Whether the card as drawn offers Other…, so a reply to it is a typed answer or refused. */
+  offersOther: boolean
   tokens: string[]
   /** An answer reported `sent-unconfirmed` that a late report may still confirm. */
   upgradable: boolean
@@ -92,6 +119,7 @@ interface Composed {
   rendered: RenderedCard
   state: 'buttons' | 'open'
   actions: TapAction[]
+  offersOther: boolean
 }
 
 const DEFAULT_SETTLE_MS = 150
@@ -143,7 +171,7 @@ export class TelegramCardKeeper {
       epoch: this.deps.answerEpoch(record.requestId),
       incarnationId: record.incarnationId ?? incarnationId
     }
-    const composed = await this.compose(record, { step: 0, chosen: [] }, null, binding.epoch)
+    const composed = await this.compose(record, START, null, binding.epoch)
     let format: TelegramCardData['format'] = 'html'
     let messageId: number
     try {
@@ -174,9 +202,8 @@ export class TelegramCardKeeper {
       format,
       base: composed.rendered.base,
       permission: record.prompt?.type === 'permission',
-      step: 0,
-      chosen: [],
-      labels: [],
+      progress: { ...START },
+      offersOther: false,
       tokens: [],
       upgradable: false,
       unwritten: null,
@@ -239,28 +266,126 @@ export class TelegramCardKeeper {
     }
     const record = await this.deps.getAttention(card.requestId).catch(() => null)
     const prompt = record?.prompt
-    if (!record || record.revision !== binding.revision || prompt?.type !== 'questions' || action.step !== card.step) {
+    if (!record || record.revision !== binding.revision || prompt?.type !== 'questions' || action.step !== card.progress.step) {
       await connector.answerCallbackQuery(tap.callbackId, 'This button is no longer active.').catch(() => undefined)
       await this.enqueue(card, () => this.refreshCard(card))
       return
     }
-    card.chosen = [...card.chosen, action.index]
-    card.labels = [...card.labels, prompt.questions[action.step]!.options[action.index]!.label]
-    if (card.step + 1 < prompt.questions.length) {
-      card.step += 1
+    const progress = card.progress
+    const question = prompt.questions[progress.step]!
+    let callback: string
+    switch (action.type) {
+      case 'choice':
+        progress.choices = [...progress.choices, action.index]
+        await this.advance(card, record, prompt, binding, tap.callbackId)
+        return
+      case 'submit':
+        progress.choices = [...progress.choices, { set: [...progress.toggled].sort((a, b) => a - b) }]
+        await this.advance(card, record, prompt, binding, tap.callbackId)
+        return
+      case 'toggle': {
+        const on = !progress.toggled.includes(action.index)
+        progress.toggled = on ? [...progress.toggled, action.index] : progress.toggled.filter((index) => index !== action.index)
+        callback = `${on ? '●' : '○'} ${question.options[action.index]!.label}`
+        break
+      }
+      case 'other':
+        progress.typing = true
+        callback = 'Reply to the card with your answer.'
+        break
+      case 'options':
+        progress.typing = false
+        callback = 'Options'
+        break
+      case 'back': {
+        // The earlier answer comes back as it was chosen: its option marked, its toggles on.
+        const earlier = progress.choices[progress.step - 1]!
+        progress.step -= 1
+        progress.choices = progress.choices.slice(0, progress.step)
+        progress.marked = typeof earlier === 'number' ? earlier : null
+        progress.toggled = typeof earlier === 'object' && 'set' in earlier ? [...earlier.set] : []
+        progress.typing = false
+        callback = `Question ${progress.step + 1} of ${prompt.questions.length}`
+        break
+      }
+    }
+    card.state = 'buttons'
+    await connector.answerCallbackQuery(tap.callbackId, callback).catch(() => undefined)
+    await this.redraw(card, record, binding)
+  }
+
+  /**
+   * A reply to a card. On a card that offers Other… it is the typed answer once Other… was tapped, and refused
+   * before; nothing else becomes of it (never a draft or a prompt). Any other reply is not the keeper's: false.
+   */
+  async typedReply(reply: InboundReply): Promise<boolean> {
+    const connector = this.deps.connector()
+    const card = reply.replyToMessageId === null ? undefined : this.cards.get(reply.replyToMessageId)
+    if (!connector || this.disposed || !card || card.state !== 'buttons' || !card.offersOther) return false
+    const answer = (text: string): Promise<unknown> =>
+      connector.sendMessage(text, { replyToMessageId: reply.messageId }).catch(() => undefined)
+    if (!card.progress.typing) {
+      await answer('Tap Other… first, then reply with your answer.')
+      return true
+    }
+    const typed = cleanTypedAnswer(reply.text ?? '')
+    if (typed === '') {
+      await answer('Reply with your answer as text.')
+      return true
+    }
+    const binding: Binding = { revision: card.revision, epoch: card.epoch, incarnationId: card.incarnationId }
+    const record = await this.deps.getAttention(card.requestId).catch(() => null)
+    const prompt = record?.prompt
+    if (!record || record.state !== 'open' || record.revision !== binding.revision || prompt?.type !== 'questions') {
+      await answer(record?.state === 'open' ? REFUSAL_WORDS.changed : REFUSAL_WORDS.gone)
+      await this.enqueue(card, () => this.refreshCard(card))
+      return true
+    }
+    this.revoke(card)
+    const progress = card.progress
+    const question = prompt.questions[progress.step]!
+    progress.choices = [...progress.choices, question.multiSelect
+      ? { set: [...progress.toggled].sort((a, b) => a - b), typed }
+      : { typed }]
+    await this.advance(card, record, prompt, binding, null)
+    return true
+  }
+
+  /** The question at `step` is answered: on to the next one on the card, or, after the last, send them all. */
+  private async advance(
+    card: LiveCard,
+    record: AttentionRecord,
+    prompt: AttentionQuestionsPrompt,
+    binding: Binding,
+    callbackId: string | null
+  ): Promise<void> {
+    const connector = this.deps.connector()
+    const progress = card.progress
+    const callback = (text: string): Promise<unknown> =>
+      callbackId === null || !connector ? Promise.resolve() : connector.answerCallbackQuery(callbackId, text).catch(() => undefined)
+    if (progress.step + 1 < prompt.questions.length) {
+      progress.step += 1
+      progress.toggled = []
+      progress.marked = null
+      progress.typing = false
       card.state = 'buttons'
-      await connector.answerCallbackQuery(tap.callbackId, `Question ${card.step + 1} of ${prompt.questions.length}`)
-        .catch(() => undefined)
-      await this.enqueue(card, async () => {
-        const composed = await this.compose(record, { step: card.step, chosen: card.chosen }, null, binding.epoch)
-        await this.show(card, composed, binding)
-      })
+      await callback(`Question ${progress.step + 1} of ${prompt.questions.length}`)
+      await this.redraw(card, record, binding)
       return
     }
+    const answer: RemoteAnswer = { type: 'choices', choices: progress.choices }
+    const labels = progress.choices.map((choice, index) => shownChoice(prompt.questions[index]!, choice))
     card.state = 'sending'
-    await connector.answerCallbackQuery(tap.callbackId, `Sending ${card.labels.join(' · ')}…`).catch(() => undefined)
-    await this.enqueue(card, () => this.showSending(card, card.labels))
-    void this.deliver(card, { type: 'choices', choices: card.chosen }, card.labels, binding)
+    await callback(`Sending ${labels.join(' · ')}…`)
+    await this.enqueue(card, () => this.showSending(card, labels))
+    void this.deliver(card, answer, labels, binding)
+  }
+
+  private async redraw(card: LiveCard, record: AttentionRecord, binding: Binding): Promise<void> {
+    await this.enqueue(card, async () => {
+      const composed = await this.compose(record, card.progress, null, binding.epoch)
+      await this.show(card, composed, binding)
+    })
   }
 
   /**
@@ -370,13 +495,13 @@ export class TelegramCardKeeper {
    */
   private async compose(
     record: AttentionRecord,
-    progress: { step: number; chosen: number[] },
+    progress: Readonly<Progress>,
     note: string | null,
     epoch: number | null
   ): Promise<Composed> {
     const header = this.deps.header(record.sessionId, record)
     const prompt = record.prompt
-    const none: Omit<Composed, 'rendered'> = { state: 'open', actions: [] }
+    const none: Omit<Composed, 'rendered'> = { state: 'open', actions: [], offersOther: false }
     if (!prompt) {
       return { ...none, rendered: record.kind === 'notice' ? noticeCard(header, record) : requestCard(header, record) }
     }
@@ -397,19 +522,48 @@ export class TelegramCardKeeper {
       return {
         state: 'buttons',
         actions,
+        offersOther: false,
         rendered: permissionCard({ header, prompt, tokens, closedBecause: null, home: this.deps.home, note })
       }
     }
-    const chosen = progress.chosen.map((index, step) => prompt.questions[step]?.options[index]?.label ?? '')
     if (!answerable) {
       return { ...none, rendered: questionCard({ header, prompt, step: 0, chosen: [], tokens: null, note }) }
     }
-    const options = prompt.questions[progress.step]!.options
-    const tokens = options.map(() => this.newToken())
+    const step = progress.step
+    const question = prompt.questions[step]!
+    const chosen = progress.choices.map((choice, index) => shownChoice(prompt.questions[index]!, choice))
+    const other = typedAnswerable(prompt, question)
+    if (progress.typing && other) {
+      const options = this.newToken()
+      return {
+        state: 'buttons',
+        actions: [{ type: 'options', step }],
+        offersOther: true,
+        rendered: questionCard({ header, prompt, step, chosen, tokens: [], note, typing: options })
+      }
+    }
+    const tokens = question.options.map(() => this.newToken())
+    const multi = question.multiSelect
+    const actions: TapAction[] = question.options.map((_, index) => ({ type: multi ? 'toggle' : 'choice', step, index }))
+    // Tokens are minted in keyboard order: options, Other…, then the control row's ‹ Back and Send or Next.
+    const otherToken = other ? this.newToken() : null
+    if (otherToken) actions.push({ type: 'other', step })
+    const back = step > 0 ? this.newToken() : null
+    if (back) actions.push({ type: 'back', step })
+    const submit = multi && progress.toggled.length > 0 ? this.newToken() : null
+    if (submit) actions.push({ type: 'submit', step })
     return {
       state: 'buttons',
-      actions: options.map((_, index) => ({ type: 'choice', step: progress.step, index })),
-      rendered: questionCard({ header, prompt, step: progress.step, chosen, tokens, note })
+      actions,
+      offersOther: other,
+      rendered: questionCard({
+        header, prompt, step, chosen, tokens, note,
+        other: otherToken,
+        back,
+        toggled: multi ? progress.toggled : null,
+        submit,
+        marked: multi ? null : progress.marked
+      })
     }
   }
 
@@ -432,6 +586,7 @@ export class TelegramCardKeeper {
         await connector.editMessageText(card.messageId, composed.rendered.text, { html: true, keyboard: composed.rendered.keyboard })
         drawn()
         card.state = composed.state
+        card.offersOther = composed.offersOther
         if (composed.state === 'buttons') this.mint(card, composed, binding)
         await this.save(card)
         return
@@ -441,6 +596,7 @@ export class TelegramCardKeeper {
       }
     }
     card.state = 'open'
+    card.offersOther = false
     await connector.editMessageText(card.messageId,
       `${plainText(composed.rendered.text)}${composed.state === 'buttons' ? '\n\nAnswer at the laptop.' : ''}`)
     drawn()
@@ -516,11 +672,9 @@ export class TelegramCardKeeper {
     if (record.revision === card.revision) return
     // The old buttons die now, before the new card is composed or sent.
     this.revoke(card)
-    card.step = 0
-    card.chosen = []
-    card.labels = []
+    card.progress = { ...START }
     const binding = this.bindingFor(card, record)
-    await this.show(card, await this.compose(record, { step: 0, chosen: [] }, null, binding.epoch), binding)
+    await this.show(card, await this.compose(record, START, null, binding.epoch), binding)
   }
 
   private bindingFor(card: LiveCard, record: AttentionRecord): Binding {
@@ -545,12 +699,10 @@ export class TelegramCardKeeper {
       // Nothing was sent. While the request is still open, the owner gets fresh buttons and can try again.
       const record = await this.deps.getAttention(card.requestId).catch(() => null)
       if (record?.state === 'open') {
-        card.step = 0
-        card.chosen = []
-        card.labels = []
+        card.progress = { ...START }
         card.state = 'open'
         const binding = this.bindingFor(card, record)
-        await this.show(card, await this.compose(record, { step: 0, chosen: [] }, REFUSAL_WORDS[outcome.reason], binding.epoch), binding)
+        await this.show(card, await this.compose(record, START, REFUSAL_WORDS[outcome.reason], binding.epoch), binding)
       } else {
         await this.finish(card, { type: 'outcome', outcome, permission: card.permission })
       }

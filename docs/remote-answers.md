@@ -160,10 +160,21 @@ The answer function lives in the utility process (`apps/desktop/src/utility/remo
 called only by the Telegram tap handler. No control-socket method, owner route or `bmn` command
 reaches it (a unit test reads the sources to keep it that way).
 
-- **Routes.** Claude and Codex questions of shape `choice` (single-select, at most 8 options), and
-  Claude `Bash` permissions with an exact command, are answered by keys. OpenCode questions and
-  permissions are answered through the plugin. Every other shape is refused as `unsupported`, so its
-  card never shows buttons. Claude permissions for other tools (`Edit`, `Write`, …) were not driven
+- **Routes.** Claude questions of shape `choice` or `multi-select` and Codex questions of shape
+  `choice` (at most 8 options each), and Claude `Bash` permissions with an exact command, are answered
+  by keys. OpenCode questions and permissions are answered through the plugin. A shape must agree with
+  its questions (`multi-select` exactly when one is). Every other shape is refused as `unsupported`, so
+  its card never shows buttons.
+- **Answer forms (Epic 31).** Per question: an option index; for a multi-select question the set of
+  indices, ascending, optionally with a typed answer; or a typed answer alone. A typed answer is sent
+  exactly as cleaned (controls and whitespace runs folded to one space, trimmed, at most 2,000
+  characters) and only where it is verified: Claude and Codex always, OpenCode unless the question has
+  `custom: false`. Claude keys: ticks by digit in option order, each tick seen before the next; Down one
+  row at a time to the typed-entry row, the text in pieces of at most 32 characters, Down to
+  `Next`/`Submit`, Enter; each move is read back from the screen before the next key. A multi-select
+  question must first show with nothing ticked and the cursor on option 1. Codex keys: Down to "None of
+  the above", Tab, the text, Enter. Proof: Claude's one string per question (labels joined by `, `,
+  typed text last), Codex `["None of the above", "user_note: <text>"]`, OpenCode's label arrays. Claude permissions for other tools (`Edit`, `Write`, …) were not driven
   and are not recognised.
 - **Screen mirror.** Each live session keeps its last 64 KB of output. A headless terminal copy
   (`screen-mirror.ts`) starts only once a Claude or Codex hook reports from that session, seeded from

@@ -1,0 +1,40 @@
+❯ Use AskUserQuestion once, nothing else first, with two questions. Q1: header
+  "Features", question "Which features should the first release include?",
+  multiSelect true, options "Rate limiting", "Audit log", "Webhooks" (short
+  descriptions). Q2: header "Database", question "Which database should store
+  users?", options "Postgres", "SQLite". Then list the answers verbatim.
+
+● User answered Claude's questions:
+  ⎿  · Which features should the first release include? → Rate limiting, GraphQL
+     · Which database should store users? → SQLite
+
+● Q1 (Features): Rate limiting, GraphQL
+
+  Q2 (Database): SQLite
+
+✻ Cooked for 5s · done 11:52 PM
+
+❯ Use AskUserQuestion once, nothing else first, with two questions. Q1: header
+  "Features", question "Which features should the first release include?",
+  multiSelect true, options "Rate limiting", "Audit log", "Webhooks" (short
+  descriptions). Q2: header "Database", question "Which database should store
+  users?", options "Postgres", "SQLite". Then list the answers verbatim.
+────────────────────────────────────────────────────────────────────────────────
+←  ☒ Features  ☐ Database  ✔ Submit  →
+
+Which features should the first release include?
+
+  1. [✔] Rate limiting
+         Per-key request caps.
+  2. [ ] Audit log
+         Record every admin action.
+  3. [✔] Webhooks
+         Notify other services on change.
+  4. [ ] Type something
+❯    Next
+────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · Tab/Arrow keys to navigate · ctrl+g to edit in VS Code · Esc
+to cancel
+

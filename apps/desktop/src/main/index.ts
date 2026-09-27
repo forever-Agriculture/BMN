@@ -102,7 +102,7 @@ import type { FileReferenceFlowProbe } from '../renderer/src/file-reference-prob
 import type { VoiceFlowProbe } from '../renderer/src/voice-probe'
 import { installFileReferenceIpcHandlers } from './file-reference-ipc'
 import { createPresenceMonitor, readMutterIdleMs } from './presence-monitor'
-import { startFakeBotApi, type FakeBotApi } from './fake-bot-api'
+import { startFakeBotApi, type FakeBotApi, type FakeBotCall, type FakeBotStep } from './fake-bot-api'
 import {
   backupsOf,
   claudeDays,
@@ -158,6 +158,8 @@ import {
 
 const EXPECTED_ELECTRON_VERSION = '44.3.0'
 const SELF_TEST_TIMEOUT_MS = 15_000
+/** The self-test's pages wait this long instead of 15 s, so each card shape costs seconds, not a quarter minute. */
+const SELF_TEST_PAGE_AFTER_MS = 2_000
 
 interface SessionIdentity {
   sessionId: string
@@ -491,7 +493,11 @@ async function launchHostWithChannel(): Promise<{
 }> {
   const { hostEntry, repoRoot } = appPaths()
   const environment = process.argv.includes('--self-test')
-    ? { ...hostEnvironment(repoRoot), ...selfTestHistoryEnvironment(), BMN_SELF_TEST_TELEGRAM_ORIGIN: (await selfTestTelegram()).origin }
+    ? {
+        ...hostEnvironment(repoRoot), ...selfTestHistoryEnvironment(),
+        BMN_SELF_TEST_TELEGRAM_ORIGIN: (await selfTestTelegram()).origin,
+        BMN_SELF_TEST_PAGE_AFTER_MS: String(SELF_TEST_PAGE_AFTER_MS)
+      }
     : hostEnvironment(repoRoot)
   const client = await PtyHostClient.launch(hostEntry, environment, {
     args: process.argv.includes('--self-test') ? ['--self-test-host'] : []
@@ -2182,7 +2188,66 @@ function writeRemoteAnswerHarness(directory: string, fixtures: string): string {
     "})",
     "const keys = []",
     "const take = async () => { const key = queue.length ? queue.shift() : await new Promise((resolve) => { waiter = resolve }); keys.push(key); return key }",
-    "for (const scenario of ['single', 'three', 'codex', 'off', 'allow', 'deny', 'card']) {",
+    // Epic 31.4: a key is one character, or an arrow's escape sequence.
+    "const takeKey = async () => { const key = await take(); return key === '\\x1b' ? key + await take() + await take() : key }",
+    "const DOWN = '\\x1b[B'",
+    // Claude's dialog as the spike recorded it: ticks, a typed-entry row, Next/Submit, then the review.
+    "const claudeAsk = async (questions) => {",
+    "  const answers = {}",
+    "  for (const [q, Q] of questions.entries()) {",
+    "    const n = Q.options.length",
+    "    let cursor = 0, other = null, otherTicked = false, order = []",
+    "    const tabs = '←  ' + questions.map((x, i) => (i < q ? '☒ ' : '☐ ') + x.header).join('  ') + '  ✔ Submit  →'",
+    "    const box = (on) => (Q.multiSelect ? '[' + (on ? '✔' : ' ') + '] ' : '')",
+    "    const render = () => { current = [tabs, Q.question,",
+    "      ...Q.options.flatMap((o, i) => [(cursor === i ? '❯' : ' ') + ' ' + (i + 1) + '. ' + box(order.includes(i)) + o.label, '     ' + o.description]),",
+    "      (cursor === n ? '❯' : ' ') + ' ' + (n + 1) + '. ' + box(otherTicked) + (other ?? (Q.multiSelect ? 'Type something' : 'Type something.')),",
+    "      ...(Q.multiSelect ? [(cursor === n + 1 ? '❯' : ' ') + '    ' + (q === questions.length - 1 ? 'Submit' : 'Next')] : []),",
+    "      '────────────────────────────────────────', '  ' + (n + 2) + '. Chat about this', 'Enter to select · ↑/↓ to navigate · Esc to cancel']; draw() }",
+    "    render()",
+    "    for (;;) {",
+    "      const key = await takeKey()",
+    "      if (key === DOWN) { cursor = Math.min(cursor + 1, Q.multiSelect ? n + 1 : n); render(); continue }",
+    "      if (key === '\\r') { if (Q.multiSelect ? cursor === n + 1 : cursor === n && other !== null) break; continue }",
+    // With the cursor on the typed-entry row every key is text, digits included.
+    "      if (cursor === n) { other = (other ?? '') + key; otherTicked = true; render(); continue }",
+    "      if (!/^\\d$/.test(key)) continue",
+    "      const digit = Number(key)",
+    "      if (!Q.multiSelect && digit <= n) { answers[Q.question] = Q.options[digit - 1].label; break }",
+    "      if (digit === n + 1) { if (Q.multiSelect) otherTicked = !otherTicked; else cursor = n; render(); continue }",
+    "      if (digit <= n) { order = order.includes(digit - 1) ? order.filter((x) => x !== digit - 1) : [...order, digit - 1]; render() }",
+    "    }",
+    // Claude reports a multi-select answer in the order the boxes were ticked, typed text last.
+    "    if (!(Q.question in answers)) answers[Q.question] = Q.multiSelect",
+    "      ? [...order.map((i) => Q.options[i].label), ...(otherTicked && other ? [other] : [])].join(', ') : other",
+    "  }",
+    "  if (questions.length > 1 || questions.some((Q) => Q.multiSelect)) {",
+    "    current = ['Review your answers', ...questions.flatMap((Q) => [' ● ' + Q.question, '   → ' + answers[Q.question]]),",
+    "      'Ready to submit your answers?', '❯ 1. Submit answers', '  2. Cancel']; draw()",
+    "    if (await takeKey() !== '1') return null",
+    "  }",
+    "  show(null)",
+    "  return answers",
+    "}",
+    // Codex's picker: every question ends with None of the above, whose notes Tab opens.
+    "const codexAsk = async (Q) => {",
+    "  const n = Q.options.length",
+    "  let cursor = 0, notes = null",
+    "  const render = () => { current = ['  Question 1/1 (1 unanswered)', '  ' + Q.question,",
+    "    ...Q.options.map((o, i) => '  ' + (cursor === i ? '›' : ' ') + ' ' + (i + 1) + '. ' + o.label.padEnd(18) + o.description),",
+    "    '  ' + (cursor === n ? '›' : ' ') + ' ' + (n + 1) + '. None of the above  Optionally, add details in notes (tab)',",
+    "    ...(notes === null ? [] : ['  › ' + (notes || 'Add notes')]), '', '  tab to add notes | enter to submit answer']; draw() }",
+    "  render()",
+    "  for (;;) {",
+    "    const key = await takeKey()",
+    "    if (notes !== null && key !== '\\r') { notes += key; render(); continue }",
+    "    if (key === DOWN) { cursor = Math.min(cursor + 1, n); render(); continue }",
+    "    if (key === '\\t' && cursor === n) { notes = ''; render(); continue }",
+    "    if (key === '\\r') { show(null); return cursor === n ? ['None of the above', ...(notes ? ['user_note: ' + notes] : [])] : [Q.options[cursor].label] }",
+    "    if (/^\\d$/.test(key)) { show(null); return [Q.options[Number(key) - 1].label] }",
+    "  }",
+    "}",
+    "for (const scenario of ['single', 'three', 'codex', 'off', 'allow', 'deny', 'card', 'claude-more', 'codex-other', 'opencode-more']) {",
     "  await wait('fire-' + scenario)",
     "  keys.length = 0",
     "  if (scenario === 'single') {",
@@ -2215,6 +2280,42 @@ function writeRemoteAnswerHarness(directory: string, fixtures: string): string {
     "      show(next)",
     "    }",
     "    hook('codex', 'codex/ask-two.post-tool-use.json', { tool_use_id: ask.tool_use_id, tool_response: JSON.stringify({ answers: byId }) })",
+    "  } else if (scenario === 'claude-more') {",
+    "    const questions = [",
+    "      { question: 'Which auth method should the API use?', header: 'Auth', multiSelect: false,",
+    "        options: [{ label: 'JWT', description: 'Stateless tokens' }, { label: 'Sessions', description: 'Server-side cookies' }] },",
+    "      { question: 'Which features should the first release include?', header: 'Features', multiSelect: true,",
+    "        options: [{ label: 'Rate limiting', description: 'Per-key caps' }, { label: 'Audit log', description: 'Admin actions' },",
+    "          { label: 'Webhooks', description: 'Notify services' }] }",
+    "    ]",
+    "    show(null); hook('claude', 'claude/ask-single.pre-tool-use.json', { tool_use_id: 'toolu_selftest_more', tool_input: { questions } })",
+    "    writeFileSync(file('opened-' + scenario), '')",
+    "    const answers = await claudeAsk(questions)",
+    "    if (answers) hook('claude', 'claude/ask-single.post-tool-use.json', { tool_use_id: 'toolu_selftest_more', tool_input: { questions }, tool_response: { questions, answers } })",
+    "  } else if (scenario === 'codex-other') {",
+    "    const questions = [{ id: 'auth', header: 'Auth', question: 'Which auth method should the API use?',",
+    "      options: [{ label: 'JWT', description: 'Stateless tokens' }, { label: 'Sessions', description: 'Server-side cookies' }] }]",
+    "    show(null); hook('codex', 'codex/ask-single.pre-tool-use.json', { tool_use_id: 'call_selftest_other', tool_input: { questions } })",
+    "    writeFileSync(file('opened-' + scenario), '')",
+    "    const answers = await codexAsk(questions[0])",
+    "    hook('codex', 'codex/ask-single.post-tool-use.json', { tool_use_id: 'call_selftest_other', tool_input: { questions },",
+    "      tool_response: JSON.stringify({ answers: { auth: { answers } } }) })",
+    "  } else if (scenario === 'opencode-more') {",
+    // OpenCode is answered through its plugin, which this stand-in plays: it asks, collects BMN's answer, replies.
+    "    const asked = read('opencode/question.asked.multiple.json')",
+    "    const requestRef = 'que_0e4a19711001SelfTestMore1'",
+    "    const questions = [asked.questions[0], { ...asked.questions[1], custom: false }]",
+    "    show(null); hook('opencode', 'opencode/question.asked.multiple.json', { id: requestRef, questions })",
+    "    writeFileSync(file('opened-' + scenario), '')",
+    "    let taken = null",
+    "    for (let attempt = 0; attempt < 6 && !taken; attempt++) {",
+    "      taken = (JSON.parse(cli(['answer', 'take', '--wait', '10', '--json'])).answers ?? []).find((answer) => answer.requestRef === requestRef) ?? null",
+    "    }",
+    "    if (taken) {",
+    "      keys.push(JSON.stringify(taken.answers))",
+    "      hook('opencode', 'opencode/question.replied.multiple-typed.json', { requestID: requestRef, sessionID: asked.sessionID, answers: taken.answers })",
+    "      cli(['answer', 'take', '--wait', '0', '--reported', requestRef + '=ok', '--json'])",
+    "    }",
     "  } else {",
     "    show('claude-bash-permission.txt'); hook('claude', 'claude/bash.permission-request.json')",
     "    writeFileSync(file('opened-' + scenario), '')",
@@ -4714,7 +4815,7 @@ async function runSelfTest(): Promise<void> {
     bot.tapOn('Which database should store users?', [0, 1, 0])
     await client.request(METHOD_REGISTRY.presenceSet, { away: true })
     writeFileSync(join(answerDirectory, 'fire-card'), '')
-    // The page waits its 15 s before it is sent; the three taps and the delivery follow.
+    // The page waits its (self-test) 2 s before it is sent; the three taps and the delivery follow.
     const cardBy = Date.now() + 60_000
     while (!existsSync(join(answerDirectory, 'done-card'))) {
       if (Date.now() > cardBy) throw new Error(`the card dialog never finished: ${JSON.stringify(bot.calls.slice(firstCall))}`)
@@ -4745,14 +4846,101 @@ async function runSelfTest(): Promise<void> {
       request: cardRequest ? { state: cardRequest.state, resolvedBy: cardRequest.resolvedBy } : null
     }
     console.error(`[BMN] self-test phase: telegram cards ${JSON.stringify(telegramCards)}`)
+    // Every step offers Other… (Epic 31), and every step after the first ‹ Back.
     const expectedSequence = [
-      'send:2', 'toast:Question 2 of 3', 'edit:2:In a follow-up', 'toast:Question 3 of 3',
-      'edit:2:<i>Nothing is sent until this answer.</i>', 'toast:Sending Postgres · Later · Staging…',
+      'send:3', 'toast:Question 2 of 3', 'edit:4:In a follow-up', 'toast:Question 3 of 3',
+      'edit:4:<i>Nothing is sent until this answer.</i>', 'toast:Sending Postgres · Later · Staging…',
       'edit:0:<i>Sending: Postgres · Later · Staging…</i>', 'edit:0:✓ <i>Sent: Postgres · Later · Staging</i>'
     ]
     if (telegramCards.card?.parseMode !== 'HTML' || JSON.stringify(telegramCards.sequence) !== JSON.stringify(expectedSequence) ||
       JSON.stringify(telegramCards.keys) !== '["1","2","1","1"]' || telegramCards.request?.resolvedBy !== 'telegram') {
       throw new Error(`telegram cards went wrong: ${JSON.stringify(telegramCards)}`)
+    }
+
+    // Story 31.4: multi-select, Other… with a typed reply, and Back, each through its agent's verified route.
+    console.error('[BMN] self-test phase: fuller telegram answers')
+    const fullerRun = async (scenario: string, requestKey: string, match: string, steps: FakeBotStep[]) => {
+      const from = bot.calls.length
+      bot.tapOn(match, steps)
+      writeFileSync(join(answerDirectory, `fire-${scenario}`), '')
+      const doneBy = Date.now() + 30_000
+      while (!existsSync(join(answerDirectory, `done-${scenario}`))) {
+        if (existsSync(join(answerDirectory, 'error'))) {
+          throw new Error(`remote answer stand-in failed: ${readFileSync(join(answerDirectory, 'error'), 'utf8')}`)
+        }
+        if (Date.now() > doneBy) throw new Error(`the ${scenario} dialog never finished: ${JSON.stringify(bot.calls.slice(from))}`)
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      const sentBy = Date.now() + 15_000
+      const card = (): FakeBotCall | undefined => bot.calls.slice(from).find((call) =>
+        call.method === 'sendMessage' && String(call.body.text).includes(match))
+      const ended = (): boolean => bot.calls.slice(from).some((call) => call.method === 'editMessageText' &&
+        call.body.message_id === card()?.messageId && /✓ <i>Sent:|⚠ <i>/.test(String(call.body.text)))
+      while (!ended() && Date.now() < sentBy) await new Promise((resolve) => setTimeout(resolve, 100))
+      const message = card()
+      const labelsOf = (body: Record<string, unknown>): string =>
+        ((body.reply_markup as { inline_keyboard?: Array<Array<{ text: string }>> } | undefined)?.inline_keyboard ?? [])
+          .flat().map((button) => button.text).join('|')
+      const sequence = message ? bot.calls.slice(bot.calls.indexOf(message)).flatMap((call) => {
+        if (call === message) return [`send:${labelsOf(call.body)}`]
+        if (call.method === 'answerCallbackQuery') return [`toast:${String(call.body.text)}`]
+        if (call.method === 'editMessageText' && call.body.message_id === message.messageId) {
+          return [`edit:${labelsOf(call.body)}:${String(call.body.text).split('\n').pop()}`]
+        }
+        // BMN's own replies to the owner's messages, such as "Tap Other… first".
+        if (call.method === 'sendMessage' && call.body.reply_parameters) return [`reply:${String(call.body.text)}`]
+        return []
+      }) : []
+      const request = (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
+        .filter((row) => row.sessionId === answerSession.sessionId && row.requestKey === requestKey)
+        .sort((left, right) => right.openedAt.localeCompare(left.openedAt))[0]
+      return {
+        sequence,
+        keys: (JSON.parse(readFileSync(join(answerDirectory, `done-${scenario}`), 'utf8')) as string[]).join(''),
+        request: request ? { state: request.state, resolvedBy: request.resolvedBy } : null
+      }
+    }
+    const claudeMore = await fullerRun('claude-more', 'claude:question', 'Which auth method should the API use?', [
+      { tap: '2 · Sessions' }, { tap: '‹ Back' }, { tap: '1 · JWT' },
+      [{ reply: 'too early' }, { tap: '○ 1 · Rate limiting' }], { tap: '○ 3 · Webhooks' }, { tap: 'Other…' }, { reply: 'GraphQL' }
+    ])
+    const codexOther = await fullerRun('codex-other', 'codex:question', 'Which auth method should the API use?', [
+      { tap: 'Other…' }, { reply: 'Passkeys first' }
+    ])
+    const openCodeMore = await fullerRun('opencode-more', 'opencode:question', 'Which features should v1 include?', [
+      { tap: '○ 2 · Rate limiting' }, { tap: 'Next · 1 selected' }, { tap: '2 · Sessions' }
+    ])
+    const fuller = { claudeMore, codexOther, openCodeMore }
+    console.error(`[BMN] self-test phase: fuller telegram answers ${JSON.stringify(fuller)}`)
+    const DOWN = '\u001b[B'
+    const inOrder = (sequence: string[], expected: string[]): boolean => {
+      let at = 0
+      for (const entry of sequence) if (at < expected.length && entry === expected[at]) at += 1
+      return at === expected.length
+    }
+    if (!inOrder(claudeMore.sequence, [
+      'send:1 · JWT|2 · Sessions|Other…',
+      'edit:○ 1 · Rate limiting|○ 2 · Audit log|○ 3 · Webhooks|Other…|‹ Back:<i>Choose one or more, then Send.</i>',
+      'toast:Question 1 of 2',
+      // Back reopens question 1 with its choice marked, and no Back on it.
+      'edit:1 · JWT|● 2 · Sessions|Other…:Server-side cookies',
+      'reply:Tap Other… first, then reply with your answer.',
+      'edit:● 1 · Rate limiting|○ 2 · Audit log|● 3 · Webhooks|Other…|‹ Back|Send 2 selected:<i>Chosen: Rate limiting · Webhooks</i>',
+      'edit:‹ Options:<i>Reply to this message with your answer.</i>',
+      'edit::<i>Sending: JWT · Rate limiting · Webhooks · “GraphQL”…</i>',
+      'edit::✓ <i>Sent: JWT · Rate limiting · Webhooks · “GraphQL”</i>'
+    ]) || claudeMore.keys !== `113${DOWN.repeat(3)}GraphQL${DOWN}\r1` || claudeMore.request?.resolvedBy !== 'telegram' ||
+      !inOrder(codexOther.sequence, [
+        'send:1 · JWT|2 · Sessions|Other…', 'edit:‹ Options:<i>Reply to this message with your answer.</i>',
+        'edit::✓ <i>Sent: “Passkeys first”</i>'
+      ]) || codexOther.keys !== `${DOWN}${DOWN}\tPasskeys first\r` || codexOther.request?.resolvedBy !== 'telegram' ||
+      !inOrder(openCodeMore.sequence, [
+        'send:○ 1 · SSO|○ 2 · Rate limiting|○ 3 · Audit log|Other…',
+        // OpenCode's second question turned typed answers off: no Other… there.
+        'edit:1 · JWT|2 · Sessions|‹ Back:<i>Nothing is sent until this answer.</i>',
+        'edit::✓ <i>Sent: Rate limiting · Sessions</i>'
+      ]) || openCodeMore.keys !== '[["Rate limiting"],["Sessions"]]' || openCodeMore.request?.resolvedBy !== 'telegram') {
+      throw new Error(`fuller telegram answers went wrong: ${JSON.stringify(fuller)}`)
     }
     await client.request(METHOD_REGISTRY.settingsPut, { section: 'telegram', value: telegramBefore })
     await client.request(METHOD_REGISTRY.telegramConfigure, { token: null })
@@ -6704,6 +6892,7 @@ async function runSelfTest(): Promise<void> {
       modelOrigin: { flags: modelOriginFlags, afterRestart: modelOriginAfterRestart },
       remoteAnswers,
       telegramCards,
+      fullerAnswers: fuller,
       survivalTable: {
         rendererCrash: survivingRendererCrash,
         quit: {

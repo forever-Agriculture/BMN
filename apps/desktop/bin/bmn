@@ -641,7 +641,7 @@ function userInputSummary(name, input) {
  */
 const PROMPT_LIMITS = Object.freeze({
   questions: 10, options: 20, text: 2000, header: 100, label: 200, description: 500, identifier: 128, tool: 100,
-  command: 4000, cwd: 4096
+  command: 4000, cwd: 4096, answer: 4000
 })
 
 /** One line of prompt text, controls folded to spaces and clipped like a title; null when nothing is left. */
@@ -693,7 +693,9 @@ function questionsPrompt(harness, input, ids, shape) {
       header: promptLine(candidate.header, PROMPT_LIMITS.header),
       text,
       multiSelect: candidate.multiSelect === true || candidate.multiple === true,
-      options
+      options,
+      // OpenCode may turn typed answers off for one question; the others always allow them.
+      ...(harness === 'opencode' && typeof candidate.custom === 'boolean' ? { custom: candidate.custom } : {})
     })
   }
   return {
@@ -749,14 +751,20 @@ function evidenceOf(fields) {
   return { toolUseId: null, requestRef: null, answers: null, permission: null, tool: null, command: null, ...fields }
 }
 
-/** One label per question, in the order the dialog asked them; null unless every question has exactly one. */
+/**
+ * What each question was answered with, in the order the dialog asked them: one string, or a harness's list of
+ * them (Codex puts a typed note after "None of the above"). Null unless every question has an answer.
+ */
 function orderedAnswers(questions, answerOf) {
   if (!Array.isArray(questions) || questions.length === 0 || questions.length > PROMPT_LIMITS.questions) return null
   const answers = []
   for (const question of questions) {
-    const label = isObject(question) ? promptLine(answerOf(question), PROMPT_LIMITS.label) : null
-    if (label === null) return null
-    answers.push([label])
+    const raw = isObject(question) ? answerOf(question) : undefined
+    const list = Array.isArray(raw) ? raw : [raw]
+    if (list.length === 0 || list.length > PROMPT_LIMITS.options) return null
+    const labels = list.map((value) => promptLine(value, PROMPT_LIMITS.answer))
+    if (labels.some((label) => label === null)) return null
+    answers.push(labels)
   }
   return answers
 }
@@ -792,7 +800,7 @@ function codexEvidence(event) {
   const byId = isObject(response) && isObject(response.answers) ? response.answers : null
   const answers = byId ? orderedAnswers(event.tool_input?.questions, (question) => {
     const entry = typeof question.id === 'string' && Object.hasOwn(byId, question.id) ? byId[question.id] : undefined
-    return isObject(entry) && Array.isArray(entry.answers) && entry.answers.length === 1 ? entry.answers[0] : undefined
+    return isObject(entry) && Array.isArray(entry.answers) ? entry.answers : undefined
   }) : null
   return evidenceOf({ toolUseId: promptId(event.tool_use_id), answers })
 }
@@ -807,7 +815,7 @@ function openCodeEvidence(event) {
   const raw = event.answers
   const answers = Array.isArray(raw) && raw.length > 0 && raw.length <= PROMPT_LIMITS.questions &&
     raw.every((labels) => Array.isArray(labels) && labels.length > 0 && labels.length <= PROMPT_LIMITS.options)
-    ? raw.map((labels) => labels.map((label) => promptLine(label, PROMPT_LIMITS.label)))
+    ? raw.map((labels) => labels.map((label) => promptLine(label, PROMPT_LIMITS.answer)))
     : null
   return evidenceOf({ requestRef, answers: answers && answers.every((labels) => labels.every((label) => label !== null)) ? answers : null })
 }

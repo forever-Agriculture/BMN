@@ -1,9 +1,12 @@
 // MODULE: remote-answer.ts - delivers an answer chosen away from the desk into the exact dialog that asked (Epic 30.2)
-import type { AttentionEvidence, AttentionPrompt, AttentionRecord } from '@bmn/protocol'
+import type { AttentionEvidence, AttentionPrompt, AttentionPromptQuestion, AttentionQuestionsPrompt, AttentionRecord } from '@bmn/protocol'
 import {
   claudePermissionOnScreen,
+  claudeQuestionState,
   claudeReviewOnScreen,
+  codexQuestionState,
   questionOnScreen,
+  showsTyped,
   type QuestionHarness
 } from './screen-mirror'
 
@@ -14,10 +17,34 @@ import {
  * it can neither create nor change one.
  */
 
-/** One option index per question, or a permission decision. "Always allow" does not exist here. */
+/**
+ * How one question is answered: an option index; for a multi-select question the set of option indices,
+ * ascending, and optionally a typed answer with them; or a typed answer alone.
+ */
+export type QuestionChoice = number | { set: number[]; typed?: string } | { typed: string }
+
+/** One choice per question, or a permission decision. "Always allow" does not exist here. */
 export type RemoteAnswer =
-  | { type: 'choices'; choices: number[] }
+  | { type: 'choices'; choices: QuestionChoice[] }
   | { type: 'permission'; decision: 'allow' | 'deny' }
+
+/** The longest typed answer sent; the spike's Claude took 2,699 characters intact (docs/remote-answers.md). */
+export const TYPED_ANSWER_CHARS = 2_000
+
+/**
+ * A typed answer as it is sent: every control character and whitespace run folded to one space (so it is one
+ * line, as `bmn hook` reports it back), trimmed, and clipped to `TYPED_ANSWER_CHARS`. Empty when nothing is left.
+ */
+export function cleanTypedAnswer(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  const folded = text.replace(/[\u0000-\u001f\u007f-\u009f\s]+/g, ' ').trim()
+  return [...folded].slice(0, TYPED_ANSWER_CHARS).join('').trim()
+}
+
+/** Whether this question may be answered with typed text: always for Claude and Codex, for OpenCode unless it said not. */
+export function typedAnswerable(prompt: AttentionQuestionsPrompt, question: AttentionPromptQuestion): boolean {
+  return prompt.harness !== 'opencode' || question.custom !== false
+}
 
 export type AnswerRefusal =
   /** The request closed, or the process that asked is gone. */
@@ -98,7 +125,11 @@ const MAX_KEY_OPTIONS = 8
 export function answerRoute(prompt: AttentionPrompt | null): AnswerRoute | null {
   if (!prompt) return null
   if (prompt.type === 'questions') {
-    if (prompt.shape !== 'choice' || prompt.questions.some((question) => question.multiSelect)) return null
+    // The shape and the questions must agree: `multi-select` exactly when some question is one.
+    const multi = prompt.questions.some((question) => question.multiSelect)
+    if (prompt.shape !== (multi ? 'multi-select' : 'choice')) return null
+    // Codex has no multi-select question (docs/remote-answers.md); a prompt claiming one is not its dialog.
+    if (prompt.harness === 'codex' && prompt.questions.some((question) => question.multiSelect)) return null
     if (prompt.harness === 'opencode') return 'opencode-api'
     if (prompt.questions.some((question) => question.options.length > MAX_KEY_OPTIONS)) return null
     return prompt.harness === 'claude' ? 'claude-keys' : 'codex-keys'
@@ -126,8 +157,9 @@ export function evidenceConfirms(prompt: AttentionPrompt, answer: RemoteAnswer, 
   if (prompt.type === 'questions') {
     if (answer.type !== 'choices' || evidence.answers === null || evidence.answers.length !== prompt.questions.length) return false
     return prompt.questions.every((question, index) => {
-      const labels = evidence.answers![index]!
-      return labels.length === 1 && labels[0] === question.options[answer.choices[index]!]?.label
+      const expected = reportedAnswer(prompt, question, answer.choices[index]!)
+      const reported = evidence.answers![index]!
+      return reported.length === expected.length && reported.every((label, at) => label === expected[at])
     })
   }
   if (answer.type !== 'permission') return false
@@ -137,21 +169,105 @@ export function evidenceConfirms(prompt: AttentionPrompt, answer: RemoteAnswer, 
   return evidence.tool === prompt.tool && evidence.command === prompt.command
 }
 
+/** A typed answer BMN would send unchanged: already clean, and not empty. */
+function cleanTyped(text: unknown): text is string {
+  return typeof text === 'string' && text !== '' && cleanTypedAnswer(text) === text
+}
+
+function choiceFits(prompt: AttentionQuestionsPrompt, question: AttentionPromptQuestion, choice: QuestionChoice): boolean {
+  const index = (value: unknown): boolean =>
+    typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value < question.options.length
+  if (typeof choice === 'number') return !question.multiSelect && index(choice)
+  if (typeof choice !== 'object' || choice === null) return false
+  const typedFits = (typed: unknown): boolean => cleanTyped(typed) && typedAnswerable(prompt, question)
+  if ('set' in choice) {
+    const set = choice.set
+    if (!question.multiSelect || !Array.isArray(set) || !set.every(index)) return false
+    // Ascending and without repeats: Claude reports labels in the order they were ticked.
+    if (!set.every((value, at) => at === 0 || value > set[at - 1]!)) return false
+    if (choice.typed !== undefined && !typedFits(choice.typed)) return false
+    return set.length > 0 || choice.typed !== undefined
+  }
+  return !question.multiSelect && typedFits((choice as { typed?: unknown }).typed)
+}
+
 function answerFits(prompt: AttentionPrompt, answer: RemoteAnswer): boolean {
   if (prompt.type === 'permission') return answer.type === 'permission'
   return answer.type === 'choices' &&
+    Array.isArray(answer.choices) &&
     answer.choices.length === prompt.questions.length &&
-    answer.choices.every((choice, index) =>
-      Number.isSafeInteger(choice) && choice >= 0 && choice < prompt.questions[index]!.options.length)
+    answer.choices.every((choice, index) => choiceFits(prompt, prompt.questions[index]!, choice))
+}
+
+/** The option labels chosen, in option order, then any typed answer. */
+function choiceParts(question: AttentionPromptQuestion, choice: QuestionChoice): { labels: string[]; typed: string | null } {
+  if (typeof choice === 'number') return { labels: [question.options[choice]!.label], typed: null }
+  if ('set' in choice) return { labels: choice.set.map((index) => question.options[index]!.label), typed: choice.typed ?? null }
+  return { labels: [], typed: choice.typed }
+}
+
+/** One question's answer as the owner reads it on the card: labels, and a typed answer in quotes, clipped. */
+export function shownChoice(question: AttentionPromptQuestion, choice: QuestionChoice): string {
+  const { labels, typed } = choiceParts(question, choice)
+  const quoted = typed === null ? [] : [`“${[...typed].length > TYPED_SHOWN_CHARS ? `${[...typed].slice(0, TYPED_SHOWN_CHARS - 1).join('')}…` : typed}”`]
+  return [...labels, ...quoted].join(' · ')
+}
+
+/** What Claude records as the answer to one question: the labels and typed text joined by ", ". */
+function claudeAnswer(question: AttentionPromptQuestion, choice: QuestionChoice): string {
+  const { labels, typed } = choiceParts(question, choice)
+  return [...labels, ...(typed === null ? [] : [typed])].join(', ')
+}
+
+/** Exactly what the harness reports back for this answer to one question (docs/remote-answers.md). */
+function reportedAnswer(prompt: AttentionQuestionsPrompt, question: AttentionPromptQuestion, choice: QuestionChoice): string[] {
+  const { labels, typed } = choiceParts(question, choice)
+  if (prompt.harness === 'claude') return [claudeAnswer(question, choice)]
+  // Codex takes a typed answer as "None of the above" with the text as its note.
+  if (prompt.harness === 'codex' && typed !== null) return [...labels, 'None of the above', `user_note: ${typed}`]
+  return [...labels, ...(typed === null ? [] : [typed])]
 }
 
 function sentLabels(prompt: AttentionPrompt, answer: RemoteAnswer): string[] {
   if (answer.type === 'permission') return [answer.decision === 'allow' ? 'Allow once' : 'Deny']
   if (prompt.type !== 'questions') return []
-  return answer.choices.map((choice, index) => prompt.questions[index]!.options[choice]!.label)
+  return answer.choices.map((choice, index) => shownChoice(prompt.questions[index]!, choice))
 }
 
-const key = (digit: number): Uint8Array => new TextEncoder().encode(String(digit))
+const encoder = new TextEncoder()
+const key = (digit: number): Uint8Array => encoder.encode(String(digit))
+const DOWN = encoder.encode('\u001b[B')
+const ENTER = encoder.encode('\r')
+const TAB = encoder.encode('\t')
+/** Typed text goes out in short pieces, so no harness mistakes it for a paste. */
+const TYPED_CHUNK = 32
+const TYPED_CHUNK_GAP_MS = 10
+/** What the card's outcome line quotes of a typed answer. */
+const TYPED_SHOWN_CHARS = 80
+
+/** What answering one question by keys needs from the answer in progress. */
+interface QuestionKeys {
+  screen: ScreenLike
+  since: { changed: boolean }
+  write(bytes: Uint8Array): void
+  current(): boolean
+  beforeSubmit(): void
+}
+
+/** A question as it first shows, before any key: nothing typed, nothing ticked, the cursor on option 1. */
+function freshQuestionOnScreen(
+  lines: readonly string[],
+  harness: QuestionHarness,
+  question: AttentionPromptQuestion,
+  step: { index: number; count: number }
+): boolean {
+  if (harness === 'claude' && question.multiSelect) {
+    const state = claudeQuestionState(lines, question)
+    return state !== null && state.cursor === 0 && state.other.text === null && !state.other.ticked &&
+      state.ticked.every((value) => !value)
+  }
+  return questionOnScreen(lines, harness, question, step)
+}
 
 interface Tracked {
   sessionId: string
@@ -214,6 +330,8 @@ export class RemoteAnswers {
   /** OpenCode permission requests still waiting, per session: its `reject` answers all of them at once. */
   private readonly openCodePermissions = new Map<string, Set<string>>()
   private readonly lateListeners = new Set<(requestId: string, outcome: AnswerOutcome) => void>()
+  /** Per answer being typed, the listener that notes screen changes since its last key. */
+  private readonly stopScreenTracking = new Map<string, () => void>()
 
   constructor(private readonly deps: RemoteAnswerDependencies) {
     this.timing = { ...DEFAULT_TIMING, ...deps.timing }
@@ -469,6 +587,8 @@ export class RemoteAnswers {
     try {
       return await this.deliverKeys(record, prompt, request, route === 'claude-keys' ? 'claude' : 'codex', current, markWritten, typing)
     } finally {
+      this.stopScreenTracking.get(record.requestId)?.()
+      this.stopScreenTracking.delete(record.requestId)
       typing.end()
     }
   }
@@ -487,10 +607,17 @@ export class RemoteAnswers {
     await screen.settled()
     if (!current()) return { state: 'refused', reason: 'changed' }
     const sent = sentLabels(prompt, request.answer)
-    const write = (digit: number): void => {
+    // Whether the screen changed since BMN's last key: a redraw that lands before a wait starts still counts.
+    const since = { changed: false }
+    this.stopScreenTracking.set(record.requestId, screen.onChange(() => {
+      since.changed = true
+    }))
+    const writeBytes = (bytes: Uint8Array): void => {
       markWritten()
-      this.deps.write(record.sessionId, key(digit))
+      since.changed = false
+      this.deps.write(record.sessionId, bytes)
     }
+    const write = (digit: number): void => writeBytes(key(digit))
 
     if (prompt.type === 'permission') {
       const dialog = claudePermissionOnScreen(screen.lines(), prompt.tool, prompt.command!, prompt.description ?? null)
@@ -510,34 +637,157 @@ export class RemoteAnswers {
       return confirmation
     }
 
-    if (request.answer.type !== 'choices') return { state: 'refused', reason: 'unsupported' }
-    const choices = request.answer.choices
+    if (request.answer.type !== 'choices' || prompt.type !== 'questions') return { state: 'refused', reason: 'unsupported' }
+    const answer = request.answer
+    const choices = answer.choices
     const count = prompt.questions.length
-    const review = harness === 'claude' && count > 1
+    // Claude reviews a dialog of several questions, or with a multi-select one, before it submits.
+    const review = harness === 'claude' && (count > 1 || prompt.questions.some((question) => question.multiSelect))
     let confirmation: Promise<AnswerOutcome> | undefined
+    const keys: QuestionKeys = {
+      screen,
+      since,
+      write: writeBytes,
+      current,
+      // The key that submits the whole dialog may cause its report at once, so the wait starts before it.
+      beforeSubmit: () => {
+        confirmation = this.expectConfirmation(record, prompt, answer, sent)
+      }
+    }
     for (let index = 0; index < count; index += 1) {
       const question = prompt.questions[index]!
       const step = { index, count }
-      const shown = (lines: string[]): boolean => questionOnScreen(lines, harness, question, step)
+      const shown = (lines: string[]): boolean => freshQuestionOnScreen(lines, harness, question, step)
       if (index === 0) {
         if (!shown(screen.lines())) return { state: 'refused', reason: 'not-on-screen' }
         if (!typing.begin()) return { state: 'refused', reason: 'changed' }
-      } else if (!(await this.waitForScreen(screen, (lines) => shown(lines) || null)) || !current()) {
+      } else if (!(await this.waitForScreen(screen, (lines) => shown(lines) || null, since)) || !current()) {
         return { state: 'partial', sent: sent.slice(0, index), total: count }
       }
-      // The last key submits the whole dialog, so the report it causes may arrive at once.
-      if (index === count - 1 && !review) confirmation = this.expectConfirmation(record, prompt, request.answer, sent)
-      write(choices[index]! + 1)
+      const submits = index === count - 1 && !review
+      const choice = choices[index]!
+      const done = typeof choice === 'number'
+        ? (submits && keys.beforeSubmit(), write(choice + 1), true)
+        : await this.answerByKeys(keys, harness, question, choice, step, submits)
+      if (!done) return { state: 'partial', sent: sent.slice(0, index), total: count }
     }
     if (!review) typing.end()
     if (review) {
-      const submit = await this.waitForScreen(screen, (lines) => claudeReviewOnScreen(lines, prompt.questions, sent))
+      const reviewed = prompt.questions.map((question, index) => claudeAnswer(question, choices[index]!))
+      const submit = await this.waitForScreen(screen, (lines) => claudeReviewOnScreen(lines, prompt.questions, reviewed), since)
       if (submit === null || !current()) return { state: 'partial', sent, total: count }
-      confirmation = this.expectConfirmation(record, prompt, request.answer, sent)
+      confirmation = this.expectConfirmation(record, prompt, answer, sent)
       write(submit)
       typing.end()
     }
     return confirmation!
+  }
+
+  /**
+   * One question answered with more than a digit (docs/remote-answers.md): ticks, a typed answer, and the keys
+   * that leave the question. Every key waits for the screen to show what the one before it did; false once it
+   * does not, and nothing more is written.
+   */
+  private async answerByKeys(
+    keys: QuestionKeys,
+    harness: QuestionHarness,
+    question: AttentionPromptQuestion,
+    choice: Exclude<QuestionChoice, number>,
+    step: { index: number; count: number },
+    submits: boolean
+  ): Promise<boolean> {
+    const typed = 'set' in choice ? choice.typed ?? null : choice.typed
+    const press = async <T>(bytes: Uint8Array, until: (lines: string[]) => T | null): Promise<T | null> => {
+      keys.write(bytes)
+      const value = await this.waitForScreen(keys.screen, until, keys.since)
+      return value !== null && keys.current() ? value : null
+    }
+    const typeText = async <T>(text: string, until: (lines: string[]) => T | null): Promise<T | null> => {
+      const chars = [...text]
+      for (let at = 0; at < chars.length; at += TYPED_CHUNK) {
+        if (at > 0) await new Promise((resolve) => setTimeout(resolve, TYPED_CHUNK_GAP_MS))
+        if (!keys.current()) return null
+        const piece = encoder.encode(chars.slice(at, at + TYPED_CHUNK).join(''))
+        if (at + TYPED_CHUNK >= chars.length) return press(piece, until)
+        keys.write(piece)
+      }
+      return null
+    }
+    const enter = (): void => {
+      if (submits) keys.beforeSubmit()
+      keys.write(ENTER)
+    }
+
+    if (harness === 'codex') {
+      if (typed === null || 'set' in choice) return false
+      const state = (lines: string[]) => codexQuestionState(lines, question, step)
+      const trailer = question.options.length
+      let now = state(keys.screen.lines())
+      // Down to "None of the above", one row at a time, each move seen before the next.
+      for (let guard = 0; now && now.cursor !== trailer && guard <= trailer; guard += 1) {
+        const from = now.cursor
+        now = await press(DOWN, (lines) => {
+          const next = state(lines)
+          return next && next.cursor !== from ? next : null
+        })
+      }
+      if (!now || now.cursor !== trailer) return false
+      if (!(await press(TAB, (lines) => state(lines)?.notes === '' || null))) return false
+      if (!(await typeText(typed, (lines) => showsTyped(state(lines)?.notes ?? null, typed) || null))) return false
+      enter()
+      return true
+    }
+
+    const state = (lines: string[]) => claudeQuestionState(lines, { ...question, multiSelect: question.multiSelect })
+    const options = question.options.length
+    if (!('set' in choice)) {
+      // Single choice: the typed-entry row's digit opens its text field.
+      const focused = (lines: string[]) => {
+        const now = state(lines)
+        return now && now.cursor === options && now.other.text === null ? now : null
+      }
+      if (!(await press(key(options + 1), focused))) return false
+      if (!(await typeText(typed!, (lines) => {
+        const now = state(lines)
+        return now && now.cursor === options && showsTyped(now.other.text, typed!) ? now : null
+      }))) return false
+      enter()
+      return true
+    }
+
+    // Multi-select: each tick in option order, as Claude reports them in the order they were ticked.
+    const ticked = new Set<number>()
+    for (const index of choice.set) {
+      ticked.add(index)
+      const expected = [...Array(options).keys()].map((at) => ticked.has(at))
+      if (!(await press(key(index + 1), (lines) => {
+        const now = state(lines)
+        return now && !now.other.ticked && now.ticked.every((value, at) => value === expected[at]) ? now : null
+      }))) return false
+    }
+    let now = state(keys.screen.lines())
+    const moveTo = async (target: number): Promise<boolean> => {
+      for (let guard = 0; now && now.cursor !== target && guard <= options + 1; guard += 1) {
+        const from = now.cursor
+        now = await press(DOWN, (lines) => {
+          const next = state(lines)
+          return next && next.cursor !== from ? next : null
+        })
+      }
+      return now !== null && now.cursor === target
+    }
+    if (typed !== null) {
+      if (!(await moveTo(options))) return false
+      now = await typeText(typed, (lines) => {
+        const next = state(lines)
+        return next && next.cursor === options && next.other.ticked && showsTyped(next.other.text, typed) ? next : null
+      })
+      if (!now) return false
+    }
+    // Down past the typed-entry row lands on Next (Submit on the last question); Enter leaves the question.
+    if (!(await moveTo(options + 1))) return false
+    enter()
+    return true
   }
 
   private async deliverToPlugin(
@@ -552,7 +802,12 @@ export class RemoteAnswers {
     const answer = request.answer
     const payload: PluginAnswer = answer.type === 'permission'
       ? { requestRef: prompt.requestRef, kind: 'permission', reply: answer.decision === 'allow' ? 'once' : 'reject' }
-      : { requestRef: prompt.requestRef, kind: 'question', answers: sentLabels(prompt, answer).map((label) => [label]) }
+      : {
+          requestRef: prompt.requestRef,
+          kind: 'question',
+          answers: (prompt as AttentionQuestionsPrompt).questions.map((question, index) =>
+            reportedAnswer(prompt as AttentionQuestionsPrompt, question, answer.choices[index]!))
+        }
     const sent = sentLabels(prompt, answer)
     let taken!: () => void
     let dropped!: () => void
@@ -629,8 +884,11 @@ export class RemoteAnswers {
     pending.settle({ state: 'sent-unconfirmed', sent: pending.sent })
   }
 
-  /** Resolves with the predicate's value once the screen changes to show it, or null after `stepMs`. */
-  private waitForScreen<T>(screen: ScreenLike, predicate: (lines: string[]) => T | null): Promise<T | null> {
+  /**
+   * Resolves with the predicate's value once the screen changes to show it, or null after `stepMs`. With `since`,
+   * a change already drawn after the last key counts too.
+   */
+  private waitForScreen<T>(screen: ScreenLike, predicate: (lines: string[]) => T | null, since?: { changed: boolean }): Promise<T | null> {
     return new Promise((resolve) => {
       let done = false
       const finish = (value: T | null): void => {
@@ -648,6 +906,12 @@ export class RemoteAnswers {
         })
       })
       const timer = setTimeout(() => finish(null), this.timing.stepMs)
+      if (since?.changed) {
+        void screen.settled().then(() => {
+          const value = predicate(screen.lines())
+          if (value !== null) finish(value)
+        })
+      }
     })
   }
 
@@ -698,6 +962,8 @@ export function dialogOnScreen(lines: readonly string[], prompt: AttentionPrompt
     return prompt.command !== null && claudePermissionOnScreen(lines, prompt.tool, prompt.command, prompt.description ?? null) !== null
   }
   const harness = prompt.harness
-  if (prompt.questions.some((question) => questionOnScreen(lines, harness, question))) return true
+  // Any state of an answer being entered is still this dialog: ticks, the cursor, or text being typed.
+  if (prompt.questions.some((question) => questionOnScreen(lines, harness, question) ||
+    (harness === 'claude' ? claudeQuestionState(lines, question) : codexQuestionState(lines, question)) !== null)) return true
   return harness === 'claude' && prompt.questions.length > 1 && claudeReviewOnScreen(lines, prompt.questions, null) !== null
 }

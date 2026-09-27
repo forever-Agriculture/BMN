@@ -10,6 +10,12 @@ export interface FakeBotCall {
   messageId?: number
 }
 
+/**
+ * One owner action on a card: tap the button at an index, tap the button with exactly this text, or reply to the
+ * card with text (Story 31.4). A list is several actions on the same card state, in order.
+ */
+export type FakeBotStep = number | { tap: string } | { reply: string } | Array<{ tap: string } | { reply: string }>
+
 export interface FakeBotApi {
   /** `http://127.0.0.1:<port>`, handed to the host as its Bot API origin. */
   origin: string
@@ -18,7 +24,7 @@ export interface FakeBotApi {
    * Taps, in order, the given option of each card state that shows buttons, but only on the message whose
    * text first contained `match`; every other card is left alone.
    */
-  tapOn(match: string, options: number[]): void
+  tapOn(match: string, options: FakeBotStep[]): void
   close(): Promise<void>
 }
 
@@ -44,25 +50,41 @@ export async function startFakeBotApi(chatId: number, userId: number): Promise<F
   const updates: Array<Record<string, unknown>> = []
   let nextUpdate = 1
   let nextMessage = 5000
-  let target: { match: string; options: number[]; messageId: number | null } | null = null
+  let target: { match: string; options: FakeBotStep[]; messageId: number | null } | null = null
 
   const tapLater = (messageId: number, keyboard: Keyboard): void => {
     if (!target || keyboard.length === 0 || target.messageId !== messageId) return
-    const option = target.options.shift()
-    if (option === undefined) return
-    const button = keyboard.flat()[option]
-    if (!button) return
-    setTimeout(() => {
-      updates.push({
-        update_id: nextUpdate++,
-        callback_query: {
-          id: `tap-${nextUpdate}`,
-          from: { id: userId, is_bot: false, first_name: 'Owner' },
-          message: { message_id: messageId, date: 1_789_000_000, chat: { id: chatId, type: 'private' } },
-          data: button.callback_data
+    const step = target.options.shift()
+    if (step === undefined) return
+    const actions = Array.isArray(step) ? step : [step]
+    actions.forEach((action, index) => {
+      const button = typeof action === 'number'
+        ? keyboard.flat()[action]
+        : 'tap' in action ? keyboard.flat().find((candidate) => candidate.text === action.tap) : undefined
+      setTimeout(() => {
+        if (typeof action === 'object' && 'reply' in action) {
+          updates.push({
+            update_id: nextUpdate++,
+            message: {
+              message_id: nextMessage++, date: 1_789_000_000, text: action.reply,
+              chat: { id: chatId, type: 'private' }, from: { id: userId, is_bot: false, first_name: 'Owner' },
+              reply_to_message: { message_id: messageId }
+            }
+          })
+          return
         }
-      })
-    }, TAP_DELAY_MS)
+        if (!button) return
+        updates.push({
+          update_id: nextUpdate++,
+          callback_query: {
+            id: `tap-${nextUpdate}`,
+            from: { id: userId, is_bot: false, first_name: 'Owner' },
+            message: { message_id: messageId, date: 1_789_000_000, chat: { id: chatId, type: 'private' } },
+            data: button.callback_data
+          }
+        })
+      }, TAP_DELAY_MS * (index + 1))
+    })
   }
 
   const reply = (response: ServerResponse, result: unknown): void => {

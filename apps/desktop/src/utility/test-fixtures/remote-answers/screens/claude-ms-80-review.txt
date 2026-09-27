@@ -1,0 +1,40 @@
+     word0251 word0252 word0253 word0254 word0255 word0256 word0257 word0258
+     word0259 word0260 word0261 word0262 word0263 word0264 word0265 word0266
+     word0267 word0268 word0269 word0270 word0271 word0272 word0273 word0274
+     word0275 word0276 word0277 word0278 word0279 word0280 word0281 word0282
+     word0283 word0284 word0285 word0286 word0287 word0288 word0289 word0290
+     word0291 word0292 word0293 word0294 word0295 word0296 word0297 word0298
+     word0299
+
+● I notice the answer contains what appears to be generated test data (word0000
+  through word0299) rather than a selection from the options. This doesn't match
+  either "JWT" or "Sessions" from the question.
+
+  Could you clarify what you'd like me to do? Should I re-ask the question, or
+  did you want to provide a different answer?
+
+✻ Cooked for 5s · done 11:39 PM
+
+❯ Use AskUserQuestion once, nothing else first: header "Features", question
+  "Which features should the first release include?", multiSelect true, options
+  "Rate limiting" (desc "Per-key request caps."), "Audit log" (desc "Record
+  every admin action."), "Webhooks" (desc "Notify other services on change.").
+  Then list the answers you got verbatim.
+
+────────────────────────────────────────────────────────────────────────────────
+←  ☒ Features  ✔ Submit  →
+
+Review your answers
+
+ ● Which features should the first release include?
+   → Audit log, Passkeys
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel
+
+
+
+
+

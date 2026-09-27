@@ -76,10 +76,19 @@ const receiptContract = [
     const row = receipt.telegramCards
     return row?.card?.parseMode === 'HTML' && row.card.header?.startsWith('❓ <b>') &&
       JSON.stringify(row.sequence) === JSON.stringify([
-        'send:2', 'toast:Question 2 of 3', 'edit:2:In a follow-up', 'toast:Question 3 of 3',
-        'edit:2:<i>Nothing is sent until this answer.</i>', 'toast:Sending Postgres · Later · Staging…',
+        'send:3', 'toast:Question 2 of 3', 'edit:4:In a follow-up', 'toast:Question 3 of 3',
+        'edit:4:<i>Nothing is sent until this answer.</i>', 'toast:Sending Postgres · Later · Staging…',
         'edit:0:<i>Sending: Postgres · Later · Staging…</i>', 'edit:0:✓ <i>Sent: Postgres · Later · Staging</i>'
       ]) && JSON.stringify(row.keys) === '["1","2","1","1"]' && row.request?.resolvedBy === 'telegram'
+  }],
+  // Story 31.4: multi-select, Other… with a typed reply, and Back, answered through each agent's verified route.
+  ['fullerAnswers', (receipt) => {
+    const row = receipt.fullerAnswers
+    const answered = (run) => run?.request?.resolvedBy === 'telegram' && run.sequence.some((entry) => entry.startsWith('edit::✓ <i>Sent:'))
+    return answered(row?.claudeMore) && row.claudeMore.keys === '113\u001b[B\u001b[B\u001b[BGraphQL\u001b[B\r1' &&
+      row.claudeMore.sequence.includes('reply:Tap Other… first, then reply with your answer.') &&
+      answered(row.codexOther) && row.codexOther.keys === '\u001b[B\u001b[B\tPasskeys first\r' &&
+      answered(row.openCodeMore) && row.openCodeMore.keys === '[["Rate limiting"],["Sessions"]]'
   }],
   ['sixelCsp', (receipt) => receipt.cspProbe?.evalRefused === true &&
     receipt.cspProbe?.wasmAllowed === true],

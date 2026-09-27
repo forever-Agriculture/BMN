@@ -28,6 +28,11 @@ export interface AttentionPromptQuestion {
   text: string
   multiSelect: boolean
   options: AttentionPromptOption[]
+  /**
+   * OpenCode's own `custom` flag: false when the agent turned off typed answers for this question. Absent
+   * when the harness did not say, and for every Claude and Codex question, which always allow one.
+   */
+  custom?: boolean
 }
 
 export interface AttentionQuestionsPrompt {
@@ -74,7 +79,9 @@ export const ATTENTION_PROMPT_LIMITS = Object.freeze({
   identifier: 128,
   tool: 100,
   command: 4_000,
-  cwd: 4_096
+  cwd: 4_096,
+  /** One reported answer: a typed text, or Claude's chosen labels joined into one string. */
+  answer: 4_000
 })
 
 const HARNESSES: readonly AttentionPromptHarness[] = ['claude', 'codex', 'opencode']
@@ -132,16 +139,18 @@ function option(value: unknown): AttentionPromptOption {
 }
 
 function question(value: unknown): AttentionPromptQuestion {
-  if (!isRecord(value) || !hasExactKeys(value, ['id', 'header', 'text', 'multiSelect', 'options'])) {
+  if (!isRecord(value) || !hasExactKeys(value, ['id', 'header', 'text', 'multiSelect', 'options'], ['custom'])) {
     throw new PromptError('prompt question has the wrong shape')
   }
   if (typeof value.multiSelect !== 'boolean') throw new PromptError('prompt question multiSelect must be true or false')
+  if ('custom' in value && typeof value.custom !== 'boolean') throw new PromptError('prompt question custom must be true or false')
   return {
     id: nullableText(value.id, 'question id', ATTENTION_PROMPT_LIMITS.identifier),
     header: nullableText(value.header, 'question header', ATTENTION_PROMPT_LIMITS.header),
     text: text(value.text, 'question text', ATTENTION_PROMPT_LIMITS.text, true),
     multiSelect: value.multiSelect,
-    options: list(value.options, 'options', ATTENTION_PROMPT_LIMITS.options).map(option)
+    options: list(value.options, 'options', ATTENTION_PROMPT_LIMITS.options).map(option),
+    ...('custom' in value ? { custom: value.custom as boolean } : {})
   }
 }
 
@@ -238,7 +247,11 @@ export interface AttentionEvidence {
   toolUseId: string | null
   /** The harness's request id (OpenCode `requestID`). */
   requestRef: string | null
-  /** The chosen label per question, in the order the prompt asked them; null when the report names none. */
+  /**
+   * What each question was answered with, in the order the prompt asked them, exactly as the harness reported
+   * it: Claude one string per question (labels joined by ", "), Codex its answers list, OpenCode its labels.
+   * Null when the report names none.
+   */
   answers: string[][] | null
   /** What the harness did with a permission; null when the report is not about one. */
   permission: 'allowed' | 'denied' | null
@@ -257,7 +270,7 @@ export function parseAttentionEvidence(value: unknown): Parsed<AttentionEvidence
     if (value.answers !== null) {
       answers = list(value.answers, 'evidence answers', ATTENTION_PROMPT_LIMITS.questions).map((labels) =>
         list(labels, 'evidence labels', ATTENTION_PROMPT_LIMITS.options).map((label) =>
-          text(label, 'evidence label', ATTENTION_PROMPT_LIMITS.label)))
+          text(label, 'evidence label', ATTENTION_PROMPT_LIMITS.answer)))
     }
     return {
       ok: true,

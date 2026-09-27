@@ -302,6 +302,10 @@ async function start(): Promise<void> {
       : {}),
     historyAdapters: historyAdapters(),
     ...(process.env.BMN_SELF_TEST_HOME && process.argv.includes('--self-test-host') ? { home: process.env.BMN_SELF_TEST_HOME } : {}),
+    // Electron self-test only (Story 31.4): pages sooner, so every answer shape fits the run's time.
+    ...(process.argv.includes('--self-test-host') && process.env.BMN_SELF_TEST_PAGE_AFTER_MS
+      ? { pageAfterMs: Number(process.env.BMN_SELF_TEST_PAGE_AFTER_MS) }
+      : {}),
     emit: (message) => parentPort.postMessage(message)
   })
   companionHolder.current = companion

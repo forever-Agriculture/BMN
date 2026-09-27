@@ -1,0 +1,50 @@
+╭────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.157.1)                     │
+│                                                │
+│ model:     GPT-6-Luna xhigh   /model to change │
+│ directory: ~/code/BMN                          │
+╰────────────────────────────────────────────────╯
+
+• Model changed to gpt-6-luna medium for Plan mode.
+
+
+› Call request_user_input exactly once right now, before anything else, with two questions. Q1 id "auth", header "Auth", question "Which auth method should the API use?", options "JWT" (description
+  "Stateless tokens") and "Sessions" (description "Server-side cookies"), isOther true. Q2 id "db", header "Database", question "Which database should store users?", options "Postgres" (description
+  "Already used by billing") and "SQLite" (description "One file"), isOther true. Do not read any files.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Question 1/2 (2 unanswered)
+  Which auth method should the API use?
+
+    1. JWT                Stateless tokens
+    2. Sessions           Server-side cookies
+  › 3. None of the above  Optionally, add details in notes (tab)
+
+  › Add notes
+
+  tab or esc to clear notes | enter to submit answer
+

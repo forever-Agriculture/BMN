@@ -1,0 +1,44 @@
+{
+  "hook_event_name": "question.asked",
+  "id": "que_0e4a19711001Ona38zuiYW5vIh",
+  "sessionID": "ses_f1b5e7f9effefJuL2a2sfck52z",
+  "questions": [
+    {
+      "question": "Which features should v1 include?",
+      "header": "Features",
+      "options": [
+        {
+          "label": "SSO",
+          "description": "Single sign-on integration"
+        },
+        {
+          "label": "Rate limiting",
+          "description": "Throttle requests per client/user"
+        },
+        {
+          "label": "Audit log",
+          "description": "Record auditable events of actions"
+        }
+      ],
+      "multiple": true
+    },
+    {
+      "question": "Which auth method?",
+      "header": "Auth",
+      "options": [
+        {
+          "label": "JWT",
+          "description": "Stateless JSON Web Tokens"
+        },
+        {
+          "label": "Sessions",
+          "description": "Server-side session cookies"
+        }
+      ]
+    }
+  ],
+  "tool": {
+    "messageID": "msg_0e4a180a1001PZDNEz8Ol5AJnP",
+    "callID": "call_function_cfb1wusr39i1_1"
+  }
+}

@@ -5,38 +5,40 @@
 - Mode: build
 - Stopping condition: selected scope accepted; no automatic time limit.
 - Explicit user stop: none
-- Restrictions and authorization boundaries: local task commits authorized (global rules); push to main and `pnpm run update:desktop` need owner authorization (AGENTS.md); never `pnpm run package` while packaged BMN is open. Epic constraints (epics.md Epic 31 "Constraints"): nothing written/deleted before Start cleanup; delete only via agent command/setting; never write agent databases (open read-only); never remove transcript files; no new daemon/unit/table; no auth file read; spikes on disposable stores only (temp CODEX_HOME / XDG_DATA_HOME). Carried from Epic 30: spike terminals unset `BMN_*` and `AITERM_*`, check `/proc/PID/environ`; never edit `~/.claude/settings.json`, `~/.codex/hooks.json`, owner OpenCode config during tests (31.1 writes cleanupPeriodDays only via the shipped Start cleanup, by the owner). Transcripts must not go to GLM (epic lead note): GLM reviews get code/diffs only.
+- Restrictions and authorization boundaries: owner asleep — "finish autonomously"; owner-bound decisions go to Fable as consultant, not the owner (log 2026-09-28 ~00:10). Local task commits authorized (global rules); push to main and `pnpm run update:desktop` need owner authorization (AGENTS.md; not implied by "finish autonomously"); never `pnpm run package` while packaged BMN is open. Epic constraints (epics.md Epic 31 "Constraints"): nothing written/deleted before Start cleanup; delete only via agent command/setting; never write agent databases (open read-only); never remove transcript files; no new daemon/unit/table; no auth file read; spikes on disposable stores only (temp CODEX_HOME / XDG_DATA_HOME). Carried from Epic 30: spike terminals unset `BMN_*` and `AITERM_*`, check `/proc/PID/environ`; never edit `~/.claude/settings.json`, `~/.codex/hooks.json`, owner OpenCode config during tests (31.1 writes cleanupPeriodDays only via the shipped Start cleanup, by the owner). Transcripts must not go to GLM (epic lead note): GLM reviews get code/diffs only.
 - Decision and history log: .dev-auto/log.md (append-only)
 - Authorized provider routes: `~/code/dev-auto/skills/dev-auto/references/models.md` (dev-auto execution consent, global rules).
 - Lead host / requested model / observed model: Claude Code, Opus (suggested lead), observed claude-opus-5-5.
 
 ## Progress
 
-- Sprint board and reconciled state: epic-31 backlog (set in-progress at first commit); 31-1..31-4 backlog (31.1+31.2 implemented, verified, not yet committed). Baseline cb6ea18. Cursor installed + owner logged in (log ~23:00).
-- Implemented (uncommitted, 31.1+31.2 together; shared runner/UI): `bin/safe-config-write.mjs` (extracted from bin/bmn; packaged via electron-builder), protocol `agentHistory` settings + `history.status/confirm`, validator, CLI `claudeConfigDir`, server rule, `agent-history.ts` runner (confirm/limit policy, 200 cap, live/24 h/cmdline skips, schedule 30 s + 24 h), adapters codex/opencode (read-only sqlite, `codex delete --force`, `opencode session delete --pure`), Preferences History section + gear dot, docs/agent-history.md (spike), features.md, self-test phases 'agent history' (+ after restart), scripts/test/history-visual.mjs.
+- Board: epic-31 in-progress; 31-1, 31-2 review (793b157); 31-4 review (commit after 793b157, log ~01:35); 31-3 backlog → in implementation. Baseline cb6ea18.
+- 31.4 implemented: answer forms `QuestionChoice` (toggle set / typed), Claude/Codex key routes screen-verified, OpenCode `answers[][]` with `custom`, cards 8–11 (toggles, Other…, ‹ Back, typing view, reply routing), docs/remote-answers.md + telegram.md.
+- 31.3: measurement done (log ~00:50–01:15, fixtures `apps/desktop/src/utility/test-fixtures/cursor/`). Decided from it: hooks VERIFIED (stop, sessionStart/End, beforeSubmitPrompt, postToolUse) → wire done notice, conversation id, Resume `cursor-agent --resume=<id>`, chip, `bmn hooks check/install cursor` (~/.cursor/hooks.json v1); no permission/question event → Needs you and answer buttons UNSUPPORTED; no chat delete → History row "keeps its own history · not managed by BMN"; model `default`, no host → no model-origin flag; no terminal notices in BMN. Wiring not started.
 - Active helpers: none.
 
 ## Decisions and findings
 
 - Original or approved intent changes: none.
 - Material pending findings: none.
-- Cross-epic obligations: Epic 30 answer checks (screen/epoch-verified keys, named refusals, no Codex permissions) for 31.4; archive setting keeps meaning (31.1); Epic 18 precedent for 31.3; deadline 2026-10-08 for 31.2.
+- Cross-epic obligations: Epic 30 answer checks kept for 31.4; archive setting keeps meaning (31.1); Epic 18 precedent for 31.3; deadline 2026-10-08 for 31.2.
+- Deviation to state at acceptance: 31.3 AC1 measured in tmux with BMN_*/AITERM_* unset, not a live BMN bash session; plan an isolated dev-BMN Cursor run for the Electron/real check.
 
 ## Evidence
 
-- 31.1+31.2: unit gate 114 files / 2142 PASS, Electron self-test run 4 EXIT 0, history screenshots (log ~23:10-23:30; `.dev-auto/evidence/epic-31/`). Spike receipts log ~22:50-23:00 and docs/agent-history.md.
-- 31.4 spike: Claude and Codex done (log ~23:30-23:55, screens `.dev-auto/evidence/epic-31/spike-31-4/`); OpenCode pending.
-- Untested so far: Claude's own deletion after cleanupPeriodDays (agent behaviour); OpenCode TUI idle on an old session without the id on its command line (documented residual).
+- 31.1+31.2: unit 114/2142 PASS, Electron run 4 EXIT 0, history screenshots (log ~23:10–23:30).
+- 31.4: unit 114/2178 PASS after two lint fixes + fixture field drop (log ~01:35; `.dev-auto/evidence/epic-31/e31-gate-314.log`), Electron run 7 EXIT 0 incl. fullerAnswers (`e31-electron-run7.log`).
+- Untested: Claude's own deletion after cleanupPeriodDays; OpenCode TUI idle on an old session without the id on its command line; 31.4 on the owner's real phone; Fable visual review of History screenshots pending.
 
 ## Measurement
 
 - Timing: started 2026-09-27 22:40 EEST.
-- Dispatches: none.
+- Dispatches: none yet in Epic 31.
 - Review yield: n/a.
-- Owner interventions: none.
+- Owner interventions: cursor login; "finish autonomously" (log ~00:10).
 - Observed usage: pending.
 
 ## Resume
 
-- Next safe action: OpenCode 31.4 spike (disposable XDG, free model); docs/remote-answers.md cells; kill tmux -L e31; commit 31.1+31.2 (board 31-1/31-2 review); implement 31.4; then 31.3 Cursor measurement.
-- Status: ACTIVE — 31.1+31.2 verified, 31.4 spike in progress.
+- Next safe action: implement 31.3 wiring (unions, schema bump, bin/bmn hook cursor + hooks check/install, Resume, chip, help agents, docs/agent-control.md Cursor table, before/after hooks-check artifacts, tests, Electron fake Cursor phase); then GLM pre-review + own final checks, Astra medium epic review, Fable visual review, acceptance.
+- Status: ACTIVE — 31.1, 31.2, 31.4 in review; 31.3 wiring next.

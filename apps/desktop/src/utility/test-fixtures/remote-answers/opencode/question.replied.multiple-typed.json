@@ -1,0 +1,14 @@
+{
+  "hook_event_name": "question.replied",
+  "sessionID": "ses_f1b5e7f9effefJuL2a2sfck52z",
+  "requestID": "que_0e4a19711001Ona38zuiYW5vIh",
+  "answers": [
+    [
+      "SSO",
+      "Rate limiting"
+    ],
+    [
+      "Passkeys first, JWT as fallback"
+    ]
+  ]
+}

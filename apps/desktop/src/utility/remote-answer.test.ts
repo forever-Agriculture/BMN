@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { AttentionEvidence, AttentionPrompt, AttentionRecord } from '@bmn/protocol'
-import { RemoteAnswers, answerRoute, evidenceConfirms, type AnswerOutcome, type RemoteAnswer, type ScreenLike } from './remote-answer'
+import { RemoteAnswers, answerRoute, cleanTypedAnswer, evidenceConfirms, type AnswerOutcome, type QuestionChoice, type RemoteAnswer, type ScreenLike } from './remote-answer'
 
 const SCREENS = join(__dirname, 'test-fixtures', 'remote-answers', 'screens')
 const screen = (name: string): string[] => readFileSync(join(SCREENS, name), 'utf8').split('\n')
@@ -517,5 +517,251 @@ describe('answering OpenCode through its plugin', () => {
     await expect(refused.engine.take('s1', 'inc-1', 500)).resolves.toHaveLength(1)
     await refused.engine.take('s1', 'inc-1', 0, { requestRef: 'que_1', delivered: false })
     await expect(failed).resolves.toEqual({ state: 'refused', reason: 'api-refused' })
+  })
+})
+
+/*
+ * Epic 31: multi-select, typed answers. The simulators draw each harness's dialog the way the spike recorded it
+ * (docs/remote-answers.md) and move it the way its keys did, so every key BMN writes must match the screen.
+ */
+const DOWN = '\u001b[B'
+
+class ClaudeDialog {
+  cursor = 0
+  ticked: boolean[]
+  other: string | null = null
+  otherTicked = false
+  submitted = false
+  constructor(
+    private readonly screenOf: () => FakeScreen,
+    private readonly text: string,
+    private readonly labels: string[],
+    private readonly multi: boolean,
+    /** What shows once the question is left: the review, or nothing. */
+    private readonly after: string[]
+  ) {
+    this.ticked = labels.map(() => false)
+  }
+
+  lines(): string[] {
+    if (this.submitted) return this.after
+    const n = this.labels.length
+    const mark = (row: number): string => (this.cursor === row ? '❯' : ' ')
+    const box = (on: boolean): string => (this.multi ? `[${on ? '✔' : ' '}] ` : '')
+    return [
+      '←  ☐ Features  ✔ Submit  →',
+      this.text,
+      ...this.labels.flatMap((label, index) => [`${mark(index)} ${index + 1}. ${box(this.ticked[index]!)}${label}`, '     A description.']),
+      `${mark(n)} ${n + 1}. ${box(this.otherTicked)}${this.other ?? (this.multi ? 'Type something' : 'Type something.')}`,
+      ...(this.multi ? [`${mark(n + 1)}    Submit`] : []),
+      '────────────────────────────────────────',
+      `  ${n + 2}. Chat about this`,
+      'Enter to select · ↑/↓ to navigate · Esc to cancel'
+    ]
+  }
+
+  key(key: string): void {
+    const n = this.labels.length
+    const typing = this.cursor === n && (this.other !== null || !this.multi)
+    if (key === DOWN) this.cursor = Math.min(this.cursor + 1, this.multi ? n + 1 : n)
+    else if (key === '\r') this.submitted = !this.multi || this.cursor === n + 1
+    else if (/^\d$/.test(key) && !(this.cursor === n && this.other !== null)) {
+      const digit = Number(key)
+      if (this.multi && digit <= n) this.ticked[digit - 1] = !this.ticked[digit - 1]
+      else if (digit === n + 1) this.cursor = n
+    } else if (this.cursor === n || typing) {
+      this.other = (this.other ?? '') + key
+      this.otherTicked = true
+    }
+    queueMicrotask(() => this.screenOf().show(this.lines()))
+  }
+}
+
+class CodexDialog {
+  cursor = 0
+  notes: string | null = null
+  submitted = false
+  constructor(private readonly screenOf: () => FakeScreen, private readonly text: string, private readonly labels: string[]) {}
+
+  lines(): string[] {
+    if (this.submitted) return BLANK
+    const n = this.labels.length
+    const mark = (row: number): string => (this.cursor === row ? '›' : ' ')
+    return [
+      '  Question 1/1 (1 unanswered)',
+      `  ${this.text}`,
+      ...this.labels.map((label, index) => `  ${mark(index)} ${index + 1}. ${label.padEnd(18)}A description`),
+      `  ${mark(n)} ${n + 1}. None of the above  Optionally, add details in notes (tab)`,
+      ...(this.notes === null ? [] : [`  › ${this.notes === '' ? 'Add notes' : this.notes}`]),
+      '',
+      '  tab to add notes | enter to submit answer'
+    ]
+  }
+
+  key(key: string): void {
+    const n = this.labels.length
+    if (key === DOWN) this.cursor = Math.min(this.cursor + 1, n)
+    else if (key === '\t' && this.cursor === n) this.notes = ''
+    else if (key === '\r') this.submitted = true
+    else if (this.notes !== null) this.notes += key
+    queueMicrotask(() => this.screenOf().show(this.lines()))
+  }
+}
+
+const multiQuestion = (text: string, ...labels: string[]) => ({ ...question(text, ...labels), multiSelect: true })
+const CLAUDE_FEATURES: AttentionPrompt = {
+  type: 'questions', harness: 'claude', shape: 'multi-select', requestRef: null, toolUseId: 'toolu_features',
+  questions: [multiQuestion('Which features should the first release include?', 'Rate limiting', 'Audit log', 'Webhooks')]
+}
+const CODEX_AUTH: AttentionPrompt = {
+  type: 'questions', harness: 'codex', shape: 'choice', requestRef: null, toolUseId: 'call_auth',
+  questions: [{ ...question('Which auth method should the API use?', 'JWT', 'Sessions'), id: 'auth' }]
+}
+const OPENCODE_FEATURES: AttentionPrompt = {
+  type: 'questions', harness: 'opencode', shape: 'multi-select', requestRef: 'que_2', toolUseId: null,
+  questions: [
+    multiQuestion('Which features should v1 include?', 'SSO', 'Rate limiting', 'Audit log'),
+    question('Which auth method?', 'JWT', 'Sessions')
+  ]
+}
+const answers = (...choices: QuestionChoice[]): RemoteAnswer => ({ type: 'choices', choices })
+const REVIEW = (question: string, answer: string): string[] =>
+  ['Review your answers', ` ● ${question}`, `   → ${answer}`, 'Ready to submit your answers?', '❯ 1. Submit answers', '  2. Cancel']
+
+function claudeHarness(prompt: AttentionPrompt, after: string[]): { h: Harness; dialog: ClaudeDialog } {
+  const q = (prompt as Extract<AttentionPrompt, { type: 'questions' }>).questions[0]!
+  // The dialog reads the harness's screen lazily, so the harness is assigned after it.
+  // eslint-disable-next-line prefer-const
+  let h!: Harness
+  const dialog = new ClaudeDialog(() => h.screens.get('s1')!, q.text, q.options.map((option) => option.label), q.multiSelect, after)
+  h = harness({ record: record(prompt), lines: dialog.lines() })
+  h.onKey = (key) => {
+    // The review answers the Submit digit by closing.
+    if (dialog.submitted && key === '1') return queueMicrotask(() => h.screens.get('s1')!.show(BLANK))
+    for (const char of key === DOWN || key === '\r' ? [key] : [...key]) dialog.key(char)
+  }
+  return { h, dialog }
+}
+
+describe('answering multi-select and typed answers (Epic 31)', () => {
+  it('ticks Claude options in option order, leaves by Down to Submit and Enter, and submits the review', async () => {
+    const { h, dialog } = claudeHarness(CLAUDE_FEATURES, REVIEW('Which features should the first release include?', 'Rate limiting, Webhooks'))
+    const pending = ask(h, answers({ set: [0, 2] }))
+    await settle(120)
+    expect(h.writes).toEqual(['1', '3', DOWN, DOWN, DOWN, DOWN, '\r', '1'])
+    expect(dialog.ticked).toEqual([true, false, true])
+    // Claude reports the labels in the order they were ticked, which is option order.
+    expect(h.engine.evidence('s1', 'claude:question', evidence({ toolUseId: 'toolu_features', answers: [['Rate limiting, Webhooks']] }))).toBe('request-1')
+    await expect(pending).resolves.toEqual({ state: 'confirmed', sent: ['Rate limiting · Webhooks'] })
+  })
+
+  it('types a Claude multi-select answer into its own row, only once the cursor is there', async () => {
+    const typed = 'Passkeys first, then JWT as a fallback for older clients'
+    const { h, dialog } = claudeHarness(CLAUDE_FEATURES, REVIEW('Which features should the first release include?', `Audit log, ${typed}`))
+    const pending = ask(h, answers({ set: [1], typed }))
+    await settle(200)
+    const keys = h.writes
+    expect(keys.slice(0, 4)).toEqual(['2', DOWN, DOWN, DOWN])
+    // Typed text goes out in pieces no harness takes for a paste, and nothing else is typed into the row.
+    expect(keys.slice(4, -3).every((piece) => [...piece].length <= 32)).toBe(true)
+    expect(keys.slice(4, -3).join('')).toBe(typed)
+    expect(keys.slice(-3)).toEqual([DOWN, '\r', '1'])
+    expect(dialog.other).toBe(typed)
+    h.engine.evidence('s1', 'claude:question', evidence({ toolUseId: 'toolu_features', answers: [[`Audit log, ${typed}`]] }))
+    await expect(pending).resolves.toEqual({ state: 'confirmed', sent: [`Audit log · “${typed}”`] })
+  })
+
+  it('answers a Claude single-choice question with typed text: its row\'s digit, the text, Enter', async () => {
+    const { h } = claudeHarness(CLAUDE_SINGLE, BLANK)
+    const pending = ask(h, answers({ typed: 'Passkeys' }))
+    await settle(80)
+    expect(h.writes).toEqual(['4', 'Passkeys', '\r'])
+    h.engine.evidence('s1', 'claude:question', evidence({ toolUseId: 'toolu_single', answers: [['Passkeys']] }))
+    await expect(pending).resolves.toEqual({ state: 'confirmed', sent: ['“Passkeys”'] })
+  })
+
+  it('answers Codex with "None of the above" and a note, and confirms from the note it reports', async () => {
+    // eslint-disable-next-line prefer-const
+    let h!: Harness
+    const dialog = new CodexDialog(() => h.screens.get('s1')!, 'Which auth method should the API use?', ['JWT', 'Sessions'])
+    h = harness({ record: record(CODEX_AUTH), lines: dialog.lines() })
+    h.onKey = (key) => {
+      for (const char of key === DOWN || key === '\r' || key === '\t' ? [key] : [...key]) dialog.key(char)
+    }
+    const pending = ask(h, answers({ typed: 'Passkeys first' }))
+    await settle(100)
+    expect(h.writes).toEqual([DOWN, DOWN, '\t', 'Passkeys first', '\r'])
+    expect(h.engine.evidence('s1', 'codex:question', evidence({ toolUseId: 'call_auth', answers: [['None of the above', 'Passkeys first']] }))).toBeNull()
+    expect(h.engine.evidence('s1', 'codex:question', evidence({ toolUseId: 'call_auth', answers: [['None of the above', 'user_note: Passkeys first']] }))).toBe('request-1')
+    await expect(pending).resolves.toEqual({ state: 'confirmed', sent: ['“Passkeys first”'] })
+  })
+
+  it('hands OpenCode every label of a multi-select question, typed text last, through its plugin', async () => {
+    const h = harness({ record: record(OPENCODE_FEATURES) })
+    const pending = ask(h, answers({ set: [0, 1], typed: 'Webhooks' }, { typed: 'Passkeys' }))
+    await settle()
+    expect(await h.engine.take('s1', 'inc-1', 0)).toEqual([
+      { requestRef: 'que_2', kind: 'question', answers: [['SSO', 'Rate limiting', 'Webhooks'], ['Passkeys']] }
+    ])
+    h.engine.evidence('s1', 'opencode:question', evidence({ requestRef: 'que_2', answers: [['SSO', 'Rate limiting', 'Webhooks'], ['Passkeys']] }))
+    await expect(pending).resolves.toEqual({ state: 'confirmed', sent: ['SSO · Rate limiting · “Webhooks”', '“Passkeys”'] })
+  })
+
+  it('refuses answers that do not fit the question, writing nothing', async () => {
+    const shapes: Array<[AttentionPrompt, RemoteAnswer]> = [
+      [CLAUDE_SINGLE, answers({ set: [0] })],
+      [CLAUDE_FEATURES, answers(0)],
+      [CLAUDE_FEATURES, answers({ set: [2, 0] })],
+      [CLAUDE_FEATURES, answers({ set: [0, 0] })],
+      [CLAUDE_FEATURES, answers({ set: [] })],
+      [CLAUDE_FEATURES, answers({ set: [3] })],
+      [CLAUDE_SINGLE, answers({ typed: '' })],
+      [CLAUDE_SINGLE, answers({ typed: 'two\nlines' })],
+      [CLAUDE_SINGLE, answers({ typed: ' padded' })],
+      [CLAUDE_SINGLE, answers({ typed: 'x'.repeat(2_001) })],
+      // OpenCode said this question takes no typed answer.
+      [{ ...OPENCODE_QUESTION, questions: [{ ...OPENCODE_QUESTION.questions[0]!, custom: false }] } as AttentionPrompt, answers({ typed: 'Mine' })],
+      // Codex asks no multi-select question; a prompt saying so is not its dialog.
+      [{ ...CODEX_AUTH, shape: 'multi-select', questions: [{ ...CODEX_AUTH.questions[0]!, multiSelect: true }] } as AttentionPrompt, answers({ set: [0] })]
+    ]
+    for (const [prompt, answer] of shapes) {
+      const h = harness({ record: record(prompt), lines: screen('claude-single-200.txt') })
+      await expect(ask(h, answer)).resolves.toEqual({ state: 'refused', reason: 'unsupported' })
+      expect(h.writes).toEqual([])
+    }
+  })
+
+  it('refuses a multi-select question already ticked on screen, and stops at once when a tick does not show', async () => {
+    const { h, dialog } = claudeHarness(CLAUDE_FEATURES, BLANK)
+    dialog.ticked[1] = true
+    h.screens.get('s1')!.show(dialog.lines())
+    await expect(ask(h, answers({ set: [0] }))).resolves.toEqual({ state: 'refused', reason: 'not-on-screen' })
+    expect(h.writes).toEqual([])
+
+    const stuck = claudeHarness(CLAUDE_FEATURES, BLANK)
+    // The program draws nothing after the first key.
+    stuck.h.onKey = () => undefined
+    await expect(ask(stuck.h, answers({ set: [0, 2] }))).resolves.toEqual({ state: 'partial', sent: [], total: 1 })
+    expect(stuck.h.writes).toEqual(['1'])
+  })
+
+  it('confirms Claude only for the labels in option order', () => {
+    const report = (value: string) => evidence({ toolUseId: 'toolu_features', answers: [[value]] })
+    expect(evidenceConfirms(CLAUDE_FEATURES, answers({ set: [0, 2] }), report('Rate limiting, Webhooks'))).toBe(true)
+    expect(evidenceConfirms(CLAUDE_FEATURES, answers({ set: [0, 2] }), report('Webhooks, Rate limiting'))).toBe(false)
+    expect(evidenceConfirms(CLAUDE_FEATURES, answers({ set: [0], typed: 'Mine' }), report('Rate limiting, Mine'))).toBe(true)
+  })
+
+  it('routes Claude and OpenCode multi-select, never a shape that disagrees with its questions', () => {
+    expect(answerRoute(CLAUDE_FEATURES)).toBe('claude-keys')
+    expect(answerRoute(OPENCODE_FEATURES)).toBe('opencode-api')
+    expect(answerRoute({ ...CLAUDE_FEATURES, shape: 'choice' })).toBeNull()
+    expect(answerRoute({ ...CLAUDE_SINGLE, shape: 'multi-select' })).toBeNull()
+  })
+
+  it('cleans a typed reply: controls and runs of space folded, trimmed, clipped to 2,000 characters', () => {
+    expect(cleanTypedAnswer('  Passkeys\n\tfirst \u0007 ok  ')).toBe('Passkeys first ok')
+    expect([...cleanTypedAnswer('é'.repeat(2_500))]).toHaveLength(2_000)
+    expect(cleanTypedAnswer('\n\t ')).toBe('')
   })
 })

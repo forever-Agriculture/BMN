@@ -1,0 +1,46 @@
+{
+  "session_id": "00000000-0000-4000-8000-000000000002",
+  "cwd": "/work/project",
+  "hook_event_name": "PostToolUse",
+  "model": "gpt-6-luna",
+  "permission_mode": "default",
+  "tool_name": "request_user_input",
+  "tool_input": {
+    "questions": [
+      {
+        "id": "auth",
+        "header": "Auth",
+        "question": "Which auth method should the API use?",
+        "options": [
+          {
+            "label": "JWT",
+            "description": "Stateless tokens"
+          },
+          {
+            "label": "Sessions",
+            "description": "Server-side cookies"
+          }
+        ],
+        "isOther": true
+      },
+      {
+        "id": "db",
+        "header": "Database",
+        "question": "Which database should store users?",
+        "options": [
+          {
+            "label": "Postgres",
+            "description": "Already used by billing"
+          },
+          {
+            "label": "SQLite",
+            "description": "One file"
+          }
+        ],
+        "isOther": true
+      }
+    ]
+  },
+  "tool_response": "{\"answers\":{\"auth\":{\"answers\":[\"None of the above\",\"user_note: Passkeys first, JWT as fallback\"]},\"db\":{\"answers\":[\"Postgres\"]}}}",
+  "tool_use_id": "call_T9Zmc5uIcARqryOBBx269xfx"
+}

@@ -53,7 +53,7 @@ import type { ApplicationRoots } from './roots'
 import { HostControlError, type SessionIdentity, type SessionManager } from './session-manager'
 import { runHookConfigurationCheck } from './hook-configuration-check'
 import { searchFileReferences } from './file-reference-search'
-import { createAttentionPager } from './attention-pager'
+import { PAGE_AFTER_MS, createAttentionPager } from './attention-pager'
 import { RemoteAnswers, answerRoute, type AnswerOutcome, type AnswerRequest, type PluginAnswer } from './remote-answer'
 import { observeRepeat, REPEAT_NOTICE_AT, type RepeatState, type RepeatSegment } from './repeat-watch'
 import { TelegramCardKeeper } from './telegram-card-keeper'
@@ -112,6 +112,8 @@ export interface CompanionServiceOptions {
   historyAdapters?: readonly AgentHistoryAdapter[]
   /** The owner's home, where `~/.claude` lives; the self-test points it at a scratch folder. */
   home?: string
+  /** How long a question or permission waits before it is paged; only the self-test host shortens it. */
+  pageAfterMs?: number
   now?: () => Date
 }
 
@@ -245,17 +247,7 @@ export class CompanionService {
   private readonly now: () => Date
   /** Whether the owner is away from the desk, as the app last reported; null while it cannot tell. */
   private ownerAway: boolean | null = null
-  private readonly pager = createAttentionPager({
-    current: (requestId) => this.options.database.companion('getAttention', requestId).catch(() => null),
-    send: (record) => this.cards.page(record),
-    schedule: (callback, ms) => {
-      const timer = setTimeout(callback, ms)
-      timer.unref()
-      return () => clearTimeout(timer)
-    },
-    ownerAway: () => this.ownerAway,
-    now: () => this.now().getTime()
-  })
+  private readonly pager: ReturnType<typeof createAttentionPager>
   /** Delivers a phone answer into the dialog that asked; reachable only from inside this process (Epic 30). */
   private readonly answers: RemoteAnswers
   /** The Telegram card of each page, kept true to its request (Story 30.3). */
@@ -334,6 +326,20 @@ export class CompanionService {
 
   constructor(private readonly options: CompanionServiceOptions) {
     this.now = options.now ?? (() => new Date())
+    this.pager = createAttentionPager({
+      current: (requestId) => this.options.database.companion('getAttention', requestId).catch(() => null),
+      send: (record) => this.cards.page(record),
+      schedule: (callback, ms) => {
+        const timer = setTimeout(callback, ms)
+        timer.unref()
+        return () => clearTimeout(timer)
+      },
+      ownerAway: () => this.ownerAway,
+      now: () => this.now().getTime(),
+      ...(options.pageAfterMs !== undefined
+        ? { pageAfterMs: { ...PAGE_AFTER_MS, question: options.pageAfterMs, permission: options.pageAfterMs } }
+        : {})
+    })
     this.history = new AgentHistory({
       home: options.home ?? homedir(),
       adapters: options.historyAdapters ?? [],
@@ -2013,11 +2019,14 @@ export class CompanionService {
 
   /**
    * A reply is addressed only by the notification it replies to. Without that correlation it is refused;
-   * with it, text becomes a draft for that session unless the owner opted into automatic submission.
+   * with it, text becomes a draft for that session unless the owner opted into automatic submission. A reply
+   * to a question card that offers Other… is the card's own (Story 31.4).
    */
   private async handleTelegramReply(reply: InboundReply): Promise<void> {
     const connector = this.telegram
     if (!connector) return
+    // A reply to a card that offers Other… is its typed answer (or refused), never a draft or a prompt.
+    if (await this.cards.typedReply(reply)) return
     const database = this.options.database
     const target = reply.replyToMessageId === null
       ? undefined

@@ -93,9 +93,9 @@ function agentText(text: string): string {
   return `<blockquote expandable>${escapeHtml(kept)}</blockquote>`
 }
 
-function keyboardFor(labels: string[], tokens: string[]): InlineKeyboard {
+function keyboardFor(labels: string[], tokens: string[], marked: number | null = null): InlineKeyboard {
   const buttons = labels.map((label, index) => ({
-    text: clip(`${index + 1} · ${label}`, BUTTON_CHARS),
+    text: clip(`${index === marked ? '● ' : ''}${index + 1} · ${label}`, BUTTON_CHARS),
     callback_data: tokens[index]!
   }))
   const total = buttons.reduce((sum, button) => sum + [...button.text].length, 0)
@@ -108,10 +108,24 @@ export interface QuestionCardInput {
   /** The question on the card now, and the labels chosen for the ones before it. */
   step: number
   chosen: string[]
-  /** One token per option of this step, or null for a card answered only at the laptop. */
+  /**
+   * One token per option of this step (a choice, or a toggle on a multi-select question), or null for a card
+   * answered only at the laptop.
+   */
   tokens: string[] | null
   /** A short line above the options, for a tap that sent nothing. */
   note?: string | null
+  /** The Other… button, when this question takes a typed answer. */
+  other?: string | null
+  /** The ‹ Back button, from the second question on. */
+  back?: string | null
+  /** Multi-select: the options toggled on, and Send or Next once at least one is. */
+  toggled?: number[] | null
+  submit?: string | null
+  /** Single choice after Back: the option chosen before, marked ●. */
+  marked?: number | null
+  /** Waiting for a typed reply after Other…: the ‹ Options button that returns to the options. */
+  typing?: string | null
 }
 
 function questionChip(prompt: AttentionQuestionsPrompt, index: number): string | null {
@@ -190,19 +204,52 @@ export function questionCard(input: QuestionCardInput): RenderedCard {
     const question = prompt.questions[index]!
     return `${escapeHtml(question.header ?? `Question ${index + 1}`)}: <b>${escapeHtml(label)}</b>`
   })
-  const last = prompt.questions.length > 1 && step === prompt.questions.length - 1
+  const question = prompt.questions[step]!
+  const final = step === prompt.questions.length - 1
+  const last = prompt.questions.length > 1 && final
   const chip = questionChip(prompt, step)
-  const text = fitted((limits) => [
+  const intro = [
     header,
     ...(chip ? [chip] : []),
     ...(earlier.length > 0 ? ['', `<blockquote>${earlier.join('\n')}</blockquote>`] : []),
-    ...(input.note ? ['', `⚠ <i>${escapeHtml(input.note)}</i>`] : []),
-    '',
-    questionBody(prompt, step, limits),
-    ...(last ? ['', '<i>Nothing is sent until this answer.</i>'] : [])
-  ].join('\n'))
-  const labels = prompt.questions[step]!.options.map((option) => option.label)
-  return { text, keyboard: keyboardFor(labels, tokens), base }
+    ...(input.note ? ['', `⚠ <i>${escapeHtml(input.note)}</i>`] : [])
+  ]
+  if (input.typing) {
+    const text = fitted((limits) => [
+      ...intro,
+      '',
+      `<b>${escapeHtml(clip(question.text, limits.question))}</b>`,
+      '',
+      '<i>Reply to this message with your answer.</i>'
+    ].join('\n'))
+    return { text, keyboard: [[{ text: '‹ Options', callback_data: input.typing }]], base }
+  }
+  const labels = question.options.map((option) => option.label)
+  const toggled = input.toggled ?? null
+  // Multi-select: the body repeats the choice in full, because buttons clip; with none, it says what to do.
+  const status = toggled === null
+    ? last ? ['', '<i>Nothing is sent until this answer.</i>'] : []
+    : ['', toggled.length > 0
+      ? `<i>Chosen: ${escapeHtml(toggled.map((index) => labels[index]!).join(' · '))}</i>`
+      : `<i>Choose one or more, then ${final ? 'Send' : 'Next'}.</i>`]
+  const text = fitted((limits) => [...intro, '', questionBody(prompt, step, limits), ...status].join('\n'))
+  const keyboard: InlineKeyboard = toggled === null
+    ? keyboardFor(labels, tokens, input.marked ?? null)
+    : labels.map((label, index) => [{
+        text: clip(`${toggled.includes(index) ? '●' : '○'} ${index + 1} · ${label}`, BUTTON_CHARS),
+        callback_data: tokens[index]!
+      }])
+  if (input.other) keyboard.push([{ text: 'Other…', callback_data: input.other }])
+  const control: InlineButton[] = []
+  if (input.back) control.push({ text: '‹ Back', callback_data: input.back })
+  if (toggled !== null && toggled.length > 0 && input.submit) {
+    control.push({
+      text: final ? `Send ${toggled.length} selected` : `Next · ${toggled.length} selected`,
+      callback_data: input.submit
+    })
+  }
+  if (control.length > 0) keyboard.push(control)
+  return { text, keyboard, base }
 }
 
 function permissionWants(prompt: AttentionPermissionPrompt): string {

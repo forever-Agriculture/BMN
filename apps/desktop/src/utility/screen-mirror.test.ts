@@ -6,9 +6,12 @@ import {
   OutputTail,
   ScreenMirror,
   claudePermissionOnScreen,
+  claudeQuestionState,
   claudeReviewOnScreen,
+  codexQuestionState,
   normalizeScreenText,
   questionOnScreen,
+  showsTyped,
   type ScreenQuestion
 } from './screen-mirror'
 
@@ -147,5 +150,58 @@ describe('recognising the recorded dialogs', () => {
 
   it('finds no answerable dialog in Codex\'s async question, which is only a message', () => {
     expect(questionOnScreen(screen('codex-async.txt'), 'codex', question('Which color should the logo use?', 'Gold', 'Black'))).toBe(false)
+  })
+})
+
+describe('recognising answers in progress (Epic 31 spike screens)', () => {
+  const FEATURES_80 = { ...question('Which features should the first release include?', 'Rate limiting', 'Audit log', 'Webhooks'), multiSelect: true }
+  const FEATURES_200 = { ...question('Which features should ship first?', 'Rate limiting', 'Audit log', 'SSO'), multiSelect: true }
+  const DATABASE_200 = { ...question('Which database should store users?', 'Postgres', 'SQLite'), multiSelect: false }
+  const AUTH_CODEX = question('Which auth method should the API use?', 'JWT', 'Sessions')
+
+  it('reads a fresh Claude multi-select question and its ticks at 200 columns', () => {
+    expect(claudeQuestionState(screen('claude-ms-200-step3.txt'), FEATURES_200)).toEqual({
+      cursor: 0, ticked: [false, false, false], other: { cursor: false, text: null, ticked: false }, leave: 'Submit'
+    })
+    expect(claudeQuestionState(screen('claude-ms-200-step3-toggled.txt'), FEATURES_200)?.ticked).toEqual([true, false, true])
+  })
+
+  it('reads ticks, typed text and the Next row at 80 columns', () => {
+    expect(claudeQuestionState(screen('claude-ms-80-toggled.txt'), FEATURES_80)).toMatchObject({ cursor: 0, ticked: [false, true, false] })
+    expect(claudeQuestionState(screen('claude-ms-80-typed.txt'), FEATURES_80)).toEqual({
+      cursor: 3, ticked: [false, true, false], other: { cursor: true, text: 'Passkeys', ticked: true }, leave: 'Submit'
+    })
+    expect(claudeQuestionState(screen('claude-ms-80-next.txt'), FEATURES_80)).toMatchObject({ cursor: 4, ticked: [true, false, true], leave: 'Next' })
+  })
+
+  it('reads Claude\'s single-choice typed row, focused and typed', () => {
+    expect(claudeQuestionState(screen('claude-other-focused-200.txt'), DATABASE_200)).toEqual({
+      cursor: 2, ticked: [], other: { cursor: true, text: null, ticked: false }, leave: null
+    })
+    expect(claudeQuestionState(screen('claude-other-typed-80.txt'), { ...question('Which auth method should the API use?', 'JWT', 'Sessions'), multiSelect: false }))
+      .toMatchObject({ cursor: 2, other: { text: 'Passkeys first, JWT as fallback' } })
+    // A single-choice rule never reads a multi-select screen, nor the reverse.
+    expect(claudeQuestionState(screen('claude-ms-200-step3.txt'), { ...FEATURES_200, multiSelect: false })).toBeNull()
+    expect(claudeQuestionState(screen('claude-single-200.txt'), { ...AUTH, multiSelect: true })).toBeNull()
+  })
+
+  it('reads the review of a multi-select answer with typed text', () => {
+    expect(claudeReviewOnScreen(screen('claude-ms-80-review.txt'), [FEATURES_80], ['Audit log, Passkeys'])).toBe(1)
+    expect(claudeReviewOnScreen(screen('claude-ms-80-review.txt'), [FEATURES_80], ['Passkeys, Audit log'])).toBeNull()
+  })
+
+  it('reads Codex\'s cursor and notes field', () => {
+    expect(codexQuestionState(screen('codex-other-selected.txt'), AUTH_CODEX, { index: 0, count: 2 })).toEqual({ cursor: 2, notes: null })
+    expect(codexQuestionState(screen('codex-other-notes.txt'), AUTH_CODEX, { index: 0, count: 2 })).toEqual({ cursor: 2, notes: '' })
+    expect(codexQuestionState(screen('codex-other-typed.txt'), AUTH_CODEX, { index: 0, count: 2 })).toEqual({ cursor: 2, notes: 'Passkeys first, JWT as fallback' })
+    expect(codexQuestionState(screen('codex-other-typed.txt'), AUTH_CODEX, { index: 1, count: 2 })).toBeNull()
+  })
+
+  it('accepts a typed answer shown whole, or a long enough start of one that wrapped', () => {
+    expect(showsTyped('Passkeys', 'Passkeys')).toBe(true)
+    expect(showsTyped('Pass', 'Passkeys first')).toBe(false)
+    expect(showsTyped('Passkeys first, JWT as', 'Passkeys first, JWT as fallback')).toBe(true)
+    expect(showsTyped('Something else entirely', 'Passkeys first, JWT as fallback')).toBe(false)
+    expect(showsTyped(null, 'x')).toBe(false)
   })
 })

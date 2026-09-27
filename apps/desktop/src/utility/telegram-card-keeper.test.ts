@@ -130,7 +130,7 @@ describe('sending a card', () => {
     await h.keeper.page(h.state.record!)
     expect(h.connector.sends).toHaveLength(1)
     expect(h.connector.sends[0]?.options.html).toBe(true)
-    expect(h.connector.buttons()).toEqual(['tok-1', 'tok-2'])
+    expect(h.connector.buttons()).toEqual(['tok-1', 'tok-2', 'tok-3'])
     expect(h.puts).toEqual([expect.objectContaining({ messageId: 100, requestId: 'r1', revision: 1, state: 'buttons', incarnationId: 'i1' })])
   })
 
@@ -204,7 +204,7 @@ describe('sending a card', () => {
     await settle()
     expect(h.connector.sends).toHaveLength(1)
     expect(h.connector.lastEdit()?.id).toBe(100)
-    expect(h.connector.editButtons()).toEqual(['tok-3', 'tok-4'])
+    expect(h.connector.editButtons()).toEqual(['tok-4', 'tok-5', 'tok-6'])
     await h.keeper.page(h.state.record)
     expect(h.connector.sends).toHaveLength(1)
     await h.keeper.tap(h.tap('tok-1'))
@@ -302,10 +302,10 @@ describe('a tap', () => {
     await h.keeper.tap(h.tap('tok-2'))
     expect(h.connector.toasts[0]?.text).toBe('Question 2 of 2')
     expect(h.connector.lastEdit()?.text).toContain('<blockquote>Auth method: <b>Session cookies</b></blockquote>')
-    expect(h.connector.editButtons()).toEqual(['tok-3', 'tok-4'])
+    expect(h.connector.editButtons()).toEqual(['tok-4', 'tok-5', 'tok-6', 'tok-7'])
     expect(h.answers).toEqual([])
     await h.keeper.tap(h.tap('tok-1'))
-    await h.keeper.tap(h.tap('tok-4'))
+    await h.keeper.tap(h.tap('tok-5'))
     await settle()
     expect(h.connector.toasts.map((toast) => toast.text)).toEqual([
       'Question 2 of 2', 'This button is no longer active.', 'Sending Session cookies · Later…'
@@ -350,10 +350,10 @@ describe('outcomes', () => {
     h.keeper.lateOutcome('r1', { state: 'refused', reason: 'api-refused' })
     await settle()
     expect(h.connector.lastEdit()?.text).toContain('OpenCode rejected the answer; nothing was applied.')
-    expect(h.connector.editButtons()).toEqual(['tok-3', 'tok-4'])
+    expect(h.connector.editButtons()).toEqual(['tok-4', 'tok-5', 'tok-6'])
     expect(h.connector.sends.at(-1)).toMatchObject({ options: { replyToMessageId: 100 } })
     await new Promise((resolve) => setTimeout(resolve, 250))
-    expect(h.connector.editButtons()).toEqual(['tok-3', 'tok-4'])
+    expect(h.connector.editButtons()).toEqual(['tok-4', 'tok-5', 'tok-6'])
     expect(h.connector.lastEdit()?.text).not.toContain('not confirmed')
     expect(h.answers).toHaveLength(1)
   })
@@ -362,7 +362,7 @@ describe('outcomes', () => {
     const h = setup({ record: record(TWO), answer: async () => ({ state: 'partial', sent: ['JWT'], total: 2 }) })
     await h.keeper.page(h.state.record!)
     await h.keeper.tap(h.tap('tok-1'))
-    await h.keeper.tap(h.tap('tok-3'))
+    await h.keeper.tap(h.tap('tok-4'))
     await settle()
     expect(h.connector.lastEdit()?.text.endsWith('⚠ <i>Sent 1 of 2 — stopped: the dialog changed. Check the laptop.</i>')).toBe(true)
     expect(h.connector.sends[1]?.text).toBe('Sent 1 of 2, then the dialog changed. Check the laptop.')
@@ -374,9 +374,9 @@ describe('outcomes', () => {
     await h.keeper.tap(h.tap('tok-1'))
     await settle()
     expect(h.connector.lastEdit()?.text).toContain('⚠ <i>Nothing was sent: that dialog is not on the screen.</i>')
-    expect(h.connector.editButtons()).toEqual(['tok-3', 'tok-4'])
+    expect(h.connector.editButtons()).toEqual(['tok-4', 'tok-5', 'tok-6'])
     expect(h.connector.sends[1]?.text).toBe('Nothing was sent: that dialog is not on the screen.')
-    await h.keeper.tap(h.tap('tok-3'))
+    await h.keeper.tap(h.tap('tok-4'))
     await settle()
     expect(h.answers).toHaveLength(2)
   })
@@ -491,5 +491,119 @@ describe('after a restart', () => {
     h.state.connected = true
     await h.keeper.sweep()
     expect(h.connector.edits).toHaveLength(1)
+  })
+})
+
+describe('multi-select, Other… and Back (Epic 31)', () => {
+  const FEATURES: AttentionPrompt = {
+    type: 'questions', harness: 'claude', shape: 'multi-select', requestRef: null, toolUseId: 'toolu_2',
+    questions: [{
+      id: null, header: 'Features', text: 'Which features?', multiSelect: true,
+      options: [{ label: 'Rate limiting', description: null }, { label: 'Audit log', description: null }, { label: 'Webhooks', description: null }]
+    }]
+  }
+  const reply = (text: string | null, replyTo = 100, messageId = 500) =>
+    ({ updateId: 9, chatId: 1, fromUserId: 1, messageId, replyToMessageId: replyTo, text, file: null })
+  const texts = (h: ReturnType<typeof setup>) => (h.connector.lastEdit()?.options.keyboard ?? []).flat().map((button) => button.text)
+
+  it('toggles only edit the card; Send delivers the set in option order', async () => {
+    const h = setup({ record: record(FEATURES), answer: async () => ({ state: 'confirmed', sent: ['Rate limiting · Webhooks'] }) })
+    await h.keeper.page(h.state.record!)
+    expect(h.connector.sends[0]?.options.keyboard?.flat().map((button) => button.text)).toEqual(['○ 1 · Rate limiting', '○ 2 · Audit log', '○ 3 · Webhooks', 'Other…'])
+    await h.keeper.tap(h.tap('tok-3'))
+    await settle()
+    expect(texts(h)).toEqual(['○ 1 · Rate limiting', '○ 2 · Audit log', '● 3 · Webhooks', 'Other…', 'Send 1 selected'])
+    await h.keeper.tap(h.tap('tok-5'))
+    await settle()
+    expect(texts(h)).toEqual(['● 1 · Rate limiting', '○ 2 · Audit log', '● 3 · Webhooks', 'Other…', 'Send 2 selected'])
+    expect(h.connector.lastEdit()?.text).toContain('<i>Chosen: Webhooks · Rate limiting</i>')
+    expect(h.answers).toEqual([])
+    // Send is the last button: tokens 10 to 14 are the three toggles, Other… and Send.
+    await h.keeper.tap(h.tap('tok-14'))
+    await settle()
+    expect(h.answers).toEqual([expect.objectContaining({ answer: { type: 'choices', choices: [{ set: [0, 2] }] }, revision: 1, epoch: 4 })])
+    expect(h.connector.lastEdit()?.text.endsWith('✓ <i>Sent: Rate limiting · Webhooks</i>')).toBe(true)
+  })
+
+  it('Other… asks for a reply, ‹ Options returns with the toggles intact, and the reply is the typed answer', async () => {
+    const h = setup({ record: record(FEATURES), answer: async () => ({ state: 'confirmed', sent: ['Audit log · “GraphQL”'] }) })
+    await h.keeper.page(h.state.record!)
+    await h.keeper.tap(h.tap('tok-2'))
+    await settle()
+    // A reply before Other… is refused: never a draft, never a prompt.
+    await expect(h.keeper.typedReply(reply('GraphQL'))).resolves.toBe(true)
+    expect(h.connector.sends.at(-1)).toMatchObject({ text: 'Tap Other… first, then reply with your answer.', options: { replyToMessageId: 500 } })
+    await h.keeper.tap(h.tap('tok-8'))
+    await settle()
+    expect(h.connector.lastEdit()?.text).toContain('<i>Reply to this message with your answer.</i>')
+    expect(texts(h)).toEqual(['‹ Options'])
+    await h.keeper.tap(h.tap('tok-10'))
+    await settle()
+    expect(texts(h)).toEqual(['○ 1 · Rate limiting', '● 2 · Audit log', '○ 3 · Webhooks', 'Other…', 'Send 1 selected'])
+    await h.keeper.tap(h.tap('tok-14'))
+    await settle()
+    await expect(h.keeper.typedReply(reply('  Graph\nQL\u0007 please '))).resolves.toBe(true)
+    await settle()
+    expect(h.answers).toEqual([expect.objectContaining({ answer: { type: 'choices', choices: [{ set: [1], typed: 'Graph QL please' }] } })])
+    expect(h.answers).toHaveLength(1)
+  })
+
+  it('clips a typed reply to 2,000 characters and asks again for an empty one', async () => {
+    const h = setup()
+    await h.keeper.page(h.state.record!)
+    await h.keeper.tap(h.tap('tok-3'))
+    await settle()
+    await expect(h.keeper.typedReply(reply(null))).resolves.toBe(true)
+    expect(h.connector.sends.at(-1)?.text).toBe('Reply with your answer as text.')
+    await h.keeper.typedReply(reply('x'.repeat(2_500)))
+    await settle()
+    const choice = (h.answers[0]?.answer as { choices: Array<{ typed: string }> }).choices[0]!
+    expect(choice.typed).toHaveLength(2_000)
+  })
+
+  it('refuses a typed reply to a card whose request changed, and sends nothing', async () => {
+    const h = setup()
+    await h.keeper.page(h.state.record!)
+    await h.keeper.tap(h.tap('tok-3'))
+    await settle()
+    h.state.record = record(QUESTION, { revision: 2 })
+    await expect(h.keeper.typedReply(reply('Mine'))).resolves.toBe(true)
+    await settle()
+    expect(h.answers).toEqual([])
+    expect(h.connector.sends.at(-1)?.text).toBe('Nothing was sent: the dialog changed on the laptop.')
+  })
+
+  it('leaves replies to cards without Other… to their usual meaning', async () => {
+    const noTyped: AttentionPrompt = {
+      ...QUESTION, harness: 'opencode', requestRef: 'que_1',
+      questions: [{ ...(QUESTION as Extract<AttentionPrompt, { type: 'questions' }>).questions[0]!, custom: false }]
+    } as AttentionPrompt
+    const h = setup({ record: record(noTyped) })
+    await h.keeper.page(h.state.record!)
+    expect(h.connector.buttons()).toEqual(['tok-1', 'tok-2'])
+    await expect(h.keeper.typedReply(reply('Mine'))).resolves.toBe(false)
+    await expect(h.keeper.typedReply(reply('Mine', 999))).resolves.toBe(false)
+    const closed = setup({ answerability: { answerable: false, reason: 'unsupported' } })
+    await closed.keeper.page(closed.state.record!)
+    await expect(closed.keeper.typedReply(reply('Mine'))).resolves.toBe(false)
+  })
+
+  it('Back returns to the previous question with its choice marked, never shown on the first', async () => {
+    const h = setup({ record: record(TWO) })
+    await h.keeper.page(h.state.record!)
+    expect(h.connector.sends[0]?.options.keyboard?.flat().map((button) => button.text)).toEqual(['1 · JWT', '2 · Session cookies', 'Other…'])
+    await h.keeper.tap(h.tap('tok-2'))
+    await settle()
+    expect(texts(h)).toEqual(['1 · Yes', '2 · Later', 'Other…', '‹ Back'])
+    await h.keeper.tap(h.tap('tok-7'))
+    await settle()
+    expect(h.connector.toasts.at(-1)?.text).toBe('Question 1 of 2')
+    expect(texts(h)).toEqual(['1 · JWT', '● 2 · Session cookies', 'Other…'])
+    expect(h.connector.lastEdit()?.text).not.toContain('<blockquote>')
+    await h.keeper.tap(h.tap('tok-8'))
+    await settle()
+    await h.keeper.tap(h.tap('tok-12'))
+    await settle()
+    expect(h.answers).toEqual([expect.objectContaining({ answer: { type: 'choices', choices: [0, 1] } })])
   })
 })

@@ -106,8 +106,23 @@ describe('parseAttentionEvidence', () => {
     ['an empty label list', { ...evidence, answers: [[]] }],
     ['a label with a control character', { ...evidence, answers: [['J\u0007WT']] }],
     ['too many questions', { ...evidence, answers: Array(ATTENTION_PROMPT_LIMITS.questions + 1).fill(['x']) }],
+    ['an answer longer than the bound', { ...evidence, answers: [['x'.repeat(ATTENTION_PROMPT_LIMITS.answer + 1)]] }],
     ['not an object', 'evidence']
   ])('refuses %s', (_label, value) => {
     expect(parseAttentionEvidence(value).ok).toBe(false)
+  })
+
+  it('accepts a typed answer or Claude\'s joined labels up to the answer bound (Epic 31)', () => {
+    const long = { ...evidence, answers: [['x'.repeat(ATTENTION_PROMPT_LIMITS.answer)], ['None of the above', 'user_note: Passkeys']] }
+    expect(parseAttentionEvidence(long)).toEqual({ ok: true, value: long })
+  })
+})
+
+describe('OpenCode\'s custom flag (Epic 31)', () => {
+  it('keeps custom when a question carries it, and still reads prompts stored without it', () => {
+    const custom = { ...question, harness: 'opencode', questions: [{ ...question.questions[0]!, custom: false }] }
+    expect(parseAttentionPrompt(custom)).toEqual({ ok: true, value: custom })
+    expect(parseAttentionPrompt(question)).toEqual({ ok: true, value: question })
+    expect(parseAttentionPrompt({ ...question, questions: [{ ...question.questions[0]!, custom: 'no' }] }).ok).toBe(false)
   })
 })

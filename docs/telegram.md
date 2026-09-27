@@ -37,7 +37,16 @@ edits the same card to say what happened:
 - **Answered at the laptop.** or **No longer open.** when it ended some other way; the buttons go.
 
 Several questions in one dialog are shown one at a time on the same card, earlier answers quoted
-above; nothing is sent until the last one. A new version of an open request edits its card instead
+above; nothing is sent until the last one. From the second question on, **‹ Back** reopens the one
+before with its choice marked ●; it changes only the card, because nothing has been sent yet.
+
+A multi-select question shows one toggle per option (`○ 1 · Label`, `● 1 · Label` once chosen) and
+repeats the choice in full as **Chosen: …**; toggling only edits the card. Once something is chosen,
+**Send N selected** (or **Next · N selected** before the last question) goes on. **Other…** answers in
+your own words: tap it, then reply to the card; **‹ Options** goes back with your toggles intact. The
+reply is sent as one line (line breaks and control characters become spaces), clipped to 2,000
+characters, and never becomes a draft or a prompt. A reply to a card that offers Other… before you
+tapped it is refused with **Tap Other… first**. A new version of an open request edits its card instead
 of sending another. Uncertain, partial and refused answers also get a short reply, so the phone
 sounds. If Telegram does not take the final edit, BMN tries again after about 10 s, 1 min and 5 min
 and never sends the answer twice; a card still unfinished at the next start is finished then. After a
@@ -55,7 +64,10 @@ What can be tapped (see [remote-answers.md](remote-answers.md) for how each is v
 | One question, one choice | buttons | buttons (Plan mode) | buttons |
 | Several questions | buttons | buttons | buttons |
 | Permission | **Allow once** / **Deny** for `Bash` | answer at the laptop | **Allow once** / **Deny** (Deny only when it is the only permission waiting) |
-| Multi-select, typed answers, subagent and sandbox prompts | answer at the laptop | answer at the laptop | answer at the laptop |
+| Multi-select | toggles | — (Codex has none) | toggles |
+| Other… (your own words) | on every question | on every question, sent as "None of the above" with your text as its note | unless the question turned it off |
+| Back | buttons | buttons | buttons |
+| Subagent and sandbox prompts | answer at the laptop | answer at the laptop | answer at the laptop |
 
 Permission buttons appear only after you tick **Answer permission prompts from Telegram** in
 Preferences → Telegram (off by default). They answer the exact prompt on screen, once; there is no
@@ -63,8 +75,8 @@ Preferences → Telegram (off by default). They answer the exact prompt on scree
 says **The command is too long to show here. Answer at the laptop.** With the setting off, a permission card ends **Answer this at the laptop.**
 
 Cards without buttons are drawn the same way and end **No buttons for this kind yet. Answer at the
-laptop.** A text reply to such a dialog stays a draft even with direct typing on, because a typed
-line cannot pick an option. If Telegram refuses a card's formatting, it is resent once as plain text.
+laptop.** A text reply to a dialog without Other… stays a draft even with direct typing on, because a
+typed line cannot pick an option. If Telegram refuses a card's formatting, it is resent once as plain text.
 
 ## Setup
 

@@ -3181,6 +3181,55 @@ describe('evidence of how a prompt ended, from the recorded hooks (Epic 30.2)', 
   })
 })
 
+describe('multi-select and typed answers from the recorded hooks (Epic 31.4)', () => {
+  const resolved = (fixture: Awaited<ReturnType<typeof cliFixture>>, requestKey: string): Record<string, unknown> | undefined =>
+    fixture.handlers.resolveAttention.mock.calls.map(([params]) => params as Record<string, unknown>)
+      .find((params) => params.requestKey === requestKey)
+
+  it('sends Claude\'s multi-select answer as the one string it reports, typed text included', async () => {
+    const fixture = await cliFixture()
+    await runHook(fixture, 'claude', await recorded('claude/ask-multiselect-typed.post-tool-use.json'))
+    expect(resolved(fixture, 'claude:question')).toMatchObject({ evidence: { answers: [['Audit log, Passkeys']] } })
+  })
+
+  it('sends Codex\'s whole answer list, so a typed note counts as the answer', async () => {
+    const fixture = await cliFixture()
+    await runHook(fixture, 'codex', await recorded('codex/ask-other.post-tool-use.json'))
+    expect(resolved(fixture, 'codex:question')).toMatchObject({
+      evidence: { answers: [['None of the above', 'user_note: Passkeys first, JWT as fallback'], ['Postgres']] }
+    })
+  })
+
+  it('keeps OpenCode\'s multiple and custom flags, and every label it reports', async () => {
+    const fixture = await cliFixture()
+    await runHook(fixture, 'opencode', await recorded('opencode/question.asked.multiple.json'), OPENCODE_FOREGROUND)
+    expect(lastOpen(fixture).prompt).toMatchObject({
+      shape: 'multi-select',
+      questions: [{ header: 'Features', multiSelect: true }, { header: 'Auth', multiSelect: false }]
+    })
+    const questionsOf = (params: Record<string, unknown>): Array<Record<string, unknown>> =>
+      (params.prompt as { questions: Array<Record<string, unknown>> }).questions
+    expect(questionsOf(lastOpen(fixture))[0]).not.toHaveProperty('custom')
+    const noTyped = await cliFixture()
+    const asked = await recorded('opencode/question.asked.multiple.json')
+    const [first, ...rest] = asked.questions as Array<Record<string, unknown>>
+    await runHook(noTyped, 'opencode', { ...asked, questions: [{ ...first, custom: false }, ...rest] }, OPENCODE_FOREGROUND)
+    expect(questionsOf(lastOpen(noTyped))[0]).toMatchObject({ custom: false })
+    await runHook(fixture, 'opencode', await recorded('opencode/question.replied.multiple-typed.json'), OPENCODE_FOREGROUND)
+    expect(resolved(fixture, 'opencode:question')).toMatchObject({
+      evidence: { answers: [['SSO', 'Rate limiting'], ['Passkeys first, JWT as fallback']] }
+    })
+  })
+
+  it('reports a 2,000-character typed answer whole', async () => {
+    const post = await recorded('claude/ask-multiselect-typed.post-tool-use.json')
+    const question = 'Which features should the first release include?'
+    const long = await cliFixture()
+    await runHook(long, 'claude', { ...post, tool_response: { ...(post.tool_response as object), answers: { [question]: 'y'.repeat(2_000) } } })
+    expect(resolved(long, 'claude:question')).toMatchObject({ evidence: { answers: [['y'.repeat(2_000)]] } })
+  })
+})
+
 describe('bmn answer take (Epic 30.2)', () => {
   it('collects this session\'s answers and waits as long as asked', async () => {
     const fixture = await cliFixture()

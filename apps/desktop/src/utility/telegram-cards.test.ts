@@ -342,3 +342,117 @@ describe('the length rule', () => {
     expect([...card.keyboard![0]![0]!.text]).toHaveLength(28)
   })
 })
+
+describe('Epic 31 cards (Design section, cards 8 to 11)', () => {
+  const FEATURES = {
+    id: null,
+    header: 'Features',
+    text: 'Which features should the first release include?',
+    multiSelect: true,
+    options: [
+      { label: 'Rate limiting', description: 'Per-key request caps.' },
+      { label: 'Audit log', description: 'Record every admin action.' },
+      { label: 'Webhooks', description: 'Notify other services on change.' }
+    ]
+  }
+  const multi = (...list: AttentionQuestionsPrompt['questions']): AttentionQuestionsPrompt => ({ ...questions(...list), shape: 'multi-select' })
+  const BODY_8 = `❓ <b>api-server</b> · Claude 🇺🇸
+<i>Features · choose any</i>
+
+<b>Which features should the first release include?</b>
+
+<b>1. Rate limiting</b>
+Per-key request caps.
+
+<b>2. Audit log</b>
+Record every admin action.
+
+<b>3. Webhooks</b>
+Notify other services on change.`
+
+  it('8. multi-select, two chosen: toggles one per row, Other…, and Send with the count', () => {
+    const card = questionCard({
+      header: CLAUDE, prompt: multi(FEATURES), step: 0, chosen: [], tokens: ['t1', 't2', 't3'],
+      other: 'ot', back: null, toggled: [0, 1], submit: 'se'
+    })
+    expect(card.text).toBe(`${BODY_8}
+
+<i>Chosen: Rate limiting · Audit log</i>`)
+    expect(card.keyboard).toEqual([
+      [{ text: '● 1 · Rate limiting', callback_data: 't1' }],
+      [{ text: '● 2 · Audit log', callback_data: 't2' }],
+      [{ text: '○ 3 · Webhooks', callback_data: 't3' }],
+      [{ text: 'Other…', callback_data: 'ot' }],
+      [{ text: 'Send 2 selected', callback_data: 'se' }]
+    ])
+  })
+
+  it('8. with none chosen there is no Send button, and the last line says what to do', () => {
+    const card = questionCard({
+      header: CLAUDE, prompt: multi(FEATURES), step: 0, chosen: [], tokens: ['t1', 't2', 't3'], other: 'ot', toggled: [], submit: 'se'
+    })
+    expect(card.text).toBe(`${BODY_8}
+
+<i>Choose one or more, then Send.</i>`)
+    expect(card.keyboard?.flat().map((button) => button.text)).toEqual(['○ 1 · Rate limiting', '○ 2 · Audit log', '○ 3 · Webhooks', 'Other…'])
+  })
+
+  it('9. multi-select after Send: the question and the Sending line, no keyboard; then Sent', () => {
+    const base = questionCard({ header: CLAUDE, prompt: multi(FEATURES), step: 0, chosen: [], tokens: ['t1', 't2', 't3'], toggled: [0, 1] }).base
+    expect(endedCard(base, { type: 'sending', labels: ['Rate limiting · Audit log'] })).toBe(`❓ <b>api-server</b> · Claude 🇺🇸
+<b>Which features should the first release include?</b>
+
+<i>Sending: Rate limiting · Audit log…</i>`)
+    expect(endingLine({ type: 'outcome', permission: false, outcome: { state: 'confirmed', sent: ['Rate limiting · Audit log'] } }))
+      .toBe('✓ <i>Sent: Rate limiting · Audit log</i>')
+  })
+
+  it('10. Other…, waiting for a reply, with ‹ Options; confirmed with the quote', () => {
+    const card = questionCard({ header: CLAUDE, prompt: questions(AUTH), step: 0, chosen: [], tokens: [], typing: 'op' })
+    expect(card.text).toBe(`❓ <b>api-server</b> · Claude 🇺🇸
+<i>Auth method</i>
+
+<b>Which auth method should the API use?</b>
+
+<i>Reply to this message with your answer.</i>`)
+    expect(card.keyboard).toEqual([[{ text: '‹ Options', callback_data: 'op' }]])
+    expect(endingLine({ type: 'outcome', permission: false, outcome: { state: 'confirmed', sent: ['“Passkeys first, JWT as fallback”'] } }))
+      .toBe('✓ <i>Sent: “Passkeys first, JWT as fallback”</i>')
+  })
+
+  it('11. a step with Back: options, Other… and ‹ Back on their own rows', () => {
+    const card = questionCard({
+      header: CLAUDE, prompt: questions(AUTH, DATABASE, TESTS), step: 1, chosen: ['JWT'], tokens: ['p', 's'], other: 'ot', back: 'bk'
+    })
+    expect(card.text).toBe(`❓ <b>api-server</b> · Claude 🇺🇸
+<i>Question 2 of 3 · Database</i>
+
+<blockquote>Auth method: <b>JWT</b></blockquote>
+
+<b>Which database should store users?</b>
+
+<b>1. Postgres</b>
+Already used by the billing service.
+
+<b>2. SQLite</b>
+One file, no server to run.`)
+    expect(card.keyboard).toEqual([
+      [{ text: '1 · Postgres', callback_data: 'p' }, { text: '2 · SQLite', callback_data: 's' }],
+      [{ text: 'Other…', callback_data: 'ot' }],
+      [{ text: '‹ Back', callback_data: 'bk' }]
+    ])
+  })
+
+  it('11. after Back the earlier choice is marked ●, and a multi-select step\'s control row is Back and Next', () => {
+    const back = questionCard({ header: CLAUDE, prompt: questions(AUTH, DATABASE), step: 0, chosen: [], tokens: ['a', 'b', 'c'], marked: 1 })
+    expect(back.keyboard?.flat().map((button) => button.text)).toEqual(['1 · JWT', '● 2 · Session cookies', '3 · OAuth only'])
+    const step = questionCard({
+      header: CLAUDE, prompt: multi(AUTH, FEATURES, DATABASE), step: 1, chosen: ['JWT'], tokens: ['t1', 't2', 't3'],
+      other: 'ot', back: 'bk', toggled: [0, 2], submit: 'nx'
+    })
+    expect(step.keyboard?.at(-1)).toEqual([{ text: '‹ Back', callback_data: 'bk' }, { text: 'Next · 2 selected', callback_data: 'nx' }])
+    expect(step.text.endsWith('<i>Chosen: Rate limiting · Webhooks</i>')).toBe(true)
+    const none = questionCard({ header: CLAUDE, prompt: multi(AUTH, FEATURES, DATABASE), step: 1, chosen: ['JWT'], tokens: ['t1', 't2', 't3'], toggled: [] })
+    expect(none.text.endsWith('<i>Choose one or more, then Next.</i>')).toBe(true)
+  })
+})

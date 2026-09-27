@@ -1,0 +1,40 @@
+  "Features", question "Which features should ship first?", multiSelect true,
+  options "Rate limiting" (desc "Per-key caps"), "Audit log" (desc "Admin
+  actions"), "SSO" (desc "Google login").
+
+● User answered Claude's questions:
+  ⎿  · Which auth method should the API use? → Sessions
+     · Which database should store users? → MySQL, with read replicas
+     · Which features should ship first? → SSO, Rate limiting
+
+● Your choices:
+  - Auth: Sessions
+  - Database: MySQL with read replicas
+  - Features: SSO, Rate limiting
+
+  What's next?
+
+✻ Baked for 7s · done 11:37 PM
+
+❯ Use AskUserQuestion once, nothing else first: header "Features", question
+  "Which features should the first release include?", multiSelect true, options
+  "Rate limiting" (desc "Per-key request caps."), "Audit log" (desc "Record
+  every admin action."), "Webhooks" (desc "Notify other services on change.").
+────────────────────────────────────────────────────────────────────────────────
+←  ☒ Features  ✔ Submit  →
+
+Which features should the first release include?
+
+❯ 1. [ ] Rate limiting
+         Per-key request caps.
+  2. [✔] Audit log
+         Record every admin action.
+  3. [ ] Webhooks
+         Notify other services on change.
+  4. [ ] Type something
+     Submit
+────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+

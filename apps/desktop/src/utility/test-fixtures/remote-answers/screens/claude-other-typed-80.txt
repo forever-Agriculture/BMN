@@ -1,0 +1,40 @@
+     · Which features should ship first? → SSO, Rate limiting
+
+● Your choices:
+  - Auth: Sessions
+  - Database: MySQL with read replicas
+  - Features: SSO, Rate limiting
+
+  What's next?
+
+✻ Baked for 7s · done 11:37 PM
+
+❯ Use AskUserQuestion once, nothing else first: header "Features", question
+  "Which features should the first release include?", multiSelect true, options
+  "Rate limiting" (desc "Per-key request caps."), "Audit log" (desc "Record
+  every admin action."), "Webhooks" (desc "Notify other services on change.").
+
+● User declined to answer questions
+  ⎿  · Which features should the first release include? (Rate limiting / Audit
+     log / Webhooks)
+
+✻ Worked for 2s · done 11:38 PM
+
+❯ Use AskUserQuestion once, nothing else first: header "Auth method", question
+  "Which auth method should the API use?", options "JWT" (desc "Stateless
+  tokens"), "Sessions" (desc "Server-side cookies").
+────────────────────────────────────────────────────────────────────────────────
+ ☐ Auth method
+
+Which auth method should the API use?
+
+  1. JWT
+     Stateless tokens
+  2. Sessions
+     Server-side cookies
+❯ 3. Passkeys first, JWT as fallback
+────────────────────────────────────────────────────────────────────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · ctrl+g to edit in VS Code · Esc to cancel
+

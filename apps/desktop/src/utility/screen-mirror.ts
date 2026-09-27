@@ -311,3 +311,161 @@ export function claudePermissionOnScreen(
   }
   return found.allow !== undefined && found.deny !== undefined ? { allow: found.allow, deny: found.deny } : null
 }
+
+/*
+ * Epic 31 dialog states (docs/remote-answers.md, "Multi-select, typed answers and Back"): where the cursor is,
+ * which boxes are ticked, and what a typed answer's row shows, so every key BMN presses is checked first.
+ */
+
+/** An option row with what the normaliser drops: the cursor, and a multi-select box. */
+interface RawOption {
+  row: number
+  column: number
+  digit: number
+  cursor: boolean
+  /** True or false for a `[✔]` or `[ ]` box, null for a row without one. */
+  ticked: boolean | null
+  label: string
+}
+
+const RAW_OPTION = /^(\s*)([❯›]\s*)?(\d{1,2})\.\s+(?:\[(✔| )\]\s+)?(.*?)(?:\s{2,}\S.*)?$/
+
+function rawOptionAt(lines: readonly string[], row: number): RawOption | null {
+  const match = RAW_OPTION.exec(lines[row] ?? '')
+  if (!match) return null
+  return {
+    row,
+    column: match[1]!.length + (match[2]?.length ?? 0),
+    digit: Number(match[3]),
+    cursor: match[2] !== undefined,
+    ticked: match[4] === undefined ? null : match[4] === '✔',
+    label: normalizeScreenText(match[5]!)
+  }
+}
+
+/** Claude's text-entry row after the options, as it reads now: its placeholder, or what has been typed. */
+export interface ClaudeOtherRow {
+  cursor: boolean
+  /** Null while it still shows its placeholder. */
+  text: string | null
+}
+
+/** A Claude question with its options in order and its typed-entry row, whatever has been typed or ticked. */
+export interface ClaudeQuestionState {
+  /** The cursor's entry: an option index, `options` for the typed-entry row, `options + 1` for Next/Submit. */
+  cursor: number | null
+  /** Per option, for a multi-select question; empty for a single-choice one. */
+  ticked: boolean[]
+  other: ClaudeOtherRow & { ticked: boolean }
+  /** Multi-select only: the row that leaves the question. */
+  leave: 'Next' | 'Submit' | null
+}
+
+/**
+ * Claude's question in any state of an answer being entered: the question text directly above option 1, every
+ * option in order (with an empty or ticked box on a multi-select question), then the typed-entry row, which
+ * reads `Type something.` (single choice) or `Type something` (multi-select) until text is typed into it.
+ */
+export function claudeQuestionState(lines: readonly string[], question: ScreenQuestion & { multiSelect: boolean }): ClaudeQuestionState | null {
+  const labels = question.options.map((option) => normalizeScreenText(option.label))
+  const placeholder = question.multiSelect ? 'Type something' : 'Type something.'
+  for (let first = lines.length - 1; first >= 0; first -= 1) {
+    const head = rawOptionAt(lines, first)
+    if (!head || head.digit !== 1 || head.label !== labels[0] || (head.ticked !== null) !== question.multiSelect) continue
+    if (textEndingAbove(lines, first, question.text) === null) continue
+    const options: RawOption[] = [head]
+    let other: RawOption | null = null
+    let row = first + 1
+    for (; row < lines.length && other === null; row += 1) {
+      const option = rawOptionAt(lines, row)
+      if (!option || option.column !== head.column) continue
+      if (option.digit !== options.length + 1 || (option.ticked !== null) !== question.multiSelect) break
+      if (options.length < labels.length) {
+        if (option.label !== labels[options.length]) break
+        options.push(option)
+      } else {
+        other = option
+      }
+    }
+    if (other === null || options.length !== labels.length) continue
+    let leave: { label: 'Next' | 'Submit'; cursor: boolean } | null = null
+    if (question.multiSelect) {
+      // The row that leaves the question follows the typed-entry row (and any text it wrapped onto) before the rule.
+      for (; row < lines.length; row += 1) {
+        const raw = lines[row]!
+        if (/^\s*─/.test(raw) || rawOptionAt(lines, row)) break
+        const text = normalizeScreenText(raw)
+        if (text === 'Next' || text === 'Submit') {
+          leave = { label: text, cursor: /^\s*❯/.test(raw) }
+          break
+        }
+      }
+      if (leave === null) continue
+    }
+    const cursorAt = options.findIndex((option) => option.cursor)
+    const cursor = cursorAt >= 0 ? cursorAt : other.cursor ? options.length : leave?.cursor ? options.length + 1 : null
+    return {
+      cursor,
+      ticked: question.multiSelect ? options.map((option) => option.ticked === true) : [],
+      other: { cursor: other.cursor, text: other.label === placeholder ? null : other.label, ticked: other.ticked === true },
+      leave: leave?.label ?? null
+    }
+  }
+  return null
+}
+
+/** Codex's question with the cursor's option and its notes field, when one is open. */
+export interface CodexQuestionState {
+  /** The cursor's option index; `options` is "None of the above". */
+  cursor: number | null
+  /** Null while no notes field is open; empty while it shows its "Add notes" placeholder. */
+  notes: string | null
+}
+
+/**
+ * Codex's question (as `questionOnScreen` recognises it) with the cursor and the notes field that Tab opens under
+ * "None of the above": a row starting `›` right after the option list.
+ */
+export function codexQuestionState(
+  lines: readonly string[],
+  question: ScreenQuestion,
+  step?: { index: number; count: number }
+): CodexQuestionState | null {
+  const labels = question.options.map((option) => option.label)
+  for (let first = lines.length - 1; first >= 0; first -= 1) {
+    if (!optionsFrom(lines, first, labels, OPTION_TRAILERS.codex)) continue
+    const top = textEndingAbove(lines, first, question.text)
+    if (top === null) continue
+    if (step && !nearestTextAbove(lines, top).startsWith(`Question ${step.index + 1}/${step.count} `)) continue
+    const head = rawOptionAt(lines, first)!
+    let cursor: number | null = null
+    let last = first
+    for (let row = first; row < lines.length; row += 1) {
+      const option = rawOptionAt(lines, row)
+      if (!option || option.column !== head.column) continue
+      if (option.cursor) cursor = option.digit - 1
+      last = row
+      if (option.digit === labels.length + 1) break
+    }
+    let notes: string | null = null
+    // The trailer's description may wrap onto a row or two before the notes field.
+    for (let row = last + 1; row < Math.min(lines.length, last + 4); row += 1) {
+      const raw = lines[row]!
+      if (rawOptionAt(lines, row)) break
+      if (/^\s*›/.test(raw)) {
+        const text = normalizeScreenText(raw)
+        notes = text === 'Add notes' ? '' : text
+        break
+      }
+    }
+    return { cursor, notes }
+  }
+  return null
+}
+
+/** Whether a typed answer's row shows it: the whole text, or, once it wraps, a long enough start of it. */
+export function showsTyped(shown: string | null, typed: string): boolean {
+  if (shown === null || shown === '') return false
+  const expected = normalizeScreenText(typed)
+  return shown === expected || (expected.startsWith(shown) && shown.length >= Math.min(expected.length, 20))
+}

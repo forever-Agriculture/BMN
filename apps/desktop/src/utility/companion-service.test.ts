@@ -1081,6 +1081,28 @@ describe('Telegram attention notifications', () => {
     )
   })
 
+  it('hands a reply to a card that offers Other… to the card, and makes no draft of it (Story 31.4)', async () => {
+    const sent: string[] = []
+    service['telegram'] = {
+      sendMessage: async (message: string) => {
+        sent.push(message)
+        return { messageId: sent.length }
+      }
+    } as unknown as TelegramConnector
+    await service.sessionsChanged()
+    const typedReply = vi.spyOn(service['cards'], 'typedReply').mockResolvedValue(true)
+    const request = COMPANION_OPERATIONS.openAttention(database, {
+      sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'question', kind: 'question', title: 'Claude asks'
+    }, 'telegram-other-request', now)
+    COMPANION_OPERATIONS.putTelegramMessage(database, 78, 's1', request.requestId, 'incarnation-1', now)
+    const reply = { updateId: 91, chatId: 1, fromUserId: 1, messageId: 99, replyToMessageId: 78, text: 'Passkeys', file: null }
+    await service['handleTelegramReply'](reply)
+    expect(typedReply).toHaveBeenCalledWith(reply)
+    expect(sent).toEqual([])
+    expect(COMPANION_OPERATIONS.listDrafts(database).filter((draft) => draft.text === 'Passkeys')).toEqual([])
+    typedReply.mockRestore()
+  })
+
   it('keeps a handoff page reply as a source draft even when automatic replies are enabled', async () => {
     const sent: string[] = []
     service['telegram'] = {
