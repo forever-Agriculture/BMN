@@ -39,6 +39,9 @@ function parseReceipt(stdout) {
 
 if (!existsSync(packagedBinary)) throw new Error(`packaged binary is missing: ${packagedBinary}`)
 if (!existsSync(packagedTerminfo)) throw new Error(`packaged Sixel terminfo is missing: ${packagedTerminfo}`)
+if (!existsSync(join(packagedResources, 'self-test/remote-answers/claude/ask-single.pre-tool-use.json'))) {
+  throw new Error(`packaged self-test fixtures are missing: ${join(packagedResources, 'self-test/remote-answers')}`)
+}
 const packagedWhisper = join(packagedResources, 'whisper/whisper-cli')
 if (!existsSync(packagedWhisper) || (statSync(packagedWhisper).mode & 0o111) === 0) {
   throw new Error(`packaged voice engine is missing or not executable: ${packagedWhisper}`)

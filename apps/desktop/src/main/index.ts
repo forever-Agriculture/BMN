@@ -4625,7 +4625,9 @@ async function runSelfTest(): Promise<void> {
     // Epic 30.2: a phone answer reaches only the dialog that asked, with exactly the keys the owner would type.
     console.error('[BMN] self-test phase: remote answers')
     const answerDirectory = join(isolatedCwd, 'remote-answers')
-    const answerFixtures = join(repoRoot, 'apps', 'desktop', 'src', 'utility', 'test-fixtures', 'remote-answers')
+    const answerFixtures = app.isPackaged
+      ? join(process.resourcesPath, 'self-test', 'remote-answers')
+      : join(repoRoot, 'apps', 'desktop', 'src', 'utility', 'test-fixtures', 'remote-answers')
     const { session: answerSession } = await createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
       name: 'Remote answers', cwd: isolatedCwd, executable: '/bin/bash',
       argv: ['-c', writeRemoteAnswerHarness(answerDirectory, answerFixtures)], cols: 200, rows: 50 }, true)
