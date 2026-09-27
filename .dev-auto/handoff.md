@@ -12,16 +12,16 @@
 
 ## Progress
 
-- Board: epic-31 in-progress; 31-1, 31-2 review (793b157); 31-4 review (a6b0606); 31-3 review (commit after a6b0606, log ~02:10). Baseline cb6ea18.
-- All four stories implemented and self-checked; acceptance reviews next.
+- Board: epic-31 in-progress; 31-1, 31-2 review (793b157); 31-4 review (a6b0606); 31-3 review (efd25b1). Baseline cb6ea18. Astra reviewed 08ffd7c (4 defects + 1 gap); repair b3756bc; recheck 1 found a repair-introduced defect → stop-repair rule → Fable consultant decisions → consolidated repair 2ad34f7 (log 02:26-02:40). Final recheck of 2ad34f7: all closed except A2 (log 02:39-02:44).
+- GLM pre-review done (no code repair); Fable visual review ACCEPT WITH FIXES, fixes applied in 08ffd7c (log ~01:26-01:40).
 - Active helpers: none.
 
 ## Decisions and findings
 
 - Original or approved intent changes: none.
-- Material pending findings: none.
+- Material pending findings: A2 (31.2) UNRESOLVED — a BMN Resume already past its guard can overlap a cleanup delete of the same conversation (cleanup ignores pending Resume reservations; session-manager.ts:1149/1171, companion-service.ts:519). Settles by: cleanup honours pending reservations + Resume re-checks the deleting mark after reserving; tests both orders; one recheck. Consultant round and its repair+recheck are used, so this needs the owner (options A/B/C in log 02:44). All other findings closed.
 - Cross-epic obligations: Epic 30 answer checks kept for 31.4; archive setting keeps meaning (31.1); Epic 18 precedent for 31.3; deadline 2026-10-08 for 31.2.
-- Deviations to state at acceptance: 31.3 AC1 measured in tmux (BMN_* unset, then fake BMN_* for env/process chain), not inside a live BMN; Cursor Needs you for permissions/questions UNSUPPORTED (no event); parity diff = aggregate `hooks check` exit code only.
+- Deviations to state at acceptance: 31.3 AC1 first measured in tmux, then confirmed live in a candidate-build BMN bash session (dev Electron, not the packaged build); Cursor Needs you for permissions/questions UNSUPPORTED (no event); parity diff = aggregate `hooks check` exit code only.
 
 ## Evidence
 
@@ -33,12 +33,12 @@
 ## Measurement
 
 - Timing: started 2026-09-27 22:40 EEST.
-- Dispatches: none yet in Epic 31.
-- Review yield: n/a.
+- Dispatches: GLM-5.3 pre-review ($1.55); Fable visual review ($1.35); Astra medium review + 2 low rechecks; Fable consultant ($0.21); live cursor-agent runs (~17 Auto prompts). Usage recorded in log 02:44.
+- Review yield: GLM 0 material (2 packet gaps); Fable 2 material (both closed); Astra 4 material + 1 gap + 1 repair-introduced (all closed except A2).
 - Owner interventions: cursor login; "finish autonomously" (log ~00:10).
-- Observed usage: pending.
+- Observed usage: recorded (log 2026-09-28 02:44).
 
 ## Resume
 
-- Next safe action: freeze candidate; GLM pre-review (sanitised git-archive export, code/diffs only) alongside final checks + Fable visual review of History screenshots; one repair; Astra medium epic review; repair/recheck; acceptance; push/update decision via Fable.
-- Status: ACTIVE — all stories in review; acceptance reviews next.
+- Next safe action: owner picks A (one more repair + recheck), B (accept documented residual) or C (hold 31.2 pruning); then acceptance (board 31-1..31-4 done, check.py). Push/update stays unauthorised until then.
+- Status: BLOCKED — one open 31.2 race (A2) after the allowed repair rounds; owner decision needed.
