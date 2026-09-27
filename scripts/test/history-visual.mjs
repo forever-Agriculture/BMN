@@ -180,7 +180,7 @@ setTimeout(() => {}, 600_000)
 
     phase('Start cleanup')
     await page.locator('.history-confirm button.primary').click()
-    const settledStatus = await untilStatus(page, (status) => !status.running && status.agents.every((row) => row.lastRun),
+    const settledStatus = await untilStatus(page, (status) => !status.running && status.agents.every((row) => row.state === 'own' || row.lastRun),
       'a finished first run', 120_000)
     phase(`settled ${JSON.stringify(settledStatus.agents)}`)
     await page.locator('.preferences-dialog [aria-label="Close Preferences"]').click()
