@@ -40,28 +40,41 @@ export function HookObservationView(props: {
   }, [props.sessionId, props.incarnationId, props.refreshTick, refresh])
 
   return (
-    <section className="hook-observation" aria-label="Harness integration">
-      <h3>Harness integration</h3>
-      {reading && observation === null ? <p>Reading hook observations…</p> : null}
+    <section className="hook-observation inspector-section" aria-label="Harness integration">
+      <h3>Harness
+        <button type="button" className="ghost small" onClick={() => setRefresh((value) => value + 1)}
+          disabled={reading}>Refresh observation</button>
+      </h3>
+      {reading && observation === null ? <p className="meta">Reading hook observations…</p> : null}
       {error ? <p className="inline-error" role="status">Observation unavailable: {error}</p> : null}
       {observation?.state === 'none' ? (
-        <p><strong>Not observed in this run</strong>. A relevant hook may simply not have happened yet.
-          {props.incarnationId ? null : ' No process run is recorded.'}</p>
+        <p><strong>Not observed in this run.</strong> <span className="meta">A relevant hook may simply not have
+          happened yet.{props.incarnationId ? null : ' No process run is recorded.'}</span></p>
       ) : null}
       {observation?.state === 'observed' ? (
         <>
-          <p><strong>Observed by BMN</strong> · {AGENT_NAMES[observation.agent]} {observation.event}</p>
-          <p>Received {new Date(observation.observedAt).toLocaleString()} · {props.sessionName} · run {observation.incarnationId}</p>
-          {observation.detailAvailable
-            ? <button type="button" onClick={props.onOpenEvents}>Open Hook events</button>
-            : <p>Earlier event detail is no longer available in the recent Hook events list.</p>}
+          <p><strong>Observed by BMN</strong></p>
+          <dl className="kv">
+            <dt>Event</dt>
+            <dd title={`${AGENT_NAMES[observation.agent]} ${observation.event}`}>
+              {AGENT_NAMES[observation.agent]} {observation.event}</dd>
+            <dt>Received</dt>
+            <dd>{new Date(observation.observedAt).toLocaleString()}</dd>
+            <dt>Session</dt>
+            <dd title={props.sessionName}>{props.sessionName}</dd>
+            <dt>Run</dt>
+            <dd className="path" title={observation.incarnationId}><bdi>run {observation.incarnationId}</bdi></dd>
+          </dl>
+          {observation.detailAvailable ? null
+            : <p className="meta">Earlier event detail is no longer in the recent Hook events list.</p>}
         </>
       ) : null}
-      <div className="hook-observation-actions">
-        <button type="button" onClick={() => setRefresh((value) => value + 1)} disabled={reading}>Refresh observation</button>
-        <button type="button" onClick={props.onOpenConfiguration}>Check configured hooks in Preferences</button>
+      <div className="actions hook-observation-actions">
+        {observation?.state === 'observed' && observation.detailAvailable
+          ? <button type="button" className="small" onClick={props.onOpenEvents}>Open Hook events</button> : null}
+        <button type="button" className="small" onClick={props.onOpenConfiguration}>Check configured hooks in Preferences</button>
       </div>
-      <p>One observed event proves it reached BMN. It does not prove every hook or permission path works.</p>
+      <small>One observed event proves it reached BMN. It does not prove every hook or permission path works.</small>
     </section>
   )
 }

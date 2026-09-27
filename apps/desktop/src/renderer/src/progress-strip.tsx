@@ -27,7 +27,7 @@ export function ProgressStrip(props: {
         title={progress.detail ?? undefined}
         onClick={(event) => props.onOpen(event.currentTarget)}
       >
-        {progress.word}
+        <span className="word">{progress.word}</span>
         <span className="evidence">{progress.evidenceWord}</span>
       </button>
       {progress.stale ? <span className="stale">stale</span> : null}

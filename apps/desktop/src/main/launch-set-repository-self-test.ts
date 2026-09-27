@@ -300,7 +300,7 @@ export async function runLaunchSetRepositorySelfTest(
       const item = await wait(() => [...document.querySelectorAll('.popup-menu [role="menuitem"]')]
         .find(button => button.textContent.trim() === 'Session details'), 'details item');
       item.click();
-      return await wait(() => document.querySelector('.session-inspector .repository-identity')?.textContent.includes('Repository root:')
+      return await wait(() => document.querySelector('.session-inspector .repository-identity')?.textContent.includes('Repository root')
         ? document.querySelector('.session-inspector .repository-identity').textContent : null, 'repository root');
     };
     const outer = await details(${JSON.stringify(params.existingSessionId)});

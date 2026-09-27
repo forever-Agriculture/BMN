@@ -75,9 +75,14 @@ const AGENT_TAGS: Readonly<Record<string, string>> = Object.freeze({
   nu: 'Shell'
 })
 
-export function agentTag(executable: string): string {
+/** A shell started as `bash -ic 'claude; exec bash -i'` is tagged by the agent it runs. */
+export function agentTag(executable: string, argv: readonly string[] = []): string {
   const base = executable.split('/').pop() ?? executable
-  return AGENT_TAGS[base] ?? base
+  const tag = AGENT_TAGS[base] ?? base
+  if (tag !== 'Shell' || !/^-[a-z]*c$/.test(argv[0] ?? '')) return tag
+  const inner = /^\s*([^\s;&|]+)/.exec(argv[1] ?? '')?.[1]?.split('/').pop()
+  const innerTag = inner ? AGENT_TAGS[inner] : undefined
+  return innerTag && innerTag !== 'Shell' ? innerTag : tag
 }
 
 /** Shortens a path under the home directory to `~` for display only. */

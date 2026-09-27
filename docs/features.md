@@ -24,13 +24,16 @@ request or update. Finished session names read more quietly; row action buttons 
 keyboard focus and remain available to the keyboard and screen readers.
 
 A session is one command in one working directory: a shell, Claude Code, Codex, OpenCode, or
-anything else installed. **New session…** opens a form:
+anything else installed. **New session…** opens the launcher beside the terminal:
 
-- **Template** — a saved launch (name, command, arguments, working directory, close behaviour) that
-  fills the form. A template whose command is missing is marked unavailable and cannot be picked.
-- **Name, Command, Arguments, Working directory** — what runs, and where.
-- **When windows close** — ask, keep the session running, or stop it. A close prompt can remember
-  your answer for the next time.
+- **Terminal, Claude Code, Codex, OpenCode** — one click picks what runs. An agent starts inside an
+  interactive bash (`bash -ic 'claude; exec bash -i'`), so your shell stays open when the agent
+  exits. Saved templates appear as further cards; a template whose command is missing is marked
+  unavailable and cannot be picked.
+- **Name, Directory** — the name follows the pick until you type your own.
+- **Advanced** — Template, Command, Arguments, when windows close (ask, keep running, or stop; a
+  close prompt can remember your answer) and terminal images. The summary line always shows the
+  exact command that will run. Arguments use shell quoting, so `'a b'` stays one argument.
 
 Edit launch settings later from the session's or pane's menu. Sessions can be moved up and down, and
 archived once stopped; **Restore session** brings an archived one back.
@@ -47,7 +50,8 @@ uses a new preview.
 
 **Repository identity** in Session details reads the session's saved launch directory and shows
 its Git root, branch or detached/unborn state, linked worktree status and read time. The New
-session form and launch-set preview show the same read-only check beside their selected directory.
+session launcher shows the same read-only check as one line under its directory, and the launch-set
+preview shows it beside its selected directory.
 BMN checks again when you press Create or Start; if a known identity changed, it shows the new
 value for review before another press. A non-repository or unavailable Git result is named and
 does not by itself block an otherwise valid launch. This describes the selected directory at the

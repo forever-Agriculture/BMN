@@ -194,6 +194,11 @@ describe('session presentation', () => {
     expect(agentTag('/home/me/.local/bin/claude')).toBe('Claude')
     expect(agentTag('/bin/bash')).toBe('Shell')
     expect(agentTag('/usr/bin/htop')).toBe('htop')
+    expect(agentTag('/bin/bash', ['-ic', 'claude; exec bash -i'])).toBe('Claude')
+    expect(agentTag('/bin/bash', ['-ic', 'codex; exec bash -i'])).toBe('Codex')
+    expect(agentTag('/bin/bash', ['-ic', 'htop; exec bash -i'])).toBe('Shell')
+    expect(agentTag('/bin/bash', ['-l'])).toBe('Shell')
+    expect(agentTag('/usr/bin/codex', ['-c', 'claude'])).toBe('Codex')
   })
 
   it('titles the window with the selected session, like agterm', () => {

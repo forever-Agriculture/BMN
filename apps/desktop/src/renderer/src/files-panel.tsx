@@ -114,7 +114,7 @@ export function FilesPanel(props: {
     const record = sessionId ? props.sessions.find((session) => session.sessionId === sessionId) : undefined
     if (!record) return 'Removed session'
     const workspace = props.workspaces.find((item) => item.workspaceId === record.workspaceId)
-    return `${workspace?.name ?? 'Removed workspace'} › ${record.name} · ${agentTag(record.executable)} · ${record.cwd}`
+    return `${workspace?.name ?? 'Removed workspace'} › ${record.name} · ${agentTag(record.executable, record.argv)} · ${record.cwd}`
   }
 
   const relevantHandoffs = props.drafts.filter((draft) =>

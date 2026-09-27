@@ -491,7 +491,7 @@ input[type='radio'] {
 }
 
 .workspace-body.with-panel {
-  grid-template-columns: 232px minmax(0, 1fr) minmax(260px, 320px);
+  grid-template-columns: 232px minmax(0, 1fr) minmax(300px, 340px);
 }
 
 .workspace-body.focus-mode {
@@ -499,7 +499,7 @@ input[type='radio'] {
 }
 
 .workspace-body.focus-mode.with-panel {
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 340px);
 }
 
 /* ---------- Workspace tree ---------- */
@@ -959,7 +959,9 @@ input[type='radio'] {
    own, so the strip reads as one line rather than as a row of controls. */
 .progress-strip .progress-open {
   display: flex;
+  flex: 0 1 auto;
   align-items: baseline;
+  justify-content: flex-start;
   gap: 8px;
   min-width: 0;
   padding: 0;
@@ -972,6 +974,40 @@ input[type='radio'] {
 
 .progress-strip .progress-open:hover {
   text-decoration: underline;
+}
+
+/* A bare text node cannot shrink; the word is a span so a narrow strip truncates it instead of
+   spilling it over the label. */
+.progress-strip .progress-open .word {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* In Session details the strip wraps into a small card: label, then state, then source. */
+.session-inspector .progress-strip {
+  flex-wrap: wrap;
+  row-gap: 2px;
+  min-height: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  white-space: normal;
+}
+
+.session-inspector .progress-strip .label {
+  flex: 1 1 100%;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.session-inspector .progress-strip .progress-open {
+  flex: 1 1 auto;
+}
+
+.session-inspector .progress-strip .source {
+  flex: 1 1 100%;
+  margin-left: 0;
+  font-size: 11px;
 }
 
 /* Whether anything backs the word is never in the word's own colour: it is a fact, not a verdict. */
@@ -1292,15 +1328,14 @@ input[type='radio'] {
   white-space: pre-wrap;
 }
 
-/* ---------- Session details panel ---------- */
+/* ---------- Side panels: session details and the session launcher ---------- */
 
-.session-inspector {
+:is(.session-inspector, .session-launcher) {
   display: flex;
   flex-direction: column;
-  gap: 10px;
   min-width: 0;
   overflow: auto;
-  padding: 10px 12px;
+  padding: 10px 16px 20px;
   border-left: 1px solid var(--hairline);
   background: var(--surface);
 }
@@ -1310,33 +1345,201 @@ input[type='radio'] {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  margin: 0 -4px 8px 0;
 }
 
-.session-inspector h2 {
-  font-size: 14px;
+:is(.session-inspector, .session-launcher) h2 {
+  overflow: hidden;
+  font-size: 16px;
   font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
-.session-inspector .binding small {
-  display: block;
+:is(.session-inspector, .session-launcher) .meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Buttons in these panels are filled plates, as in dialogs: outlined boxes read as unfinished. */
+:is(.session-inspector, .session-launcher) :where(button:not(.icon-button, .progress-open, .primary, .ghost, [role='radio'])) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  font-weight: 500;
+}
+
+:is(.session-inspector, .session-launcher) :where(button:not(.icon-button, .progress-open, .primary, .ghost, [role='radio'])):hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 13%, transparent);
+}
+
+:is(.session-inspector, .session-launcher) :where(button:not(.icon-button, .progress-open, .primary, .ghost, [role='radio'])):active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+  box-shadow: none;
+}
+
+:is(.session-inspector, .session-launcher) button:disabled:not(.primary) {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+:is(.session-inspector, .session-launcher) button.small {
+  min-height: 24px;
+  padding: 1px 8px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+:is(.session-inspector, .session-launcher) button.ghost.small {
+  padding: 1px 4px;
   color: var(--muted);
 }
 
-.repository-identity {
+:is(.session-inspector, .session-launcher) button.ghost.small:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--hover);
+}
+
+/* Stop is quiet until intended: it sits apart on the right and takes the error tone only on hover. */
+.session-inspector button.danger {
+  color: var(--muted);
+}
+
+.session-inspector .actions > button.danger:not(:first-child) {
+  margin-left: auto;
+}
+
+.session-inspector button.danger:hover:not(:disabled) {
+  color: var(--error);
+  background: color-mix(in srgb, var(--error) 12%, transparent);
+}
+
+:is(.session-inspector, .session-launcher) .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.session-inspector .actions:empty {
+  display: none;
+}
+
+.inspector-head {
   display: grid;
-  gap: 5px;
+  gap: 6px;
+  padding-bottom: 12px;
+}
+
+.inspector-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
-  padding: 8px 0;
   color: var(--muted);
-  overflow-wrap: anywhere;
+  font-size: 12px;
 }
 
-.repository-identity strong {
+.inspector-state > span:nth-child(2) {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.inspector-head .actions {
+  margin-top: 4px;
+}
+
+.inspector-section {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.inspector-section > h3 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 24px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.inspector-section > h3 button {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.inspector-section p {
   color: var(--text);
 }
 
-.repository-identity code {
+.inspector-section small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.inspector-section .actions {
+  margin-top: 2px;
+}
+
+/* Key/value rows: a fixed label column; values truncate with the full text in their title. */
+.kv {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 3px 10px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.kv dt {
+  overflow: hidden;
+  color: var(--muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.kv dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
   color: var(--text);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Paths keep their tail (the part that names the folder) and lose the head. */
+.kv dd.path {
+  direction: rtl;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  text-align: left;
+}
+
+.kv dd.path > bdi {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+/* The launcher shows identity as one line under its Directory field. */
+.repository-identity.compact {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 8px;
+  margin-top: -6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.repository-identity.compact button {
+  margin-left: auto;
 }
 
 .launch-sets-dialog {
@@ -1363,37 +1566,211 @@ input[type='radio'] {
   overflow-wrap: anywhere;
 }
 
-.session-inspector .actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
+/* ---------- Launcher form ---------- */
 
 .create-form {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding-top: 10px;
-  border-top: 1px solid var(--hairline);
+  gap: 12px;
 }
 
-.create-form label {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
+.create-form > h2 {
+  margin-bottom: 2px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.create-form .field {
+  display: grid;
+  gap: 5px;
   color: var(--muted);
   font-size: 12px;
+  font-weight: 500;
 }
 
-.create-form input,
-.create-form select {
+.create-form .field :is(input, select) {
   width: 100%;
   color: var(--text);
+  font-weight: 400;
 }
 
 .create-form .actions {
-  display: flex;
+  padding-top: 4px;
+}
+
+.create-form .actions .primary {
+  flex: 1;
+  min-height: 32px;
+}
+
+:is(.session-inspector, .session-launcher) :where(input:not([type='checkbox'], [type='radio']), select) {
+  min-height: 32px;
+  padding: 5px 10px;
+  border-color: color-mix(in srgb, var(--text) 12%, transparent);
+  border-radius: 8px;
+  background-color: var(--ground);
+  transition: var(--hover-transition);
+}
+
+:is(.session-inspector, .session-launcher) :where(input, select):hover:not(:focus-visible) {
+  border-color: color-mix(in srgb, var(--text) 22%, transparent);
+}
+
+/* Native select without the platform arrow: a muted chevron that reads in every colour mode. */
+.session-launcher select {
+  appearance: none;
+  padding-right: 30px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none' stroke='%23a3a3a3' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.5 6.5 8 10l3.5-3.5'/%3E%3C/svg%3E");
+  background-position: right 9px center;
+  background-repeat: no-repeat;
+}
+
+.session-launcher select option {
+  color: var(--text);
+  background: var(--raised);
+}
+
+/* Agent picker: selection is the gold bar, focus the white ring; nothing else changes hue. */
+.agent-picker {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
+}
+
+.agent-picker [role='radio'] {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 1px;
+  min-height: 48px;
+  padding: 7px 10px 7px 13px;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--raised);
+  text-align: left;
+  white-space: normal;
+}
+
+.agent-picker [role='radio']::before {
+  position: absolute;
+  top: 9px;
+  bottom: 9px;
+  left: 0;
+  width: 2px;
+  border-radius: 0 1px 1px 0;
+  background: transparent;
+  content: '';
+  transition: var(--hover-transition);
+}
+
+.agent-picker [role='radio']:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--text) 18%, transparent);
+  background: var(--hover);
+}
+
+.agent-picker [role='radio'][aria-checked='true'] {
+  border-color: color-mix(in srgb, var(--text) 22%, transparent);
+  background: var(--selected);
+}
+
+.agent-picker [role='radio'][aria-checked='true']::before {
+  background: var(--identity);
+}
+
+.agent-picker [role='radio']:disabled {
+  background: transparent;
+  opacity: 0.45;
+}
+
+.agent-picker .agent-name {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.agent-picker .agent-hint {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--muted);
+  font: 11px/1.4 var(--font-mono);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Advanced: the resolved command stays on the summary line, so nothing is hidden. */
+.create-form .advanced {
+  padding-top: 6px;
+  border-top: 1px solid var(--hairline);
+}
+
+.create-form .advanced-body {
+  display: grid;
+  gap: 12px;
+  padding-top: 8px;
+}
+
+.create-form .advanced > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  margin: 0 -4px;
+  padding: 0 4px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  transition: var(--hover-transition);
+}
+
+.create-form .advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.create-form .advanced > summary::before {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-right: 1.4px solid currentColor;
+  border-bottom: 1.4px solid currentColor;
+  content: '';
+  rotate: -45deg;
+  transition: rotate 100ms ease-out;
+}
+
+.create-form .advanced[open] > summary::before {
+  rotate: 45deg;
+}
+
+.create-form .advanced > summary code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--faint);
+  font: 11px var(--font-mono);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.create-form .advanced[open] > summary code {
+  display: none;
+}
+
+.create-form .advanced > summary:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.create-form .field-help.resolved code {
+  color: var(--text);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
 }
 
 /* ---------- Dialogs, popovers and palette ---------- */

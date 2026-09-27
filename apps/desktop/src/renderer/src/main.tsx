@@ -48,13 +48,18 @@ import {
   shouldOfferInterrupted
 } from './resume-interrupted-presentation'
 import { ProgressStrip } from './progress-strip'
+import { AgentPicker, type PickerOption } from './agent-picker'
 import { Icon } from './icons'
 import { isModifierOnly, resolveShortcut, SHORTCUT_LABELS, type AppCommand } from './keymap'
 import { createLayoutWriter } from './layout-writer'
 import {
   BACKGROUND_CHOICE_OPTIONS,
   INITIAL_SESSION_FORM,
+  LAUNCH_AGENTS,
+  applyLaunchAgent,
   applyLaunchTemplate,
+  launchAgentOf,
+  quoteArgv,
   sessionCreateParams,
   sessionLaunchForm,
   sessionUpdateParams,
@@ -165,7 +170,7 @@ type ShellDialog =
       incarnationId: string | null
     }
 
-type SidePanel = 'files' | 'details' | null
+type SidePanel = 'files' | 'details' | 'new' | null
 
 const APP_EVENT_REFRESH_MS = 15_000
 
@@ -740,7 +745,7 @@ function App(): React.JSX.Element {
     const recentCwd = sessions.findLast((session) => session.workspaceId === workspace?.workspaceId)?.cwd
     setSessionForm({ ...INITIAL_SESSION_FORM, cwd: workspace?.defaultCwd ?? recentCwd ?? home ?? INITIAL_SESSION_FORM.cwd })
     setFormError(undefined)
-    setPanel('details')
+    setPanel('new')
   }
 
   const beginSessionEdit = (session: SessionRecord): void => {
@@ -750,7 +755,7 @@ function App(): React.JSX.Element {
     setPickedTemplateId('')
     setSessionForm(sessionLaunchForm(session))
     setFormError(undefined)
-    setPanel('details')
+    setPanel('new')
   }
 
   const stopSession = (record: SessionRecord): void => {
@@ -1047,7 +1052,7 @@ function App(): React.JSX.Element {
           id: `split-${id}`,
           group: 'Sessions',
           label: record.name,
-          context: `${workspaceName(record.workspaceId)} · ${agentTag(record.executable)} · ${displayPath(record.cwd, home)} · ${live[id] ? 'running' : 'stopped'}`,
+          context: `${workspaceName(record.workspaceId)} · ${agentTag(record.executable, record.argv)} · ${displayPath(record.cwd, home)} · ${live[id] ? 'running' : 'stopped'}`,
           run: () => splitWith(id)
         }] : []
       }),
@@ -1326,7 +1331,7 @@ function App(): React.JSX.Element {
           // The palette row carries the same mark and word as the sidebar row it stands for.
           mark: status.dot,
           live: isLive,
-          context: `${workspace.name} · ${agentTag(session.executable)} · ${status.word} · ${displayPath(session.cwd, home)}`,
+          context: `${workspace.name} · ${agentTag(session.executable, session.argv)} · ${status.word} · ${displayPath(session.cwd, home)}`,
           run: () => openSession(session.sessionId)
         }
       })),
@@ -1406,9 +1411,33 @@ function App(): React.JSX.Element {
     selectedRecord ? `${selectedRecord.sessionId}:${selectedRecord.cwd}` : null
   )
   const formRepository = useRepositoryIdentity(
-    panel === 'details' && activeWorkspaceId && !editingSessionId ? sessionForm.cwd : null,
+    panel === 'new' && activeWorkspaceId && !editingSessionId ? sessionForm.cwd : null,
     `new:${activeWorkspaceId ?? ''}:${sessionForm.cwd}`
   )
+  const pickerOptions: PickerOption[] = [
+    ...LAUNCH_AGENTS.map((agent) => ({ id: agent.id, label: agent.label, hint: agent.command ?? 'bash' })),
+    ...templates.map((template) => ({
+      id: `template:${template.templateId}`,
+      label: template.name,
+      hint: `${template.executable.split('/').pop() ?? template.executable} ${quoteArgv(template.argv)}`.trim(),
+      disabledReason: template.launchDisabledReason
+    }))
+  ]
+  const selectedPickerId = pickedTemplateId ? `template:${pickedTemplateId}` : launchAgentOf(sessionForm)
+  const pickLaunchOption = (option: PickerOption): void => {
+    const template = templates.find((item) => `template:${item.templateId}` === option.id)
+    if (template) {
+      setPickedTemplateId(template.templateId)
+      setSessionForm((current) => applyLaunchTemplate(current, template))
+      return
+    }
+    const agent = LAUNCH_AGENTS.find((item) => item.id === option.id)
+    if (!agent) return
+    const pickedTemplateName = templates.find((item) => item.templateId === pickedTemplateId)?.name
+    setPickedTemplateId('')
+    setSessionForm((current) => applyLaunchAgent(current, agent.id, pickedTemplateName ? [pickedTemplateName] : []))
+  }
+  const resolvedCommand = `${sessionForm.executable} ${sessionForm.argv}`.trim()
   const observedProgressFor = (session: SessionRecord): ProgressPresentation | null => progressPresentation(
     progress,
     session.sessionId,
@@ -1416,6 +1445,9 @@ function App(): React.JSX.Element {
     live[session.sessionId]?.incarnationId ?? session.lastProcess?.incarnationId
   )
   const selectedProgress = selectedRecord ? observedProgressFor(selectedRecord) : null
+  const selectedStatus = selectedRecord ? sessionStatus(selectedRecord,
+    sessionProcessLive(selectedRecord, live[selectedRecord.sessionId]?.incarnationId),
+    unresolved, selectedProgress, activity[selectedRecord.sessionId] ?? null) : null
   const sessionIncarnation = (session: SessionRecord): string | null =>
     live[session.sessionId]?.incarnationId ?? session.lastProcess?.incarnationId ?? null
   /** Freezes the observation the owner opened; the dialog renders from that and never from live state. */
@@ -1604,7 +1636,7 @@ function App(): React.JSX.Element {
                           >
                             <span className={`status-dot ${status.dot}`} aria-hidden="true" />
                             <span className="session-name">{session.name}</span>
-                            <span className="chip">{agentTag(session.executable)}</span>
+                            <span className="chip">{agentTag(session.executable, session.argv)}</span>
                             <span className="session-detail">
                               <span className="session-state">{status.word}</span>
                               <span className="session-directory">{displayPath(session.cwd, home)}</span>
@@ -1734,7 +1766,7 @@ function App(): React.JSX.Element {
           ) : null}
           {selectedRecord && !live[selectedRecord.sessionId] ? (
             <section className="stopped-session" style={paneStyle(selectedRecord.sessionId)}>
-              <span className="eyebrow">{workspaceName(selectedRecord.workspaceId)} · {agentTag(selectedRecord.executable)}</span>
+              <span className="eyebrow">{workspaceName(selectedRecord.workspaceId)} · {agentTag(selectedRecord.executable, selectedRecord.argv)}</span>
               <h2>{selectedRecord.name}</h2>
               <p>{sessionProcessLabel(selectedRecord.lastProcess)} · {selectedRecord.cwd}</p>
               <ProgressStrip progress={selectedProgress} onOpen={() => openProgressDetail(selectedRecord, selectedProgress)} />
@@ -1829,20 +1861,46 @@ function App(): React.JSX.Element {
               <span className="eyebrow">Session details</span>
               <button type="button" className="icon-button" aria-label="Close session details" onClick={() => setPanel(null)}><Icon name="close" /></button>
             </div>
-            {selectedRecord ? (
+            {selectedRecord && selectedStatus ? (
               <>
-                <h2>{selectedRecord.name}</h2>
-                <div className="binding">
-                  <p>{bindingPresentation.label}</p>
-                  <small>{bindingPresentation.detail}</small>
-                </div>
+                <header className="inspector-head">
+                  <h2 title={selectedRecord.name}>{selectedRecord.name}</h2>
+                  <p className="inspector-state">
+                    <span className={`status-dot ${selectedStatus.dot}`} aria-hidden="true" />
+                    <span>{selectedStatus.word}</span>
+                    <span className="chip">{agentTag(selectedRecord.executable, selectedRecord.argv)}</span>
+                  </p>
+                  {selectedRecord.launchDisabledReason ? (
+                    <p className="inline-error" role="status">
+                      Launch unavailable: {selectedRecord.launchDisabledReason}
+                    </p>
+                  ) : null}
+                  <div className="actions">
+                    {bindingPresentation.canResume ? <button type="button" className="primary" onClick={() => confirmResume(selectedRecord)} disabled={!!selectedRecord.launchDisabledReason}
+                      title={selectedRecord.launchDisabledReason}>Resume</button> : null}
+                    {!live[selectedRecord.sessionId] ? (
+                      <button type="button" disabled={!!selectedRecord.launchDisabledReason}
+                        title={selectedRecord.launchDisabledReason ?? 'Run the saved command again in a new process'}
+                        onClick={() => relaunchSession(selectedRecord)}>Start again</button>
+                    ) : null}
+                    {live[selectedRecord.sessionId] ? (
+                      <button type="button" className="danger" onClick={() => setDialog({ kind: 'stop', session: selectedRecord })}>Stop…</button>
+                    ) : null}
+                  </div>
+                </header>
                 <RepositoryIdentityView
                   directory={selectedRecord.cwd}
                   identity={detailsRepository.identity}
                   loading={detailsRepository.loading}
                   onRefresh={() => void detailsRepository.refresh()}
+                  home={home}
                 />
-                <ProgressStrip progress={selectedProgress} onOpen={() => openProgressDetail(selectedRecord, selectedProgress)} />
+                {selectedProgress ? (
+                  <section className="inspector-section">
+                    <h3>Progress</h3>
+                    <ProgressStrip progress={selectedProgress} onOpen={() => openProgressDetail(selectedRecord, selectedProgress)} />
+                  </section>
+                ) : null}
                 <HookObservationView
                   key={`${selectedRecord.sessionId}:${sessionIncarnation(selectedRecord) ?? ''}`}
                   sessionId={selectedRecord.sessionId}
@@ -1852,37 +1910,38 @@ function App(): React.JSX.Element {
                   onOpenEvents={() => setDialog({ kind: 'hook-events', session: selectedRecord })}
                   onOpenConfiguration={() => setDialog({ kind: 'preferences', section: 'agent-control' })}
                 />
-                {selectedRecord.launchDisabledReason ? (
-                  <p className="inline-error" role="status">
-                    Launch unavailable: {selectedRecord.launchDisabledReason}
-                  </p>
-                ) : null}
-                <div className="actions">
-                  {bindingPresentation.canResume ? <button type="button" onClick={() => confirmResume(selectedRecord)} disabled={!!selectedRecord.launchDisabledReason}
-                    title={selectedRecord.launchDisabledReason}>Resume</button> : null}
-                  {bindingPresentation.canLocate && binding && binding.agentCli !== 'other' ? (
-                    <button type="button" onClick={() => setDialog({ kind: 'locate', session: selectedRecord, binding })}>Locate chat</button>
-                  ) : null}
-                  {!live[selectedRecord.sessionId] ? (
-                    <button type="button" disabled={!!selectedRecord.launchDisabledReason}
-                      title={selectedRecord.launchDisabledReason ?? 'Run the saved command again in a new process'}
-                      onClick={() => relaunchSession(selectedRecord)}>Start again</button>
-                  ) : null}
-                  {bindingPresentation.canStartNew && binding?.agentCli !== 'other' ? <button type="button"
-                    title="Forget the stored conversation so this session no longer resumes it" onClick={() => {
-                    void window.aiTerminal.startNewConversation(selectedRecord.sessionId)
-                      .then(() => window.aiTerminal.getConversationBinding(selectedRecord.sessionId))
-                      .then(setBinding)
-                      .catch(fail('Request failed'))
-                  }}>Start new</button> : null}
-                  {live[selectedRecord.sessionId] ? (
-                    <button type="button" className="ghost" onClick={() => setDialog({ kind: 'stop', session: selectedRecord })}>Stop…</button>
-                  ) : null}
-                </div>
+                <section className="inspector-section binding">
+                  <h3>Conversation</h3>
+                  <p>{bindingPresentation.label}</p>
+                  <small>{bindingPresentation.detail}</small>
+                  <div className="actions">
+                    {bindingPresentation.canLocate && binding && binding.agentCli !== 'other' ? (
+                      <button type="button" className="small" onClick={() => setDialog({ kind: 'locate', session: selectedRecord, binding })}>Locate chat</button>
+                    ) : null}
+                    {bindingPresentation.canStartNew && binding?.agentCli !== 'other' ? <button type="button" className="small"
+                      title="Forget the stored conversation so this session no longer resumes it" onClick={() => {
+                      void window.aiTerminal.startNewConversation(selectedRecord.sessionId)
+                        .then(() => window.aiTerminal.getConversationBinding(selectedRecord.sessionId))
+                        .then(setBinding)
+                        .catch(fail('Request failed'))
+                    }}>Start new</button> : null}
+                  </div>
+                </section>
               </>
-            ) : null}
-            {activeWorkspaceId ? (
-              <form className="create-form" onSubmit={(event) => {
+            ) : <p className="meta">No session selected.</p>}
+          </aside>
+        ) : null}
+        {panel === 'new' && activeWorkspaceId ? (
+          <aside className="session-launcher side-panel" aria-label={editingSessionId ? 'Edit session' : 'New session'}>
+            <div className="panel-heading">
+              <span className="eyebrow">{editingSessionId ? 'Edit session' : `New ${newSessionSplit ? 'split ' : ''}session`}</span>
+              <button type="button" className="icon-button" aria-label="Close new session" onClick={() => {
+                setEditingSessionId(undefined)
+                setFormError(undefined)
+                setPanel(null)
+              }}><Icon name="close" /></button>
+            </div>
+            <form className="create-form" onSubmit={(event) => {
                 event.preventDefault()
                 setFormError(undefined)
                 void (async () => {
@@ -1896,6 +1955,7 @@ function App(): React.JSX.Element {
                         record.sessionId === updated.sessionId ? updated : record
                       ))
                       setEditingSessionId(undefined)
+                      setPanel(null)
                       brief(`Saved ${updated.name}.`)
                       return
                     }
@@ -1927,95 +1987,104 @@ function App(): React.JSX.Element {
                   }
                 })()
               }}>
-                <strong>{editingSessionId
-                  ? 'Edit session'
-                  : `New ${newSessionSplit ? 'split ' : ''}session in ${activeWorkspace?.name ?? 'workspace'}`}</strong>
-                <label>Template
-                  <select aria-label="Launch template" value={pickedTemplateId} onChange={(event) => {
-                    const id = event.target.value
-                    const template = templates.find((item) => item.templateId === id)
-                    if (template?.launchDisabledReason) {
-                      event.currentTarget.value = ''
-                      setPickedTemplateId('')
-                      return
-                    }
-                    setPickedTemplateId(id)
-                    setSessionForm((current) => applyLaunchTemplate(current, template))
-                  }}><option value="">No template</option>{templates.map((template) => (
-                    <option
-                      key={template.templateId}
-                      value={template.templateId}
-                      disabled={!!template.launchDisabledReason}
-                      title={template.launchDisabledReason}
-                    >
-                      {template.name}{template.launchDisabledReason ? ' — unavailable' : ''}
-                    </option>
-                  ))}</select>
-                </label>
-                <label>Name
+              <h2 title={editingSessionId ? sessionForm.name : activeWorkspace?.name}>{editingSessionId
+                ? sessionForm.name || 'Session'
+                : `in ${activeWorkspace?.name ?? 'workspace'}`}</h2>
+              {!editingSessionId ? <AgentPicker options={pickerOptions} selectedId={selectedPickerId} onPick={pickLaunchOption} /> : null}
+              <label className="field">Name
                   <input aria-label="Session name" value={sessionForm.name} onChange={(event) => {
                     const name = event.target.value
                     setSessionForm((current) => ({ ...current, name }))
                   }} />
-                </label>
-                <label>Command
-                  <input aria-label="Executable" className="mono" value={sessionForm.executable} onChange={(event) => {
-                    const executable = event.target.value
-                    setSessionForm((current) => ({ ...current, executable }))
-                  }} />
-                </label>
-                <label>Arguments
-                  <input aria-label="Arguments" className="mono" value={sessionForm.argv} onChange={(event) => {
-                    const argv = event.target.value
-                    setSessionForm((current) => ({ ...current, argv }))
-                  }} />
-                </label>
-                <label>Working directory
+              </label>
+              <label className="field">Directory
                   <input aria-label="Working directory" className="mono" value={sessionForm.cwd} onChange={(event) => {
                     const cwd = event.target.value
                     setSessionForm((current) => ({ ...current, cwd }))
                   }} />
-                </label>
-                {!editingSessionId ? <RepositoryIdentityView
-                  directory={sessionForm.cwd}
-                  identity={formRepository.identity}
-                  loading={formRepository.loading}
-                  onRefresh={() => void formRepository.refresh()}
-                /> : null}
-                <label>When windows close
-                  <select aria-label="When windows close" value={sessionForm.backgroundChoice ?? ''} onChange={(event) => {
-                    const value = event.target.value
-                    const backgroundChoice = value === 'hide' || value === 'stop' ? value : null
-                    setSessionForm((current) => ({ ...current, backgroundChoice }))
-                  }}>{BACKGROUND_CHOICE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
-                </label>
-                <label>Terminal images (Sixel)
-                  <select aria-label="Terminal images (Sixel)" value={sessionForm.terminalGraphics ?? ''}
-                    onChange={(event) => {
-                      const choice = event.target.value
-                      setSessionForm((current) => ({ ...current,
-                        terminalGraphics: choice === 'sixel' || choice === 'standard' ? choice : null }))
-                    }}>
-                    <option value="">Default (on)</option>
-                    <option value="sixel">On</option>
-                    <option value="standard">Off</option>
-                  </select>
-                </label>
-                <p className="field-help">Effective: {effectiveTerminalGraphics(sessionForm.terminalGraphics) === 'sixel'
-                  ? 'Sixel images' : 'standard terminal'}. Every session uses images unless set to Off.
-                  For SSH, sudo or containers without BMN terminfo, choose Off or run the command with <code>TERM=xterm-256color</code>.</p>
-                {formError ? <span className="inline-error" role="alert">{formError}</span> : null}
-                <div className="actions">
-                  <button type="submit" className="primary" disabled={!editingSessionId && (formRepository.loading || !formRepository.identity)}>
-                    {editingSessionId ? 'Save session' : 'Create session'}
-                  </button>
+              </label>
+              {!editingSessionId ? <RepositoryIdentityView
+                compact
+                directory={sessionForm.cwd}
+                identity={formRepository.identity}
+                loading={formRepository.loading}
+                onRefresh={() => void formRepository.refresh()}
+              /> : null}
+              <details className="advanced" open={!!editingSessionId || undefined}>
+                <summary><span>Advanced</span><code>{resolvedCommand}</code></summary>
+                <div className="advanced-body">
+                  <label className="field">Template
+                    <select aria-label="Launch template" value={pickedTemplateId} onChange={(event) => {
+                      const id = event.target.value
+                      const template = templates.find((item) => item.templateId === id)
+                      if (template?.launchDisabledReason) {
+                        event.currentTarget.value = ''
+                        setPickedTemplateId('')
+                        return
+                      }
+                      setPickedTemplateId(id)
+                      setSessionForm((current) => applyLaunchTemplate(current, template))
+                    }}><option value="">No template</option>{templates.map((template) => (
+                      <option
+                        key={template.templateId}
+                        value={template.templateId}
+                        disabled={!!template.launchDisabledReason}
+                        title={template.launchDisabledReason}
+                      >
+                        {template.name}{template.launchDisabledReason ? ' — unavailable' : ''}
+                      </option>
+                    ))}</select>
+                  </label>
+                  <label className="field">Command
+                    <input aria-label="Executable" className="mono" value={sessionForm.executable} onChange={(event) => {
+                      const executable = event.target.value
+                      setPickedTemplateId('')
+                      setSessionForm((current) => ({ ...current, executable }))
+                    }} />
+                  </label>
+                  <label className="field">Arguments
+                    <input aria-label="Arguments" className="mono" value={sessionForm.argv} onChange={(event) => {
+                      const argv = event.target.value
+                      setPickedTemplateId('')
+                      setSessionForm((current) => ({ ...current, argv }))
+                    }} />
+                  </label>
+                  <p className="field-help resolved">Runs <code>{resolvedCommand}</code></p>
+                  <label className="field">When windows close
+                    <select aria-label="When windows close" value={sessionForm.backgroundChoice ?? ''} onChange={(event) => {
+                      const value = event.target.value
+                      const backgroundChoice = value === 'hide' || value === 'stop' ? value : null
+                      setSessionForm((current) => ({ ...current, backgroundChoice }))
+                    }}>{BACKGROUND_CHOICE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+                  </label>
+                  <label className="field">Terminal images (Sixel)
+                    <select aria-label="Terminal images (Sixel)" value={sessionForm.terminalGraphics ?? ''}
+                      onChange={(event) => {
+                        const choice = event.target.value
+                        setSessionForm((current) => ({ ...current,
+                          terminalGraphics: choice === 'sixel' || choice === 'standard' ? choice : null }))
+                      }}>
+                      <option value="">Default (on)</option>
+                      <option value="sixel">On</option>
+                      <option value="standard">Off</option>
+                    </select>
+                  </label>
+                  <p className="field-help">{effectiveTerminalGraphics(sessionForm.terminalGraphics) === 'sixel'
+                    ? 'Sixel images on.' : 'Standard terminal.'} For SSH, sudo or containers without BMN terminfo,
+                    choose Off or run the command with <code>TERM=xterm-256color</code>.</p>
+                </div>
+              </details>
+              {formError ? <span className="inline-error" role="alert">{formError}</span> : null}
+              <div className="actions">
+                <button type="submit" className="primary" disabled={!editingSessionId && (formRepository.loading || !formRepository.identity)}>
+                  {editingSessionId ? 'Save session' : 'Create session'}
+                </button>
                   {editingSessionId ? <button type="button" className="ghost" onClick={() => {
                     setEditingSessionId(undefined)
                     setFormError(undefined)
                   }}>Cancel edit</button> : null}
-                </div>
-              </form>
-            ) : null}
+              </div>
+            </form>
           </aside>
         ) : null}
       </div>
@@ -2094,7 +2163,7 @@ function App(): React.JSX.Element {
               sessionId: session.sessionId,
               sessionName: session.name,
               workspaceName: workspace.name,
-              harness: agentTag(session.executable),
+              harness: agentTag(session.executable, session.argv),
               path: live[session.sessionId]?.cwd ?? session.cwd,
               incarnationId: sessionProcessLive(session, live[session.sessionId]?.incarnationId)
                 ? live[session.sessionId]!.incarnationId : null

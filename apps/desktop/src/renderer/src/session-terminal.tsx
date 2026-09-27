@@ -27,6 +27,7 @@ import { ProgressStrip } from './progress-strip'
 import { capTitle, type SessionActivity } from './session-activity'
 import type { ProgressPresentation, SessionAttention } from './session-presentation'
 import { agentTag } from './session-presentation'
+import { splitArgv } from './launch-template'
 import { parseTerminalNotice } from './terminal-notice'
 import { installTerminalTestHook } from './test-hook'
 import { liveTerminalOptions, startSavedOutputCapture } from './terminal-history'
@@ -697,7 +698,7 @@ export function SessionTerminal(props: {
             JSON.stringify(remainingAfterHandoff) === JSON.stringify(remainingResponseTitles),
           discardedDraftHidden
         }
-        // The inspector and session form live in the details panel, opened the way the owner opens it.
+        // The inspector lives in the details panel, opened the way the owner opens it.
         const moreButton = section.current?.querySelector<HTMLButtonElement>('button[data-action="more"]')
         if (!moreButton) throw new Error('the pane More button was not rendered')
         moreButton.click()
@@ -706,26 +707,9 @@ export function SessionTerminal(props: {
         )].find((item) => item.textContent?.trim() === 'Session details'))
         detailsItem.click()
         console.warn('[BMN] renderer behavioural integration: details panel opened')
-        const templatePicker = await waitFor(() => document.querySelector<HTMLSelectElement>(
-          'select[aria-label="Launch template"]'
-        ))
-        const templateOption = [...templatePicker.options]
-          .find((option) => option.value.length > 0 && !option.disabled)
-        const unavailableTemplateOption = [...templatePicker.options]
-          .find((option) => option.value.length > 0 && option.disabled)
-        const templateForm = templatePicker.closest('form')
-        if (!templateOption || !unavailableTemplateOption || !templateForm) {
-          throw new Error('the real available and unavailable template options were not rendered')
-        }
-        const input = (label: string): HTMLInputElement => {
-          const element = templateForm.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)
-          if (!element) throw new Error(`the template form field ${label} was not rendered`)
-          return element
-        }
-        const inspector = document.querySelector<HTMLElement>(
+        const inspector = await waitFor(() => document.querySelector<HTMLElement>(
           '[aria-label="Selected session actions"]'
-        )
-        if (!inspector) throw new Error('the selected-session inspector was not rendered')
+        ))
         const detailsProgressText = await waitFor(() => {
           const text = inspector.querySelector<HTMLElement>('.progress-strip')?.textContent?.trim()
           return text?.includes('Observed self-test failure') && text.includes('Last observed failed') &&
@@ -746,6 +730,29 @@ export function SessionTerminal(props: {
           resumeDisabled: resumeButton.disabled,
           resumeTitle: resumeButton.title
         }
+        // The session form is its own panel, opened from the same pane menu.
+        moreButton.click()
+        const newSessionItem = await waitFor(() => [...document.querySelectorAll<HTMLButtonElement>(
+          '.popup-menu [role="menuitem"]'
+        )].find((item) => item.textContent?.trim() === 'New session in this workspace'))
+        newSessionItem.click()
+        console.warn('[BMN] renderer behavioural integration: new session panel opened')
+        const templatePicker = await waitFor(() => document.querySelector<HTMLSelectElement>(
+          'select[aria-label="Launch template"]'
+        ))
+        const templateOption = [...templatePicker.options]
+          .find((option) => option.value.length > 0 && !option.disabled)
+        const unavailableTemplateOption = [...templatePicker.options]
+          .find((option) => option.value.length > 0 && option.disabled)
+        const templateForm = templatePicker.closest('form')
+        if (!templateOption || !unavailableTemplateOption || !templateForm) {
+          throw new Error('the real available and unavailable template options were not rendered')
+        }
+        const input = (label: string): HTMLInputElement => {
+          const element = templateForm.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)
+          if (!element) throw new Error(`the template form field ${label} was not rendered`)
+          return element
+        }
         const unavailableTemplate = {
           name: unavailableTemplateOption.textContent?.trim() ?? '',
           disabled: unavailableTemplateOption.disabled,
@@ -760,7 +767,7 @@ export function SessionTerminal(props: {
         const expectedTemplateSession = {
           name: input('Session name').value,
           executable: input('Executable').value,
-          argv: input('Arguments').value.trim().split(/\s+/).filter(Boolean),
+          argv: splitArgv(input('Arguments').value),
           cwd: input('Working directory').value,
           backgroundChoice: (() => {
             const value = templateForm.querySelector<HTMLSelectElement>(
@@ -770,6 +777,9 @@ export function SessionTerminal(props: {
           })()
         }
         const shownSize = { cols: terminal.cols, rows: terminal.rows }
+        // requestSubmit is a no-op while Create waits for the repository identity read.
+        await waitFor(() => templateForm.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled === false
+          ? true : undefined)
         templateForm.requestSubmit()
         console.warn('[BMN] renderer behavioural integration: template form submitted')
         const knownSessionIds = new Set(sessionsBeforeTemplate.map((session) => session.sessionId))
@@ -1129,7 +1139,7 @@ export function SessionTerminal(props: {
           />
         ) : null}
         <strong title={name}>{name}</strong>
-        {props.record ? <span className="chip">{agentTag(props.record.executable)}</span> : null}
+        {props.record ? <span className="chip">{agentTag(props.record.executable, props.record.argv)}</span> : null}
         <span className={`status-dot ${dot}`} aria-hidden="true" />
         <span className={`pane-status${props.attention && !exitStatus ? ' needs-you' : ''}`}>
           <span className="pane-state">{stateWord}</span>

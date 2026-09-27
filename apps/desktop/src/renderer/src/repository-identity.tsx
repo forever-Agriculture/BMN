@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { RepositoryIdentity } from '@bmn/protocol'
+import { displayPath } from './session-presentation'
 
 export interface IdentityLookupState {
   directory: string
@@ -72,13 +73,16 @@ export function useRepositoryIdentity(directory: string | null, requestKey = dir
   }
 }
 
+/** Full section in Session details; `compact` is the one line under the launcher's Directory field. */
 export function RepositoryIdentityView({
-  directory, identity, loading, onRefresh
+  directory, identity, loading, onRefresh, compact = false, home = null
 }: {
   directory: string
   identity?: RepositoryIdentity | undefined
   loading: boolean
   onRefresh?: () => void
+  compact?: boolean
+  home?: string | null
 }): React.JSX.Element {
   const current = identity?.directory === directory ? identity : undefined
   let description = 'Reading repository identity…'
@@ -92,12 +96,27 @@ export function RepositoryIdentityView({
         : 'Detached HEAD'
     description = `${branch} · ${current.linkedWorktree ? 'Linked worktree' : 'Main worktree'}`
   }
-  return <div className="repository-identity" aria-live="polite">
-    <strong>Repository identity</strong>
-    <div>Selected directory: <code>{directory}</code></div>
-    {current?.state === 'repository' && !loading ? <div>Repository root: <code>{current.root}</code></div> : null}
-    <div>{description}</div>
-    {current && !loading ? <small>Read from selected directory at {new Date(current.observedAt).toLocaleString()}</small> : null}
-    {onRefresh ? <button type="button" className="ghost" onClick={onRefresh}>Refresh identity</button> : null}
-  </div>
+  const read = current && !loading ? new Date(current.observedAt).toLocaleTimeString() : null
+  if (compact) {
+    return <div className="repository-identity compact" aria-live="polite">
+      <span title={read ? `Read from selected directory at ${read}` : undefined}>{description}</span>
+      {onRefresh ? <button type="button" className="ghost small" onClick={onRefresh}>Refresh identity</button> : null}
+    </div>
+  }
+  return <section className="repository-identity inspector-section" aria-live="polite">
+    <h3>Repository
+      {onRefresh ? <button type="button" className="ghost small" onClick={onRefresh}>Refresh identity</button> : null}
+    </h3>
+    <dl className="kv">
+      <dt>Directory</dt>
+      <dd className="path" title={directory}><bdi>{displayPath(directory, home)}</bdi></dd>
+      {current?.state === 'repository' && !loading ? <>
+        <dt>Repository root</dt>
+        <dd className="path" title={current.root}><bdi>{displayPath(current.root, home)}</bdi></dd>
+      </> : null}
+      <dt>State</dt>
+      <dd title={description}>{description}</dd>
+    </dl>
+    {read ? <small>Read from selected directory at {read}</small> : null}
+  </section>
 }
