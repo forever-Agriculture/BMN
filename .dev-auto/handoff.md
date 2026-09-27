@@ -12,14 +12,14 @@
 
 ## Progress
 
-- Sprint board and reconciled state: epic-30 in-progress; 30-1, 30-2, 30-3 all `review`. Commits 251b1e2 (30.1), 8ee22dd (30.2 engine), 9ac0872 (30.3 + 30.2/30.3 Electron phases) = frozen review candidate. Live harness kept untracked at `.dev-auto/evidence/e30-live-remote-answers.live.test.ts.txt`.
+- Sprint board and reconciled state: epic-30 in-progress; 30-1, 30-2 `done`; 30-3 `review` until the owner phone run (its verification names it). Accepted candidate 9b0d890 (251b1e2, 8ee22dd, 9ac0872, a2f7456, bbe3ec4, 9b0d890); local main ahead of origin, not pushed. Live harness kept untracked at `.dev-auto/evidence/e30-live-remote-answers.live.test.ts.txt`.
 - Implemented: 30.1 (spike, structured prompt, v17, CLI mappers, setting, docs); 30.2 (mirror, engine, evidence, `answer.take`, plugin polling); 30.3 telegram-cards.ts, telegram-card-keeper.ts, connector HTML/edit/toast/callback_query/apiOrigin, schema v18 card columns, companion wiring, structured-dialog drafts, docs telegram.md/features.md, Electron fake Bot API phase (main/fake-bot-api.ts).
-- Active helpers: Astra `medium` consultant on R1-R4 (codex exec read-only), started ~21:55, prompt `e30-consult-prompt.md`, output `e30-consult.md`. Recheck collected (`e30-astra-recheck.md` sha f41fbe3ef659210d). GLM-5.3 pre-review collected (`e30-glm-prereview.json`, $2.04); Astra medium epic review collected (`e30-astra-review.md` sha ca85a5e1b5876c41, log ~19:45-20:10). Pre-review repair committed a2f7456.
+- Active helpers: none. Collected: pre-review, full review, recheck 1 (`e30-astra-recheck.md`), consultation (`e30-consult.md`), final recheck (`e30-astra-recheck2.md` sha 0e6af55dfe1d6946, clean).
 
 ## Decisions and findings
 
 - Original or approved intent changes: none.
-- Material pending findings: OPEN R1 (P1, introduced by the A3 repair), R2 (P1), R3 (P2), R4 (P2) from the Astra recheck (log ~21:40-21:50); reproduced by 4 failing tests (`e30-recheck-repro.log`). A1, A2, A4, A6, A7 closed by the recheck; A3/A5/A8 residuals are R1-R3. Earlier findings G1, G2, L1 closed (a2f7456).
+- Material pending findings: none. Every finding (G1, G2, L1, A1-A8, R1-R4) has a closed disposition at 9b0d890 (log ~23:05).
 - 30.2 AC1 FAIL recorded (1.49×) → mirror gated to Claude/Codex hook sessions (log 2026-09-27 ~18:05).
 - Known residuals (log ~18:35-19:00): under heavy CPU load the plugin's 3 s hook deadline can lose a replied report → honest sent-unconfirmed. Final cards stay in the keeper's memory until restart (small).
 - Cross-epic obligations: Epic 29 hook origin reused for card headers (flag seen in Electron header); old `bmn` CLI ↔ new server; Remote Control sessions stay skipped; text-reply path unchanged except structured-dialog drafts.
@@ -30,7 +30,7 @@
 - Electron self-test incl. "remote answers" (30.2) and "telegram cards" (30.3, fake Bot API taps a three-question card; edits in order; keys 1,2,1,1; resolvedBy telegram): EXIT 0, `e30-electron-30.3-run1.log` sha 20a3b134a7a18d3b.
 - Real agents through the internal answer function, isolated BMN (log ~18:35-19:00): Claude 4/4 as designed, Codex 2/2 confirmed, OpenCode 3/3 confirmed on a quiet machine (run 1 under load: 1 confirmed, 2 sent-unconfirmed).
 - Reviewed scope and route: Astra (gpt-6-astra medium, codex exec read-only) full review of ec7c517..a2f7456 → not ready (A1-A8). Baseline ec7c517.
-- Review allowance at the current boundary: rechecks 1 used (found a repair-introduced defect) / consultation 1 running / final repair 0 of 1, then one recheck; remaining material defects then block the boundary.
+- Review allowance: used through the final recheck (clean). Acceptance checks recorded (log ~23:05).
 - Unverified: owner real-phone run on the packaged build (needs push + `pnpm run update:desktop` authorization and the owner's phone); Telegram's real rendering of the HTML cards.
 
 ## Measurement
@@ -39,9 +39,9 @@
 - Dispatches: GLM-5.3 max pre-review, $2.04, 63 turns; Astra medium review 3,271,969 input / 3,081,216 cached / 11,743 output.
 - Review yield: n/a.
 - Owner interventions: none during build.
-- Observed usage: pending.
+- Observed usage: lead Claude transcript 9e03d012 claude-opus-5-5/high 155.1M cache read / 1.44M cache write / 662K output; Astra recheck 1 1.05M in / 9.4K out; consult 169K in / 1.4K out; final recheck 864K in / 7.1K out (log).
 
 ## Resume
 
-- Next safe action: collect the consultation; make the ONE final consolidated repair of R1-R4 per its answer; gates; commit; one Astra `low` recheck. Any remaining material defect → report the boundary BLOCKED with options.
-- Status: ACTIVE — recheck found R1-R4; consultation running before the final repair.
+- Next safe action: owner authorizes push to main + `pnpm run update:desktop` (AGENTS.md), then walks the seven experience lines on the packaged build (30.3 verification); on pass → 30-3 and epic-30 done, Status COMPLETE.
+- Status: BLOCKED — automated acceptance passed; needs owner authorization for push + update:desktop and the owner's phone run.
