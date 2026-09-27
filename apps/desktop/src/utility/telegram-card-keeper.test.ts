@@ -534,6 +534,26 @@ describe('multi-select, Other… and Back (Epic 31)', () => {
     expect(h.answers).toEqual([])
   })
 
+  it('keeps every later reply to an Other… card, while its answer is sent and after: never a draft (Astra recheck)', async () => {
+    let release!: () => void
+    const h = setup({ record: record(FEATURES), answer: () => new Promise((resolve) => { release = () => resolve({ state: 'confirmed', sent: ['“GraphQL”'] }) }) })
+    await h.keeper.page(h.state.record!)
+    await h.keeper.tap(h.tap('tok-4'))
+    await settle()
+    await expect(h.keeper.typedReply(reply('GraphQL'))).resolves.toBe(true)
+    await settle()
+    expect(h.answers).toHaveLength(1)
+    // The answer is on its way: a second reply is kept and refused, and nothing else is typed.
+    await expect(h.keeper.typedReply(reply('Something else', 100, 501))).resolves.toBe(true)
+    expect(h.connector.sends.at(-1)).toMatchObject({ text: 'Another answer is already on its way.', options: { replyToMessageId: 501 } })
+    expect(h.answers).toHaveLength(1)
+    release()
+    await settle()
+    await expect(h.keeper.typedReply(reply('And another', 100, 502))).resolves.toBe(true)
+    expect(h.connector.sends.at(-1)?.options).toMatchObject({ replyToMessageId: 502 })
+    expect(h.answers).toHaveLength(1)
+  })
+
   it('Other… asks for a reply, ‹ Options returns with the toggles intact, and the reply is the typed answer', async () => {
     const h = setup({ record: record(FEATURES), answer: async () => ({ state: 'confirmed', sent: ['Audit log · “GraphQL”'] }) })
     await h.keeper.page(h.state.record!)

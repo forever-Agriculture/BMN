@@ -106,6 +106,8 @@ interface LiveCard {
   progress: Progress
   /** Whether the card as drawn offers Other…, so a reply to it is a typed answer or refused. */
   offersOther: boolean
+  /** Whether it ever did: every later reply to it is still the keeper's, never a draft. */
+  offeredOther: boolean
   tokens: string[]
   /** An answer reported `sent-unconfirmed` that a late report may still confirm. */
   upgradable: boolean
@@ -204,6 +206,7 @@ export class TelegramCardKeeper {
       permission: record.prompt?.type === 'permission',
       progress: { ...START },
       offersOther: state === 'buttons' && composed.offersOther,
+      offeredOther: state === 'buttons' && composed.offersOther,
       tokens: [],
       upgradable: false,
       unwritten: null,
@@ -316,14 +319,23 @@ export class TelegramCardKeeper {
 
   /**
    * A reply to a card. On a card that offers Other… it is the typed answer once Other… was tapped, and refused
-   * before; nothing else becomes of it (never a draft or a prompt). Any other reply is not the keeper's: false.
+   * before; on one that offered it, while an answer is sent or after, it is refused. Nothing else becomes of it
+   * (never a draft or a prompt). Any other reply is not the keeper's: false.
    */
   async typedReply(reply: InboundReply): Promise<boolean> {
     const connector = this.deps.connector()
     const card = reply.replyToMessageId === null ? undefined : this.cards.get(reply.replyToMessageId)
-    if (!connector || this.disposed || !card || card.state !== 'buttons' || !card.offersOther) return false
+    if (!connector || this.disposed || !card || !card.offeredOther) return false
     const answer = (text: string): Promise<unknown> =>
       connector.sendMessage(text, { replyToMessageId: reply.messageId }).catch(() => undefined)
+    if (card.state === 'sending') {
+      await answer(REFUSAL_WORDS.claimed)
+      return true
+    }
+    if (card.state !== 'buttons' || !card.offersOther) {
+      await answer(card.state === 'open' ? 'Nothing was sent: answer this one at the laptop.' : REFUSAL_WORDS.gone)
+      return true
+    }
     if (!card.progress.typing) {
       await answer('Tap Other… first, then reply with your answer.')
       return true
@@ -587,6 +599,7 @@ export class TelegramCardKeeper {
         drawn()
         card.state = composed.state
         card.offersOther = composed.offersOther
+        card.offeredOther ||= composed.offersOther
         if (composed.state === 'buttons') this.mint(card, composed, binding)
         await this.save(card)
         return

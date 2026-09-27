@@ -137,6 +137,8 @@ export class AgentHistory {
   private serial: Promise<unknown> = Promise.resolve()
   private timer: { cancel(): void } | null = null
   private stopped = false
+  /** Conversation ids being checked and deleted this moment. */
+  private readonly deleting = new Set<string>()
 
   constructor(options: AgentHistoryOptions) {
     this.options = options
@@ -235,6 +237,11 @@ export class AgentHistory {
 
   private cutoff(days: number): number {
     return this.now().getTime() - days * DAY_MS
+  }
+
+  /** Whether cleanup is deleting this conversation right now; BMN's Resume refuses it meanwhile. */
+  isDeleting(conversationId: string): boolean {
+    return this.deleting.has(conversationId)
   }
 
   private async protectedIds(): Promise<Set<string>> {
@@ -351,8 +358,11 @@ export class AgentHistory {
         let result: Awaited<ReturnType<AgentHistoryAdapter['remove']>>
         try {
           // Checked again just before its delete: a batch takes minutes, and meanwhile a session can be resumed,
-          // bound, named on a command line or touched.
-          const still = this.eligible(await adapter.candidates(this.cutoff(days)), await this.protectedIds())
+          // bound, named on a command line or touched. BMN's own Resume is refused while the id is here; the
+          // agent's store is read last, so activity that lands while the rest is read still counts.
+          this.deleting.add(candidate.id)
+          const protectedIds = await this.protectedIds()
+          const still = this.eligible(await adapter.candidates(this.cutoff(days)), protectedIds)
           if (!still.some((next) => next.id === candidate.id)) {
             skipped += 1
             continue
@@ -360,6 +370,8 @@ export class AgentHistory {
           result = await adapter.remove(candidate.id)
         } catch (error) {
           result = { ok: false, reason: errorText(error) }
+        } finally {
+          this.deleting.delete(candidate.id)
         }
         if (result.ok) run.deleted += 1
         else run.failures.push({ id: candidate.id, reason: result.reason })

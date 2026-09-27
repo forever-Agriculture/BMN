@@ -2018,6 +2018,11 @@ export class CompanionService {
     this.emit('telegram', null)
   }
 
+  /** Whether agent-history cleanup is deleting this conversation right now (Resume refuses it meanwhile). */
+  historyDeleting(conversationId: string): boolean {
+    return this.history.isDeleting(conversationId)
+  }
+
   /**
    * A reply is addressed only by the notification it replies to. Without that correlation it is refused;
    * with it, text becomes a draft for that session unless the owner opted into automatic submission. A reply

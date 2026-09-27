@@ -243,6 +243,8 @@ interface SessionManagerOptions {
     acknowledgementDeadlineMs?: number
   }
   conversationReferenceExists?: (binding: BoundConversationBinding) => Promise<boolean>
+  /** True while agent-history cleanup is deleting this conversation; Resume refuses it meanwhile. */
+  conversationBeingDeleted?: (binding: BoundConversationBinding) => boolean
   capabilityProbeTimeoutMs?: number
   onSessionStateChange?: (message: SessionProcessStateChangedMessage) => void
   /** Addressed-control variables added after the private-variable filter for each process incarnation. */
@@ -499,6 +501,7 @@ export class SessionManager {
     acknowledgementDeadlineMs?: number
   } | undefined
   private readonly referenceExists: (binding: BoundConversationBinding) => Promise<boolean>
+  private readonly beingDeleted: (binding: BoundConversationBinding) => boolean
   private readonly capabilityProbeTimeoutMs: number
   private readonly onSessionStateChange: (message: SessionProcessStateChangedMessage) => void
   private readonly claudeSessionIdCapabilities = new Map<string, Promise<ClaudeCapabilityProbeResult>>()
@@ -531,6 +534,7 @@ export class SessionManager {
     this.savedOutputStore = options.savedOutputStore
     this.outputQueueLimits = options.outputQueueLimits
     this.referenceExists = options.conversationReferenceExists ?? conversationReferenceExists
+    this.beingDeleted = options.conversationBeingDeleted ?? (() => false)
     this.capabilityProbeTimeoutMs = options.capabilityProbeTimeoutMs ?? 2_000
     this.onSessionStateChange = options.onSessionStateChange ?? (() => undefined)
   }
@@ -1142,6 +1146,12 @@ export class SessionManager {
     binding: BoundConversationBinding,
     reservation: ConversationReservation
   ): Promise<SessionResumeResult> {
+    if (this.beingDeleted(binding)) {
+      throw new HostControlError(
+        ERROR_CODES.invalidArgument,
+        `BMN is cleaning up this ${binding.agentCli} conversation's history right now; try again in a moment`
+      )
+    }
     if (!await this.referenceExists(binding)) {
       throw new HostControlError(
         ERROR_CODES.notFound,

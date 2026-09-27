@@ -291,6 +291,7 @@ async function start(): Promise<void> {
       }),
     sendTerminalMessage: (message) => terminalPort?.postMessage(message),
     conversationReferenceExists: (binding) => conversationReferenceExists(binding, agentHome()),
+    conversationBeingDeleted: (binding) => companionHolder.current?.historyDeleting(binding.conversationReference) ?? false,
     onSessionStateChange: (message) => {
       parentPort.postMessage(message)
       companionHolder.current?.sessionStateChanged(message.sessionId, message.state)

@@ -1,0 +1,15 @@
+  I'll check for a question tool first, then ask you the multiple-choice question.
+    Explored available MCP tools pattern (?i)question|ask|choice|quiz|prompt
+    Explored available MCP tools cursor
+  I don’t have a dedicated question tool in this session, so here’s the choice in
+  chat:
+  Which should we do next?
+  A. Explore the current workspace
+  B. Help with a coding task you have in mind
+  C. Something else (tell me what)
+  Reply with A, B, or C — I’ll wait for your answer before doing anything else.
+
+  → Add a follow-up
+
+  Auto · 7.6%
+  /tmp/bmn-development-XXXXXX/cursor-workspace

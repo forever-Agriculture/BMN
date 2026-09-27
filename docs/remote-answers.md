@@ -192,7 +192,9 @@ reaches it (a unit test reads the sources to keep it that way).
   kept in the prompt), and the digits of the
   plain `Yes` and `No` entries read from the screen. Frame and cursor glyphs and whitespace runs are
   normalised; soft-wrapped rows are joined. A typed answer counts as shown only when its field, with the
-  rows it wrapped onto, holds all of it (whitespace aside); a start of it is not enough.
+  rows it wrapped onto, holds all of it, read the same way (frame glyphs and whitespace aside); a start of
+  it is not enough. So a lost frame glyph in an answer goes unnoticed; every other character is checked,
+  and an answer made only of frame glyphs is refused as `unsupported` before any key.
 - **Epoch.** Every open, resolve or withdraw a hook sends for a session raises the epoch of each of
   its followed requests before the store is touched, and so does the recognised dialog leaving the
   screen, checked on every screen change, so even a brief departure counts. Only the request BMN is

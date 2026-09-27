@@ -5,6 +5,7 @@ import {
   claudeQuestionState,
   claudeReviewOnScreen,
   codexQuestionState,
+  normalizeScreenText,
   questionOnScreen,
   showsTyped,
   type QuestionHarness
@@ -180,7 +181,9 @@ function choiceFits(prompt: AttentionQuestionsPrompt, question: AttentionPromptQ
     typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value < question.options.length
   if (typeof choice === 'number') return !question.multiSelect && index(choice)
   if (typeof choice !== 'object' || choice === null) return false
-  const typedFits = (typed: unknown): boolean => cleanTyped(typed) && typedAnswerable(prompt, question)
+  // On a screen route the text must show on screen: one made only of frame glyphs never could.
+  const typedFits = (typed: unknown): boolean => cleanTyped(typed) && typedAnswerable(prompt, question) &&
+    (prompt.harness === 'opencode' || normalizeScreenText(typed) !== '')
   if ('set' in choice) {
     const set = choice.set
     if (!question.multiSelect || !Array.isArray(set) || !set.every(index)) return false

@@ -1,7 +1,7 @@
 // MODULE: remote-answer.test.ts - the answer engine: refusals, claims, epochs, key scripts and honest outcomes
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AttentionEvidence, AttentionPrompt, AttentionRecord } from '@bmn/protocol'
 import { RemoteAnswers, answerRoute, cleanTypedAnswer, evidenceConfirms, type AnswerOutcome, type QuestionChoice, type RemoteAnswer, type ScreenLike } from './remote-answer'
 
@@ -708,6 +708,20 @@ describe('answering multi-select and typed answers (Epic 31)', () => {
     expect(h.writes).not.toContain('\r')
     expect(dialog.submitted).toBe(false)
     await expect(pending).resolves.toMatchObject({ state: 'partial' })
+  })
+
+  it('delivers a typed answer holding frame glyphs, and refuses one made only of them before any key (Astra recheck)', async () => {
+    const typed = 'Use A │ B, then ✔ the checks and keep the old tokens for a week'
+    const { h, dialog } = claudeHarness(CLAUDE_SINGLE, BLANK)
+    const pending = ask(h, answers({ typed }))
+    await vi.waitFor(() => expect(h.writes.at(-1)).toBe('\r'))
+    expect(dialog.other).toBe(typed)
+    h.engine.evidence('s1', 'claude:question', evidence({ toolUseId: 'toolu_single', answers: [[typed]] }))
+    await expect(pending).resolves.toMatchObject({ state: 'confirmed' })
+
+    const glyphs = claudeHarness(CLAUDE_SINGLE, BLANK)
+    await expect(ask(glyphs.h, answers({ typed: '│ ✔' }))).resolves.toMatchObject({ state: 'refused', reason: 'unsupported' })
+    expect(glyphs.h.writes).toEqual([])
   })
 
   it('answers a Claude single-choice question with typed text: its row\'s digit, the text, Enter', async () => {

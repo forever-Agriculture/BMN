@@ -3794,6 +3794,8 @@ describe('conversation identity reported by the harness', () => {
   const OBSERVED = '01a0b657-21a8-7f00-addd-b73646828f5b'
   const OTHER = '01a0b659-2862-7d93-a4c5-bc1bd2a47915'
 
+  /** Conversations agent-history cleanup is deleting this moment, as codexFixture's managers see them. */
+  const deletingReferences = new Set<string>()
   async function codexFixture(argv: readonly string[] = [], names: readonly string[] = ['Codex'], agent = 'codex',
     graphics: 'sixel' | 'standard' | null = null, bundledTerminfo = false): Promise<{
     manager: SessionManager
@@ -3828,6 +3830,7 @@ describe('conversation identity reported by the harness', () => {
       },
       processStartIdentity: async () => `linux-proc-start:${spawns.length}`,
       conversationReferenceExists: async () => true,
+      conversationBeingDeleted: (binding) => deletingReferences.has(binding.conversationReference),
       sendTerminalMessage: () => undefined
     })
     const sessions = []
@@ -4270,6 +4273,13 @@ describe('conversation identity reported by the harness', () => {
     await vi.waitFor(async () => {
       await expect(fixture.manager.health()).resolves.toMatchObject({ liveSessions: 0 })
     })
+    // While history cleanup deletes this chat, Resume is refused and starts nothing (Astra recheck, R2).
+    deletingReferences.add(other)
+    const spawnsBefore = fixture.spawns.length
+    await expect(fixture.manager.resume({ sessionId: created!.sessionId, cols: 80, rows: 24 }))
+      .rejects.toThrow("BMN is cleaning up this cursor conversation's history right now; try again in a moment")
+    expect(fixture.spawns).toHaveLength(spawnsBefore)
+    deletingReferences.delete(other)
     await fixture.manager.resume({ sessionId: created!.sessionId, cols: 80, rows: 24 })
     const spawned = fixture.spawns.at(-1)!
     expect([spawned.executable, ...spawned.argv].join(' ')).toBe(preview.command)

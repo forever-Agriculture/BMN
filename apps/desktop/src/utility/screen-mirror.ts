@@ -465,12 +465,13 @@ export function codexQuestionState(
 }
 
 /**
- * Whether a typed answer's field shows exactly this text, wrapped rows included. Whitespace is ignored, since a
- * wrap may fall on a space or inside a word; any lost or extra character fails.
+ * Whether a typed answer's field shows exactly this text, wrapped rows included. The text is read the way the
+ * screen is (frame and cursor glyphs dropped), and whitespace is ignored, since a wrap may fall on a space or inside
+ * a word; any other lost or extra character fails.
  */
 export function showsTyped(shown: string | null, typed: string): boolean {
   if (shown === null || shown === '') return false
-  const bare = (text: string): string => text.replace(/\s+/g, '')
+  const bare = (text: string): string => normalizeScreenText(text).replace(/\s+/g, '')
   return bare(shown) === bare(typed)
 }
 

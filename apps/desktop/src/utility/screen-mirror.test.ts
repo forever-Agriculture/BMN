@@ -207,6 +207,10 @@ describe('recognising answers in progress (Epic 31 spike screens)', () => {
     expect(showsTyped('Passkeys first, JWT as fall back', 'Passkeys first, JWT as fallback')).toBe(true)
     expect(showsTyped('Something else entirely', 'Passkeys first, JWT as fallback')).toBe(false)
     expect(showsTyped(null, 'x')).toBe(false)
+    // The field is read without frame glyphs, so an answer holding one is read the same way (Astra recheck).
+    expect(showsTyped('Use A B', 'Use A │ B')).toBe(true)
+    expect(showsTyped('checks done', '✔ checks done ●')).toBe(true)
+    expect(showsTyped('Use A', 'Use A │ B')).toBe(false)
   })
 
   it('reads a typed answer that wrapped onto further rows, for Claude and Codex', () => {

@@ -178,7 +178,7 @@ Then checked inside BMN (2026-09-28, candidate build, BMN's own folders in a scr
 `bmn hooks install cursor --file <project>/.cursor/hooks.json`). `cursor-agent` typed into a bash session:
 Cursor's workspace-trust prompt first, then each turn end opened "Cursor finished its turn" (`hook:cursor:stop`),
 the next prompt answered it, a real `ls` gave `postToolUse`, the chip read Cursor, and the binding stayed
-unsupported, as for every agent typed into a shell. Cursor's `Run this command?` prompt for `rm` showed on screen
+unsupported, as for every agent typed into a shell. A question came as plain text (see Question dialog below). Cursor's `Run this command?` prompt for `rm` showed on screen
 with no hook event and nothing in Needs you. `cursor-agent` launched directly bound its chat at `sessionStart`;
 after Stop, Resume ran `cursor-agent --resume=<id>`, the chat's earlier turn was on screen, and the next prompt
 fired `beforeSubmitPrompt` and `stop` (no `sessionStart`), opening a fresh notice under the same chat id.
@@ -193,7 +193,7 @@ fired `beforeSubmitPrompt` and `stop` (no `sessionStart`), opening a fresh notic
 | Local session store and delete | Store **VERIFIED**: `~/.cursor/chats/<md5 of the workspace path>/<id>/` (`store.db`, `meta.json`, `prompt_history.json`). Delete **UNSUPPORTED**: the CLI has no chat delete command (its `delete` subcommands are for automations and environments), so History reads "keeps its own history · not managed by BMN" and BMN removes nothing. |
 | Terminal notices (OSC 9/777/99) | **UNSUPPORTED** in BMN: Cursor emits them only for terminals it detects by `TERM_PROGRAM` (Apple Terminal, Ghostty, iTerm2, kitty, …); only OSC 0 titles were seen. |
 | Model and host | `model` is `default` under Auto, or the chosen model's name; no base-URL variable or host. BMN logs the model for the flag and adds no Cursor host to the classifier; `default` shows no flag. |
-| Question dialog | **UNSUPPORTED.** The question tool was not offered to the model in the default mode, Plan mode or a fresh `--plan` session, so no Epic 30 answer shape applies. |
+| Question dialog | **UNSUPPORTED.** The question tool was not offered to the model in the default mode, Plan mode or a fresh `--plan` session, so no Epic 30 answer shape applies. Inside BMN, asked for a multiple-choice question, Cursor searched its tools for one, found none and asked in plain text; the only hook event was `stop`, so Needs you showed the ordinary "Cursor finished its turn" ([`question-in-bmn.txt`](../apps/desktop/src/utility/test-fixtures/cursor/question-in-bmn.txt)). |
 | Permission prompt | Seen (`Run this command? … Run (once) (y) / Add Shell(touch) to allowlist? (tab) / Run Everything (shift+tab) / Skip (esc or n)`), but **no event marks it**: `beforeShellExecution` fires for every command before BMN could know a prompt is shown. No Needs you request and no buttons. |
 | Nested agents | A hook's parent is `bash` and then Cursor's node process (`MainThread`), which holds the terminal's foreground group, so BMN's nested-agent rule applies unchanged: a `cursor-agent` run from a tool call reports nothing. |
 

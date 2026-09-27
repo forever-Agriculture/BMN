@@ -46,7 +46,9 @@ repeats the choice in full as **Chosen: …**; toggling only edits the card. Onc
 your own words: tap it, then reply to the card; **‹ Options** goes back with your toggles intact. The
 reply is sent as one line (line breaks and control characters become spaces), clipped to 2,000
 characters, and never becomes a draft or a prompt. A reply to a card that offers Other… before you
-tapped it is refused with **Tap Other… first**. A new version of an open request edits its card instead
+tapped it is refused with **Tap Other… first**; while its answer is on its way, or once it is done, a
+reply to it is refused too, never turned into a draft. A reply made only of frame glyphs such as `│`
+or `✔` cannot be checked on a Claude or Codex screen and is refused. A new version of an open request edits its card instead
 of sending another. Uncertain, partial and refused answers also get a short reply, so the phone
 sounds. If Telegram does not take the final edit, BMN tries again after about 10 s, 1 min and 5 min
 and never sends the answer twice; a card still unfinished at the next start is finished then. After a

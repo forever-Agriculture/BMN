@@ -351,6 +351,44 @@ describe('agent history limit', () => {
     expect(f.state().runs.codex).toMatchObject({ deleted: 1, remaining: 0, failures: [] })
   })
 
+  it('marks each session as being deleted only while its check and delete run, failures included (Astra recheck)', async () => {
+    const codex = fakeAdapter('codex', [{ id: 'a', updatedAt: daysAgo(40) }, { id: 'b', updatedAt: daysAgo(41) }])
+    codex.failing.add('b')
+    const f = await fixture({ adapters: [codex] })
+    const seen: Array<[string, boolean, boolean]> = []
+    const remove = codex.remove.bind(codex)
+    codex.remove = async (id) => {
+      seen.push([id, f.history.isDeleting(id), f.history.isDeleting(id === 'a' ? 'b' : 'a')])
+      return remove(id)
+    }
+    await f.history.confirm()
+    await f.history.run()
+
+    expect(seen).toEqual([['b', true, false], ['a', true, false]])
+    expect(f.history.isDeleting('a')).toBe(false)
+    expect(f.history.isDeleting('b')).toBe(false)
+    expect(f.state().runs.codex).toMatchObject({ deleted: 1, failures: [{ id: 'b' }] })
+  })
+
+  it('reads the agent store last in the re-check, so activity during the other reads still counts (Astra recheck)', async () => {
+    const codex = fakeAdapter('codex', [{ id: 'b', updatedAt: daysAgo(40) }])
+    let liveReads = 0
+    const f = await fixture({ adapters: [codex] })
+    const history = f.history as unknown as { options: { liveConversationIds: () => Promise<Set<string>> } }
+    const live = history.options.liveConversationIds
+    history.options.liveConversationIds = async () => {
+      liveReads += 1
+      // The re-check's own read of live bindings: the session is used right then.
+      if (liveReads === 2) codex.sessions = codex.sessions.map((session) => ({ ...session, updatedAt: NOW.getTime() }))
+      return live()
+    }
+    await f.history.confirm()
+    await f.history.run()
+
+    expect(liveReads).toBe(2)
+    expect(codex.removed).toEqual([])
+  })
+
   it('stops between deletions when BMN quits; the next run takes the rest', async () => {
     const codex = fakeAdapter('codex', [{ id: 'a', updatedAt: daysAgo(40) }, { id: 'b', updatedAt: daysAgo(41) }])
     const f = await fixture({ adapters: [codex] })
