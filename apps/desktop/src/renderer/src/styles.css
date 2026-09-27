@@ -249,9 +249,10 @@ input[type='radio'] {
 .chip {
   display: inline-block;
   padding: 0 6px;
-  border: 1px solid var(--hairline);
+  border: 0;
   border-radius: 4px;
   color: var(--muted);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
   font: 11px/18px var(--font-mono);
   white-space: nowrap;
 }
@@ -676,6 +677,12 @@ input[type='radio'] {
   grid-column: auto;
 }
 
+/* Every session starts in a shell, so a bare "Shell" tag on each row is noise. The element stays in
+   the DOM: the self-test reads its text. */
+.session-row .chip[data-generic='true'] {
+  display: none;
+}
+
 .session-row.archived .session-name {
   color: var(--muted);
 }
@@ -977,6 +984,8 @@ input[type='radio'] {
    own, so the strip reads as one line rather than as a row of controls. */
 .progress-strip .progress-open {
   display: flex;
+  min-height: 0;
+  line-height: inherit;
   flex: 0 1 auto;
   align-items: baseline;
   justify-content: flex-start;
@@ -1026,6 +1035,40 @@ input[type='radio'] {
   flex: 1 1 100%;
   margin-left: 0;
   font-size: 11px;
+}
+
+/* On a stopped session the strip is a plate, not a pane bar: the label gets its own line (up to two),
+   then state and evidence on the left and the source on the right, on one baseline. */
+.stopped-session .progress-strip {
+  flex-wrap: wrap;
+  align-items: baseline;
+  row-gap: 4px;
+  min-height: 0;
+  padding: 9px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--raised);
+  white-space: normal;
+}
+
+.stopped-session .progress-strip .label {
+  display: -webkit-box;
+  flex: 1 1 100%;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: var(--text);
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.stopped-session .progress-strip .progress-open {
+  flex: 1 1 auto;
+  white-space: nowrap;
+}
+
+.stopped-session .progress-strip .source {
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 /* Whether anything backs the word is never in the word's own colour: it is a fact, not a verdict. */
@@ -1381,22 +1424,22 @@ input[type='radio'] {
 }
 
 /* Buttons in these panels are filled plates, as in dialogs: outlined boxes read as unfinished. */
-:is(.session-inspector, .session-launcher) :where(button:not(.icon-button, .progress-open, .primary, .ghost, [role='radio'])) {
+:is(.session-inspector, .session-launcher, .stopped-session) :where(button:not(.icon-button, .progress-open, .primary, .ghost, [role='radio'])) {
   border-color: transparent;
   background: color-mix(in srgb, var(--text) 8%, transparent);
   font-weight: 500;
 }
 
-:is(.session-inspector, .session-launcher) :where(button:not(.icon-button, .progress-open, .primary, .ghost, [role='radio'])):hover:not(:disabled) {
+:is(.session-inspector, .session-launcher, .stopped-session) :where(button:not(.icon-button, .progress-open, .primary, .ghost, [role='radio'])):hover:not(:disabled) {
   background: color-mix(in srgb, var(--text) 13%, transparent);
 }
 
-:is(.session-inspector, .session-launcher) :where(button:not(.icon-button, .progress-open, .primary, .ghost, [role='radio'])):active:not(:disabled) {
+:is(.session-inspector, .session-launcher, .stopped-session) :where(button:not(.icon-button, .progress-open, .primary, .ghost, [role='radio'])):active:not(:disabled) {
   background: color-mix(in srgb, var(--text) 16%, transparent);
   box-shadow: none;
 }
 
-:is(.session-inspector, .session-launcher) button:disabled:not(.primary) {
+:is(.session-inspector, .session-launcher, .stopped-session) button:disabled:not(.primary) {
   border-color: transparent;
   background: color-mix(in srgb, var(--text) 4%, transparent);
 }

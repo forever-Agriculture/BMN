@@ -1652,7 +1652,9 @@ function App(): React.JSX.Element {
                             <span className={`status-dot ${status.dot}`} aria-hidden="true" />
                             <span className="session-name">{session.name}</span>
                             <span className="chips">
-                              <span className="chip">{origin === null ? agentTag(session.executable, session.argv) : observedAgentName(origin.agent)}</span>
+                              <span className="chip" data-generic={origin === null && agentTag(session.executable, session.argv) === 'Shell' ? 'true' : undefined}>
+                                {origin === null ? agentTag(session.executable, session.argv) : observedAgentName(origin.agent)}
+                              </span>
                               {originFlag === null ? null : (
                                 <span className="origin-flag" role="img" title={originLabel ?? undefined} aria-label={originLabel ?? undefined}>{originFlag}</span>
                               )}
@@ -1787,7 +1789,10 @@ function App(): React.JSX.Element {
           ) : null}
           {selectedRecord && !live[selectedRecord.sessionId] ? (
             <section className="stopped-session" style={paneStyle(selectedRecord.sessionId)}>
-              <span className="eyebrow">{workspaceName(selectedRecord.workspaceId)} · {agentTag(selectedRecord.executable, selectedRecord.argv)}</span>
+              <span className="eyebrow">
+                {[workspaceName(selectedRecord.workspaceId), agentTag(selectedRecord.executable, selectedRecord.argv)]
+                  .filter((part) => part !== 'Shell').join(' · ')}
+              </span>
               <h2>{selectedRecord.name}</h2>
               <p>{sessionProcessLabel(selectedRecord.lastProcess)} · {selectedRecord.cwd}</p>
               <ProgressStrip progress={selectedProgress} onOpen={() => openProgressDetail(selectedRecord, selectedProgress)} />
@@ -1804,7 +1809,7 @@ function App(): React.JSX.Element {
                     .then(setSavedOutput)
                     .catch(fail('Saved output unavailable'))
                 }}>Saved output</button>
-                <button type="button" className="ghost" onClick={() => setPanel('details')}>Session details</button>
+                <button type="button" onClick={() => setPanel('details')}>Session details</button>
               </div>
               {savedOutput ? <pre className="saved-output-summary">{savedOutput.current?.content ?? savedOutput.history[0]?.content ?? 'No saved output has been captured for this session.'}</pre> : null}
             </section>
