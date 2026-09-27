@@ -5,7 +5,7 @@ per agent version and prompt shape, exactly how that answer is delivered, how BM
 dialog on screen, and what proves the answer landed. Code follows this table: a shape that is not
 **VERIFIED** here gets a card without buttons.
 
-Measured 2026-09-27 against Claude Code 2.1.283, codex-cli 0.157.1 and OpenCode 1.18.32, each driven
+Measured 2026-09-27 (Epic 30; multi-select, typed answers and Back in Epic 31, same night, same versions) against Claude Code 2.1.283, codex-cli 0.157.1 and OpenCode 1.18.32, each driven
 in a real terminal (tmux, 200×50 and 80×40) with BMN's control variables removed. Raw captures and a
 SHA-256 manifest are under `.dev-auto/evidence/remote-answers/` (not committed). Sanitised hook
 payloads and screen text are the test fixtures in
@@ -21,8 +21,9 @@ payloads and screen text are the test fixtures in
 | Permission, allow once | **VERIFIED** keys (`Bash` only; other tools not driven) | out of scope (Auto Review) | **VERIFIED** API |
 | Permission, deny | **VERIFIED** keys (`Bash` only), never confirmed | out of scope | **VERIFIED** API, only when it is the session's single pending permission |
 | Sandbox network prompt | **UNSUPPORTED**: not driven (sandbox off on this machine); prompt-less, so no buttons | — | — |
-| Multi-select | **UNSUPPORTED** (version 1) | **UNSUPPORTED** | **UNSUPPORTED** |
-| Typed ("Other") answer | **UNSUPPORTED** (version 1) | **UNSUPPORTED** | **UNSUPPORTED** |
+| Multi-select | **VERIFIED** keys (Epic 31) | **UNSUPPORTED**: the tool has no multi-select field | **VERIFIED** API (Epic 31) |
+| Typed ("Other…") answer | **VERIFIED** keys, single- and multi-select (Epic 31) | **VERIFIED** keys, as "None of the above" plus a note (Epic 31) | **VERIFIED** API, unless the question sets `custom: false` (Epic 31) |
+| Back to a previous question | **VERIFIED**: card only, no keys (Epic 31) | **VERIFIED**: card only, no keys (Epic 31) | **VERIFIED**: card only, no API call (Epic 31) |
 | Subagent prompts | — | — | **UNSUPPORTED** (version 1) |
 
 ## Claude Code 2.1.283
@@ -57,6 +58,35 @@ payloads and screen text are the test fixtures in
 | Several questions | a tab row `←  ☐ H1  ☐ H2  ☐ H3  ✔ Submit  →`; answered tabs turn `☒`; one question shown at a time | the digit for each question in order; each digit answers and moves on. After the last one a **Review your answers** screen lists `● <question>` / `→ <label>` and `1. Submit answers` / `2. Cancel`; press `1` |
 | Permission | a tool title (`Bash command`), the command indented under it, `Do you want to proceed?`, options `1. Yes`, `2. Yes, and always allow …`, `3. No` | allow once: the digit of the option labelled exactly `Yes`; deny: the digit of the option labelled exactly `No`. The option list varies by tool, so the digits are read from the screen, never assumed |
 
+### Multi-select, typed answers and Back (Epic 31)
+
+Screens: `.dev-auto/evidence/epic-31/spike-31-4/screens/claude-*` (80 and 200 columns).
+
+- **Multi-select** (`multiSelect: true`): options show as `N. [ ] <label>`, then `N+1. [ ] Type something`,
+  a last row that reads `Next` on an earlier question and `Submit` on the last, and `Chat about this`
+  below the rule. A digit toggles its option to `[✔]` and does not submit or move the cursor, which
+  starts on option 1. BMN leaves the question by pressing **Down** once per option plus once for
+  `Type something` (the cursor lands on `❯ Next` or `❯ Submit`) and **Enter**: on to the next
+  question, or after the last to **Review your answers**, where `1` submits. (Right also leaves a
+  question but is not used, because inside a text field it moves the text cursor.) `PostToolUse` reports the question's answer as one
+  string, the chosen labels joined by `, ` **in the order they were toggled** (`"SSO, Rate
+  limiting"`; toggling 3 then 1 gave `"Webhooks, Rate limiting"`), so BMN toggles in option order
+  and expects that order.
+- **Typed answer, single choice:** the digit of `Type something.` puts the cursor in its text field;
+  the typed text replaces the label in place (`❯ 3. Passkeys first, JWT as fallback`); **Enter**
+  submits a one-question dialog or moves to the next question. `PostToolUse` reports the text as the
+  answer. A 2,699-character answer arrived intact; BMN clips at 2,000.
+- **Typed answer, multi-select:** a digit only ticks `Type something`; typing needs the cursor on
+  that row. From a freshly shown question the cursor is on option 1, so after the toggles BMN presses
+  **Down** once per option, types (the row ticks itself and shows the text: `❯ 4. [✔] Passkeys`),
+  then **Down** to `Next`/`Submit` and **Enter**. Inside the text field Right moves the text cursor and a
+  digit is typed into the answer, so neither is used there. Reported as `"Audit log, Passkeys"`
+  (typed text last); on the first of two questions the same keys moved on to question 2 and the
+  review listed `Rate limiting, GraphQL`.
+- **Back:** **Left** returns to the previous question with its earlier choice marked `✔`; the tab row
+  is `←  ☒ H1  ☐ H2  ☐ H3  ✔ Submit  →`. BMN never needs it: a card sends nothing until its last
+  answer, so a card's Back only changes the card.
+
 ## Codex 0.157.1
 
 - The blocking `request_user_input` exists only in **Plan mode** ("The blocking request_user_input
@@ -72,6 +102,22 @@ payloads and screen text are the test fixtures in
 - `request_user_input_async` renders as an ordinary message with bulleted options and returns
   `{"accepted": true}` at once; there is no picker to answer. No buttons.
 - Codex's hooks read `CODEX_HOME`; hooks in a new file need trusting once (`/hooks`).
+
+### Multi-select, typed answers and Back (Epic 31)
+
+Screens: `.dev-auto/evidence/epic-31/spike-31-4/screens/codex-*` (200 columns). Receipt: the spike
+thread's rollout, `function_call_output` of `request_user_input`.
+
+- **Multi-select: UNSUPPORTED.** The tool's question has `header`, `id`, `question`, `isOther` and
+  `options`, and no multi-select field; Codex cannot ask one.
+- **Typed answer:** every question ends with `None of the above  Optionally, add details in notes
+  (tab)`, whether or not the call set `isOther`. BMN presses **Down** to that row (one per option
+  from option 1), **Tab** to open `› Add notes`, types the text, then **Enter** (`enter to submit
+  answer`; on the last question it submits all). `PostToolUse` reports
+  `{"answers":{"auth":{"answers":["None of the above","user_note: Passkeys first, JWT as fallback"]}}}`,
+  which is the proof.
+- **Back:** **Left**/**Right** move between questions and keep earlier choices and notes
+  (`←/→ to navigate questions`). As for Claude, a card's Back presses nothing.
 
 ## OpenCode 1.18.32
 
@@ -92,6 +138,21 @@ payloads and screen text are the test fixtures in
   when the card's permission is the only one pending in that session.
 - The dialog: `△ Permission required`, the command, and `Allow once   Allow always   Reject`;
   questions show numbered options and "Type your own answer". Keys are not needed.
+
+### Multi-select, typed answers and Back (Epic 31)
+
+Screens and events: `.dev-auto/evidence/epic-31/spike-31-4/opencode/`. Disposable
+`XDG_*` folders, free model, BMN's variables removed.
+
+- **Multi-select:** `question.asked` carries `multiple: true` on the question (the tool's schema:
+  "Allow selecting multiple choices"). The TUI shows `N. [ ] <label>` and `(select all that apply)`.
+  `POST question/<id>/reply` with `{"answers": [["SSO", "Rate limiting"], …]}` returned `200 true`,
+  emitted `question.replied` with exactly those arrays, and the model received "SSO, Rate limiting".
+- **Typed answer:** the schema's `custom` ("Allow typing a custom answer (default: true)") adds
+  `Type your own answer`; the event omits it unless the model set it. A label that is not an option,
+  `[["Passkeys first, JWT as fallback"]]`, was accepted the same way and reached the model as the
+  answer. BMN offers **Other…** only when `custom` is not `false`.
+- **Back:** all questions are answered in one call, so a card's Back is card-only.
 
 ## How BMN uses this
 

@@ -959,6 +959,39 @@ describe('bmn hook provenance and the hook event log', () => {
     expect(JSON.stringify(observed)).not.toContain('/v1')
   })
 
+  // Story 31.1: the Claude config folder rides along, resolved the way `hooks install` resolves it.
+  it.each([
+    ['an absolute folder', '/srv/agents/glm-config', undefined, '/srv/agents/glm-config'],
+    ['a relative folder, against the working directory', 'conf/glm', 'cwd', '<cwd>/conf/glm'],
+    ['a folder with .. kept as written', '/srv/agents/../glm', undefined, '/srv/agents/../glm'],
+    ['no variable, the home folder', undefined, undefined, '<home>/.claude']
+  ])('sends claudeConfigDir for %s', async (_label, variable, cwd, expected) => {
+    const fixture = await cliFixture()
+    const home = join(fixture.root, 'home')
+    const workdir = join(fixture.root, 'work')
+    await mkdir(workdir, { recursive: true })
+    const proc = await procTree(fixture.root, HOLDS_TERMINAL)
+    const result = await runCli(['hook', 'claude'], {
+      env: { ...fixture.sessionEnv, BMN_PROC_ROOT: proc, HOME: home, ...(variable === undefined ? {} : { CLAUDE_CONFIG_DIR: variable }) },
+      input: JSON.stringify({ hook_event_name: 'Notification' }),
+      ...(cwd === undefined ? {} : { cwd: workdir })
+    })
+
+    expect(result).toEqual(QUIET)
+    const observed = fixture.handlers.observeHookEvent.mock.calls[0]?.[0]
+    expect(observed?.claudeConfigDir).toBe(expected.replace('<cwd>', workdir).replace('<home>', home))
+  })
+
+  it('sends no claudeConfigDir from a Codex or OpenCode hook', async () => {
+    for (const agent of ['codex', 'opencode']) {
+      const fixture = await cliFixture()
+      await runHook(fixture, agent, { hook_event_name: 'Stop' }, HOLDS_TERMINAL, { CLAUDE_CONFIG_DIR: '/srv/glm' })
+      const observed = fixture.handlers.observeHookEvent.mock.calls[0]?.[0]
+      expect(observed).toMatchObject({ agent })
+      expect(observed?.claudeConfigDir).toBeUndefined()
+    }
+  })
+
   it('sends no apiHost when the base URL variable is unset', async () => {
     const fixture = await cliFixture()
 

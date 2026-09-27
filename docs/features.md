@@ -75,9 +75,17 @@ model is hosted; Session details adds a Model row with the model name and API ho
 unrecognised model shows no flag rather than a guess. How it is decided:
 [Agent control](agent-control.md#model-origin-flag).
 
-**Archive retention.** Preferences → Archive sets how long archived sessions and workspaces are
-kept: a number of days, or forever. The check runs when BMN starts. Deletion is permanent and takes
-the saved output, requests and Telegram history with it; published files are kept.
+**Agent history.** Preferences → History → Keep agent history (7, 30 or 90 days, or Never; default
+30) is one limit for every agent: Claude Code and `claude glm` get it as their own
+`cleanupPeriodDays`, and BMN deletes Codex and OpenCode sessions untouched for longer through their
+own delete commands, at most 200 per agent per daily run. Nothing is written or deleted until you
+press Start cleanup once; the Preferences button shows the attention dot while it waits. Sessions in
+use are never deleted. See [Agent history](agent-history.md).
+
+**Archive retention.** Preferences → History → Delete archived sessions and workspaces sets how long
+archived sessions and workspaces are kept: a number of days, or forever. The check runs when BMN
+starts. Deletion is permanent and takes the saved output, requests and Telegram history with it;
+published files are kept.
 
 ## The terminal and panes
 

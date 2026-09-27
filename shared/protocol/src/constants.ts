@@ -69,6 +69,8 @@ export const METHOD_REGISTRY = Object.freeze({
   draftDiscard: 'draft.discard',
   settingsGet: 'settings.get',
   settingsPut: 'settings.put',
+  historyStatus: 'history.status',
+  historyConfirm: 'history.confirm',
   backupExport: 'backup.export',
   backupVerify: 'backup.verify',
   telegramConfigure: 'telegram.configure',

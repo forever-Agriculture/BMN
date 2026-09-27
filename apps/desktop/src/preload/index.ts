@@ -9,6 +9,7 @@ import {
   isAppEventMessage,
   isClosePromptRequest,
   type AppEventMessage,
+  type AgentHistoryStatus,
   type AppSettings,
   type ArtifactPreview,
   type ArtifactRecord,
@@ -634,6 +635,12 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   putSettings<Section extends keyof AppSettings>(section: Section, value: AppSettings[Section]): Promise<AppSettings> {
     return invokeBridge('aiterm:settings:put', { section, value })
+  },
+  getHistoryStatus(): Promise<AgentHistoryStatus> {
+    return invokeBridge('aiterm:history:status', {})
+  },
+  confirmHistory(): Promise<AgentHistoryStatus> {
+    return invokeBridge('aiterm:history:confirm', {})
   },
   configureTelegram(token: string | null): Promise<TelegramStatus> {
     return invokeBridge('aiterm:telegram:configure', { token })

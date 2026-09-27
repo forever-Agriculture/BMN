@@ -129,6 +129,8 @@ export interface ControlHandlers {
     apiHost?: string | undefined
     /** The model name the hook payload carried; absent when it carried none. */
     model?: string | undefined
+    /** The Claude config folder the CLI resolved (Story 31.1); absent from other agents and old CLIs. */
+    claudeConfigDir?: string | undefined
     effects: readonly HookEventEffect[]
   }): Promise<unknown>
   /** Writes text into the PTY as a bracketed paste; appends '\r' only when submit is true. */
@@ -960,7 +962,7 @@ export class ControlServer {
       }
       case 'hook.observe': {
         // Observations are diagnostic; the repeat watch may open or withdraw its one notice.
-        const params = closedParams(rawParams, ['sessionId', 'agent', 'event', 'source', 'toolName', 'effects', 'fingerprint', 'apiHost', 'model'])
+        const params = closedParams(rawParams, ['sessionId', 'agent', 'event', 'source', 'toolName', 'effects', 'fingerprint', 'apiHost', 'model', 'claudeConfigDir'])
         const agent = requireEnum(params, 'agent', HOOK_EVENT_AGENTS)
         const event = requireText(params, 'event', RULES.source)
         if (!isHookEventName(event)) throw invalid('event must be printable ASCII without spaces')
@@ -978,6 +980,11 @@ export class ControlServer {
           throw invalid('apiHost must be a hostname')
         }
         const model = readText(params, 'model', RULES.model)
+        // Where a Claude session's settings live (Story 31.1). An old CLI sends none and still passes.
+        const claudeConfigDir = readText(params, 'claudeConfigDir', RULES.path)
+        if (claudeConfigDir !== undefined && (agent !== 'claude' || !claudeConfigDir.startsWith('/'))) {
+          throw invalid('claudeConfigDir must be an absolute path from a Claude hook')
+        }
         const effects = requireEffects(params, 'effects')
         const sessionId = this.target(scope, params)
         return handlers.observeHookEvent({
@@ -990,6 +997,7 @@ export class ControlServer {
           ...(fingerprint === undefined ? {} : { fingerprint }),
           ...(apiHost === undefined ? {} : { apiHost }),
           ...(model === undefined ? {} : { model }),
+          ...(claudeConfigDir === undefined ? {} : { claudeConfigDir }),
           effects
         })
       }

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
 import {
@@ -45,6 +46,10 @@ import { ensureApplicationRoots, resolveApplicationRoots } from './roots'
 import { installBundledTerminfo } from './terminal-graphics'
 import { FileSavedOutputStore } from './saved-output-store'
 import { routeTerminalSavedOutputGet } from './saved-output-route'
+import { type AgentHistoryAdapter } from './agent-history'
+import { codexHistoryAdapter } from './agent-history-codex'
+import { openCodeHistoryAdapter } from './agent-history-opencode'
+import type { OpenReadOnly } from './agent-history-store'
 import {
   HostControlError,
   PersistedSessionStartError,
@@ -236,6 +241,14 @@ async function purgeExpiredArchives(
   }
 }
 
+/** Codex and OpenCode, pruned by their own delete commands; their databases are only ever opened read-only. */
+function historyAdapters(): AgentHistoryAdapter[] {
+  const home = process.env.BMN_SELF_TEST_HOME && process.argv.includes('--self-test-host') ? process.env.BMN_SELF_TEST_HOME : homedir()
+  const open: OpenReadOnly = (path) => new (BetterSqlite3 as unknown as new (path: string, options: { readonly: true; fileMustExist: true }) =>
+    ReturnType<OpenReadOnly>)(path, { readonly: true, fileMustExist: true })
+  return [codexHistoryAdapter({ home, open }), openCodeHistoryAdapter({ home, open })]
+}
+
 async function start(): Promise<void> {
   const roots = resolveApplicationRoots()
   await ensureApplicationRoots(roots)
@@ -287,6 +300,8 @@ async function start(): Promise<void> {
     ...(process.argv.includes('--self-test-host') && process.env.BMN_SELF_TEST_TELEGRAM_ORIGIN
       ? { telegramApiOrigin: process.env.BMN_SELF_TEST_TELEGRAM_ORIGIN }
       : {}),
+    historyAdapters: historyAdapters(),
+    ...(process.env.BMN_SELF_TEST_HOME && process.argv.includes('--self-test-host') ? { home: process.env.BMN_SELF_TEST_HOME } : {}),
     emit: (message) => parentPort.postMessage(message)
   })
   companionHolder.current = companion

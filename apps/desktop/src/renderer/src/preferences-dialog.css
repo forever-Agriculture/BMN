@@ -323,3 +323,121 @@
   margin: 6px 0;
   padding-left: 20px;
 }
+
+/* History (Epic 31): segmented limits, agent rows and the one confirm line. Gold marks selection only. */
+.preferences-dialog .history-control {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+.segmented {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.segmented [role='radio'] {
+  position: relative;
+  height: 32px;
+  padding: 0 8px 0 11px;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--raised);
+  color: var(--text);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.segmented [role='radio']::before {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 0;
+  width: 2px;
+  border-radius: 0 1px 1px 0;
+  background: transparent;
+  content: '';
+  transition: var(--hover-transition);
+}
+
+.segmented [role='radio']:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--text) 18%, transparent);
+  background: var(--hover);
+}
+
+.segmented [role='radio'][aria-checked='true'] {
+  border-color: color-mix(in srgb, var(--text) 22%, transparent);
+  background: var(--selected);
+}
+
+.segmented [role='radio'][aria-checked='true']::before {
+  background: var(--identity);
+}
+
+.segmented [role='radio']:disabled {
+  opacity: 0.45;
+}
+
+.preferences-dialog .history-rows {
+  grid-template-columns: 96px minmax(0, 1fr) auto;
+  gap: 0 10px;
+  margin: 4px 0 8px;
+}
+
+.preferences-dialog .history-row {
+  display: contents;
+}
+
+.preferences-dialog .history-rows dt {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.preferences-dialog .history-rows dd {
+  color: var(--muted);
+}
+
+.preferences-dialog .history-rows dd.value {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.preferences-dialog .history-rows .next {
+  color: var(--text);
+}
+
+.preferences-dialog .history-rows dd.failure {
+  grid-column: 2 / -1;
+}
+
+.preferences-dialog .history-confirm {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0 12px;
+}
+
+.preferences-dialog .history-confirm p {
+  flex: 1;
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.preferences-dialog .history-archive {
+  border-top: 1px solid var(--hairline);
+  padding-top: 12px;
+}
+
+.preferences-button {
+  position: relative;
+}
+
+.preferences-button .status-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+}

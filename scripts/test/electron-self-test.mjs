@@ -677,9 +677,10 @@ const exitCode = await withTemporaryRoot(temporaryRootContracts.electronSelfTest
     }
     const timer = setTimeout(() => {
       child.kill('SIGKILL')
-      finish(undefined, new Error('Electron self-test timed out after 120 seconds'))
-      // A passing run measured 88.7 s on 2026-09-27 (Epic 29 added about 1 s), too close to the old 90 s.
-    }, 120_000)
+      finish(undefined, new Error('Electron self-test timed out after 150 seconds'))
+      // A passing run measured 88.7 s on 2026-09-27 (Epic 29 added about 1 s), too close to the old 90 s;
+      // Epic 31's agent history phases add a few seconds more.
+    }, 150_000)
     child.stdout.on('data', () => {
       const receipt = stdout
         .split(/\r?\n/)

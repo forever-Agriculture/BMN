@@ -1,49 +1,42 @@
 # Dev Auto handoff
 
-- Project / selected epics: /home/oleksandr/code/BMN; Epic 30 (stories 30.1, 30.2, 30.3), `/dev-auto 30` 2026-09-27.
-- Original request and intended outcomes: `_bmad-output/planning-artifacts/epics.md` "Epic 30: Answer Your Agents from Telegram" (from line 1573) — Telegram cards with tap-to-answer buttons for agent questions and permissions; seven experience lines; shape matrix (decision 7).
+- Project / selected epics: /home/oleksandr/code/BMN; Epic 31 (stories 31.1, 31.2, 31.3, 31.4), `/dev-auto 31` 2026-09-27 ~22:40 EEST.
+- Original request and intended outcomes: `_bmad-output/planning-artifacts/epics.md` "Epic 31: Every Agent Under the Same Rules" (line 1816) — one agent-history limit (Claude/GLM cleanupPeriodDays, Codex/OpenCode own delete, one Start cleanup), Cursor terminal agent from measurements, Telegram multi-select / Other… / Back. Design section (Fable) binding for UI and cards.
 - Mode: build
 - Stopping condition: selected scope accepted; no automatic time limit.
 - Explicit user stop: none
-- Restrictions and authorization boundaries: local task commits authorized (global rules); push to main and `pnpm run update:desktop` need owner authorization (AGENTS.md); never `pnpm run package` while packaged BMN is open. Spike runs of real agents must not touch the owner's BMN or Telegram: unset `BMN_*` AND legacy `AITERM_*` in spike terminals and check `/proc/PID/environ` before prompting (leak 2026-09-27, log); never edit `~/.claude/settings.json`, `~/.codex/hooks.json` or the owner's OpenCode config (use `--settings`, temp CODEX_HOME / OPENCODE_CONFIG_DIR). Epic constraints: no blocking hooks, no "always allow", nothing on the control socket can create or change an answer.
+- Restrictions and authorization boundaries: local task commits authorized (global rules); push to main and `pnpm run update:desktop` need owner authorization (AGENTS.md); never `pnpm run package` while packaged BMN is open. Epic constraints (epics.md Epic 31 "Constraints"): nothing written/deleted before Start cleanup; delete only via agent command/setting; never write agent databases (open read-only); never remove transcript files; no new daemon/unit/table; no auth file read; spikes on disposable stores only (temp CODEX_HOME / XDG_DATA_HOME). Carried from Epic 30: spike terminals unset `BMN_*` and `AITERM_*`, check `/proc/PID/environ`; never edit `~/.claude/settings.json`, `~/.codex/hooks.json`, owner OpenCode config during tests (31.1 writes cleanupPeriodDays only via the shipped Start cleanup, by the owner). Transcripts must not go to GLM (epic lead note): GLM reviews get code/diffs only.
 - Decision and history log: .dev-auto/log.md (append-only)
 - Authorized provider routes: `~/code/dev-auto/skills/dev-auto/references/models.md` (dev-auto execution consent, global rules).
 - Lead host / requested model / observed model: Claude Code, Opus (suggested lead), observed claude-opus-5-5.
 
 ## Progress
 
-- Sprint board and reconciled state: epic-30 `done`; 30-1, 30-2, 30-3 `done` (30-3 after the owner phone walk-through 2026-09-27 ~21:05-21:20 EEST, log). Accepted candidate 9b0d890 (251b1e2, 8ee22dd, 9ac0872, a2f7456, bbe3ec4, 9b0d890); pushed to origin main as c479a05 (owner authorized, log ~23:10); first update FAILED (local record commit unpushed); second FAILED the packaged smoke (fixtures not packaged) → fix 813884a, pushed; third update of 25e9617 COMPLETE 17:35:40Z (package, packaged smoke, install PASS; `~/.local/state/bmn/source-update/latest.json`), new build running (log resume 3). Live harness kept untracked at `.dev-auto/evidence/e30-live-remote-answers.live.test.ts.txt`.
-- Implemented: 30.1 (spike, structured prompt, v17, CLI mappers, setting, docs); 30.2 (mirror, engine, evidence, `answer.take`, plugin polling); 30.3 telegram-cards.ts, telegram-card-keeper.ts, connector HTML/edit/toast/callback_query/apiOrigin, schema v18 card columns, companion wiring, structured-dialog drafts, docs telegram.md/features.md, Electron fake Bot API phase (main/fake-bot-api.ts).
-- Active helpers: none. Collected: owner-requested GLM full review of ec7c517..25e9617 (`e30-glm-final.md`, no material findings, log ~20:55); pre-review, full review, recheck 1 (`e30-astra-recheck.md`), consultation (`e30-consult.md`), final recheck (`e30-astra-recheck2.md` sha 0e6af55dfe1d6946, clean).
+- Sprint board and reconciled state: epic-31 backlog (set in-progress at first commit); 31-1..31-4 backlog (31.1+31.2 implemented, verified, not yet committed). Baseline cb6ea18. Cursor installed + owner logged in (log ~23:00).
+- Implemented (uncommitted, 31.1+31.2 together; shared runner/UI): `bin/safe-config-write.mjs` (extracted from bin/bmn; packaged via electron-builder), protocol `agentHistory` settings + `history.status/confirm`, validator, CLI `claudeConfigDir`, server rule, `agent-history.ts` runner (confirm/limit policy, 200 cap, live/24 h/cmdline skips, schedule 30 s + 24 h), adapters codex/opencode (read-only sqlite, `codex delete --force`, `opencode session delete --pure`), Preferences History section + gear dot, docs/agent-history.md (spike), features.md, self-test phases 'agent history' (+ after restart), scripts/test/history-visual.mjs.
+- Active helpers: none.
 
 ## Decisions and findings
 
-- Original or approved intent changes: none. Owner request 2026-09-27 ~20:40 (log): GLM review of the whole epic at the end (ec7c517..25e9617), Fable consult if needed, then one test Telegram message via `tg.py send` when done.
-- Walk-through setup gap (log ~21:05): owner hook files lacked PreToolUse/PermissionRequest; installed with owner authorization ("claude + codex + opencode + all future agents"); docs/telegram.md setup step 5 added.
-- Material pending findings: none. Every finding (G1, G2, L1, A1-A8, R1-R4) has a closed disposition at 9b0d890 (log ~23:05).
-- 30.2 AC1 FAIL recorded (1.49×) → mirror gated to Claude/Codex hook sessions (log 2026-09-27 ~18:05).
-- Known residuals (log ~18:35-19:00): under heavy CPU load the plugin's 3 s hook deadline can lose a replied report → honest sent-unconfirmed. Final cards stay in the keeper's memory until restart (small).
-- Cross-epic obligations: Epic 29 hook origin reused for card headers (flag seen in Electron header); old `bmn` CLI ↔ new server; Remote Control sessions stay skipped; text-reply path unchanged except structured-dialog drafts.
+- Original or approved intent changes: none.
+- Material pending findings: none.
+- Cross-epic obligations: Epic 30 answer checks (screen/epoch-verified keys, named refusals, no Codex permissions) for 31.4; archive setting keeps meaning (31.1); Epic 18 precedent for 31.3; deadline 2026-10-08 for 31.2.
 
 ## Evidence
 
-- Unit gate at 25e9617: 110 files / 2084 PASS (`e30-unit-final.log` sha 8d3e6e6cfbd293a8). Unit gate 30.3: typecheck+lint+vitest 110 files / 2056 PASS (`.dev-auto/evidence/e30-unit-30.3a.log`); structured-draft RED/GREEN `e30-structured-draft-{red,green}.log`; earlier 30.2 gate/RED-GREEN in log.
-- Electron self-test incl. "remote answers" (30.2) and "telegram cards" (30.3, fake Bot API taps a three-question card; edits in order; keys 1,2,1,1; resolvedBy telegram): EXIT 0, `e30-electron-30.3-run1.log` sha 20a3b134a7a18d3b.
-- Real agents through the internal answer function, isolated BMN (log ~18:35-19:00): Claude 4/4 as designed, Codex 2/2 confirmed, OpenCode 3/3 confirmed on a quiet machine (run 1 under load: 1 confirmed, 2 sent-unconfirmed).
-- Reviewed scope and route: Astra (gpt-6-astra medium, codex exec read-only) full review of ec7c517..a2f7456 → not ready (A1-A8). Baseline ec7c517.
-- Review allowance: used through the final recheck (clean). Acceptance checks recorded (log ~23:05).
-- Owner phone walk-through on packaged 25e9617 (log ~21:05-21:20): lines 1-6 PASS live (cards 251-254, ~15.5 s after open, resolvedBy telegram / input as tapped; line 1 = at-desk requests seen within 14 ms, never paged). Line 7 delegated by owner ("idk make sure it works"): packaged smoke of 25e9617 permissionsOff refused/no keys, allowOnce key 1 confirmed, deny key 3 sent-unconfirmed (`latest.log`); real Claude Bash allow once confirmed in isolated BMN (log ~23:05); unit keyboards Allow once/Deny only.
-- Unverified: a permission card rendered on the owner's real phone (same renderer/connector as the question cards seen live).
+- 31.1+31.2: unit gate 114 files / 2142 PASS, Electron self-test run 4 EXIT 0, history screenshots (log ~23:10-23:30; `.dev-auto/evidence/epic-31/`). Spike receipts log ~22:50-23:00 and docs/agent-history.md.
+- 31.4 spike: Claude and Codex done (log ~23:30-23:55, screens `.dev-auto/evidence/epic-31/spike-31-4/`); OpenCode pending.
+- Untested so far: Claude's own deletion after cleanupPeriodDays (agent behaviour); OpenCode TUI idle on an old session without the id on its command line (documented residual).
 
 ## Measurement
 
-- Timing: started 2026-09-27 ~17:30.
-- Dispatches: GLM-5.3 max pre-review, $2.04, 63 turns; GLM-5.3 max final review $5.57, 95 turns; Astra medium review 3,271,969 input / 3,081,216 cached / 11,743 output.
+- Timing: started 2026-09-27 22:40 EEST.
+- Dispatches: none.
 - Review yield: n/a.
-- Owner interventions: none during build; after: push+update authorization, phone walk-through, hook-install authorization, GLM final review request.
-- Observed usage: lead Claude transcript 9e03d012 claude-opus-5-5/high 155.1M cache read / 1.44M cache write / 662K output; resume lead b64bdd23 claude-opus-5-5/high 226 input / 12.07M cache read / 134.5K cache write / 53.3K output; Astra recheck 1 1.05M in / 9.4K out; consult 169K in / 1.4K out; final recheck 864K in / 7.1K out (log).
+- Owner interventions: none.
+- Observed usage: pending.
 
 ## Resume
 
-- Next safe action: none; optional epic-30 retrospective.
-- Status: COMPLETE — Epic 30 accepted: owner walk-through lines 1-6 live, line 7 by packaged-smoke and real-agent evidence.
+- Next safe action: OpenCode 31.4 spike (disposable XDG, free model); docs/remote-answers.md cells; kill tmux -L e31; commit 31.1+31.2 (board 31-1/31-2 review); implement 31.4; then 31.3 Cursor measurement.
+- Status: ACTIVE — 31.1+31.2 verified, 31.4 spike in progress.

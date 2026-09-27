@@ -570,7 +570,13 @@ describe('control server validation', () => {
     ['oversize model', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], model: 'x'.repeat(129) }],
     ['empty model', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], model: '' }],
     ['non-string model', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], model: 42 }],
-    ['unknown hook parameter', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], pid: 12 }]
+    ['unknown hook parameter', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], pid: 12 }],
+    // Story 31.1: a Claude folder is an absolute path, and only a Claude hook reports one.
+    ['relative claude config folder', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], claudeConfigDir: 'conf/glm' }],
+    ['claude config folder from codex', 'hook.observe', { agent: 'codex', event: 'Stop', effects: [], claudeConfigDir: '/srv/glm' }],
+    ['control character claude config folder', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], claudeConfigDir: '/srv/\u0007glm' }],
+    ['empty claude config folder', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], claudeConfigDir: '' }],
+    ['non-string claude config folder', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], claudeConfigDir: 7 }]
   ])('rejects %s with INVALID_ARGUMENT and keeps the connection', async (_label, method, params) => {
     const fixture = await serverFixture()
     const client = await authenticated(fixture, sessionToken(fixture))
@@ -642,6 +648,11 @@ describe('control server validation', () => {
       model: 'GLM-5.3',
       effects: []
     })
+    // Story 31.1: the folder a Claude session's settings live in reaches the handler as sent.
+    await client.request('hook.observe', { agent: 'claude', event: 'Stop', effects: [], claudeConfigDir: '/home/owner/.claude-glm' })
+    expect(fixture.handlers.observeHookEvent).toHaveBeenLastCalledWith(expect.objectContaining({
+      agent: 'claude', claudeConfigDir: '/home/owner/.claude-glm'
+    }))
     // Names the URL parser keeps, underscores and IPv6 literals included, are hosts too.
     for (const apiHost of ['my_host.internal.example', '[::1]', 'xn--bcher-kva.example']) {
       await client.request('hook.observe', { agent: 'claude', event: 'Stop', effects: [], apiHost })

@@ -1,9 +1,8 @@
-// MODULE: preferences-dialog.tsx - owner-facing preferences: appearance, notifications, voice, Telegram, archive, agent control, backup
+// MODULE: preferences-dialog.tsx - owner-facing preferences: appearance, notifications, voice, Telegram, history, agent control, backup
 import { useEffect, useRef, useState } from 'react'
 import type {
   AppearanceSettings,
   AppSettings,
-  ArchiveDeleteAfterDays,
   BackupManifest,
   BackupVerifyResult,
   ControlInfo,
@@ -12,12 +11,13 @@ import type {
   TelegramStatus,
   VoiceSettings
 } from '@bmn/protocol'
-import { ARCHIVE_DELETE_AFTER_DAYS, COLOR_MODE_NAMES, DEFAULT_APP_SETTINGS, IDENTITY_NAMES, TERMINAL_FONT_SIZE_RANGE } from '@bmn/protocol'
+import { COLOR_MODE_NAMES, DEFAULT_APP_SETTINGS, IDENTITY_NAMES, TERMINAL_FONT_SIZE_RANGE } from '@bmn/protocol'
 import { Icon } from './icons'
 import { COLOR_MODE_PRESENTATION, IDENTITY_PRESENTATION } from './theme'
 import { VoicePreferences } from './voice-preferences'
 import { Dialog } from './dialog'
 import { failureDetail } from './bridge-error'
+import { HistoryPreferences } from './history-preferences'
 import { createHookCheckRunner } from './hook-check-runner'
 import { parseTelegramForm, type TelegramFormFields } from './telegram-form'
 import './preferences-dialog.css'
@@ -107,28 +107,6 @@ export function PreferencesDialog(props: {
       setNotificationsError(failureDetail(error, 'Could not save notification settings'))
     } finally {
       setNotificationsBusy(false)
-    }
-  }
-
-  // --- Archive ---------------------------------------------------------------
-  const [archiveDeleteAfter, setArchiveDeleteAfter] = useState<ArchiveDeleteAfterDays>(props.settings.archive.deleteAfterDays)
-  const [archiveBusy, setArchiveBusy] = useState(false)
-  const [archiveError, setArchiveError] = useState<string | null>(null)
-
-  async function saveArchive(next: ArchiveDeleteAfterDays): Promise<void> {
-    const previous = archiveDeleteAfter
-    setArchiveDeleteAfter(next)
-    setArchiveBusy(true)
-    setArchiveError(null)
-    try {
-      const result = await window.aiTerminal.putSettings('archive', { deleteAfterDays: next })
-      setArchiveDeleteAfter(result.archive.deleteAfterDays)
-      onSettings.current(result)
-    } catch (error) {
-      setArchiveDeleteAfter(previous)
-      setArchiveError(failureDetail(error, 'Could not save archive settings'))
-    } finally {
-      setArchiveBusy(false)
     }
   }
 
@@ -701,39 +679,7 @@ export function PreferencesDialog(props: {
         </p>
       </section>
 
-      <section className="preferences-section">
-        <h3>Archive</h3>
-        <div className="preferences-row">
-          <div className="preferences-row-label">
-            <label htmlFor="preferences-archive-delete-after">Delete archived sessions and workspaces</label>
-            <p className="preferences-help">
-              Checked when BMN starts. Items archived longer than this are deleted for good, with their saved
-              output, requests and Telegram history. Published files are kept.
-            </p>
-          </div>
-          <div className="preferences-row-control">
-            <select
-              id="preferences-archive-delete-after"
-              value={archiveDeleteAfter === null ? 'never' : String(archiveDeleteAfter)}
-              disabled={archiveBusy}
-              onChange={(event) => void saveArchive(
-                ARCHIVE_DELETE_AFTER_DAYS.find((days) => String(days ?? 'never') === event.target.value) ?? null
-              )}
-            >
-              {ARCHIVE_DELETE_AFTER_DAYS.map((days) => (
-                <option key={days ?? 'never'} value={days ?? 'never'}>
-                  {days === null ? 'Never' : `After ${days} days`}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-        {archiveError && (
-          <p className="preferences-error" role="alert">
-            {archiveError}
-          </p>
-        )}
-      </section>
+      <HistoryPreferences settings={props.settings} onSettings={(next) => onSettings.current(next)} />
 
       <section className="preferences-section" id="agent-control-section" tabIndex={-1}>
         <h3>Local agent control</h3>

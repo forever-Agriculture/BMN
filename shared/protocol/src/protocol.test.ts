@@ -133,6 +133,8 @@ describe('protocol surface', () => {
         'draft.discard',
         'settings.get',
         'settings.put',
+        'history.status',
+        'history.confirm',
         'backup.export',
         'backup.verify',
         'telegram.configure',
@@ -142,7 +144,7 @@ describe('protocol surface', () => {
         'presence.set'
       ])
     )
-    expect(Object.values(METHOD_REGISTRY)).toHaveLength(71)
+    expect(Object.values(METHOD_REGISTRY)).toHaveLength(73)
   })
 
   it('exports the initial stable error codes', () => {

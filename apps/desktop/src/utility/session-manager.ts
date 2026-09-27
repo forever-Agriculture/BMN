@@ -1478,6 +1478,11 @@ export class SessionManager {
     return { activated: true, undeliveredOutput: disclosure }
   }
 
+  /** Sessions whose process this host holds live now. */
+  liveSessionIds(): string[] {
+    return [...this.sessions].filter(([, live]) => !live.exited).map(([sessionId]) => sessionId)
+  }
+
   /** The incarnation the host currently holds live for a session, if any. */
   liveIncarnationId(sessionId: string): string | undefined {
     const live = this.sessions.get(sessionId)

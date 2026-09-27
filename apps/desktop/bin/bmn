@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // MODULE: bmn - command-line client for the BMN control socket (one connection per invocation)
 import { createHash, randomUUID } from 'node:crypto'
-import {
-  chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync
-} from 'node:fs'
+import { copyFileSync, existsSync, readFileSync, writeFileSync, writeSync } from 'node:fs'
 import { createConnection } from 'node:net'
 import { homedir } from 'node:os'
-import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
+import {
+  ConfigWriteError, absoluteUncollapsed, currentText, jsonIndent, rewrittenNumbers, writeAtomically
+} from './safe-config-write.mjs'
 
 const TIMEOUT_MS = 10_000
 /** A hook runs inside the agent's turn, so a stalled app must not hold the agent up for long. */
@@ -163,12 +164,8 @@ Inside tmux or Zellij, Codex follows the multiplexer's own image support.`
 
 class UsageError extends Error {}
 
-class CliError extends Error {
-  constructor(code, message) {
-    super(message)
-    this.code = code
-  }
-}
+/** A refusal with a stable code; the shared config writer throws the same class. */
+const CliError = ConfigWriteError
 
 function isObject(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value)
@@ -1074,14 +1071,6 @@ const HOOK_ENTRY_TIMEOUT = 5
  * The file that harness actually reads. Both harnesses let the owner move their config directory,
  * and BMN follows them there rather than writing a file the harness will never look at.
  */
-/**
- * Absolute, but never through `resolve` or `join`: both collapse `..` as text, and a `..` has to
- * reach `linkTarget` intact or it is answered from where a link was written, not where it points.
- */
-function absoluteUncollapsed(path) {
-  return isAbsolute(path) ? path : `${process.cwd()}/${path}`
-}
-
 function hookFilePath(agent) {
   if (agent === 'opencode') {
     const config = process.env.OPENCODE_CONFIG_DIR || `${process.env.XDG_CONFIG_HOME || `${homedir()}/.config`}/opencode`
@@ -1406,60 +1395,6 @@ function checkHooks(agent, path, file = agent === 'opencode' ? undefined : readH
   return { agent, file: path, state: file.state, ...(file.detail === undefined ? {} : { detail: file.detail }), events, missing }
 }
 
-/**
- * A JSON number literal as an exact decimal: sign, digits and a power of ten, with trailing zeros
- * removed so `1.0`, `1` and `1e0` all come out the same. Comparing these compares the numbers two
- * spellings denote, which is the only question worth asking about a rewrite.
- */
-function decimalParts(token) {
-  const parsed = /^(-?)(\d+)(?:\.(\d+))?(?:[eE]([+-]?\d+))?$/.exec(token)
-  if (parsed === null) return null
-  const [, sign, whole, fraction = '', exponent = '0'] = parsed
-  let digits = `${whole}${fraction}`.replace(/^0+(?=\d)/, '')
-  let scale = BigInt(exponent) - BigInt(fraction.length)
-  while (digits.length > 1 && digits.endsWith('0')) {
-    digits = digits.slice(0, -1)
-    scale += 1n
-  }
-  return digits === '0' ? { sign: '', digits: '0', scale: 0n } : { sign, digits, scale }
-}
-
-/**
- * Numbers `install` would write back as a different number. It reserializes the file, and
- * `JSON.stringify` does not promise the digits it was handed: `18446744073709551615` comes out as
- * `18446744073709552000`, `1000000000000000128` as `1000000000000000100`, `9007199254740993.0` as
- * `9007199254740992`, and `1e400` as `null`. Each is a silent edit to a value BMN was not asked to
- * touch, in a file it had just called fine.
- *
- * So the comparison is between the literal in the file and the literal the writer would emit, as
- * exact decimals. `1.0` becoming `1` is the same number and is allowed; the rest are not. Judging
- * this from the shape of the token was the previous version of this guard, and it was wrong in
- * both directions.
- *
- * Node hands the reviver the literal source from 21 on. `bin/bmn` runs under whatever node the
- * machine has, so where that is missing this finds nothing and `install` behaves as it always did
- * - it is a guard on a rare file, never something `check` depends on.
- */
-function rewrittenNumbers(text) {
-  const changed = []
-  try {
-    JSON.parse(text, function compareToken(key, value, context) {
-      const source = context?.source
-      if (typeof value !== 'number' || typeof source !== 'string') return value
-      const before = decimalParts(source)
-      const after = Number.isFinite(value) ? decimalParts(JSON.stringify(value)) : null
-      if (before === null || after === null || before.sign !== after.sign
-        || before.digits !== after.digits || before.scale !== after.scale) {
-        changed.push(source)
-      }
-      return value
-    })
-  } catch {
-    return []
-  }
-  return changed
-}
-
 /** The documented entry added for each missing event, beside the hooks already registered for it. */
 function installHooks(agent, data, missing) {
   const next = { ...data, hooks: isObject(data.hooks) ? { ...data.hooks } : {} }
@@ -1471,13 +1406,6 @@ function installHooks(agent, data, missing) {
     next.hooks[event] = groups
   }
   return next
-}
-
-/** The indent the file already uses, so installing changes the hooks and not every other line. */
-function jsonIndent(text) {
-  const match = /\n([ \t]+)"/.exec(text)
-  if (match === null) return 2
-  return match[1].startsWith('\t') ? '\t' : match[1].length
 }
 
 /** Longest common subsequence of two line arrays, as the indices that match. */
@@ -1549,89 +1477,6 @@ function unifiedDiff(beforeText, afterText, path) {
     for (const entry of rows.slice(start, index)) lines.push(`${entry.sign}${entry.text}`)
   }
   return lines.length === 2 ? '' : lines.join('\n')
-}
-
-/**
- * Temp file in the same folder, then rename: a crash mid-write leaves the old file intact. The
- * rename replaces whatever `path` names, so a symlinked settings file is resolved first and the
- * link itself survives, still pointing at the file that was updated. `verify` runs with the temp
- * written and the original still in place: it is the last chance to refuse rather than replace.
- */
-/**
- * The file at the end of a symlink, followed even when it does not exist yet: a dotfiles repository
- * often links a settings file that is created later, and the harness reads the end of the link, so
- * that is the file BMN must write rather than the link it would otherwise replace.
- */
-const MAX_LINK_HOPS = 10
-
-function linkTarget(path) {
-  // Resolved the way the kernel resolves a path: one component at a time, following each symlink as
-  // it is met, so `..` after a symlink steps back from where the link landed and not from where it
-  // was written. Neither `resolve()` nor `realpathSync()` can be used here - both collapse `..` as
-  // text first, which lands on a different file and would overwrite whatever happens to be there.
-  // Made absolute by concatenation, never by `resolve`/`join`, which would collapse the `..` in the
-  // given path itself before a single link had been read.
-  let pending = absoluteUncollapsed(path).split('/').filter((part) => part !== '')
-  let out = ''
-  let hops = 0
-  while (pending.length > 0) {
-    const part = pending.shift()
-    if (part === '.') continue
-    if (part === '..') {
-      out = out.slice(0, out.lastIndexOf('/'))
-      continue
-    }
-    const next = `${out}/${part}`
-    let link
-    try {
-      link = readlinkSync(next)
-    } catch (error) {
-      // A component that is not a link is simply itself, and one that is not there at all is a
-      // directory the install will create. Only a `..` after a missing component is unanswerable:
-      // where it steps back to depends on what that component would have been.
-      if (error.code === 'ENOENT' && pending.includes('..')) {
-        throw new CliError('UNRESOLVED_LINK', `${path} leads through ${next}, which does not exist; resolve it by hand`)
-      }
-      out = next
-      continue
-    }
-    hops += 1
-    if (hops > MAX_LINK_HOPS) {
-      throw new CliError(
-        'TOO_MANY_LINKS', `${path} passes through more than ${MAX_LINK_HOPS} symlinks; resolve it by hand`
-      )
-    }
-    const target = isAbsolute(link) ? link : `${out}/${link}`
-    pending = [...target.split('/').filter((part) => part !== ''), ...pending]
-    out = ''
-  }
-  return out === '' ? '/' : out
-}
-
-function writeAtomically(path, text, verify) {
-  const target = linkTarget(path)
-  const temporary = join(dirname(target), `.${basename(target)}.bmn-${process.pid}.tmp`)
-  try {
-    // A fresh machine has no ~/.codex yet, and that is the machine this command is for.
-    mkdirSync(dirname(target), { recursive: true })
-    writeFileSync(temporary, text, { mode: 0o600 })
-    try {
-      // chmod, not a second write: the mode option applies only when the file is created.
-      chmodSync(temporary, statSync(target).mode & 0o777)
-    } catch {
-      // A new file keeps the restrictive mode above; a hook file names the owner's own machine.
-    }
-    verify?.(target)
-    renameSync(temporary, target)
-  } catch (error) {
-    try {
-      unlinkSync(temporary)
-    } catch {
-      // The temp file is already gone, or was never created.
-    }
-    throw error
-  }
-  return target
 }
 
 function hookAgentsFor(agent) {
@@ -1738,16 +1583,6 @@ function checkHooksCommand(agents, pathFor, asJson) {
     : 'Run `bmn hooks install <agent>` to add the missing entries. This reports configuration, not that a hook fired.')
   process.stdout.write(`${lines.join('\n\n')}\n`)
   return ok ? 0 : 1
-}
-
-/** The bytes on disk now, or null when the file is gone; used to refuse an overwrite of somebody else's edit. */
-function currentText(path) {
-  try {
-    return readFileSync(path, 'utf8')
-  } catch (error) {
-    if (error.code === 'ENOENT') return null
-    throw error
-  }
 }
 
 function checkOpenCodePlugin(path) {
@@ -1937,7 +1772,8 @@ async function runHook(args) {
   const model = hookModel(agent, event)
   const observable = hookEventName(event.hook_event_name) !== undefined
   if (requests.length === 0 && !observable) return 0
-  const calls = [...requests, (outcomes) => hookObservation(agent, event, requests, outcomes, apiHost, model)]
+  const configDir = agent === 'claude' ? claudeConfigDir() : undefined
+  const calls = [...requests, (outcomes) => hookObservation(agent, event, requests, outcomes, apiHost, model, configDir)]
   await callEach(socketPath, token, calls, HOOK_TIMEOUT_MS).catch(() => undefined)
   return 0
 }
@@ -2013,7 +1849,7 @@ function toolFingerprint(event, agent) {
  * the host accepted: a Stop that found nothing to withdraw, or an open the host refused, leaves the list
  * empty, which is what the owner needs to see when a request they expected never arrived.
  */
-function hookObservation(agent, event, requests, outcomes, apiHost = null, model = undefined) {
+function hookObservation(agent, event, requests, outcomes, apiHost = null, model = undefined, configDir = undefined) {
   const eventName = hookEventName(event.hook_event_name)
   if (eventName === undefined) return undefined
   const byMethod = { 'attention.open': 'opened', 'attention.withdraw': 'withdrew', 'attention.resolve': 'answered' }
@@ -2042,9 +1878,18 @@ function hookObservation(agent, event, requests, outcomes, apiHost = null, model
       ...(toolName === undefined ? {} : { toolName }),
       ...(fingerprint === undefined ? {} : { fingerprint }),
       ...(apiHost === null ? {} : { apiHost }),
-      ...(model === undefined ? {} : { model })
+      ...(model === undefined ? {} : { model }),
+      ...(configDir === undefined ? {} : { claudeConfigDir: configDir })
     }
   }
+}
+
+/**
+ * The Claude config folder this session's agent reads, resolved exactly as `hooks install` resolves it,
+ * so BMN's history setting reaches `claude glm` (its own CLAUDE_CONFIG_DIR) as well as `~/.claude`.
+ */
+function claudeConfigDir() {
+  return absoluteUncollapsed(process.env.CLAUDE_CONFIG_DIR || `${homedir()}/.claude`)
 }
 
 function describeSnapshot(result) {

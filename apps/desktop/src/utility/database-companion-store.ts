@@ -1,6 +1,7 @@
 // MODULE: database-companion-store.ts - artifacts, attention, progress, receipts, drafts, Telegram message map and settings rows
 import { createHash } from 'node:crypto'
 import {
+  AGENT_HISTORY_KEEP_DAYS,
   ARCHIVE_DELETE_AFTER_DAYS,
   COLOR_MODE_NAMES,
   DEFAULT_APP_SETTINGS,
@@ -14,6 +15,7 @@ import {
   validateVocabulary,
   type AppearanceSettings,
   type AppSettings,
+  type AgentHistoryKeepDays,
   type ArchiveDeleteAfterDays,
   type ArtifactRecord,
   type ArtifactState,
@@ -26,6 +28,7 @@ import {
   type InputDraftRecord,
   type InputDraftState,
   type HandoffReviewSnapshot,
+  MAX_CLAUDE_CONFIG_DIRS,
   MAX_PROGRESS_EVIDENCE,
   type ProgressEvidence,
   type ProgressRecord,
@@ -1161,20 +1164,42 @@ export function validateSettingsSection(section: string, value: unknown): AppSet
         invalid('Delete archived items after must be Never, 90, 30 or 10 days')
       }
       return { deleteAfterDays: candidate.deleteAfterDays as ArchiveDeleteAfterDays }
+    case 'agentHistory': {
+      if (!AGENT_HISTORY_KEEP_DAYS.includes(candidate.keepDays as AgentHistoryKeepDays)) {
+        invalid('Keep agent history must be 7, 30 or 90 days, or Never')
+      }
+      const confirmed = candidate.confirmedKeepDays
+      if (confirmed !== undefined && !AGENT_HISTORY_KEEP_DAYS.includes(confirmed as AgentHistoryKeepDays)) {
+        invalid('The confirmed agent history limit is invalid')
+      }
+      const folders = candidate.claudeConfigDirs ?? []
+      if (
+        !Array.isArray(folders) || folders.length > MAX_CLAUDE_CONFIG_DIRS + 1 ||
+        !folders.every((folder) => typeof folder === 'string' && isAbsolute(folder) && folder.length <= 4_096 && !folder.includes('\0'))
+      ) {
+        invalid('Claude config folders must be absolute paths')
+      }
+      return {
+        keepDays: candidate.keepDays as AgentHistoryKeepDays,
+        ...(confirmed === undefined ? {} : { confirmedKeepDays: confirmed as AgentHistoryKeepDays }),
+        claudeConfigDirs: [...new Set(folders as string[])]
+      }
+    }
     default:
       return invalid(`Unknown settings section ${section}`)
   }
 }
 
 export function getSettings(database: DatabaseConnection): AppSettings {
-  const rows = database.prepare("SELECT key, value_json FROM app_setting WHERE key IN ('appearance', 'notifications', 'telegram', 'voice', 'archive')")
+  const rows = database.prepare("SELECT key, value_json FROM app_setting WHERE key IN ('appearance', 'notifications', 'telegram', 'voice', 'archive', 'agentHistory')")
     .all() as Array<{ key: SettingsSection; value_json: string }>
   const settings: AppSettings = {
     appearance: { ...DEFAULT_APP_SETTINGS.appearance },
     notifications: { ...DEFAULT_APP_SETTINGS.notifications },
     telegram: { ...DEFAULT_APP_SETTINGS.telegram },
     voice: { ...DEFAULT_APP_SETTINGS.voice },
-    archive: { ...DEFAULT_APP_SETTINGS.archive }
+    archive: { ...DEFAULT_APP_SETTINGS.archive },
+    agentHistory: { ...DEFAULT_APP_SETTINGS.agentHistory, claudeConfigDirs: [] }
   }
   for (const row of rows) {
     try {

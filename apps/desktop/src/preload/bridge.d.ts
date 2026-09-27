@@ -1,6 +1,7 @@
 // MODULE: bridge.d.ts - the typed window.aiTerminal bridge the preload exposes to the renderer
 import type {
   AppEventMessage,
+  AgentHistoryStatus,
   AppSettings,
   ArtifactPreview,
   ArtifactRecord,
@@ -274,6 +275,10 @@ export interface AiTerminalBridge {
   discardDraft(draftId: string): Promise<InputDraftRecord>
   getSettings(): Promise<AppSettings>
   putSettings<Section extends keyof AppSettings>(section: Section, value: AppSettings[Section]): Promise<AppSettings>
+  /** Preferences → History: each Claude folder, each agent's counts and whether Start cleanup is waiting. */
+  getHistoryStatus(): Promise<AgentHistoryStatus>
+  /** Start cleanup: the owner's one confirmation; writes the Claude folders and starts the first run. */
+  confirmHistory(): Promise<AgentHistoryStatus>
   configureTelegram(token: string | null): Promise<TelegramStatus>
   getTelegramStatus(): Promise<TelegramStatus>
   testTelegram(): Promise<TelegramStatus>

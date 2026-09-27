@@ -420,12 +420,83 @@ export interface ArchiveSettings {
   deleteAfterDays: ArchiveDeleteAfterDays
 }
 
+/** Days every agent keeps a session untouched before its own mechanism deletes it; null keeps everything. */
+export type AgentHistoryKeepDays = 7 | 30 | 90 | null
+/** Shortest to longest, Never last: the order the segmented control shows. */
+export const AGENT_HISTORY_KEEP_DAYS: readonly AgentHistoryKeepDays[] = Object.freeze([7, 30, 90, null])
+/** What BMN writes as Claude's `cleanupPeriodDays` for Never; 0 is never written (docs/agent-history.md). */
+export const CLAUDE_KEEP_FOREVER_DAYS = 36_500
+/** At most this many sessions per agent are deleted in one run; the rest wait for the next. */
+export const MAX_DELETIONS_PER_RUN = 200
+/** Learned Claude config folders BMN remembers; the oldest is dropped first, `~/.claude` never. */
+export const MAX_CLAUDE_CONFIG_DIRS = 8
+
+export interface AgentHistorySettings {
+  keepDays: AgentHistoryKeepDays
+  /** The limit the owner last confirmed with Start cleanup; absent until the first press. */
+  confirmedKeepDays?: AgentHistoryKeepDays
+  /** Absolute Claude config folders learned from hook calls, oldest first. */
+  claudeConfigDirs: string[]
+}
+
 export interface AppSettings {
   appearance: AppearanceSettings
   notifications: NotificationSettings
   telegram: TelegramSettings
   voice: VoiceSettings
   archive: ArchiveSettings
+  agentHistory: AgentHistorySettings
+}
+
+/** One Claude-family config folder in Preferences → History. */
+export interface AgentHistoryClaudeFolder {
+  path: string
+  /** "Claude Code" for `~/.claude`, "GLM" for a folder named `.claude-glm`, else "Claude". */
+  name: string
+  /** The path with the home folder written as `~`. */
+  displayPath: string
+  /** `cleanupPeriodDays` on disk now; null when unset (Claude's default). */
+  currentDays: number | null
+  /** The value BMN writes for the owner's limit. */
+  targetDays: number
+  /** The file differs from the target and waits for Start cleanup. */
+  pending: boolean
+  /** Last successful write by BMN. */
+  applied?: { days: number; at: string }
+  /** Why the last write or read failed, in one short phrase. */
+  failure?: string
+}
+
+export type AgentHistoryAgent = 'codex' | 'opencode' | 'cursor'
+
+export interface AgentHistoryRun {
+  at: string
+  deleted: number
+  /** Candidates left for the next run (the per-run cap). */
+  remaining: number
+  failures: Array<{ id: string; reason: string }>
+}
+
+/** One agent BMN prunes by the agent's own delete command (Story 31.2). */
+export interface AgentHistoryAgentRow {
+  agent: AgentHistoryAgent
+  /** `managed`: BMN counts and deletes; `unrecognised`: the store or command is not what BMN measured; `own`: the agent keeps its own history. */
+  state: 'managed' | 'unrecognised' | 'own'
+  detail?: string
+  sessions?: number
+  /** Sessions older than the owner's (pending) limit that a run would delete. */
+  candidates?: number
+  lastRun?: AgentHistoryRun
+}
+
+export interface AgentHistoryStatus {
+  keepDays: AgentHistoryKeepDays
+  confirmedKeepDays: AgentHistoryKeepDays | undefined
+  /** Something waits for Start cleanup: the first press, a shorter limit, or a folder that differs. */
+  needsConfirmation: boolean
+  running: boolean
+  claude: AgentHistoryClaudeFolder[]
+  agents: AgentHistoryAgentRow[]
 }
 
 export const DEFAULT_APP_SETTINGS: AppSettings = Object.freeze({
@@ -440,7 +511,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = Object.freeze({
     answerPermissions: false
   }),
   voice: Object.freeze({ model: 'base', language: 'auto', modelFolder: null, holdSpaceToTalk: true, vocabulary: Object.freeze([]) as unknown as string[] }),
-  archive: Object.freeze({ deleteAfterDays: null })
+  archive: Object.freeze({ deleteAfterDays: null }),
+  agentHistory: Object.freeze({ keepDays: 30, claudeConfigDirs: Object.freeze([]) as unknown as string[] })
 }) as AppSettings
 
 export type TelegramConnectorState =

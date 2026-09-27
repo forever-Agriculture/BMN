@@ -277,3 +277,29 @@ it('cascades only expired workspace launch sets while preserving unrelated defin
   expect(database.prepare('SELECT set_id FROM launch_set').all()).toEqual([{ set_id: 'kept-sets' }])
   expect(database.pragma('foreign_key_check')).toEqual([])
 })
+
+describe('agent history setting (Story 31.1)', () => {
+  it('reads an old settings row without it as 30 days, unconfirmed, and keeps it beside archive', () => {
+    expect(getSettings(database).agentHistory).toEqual({ keepDays: 30, claudeConfigDirs: [] })
+    database.prepare("INSERT INTO app_setting(key, value_json, updated_at) VALUES ('archive', '{\"deleteAfterDays\":30}', ?)").run(now)
+    expect(getSettings(database)).toMatchObject({ archive: { deleteAfterDays: 30 }, agentHistory: { keepDays: 30, claudeConfigDirs: [] } })
+    expect(getSettings(database).agentHistory.confirmedKeepDays).toBeUndefined()
+  })
+
+  it.each([7, 30, 90, null] as const)('stores %s days with its confirmation and learned folders', (days) => {
+    putSettingsSection(database, 'agentHistory', { keepDays: days, confirmedKeepDays: days, claudeConfigDirs: ['/home/o/.claude-glm'] }, now)
+    expect(getSettings(database).agentHistory).toEqual({ keepDays: days, confirmedKeepDays: days, claudeConfigDirs: ['/home/o/.claude-glm'] })
+  })
+
+  it.each([
+    ['an unknown limit', { keepDays: 10, claudeConfigDirs: [] }],
+    ['a text limit', { keepDays: '30', claudeConfigDirs: [] }],
+    ['an unknown confirmed limit', { keepDays: 30, confirmedKeepDays: 0, claudeConfigDirs: [] }],
+    ['a relative folder', { keepDays: 30, claudeConfigDirs: ['conf/glm'] }],
+    ['too many folders', { keepDays: 30, claudeConfigDirs: Array.from({ length: 10 }, (_, index) => `/c/${index}`) }]
+  ])('refuses %s and keeps the stored value', (_label, value) => {
+    putSettingsSection(database, 'agentHistory', { keepDays: 90, claudeConfigDirs: [] }, now)
+    expect(() => putSettingsSection(database, 'agentHistory', value, now)).toThrow()
+    expect(getSettings(database).agentHistory).toEqual({ keepDays: 90, claudeConfigDirs: [] })
+  })
+})

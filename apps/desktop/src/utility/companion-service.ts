@@ -21,6 +21,8 @@ import {
   terminalNoticeOrigin,
   type AppEventMessage,
   type AppEventTopic,
+  AGENT_HISTORY_KEEP_DAYS,
+  type AgentHistoryKeepDays,
   type AppSettings,
   type ArtifactPreview,
   type ArtifactRecord,
@@ -55,6 +57,7 @@ import { createAttentionPager } from './attention-pager'
 import { RemoteAnswers, answerRoute, type AnswerOutcome, type AnswerRequest, type PluginAnswer } from './remote-answer'
 import { observeRepeat, REPEAT_NOTICE_AT, type RepeatState, type RepeatSegment } from './repeat-watch'
 import { TelegramCardKeeper } from './telegram-card-keeper'
+import { AGENT_HISTORY_STATE_KEY, AgentHistory, readHistoryState, type AgentHistoryAdapter } from './agent-history'
 import { TelegramConnector, maskToken, redactToken, type ConnectorHealth, type InboundReply } from './telegram-connector'
 
 /** A listed session plus its conversation route; `null` when the session has no stored binding. */
@@ -70,6 +73,8 @@ const TELEGRAM_DOWNLOAD_BYTES = 20 * 1024 * 1024
 const TELEGRAM_TOKEN_FILE = 'telegram-bot.token'
 const TELEGRAM_OFFSET_KEY = 'telegram.offset'
 const ATTENTION_SWEEP_MS = 30_000
+/** The first history run waits this long after start, so restored sessions launch first. */
+const HISTORY_FIRST_RUN_DELAY_MS = 30_000
 const REMOTE_ANSWER_RESOLUTION = 'Answered from Telegram'
 /** The refusal log is trimmed back to half this size as soon as one append carries it past. */
 const REFUSAL_LOG_BYTES = 256 * 1024
@@ -103,6 +108,10 @@ export interface CompanionServiceOptions {
   fetch?: typeof fetch
   /** The Bot API origin; only the self-test host sets it, to a local fake. */
   telegramApiOrigin?: string
+  /** Agents whose sessions the history limit prunes (Story 31.2); none means Claude folders only. */
+  historyAdapters?: readonly AgentHistoryAdapter[]
+  /** The owner's home, where `~/.claude` lives; the self-test points it at a scratch folder. */
+  home?: string
   now?: () => Date
 }
 
@@ -317,12 +326,28 @@ export class CompanionService {
   /** One notice at a time per session: two arriving together must not each open their own row. */
   private readonly noticeOperations = new Map<string, Promise<unknown>>()
   private readonly repeatStates = new Map<string, RepeatState>()
+  /** The one history limit for every agent (Stories 31.1, 31.2). */
+  private readonly history: AgentHistory
   /** Each bounded log has its own serialized append queue. */
   private repeatWrites: Promise<void> = Promise.resolve()
   private refusalWrites: Promise<void> = Promise.resolve()
 
   constructor(private readonly options: CompanionServiceOptions) {
     this.now = options.now ?? (() => new Date())
+    this.history = new AgentHistory({
+      home: options.home ?? homedir(),
+      adapters: options.historyAdapters ?? [],
+      readSettings: async () => (await options.database.companion('getSettings')).agentHistory,
+      writeSettings: async (next) => {
+        await options.database.companion('putSettingsSection', 'agentHistory', next, this.iso())
+      },
+      readState: async () => readHistoryState(await options.database.companion('getRawSetting', AGENT_HISTORY_STATE_KEY)),
+      writeState: (next) => options.database.companion('putRawSetting', AGENT_HISTORY_STATE_KEY, next, this.iso()),
+      liveConversationIds: () => this.liveConversationIds(),
+      now: () => this.now(),
+      log: (line) => process.stderr.write(line),
+      changed: () => this.emit('settings', null)
+    })
     this.answers = new RemoteAnswers({
       getAttention: (requestId) => options.database.companion('getAttention', requestId).catch(() => null),
       liveIncarnationId: (sessionId) => options.manager.liveIncarnationId(sessionId),
@@ -480,9 +505,22 @@ export class CompanionService {
     this.sweepTimer.unref()
     // Telegram's first network check must never delay terminal startup.
     void this.restartTelegram().catch(() => undefined)
+    // After the archive purge (it ran before this service existed), and late enough not to compete with launches.
+    this.history.startSchedule(HISTORY_FIRST_RUN_DELAY_MS)
+  }
+
+  /** Conversation references bound to a session whose process runs now; the history runner never deletes these. */
+  private async liveConversationIds(): Promise<Set<string>> {
+    const ids = new Set<string>()
+    for (const sessionId of this.options.manager.liveSessionIds()) {
+      const binding = await this.options.database.getConversationBinding(sessionId).catch(() => undefined)
+      if (binding?.status === 'bound' && binding.conversationReference) ids.add(binding.conversationReference)
+    }
+    return ids
   }
 
   async close(): Promise<void> {
+    this.history.stop()
     if (this.sweepTimer) clearInterval(this.sweepTimer)
     this.pager.close()
     this.cards.dispose()
@@ -660,11 +698,26 @@ export class CompanionService {
         return database.companion('getSettings')
       case METHOD_REGISTRY.settingsPut: {
         const section = text(params, 'section', 32)
+        if (section === 'agentHistory') {
+          // Only the limit comes from the window; confirmation and learned folders are BMN's own record.
+          const value = params.value as { keepDays?: unknown } | null
+          const keepDays = value && typeof value === 'object' ? value.keepDays : undefined
+          if (!AGENT_HISTORY_KEEP_DAYS.includes(keepDays as AgentHistoryKeepDays)) {
+            invalid('Keep agent history must be 7, 30 or 90 days, or Never')
+          }
+          await this.history.setKeepDays(keepDays as AgentHistoryKeepDays)
+          return database.companion('getSettings')
+        }
         const settings = await database.companion('putSettingsSection', section, params.value, this.iso())
         this.emit('settings', null)
         if (section === 'telegram') await this.restartTelegram()
         return settings
       }
+      case METHOD_REGISTRY.historyStatus:
+        return this.history.status()
+      case METHOD_REGISTRY.historyConfirm:
+        await this.history.confirm()
+        return this.history.status()
       case METHOD_REGISTRY.backupExport:
         return this.exportBackup(text(params, 'directory'))
       case METHOD_REGISTRY.backupVerify:
@@ -1095,8 +1148,10 @@ export class CompanionService {
     fingerprint?: string | undefined
     apiHost?: string | undefined
     model?: string | undefined
+    claudeConfigDir?: string | undefined
     effects: readonly HookEventEffect[]
   }): Promise<{ recorded: true }> {
+    if (p.claudeConfigDir !== undefined) void this.history.learnClaudeFolder(p.claudeConfigDir).catch(() => undefined)
     // Share the notice queue: observe/reset/open must complete in arrival order.
     const previous = this.noticeOperations.get(p.sessionId) ?? Promise.resolve()
     const operation = async (): Promise<{ recorded: true }> => {

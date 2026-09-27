@@ -1,5 +1,5 @@
 // MODULE: index.ts - Electron main process: windows, bridge IPC, host lifecycle and the self-test driver
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, truncateSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, truncateSync, unlinkSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
@@ -8,6 +8,7 @@ import {
   METHOD_REGISTRY,
   isLaunchSetStartParams,
   isTerminalOutputMessage,
+  type AgentHistoryStatus,
   type AppSettings,
   type ArtifactRecord,
   type AttentionRecord,
@@ -102,6 +103,15 @@ import type { VoiceFlowProbe } from '../renderer/src/voice-probe'
 import { installFileReferenceIpcHandlers } from './file-reference-ipc'
 import { createPresenceMonitor, readMutterIdleMs } from './presence-monitor'
 import { startFakeBotApi, type FakeBotApi } from './fake-bot-api'
+import {
+  backupsOf,
+  claudeDays,
+  historyView,
+  prepareHistoryFixture,
+  recordedCalls,
+  selfTestHistoryEnvironment,
+  type HistoryFixture
+} from './agent-history-self-test'
 import { installVoiceIpcHandlers } from './voice-ipc'
 import {
   SPEECH_DETECTOR_FILE,
@@ -481,7 +491,7 @@ async function launchHostWithChannel(): Promise<{
 }> {
   const { hostEntry, repoRoot } = appPaths()
   const environment = process.argv.includes('--self-test')
-    ? { ...hostEnvironment(repoRoot), BMN_SELF_TEST_TELEGRAM_ORIGIN: (await selfTestTelegram()).origin }
+    ? { ...hostEnvironment(repoRoot), ...selfTestHistoryEnvironment(), BMN_SELF_TEST_TELEGRAM_ORIGIN: (await selfTestTelegram()).origin }
     : hostEnvironment(repoRoot)
   const client = await PtyHostClient.launch(hostEntry, environment, {
     args: process.argv.includes('--self-test') ? ['--self-test-host'] : []
@@ -2135,6 +2145,7 @@ function writeOriginHarness(directory: string): string {
     "  const scenario = JSON.parse(require('node:fs').readFileSync(file('fire-' + n), 'utf8'))",
     "  const env = { ...process.env }",
     "  if (scenario.baseUrl === null) delete env.ANTHROPIC_BASE_URL; else env.ANTHROPIC_BASE_URL = scenario.baseUrl",
+    "  if (scenario.configDir) env.CLAUDE_CONFIG_DIR = scenario.configDir",
     "  const payload = scenario.event === 'SessionStart' ? { hook_event_name: 'SessionStart', source: 'startup' }",
     "    : { hook_event_name: scenario.event, tool_name: 'Bash', tool_input: { command: 'origin-' + n }, tool_response: { output: 'fixture' } }",
     "  if (scenario.model !== null) payload.model = scenario.model",
@@ -2275,7 +2286,7 @@ async function modelOriginProbe(
 
 /** Fires one origin gate and waits until the stand-in's `bmn hook claude` call has returned. */
 async function fireOriginGate(
-  directory: string, n: number, scenario: { baseUrl: string | null; model: string | null; event: string }
+  directory: string, n: number, scenario: { baseUrl: string | null; model: string | null; event: string; configDir?: string }
 ): Promise<void> {
   writeFileSync(join(directory, `fire-${n}`), JSON.stringify(scenario))
   await untilFileExists(join(directory, `done-${n}`), `model origin hook ${n}`)
@@ -2520,6 +2531,8 @@ async function runSelfTest(): Promise<void> {
   const ready = launched.ready
   let applicationPort: MessagePortMain | undefined = launched.applicationPort
   let receipt: Record<string, unknown> | undefined
+  /** Epic 31's fixture; its holder process is stopped when the self-test releases its resources. */
+  let historyFixture: HistoryFixture | undefined
   /** Epic 12.1: what the CLI stored, what it refused, and whether the links survive a restart. */
   let progressEvidence: {
     sameIdOnRetry: boolean
@@ -4749,6 +4762,69 @@ async function runSelfTest(): Promise<void> {
       incarnationId: answerSession.lastProcess?.incarnationId, cause: 'explicit' })
     stoppedBeforeRestartSessionIds.add(answerSession.sessionId)
 
+    // Epic 31 (Stories 31.1, 31.2): one history limit. The stand-in's own `bmn hook claude` calls teach BMN two
+    // more Claude folders; Start cleanup, clicked in Preferences, writes all three and prunes the fake Codex and
+    // OpenCode stores through recording binaries. The owner's real files are never in reach: the host's home,
+    // CODEX_HOME and XDG_DATA_HOME are this run's scratch folders.
+    console.error('[BMN] self-test phase: agent history')
+    historyFixture = prepareHistoryFixture(isolatedCwd)
+    // PostToolUse opens nothing, so the open-request counts the survival table compares stay put.
+    const originGates = readdirSync(originDirectory).filter((name) => name.startsWith('done-')).length
+    await fireOriginGate(originDirectory, originGates, { baseUrl: null, model: null, event: 'PostToolUse', configDir: historyFixture.glm })
+    await fireOriginGate(originDirectory, originGates + 1, { baseUrl: null, model: null, event: 'PostToolUse', configDir: historyFixture.work })
+    const historyStoreBefore = historyFixture.storeFiles()
+    const historyPending = await client.request<AgentHistoryStatus>(METHOD_REGISTRY.historyStatus, {})
+    const historyPendingView = await historyView(applicationWindow, 'read')
+    const historyClicked = await historyView(applicationWindow, 'start-cleanup')
+    const historyRunBy = Date.now() + 15_000
+    let historySettled = await client.request<AgentHistoryStatus>(METHOD_REGISTRY.historyStatus, {})
+    while ((historySettled.running || historySettled.agents.some((row) => row.lastRun === undefined)) && Date.now() < historyRunBy) {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      historySettled = await client.request<AgentHistoryStatus>(METHOD_REGISTRY.historyStatus, {})
+    }
+    const historySettledView = await historyView(applicationWindow, 'read')
+    const agentHistory = {
+      pending: {
+        needsConfirmation: historyPending.needsConfirmation,
+        folders: historyPending.claude.map((folder) => ({ path: folder.path, current: folder.currentDays, target: folder.targetDays, pending: folder.pending })),
+        agents: historyPending.agents.map((row) => ({ agent: row.agent, state: row.state, sessions: row.sessions, candidates: row.candidates })),
+        view: historyPendingView
+      },
+      clicked: historyClicked,
+      settled: {
+        needsConfirmation: historySettled.needsConfirmation,
+        days: [claudeDays(historyFixture.claudeHome), claudeDays(historyFixture.glm), claudeDays(historyFixture.work)],
+        backups: [backupsOf(historyFixture.claudeHome), backupsOf(historyFixture.glm), backupsOf(historyFixture.work)],
+        glmEnvKept: JSON.parse(readFileSync(join(historyFixture.glm, 'settings.json'), 'utf8')).env?.ANTHROPIC_MODEL === 'glm',
+        codexCalls: recordedCalls(historyFixture.codexLog),
+        openCodeCalls: recordedCalls(historyFixture.openCodeLog),
+        runs: historySettled.agents.map((row) => ({ agent: row.agent, deleted: row.lastRun?.deleted, failures: row.lastRun?.failures.length })),
+        storeUnchanged: JSON.stringify(historyFixture.storeFiles()) === JSON.stringify(historyStoreBefore),
+        view: historySettledView
+      }
+    }
+    console.error(`[BMN] self-test phase: agent history ${JSON.stringify(agentHistory)}`)
+    const learnedFolders = [historyFixture.claudeHome, historyFixture.glm, historyFixture.work]
+    const pendingFolder = (path: string, current: number | null) => agentHistory.pending.folders
+      .some((folder) => folder.path === path && folder.current === current && folder.target === 30 && folder.pending)
+    if (!agentHistory.pending.needsConfirmation || !pendingFolder(historyFixture.claudeHome, null) ||
+      !pendingFolder(historyFixture.glm, 90) || !pendingFolder(historyFixture.work, null) ||
+      JSON.stringify(agentHistory.pending.agents) !== JSON.stringify([
+        { agent: 'codex', state: 'managed', sessions: 3, candidates: 1 }, { agent: 'opencode', state: 'managed', sessions: 3, candidates: 1 }]) ||
+      !historyPendingView.dot || historyPendingView.confirm !== 'Sets 3 Claude folders to 30 days; deletes 2 sessions for good.' ||
+      !historyPendingView.rows.some((row) => row.startsWith('GLM | ') && row.endsWith('90 days → 30 days')) ||
+      agentHistory.settled.needsConfirmation || historySettledView.dot || historySettledView.confirm !== null ||
+      JSON.stringify(agentHistory.settled.days) !== '[30,30,30]' || JSON.stringify(agentHistory.settled.backups) !== '[1,1,1]' ||
+      !agentHistory.settled.glmEnvKept ||
+      JSON.stringify(agentHistory.settled.codexCalls) !== JSON.stringify([`${historyFixture.home}|delete --force ${historyFixture.ids.oldCodex}`]) ||
+      JSON.stringify(agentHistory.settled.openCodeCalls) !== JSON.stringify([`${historyFixture.home}|session delete ${historyFixture.ids.oldOpenCode} --pure`]) ||
+      JSON.stringify(agentHistory.settled.runs) !== '[{"agent":"codex","deleted":1,"failures":0},{"agent":"opencode","deleted":1,"failures":0}]' ||
+      !agentHistory.settled.storeUnchanged || learnedFolders.some((folder) => !historySettled.claude.some((row) => row.path === folder && !row.pending))) {
+      throw new Error(`agent history went wrong: ${JSON.stringify(agentHistory)}`)
+    }
+    // The owner's own hand edit, made while BMN runs: after the restart it must show, not be undone.
+    writeFileSync(join(historyFixture.glm, 'settings.json'), '{\n  "cleanupPeriodDays": 14\n}\n')
+
     // Close details and return selection to the lifecycle fixture the restart checks expect.
     await applicationWindow.webContents.executeJavaScript(`(async () => {
       document.querySelector('.session-inspector .panel-heading button')?.click();
@@ -4982,7 +5058,8 @@ async function runSelfTest(): Promise<void> {
     ) as { incarnationId: string }
     await recoverApplicationRenderer(applicationWindow)
     const originBeforeHook = await modelOriginProbe(applicationWindow, originSession.sessionId, 'Model origin', null)
-    await fireOriginGate(originDirectory, originScenarios.length,
+    // The next unused gate: the agent history phase fired two more after the origin scenarios.
+    await fireOriginGate(originDirectory, readdirSync(originDirectory).filter((name) => name.startsWith('done-')).length,
       { baseUrl: 'https://api.z.ai/api/anthropic', model: null, event: 'PostToolUse' })
     const originAfterHook = await modelOriginProbe(applicationWindow, originSession.sessionId, 'Model origin', 'via api.z.ai')
     await client.request(METHOD_REGISTRY.sessionStop, { sessionId: originSession.sessionId,
@@ -5000,6 +5077,18 @@ async function runSelfTest(): Promise<void> {
       originAfterHook.rowLabel !== 'Model origin: China via api.z.ai' ||
       originStopped.paneFlag !== null || originStopped.inspectorFlag !== null || originStopped.modelRow !== null) {
       throw new Error(`the model origin did not follow the restart: ${JSON.stringify(modelOriginAfterRestart)}`)
+    }
+    // Epic 31: the owner's hand edit survived the restart as a pending row with the dot, and was not rewritten.
+    console.error('[BMN] self-test phase: agent history after restart')
+    const historyAfterRestart = await client.request<AgentHistoryStatus>(METHOD_REGISTRY.historyStatus, {})
+    const driftedFolder = historyAfterRestart.claude.find((folder) => folder.path === historyFixture?.glm)
+    const historyAfterRestartView = await historyView(applicationWindow, 'read')
+    const historyDrift = { needsConfirmation: historyAfterRestart.needsConfirmation, folder: driftedFolder ?? null,
+      onDisk: historyFixture ? claudeDays(historyFixture.glm) : null, view: historyAfterRestartView }
+    console.error(`[BMN] self-test phase: agent history after restart ${JSON.stringify(historyDrift)}`)
+    if (!historyDrift.needsConfirmation || driftedFolder?.currentDays !== 14 || !driftedFolder.pending || historyDrift.onDisk !== 14 ||
+      !historyAfterRestartView.dot || !historyAfterRestartView.rows.some((row) => row.startsWith('GLM | ') && row.endsWith('14 days → 30 days'))) {
+      throw new Error(`agent history drift went wrong after the restart: ${JSON.stringify(historyDrift)}`)
     }
     // A dedicated live session on the restarted host, after every restored-state check, so no
     // earlier count, order or receipt value sees it.
@@ -6655,6 +6744,7 @@ async function runSelfTest(): Promise<void> {
     throw error
   } finally {
     console.error('[BMN] self-test phase: releasing self-test resources')
+    historyFixture?.holder.kill()
     if (applicationWindow && !applicationWindow.isDestroyed()) applicationWindow.destroy()
     applicationWindow = undefined
     if (applicationPort) applicationPort.close()

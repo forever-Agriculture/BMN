@@ -55,6 +55,8 @@ const ROUTES = {
   'aiterm:draft:discard': METHOD_REGISTRY.draftDiscard,
   'aiterm:settings:get': METHOD_REGISTRY.settingsGet,
   'aiterm:settings:put': METHOD_REGISTRY.settingsPut,
+  'aiterm:history:status': METHOD_REGISTRY.historyStatus,
+  'aiterm:history:confirm': METHOD_REGISTRY.historyConfirm,
   'aiterm:telegram:configure': METHOD_REGISTRY.telegramConfigure,
   'aiterm:telegram:status': METHOD_REGISTRY.telegramStatus,
   'aiterm:telegram:test': METHOD_REGISTRY.telegramTest,

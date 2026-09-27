@@ -222,6 +222,8 @@ function App(): React.JSX.Element {
   const [hookOrigins, setHookOrigins] = useState<HookOriginRecord[]>([])
   const [drafts, setDrafts] = useState<InputDraftRecord[]>([])
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS)
+  /** Preferences → History waits for Start cleanup (Story 31.1); the gear carries the one attention dot. */
+  const [historyPending, setHistoryPending] = useState(false)
   const [panel, setPanel] = useState<SidePanel>(null)
   const [requestedHandoffDraftId, setRequestedHandoffDraftId] = useState<string | null>(null)
   const [requestedHandoffReviewDraft, setRequestedHandoffReviewDraft] = useState<InputDraftRecord | null>(null)
@@ -446,7 +448,12 @@ function App(): React.JSX.Element {
     // One list read backs every origin flag in the window; each hook event invalidates it.
     hooks: () => window.aiTerminal.listHookOrigins().then(setHookOrigins),
     drafts: () => window.aiTerminal.listDrafts().then(setDrafts),
-    settings: () => window.aiTerminal.getSettings().then(setSettings),
+    settings: async () => {
+      setSettings(await window.aiTerminal.getSettings())
+      // Start cleanup waiting is the one History state that must not sit unseen behind the gear.
+      const history = await window.aiTerminal.getHistoryStatus().catch(() => null)
+      if (history) setHistoryPending(history.needsConfirmation)
+    },
     // A hook can rebind a conversation at any time; the window reloads the binding it is showing.
     conversations: async () => setBindingRevision((revision) => revision + 1)
   }
@@ -1539,8 +1546,16 @@ function App(): React.JSX.Element {
           <button type="button" className="icon-button" aria-label="Command palette" title={`Command palette (${SHORTCUT_LABELS.palette})`} onClick={() => setDialog({ kind: 'palette' })}>
             <Icon name="search" />
           </button>
-          <button type="button" className="icon-button" aria-label="Preferences" title="Preferences" onClick={() => setDialog({ kind: 'preferences' })}>
+          <button
+            type="button"
+            className="icon-button preferences-button"
+            aria-label="Preferences"
+            aria-description={historyPending ? 'Agent history cleanup waits for you' : undefined}
+            title={historyPending ? 'Preferences · History: Start cleanup waits for you' : 'Preferences'}
+            onClick={() => setDialog({ kind: 'preferences' })}
+          >
             <Icon name="gear" />
+            {historyPending ? <span className="status-dot needs-you" aria-hidden="true" /> : null}
           </button>
         </div>
         {needsYouOpen ? (
