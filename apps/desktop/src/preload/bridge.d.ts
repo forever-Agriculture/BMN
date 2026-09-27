@@ -1,3 +1,4 @@
+// MODULE: bridge.d.ts - the typed window.aiTerminal bridge the preload exposes to the renderer
 import type {
   AppEventMessage,
   AppSettings,
@@ -22,6 +23,7 @@ import type {
   HookCheckReport,
   HookEventRecord,
   HookObservation,
+  HookOriginRecord,
   InputDraftRecord,
   InterruptedSessionCohort,
   SessionCohortOfferedResult,
@@ -240,6 +242,11 @@ export interface AiTerminalBridge {
    * 30-event log's evictions. `none` is an absence of evidence, never a verdict that hooks are broken.
    */
   getHookObservation(sessionId: string, incarnationId?: string): Promise<HookObservation>
+  /**
+   * Read-only: each session's latest model-origin facts (maker's country, model name, API host),
+   * kept per live incarnation in memory only. One list read backs every flag in the window.
+   */
+  listHookOrigins(): Promise<HookOriginRecord[]>
   /**
    * Read-only: a dated snapshot of what the hook checker found configured for Claude Code, Codex
    * and OpenCode. Never writes a hook file, and carries no configuration contents; exit 1 with a

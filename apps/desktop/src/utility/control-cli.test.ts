@@ -38,7 +38,10 @@ function runCli(
 ): Promise<CliResult> {
   const env: NodeJS.ProcessEnv = { ...process.env }
   for (const key of Object.keys(env)) {
-    if (key.startsWith('BMN_') || key.startsWith('AITERM_')) delete env[key]
+    // The lead's own harness pointers must not decide a hook test: base URLs and config homes are
+    // set per test or absent, never inherited from whoever runs the suite.
+    if (key.startsWith('BMN_') || key.startsWith('AITERM_') ||
+      key === 'ANTHROPIC_BASE_URL' || key === 'OPENAI_BASE_URL' || key === 'CLAUDE_CONFIG_DIR') delete env[key]
   }
   return new Promise((resolve) => {
     const child = execFile(
@@ -315,11 +318,12 @@ async function runHook(
   fixture: Awaited<ReturnType<typeof cliFixture>>,
   agent: string,
   event: unknown,
-  agentProcess: ProcessStat = HOLDS_TERMINAL
+  agentProcess: ProcessStat = HOLDS_TERMINAL,
+  env: Record<string, string> = {}
 ): Promise<CliResult> {
   const proc = await procTree(fixture.root, agentProcess)
   return runCli(['hook', agent], {
-    env: { ...fixture.sessionEnv, BMN_PROC_ROOT: proc, CLAUDE_CONFIG_DIR: join(fixture.root, 'claude') },
+    env: { ...fixture.sessionEnv, BMN_PROC_ROOT: proc, CLAUDE_CONFIG_DIR: join(fixture.root, 'claude'), ...env },
     input: JSON.stringify(event)
   })
 }
@@ -917,6 +921,82 @@ describe('bmn hook provenance and the hook event log', () => {
       toolName: null,
       effects: []
     })
+  })
+
+  it.each([
+    ['claude', 'ANTHROPIC_BASE_URL', 'https://api.z.ai/api/anthropic', 'api.z.ai'],
+    ['claude', 'ANTHROPIC_BASE_URL', 'http://localhost:3000/base', 'localhost'],
+    ['claude', 'ANTHROPIC_BASE_URL', 'https://user:secret@mistral.ai/v1', 'mistral.ai'],
+    ['claude', 'ANTHROPIC_BASE_URL', 'unix:///run/bmn.sock', undefined],
+    ['claude', 'ANTHROPIC_BASE_URL', 'not a url', undefined],
+    ['claude', 'ANTHROPIC_BASE_URL', 'https://my_host.internal.example/v1', 'my_host.internal.example'],
+    ['claude', 'ANTHROPIC_BASE_URL', 'http://[::1]:8080/v1', '[::1]'],
+    // A fully qualified name keeps its root dot; the classifier reads it as the same host.
+    ['claude', 'ANTHROPIC_BASE_URL', 'https://api.z.ai./api/anthropic', 'api.z.ai.'],
+    // A host the utility would refuse is not sent, so the observation itself still arrives.
+    ['claude', 'ANTHROPIC_BASE_URL', `https://${'a'.repeat(300)}.example`, undefined],
+    ['claude', 'OPENAI_BASE_URL', 'https://api.openai.com/v1', undefined],
+    ['codex', 'OPENAI_BASE_URL', 'https://api.openai.com/v1', 'api.openai.com'],
+    ['codex', 'OPENAI_BASE_URL', 'https://ark.cn-beijing.volces.com/api/v3', 'ark.cn-beijing.volces.com'],
+    ['codex', 'ANTHROPIC_BASE_URL', 'https://api.z.ai/api/anthropic', undefined],
+    ['opencode', 'ANTHROPIC_BASE_URL', 'https://api.z.ai/api/anthropic', undefined]
+  ])('forwards only the hostname of %s own base URL (%s=%s)', async (agent, variable, value, apiHost) => {
+    const fixture = await cliFixture()
+
+    const result = await runHook(fixture, agent, { hook_event_name: 'Notification' }, HOLDS_TERMINAL, {
+      [variable]: value
+    })
+
+    expect(result).toEqual(QUIET)
+    expect(fixture.handlers.observeHookEvent).toHaveBeenCalledTimes(1)
+    const observed = fixture.handlers.observeHookEvent.mock.calls[0]?.[0]
+    expect(observed).toMatchObject({ agent, event: 'Notification' })
+    // Only the parsed host ever leaves the process: no scheme, path, port, credentials or raw URL.
+    expect(observed?.apiHost).toBe(apiHost)
+    expect(JSON.stringify(observed)).not.toContain('secret')
+    expect(JSON.stringify(observed)).not.toContain('/api/anthropic')
+    expect(JSON.stringify(observed)).not.toContain('/v1')
+  })
+
+  it('sends no apiHost when the base URL variable is unset', async () => {
+    const fixture = await cliFixture()
+
+    const result = await runHook(fixture, 'claude', { hook_event_name: 'Notification' })
+
+    expect(result).toEqual(QUIET)
+    const observed = fixture.handlers.observeHookEvent.mock.calls[0]?.[0]
+    expect(observed).toMatchObject({ agent: 'claude' })
+    expect(observed?.apiHost).toBeUndefined()
+  })
+
+  it.each([
+    ['claude', { hook_event_name: 'SessionStart', model: '  GLM-5.3  ' }, 'GLM-5.3'],
+    ['claude', { hook_event_name: 'SessionStart', model: 'x'.repeat(200) }, 'x'.repeat(128)],
+    // The utility refuses more than 128 UTF-16 units, and a cut never splits a surrogate pair.
+    ['claude', { hook_event_name: 'SessionStart', model: 'x'.repeat(126) + '😀😀' }, 'x'.repeat(126) + '😀'],
+    ['claude', { hook_event_name: 'SessionStart', model: 'x'.repeat(127) + '😀' }, 'x'.repeat(127)],
+    ['claude', { hook_event_name: 'SessionStart', model: 'glm\u0007-5\u007f' }, 'glm-5'],
+    ['claude', { hook_event_name: 'SessionStart', model: 42 }, undefined],
+    ['claude', { hook_event_name: 'SessionStart' }, undefined],
+    ['claude', { hook_event_name: 'SessionStart', model: '  \t ' }, undefined],
+    [
+      'opencode',
+      // The shipped plugin spreads `properties`; `message.updated` carries `{ info: Message }`.
+      { hook_event_name: 'message.updated', info: { role: 'assistant', providerID: 'moonshotai', modelID: 'kimi-k2' } },
+      'kimi-k2'
+    ],
+    ['opencode', { hook_event_name: 'message.updated', info: { role: 'user' } }, undefined],
+    ['opencode', { hook_event_name: 'session.started' }, undefined]
+  ])('carries the model %s payloads report, trimmed and bounded', async (agent, event, model) => {
+    const fixture = await cliFixture()
+
+    const result = await runHook(fixture, agent, event)
+
+    expect(result).toEqual(QUIET)
+    expect(fixture.handlers.observeHookEvent).toHaveBeenCalledTimes(1)
+    const observed = fixture.handlers.observeHookEvent.mock.calls[0]?.[0]
+    expect(observed).toMatchObject({ agent })
+    expect(observed?.model).toBe(model)
   })
 
   it('records no effect for calls the host refused, which is what a missing request looks like', async () => {

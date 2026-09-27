@@ -15,6 +15,7 @@ import {
   type ConversationResumePreview,
   type ExplicitConversationBinding,
   type InputDraftRecord,
+  type HookOriginRecord,
   type InterruptedSessionCohort,
   type LaunchTemplateRecord,
   type ProgressRecord,
@@ -79,9 +80,13 @@ import {
   type SessionActivity
 } from './session-activity'
 import {
+  activeHookOrigin,
   agentTag,
   attentionActionWhenOpened,
   displayPath,
+  modelOriginFlag,
+  modelOriginLabel,
+  observedAgentName,
   inferHome,
   neighbor,
   nextRequest,
@@ -214,6 +219,7 @@ function App(): React.JSX.Element {
   const [artifacts, setArtifacts] = useState<ArtifactRecord[]>([])
   const [attention, setAttention] = useState<AttentionRecord[]>([])
   const [progress, setProgress] = useState<ProgressRecord[]>([])
+  const [hookOrigins, setHookOrigins] = useState<HookOriginRecord[]>([])
   const [drafts, setDrafts] = useState<InputDraftRecord[]>([])
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS)
   const [panel, setPanel] = useState<SidePanel>(null)
@@ -437,6 +443,8 @@ function App(): React.JSX.Element {
     artifacts: () => window.aiTerminal.listArtifacts(null).then(setArtifacts),
     attention: () => window.aiTerminal.listAttention().then(setAttention),
     progress: () => window.aiTerminal.listProgress().then(setProgress),
+    // One list read backs every origin flag in the window; each hook event invalidates it.
+    hooks: () => window.aiTerminal.listHookOrigins().then(setHookOrigins),
     drafts: () => window.aiTerminal.listDrafts().then(setDrafts),
     settings: () => window.aiTerminal.getSettings().then(setSettings),
     // A hook can rebind a conversation at any time; the window reloads the binding it is showing.
@@ -1450,6 +1458,10 @@ function App(): React.JSX.Element {
     unresolved, selectedProgress, activity[selectedRecord.sessionId] ?? null) : null
   const sessionIncarnation = (session: SessionRecord): string | null =>
     live[session.sessionId]?.incarnationId ?? session.lastProcess?.incarnationId ?? null
+  /** The origin facts of the selected session's live run; a stopped session has none to show. */
+  const selectedOrigin = selectedRecord
+    ? activeHookOrigin(hookOrigins, selectedRecord, live[selectedRecord.sessionId]?.incarnationId)
+    : null
   /** Freezes the observation the owner opened; the dialog renders from that and never from live state. */
   const openProgressDetail = (
     session: SessionRecord | undefined, opened: ProgressPresentation | null,
@@ -1622,6 +1634,9 @@ function App(): React.JSX.Element {
                       const isLive = sessionProcessLive(session, live[session.sessionId]?.incarnationId)
                       const status = sessionStatus(session, isLive, unresolved, observedProgress, observedActivity)
                       const selected = session.sessionId === selectedSessionId
+                      const origin = activeHookOrigin(hookOrigins, session, live[session.sessionId]?.incarnationId)
+                      const originFlag = origin === null ? null : modelOriginFlag(origin)
+                      const originLabel = origin === null ? null : modelOriginLabel(origin)
                       return (
                         <div className={`session-row${selected ? ' selected' : ''}${session.archivedAt ? ' archived' : ''}`} data-live={String(isLive)} key={session.sessionId}>
                           <button
@@ -1636,7 +1651,12 @@ function App(): React.JSX.Element {
                           >
                             <span className={`status-dot ${status.dot}`} aria-hidden="true" />
                             <span className="session-name">{session.name}</span>
-                            <span className="chip">{agentTag(session.executable, session.argv)}</span>
+                            <span className="chips">
+                              <span className="chip">{origin === null ? agentTag(session.executable, session.argv) : observedAgentName(origin.agent)}</span>
+                              {originFlag === null ? null : (
+                                <span className="origin-flag" role="img" title={originLabel ?? undefined} aria-label={originLabel ?? undefined}>{originFlag}</span>
+                              )}
+                            </span>
                             <span className="session-detail">
                               <span className="session-state">{status.word}</span>
                               <span className="session-directory">{displayPath(session.cwd, home)}</span>
@@ -1688,6 +1708,7 @@ function App(): React.JSX.Element {
                 filesOpen={panel === 'files'}
                 attention={sessionAttention(unresolved, terminalStartup.sessionId)}
                 activity={activity[terminalStartup.sessionId] ?? null}
+                modelOrigin={record ? activeHookOrigin(hookOrigins, record, terminalStartup.incarnationId) : null}
                 onTitle={(title) => noteTitle(terminalStartup.sessionId, title)}
                 onAnswer={() => answerByTyping(terminalStartup.sessionId)}
                 armed={armed}
@@ -1868,7 +1889,12 @@ function App(): React.JSX.Element {
                   <p className="inspector-state">
                     <span className={`status-dot ${selectedStatus.dot}`} aria-hidden="true" />
                     <span>{selectedStatus.word}</span>
-                    <span className="chip">{agentTag(selectedRecord.executable, selectedRecord.argv)}</span>
+                    <span className="chip">{selectedOrigin === null ? agentTag(selectedRecord.executable, selectedRecord.argv) : observedAgentName(selectedOrigin.agent)}</span>
+                    {selectedOrigin !== null && modelOriginFlag(selectedOrigin) !== null ? (
+                      <span className="origin-flag" role="img"
+                        title={modelOriginLabel(selectedOrigin) ?? undefined}
+                        aria-label={modelOriginLabel(selectedOrigin) ?? undefined}>{modelOriginFlag(selectedOrigin)}</span>
+                    ) : null}
                   </p>
                   {selectedRecord.launchDisabledReason ? (
                     <p className="inline-error" role="status">
@@ -1906,6 +1932,7 @@ function App(): React.JSX.Element {
                   sessionId={selectedRecord.sessionId}
                   sessionName={selectedRecord.name}
                   incarnationId={sessionIncarnation(selectedRecord)}
+                  origin={selectedOrigin}
                   refreshTick={now}
                   onOpenEvents={() => setDialog({ kind: 'hook-events', session: selectedRecord })}
                   onOpenConfiguration={() => setDialog({ kind: 'preferences', section: 'agent-control' })}

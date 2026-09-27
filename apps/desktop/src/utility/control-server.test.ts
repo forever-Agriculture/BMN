@@ -533,6 +533,19 @@ describe('control server validation', () => {
     ['invented hook effect', 'hook.observe', { agent: 'claude', event: 'Stop', effects: ['notified'] }],
     ['too many hook effects', 'hook.observe',
       { agent: 'claude', event: 'Stop', effects: ['opened', 'opened', 'opened', 'opened', 'opened', 'opened', 'opened', 'opened', 'opened'] }],
+    ['api host with a path', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], apiHost: 'api.z.ai/api' }],
+    ['api host with credentials', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], apiHost: 'user@api.z.ai' }],
+    ['api host with a scheme', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], apiHost: 'https://api.z.ai' }],
+    ['api host with a space', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], apiHost: 'api.z ai' }],
+    ['control character api host', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], apiHost: 'api.z.ai\u0007' }],
+    ['oversize api host', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], apiHost: `${'a'.repeat(256)}.ai` }],
+    ['empty api host', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], apiHost: '' }],
+    ['non-string api host', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], apiHost: 12 }],
+    ['api host with a stray bracket', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], apiHost: 'api]z.ai' }],
+    ['control character model', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], model: 'glm\u0007' }],
+    ['oversize model', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], model: 'x'.repeat(129) }],
+    ['empty model', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], model: '' }],
+    ['non-string model', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], model: 42 }],
     ['unknown hook parameter', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], pid: 12 }]
   ])('rejects %s with INVALID_ARGUMENT and keeps the connection', async (_label, method, params) => {
     const fixture = await serverFixture()
@@ -587,6 +600,38 @@ describe('control server validation', () => {
       toolName: 'Bash',
       fingerprint: '0123456789abcdef',
       effects: ['answered', 'withdrew']
+    })
+
+    // Epic 29: model facts ride along when the CLI sends them, and an older CLI that sends none
+    // still records its observation unchanged.
+    await client.request('hook.observe', {
+      agent: 'claude', event: 'SessionStart', effects: [], apiHost: 'api.z.ai', model: 'GLM-5.3'
+    })
+    expect(fixture.handlers.observeHookEvent).toHaveBeenLastCalledWith({
+      sessionId: 'session-1',
+      incarnationId: 'incarnation-1',
+      agent: 'claude',
+      event: 'SessionStart',
+      source: null,
+      toolName: null,
+      apiHost: 'api.z.ai',
+      model: 'GLM-5.3',
+      effects: []
+    })
+    // Names the URL parser keeps, underscores and IPv6 literals included, are hosts too.
+    for (const apiHost of ['my_host.internal.example', '[::1]', 'xn--bcher-kva.example']) {
+      await client.request('hook.observe', { agent: 'claude', event: 'Stop', effects: [], apiHost })
+      expect(fixture.handlers.observeHookEvent).toHaveBeenLastCalledWith(expect.objectContaining({ apiHost }))
+    }
+    await client.request('hook.observe', { agent: 'codex', event: 'Stop', effects: [] })
+    expect(fixture.handlers.observeHookEvent).toHaveBeenLastCalledWith({
+      sessionId: 'session-1',
+      incarnationId: 'incarnation-1',
+      agent: 'codex',
+      event: 'Stop',
+      source: null,
+      toolName: null,
+      effects: []
     })
   })
 

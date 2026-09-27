@@ -1,3 +1,4 @@
+// MODULE: protocol.test.ts - frozen surface, defaults and guards of the protocol package
 import { describe, expect, it, vi } from 'vitest'
 import {
   DEFAULT_WORKSPACE_MARKER,
@@ -123,6 +124,7 @@ describe('protocol surface', () => {
         'hookEvents.list',
         'hooks.check',
         'hookObservation.get',
+        'hookOrigins.list',
         'progress.list',
         'draft.list', 'handoff.review',
         'draft.save',
@@ -140,7 +142,7 @@ describe('protocol surface', () => {
         'presence.set'
       ])
     )
-    expect(Object.values(METHOD_REGISTRY)).toHaveLength(70)
+    expect(Object.values(METHOD_REGISTRY)).toHaveLength(71)
   })
 
   it('exports the initial stable error codes', () => {

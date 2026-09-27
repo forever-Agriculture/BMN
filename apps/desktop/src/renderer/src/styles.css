@@ -256,6 +256,15 @@ input[type='radio'] {
   white-space: nowrap;
 }
 
+/* The model-maker's flag beside the agent chip: emoji only, the one colour the palette allows. */
+.origin-flag {
+  display: inline-block;
+  font-size: 12px;
+  line-height: 18px;
+  vertical-align: text-bottom;
+  white-space: nowrap;
+}
+
 .inline-error {
   color: var(--error);
   font-size: 12px;
@@ -652,10 +661,19 @@ input[type='radio'] {
   white-space: nowrap;
 }
 
-.session-row .chip {
+.session-row .chips {
   grid-row: 1 / span 2;
   grid-column: 3;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
   align-self: center;
+}
+
+.session-row .chip {
+  grid-row: auto;
+  grid-column: auto;
 }
 
 .session-row.archived .session-name {
@@ -2750,6 +2768,7 @@ input[type='radio'] {
   .session-row .session-name,
   .session-row .session-detail,
   .session-row .chip,
+  .session-row .origin-flag,
   .session-row .row-menu-button,
   .workspace-row .row-menu-button,
   .workspace-row .count,

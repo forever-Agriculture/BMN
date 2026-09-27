@@ -45,6 +45,21 @@ const receiptContract = [
   ['sixelViewSwap', (receipt) => receipt.sixelViewSwap?.visibleAfter === true &&
     receipt.sixelViewSwap?.leakedText === false && receipt.sixelViewSwap?.storageMB > 0 &&
     receipt.sixelViewSwap?.otherPanesLeak === false],
+  // Epic 29: the maker's flag in the row, pane heading and details for each base URL, none for an
+  // unknown host and model, and back on the first hook after a restart.
+  ['modelOrigin', (receipt) => {
+    const flags = receipt.modelOrigin?.flags
+    const shown = (label, flag) => flags?.[label]?.rowFlag === flag && flags[label].paneFlag === flag &&
+      flags[label].inspectorFlag === flag && flags[label].rowChip === 'Claude'
+    const restart = receipt.modelOrigin?.afterRestart
+    return shown('default', '🇺🇸') && shown('zai', '🇨🇳') && shown('mistral', '🇫🇷') &&
+      shown('openrouter', '🇨🇳') && shown('unknown', null) &&
+      flags.unknown.modelTitle === 'Model origin unclassified' &&
+      flags.zai.rowLabel === 'Model origin: China · claude-sonnet-4-5 via api.z.ai' &&
+      restart?.before?.rowFlag === null && restart.before.rowChip === 'Shell' &&
+      restart.after?.rowFlag === '🇨🇳' && restart.after.rowChip === 'Claude' &&
+      restart.stopped?.rowFlag === null && restart.stopped.modelRow === null
+  }],
   ['sixelCsp', (receipt) => receipt.cspProbe?.evalRefused === true &&
     receipt.cspProbe?.wasmAllowed === true],
   ['graphicsTerminfo', (receipt) => receipt.graphicsTerminfo?.sixelResolved === true &&
@@ -515,8 +530,8 @@ const receiptContract = [
   [
     'survivalTable',
     (receipt) =>
-      receipt.survivalTable?.rendererCrash?.liveProcesses === 3 &&
-      receipt.survivalTable.rendererCrash.incarnationRecords === 15 &&
+      receipt.survivalTable?.rendererCrash?.liveProcesses === 4 &&
+      receipt.survivalTable.rendererCrash.incarnationRecords === 16 &&
       receipt.survivalTable.rendererCrash.openRequestsBefore > 0 &&
       receipt.survivalTable.rendererCrash.openRequestsAfter ===
         receipt.survivalTable.rendererCrash.openRequestsBefore &&
@@ -641,8 +656,9 @@ const exitCode = await withTemporaryRoot(temporaryRootContracts.electronSelfTest
     }
     const timer = setTimeout(() => {
       child.kill('SIGKILL')
-      finish(undefined, new Error('Electron self-test timed out after 90 seconds'))
-    }, 90_000)
+      finish(undefined, new Error('Electron self-test timed out after 120 seconds'))
+      // A passing run measured 88.7 s on 2026-09-27 (Epic 29 added about 1 s), too close to the old 90 s.
+    }, 120_000)
     child.stdout.on('data', () => {
       const receipt = stdout
         .split(/\r?\n/)

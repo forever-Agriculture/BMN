@@ -1,3 +1,4 @@
+// MODULE: index.ts - preload that exposes the typed bmn bridge over context isolation
 import {
   MAX_TERMINAL_CHUNK_BYTES,
   CONSUMER_OUTPUT_QUEUE_BYTES,
@@ -16,6 +17,7 @@ import {
   type HookEventRecord,
   type HookCheckReport,
   type HookObservation,
+  type HookOriginRecord,
   type BackupManifest,
   type BackupVerifyResult,
   type ControlInfo,
@@ -588,6 +590,9 @@ contextBridge.exposeInMainWorld('aiTerminal', {
       sessionId,
       ...(incarnationId === undefined ? {} : { incarnationId })
     })
+  },
+  listHookOrigins(): Promise<HookOriginRecord[]> {
+    return invokeBridge('aiterm:hook-origins:list', {})
   },
   checkHookConfiguration(): Promise<HookCheckReport> {
     return invokeBridge('aiterm:hooks:check', {})

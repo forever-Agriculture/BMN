@@ -1,4 +1,5 @@
-export const PROTOCOL_VERSION = Object.freeze({ major: 1, minor: 2 } as const)
+// MODULE: constants.ts - protocol version, size limits, method registry and topic names
+export const PROTOCOL_VERSION = Object.freeze({ major: 1, minor: 3 } as const)
 
 export const MAX_CONTROL_FRAME_BYTES = 1024 * 1024
 export const MAX_TERMINAL_CHUNK_BYTES = 256 * 1024
@@ -58,6 +59,7 @@ export const METHOD_REGISTRY = Object.freeze({
   hookEventsList: 'hookEvents.list',
   hooksCheck: 'hooks.check',
   hookObservationGet: 'hookObservation.get',
+  hookOriginsList: 'hookOrigins.list',
   progressList: 'progress.list',
   draftList: 'draft.list',
   handoffReview: 'handoff.review',

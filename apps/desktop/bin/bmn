@@ -1625,11 +1625,55 @@ async function runHook(args) {
   // One observation per event, whether or not it changed anything: an event that opened nothing is
   // exactly what the owner needs to see when a request they expected never arrived. It goes last, on the
   // same connection and timeout, so it can report what the calls before it actually did.
+  const apiHost = hookApiHost(agent)
+  const model = hookModel(agent, event)
   const observable = hookEventName(event.hook_event_name) !== undefined
   if (requests.length === 0 && !observable) return 0
-  const calls = [...requests, (outcomes) => hookObservation(agent, event, requests, outcomes)]
+  const calls = [...requests, (outcomes) => hookObservation(agent, event, requests, outcomes, apiHost, model)]
   await callEach(socketPath, token, calls, HOOK_TIMEOUT_MS).catch(() => undefined)
   return 0
+}
+
+/**
+ * The hostname of the agent's own API base URL, so the utility can flag the model's maker. Only the
+ * parsed host ever leaves this process: no scheme, path, query or credentials ride along, and an
+ * unset or unparsable URL reports nothing rather than a guess.
+ */
+function hookApiHost(agent) {
+  const variable = agent === 'claude' ? 'ANTHROPIC_BASE_URL' : agent === 'codex' ? 'OPENAI_BASE_URL' : null
+  const value = variable === null ? undefined : process.env[variable]
+  if (typeof value !== 'string' || value.trim() === '') return null
+  let hostname = ''
+  try {
+    hostname = new URL(value.trim()).hostname
+  } catch {
+    return null
+  }
+  // Only a host the utility accepts is sent: an odd one would make it refuse the whole observation.
+  return hostname.length <= 255 && /^(?:[a-zA-Z0-9._-]+|\[[0-9a-fA-F:.]+\])$/.test(hostname) ? hostname : null
+}
+
+/**
+ * The model name the payload carried, trimmed and bounded to 128 printable UTF-16 units. Claude Code
+ * puts it at `model`; the OpenCode plugin spreads an event's properties, and `message.updated`
+ * carries `{ info: Message }`, whose assistant messages name `modelID` (@opencode-ai/sdk
+ * EventMessageUpdated) — both are read here, and the plugin itself is never changed.
+ */
+function hookModel(agent, event) {
+  const raw = typeof event.model === 'string' ? event.model
+    : agent === 'opencode' && isObject(event.info) && typeof event.info.modelID === 'string'
+      ? event.info.modelID
+      : undefined
+  if (raw === undefined) return undefined
+  const printable = [...raw.trim()].filter((ch) => ch.charCodeAt(0) > 0x1f && ch.charCodeAt(0) !== 0x7f)
+  // The utility counts UTF-16 units and refuses the whole observation above 128, so the cut is in
+  // those units, and only between code points, never through a surrogate pair.
+  let model = ''
+  for (const ch of printable) {
+    if (model.length + ch.length > 128) break
+    model += ch
+  }
+  return model === '' ? undefined : model
 }
 
 /** JSON with object keys sorted at every depth and no whitespace; absent reads as `null`. */
@@ -1661,7 +1705,7 @@ function toolFingerprint(event, agent) {
  * the host accepted: a Stop that found nothing to withdraw, or an open the host refused, leaves the list
  * empty, which is what the owner needs to see when a request they expected never arrived.
  */
-function hookObservation(agent, event, requests, outcomes) {
+function hookObservation(agent, event, requests, outcomes, apiHost = null, model = undefined) {
   const eventName = hookEventName(event.hook_event_name)
   if (eventName === undefined) return undefined
   const byMethod = { 'attention.open': 'opened', 'attention.withdraw': 'withdrew', 'attention.resolve': 'answered' }
@@ -1688,7 +1732,9 @@ function hookObservation(agent, event, requests, outcomes) {
       effects,
       ...(source === undefined ? {} : { source }),
       ...(toolName === undefined ? {} : { toolName }),
-      ...(fingerprint === undefined ? {} : { fingerprint })
+      ...(fingerprint === undefined ? {} : { fingerprint }),
+      ...(apiHost === null ? {} : { apiHost }),
+      ...(model === undefined ? {} : { model })
     }
   }
 }

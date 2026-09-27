@@ -1,16 +1,20 @@
 // MODULE: session-presentation.test.ts - status, tags, progress staleness and needs-you navigation
-import type { AttentionRecord, InputDraftRecord, ProgressRecord } from '@bmn/protocol'
+import type { AttentionRecord, HookOriginRecord, InputDraftRecord, ProgressRecord, SessionRecord } from '@bmn/protocol'
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { NeedsYouPopover } from './needs-you-popover'
 import {
+  activeHookOrigin,
   agentTag,
   handoffDraftForAttention,
   handoffPreparedBy,
   attentionActionWhenOpened,
   displayPath,
   inferHome,
+  modelOriginFlag,
+  modelOriginLabel,
+  observedAgentName,
   openAttentionGroups,
   neighbor,
   splitCandidates,
@@ -461,5 +465,53 @@ describe('agent handoff entry and provenance', () => {
     expect(handoffPreparedBy(draft, restarted, [petition])?.stale).toBe(true)
     expect(handoffPreparedBy(draft, restarted, [{ ...petition, requestKey: 'handoff:other' }])?.stale).toBe(false)
     expect(handoffPreparedBy({ ...draft, preparedBy: null }, source, [petition])).toBeNull()
+  })
+})
+
+describe('model origin presentation', () => {
+  const origin = (over: Partial<HookOriginRecord> = {}): HookOriginRecord => ({
+    state: 'observed',
+    sessionId: 's1',
+    incarnationId: 'incarnation-1',
+    agent: 'claude',
+    country: 'CN',
+    model: 'GLM-5.3',
+    apiHost: 'api.z.ai',
+    observedAt: '2026-09-27T12:00:00.000Z',
+    ...over
+  })
+
+  it('finds the record of the live run only', () => {
+    const records = [origin(), origin({ sessionId: 's2', incarnationId: 'incarnation-2', agent: 'codex' })]
+    const session = (sessionId: string, state: 'live' | 'exited' | 'interrupted' = 'live') =>
+      ({ sessionId, lastProcess: { incarnationId: 'incarnation-1', state } }) as Pick<SessionRecord, 'sessionId' | 'lastProcess'>
+    expect(activeHookOrigin(records, session('s1'), 'incarnation-1')).toMatchObject({ sessionId: 's1', agent: 'claude' })
+    expect(activeHookOrigin(records, session('s1'), 'incarnation-9')).toBeNull()
+    expect(activeHookOrigin(records, session('s1'), undefined)).toBeNull()
+    expect(activeHookOrigin(records, session('s9'), 'incarnation-1')).toBeNull()
+    // The window keeps an exited run's pane and incarnation; its flag still goes with the process.
+    expect(activeHookOrigin(records, session('s1', 'exited'), 'incarnation-1')).toBeNull()
+    expect(activeHookOrigin(records, session('s1', 'interrupted'), 'incarnation-1')).toBeNull()
+  })
+
+  it('flags a classified origin and names its country, model and host in one label', () => {
+    expect(modelOriginFlag(origin())).toBe('🇨🇳')
+    expect(modelOriginLabel(origin())).toBe('Model origin: China · GLM-5.3 via api.z.ai')
+    expect(modelOriginLabel(origin({ country: 'US', model: null, apiHost: null })))
+      .toBe('Model origin: the United States')
+    expect(modelOriginLabel(origin({ country: 'FR', model: null, apiHost: 'api.mistral.ai' })))
+      .toBe('Model origin: France via api.mistral.ai')
+  })
+
+  it('shows no flag and no placeholder for an unclassified origin', () => {
+    const unknown = origin({ country: null, model: null, apiHost: 'llm.internal.example' })
+    expect(modelOriginFlag(unknown)).toBeNull()
+    expect(modelOriginLabel(unknown)).toBeNull()
+  })
+
+  it('names the agent the run itself reported, in place of the executable word', () => {
+    expect(observedAgentName('claude')).toBe('Claude')
+    expect(observedAgentName('codex')).toBe('Codex')
+    expect(observedAgentName('opencode')).toBe('OpenCode')
   })
 })

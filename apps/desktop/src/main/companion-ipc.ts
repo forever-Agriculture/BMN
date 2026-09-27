@@ -43,6 +43,7 @@ const ROUTES = {
   'aiterm:attention:resolve': METHOD_REGISTRY.attentionResolve,
   'aiterm:hook-events:list': METHOD_REGISTRY.hookEventsList,
   'aiterm:hook-observation:get': METHOD_REGISTRY.hookObservationGet,
+  'aiterm:hook-origins:list': METHOD_REGISTRY.hookOriginsList,
   'aiterm:hooks:check': METHOD_REGISTRY.hooksCheck,
   'aiterm:attention:terminal-notice': METHOD_REGISTRY.attentionTerminalNotice,
   'aiterm:progress:list': METHOD_REGISTRY.progressList,

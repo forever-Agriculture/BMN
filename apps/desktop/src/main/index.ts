@@ -1,3 +1,4 @@
+// MODULE: index.ts - Electron main process: windows, bridge IPC, host lifecycle and the self-test driver
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, truncateSync, unlinkSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { homedir } from 'node:os'
@@ -2106,6 +2107,97 @@ function writeAcceptanceHarness(directory: string, name: string, steps: string[]
     "})().catch(error => writeFileSync(file('error'), String(error)))", ''
   ].join('\n'), { mode: 0o700 })
   return executable
+}
+
+/**
+ * Epic 29 stand-in Claude, typed into a shell the way the owner runs agents, so its chip reads
+ * "Shell" until its own hooks report: gate `fire-N` carries one scenario (base URL, model, event)
+ * and the real `bmn hook claude` runs under exactly that environment. A resumed run skips gates
+ * already `done-N`, so after a restart it waits for the next gate instead of replaying old ones.
+ */
+function writeOriginHarness(directory: string): string {
+  return writeAcceptanceHarness(directory, 'origin-agent', [
+    "for (let n = 0; ; n++) {",
+    "  if (existsSync(file('done-' + n))) continue",
+    "  await wait('fire-' + n)",
+    "  const scenario = JSON.parse(require('node:fs').readFileSync(file('fire-' + n), 'utf8'))",
+    "  const env = { ...process.env }",
+    "  if (scenario.baseUrl === null) delete env.ANTHROPIC_BASE_URL; else env.ANTHROPIC_BASE_URL = scenario.baseUrl",
+    "  const payload = scenario.event === 'SessionStart' ? { hook_event_name: 'SessionStart', source: 'startup' }",
+    "    : { hook_event_name: scenario.event, tool_name: 'Bash', tool_input: { command: 'origin-' + n }, tool_response: { output: 'fixture' } }",
+    "  if (scenario.model !== null) payload.model = scenario.model",
+    "  const result = spawnSync('bmn', ['hook', 'claude'], { input: JSON.stringify(payload), env, encoding: 'utf8' })",
+    "  writeFileSync(file('done-' + n), String(result.status))",
+    "}"
+  ])
+}
+
+interface OriginProbe {
+  rowChip: string | null
+  rowFlag: string | null
+  rowLabel: string | null
+  paneChip: string | null
+  paneFlag: string | null
+  paneLabel: string | null
+  inspectorChip: string | null
+  inspectorFlag: string | null
+  modelRow: string | null
+  modelTitle: string | null
+}
+
+/**
+ * Reads the origin flag where the owner sees it: the sidebar row, the pane heading, and Session
+ * details' header and Model row. It selects the session and opens details itself, and waits until
+ * `until` (the Model row text, or null for "no Model row") holds before reading anything.
+ */
+async function modelOriginProbe(
+  window: BrowserWindow, sessionId: string, name: string, until: string | null
+): Promise<OriginProbe> {
+  return window.webContents.executeJavaScript(`(async () => {
+    const wait = async (read, label) => { const end = Date.now() + 10000; while (Date.now() < end) {
+      const value = read(); if (value) return value; await new Promise(r => setTimeout(r, 25));
+    } throw new Error('model origin probe timed out: ' + label); };
+    const id = ${JSON.stringify(sessionId)};
+    const until = ${JSON.stringify(until)};
+    (await wait(() => document.querySelector('.session-row > button[data-session-id="' + id + '"]'), 'session row')).click();
+    if (document.querySelector('.session-inspector h2')?.textContent !== ${JSON.stringify(name)}) {
+      (await wait(() => document.querySelector('[aria-label="Actions for ${name}"]'), 'row menu')).click();
+      (await wait(() => [...document.querySelectorAll('.popup-menu [role="menuitem"]')]
+        .find(row => row.textContent.trim() === 'Session details'), 'details action')).click();
+      await wait(() => document.querySelector('.session-inspector h2')?.textContent === ${JSON.stringify(name)}, 'details');
+    }
+    const modelRow = () => {
+      const term = [...document.querySelectorAll('.session-inspector .hook-observation dt')].find(dt => dt.textContent === 'Model');
+      return term?.nextElementSibling ?? null;
+    };
+    await wait(() => until === null ? modelRow() === null : modelRow()?.textContent.includes(until), 'Model row ' + until)
+      .catch(async (error) => { throw new Error(error.message + ' ' + JSON.stringify({ shown: modelRow()?.textContent ?? null,
+        details: document.querySelector('.session-inspector')?.textContent.slice(0, 300) ?? null,
+        origins: await window.aiTerminal.listHookOrigins() })); });
+    const row = document.querySelector('.session-row > button[data-session-id="' + id + '"]');
+    const pane = document.querySelector('.session-terminal[data-session-id="' + id + '"]:not(.session-terminal-hidden) .pane-heading');
+    const inspector = document.querySelector('.session-inspector .inspector-state');
+    const flag = (root) => root?.querySelector('.origin-flag') ?? null;
+    return {
+      rowChip: row?.querySelector('.chips .chip')?.textContent ?? null,
+      rowFlag: flag(row)?.textContent ?? null, rowLabel: flag(row)?.getAttribute('aria-label') ?? null,
+      paneChip: pane?.querySelector('.chip')?.textContent ?? null,
+      paneFlag: flag(pane)?.textContent ?? null, paneLabel: flag(pane)?.getAttribute('aria-label') ?? null,
+      inspectorChip: inspector?.querySelector('.chip')?.textContent ?? null,
+      inspectorFlag: flag(inspector)?.textContent ?? null,
+      modelRow: modelRow()?.textContent ?? null, modelTitle: modelRow()?.getAttribute('title') ?? null
+    };
+  })()`) as Promise<OriginProbe>
+}
+
+/** Fires one origin gate and waits until the stand-in's `bmn hook claude` call has returned. */
+async function fireOriginGate(
+  directory: string, n: number, scenario: { baseUrl: string | null; model: string | null; event: string }
+): Promise<void> {
+  writeFileSync(join(directory, `fire-${n}`), JSON.stringify(scenario))
+  await untilFileExists(join(directory, `done-${n}`), `model origin hook ${n}`)
+  const status = readFileSync(join(directory, `done-${n}`), 'utf8')
+  if (status !== '0') throw new Error(`model origin hook ${n} exited ${status}`)
 }
 
 /** What a session's own `bmn list --json` says about its conversation, once the hook has reported. */
@@ -4415,12 +4507,53 @@ async function runSelfTest(): Promise<void> {
     }
     console.error(`[BMN] self-test phase: resume confirmation ${JSON.stringify(resumeConfirmationShownToOwner)}`)
 
+    // Epic 29: the model maker's flag, from what a Claude stand-in's own `bmn hook claude` reports
+    // under each base URL. This run stays live into the application restart below.
+    console.error('[BMN] self-test phase: model origin flags')
+    const originDirectory = join(isolatedCwd, 'model-origin')
+    const { session: originSession } = await createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
+      name: 'Model origin', cwd: isolatedCwd, executable: '/bin/bash', argv: ['-c', writeOriginHarness(originDirectory)],
+      cols: 80, rows: 24 }, true)
+    await recoverApplicationRenderer(applicationWindow)
+    const originScenarios = [
+      { label: 'default', baseUrl: null, model: 'claude-opus-4-5', flag: '🇺🇸',
+        name: 'Model origin: the United States · claude-opus-4-5', row: 'claude-opus-4-5' },
+      { label: 'zai', baseUrl: 'https://api.z.ai/api/anthropic', model: 'claude-sonnet-4-5', flag: '🇨🇳',
+        name: 'Model origin: China · claude-sonnet-4-5 via api.z.ai', row: 'claude-sonnet-4-5 via api.z.ai' },
+      { label: 'mistral', baseUrl: 'https://api.mistral.ai', model: 'mistral-large-latest', flag: '🇫🇷',
+        name: 'Model origin: France · mistral-large-latest via api.mistral.ai', row: 'mistral-large-latest via api.mistral.ai' },
+      { label: 'openrouter', baseUrl: 'https://openrouter.ai/api', model: 'moonshotai/kimi-k2', flag: '🇨🇳',
+        name: 'Model origin: China · moonshotai/kimi-k2 via openrouter.ai', row: 'moonshotai/kimi-k2 via openrouter.ai' },
+      { label: 'unknown', baseUrl: 'https://llm.internal.example/v1', model: 'custom-tuned', flag: null,
+        name: null, row: 'custom-tuned via llm.internal.example' }
+    ]
+    const modelOriginFlags: Record<string, OriginProbe> = {}
+    for (const [n, scenario] of originScenarios.entries()) {
+      await fireOriginGate(originDirectory, n, { baseUrl: scenario.baseUrl, model: scenario.model, event: 'SessionStart' })
+      const seen = await modelOriginProbe(applicationWindow, originSession.sessionId, 'Model origin', scenario.row)
+      modelOriginFlags[scenario.label] = seen
+      if (seen.rowFlag !== scenario.flag || seen.paneFlag !== scenario.flag || seen.inspectorFlag !== scenario.flag ||
+        seen.rowLabel !== scenario.name || seen.paneLabel !== scenario.name ||
+        seen.modelTitle !== (scenario.name ?? 'Model origin unclassified') ||
+        [seen.rowChip, seen.paneChip, seen.inspectorChip].some((chip) => chip !== 'Claude')) {
+        throw new Error(`model origin ${scenario.label} rendered wrongly: ${JSON.stringify(seen)}`)
+      }
+    }
+    // Close details and return selection to the lifecycle fixture the restart checks expect.
+    await applicationWindow.webContents.executeJavaScript(`(async () => {
+      document.querySelector('.session-inspector .panel-heading button')?.click();
+      const row = document.querySelector('.session-row button[data-session-id="' + ${JSON.stringify(preloadProbe.templateCreatedSession.sessionId)} + '"]');
+      if (!row) throw new Error('the lifecycle fixture disappeared after the model origin phase');
+      row.click();
+    })()`)
+
     const afterRenderer = await client.request<HostHealth>(METHOD_REGISTRY.healthGet, {})
     // The voice flow stops and starts the destination session once, the hook-reported Codex phase
     // starts two sessions and resumes one, the terminal-mode program adds one, and Epic 16/18's
     // three synthetic sessions plus OpenCode Resume add four; the new OpenCode routing and repeat
-    // fixtures add two more incarnations, and all are stopped again.
-    if (afterRenderer.liveSessions !== 3 || afterRenderer.incarnationRecords !== 15) {
+    // fixtures add two more incarnations, and all are stopped again. Epic 29's model-origin run adds
+    // one live incarnation that the application restart below interrupts.
+    if (afterRenderer.liveSessions !== 4 || afterRenderer.incarnationRecords !== 16) {
       throw new Error(`renderer restart duplicated or stopped a process: ${afterRenderer.liveSessions} live, ${afterRenderer.incarnationRecords} incarnations`)
     }
     // "What survives", renderer-crash row: the processes, the layout and the open requests outlive the view.
@@ -4526,7 +4659,7 @@ async function runSelfTest(): Promise<void> {
     if (
       restoredHealth.liveSessions !== 0 ||
       restoredHealth.runningIncarnations !== 0 ||
-      restoredHealth.interruptedIncarnations !== 4
+      restoredHealth.interruptedIncarnations !== 5
     ) {
       throw new Error('application restart did not interrupt every prior live incarnation')
     }
@@ -4555,7 +4688,8 @@ async function runSelfTest(): Promise<void> {
     }
     if (
       restoredWorkspaces.length !== 3 ||
-      restoredDefaultSessions.filter((item) => !stoppedBeforeRestartSessionIds.has(item.sessionId))
+      restoredDefaultSessions.filter((item) => !stoppedBeforeRestartSessionIds.has(item.sessionId) &&
+        item.sessionId !== originSession.sessionId)
         .map((item) => item.sessionId).join(',') !==
         defaultSessionsAfterLifecycleStop.map((item) => item.sessionId).join(',') ||
       restoredArchivedSessions[0]?.sessionId !== thirdSession.sessionId ||
@@ -4628,6 +4762,33 @@ async function runSelfTest(): Promise<void> {
       !stoppedStaleProgress.includes('self-test')
     ) {
       throw new Error(`stale current-incarnation progress did not survive into the stopped view: ${stoppedStaleProgress}`)
+    }
+    // Epic 29 AC3: the restart dropped every origin; the next hook of the new run, not a SessionStart,
+    // brings the flag back. After every restored-state check, so no count above sees this run.
+    console.error('[BMN] self-test phase: model origin after restart')
+    const originRelaunched = await applicationWindow.webContents.executeJavaScript(
+      `window.aiTerminal.relaunchSession(${JSON.stringify(originSession.sessionId)})`
+    ) as { incarnationId: string }
+    await recoverApplicationRenderer(applicationWindow)
+    const originBeforeHook = await modelOriginProbe(applicationWindow, originSession.sessionId, 'Model origin', null)
+    await fireOriginGate(originDirectory, originScenarios.length,
+      { baseUrl: 'https://api.z.ai/api/anthropic', model: null, event: 'PostToolUse' })
+    const originAfterHook = await modelOriginProbe(applicationWindow, originSession.sessionId, 'Model origin', 'via api.z.ai')
+    await client.request(METHOD_REGISTRY.sessionStop, { sessionId: originSession.sessionId,
+      incarnationId: originRelaunched.incarnationId, cause: 'explicit' })
+    const originStopped = await acceptanceWait(async () => {
+      const seen = await modelOriginProbe(applicationWindow!, originSession.sessionId, 'Model origin', null)
+      return seen.rowFlag === null ? seen : undefined
+    }, 'stopped model origin row')
+    await applicationWindow.webContents.executeJavaScript(
+      `document.querySelector('.session-inspector .panel-heading button')?.click()`)
+    const modelOriginAfterRestart = { before: originBeforeHook, after: originAfterHook, stopped: originStopped }
+    if (originBeforeHook.rowFlag !== null || originBeforeHook.paneFlag !== null || originBeforeHook.modelRow !== null ||
+      originBeforeHook.rowChip !== 'Shell' || originAfterHook.rowChip !== 'Claude' || originStopped.rowChip !== 'Shell' ||
+      originAfterHook.rowFlag !== '🇨🇳' || originAfterHook.paneFlag !== '🇨🇳' ||
+      originAfterHook.rowLabel !== 'Model origin: China via api.z.ai' ||
+      originStopped.paneFlag !== null || originStopped.inspectorFlag !== null || originStopped.modelRow !== null) {
+      throw new Error(`the model origin did not follow the restart: ${JSON.stringify(modelOriginAfterRestart)}`)
     }
     // A dedicated live session on the restarted host, after every restored-state check, so no
     // earlier count, order or receipt value sees it.
@@ -6240,6 +6401,7 @@ async function runSelfTest(): Promise<void> {
       harnessObservations: { opencode: openCodeObservationUi, codex: codexObservationUi },
       terminalNotice,
       launchSetRepository,
+      modelOrigin: { flags: modelOriginFlags, afterRestart: modelOriginAfterRestart },
       survivalTable: {
         rendererCrash: survivingRendererCrash,
         quit: {

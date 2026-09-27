@@ -66,6 +66,15 @@ commands — Claude, Codex, OpenCode, Gemini, Aider, Shell — but the deeper
 integration (attention hooks and conversation resume) is built for Claude Code, Codex and OpenCode.
 Any other CLI still runs as a normal terminal session, without those.
 
+**Model origin flag.** While a Claude Code, Codex or OpenCode run reports through its own hooks,
+its sidebar row, pane heading and Session details show the agent it really is (not "Shell") and
+a small flag for the country of the company that made its model — 🇺🇸 for Anthropic, OpenAI and
+other US labs, 🇨🇳 for GLM, Kimi, Qwen, DeepSeek, MiniMax or Xiaomi MiMo, and the flag of the main
+French, German, Canadian, Korean and Japanese makers. The flag names the maker, not where the
+model is hosted; Session details adds a Model row with the model name and API host. An
+unrecognised model shows no flag rather than a guess. How it is decided:
+[Agent control](agent-control.md#model-origin-flag).
+
 **Archive retention.** Preferences → Archive sets how long archived sessions and workspaces are
 kept: a number of days, or forever. The check runs when BMN starts. Deletion is permanent and takes
 the saved output, requests and Telegram history with it; published files are kept.

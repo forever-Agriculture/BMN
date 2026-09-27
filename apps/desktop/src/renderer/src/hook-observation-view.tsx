@@ -1,8 +1,9 @@
 // MODULE: hook-observation-view.tsx - one session/run's actual harness event receipt, never a health verdict
 import { useEffect, useState } from 'react'
-import type { HookObservation } from '@bmn/protocol'
+import type { HookObservation, HookOriginRecord } from '@bmn/protocol'
 import { boundedRead } from './bounded-read'
 import { failureDetail } from './bridge-error'
+import { modelOriginFlag, modelOriginLabel } from './session-presentation'
 import './hook-observation-view.css'
 
 const AGENT_NAMES = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode' } as const
@@ -11,6 +12,8 @@ export function HookObservationView(props: {
   sessionId: string
   sessionName: string
   incarnationId: string | null
+  /** This run's model-origin facts when its own hooks reported them; a plain shell has none. */
+  origin: HookOriginRecord | null
   refreshTick: number
   onOpenEvents(): void
   onOpenConfiguration(): void
@@ -37,7 +40,9 @@ export function HookObservationView(props: {
       setError(failureDetail(cause, 'Hook observation unavailable'))
     }).finally(() => { if (current) setReading(false) })
     return () => { current = false }
-  }, [props.sessionId, props.incarnationId, props.refreshTick, refresh])
+    // A new origin means this run's hook just reported, so the Model row follows the flag at once
+    // instead of waiting for the next refresh tick.
+  }, [props.sessionId, props.incarnationId, props.refreshTick, refresh, props.origin?.observedAt])
 
   return (
     <section className="hook-observation inspector-section" aria-label="Harness integration">
@@ -64,6 +69,17 @@ export function HookObservationView(props: {
             <dd title={props.sessionName}>{props.sessionName}</dd>
             <dt>Run</dt>
             <dd className="path" title={observation.incarnationId}><bdi>run {observation.incarnationId}</bdi></dd>
+            {props.origin !== null ? (
+              <dt>Model</dt>
+            ) : null}
+            {props.origin !== null ? (
+              <dd title={modelOriginLabel(props.origin) ?? 'Model origin unclassified'}>
+                {modelOriginFlag(props.origin) === null ? null : (
+                  <span aria-hidden="true">{modelOriginFlag(props.origin)} </span>
+                )}
+                {props.origin.model ?? 'Unknown model'}{props.origin.apiHost === null ? null : ` via ${props.origin.apiHost}`}
+              </dd>
+            ) : null}
           </dl>
           {observation.detailAvailable ? null
             : <p className="meta">Earlier event detail is no longer in the recent Hook events list.</p>}

@@ -3091,3 +3091,127 @@ Handoff lines superseded (verbatim):
 - Timing: started 2026-09-26; acceptance pending.
 - Active helpers: none. Owner trial app: isolated dev BMN running (Electron main PID 2692898, scratch launcher because baseline `scripts/test/electron-dev.mjs:11` fails ERR_PACKAGE_PATH_NOT_EXPORTED; see log).
 - Review yield: ... F2 closed in rechecks, F1 material after final recheck. No acceptance.
+
+## 2026-09-27 Epic 29 run (GLM lead) — paused for owner laptop restart
+
+Owner quotes (verbatim):
+- "let Fable review the epic instead of Astra in the end"
+- "consult with codex/sol regarding this plugin"
+- "stop, We'll continue later, I need to restart the laptop"
+
+Sol consult1 (gpt-6-sol, xhigh, read-only, approval never): receipt .dev-auto/evidence/sol-consult1.json,
+prompt sol-consult1-prompt.md. Usage (turn.completed): 1,721,964 input (1,617,536 cached) / 13,343 output.
+Findings and dispositions (detail in handoff): F1 multi-maker hosts → adopted (aiplatform.googleapis.com,
+siliconflow.cn out of first-party rows; model name decides — deviation from the epic's literal table,
+justified by the epic's own neutral-host rule and maker principle; flagged to owner). F2 competing tokens
+→ adopted (start-anchored pass; DeepSeek-R1-Distill-Llama-70B → CN). F3 model-less hooks erasing flags →
+adopted (per-incarnation retention). F4 case-sensitive shapes; command-r7b/Yi-Lightning misses → adopted
+(shapes case-insensitive; continuations loosened). F5 OpenCode nested message.info.modelID → adopted in CLI,
+no plugin change. F6 new-CLI/old-server observation loss → accepted (atomic app shipping). F7 host privacy
+local-only; model over-filtering → adopted relaxed filter. F8 dead neutral list → adopted (removed).
+
+Env note: this GLM lead session exports ANTHROPIC_BASE_URL=api.z.ai and CLAUDE_CONFIG_DIR=~/.claude-glm;
+they leaked through control-cli.test.ts runCli into child CLIs (3 failures, including one pre-existing
+isolation gap in "reads both harnesses"). Fixed by scrubbing ANTHROPIC_BASE_URL/OPENAI_BASE_URL/
+CLAUDE_CONFIG_DIR in runCli. Combined 5-file run after fix: 625 passed / 6 failed in 1 file, but isolated
+re-run of the two suspects showed no failures — attribute at resume with a clean rerun before anything else.
+model-origin.test.ts 9/9 green. Typecheck/lint/Electron/docs/reviews not yet run.
+
+## 2026-09-27 ~14:35 — owner stop, resumed session
+
+Owner quote (verbatim): "stop this session"
+
+State at stop: resumed run fixed the 6 `model origins` assertion failures (array-shape
+mismatch, not an env leak) and the `toolName` helper typing in companion-service.test.ts;
+added `hookOrigins.list` to protocol.test.ts method set + length 71; added `// MODULE:`
+headers to companion.ts, constants.ts, index.ts, protocol.test.ts, model-origin.test.ts,
+bridge.d.ts, preload/index.ts per the repo hook convention. Full chain: typecheck+lint
+clean, unit 1879/1880 (only the length assertion), fixed after; full-chain confirm rerun
+still pending.
+
+Electron self-test `modelOrigin` phase design settled before the stop (not yet written):
+- Harness `writeOriginHarness` after writeAcceptanceHarness (index.ts ~2109): stand-in
+  Claude on gate files; scenario table zai/none/mistral/openrouter/unknown maps to
+  ANTHROPIC_BASE_URL + payload model; `spawnSync('bmn', ['hook','claude'], { env })` with
+  the variable deleted unless set; event 'SessionStart'-class observation-only payload
+  (verify hookRequests emits nothing for the chosen name before use); gates `fire-<n>`
+  consumed only when `done-<n>` absent, so the incarnation resumed after the application
+  restart waits for the next gate instead of replaying old ones (pty host kills sessions
+  on host loss, so no orphan race).
+- Insertion 1: create session + run 5 scenario probes right after the resume-confirmation
+  phase (index.ts ~4417, before `afterRenderer`), probes read sidebar `.origin-flag`/chip,
+  `.pane-heading` flag/chip, details Model row dd text+title, inspector-state flag; restore
+  the templateCreatedSession selection afterwards (layout put would otherwise break
+  restoredLayout.selectedSessionId at ~4562).
+- Count updates: afterRenderer 3→4 live / 15→16 incarnations (~4423 + comment),
+  interruptedIncarnations 4→5 (~4529), filter origin session out of the restored-order
+  comparison (~4558), receipt contract survivalTable.rendererCrash 3→4 / 15→16 in
+  scripts/test/electron-self-test.mjs.
+- Insertion 2: after stoppedStaleProgress (~4631, before renderer-live-exit phase):
+  sessionResume the interrupted origin session, probe no flag before any hook, fire zai
+  gate, probe 🇨🇳 regained, sessionStop explicit, probe stopped row shows no flag.
+- Receipt `modelOrigin` entry + contract row asserting per-scenario flag/label/chip/pane/
+  details and afterRestart before/after.
+Expected values: US label "Model origin: the United States"; unknown → no flag anywhere,
+chip still "Claude", details "custom-tuned via llm.internal.example", title "Model origin
+unclassified"; stopped/unobserved → no Model row (details probe must not wait for
+`.hook-observation`).
+
+## 2026-09-27 — resume (Opus 5.5 lead)
+
+Owner command (verbatim): "/dev-auto resume". Lifts the "stop this session" stop. Lead is now
+Claude Code Opus 5.5 (no Z.ai env in this session). Superseded handoff terms: Mode "paused by owner
+stop…"; stop "stop this session"; lead GLM-5.3 `max`.
+- 2026-09-27 resume leg: Electron run 1 hit 90 s ceiling after in-test capturePage (hidden window, stale frame) — capture removed. Run 3: stopped run kept flag (renderer `live` keeps exited run) → fixed. Run 5-7 timing: post-restart step 9.7 s = HookObservationView ticker (15 s) → refetch on origin. Run 8: suite 88.7 s total → ceiling 120 s. Screenshot script attempts 1-6 failed: hook from `bash -c` pipeline ignored by `interactiveAgentPid` (design); node parent fixed it. SessionEnd clear added (owner outcome "running agent"; AC4 plain shell shows none).
+- 2026-09-27 Fable `medium` full review (receipt `.dev-auto/evidence/e29-fable-review.json`, text `e29-fable-review.md`; claude-fable-5-1, 2 in + 60,025 cache-create + 540 cache-read / 14,589 out, $1.93). Verdict not acceptable: F1 stale host/model carried across agents in one run (blocks); F2 no gates for c2 (blocks); F3 missing dashscope-intl / kimi hosts, trailing dot; F4 command/step shapes too wide, phi4/chatgpt null; F5 OpenCode model path unverified; F6 unreadable host → default guess; F7 Codex config.toml providers; F8 emit on every event; F9 header/comment. Dispositions: F1 fixed (host never carried; model carried only same agent, not across non-compact SessionStart; tests); F2 closed (c2 chain 1888/1888, Electron EXIT 0); F3 fixed (dashscope-intl.aliyuncs.com, kimi.com, kimi.ai confirmed via docs.qwencloud.com + kimi.com/code/docs; root dot stripped; BytePlus left out: unconfirmed, multi-maker); F4 fixed (command-[ra](?![a-z]), step-?\d, phi-?\d, chatgpt token); F5 CONFIRMED defect & fixed: @opencode-ai/sdk EventMessageUpdated properties {info: Message} → CLI reads info.modelID (was message.info.modelID, never matched); F6/F7 accepted as epic-conformant limits, documented in agent-control.md; F8 fixed (emit only when shown facts change); F9 fixed. RED on c2 code: 7 failures `e29-review-repair-red.log`. c3 `e29-candidate3.diff` 297a5268…: chain 1891/1891, Electron EXIT 0.
+
+## 2026-09-27 Epic 29 acceptance — superseded handoff (verbatim)
+
+# Dev Auto handoff
+
+- Project / selected epics: /home/oleksandr/code/BMN; Epic 29 (29.1), requested as `/dev-auto 29` on 2026-09-27.
+- Original request and intended outcomes: `_bmad-output/planning-artifacts/epics.md:1531-1571`; model-maker country flag (US, CN, FR, DE, CA, KR, JP) on running agent sessions, derived from hook-reported API host and model name.
+- Mode: build/resume; owner resumed with `/dev-auto resume` (2026-09-27, Opus lead).
+- Stopping condition: selected scope accepted; no automatic time limit.
+- Explicit user stop: none (earlier stops lifted by `/dev-auto resume`, 2026-09-27; see log).
+- Restrictions and authorization boundaries: requested implementation, checks and ready local task commit authorized by user AGENTS.md. Epic constraints: flag is the only new colour; no new daemon, database table, network call or configuration edit; CLI forwards the API host only; unknown host + unknown model shows no flag. Real-agent owner check on packaged build is owner-run; UNVERIFIED until then. Repo rule: after commit+push to main, run `pnpm run update:desktop` (push/update need owner authorization).
+- Owner instructions this run (verbatim in log): "let Fable review the epic instead of Astra in the end" (strong review → Fable `medium`); "consult with codex/sol regarding this plugin" (done, see below).
+- Decision and history log: `.dev-auto/log.md` (append only).
+- Authorized provider routes: `/home/oleksandr/code/dev-auto/skills/dev-auto/references/models.md`; pre-review GLM; strong review Fable `medium` per owner.
+- Lead host / requested model / observed model: Claude Code Opus 5.5 (`claude-opus-5-5`) from this resume; earlier legs GLM-5.3 `max` (see log).
+
+## Progress
+
+- Sprint board: `epic-29`/`29-1` still backlog in ignored `_bmad-output/implementation-artifacts/sprint-status.yaml`; update at acceptance.
+- Implemented (all uncommitted, baseline `cb2ad4c`): `shared/protocol/src/model-origin.ts` (+`model-origin.test.ts`, 9 tests green) with `modelOrigin`, `countryFlag`, table, two-pass start-anchored token matching, case-insensitive shapes; `companion.ts` `HookOriginRecord` + `hooks` topic; `constants.ts` `hookOriginsList` + protocol minor 1.3; `control-server.ts` hook.observe closedParams `apiHost`/`model` + hostname/RULES validation + handler type; `companion-service.ts` `hookOrigins` map (per live incarnation, retains last known model/apiHost within an incarnation, emits `hooks`), `hookOriginsList` route, sessionsChanged cleanup; `bin/bmn` `hookApiHost` (URL hostname only) + `hookModel` (trim, ≤128, controls stripped, OpenCode nested `message.info.modelID`) + pass-through; IPC route, preload `listHookOrigins`, bridge types; renderer: `activeHookOrigin`/`modelOriginFlag`/`modelOriginLabel`/`observedAgentName` in session-presentation.ts, sidebar row chip+flag (wrapped `.chips` grid cell), details header chip+flag, Harness Model row (hook-observation-view.tsx), pane heading chip+flag (session-terminal.tsx `modelOrigin` prop), `.origin-flag` CSS + mobile hide; tests added in control-cli (env scrub + host/model cases), control-server (validator cases + positive), companion-service (`model origins` describe), session-presentation (origin presentation).
+- Resume leg (Opus), all uncommitted: Electron phase (`main/index.ts` `writeOriginHarness` launched via `/bin/bash -c` so the chip reads Shell→Claude, `modelOriginProbe`, `fireOriginGate`; phase before `afterRenderer` + regain/stop phase after `stoppedStaleProgress`; counts 4/16, interrupted 5, origin session filtered from restored order; receipt `modelOrigin` + contract row; suite ceiling 90→120 s, basis: passing run 88.7 s). Repairs found by it: stopped run kept flag (renderer keeps exited run in `live`) → `activeHookOrigin` takes the record and gates on `sessionProcessLive`, pane also on `exitStatus`; Model row lagged ≤15 s → `HookObservationView` refetches on `origin.observedAt`; CLI model cut ≤128 UTF-16 units w/o splitting pairs; `SessionEnd` drops the origin (agent quit to shell). Docs: `features.md` Model origin flag; `agent-control.md` §Model origin flag.
+- Candidates: c1 e60b576f… (GLM pre-review), c2 aade335a… (Fable full review), c3 `e29-candidate3.diff` 297a5268… = c2 + consolidated review repair (log 2026-09-27 Fable entry). Gates c3: chain 1891/1891 (`e29-fullchain-c3.log`), Electron EXIT 0 (`e29-electron-c3.log`).
+- Review findings: pre-review P1-P6 disposed (log); Fable F1-F9 disposed in c3 (log); recheck of c3 pending — this is the boundary's first recheck.
+- Check state: resume baseline chain 1880/1880 (`e29-fullchain-resume.log`). Electron run 9 EXIT 0 before the last two repairs (`e29-electron-9.log`). RED/GREEN: `e29-cut-*`, `e29-stopped-*`, `e29-sessionend-*` logs. Screenshots: `e29-shots/origin-{zai,unknown}-details.png` (one-off `e29-origin-shots.mjs`, dev app; hook parent must be a foreground agent process — `bash -c` wrappers are ignored by design, `interactiveAgentPid`).
+- Active helpers: Fable `medium` recheck of c3 (pending). Done: GLM pre-review (58,736 in / 581,888 cache-read / 11,659 out); Fable review ($1.93, log).
+
+## Decisions and findings
+
+- Original or approved intent changes (justified by the epic's own rules, flagged for owner): `aiplatform.googleapis.com` and `siliconflow.cn` moved out of first-party rows (multi-maker platforms; the epic's neutral-host rule and maker principle say the model name decides) — Sol consult findings F1/F2.
+- Sol consultation dispositions: F1 adopted (above); F2 adopted (start-anchored token pass; DeepSeek-R1-Distill-Llama → CN); F3 adopted (retain last model/apiHost per incarnation); F4 adopted (shapes case-insensitive; `command-[ra]`, `yi-`, `step-` continuations); F5 adopted (OpenCode nested modelID read in CLI, no plugin change); F6 accepted-as-is (CLI+server ship atomically; note only); F7 adopted (CLI keeps non-control chars incl. spaces/unicode; host stays local-only — no real exposure); F8 adopted (dead neutral list removed, documented in module doc).
+- Cross-epic obligations: old CLI ↔ new server passes (validator optional keys); preserve existing hook behaviour; no OpenCode plugin changes.
+- Host confirmations (epic-required): all four "from memory" hosts confirmed against vendor docs (PLaMo api.platform.preferredai.jp, Hunyuan api.hunyuan.cloud.tencent.com subdomains; platform.xiaomimimo.com; clovastudio.stream.ntruss.com exact). None dropped.
+
+## Evidence
+
+- Sol consult: prompt `.dev-auto/evidence/sol-consult1-prompt.md`, receipt `.dev-auto/evidence/sol-consult1.json`; gpt-6-sol xhigh read-only/never; usage (turn.completed) 1,721,964 input (1,617,536 cached) / 13,343 output; findings F1-F8 with dispositions above; rollout receipt under `~/.codex/sessions/2026/09/27/` (read via `scripts/check.py usage` at resume).
+- Checks run: `pnpm vitest run shared/protocol/src/model-origin.test.ts` → 9/9 PASS. Combined 5-file run → 625/631, 6 failures unattributed (env-scrub fix landed after; clean rerun pending). Typecheck/lint/full unit: NOT run yet.
+- Unverified: renderer UI rendering (no Electron run yet), packaged behaviour, real agents.
+
+## Measurement
+
+- Timing: started 2026-09-27 ~13:00; paused 13:20 for owner restart.
+- Dispatches: Sol consult1 (above). GLM pre-review and Fable review pending.
+- Owner interventions: Fable-review route instruction; Sol consult instruction; stop for laptop restart. No corrections.
+
+## Resume
+
+- Next safe action: collect Fable recheck; if a material defect came from the repair, stop repairing and escalate per skill; else board + commit + handoff COMPLETE.
+- Status: ACTIVE — c3 green; Fable recheck pending.
+
+- Recheck (Fable medium, receipt e29-fable-recheck.json, $0.62): acceptable; F1-F9 closed/accepted; residuals R1 OpenCode no reset (documented), R2 trailing dot (CLI test added, api.z.ai. forwarded and classified CN), R3 refuted (only consumer: renderer refresh.hooks), R4 late SessionEnd from replaced agent cleared newer record (fixed, RED e29-lateend-red.log). /model mid-session limit documented. c4 707b748a…: chain 1893/1893, Electron EXIT 0.

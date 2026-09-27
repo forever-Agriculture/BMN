@@ -8,6 +8,7 @@ import {
   decsetRestoreSequence,
   TERMINAL_NOTICE_CODES,
   type ColorModeName,
+  type HookOriginRecord,
   type SessionRecord,
   type TerminalExitMessage,
   type TerminalOutputMessage,
@@ -26,7 +27,7 @@ import { WorkspaceIdentityMark } from './workspace-marker'
 import { ProgressStrip } from './progress-strip'
 import { capTitle, type SessionActivity } from './session-activity'
 import type { ProgressPresentation, SessionAttention } from './session-presentation'
-import { agentTag } from './session-presentation'
+import { agentTag, modelOriginFlag, modelOriginLabel, observedAgentName } from './session-presentation'
 import { splitArgv } from './launch-template'
 import { parseTerminalNotice } from './terminal-notice'
 import { installTerminalTestHook } from './test-hook'
@@ -95,6 +96,8 @@ export function SessionTerminal(props: {
   activity: SessionActivity | null
   /** The harness set the terminal title; the shell caps it, keeps it in memory and shows it. */
   onTitle(title: string): void
+  /** This run's model-origin facts, or null: they name the agent chip and its flag in the heading. */
+  modelOrigin: HookOriginRecord | null
   /** The owner typed, pasted or dictated into the pane while it needs them. */
   onAnswer(): void
   armed: boolean
@@ -1139,7 +1142,14 @@ export function SessionTerminal(props: {
           />
         ) : null}
         <strong title={name}>{name}</strong>
-        {props.record ? <span className="chip">{agentTag(props.record.executable, props.record.argv)}</span> : null}
+        {props.record ? <span className="chip">{props.modelOrigin === null || exitStatus
+          ? agentTag(props.record.executable, props.record.argv)
+          : observedAgentName(props.modelOrigin.agent)}</span> : null}
+        {props.modelOrigin !== null && !exitStatus && modelOriginFlag(props.modelOrigin) !== null ? (
+          <span className="origin-flag" role="img"
+            title={modelOriginLabel(props.modelOrigin) ?? undefined}
+            aria-label={modelOriginLabel(props.modelOrigin) ?? undefined}>{modelOriginFlag(props.modelOrigin)}</span>
+        ) : null}
         <span className={`status-dot ${dot}`} aria-hidden="true" />
         <span className={`pane-status${props.attention && !exitStatus ? ' needs-you' : ''}`}>
           <span className="pane-state">{stateWord}</span>

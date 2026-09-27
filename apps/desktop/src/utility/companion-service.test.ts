@@ -20,6 +20,7 @@ import {
   type BackupVerifyResult,
   type HookEventRecord,
   type HookObservation,
+  type HookOriginRecord,
   type HandoffReviewSnapshot,
   type SessionRecord
 } from '@bmn/protocol'
@@ -1491,6 +1492,177 @@ describe('hook observation summary', () => {
   it('requires a session to read', async () => {
     await expect(observation({})).rejects.toMatchObject({ code: ERROR_CODES.invalidArgument })
     await expect(observation({ sessionId: '' })).rejects.toMatchObject({ code: ERROR_CODES.invalidArgument })
+  })
+})
+
+describe('model origins', () => {
+  const observe = async (params: {
+    sessionId: string
+    incarnationId?: string | null
+    agent?: HookEventRecord['agent']
+    event: string
+    toolName?: string
+    source?: string
+    apiHost?: string
+    model?: string
+  }): Promise<void> => {
+    const { sessionId, incarnationId = liveIncarnations.get(sessionId) ?? null, agent = 'claude', event } = params
+    await (service as unknown as {
+      observeHookEvent(p: {
+        sessionId: string
+        incarnationId: string | null
+        agent: HookEventRecord['agent']
+        event: string
+        source: string | null
+        toolName: string | null
+        apiHost?: string
+        model?: string
+        effects: readonly HookEventRecord['effects'][number][]
+      }): unknown
+    }).observeHookEvent({
+      sessionId,
+      incarnationId,
+      agent,
+      event,
+      source: params.source ?? null,
+      toolName: params.toolName ?? null,
+      ...(params.apiHost === undefined ? {} : { apiHost: params.apiHost }),
+      ...(params.model === undefined ? {} : { model: params.model }),
+      effects: []
+    })
+  }
+
+  const origins = () =>
+    service.route(METHOD_REGISTRY.hookOriginsList, {}) as Promise<HookOriginRecord[]>
+
+  it('classifies the reported host and serves it as one list read', async () => {
+    await observe({ sessionId: 's1', event: 'SessionStart', apiHost: 'api.z.ai', model: 'GLM-5.3' })
+
+    await expect(origins()).resolves.toEqual([{
+      state: 'observed',
+      sessionId: 's1',
+      incarnationId: 'incarnation-1',
+      agent: 'claude',
+      country: 'CN',
+      model: 'GLM-5.3',
+      apiHost: 'api.z.ai',
+      observedAt: now
+    }])
+  })
+
+  it('publishes a hooks invalidation when what the window shows changes, not for repeats or terminal notices', async () => {
+    await observe({ sessionId: 's1', event: 'Notification', apiHost: 'api.z.ai' })
+    await observe({ sessionId: 's1', event: 'PostToolUse', apiHost: 'api.z.ai' })
+    await observe({ sessionId: 's1', agent: 'terminal', event: 'osc:9' })
+    clock = '2026-09-14T12:00:05.000Z'
+    await observe({ sessionId: 's1', event: 'Stop', apiHost: 'api.z.ai', model: 'GLM-5.3' })
+
+    const hookTopics = emitted.filter((message) => message.topic === 'hooks')
+    expect(hookTopics).toEqual([
+      { kind: 'app-event', topic: 'hooks', sessionId: 's1' },
+      { kind: 'app-event', topic: 'hooks', sessionId: 's1' }
+    ])
+    // The record's time still follows the latest event.
+    await expect(origins()).resolves.toMatchObject([{ observedAt: '2026-09-14T12:00:05.000Z' }])
+  })
+
+  it('falls back to the agent default when no host was reported', async () => {
+    await observe({ sessionId: 's2', agent: 'codex', event: 'Stop' })
+
+    await expect(origins()).resolves.toMatchObject([{
+      sessionId: 's2', agent: 'codex', country: 'US', model: null, apiHost: null
+    }])
+  })
+
+  it('keeps an unclassifiable origin as a record with no country, never a guess', async () => {
+    await observe({ sessionId: 's1', event: 'Stop', apiHost: 'llm.internal.example', model: 'custom-tuned' })
+
+    await expect(origins()).resolves.toMatchObject([{ sessionId: 's1', country: null, model: 'custom-tuned' }])
+  })
+
+  it('keeps the same agent\'s last model when later events carry none, and compaction keeps it too', async () => {
+    await observe({ sessionId: 's1', event: 'SessionStart', source: 'startup', apiHost: 'openrouter.ai', model: 'moonshotai/kimi-k2' })
+    await observe({ sessionId: 's1', event: 'PostToolUse', toolName: 'Bash', apiHost: 'openrouter.ai' })
+    await observe({ sessionId: 's1', event: 'SessionStart', source: 'compact', apiHost: 'openrouter.ai' })
+
+    await expect(origins()).resolves.toMatchObject([{
+      sessionId: 's1', country: 'CN', model: 'moonshotai/kimi-k2', apiHost: 'openrouter.ai'
+    }])
+  })
+
+  it('never carries the host: the CLI reads it for every event, so absent means unset now', async () => {
+    await observe({ sessionId: 's1', event: 'SessionStart', source: 'startup', apiHost: 'api.z.ai', model: 'claude-opus-4-5' })
+    await observe({ sessionId: 's1', event: 'PostToolUse', toolName: 'Bash' })
+
+    await expect(origins()).resolves.toMatchObject([{ country: 'US', model: 'claude-opus-4-5', apiHost: null }])
+  })
+
+  it('starts from its own report when another agent, or a new session, takes over the shell', async () => {
+    // `claude glm` killed without a SessionEnd, then plain Claude in the same shell.
+    await observe({ sessionId: 's1', event: 'SessionStart', source: 'startup', apiHost: 'api.z.ai', model: 'glm-5.3' })
+    await observe({ sessionId: 's1', event: 'SessionStart', source: 'startup' })
+    await expect(origins()).resolves.toMatchObject([{ agent: 'claude', country: 'US', model: null, apiHost: null }])
+
+    // Then Codex: nothing from the Claude run speaks for it.
+    await observe({ sessionId: 's1', event: 'SessionStart', source: 'startup', model: 'kimi-k2' })
+    await observe({ sessionId: 's1', agent: 'codex', event: 'Stop' })
+    await expect(origins()).resolves.toMatchObject([{ agent: 'codex', country: 'US', model: null, apiHost: null }])
+  })
+
+  it('replaces the facts when a new event reports different ones', async () => {
+    await observe({ sessionId: 's1', event: 'SessionStart', apiHost: 'api.z.ai', model: 'GLM-5.3' })
+    clock = '2026-09-14T12:00:05.000Z'
+    await observe({ sessionId: 's1', event: 'SessionStart', apiHost: 'api.mistral.ai', model: 'mistral-large-2' })
+
+    await expect(origins()).resolves.toMatchObject([{
+      sessionId: 's1', country: 'FR', model: 'mistral-large-2', apiHost: 'api.mistral.ai',
+      observedAt: '2026-09-14T12:00:05.000Z'
+    }])
+  })
+
+  it('drops the origin when the agent ends, leaving its shell unflagged until the next agent reports', async () => {
+    await observe({ sessionId: 's1', event: 'SessionStart', apiHost: 'api.z.ai', model: 'GLM-5.3' })
+    await observe({ sessionId: 's1', event: 'SessionEnd' })
+
+    await expect(origins()).resolves.toEqual([])
+    expect(emitted.filter((message) => message.topic === 'hooks')).toHaveLength(2)
+
+    await observe({ sessionId: 's1', agent: 'codex', event: 'SessionStart' })
+    await expect(origins()).resolves.toMatchObject([{ sessionId: 's1', agent: 'codex', country: 'US', apiHost: null }])
+  })
+
+  it('leaves the newer agent\'s flag when an earlier agent\'s SessionEnd arrives late', async () => {
+    await observe({ sessionId: 's1', event: 'SessionStart', source: 'startup', apiHost: 'api.z.ai' })
+    await observe({ sessionId: 's1', agent: 'codex', event: 'SessionStart', source: 'startup', model: 'gpt-5.5' })
+    await observe({ sessionId: 's1', event: 'SessionEnd' })
+
+    await expect(origins()).resolves.toMatchObject([{ agent: 'codex', country: 'US', model: 'gpt-5.5' }])
+  })
+
+  it('carries nothing across an incarnation boundary', async () => {
+    await observe({ sessionId: 's1', event: 'SessionStart', apiHost: 'api.z.ai', model: 'GLM-5.3' })
+    liveIncarnations.set('s1', 'incarnation-9')
+    await observe({ sessionId: 's1', event: 'PostToolUse' })
+
+    await expect(origins()).resolves.toMatchObject([{
+      sessionId: 's1', incarnationId: 'incarnation-9', country: 'US', model: null, apiHost: null
+    }])
+  })
+
+  it('ignores a late event from an incarnation the host has already replaced', async () => {
+    await observe({ sessionId: 's1', event: 'SessionStart', apiHost: 'api.mistral.ai' })
+    liveIncarnations.set('s1', 'incarnation-2')
+
+    await observe({ sessionId: 's1', incarnationId: 'incarnation-1', event: 'Stop', apiHost: 'api.z.ai' })
+
+    await expect(origins()).resolves.toMatchObject([{ sessionId: 's1', country: 'FR', incarnationId: 'incarnation-1' }])
+  })
+
+  it('starts a fresh service with no origins from the earlier process', async () => {
+    await observe({ sessionId: 's1', event: 'SessionStart', apiHost: 'api.z.ai' })
+    const restarted = new CompanionService(service['options'])
+
+    await expect(restarted.route(METHOD_REGISTRY.hookOriginsList, {})).resolves.toEqual([])
   })
 })
 

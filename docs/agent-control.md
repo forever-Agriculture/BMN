@@ -186,6 +186,44 @@ what it changed. That list is the answer to "why is there no request for this?".
 memory only, at most 30 events per session, is never shown to another session, and starts empty
 again after BMN restarts.
 
+### Model origin flag
+
+Each hook event also tells BMN which model the agent is using, so the session can show its maker's
+flag. `bmn hook` sends the **hostname only** of the agent's API base URL — `ANTHROPIC_BASE_URL` for
+Claude Code, `OPENAI_BASE_URL` for Codex; never the scheme, path, query or any credential in it —
+and the model name when the event carries one (Claude's `SessionStart` `model`, OpenCode's
+`info.modelID`), trimmed to 128 printable characters. A host that is not a plain name or
+bracketed IPv6 address is left out rather than sent. The hook and the flag work without it:
+an older `bmn` that sends neither still reports.
+
+One table in `shared/protocol/src/model-origin.ts` decides, in this order:
+
+1. The maker's own API host (or a subdomain of it) names its country, even when the model name
+   says otherwise: Z.ai serves GLM behind Claude model names, so `api.z.ai` is 🇨🇳 (so are
+   Alibaba's DashScope and Moonshot's Kimi Code endpoints for Claude Code).
+2. Otherwise a model-name token decides, after any router prefix (`moonshotai/kimi-k2` is 🇨🇳).
+   Routers, clouds and local servers — OpenRouter, AWS, Azure, Groq, Together, Fireworks, Google's
+   Vertex AI, SiliconFlow, `localhost` — never decide by themselves: Kimi on Groq is 🇨🇳, Llama on
+   Groq is 🇺🇸.
+3. Otherwise no base URL means the agent's own provider: Claude Code 🇺🇸 (Anthropic), Codex 🇺🇸
+   (OpenAI).
+4. Otherwise nothing: an unknown host with an unknown model shows no flag.
+
+The origin is kept per run, in memory only, like **Hook events…**. The host is read afresh for every
+event, so it always describes the agent now. Most events carry no model, so the same agent keeps its
+last reported model within its session; a different agent, or a new session in it, starts from what
+it reports itself, and the agent's `SessionEnd` takes the flag away, since the shell it leaves behind
+has none. A new run starts without one, and after BMN restarts the next hook of any kind brings it
+back. OpenCode shows a flag only when its events already carry a model (`message.updated`'s
+`info.modelID`); the shipped plugin is unchanged.
+
+Known limits: a base URL BMN cannot read a host from (no scheme, a `unix:` URL) counts as unset, so
+the agent's default provider decides; and a Codex provider configured in `~/.codex/config.toml`
+rather than `OPENAI_BASE_URL` is not seen, so it reads as OpenAI unless the model name says otherwise.
+Claude Code reports its model only at `SessionStart`, so a `/model` switch mid-session shows the old
+model until the next session. OpenCode sends no session end BMN recognises, so after it exits its
+shell keeps the flag until the run ends or another agent reports.
+
 ### Repeated tool calls
 
 For Claude Code and Codex, BMN counts identical tool calls, failed ones included, since your last message. Eight

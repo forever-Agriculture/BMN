@@ -1,3 +1,5 @@
+// MODULE: companion.ts - records, topics and settings for the host-side companion service
+import type { ModelOriginAgent, ModelOriginCountry } from './model-origin'
 import type { SessionRecord, WorkspaceRecord } from './workspace'
 
 export type ArtifactDirection = 'input' | 'output'
@@ -217,6 +219,24 @@ export interface HookObservationObserved {
   observedAt: string
   /** False once the bounded log has evicted this event's row, so its detail is no longer readable. */
   detailAvailable: boolean
+}
+
+/**
+ * The model origin one run of a session last reported: the country of the company that made the
+ * model (null when nothing known speaks), with the model name and API host that produced it. Kept
+ * per live incarnation in memory only, like the hook observation it accompanies.
+ */
+export interface HookOriginRecord {
+  state: 'observed'
+  sessionId: string
+  incarnationId: string
+  agent: ModelOriginAgent
+  /** ISO country code from `modelOrigin`, or null when the facts classify to no country. */
+  country: ModelOriginCountry | null
+  model: string | null
+  apiHost: string | null
+  /** When BMN received the facts, independent of when the harness says it ran. */
+  observedAt: string
 }
 
 export interface HookObservationNone {
@@ -442,6 +462,7 @@ export const APP_EVENT_TOPICS = [
   'attention',
   'progress',
   'drafts',
+  'hooks',
   'settings',
   'telegram',
   'conversations'

@@ -11,6 +11,7 @@ import {
   isAttentionOrigin,
   hasDisallowedHandoffControl,
   METHOD_REGISTRY,
+  modelOrigin,
   PROGRESS_STALE_AFTER_MS,
   TERMINAL_NOTICE_BODY_MAX,
   TERMINAL_NOTICE_CODES,
@@ -29,6 +30,7 @@ import {
   type ControlInfo,
   type HookEventEffect,
   type HookObservation,
+  type HookOriginRecord,
   type HookEventRecord,
   type InputDraftRecord,
   type FileReferencePasteReceipt,
@@ -293,6 +295,12 @@ export class CompanionService {
     event: string
     observedAt: string
   }>()
+  /**
+   * The model origin each session's current run last reported: the maker's country with the model
+   * name and API host behind it, classified here by the protocol's one table. In memory only, like
+   * the observation it accompanies, so a restart of BMN starts empty and the next hook refills it.
+   */
+  private readonly hookOrigins = new Map<string, HookOriginRecord>()
   /** The terminal notice each session has open, so a burst becomes more lines and not more rows. */
   private readonly terminalNotices = new Map<string, {
     requestId: string
@@ -510,6 +518,9 @@ export class CompanionService {
       case METHOD_REGISTRY.hookObservationGet:
         // Read-only and scoped to one session's run; no other session's observation reaches this answer.
         return this.hookObservation(text(params, 'sessionId'), optionalText(params, 'incarnationId') ?? undefined)
+      case METHOD_REGISTRY.hookOriginsList:
+        // Read-only: each session's own latest origin, never another session's facts beside it.
+        return [...this.hookOrigins.values()]
       case METHOD_REGISTRY.hooksCheck:
         // The owner's own read-only check, dated on arrival; the window decides what a stale answer is worth.
         return runHookConfigurationCheck(this.options.cliScriptPath ?? this.options.cliPath, { now: this.now })
@@ -673,7 +684,7 @@ export class CompanionService {
     }
     // A deleted session keeps no hook events: the log, and everything else kept per session in
     // memory here, follows the sessions that still exist.
-    for (const map of [this.hookEvents, this.hookReporters, this.hookObservations, this.terminalNotices, this.repeatStates]) {
+    for (const map of [this.hookEvents, this.hookReporters, this.hookObservations, this.hookOrigins, this.terminalNotices, this.repeatStates]) {
       for (const sessionId of map.keys()) {
         if (!this.knownSessions.has(sessionId)) map.delete(sessionId)
       }
@@ -973,6 +984,8 @@ export class CompanionService {
     source: string | null
     toolName: string | null
     fingerprint?: string | undefined
+    apiHost?: string | undefined
+    model?: string | undefined
     effects: readonly HookEventEffect[]
   }): Promise<{ recorded: true }> {
     // Share the notice queue: observe/reset/open must complete in arrival order.
@@ -1032,7 +1045,10 @@ export class CompanionService {
     return this.repeatWrites
   }
 
-  private recordHookEvent(p: Omit<HookEventRecord, 'observedAt'>): { recorded: true } {
+  private recordHookEvent(p: Omit<HookEventRecord, 'observedAt'> & {
+    apiHost?: string | undefined
+    model?: string | undefined
+  }): { recorded: true } {
     const observedAt = this.iso()
     // Which incarnation has a harness reporting for it, kept whatever the log later drops.
     if (p.agent !== 'terminal' && p.incarnationId !== null) {
@@ -1047,6 +1063,39 @@ export class CompanionService {
           event: p.event,
           observedAt
         })
+        // Every hook event refreshes the origin, so a flag lost to a BMN restart comes back on the
+        // next hook without waiting for a SessionStart. The CLI reads the base URL afresh for every
+        // event, so the host is never carried: absent means unset now. Most events carry no model,
+        // so the same agent's last model still speaks within its session; a new agent, or a new
+        // session in it (SessionStart other than compaction), starts from what it reports itself.
+        const previous = this.hookOrigins.get(p.sessionId)
+        const newSession = p.event === 'SessionStart' && p.source !== 'compact'
+        const carried = previous !== undefined && previous.incarnationId === p.incarnationId &&
+          previous.agent === p.agent && !newSession ? previous : null
+        const model = p.model ?? carried?.model ?? null
+        const apiHost = p.apiHost ?? null
+        // An agent that ended leaves a plain shell behind in the same run, and a shell has no flag;
+        // a late end from an agent that has already been replaced leaves the newer one's facts.
+        const ended = p.event === 'SessionEnd'
+        const staleEnd = ended && previous !== undefined && previous.incarnationId === p.incarnationId &&
+          previous.agent !== p.agent
+        const next: HookOriginRecord | null | undefined = staleEnd ? previous : ended ? null : {
+          state: 'observed',
+          sessionId: p.sessionId,
+          incarnationId: p.incarnationId,
+          agent: p.agent,
+          country: modelOrigin({ agent: p.agent, apiHost, model }),
+          model,
+          apiHost,
+          observedAt
+        }
+        if (next === null) this.hookOrigins.delete(p.sessionId)
+        else if (next !== undefined) this.hookOrigins.set(p.sessionId, next)
+        // Only a change the window can show is published, so a busy agent's every tool call does
+        // not re-read the list; the record's time still moves with each event.
+        const shown = (record: HookOriginRecord | null | undefined): string => record
+          ? JSON.stringify([record.incarnationId, record.agent, record.country, record.model, record.apiHost]) : ''
+        if (shown(previous) !== shown(next)) this.emit('hooks', p.sessionId)
       }
     }
     const log = this.hookEvents.get(p.sessionId) ?? []

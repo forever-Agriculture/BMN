@@ -1,8 +1,11 @@
-// MODULE: session-presentation.ts - status dots, agent tags, progress freshness and needs-you ordering for the shell
+// MODULE: session-presentation.ts - status dots, agent tags, model-origin flags, progress freshness and needs-you ordering for the shell
 import type { SessionActivity } from './session-activity'
 import {
+  countryFlag,
+  MODEL_ORIGIN_COUNTRY_NAMES,
   PROGRESS_STALE_AFTER_MS,
   type AttentionRecord,
+  type HookOriginRecord,
   type InputDraftRecord,
   type ProgressEvidence,
   type ProgressRecord,
@@ -83,6 +86,42 @@ export function agentTag(executable: string, argv: readonly string[] = []): stri
   const inner = /^\s*([^\s;&|]+)/.exec(argv[1] ?? '')?.[1]?.split('/').pop()
   const innerTag = inner ? AGENT_TAGS[inner] : undefined
   return innerTag && innerTag !== 'Shell' ? innerTag : tag
+}
+
+/**
+ * The origin facts of the run the owner is looking at, or null: a record from any other incarnation
+ * is not this run's model, and a run that is not running shows nothing — the window keeps an exited
+ * run's pane (and its incarnation) to say "Process exited", but its flag goes with the process.
+ */
+export function activeHookOrigin(
+  records: readonly HookOriginRecord[],
+  session: Pick<SessionRecord, 'sessionId' | 'lastProcess'>,
+  liveIncarnationId: string | undefined
+): HookOriginRecord | null {
+  if (!sessionProcessLive(session, liveIncarnationId)) return null
+  return records.find((record) => record.sessionId === session.sessionId &&
+    record.incarnationId === liveIncarnationId) ?? null
+}
+
+/** The flag emoji of a classified origin; an unclassified one shows no flag and no placeholder. */
+export function modelOriginFlag(origin: Pick<HookOriginRecord, 'country'>): string | null {
+  return origin.country === null ? null : countryFlag(origin.country)
+}
+
+/** The tooltip and accessible name of a classified origin; the model is omitted when unknown. */
+export function modelOriginLabel(
+  origin: Pick<HookOriginRecord, 'country' | 'model' | 'apiHost'>
+): string | null {
+  if (origin.country === null) return null
+  const parts = [MODEL_ORIGIN_COUNTRY_NAMES[origin.country]]
+  if (origin.model !== null) parts.push(origin.model)
+  const label = `Model origin: ${parts.join(' · ')}`
+  return origin.apiHost === null ? label : `${label} via ${origin.apiHost}`
+}
+
+/** The plain name of the agent a run's own hooks identified, replacing the executable's "Shell". */
+export function observedAgentName(agent: HookOriginRecord['agent']): string {
+  return AGENT_TAGS[agent] ?? agent
 }
 
 /** Shortens a path under the home directory to `~` for display only. */

@@ -107,6 +107,10 @@ export interface ControlHandlers {
     source: string | null
     toolName: string | null
     fingerprint?: string | undefined
+    /** Hostname only, from the agent's own base-URL environment; absent when the CLI could not read one. */
+    apiHost?: string | undefined
+    /** The model name the hook payload carried; absent when it carried none. */
+    model?: string | undefined
     effects: readonly HookEventEffect[]
   }): Promise<unknown>
   /** Writes text into the PTY as a bracketed paste; appends '\r' only when submit is true. */
@@ -201,6 +205,9 @@ const SESSION_TOKEN_TEXT = /s1\.[A-Za-z0-9_:-]+\.[A-Za-z0-9_:-]+\.[0-9a-fA-F]{16
 const LONG_HEX_TEXT = /[0-9a-fA-F]{32,}/g
 
 const IDENTIFIER: TextRule = { min: 1, max: 128, unit: 'characters', controls: 'reject' }
+/** A parsed hostname: a name (letters, digits, '.', '_', '-') or a bracketed IPv6 literal. */
+const API_HOST_SHAPE = /^(?:[a-zA-Z0-9._-]+|\[[0-9a-fA-F:.]+\])$/
+
 const RULES = {
   sessionId: IDENTIFIER,
   requestKey: IDENTIFIER,
@@ -208,6 +215,8 @@ const RULES = {
   path: { min: 1, max: 4096, unit: 'bytes', controls: 'reject' },
   name: { min: 1, max: 255, unit: 'characters', controls: 'reject' },
   source: { min: 1, max: 64, unit: 'characters', controls: 'reject' },
+  apiHost: { min: 1, max: 255, unit: 'characters', controls: 'reject' },
+  model: { min: 1, max: 128, unit: 'characters', controls: 'reject' },
   label: { min: 1, max: 200, unit: 'characters', controls: 'reject' },
   detail: { min: 1, max: 2000, unit: 'characters', controls: 'allow-whitespace' },
   title: { min: 1, max: 200, unit: 'characters', controls: 'reject' },
@@ -887,7 +896,7 @@ export class ControlServer {
       }
       case 'hook.observe': {
         // Observations are diagnostic; the repeat watch may open or withdraw its one notice.
-        const params = closedParams(rawParams, ['sessionId', 'agent', 'event', 'source', 'toolName', 'effects', 'fingerprint'])
+        const params = closedParams(rawParams, ['sessionId', 'agent', 'event', 'source', 'toolName', 'effects', 'fingerprint', 'apiHost', 'model'])
         const agent = requireEnum(params, 'agent', HOOK_EVENT_AGENTS)
         const event = requireText(params, 'event', RULES.source)
         if (!isHookEventName(event)) throw invalid('event must be printable ASCII without spaces')
@@ -897,6 +906,14 @@ export class ControlServer {
         if (fingerprint !== undefined && !/^[0-9a-f]{16}$/.test(fingerprint)) {
           throw invalid('fingerprint must be 16 lowercase hexadecimal characters')
         }
+        // The host is a hostname the CLI parsed, never a URL: no scheme, path, query or credentials
+        // may ride along, and a bracketed IPv6 literal is the only form with ':' or '[' in it. The
+        // URL parser keeps '_' in names, so it passes here rather than refusing the observation.
+        const apiHost = readText(params, 'apiHost', RULES.apiHost)
+        if (apiHost !== undefined && !API_HOST_SHAPE.test(apiHost)) {
+          throw invalid('apiHost must be a hostname')
+        }
+        const model = readText(params, 'model', RULES.model)
         const effects = requireEffects(params, 'effects')
         const sessionId = this.target(scope, params)
         return handlers.observeHookEvent({
@@ -907,6 +924,8 @@ export class ControlServer {
           source: source ?? null,
           toolName: toolName ?? null,
           ...(fingerprint === undefined ? {} : { fingerprint }),
+          ...(apiHost === undefined ? {} : { apiHost }),
+          ...(model === undefined ? {} : { model }),
           effects
         })
       }
