@@ -2304,6 +2304,35 @@ describe('answers from the phone go only into the dialog that asked (Epic 30.2)'
     })
   })
 
+  it('credits the phone when OpenCode confirms its answer after a busy report already closed the question', async () => {
+    const question = {
+      sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'opencode:question', kind: 'question' as const,
+      title: 'OpenCode asks', origin: 'hook:opencode:question.asked',
+      prompt: {
+        type: 'questions' as const, harness: 'opencode' as const, shape: 'choice' as const, requestRef: 'que_1', toolUseId: null,
+        questions: [{ id: null, header: 'Auth', text: 'Which auth?', multiSelect: false,
+          options: [{ label: 'JWT', description: null }, { label: 'Cookies', description: null }] }]
+      }
+    }
+    const opened = await service['openAttention'](question)
+    const outcome = service.answerAttention({
+      requestId: opened.requestId, revision: opened.revision, epoch: service.answerEpoch(opened.requestId)!,
+      incarnationId: 'incarnation-1', answer: { type: 'choices', choices: [1] }
+    })
+    await expect(service['answers'].take('s1', 'incarnation-1', 1_000))
+      .resolves.toEqual([{ requestRef: 'que_1', kind: 'question', answers: [['Cookies']] }])
+    // OpenCode's busy report can land before its replied event and close the slot first.
+    await service['closeAttentionByKey']('s1', 'opencode:question', 'answered', 'answered in the terminal', 'hook:opencode:session.status')
+    await expect(service['closeAttentionByKey']('s1', 'opencode:question', 'answered', 'answered in the terminal',
+      'hook:opencode:question.replied',
+      { toolUseId: null, requestRef: 'que_1', answers: [['Cookies']], permission: null, tool: null, command: null }))
+      .rejects.toMatchObject({ code: ERROR_CODES.notFound })
+    await expect(outcome).resolves.toEqual({ state: 'confirmed', sent: ['Cookies'] })
+    expect(COMPANION_OPERATIONS.getAttention(database, opened.requestId)).toMatchObject({
+      state: 'answered', resolvedBy: 'telegram', resolution: 'Answered from Telegram'
+    })
+  })
+
   it('leaves an OpenCode permission open when the report is about another request of the same slot', async () => {
     const opencode = {
       sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'opencode:permission', kind: 'permission' as const,

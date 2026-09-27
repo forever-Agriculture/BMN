@@ -339,6 +339,24 @@ export function closeAttention(
   return getAttention(database, row.request_id)
 }
 
+/**
+ * A phone answer that its harness confirmed only after one of the harness's own hooks had already closed the
+ * request (OpenCode reports busy or idle as fast as the replied event). Only a hook's close is re-attributed.
+ */
+export function creditTelegramAnswer(
+  database: DatabaseConnection,
+  requestId: string,
+  resolution: string,
+  now: string
+): AttentionRecord | null {
+  const result = database.prepare(
+    `UPDATE attention_request SET state = 'answered', resolution = ?, resolved_by = 'telegram', resolved_at = ?,
+       revision = revision + 1
+     WHERE request_id = ? AND state != 'open' AND resolved_by LIKE 'hook:%'`
+  ).run(resolution, now, requestId)
+  return Number(result.changes) > 0 ? getAttention(database, requestId) : null
+}
+
 export function expireAttention(database: DatabaseConnection, now: string, activeDraftIds: readonly string[] = []): number {
   // Protect only active owner operations. A recovered uncertain paste has no such operation;
   // its petition may expire while the draft keeps its truthful uncertain state.
@@ -1274,6 +1292,7 @@ export const COMPANION_OPERATIONS = Object.freeze({
   getTelegramMessage,
   putTelegramCard,
   updateTelegramCard,
+  creditTelegramAnswer,
   listTelegramCards,
   getSettings,
   putSettingsSection,

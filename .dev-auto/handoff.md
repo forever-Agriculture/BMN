@@ -12,16 +12,16 @@
 
 ## Progress
 
-- Sprint board and reconciled state: epic-30 in-progress; 30-1, 30-2, 30-3 all `review` (implemented, awaiting epic review). Commits 251b1e2 (30.1), 8ee22dd (30.2 engine), next commit = 30.2 Electron phase + 30.3 (candidate for review).
+- Sprint board and reconciled state: epic-30 in-progress; 30-1, 30-2, 30-3 all `review`. Commits 251b1e2 (30.1), 8ee22dd (30.2 engine), 9ac0872 (30.3 + 30.2/30.3 Electron phases) = frozen review candidate. Live harness kept untracked at `.dev-auto/evidence/e30-live-remote-answers.live.test.ts.txt`.
 - Implemented: 30.1 (spike, structured prompt, v17, CLI mappers, setting, docs); 30.2 (mirror, engine, evidence, `answer.take`, plugin polling); 30.3 telegram-cards.ts, telegram-card-keeper.ts, connector HTML/edit/toast/callback_query/apiOrigin, schema v18 card columns, companion wiring, structured-dialog drafts, docs telegram.md/features.md, Electron fake Bot API phase (main/fake-bot-api.ts).
-- Active helpers: none.
+- Active helpers: Astra (gpt-6-astra medium, codex exec read-only, approval never, BMN_*/AITERM_* unset) reviewing ec7c517..HEAD, started ~19:45. GLM-5.3 pre-review collected (receipt `e30-glm-prereview.json`, $2.04).
 
 ## Decisions and findings
 
 - Original or approved intent changes: none.
-- Material pending findings: none.
+- Material pending findings: none open. GLM pre-review G1 (oversize card lost), G2 (minor) and lead finding L1 (OpenCode resolvedBy) closed in the consolidated repair (log ~19:30); repaired tree: unit 110 files / 2058 PASS (`e30-unit-repair1.log` sha 03d962deb62eb4d8), Electron EXIT 0 (`e30-electron-repair1.log` sha b8e9112993629a39).
 - 30.2 AC1 FAIL recorded (1.49×) → mirror gated to Claude/Codex hook sessions (log 2026-09-27 ~18:05).
-- Known residuals (log ~18:35-19:00): OpenCode record may keep resolvedBy `hook:opencode:session.*` when session.status/idle closes it before the replied evidence (outcome still confirmed); under heavy CPU load the plugin's 3 s hook deadline can lose a replied report → honest sent-unconfirmed. Final cards stay in the keeper's memory until restart (small).
+- Known residuals (log ~18:35-19:00): under heavy CPU load the plugin's 3 s hook deadline can lose a replied report → honest sent-unconfirmed. Final cards stay in the keeper's memory until restart (small).
 - Cross-epic obligations: Epic 29 hook origin reused for card headers (flag seen in Electron header); old `bmn` CLI ↔ new server; Remote Control sessions stay skipped; text-reply path unchanged except structured-dialog drafts.
 
 ## Evidence
@@ -36,12 +36,12 @@
 ## Measurement
 
 - Timing: started 2026-09-27 ~17:30.
-- Dispatches: none yet (planning reviews predate the run).
+- Dispatches: GLM-5.3 max pre-review, $2.04, 63 turns.
 - Review yield: n/a.
 - Owner interventions: none during build.
 - Observed usage: pending.
 
 ## Resume
 
-- Next safe action: commit the candidate; dispatch GLM pre-review (prompt `.dev-auto/evidence/e30-glm-prereview-prompt.md`, diff `e30-candidate.diff`); one consolidated repair; Astra medium epic review; then ask the owner to authorize push + update:desktop for the phone walk-through.
+- Next safe action: collect Astra medium epic review (prompt `.dev-auto/evidence/e30-astra-review-prompt.md`, output `e30-astra-review.md`); repairs + recheck; then ask the owner to authorize push + update:desktop for the phone walk-through.
 - Status: ACTIVE — Epic 30 implemented and self-tested; reviews next.

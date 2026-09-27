@@ -44,6 +44,8 @@ class FakeConnector implements CardConnector {
   async sendMessage(text: string, options: CardMessageOptions = {}): Promise<{ messageId: number }> {
     if (this.failAll) throw new TelegramConnectorError('network', 'down')
     if (this.refuseHtml && options.html) throw new TelegramConnectorError('http', "Telegram sendMessage failed (400): can't parse entities", 400)
+    // The real connector refuses an HTML card over the limit before sending it.
+    if (options.html && text.length > 4096) throw new TelegramConnectorError('invalid-argument', 'A formatted Telegram card must fit 4,096 characters')
     const id = this.next++
     this.sends.push({ id, text, options })
     return { messageId: id }
@@ -150,6 +152,19 @@ describe('sending a card', () => {
     expect(h.connector.sends[0]?.text).toContain('Which auth method?')
     expect(h.connector.sends[0]?.text).not.toContain('<b>')
     expect(h.connector.sends[0]?.text.endsWith('Answer at the laptop.')).toBe(true)
+    expect(h.puts[0]).toMatchObject({ state: 'open', card: { format: 'plain' } })
+  })
+
+  it('still pages a card too long to fit, as plain words, instead of losing it', async () => {
+    const huge: AttentionPrompt = {
+      ...QUESTION,
+      questions: [{ ...QUESTION.questions[0]!, options: Array.from({ length: 20 }, (_, index) => ({ label: `${index} ${'L'.repeat(240)}`, description: null })) }]
+    } as AttentionPrompt
+    const h = setup({ record: record(huge) })
+    await h.keeper.page(h.state.record!)
+    expect(h.connector.sends).toHaveLength(1)
+    expect(h.connector.sends[0]?.options.html).toBeUndefined()
+    expect(h.connector.sends[0]?.text).toContain('Which auth method?')
     expect(h.puts[0]).toMatchObject({ state: 'open', card: { format: 'plain' } })
   })
 

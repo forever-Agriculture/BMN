@@ -84,8 +84,9 @@ interface Composed {
 
 const DEFAULT_SETTLE_MS = 150
 
+/** Telegram refused the HTML, or the card cannot fit at all: either way the words go out plain. */
 function isFormattingRefusal(error: unknown): boolean {
-  return error instanceof TelegramConnectorError && error.status === 400
+  return error instanceof TelegramConnectorError && (error.status === 400 || error.kind === 'invalid-argument')
 }
 
 /**
@@ -368,10 +369,10 @@ export class TelegramCardKeeper {
   private async show(card: LiveCard, composed: Composed): Promise<void> {
     const connector = this.deps.connector()
     if (!connector) return
-    card.base = composed.rendered.base
     if (card.format === 'html') {
       try {
         await connector.editMessageText(card.messageId, composed.rendered.text, { html: true, keyboard: composed.rendered.keyboard })
+        card.base = composed.rendered.base
         card.state = composed.state
         if (composed.state === 'buttons') this.mint(card, composed)
         else this.revoke(card)
@@ -386,6 +387,7 @@ export class TelegramCardKeeper {
     card.state = 'open'
     await connector.editMessageText(card.messageId,
       `${plainText(composed.rendered.text)}${composed.state === 'buttons' ? '\n\nAnswer at the laptop.' : ''}`)
+    card.base = composed.rendered.base
     await this.save(card)
   }
 

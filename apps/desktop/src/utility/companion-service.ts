@@ -1019,7 +1019,8 @@ export class CompanionService {
   ): Promise<AttentionRecord> {
     this.answers.hookReported(sessionId)
     // The harness reporting exactly the answer sent from the phone closes the request as the phone's.
-    const answeredRemotely = evidence ? this.answers.evidence(sessionId, requestKey, evidence) !== null : false
+    const remoteRequestId = evidence ? this.answers.evidence(sessionId, requestKey, evidence) : null
+    const answeredRemotely = remoteRequestId !== null
     const record = await this.options.database.companion(
       'closeAttention',
       // A report about another request of the same slot (OpenCode's queued permissions) leaves this one open.
@@ -1028,7 +1029,16 @@ export class CompanionService {
       answeredRemotely ? REMOTE_ANSWER_RESOLUTION : resolution,
       this.iso(),
       answeredRemotely ? 'telegram' : origin
-    )
+    ).catch(async (error: unknown) => {
+      // Another hook of the same harness closed it first; the phone's confirmed answer still gets the credit.
+      if (remoteRequestId !== null) {
+        const credited = await this.options.database.companion(
+          'creditTelegramAnswer', remoteRequestId, REMOTE_ANSWER_RESOLUTION, this.iso()
+        ).catch(() => null)
+        if (credited) this.emit('attention', sessionId)
+      }
+      throw error
+    })
     this.answers.closed(record)
     this.emit('attention', sessionId)
     return record
