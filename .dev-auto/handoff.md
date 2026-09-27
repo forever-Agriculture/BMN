@@ -12,7 +12,7 @@
 
 ## Progress
 
-- Sprint board and reconciled state: epic-30 in-progress; 30-1, 30-2 `done`; 30-3 `review` until the owner phone run (its verification names it). Accepted candidate 9b0d890 (251b1e2, 8ee22dd, 9ac0872, a2f7456, bbe3ec4, 9b0d890); pushed to origin main as c479a05 (owner authorized, log ~23:10); update:desktop queued. Live harness kept untracked at `.dev-auto/evidence/e30-live-remote-answers.live.test.ts.txt`.
+- Sprint board and reconciled state: epic-30 in-progress; 30-1, 30-2 `done`; 30-3 `review` until the owner phone run (its verification names it). Accepted candidate 9b0d890 (251b1e2, 8ee22dd, 9ac0872, a2f7456, bbe3ec4, 9b0d890); pushed to origin main as c479a05 (owner authorized, log ~23:10); first update FAILED (local record commit unpushed), record commits pushed and update requeued (log 2026-09-27 resume). Live harness kept untracked at `.dev-auto/evidence/e30-live-remote-answers.live.test.ts.txt`.
 - Implemented: 30.1 (spike, structured prompt, v17, CLI mappers, setting, docs); 30.2 (mirror, engine, evidence, `answer.take`, plugin polling); 30.3 telegram-cards.ts, telegram-card-keeper.ts, connector HTML/edit/toast/callback_query/apiOrigin, schema v18 card columns, companion wiring, structured-dialog drafts, docs telegram.md/features.md, Electron fake Bot API phase (main/fake-bot-api.ts).
 - Active helpers: none. Collected: pre-review, full review, recheck 1 (`e30-astra-recheck.md`), consultation (`e30-consult.md`), final recheck (`e30-astra-recheck2.md` sha 0e6af55dfe1d6946, clean).
 
@@ -43,5 +43,5 @@
 
 ## Resume
 
-- Next safe action: owner closes BMN (update installs c479a05), then walks the seven experience lines on the packaged build (30.3 verification); on pass → 30-3 and epic-30 done, Status COMPLETE.
+- Next safe action: owner closes BMN once more (requeued update installs origin/main after the record push), then walks the seven experience lines on the packaged build (30.3 verification); on pass → 30-3 and epic-30 done, Status COMPLETE.
 - Status: BLOCKED — awaiting the owner's phone walk-through on the updated packaged build.
