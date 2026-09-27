@@ -242,7 +242,6 @@ const ENTER = encoder.encode('\r')
 const TAB = encoder.encode('\t')
 /** Typed text goes out in short pieces, so no harness mistakes it for a paste. */
 const TYPED_CHUNK = 32
-const TYPED_CHUNK_GAP_MS = 10
 /** What the card's outcome line quotes of a typed answer. */
 const TYPED_SHOWN_CHARS = 80
 
@@ -703,14 +702,15 @@ export class RemoteAnswers {
       const value = await this.waitForScreen(keys.screen, until, keys.since)
       return value !== null && keys.current() ? value : null
     }
-    const typeText = async <T>(text: string, until: (lines: string[]) => T | null): Promise<T | null> => {
+    // The text in pieces; each piece waits for the field to show everything typed so far before the next is written.
+    const typeText = async <T>(text: string, field: (lines: string[]) => string | null, until: (lines: string[]) => T | null): Promise<T | null> => {
       const chars = [...text]
       for (let at = 0; at < chars.length; at += TYPED_CHUNK) {
-        if (at > 0) await new Promise((resolve) => setTimeout(resolve, TYPED_CHUNK_GAP_MS))
-        if (!keys.current()) return null
-        const piece = encoder.encode(chars.slice(at, at + TYPED_CHUNK).join(''))
-        if (at + TYPED_CHUNK >= chars.length) return press(piece, until)
-        keys.write(piece)
+        const end = Math.min(at + TYPED_CHUNK, chars.length)
+        const piece = encoder.encode(chars.slice(at, end).join(''))
+        if (end === chars.length) return press(piece, until)
+        const soFar = chars.slice(0, end).join('')
+        if (!(await press(piece, (lines) => showsTyped(field(lines), soFar) || null))) return null
       }
       return null
     }
@@ -734,7 +734,7 @@ export class RemoteAnswers {
       }
       if (!now || now.cursor !== trailer) return false
       if (!(await press(TAB, (lines) => state(lines)?.notes === '' || null))) return false
-      if (!(await typeText(typed, (lines) => showsTyped(state(lines)?.notes ?? null, typed) || null))) return false
+      if (!(await typeText(typed, (lines) => state(lines)?.notes ?? null, (lines) => showsTyped(state(lines)?.notes ?? null, typed) || null))) return false
       enter()
       return true
     }
@@ -748,7 +748,11 @@ export class RemoteAnswers {
         return now && now.cursor === options && now.other.text === null ? now : null
       }
       if (!(await press(key(options + 1), focused))) return false
-      if (!(await typeText(typed!, (lines) => {
+      const field = (lines: string[]): string | null => {
+        const now = state(lines)
+        return now && now.cursor === options ? now.other.text : null
+      }
+      if (!(await typeText(typed!, field, (lines) => {
         const now = state(lines)
         return now && now.cursor === options && showsTyped(now.other.text, typed!) ? now : null
       }))) return false
@@ -780,6 +784,9 @@ export class RemoteAnswers {
     if (typed !== null) {
       if (!(await moveTo(options))) return false
       now = await typeText(typed, (lines) => {
+        const next = state(lines)
+        return next && next.cursor === options ? next.other.text : null
+      }, (lines) => {
         const next = state(lines)
         return next && next.cursor === options && next.other.ticked && showsTyped(next.other.text, typed) ? next : null
       })

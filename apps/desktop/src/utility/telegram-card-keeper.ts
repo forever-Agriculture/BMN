@@ -203,7 +203,7 @@ export class TelegramCardKeeper {
       base: composed.rendered.base,
       permission: record.prompt?.type === 'permission',
       progress: { ...START },
-      offersOther: false,
+      offersOther: state === 'buttons' && composed.offersOther,
       tokens: [],
       upgradable: false,
       unwritten: null,

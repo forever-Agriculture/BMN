@@ -61,8 +61,9 @@ function fakeAdapter(agent: 'codex' | 'opencode', sessions: HistoryCandidate[], 
 async function fixture(options: {
   settings?: Partial<AgentHistorySettings>
   adapters?: AgentHistoryAdapter[]
+  /** Read at each call, so a test may change it while a run is under way. */
   live?: string[]
-  commandLines?: string
+  commandLines?: string | (() => string)
   claudeSettings?: string | null
 } = {}) {
   const home = await mkdtemp(join(tmpdir(), 'bmn-history-'))
@@ -83,7 +84,7 @@ async function fixture(options: {
     readState: async () => structuredClone(state),
     writeState: async (next) => { state = structuredClone(next) },
     liveConversationIds: async () => new Set(options.live ?? []),
-    commandLines: () => options.commandLines ?? '',
+    commandLines: () => typeof options.commandLines === 'function' ? options.commandLines() : options.commandLines ?? '',
     now: () => NOW,
     log: (line) => logs.push(line),
     changed
@@ -198,6 +199,29 @@ describe('agent history limit', () => {
     expect(await f.claudeDays()).toBe(36_500)
   })
 
+  it('lists a folder learned after the confirmation as pending even when it already holds the limit (Astra review)', async () => {
+    const f = await fixture()
+    await f.history.confirm()
+    const glm = join(f.home, '.claude-glm')
+    await mkdir(glm)
+    await writeFile(join(glm, 'settings.json'), '{ "cleanupPeriodDays": 30 }')
+    await f.history.learnClaudeFolder(glm)
+
+    const before = await f.history.status()
+    expect(before.needsConfirmation).toBe(true)
+    expect(before.claude.find((folder) => folder.path === glm)).toMatchObject({ currentDays: 30, targetDays: 30, pending: true })
+    // Nothing follows a later change until the owner confirms it.
+    await f.history.setKeepDays(90)
+    expect(await f.claudeDays(glm)).toBe(30)
+
+    await f.history.confirm()
+    const after = await f.history.status()
+    expect(after.needsConfirmation).toBe(false)
+    expect(after.claude.find((folder) => folder.path === glm)).toMatchObject({ currentDays: 90, pending: false })
+    await f.history.setKeepDays(null)
+    expect(await f.claudeDays(glm)).toBe(36_500)
+  })
+
   it('remembers learned folders that hold a settings.json, at most 8, never the home one', async () => {
     const f = await fixture()
     await f.history.learnClaudeFolder(join(f.home, '.claude'))
@@ -302,6 +326,29 @@ describe('agent history limit', () => {
     const f = await fixture({ adapters: [absent] })
 
     expect((await f.history.status()).agents).toEqual([])
+  })
+
+  it('checks each session again just before deleting it: one resumed, touched or started meanwhile is kept (Astra review)', async () => {
+    const codex = fakeAdapter('codex', ['e', 'f', 'g', 'h'].map((id, index) => ({ id, updatedAt: daysAgo(40 + 4 - index) })))
+    const live: string[] = []
+    let commandLines = 'bash'
+    const f = await fixture({ adapters: [codex], live, commandLines: () => commandLines })
+    const remove = codex.remove.bind(codex)
+    codex.remove = async (id) => {
+      const result = await remove(id)
+      // While 'e' is deleted, 'f' is resumed in BMN, 'g' is used and 'h' starts on a command line.
+      if (id === 'e') {
+        live.push('f')
+        codex.sessions = codex.sessions.map((session) => (session.id === 'g' ? { ...session, updatedAt: NOW.getTime() } : session))
+        commandLines = 'codex resume h'
+      }
+      return result
+    }
+    await f.history.confirm()
+    await f.history.run()
+
+    expect(codex.removed).toEqual(['e'])
+    expect(f.state().runs.codex).toMatchObject({ deleted: 1, remaining: 0, failures: [] })
   })
 
   it('stops between deletions when BMN quits; the next run takes the rest', async () => {

@@ -674,6 +674,42 @@ describe('answering multi-select and typed answers (Epic 31)', () => {
     await expect(pending).resolves.toEqual({ state: 'confirmed', sent: [`Audit log · “${typed}”`] })
   })
 
+  it('writes no further piece once the screen stops showing the dialog after an earlier piece (Astra review)', async () => {
+    const typed = 'Passkeys first, then JWT as a fallback for older clients and scripts'
+    const { h, dialog } = claudeHarness(CLAUDE_SINGLE, BLANK)
+    let pieces = 0
+    h.onKey = (key) => {
+      if (key === '4') return dialog.key(key)
+      pieces += 1
+      // The first piece lands, then the agent is gone and the shell prompt shows; the hook epoch never moves.
+      for (const char of key) dialog.key(char)
+      queueMicrotask(() => h.screens.get('s1')!.show(['owner@host:~$ ']))
+    }
+    const pending = ask(h, answers({ typed }))
+    await settle(400)
+    expect(pieces).toBe(1)
+    expect(h.writes).toEqual(['4', typed.slice(0, 32)])
+    await expect(pending).resolves.toMatchObject({ state: 'partial' })
+  })
+
+  it('never presses Enter when the field does not show every piece typed (Astra review)', async () => {
+    const typed = 'Passkeys first, then JWT as a fallback for older clients'
+    const { h, dialog } = claudeHarness(CLAUDE_SINGLE, BLANK)
+    let pieces = 0
+    h.onKey = (key) => {
+      if (key === '4' || key === '\r') return dialog.key(key)
+      pieces += 1
+      // The second piece is lost on the way; the screen still redraws with the first.
+      if (pieces !== 2) for (const char of key) dialog.key(char)
+      else queueMicrotask(() => h.screens.get('s1')!.show(dialog.lines()))
+    }
+    const pending = ask(h, answers({ typed }))
+    await settle(400)
+    expect(h.writes).not.toContain('\r')
+    expect(dialog.submitted).toBe(false)
+    await expect(pending).resolves.toMatchObject({ state: 'partial' })
+  })
+
   it('answers a Claude single-choice question with typed text: its row\'s digit, the text, Enter', async () => {
     const { h } = claudeHarness(CLAUDE_SINGLE, BLANK)
     const pending = ask(h, answers({ typed: 'Passkeys' }))

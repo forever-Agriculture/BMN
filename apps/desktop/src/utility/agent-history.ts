@@ -188,7 +188,8 @@ export class AgentHistory {
         displayPath: path.startsWith(`${this.options.home}/`) ? `~${path.slice(this.options.home.length)}` : path,
         currentDays: read.ok ? read.currentDays : null,
         targetDays: target,
-        pending: !read.ok || read.currentDays !== target,
+        // A folder the owner has not confirmed since BMN learned it waits for Start cleanup, even when it holds the value.
+        pending: !read.ok || read.currentDays !== target || (settings.confirmedKeepDays !== undefined && applied === undefined),
         ...(applied === undefined ? {} : { applied }),
         ...(failure === undefined ? {} : { failure })
       }
@@ -326,7 +327,6 @@ export class AgentHistory {
     const settings = await this.options.readSettings()
     const days = settings.confirmedKeepDays
     if (days === undefined || days === null || this.stopped) return
-    const protectedIds = await this.protectedIds()
     const summary: string[] = []
     for (const adapter of this.options.adapters) {
       if (this.stopped) break
@@ -334,7 +334,7 @@ export class AgentHistory {
       try {
         const available = await adapter.available()
         if (!available.ok) continue
-        candidates = this.eligible(await adapter.candidates(this.cutoff(days)), protectedIds)
+        candidates = this.eligible(await adapter.candidates(this.cutoff(days)), await this.protectedIds())
       } catch (error) {
         summary.push(`${adapter.agent} not recognised (${errorText(error)})`)
         continue
@@ -342,13 +342,21 @@ export class AgentHistory {
       if (candidates.length === 0) continue
       const batch = candidates.slice(0, MAX_DELETIONS_PER_RUN)
       const run: AgentHistoryRun = { at: this.now().toISOString(), deleted: 0, remaining: candidates.length - batch.length, failures: [] }
+      let skipped = 0
       for (const candidate of batch) {
         if (this.stopped) {
-          run.remaining += batch.length - run.deleted - run.failures.length
+          run.remaining += batch.length - run.deleted - run.failures.length - skipped
           break
         }
         let result: Awaited<ReturnType<AgentHistoryAdapter['remove']>>
         try {
+          // Checked again just before its delete: a batch takes minutes, and meanwhile a session can be resumed,
+          // bound, named on a command line or touched.
+          const still = this.eligible(await adapter.candidates(this.cutoff(days)), await this.protectedIds())
+          if (!still.some((next) => next.id === candidate.id)) {
+            skipped += 1
+            continue
+          }
           result = await adapter.remove(candidate.id)
         } catch (error) {
           result = { ok: false, reason: errorText(error) }

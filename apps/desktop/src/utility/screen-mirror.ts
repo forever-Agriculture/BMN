@@ -404,10 +404,11 @@ export function claudeQuestionState(lines: readonly string[], question: ScreenQu
     }
     const cursorAt = options.findIndex((option) => option.cursor)
     const cursor = cursorAt >= 0 ? cursorAt : other.cursor ? options.length : leave?.cursor ? options.length + 1 : null
+    const typed = other.label === placeholder ? null : [other.label, ...wrappedRows(lines, other.row, /^(Next|Submit)$/)].join(' ')
     return {
       cursor,
       ticked: question.multiSelect ? options.map((option) => option.ticked === true) : [],
-      other: { cursor: other.cursor, text: other.label === placeholder ? null : other.label, ticked: other.ticked === true },
+      other: { cursor: other.cursor, text: typed, ticked: other.ticked === true },
       leave: leave?.label ?? null
     }
   }
@@ -454,7 +455,7 @@ export function codexQuestionState(
       if (rawOptionAt(lines, row)) break
       if (/^\s*›/.test(raw)) {
         const text = normalizeScreenText(raw)
-        notes = text === 'Add notes' ? '' : text
+        notes = text === 'Add notes' ? '' : [text, ...wrappedRows(lines, row, /^tab or esc to clear notes/)].join(' ')
         break
       }
     }
@@ -463,9 +464,24 @@ export function codexQuestionState(
   return null
 }
 
-/** Whether a typed answer's row shows it: the whole text, or, once it wraps, a long enough start of it. */
+/**
+ * Whether a typed answer's field shows exactly this text, wrapped rows included. Whitespace is ignored, since a
+ * wrap may fall on a space or inside a word; any lost or extra character fails.
+ */
 export function showsTyped(shown: string | null, typed: string): boolean {
   if (shown === null || shown === '') return false
-  const expected = normalizeScreenText(typed)
-  return shown === expected || (expected.startsWith(shown) && shown.length >= Math.min(expected.length, 20))
+  const bare = (text: string): string => text.replace(/\s+/g, '')
+  return bare(shown) === bare(typed)
+}
+
+/** The rows a typed answer wrapped onto, after its first row: up to a blank row, a rule, an option or `stop`. */
+function wrappedRows(lines: readonly string[], after: number, stop: RegExp): string[] {
+  const rows: string[] = []
+  for (let row = after + 1; row < lines.length; row += 1) {
+    const raw = lines[row]!
+    const text = normalizeScreenText(raw)
+    if (text === '' || /^\s*─/.test(raw) || rawOptionAt(lines, row) || stop.test(text)) break
+    rows.push(text)
+  }
+  return rows
 }

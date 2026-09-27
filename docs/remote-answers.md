@@ -172,7 +172,7 @@ reaches it (a unit test reads the sources to keep it that way).
   exactly as cleaned (controls and whitespace runs folded to one space, trimmed, at most 2,000
   characters) and only where it is verified: Claude and Codex always, OpenCode unless the question has
   `custom: false`. Claude keys: ticks by digit in option order, each tick seen before the next; Down one
-  row at a time to the typed-entry row, the text in pieces of at most 32 characters, Down to
+  row at a time to the typed-entry row, the text in pieces of at most 32 characters, each seen whole in the field before the next, Down to
   `Next`/`Submit`, Enter; each move is read back from the screen before the next key. A multi-select
   question must first show with nothing ticked and the cursor on option 1. Codex keys: Down to "None of
   the above", Tab, the text, Enter. Proof: Claude's one string per question (labels joined by `, `,
@@ -191,7 +191,8 @@ reaches it (a unit test reads the sources to keep it that way).
   `Do you want to proceed?` but the command's own description (Claude's `tool_input.description`,
   kept in the prompt), and the digits of the
   plain `Yes` and `No` entries read from the screen. Frame and cursor glyphs and whitespace runs are
-  normalised; soft-wrapped rows are joined.
+  normalised; soft-wrapped rows are joined. A typed answer counts as shown only when its field, with the
+  rows it wrapped onto, holds all of it (whitespace aside); a start of it is not enough.
 - **Epoch.** Every open, resolve or withdraw a hook sends for a session raises the epoch of each of
   its followed requests before the store is touched, and so does the recognised dialog leaving the
   screen, checked on every screen change, so even a brief departure counts. Only the request BMN is

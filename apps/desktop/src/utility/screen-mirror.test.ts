@@ -197,11 +197,29 @@ describe('recognising answers in progress (Epic 31 spike screens)', () => {
     expect(codexQuestionState(screen('codex-other-typed.txt'), AUTH_CODEX, { index: 1, count: 2 })).toBeNull()
   })
 
-  it('accepts a typed answer shown whole, or a long enough start of one that wrapped', () => {
+  it('accepts a typed answer only when all of it shows, wherever it wrapped (Astra review, Epic 31)', () => {
     expect(showsTyped('Passkeys', 'Passkeys')).toBe(true)
     expect(showsTyped('Pass', 'Passkeys first')).toBe(false)
-    expect(showsTyped('Passkeys first, JWT as', 'Passkeys first, JWT as fallback')).toBe(true)
+    // A start of the text is not proof: the rest may have been lost.
+    expect(showsTyped('Passkeys first, JWT as', 'Passkeys first, JWT as fallback')).toBe(false)
+    // A wrap on a space or inside a word joins back.
+    expect(showsTyped('Passkeys first, JWT as fallback', 'Passkeys first, JWT as fallback')).toBe(true)
+    expect(showsTyped('Passkeys first, JWT as fall back', 'Passkeys first, JWT as fallback')).toBe(true)
     expect(showsTyped('Something else entirely', 'Passkeys first, JWT as fallback')).toBe(false)
     expect(showsTyped(null, 'x')).toBe(false)
+  })
+
+  it('reads a typed answer that wrapped onto further rows, for Claude and Codex', () => {
+    const claude = screen('claude-other-typed-80.txt')
+    const at = claude.findIndex((line) => line.includes('3. Passkeys first, JWT as fallback'))
+    const wrapped = [...claude.slice(0, at), '❯ 3. Passkeys first, JWT as', '     fallback for older clie', '     nts', ...claude.slice(at + 1)]
+    const auth = { ...question('Which auth method should the API use?', 'JWT', 'Sessions'), multiSelect: false }
+    const other = claudeQuestionState(wrapped, auth)?.other.text ?? null
+    expect(showsTyped(other, 'Passkeys first, JWT as fallback for older clients')).toBe(true)
+    expect(showsTyped(other, 'Passkeys first, JWT as fallback')).toBe(false)
+    const codex = screen('codex-other-typed.txt')
+    const row = codex.findIndex((line) => line.includes('› Passkeys first, JWT as fallback'))
+    const notes = codexQuestionState([...codex.slice(0, row), '  › Passkeys first, JWT as', '    fallback', ...codex.slice(row + 1)], AUTH_CODEX, { index: 0, count: 2 })?.notes ?? null
+    expect(notes).toBe('Passkeys first, JWT as fallback')
   })
 })

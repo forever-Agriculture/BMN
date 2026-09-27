@@ -525,6 +525,15 @@ describe('multi-select, Other… and Back (Epic 31)', () => {
     expect(h.connector.lastEdit()?.text.endsWith('✓ <i>Sent: Rate limiting · Webhooks</i>')).toBe(true)
   })
 
+  it('refuses a reply to a card just paged, before any tap: never a draft (Astra review)', async () => {
+    const h = setup({ record: record(FEATURES) })
+    await h.keeper.page(h.state.record!)
+    expect(h.connector.sends[0]?.options.keyboard?.flat().map((button) => button.text)).toContain('Other…')
+    await expect(h.keeper.typedReply(reply('GraphQL'))).resolves.toBe(true)
+    expect(h.connector.sends.at(-1)).toMatchObject({ text: 'Tap Other… first, then reply with your answer.', options: { replyToMessageId: 500 } })
+    expect(h.answers).toEqual([])
+  })
+
   it('Other… asks for a reply, ‹ Options returns with the toggles intact, and the reply is the typed answer', async () => {
     const h = setup({ record: record(FEATURES), answer: async () => ({ state: 'confirmed', sent: ['Audit log · “GraphQL”'] }) })
     await h.keeper.page(h.state.record!)

@@ -174,6 +174,15 @@ see what reaches a hook. Payloads are sanitised in
 [`apps/desktop/src/utility/test-fixtures/cursor/`](../apps/desktop/src/utility/test-fixtures/cursor/); the log is
 `.dev-auto/log.md` (2026-09-28 ~00:50–01:40).
 
+Then checked inside BMN (2026-09-28, candidate build, BMN's own folders in a scratch root, hooks from
+`bmn hooks install cursor --file <project>/.cursor/hooks.json`). `cursor-agent` typed into a bash session:
+Cursor's workspace-trust prompt first, then each turn end opened "Cursor finished its turn" (`hook:cursor:stop`),
+the next prompt answered it, a real `ls` gave `postToolUse`, the chip read Cursor, and the binding stayed
+unsupported, as for every agent typed into a shell. Cursor's `Run this command?` prompt for `rm` showed on screen
+with no hook event and nothing in Needs you. `cursor-agent` launched directly bound its chat at `sessionStart`;
+after Stop, Resume ran `cursor-agent --resume=<id>`, the chat's earlier turn was on screen, and the next prompt
+fired `beforeSubmitPrompt` and `stop` (no `sessionStart`), opening a fresh notice under the same chat id.
+
 | Question | Result |
 | --- | --- |
 | Hook support | **VERIFIED.** `hooks.json` version 1, `{ "version": 1, "hooks": { "<event>": [{ "command": "…", "timeout": 5 }] } }`, one flat entry per command (no matcher groups). The terminal agent reads the user file `~/.cursor/hooks.json` (a one-entry `stop` capture fired) and a project `.cursor/hooks.json` (every event below fired), not only the editor. Commands run under `bash`, with the session's environment (`BMN_CONTROL_SOCKET`, `BMN_TOKEN` and `BMN_SESSION_ID` reached every hook). Cursor also lists Claude Code's settings files as "third-party" hook sources; a project `.claude/settings.json` hook did **not** fire by default. |
