@@ -12,13 +12,14 @@
 
 ## Progress
 
-- Sprint board and reconciled state: epic-30 in-progress; 30-1, 30-2 `done`; 30-3 `review` until the owner phone run (its verification names it). Accepted candidate 9b0d890 (251b1e2, 8ee22dd, 9ac0872, a2f7456, bbe3ec4, 9b0d890); pushed to origin main as c479a05 (owner authorized, log ~23:10); first update FAILED (local record commit unpushed); second FAILED the packaged smoke (fixtures not packaged) → fix 813884a, pushed; third update of 25e9617 COMPLETE 17:35:40Z (package, packaged smoke, install PASS; `~/.local/state/bmn/source-update/latest.json`), new build running (log resume 3). Live harness kept untracked at `.dev-auto/evidence/e30-live-remote-answers.live.test.ts.txt`.
+- Sprint board and reconciled state: epic-30 `done`; 30-1, 30-2, 30-3 `done` (30-3 after the owner phone walk-through 2026-09-27 ~21:05-21:20 EEST, log). Accepted candidate 9b0d890 (251b1e2, 8ee22dd, 9ac0872, a2f7456, bbe3ec4, 9b0d890); pushed to origin main as c479a05 (owner authorized, log ~23:10); first update FAILED (local record commit unpushed); second FAILED the packaged smoke (fixtures not packaged) → fix 813884a, pushed; third update of 25e9617 COMPLETE 17:35:40Z (package, packaged smoke, install PASS; `~/.local/state/bmn/source-update/latest.json`), new build running (log resume 3). Live harness kept untracked at `.dev-auto/evidence/e30-live-remote-answers.live.test.ts.txt`.
 - Implemented: 30.1 (spike, structured prompt, v17, CLI mappers, setting, docs); 30.2 (mirror, engine, evidence, `answer.take`, plugin polling); 30.3 telegram-cards.ts, telegram-card-keeper.ts, connector HTML/edit/toast/callback_query/apiOrigin, schema v18 card columns, companion wiring, structured-dialog drafts, docs telegram.md/features.md, Electron fake Bot API phase (main/fake-bot-api.ts).
 - Active helpers: none. Collected: owner-requested GLM full review of ec7c517..25e9617 (`e30-glm-final.md`, no material findings, log ~20:55); pre-review, full review, recheck 1 (`e30-astra-recheck.md`), consultation (`e30-consult.md`), final recheck (`e30-astra-recheck2.md` sha 0e6af55dfe1d6946, clean).
 
 ## Decisions and findings
 
 - Original or approved intent changes: none. Owner request 2026-09-27 ~20:40 (log): GLM review of the whole epic at the end (ec7c517..25e9617), Fable consult if needed, then one test Telegram message via `tg.py send` when done.
+- Walk-through setup gap (log ~21:05): owner hook files lacked PreToolUse/PermissionRequest; installed with owner authorization ("claude + codex + opencode + all future agents"); docs/telegram.md setup step 5 added.
 - Material pending findings: none. Every finding (G1, G2, L1, A1-A8, R1-R4) has a closed disposition at 9b0d890 (log ~23:05).
 - 30.2 AC1 FAIL recorded (1.49×) → mirror gated to Claude/Codex hook sessions (log 2026-09-27 ~18:05).
 - Known residuals (log ~18:35-19:00): under heavy CPU load the plugin's 3 s hook deadline can lose a replied report → honest sent-unconfirmed. Final cards stay in the keeper's memory until restart (small).
@@ -31,17 +32,18 @@
 - Real agents through the internal answer function, isolated BMN (log ~18:35-19:00): Claude 4/4 as designed, Codex 2/2 confirmed, OpenCode 3/3 confirmed on a quiet machine (run 1 under load: 1 confirmed, 2 sent-unconfirmed).
 - Reviewed scope and route: Astra (gpt-6-astra medium, codex exec read-only) full review of ec7c517..a2f7456 → not ready (A1-A8). Baseline ec7c517.
 - Review allowance: used through the final recheck (clean). Acceptance checks recorded (log ~23:05).
-- Unverified: owner real-phone run on the packaged build (needs push + `pnpm run update:desktop` authorization and the owner's phone); Telegram's real rendering of the HTML cards.
+- Owner phone walk-through on packaged 25e9617 (log ~21:05-21:20): lines 1-6 PASS live (cards 251-254, ~15.5 s after open, resolvedBy telegram / input as tapped; line 1 = at-desk requests seen within 14 ms, never paged). Line 7 delegated by owner ("idk make sure it works"): packaged smoke of 25e9617 permissionsOff refused/no keys, allowOnce key 1 confirmed, deny key 3 sent-unconfirmed (`latest.log`); real Claude Bash allow once confirmed in isolated BMN (log ~23:05); unit keyboards Allow once/Deny only.
+- Unverified: a permission card rendered on the owner's real phone (same renderer/connector as the question cards seen live).
 
 ## Measurement
 
 - Timing: started 2026-09-27 ~17:30.
 - Dispatches: GLM-5.3 max pre-review, $2.04, 63 turns; GLM-5.3 max final review $5.57, 95 turns; Astra medium review 3,271,969 input / 3,081,216 cached / 11,743 output.
 - Review yield: n/a.
-- Owner interventions: none during build.
-- Observed usage: lead Claude transcript 9e03d012 claude-opus-5-5/high 155.1M cache read / 1.44M cache write / 662K output; Astra recheck 1 1.05M in / 9.4K out; consult 169K in / 1.4K out; final recheck 864K in / 7.1K out (log).
+- Owner interventions: none during build; after: push+update authorization, phone walk-through, hook-install authorization, GLM final review request.
+- Observed usage: lead Claude transcript 9e03d012 claude-opus-5-5/high 155.1M cache read / 1.44M cache write / 662K output; resume lead b64bdd23 claude-opus-5-5/high 226 input / 12.07M cache read / 134.5K cache write / 53.3K output; Astra recheck 1 1.05M in / 9.4K out; consult 169K in / 1.4K out; final recheck 864K in / 7.1K out (log).
 
 ## Resume
 
-- Next safe action: owner walks the seven experience lines (epics.md Epic 30 "The experience this epic must deliver") on the packaged build 25e9617 with the phone; on pass → 30-3 and epic-30 done, Status COMPLETE; on a failed line → repair that line.
-- Status: BLOCKED — awaiting the owner's phone walk-through on the updated packaged build.
+- Next safe action: none; optional epic-30 retrospective.
+- Status: COMPLETE — Epic 30 accepted: owner walk-through lines 1-6 live, line 7 by packaged-smoke and real-agent evidence.

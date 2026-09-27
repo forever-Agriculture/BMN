@@ -79,6 +79,10 @@ line cannot pick an option. If Telegram refuses a card's formatting, it is resen
    - optionally tick **Answer permission prompts from Telegram** to get Allow once / Deny buttons;
    - tick **Enabled** and save.
 4. Check the status line shows it polling, then press **Send test message**.
+5. For buttons, the agents must report their dialogs to BMN. Run `bmn hooks check`; if any entry
+   says `missing`, run `bmn hooks install claude` (and `codex`, `opencode`); Codex must then trust
+   the new entries once with `/hooks`. Without them a question never reaches your phone as a card,
+   and a permission arrives only as a plain "needs your permission" message.
 
 ## Security
 
