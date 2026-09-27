@@ -5096,3 +5096,28 @@ describe('terminal replay across view changes', () => {
     }
   )
 })
+
+describe('screen mirror for sessions running an agent (Epic 30.2)', () => {
+  it('starts only when asked, from the recent output, then follows output, resize and exit', async () => {
+    const { manager, pty, cwd } = await fixture()
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath, argv: [], cols: 80, rows: 24 })
+    pty.emit('before the agent\r\n')
+    expect(manager.screenMirror(created.sessionId, 'another-incarnation')).toBeUndefined()
+    const mirror = manager.screenMirror(created.sessionId, created.incarnationId)!
+    expect(manager.screenMirror(created.sessionId)).toBe(mirror)
+    pty.emit('the dialog\r\n')
+    await mirror.settled()
+    expect(mirror.lines().slice(0, 2)).toEqual(['before the agent', 'the dialog'])
+    const attached = manager.attach(created)
+    manager.resize({ attachmentId: attached.attachmentId, cols: 100, rows: 30 })
+    expect(mirror.lines()).toHaveLength(30)
+    manager.stopScreenMirror(created.sessionId)
+    const restarted = manager.screenMirror(created.sessionId)!
+    expect(restarted).not.toBe(mirror)
+    await restarted.settled()
+    // A restarted mirror is seeded from the tail again, so it still sees what was drawn.
+    expect(restarted.lines().join('\n')).toContain('the dialog')
+    pty.emitExit({ exitCode: 0 })
+    expect(manager.screenMirror(created.sessionId)).toBeUndefined()
+  })
+})

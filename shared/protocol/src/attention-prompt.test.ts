@@ -1,6 +1,6 @@
 // MODULE: attention-prompt.test.ts - validation and merging of the structured prompts hooks report
 import { describe, expect, it } from 'vitest'
-import { ATTENTION_PROMPT_LIMITS, mergeSamePrompt, parseAttentionPrompt, readStoredPrompt, type AttentionPrompt } from './attention-prompt'
+import { ATTENTION_PROMPT_LIMITS, mergeSamePrompt, parseAttentionEvidence, parseAttentionPrompt, readStoredPrompt, type AttentionPrompt } from './attention-prompt'
 
 const question: AttentionPrompt = {
   type: 'questions',
@@ -82,5 +82,27 @@ describe('mergeSamePrompt', () => {
     expect(mergeSamePrompt(question, other)).toBeNull()
     expect(mergeSamePrompt(question, { ...question, toolUseId: 'toolu_2' })).toBeNull()
     expect(mergeSamePrompt(permission, { ...permission, requestRef: 'per_2' })).toBeNull()
+  })
+})
+
+describe('parseAttentionEvidence', () => {
+  const evidence = { toolUseId: 'toolu_1', requestRef: null, answers: [['JWT']], permission: null, tool: null, command: null }
+
+  it('accepts the evidence a hook sends exactly as given', () => {
+    expect(parseAttentionEvidence(evidence)).toEqual({ ok: true, value: evidence })
+    const permission = { ...evidence, answers: null, permission: 'allowed', tool: 'Bash', command: 'touch a\nb' }
+    expect(parseAttentionEvidence(permission)).toEqual({ ok: true, value: permission })
+  })
+
+  it.each([
+    ['an extra key', { ...evidence, confirmed: true }],
+    ['a missing key', Object.fromEntries(Object.entries(evidence).filter(([key]) => key !== 'command'))],
+    ['an unknown permission word', { ...evidence, permission: 'always' }],
+    ['an empty label list', { ...evidence, answers: [[]] }],
+    ['a label with a control character', { ...evidence, answers: [['J\u0007WT']] }],
+    ['too many questions', { ...evidence, answers: Array(ATTENTION_PROMPT_LIMITS.questions + 1).fill(['x']) }],
+    ['not an object', 'evidence']
+  ])('refuses %s', (_label, value) => {
+    expect(parseAttentionEvidence(value).ok).toBe(false)
   })
 })

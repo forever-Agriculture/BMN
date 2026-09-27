@@ -19,8 +19,10 @@ const CONVERSATION_REFERENCE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}
 const OPENCODE_REFERENCE = /^ses_[0-9a-f]{12}[A-Za-z0-9]{14}$/
 const ATTENTION_KINDS = ['question', 'permission', 'review', 'notice']
 const VALUE_OPTIONS = new Set([
-  'name', 'session', 'key', 'source', 'detail', 'observed', 'kind', 'body', 'expires', 'socket', 'token-file', 'file', 'text'
+  'name', 'session', 'key', 'source', 'detail', 'observed', 'kind', 'body', 'expires', 'socket', 'token-file', 'file', 'text', 'wait'
 ])
+/** The longest `answer take --wait` the app accepts (control-server MAX_ANSWER_WAIT_SECONDS). */
+const MAX_ANSWER_WAIT_SECONDS = 25
 /** Options that may be repeated; each occurrence appends, so the order given is the order stored. */
 const LIST_OPTIONS = new Set(['evidence-id', 'file-id'])
 const FLAG_OPTIONS = new Set(['json', 'owner', 'submit', 'help'])
@@ -49,6 +51,9 @@ Commands:
   withdraw <request-key>                    Withdraw an attention request
   resolve <request-key> <resolution>        Resolve an attention request
   send <text> [--submit] [--key K]          Paste text into the session; --submit also presses Enter
+  answer take [--wait S]                    Collect, once, the answers BMN decided from a Telegram tap for
+                                            this session's own OpenCode requests (used by BMN's plugin);
+                                            waits up to S seconds (0-${MAX_ANSWER_WAIT_SECONDS}) for one to arrive
   hook <agent>                              Turn an agent hook event on stdin into Needs you requests;
                                             agent is one of claude|codex|opencode; prints nothing, always exits 0
   hooks print opencode                     Print the shipped OpenCode TypeScript plugin
@@ -263,6 +268,19 @@ const COMMANDS = {
       })
     })
   },
+  answer: {
+    args: ['action'],
+    options: ['wait'],
+    build: ([action], options) => {
+      if (action !== 'take') throw new UsageError('answer supports only: take')
+      const wait = options.wait === undefined ? 0 : Number(options.wait)
+      if (!Number.isInteger(wait) || wait < 0 || wait > MAX_ANSWER_WAIT_SECONDS || !/^\d+$/.test(String(options.wait ?? '0'))) {
+        throw new UsageError(`--wait must be a whole number of seconds from 0 to ${MAX_ANSWER_WAIT_SECONDS}`)
+      }
+      // The socket holds the call open for up to --wait; the connection deadline allows for it.
+      return { method: 'answer.take', params: { wait }, timeoutMs: TIMEOUT_MS + wait * 1000 }
+    }
+  },
   send: {
     args: ['text'],
     options: ['submit', 'session', 'key'],
@@ -433,8 +451,8 @@ function callEach(socketPath, token, requests, timeoutMs = TIMEOUT_MS) {
   })
 }
 
-async function call(socketPath, token, method, params) {
-  const [outcome] = await callEach(socketPath, token, [{ method, params }])
+async function call(socketPath, token, method, params, timeoutMs = TIMEOUT_MS) {
+  const [outcome] = await callEach(socketPath, token, [{ method, params }], timeoutMs)
   if (outcome.error) throw outcome.error
   return outcome.result
 }
@@ -445,11 +463,50 @@ const OPENCODE_PLUGIN = `import type { Plugin } from "@opencode-ai/plugin"
 // Shipped by BMN. Reinstall with bmn hooks install opencode.
 export const BMNPlugin: Plugin = async (input) => {
   let sessionID: string | undefined
+  // The owner's own session's questions and permissions still waiting; BMN may answer them from Telegram.
+  const waiting = new Set<string>()
+  let polling = false
+  const inBMN = () => Boolean(process.env.BMN_CONTROL_SOCKET || process.env.AITERM_CONTROL_SOCKET)
+  // An answer BMN already decided from a tap, posted to this OpenCode's own server by its request ID.
+  const reply = async (answer: { requestRef?: string; kind?: string; answers?: string[][]; reply?: string }) => {
+    if (!answer.requestRef || !waiting.has(answer.requestRef)) return
+    const route = answer.kind === "question" ? "question" : "permission"
+    const url = new URL(\`\${route}/\${encodeURIComponent(answer.requestRef)}/reply\`, input.serverUrl)
+    url.searchParams.set("directory", input.directory)
+    const body = route === "question" ? { answers: answer.answers } : { reply: answer.reply === "reject" ? "reject" : "once" }
+    const fetcher = (input.client as any)?._client?.getConfig?.().fetch ?? fetch
+    await fetcher(new Request(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }))
+  }
+  // Asks BMN only while something waits, and gives up after three failures so an absent BMN costs nothing.
+  const poll = async () => {
+    if (polling) return
+    polling = true
+    let failures = 0
+    try {
+      while (waiting.size > 0 && failures < 3) {
+        const result = await input.$\`timeout -s KILL 35s bmn answer take --wait 25 --json\`.quiet().nothrow()
+        if (result.exitCode !== 0) {
+          failures += 1
+          await new Promise((resolve) => setTimeout(resolve, 5000))
+          continue
+        }
+        failures = 0
+        const parsed = JSON.parse(result.stdout.toString()) as { answers?: unknown[] }
+        for (const answer of parsed.answers ?? []) await reply(answer as Parameters<typeof reply>[0]).catch(() => undefined)
+      }
+    } catch {
+      // A malformed answer or a failed post leaves the dialog for the owner at the laptop.
+    } finally {
+      polling = false
+    }
+  }
   return {
     event: async ({ event }) => {
-      if (!process.env.BMN_CONTROL_SOCKET && !process.env.AITERM_CONTROL_SOCKET) return
+      if (!inBMN()) return
       try {
-        const properties = event.properties as { sessionID?: string; info?: { id?: string; parentID?: string } }
+        const properties = event.properties as {
+          sessionID?: string; id?: string; requestID?: string; info?: { id?: string; parentID?: string }
+        }
         const id = properties.sessionID ?? properties.info?.id
         if (!properties.info?.parentID && id && (!sessionID || String(event.type) === "tui.session.select")) sessionID = id
         const payload = JSON.stringify({ hook_event_name: event.type, ...event.properties })
@@ -457,6 +514,15 @@ export const BMNPlugin: Plugin = async (input) => {
         const deadline = ["timeout", "-s", "KILL", "3s"]
         await input.$\`printf '%s' \${payload} | \${deadline} bmn hook opencode\`
           .env({ ...process.env, BMN_OPENCODE_SESSION_ID: sessionID ?? "" }).quiet().nothrow()
+        const type = String(event.type)
+        if (properties.sessionID === sessionID && properties.id && (type === "question.asked" || type === "permission.asked")) {
+          waiting.add(properties.id)
+          void poll()
+        }
+        if (properties.requestID && ["question.replied", "question.rejected", "permission.replied"].includes(type)) {
+          waiting.delete(properties.requestID)
+        }
+        if (type === "session.idle" || type === "session.deleted" || type === "tui.session.select") waiting.clear()
       } catch {
         // A missing or stalled BMN must never interrupt OpenCode.
       }
@@ -641,6 +707,78 @@ function claudeCommand(input) {
   return null
 }
 
+/**
+ * What a hook reports about how a prompt ended (docs/remote-answers.md, "Proof of an answer"), in the shape
+ * the app validates. A value that would not pass is left null rather than sent: malformed evidence would
+ * refuse the resolve it rides on.
+ */
+function evidenceOf(fields) {
+  return { toolUseId: null, requestRef: null, answers: null, permission: null, tool: null, command: null, ...fields }
+}
+
+/** One label per question, in the order the dialog asked them; null unless every question has exactly one. */
+function orderedAnswers(questions, answerOf) {
+  if (!Array.isArray(questions) || questions.length === 0 || questions.length > PROMPT_LIMITS.questions) return null
+  const answers = []
+  for (const question of questions) {
+    const label = isObject(question) ? promptLine(answerOf(question), PROMPT_LIMITS.label) : null
+    if (label === null) return null
+    answers.push([label])
+  }
+  return answers
+}
+
+/** Claude's PostToolUse: the chosen answers of its question tool, or the tool and exact input that ran. */
+function claudeEvidence(event) {
+  const toolUseId = promptId(event.tool_use_id)
+  if (event.tool_name === 'AskUserQuestion') {
+    const chosen = isObject(event.tool_response) && isObject(event.tool_response.answers) ? event.tool_response.answers : null
+    const answers = chosen ? orderedAnswers(event.tool_input?.questions,
+      (question) => typeof question.question === 'string' && Object.hasOwn(chosen, question.question) ? chosen[question.question] : undefined) : null
+    return evidenceOf({ toolUseId, answers })
+  }
+  const command = claudeCommand(event.tool_input)
+  return evidenceOf({
+    toolUseId,
+    permission: 'allowed',
+    tool: promptLine(event.tool_name, PROMPT_LIMITS.tool),
+    command: typeof command === 'string' && command.length <= PROMPT_LIMITS.command ? promptText(command, PROMPT_LIMITS.command) : null
+  })
+}
+
+/** Codex's PostToolUse for its question tool: `tool_response` is a JSON string of answers keyed by question id. */
+function codexEvidence(event) {
+  let response = event.tool_response
+  if (typeof response === 'string') {
+    try {
+      response = JSON.parse(response)
+    } catch {
+      response = undefined
+    }
+  }
+  const byId = isObject(response) && isObject(response.answers) ? response.answers : null
+  const answers = byId ? orderedAnswers(event.tool_input?.questions, (question) => {
+    const entry = typeof question.id === 'string' && Object.hasOwn(byId, question.id) ? byId[question.id] : undefined
+    return isObject(entry) && Array.isArray(entry.answers) && entry.answers.length === 1 ? entry.answers[0] : undefined
+  }) : null
+  return evidenceOf({ toolUseId: promptId(event.tool_use_id), answers })
+}
+
+/** OpenCode's replied events name the request they answer and exactly what was answered. */
+function openCodeEvidence(event) {
+  const requestRef = promptId(event.requestID)
+  if (event.hook_event_name === 'permission.replied') {
+    // "always" is never sent from the phone, so it proves nothing about an answer BMN sent.
+    return evidenceOf({ requestRef, permission: event.reply === 'once' ? 'allowed' : event.reply === 'reject' ? 'denied' : null })
+  }
+  const raw = event.answers
+  const answers = Array.isArray(raw) && raw.length > 0 && raw.length <= PROMPT_LIMITS.questions &&
+    raw.every((labels) => Array.isArray(labels) && labels.length > 0 && labels.length <= PROMPT_LIMITS.options)
+    ? raw.map((labels) => labels.map((label) => promptLine(label, PROMPT_LIMITS.label)))
+    : null
+  return evidenceOf({ requestRef, answers: answers && answers.every((labels) => labels.every((label) => label !== null)) ? answers : null })
+}
+
 /** Claude Code lists in-flight background work and scheduled wake-ups on Stop; either resumes the agent without the owner. */
 function resumesByItself(event) {
   return [event.background_tasks, event.session_crons].some((list) => Array.isArray(list) && list.length > 0)
@@ -706,6 +844,8 @@ function hookRequests(agent, event) {
     method: 'attention.resolve',
     params: { requestKey: requestKey(slot), resolution: IN_TERMINAL, origin }
   }))
+  // The harness's own report of the answer, so an answer sent from the phone can be confirmed.
+  const proven = (calls, evidence) => calls.map((call) => ({ ...call, params: { ...call.params, evidence } }))
   if (agent === 'opencode') {
     const id = event.sessionID ?? event.info?.id
     const first = process.env.BMN_OPENCODE_SESSION_ID
@@ -736,13 +876,13 @@ function hookRequests(agent, event) {
           // Only `metadata.command` says exactly what runs; `patterns` are what an "always" would cover.
           permissionPrompt('opencode', 'permission', event.permission, event.metadata?.command, { requestRef: event.id }, null))
       case 'permission.replied':
-        return event.reply === 'reject' ? withdraw('permission')
-          : ['once', 'always'].includes(event.reply) ? answered('permission') : []
+        return proven(event.reply === 'reject' ? withdraw('permission')
+          : ['once', 'always'].includes(event.reply) ? answered('permission') : [], openCodeEvidence(event))
       case 'question.asked': {
         const summary = userInputSummary(name, event)
         return open('question', 'question', summary.title, summary.body, questionsPrompt('opencode', event, { requestRef: event.id }))
       }
-      case 'question.replied': return answered('question')
+      case 'question.replied': return proven(answered('question'), openCodeEvidence(event))
       case 'question.rejected': return withdraw('question')
       case 'session.status':
         return event.status?.type === 'busy' ? [...answered('permission', 'question'), ...withdraw('turn', 'error')] : []
@@ -812,11 +952,13 @@ function hookRequests(agent, event) {
       if (agent === 'codex' && asyncUserInputTool(event.tool_name)) return withdraw('turn')
       // Later Codex tools may finish while that queued question is still waiting for its owner.
       if (agent === 'codex') {
-        const answeredSlots = userInputTool(event.tool_name) ? ['permission', 'question'] : ['permission']
-        return [...answered(...answeredSlots), ...withdraw('turn')]
+        if (userInputTool(event.tool_name)) {
+          return [...proven(answered('permission', 'question'), codexEvidence(event)), ...withdraw('turn')]
+        }
+        return [...answered('permission'), ...withdraw('turn')]
       }
       // A tool ran, so any prompt was answered, and a turn a Stop hook sent back to work is running again.
-      return [...answered('permission', 'question'), ...withdraw('turn')]
+      return [...proven(answered('permission', 'question'), claudeEvidence(event)), ...withdraw('turn')]
     case 'UserPromptSubmit':
       return [...answered('permission', 'question'), ...withdraw('turn')]
     case 'Stop': {
@@ -2028,7 +2170,7 @@ async function main(argv) {
   }
   try {
     const { socketPath, token } = readCredentials(parsed.options)
-    const result = await call(socketPath, token, request.method, request.params)
+    const result = await call(socketPath, token, request.method, request.params, request.timeoutMs)
     const output = parsed.options.json
       ? JSON.stringify(result ?? null, null, 2)
       : describeResult(command, positionals, parsed.options, result)

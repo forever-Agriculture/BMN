@@ -78,7 +78,8 @@ async function cliFixture() {
     withdrawAttention: vi.fn<ControlHandlers['withdrawAttention']>(async () => ({ withdrawn: true })),
     resolveAttention: vi.fn<ControlHandlers['resolveAttention']>(async () => ({ resolved: true })),
     observeHookEvent: vi.fn<ControlHandlers['observeHookEvent']>(async () => ({ recorded: true })),
-    submitInput: vi.fn<ControlHandlers['submitInput']>(async () => undefined)
+    submitInput: vi.fn<ControlHandlers['submitInput']>(async () => undefined),
+    takeAnswers: vi.fn<ControlHandlers['takeAnswers']>(async () => ({ answers: [] }))
   } satisfies ControlHandlers
   const server = new ControlServer({ socketPath, auth, handlers, receipts: new MemoryReceiptStore() })
   await server.listen()
@@ -3017,5 +3018,92 @@ describe('Claude PreToolUse gated to its question tool (Epic 30)', () => {
     const otherReport = JSON.parse((await runHooks(['check', 'claude', '--file', other, '--json'])).stdout)
     const otherRow = otherReport.agents[0].events.find((row: { event: string }) => row.event === 'PreToolUse')
     expect(otherRow.state).toBe('missing')
+  })
+})
+
+describe('evidence of how a prompt ended, from the recorded hooks (Epic 30.2)', () => {
+  const resolved = (fixture: Awaited<ReturnType<typeof cliFixture>>, requestKey: string): Record<string, unknown> | undefined =>
+    fixture.handlers.resolveAttention.mock.calls.map(([params]) => params as Record<string, unknown>)
+      .find((params) => params.requestKey === requestKey)
+
+  it('sends Claude\'s chosen answers in the order the dialog asked them', async () => {
+    const fixture = await cliFixture()
+    await runHook(fixture, 'claude', await recorded('claude/ask-three.post-tool-use.json'))
+    expect(resolved(fixture, 'claude:question')).toMatchObject({
+      evidence: {
+        toolUseId: 'toolu_01YENoYpvTY1rDaqboBWAGmy', requestRef: null,
+        answers: [['Postgres'], ['Later'], ['Staging']], permission: null, tool: null, command: null
+      }
+    })
+  })
+
+  it('sends the tool and exact command a Claude permission let run', async () => {
+    const fixture = await cliFixture()
+    await runHook(fixture, 'claude', await recorded('claude/bash.post-tool-use.json'))
+    expect(resolved(fixture, 'claude:permission')).toMatchObject({
+      evidence: { toolUseId: 'toolu_014AAdE1ZSjo3GMghU99naAq', answers: null, permission: 'allowed', tool: 'Bash', command: 'touch spike-allow.txt' }
+    })
+  })
+
+  it('orders Codex answers by the question ids the tool asked, not by the response', async () => {
+    const fixture = await cliFixture()
+    await runHook(fixture, 'codex', await recorded('codex/ask-two.post-tool-use.json'))
+    expect(resolved(fixture, 'codex:question')).toMatchObject({
+      evidence: { toolUseId: 'call_V5f15sVVybbRPi2QBgmKciRj', answers: [['SQLite'], ['Yes']] }
+    })
+  })
+
+  it('leaves answers out when a report does not name one per question', async () => {
+    const fixture = await cliFixture()
+    const post = await recorded('codex/ask-two.post-tool-use.json')
+    await runHook(fixture, 'codex', { ...post, tool_response: '{"answers":{"database":{"answers":["SQLite"]}}}' })
+    expect(resolved(fixture, 'codex:question')).toMatchObject({ evidence: { answers: null } })
+    const broken = await cliFixture()
+    await runHook(broken, 'codex', { ...post, tool_response: 'not json' })
+    expect(resolved(broken, 'codex:question')).toMatchObject({ evidence: { answers: null } })
+  })
+
+  it('sends OpenCode\'s request id with the answers or the permission reply', async () => {
+    const fixture = await cliFixture()
+    await runHook(fixture, 'opencode', await recorded('opencode/question.replied.json'), OPENCODE_FOREGROUND)
+    expect(resolved(fixture, 'opencode:question')).toMatchObject({
+      evidence: { requestRef: 'que_0e3488978001RROK6B1gVoiWiS', answers: [['Session cookies']], permission: null }
+    })
+    await runHook(fixture, 'opencode', await recorded('opencode/permission.replied.once.json'), OPENCODE_FOREGROUND)
+    expect(resolved(fixture, 'opencode:permission')).toMatchObject({
+      evidence: { requestRef: 'per_0e34b1329001CyMk3xp8kIma9a', permission: 'allowed' }
+    })
+    await runHook(fixture, 'opencode', { ...(await recorded('opencode/permission.replied.once.json')), reply: 'reject' }, OPENCODE_FOREGROUND)
+    const withdrawn = fixture.handlers.withdrawAttention.mock.calls.map(([params]) => params as Record<string, unknown>)
+      .find((params) => params.requestKey === 'opencode:permission')
+    expect(withdrawn).toMatchObject({ evidence: { requestRef: 'per_0e34b1329001CyMk3xp8kIma9a', permission: 'denied' } })
+  })
+})
+
+describe('bmn answer take (Epic 30.2)', () => {
+  it('collects this session\'s answers and waits as long as asked', async () => {
+    const fixture = await cliFixture()
+    fixture.handlers.takeAnswers.mockResolvedValue({
+      answers: [{ requestRef: 'que_1', kind: 'question', answers: [['JWT']] }]
+    })
+    const result = await runCli(['answer', 'take', '--wait', '2', '--json'], { env: fixture.sessionEnv })
+    expect(result.code).toBe(0)
+    expect(JSON.parse(result.stdout)).toEqual({ answers: [{ requestRef: 'que_1', kind: 'question', answers: [['JWT']] }] })
+    expect(fixture.handlers.takeAnswers).toHaveBeenCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', waitMs: 2000 })
+  })
+
+  it.each([['-1'], ['26'], ['1.5'], ['soon']])('refuses --wait %s as a usage error', async (wait) => {
+    const fixture = await cliFixture()
+    const result = await runCli(['answer', 'take', '--wait', wait], { env: fixture.sessionEnv })
+    expect(result.code).toBe(2)
+    expect(fixture.handlers.takeAnswers).not.toHaveBeenCalled()
+  })
+
+  it('offers no command that could send an answer', async () => {
+    const fixture = await cliFixture()
+    for (const action of ['give', 'send', 'allow']) {
+      expect((await runCli(['answer', action], { env: fixture.sessionEnv })).code).toBe(2)
+    }
+    expect(fixture.handlers.takeAnswers).not.toHaveBeenCalled()
   })
 })

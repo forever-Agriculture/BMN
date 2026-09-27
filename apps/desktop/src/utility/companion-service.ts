@@ -23,6 +23,7 @@ import {
   type AppSettings,
   type ArtifactPreview,
   type ArtifactRecord,
+  type AttentionEvidence,
   type AttentionPrompt,
   type AttentionRecord,
   type BackupManifest,
@@ -50,6 +51,7 @@ import { HostControlError, type SessionIdentity, type SessionManager } from './s
 import { runHookConfigurationCheck } from './hook-configuration-check'
 import { searchFileReferences } from './file-reference-search'
 import { createAttentionPager } from './attention-pager'
+import { RemoteAnswers, answerRoute, type AnswerOutcome, type AnswerRequest, type PluginAnswer } from './remote-answer'
 import { observeRepeat, REPEAT_NOTICE_AT, type RepeatState, type RepeatSegment } from './repeat-watch'
 import { TelegramConnector, maskToken, redactToken, type ConnectorHealth, type InboundReply } from './telegram-connector'
 
@@ -66,6 +68,7 @@ const TELEGRAM_DOWNLOAD_BYTES = 20 * 1024 * 1024
 const TELEGRAM_TOKEN_FILE = 'telegram-bot.token'
 const TELEGRAM_OFFSET_KEY = 'telegram.offset'
 const ATTENTION_SWEEP_MS = 30_000
+const REMOTE_ANSWER_RESOLUTION = 'Answered from Telegram'
 /** The refusal log is trimmed back to half this size as soon as one append carries it past. */
 const REFUSAL_LOG_BYTES = 256 * 1024
 /** One refusal reason on one line; longer than this is a validator quoting the caller, not a reason. */
@@ -248,6 +251,8 @@ export class CompanionService {
     ownerAway: () => this.ownerAway,
     now: () => this.now().getTime()
   })
+  /** Delivers a phone answer into the dialog that asked; reachable only from inside this process (Epic 30). */
+  private readonly answers: RemoteAnswers
   private readonly draftOperations = new Map<string, Promise<void>>()
   /** A request key claims the one PTY write before any asynchronous availability check. */
   private readonly fileReferencePastes = new Map<string, {
@@ -320,6 +325,13 @@ export class CompanionService {
 
   constructor(private readonly options: CompanionServiceOptions) {
     this.now = options.now ?? (() => new Date())
+    this.answers = new RemoteAnswers({
+      getAttention: (requestId) => options.database.companion('getAttention', requestId).catch(() => null),
+      liveIncarnationId: (sessionId) => options.manager.liveIncarnationId(sessionId),
+      screen: (sessionId, incarnationId) => options.manager.screenMirror(sessionId, incarnationId),
+      write: (sessionId, bytes) => options.manager.writeToSession(sessionId, bytes),
+      answerPermissions: async () => (await options.database.companion('getSettings')).telegram.answerPermissions
+    })
     this.socketPath = join(options.roots.runtime, 'control', 'control.sock')
     this.refusalLogPath = join(options.roots.state, 'refused-requests.log')
     this.files = new ArtifactFileStore({
@@ -354,10 +366,13 @@ export class CompanionService {
         }),
         withdrawAttention: (p) => this.controlCall(() => p.requestKey.startsWith('handoff:')
           ? this.withdrawAgentHandoff(p.sessionId, p.requestKey.slice('handoff:'.length))
-          : this.closeAttentionByKey(p.sessionId, p.requestKey, 'withdrawn', null, p.origin ?? null)
+          : this.closeAttentionByKey(p.sessionId, p.requestKey, 'withdrawn', null, p.origin ?? null, p.evidence)
         ),
         resolveAttention: (p) => this.controlCall(
-          () => this.closeAttentionByKey(p.sessionId, p.requestKey, 'answered', p.resolution, p.origin ?? null)
+          () => this.closeAttentionByKey(p.sessionId, p.requestKey, 'answered', p.resolution, p.origin ?? null, p.evidence)
+        ),
+        takeAnswers: (p) => this.controlCall(
+          async (): Promise<{ answers: PluginAnswer[] }> => ({ answers: await this.answers.take(p.sessionId, p.incarnationId, p.waitMs) })
         ),
         observeHookEvent: (p) => this.controlCall(async () => this.observeHookEvent(p)),
         submitInput: (p) => this.controlCall(async () => {
@@ -445,6 +460,7 @@ export class CompanionService {
   async close(): Promise<void> {
     if (this.sweepTimer) clearInterval(this.sweepTimer)
     this.pager.close()
+    this.answers.dispose()
     await Promise.allSettled([this.control.close(), this.telegram?.stop()])
     await unlink(join(dirname(this.socketPath), 'owner.token')).catch(() => undefined)
   }
@@ -844,6 +860,8 @@ export class CompanionService {
     origin?: string
     prompt?: AttentionPrompt
   }): Promise<AttentionRecord & { changed: boolean }> {
+    // Before the store is touched: a card sent for the dialog as it was must not answer what comes next.
+    this.answers.hookReported(p.sessionId)
     const record = await this.options.database.companion('openAttention', {
       sessionId: p.sessionId,
       incarnationId: p.incarnationId,
@@ -855,6 +873,7 @@ export class CompanionService {
       ...(p.origin !== undefined ? { origin: p.origin } : {}),
       ...(p.prompt !== undefined ? { prompt: p.prompt } : {})
     }, randomUUID(), this.iso())
+    this.answers.track(record)
     this.emit('attention', p.sessionId)
     if (!p.phoneNotified) this.pager.opened(record)
     return record
@@ -969,13 +988,64 @@ export class CompanionService {
     requestKey: string,
     state: 'answered' | 'withdrawn',
     resolution: string | null,
-    origin: string | null = null
+    origin: string | null = null,
+    evidence?: AttentionEvidence
   ): Promise<AttentionRecord> {
+    this.answers.hookReported(sessionId)
+    // The harness reporting exactly the answer sent from the phone closes the request as the phone's.
+    const answeredRemotely = evidence ? this.answers.evidence(sessionId, requestKey, evidence) !== null : false
     const record = await this.options.database.companion(
-      'closeAttention', { sessionId, requestKey }, state, resolution, this.iso(), origin
+      'closeAttention',
+      // A report about another request of the same slot (OpenCode's queued permissions) leaves this one open.
+      { sessionId, requestKey, ...(evidence?.requestRef ? { expectedRequestRef: evidence.requestRef } : {}) },
+      answeredRemotely ? 'answered' : state,
+      answeredRemotely ? REMOTE_ANSWER_RESOLUTION : resolution,
+      this.iso(),
+      answeredRemotely ? 'telegram' : origin
     )
+    this.answers.closed(record)
     this.emit('attention', sessionId)
     return record
+  }
+
+  /**
+   * Answers an open request from a Telegram tap (Story 30.3). Internal to the utility process: no control
+   * socket method, owner route or CLI command reaches it, because agents can read the owner token.
+   */
+  async answerAttention(request: AnswerRequest): Promise<AnswerOutcome> {
+    const outcome = await this.answers.answer(request)
+    if (outcome.state === 'sent-unconfirmed' && request.answer.type === 'permission' && request.answer.decision === 'deny') {
+      // Claude reports a deny through no hook, so its request would otherwise stay open after the dialog closed.
+      const record = await this.options.database.companion('getAttention', request.requestId).catch(() => null)
+      if (record?.state === 'open' && record.prompt?.harness === 'claude') {
+        const closed = await this.options.database.companion('closeAttention',
+          { requestId: record.requestId, expectedRevision: record.revision }, 'answered',
+          'Deny sent from Telegram, not confirmed', this.iso(), 'telegram').catch(() => null)
+        if (closed) {
+          this.answers.closed(closed)
+          this.emit('attention', closed.sessionId)
+        }
+      }
+    }
+    return outcome
+  }
+
+  /** The dialog epoch a card for this request is sent for; null when it cannot be answered by a tap. */
+  answerEpoch(requestId: string): number | null {
+    return this.answers.epochOf(requestId)
+  }
+
+  /** Whether a tap could answer this request now, and whether it may offer Deny. */
+  async answerability(record: AttentionRecord): Promise<
+    { answerable: true; deny: boolean } | { answerable: false; reason: 'unsupported' | 'permissions-off' }
+  > {
+    if (record.state !== 'open' || answerRoute(record.prompt) === null) return { answerable: false, reason: 'unsupported' }
+    if (record.prompt?.type === 'permission') {
+      const settings = await this.options.database.companion('getSettings')
+      if (!settings.telegram.answerPermissions) return { answerable: false, reason: 'permissions-off' }
+      return { answerable: true, deny: this.answers.canDeny(record) }
+    }
+    return { answerable: true, deny: false }
   }
 
   /** The repeat watch is the sole exception to the otherwise diagnostic hook log. */
@@ -1059,6 +1129,11 @@ export class CompanionService {
       // Only this run's own report may speak for it, so a queued event from a process that has
       // already been replaced never becomes the current run's observation.
       if (this.options.manager.liveIncarnationId(p.sessionId) === p.incarnationId) {
+        // Only a session running an agent BMN can answer by keys pays for a screen mirror (Epic 30.2 AC1).
+        if (p.agent === 'claude' || p.agent === 'codex') {
+          if (p.event === 'SessionEnd') this.options.manager.stopScreenMirror(p.sessionId)
+          else this.options.manager.screenMirror(p.sessionId, p.incarnationId)
+        }
         this.hookObservations.set(p.sessionId, {
           sessionId: p.sessionId,
           incarnationId: p.incarnationId,
@@ -1157,6 +1232,9 @@ export class CompanionService {
       this.emit('attention', null)
       this.emit('drafts', null)
     }
+    // Requests closed by expiry or by the owner are forgotten here; hooks report their own closes.
+    const rows = await this.options.database.companion('listAttention').catch(() => null)
+    if (rows) this.answers.retain(new Set(rows.filter((row) => row.state === 'open').map((row) => row.requestId)))
   }
 
   private async readyArtifact(artifactId: string): Promise<ArtifactRecord> {

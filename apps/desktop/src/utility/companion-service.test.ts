@@ -32,6 +32,7 @@ import { initializeDatabase, type DatabaseConnection } from './database-initiali
 import { selectConversationRoutes } from './database-binding-store'
 import { createWorkspace, listSessions, listWorkspaces } from './database-workspace-store'
 import type { SessionManager } from './session-manager'
+import type { ScreenLike } from './remote-answer'
 import type { TelegramConnector } from './telegram-connector'
 import { DEFAULT_WORKSPACE_ID } from './store-schema'
 
@@ -45,6 +46,8 @@ let writes: Array<{ sessionId: string; bytes: Uint8Array }>
 let liveIncarnations: Map<string, string>
 let liveDirectories: Map<string, string>
 let reportedProcesses: Map<string, string>
+/** Screen mirrors a test hands the service for a session (Epic 30); none unless a test sets one. */
+let screens: Map<string, ScreenLike>
 let emitted: AppEventMessage[]
 let clock: string
 let archiveAtFinalTargetRead: (() => void) | null
@@ -108,10 +111,13 @@ beforeEach(() => {
   liveIncarnations = new Map([['s1', 'incarnation-1'], ['s2', 'incarnation-2']])
   liveDirectories = new Map()
   reportedProcesses = new Map()
+  screens = new Map()
   const manager = {
     liveIncarnationId: (sessionId: string) => liveIncarnations.get(sessionId),
     liveLaunchDirectory: (sessionId: string) => liveDirectories.get(sessionId),
     writeToSession: (sessionId: string, bytes: Uint8Array) => writes.push({ sessionId, bytes }),
+    screenMirror: (sessionId: string) => screens.get(sessionId),
+    stopScreenMirror: (sessionId: string) => screens.delete(sessionId),
     sessionWithCurrentProcessState: (session: SessionRecord) => {
       const incarnationId = reportedProcesses.get(session.sessionId)
       return incarnationId === undefined
@@ -2158,5 +2164,152 @@ describe('repeat watch notices and calibration', () => {
     expect(service.listHookEvents('s1').map((row) => row.repeat)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, null])
     await observe({ sessionId: 's2', incarnationId: 'incarnation-2', agent: 'codex' })
     expect(service.listHookEvents('s2')[0]?.repeat).toBe(1)
+  })
+})
+
+describe('answers from the phone go only into the dialog that asked (Epic 30.2)', () => {
+  const SCREENS = join(__dirname, 'test-fixtures', 'remote-answers', 'screens')
+  const screenOf = (name: string): string[] => readFileSync(join(SCREENS, name), 'utf8').split('\n')
+  class FakeScreen implements ScreenLike {
+    private readonly listeners = new Set<() => void>()
+    constructor(private current: string[]) {}
+    lines(): string[] { return this.current }
+    settled(): Promise<void> { return Promise.resolve() }
+    onChange(listener: () => void): () => void {
+      this.listeners.add(listener)
+      return () => this.listeners.delete(listener)
+    }
+    show(lines: string[]): void {
+      this.current = lines
+      for (const listener of [...this.listeners]) listener()
+    }
+  }
+  const bash = {
+    sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'claude:permission', kind: 'permission' as const,
+    title: 'Claude wants to use Bash', origin: 'hook:claude:PermissionRequest',
+    prompt: {
+      type: 'permission' as const, harness: 'claude' as const, shape: 'permission' as const, requestRef: null, toolUseId: null,
+      tool: 'Bash', command: 'touch spike-allow.txt', cwd: '/work/project'
+    }
+  }
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 200))
+  const allowPermissions = async () => {
+    await database.transaction(() => COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', {
+      enabled: false, allowedChatId: null, allowedUserId: null, notifyOn: 'attention-and-exit', autoSubmitReplies: false,
+      answerPermissions: true
+    }, new Date().toISOString()))()
+  }
+  const keys = () => writes.map((write) => new TextDecoder().decode(write.bytes))
+
+  it('refuses an allow for A while an identical successor prompt B is on screen (RED first)', async () => {
+    await allowPermissions()
+    const screen = new FakeScreen(screenOf('claude-bash-permission.txt'))
+    screens.set('s1', screen)
+    const first = await service['openAttention'](bash)
+    await settle()
+    const card = { requestId: first.requestId, revision: first.revision, epoch: service.answerEpoch(first.requestId)!, incarnationId: 'incarnation-1' }
+    // The owner denies A at the laptop (no hook fires), then Claude asks the very same command again.
+    screen.show(screenOf('claude-bash-denied.txt'))
+    await settle()
+    const second = await service['openAttention'](bash)
+    screen.show(screenOf('claude-bash-permission.txt'))
+    await settle()
+    // To the store B is A: same request, same revision. Only the epoch tells them apart.
+    expect([second.requestId, second.revision, second.changed]).toEqual([first.requestId, first.revision, false])
+    const outcome = service.answerAttention({ ...card, answer: { type: 'permission', decision: 'allow' } })
+    await settle()
+    expect(keys()).toEqual([])
+    await expect(outcome).resolves.toEqual({ state: 'refused', reason: 'changed' })
+  })
+
+  it('closes the request as answered from Telegram when the harness reports exactly the answer sent', async () => {
+    await allowPermissions()
+    screens.set('s1', new FakeScreen(screenOf('claude-bash-permission.txt')))
+    const opened = await service['openAttention'](bash)
+    const outcome = service.answerAttention({
+      requestId: opened.requestId, revision: opened.revision, epoch: service.answerEpoch(opened.requestId)!,
+      incarnationId: 'incarnation-1', answer: { type: 'permission', decision: 'allow' }
+    })
+    await settle()
+    expect(keys()).toEqual(['1'])
+    const closed = await service['closeAttentionByKey']('s1', 'claude:permission', 'answered', 'answered in the terminal', 'hook:claude:PostToolUse', {
+      toolUseId: 'toolu_x', requestRef: null, answers: null, permission: 'allowed', tool: 'Bash', command: 'touch spike-allow.txt'
+    })
+    expect(closed).toMatchObject({ state: 'answered', resolvedBy: 'telegram', resolution: 'Answered from Telegram' })
+    await expect(outcome).resolves.toEqual({ state: 'confirmed', sent: ['Allow once'] })
+  })
+
+  it('keeps the hook as the answerer when its report names a different answer', async () => {
+    await allowPermissions()
+    screens.set('s1', new FakeScreen(screenOf('claude-bash-permission.txt')))
+    await service['openAttention'](bash)
+    const closed = await service['closeAttentionByKey']('s1', 'claude:permission', 'answered', 'answered in the terminal', 'hook:claude:PostToolUse', {
+      toolUseId: 'toolu_x', requestRef: null, answers: null, permission: 'allowed', tool: 'Bash', command: 'touch spike-allow.txt'
+    })
+    expect(closed).toMatchObject({ resolvedBy: 'hook:claude:PostToolUse', resolution: 'answered in the terminal' })
+  })
+
+  it('closes a Claude deny it could not confirm, saying so, because no hook will', async () => {
+    await allowPermissions()
+    screens.set('s1', new FakeScreen(screenOf('claude-bash-permission.txt')))
+    const opened = await service['openAttention'](bash)
+    await expect(service.answerAttention({
+      requestId: opened.requestId, revision: opened.revision, epoch: service.answerEpoch(opened.requestId)!,
+      incarnationId: 'incarnation-1', answer: { type: 'permission', decision: 'deny' }
+    })).resolves.toEqual({ state: 'sent-unconfirmed', sent: ['Deny'] })
+    expect(keys()).toEqual(['3'])
+    expect(COMPANION_OPERATIONS.getAttention(database, opened.requestId)).toMatchObject({
+      state: 'answered', resolvedBy: 'telegram', resolution: 'Deny sent from Telegram, not confirmed'
+    })
+  })
+
+  it('leaves an OpenCode permission open when the report is about another request of the same slot', async () => {
+    const opencode = {
+      sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'opencode:permission', kind: 'permission' as const,
+      title: 'OpenCode asks to bash',
+      prompt: { type: 'permission' as const, harness: 'opencode' as const, shape: 'permission' as const, requestRef: 'per_2', toolUseId: null, tool: 'bash', command: 'touch b', cwd: null }
+    }
+    const opened = await service['openAttention'](opencode)
+    const cascade = { toolUseId: null, requestRef: 'per_1', answers: null, permission: 'denied' as const, tool: null, command: null }
+    await expect(service['closeAttentionByKey']('s1', 'opencode:permission', 'withdrawn', null, 'hook:opencode:permission.replied', cascade))
+      .rejects.toMatchObject({ code: ERROR_CODES.notFound })
+    expect(COMPANION_OPERATIONS.getAttention(database, opened.requestId).state).toBe('open')
+    await service['closeAttentionByKey']('s1', 'opencode:permission', 'withdrawn', null, 'hook:opencode:permission.replied', { ...cascade, requestRef: 'per_2' })
+    expect(COMPANION_OPERATIONS.getAttention(database, opened.requestId).state).toBe('withdrawn')
+  })
+
+  it('starts a screen mirror only for an agent it can answer by keys, and stops it when the agent ends', async () => {
+    const started: string[] = []
+    const stopped: string[] = []
+    const manager = service['options'].manager
+    manager.screenMirror = (sessionId: string) => {
+      started.push(sessionId)
+      return undefined
+    }
+    manager.stopScreenMirror = (sessionId: string) => {
+      stopped.push(sessionId)
+    }
+    const observe = (sessionId: string, incarnationId: string, agent: HookEventRecord['agent'], event: string) =>
+      (service as unknown as { observeHookEvent(p: unknown): Promise<unknown> }).observeHookEvent({
+        sessionId, incarnationId, agent, event, source: null, toolName: null, effects: []
+      })
+    await observe('s1', 'incarnation-1', 'claude', 'SessionStart')
+    await observe('s2', 'incarnation-2', 'opencode', 'session.created')
+    await observe('s2', 'incarnation-old', 'codex', 'SessionStart')
+    await observe('s1', 'incarnation-1', 'claude', 'SessionEnd')
+    expect(started).toEqual(['s1'])
+    expect(stopped).toEqual(['s1'])
+  })
+
+  it('has no owner route, socket method or CLI command that reaches the answer function', () => {
+    expect(Object.values(METHOD_REGISTRY).filter((method) => String(method).startsWith('answer'))).toEqual([])
+    const server = readFileSync(join(__dirname, 'control-server.ts'), 'utf8')
+    expect(server).not.toMatch(/answerAttention/)
+    expect([...server.matchAll(/case '(answer\.[^']*)'/g)].map((match) => match[1])).toEqual(['answer.take'])
+    const service = readFileSync(join(__dirname, 'companion-service.ts'), 'utf8')
+    // The engine's answer is called from answerAttention alone; the owner route and socket handlers never name it.
+    expect([...service.matchAll(/this\.answers\.answer\(/g)]).toHaveLength(1)
+    const cli = readFileSync(join(__dirname, '..', '..', 'bin', 'bmn'), 'utf8')
+    expect([...cli.matchAll(/method: '(answer\.[^']*)'/g)].map((match) => match[1])).toEqual(['answer.take'])
   })
 })

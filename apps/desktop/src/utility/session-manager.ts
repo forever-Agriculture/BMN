@@ -62,6 +62,7 @@ import { HostOutputQueue, type HostOutputQueueTransition } from './transport'
 import { TerminalByteFramer, type TerminalFrame } from './terminal-byte-framer'
 import { terminalGraphicsEnvironment, type TerminfoAsset } from './terminal-graphics'
 import { DecsetModeTracker } from './decset-modes'
+import { OutputTail, ScreenMirror } from './screen-mirror'
 import {
   agentCli,
   applyCapturedLaunchEnvironment,
@@ -266,6 +267,10 @@ interface LiveSession extends SessionIdentity {
   outputFramer: TerminalByteFramer
   /** The private modes this program has turned on, read from its own output as it streams. */
   decsetModes: DecsetModeTracker
+  /** The last output bytes, so a screen mirror started when an agent shows up can see what it drew. */
+  outputTail: OutputTail
+  /** A headless copy of the screen, only for sessions running an agent (Epic 30). */
+  mirror?: ScreenMirror | undefined
   undeliveredOutput: TerminalFrame[]
   undeliveredOutputState: UndeliveredOutputState
   exitComplete: Promise<void>
@@ -1208,6 +1213,7 @@ export class SessionManager {
       captureStartedAt,
       outputFramer: new TerminalByteFramer(),
       decsetModes: new DecsetModeTracker(),
+      outputTail: new OutputTail(),
       undeliveredOutput: [],
       undeliveredOutputState: {
         limitBytes: this.undeliveredOutputLimitBytes,
@@ -1520,7 +1526,26 @@ export class SessionManager {
       throw new HostControlError(ERROR_CODES.invalidArgument, 'Terminal dimensions are invalid')
     }
     session.pty.resize(params.cols, params.rows)
+    session.mirror?.resize(session.pty.cols, session.pty.rows)
     return { cols: session.pty.cols, rows: session.pty.rows }
+  }
+
+  /**
+   * The live session's screen mirror, started on first use from the recent output tail. BMN asks for it
+   * once an agent reports through its hooks; a plain shell never pays for a second parser.
+   */
+  screenMirror(sessionId: string, incarnationId?: string): ScreenMirror | undefined {
+    const live = this.sessions.get(sessionId)
+    if (!live || live.exited || (incarnationId !== undefined && live.incarnationId !== incarnationId)) return undefined
+    live.mirror ??= new ScreenMirror(live.pty.cols, live.pty.rows, live.outputTail.read())
+    return live.mirror
+  }
+
+  /** Stops the mirror when the agent that needed it has left the session; the tail keeps going. */
+  stopScreenMirror(sessionId: string): void {
+    const live = this.sessions.get(sessionId)
+    live?.mirror?.dispose()
+    if (live) live.mirror = undefined
   }
 
   detach(params: { attachmentId: string }): void {
@@ -1989,6 +2014,8 @@ export class SessionManager {
     // Read before anything is queued or dropped: the mode set must follow the program even when
     // the view is gone, because that is exactly when the next view will need it.
     session.decsetModes.read(bytes)
+    session.outputTail.push(bytes)
+    session.mirror?.write(bytes)
     this.deliverFrames(session, session.outputFramer.push(bytes))
   }
 
@@ -2010,6 +2037,8 @@ export class SessionManager {
     session.exited = true
     // The program is gone; its modes go with it, so nothing stale can reach a later view.
     session.decsetModes.clear()
+    session.mirror?.dispose()
+    session.mirror = undefined
     this.onSessionStateChange({
       kind: 'session-process-state-changed',
       sessionId: session.sessionId,

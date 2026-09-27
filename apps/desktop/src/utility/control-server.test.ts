@@ -134,7 +134,8 @@ function fakeHandlers(current: Map<string, string>) {
     withdrawAttention: vi.fn(async (): Promise<unknown> => ({ withdrawn: true })),
     resolveAttention: vi.fn(async (): Promise<unknown> => ({ resolved: true })),
     observeHookEvent: vi.fn(async (): Promise<unknown> => ({ recorded: true })),
-    submitInput: vi.fn(async (): Promise<void> => undefined)
+    submitInput: vi.fn(async (): Promise<void> => undefined),
+    takeAnswers: vi.fn(async (): Promise<unknown> => ({ answers: [] }))
   } satisfies ControlHandlers
 }
 
@@ -508,6 +509,20 @@ describe('control server validation', () => {
       type: 'permission', harness: 'claude', shape: 'permission', requestRef: null, toolUseId: null, tool: 'Bash', command: 'ls', cwd: null
     } }],
     ['missing resolution', 'attention.resolve', { requestKey: 'q' }],
+    ['evidence with an unknown key', 'attention.resolve', { requestKey: 'q', resolution: 'r', evidence: {
+      toolUseId: null, requestRef: null, answers: null, permission: null, tool: null, command: null, answered: true
+    } }],
+    ['evidence with an unknown permission word', 'attention.withdraw', { requestKey: 'q', evidence: {
+      toolUseId: null, requestRef: 'per_1', answers: null, permission: 'always', tool: null, command: null
+    } }],
+    ['evidence with an empty answer list', 'attention.resolve', { requestKey: 'q', resolution: 'r', evidence: {
+      toolUseId: null, requestRef: null, answers: [[]], permission: null, tool: null, command: null
+    } }],
+    ['answer.take waiting too long', 'answer.take', { wait: 26 }],
+    ['answer.take with a fractional wait', 'answer.take', { wait: 1.5 }],
+    ['answer.take naming a request', 'answer.take', { requestId: 'r1' }],
+    ['a method that would give an answer', 'answer.give', { requestId: 'r1' }],
+    ['an attention answer method', 'attention.answer', { requestId: 'r1' }],
     ['missing input key', 'input.submit', { text: 'ls' }],
     ['oversize text', 'input.submit', { text: 'x'.repeat(64 * 1024 + 1), idempotencyKey: 'k' }],
     ['non-boolean submit', 'input.submit', { text: 'ls', submit: 'yes', idempotencyKey: 'k' }],
@@ -656,6 +671,34 @@ describe('control server validation', () => {
     expect(fixture.handlers.openAttention).toHaveBeenLastCalledWith({
       sessionId: 'session-1', incarnationId: 'incarnation-1', requestKey: 'q', kind: 'question', title: 'Which database?', prompt
     })
+  })
+
+  it('passes validated evidence with a resolve and a withdraw', async () => {
+    const fixture = await serverFixture()
+    const client = await authenticated(fixture, sessionToken(fixture))
+    const evidence = {
+      toolUseId: 'toolu_1', requestRef: null, answers: [['Postgres'], ['Later']], permission: null, tool: null, command: null
+    }
+    await client.request('attention.resolve', { requestKey: 'claude:question', resolution: 'answered in the terminal', evidence })
+    expect(fixture.handlers.resolveAttention).toHaveBeenLastCalledWith({
+      sessionId: 'session-1', requestKey: 'claude:question', resolution: 'answered in the terminal', evidence
+    })
+    const denied = { ...evidence, toolUseId: null, requestRef: 'per_1', answers: null, permission: 'denied' }
+    await client.request('attention.withdraw', { requestKey: 'opencode:permission', evidence: denied })
+    expect(fixture.handlers.withdrawAttention).toHaveBeenLastCalledWith({ sessionId: 'session-1', requestKey: 'opencode:permission', evidence: denied })
+  })
+
+  it('lets a session collect only its own answers, and never with the owner token', async () => {
+    const fixture = await serverFixture()
+    const session = await authenticated(fixture, sessionToken(fixture))
+    expect((await session.request('answer.take', { wait: 3 })).error).toBeUndefined()
+    expect(fixture.handlers.takeAnswers).toHaveBeenLastCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', waitMs: 3000 })
+    expect((await session.request('answer.take', {})).error).toBeUndefined()
+    expect(fixture.handlers.takeAnswers).toHaveBeenLastCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', waitMs: 0 })
+    expect((await session.request('answer.take', { sessionId: 'session-2' })).error).toBeDefined()
+    const owner = await authenticated(fixture, fixture.auth.ownerToken)
+    expect((await owner.request('answer.take', {})).error).toMatchObject({ data: { code: ERROR_CODES.unauthorized } })
+    expect(fixture.handlers.takeAnswers).toHaveBeenCalledTimes(2)
   })
 
   it('opens and resolves without an origin, which stores no provenance', async () => {

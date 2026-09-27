@@ -18,8 +18,8 @@ payloads and screen text are the test fixtures in
 | One question, one choice | **VERIFIED** keys | **VERIFIED** keys (Plan mode only) | **VERIFIED** API |
 | Several questions in one dialog | **VERIFIED** keys | **VERIFIED** keys | **VERIFIED** API (same call) |
 | Async question | — | **UNSUPPORTED**: no picker; printed as a message, answered by typing a prompt | — |
-| Permission, allow once | **VERIFIED** keys | out of scope (Auto Review) | **VERIFIED** API |
-| Permission, deny | **VERIFIED** keys, never confirmed | out of scope | **VERIFIED** API, only when it is the session's single pending permission |
+| Permission, allow once | **VERIFIED** keys (`Bash` only; other tools not driven) | out of scope (Auto Review) | **VERIFIED** API |
+| Permission, deny | **VERIFIED** keys (`Bash` only), never confirmed | out of scope | **VERIFIED** API, only when it is the session's single pending permission |
 | Sandbox network prompt | **UNSUPPORTED**: not driven (sandbox off on this machine); prompt-less, so no buttons | — | — |
 | Multi-select | **UNSUPPORTED** (version 1) | **UNSUPPORTED** | **UNSUPPORTED** |
 | Typed ("Other") answer | **UNSUPPORTED** (version 1) | **UNSUPPORTED** | **UNSUPPORTED** |
@@ -95,9 +95,43 @@ payloads and screen text are the test fixtures in
 
 ## How BMN uses this
 
-- Keys go only into the dialog the card was sent for, after BMN's screen mirror shows it (question
-  and chosen label, or the tool title and command), and only while the request is open at the same
-  revision and dialog epoch. See Epic 30, decisions 3–5.
-- OpenCode answers travel to the session's own plugin through the control socket's read-and-consume
-  `answer.take`; the plugin posts the reply to its own server.
-- `confirmed` requires the proofs above; everything else is *sent, not confirmed*.
+The answer function lives in the utility process (`apps/desktop/src/utility/remote-answer.ts`) and is
+called only by the Telegram tap handler. No control-socket method, owner route or `bmn` command
+reaches it (a unit test reads the sources to keep it that way).
+
+- **Routes.** Claude and Codex questions of shape `choice` (single-select, at most 8 options), and
+  Claude `Bash` permissions with an exact command, are answered by keys. OpenCode questions and
+  permissions are answered through the plugin. Every other shape is refused as `unsupported`, so its
+  card never shows buttons. Claude permissions for other tools (`Edit`, `Write`, …) were not driven
+  and are not recognised.
+- **Screen mirror.** Each live session keeps its last 64 KB of output. A headless terminal copy
+  (`screen-mirror.ts`) starts only once a Claude or Codex hook reports from that session, seeded from
+  that tail, and stops on the agent's `SessionEnd` or the session's exit. Measured 2026-09-27: one
+  50 MB flood through the session manager cost a median 1,963 ms CPU without a mirror and 2,932 ms
+  with one (1.49×), above the 1.10× budget, so plain shells never pay for it.
+- **Recognition.** A dialog is on screen only when its option list appears in order at one column,
+  followed by the harness's own extra entry (`Type something.` for Claude, `None of the above` for
+  Codex), with the question text directly above it. Codex steps must also show `Question i/N`.
+  Claude's review must list exactly the answers sent. A permission must show `Bash command`, the
+  exact command ending on a row boundary, and `Do you want to proceed?`, with the digits of the
+  plain `Yes` and `No` entries read from the screen. Frame and cursor glyphs and whitespace runs are
+  normalised; soft-wrapped rows are joined.
+- **Epoch.** Every open, resolve or withdraw a hook sends for a session raises the epoch of each of
+  its followed requests before the store is touched, and so does the recognised dialog leaving the
+  screen. A card is bound to the epoch at send time. This is what refuses an allow for a prompt whose
+  identical successor now shows. To the store the successor is the same request at the same revision.
+- **Checks before a key.** The request is claimed before any await, so a second tap loses as
+  `claimed`. Then: the process that asked is live (`gone`); revision and epoch match (`changed`); the
+  shape has a route and the answer fits it (`unsupported`); permissions are allowed by the
+  **Answer permission prompts from Telegram** setting (`permissions-off`); an OpenCode deny is the
+  session's only pending permission (`unsupported`); and the dialog is on screen with that choice
+  (`not-on-screen`). Each question of a stepped dialog is re-checked just before its own key. A
+  failure after the first key stops at once as `partial`.
+- **OpenCode.** The answer waits for the session's own plugin to collect it through `answer.take`
+  (5 s, else `not-delivered` and nothing was sent). The plugin posts it to its own server.
+- **Outcomes.** `confirmed` only when the harness reports exactly that answer within 10 s: the
+  question tool's answers, the permitted tool with the same input, or OpenCode's replied event for
+  that request id. The request then closes as answered by `telegram`. Otherwise the answer is
+  `sent-unconfirmed`: never retried, and still upgraded to `confirmed` if the report comes within ten
+  minutes. A Claude deny is always `sent-unconfirmed`, and BMN closes its request itself with
+  "Deny sent from Telegram, not confirmed", because no hook will.

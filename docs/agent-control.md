@@ -36,6 +36,9 @@ bmn ask <request-key> <title> [--kind K] [--body B] [--expires ISO]
 bmn withdraw <request-key>                     Withdraw your request
 bmn resolve <request-key> <resolution>         Mark a request resolved
 bmn send <text> [--submit] [--key K]           Paste text into the session; --submit presses Enter
+bmn answer take [--wait S]                     Collect, once, the answers BMN decided from a Telegram tap
+                                               for this session's own OpenCode requests (BMN's plugin
+                                               runs this); waits up to S seconds, 0-25
 bmn hook <agent>                               Turn an agent hook event on stdin into Needs you requests
 bmn hooks print opencode                       Print the shipped OpenCode TypeScript plugin
 bmn hooks check [agent] [--file PATH]          Say which of BMN's hook entries each hook file carries
@@ -151,11 +154,11 @@ agent, and they do nothing outside BMN.
 | Claude `Notification` (permission prompt) | Opens a `permission` request, unless a question or permission of that session already carries its dialog: Claude sends this notice about 6 s into any unanswered prompt, questions included |
 | Claude `Notification` (question dialog) | Opens a `question` request |
 | Codex `PreToolUse` for `request_user_input` or `request_user_input_async` | Opens a `question` request with the question text and choices (blocking and async are different shapes) |
-| OpenCode `permission.asked`, `permission.replied` | Opens, answers or withdraws a `permission` request, carrying the request id and the exact command from the event's `metadata`; subagents and other sessions in the same process share their own `subagent-permission` request |
-| OpenCode `question.asked`, `question.replied`, `question.rejected` | Opens, answers or withdraws a `question` request; subagents and other sessions in the same process share their own `subagent-question` request |
+| OpenCode `permission.asked`, `permission.replied` | Opens, answers or withdraws a `permission` request, carrying the request id and the exact command from the event's `metadata`; subagents and other sessions in the same process share their own `subagent-permission` request. `permission.replied` carries evidence naming its request id and reply, and closes only the request holding that id: OpenCode keeps one slot for several pending permissions |
+| OpenCode `question.asked`, `question.replied`, `question.rejected` | Opens, answers or withdraws a `question` request; subagents and other sessions in the same process share their own `subagent-question` request. `question.replied` carries evidence with its request id and answers |
 | OpenCode main `session.status` busy, `session.idle`, `session.error` | Clears main prompts, or opens a finished-turn or error notice. Main idle also withdraws subagent requests; main busy leaves them open. Subagent status, idle and errors are not reported |
 | OpenCode main `session.created`, `tui.session.select`, `session.deleted` | Captures the conversation or clears the plugin's requests, including subagent requests on select/delete. These events from subagents are ignored |
-| `PostToolUse`, Claude `PostToolUseFailure`, `UserPromptSubmit` | Clears the turn notice. Claude resolves open prompts after a tool completes or fails. Codex resolves permission after any tool and resolves a question only after synchronous `request_user_input` or `UserPromptSubmit`; an async question stays open while later tools run |
+| `PostToolUse`, Claude `PostToolUseFailure`, `UserPromptSubmit` | Clears the turn notice. Claude resolves open prompts after a tool completes or fails. Codex resolves permission after any tool and resolves a question only after synchronous `request_user_input` or `UserPromptSubmit`; an async question stays open while later tools run. A `PostToolUse` resolve carries **evidence**: the chosen answers of the question tool in question order, or the tool and exact input that ran (see below) |
 | `Stop` | Withdraws open prompts and opens a `notice` that the turn finished, with the last message. Codex keeps a queued async question open until the owner submits input. When Claude still has background tasks or a scheduled wake-up, it opens nothing: the agent resumes without you |
 | `SessionStart` (not after compaction), `SessionEnd` | Withdraws everything the hook opened |
 | `SessionStart` with `startup`, `resume`, `clear` or `fork` | Also reports the conversation the process is now in, so Resume reopens that one |
@@ -264,7 +267,11 @@ shipped with this CLI. Both `plugin/` and `plugins/` load in the installed binar
 existing `plugin/` folder and otherwise installs into `plugins/`. `check` compares `bmn.ts` byte for
 byte and reports `wired`, `wired (older wording)` or `missing`. `install` backs up an older file
 before replacing it. The plugin forwards OpenCode events to `bmn hook opencode` only inside BMN;
-the hook log shows what actually arrived. This was checked against OpenCode CLI 1.18.31 and locally
+the hook log shows what actually arrived. While a question or permission of the plugin's own main
+session waits, it also runs `bmn answer take --wait 25` in a loop and posts any answer it receives to
+its own OpenCode server by request id (`question/<id>/reply`, `permission/<id>/reply`); it stops when
+nothing waits and after three failed calls, so an absent BMN costs nothing. A plugin installed before
+Epic 30 shows as `wired (older wording)` until `bmn hooks install opencode` replaces it. This was checked against OpenCode CLI 1.18.31 and locally
 installed plugin SDK 1.4.9 on 2026-09-22; real interactive event delivery is still unverified.
 
 For Claude and Codex, `install` copies the file to `<file>.bmn-backup-<timestamp>`, adds the missing entries next to the
@@ -509,6 +516,13 @@ bmn hook is not yours
 
 ## What the app enforces
 
+- Nothing on the socket can answer an agent's prompt, for any token: the owner token is a file every
+  process of the owner's user can read, agents included. Answers from the phone are decided inside
+  the app from a Telegram tap (Epic 30). `answer.take` only hands a session's own OpenCode plugin
+  the answers already decided for that session's open requests, consuming them, and it refuses the
+  owner token. Hook **evidence** on a resolve or withdraw (`toolUseId`, `requestRef`, `answers`,
+  `permission`, `tool`, `command`, all bounded and validated) can only mark an answer BMN sent as
+  confirmed; it never makes one.
 - Requests are validated for schema and size before anything runs.
 - A session token can publish, report and send only for its own session, and only while that
   process incarnation is current. `handoff.prepare` is its one exception: it may name a destination

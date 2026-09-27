@@ -217,3 +217,51 @@ export function mergeSamePrompt(stored: AttentionPrompt, incoming: AttentionProm
     toolUseId: stored.toolUseId ?? incoming.toolUseId
   }
 }
+
+/**
+ * What a harness reported about how a prompt ended, sent with the hook's resolve or withdraw. It proves
+ * an answer landed only when it names that answer (docs/remote-answers.md, "Proof of an answer"); it can
+ * never answer anything itself.
+ */
+export interface AttentionEvidence {
+  /** The tool call the report is about (Claude and Codex `tool_use_id`). */
+  toolUseId: string | null
+  /** The harness's request id (OpenCode `requestID`). */
+  requestRef: string | null
+  /** The chosen label per question, in the order the prompt asked them; null when the report names none. */
+  answers: string[][] | null
+  /** What the harness did with a permission; null when the report is not about one. */
+  permission: 'allowed' | 'denied' | null
+  /** The tool that ran and exactly what it acted on, for a permission the report cannot name by id. */
+  tool: string | null
+  command: string | null
+}
+
+const EVIDENCE_KEYS = ['toolUseId', 'requestRef', 'answers', 'permission', 'tool', 'command']
+
+/** Validates the evidence a hook sent, with the same bounds a prompt has. */
+export function parseAttentionEvidence(value: unknown): Parsed<AttentionEvidence> {
+  try {
+    if (!isRecord(value) || !hasExactKeys(value, EVIDENCE_KEYS)) throw new PromptError('evidence has the wrong shape')
+    let answers: string[][] | null = null
+    if (value.answers !== null) {
+      answers = list(value.answers, 'evidence answers', ATTENTION_PROMPT_LIMITS.questions).map((labels) =>
+        list(labels, 'evidence labels', ATTENTION_PROMPT_LIMITS.options).map((label) =>
+          text(label, 'evidence label', ATTENTION_PROMPT_LIMITS.label)))
+    }
+    return {
+      ok: true,
+      value: {
+        toolUseId: nullableText(value.toolUseId, 'evidence toolUseId', ATTENTION_PROMPT_LIMITS.identifier),
+        requestRef: nullableText(value.requestRef, 'evidence requestRef', ATTENTION_PROMPT_LIMITS.identifier),
+        answers,
+        permission: value.permission === null ? null : oneOf(value.permission, 'evidence permission', ['allowed', 'denied'] as const),
+        tool: nullableText(value.tool, 'evidence tool', ATTENTION_PROMPT_LIMITS.tool),
+        command: nullableText(value.command, 'evidence command', ATTENTION_PROMPT_LIMITS.command, true)
+      }
+    }
+  } catch (error) {
+    if (error instanceof PromptError) return { ok: false, error: error.message }
+    throw error
+  }
+}

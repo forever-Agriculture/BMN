@@ -12,8 +12,10 @@ import {
   hasDisallowedHandoffControl,
   isHookEventName,
   isProtocolErrorCode,
+  parseAttentionEvidence,
   parseAttentionPrompt,
   type AttentionKind,
+  type AttentionEvidence,
   type AttentionPrompt,
   type ConversationObservationSource,
   type HookEventAgent,
@@ -94,13 +96,20 @@ export interface ControlHandlers {
     source: ConversationObservationSource
     transcriptPath?: string
   }): Promise<unknown>
-  withdrawAttention(p: { sessionId: string; requestKey: string; origin?: string }): Promise<unknown>
+  withdrawAttention(p: { sessionId: string; requestKey: string; origin?: string; evidence?: AttentionEvidence }): Promise<unknown>
   resolveAttention(p: {
     sessionId: string
     requestKey: string
     resolution: string
     origin?: string
+    /** What the harness reported about how the prompt ended; it can prove an answer, never make one. */
+    evidence?: AttentionEvidence
   }): Promise<unknown>
+  /**
+   * Hands a session's OpenCode plugin the answers BMN already decided from a Telegram tap, consuming them.
+   * Only for the session's own live process; nothing here can create or change an answer.
+   */
+  takeAnswers(p: { sessionId: string; incarnationId: string | null; waitMs: number }): Promise<unknown>
   /** One hook event, recorded so the owner can see which events arrived; it changes nothing by itself. */
   observeHookEvent(p: {
     sessionId: string
@@ -186,6 +195,8 @@ const JSONRPC_SERVER_ERROR = -32000
 const MAX_INPUT_TEXT_BYTES = 64 * 1024
 const MAX_ERROR_MESSAGE_LENGTH = 500
 const CLOSE_GRACE_MS = 1000
+/** How long one `answer.take` may wait for an answer; the CLI's own deadline is longer. */
+export const MAX_ANSWER_WAIT_SECONDS = 25
 const REQUEST_KEYS = ['jsonrpc', 'id', 'method', 'params']
 const PROGRESS_STATES: readonly ProgressState[] = [
   'running', 'waiting', 'blocked', 'claimed-done', 'verified', 'failed', 'unknown'
@@ -301,6 +312,14 @@ function readBoolean(params: Params, key: string): boolean | undefined {
   const value = params[key]
   if (value === undefined || typeof value === 'boolean') return value
   throw invalid(`${key} must be a boolean`)
+}
+
+/** Evidence a hook sent with a resolve or withdraw; malformed evidence is refused, not dropped. */
+function readEvidence(params: Params): AttentionEvidence | undefined {
+  if (params.evidence === undefined) return undefined
+  const parsed = parseAttentionEvidence(params.evidence)
+  if (!parsed.ok) throw invalid(parsed.error)
+  return parsed.value
 }
 
 function requireEnum<T extends string>(params: Params, key: string, allowed: readonly T[]): T {
@@ -886,28 +905,46 @@ export class ControlServer {
         }
       }
       case 'attention.withdraw': {
-        const params = closedParams(rawParams, ['sessionId', 'requestKey', 'origin'])
+        const params = closedParams(rawParams, ['sessionId', 'requestKey', 'origin', 'evidence'])
         const requestKey = requireText(params, 'requestKey', RULES.requestKey)
         if (requestKey.startsWith('handoff:') && scope.kind !== 'session') {
           throw unauthorized('Only the source session may withdraw its handoff')
         }
         const origin = this.usableOrigin(params, scope, method, handlers)
+        const evidence = readEvidence(params)
         const sessionId = this.target(scope, params)
-        return handlers.withdrawAttention({ sessionId, requestKey, ...(origin === undefined ? {} : { origin }) })
+        return handlers.withdrawAttention({
+          sessionId,
+          requestKey,
+          ...(origin === undefined ? {} : { origin }),
+          ...(evidence === undefined ? {} : { evidence })
+        })
       }
       case 'attention.resolve': {
-        const params = closedParams(rawParams, ['sessionId', 'requestKey', 'resolution', 'origin'])
+        const params = closedParams(rawParams, ['sessionId', 'requestKey', 'resolution', 'origin', 'evidence'])
         const requestKey = requireText(params, 'requestKey', RULES.requestKey)
         if (requestKey.startsWith('handoff:')) throw invalid('Deliver or discard the handoff to resolve it')
         const resolution = requireText(params, 'resolution', RULES.resolution)
         const origin = this.usableOrigin(params, scope, method, handlers)
+        const evidence = readEvidence(params)
         const sessionId = this.target(scope, params)
         return handlers.resolveAttention({
           sessionId,
           requestKey,
           resolution,
-          ...(origin === undefined ? {} : { origin })
+          ...(origin === undefined ? {} : { origin }),
+          ...(evidence === undefined ? {} : { evidence })
         })
+      }
+      case 'answer.take': {
+        // Read-and-consume only: the answers were decided inside the app from a Telegram tap (Epic 30, decision 5).
+        const params = closedParams(rawParams, ['wait'])
+        if (scope.kind !== 'session') throw unauthorized('Only a session may collect its own answers')
+        const wait = params.wait ?? 0
+        if (typeof wait !== 'number' || !Number.isInteger(wait) || wait < 0 || wait > MAX_ANSWER_WAIT_SECONDS) {
+          throw invalid(`wait must be a whole number of seconds from 0 to ${MAX_ANSWER_WAIT_SECONDS}`)
+        }
+        return handlers.takeAnswers({ sessionId: scope.sessionId, incarnationId: scope.incarnationId, waitMs: wait * 1000 })
       }
       case 'hook.observe': {
         // Observations are diagnostic; the repeat watch may open or withdraw its one notice.

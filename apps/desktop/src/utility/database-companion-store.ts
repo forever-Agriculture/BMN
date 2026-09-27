@@ -305,6 +305,8 @@ export function closeAttention(
   target: ({ requestId: string } | { sessionId: string; requestKey: string }) & {
     expectedKind?: AttentionKind
     expectedRevision?: number
+    /** The harness request a report is about; a request holding a different one is not the one it closed. */
+    expectedRequestRef?: string
   },
   state: Exclude<AttentionState, 'open'>,
   resolution: string | null,
@@ -319,6 +321,10 @@ export function closeAttention(
         "SELECT * FROM attention_request WHERE session_id = ? AND request_key = ? AND state = 'open'"
   ).get(target.sessionId, target.requestKey)) as AttentionRow | undefined
   if (!row) throw new WorkspaceStoreError(ERROR_CODES.notFound, 'No matching open attention request')
+  const heldRef = target.expectedRequestRef === undefined ? null : readStoredPrompt(row.prompt_json ?? null)?.requestRef ?? null
+  if (heldRef !== null && heldRef !== target.expectedRequestRef) {
+    throw new WorkspaceStoreError(ERROR_CODES.notFound, 'No matching open attention request')
+  }
   if (
     (target.expectedKind !== undefined && row.kind !== target.expectedKind) ||
     (target.expectedRevision !== undefined && row.revision !== target.expectedRevision)
