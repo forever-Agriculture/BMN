@@ -34,6 +34,8 @@ function standIn(bin, name, store, table) {
   writeFileSync(path, `#!${process.execPath}
 const Database = require(${JSON.stringify(sqlitePath)})
 const id = process.argv.at(${name === 'codex' ? -1 : -2})
+// One old OpenCode session is open elsewhere, so the settled row shows its failure line.
+if (id.endsWith('000XIFvU67lmdh')) { console.error('session is open elsewhere'); process.exit(1) }
 const db = new Database(${JSON.stringify(store)})
 db.prepare('DELETE FROM ${table} WHERE id = ?').run(id)
 db.close()
@@ -185,6 +187,11 @@ setTimeout(() => {}, 600_000)
     phase(`settled ${JSON.stringify(settledStatus.agents)}`)
     await page.locator('.preferences-dialog [aria-label="Close Preferences"]').click()
     const settled = await shoot(page, 'settled')
+    await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(540, 900))
+    await page.waitForTimeout(300)
+    await page.locator('.history-section').screenshot({ path: join(evidenceDirectory, 'settled-narrow.png') })
+    await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 900))
+    await page.waitForTimeout(300)
 
     phase('a shorter limit waits for confirmation')
     await page.locator('.history-section [role="radio"]', { hasText: '7 days' }).first().click()

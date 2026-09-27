@@ -109,7 +109,7 @@ export function confirmSentence(status: AgentHistoryStatus): string {
 export function keepHelp(status: AgentHistoryStatus): string {
   const confirmed = status.confirmedKeepDays
   if (confirmed !== undefined && confirmed !== status.keepDays) {
-    return `${keepLabel(confirmed)} stays in force until you confirm ${keepLabel(status.keepDays)}`
+    return `${keepLabel(confirmed)} stays in force until you confirm ${keepLabel(status.keepDays)}.`
   }
   return 'Each agent deletes sessions untouched longer.'
 }
