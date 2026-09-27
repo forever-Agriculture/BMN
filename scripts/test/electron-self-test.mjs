@@ -60,6 +60,27 @@ const receiptContract = [
       restart.after?.rowFlag === '🇨🇳' && restart.after.rowChip === 'Claude' &&
       restart.stopped?.rowFlag === null && restart.stopped.modelRow === null
   }],
+  // Epic 30.2: the exact keys a phone answer typed into each recorded dialog, and what came of it.
+  ['remoteAnswers', (receipt) => {
+    const row = receipt.remoteAnswers
+    const confirmed = (run, keys) => JSON.stringify(run?.keys) === JSON.stringify(keys) &&
+      run.outcome?.state === 'confirmed' && run.request?.resolvedBy === 'telegram'
+    return row?.readBack?.type === 'questions' && row.readBack.labels?.join('|') === 'JWT|Session cookies|OAuth only' &&
+      confirmed(row.single, ['2']) && confirmed(row.three, ['1', '2', '1', '1']) && confirmed(row.codexTwo, ['2', '1']) &&
+      confirmed(row.allowOnce, ['1']) && row.permissionsOff?.outcome?.reason === 'permissions-off' &&
+      row.permissionsOff.keys.length === 0 && row.denied?.outcome?.state === 'sent-unconfirmed' &&
+      JSON.stringify(row.denied.keys) === '["3"]' && row.allKeys === '212112113'
+  }],
+  // Story 30.3: the card edits a fake Bot API saw while it tapped a three-question dialog, in order.
+  ['telegramCards', (receipt) => {
+    const row = receipt.telegramCards
+    return row?.card?.parseMode === 'HTML' && row.card.header?.startsWith('❓ <b>') &&
+      JSON.stringify(row.sequence) === JSON.stringify([
+        'send:2', 'toast:Question 2 of 3', 'edit:2:In a follow-up', 'toast:Question 3 of 3',
+        'edit:2:<i>Nothing is sent until this answer.</i>', 'toast:Sending Postgres · Later · Staging…',
+        'edit:0:<i>Sending: Postgres · Later · Staging…</i>', 'edit:0:✓ <i>Sent: Postgres · Later · Staging</i>'
+      ]) && JSON.stringify(row.keys) === '["1","2","1","1"]' && row.request?.resolvedBy === 'telegram'
+  }],
   ['sixelCsp', (receipt) => receipt.cspProbe?.evalRefused === true &&
     receipt.cspProbe?.wasmAllowed === true],
   ['graphicsTerminfo', (receipt) => receipt.graphicsTerminfo?.sixelResolved === true &&
@@ -531,7 +552,7 @@ const receiptContract = [
     'survivalTable',
     (receipt) =>
       receipt.survivalTable?.rendererCrash?.liveProcesses === 4 &&
-      receipt.survivalTable.rendererCrash.incarnationRecords === 16 &&
+      receipt.survivalTable.rendererCrash.incarnationRecords === 17 &&
       receipt.survivalTable.rendererCrash.openRequestsBefore > 0 &&
       receipt.survivalTable.rendererCrash.openRequestsAfter ===
         receipt.survivalTable.rendererCrash.openRequestsBefore &&

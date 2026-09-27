@@ -883,11 +883,14 @@ describe('Telegram attention notifications', () => {
       state: 'polling', detail: '', lastPollAt: null, lastError: null, rejectedUpdates: 0
     }
 
-    await service['telegramNotify']('s1', 'request-1', 'Session needs you')
+    const record = await service['openAttention']({
+      sessionId: 's1', incarnationId: null, kind: 'question', title: 'Session needs you', requestKey: 'bind'
+    })
+    await service['cards'].page(record)
 
     expect(COMPANION_OPERATIONS.getTelegramMessage(database, 77)).toEqual({
       sessionId: 's1',
-      requestId: 'request-1',
+      requestId: record.requestId,
       incarnationId: 'incarnation-1'
     })
   })
@@ -914,7 +917,7 @@ describe('Telegram attention notifications', () => {
     await service['openAttention']({ ...prompt, requestKey: 'claude:permission' })
     await vi.advanceTimersByTimeAsync(60_000)
 
-    expect(sent).toEqual(['● Session needs you (permission)\nClaude wants to use Bash\n\nReply to this message to answer.'])
+    expect(sent).toEqual(['🔐 <b>Session</b>\n<b>Claude wants to use Bash</b>\n\n<i>Reply to this message to answer.</i>'])
   })
 
   it('pages only once the owner is away, never for a prompt their phone already got, and reports exits only away', async () => {
@@ -947,8 +950,8 @@ describe('Telegram attention notifications', () => {
     await vi.advanceTimersByTimeAsync(60_000)
 
     expect(sent).toEqual([
-      '● Session needs you (permission)\nClaude wants to use Bash\n\nReply to this message to answer.',
-      '■ A session exited'
+      '🔐 <b>Session</b>\n<b>Claude wants to use Bash</b>\n\n<i>Reply to this message to answer.</i>',
+      '■ <b>Session</b> exited'
     ])
     await expect(service.route(METHOD_REGISTRY.presenceSet, { away: 'yes' })).rejects.toThrow('away must be')
   })
@@ -1038,6 +1041,44 @@ describe('Telegram attention notifications', () => {
     expect(COMPANION_OPERATIONS.getAttention(database, request.requestId)).toMatchObject({
       state: 'answered', resolution: 'current answer'
     })
+  })
+
+  it('keeps a reply to an open structured dialog as a draft even with automatic replies on (Story 30.3)', async () => {
+    const sent: string[] = []
+    service['telegram'] = {
+      sendMessage: async (message: string) => {
+        sent.push(message)
+        return { messageId: sent.length }
+      }
+    } as unknown as TelegramConnector
+    await service.sessionsChanged()
+    COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', {
+      enabled: true, allowedChatId: 1, allowedUserId: null,
+      notifyOn: 'attention-and-exit', autoSubmitReplies: true
+    }, now)
+    const request = COMPANION_OPERATIONS.openAttention(database, {
+      sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'question',
+      kind: 'question', title: 'Claude asks: Which auth method?',
+      prompt: {
+        type: 'questions', harness: 'claude', shape: 'multi-select', requestRef: null, toolUseId: 'toolu_1',
+        questions: [{ id: null, header: 'Auth', text: 'Which auth method?', multiSelect: true,
+          options: [{ label: 'JWT', description: null }, { label: 'Cookies', description: null }] }]
+      }
+    }, 'telegram-structured-request', now)
+    COMPANION_OPERATIONS.putTelegramMessage(database, 77, 's1', request.requestId, 'incarnation-1', now)
+
+    await service['handleTelegramReply']({
+      updateId: 90, chatId: 1, fromUserId: 1, messageId: 99, replyToMessageId: 77, text: 'JWT please', file: null
+    })
+
+    expect(writes).toEqual([])
+    expect(sent).toEqual([
+      'Saved as a draft in BMN. A typed reply cannot pick an option in this dialog: tap a button or answer at the laptop.'
+    ])
+    expect(COMPANION_OPERATIONS.getAttention(database, request.requestId)).toMatchObject({ state: 'open' })
+    expect(COMPANION_OPERATIONS.listDrafts(database)).toContainEqual(
+      expect.objectContaining({ sessionId: 's1', origin: 'telegram', state: 'draft', text: 'JWT please' })
+    )
   })
 
   it('keeps a handoff page reply as a source draft even when automatic replies are enabled', async () => {

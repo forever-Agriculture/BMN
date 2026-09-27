@@ -101,6 +101,7 @@ import type { FileReferenceFlowProbe } from '../renderer/src/file-reference-prob
 import type { VoiceFlowProbe } from '../renderer/src/voice-probe'
 import { installFileReferenceIpcHandlers } from './file-reference-ipc'
 import { createPresenceMonitor, readMutterIdleMs } from './presence-monitor'
+import { startFakeBotApi, type FakeBotApi } from './fake-bot-api'
 import { installVoiceIpcHandlers } from './voice-ipc'
 import {
   SPEECH_DETECTOR_FILE,
@@ -465,13 +466,24 @@ function bmnCliPath(): string {
     : join(app.getAppPath(), 'bin', 'bmn')
 }
 
+/** The self-test's Telegram: one local fake Bot API for the whole run, started before the first host. */
+const SELF_TEST_TELEGRAM_CHAT_ID = 424242
+let selfTestBotApi: Promise<FakeBotApi> | null = null
+function selfTestTelegram(): Promise<FakeBotApi> {
+  selfTestBotApi ??= startFakeBotApi(SELF_TEST_TELEGRAM_CHAT_ID, SELF_TEST_TELEGRAM_CHAT_ID)
+  return selfTestBotApi
+}
+
 async function launchHostWithChannel(): Promise<{
   client: PtyHostClient
   ready: HostReady
   applicationPort: MessagePortMain
 }> {
   const { hostEntry, repoRoot } = appPaths()
-  const client = await PtyHostClient.launch(hostEntry, hostEnvironment(repoRoot), {
+  const environment = process.argv.includes('--self-test')
+    ? { ...hostEnvironment(repoRoot), BMN_SELF_TEST_TELEGRAM_ORIGIN: (await selfTestTelegram()).origin }
+    : hostEnvironment(repoRoot)
+  const client = await PtyHostClient.launch(hostEntry, environment, {
     args: process.argv.includes('--self-test') ? ['--self-test-host'] : []
   })
   const ready = await client.ready
@@ -2128,6 +2140,77 @@ function writeOriginHarness(directory: string): string {
     "  if (scenario.model !== null) payload.model = scenario.model",
     "  const result = spawnSync('bmn', ['hook', 'claude'], { input: JSON.stringify(payload), env, encoding: 'utf8' })",
     "  writeFileSync(file('done-' + n), String(result.status))",
+    "}"
+  ])
+}
+
+/**
+ * Epic 30.2 stand-in agent. Each gate `fire-<scenario>` makes it draw one recorded dialog in raw mode,
+ * report it through the real `bmn hook`, and log every byte the terminal sends it, so the self-test
+ * proves exactly which keys a phone answer wrote. After the keys it reports the answer the way the
+ * harness does (`PostToolUse`), except Claude's deny, which reports nothing.
+ */
+function writeRemoteAnswerHarness(directory: string, fixtures: string): string {
+  return writeAcceptanceHarness(directory, 'remote-agent', [
+    "const fs = require('node:fs')",
+    `const fixtures = ${JSON.stringify(fixtures)}`,
+    "const read = (name) => JSON.parse(fs.readFileSync(fixtures + '/' + name, 'utf8'))",
+    "const screen = (name) => fs.readFileSync(fixtures + '/screens/' + name, 'utf8').replace(/\\s+$/, '').split('\\n')",
+    "let current = ['']",
+    "const draw = () => process.stdout.write('\\x1b[2J\\x1b[H' + current.slice(-(process.stdout.rows || 24)).join('\\r\\n'))",
+    "process.stdout.on('resize', draw)",
+    "const show = (name) => { current = name ? screen(name) : ['']; draw() }",
+    "const hook = (agent, name, patch) => spawnSync('bmn', ['hook', agent], { input: JSON.stringify({ ...read(name), ...patch }), encoding: 'utf8' }).status",
+    "const queue = []",
+    "let waiter = null",
+    "process.stdin.setRawMode(true)",
+    "process.stdin.on('data', (chunk) => {",
+    "  const text = chunk.toString('utf8')",
+    "  appendFileSync(file('keys.log'), JSON.stringify(text) + '\\n')",
+    "  for (const key of text) { if (waiter) { const next = waiter; waiter = null; next(key) } else queue.push(key) }",
+    "})",
+    "const keys = []",
+    "const take = async () => { const key = queue.length ? queue.shift() : await new Promise((resolve) => { waiter = resolve }); keys.push(key); return key }",
+    "for (const scenario of ['single', 'three', 'codex', 'off', 'allow', 'deny', 'card']) {",
+    "  await wait('fire-' + scenario)",
+    "  keys.length = 0",
+    "  if (scenario === 'single') {",
+    "    const ask = read('claude/ask-single.pre-tool-use.json')",
+    "    show('claude-single-200.txt'); hook('claude', 'claude/ask-single.pre-tool-use.json')",
+    "    writeFileSync(file('opened-' + scenario), '')",
+    "    const question = ask.tool_input.questions[0]",
+    "    const label = question.options[Number(await take()) - 1].label",
+    "    show(null)",
+    "    hook('claude', 'claude/ask-single.post-tool-use.json', { tool_use_id: ask.tool_use_id, tool_response: { answers: { [question.question]: label } } })",
+    "  } else if (scenario === 'three' || scenario === 'card') {",
+    "    const ask = read('claude/ask-three.pre-tool-use.json')",
+    "    show('claude-three-step1.txt'); hook('claude', 'claude/ask-three.pre-tool-use.json')",
+    "    writeFileSync(file('opened-' + scenario), '')",
+    "    const answers = {}",
+    "    for (const [index, next] of ['claude-three-step2.txt', 'claude-three-step3.txt', 'claude-three-review.txt'].entries()) {",
+    "      const question = ask.tool_input.questions[index]",
+    "      answers[question.question] = question.options[Number(await take()) - 1].label",
+    "      show(next)",
+    "    }",
+    "    if (await take() === '1') { show(null); hook('claude', 'claude/ask-three.post-tool-use.json', { tool_use_id: ask.tool_use_id, tool_response: { answers } }) }",
+    "  } else if (scenario === 'codex') {",
+    "    const ask = read('codex/ask-two.pre-tool-use.json')",
+    "    show('codex-two-step1.txt'); hook('codex', 'codex/ask-two.pre-tool-use.json')",
+    "    writeFileSync(file('opened-' + scenario), '')",
+    "    const byId = {}",
+    "    for (const [index, next] of ['codex-two-step2.txt', null].entries()) {",
+    "      const question = ask.tool_input.questions[index]",
+    "      byId[question.id] = { answers: [question.options[Number(await take()) - 1].label] }",
+    "      show(next)",
+    "    }",
+    "    hook('codex', 'codex/ask-two.post-tool-use.json', { tool_use_id: ask.tool_use_id, tool_response: JSON.stringify({ answers: byId }) })",
+    "  } else {",
+    "    show('claude-bash-permission.txt'); hook('claude', 'claude/bash.permission-request.json')",
+    "    writeFileSync(file('opened-' + scenario), '')",
+    "    if (scenario === 'allow' && await take() === '1') { show(null); hook('claude', 'claude/bash.post-tool-use.json') }",
+    "    if (scenario === 'deny' && await take() === '3') show('claude-bash-denied.txt')",
+    "  }",
+    "  writeFileSync(file('done-' + scenario), JSON.stringify(keys))",
     "}"
   ])
 }
@@ -4539,6 +4622,131 @@ async function runSelfTest(): Promise<void> {
         throw new Error(`model origin ${scenario.label} rendered wrongly: ${JSON.stringify(seen)}`)
       }
     }
+    // Epic 30.2: a phone answer reaches only the dialog that asked, with exactly the keys the owner would type.
+    console.error('[BMN] self-test phase: remote answers')
+    const answerDirectory = join(isolatedCwd, 'remote-answers')
+    const answerFixtures = join(repoRoot, 'apps', 'desktop', 'src', 'utility', 'test-fixtures', 'remote-answers')
+    const { session: answerSession } = await createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
+      name: 'Remote answers', cwd: isolatedCwd, executable: '/bin/bash',
+      argv: ['-c', writeRemoteAnswerHarness(answerDirectory, answerFixtures)], cols: 200, rows: 50 }, true)
+    await recoverApplicationRenderer(applicationWindow)
+    const answerRun = async (scenario: string, requestKey: string, answer: unknown) => {
+      writeFileSync(join(answerDirectory, `fire-${scenario}`), '')
+      await untilFileExists(join(answerDirectory, `opened-${scenario}`), `drew the ${scenario} dialog`)
+      // The stand-in's drawing reaches the mirror a moment after its hook returns.
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      const opened = (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
+        .find((row) => row.sessionId === answerSession.sessionId && row.requestKey === requestKey && row.state === 'open')
+      const { selfTestRemoteAnswer } = await client.request<{
+        selfTestRemoteAnswer: { outcome: { state: string; reason?: string; sent?: string[] } | null; request: AttentionRecord | null }
+      }>(METHOD_REGISTRY.healthGet, { selfTestRemoteAnswer: { sessionId: answerSession.sessionId, requestKey, answer } })
+      await untilFileExists(join(answerDirectory, `done-${scenario}`), `finished the ${scenario} dialog`)
+      if (existsSync(join(answerDirectory, 'error'))) {
+        throw new Error(`remote answer stand-in failed: ${readFileSync(join(answerDirectory, 'error'), 'utf8')}`)
+      }
+      const request = selfTestRemoteAnswer.request
+      return {
+        prompt: opened?.prompt ?? null,
+        outcome: selfTestRemoteAnswer.outcome,
+        keys: JSON.parse(readFileSync(join(answerDirectory, `done-${scenario}`), 'utf8')) as string[],
+        request: request ? { state: request.state, resolvedBy: request.resolvedBy, resolution: request.resolution } : null
+      }
+    }
+    const single = await answerRun('single', 'claude:question', { type: 'choices', choices: [1] })
+    const three = await answerRun('three', 'claude:question', { type: 'choices', choices: [0, 1, 0] })
+    const codexTwo = await answerRun('codex', 'codex:question', { type: 'choices', choices: [1, 0] })
+    const permissionsOff = await answerRun('off', 'claude:permission', { type: 'permission', decision: 'allow' })
+    await client.request(METHOD_REGISTRY.settingsPut, { section: 'telegram', value: {
+      ...(await client.request<AppSettings>(METHOD_REGISTRY.settingsGet, {})).telegram, answerPermissions: true } })
+    const allowOnce = await answerRun('allow', 'claude:permission', { type: 'permission', decision: 'allow' })
+    const denied = await answerRun('deny', 'claude:permission', { type: 'permission', decision: 'deny' })
+    await client.request(METHOD_REGISTRY.settingsPut, { section: 'telegram', value: {
+      ...(await client.request<AppSettings>(METHOD_REGISTRY.settingsGet, {})).telegram, answerPermissions: false } })
+    const allKeys = readFileSync(join(answerDirectory, 'keys.log'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as string).join('')
+    const remoteAnswers = {
+      readBack: single.prompt?.type === 'questions'
+        ? { type: single.prompt.type, harness: single.prompt.harness, labels: single.prompt.questions[0]?.options.map((option) => option.label) }
+        : null,
+      single, three, codexTwo, permissionsOff, allowOnce, denied,
+      // Every byte the stand-in ever received, across all six dialogs.
+      allKeys
+    }
+    console.error(`[BMN] self-test phase: remote answers ${JSON.stringify(remoteAnswers)}`)
+    const answered = (run: typeof single, keys: string[], sent: string[]) =>
+      JSON.stringify(run.keys) === JSON.stringify(keys) && run.outcome?.state === 'confirmed' &&
+      JSON.stringify(run.outcome.sent) === JSON.stringify(sent) && run.request?.resolvedBy === 'telegram'
+    if (!answered(single, ['2'], ['Session cookies']) || !answered(three, ['1', '2', '1', '1'], ['Postgres', 'Later', 'Staging']) ||
+      !answered(codexTwo, ['2', '1'], ['SQLite', 'Yes']) || !answered(allowOnce, ['1'], ['Allow once']) ||
+      permissionsOff.outcome?.state !== 'refused' || permissionsOff.outcome.reason !== 'permissions-off' || permissionsOff.keys.length !== 0 ||
+      denied.outcome?.state !== 'sent-unconfirmed' || JSON.stringify(denied.keys) !== '["3"]' || denied.request?.resolvedBy !== 'telegram' ||
+      allKeys !== '2' + '1211' + '21' + '1' + '3') {
+      throw new Error(`remote answers went wrong: ${JSON.stringify(remoteAnswers)}`)
+    }
+
+    // Story 30.3: the same three-question dialog, answered by tapping its Telegram card on a fake Bot API.
+    console.error('[BMN] self-test phase: telegram cards')
+    const bot = await selfTestTelegram()
+    const telegramBefore = (await client.request<AppSettings>(METHOD_REGISTRY.settingsGet, {})).telegram
+    await client.request(METHOD_REGISTRY.settingsPut, { section: 'telegram', value: { ...telegramBefore, enabled: true,
+      allowedChatId: SELF_TEST_TELEGRAM_CHAT_ID, allowedUserId: null, notifyOn: 'attention', autoSubmitReplies: false } })
+    await client.request(METHOD_REGISTRY.telegramConfigure, { token: '123456789:SELFTEST_fake_bot_token_not_real' })
+    const pollingBy = Date.now() + 15_000
+    while ((await client.request<{ state: string }>(METHOD_REGISTRY.telegramStatus, {})).state !== 'polling') {
+      if (Date.now() > pollingBy) throw new Error('the self-test Telegram connector never started polling')
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    const firstCall = bot.calls.length
+    bot.tapOn('Which database should store users?', [0, 1, 0])
+    await client.request(METHOD_REGISTRY.presenceSet, { away: true })
+    writeFileSync(join(answerDirectory, 'fire-card'), '')
+    // The page waits its 15 s before it is sent; the three taps and the delivery follow.
+    const cardBy = Date.now() + 60_000
+    while (!existsSync(join(answerDirectory, 'done-card'))) {
+      if (Date.now() > cardBy) throw new Error(`the card dialog never finished: ${JSON.stringify(bot.calls.slice(firstCall))}`)
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    const finishedBy = Date.now() + 15_000
+    const finalEdit = (): boolean => bot.calls.slice(firstCall).some((call) =>
+      call.method === 'editMessageText' && String(call.body.text).includes('✓ <i>Sent:'))
+    while (!finalEdit() && Date.now() < finishedBy) await new Promise((resolve) => setTimeout(resolve, 100))
+    const cardMessage = bot.calls.slice(firstCall).find((call) =>
+      call.method === 'sendMessage' && String(call.body.text).includes('Which database should store users?'))
+    const buttonsOf = (body: Record<string, unknown>): number =>
+      ((body.reply_markup as { inline_keyboard?: unknown[][] } | undefined)?.inline_keyboard ?? []).flat().length
+    const lastLine = (body: Record<string, unknown>): string => String(body.text ?? '').split('\n').pop() ?? ''
+    // Only this card's own messages: other sessions' pages may arrive when the owner turns away.
+    const cardCalls = cardMessage ? bot.calls.slice(bot.calls.indexOf(cardMessage)).filter((call) => call === cardMessage ||
+      call.method === 'answerCallbackQuery' || call.method === 'editMessageText' && call.body.message_id === cardMessage.messageId) : []
+    const cardRequest = (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
+      .filter((row) => row.sessionId === answerSession.sessionId && row.requestKey === 'claude:question')
+      .sort((left, right) => right.openedAt.localeCompare(left.openedAt))[0]
+    const telegramCards = {
+      card: cardMessage ? { parseMode: cardMessage.body.parse_mode, buttons: buttonsOf(cardMessage.body),
+        header: String(cardMessage.body.text).split('\n')[0] } : null,
+      sequence: cardCalls.map((call) => call.method === 'answerCallbackQuery'
+        ? `toast:${String(call.body.text)}`
+        : call.method === 'sendMessage' ? `send:${buttonsOf(call.body)}` : `edit:${buttonsOf(call.body)}:${lastLine(call.body)}`),
+      keys: JSON.parse(readFileSync(join(answerDirectory, 'done-card'), 'utf8')) as string[],
+      request: cardRequest ? { state: cardRequest.state, resolvedBy: cardRequest.resolvedBy } : null
+    }
+    console.error(`[BMN] self-test phase: telegram cards ${JSON.stringify(telegramCards)}`)
+    const expectedSequence = [
+      'send:2', 'toast:Question 2 of 3', 'edit:2:In a follow-up', 'toast:Question 3 of 3',
+      'edit:2:<i>Nothing is sent until this answer.</i>', 'toast:Sending Postgres · Later · Staging…',
+      'edit:0:<i>Sending: Postgres · Later · Staging…</i>', 'edit:0:✓ <i>Sent: Postgres · Later · Staging</i>'
+    ]
+    if (telegramCards.card?.parseMode !== 'HTML' || JSON.stringify(telegramCards.sequence) !== JSON.stringify(expectedSequence) ||
+      JSON.stringify(telegramCards.keys) !== '["1","2","1","1"]' || telegramCards.request?.resolvedBy !== 'telegram') {
+      throw new Error(`telegram cards went wrong: ${JSON.stringify(telegramCards)}`)
+    }
+    await client.request(METHOD_REGISTRY.settingsPut, { section: 'telegram', value: telegramBefore })
+    await client.request(METHOD_REGISTRY.telegramConfigure, { token: null })
+    reportPresence()
+
+    await client.request(METHOD_REGISTRY.sessionStop, { sessionId: answerSession.sessionId,
+      incarnationId: answerSession.lastProcess?.incarnationId, cause: 'explicit' })
+    stoppedBeforeRestartSessionIds.add(answerSession.sessionId)
+
     // Close details and return selection to the lifecycle fixture the restart checks expect.
     await applicationWindow.webContents.executeJavaScript(`(async () => {
       document.querySelector('.session-inspector .panel-heading button')?.click();
@@ -4553,7 +4761,8 @@ async function runSelfTest(): Promise<void> {
     // three synthetic sessions plus OpenCode Resume add four; the new OpenCode routing and repeat
     // fixtures add two more incarnations, and all are stopped again. Epic 29's model-origin run adds
     // one live incarnation that the application restart below interrupts.
-    if (afterRenderer.liveSessions !== 4 || afterRenderer.incarnationRecords !== 16) {
+    // Epic 30.2's remote-answer stand-in adds one more incarnation, stopped before this check.
+    if (afterRenderer.liveSessions !== 4 || afterRenderer.incarnationRecords !== 17) {
       throw new Error(`renderer restart duplicated or stopped a process: ${afterRenderer.liveSessions} live, ${afterRenderer.incarnationRecords} incarnations`)
     }
     // "What survives", renderer-crash row: the processes, the layout and the open requests outlive the view.
@@ -6402,6 +6611,8 @@ async function runSelfTest(): Promise<void> {
       terminalNotice,
       launchSetRepository,
       modelOrigin: { flags: modelOriginFlags, afterRestart: modelOriginAfterRestart },
+      remoteAnswers,
+      telegramCards,
       survivalTable: {
         rendererCrash: survivingRendererCrash,
         quit: {

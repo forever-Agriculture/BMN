@@ -519,5 +519,15 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
     sql: `
       ALTER TABLE attention_request ADD COLUMN prompt_json TEXT NULL CHECK (prompt_json IS NULL OR json_valid(prompt_json));
     `
+  },
+  {
+    // Epic 30.3: a page is a card edited in place, so its request revision, state and outcome base are kept.
+    version: 18,
+    sql: `
+      ALTER TABLE telegram_message ADD COLUMN revision INTEGER NULL;
+      ALTER TABLE telegram_message ADD COLUMN card_state TEXT NULL
+        CHECK (card_state IS NULL OR card_state IN ('buttons', 'open', 'sending', 'final'));
+      ALTER TABLE telegram_message ADD COLUMN card_json TEXT NULL CHECK (card_json IS NULL OR json_valid(card_json));
+    `
   }
 ])

@@ -6,6 +6,9 @@ import { setTimeout as delay } from 'node:timers/promises'
 
 const API_ORIGIN = 'https://api.telegram.org'
 const MESSAGE_CHAR_LIMIT = 4096
+/** Telegram delivers at most 64 bytes of callback data with a tap. */
+const CALLBACK_DATA_BYTES = 64
+const TOAST_CHARS = 200
 const DEFAULT_POLL_TIMEOUT_SECONDS = 25
 const POLL_GRACE_MS = 15_000
 const REQUEST_TIMEOUT_MS = 30_000
@@ -40,8 +43,32 @@ export interface InboundReply {
   } | null
 }
 
+/** A tap on a card button, from the allowed chat and sender. */
+export interface InboundTap {
+  updateId: number
+  callbackId: string
+  chatId: number
+  fromUserId: number
+  messageId: number
+  data: string
+}
+
+export interface InlineKeyboardButton {
+  text: string
+  callback_data: string
+}
+
+export interface CardMessageOptions {
+  replyToMessageId?: number
+  /** Sends the text as Telegram HTML; it must already fit the limit, because HTML cannot be cut safely. */
+  html?: boolean
+  keyboard?: InlineKeyboardButton[][] | null
+}
+
 export interface TelegramConnectorOptions {
   token: string
+  /** The Bot API origin; only the self-test host points it at a local fake. */
+  apiOrigin?: string
   allowedChatId: number
   /** null accepts any sender, but only when the allowed chat is a private chat. */
   allowedUserId: number | null
@@ -51,6 +78,8 @@ export interface TelegramConnectorOptions {
   isPidAlive?: (pid: number) => boolean
   offset: { get(): Promise<number | null>; set(next: number): Promise<void> }
   onReply(reply: InboundReply): Promise<void>
+  /** Must return quickly: the poll loop waits for it. */
+  onTap?(tap: InboundTap): Promise<void>
   onHealth(health: ConnectorHealth): void
   pollTimeoutSeconds?: number
   sleep?: (ms: number) => Promise<void>
@@ -78,7 +107,7 @@ export class TelegramConnectorError extends Error {
 
 type LockResult = { acquired: true; nonce: string } | { acquired: false; pid: number | null }
 
-type ParsedUpdate = { updateId: number; outcome: InboundReply | 'ignored' | 'rejected' }
+type ParsedUpdate = { updateId: number; outcome: InboundReply | { tap: InboundTap } | 'ignored' | 'rejected' }
 
 /** Shows at most four leading and four trailing characters, and fewer for short tokens. */
 export function maskToken(token: string): string {
@@ -230,6 +259,7 @@ function parseUpdate(
   allowedUserId: number | null
 ): ParsedUpdate {
   const updateId = update.update_id
+  if (isRecord(update.callback_query)) return parseTap(updateId, update.callback_query, allowedChatId, allowedUserId)
   const message = update.message
   if (!isRecord(message)) return { updateId, outcome: 'ignored' }
   const chat = message.chat
@@ -257,6 +287,31 @@ function parseUpdate(
   }
 }
 
+/** The chat and sender rules of a message apply to a tap: the chat of the card tapped, and who tapped it. */
+function parseTap(
+  updateId: number,
+  query: Record<string, unknown>,
+  allowedChatId: number,
+  allowedUserId: number | null
+): ParsedUpdate {
+  const message = query.message
+  const chat = isRecord(message) ? message.chat : null
+  const from = query.from
+  if (!isRecord(message) || !isRecord(chat) || chat.id !== allowedChatId) return { updateId, outcome: 'rejected' }
+  if (allowedUserId === null && chat.type !== 'private') return { updateId, outcome: 'rejected' }
+  if (!isRecord(from) || !isInteger(from.id)) return { updateId, outcome: 'rejected' }
+  if (allowedUserId !== null && from.id !== allowedUserId) return { updateId, outcome: 'rejected' }
+  if (!isText(query.id) || !isInteger(message.message_id)) return { updateId, outcome: 'rejected' }
+  const data = query.data
+  if (!isText(data) || Buffer.byteLength(data) > CALLBACK_DATA_BYTES) return { updateId, outcome: 'rejected' }
+  return {
+    updateId,
+    outcome: {
+      tap: { updateId, callbackId: query.id, chatId: allowedChatId, fromUserId: from.id, messageId: message.message_id, data }
+    }
+  }
+}
+
 function truncateMessage(text: string): string {
   if (text.length <= MESSAGE_CHAR_LIMIT) return text
   let end = MESSAGE_CHAR_LIMIT - 1
@@ -269,6 +324,7 @@ export class TelegramConnector {
   private readonly options: TelegramConnectorOptions
   private readonly lockPath: string
   private readonly pollTimeoutSeconds: number
+  private readonly apiOrigin: string
   private readonly now: () => Date
   private readonly isPidAlive: (pid: number) => boolean
   private current: ConnectorHealth = {
@@ -303,6 +359,7 @@ export class TelegramConnector {
     }
     this.options = options
     this.pollTimeoutSeconds = pollTimeoutSeconds
+    this.apiOrigin = options.apiOrigin ?? API_ORIGIN
     this.lockPath = join(options.lockDirectory, lockFileName(options.token))
     this.now = options.now ?? (() => new Date())
     this.isPidAlive = options.isPidAlive ?? defaultIsPidAlive
@@ -339,7 +396,7 @@ export class TelegramConnector {
     return { ...this.current }
   }
 
-  async sendMessage(text: string, options: { replyToMessageId?: number } = {}): Promise<{ messageId: number }> {
+  async sendMessage(text: string, options: CardMessageOptions = {}): Promise<{ messageId: number }> {
     if (typeof text !== 'string' || text.length === 0) {
       throw new TelegramConnectorError('invalid-argument', 'Telegram message text must not be empty')
     }
@@ -348,7 +405,7 @@ export class TelegramConnector {
     }
     const result = await this.call('sendMessage', {
       chat_id: this.options.allowedChatId,
-      text: truncateMessage(text),
+      ...this.body(text, options),
       ...(options.replyToMessageId !== undefined
         ? { reply_parameters: { message_id: options.replyToMessageId, allow_sending_without_reply: true } }
         : {})
@@ -357,6 +414,58 @@ export class TelegramConnector {
       throw new TelegramConnectorError('protocol', 'Telegram sendMessage returned a malformed result')
     }
     return { messageId: result.message_id }
+  }
+
+  /**
+   * Replaces a card's text and buttons; no keyboard removes them. An edit that changes nothing is not an
+   * error, so a card can always be brought to its current truth.
+   */
+  async editMessageText(messageId: number, text: string, options: Omit<CardMessageOptions, 'replyToMessageId'> = {}): Promise<void> {
+    if (!isInteger(messageId)) throw new TelegramConnectorError('invalid-argument', 'Telegram message id must be an integer')
+    if (typeof text !== 'string' || text.length === 0) {
+      throw new TelegramConnectorError('invalid-argument', 'Telegram message text must not be empty')
+    }
+    try {
+      await this.call('editMessageText', {
+        chat_id: this.options.allowedChatId,
+        message_id: messageId,
+        ...this.body(text, options),
+        reply_markup: { inline_keyboard: options.keyboard ?? [] }
+      }, AbortSignal.timeout(REQUEST_TIMEOUT_MS))
+    } catch (error) {
+      if (error instanceof TelegramConnectorError && error.status === 400 && /message is not modified/i.test(error.message)) return
+      throw error
+    }
+  }
+
+  /** Stops the button's spinner with a short toast. */
+  async answerCallbackQuery(callbackId: string, text: string): Promise<void> {
+    if (!isText(callbackId)) throw new TelegramConnectorError('invalid-argument', 'Telegram callback id is required')
+    await this.call('answerCallbackQuery', {
+      callback_query_id: callbackId,
+      text: [...text].slice(0, TOAST_CHARS).join('')
+    }, AbortSignal.timeout(REQUEST_TIMEOUT_MS))
+  }
+
+  private body(text: string, options: Omit<CardMessageOptions, 'replyToMessageId'>): Record<string, unknown> {
+    const keyboard = options.keyboard ?? null
+    for (const button of keyboard?.flat() ?? []) {
+      if (!isText(button.text) || !isText(button.callback_data) || Buffer.byteLength(button.callback_data) > CALLBACK_DATA_BYTES) {
+        throw new TelegramConnectorError('invalid-argument', 'Telegram buttons need text and at most 64 bytes of data')
+      }
+    }
+    if (!options.html) {
+      return { text: truncateMessage(text), ...(keyboard ? { reply_markup: { inline_keyboard: keyboard } } : {}) }
+    }
+    if (text.length > MESSAGE_CHAR_LIMIT) {
+      throw new TelegramConnectorError('invalid-argument', 'A formatted Telegram card must fit 4,096 characters')
+    }
+    return {
+      text,
+      parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true },
+      ...(keyboard ? { reply_markup: { inline_keyboard: keyboard } } : {})
+    }
   }
 
   async downloadFile(fileId: string, maxBytes: number): Promise<{ bytes: Uint8Array; filePath: string }> {
@@ -374,7 +483,7 @@ export class TelegramConnector {
     const filePath = file.file_path
     const encodedPath = filePath.split('/').map((part) => encodeURIComponent(part)).join('/')
     const response = await this.request(
-      `${API_ORIGIN}/file/bot${this.options.token}/${encodedPath}`,
+      `${this.apiOrigin}/file/bot${this.options.token}/${encodedPath}`,
       { method: 'GET', signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) },
       'file download'
     )
@@ -451,7 +560,7 @@ export class TelegramConnector {
     const result = await this.call('getUpdates', {
       ...(this.nextOffset !== null ? { offset: this.nextOffset } : {}),
       timeout: this.pollTimeoutSeconds,
-      allowed_updates: ['message']
+      allowed_updates: ['message', 'callback_query']
     }, AbortSignal.any([signal, AbortSignal.timeout(this.pollTimeoutSeconds * 1000 + POLL_GRACE_MS)]))
     if (!Array.isArray(result)) {
       throw new TelegramConnectorError('protocol', 'Telegram getUpdates returned a malformed result')
@@ -481,6 +590,12 @@ export class TelegramConnector {
       const { updateId, outcome } = parseUpdate(update, this.options.allowedChatId, this.options.allowedUserId)
       if (outcome === 'rejected') {
         this.publish({ rejectedUpdates: this.current.rejectedUpdates + 1 })
+      } else if (outcome !== 'ignored' && 'tap' in outcome) {
+        try {
+          await this.options.onTap?.(outcome.tap)
+        } catch (error) {
+          this.publish({ lastError: `Tap handler failed for update ${updateId}: ${errorMessage(error)}` })
+        }
       } else if (outcome !== 'ignored') {
         try {
           await this.options.onReply(outcome)
@@ -562,7 +677,7 @@ export class TelegramConnector {
   }
 
   private async call(method: string, params: Record<string, unknown>, signal: AbortSignal): Promise<unknown> {
-    const response = await this.request(`${API_ORIGIN}/bot${this.options.token}/${method}`, {
+    const response = await this.request(`${this.apiOrigin}/bot${this.options.token}/${method}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(params),

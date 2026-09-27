@@ -964,6 +964,73 @@ export function putTelegramMessage(
   ).run(messageId, sessionId, requestId, incarnationId, now)
 }
 
+export type TelegramCardState = 'buttons' | 'open' | 'sending' | 'final'
+
+/** What a card needs to be finished after a restart: the HTML kept above its outcome line, and its format. */
+export interface TelegramCardData {
+  base: string
+  format: 'html' | 'plain'
+}
+
+export interface TelegramCardRecord {
+  messageId: number
+  sessionId: string
+  requestId: string | null
+  incarnationId: string | null
+  revision: number | null
+  state: TelegramCardState
+  card: TelegramCardData
+}
+
+export function putTelegramCard(database: DatabaseConnection, card: TelegramCardRecord, now: string): void {
+  database.prepare(
+    `INSERT OR REPLACE INTO telegram_message(
+       message_id, session_id, request_id, incarnation_id, sent_at, revision, card_state, card_json
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(card.messageId, card.sessionId, card.requestId, card.incarnationId, now, card.revision, card.state,
+    JSON.stringify(card.card))
+}
+
+export function updateTelegramCard(
+  database: DatabaseConnection,
+  messageId: number,
+  revision: number | null,
+  state: TelegramCardState,
+  card: TelegramCardData
+): void {
+  database.prepare(
+    'UPDATE telegram_message SET revision = ?, card_state = ?, card_json = ? WHERE message_id = ?'
+  ).run(revision, state, JSON.stringify(card), messageId)
+}
+
+/** Cards in these states, oldest first; rows without a card (plain notices before 30.3) never appear. */
+export function listTelegramCards(database: DatabaseConnection, states: TelegramCardState[]): TelegramCardRecord[] {
+  if (states.length === 0) return []
+  const rows = database.prepare(
+    `SELECT message_id, session_id, request_id, incarnation_id, revision, card_state, card_json
+     FROM telegram_message
+     WHERE card_state IN (${states.map(() => '?').join(', ')}) AND card_json IS NOT NULL
+     ORDER BY message_id`
+  ).all(...states) as Array<{
+    message_id: number
+    session_id: string
+    request_id: string | null
+    incarnation_id: string | null
+    revision: number | null
+    card_state: TelegramCardState
+    card_json: string
+  }>
+  return rows.map((row) => ({
+    messageId: row.message_id,
+    sessionId: row.session_id,
+    requestId: row.request_id,
+    incarnationId: row.incarnation_id,
+    revision: row.revision,
+    state: row.card_state,
+    card: JSON.parse(row.card_json) as TelegramCardData
+  }))
+}
+
 export function getTelegramMessage(
   database: DatabaseConnection,
   messageId: number
@@ -1205,6 +1272,9 @@ export const COMPANION_OPERATIONS = Object.freeze({
   readHandoffReview,
   putTelegramMessage,
   getTelegramMessage,
+  putTelegramCard,
+  updateTelegramCard,
+  listTelegramCards,
   getSettings,
   putSettingsSection,
   getRawSetting,

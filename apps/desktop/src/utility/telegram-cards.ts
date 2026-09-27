@@ -1,0 +1,344 @@
+// MODULE: telegram-cards.ts - the Telegram card for a page: escaped HTML, the length rule, buttons and outcome lines (Story 30.3)
+import type {
+  AttentionPermissionPrompt,
+  AttentionQuestionsPrompt,
+  AttentionRecord,
+  ModelOriginAgent
+} from '@bmn/protocol'
+import type { AnswerOutcome, AnswerRefusal } from './remote-answer'
+
+/** Telegram's limit on one message's text; every card is measured as the HTML string itself, which is never shorter. */
+export const TELEGRAM_TEXT_LIMIT = 4096
+const SESSION_CHARS = 24
+const BUTTON_CHARS = 28
+const ONE_ROW_CHARS = 30
+const ONE_ROW_OPTIONS = 3
+const QUOTE_CHARS = 3000
+const QUOTE_LINES = 3
+const COMMAND_CHARS = 3000
+const OUTCOME_QUESTION_CHARS = 200
+const MIN_QUESTION_CHARS = 40
+
+export interface InlineButton {
+  text: string
+  callback_data: string
+}
+
+export type InlineKeyboard = InlineButton[][]
+
+/** What the first line names: never the model, and the flag only when Epic 29 observed it. */
+export interface CardHeader {
+  session: string
+  agent: ModelOriginAgent | null
+  flag: string | null
+}
+
+/**
+ * A rendered card. `base` is what stays above the outcome line once the buttons go: the header and the
+ * question (or the permission's command), so the finished card still says what was answered.
+ */
+export interface RenderedCard {
+  text: string
+  keyboard: InlineKeyboard | null
+  base: string
+}
+
+const AGENT_NAMES: Readonly<Record<ModelOriginAgent, string>> = Object.freeze({
+  claude: 'Claude',
+  codex: 'Codex',
+  opencode: 'OpenCode'
+})
+
+export function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/** Clips to at most `max` characters including the ellipsis, never splitting a surrogate pair. */
+export function clip(text: string, max: number): string {
+  const chars = [...text]
+  if (chars.length <= max) return text
+  if (max <= 0) return ''
+  return `${chars.slice(0, max - 1).join('')}…`
+}
+
+/** The card as plain text, for the one resend after Telegram refuses its HTML. */
+export function plainText(html: string): string {
+  return html
+    .replace(/<[^>]*>/g, '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+}
+
+function headerLine(glyph: string, header: CardHeader, suffix = ''): string {
+  const agent = header.agent ? ` · ${AGENT_NAMES[header.agent]}${header.flag ? ` ${header.flag}` : ''}` : ''
+  return `${glyph} <b>${escapeHtml(clip(header.session, SESSION_CHARS))}</b>${agent}${suffix}`
+}
+
+/**
+ * Agent-written text: up to three lines as they are, longer text folded into an expandable quote, clipped
+ * on a paragraph break at 3,000 characters and saying where the rest is.
+ */
+function agentText(text: string): string {
+  const trimmed = text.trim()
+  if (trimmed.split('\n').length <= QUOTE_LINES && [...trimmed].length <= QUOTE_CHARS) return escapeHtml(trimmed)
+  let kept = trimmed
+  if ([...kept].length > QUOTE_CHARS) {
+    const head = [...kept].slice(0, QUOTE_CHARS).join('')
+    const paragraph = head.lastIndexOf('\n\n')
+    const line = head.lastIndexOf('\n')
+    const cut = paragraph > QUOTE_CHARS / 2 ? paragraph : line > QUOTE_CHARS / 2 ? line : head.length
+    kept = `${head.slice(0, cut).trimEnd()}\n… continues at the laptop`
+  }
+  return `<blockquote expandable>${escapeHtml(kept)}</blockquote>`
+}
+
+function keyboardFor(labels: string[], tokens: string[]): InlineKeyboard {
+  const buttons = labels.map((label, index) => ({
+    text: clip(`${index + 1} · ${label}`, BUTTON_CHARS),
+    callback_data: tokens[index]!
+  }))
+  const total = buttons.reduce((sum, button) => sum + [...button.text].length, 0)
+  return buttons.length <= ONE_ROW_OPTIONS && total <= ONE_ROW_CHARS ? [buttons] : buttons.map((button) => [button])
+}
+
+export interface QuestionCardInput {
+  header: CardHeader
+  prompt: AttentionQuestionsPrompt
+  /** The question on the card now, and the labels chosen for the ones before it. */
+  step: number
+  chosen: string[]
+  /** One token per option of this step, or null for a card answered only at the laptop. */
+  tokens: string[] | null
+  /** A short line above the options, for a tap that sent nothing. */
+  note?: string | null
+}
+
+function questionChip(prompt: AttentionQuestionsPrompt, index: number): string | null {
+  const question = prompt.questions[index]!
+  const parts: string[] = []
+  if (prompt.questions.length > 1) parts.push(`Question ${index + 1} of ${prompt.questions.length}`)
+  if (question.header) parts.push(question.header)
+  let chip = parts.join(' · ')
+  if (question.multiSelect) chip = chip ? `${chip} · choose any` : 'Choose any'
+  return chip ? `<i>${escapeHtml(chip)}</i>` : null
+}
+
+function questionBody(
+  prompt: AttentionQuestionsPrompt,
+  index: number,
+  limits: { description: number; question: number }
+): string {
+  const question = prompt.questions[index]!
+  const options = question.options.map((option, number) => {
+    const description = option.description ? clip(option.description, limits.description) : ''
+    return `<b>${number + 1}. ${escapeHtml(option.label)}</b>${description ? `\n${escapeHtml(description)}` : ''}`
+  })
+  return [
+    `<b>${escapeHtml(clip(question.text, limits.question))}</b>`,
+    '',
+    options.join('\n\n')
+  ].join('\n')
+}
+
+/**
+ * Fits the card in Telegram's limit by one rule: descriptions are clipped first, then question text,
+ * never labels. `render` is called with ever smaller caps until the text fits or the caps are spent.
+ */
+function fitted(render: (limits: { description: number; question: number }) => string): string {
+  const unlimited = Number.MAX_SAFE_INTEGER
+  let text = render({ description: unlimited, question: unlimited })
+  if (text.length <= TELEGRAM_TEXT_LIMIT) return text
+  for (let description = 400; description >= 0; description = description > 50 ? description - 50 : description - 10) {
+    text = render({ description, question: unlimited })
+    if (text.length <= TELEGRAM_TEXT_LIMIT) return text
+  }
+  for (let question = 1600; question >= MIN_QUESTION_CHARS; question -= 80) {
+    text = render({ description: 0, question })
+    if (text.length <= TELEGRAM_TEXT_LIMIT) return text
+  }
+  return render({ description: 0, question: MIN_QUESTION_CHARS })
+}
+
+function outcomeBase(header: string, questions: string[]): string {
+  return [header, ...questions.map((text) => `<b>${escapeHtml(clip(text, OUTCOME_QUESTION_CHARS))}</b>`)].join('\n')
+}
+
+/**
+ * A question card. With buttons it shows one question at a time, earlier answers quoted above it; without
+ * them it shows every question and says to answer at the laptop.
+ */
+export function questionCard(input: QuestionCardInput): RenderedCard {
+  const { prompt, step, chosen, tokens } = input
+  const header = headerLine('❓', input.header)
+  const base = outcomeBase(header, prompt.questions.map((question) => question.text))
+  if (tokens === null) {
+    const text = fitted((limits) => [
+      header,
+      prompt.questions.map((_, index) => {
+        const chip = questionChip(prompt, index)
+        const body = questionBody(prompt, index, limits)
+        // The first chip sits right under the header, as on a card with buttons.
+        return index === 0 ? [...(chip ? [chip] : []), '', body].join('\n') : [...(chip ? [chip, ''] : []), body].join('\n')
+      }).join('\n\n'),
+      '',
+      '<i>No buttons for this kind yet. Answer at the laptop.</i>'
+    ].join('\n'))
+    return { text, keyboard: null, base }
+  }
+  const earlier = chosen.map((label, index) => {
+    const question = prompt.questions[index]!
+    return `${escapeHtml(question.header ?? `Question ${index + 1}`)}: <b>${escapeHtml(label)}</b>`
+  })
+  const last = prompt.questions.length > 1 && step === prompt.questions.length - 1
+  const chip = questionChip(prompt, step)
+  const text = fitted((limits) => [
+    header,
+    ...(chip ? [chip] : []),
+    ...(earlier.length > 0 ? ['', `<blockquote>${earlier.join('\n')}</blockquote>`] : []),
+    ...(input.note ? ['', `⚠ <i>${escapeHtml(input.note)}</i>`] : []),
+    '',
+    questionBody(prompt, step, limits),
+    ...(last ? ['', '<i>Nothing is sent until this answer.</i>'] : [])
+  ].join('\n'))
+  const labels = prompt.questions[step]!.options.map((option) => option.label)
+  return { text, keyboard: keyboardFor(labels, tokens), base }
+}
+
+function permissionWants(prompt: AttentionPermissionPrompt): string {
+  if (prompt.shape === 'sandbox-network') return 'Wants network access'
+  const what = /^bash$/i.test(prompt.tool) ? 'to run a command' : `to use ${prompt.tool}`
+  return prompt.shape === 'subagent' ? `A subagent wants ${what}` : `Wants ${what}`
+}
+
+function homeRelative(path: string, home: string | null): string {
+  if (!home) return path
+  if (path === home) return '~'
+  return path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path
+}
+
+export interface PermissionCardInput {
+  header: CardHeader
+  prompt: AttentionPermissionPrompt
+  /** Allow once and Deny tokens; Deny is null when it would answer more than this request. */
+  tokens: { allow: string; deny: string | null } | null
+  /** Why a card has no buttons: the setting is off, or no verified route answers this shape. */
+  closedBecause: 'permissions-off' | 'unsupported' | null
+  home: string | null
+  note?: string | null
+}
+
+export function permissionCard(input: PermissionCardInput): RenderedCard {
+  const { prompt } = input
+  const command = prompt.command === null ? 'The agent did not say exactly what.' : clip(prompt.command, COMMAND_CHARS)
+  const base = [
+    headerLine('🔐', input.header),
+    `<i>${escapeHtml(permissionWants(prompt))}</i>`,
+    '',
+    `<pre>${escapeHtml(command)}</pre>`,
+    ...(prompt.cwd ? [`in <code>${escapeHtml(clip(homeRelative(prompt.cwd, input.home), 300))}</code>`] : [])
+  ].join('\n')
+  const trailer = input.tokens !== null
+    ? input.note ? `⚠ <i>${escapeHtml(input.note)}</i>` : null
+    : input.closedBecause === 'permissions-off'
+      ? '<i>Answer this at the laptop.</i>'
+      : '<i>No buttons for this kind yet. Answer at the laptop.</i>'
+  const text = trailer ? `${base}\n\n${trailer}` : base
+  if (input.tokens === null) return { text, keyboard: null, base }
+  const row: InlineButton[] = [{ text: 'Allow once', callback_data: input.tokens.allow }]
+  if (input.tokens.deny !== null) row.push({ text: 'Deny', callback_data: input.tokens.deny })
+  return { text, keyboard: [row], base }
+}
+
+/** A request without a structured prompt (`bmn ask`, a review, a handoff): answered by replying to the card. */
+export function requestCard(header: CardHeader, record: Pick<AttentionRecord, 'kind' | 'title' | 'body'>): RenderedCard {
+  const base = [
+    headerLine(record.kind === 'permission' ? '🔐' : '❓', header),
+    `<b>${escapeHtml(clip(record.title, 500))}</b>`,
+    ...(record.body ? ['', agentText(record.body)] : [])
+  ].join('\n')
+  return { text: `${base}\n\n<i>Reply to this message to answer.</i>`, keyboard: null, base }
+}
+
+/** A notice: a finished turn reads as the agent finishing, anything else as a warning with its title. */
+export function noticeCard(
+  header: CardHeader,
+  record: Pick<AttentionRecord, 'title' | 'body' | 'requestKey'>
+): RenderedCard {
+  if (record.requestKey === 'turn') {
+    const base = [headerLine('✓', header, ' finished'), ...(record.body ? ['', agentText(record.body)] : [])].join('\n')
+    return { text: `${base}\n<i>Reply to this message to continue.</i>`, keyboard: null, base }
+  }
+  const base = [
+    headerLine('⚠', header),
+    `<b>${escapeHtml(clip(record.title, 500))}</b>`,
+    ...(record.body ? ['', agentText(record.body)] : [])
+  ].join('\n')
+  return { text: `${base}\n\n<i>Reply to this message to answer.</i>`, keyboard: null, base }
+}
+
+export function exitCard(header: CardHeader): string {
+  return headerLine('■', header, ' exited')
+}
+
+/** The italic line that replaces the options once a card is decided. */
+export type CardEnding =
+  | { type: 'sending'; labels: string[] }
+  | { type: 'outcome'; outcome: AnswerOutcome; permission: boolean }
+  | { type: 'laptop' }
+  | { type: 'telegram' }
+  | { type: 'closed' }
+  | { type: 'restarted' }
+  | { type: 'restarted-sending' }
+
+export const REFUSAL_WORDS: Readonly<Record<AnswerRefusal, string>> = Object.freeze({
+  gone: 'Nothing was sent: this is no longer open.',
+  changed: 'Nothing was sent: the dialog changed on the laptop.',
+  'not-on-screen': 'Nothing was sent: that dialog is not on the screen.',
+  unsupported: 'Nothing was sent: this kind cannot be answered from Telegram.',
+  'permissions-off': 'Nothing was sent: permission answers from Telegram are off.',
+  claimed: 'Another answer is already on its way.',
+  'not-delivered': 'Nothing was sent: OpenCode did not pick up the answer.'
+})
+
+export function endingLine(ending: CardEnding): string {
+  switch (ending.type) {
+    case 'sending':
+      return `<i>Sending: ${escapeHtml(ending.labels.join(' · '))}…</i>`
+    case 'laptop':
+      return '<i>Answered at the laptop.</i>'
+    case 'telegram':
+      return '✓ <i>Answered from Telegram.</i>'
+    case 'closed':
+      return '<i>No longer open.</i>'
+    case 'restarted':
+      return '<i>BMN restarted — answer at the laptop.</i>'
+    case 'restarted-sending':
+      return '⚠ <i>Sent — not confirmed, check the laptop.</i>'
+    case 'outcome': {
+      const outcome = ending.outcome
+      if (outcome.state === 'refused') return `⚠ <i>${escapeHtml(REFUSAL_WORDS[outcome.reason])}</i>`
+      const sent = escapeHtml(outcome.sent.join(' · '))
+      if (outcome.state === 'confirmed') {
+        if (ending.permission) return outcome.sent[0] === 'Deny' ? '✓ <i>Denied</i>' : '✓ <i>Allowed once</i>'
+        return `✓ <i>Sent: ${sent}</i>`
+      }
+      if (outcome.state === 'sent-unconfirmed') {
+        return `⚠ <i>Sent${sent ? `: ${sent}` : ''} — not confirmed, check the laptop.</i>`
+      }
+      return `⚠ <i>Sent ${outcome.sent.length} of ${outcome.total} — stopped: the dialog changed. Check the laptop.</i>`
+    }
+  }
+}
+
+/** The short reply that makes the phone sound when an answer went wrong or is uncertain; null when it went right. */
+export function endingReply(outcome: AnswerOutcome): string | null {
+  if (outcome.state === 'confirmed') return null
+  if (outcome.state === 'refused') return REFUSAL_WORDS[outcome.reason]
+  if (outcome.state === 'partial') return `Sent ${outcome.sent.length} of ${outcome.total}, then the dialog changed. Check the laptop.`
+  return 'Sent, but not confirmed. Check the laptop.'
+}
+
+export function endedCard(base: string, ending: CardEnding): string {
+  return `${base}\n\n${endingLine(ending)}`
+}

@@ -208,8 +208,8 @@ describe('telegram connector polling', () => {
     }])
     const [first, second] = h.api.polls()
     expect(first?.url).toBe(`https://api.telegram.org/bot${TOKEN}/getUpdates`)
-    expect(first?.body).toEqual({ timeout: 25, allowed_updates: ['message'] })
-    expect(second?.body).toEqual({ offset: 42, timeout: 25, allowed_updates: ['message'] })
+    expect(first?.body).toEqual({ timeout: 25, allowed_updates: ['message', 'callback_query'] })
+    expect(second?.body).toEqual({ offset: 42, timeout: 25, allowed_updates: ['message', 'callback_query'] })
     expect(h.offset.saved).toEqual([42])
     expect(h.connector.health()).toMatchObject({ state: 'polling', lastPollAt: NOW, rejectedUpdates: 0 })
     expect(h.healths.map((health) => health.state)).toContain('starting')
@@ -585,5 +585,133 @@ describe('telegram connector outbound', () => {
 
     expect(cancelled).toBe(true)
     expect(pulls).toBeLessThan(10)
+  })
+})
+
+function tapUpdate(
+  updateId: number,
+  fields: { chatId?: number; chatType?: string; fromId?: number; messageId?: number; data?: unknown } = {}
+): Record<string, unknown> {
+  return {
+    update_id: updateId,
+    callback_query: {
+      id: `callback-${updateId}`,
+      from: { id: fields.fromId ?? USER_ID, is_bot: false, first_name: 'Owner' },
+      message: {
+        message_id: fields.messageId ?? 700,
+        date: 1_789_000_000,
+        chat: { id: fields.chatId ?? CHAT_ID, type: fields.chatType ?? 'private' }
+      },
+      data: 'data' in fields ? fields.data : 'token-1'
+    }
+  }
+}
+
+describe('telegram cards and taps (Story 30.3)', () => {
+  it('hands a tap from the allowed chat and sender to onTap, and rejects every other tap uncounted by onTap', async () => {
+    const taps: unknown[] = []
+    const h = await harness({ onTap: async (tap) => void taps.push(tap) })
+    h.api.updates.push(() => ok([
+      tapUpdate(1),
+      tapUpdate(2, { chatId: CHAT_ID + 1 }),
+      tapUpdate(3, { fromId: USER_ID + 1 }),
+      tapUpdate(4, { data: 'x'.repeat(65) }),
+      tapUpdate(5, { data: 7 })
+    ]))
+
+    await h.connector.start()
+    await vi.waitFor(() => expect(h.api.count('getUpdates')).toBe(2))
+
+    expect(taps).toEqual([{ updateId: 1, callbackId: 'callback-1', chatId: CHAT_ID, fromUserId: USER_ID, messageId: 700, data: 'token-1' }])
+    expect(h.connector.health().rejectedUpdates).toBe(4)
+    expect(h.replies).toEqual([])
+  })
+
+  it('refuses a tap in a group when no sender is named, as it refuses a message there', async () => {
+    const taps: unknown[] = []
+    const h = await harness({ allowedUserId: null, onTap: async (tap) => void taps.push(tap) })
+    h.api.updates.push(() => ok([tapUpdate(1, { chatType: 'group' }), tapUpdate(2, { fromId: 42 })]))
+
+    await h.connector.start()
+    await vi.waitFor(() => expect(h.api.count('getUpdates')).toBe(2))
+
+    expect(taps).toEqual([expect.objectContaining({ updateId: 2, fromUserId: 42 })])
+  })
+
+  it('keeps polling when the tap handler throws, and reports it without the token', async () => {
+    const h = await harness({ onTap: async () => { throw new Error(`boom ${TOKEN}`) } })
+    h.api.updates.push(() => ok([tapUpdate(9)]))
+
+    await h.connector.start()
+    await vi.waitFor(() => expect(h.api.count('getUpdates')).toBe(2))
+
+    expect(h.connector.health().lastError).toContain('Tap handler failed for update 9')
+    expect(h.connector.health().lastError).not.toContain(TOKEN_SECRET)
+    expect(h.offset.saved).toEqual([10])
+  })
+
+  it('sends a card as HTML with its buttons and never cuts it; plain text is still cut to the limit', async () => {
+    const h = await harness()
+    h.api.handlers.set('sendMessage', () => ok({ message_id: 12 }))
+    const keyboard = [[{ text: '1 · JWT', callback_data: 'a'.repeat(22) }]]
+
+    await expect(h.connector.sendMessage('<b>Card</b>', { html: true, keyboard })).resolves.toEqual({ messageId: 12 })
+    await expect(h.connector.sendMessage('x'.repeat(5000), { html: true })).rejects.toMatchObject({ kind: 'invalid-argument' })
+    await expect(h.connector.sendMessage('card', { keyboard: [[{ text: 'x', callback_data: 'b'.repeat(65) }]] }))
+      .rejects.toMatchObject({ kind: 'invalid-argument' })
+    await h.connector.sendMessage('y'.repeat(5000))
+
+    const sends = h.api.calls.filter((call) => call.method === 'sendMessage')
+    expect(sends[0]?.body).toEqual({
+      chat_id: CHAT_ID,
+      text: '<b>Card</b>',
+      parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true },
+      reply_markup: { inline_keyboard: keyboard }
+    })
+    expect(sends).toHaveLength(2)
+    expect((sends[1]?.body.text as string).length).toBe(4096)
+    expect(sends[1]?.body.parse_mode).toBeUndefined()
+  })
+
+  it('edits a card in place, removing its buttons when none are given, and treats an unchanged edit as done', async () => {
+    const h = await harness()
+    let unchanged = false
+    h.api.handlers.set('editMessageText', () => unchanged
+      ? apiError(400, 'Bad Request: message is not modified: specified new message content is the same')
+      : ok(true))
+
+    await h.connector.editMessageText(12, '<i>Sent</i>', { html: true })
+    unchanged = true
+    await expect(h.connector.editMessageText(12, '<i>Sent</i>', { html: true })).resolves.toBeUndefined()
+    h.api.handlers.set('editMessageText', () => apiError(400, "Bad Request: can't parse entities"))
+    await expect(h.connector.editMessageText(12, '<i>Sent', { html: true })).rejects.toMatchObject({ status: 400 })
+
+    expect(h.api.calls.find((call) => call.method === 'editMessageText')?.body).toEqual({
+      chat_id: CHAT_ID,
+      message_id: 12,
+      text: '<i>Sent</i>',
+      parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true },
+      reply_markup: { inline_keyboard: [] }
+    })
+  })
+
+  it('answers a tap with a toast of at most 200 characters', async () => {
+    const h = await harness()
+    h.api.handlers.set('answerCallbackQuery', () => ok(true))
+
+    await h.connector.answerCallbackQuery('callback-1', `Sending ${'x'.repeat(300)}`)
+
+    const body = h.api.calls.find((call) => call.method === 'answerCallbackQuery')?.body
+    expect(body?.callback_query_id).toBe('callback-1')
+    expect([...(body?.text as string)]).toHaveLength(200)
+  })
+
+  it('talks to the origin it was given instead of Telegram, for the self-test fake', async () => {
+    const h = await harness({ apiOrigin: 'http://127.0.0.1:4555' })
+    h.api.handlers.set('answerCallbackQuery', () => ok(true))
+    await h.connector.answerCallbackQuery('callback-1', 'ok')
+    expect(h.api.calls[0]?.url).toBe(`http://127.0.0.1:4555/bot${TOKEN}/answerCallbackQuery`)
   })
 })

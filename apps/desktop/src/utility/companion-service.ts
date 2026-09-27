@@ -2,7 +2,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { appendFile, chmod, copyFile, lstat, mkdir, readFile, rename, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, join, relative } from 'node:path'
 import {
   ERROR_CODES,
@@ -11,6 +11,7 @@ import {
   isAttentionOrigin,
   hasDisallowedHandoffControl,
   METHOD_REGISTRY,
+  countryFlag,
   modelOrigin,
   PROGRESS_STALE_AFTER_MS,
   TERMINAL_NOTICE_BODY_MAX,
@@ -53,6 +54,7 @@ import { searchFileReferences } from './file-reference-search'
 import { createAttentionPager } from './attention-pager'
 import { RemoteAnswers, answerRoute, type AnswerOutcome, type AnswerRequest, type PluginAnswer } from './remote-answer'
 import { observeRepeat, REPEAT_NOTICE_AT, type RepeatState, type RepeatSegment } from './repeat-watch'
+import { TelegramCardKeeper } from './telegram-card-keeper'
 import { TelegramConnector, maskToken, redactToken, type ConnectorHealth, type InboundReply } from './telegram-connector'
 
 /** A listed session plus its conversation route; `null` when the session has no stored binding. */
@@ -99,6 +101,8 @@ export interface CompanionServiceOptions {
   cliScriptPath?: string
   emit(message: AppEventMessage): void
   fetch?: typeof fetch
+  /** The Bot API origin; only the self-test host sets it, to a local fake. */
+  telegramApiOrigin?: string
   now?: () => Date
 }
 
@@ -234,15 +238,7 @@ export class CompanionService {
   private ownerAway: boolean | null = null
   private readonly pager = createAttentionPager({
     current: (requestId) => this.options.database.companion('getAttention', requestId).catch(() => null),
-    send: (record) => {
-      const session = this.knownSessions.get(record.sessionId)
-      const body = record.body ? `\n${record.body}` : ''
-      return this.telegramNotify(
-        record.sessionId,
-        record.requestId,
-        `● ${session?.name ?? 'Session'} needs you (${record.kind})\n${record.title}${body}\n\nReply to this message to answer.`
-      )
-    },
+    send: (record) => this.cards.page(record),
     schedule: (callback, ms) => {
       const timer = setTimeout(callback, ms)
       timer.unref()
@@ -253,6 +249,8 @@ export class CompanionService {
   })
   /** Delivers a phone answer into the dialog that asked; reachable only from inside this process (Epic 30). */
   private readonly answers: RemoteAnswers
+  /** The Telegram card of each page, kept true to its request (Story 30.3). */
+  private readonly cards: TelegramCardKeeper
   private readonly draftOperations = new Map<string, Promise<void>>()
   /** A request key claims the one PTY write before any asynchronous availability check. */
   private readonly fileReferencePastes = new Map<string, {
@@ -332,6 +330,33 @@ export class CompanionService {
       write: (sessionId, bytes) => options.manager.writeToSession(sessionId, bytes),
       answerPermissions: async () => (await options.database.companion('getSettings')).telegram.answerPermissions
     })
+    this.cards = new TelegramCardKeeper({
+      connector: () => this.telegram && this.telegramHealth?.state === 'polling' ? this.telegram : undefined,
+      getAttention: (requestId) => options.database.companion('getAttention', requestId).catch(() => null),
+      header: (sessionId, record) => {
+        const origin = this.hookOrigins.get(sessionId)
+        const live = origin !== undefined && origin.incarnationId === options.manager.liveIncarnationId(sessionId)
+        return {
+          session: this.knownSessions.get(sessionId)?.name ?? 'Session',
+          agent: live ? origin.agent : record?.prompt?.harness ?? null,
+          flag: live && origin.country ? countryFlag(origin.country) : null
+        }
+      },
+      answerability: (record) => this.answerability(record),
+      answerEpoch: (requestId) => this.answerEpoch(requestId),
+      liveIncarnationId: (sessionId) => options.manager.liveIncarnationId(sessionId),
+      answer: (request) => this.answerAttention(request),
+      store: {
+        put: (card) => options.database.companion('putTelegramCard', card, this.iso()),
+        update: (messageId, revision, state, card) =>
+          options.database.companion('updateTelegramCard', messageId, revision, state, card),
+        list: (states) => options.database.companion('listTelegramCards', states),
+        message: (messageId, sessionId, requestId, incarnationId) =>
+          options.database.companion('putTelegramMessage', messageId, sessionId, requestId, incarnationId, this.iso())
+      },
+      home: homedir()
+    })
+    this.answers.onLateOutcome((requestId, outcome) => this.cards.lateOutcome(requestId, outcome))
     this.socketPath = join(options.roots.runtime, 'control', 'control.sock')
     this.refusalLogPath = join(options.roots.state, 'refused-requests.log')
     this.files = new ArtifactFileStore({
@@ -460,6 +485,7 @@ export class CompanionService {
   async close(): Promise<void> {
     if (this.sweepTimer) clearInterval(this.sweepTimer)
     this.pager.close()
+    this.cards.dispose()
     this.answers.dispose()
     await Promise.allSettled([this.control.close(), this.telegram?.stop()])
     await unlink(join(dirname(this.socketPath), 'owner.token')).catch(() => undefined)
@@ -471,8 +497,7 @@ export class CompanionService {
       if (state !== 'exited' || this.ownerAway === false) return
       const settings = await this.options.database.companion('getSettings')
       if (!settings.telegram.enabled || settings.telegram.notifyOn !== 'attention-and-exit') return
-      const session = this.knownSessions.get(sessionId)
-      await this.telegramNotify(sessionId, null, `■ ${session?.name ?? 'A session'} exited`)
+      await this.cards.exited(sessionId)
     }).catch(() => undefined)
   }
 
@@ -681,6 +706,7 @@ export class CompanionService {
 
   private emit(topic: AppEventTopic, sessionId: string | null): void {
     this.options.emit({ kind: 'app-event', topic, sessionId })
+    if (topic === 'attention') this.cards.changed(sessionId)
   }
 
   private async controlCall<Result>(operation: () => Promise<Result>): Promise<Result> {
@@ -1886,6 +1912,7 @@ export class CompanionService {
     } else {
       const connector = new TelegramConnector({
         token,
+        ...(this.options.telegramApiOrigin ? { apiOrigin: this.options.telegramApiOrigin } : {}),
         allowedChatId: settings.telegram.allowedChatId,
         allowedUserId: settings.telegram.allowedUserId,
         fetch: this.options.fetch ?? fetch,
@@ -1898,9 +1925,12 @@ export class CompanionService {
           set: (next) => this.options.database.companion('putRawSetting', TELEGRAM_OFFSET_KEY, next, this.iso())
         },
         onReply: (reply) => this.handleTelegramReply(reply),
+        onTap: (tap) => this.cards.tap(tap),
         onHealth: (health) => {
           if (this.telegram !== connector) return
           this.telegramHealth = health
+          // Cards a previous run left with buttons are finished once Telegram is reachable, before new pages.
+          if (health.state === 'polling') void this.cards.sweep()
           this.emit('telegram', null)
         }
       })
@@ -1914,20 +1944,6 @@ export class CompanionService {
       }
     }
     this.emit('telegram', null)
-  }
-
-  private async telegramNotify(sessionId: string, requestId: string | null, message: string): Promise<void> {
-    const connector = this.telegram
-    if (!connector || this.telegramHealth?.state !== 'polling') return
-    const incarnationId = this.options.manager.liveIncarnationId(sessionId) ?? null
-    try {
-      const sent = await connector.sendMessage(message)
-      await this.options.database.companion(
-        'putTelegramMessage', sent.messageId, sessionId, requestId, incarnationId, this.iso()
-      )
-    } catch {
-      // Connector health carries the redacted failure; attention stays open in the app either way.
-    }
   }
 
   /**
@@ -1984,7 +2000,9 @@ export class CompanionService {
       request?.state === 'open' &&
       request.sessionId === target.sessionId &&
       (request.incarnationId === null || request.incarnationId === target.incarnationId)
-    if (settings.telegram.autoSubmitReplies && currentTarget && request.kind !== 'handoff') {
+    // A typed line cannot pick an option in the agent's own dialog, so a reply to one stays a draft.
+    const structured = request?.state === 'open' && request.prompt !== null
+    if (settings.telegram.autoSubmitReplies && currentTarget && request.kind !== 'handoff' && !structured) {
       try {
         await this.sendDraft(record.draftId, true, target.incarnationId)
         if (reply.text) {
@@ -2008,7 +2026,9 @@ export class CompanionService {
         }
       }
     }
-    await connector.sendMessage('Saved as a draft in BMN for that session.', {
+    await connector.sendMessage(structured
+      ? 'Saved as a draft in BMN. A typed reply cannot pick an option in this dialog: tap a button or answer at the laptop.'
+      : 'Saved as a draft in BMN for that session.', {
       replyToMessageId: reply.messageId
     }).catch(() => undefined)
   }

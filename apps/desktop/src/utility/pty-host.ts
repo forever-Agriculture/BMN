@@ -35,6 +35,7 @@ import {
   type WorkspaceLayoutState
 } from '@bmn/protocol'
 import { CompanionService, UNROUTED } from './companion-service'
+import type { AnswerRequest } from './remote-answer'
 import { DatabaseClientError, DatabaseWorkerClient } from './database-client'
 import { readFileReference } from './file-reference-reader'
 import { inspectRepositoryIdentity } from './repository-identity'
@@ -282,6 +283,10 @@ async function start(): Promise<void> {
     roots,
     cliPath,
     cliScriptPath: process.env.BMN_CLI_SCRIPT ?? cliPath,
+    // Electron self-test only (Story 30.3): Telegram talks to the main process's local fake Bot API.
+    ...(process.argv.includes('--self-test-host') && process.env.BMN_SELF_TEST_TELEGRAM_ORIGIN
+      ? { telegramApiOrigin: process.env.BMN_SELF_TEST_TELEGRAM_ORIGIN }
+      : {}),
     emit: (message) => parentPort.postMessage(message)
   })
   companionHolder.current = companion
@@ -368,6 +373,22 @@ async function start(): Promise<void> {
             })
           }, 0)
           return { selfTestHostLossScheduled: true }
+        }
+        if (params.selfTestRemoteAnswer !== undefined && process.argv.includes('--self-test-host')) {
+          // Electron self-test only (Epic 30.2): answers the open request at a key the way a Telegram tap will.
+          // Not on the control socket, and absent from every build that is not started with this flag.
+          const probe = record(params.selfTestRemoteAnswer)
+          const rows = await database.companion('listAttention')
+          const open = rows.find((row) => row.sessionId === probe.sessionId && row.requestKey === probe.requestKey && row.state === 'open')
+          if (!open) return { selfTestRemoteAnswer: { outcome: null, request: null } }
+          const outcome = await companionService.answerAttention({
+            requestId: open.requestId,
+            revision: open.revision,
+            epoch: companionService.answerEpoch(open.requestId) ?? -1,
+            incarnationId: open.incarnationId ?? '',
+            answer: probe.answer as AnswerRequest['answer']
+          })
+          return { selfTestRemoteAnswer: { outcome, request: await database.companion('getAttention', open.requestId) } }
         }
         return manager.health()
       case METHOD_REGISTRY.workspaceList:
