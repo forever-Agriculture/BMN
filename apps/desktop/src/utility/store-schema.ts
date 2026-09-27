@@ -512,5 +512,12 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
           SELECT 1 FROM json_each(launch_set.entries_json) WHERE type != 'object'
         );
     `
+  },
+  {
+    // Epic 30: the agent's own question or permission, so it can be shown and answered away from the desk.
+    version: 17,
+    sql: `
+      ALTER TABLE attention_request ADD COLUMN prompt_json TEXT NULL CHECK (prompt_json IS NULL OR json_valid(prompt_json));
+    `
   }
 ])

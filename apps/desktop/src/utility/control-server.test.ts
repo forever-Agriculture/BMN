@@ -500,6 +500,13 @@ describe('control server validation', () => {
     ['missing publish key', 'artifact.publish', { path: '/tmp/notes.md' }],
     ['bad kind', 'attention.open', { requestKey: 'q', kind: 'urgent', title: 'Title' }],
     ['expiry without timezone', 'attention.open', { requestKey: 'q', kind: 'question', title: 'T', expiresAt: '2026-09-14T12:00:00' }],
+    ['unknown prompt type', 'attention.open', { requestKey: 'q', kind: 'question', title: 'T', prompt: { type: 'survey' } }],
+    ['permission prompt on a question', 'attention.open', { requestKey: 'q', kind: 'question', title: 'T', prompt: {
+      type: 'permission', harness: 'claude', shape: 'permission', requestRef: null, toolUseId: null, tool: 'Bash', command: 'ls', cwd: null
+    } }],
+    ['prompt on a notice', 'attention.open', { requestKey: 'q', kind: 'notice', title: 'T', prompt: {
+      type: 'permission', harness: 'claude', shape: 'permission', requestRef: null, toolUseId: null, tool: 'Bash', command: 'ls', cwd: null
+    } }],
     ['missing resolution', 'attention.resolve', { requestKey: 'q' }],
     ['missing input key', 'input.submit', { text: 'ls' }],
     ['oversize text', 'input.submit', { text: 'x'.repeat(64 * 1024 + 1), idempotencyKey: 'k' }],
@@ -632,6 +639,22 @@ describe('control server validation', () => {
       source: null,
       toolName: null,
       effects: []
+    })
+  })
+
+  it('passes a validated agent prompt to the handler', async () => {
+    const fixture = await serverFixture()
+    const client = await authenticated(fixture, sessionToken(fixture))
+    const prompt = {
+      type: 'questions', harness: 'codex', shape: 'choice', requestRef: null, toolUseId: 'call_1',
+      questions: [{ id: 'db', header: 'Database', text: 'Which database?', multiSelect: false,
+        options: [{ label: 'Postgres', description: 'Already used' }, { label: 'SQLite', description: null }] }]
+    }
+
+    await client.request('attention.open', { requestKey: 'q', kind: 'question', title: 'Which database?', prompt })
+
+    expect(fixture.handlers.openAttention).toHaveBeenLastCalledWith({
+      sessionId: 'session-1', incarnationId: 'incarnation-1', requestKey: 'q', kind: 'question', title: 'Which database?', prompt
     })
   })
 

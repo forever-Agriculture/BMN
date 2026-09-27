@@ -146,10 +146,12 @@ agent, and they do nothing outside BMN.
 
 | Event | Effect |
 | --- | --- |
-| Claude `Notification` (permission prompt) or `PermissionRequest` | Opens a `permission` request |
+| Claude `PreToolUse` for `AskUserQuestion`, or its `PermissionRequest` for that tool | Opens a `question` request carrying the questions, options and descriptions ([remote-answers.md](remote-answers.md)); both events describe one dialog and merge into one request |
+| Claude `PermissionRequest` for any other tool | Opens a `permission` request carrying the tool, the exact command or path, and the working directory |
+| Claude `Notification` (permission prompt) | Opens a `permission` request, unless a question or permission of that session already carries its dialog: Claude sends this notice about 6 s into any unanswered prompt, questions included |
 | Claude `Notification` (question dialog) | Opens a `question` request |
-| Codex `PreToolUse` for `request_user_input` or `request_user_input_async` | Opens a `question` request with the question text and choices |
-| OpenCode `permission.asked`, `permission.replied` | Opens, answers or withdraws a `permission` request; subagents and other sessions in the same process share their own `subagent-permission` request |
+| Codex `PreToolUse` for `request_user_input` or `request_user_input_async` | Opens a `question` request with the question text and choices (blocking and async are different shapes) |
+| OpenCode `permission.asked`, `permission.replied` | Opens, answers or withdraws a `permission` request, carrying the request id and the exact command from the event's `metadata`; subagents and other sessions in the same process share their own `subagent-permission` request |
 | OpenCode `question.asked`, `question.replied`, `question.rejected` | Opens, answers or withdraws a `question` request; subagents and other sessions in the same process share their own `subagent-question` request |
 | OpenCode main `session.status` busy, `session.idle`, `session.error` | Clears main prompts, or opens a finished-turn or error notice. Main idle also withdraws subagent requests; main busy leaves them open. Subagent status, idle and errors are not reported |
 | OpenCode main `session.created`, `tui.session.select`, `session.deleted` | Captures the conversation or clears the plugin's requests, including subagent requests on select/delete. These events from subagents are ignored |
@@ -427,13 +429,17 @@ at all about a command it does not recognise. A hand-written entry that works pe
 exactly, and `check` will answer for it.
 
 The entries themselves, for wiring them by hand. `~/.claude/settings.json` needs `Notification`,
-`PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `Stop`, `SessionStart` and `SessionEnd`, next to any hooks
-already there:
+`PreToolUse`, `PermissionRequest`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `Stop`, `SessionStart`
+and `SessionEnd`, next to any hooks already there:
 
 ```json
 { "hooks": [{ "type": "command", "timeout": 5,
   "command": "[ -n \"$BMN_CONTROL_SOCKET\" ] && command -v bmn >/dev/null && bmn hook claude; exit 0" }] }
 ```
+
+`PreToolUse` runs before every tool and holds it until the hook returns, so BMN gates its entry to the one
+tool it needs with `"matcher": "AskUserQuestion"`; `check` reads that matcher as wired, and an ungated entry
+as wired too. Any other matcher on BMN's entry reads as gated.
 
 For Codex, the same entries with `bmn hook codex` go in `~/.codex/hooks.json` for `PreToolUse`,
 `PostToolUse`, `UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd` and `Interrupt`. Codex must

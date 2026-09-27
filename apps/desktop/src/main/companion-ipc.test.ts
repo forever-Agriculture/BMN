@@ -23,7 +23,8 @@ function request(requestId: string, sessionId: string, revision = 1): AttentionR
     seenAt: null,
     revision,
     openedBy: null,
-    resolvedBy: null
+    resolvedBy: null,
+    prompt: null
   }
 }
 

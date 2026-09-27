@@ -1,0 +1,50 @@
+╭──────────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.157.1)                           │
+│                                                      │
+│ model:     GPT-6-Luna low   /model to change         │
+│ directory: /work/project │
+╰──────────────────────────────────────────────────────╯
+
+• Model changed to gpt-6-luna medium for Plan mode.
+
+
+› Before planning anything, call the request_user_input tool exactly once to ask me: header "Auth method", question "Which auth method should the API use?", options "JWT" (description "Stateless
+  tokens"), "Session cookies" (description "Server-side sessions"), "OAuth only" (description "Delegate sign-in").
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  Question 1/1 (1 unanswered)
+  Which auth method should the API use?
+
+  › 1. JWT                Stateless tokens                                                                                                                                                            
+    2. Session cookies    Server-side sessions
+    3. OAuth only         Delegate sign-in
+    4. None of the above  Optionally, add details in notes (tab)
+
+  tab to add notes | enter to submit answer | esc to interrupt
+

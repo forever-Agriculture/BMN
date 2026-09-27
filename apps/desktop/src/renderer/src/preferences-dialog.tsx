@@ -190,11 +190,12 @@ export function PreferencesDialog(props: {
     }
   }
 
-  // --- Telegram: form (chat/user id, notifyOn, autoSubmitReplies, enabled) ---
+  // --- Telegram: form (chat/user id, notifyOn, autoSubmitReplies, answerPermissions, enabled) ---
   const [chatIdInput, setChatIdInput] = useState(idText(props.settings.telegram.allowedChatId))
   const [userIdInput, setUserIdInput] = useState(idText(props.settings.telegram.allowedUserId))
   const [notifyOn, setNotifyOn] = useState(props.settings.telegram.notifyOn)
   const [autoSubmitReplies, setAutoSubmitReplies] = useState(props.settings.telegram.autoSubmitReplies)
+  const [answerPermissions, setAnswerPermissions] = useState(props.settings.telegram.answerPermissions)
   const [telegramEnabled, setTelegramEnabled] = useState(props.settings.telegram.enabled)
   const [telegramFormBusy, setTelegramFormBusy] = useState(false)
   const [telegramFormError, setTelegramFormError] = useState<string | null>(null)
@@ -206,7 +207,8 @@ export function PreferencesDialog(props: {
       allowedChatId: chatIdInput,
       allowedUserId: userIdInput,
       notifyOn,
-      autoSubmitReplies
+      autoSubmitReplies,
+      answerPermissions
     }
     const parsed = parseTelegramForm(fields)
     if (!parsed.ok) {
@@ -223,6 +225,7 @@ export function PreferencesDialog(props: {
       setUserIdInput(idText(result.telegram.allowedUserId))
       setNotifyOn(result.telegram.notifyOn)
       setAutoSubmitReplies(result.telegram.autoSubmitReplies)
+      setAnswerPermissions(result.telegram.answerPermissions)
       setTelegramEnabled(result.telegram.enabled)
       onSettings.current(result)
       setTelegramFormSuccess('Telegram settings saved.')
@@ -617,6 +620,25 @@ export function PreferencesDialog(props: {
               checked={autoSubmitReplies}
               disabled={telegramFormBusy}
               onChange={(event) => setAutoSubmitReplies(event.target.checked)}
+            />
+          </div>
+        </div>
+
+        <div className="preferences-row">
+          <div className="preferences-row-label">
+            <label htmlFor="preferences-telegram-answer-permissions">Answer permission prompts from Telegram</label>
+            <p className="preferences-help">
+              Adds Allow once and Deny to permission cards. Each tap answers only the exact prompt on screen, never
+              "always allow".
+            </p>
+          </div>
+          <div className="preferences-row-control">
+            <input
+              id="preferences-telegram-answer-permissions"
+              type="checkbox"
+              checked={answerPermissions}
+              disabled={telegramFormBusy}
+              onChange={(event) => setAnswerPermissions(event.target.checked)}
             />
           </div>
         </div>

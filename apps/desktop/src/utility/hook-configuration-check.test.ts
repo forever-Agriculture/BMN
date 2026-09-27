@@ -9,7 +9,10 @@ import { runHookConfigurationCheck } from './hook-configuration-check'
 import type { HookCheckAgentReport, HookCheckReport } from '@bmn/protocol'
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
-const CLAUDE_EVENTS = ['Notification', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd']
+const CLAUDE_EVENTS = [
+  'Notification', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop',
+  'SessionStart', 'SessionEnd'
+]
 const CODEX_EVENTS = ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd', 'Interrupt']
 const checkedAt = '2026-09-24T12:00:00.000Z'
 const roots = new Set<string>()

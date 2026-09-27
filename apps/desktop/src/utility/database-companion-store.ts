@@ -9,6 +9,8 @@ import {
   TERMINAL_FONT_SIZE_RANGE,
   VOICE_LANGUAGES,
   VOICE_MODEL_IDS,
+  mergeSamePrompt,
+  readStoredPrompt,
   validateVocabulary,
   type AppearanceSettings,
   type AppSettings,
@@ -16,6 +18,7 @@ import {
   type ArtifactRecord,
   type ArtifactState,
   type AttentionKind,
+  type AttentionPrompt,
   type AttentionRecord,
   type AttentionState,
   type ColorModeName,
@@ -152,6 +155,7 @@ interface AttentionRow {
   revision: number
   opened_by: string | null
   resolved_by: string | null
+  prompt_json: string | null
 }
 
 function attentionFromRow(row: AttentionRow): AttentionRecord {
@@ -172,7 +176,9 @@ function attentionFromRow(row: AttentionRow): AttentionRecord {
     revision: row.revision,
     // Rows written before migration 9 have no provenance; they read as unknown rather than guessing.
     openedBy: row.opened_by,
-    resolvedBy: row.resolved_by
+    resolvedBy: row.resolved_by,
+    // Rows written before migration 17, and prompts that no longer parse, read as plain requests.
+    prompt: readStoredPrompt(row.prompt_json ?? null)
   }
 }
 
@@ -186,7 +192,12 @@ export interface AttentionOpenParams {
   expiresAt?: string
   /** What opened it; a caller that does not say leaves the column null. */
   origin?: string
+  /** The agent's own question or permission; validated by the control server before it gets here. */
+  prompt?: AttentionPrompt
 }
+
+/** Claude's delayed "needs your permission" notice; it names no tool, so it never outranks a structured prompt. */
+const CLAUDE_PERMISSION_NOTICE = 'hook:claude:Notification'
 
 /** Opening the same key again while it is open updates that request instead of duplicating it. */
 /**
@@ -201,20 +212,49 @@ export function openAttention(
   requestId: string,
   now: string
 ): AttentionOpenResult {
+  // Claude sends "needs your permission" about 6 s after any prompt it is still waiting on, a question
+  // included (docs/remote-answers.md). When a structured prompt of that session is already open, the notice
+  // is that same dialog: opening a second, tool-less permission would page twice and stale the first card.
+  if (params.prompt === undefined && params.kind === 'permission' && params.origin === CLAUDE_PERMISSION_NOTICE) {
+    const covered = database.prepare(
+      `SELECT * FROM attention_request
+       WHERE session_id = ? AND state = 'open' AND prompt_json IS NOT NULL
+         AND (incarnation_id IS ? OR incarnation_id IS NULL)
+       ORDER BY opened_at DESC LIMIT 1`
+    ).get(params.sessionId, params.incarnationId) as AttentionRow | undefined
+    if (covered) return { ...attentionFromRow(covered), changed: false }
+  }
   const existing = database.prepare(
     "SELECT * FROM attention_request WHERE session_id = ? AND request_key = ? AND state = 'open'"
   ).get(params.sessionId, params.requestKey) as AttentionRow | undefined
   if (existing) {
+    const stored = readStoredPrompt(existing.prompt_json ?? null)
+    // A plain re-open of a request that already holds the agent's own prompt adds nothing the prompt does not
+    // say better: same kind, nothing changes, so no revision bump, no unread flag and no second page.
+    if (params.prompt === undefined && stored !== null && existing.kind === params.kind) {
+      return { ...attentionFromRow(existing), changed: false }
+    }
+    const merged = params.prompt !== undefined && stored !== null ? mergeSamePrompt(stored, params.prompt) : null
+    const nextPrompt = merged ?? params.prompt ?? stored
     const unchanged = existing.kind === params.kind &&
       existing.title === params.title &&
       existing.body === (params.body ?? null) &&
-      existing.expires_at === (params.expiresAt ?? null)
+      existing.expires_at === (params.expiresAt ?? null) &&
+      (params.prompt === undefined || merged !== null)
     // Provenance alone never counts as a change: a re-open that says only a different origin must not clear
     // `seen_at` and show the owner a request they have already read. What opened it stays what opened it.
-    if (unchanged) return { ...attentionFromRow(existing), changed: false }
+    // A second report of the same dialog may add an id the first lacked; that is kept without a new revision.
+    if (unchanged) {
+      const promptJson = nextPrompt === null ? null : JSON.stringify(nextPrompt)
+      if (promptJson !== (existing.prompt_json ?? null)) {
+        database.prepare('UPDATE attention_request SET prompt_json = ? WHERE request_id = ?').run(promptJson, existing.request_id)
+        return { ...getAttention(database, existing.request_id), changed: false }
+      }
+      return { ...attentionFromRow(existing), changed: false }
+    }
     database.prepare(
       `UPDATE attention_request SET kind = ?, title = ?, body = ?, expires_at = ?, incarnation_id = ?,
-         opened_by = ?, seen_at = NULL, revision = revision + 1
+         opened_by = ?, seen_at = NULL, revision = revision + 1, prompt_json = ?
        WHERE request_id = ?`
     ).run(
       params.kind,
@@ -223,14 +263,15 @@ export function openAttention(
       params.expiresAt ?? null,
       params.incarnationId,
       params.origin ?? null,
+      nextPrompt === null ? null : JSON.stringify(nextPrompt),
       existing.request_id
     )
     return { ...getAttention(database, existing.request_id), changed: true }
   }
   database.prepare(
     `INSERT INTO attention_request(request_id, session_id, incarnation_id, request_key, kind, title, body,
-       state, resolution, opened_at, expires_at, resolved_at, seen_at, revision, opened_by, resolved_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'open', NULL, ?, ?, NULL, NULL, 1, ?, NULL)`
+       state, resolution, opened_at, expires_at, resolved_at, seen_at, revision, opened_by, resolved_by, prompt_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'open', NULL, ?, ?, NULL, NULL, 1, ?, NULL, ?)`
   ).run(
     requestId,
     params.sessionId,
@@ -241,7 +282,8 @@ export function openAttention(
     params.body ?? null,
     now,
     params.expiresAt ?? null,
-    params.origin ?? null
+    params.origin ?? null,
+    params.prompt === undefined ? null : JSON.stringify(params.prompt)
   )
   return { ...getAttention(database, requestId), changed: true }
 }
@@ -986,6 +1028,9 @@ export function validateSettingsSection(section: string, value: unknown): AppSet
         invalid('Telegram notification scope is invalid')
       }
       if (typeof candidate.autoSubmitReplies !== 'boolean') invalid('Reply submission must be on or off')
+      // Sections saved before Epic 30 have no answerPermissions and keep it off.
+      const answerPermissions = candidate.answerPermissions ?? DEFAULT_APP_SETTINGS.telegram.answerPermissions
+      if (typeof answerPermissions !== 'boolean') invalid('Answering permission prompts must be on or off')
       const allowedChatId = nullableInteger(candidate.allowedChatId, 'Allowed chat id')
       const allowedUserId = nullableInteger(candidate.allowedUserId, 'Allowed user id')
       if (candidate.enabled && allowedChatId === null) invalid('Choose the allowed chat before enabling Telegram')
@@ -994,7 +1039,8 @@ export function validateSettingsSection(section: string, value: unknown): AppSet
         allowedChatId,
         allowedUserId,
         notifyOn: candidate.notifyOn,
-        autoSubmitReplies: candidate.autoSubmitReplies
+        autoSubmitReplies: candidate.autoSubmitReplies,
+        answerPermissions
       }
     }
     case 'voice': {

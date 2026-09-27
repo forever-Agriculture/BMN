@@ -1,0 +1,31 @@
+{
+  "session_id": "00000000-0000-4000-8000-000000000001",
+  "cwd": "/work/project",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "AskUserQuestion",
+  "tool_input": {
+    "questions": [
+      {
+        "question": "Which auth method should the API use?",
+        "header": "Auth method",
+        "options": [
+          {
+            "label": "JWT",
+            "description": "Stateless tokens, no session store"
+          },
+          {
+            "label": "Session cookies",
+            "description": "Server-side sessions in Redis"
+          },
+          {
+            "label": "OAuth only",
+            "description": "Delegate sign-in to Google and GitHub"
+          }
+        ],
+        "multiSelect": false
+      }
+    ]
+  },
+  "tool_use_id": "toolu_01PqP3uetPam78QueRqjK7xL"
+}

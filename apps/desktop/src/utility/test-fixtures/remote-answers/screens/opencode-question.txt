@@ -1,0 +1,50 @@
+                                                                                                                                                              
+  ┃                                                                                                                                                             New session - 2026-09-27T14:32:50.
+  ┃  Use your question tool exactly once to ask me: header "Auth method", question "Which auth method should the API use?", options "JWT" (description          617Z
+  ┃  "Stateless tokens"), "Session cookies" (description "Server-side sessions"), "OAuth only" (description "Delegate sign-in"). Do nothing else first.       
+  ┃                                                                                                                                                             Context
+                                                                                                                                                                0 tokens
+     + Thought: 143ms                                                                                                                                           0% used
+                                                                                                                                                                $0.00 spent
+     → Asked 1 question                                                                                                                                       
+                                                                                                                                                                ▼ MCP
+     ▣  Build · MiMo-V2.6-Flash Free                                                                                                                            • markitdown Connected
+                                                                                                                                                                • playwright Connected
+                                                                                                                                                                • websearch Connected
+                                                                                                                                                              
+                                                                                                                                                                LSP
+                                                                                                                                                                LSPs are disabled
+                                                                                                                                                              
+                                                                                                                                                              
+                                                                                                                                                              
+                                                                                                                                                              
+                                                                                                                                                              
+                                                                                                                                                              
+                                                                                                                                                              
+                                                                                                                                                              
+                                                                                                                                                              
+                                                                                                                                                              
+                                                                                                                                                              
+                                                                                                                                                              
+                                                                                                                                                              
+                                                                                                                                                              
+                                                                                                                                                              
+                                                                                                                                                              
+                                                                                                                                                              
+                                                                                                                                                              
+                                                                                                                                                              
+                                                                                                                                                              
+  ┃                                                                                                                                                           
+  ┃  Which auth method should the API use?                                                                                                                    
+  ┃                                                                                                                                                           
+  ┃  1. JWT                                                                                                                                                   
+  ┃     Stateless tokens                                                                                                                                      
+  ┃  2. Session cookies                                                                                                                                       
+  ┃     Server-side sessions                                                                                                                                  
+  ┃  3. OAuth only                                                                                                                                            
+  ┃     Delegate sign-in                                                                                                                                        /work/project
+  ┃  4. Type your own answer                                                                                                                                    BMN/9e03d012-50e1-4db3-bb06-
+  ┃                                                                                                                                                             4f4fbd0cb2b0/scratchpad/spike/oproj
+  ┃  ↑↓ select  enter submit  esc dismiss                                                                                                                     
+  ┃                                                                                                                                                             • OpenCode 1.18.32
+                                                                                                                                                              

@@ -1,45 +1,45 @@
 # Dev Auto handoff
 
-- Project / selected epics: /home/oleksandr/code/BMN; Epic 29 (story 29.1), `/dev-auto 29`, resumed `/dev-auto resume` 2026-09-27.
-- Original request and intended outcomes: `_bmad-output/planning-artifacts/epics.md:1531-1571` — model maker's country flag on running agent sessions from hook-reported API host and model.
-- Mode: resume
+- Project / selected epics: /home/oleksandr/code/BMN; Epic 30 (stories 30.1, 30.2, 30.3), `/dev-auto 30` 2026-09-27.
+- Original request and intended outcomes: `_bmad-output/planning-artifacts/epics.md` "Epic 30: Answer Your Agents from Telegram" (from line 1573) — Telegram cards with tap-to-answer buttons for agent questions and permissions; seven experience lines; shape matrix (decision 7).
+- Mode: build
 - Stopping condition: selected scope accepted; no automatic time limit.
-- Explicit user stop: none (earlier stops lifted by `/dev-auto resume`; log 2026-09-27).
-- Restrictions and authorization boundaries: local task commit authorized (global rules); push to main and `pnpm run update:desktop` need owner authorization (AGENTS.md). Epic constraints honoured: flag is the only new colour; no daemon, table, network call or config edit; CLI sends hostname only.
+- Explicit user stop: none
+- Restrictions and authorization boundaries: local task commits authorized (global rules); push to main and `pnpm run update:desktop` need owner authorization (AGENTS.md); never `pnpm run package` while packaged BMN is open. Spike runs of real agents must not touch the owner's BMN or Telegram: unset `BMN_*` AND legacy `AITERM_*` in spike terminals and check `/proc/PID/environ` before prompting (leak 2026-09-27, log); never edit `~/.claude/settings.json`, `~/.codex/hooks.json` or the owner's OpenCode config (use `--settings`, temp CODEX_HOME / OPENCODE_CONFIG_DIR). Epic constraints: no blocking hooks, no "always allow", nothing on the control socket can create or change an answer.
 - Decision and history log: .dev-auto/log.md (append-only)
-- Authorized provider routes: `~/code/dev-auto/skills/dev-auto/references/models.md`; strong review Fable `medium` per owner ("let Fable review the epic instead of Astra in the end", log).
-- Lead host / requested model / observed model: Claude Code GLM-5.3 `max` (earlier legs) then Claude Code Opus; observed `claude-opus-5-5/high` (transcript dd609765…).
+- Authorized provider routes: `~/code/dev-auto/skills/dev-auto/references/models.md` (dev-auto execution consent, global rules).
+- Lead host / requested model / observed model: Claude Code, Opus (suggested lead), observed claude-opus-5-5.
 
 ## Progress
 
-- Sprint board and reconciled state: `epic-29: done`, `29-1-…: done` in `_bmad-output/implementation-artifacts/sprint-status.yaml` (ignored file).
-- Implemented: classifier `shared/protocol/src/model-origin.ts`; CLI host/model forwarding (`apps/desktop/bin/bmn`); validator; per-run origin state + `hooks` topic + `hookOrigins.list`; sidebar/pane/details flag and chip; Electron phases `model origin flags` / `after restart`; docs `features.md`, `agent-control.md`. Committed locally with this handoff (not pushed).
+- Sprint board and reconciled state: epic-30 in-progress; 30-1 implemented (Electron read-back phase pending, folded into the 30.2/30.3 Electron run); 30-2 next.
+- Implemented: 30.1 spike → docs/remote-answers.md + fixtures; structured `prompt` (shared/protocol attention-prompt.ts), schema v17 prompt_json, store merge/notice rules, validator, CLI mappers (Claude PreToolUse gated to AskUserQuestion + PermissionRequest; Codex; OpenCode), answerPermissions setting + checkbox, Needs-you read-only options, docs/agent-control.md.
 - Active helpers: none.
 
 ## Decisions and findings
 
-- Original or approved intent changes (for owner amendment): Vertex `aiplatform.googleapis.com` and `siliconflow.cn` treated as neutral (multi-maker); added confirmed CN hosts `dashscope-intl.aliyuncs.com`, `kimi.com`, `kimi.ai`; `SessionEnd` clears the flag; host never carried, model carried within one agent's session.
+- Original or approved intent changes: none.
 - Material pending findings: none.
-- Cross-epic obligations: old CLI ↔ new server passes; protocol minor 1.3; OpenCode plugin unchanged.
+- Cross-epic obligations: Epic 29 hook observation (agent + flag) reused for card headers; old `bmn` CLI ↔ new server must pass; Remote Control sessions stay skipped; text-reply path unchanged except structured-dialog drafts.
 
 ## Evidence
 
-- Checks run and observed results: c4 (`.dev-auto/evidence/e29-candidate4.diff` sha256 707b748a…) typecheck 0, lint 0, unit 105 files/1893 PASS (`e29-fullchain-c4.log`), `pnpm test:electron` EXIT 0 incl. `modelOrigin` contract (`e29-electron-c4.log`).
-- Tests: unit (classifier, CLI, validator, service, presentation), Electron self-test; RED/GREEN logs `e29-{cut,stopped,sessionend,host,review-repair,lateend}-*`. Screenshots `e29-shots/origin-{zai,unknown}-details.png`. Untested: real Claude/Codex/OpenCode payloads; narrow-row CSS layout.
-- Reviewed scope and route: GLM-5.3 pre-review of c1; Fable `medium` full review of c2; Fable recheck of c3 — acceptable.
-- Baseline and reviewed revisions / material finding dispositions / recheck or delta evidence: baseline cb2ad4c; c1 e60b576f…, c2 aade335a…, c3 297a5268…, c4 = c3 + recheck residuals R2/R4 + doc limits (delta evidence: RED `e29-lateend-red.log`, full gates). Dispositions in log.
-- Review allowance at the current boundary: rechecks used 1 / consultation 0 / final repair used 1.
-- Unreviewed or unverified areas: packaged build with real `claude glm`, Codex and OpenCode sessions (owner check; record Z.ai SessionStart `model`); Fable did not examine hello.ts version handling or narrow-row CSS.
+- Checks run and observed results: 30.1 gate typecheck+lint+unit 106 files/1934 PASS (`.dev-auto/evidence/e30-gate-30.1.log`); store prompt tests RED on baseline store 6/6, GREEN 6/6 (`e30-store-{red,green}.log`). Mirror benchmark: headless xterm ~700 ms CPU per 50 MB vs ~20 ms without → 30.2 AC1 1.10× budget will FAIL if always-on; decision pending measurement in 30.2.
+- Tests: none yet.
+- Reviewed scope and route: none yet.
+- Baseline and reviewed revisions / material finding dispositions / recheck or delta evidence: baseline ec7c517.
+- Review allowance at the current boundary: rechecks 0 / consultation 0 / final repair 0.
+- Unreviewed or unverified areas: all.
 
 ## Measurement
 
-- Timing: started 2026-09-27 ~13:00; accepted 2026-09-27 ~16:30 (two owner pauses included).
-- Dispatches: Sol consult gpt-6-sol/xhigh (`sol-consult1.json`); GLM-5.3 pre-review (`e29-prereview.json`); Fable medium review (`e29-fable-review.json`); Fable medium recheck (`e29-fable-recheck.json`).
-- Review yield: pre-review material 1 (P5 host shape) / strong-review material 2 blocking + 3 fixable (F1, F3-F5; F2 evidence-only; pre-review had flagged none of them) / rechecks 1 / defects later traced: none yet.
-- Owner interventions: 0 corrections / 2 route instructions / 2 stops for restart; ~0 avoidable.
-- Observed usage: Opus lead 366 in + 36,344,603 cache-read + 295,298 cache-create / 131,896 out; GLM lead legs 602feed9 (77,671 in / 3,070,464 cache-read / 29,808 out) and 7aafe273 (186,753 / 19,619,392 / 79,198); Sol 1,721,964 in (1,617,536 cached) / 13,343 out; GLM pre-review 58,736 / 581,888 / 11,659; Fable review $1.93, recheck $0.62. Gaps: none known.
+- Timing: started 2026-09-27 ~17:30.
+- Dispatches: none yet.
+- Review yield: n/a.
+- Owner interventions: none.
+- Observed usage: pending.
 
 ## Resume
 
-- Next safe action: owner decides on push + `pnpm run update:desktop`, then runs the packaged check (real `claude glm`, Codex, OpenCode sessions).
-- Status: COMPLETE
+- Next safe action: commit 30.1; implement 30.2 (screen mirror gated to agent sessions, epoch, answerAttention, evidence-based confirmation, OpenCode answer.take + plugin).
+- Status: ACTIVE — Story 30.1 implemented, gate green.

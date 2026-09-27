@@ -1,5 +1,5 @@
 // MODULE: constants.ts - protocol version, size limits, method registry and topic names
-export const PROTOCOL_VERSION = Object.freeze({ major: 1, minor: 3 } as const)
+export const PROTOCOL_VERSION = Object.freeze({ major: 1, minor: 4 } as const)
 
 export const MAX_CONTROL_FRAME_BYTES = 1024 * 1024
 export const MAX_TERMINAL_CHUNK_BYTES = 256 * 1024

@@ -20,9 +20,9 @@ afterEach(async () => {
 })
 
 describe('owned database schema', () => {
-  it('contains the sixteen ordered migrations and only the owned tables', () => {
+  it('contains the seventeen ordered migrations and only the owned tables', () => {
     expect(DATABASE_MIGRATIONS.map((migration) => migration.version))
-      .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
+      .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17])
     expect(STORY_SCHEMA_TABLES).toEqual([
       'app_setting',
       'artifact',
@@ -190,7 +190,7 @@ describe('owned database schema', () => {
           { version: 1 }, { version: 2 }, { version: 3 }, { version: 4 },
           { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 },
           { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 },
-          { version: 15 }, { version: 16 }
+          { version: 15 }, { version: 16 }, { version: 17 }
         ])
       expect(database.prepare('SELECT applied_at FROM schema_migration WHERE version = 3').get())
         .toEqual({ applied_at: migratedAt })
@@ -302,7 +302,8 @@ describe('owned database schema', () => {
           { version: 13, applied_at: migratedAt },
           { version: 14, applied_at: migratedAt },
           { version: 15, applied_at: migratedAt },
-          { version: 16, applied_at: migratedAt }
+          { version: 16, applied_at: migratedAt },
+          { version: 17, applied_at: migratedAt }
         ])
       expect(database.prepare('SELECT COUNT(*) AS count FROM workspace_layout').get())
         .toEqual({ count: 2 })
@@ -349,7 +350,7 @@ describe('owned database schema', () => {
         state: 'draft'
       })
       expect(database.prepare('SELECT version FROM schema_migration ORDER BY version DESC LIMIT 1').get())
-        .toEqual({ version: 16 })
+        .toEqual({ version: 17 })
     } finally {
       database.close()
     }
@@ -499,12 +500,15 @@ describe('owned database schema', () => {
         prepared_by: null, text: 'hello', state: 'draft'
       })
       expect(database.prepare(
-        `SELECT request_id, kind, title, body, state, opened_by, resolved_by
+        `SELECT request_id, kind, title, body, state, opened_by, resolved_by, prompt_json
          FROM attention_request WHERE request_id = 'legacy-request'`
       ).get()).toEqual({
         request_id: 'legacy-request', kind: 'question', title: 'Legacy question', body: 'Keep this',
-        state: 'open', opened_by: null, resolved_by: null
+        state: 'open', opened_by: null, resolved_by: null, prompt_json: null
       })
+      // Migration 17 stores only JSON a prompt reader can parse; anything else is refused at the row.
+      expect(() => database.prepare("UPDATE attention_request SET prompt_json = 'not json' WHERE request_id = 'legacy-request'").run())
+        .toThrow(/CHECK constraint/)
       expect(database.prepare(
         `SELECT agent_cli, status, conversation_reference, capture_route
          FROM conversation_binding WHERE session_id = 'legacy-session'`

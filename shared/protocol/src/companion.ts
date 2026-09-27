@@ -1,5 +1,6 @@
 // MODULE: companion.ts - records, topics and settings for the host-side companion service
 import type { ModelOriginAgent, ModelOriginCountry } from './model-origin'
+import type { AttentionPrompt } from './attention-prompt'
 import type { SessionRecord, WorkspaceRecord } from './workspace'
 
 export type ArtifactDirection = 'input' | 'output'
@@ -64,6 +65,8 @@ export interface AttentionRecord {
   openedBy: AttentionOrigin | null
   /** What answered, withdrew or expired it; null while it is open or for a legacy row. */
   resolvedBy: AttentionOrigin | null
+  /** The agent's own question or permission, as its hook reported it; null for plain requests. */
+  prompt: AttentionPrompt | null
 }
 
 /**
@@ -359,6 +362,8 @@ export interface TelegramSettings {
   notifyOn: 'attention' | 'attention-and-exit'
   /** Replies are typed and submitted only when the owner opted in; otherwise they stay addressed drafts. */
   autoSubmitReplies: boolean
+  /** Telegram may answer permission prompts (allow once or deny, never always); off until the owner turns it on. */
+  answerPermissions: boolean
 }
 
 export type VoiceModelId = 'base' | 'small'
@@ -431,7 +436,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = Object.freeze({
     allowedChatId: null,
     allowedUserId: null,
     notifyOn: 'attention',
-    autoSubmitReplies: false
+    autoSubmitReplies: false,
+    answerPermissions: false
   }),
   voice: Object.freeze({ model: 'base', language: 'auto', modelFolder: null, holdSpaceToTalk: true, vocabulary: Object.freeze([]) as unknown as string[] }),
   archive: Object.freeze({ deleteAfterDays: null })

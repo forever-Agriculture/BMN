@@ -1,0 +1,19 @@
+{
+  "hook_event_name": "permission.asked",
+  "id": "per_0e34a387c001VPvN35boSv2KTp",
+  "sessionID": "ses_f1cb5dc6fffeY1rIOKvTT8ffse",
+  "permission": "bash",
+  "patterns": [
+    "touch oc-d.txt"
+  ],
+  "metadata": {
+    "command": "touch oc-d.txt"
+  },
+  "always": [
+    "touch *"
+  ],
+  "tool": {
+    "messageID": "msg_0e34a2433001ZFvPd3AmSKG5Ia",
+    "callID": "call_3d1743557d24483f85c776c6"
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "session_id": "00000000-0000-4000-8000-000000000001",
+  "cwd": "/work/project",
+  "permission_mode": "default",
+  "hook_event_name": "PreToolUse",
+  "tool_name": "AskUserQuestion",
+  "tool_input": {
+    "questions": [
+      {
+        "question": "Which database should store users?",
+        "header": "Database",
+        "options": [
+          {
+            "label": "Postgres",
+            "description": "Already used by billing"
+          },
+          {
+            "label": "SQLite",
+            "description": "One file, no server"
+          }
+        ],
+        "multiSelect": false
+      },
+      {
+        "question": "Add integration tests now?",
+        "header": "Tests",
+        "options": [
+          {
+            "label": "Yes",
+            "description": "Before merging"
+          },
+          {
+            "label": "Later",
+            "description": "In a follow-up"
+          }
+        ],
+        "multiSelect": false
+      },
+      {
+        "question": "Where to deploy first?",
+        "header": "Deploy",
+        "options": [
+          {
+            "label": "Staging",
+            "description": "Safe first step"
+          },
+          {
+            "label": "Production",
+            "description": "Straight to users"
+          }
+        ],
+        "multiSelect": false
+      }
+    ]
+  },
+  "tool_use_id": "toolu_01YENoYpvTY1rDaqboBWAGmy"
+}

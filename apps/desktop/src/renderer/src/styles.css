@@ -2587,6 +2587,51 @@ input[type='radio'] {
   white-space: pre-wrap;
 }
 
+.attention-prompt {
+  display: grid;
+  gap: 8px;
+}
+
+.attention-prompt section {
+  display: grid;
+  gap: 4px;
+}
+
+.attention-prompt-header,
+.attention-prompt-where {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.attention-prompt-text {
+  margin: 0;
+  font-size: 13px;
+}
+
+.attention-prompt ol {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.attention-prompt li::marker {
+  color: var(--muted);
+  font: 12px var(--font-mono);
+}
+
+.attention-prompt-label {
+  display: block;
+  font-size: 13px;
+}
+
+.attention-prompt-description {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .attention-item .seen {
   color: var(--muted);
   font-size: 12px;

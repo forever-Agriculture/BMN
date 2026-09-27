@@ -21,6 +21,7 @@ function record(change: Partial<AttentionRecord> = {}): AttentionRecord {
     revision: 1,
     openedBy: null,
     resolvedBy: null,
+    prompt: null,
     ...change
   }
 }

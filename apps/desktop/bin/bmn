@@ -544,6 +544,103 @@ function userInputSummary(name, input) {
   return { title: titleText(heading, `${name} has a question`), body: bodyText(rows.join('\n')) }
 }
 
+/**
+ * Protective bounds the app stores a prompt within (shared/protocol attention-prompt.ts). A dialog larger
+ * than these is sent as a plain request rather than cut: a shortened dialog is a different dialog.
+ */
+const PROMPT_LIMITS = Object.freeze({
+  questions: 10, options: 20, text: 2000, header: 100, label: 200, description: 500, identifier: 128, tool: 100,
+  command: 4000, cwd: 4096
+})
+
+/** One line of prompt text, controls folded to spaces and clipped like a title; null when nothing is left. */
+function promptLine(value, max) {
+  if (typeof value !== 'string') return null
+  // eslint-disable-next-line no-control-regex
+  const text = value.replace(/[\u0000-\u001f\u007f-\u009f\s]+/g, ' ').trim()
+  return text === '' ? null : clip(text, max)
+}
+
+/** Prompt text that may span lines: tabs and line feeds kept, every other control removed. */
+function promptText(value, max) {
+  if (typeof value !== 'string') return null
+  // eslint-disable-next-line no-control-regex
+  const text = value.replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '').trim()
+  return text === '' ? null : clip(text, max)
+}
+
+/** An id is kept only whole: a clipped id would name a different request. */
+function promptId(value) {
+  // eslint-disable-next-line no-control-regex
+  return typeof value === 'string' && value !== '' && value.length <= PROMPT_LIMITS.identifier && !/[\u0000-\u001f\u007f-\u009f]/.test(value)
+    ? value
+    : null
+}
+
+/**
+ * The agent's own questions as the app stores them (docs/remote-answers.md), or undefined when the
+ * payload is not a well-formed dialog: every question needs text and at least one labelled option.
+ * Claude and Codex name the text `question`, Codex async `title`; OpenCode marks multi-select `multiple`.
+ */
+function questionsPrompt(harness, input, ids, shape) {
+  const candidates = isObject(input) && Array.isArray(input.questions) ? input.questions : []
+  if (candidates.length === 0 || candidates.length > PROMPT_LIMITS.questions) return undefined
+  const questions = []
+  for (const candidate of candidates) {
+    if (!isObject(candidate)) return undefined
+    const text = promptText(candidate.question ?? candidate.title, PROMPT_LIMITS.text)
+    const raw = Array.isArray(candidate.options) ? candidate.options : []
+    if (text === null || raw.length === 0 || raw.length > PROMPT_LIMITS.options) return undefined
+    const options = []
+    for (const option of raw) {
+      const label = promptLine(isObject(option) ? option.label : option, PROMPT_LIMITS.label)
+      if (label === null) return undefined
+      options.push({ label, description: isObject(option) ? promptText(option.description, PROMPT_LIMITS.description) : null })
+    }
+    questions.push({
+      id: promptId(candidate.id),
+      header: promptLine(candidate.header, PROMPT_LIMITS.header),
+      text,
+      multiSelect: candidate.multiSelect === true || candidate.multiple === true,
+      options
+    })
+  }
+  return {
+    type: 'questions',
+    harness,
+    shape: shape ?? (questions.some((question) => question.multiSelect) ? 'multi-select' : 'choice'),
+    requestRef: promptId(ids.requestRef),
+    toolUseId: promptId(ids.toolUseId),
+    questions
+  }
+}
+
+/** A permission prompt; `command` stays null unless the harness said exactly what would run. */
+function permissionPrompt(harness, shape, tool, command, ids, cwd) {
+  const name = promptLine(tool, PROMPT_LIMITS.tool)
+  if (name === null) return undefined
+  const exact = typeof command === 'string' && command.length <= PROMPT_LIMITS.command ? promptText(command, PROMPT_LIMITS.command) : null
+  return {
+    type: 'permission',
+    harness,
+    shape,
+    requestRef: promptId(ids.requestRef),
+    toolUseId: promptId(ids.toolUseId),
+    tool: name,
+    command: exact,
+    cwd: typeof cwd === 'string' && cwd.startsWith('/') && cwd.length <= PROMPT_LIMITS.cwd && !/[\u0000-\u001f]/.test(cwd) ? cwd : null
+  }
+}
+
+/** The exact thing a Claude tool would act on, when it names one; otherwise null, never a JSON dump. */
+function claudeCommand(input) {
+  if (!isObject(input)) return null
+  for (const key of ['command', 'file_path', 'path', 'url', 'notebook_path', 'pattern']) {
+    if (typeof input[key] === 'string' && input[key] !== '') return input[key]
+  }
+  return null
+}
+
 /** Claude Code lists in-flight background work and scheduled wake-ups on Stop; either resumes the agent without the owner. */
 function resumesByItself(event) {
   return [event.background_tasks, event.session_crons].some((list) => Array.isArray(list) && list.length > 0)
@@ -593,9 +690,13 @@ function hookRequests(agent, event) {
   const requestKey = (slot) => `${agent}:${slot}`
   // Every call this event makes carries the event that made it, so Needs you can say where a row came from.
   const origin = hookOrigin(agent, event.hook_event_name)
-  const open = (slot, kind, title, body) => [{
+  const open = (slot, kind, title, body, prompt) => [{
     method: 'attention.open',
-    params: { requestKey: requestKey(slot), kind, title, origin, ...(body === undefined ? {} : { body }) }
+    params: {
+      requestKey: requestKey(slot), kind, title, origin,
+      ...(body === undefined ? {} : { body }),
+      ...(prompt === undefined ? {} : { prompt })
+    }
   }]
   const withdraw = (...slots) => slots.map((slot) => ({
     method: 'attention.withdraw',
@@ -613,13 +714,15 @@ function hookRequests(agent, event) {
       switch (event.hook_event_name) {
         case 'permission.asked':
           return open('subagent-permission', 'permission', titleText(`OpenCode subagent asks to ${titleText(event.permission, 'use a tool')}`, 'OpenCode subagent asks permission'),
-            bodyText(Array.isArray(event.patterns) ? event.patterns.join('\n') : undefined))
+            bodyText(Array.isArray(event.patterns) ? event.patterns.join('\n') : undefined),
+            permissionPrompt('opencode', 'subagent', event.permission, event.metadata?.command, { requestRef: event.id }, null))
         case 'permission.replied':
           return event.reply === 'reject' ? withdraw('subagent-permission')
             : ['once', 'always'].includes(event.reply) ? answered('subagent-permission') : []
         case 'question.asked': {
           const summary = userInputSummary('OpenCode subagent', event)
-          return open('subagent-question', 'question', summary.title, summary.body)
+          return open('subagent-question', 'question', summary.title, summary.body,
+            questionsPrompt('opencode', event, { requestRef: event.id }, 'subagent'))
         }
         case 'question.replied': return answered('subagent-question')
         case 'question.rejected': return withdraw('subagent-question')
@@ -629,13 +732,15 @@ function hookRequests(agent, event) {
     switch (event.hook_event_name) {
       case 'permission.asked':
         return open('permission', 'permission', titleText(`OpenCode asks to ${titleText(event.permission, 'use a tool')}`, 'OpenCode asks permission'),
-          bodyText(Array.isArray(event.patterns) ? event.patterns.join('\n') : undefined))
+          bodyText(Array.isArray(event.patterns) ? event.patterns.join('\n') : undefined),
+          // Only `metadata.command` says exactly what runs; `patterns` are what an "always" would cover.
+          permissionPrompt('opencode', 'permission', event.permission, event.metadata?.command, { requestRef: event.id }, null))
       case 'permission.replied':
         return event.reply === 'reject' ? withdraw('permission')
           : ['once', 'always'].includes(event.reply) ? answered('permission') : []
       case 'question.asked': {
         const summary = userInputSummary(name, event)
-        return open('question', 'question', summary.title, summary.body)
+        return open('question', 'question', summary.title, summary.body, questionsPrompt('opencode', event, { requestRef: event.id }))
       }
       case 'question.replied': return answered('question')
       case 'question.rejected': return withdraw('question')
@@ -660,9 +765,15 @@ function hookRequests(agent, event) {
   }
   switch (event.hook_event_name) {
     case 'PreToolUse': {
+      if (agent === 'claude' && event.tool_name === 'AskUserQuestion') {
+        const summary = userInputSummary(name, event.tool_input)
+        return open('question', 'question', summary.title, summary.body,
+          questionsPrompt('claude', event.tool_input, { toolUseId: event.tool_use_id }))
+      }
       if (agent !== 'codex' || !userInputTool(event.tool_name)) return []
       const summary = userInputSummary(name, event.tool_input)
-      return open('question', 'question', summary.title, summary.body)
+      return open('question', 'question', summary.title, summary.body, questionsPrompt('codex', event.tool_input,
+        { toolUseId: event.tool_use_id }, asyncUserInputTool(event.tool_name) ? 'async-choice' : undefined))
     }
     case 'Notification': {
       const type = event.notification_type
@@ -677,11 +788,21 @@ function hookRequests(agent, event) {
       return []
     }
     case 'PermissionRequest':
+      // Claude asks permission to show its own question dialog; that is the question, not a permission.
+      if (agent === 'claude' && event.tool_name === 'AskUserQuestion') {
+        const summary = userInputSummary(name, event.tool_input)
+        return open('question', 'question', summary.title, summary.body, questionsPrompt('claude', event.tool_input, {}))
+      }
       return open(
         'permission',
         'permission',
         titleText(`${name} wants to use ${titleText(event.tool_name, 'a tool')}`, `${name} needs your permission`),
-        bodyText(toolSummary(event.tool_input))
+        bodyText(toolSummary(event.tool_input)),
+        // Codex permissions stay plain: its PermissionRequest fires before Auto Review decides.
+        agent === 'claude'
+          ? permissionPrompt('claude', 'permission', event.tool_name, claudeCommand(event.tool_input), { toolUseId: event.tool_use_id },
+            event.cwd)
+          : undefined
       )
     case 'PostToolUseFailure':
     case 'PostToolUse':
@@ -735,8 +856,12 @@ function hookRequests(agent, event) {
 const HOOK_FILES = {
   claude: {
     path: ['.claude', 'settings.json'],
-    events: ['Notification', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd'],
+    events: ['Notification', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd'],
     optional: [],
+    // BMN only needs PreToolUse for the question dialog, and it blocks every tool until it returns, so the
+    // entry is gated to that tool. Measured on 2.1.283: a string matcher fires for AskUserQuestion and
+    // not for Bash (docs/remote-answers.md). An ungated entry still counts, since it covers the question too.
+    matchers: { PreToolUse: 'AskUserQuestion' },
 // Measured against the real CLI, firing a PostToolUse hook on a real tool call: a matcher,
     // group or entry Claude Code cannot use kills that group and nothing else - a sibling group in
     // the same event still fired, and so did another event's. So BMN never refuses a Claude file
@@ -903,7 +1028,7 @@ function oneLine(command) {
  * BMN recognises. A recognised entry settles the event; the named ones are carried out so that
  * `check` can print them beside it.
  */
-function hookEventState(groups, agent) {
+function hookEventState(groups, agent, event) {
   if (!Array.isArray(groups)) return { state: 'missing', unrecognised: [], gated: [] }
   let older = false
   const unrecognised = []
@@ -925,7 +1050,7 @@ function hookEventState(groups, agent) {
     // ignore the matcher on some events (Codex does on `Stop`, `UserPromptSubmit` and `Interrupt`),
     // in which case the entry `install` adds beside it is a duplicate rather than the only one
     // that works.
-    const gated = gatesEvent(group.matcher, agent)
+    const gated = gatesEvent(group.matcher, agent, event)
     const entries = Array.isArray(group.hooks) ? group.hooks : []
     for (const entry of entries) {
       // Only a command entry runs anything; another hook type that names bmn still never calls it.
@@ -1067,8 +1192,12 @@ const TIMEOUT_RULE_UNMEASURED =
 const TIMEOUT_NOT_LOADABLE =
   'an entry here is one of BMN\'s own commands whose timeout is not a whole number at or above zero or null; Codex\'s u64 would not load it'
 
-/** Whether this matcher leaves its group gated, by what the harness in question treats as absence. */
-function gatesEvent(matcher, agent) {
+/**
+ * Whether this matcher leaves its group gated, by what the harness in question treats as absence. The one
+ * matcher BMN itself writes for an event (`matchers`) is not a gate: it is exactly the part BMN needs.
+ */
+function gatesEvent(matcher, agent, event) {
+  if (event !== undefined && HOOK_FILES[agent].matchers?.[event] !== undefined && matcher === HOOK_FILES[agent].matchers[event]) return false
   const ungated = HOOK_FILES[agent].ungated
   if (matcher === undefined) return !ungated.includes('absent')
   if (matcher === null) return !ungated.includes('null')
@@ -1084,7 +1213,7 @@ function checkHooks(agent, path, file = agent === 'opencode' ? undefined : readH
   const events = [...spec.events, ...spec.optional].map((event) => {
     // An unusable file says nothing about any event, so nothing is reported as wired.
     const read = file.state === 'read'
-      ? hookEventState(hooks[event], agent)
+      ? hookEventState(hooks[event], agent, event)
       : { state: 'missing', unrecognised: [], gated: [] }
     return {
       event,
@@ -1159,7 +1288,8 @@ function installHooks(agent, data, missing) {
   for (const event of missing) {
     const groups = Array.isArray(next.hooks[event]) ? [...next.hooks[event]] : []
     // Appended as its own group: an existing group carries a matcher this entry must not inherit.
-    groups.push({ hooks: [hookEntry(agent)] })
+    const matcher = HOOK_FILES[agent].matchers?.[event]
+    groups.push({ ...(matcher === undefined ? {} : { matcher }), hooks: [hookEntry(agent)] })
     next.hooks[event] = groups
   }
   return next

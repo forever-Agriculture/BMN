@@ -23,6 +23,7 @@ import {
   type AppSettings,
   type ArtifactPreview,
   type ArtifactRecord,
+  type AttentionPrompt,
   type AttentionRecord,
   type BackupManifest,
   type BackupManifestEntry,
@@ -841,6 +842,7 @@ export class CompanionService {
     expiresAt?: string
     phoneNotified?: boolean
     origin?: string
+    prompt?: AttentionPrompt
   }): Promise<AttentionRecord & { changed: boolean }> {
     const record = await this.options.database.companion('openAttention', {
       sessionId: p.sessionId,
@@ -850,7 +852,8 @@ export class CompanionService {
       title: p.title,
       ...(p.body !== undefined ? { body: p.body } : {}),
       ...(p.expiresAt !== undefined ? { expiresAt: new Date(p.expiresAt).toISOString() } : {}),
-      ...(p.origin !== undefined ? { origin: p.origin } : {})
+      ...(p.origin !== undefined ? { origin: p.origin } : {}),
+      ...(p.prompt !== undefined ? { prompt: p.prompt } : {})
     }, randomUUID(), this.iso())
     this.emit('attention', p.sessionId)
     if (!p.phoneNotified) this.pager.opened(record)

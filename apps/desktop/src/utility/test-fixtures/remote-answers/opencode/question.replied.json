@@ -1,0 +1,10 @@
+{
+  "hook_event_name": "question.replied",
+  "sessionID": "ses_f1cb78f46ffeE27z0srzmO0ERc",
+  "requestID": "que_0e3488978001RROK6B1gVoiWiS",
+  "answers": [
+    [
+      "Session cookies"
+    ]
+  ]
+}

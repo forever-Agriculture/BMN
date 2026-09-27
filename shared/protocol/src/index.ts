@@ -1,6 +1,7 @@
 // MODULE: index.ts - public exports of the shared BMN protocol package
 export * from './binding'
 export * from './companion'
+export * from './attention-prompt'
 export * from './constants'
 export * from './envelope'
 export * from './errors'

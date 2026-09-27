@@ -49,7 +49,8 @@ const request = (requestId: string, sessionId: string, openedAt: string, state: 
   seenAt: null,
   revision: 1,
   openedBy: null,
-  resolvedBy: null
+  resolvedBy: null,
+  prompt: null
 })
 
 describe('workspace attention', () => {

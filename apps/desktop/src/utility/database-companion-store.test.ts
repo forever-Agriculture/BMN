@@ -6,6 +6,8 @@ import {
   DEFAULT_APP_SETTINGS,
   ERROR_CODES,
   type ArtifactRecord,
+  type AttentionPrompt,
+  type AttentionQuestionsPrompt,
   type ProgressRecord,
   type ProgressState
 } from '@bmn/protocol'
@@ -120,6 +122,73 @@ describe('companion store', () => {
     expect(() => setArtifactState(database, 'nope', 'missing')).toThrow(
       expect.objectContaining({ code: ERROR_CODES.notFound })
     )
+  })
+
+  describe('structured prompts (Epic 30)', () => {
+    const question: AttentionQuestionsPrompt = {
+      type: 'questions', harness: 'claude', shape: 'choice', requestRef: null, toolUseId: 'toolu_1',
+      questions: [{ id: null, header: 'Auth method', text: 'Which auth?', multiSelect: false,
+        options: [{ label: 'JWT', description: 'Stateless' }, { label: 'Cookies', description: null }] }]
+    }
+    const asked = {
+      sessionId: 's1', incarnationId: 'i1', requestKey: 'claude:question', kind: 'question' as const,
+      title: 'Claude asks: Which auth?', origin: 'hook:claude:PreToolUse', prompt: question
+    }
+    const bash: AttentionPrompt = {
+      type: 'permission', harness: 'claude', shape: 'permission', requestRef: null, toolUseId: null,
+      tool: 'Bash', command: 'touch a.txt', cwd: '/work/one'
+    }
+    const permission = {
+      sessionId: 's1', incarnationId: 'i1', requestKey: 'claude:permission', kind: 'permission' as const,
+      title: 'Claude wants to use Bash', body: 'touch a.txt', origin: 'hook:claude:PermissionRequest', prompt: bash
+    }
+    const notice = {
+      sessionId: 's1', incarnationId: 'i1', requestKey: 'claude:permission', kind: 'permission' as const,
+      title: 'Claude needs your permission', origin: 'hook:claude:Notification'
+    }
+
+    it('stores the prompt and reads it back on the record', () => {
+      expect(openAttention(database, asked, 'r1', now).prompt).toEqual(question)
+      expect(getAttention(database, 'r1').prompt).toEqual(question)
+    })
+
+    it('keeps revision and unread state when Claude repeats the same permission without a prompt', () => {
+      const opened = openAttention(database, permission, 'r1', now)
+      markAttentionSeen(database, 'r1', now)
+      // Claude's delayed notice names no tool; it is the same prompt, not a changed one to page again.
+      const repeated = openAttention(database, { ...notice, origin: 'cli' }, 'r2', now)
+      expect(repeated).toMatchObject({ requestId: 'r1', revision: opened.revision, changed: false, title: permission.title })
+      expect(getAttention(database, 'r1')).toMatchObject({ seenAt: now, prompt: bash })
+    })
+
+    it('files the notice under an open question instead of opening a tool-less permission', () => {
+      openAttention(database, asked, 'r1', now)
+      const covered = openAttention(database, notice, 'r2', now)
+      expect(covered).toMatchObject({ requestId: 'r1', changed: false })
+      expect(listAttention(database).map((row) => row.requestId)).toEqual(['r1'])
+    })
+
+    it('still opens the notice when no structured prompt is open, or another run holds one', () => {
+      openAttention(database, { ...asked, incarnationId: 'old' }, 'r1', now)
+      expect(openAttention(database, notice, 'r2', now)).toMatchObject({ requestId: 'r2', changed: true, prompt: null })
+    })
+
+    it('merges the question PreToolUse and PermissionRequest report in either order without a new revision', () => {
+      const withoutId = { ...asked, origin: 'hook:claude:PermissionRequest', prompt: { ...question, toolUseId: null } }
+      openAttention(database, asked, 'r1', now)
+      expect(openAttention(database, withoutId, 'r2', now)).toMatchObject({ revision: 1, changed: false, prompt: question })
+      closeAttention(database, { requestId: 'r1' }, 'answered', 'x', now)
+
+      openAttention(database, withoutId, 'r3', now)
+      expect(openAttention(database, asked, 'r4', now)).toMatchObject({ requestId: 'r3', revision: 1, changed: false, prompt: question })
+    })
+
+    it('bumps the revision for a different dialog in the same slot', () => {
+      openAttention(database, asked, 'r1', now)
+      const next = { ...question, toolUseId: 'toolu_2', questions: [{ ...question.questions[0]!, text: 'Which database?' }] }
+      expect(openAttention(database, { ...asked, title: 'Claude asks: Which database?', prompt: next }, 'r2', now))
+        .toMatchObject({ requestId: 'r1', revision: 2, changed: true, prompt: next })
+    })
   })
 
   it('keeps one open attention per key until a correlated close', () => {
@@ -585,6 +654,15 @@ describe('companion store', () => {
     expect(() => putSettingsSection(database, 'telegram', { ...DEFAULT_APP_SETTINGS.telegram, enabled: true }, now))
       .toThrow(/allowed chat/)
     expect(getSettings(database).appearance).toEqual({ identity: 'boss', colorMode: 'dark', terminalFontSize: 16 })
+  })
+
+  it('reads a Telegram section saved before Epic 30 with permission answers off, and stores the choice', () => {
+    const legacy = { enabled: false, allowedChatId: 7, allowedUserId: null, notifyOn: 'attention', autoSubmitReplies: true }
+    database.prepare("INSERT OR REPLACE INTO app_setting(key, value_json, updated_at) VALUES ('telegram', ?, ?)")
+      .run(JSON.stringify(legacy), now)
+    expect(getSettings(database).telegram).toEqual({ ...legacy, answerPermissions: false })
+    expect(putSettingsSection(database, 'telegram', { ...legacy, answerPermissions: true }, now).telegram.answerPermissions).toBe(true)
+    expect(() => putSettingsSection(database, 'telegram', { ...legacy, answerPermissions: 'yes' }, now)).toThrow(/permission prompts/)
   })
 
   it('splits a theme stored before identity and color mode were separate choices', () => {

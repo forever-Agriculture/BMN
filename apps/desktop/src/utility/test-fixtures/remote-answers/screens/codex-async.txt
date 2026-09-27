@@ -1,0 +1,50 @@
+  tokens"), "Session cookies" (description "Server-side sessions"), "OAuth only" (description "Delegate sign-in").
+
+
+• Questions 1/1 answered
+  • Which auth method should the API use?
+    answer: Session cookies
+
+• Session cookies.
+
+  5:28 PM
+
+
+› Call request_user_input exactly once with TWO questions: (1) header "Database", question "Which database should store users?", options "Postgres" (desc "Already used"), "SQLite" (desc "One file");
+  (2) header "Tests", question "Add integration tests now?", options "Yes" (desc "Before merging"), "Later" (desc "Follow-up").
+
+
+• Questions 2/2 answered
+  • Which database should store users?
+    answer: SQLite
+  • Add integration tests now?
+    answer: Yes
+
+• • Database: SQLite
+  • Integration tests: Yes, before merging
+
+  5:29 PM
+
+• Model changed to gpt-6-luna low for Default mode.
+
+
+› Call the request_user_input_async tool exactly once to ask me "Which color should the logo use?" with options "Gold" and "Black". Then stop your turn.
+
+
+• Which color should the logo use?
+
+  • Gold
+  • Black
+
+• Which color should the logo use?
+
+  • Gold
+  • Black
+
+  5:30 PM
+                                                                                                                                                Tip: Press ctrl+r to search previously entered prompts.
+
+› Ask Codex to do anything
+
+  GPT-6-Luna low · /work/project · Choose API auth method
+  ? for shortcuts                                                                                                                                                              ⚠ 1 warning · f2 to view

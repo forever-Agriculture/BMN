@@ -10,6 +10,7 @@ export interface TelegramFormFields {
   allowedUserId: string
   notifyOn: 'attention' | 'attention-and-exit'
   autoSubmitReplies: boolean
+  answerPermissions: boolean
 }
 
 export type TelegramFormResult = { ok: true; value: TelegramSettings } | { ok: false; message: string }
@@ -47,7 +48,8 @@ export function parseTelegramForm(fields: TelegramFormFields): TelegramFormResul
       allowedChatId: chat.value,
       allowedUserId: user.value,
       notifyOn: fields.notifyOn,
-      autoSubmitReplies: fields.autoSubmitReplies
+      autoSubmitReplies: fields.autoSubmitReplies,
+      answerPermissions: fields.answerPermissions
     }
   }
 }

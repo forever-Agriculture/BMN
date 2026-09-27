@@ -1,0 +1,50 @@
+ ▐▛███▛█   Claude Code v2.1.283
+▝▜██████▀  Haiku 4.5 · Claude Max
+ ▝▝   ▝▝   /work/project
+
+
+❯ Use the AskUserQuestion tool exactly once to ask me ONE question: header "Auth method", question "Which auth method should the API use?", options: "JWT" (description "Stateless tokens, no session 
+  store"), "Session cookies" (description "Server-side sessions in Redis"), "OAuth only" (description "Delegate sign-in to Google and GitHub"). Single select. Do nothing else before asking.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Auth method 
+
+Which auth method should the API use?
+
+❯ 1. JWT
+     Stateless tokens, no session store
+  2. Session cookies
+     Server-side sessions in Redis
+  3. OAuth only
+     Delegate sign-in to Google and GitHub
+  4. Type something.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

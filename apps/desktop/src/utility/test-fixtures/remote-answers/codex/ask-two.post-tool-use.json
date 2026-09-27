@@ -1,0 +1,44 @@
+{
+  "session_id": "00000000-0000-4000-8000-000000000002",
+  "cwd": "/work/project",
+  "hook_event_name": "PostToolUse",
+  "model": "gpt-6-luna",
+  "permission_mode": "default",
+  "tool_name": "request_user_input",
+  "tool_input": {
+    "questions": [
+      {
+        "header": "Database",
+        "id": "database",
+        "question": "Which database should store users?",
+        "options": [
+          {
+            "label": "Postgres",
+            "description": "Already used"
+          },
+          {
+            "label": "SQLite",
+            "description": "One file"
+          }
+        ]
+      },
+      {
+        "header": "Tests",
+        "id": "tests",
+        "question": "Add integration tests now?",
+        "options": [
+          {
+            "label": "Yes",
+            "description": "Before merging"
+          },
+          {
+            "label": "Later",
+            "description": "Follow-up"
+          }
+        ]
+      }
+    ]
+  },
+  "tool_response": "{\"answers\":{\"tests\":{\"answers\":[\"Yes\"]},\"database\":{\"answers\":[\"SQLite\"]}}}",
+  "tool_use_id": "call_V5f15sVVybbRPi2QBgmKciRj"
+}

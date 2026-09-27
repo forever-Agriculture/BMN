@@ -1,0 +1,29 @@
+{
+  "hook_event_name": "question.asked",
+  "id": "que_0e3488978001RROK6B1gVoiWiS",
+  "sessionID": "ses_f1cb78f46ffeE27z0srzmO0ERc",
+  "questions": [
+    {
+      "question": "Which auth method should the API use?",
+      "header": "Auth method",
+      "options": [
+        {
+          "label": "JWT",
+          "description": "Stateless tokens"
+        },
+        {
+          "label": "Session cookies",
+          "description": "Server-side sessions"
+        },
+        {
+          "label": "OAuth only",
+          "description": "Delegate sign-in"
+        }
+      ]
+    }
+  ],
+  "tool": {
+    "messageID": "msg_0e34870ff001tZpsut7MFjWIR7",
+    "callID": "call_b88ff3b6cf7b47b3bc111f71"
+  }
+}

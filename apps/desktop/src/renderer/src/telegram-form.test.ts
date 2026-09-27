@@ -8,6 +8,7 @@ const fields = (change: Partial<TelegramFormFields>): TelegramFormFields => ({
   allowedUserId: '',
   notifyOn: 'attention',
   autoSubmitReplies: false,
+  answerPermissions: false,
   ...change
 })
 
@@ -21,7 +22,8 @@ describe('parseTelegramForm', () => {
         allowedChatId: null,
         allowedUserId: null,
         notifyOn: 'attention',
-        autoSubmitReplies: false
+        autoSubmitReplies: false,
+        answerPermissions: false
       }
     })
   })
@@ -35,7 +37,8 @@ describe('parseTelegramForm', () => {
         allowedChatId: -100123,
         allowedUserId: -7,
         notifyOn: 'attention',
-        autoSubmitReplies: false
+        autoSubmitReplies: false,
+        answerPermissions: false
       }
     })
   })
@@ -74,7 +77,8 @@ describe('parseTelegramForm', () => {
         allowedChatId: 12345,
         allowedUserId: null,
         notifyOn: 'attention',
-        autoSubmitReplies: false
+        autoSubmitReplies: false,
+        answerPermissions: false
       }
     })
   })
@@ -90,7 +94,8 @@ describe('parseTelegramForm', () => {
         allowedChatId: 1,
         allowedUserId: null,
         notifyOn: 'attention-and-exit',
-        autoSubmitReplies: true
+        autoSubmitReplies: true,
+        answerPermissions: false
       }
     })
   })

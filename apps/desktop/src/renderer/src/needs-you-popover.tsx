@@ -1,6 +1,6 @@
 // MODULE: needs-you-popover.tsx - unresolved requests, unread sessions and recent request history under the header count
 import { useEffect, useRef } from 'react'
-import type { AttentionRecord } from '@bmn/protocol'
+import type { AttentionPrompt, AttentionRecord } from '@bmn/protocol'
 import { attentionProvenance, isActionableAttention, openAttentionGroups, relativeAge } from './session-presentation'
 
 export interface SessionPlace {
@@ -12,6 +12,47 @@ export interface UnreadEntry {
   sessionId: string
   reason: string
   at: string
+}
+
+/**
+ * The agent's own question or permission, read-only: the owner answers in the terminal (or from Telegram);
+ * this only shows what is being asked, option by option, instead of the flattened text.
+ */
+function PromptDetail(props: { prompt: AttentionPrompt }): React.JSX.Element {
+  const { prompt } = props
+  if (prompt.type === 'permission') {
+    return (
+      <div className="attention-prompt">
+        {prompt.command ? <pre>{prompt.command}</pre> : null}
+        {prompt.cwd ? <span className="attention-prompt-where">in {prompt.cwd}</span> : null}
+      </div>
+    )
+  }
+  const several = prompt.questions.length > 1
+  return (
+    <div className="attention-prompt">
+      {prompt.questions.map((question, index) => (
+        <section key={index} aria-label={question.header ?? `Question ${index + 1}`}>
+          {several || question.header ? (
+            <span className="attention-prompt-header">
+              {several ? `${index + 1} of ${prompt.questions.length}` : null}
+              {several && question.header ? ' · ' : null}
+              {question.header}
+            </span>
+          ) : null}
+          {several ? <p className="attention-prompt-text">{question.text}</p> : null}
+          <ol>
+            {question.options.map((option, optionIndex) => (
+              <li key={optionIndex}>
+                <span className="attention-prompt-label">{option.label}</span>
+                {option.description ? <span className="attention-prompt-description">{option.description}</span> : null}
+              </li>
+            ))}
+          </ol>
+        </section>
+      ))}
+    </div>
+  )
 }
 
 export function NeedsYouPopover(props: {
@@ -67,7 +108,7 @@ export function NeedsYouPopover(props: {
           <span className="age">{relativeAge(request.openedAt, props.now)}</span>
         </div>
         <h3>{request.title}</h3>
-        {request.body ? <pre>{request.body}</pre> : null}
+        {request.prompt ? <PromptDetail prompt={request.prompt} /> : request.body ? <pre>{request.body}</pre> : null}
         <p className="seen">
           {actionable
             ? request.seenAt

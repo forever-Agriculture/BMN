@@ -1,0 +1,32 @@
+{
+  "session_id": "00000000-0000-4000-8000-000000000002",
+  "cwd": "/work/project",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-6-luna",
+  "permission_mode": "default",
+  "tool_name": "request_user_input",
+  "tool_input": {
+    "questions": [
+      {
+        "header": "Auth method",
+        "id": "auth_method",
+        "question": "Which auth method should the API use?",
+        "options": [
+          {
+            "label": "JWT",
+            "description": "Stateless tokens"
+          },
+          {
+            "label": "Session cookies",
+            "description": "Server-side sessions"
+          },
+          {
+            "label": "OAuth only",
+            "description": "Delegate sign-in"
+          }
+        ]
+      }
+    ]
+  },
+  "tool_use_id": "call_HQi4QVCmZt7d0mcVvvTIMGee"
+}

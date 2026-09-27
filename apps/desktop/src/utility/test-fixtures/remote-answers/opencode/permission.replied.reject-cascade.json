@@ -1,0 +1,14 @@
+[
+  {
+    "hook_event_name": "permission.replied",
+    "sessionID": "ses_f1cb5dc6fffeY1rIOKvTT8ffse",
+    "requestID": "per_0e34a38370010edWsFz2o7GSqa",
+    "reply": "reject"
+  },
+  {
+    "hook_event_name": "permission.replied",
+    "sessionID": "ses_f1cb5dc6fffeY1rIOKvTT8ffse",
+    "requestID": "per_0e34a387c001VPvN35boSv2KTp",
+    "reply": "reject"
+  }
+]

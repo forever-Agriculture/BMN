@@ -12,7 +12,9 @@ import {
   hasDisallowedHandoffControl,
   isHookEventName,
   isProtocolErrorCode,
+  parseAttentionPrompt,
   type AttentionKind,
+  type AttentionPrompt,
   type ConversationObservationSource,
   type HookEventAgent,
   type HookEventEffect,
@@ -70,6 +72,8 @@ export interface ControlHandlers {
     phoneNotified?: boolean
     /** What opened it, from the closed origin vocabulary. */
     origin?: string
+    /** The agent's own question or permission, already validated. */
+    prompt?: AttentionPrompt
   }): Promise<unknown>
   /** A session may address one destination; only the handler creates the owner-delivered draft. */
   prepareHandoff(p: {
@@ -801,7 +805,7 @@ export class ControlServer {
       case 'attention.open': {
         const params = closedParams(rawParams, [
           'sessionId', 'requestKey', 'kind', 'title', 'body', 'expiresAt', 'idempotencyKey', 'phoneNotified',
-          'origin'
+          'origin', 'prompt'
         ])
         const requestKey = requireText(params, 'requestKey', RULES.requestKey)
         if (requestKey.startsWith('handoff:')) throw invalid('The handoff request key is reserved')
@@ -811,6 +815,16 @@ export class ControlServer {
         const expiresAt = readTimestamp(params, 'expiresAt')
         const idempotencyKey = readText(params, 'idempotencyKey', RULES.idempotencyKey)
         const phoneNotified = readBoolean(params, 'phoneNotified')
+        let prompt: AttentionPrompt | undefined
+        if (params.prompt !== undefined) {
+          const parsed = parseAttentionPrompt(params.prompt)
+          if (!parsed.ok) throw invalid(parsed.error)
+          // A question prompt belongs to a question request and a permission prompt to a permission one.
+          if ((parsed.value.type === 'questions') !== (kind === 'question') || (parsed.value.type === 'permission') !== (kind === 'permission')) {
+            throw invalid('prompt type must match the request kind')
+          }
+          prompt = parsed.value
+        }
         const origin = this.usableOrigin(params, scope, method, handlers)
         const sessionId = this.target(scope, params)
         return this.idempotent(scope, method, idempotencyKey, params, () => handlers.openAttention({
@@ -822,7 +836,8 @@ export class ControlServer {
           ...(body === undefined ? {} : { body }),
           ...(expiresAt === undefined ? {} : { expiresAt }),
           ...(phoneNotified === undefined ? {} : { phoneNotified }),
-          ...(origin === undefined ? {} : { origin })
+          ...(origin === undefined ? {} : { origin }),
+          ...(prompt === undefined ? {} : { prompt })
         }))
       }
       case 'conversation.observe': {

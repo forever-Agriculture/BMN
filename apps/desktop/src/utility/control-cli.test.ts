@@ -1192,7 +1192,10 @@ describe('bmn hook provenance and the hook event log', () => {
 
 const DOCUMENTED_CLAUDE = '[ -n "$BMN_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook claude; exit 0'
 const OLDER_CLAUDE = '[ -n "$AITERM_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook claude; exit 0'
-const CLAUDE_EVENTS = ['Notification', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd']
+const CLAUDE_EVENTS = [
+  'Notification', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit', 'Stop',
+  'SessionStart', 'SessionEnd'
+]
 const CODEX_EVENTS = ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd', 'Interrupt']
 const DOCUMENTED_CODEX = DOCUMENTED_CLAUDE.replace('bmn hook claude', 'bmn hook codex')
 
@@ -2205,10 +2208,16 @@ describe('bmn hooks install', () => {
     expect(after.hooks.PostToolUse[0]).toEqual(before.hooks.PostToolUse[0])
     expect(after.hooks.Stop).toEqual(before.hooks.Stop)
     expect(after.hooks.PostToolUse[1]).toEqual({ hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] })
-    for (const event of ['Notification', 'UserPromptSubmit', 'SessionStart', 'SessionEnd']) {
+    for (const event of ['Notification', 'PermissionRequest', 'UserPromptSubmit', 'SessionStart', 'SessionEnd']) {
       expect(after.hooks[event]).toEqual([{ hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] }])
     }
-    expect(install.stdout).toContain('Notification, PostToolUse, PostToolUseFailure, UserPromptSubmit, SessionStart, SessionEnd')
+    // PreToolUse blocks every tool until it returns, so BMN's entry is gated to the one tool it needs.
+    expect(after.hooks.PreToolUse).toEqual([
+      { matcher: 'AskUserQuestion', hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] }
+    ])
+    expect(install.stdout).toContain(
+      'Notification, PreToolUse, PermissionRequest, PostToolUse, PostToolUseFailure, UserPromptSubmit, SessionStart, SessionEnd'
+    )
     expect(install.stdout.split('\n').filter((line) => /^-[^-]/.test(line))).toEqual([])
   })
 
@@ -2553,6 +2562,7 @@ describe('the hook event lists check and hook share', () => {
     const payloads: Record<string, unknown> = {
       Notification: { notification_type: 'permission_prompt', message: 'needs permission' },
       PreToolUse: { tool_name: 'request_user_input', tool_input: { questions: [{ question: 'Which?' }] } },
+      PermissionRequest: { tool_name: 'Bash', tool_input: { command: 'ls' } },
       PostToolUse: { tool_name: 'Bash', tool_input: {} },
       PostToolUseFailure: { tool_name: 'Bash', tool_input: { command: 'false' }, error: 'Exit code 1' },
       UserPromptSubmit: {},
@@ -2575,7 +2585,11 @@ describe('the hook event lists check and hook share', () => {
         const before = fixture.handlers.openAttention.mock.calls.length +
           fixture.handlers.withdrawAttention.mock.calls.length +
           fixture.handlers.resolveAttention.mock.calls.length
-        await runHook(fixture, agent, { hook_event_name: event, ...(payloads[event] as object) })
+        // Claude's only PreToolUse is its own question dialog; Codex's is request_user_input.
+        const payload = agent === 'claude' && event === 'PreToolUse'
+          ? { tool_name: 'AskUserQuestion', tool_input: { questions: [{ question: 'Which?', options: [{ label: 'A', description: 'a' }] }] } }
+          : payloads[event]
+        await runHook(fixture, agent, { hook_event_name: event, ...(payload as object) })
         const after = fixture.handlers.openAttention.mock.calls.length +
           fixture.handlers.withdrawAttention.mock.calls.length +
           fixture.handlers.resolveAttention.mock.calls.length
@@ -2851,5 +2865,157 @@ describe('OpenCode hooks', () => {
     await mkdir(join(config, 'plugin'), { recursive: true })
     const installed = JSON.parse((await runHooks(['install', 'opencode', '--json'], env)).stdout)
     expect(installed.file).toBe(join(config, 'plugin', 'bmn.ts'))
+  })
+})
+
+// Payloads recorded from the real harnesses on 2026-09-27 (docs/remote-answers.md), sanitised.
+const REMOTE_FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'test-fixtures', 'remote-answers')
+
+async function recorded(name: string): Promise<Record<string, unknown>> {
+  return JSON.parse(await readFile(join(REMOTE_FIXTURES, name), 'utf8')) as Record<string, unknown>
+}
+
+function lastOpen(fixture: Awaited<ReturnType<typeof cliFixture>>): Record<string, unknown> {
+  const calls = fixture.handlers.openAttention.mock.calls
+  return calls[calls.length - 1]?.[0] as Record<string, unknown>
+}
+
+describe('structured prompts from the recorded hooks (Epic 30)', () => {
+  it('opens a Claude question with its options and tool call id', async () => {
+    const fixture = await cliFixture()
+    await runHook(fixture, 'claude', await recorded('claude/ask-single.pre-tool-use.json'))
+    expect(lastOpen(fixture)).toMatchObject({
+      requestKey: 'claude:question',
+      kind: 'question',
+      origin: 'hook:claude:PreToolUse',
+      prompt: {
+        type: 'questions', harness: 'claude', shape: 'choice', requestRef: null, toolUseId: 'toolu_01PqP3uetPam78QueRqjK7xL',
+        questions: [{
+          id: null, header: 'Auth method', text: 'Which auth method should the API use?', multiSelect: false,
+          options: [
+            { label: 'JWT', description: 'Stateless tokens, no session store' },
+            { label: 'Session cookies', description: 'Server-side sessions in Redis' },
+            { label: 'OAuth only', description: 'Delegate sign-in to Google and GitHub' }
+          ]
+        }]
+      }
+    })
+  })
+
+  it('files Claude\'s PermissionRequest for its own question under the question, without the call id', async () => {
+    const fixture = await cliFixture()
+    await runHook(fixture, 'claude', await recorded('claude/ask-single.permission-request.json'))
+    expect(lastOpen(fixture)).toMatchObject({
+      requestKey: 'claude:question', kind: 'question', prompt: { type: 'questions', toolUseId: null }
+    })
+  })
+
+  it('keeps all three questions of one Claude dialog, and marks a multi-select dialog', async () => {
+    const fixture = await cliFixture()
+    await runHook(fixture, 'claude', await recorded('claude/ask-three.pre-tool-use.json'))
+    const three = lastOpen(fixture).prompt as { questions: Array<{ header: string }> }
+    expect(three.questions.map((each) => each.header)).toEqual(['Database', 'Tests', 'Deploy'])
+    await runHook(fixture, 'claude', await recorded('claude/ask-multiselect.pre-tool-use.json'))
+    expect(lastOpen(fixture).prompt).toMatchObject({ shape: 'multi-select', questions: [{ multiSelect: true }] })
+  })
+
+  it('opens a Claude permission with the exact command and working directory', async () => {
+    const fixture = await cliFixture()
+    await runHook(fixture, 'claude', await recorded('claude/bash.permission-request.json'))
+    expect(lastOpen(fixture)).toMatchObject({
+      requestKey: 'claude:permission',
+      kind: 'permission',
+      prompt: {
+        type: 'permission', harness: 'claude', shape: 'permission', requestRef: null, toolUseId: null,
+        tool: 'Bash', command: 'touch spike-allow.txt', cwd: '/work/project'
+      }
+    })
+  })
+
+  it('opens Codex blocking and async questions as different shapes', async () => {
+    const fixture = await cliFixture()
+    await runHook(fixture, 'codex', await recorded('codex/ask-two.pre-tool-use.json'))
+    expect(lastOpen(fixture).prompt).toMatchObject({
+      harness: 'codex', shape: 'choice', toolUseId: expect.stringMatching(/^call_/),
+      questions: [{ id: 'database', header: 'Database' }, { id: 'tests', header: 'Tests' }]
+    })
+    await runHook(fixture, 'codex', await recorded('codex/ask-async.pre-tool-use.json'))
+    expect(lastOpen(fixture).prompt).toMatchObject({
+      shape: 'async-choice',
+      questions: [{ id: null, header: null, text: 'Which color should the logo use?',
+        options: [{ label: 'Gold', description: null }, { label: 'Black', description: null }] }]
+    })
+  })
+
+  it('leaves Codex permissions plain', async () => {
+    const fixture = await cliFixture()
+    await runHook(fixture, 'codex', { hook_event_name: 'PermissionRequest', tool_name: 'shell', tool_input: { command: 'ls' } })
+    expect(lastOpen(fixture)).not.toHaveProperty('prompt')
+  })
+
+  it('opens OpenCode questions and permissions with their request ids, command only from metadata', async () => {
+    const fixture = await cliFixture()
+    await runHook(fixture, 'opencode', await recorded('opencode/question.asked.json'), OPENCODE_FOREGROUND)
+    expect(lastOpen(fixture)).toMatchObject({
+      requestKey: 'opencode:question', prompt: { harness: 'opencode', shape: 'choice', requestRef: 'que_0e3488978001RROK6B1gVoiWiS' }
+    })
+    await runHook(fixture, 'opencode', await recorded('opencode/permission.asked.json'), OPENCODE_FOREGROUND)
+    expect(lastOpen(fixture)).toMatchObject({
+      requestKey: 'opencode:permission',
+      prompt: { tool: 'bash', command: 'touch oc-c.txt', requestRef: 'per_0e34a38370010edWsFz2o7GSqa', cwd: null }
+    })
+    const patternsOnly = { ...(await recorded('opencode/permission.asked.json')), metadata: {} }
+    await runHook(fixture, 'opencode', patternsOnly, OPENCODE_FOREGROUND)
+    expect(lastOpen(fixture).prompt).toMatchObject({ command: null })
+  })
+
+  it('marks OpenCode subagent prompts as their own shape', async () => {
+    const fixture = await cliFixture()
+    const env = { BMN_OPENCODE_SESSION_ID: 'ses_0123456789abSyntheticMain0' }
+    await runHook(fixture, 'opencode', await recorded('opencode/question.asked.json'), OPENCODE_FOREGROUND, env)
+    expect(lastOpen(fixture)).toMatchObject({ requestKey: 'opencode:subagent-question', prompt: { shape: 'subagent' } })
+    await runHook(fixture, 'opencode', await recorded('opencode/permission.asked.json'), OPENCODE_FOREGROUND, env)
+    expect(lastOpen(fixture)).toMatchObject({ requestKey: 'opencode:subagent-permission', prompt: { shape: 'subagent' } })
+  })
+
+  it('sends a dialog larger than the app stores as a plain request instead of a cut one', async () => {
+    const fixture = await cliFixture()
+    const options = Array.from({ length: 21 }, (_, index) => ({ label: `Option ${index}`, description: 'x' }))
+    await runHook(fixture, 'claude', {
+      hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_use_id: 'toolu_big',
+      tool_input: { questions: [{ question: 'Which?', header: 'Big', options, multiSelect: false }] }
+    })
+    expect(lastOpen(fixture)).toMatchObject({ requestKey: 'claude:question', kind: 'question' })
+    expect(lastOpen(fixture)).not.toHaveProperty('prompt')
+  })
+
+  it('cleans control characters out of prompt text rather than losing the request', async () => {
+    const fixture = await cliFixture()
+    await runHook(fixture, 'claude', {
+      hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_use_id: 'toolu_bell',
+      tool_input: { questions: [{ question: 'Ring\u0007 now?\nReally', header: 'Bell\tH', multiSelect: false,
+        options: [{ label: 'Yes\u001b[31m', description: 'red\u0000' }] }] }
+    })
+    expect(lastOpen(fixture).prompt).toMatchObject({
+      questions: [{ text: 'Ring now?\nReally', header: 'Bell H', options: [{ label: 'Yes [31m', description: 'red' }] }]
+    })
+  })
+})
+
+describe('Claude PreToolUse gated to its question tool (Epic 30)', () => {
+  it('counts BMN\'s own AskUserQuestion matcher as wired, and any other matcher as gated', async () => {
+    const own = await hookFileFixture({
+      hooks: { PreToolUse: [{ matcher: 'AskUserQuestion', hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] }] }
+    })
+    const ownReport = JSON.parse((await runHooks(['check', 'claude', '--file', own, '--json'])).stdout)
+    const ownRow = ownReport.agents[0].events.find((row: { event: string }) => row.event === 'PreToolUse')
+    expect(ownRow.state).toBe('wired')
+
+    const other = await hookFileFixture({
+      hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CLAUDE }] }] }
+    })
+    const otherReport = JSON.parse((await runHooks(['check', 'claude', '--file', other, '--json'])).stdout)
+    const otherRow = otherReport.agents[0].events.find((row: { event: string }) => row.event === 'PreToolUse')
+    expect(otherRow.state).toBe('missing')
   })
 })

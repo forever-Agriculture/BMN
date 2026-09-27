@@ -5316,7 +5316,7 @@ async function runSelfTest(): Promise<void> {
     const syntheticClaudeSettings = join(syntheticClaudeConfigDir, 'settings.json')
     mkdirSync(syntheticClaudeConfigDir, { recursive: true })
     const configuredClaudeEvents = [
-      'Notification', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit',
+      'Notification', 'PreToolUse', 'PermissionRequest', 'PostToolUse', 'PostToolUseFailure', 'UserPromptSubmit',
       'Stop', 'SessionStart', 'SessionEnd'
     ]
     writeFileSync(syntheticClaudeSettings, `${JSON.stringify({ hooks: Object.fromEntries(
