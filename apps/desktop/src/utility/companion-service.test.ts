@@ -2230,7 +2230,7 @@ describe('answers from the phone go only into the dialog that asked (Epic 30.2)'
     title: 'Claude wants to use Bash', origin: 'hook:claude:PermissionRequest',
     prompt: {
       type: 'permission' as const, harness: 'claude' as const, shape: 'permission' as const, requestRef: null, toolUseId: null,
-      tool: 'Bash', command: 'touch spike-allow.txt', cwd: '/work/project'
+      tool: 'Bash', command: 'touch spike-allow.txt', cwd: '/work/project', description: 'Create spike-allow.txt file'
     }
   }
   const settle = () => new Promise((resolve) => setTimeout(resolve, 200))

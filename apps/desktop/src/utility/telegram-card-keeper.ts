@@ -8,6 +8,7 @@ import {
   endingReply,
   exitCard,
   noticeCard,
+  commandShownWhole,
   permissionCard,
   plainText,
   questionCard,
@@ -49,10 +50,19 @@ export interface CardKeeperDependencies {
   home: string | null
   /** Quiet time before a burst of request changes is read back; at most a few hundred milliseconds. */
   settleMs?: number
+  /** Waits before each retry of a card's final edit that Telegram did not take; about ten seconds to five minutes. */
+  retryMs?: readonly number[]
   token?: () => string
 }
 
 type TapAction = { type: 'choice'; step: number; index: number } | { type: 'permission'; decision: 'allow' | 'deny' }
+
+/** What a set of buttons was drawn for, fixed when they are minted: a tap answers exactly this, never a later revision. */
+interface Binding {
+  readonly revision: number
+  readonly epoch: number | null
+  readonly incarnationId: string | null
+}
 
 interface LiveCard {
   messageId: number
@@ -72,6 +82,8 @@ interface LiveCard {
   tokens: string[]
   /** An answer reported `sent-unconfirmed` that a late report may still confirm. */
   upgradable: boolean
+  /** The ending still to be written after a failed edit, and the timer that retries it. */
+  unwritten: { ending: CardEnding; timer: NodeJS.Timeout | null } | null
   /** Edits of one card run one after another, in the order they were decided. */
   queue: Promise<void>
 }
@@ -83,6 +95,16 @@ interface Composed {
 }
 
 const DEFAULT_SETTLE_MS = 150
+const DEFAULT_RETRY_MS = [10_000, 60_000, 300_000]
+
+/**
+ * Telegram will never take this edit (the message is gone or can no longer be edited, the chat blocked the
+ * bot, or the text cannot fit); anything else may work later.
+ */
+function isPermanentEditFailure(error: unknown): boolean {
+  return error instanceof TelegramConnectorError &&
+    (error.status === 400 || error.status === 403 || error.kind === 'invalid-argument')
+}
 
 /** Telegram refused the HTML, or the card cannot fit at all: either way the words go out plain. */
 function isFormattingRefusal(error: unknown): boolean {
@@ -97,7 +119,7 @@ function isFormattingRefusal(error: unknown): boolean {
 export class TelegramCardKeeper {
   private readonly cards = new Map<number, LiveCard>()
   private readonly byRequest = new Map<string, number>()
-  private readonly tokens = new Map<string, { messageId: number; action: TapAction }>()
+  private readonly tokens = new Map<string, { messageId: number; action: TapAction; binding: Binding }>()
   private readonly timers = new Map<string, NodeJS.Timeout>()
   private swept = false
   private disposed = false
@@ -115,8 +137,13 @@ export class TelegramCardKeeper {
       }
       return
     }
-    const composed = await this.compose(record, { step: 0, chosen: [] }, null, null)
     const incarnationId = this.deps.liveIncarnationId(record.sessionId) ?? null
+    const binding: Binding = {
+      revision: record.revision,
+      epoch: this.deps.answerEpoch(record.requestId),
+      incarnationId: record.incarnationId ?? incarnationId
+    }
+    const composed = await this.compose(record, { step: 0, chosen: [] }, null, binding.epoch)
     let format: TelegramCardData['format'] = 'html'
     let messageId: number
     try {
@@ -140,9 +167,9 @@ export class TelegramCardKeeper {
       messageId,
       sessionId: record.sessionId,
       requestId: record.requestId,
-      incarnationId: record.incarnationId ?? incarnationId,
-      revision: record.revision,
-      epoch: this.deps.answerEpoch(record.requestId),
+      incarnationId: binding.incarnationId,
+      revision: binding.revision,
+      epoch: binding.epoch,
       state,
       format,
       base: composed.rendered.base,
@@ -152,11 +179,12 @@ export class TelegramCardKeeper {
       labels: [],
       tokens: [],
       upgradable: false,
+      unwritten: null,
       queue: Promise.resolve()
     }
     this.cards.set(messageId, card)
     this.byRequest.set(record.requestId, messageId)
-    if (state === 'buttons') this.mint(card, composed)
+    if (state === 'buttons') this.mint(card, composed, binding)
     await this.deps.store.put({
       messageId,
       sessionId: record.sessionId,
@@ -200,18 +228,18 @@ export class TelegramCardKeeper {
       return
     }
     this.revoke(card)
-    const action = entry.action
+    const { action, binding } = entry
     if (action.type === 'permission') {
       const label = action.decision === 'allow' ? 'Allow once' : 'Deny'
       card.state = 'sending'
       await connector.answerCallbackQuery(tap.callbackId, `Sending ${label}…`).catch(() => undefined)
       await this.enqueue(card, () => this.showSending(card, [label]))
-      void this.deliver(card, { type: 'permission', decision: action.decision }, [label])
+      void this.deliver(card, { type: 'permission', decision: action.decision }, [label], binding)
       return
     }
     const record = await this.deps.getAttention(card.requestId).catch(() => null)
     const prompt = record?.prompt
-    if (!record || prompt?.type !== 'questions' || action.step !== card.step) {
+    if (!record || record.revision !== binding.revision || prompt?.type !== 'questions' || action.step !== card.step) {
       await connector.answerCallbackQuery(tap.callbackId, 'This button is no longer active.').catch(() => undefined)
       await this.enqueue(card, () => this.refreshCard(card))
       return
@@ -224,15 +252,15 @@ export class TelegramCardKeeper {
       await connector.answerCallbackQuery(tap.callbackId, `Question ${card.step + 1} of ${prompt.questions.length}`)
         .catch(() => undefined)
       await this.enqueue(card, async () => {
-        const composed = await this.compose(record, { step: card.step, chosen: card.chosen }, null, card.epoch)
-        await this.show(card, composed)
+        const composed = await this.compose(record, { step: card.step, chosen: card.chosen }, null, binding.epoch)
+        await this.show(card, composed, binding)
       })
       return
     }
     card.state = 'sending'
     await connector.answerCallbackQuery(tap.callbackId, `Sending ${card.labels.join(' · ')}…`).catch(() => undefined)
     await this.enqueue(card, () => this.showSending(card, card.labels))
-    void this.deliver(card, { type: 'choices', choices: card.chosen }, card.labels)
+    void this.deliver(card, { type: 'choices', choices: card.chosen }, card.labels, binding)
   }
 
   /** A report that confirmed an answer after the card already said it was not confirmed. */
@@ -252,6 +280,7 @@ export class TelegramCardKeeper {
     if (!connector || this.swept || this.disposed) return
     this.swept = true
     const stale = await this.deps.store.list(['buttons', 'sending']).catch(() => [])
+    let unfinished = false
     for (const row of stale) {
       if (this.cards.has(row.messageId)) continue
       const ending: CardEnding = row.state === 'sending' ? { type: 'restarted-sending' } : { type: 'restarted' }
@@ -259,11 +288,17 @@ export class TelegramCardKeeper {
       try {
         await connector.editMessageText(row.messageId, row.card.format === 'plain' ? plainText(text) : text,
           { html: row.card.format === 'html', keyboard: null })
-      } catch {
-        // A card Telegram no longer lets BMN edit is still finished here, so it is not retried every start.
+      } catch (error) {
+        // A card Telegram will never let BMN edit is finished here; any other failure is tried again later.
+        if (!isPermanentEditFailure(error)) {
+          unfinished = true
+          continue
+        }
       }
       await this.deps.store.update(row.messageId, row.revision, 'final', row.card).catch(() => undefined)
     }
+    // The next connection, or the next start, tries the rest again.
+    if (unfinished) this.swept = false
   }
 
   /** The session's process ended; says so in the same header style as the cards. */
@@ -283,6 +318,7 @@ export class TelegramCardKeeper {
     this.disposed = true
     for (const timer of this.timers.values()) clearTimeout(timer)
     this.timers.clear()
+    for (const card of this.cards.values()) if (card.unwritten?.timer) clearTimeout(card.unwritten.timer)
     this.tokens.clear()
   }
 
@@ -301,13 +337,13 @@ export class TelegramCardKeeper {
     return this.deps.token?.() ?? randomBytes(16).toString('base64url')
   }
 
-  private mint(card: LiveCard, composed: Composed): void {
+  private mint(card: LiveCard, composed: Composed, binding: Binding): void {
     this.revoke(card)
     const keyboard = composed.rendered.keyboard
     if (!keyboard) return
     const buttons = keyboard.flat()
     buttons.forEach((button, index) => {
-      this.tokens.set(button.callback_data, { messageId: card.messageId, action: composed.actions[index]! })
+      this.tokens.set(button.callback_data, { messageId: card.messageId, action: composed.actions[index]!, binding })
       card.tokens.push(button.callback_data)
     })
   }
@@ -338,7 +374,8 @@ export class TelegramCardKeeper {
       (record.incarnationId ?? this.deps.liveIncarnationId(record.sessionId)) !== undefined
     const answerable = answerability.answerable && bound
     if (prompt.type === 'permission') {
-      if (!answerable) {
+      // A command the card must clip is answered at the laptop, never approved unseen.
+      if (!answerable || !commandShownWhole(prompt)) {
         const closedBecause = answerability.answerable ? 'unsupported' : answerability.reason
         return { ...none, rendered: permissionCard({ header, prompt, tokens: null, closedBecause, home: this.deps.home, note }) }
       }
@@ -366,16 +403,25 @@ export class TelegramCardKeeper {
   }
 
   /** Writes a composed card onto its message, falling back once to plain words if Telegram refuses the HTML. */
-  private async show(card: LiveCard, composed: Composed): Promise<void> {
+  /**
+   * Redraws the card for `binding`. The old buttons die before anything is sent, and the card takes the new
+   * binding only once Telegram shows it, so no tap ever answers a revision its buttons were not drawn for.
+   */
+  private async show(card: LiveCard, composed: Composed, binding: Binding): Promise<void> {
+    this.revoke(card)
     const connector = this.deps.connector()
     if (!connector) return
+    const drawn = (): void => {
+      card.revision = binding.revision
+      card.epoch = binding.epoch
+      card.base = composed.rendered.base
+    }
     if (card.format === 'html') {
       try {
         await connector.editMessageText(card.messageId, composed.rendered.text, { html: true, keyboard: composed.rendered.keyboard })
-        card.base = composed.rendered.base
+        drawn()
         card.state = composed.state
-        if (composed.state === 'buttons') this.mint(card, composed)
-        else this.revoke(card)
+        if (composed.state === 'buttons') this.mint(card, composed, binding)
         await this.save(card)
         return
       } catch (error) {
@@ -383,11 +429,10 @@ export class TelegramCardKeeper {
         card.format = 'plain'
       }
     }
-    this.revoke(card)
     card.state = 'open'
     await connector.editMessageText(card.messageId,
       `${plainText(composed.rendered.text)}${composed.state === 'buttons' ? '\n\nAnswer at the laptop.' : ''}`)
-    card.base = composed.rendered.base
+    drawn()
     await this.save(card)
   }
 
@@ -396,20 +441,48 @@ export class TelegramCardKeeper {
     await this.save(card)
   }
 
-  private async finish(card: LiveCard, ending: CardEnding): Promise<void> {
+  /**
+   * Ends the card. It is stored as final only once Telegram shows the ending; until then the stored card keeps
+   * its buttons or Sending state, the edit is retried, and a restart's sweep still finds it.
+   */
+  private async finish(card: LiveCard, ending: CardEnding, attempt = 0): Promise<void> {
     this.revoke(card)
     card.state = 'final'
-    await this.writeEnding(card, ending)
-    await this.save(card)
+    if (card.unwritten?.timer) clearTimeout(card.unwritten.timer)
+    card.unwritten = null
+    if (await this.writeEnding(card, ending)) {
+      await this.save(card)
+      return
+    }
+    const delays = this.deps.retryMs ?? DEFAULT_RETRY_MS
+    const delay = delays[attempt]
+    const unwritten: NonNullable<LiveCard['unwritten']> = { ending, timer: null }
+    card.unwritten = unwritten
+    if (delay === undefined || this.disposed) return
+    unwritten.timer = setTimeout(() => {
+      unwritten.timer = null
+      void this.enqueue(card, async () => {
+        // A newer ending has taken over, or this one was written meanwhile.
+        if (card.unwritten !== unwritten) return
+        await this.finish(card, ending, attempt + 1)
+      })
+    }, delay)
+    unwritten.timer.unref?.()
   }
 
-  private async writeEnding(card: LiveCard, ending: CardEnding): Promise<void> {
+  /** Whether Telegram now shows the ending, or never will; false when it may take it later. */
+  private async writeEnding(card: LiveCard, ending: CardEnding): Promise<boolean> {
     const connector = this.deps.connector()
-    if (!connector) return
+    if (!connector) return false
     const text = endedCard(card.base, ending)
     const keyboard: InlineKeyboard | null = null
-    await connector.editMessageText(card.messageId, card.format === 'plain' ? plainText(text) : text,
-      { html: card.format === 'html', keyboard }).catch(() => undefined)
+    try {
+      await connector.editMessageText(card.messageId, card.format === 'plain' ? plainText(text) : text,
+        { html: card.format === 'html', keyboard })
+      return true
+    } catch (error) {
+      return isPermanentEditFailure(error)
+    }
   }
 
   private async save(card: LiveCard): Promise<void> {
@@ -430,21 +503,26 @@ export class TelegramCardKeeper {
       return
     }
     if (record.revision === card.revision) return
-    card.revision = record.revision
-    card.epoch = this.deps.answerEpoch(record.requestId)
+    // The old buttons die now, before the new card is composed or sent.
+    this.revoke(card)
     card.step = 0
     card.chosen = []
     card.labels = []
-    await this.show(card, await this.compose(record, { step: 0, chosen: [] }, null, card.epoch))
+    const binding = this.bindingFor(card, record)
+    await this.show(card, await this.compose(record, { step: 0, chosen: [] }, null, binding.epoch), binding)
+  }
+
+  private bindingFor(card: LiveCard, record: AttentionRecord): Binding {
+    return { revision: record.revision, epoch: this.deps.answerEpoch(record.requestId), incarnationId: card.incarnationId }
   }
 
   /** Runs detached from the poll loop: 30.2 may take seconds to confirm. */
-  private async deliver(card: LiveCard, answer: RemoteAnswer, labels: string[]): Promise<void> {
+  private async deliver(card: LiveCard, answer: RemoteAnswer, labels: string[], binding: Binding): Promise<void> {
     const outcome = await this.deps.answer({
       requestId: card.requestId,
-      revision: card.revision,
-      epoch: card.epoch ?? -1,
-      incarnationId: card.incarnationId ?? '',
+      revision: binding.revision,
+      epoch: binding.epoch ?? -1,
+      incarnationId: binding.incarnationId ?? '',
       answer
     }).catch((): AnswerOutcome => ({ state: 'sent-unconfirmed', sent: labels }))
     await this.enqueue(card, () => this.settle(card, outcome))
@@ -456,13 +534,12 @@ export class TelegramCardKeeper {
       // Nothing was sent. While the request is still open, the owner gets fresh buttons and can try again.
       const record = await this.deps.getAttention(card.requestId).catch(() => null)
       if (record?.state === 'open') {
-        card.revision = record.revision
-        card.epoch = this.deps.answerEpoch(record.requestId)
         card.step = 0
         card.chosen = []
         card.labels = []
         card.state = 'open'
-        await this.show(card, await this.compose(record, { step: 0, chosen: [] }, REFUSAL_WORDS[outcome.reason], card.epoch))
+        const binding = this.bindingFor(card, record)
+        await this.show(card, await this.compose(record, { step: 0, chosen: [] }, REFUSAL_WORDS[outcome.reason], binding.epoch), binding)
       } else {
         await this.finish(card, { type: 'outcome', outcome, permission: card.permission })
       }

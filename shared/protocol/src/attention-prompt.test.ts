@@ -32,6 +32,9 @@ describe('parseAttentionPrompt', () => {
   it('accepts a question and a permission prompt exactly as stored', () => {
     expect(parseAttentionPrompt(question)).toEqual({ ok: true, value: question })
     expect(parseAttentionPrompt(permission)).toEqual({ ok: true, value: permission })
+    const described = { ...permission, description: 'Create the file\nfor the test' }
+    expect(parseAttentionPrompt(described)).toEqual({ ok: true, value: described })
+    expect(parseAttentionPrompt({ ...permission, description: null })).toEqual({ ok: true, value: { ...permission, description: null } })
   })
 
   it('keeps line breaks in question text and descriptions but no other control', () => {
@@ -57,6 +60,8 @@ describe('parseAttentionPrompt', () => {
     ['a non-boolean multiSelect', { ...question, questions: [{ ...question.questions[0], multiSelect: 'no' }] }],
     ['an empty tool', { ...permission, tool: '' }],
     ['a long request id', { ...permission, requestRef: 'p'.repeat(129) }],
+    ['a long description', { ...permission, description: 'd'.repeat(501) }],
+    ['a description on questions', { ...question, description: 'Create it' }],
     ['not an object', 'prompt']
   ])('refuses %s', (_label, value) => {
     expect(parseAttentionPrompt(value).ok).toBe(false)

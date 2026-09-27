@@ -19,7 +19,7 @@ const CONVERSATION_REFERENCE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}
 const OPENCODE_REFERENCE = /^ses_[0-9a-f]{12}[A-Za-z0-9]{14}$/
 const ATTENTION_KINDS = ['question', 'permission', 'review', 'notice']
 const VALUE_OPTIONS = new Set([
-  'name', 'session', 'key', 'source', 'detail', 'observed', 'kind', 'body', 'expires', 'socket', 'token-file', 'file', 'text', 'wait'
+  'name', 'session', 'key', 'source', 'detail', 'observed', 'kind', 'body', 'expires', 'socket', 'token-file', 'file', 'text', 'wait', 'reported'
 ])
 /** The longest `answer take --wait` the app accepts (control-server MAX_ANSWER_WAIT_SECONDS). */
 const MAX_ANSWER_WAIT_SECONDS = 25
@@ -51,9 +51,11 @@ Commands:
   withdraw <request-key>                    Withdraw an attention request
   resolve <request-key> <resolution>        Resolve an attention request
   send <text> [--submit] [--key K]          Paste text into the session; --submit also presses Enter
-  answer take [--wait S]                    Collect, once, the answers BMN decided from a Telegram tap for
+  answer take [--wait S] [--reported R=ok|failed]
+                                            Collect, once, the answers BMN decided from a Telegram tap for
                                             this session's own OpenCode requests (used by BMN's plugin);
-                                            waits up to S seconds (0-${MAX_ANSWER_WAIT_SECONDS}) for one to arrive
+                                            waits up to S seconds (0-${MAX_ANSWER_WAIT_SECONDS}) for one to arrive.
+                                            --reported says whether OpenCode accepted the reply to request R
   hook <agent>                              Turn an agent hook event on stdin into Needs you requests;
                                             agent is one of claude|codex|opencode; prints nothing, always exits 0
   hooks print opencode                     Print the shipped OpenCode TypeScript plugin
@@ -270,15 +272,21 @@ const COMMANDS = {
   },
   answer: {
     args: ['action'],
-    options: ['wait'],
+    options: ['wait', 'reported'],
     build: ([action], options) => {
       if (action !== 'take') throw new UsageError('answer supports only: take')
+      let reported
+      if (options.reported !== undefined) {
+        const match = /^([\x21-\x3c\x3e-\x7e]{1,128})=(ok|failed)$/.exec(String(options.reported))
+        if (!match) throw new UsageError('--reported must be REQUEST_ID=ok or REQUEST_ID=failed')
+        reported = { requestRef: match[1], delivered: match[2] === 'ok' }
+      }
       const wait = options.wait === undefined ? 0 : Number(options.wait)
       if (!Number.isInteger(wait) || wait < 0 || wait > MAX_ANSWER_WAIT_SECONDS || !/^\d+$/.test(String(options.wait ?? '0'))) {
         throw new UsageError(`--wait must be a whole number of seconds from 0 to ${MAX_ANSWER_WAIT_SECONDS}`)
       }
       // The socket holds the call open for up to --wait; the connection deadline allows for it.
-      return { method: 'answer.take', params: { wait }, timeoutMs: TIMEOUT_MS + wait * 1000 }
+      return { method: 'answer.take', params: { wait, ...(reported ? { reported } : {}) }, timeoutMs: TIMEOUT_MS + wait * 1000 }
     }
   },
   send: {
@@ -465,17 +473,26 @@ export const BMNPlugin: Plugin = async (input) => {
   let sessionID: string | undefined
   // The owner's own session's questions and permissions still waiting; BMN may answer them from Telegram.
   const waiting = new Set<string>()
+  // Its permissions among them: OpenCode's reject denies every one still waiting.
+  const waitingPermissions = new Set<string>()
+  // What OpenCode's server said to each reply, told to BMN on the next collection.
+  const reports: string[] = []
   let polling = false
   const inBMN = () => Boolean(process.env.BMN_CONTROL_SOCKET || process.env.AITERM_CONTROL_SOCKET)
   // An answer BMN already decided from a tap, posted to this OpenCode's own server by its request ID.
   const reply = async (answer: { requestRef?: string; kind?: string; answers?: string[][]; reply?: string }) => {
     if (!answer.requestRef || !waiting.has(answer.requestRef)) return
     const route = answer.kind === "question" ? "question" : "permission"
+    const reject = route === "permission" && answer.reply === "reject"
+    // A Deny goes out only while it answers this one request alone; BMN reports nothing, so the tap is not confirmed.
+    if (reject && (waitingPermissions.size !== 1 || !waitingPermissions.has(answer.requestRef))) return
     const url = new URL(\`\${route}/\${encodeURIComponent(answer.requestRef)}/reply\`, input.serverUrl)
     url.searchParams.set("directory", input.directory)
-    const body = route === "question" ? { answers: answer.answers } : { reply: answer.reply === "reject" ? "reject" : "once" }
+    const body = route === "question" ? { answers: answer.answers } : { reply: reject ? "reject" : "once" }
     const fetcher = (input.client as any)?._client?.getConfig?.().fetch ?? fetch
-    await fetcher(new Request(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }))
+    // A lost connection may still have delivered the reply, so only a response is reported.
+    const response = await fetcher(new Request(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }))
+    reports.push(\`\${answer.requestRef}=\${response.ok ? "ok" : "failed"}\`)
   }
   // Asks BMN only while something waits, and gives up after three failures so an absent BMN costs nothing.
   const poll = async () => {
@@ -483,9 +500,13 @@ export const BMNPlugin: Plugin = async (input) => {
     polling = true
     let failures = 0
     try {
-      while (waiting.size > 0 && failures < 3) {
-        const result = await input.$\`timeout -s KILL 35s bmn answer take --wait 25 --json\`.quiet().nothrow()
+      while ((waiting.size > 0 || reports.length > 0) && failures < 3) {
+        const report = reports.shift()
+        const result = report
+          ? await input.$\`timeout -s KILL 10s bmn answer take --wait 0 --reported \${report} --json\`.quiet().nothrow()
+          : await input.$\`timeout -s KILL 35s bmn answer take --wait 25 --json\`.quiet().nothrow()
         if (result.exitCode !== 0) {
+          if (report) reports.unshift(report)
           failures += 1
           await new Promise((resolve) => setTimeout(resolve, 5000))
           continue
@@ -517,12 +538,17 @@ export const BMNPlugin: Plugin = async (input) => {
         const type = String(event.type)
         if (properties.sessionID === sessionID && properties.id && (type === "question.asked" || type === "permission.asked")) {
           waiting.add(properties.id)
+          if (type === "permission.asked") waitingPermissions.add(properties.id)
           void poll()
         }
         if (properties.requestID && ["question.replied", "question.rejected", "permission.replied"].includes(type)) {
           waiting.delete(properties.requestID)
+          waitingPermissions.delete(properties.requestID)
         }
-        if (type === "session.idle" || type === "session.deleted" || type === "tui.session.select") waiting.clear()
+        if (type === "session.idle" || type === "session.deleted" || type === "tui.session.select") {
+          waiting.clear()
+          waitingPermissions.clear()
+        }
       } catch {
         // A missing or stalled BMN must never interrupt OpenCode.
       }
@@ -681,8 +707,11 @@ function questionsPrompt(harness, input, ids, shape) {
   }
 }
 
-/** A permission prompt; `command` stays null unless the harness said exactly what would run. */
-function permissionPrompt(harness, shape, tool, command, ids, cwd) {
+/**
+ * A permission prompt; `command` stays null unless the harness said exactly what would run. `description`,
+ * when given, is what the dialog draws under the command, kept only whole.
+ */
+function permissionPrompt(harness, shape, tool, command, ids, cwd, description) {
   const name = promptLine(tool, PROMPT_LIMITS.tool)
   if (name === null) return undefined
   const exact = typeof command === 'string' && command.length <= PROMPT_LIMITS.command ? promptText(command, PROMPT_LIMITS.command) : null
@@ -694,7 +723,12 @@ function permissionPrompt(harness, shape, tool, command, ids, cwd) {
     toolUseId: promptId(ids.toolUseId),
     tool: name,
     command: exact,
-    cwd: typeof cwd === 'string' && cwd.startsWith('/') && cwd.length <= PROMPT_LIMITS.cwd && !/[\u0000-\u001f]/.test(cwd) ? cwd : null
+    cwd: typeof cwd === 'string' && cwd.startsWith('/') && cwd.length <= PROMPT_LIMITS.cwd && !/[\u0000-\u001f]/.test(cwd) ? cwd : null,
+    ...(description === undefined ? {} : {
+      description: typeof description === 'string' && description.length <= PROMPT_LIMITS.description
+        ? promptText(description, PROMPT_LIMITS.description)
+        : null
+    })
   }
 }
 
@@ -941,7 +975,7 @@ function hookRequests(agent, event) {
         // Codex permissions stay plain: its PermissionRequest fires before Auto Review decides.
         agent === 'claude'
           ? permissionPrompt('claude', 'permission', event.tool_name, claudeCommand(event.tool_input), { toolUseId: event.tool_use_id },
-            event.cwd)
+            event.cwd, isObject(event.tool_input) ? event.tool_input.description ?? null : null)
           : undefined
       )
     case 'PostToolUseFailure':

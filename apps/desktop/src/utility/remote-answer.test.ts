@@ -53,7 +53,7 @@ const CODEX_TWO: AttentionPrompt = {
 }
 const CLAUDE_BASH: AttentionPrompt = {
   type: 'permission', harness: 'claude', shape: 'permission', requestRef: null, toolUseId: null,
-  tool: 'Bash', command: 'touch spike-allow.txt', cwd: '/work/project'
+  tool: 'Bash', command: 'touch spike-allow.txt', cwd: '/work/project', description: 'Create spike-allow.txt file'
 }
 const OPENCODE_QUESTION: AttentionPrompt = {
   type: 'questions', harness: 'opencode', shape: 'choice', requestRef: 'que_1', toolUseId: null,
@@ -115,7 +115,7 @@ function harness(initial?: { record: AttentionRecord; lines?: string[] }): Harne
       h.onKey?.(key)
     },
     answerPermissions: async () => h.permissions.on,
-    timing: { stepMs: 200, confirmMs: 250, pickupMs: 150, lateMs: 2_000, watchMs: 5 }
+    timing: { stepMs: 200, confirmMs: 250, pickupMs: 150, lateMs: 2_000 }
   })
   engines.push(h.engine)
   if (initial) open(h, initial.record, initial.lines)
@@ -349,6 +349,29 @@ describe('the dialog epoch (decision 3)', () => {
   })
 })
 
+describe('reports that speak for another dialog (Astra A5)', () => {
+  it('never lets an identical successor\'s report confirm an earlier answer or credit it to the phone', async () => {
+    const h = harness({ record: record(CLAUDE_BASH), lines: screen('claude-bash-permission.txt') })
+    const late: string[] = []
+    h.engine.onLateOutcome((requestId) => late.push(requestId))
+    await expect(ask(h, allow)).resolves.toEqual({ state: 'sent-unconfirmed', sent: ['Allow once'] })
+    h.engine.closed(record(CLAUDE_BASH, { state: 'answered' }))
+    open(h, record(CLAUDE_BASH, { requestId: 'request-2' }))
+    const report = evidence({ permission: 'allowed', tool: 'Bash', command: 'touch spike-allow.txt' })
+    expect(h.engine.evidence('s1', 'claude:permission', report)).toBeNull()
+    expect(late).toEqual([])
+  })
+
+  it('ignores a report from a later process of the same session', async () => {
+    const h = harness({ record: record(CLAUDE_BASH), lines: screen('claude-bash-permission.txt') })
+    const pending = ask(h, allow)
+    await settle()
+    h.live.set('s1', 'inc-9')
+    expect(h.engine.evidence('s1', 'claude:permission', evidence({ permission: 'allowed', tool: 'Bash', command: 'touch spike-allow.txt' }))).toBeNull()
+    await expect(pending).resolves.toEqual({ state: 'sent-unconfirmed', sent: ['Allow once'] })
+  })
+})
+
 describe('answering OpenCode through its plugin', () => {
   it('hands the plugin the answer by request id, writes no keys, and confirms from the replied event', async () => {
     const h = harness({ record: record(OPENCODE_QUESTION) })
@@ -387,5 +410,31 @@ describe('answering OpenCode through its plugin', () => {
     await expect(h.engine.take('s1', 'inc-1', 500)).resolves.toEqual([{ requestRef: 'per_1', kind: 'permission', reply: 'reject' }])
     h.engine.evidence('s1', 'opencode:permission', evidence({ requestRef: 'per_1', permission: 'denied' }))
     await expect(pending).resolves.toEqual({ state: 'confirmed', sent: ['Deny'] })
+  })
+
+  it('drops a queued Deny once another permission has opened, because reject would answer both (Astra A2)', async () => {
+    const h = harness({ record: record(OPENCODE_PERMISSION) })
+    const pending = ask(h, deny)
+    await settle()
+    open(h, record({ ...OPENCODE_PERMISSION, requestRef: 'per_2' }, { requestId: 'request-2' }))
+    await expect(h.engine.take('s1', 'inc-1', 0)).resolves.toEqual([])
+    await expect(pending).resolves.toEqual({ state: 'refused', reason: 'changed' })
+  })
+
+  it('confirms or refuses from what OpenCode\'s server told the plugin, and only for the process it handed the answer to', async () => {
+    const h = harness({ record: record(OPENCODE_QUESTION) })
+    const pending = ask(h, choose(1))
+    await expect(h.engine.take('s1', 'inc-1', 500)).resolves.toHaveLength(1)
+    // Another process, or a request it was never handed, cannot settle it.
+    await h.engine.take('s1', 'inc-old', 0, { requestRef: 'que_1', delivered: true })
+    await h.engine.take('s1', 'inc-1', 0, { requestRef: 'que_9', delivered: true })
+    await h.engine.take('s1', 'inc-1', 0, { requestRef: 'que_1', delivered: true })
+    await expect(pending).resolves.toEqual({ state: 'confirmed', sent: ['Session cookies'] })
+
+    const refused = harness({ record: record(OPENCODE_QUESTION) })
+    const failed = ask(refused, choose(1))
+    await expect(refused.engine.take('s1', 'inc-1', 500)).resolves.toHaveLength(1)
+    await refused.engine.take('s1', 'inc-1', 0, { requestRef: 'que_1', delivered: false })
+    await expect(failed).resolves.toEqual({ state: 'refused', reason: 'gone' })
   })
 })

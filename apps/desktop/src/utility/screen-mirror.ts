@@ -256,11 +256,13 @@ const CLAUDE_PERMISSION_TITLES: Readonly<Record<string, string>> = { Bash: 'Bash
 /**
  * Claude's permission dialog for exactly this tool and command, with the digits of its plain "Yes"
  * (allow once) and "No" (deny); never the "always" entries. Null when the screen shows anything else.
+ * Every command line must be drawn whole, and nothing but the command's `description` may follow it.
  */
 export function claudePermissionOnScreen(
   lines: readonly string[],
   tool: string,
-  command: string
+  command: string,
+  description: string | null = null
 ): { allow: number; deny: number } | null {
   const title = CLAUDE_PERMISSION_TITLES[tool]
   if (!title) return null
@@ -280,17 +282,21 @@ export function claudePermissionOnScreen(
     }
   }
   if (top < 0) return null
-  // The command must end on a row boundary: "touch a" never matches a dialog for "touch a b".
-  const target = normalizeScreenText(command)
-  let collected = ''
-  let shown = false
-  for (let row = top + 1; row < ask && collected.length < target.length; row += 1) {
-    const piece = normalizeScreenText(lines[row]!)
-    if (piece === '') continue
-    collected = collected === '' ? piece : `${collected} ${piece}`
-    shown = collected === target
+  // Each command line, possibly wrapped over several rows, must end on a row boundary: "touch a" never
+  // matches a dialog for "touch a b", nor one whose next line adds "touch b".
+  const rows = lines.slice(top + 1, ask).map(normalizeScreenText).filter((piece) => piece !== '')
+  let next = 0
+  for (const line of command.split('\n').map(normalizeScreenText).filter((piece) => piece !== '')) {
+    let collected = ''
+    while (collected.length < line.length && next < rows.length) {
+      collected = collected === '' ? rows[next]! : `${collected} ${rows[next]!}`
+      next += 1
+    }
+    if (collected !== line) return null
   }
-  if (!shown) return null
+  if (next === 0) return null
+  const rest = rows.slice(next).join(' ')
+  if (rest !== '' && rest !== normalizeScreenText(description ?? '')) return null
   let column: number | null = null
   let expected = 1
   const found: { allow?: number; deny?: number } = {}

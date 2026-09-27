@@ -161,6 +161,22 @@ in <code>~/code/api</code>`)
     expect(card.text).toContain('in <code>/home/owner/code/api</code>')
   })
 
+  it('3. never offers Allow once or Deny for a command it would have to clip', () => {
+    const command = `${'echo fixture && '.repeat(187)}echo end; touch unseen.txt`
+    expect(command.length).toBeGreaterThan(3000)
+    const card = permissionCard({
+      header: CLAUDE, prompt: { ...BASH, command }, tokens: { allow: 'al', deny: 'de' }, closedBecause: null, home: null
+    })
+    expect(card.keyboard).toBeNull()
+    expect(card.text).not.toContain('touch unseen.txt')
+    expect(card.text.endsWith('<i>The command is too long to show here. Answer at the laptop.</i>')).toBe(true)
+    const whole = permissionCard({
+      header: CLAUDE, prompt: { ...BASH, command: command.slice(-3000) }, tokens: { allow: 'al', deny: 'de' }, closedBecause: null, home: null
+    })
+    expect(whole.keyboard).not.toBeNull()
+    expect(whole.text).toContain('touch unseen.txt')
+  })
+
   it('4. a permission with phone answers off says to answer at the laptop and has no buttons', () => {
     const card = permissionCard({ header: CLAUDE, prompt: BASH, tokens: null, closedBecause: 'permissions-off', home: '/home/owner' })
     expect(card.text).toBe(`🔐 <b>api-server</b> · Claude 🇺🇸

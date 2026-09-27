@@ -2642,6 +2642,69 @@ describe('OpenCode hooks', () => {
     await expect(plugin.event({ event: root })).resolves.toBeUndefined()
   })
 
+  it('posts a collected answer to its own server, sends Deny only for the one waiting permission, and reports each response', async () => {
+    const printed = await runHooks(['print', 'opencode'])
+    expect(printed, printed.stderr).toMatchObject({ code: 0 })
+    const javascript = stripTypeScriptTypes(printed.stdout).replace('export const BMNPlugin', 'const BMNPlugin')
+    const takes: string[] = []
+    const answerNext: Array<(answers: unknown[]) => void> = []
+    const shell = (strings: TemplateStringsArray, ...values: unknown[]) => {
+      const command = strings.reduce((text, part, index) => text + part + (index < values.length ? String(values[index]) : ''), '')
+      const result = {
+        env: () => result,
+        quiet: () => result,
+        nothrow: async () => {
+          if (!command.includes('bmn answer take')) return { exitCode: 0, stdout: Buffer.from('') }
+          takes.push(command)
+          const answers = await new Promise<unknown[]>((resolve) => answerNext.push(resolve))
+          return { exitCode: 0, stdout: Buffer.from(JSON.stringify({ answers })) }
+        }
+      }
+      return result
+    }
+    const posts: Array<{ url: string; body: unknown }> = []
+    let accept = true
+    const fetcher = async (request: Request) => {
+      posts.push({ url: request.url, body: JSON.parse(await request.text()) })
+      return { ok: accept }
+    }
+    const create = runInNewContext(`${javascript}; BMNPlugin`, {
+      process: { env: { BMN_CONTROL_SOCKET: '/fixture/socket' } }, URL, Request, setTimeout, Buffer
+    })
+    const plugin = await create({
+      $: shell, serverUrl: new URL('http://127.0.0.1:4096/'), directory: '/work',
+      client: { _client: { getConfig: () => ({ fetch: fetcher }) } }
+    })
+    const event = (type: string, properties: Record<string, unknown>) => plugin.event({ event: { type, properties } })
+    const answer = async (answers: unknown[], expectedTakes: number) => {
+      await vi.waitFor(() => expect(answerNext).toHaveLength(1))
+      answerNext.shift()!(answers)
+      await vi.waitFor(() => expect(takes).toHaveLength(expectedTakes))
+    }
+    await event('session.created', { sessionID: OPENCODE_SESSION })
+    await event('permission.asked', { sessionID: OPENCODE_SESSION, id: 'per_1' })
+    await event('permission.asked', { sessionID: OPENCODE_SESSION, id: 'per_2' })
+    await vi.waitFor(() => expect(takes).toHaveLength(1))
+    expect(takes[0]).toBe('timeout -s KILL 35s bmn answer take --wait 25 --json')
+    // Two permissions wait, and OpenCode's reject would deny both: the Deny is not sent, and nothing is reported.
+    await answer([{ requestRef: 'per_1', kind: 'permission', reply: 'reject' }], 2)
+    expect(posts).toEqual([])
+    expect(takes[1]).toBe('timeout -s KILL 35s bmn answer take --wait 25 --json')
+    await answer([{ requestRef: 'per_2', kind: 'permission', reply: 'once' }], 3)
+    expect(posts).toEqual([{ url: 'http://127.0.0.1:4096/permission/per_2/reply?directory=%2Fwork', body: { reply: 'once' } }])
+    expect(takes[2]).toBe('timeout -s KILL 10s bmn answer take --wait 0 --reported per_2=ok --json')
+    await event('permission.replied', { sessionID: OPENCODE_SESSION, requestID: 'per_2', reply: 'once' })
+    await answer([], 4)
+    accept = false
+    await answer([{ requestRef: 'per_1', kind: 'permission', reply: 'reject' }], 5)
+    expect(posts[1]).toEqual({ url: 'http://127.0.0.1:4096/permission/per_1/reply?directory=%2Fwork', body: { reply: 'reject' } })
+    expect(takes[4]).toBe('timeout -s KILL 10s bmn answer take --wait 0 --reported per_1=failed --json')
+    await event('session.idle', { sessionID: OPENCODE_SESSION })
+    answerNext.shift()!([])
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(takes).toHaveLength(5)
+  })
+
   it('kills a stalled plugin child within 3 seconds', async () => {
     const printed = await runHooks(['print', 'opencode'])
     expect(printed, printed.stderr).toMatchObject({ code: 0 })
@@ -2928,7 +2991,7 @@ describe('structured prompts from the recorded hooks (Epic 30)', () => {
       kind: 'permission',
       prompt: {
         type: 'permission', harness: 'claude', shape: 'permission', requestRef: null, toolUseId: null,
-        tool: 'Bash', command: 'touch spike-allow.txt', cwd: '/work/project'
+        tool: 'Bash', command: 'touch spike-allow.txt', cwd: '/work/project', description: 'Create spike-allow.txt file'
       }
     })
   })
@@ -3089,7 +3152,21 @@ describe('bmn answer take (Epic 30.2)', () => {
     const result = await runCli(['answer', 'take', '--wait', '2', '--json'], { env: fixture.sessionEnv })
     expect(result.code).toBe(0)
     expect(JSON.parse(result.stdout)).toEqual({ answers: [{ requestRef: 'que_1', kind: 'question', answers: [['JWT']] }] })
-    expect(fixture.handlers.takeAnswers).toHaveBeenCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', waitMs: 2000 })
+    expect(fixture.handlers.takeAnswers).toHaveBeenCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', waitMs: 2000, report: null })
+  })
+
+  it('passes on what OpenCode\'s server said to a posted reply', async () => {
+    const fixture = await cliFixture()
+    expect((await runCli(['answer', 'take', '--reported', 'per_1=ok', '--json'], { env: fixture.sessionEnv })).code).toBe(0)
+    expect(fixture.handlers.takeAnswers).toHaveBeenLastCalledWith({
+      sessionId: 'session-1', incarnationId: 'incarnation-1', waitMs: 0, report: { requestRef: 'per_1', delivered: true }
+    })
+    expect((await runCli(['answer', 'take', '--reported', 'per_1=failed'], { env: fixture.sessionEnv })).code).toBe(0)
+    expect(fixture.handlers.takeAnswers).toHaveBeenLastCalledWith(expect.objectContaining({ report: { requestRef: 'per_1', delivered: false } }))
+    for (const value of ['per_1', 'per_1=maybe', '=ok', 'per 1=ok']) {
+      expect((await runCli(['answer', 'take', '--reported', value], { env: fixture.sessionEnv })).code).toBe(2)
+    }
+    expect(fixture.handlers.takeAnswers).toHaveBeenCalledTimes(2)
   })
 
   it.each([['-1'], ['26'], ['1.5'], ['soon']])('refuses --wait %s as a usage error', async (wait) => {

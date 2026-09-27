@@ -217,12 +217,20 @@ function homeRelative(path: string, home: string | null): string {
   return path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path
 }
 
+/** Whether the card can show the whole command; a permission is never approved from a clipped one. */
+export function commandShownWhole(prompt: AttentionPermissionPrompt): boolean {
+  return prompt.command !== null && clip(prompt.command, COMMAND_CHARS) === prompt.command
+}
+
 export interface PermissionCardInput {
   header: CardHeader
   prompt: AttentionPermissionPrompt
   /** Allow once and Deny tokens; Deny is null when it would answer more than this request. */
   tokens: { allow: string; deny: string | null } | null
-  /** Why a card has no buttons: the setting is off, or no verified route answers this shape. */
+  /**
+   * Why a card has no buttons: the setting is off, or no verified route answers this shape. A command too
+   * long to show whole never gets buttons, whatever is passed.
+   */
   closedBecause: 'permissions-off' | 'unsupported' | null
   home: string | null
   note?: string | null
@@ -238,15 +246,18 @@ export function permissionCard(input: PermissionCardInput): RenderedCard {
     `<pre>${escapeHtml(command)}</pre>`,
     ...(prompt.cwd ? [`in <code>${escapeHtml(clip(homeRelative(prompt.cwd, input.home), 300))}</code>`] : [])
   ].join('\n')
-  const trailer = input.tokens !== null
+  const tokens = prompt.command !== null && !commandShownWhole(prompt) ? null : input.tokens
+  const trailer = tokens !== null
     ? input.note ? `⚠ <i>${escapeHtml(input.note)}</i>` : null
-    : input.closedBecause === 'permissions-off'
-      ? '<i>Answer this at the laptop.</i>'
-      : '<i>No buttons for this kind yet. Answer at the laptop.</i>'
+    : prompt.command !== null && !commandShownWhole(prompt)
+      ? '<i>The command is too long to show here. Answer at the laptop.</i>'
+      : input.closedBecause === 'permissions-off'
+        ? '<i>Answer this at the laptop.</i>'
+        : '<i>No buttons for this kind yet. Answer at the laptop.</i>'
   const text = trailer ? `${base}\n\n${trailer}` : base
-  if (input.tokens === null) return { text, keyboard: null, base }
-  const row: InlineButton[] = [{ text: 'Allow once', callback_data: input.tokens.allow }]
-  if (input.tokens.deny !== null) row.push({ text: 'Deny', callback_data: input.tokens.deny })
+  if (tokens === null) return { text, keyboard: null, base }
+  const row: InlineButton[] = [{ text: 'Allow once', callback_data: tokens.allow }]
+  if (tokens.deny !== null) row.push({ text: 'Deny', callback_data: tokens.deny })
   return { text, keyboard: [row], base }
 }
 

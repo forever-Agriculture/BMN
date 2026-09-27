@@ -397,7 +397,7 @@ export class CompanionService {
           () => this.closeAttentionByKey(p.sessionId, p.requestKey, 'answered', p.resolution, p.origin ?? null, p.evidence)
         ),
         takeAnswers: (p) => this.controlCall(
-          async (): Promise<{ answers: PluginAnswer[] }> => ({ answers: await this.answers.take(p.sessionId, p.incarnationId, p.waitMs) })
+          async (): Promise<{ answers: PluginAnswer[] }> => ({ answers: await this.answers.take(p.sessionId, p.incarnationId, p.waitMs, p.report ?? undefined) })
         ),
         observeHookEvent: (p) => this.controlCall(async () => this.observeHookEvent(p)),
         submitInput: (p) => this.controlCall(async () => {

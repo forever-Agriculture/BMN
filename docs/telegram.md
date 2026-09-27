@@ -38,11 +38,13 @@ edits the same card to say what happened:
 Several questions in one dialog are shown one at a time on the same card, earlier answers quoted
 above; nothing is sent until the last one. A new version of an open request edits its card instead
 of sending another. Uncertain, partial and refused answers also get a short reply, so the phone
-sounds. After a BMN restart, cards still showing buttons say **BMN restarted — answer at the
-laptop.**
+sounds. If Telegram does not take the final edit, BMN tries again after about 10 s, 1 min and 5 min
+and never sends the answer twice; a card still unfinished at the next start is finished then. After a
+BMN restart, cards still showing buttons say **BMN restarted — answer at the laptop.**
 
 Buttons are single-use and bound to that request, its version, the dialog on screen and the process
-that asked; an old or copied button changes nothing and says so. Only the allowed chat and user can
+that asked; an old or copied button changes nothing and says so. When a request changes, its old
+buttons stop working before the new card is drawn. Only the allowed chat and user can
 tap.
 
 What can be tapped (see [remote-answers.md](remote-answers.md) for how each is verified):
@@ -56,7 +58,8 @@ What can be tapped (see [remote-answers.md](remote-answers.md) for how each is v
 
 Permission buttons appear only after you tick **Answer permission prompts from Telegram** in
 Preferences → Telegram (off by default). They answer the exact prompt on screen, once; there is no
-"always allow". With the setting off, a permission card ends **Answer this at the laptop.**
+"always allow". A command too long to show whole (over 3,000 characters) gets no buttons: the card
+says **The command is too long to show here. Answer at the laptop.** With the setting off, a permission card ends **Answer this at the laptop.**
 
 Cards without buttons are drawn the same way and end **No buttons for this kind yet. Answer at the
 laptop.** A text reply to such a dialog stays a draft even with direct typing on, because a typed

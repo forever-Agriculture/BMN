@@ -54,6 +54,11 @@ export interface AttentionPermissionPrompt {
   command: string | null
   /** The directory the agent is working in, when the harness reported it. */
   cwd: string | null
+  /**
+   * What Claude draws under the command (its `tool_input.description`), null when it gave none; absent from
+   * prompts written before it was recorded. Anything else drawn there is not this dialog.
+   */
+  description?: string | null
 }
 
 export type AttentionPrompt = AttentionQuestionsPrompt | AttentionPermissionPrompt
@@ -161,7 +166,9 @@ export function parseAttentionPrompt(value: unknown): Parsed<AttentionPrompt> {
       }
     }
     if (value.type === 'permission') {
-      if (!hasExactKeys(value, ['type', 'harness', 'shape', 'requestRef', 'toolUseId', 'tool', 'command', 'cwd'])) {
+      const keys = ['type', 'harness', 'shape', 'requestRef', 'toolUseId', 'tool', 'command', 'cwd']
+      const described = 'description' in value
+      if (!hasExactKeys(value, described ? [...keys, 'description'] : keys)) {
         throw new PromptError('prompt has the wrong shape')
       }
       return {
@@ -174,7 +181,10 @@ export function parseAttentionPrompt(value: unknown): Parsed<AttentionPrompt> {
           toolUseId: nullableText(value.toolUseId, 'toolUseId', ATTENTION_PROMPT_LIMITS.identifier),
           tool: text(value.tool, 'tool', ATTENTION_PROMPT_LIMITS.tool),
           command: nullableText(value.command, 'command', ATTENTION_PROMPT_LIMITS.command, true),
-          cwd: nullableText(value.cwd, 'cwd', ATTENTION_PROMPT_LIMITS.cwd)
+          cwd: nullableText(value.cwd, 'cwd', ATTENTION_PROMPT_LIMITS.cwd),
+          ...(described
+            ? { description: nullableText(value.description, 'description', ATTENTION_PROMPT_LIMITS.description, true) }
+            : {})
         }
       }
     }

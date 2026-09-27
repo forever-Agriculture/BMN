@@ -109,7 +109,12 @@ export interface ControlHandlers {
    * Hands a session's OpenCode plugin the answers BMN already decided from a Telegram tap, consuming them.
    * Only for the session's own live process; nothing here can create or change an answer.
    */
-  takeAnswers(p: { sessionId: string; incarnationId: string | null; waitMs: number }): Promise<unknown>
+  takeAnswers(p: {
+    sessionId: string
+    incarnationId: string | null
+    waitMs: number
+    report: { requestRef: string; delivered: boolean } | null
+  }): Promise<unknown>
   /** One hook event, recorded so the owner can see which events arrived; it changes nothing by itself. */
   observeHookEvent(p: {
     sessionId: string
@@ -938,13 +943,20 @@ export class ControlServer {
       }
       case 'answer.take': {
         // Read-and-consume only: the answers were decided inside the app from a Telegram tap (Epic 30, decision 5).
-        const params = closedParams(rawParams, ['wait'])
+        const params = closedParams(rawParams, ['wait', 'reported'])
         if (scope.kind !== 'session') throw unauthorized('Only a session may collect its own answers')
         const wait = params.wait ?? 0
         if (typeof wait !== 'number' || !Number.isInteger(wait) || wait < 0 || wait > MAX_ANSWER_WAIT_SECONDS) {
           throw invalid(`wait must be a whole number of seconds from 0 to ${MAX_ANSWER_WAIT_SECONDS}`)
         }
-        return handlers.takeAnswers({ sessionId: scope.sessionId, incarnationId: scope.incarnationId, waitMs: wait * 1000 })
+        // What OpenCode's server said to a reply the plugin posted: it settles only an answer this session was handed.
+        let report: { requestRef: string; delivered: boolean } | null = null
+        if (params.reported !== undefined) {
+          const reported = closedParams(params.reported, ['requestRef', 'delivered'])
+          if (typeof reported.delivered !== 'boolean') throw invalid('reported.delivered must be true or false')
+          report = { requestRef: requireText(reported, 'requestRef', IDENTIFIER), delivered: reported.delivered }
+        }
+        return handlers.takeAnswers({ sessionId: scope.sessionId, incarnationId: scope.incarnationId, waitMs: wait * 1000, report })
       }
       case 'hook.observe': {
         // Observations are diagnostic; the repeat watch may open or withdraw its one notice.

@@ -107,11 +107,28 @@ describe('recognising the recorded dialogs', () => {
 
   it('reads the allow-once and deny digits of Claude\'s Bash permission for exactly that command', () => {
     const lines = screen('claude-bash-permission.txt')
-    expect(claudePermissionOnScreen(lines, 'Bash', 'touch spike-allow.txt')).toEqual({ allow: 1, deny: 3 })
-    expect(claudePermissionOnScreen(lines, 'Bash', 'touch spike-allow')).toBeNull()
-    expect(claudePermissionOnScreen(lines, 'Bash', 'touch spike-allow.txt other.txt')).toBeNull()
-    expect(claudePermissionOnScreen(lines, 'Edit', 'touch spike-allow.txt')).toBeNull()
-    expect(claudePermissionOnScreen(screen('claude-bash-denied.txt'), 'Bash', 'touch spike-allow.txt')).toBeNull()
+    const described = 'Create spike-allow.txt file'
+    expect(claudePermissionOnScreen(lines, 'Bash', 'touch spike-allow.txt', described)).toEqual({ allow: 1, deny: 3 })
+    expect(claudePermissionOnScreen(lines, 'Bash', 'touch spike-allow', described)).toBeNull()
+    expect(claudePermissionOnScreen(lines, 'Bash', 'touch spike-allow.txt other.txt', described)).toBeNull()
+    expect(claudePermissionOnScreen(lines, 'Edit', 'touch spike-allow.txt', described)).toBeNull()
+    expect(claudePermissionOnScreen(screen('claude-bash-denied.txt'), 'Bash', 'touch spike-allow.txt', described)).toBeNull()
+    // A row the prompt does not account for could be another command line.
+    expect(claudePermissionOnScreen(lines, 'Bash', 'touch spike-allow.txt')).toBeNull()
+    expect(claudePermissionOnScreen(lines, 'Bash', 'touch spike-allow.txt', 'Create another file')).toBeNull()
+  })
+
+  it('refuses a Claude permission whose dialog adds command lines to the one BMN was told about', () => {
+    const lines = screen('claude-bash-permission.txt')
+    const row = lines.findIndex((line) => line.trim() === 'touch spike-allow.txt')
+    const multiline = [...lines.slice(0, row + 1), '   touch NEW.txt', ...lines.slice(row + 1)]
+    const described = 'Create spike-allow.txt file'
+    expect(claudePermissionOnScreen(multiline, 'Bash', 'touch spike-allow.txt', described)).toBeNull()
+    expect(claudePermissionOnScreen(multiline, 'Bash', 'touch spike-allow.txt\ntouch NEW.txt', described)).toEqual({ allow: 1, deny: 3 })
+    expect(claudePermissionOnScreen(lines, 'Bash', 'touch spike-allow.txt\ntouch NEW.txt', described)).toBeNull()
+    // A long line wrapped over rows still reads as that one line.
+    const wrapped = [...lines.slice(0, row), '   touch spike-allow.txt', '   other.txt', ...lines.slice(row + 1)]
+    expect(claudePermissionOnScreen(wrapped, 'Bash', 'touch spike-allow.txt other.txt', described)).toEqual({ allow: 1, deny: 3 })
   })
 
   it('finds a Codex question at 200 and 80 columns, with its description column beside the labels', () => {

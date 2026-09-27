@@ -521,6 +521,8 @@ describe('control server validation', () => {
     ['answer.take waiting too long', 'answer.take', { wait: 26 }],
     ['answer.take with a fractional wait', 'answer.take', { wait: 1.5 }],
     ['answer.take naming a request', 'answer.take', { requestId: 'r1' }],
+    ['answer.take reporting without an outcome', 'answer.take', { reported: { requestRef: 'per_1' } }],
+    ['answer.take reporting an answer', 'answer.take', { reported: { requestRef: 'per_1', delivered: true, reply: 'once' } }],
     ['a method that would give an answer', 'answer.give', { requestId: 'r1' }],
     ['an attention answer method', 'attention.answer', { requestId: 'r1' }],
     ['missing input key', 'input.submit', { text: 'ls' }],
@@ -692,9 +694,11 @@ describe('control server validation', () => {
     const fixture = await serverFixture()
     const session = await authenticated(fixture, sessionToken(fixture))
     expect((await session.request('answer.take', { wait: 3 })).error).toBeUndefined()
-    expect(fixture.handlers.takeAnswers).toHaveBeenLastCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', waitMs: 3000 })
-    expect((await session.request('answer.take', {})).error).toBeUndefined()
-    expect(fixture.handlers.takeAnswers).toHaveBeenLastCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', waitMs: 0 })
+    expect(fixture.handlers.takeAnswers).toHaveBeenLastCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', waitMs: 3000, report: null })
+    expect((await session.request('answer.take', { reported: { requestRef: 'per_1', delivered: false } })).error).toBeUndefined()
+    expect(fixture.handlers.takeAnswers).toHaveBeenLastCalledWith({
+      sessionId: 'session-1', incarnationId: 'incarnation-1', waitMs: 0, report: { requestRef: 'per_1', delivered: false }
+    })
     expect((await session.request('answer.take', { sessionId: 'session-2' })).error).toBeDefined()
     const owner = await authenticated(fixture, fixture.auth.ownerToken)
     expect((await owner.request('answer.take', {})).error).toMatchObject({ data: { code: ERROR_CODES.unauthorized } })

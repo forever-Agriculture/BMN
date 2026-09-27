@@ -85,11 +85,9 @@ export interface AnswerTiming {
   pickupMs: number
   /** How long an unconfirmed answer can still be upgraded by a late report. */
   lateMs: number
-  /** Quiet time before a changed screen is checked for the dialog leaving it. */
-  watchMs: number
 }
 
-const DEFAULT_TIMING: AnswerTiming = { stepMs: 3_000, confirmMs: 10_000, pickupMs: 5_000, lateMs: 10 * 60_000, watchMs: 150 }
+const DEFAULT_TIMING: AnswerTiming = { stepMs: 3_000, confirmMs: 10_000, pickupMs: 5_000, lateMs: 10 * 60_000 }
 
 /** Digits are single keys, and each harness numbers one extra entry after the agent's options. */
 const MAX_KEY_OPTIONS = 8
@@ -107,6 +105,12 @@ export function answerRoute(prompt: AttentionPrompt | null): AnswerRoute | null 
   if (prompt.shape !== 'permission' || prompt.command === null) return null
   if (prompt.harness === 'opencode') return 'opencode-api'
   return prompt.harness === 'claude' && prompt.tool === 'Bash' ? 'claude-keys' : null
+}
+
+/** Whether a report names this prompt's own harness id, which no successor dialog shares. */
+function namesItself(prompt: AttentionPrompt, evidence: AttentionEvidence): boolean {
+  return (prompt.requestRef !== null && evidence.requestRef === prompt.requestRef) ||
+    (prompt.toolUseId !== null && evidence.toolUseId === prompt.toolUseId)
 }
 
 function sameIds(expected: string | null, reported: string | null): boolean {
@@ -163,6 +167,14 @@ interface Pending {
   settled: boolean
   settle(outcome: AnswerOutcome): void
   timers: NodeJS.Timeout[]
+  /** The request closed before a report arrived; only a report naming its own id may still confirm it. */
+  closed: boolean
+}
+
+/** What an OpenCode plugin says became of an answer it collected: its own server accepted or rejected the reply. */
+export interface PluginReport {
+  requestRef: string
+  delivered: boolean
 }
 
 interface Delivery {
@@ -172,11 +184,14 @@ interface Delivery {
   payload: PluginAnswer
   taken: boolean
   onTaken(): void
+  /** Whether it may still be handed out: a Deny must still answer this request alone. */
+  valid(): boolean
+  onDropped(): void
 }
 
 interface Watch {
   unsubscribe(): void
-  timer?: NodeJS.Timeout | undefined
+  check(): void
 }
 
 export class RemoteAnswers {
@@ -186,7 +201,11 @@ export class RemoteAnswers {
   private readonly pending = new Map<string, Pending>()
   private readonly deliveries = new Map<string, Delivery[]>()
   private readonly takers = new Map<string, Set<() => void>>()
+  /** Plugin answers handed out and not yet reported on, by session and harness request id. */
+  private readonly handedOut = new Map<string, { requestId: string; incarnationId: string }>()
   private readonly watches = new Map<string, Watch>()
+  /** Sessions BMN is typing into right now; its own keys move the dialog through its steps. */
+  private readonly typing = new Set<string>()
   /** OpenCode permission requests still waiting, per session: its `reject` answers all of them at once. */
   private readonly openCodePermissions = new Map<string, Set<string>>()
   private readonly lateListeners = new Set<(requestId: string, outcome: AnswerOutcome) => void>()
@@ -254,6 +273,10 @@ export class RemoteAnswers {
     if (evidence.requestRef !== null) this.openCodePermissions.get(sessionId)?.delete(evidence.requestRef)
     for (const [requestId, pending] of this.pending) {
       if (pending.record.sessionId !== sessionId || pending.record.requestKey !== requestKey) continue
+      // A report from a later process, or about a request that already closed, speaks for another dialog
+      // unless it names this one's own id: an identical successor reports the same tool and command.
+      if (this.deps.liveIncarnationId(sessionId) !== pending.record.incarnationId) continue
+      if (pending.closed && !namesItself(pending.prompt, evidence)) continue
       if (!evidenceConfirms(pending.prompt, pending.answer, evidence)) continue
       const outcome: AnswerOutcome = { state: 'confirmed', sent: pending.sent }
       if (pending.settled) {
@@ -268,6 +291,8 @@ export class RemoteAnswers {
 
   /** Called once a request is no longer open, by whatever closed it. */
   closed(record: AttentionRecord): void {
+    const pending = this.pending.get(record.requestId)
+    if (pending) pending.closed = true
     this.tracked.delete(record.requestId)
     this.claims.delete(record.requestId)
     this.dropDeliveries((delivery) => delivery.requestId === record.requestId)
@@ -304,9 +329,12 @@ export class RemoteAnswers {
     this.claims.add(request.requestId)
     let wrote = false
     try {
-      return await this.deliver(request, () => {
+      const outcome = await this.deliver(request, () => {
         wrote = true
       })
+      // A refusal means nothing reached the agent, whatever was attempted: the owner may tap again.
+      if (outcome.state === 'refused') wrote = false
+      return outcome
     } catch {
       // A failed write may still have reached the program: say so, never "not sent".
       return wrote
@@ -322,14 +350,28 @@ export class RemoteAnswers {
    * The answers waiting for this session's OpenCode plugin, consumed as they are returned. Waits up to
    * `waitMs` for one to arrive. Only the session's own live process can collect them.
    */
-  async take(sessionId: string, incarnationId: string | null, waitMs: number): Promise<PluginAnswer[]> {
+  async take(
+    sessionId: string,
+    incarnationId: string | null,
+    waitMs: number,
+    report?: PluginReport
+  ): Promise<PluginAnswer[]> {
     if (incarnationId === null) return []
+    if (report) this.pluginReported(sessionId, incarnationId, report)
     const collect = (): PluginAnswer[] => {
       const queue = this.deliveries.get(sessionId) ?? []
-      const ready = queue.filter((delivery) => delivery.incarnationId === incarnationId && !delivery.taken)
-      for (const delivery of ready) {
+      const ready: Delivery[] = []
+      for (const delivery of queue) {
+        if (delivery.incarnationId !== incarnationId || delivery.taken) continue
+        if (!delivery.valid()) {
+          delivery.taken = true
+          delivery.onDropped()
+          continue
+        }
         delivery.taken = true
         delivery.onTaken()
+        this.handedOut.set(`${sessionId}\u0000${delivery.payload.requestRef}`, { requestId: delivery.requestId, incarnationId })
+        ready.push(delivery)
       }
       const rest = queue.filter((delivery) => !delivery.taken)
       if (rest.length > 0) this.deliveries.set(sessionId, rest)
@@ -353,11 +395,29 @@ export class RemoteAnswers {
     return collect()
   }
 
-  dispose(): void {
-    for (const watch of this.watches.values()) {
-      watch.unsubscribe()
-      clearTimeout(watch.timer)
+  /**
+   * The plugin's own server accepted or rejected an answer it collected. Acceptance is OpenCode answering that
+   * request by id (decision 4); a rejection means nothing was applied. Only the process that collected it may say.
+   */
+  private pluginReported(sessionId: string, incarnationId: string, report: PluginReport): void {
+    const key = `${sessionId}\u0000${report.requestRef}`
+    const handed = this.handedOut.get(key)
+    if (!handed || handed.incarnationId !== incarnationId) return
+    this.handedOut.delete(key)
+    const pending = this.pending.get(handed.requestId)
+    if (!pending) return
+    if (report.delivered) {
+      const outcome: AnswerOutcome = { state: 'confirmed', sent: pending.sent }
+      if (pending.settled) for (const listener of this.lateListeners) listener(handed.requestId, outcome)
+      pending.settle(outcome)
+    } else {
+      pending.settle({ state: 'refused', reason: 'gone' })
     }
+    this.finishPending(handed.requestId)
+  }
+
+  dispose(): void {
+    for (const watch of this.watches.values()) watch.unsubscribe()
     this.watches.clear()
     for (const requestId of [...this.pending.keys()]) this.finishPending(requestId)
     for (const takers of this.takers.values()) for (const wake of [...takers]) wake()
@@ -383,7 +443,14 @@ export class RemoteAnswers {
       this.epochOf(record.requestId) === request.epoch &&
       this.deps.liveIncarnationId(record.sessionId) === request.incarnationId
     if (route === 'opencode-api') return this.deliverToPlugin(record, prompt, request, current, markWritten)
-    return this.deliverKeys(record, prompt, request, route === 'claude-keys' ? 'claude' : 'codex', current, markWritten)
+    // While BMN types, its own keys walk the dialog through its steps, and each step is verified on its own.
+    this.typing.add(record.sessionId)
+    try {
+      return await this.deliverKeys(record, prompt, request, route === 'claude-keys' ? 'claude' : 'codex', current, markWritten)
+    } finally {
+      this.typing.delete(record.sessionId)
+      this.watches.get(record.sessionId)?.check()
+    }
   }
 
   private async deliverKeys(
@@ -405,7 +472,7 @@ export class RemoteAnswers {
     }
 
     if (prompt.type === 'permission') {
-      const dialog = claudePermissionOnScreen(screen.lines(), prompt.tool, prompt.command!)
+      const dialog = claudePermissionOnScreen(screen.lines(), prompt.tool, prompt.command!, prompt.description ?? null)
       if (!dialog) return { state: 'refused', reason: 'not-on-screen' }
       if (request.answer.type !== 'permission') return { state: 'refused', reason: 'unsupported' }
       if (request.answer.decision === 'deny') {
@@ -460,9 +527,11 @@ export class RemoteAnswers {
       : { requestRef: prompt.requestRef, kind: 'question', answers: sentLabels(prompt, answer).map((label) => [label]) }
     const sent = sentLabels(prompt, answer)
     let taken!: () => void
-    const pickedUp = new Promise<boolean>((resolve) => {
-      taken = () => resolve(true)
-      setTimeout(() => resolve(false), this.timing.pickupMs)
+    let dropped!: () => void
+    const pickedUp = new Promise<'taken' | 'dropped' | 'late'>((resolve) => {
+      taken = () => resolve('taken')
+      dropped = () => resolve('dropped')
+      setTimeout(() => resolve('late'), this.timing.pickupMs)
     })
     const delivery: Delivery = {
       requestId: record.requestId,
@@ -474,16 +543,22 @@ export class RemoteAnswers {
         // From here the answer may reach OpenCode; the claim holds until the request closes.
         markWritten()
         taken()
-      }
+      },
+      // OpenCode's reject denies every permission still waiting, so a Deny stays valid only while this
+      // request is the session's one pending permission, up to the moment it is handed out.
+      valid: () => this.tracked.has(record.requestId) &&
+        (payload.kind !== 'permission' || payload.reply !== 'reject' || this.canDeny(record)),
+      onDropped: () => dropped()
     }
     // The plugin's reply can reach the hook before `take` returns, so the report is awaited first.
     const confirmation = this.expectConfirmation(record, prompt, answer, sent)
     this.deliveries.set(record.sessionId, [...(this.deliveries.get(record.sessionId) ?? []), delivery])
     for (const wake of [...(this.takers.get(record.sessionId) ?? [])]) wake()
-    if (!(await pickedUp) && !delivery.taken) {
+    const pickup = await pickedUp
+    if (pickup !== 'taken') {
       this.dropDeliveries((candidate) => candidate === delivery)
       this.finishPending(record.requestId)
-      return { state: 'refused', reason: 'not-delivered' }
+      return { state: 'refused', reason: pickup === 'dropped' ? 'changed' : 'not-delivered' }
     }
     return confirmation
   }
@@ -502,6 +577,7 @@ export class RemoteAnswers {
         answer,
         sent,
         settled: false,
+        closed: false,
         settle: (outcome) => {
           if (pending.settled) return
           pending.settled = true
@@ -520,6 +596,7 @@ export class RemoteAnswers {
     if (!pending) return
     for (const timer of pending.timers) clearTimeout(timer)
     this.pending.delete(requestId)
+    for (const [key, handed] of this.handedOut) if (handed.requestId === requestId) this.handedOut.delete(key)
     pending.settle({ state: 'sent-unconfirmed', sent: pending.sent })
   }
 
@@ -549,9 +626,10 @@ export class RemoteAnswers {
     if (this.watches.has(sessionId)) return
     const screen = this.deps.screen(sessionId, incarnationId)
     if (!screen) return
-    const watch: Watch = { unsubscribe: () => undefined }
+    const watch: Watch = { unsubscribe: () => undefined, check: () => undefined }
+    // Every change is read as it lands: a dialog that leaves and comes back between two samples is still over.
     const check = (): void => {
-      watch.timer = undefined
+      if (this.typing.has(sessionId)) return
       const lines = screen.lines()
       for (const entry of this.tracked.values()) {
         if (entry.sessionId !== sessionId) continue
@@ -561,9 +639,8 @@ export class RemoteAnswers {
         entry.visible = visible
       }
     }
-    watch.unsubscribe = screen.onChange(() => {
-      watch.timer ??= setTimeout(check, this.timing.watchMs)
-    })
+    watch.check = check
+    watch.unsubscribe = screen.onChange(check)
     this.watches.set(sessionId, watch)
     void screen.settled().then(check)
   }
@@ -573,7 +650,6 @@ export class RemoteAnswers {
     const watch = this.watches.get(sessionId)
     if (!watch) return
     watch.unsubscribe()
-    clearTimeout(watch.timer)
     this.watches.delete(sessionId)
   }
 
@@ -590,7 +666,7 @@ export class RemoteAnswers {
 export function dialogOnScreen(lines: readonly string[], prompt: AttentionPrompt): boolean {
   if (prompt.harness === 'opencode') return false
   if (prompt.type === 'permission') {
-    return prompt.command !== null && claudePermissionOnScreen(lines, prompt.tool, prompt.command) !== null
+    return prompt.command !== null && claudePermissionOnScreen(lines, prompt.tool, prompt.command, prompt.description ?? null) !== null
   }
   const harness = prompt.harness
   if (prompt.questions.some((question) => questionOnScreen(lines, harness, question))) return true

@@ -36,9 +36,11 @@ bmn ask <request-key> <title> [--kind K] [--body B] [--expires ISO]
 bmn withdraw <request-key>                     Withdraw your request
 bmn resolve <request-key> <resolution>         Mark a request resolved
 bmn send <text> [--submit] [--key K]           Paste text into the session; --submit presses Enter
-bmn answer take [--wait S]                     Collect, once, the answers BMN decided from a Telegram tap
+bmn answer take [--wait S] [--reported R=ok|failed]
+                                               Collect, once, the answers BMN decided from a Telegram tap
                                                for this session's own OpenCode requests (BMN's plugin
-                                               runs this); waits up to S seconds, 0-25
+                                               runs this); waits up to S seconds, 0-25. --reported says
+                                               whether OpenCode accepted the reply to request R
 bmn hook <agent>                               Turn an agent hook event on stdin into Needs you requests
 bmn hooks print opencode                       Print the shipped OpenCode TypeScript plugin
 bmn hooks check [agent] [--file PATH]          Say which of BMN's hook entries each hook file carries
@@ -269,8 +271,11 @@ byte and reports `wired`, `wired (older wording)` or `missing`. `install` backs 
 before replacing it. The plugin forwards OpenCode events to `bmn hook opencode` only inside BMN;
 the hook log shows what actually arrived. While a question or permission of the plugin's own main
 session waits, it also runs `bmn answer take --wait 25` in a loop and posts any answer it receives to
-its own OpenCode server by request id (`question/<id>/reply`, `permission/<id>/reply`); it stops when
-nothing waits and after three failed calls, so an absent BMN costs nothing. A plugin installed before
+its own OpenCode server by request id (`question/<id>/reply`, `permission/<id>/reply`), then tells
+BMN what the server answered with `--reported <id>=ok|failed` (nothing when the connection failed, as
+the reply may still have landed). It posts a reject only while that permission is the only one of
+its session still waiting, because OpenCode's reject answers them all. It stops when nothing waits
+and after three failed calls, so an absent BMN costs nothing. A plugin installed before
 Epic 30 shows as `wired (older wording)` until `bmn hooks install opencode` replaces it. This was checked against OpenCode CLI 1.18.31 and locally
 installed plugin SDK 1.4.9 on 2026-09-22; real interactive event delivery is still unverified.
 
@@ -520,7 +525,8 @@ bmn hook is not yours
   process of the owner's user can read, agents included. Answers from the phone are decided inside
   the app from a Telegram tap (Epic 30). `answer.take` only hands a session's own OpenCode plugin
   the answers already decided for that session's open requests, consuming them, and it refuses the
-  owner token. Hook **evidence** on a resolve or withdraw (`toolUseId`, `requestRef`, `answers`,
+  owner token. Its `reported` outcome settles only an answer that same process was handed, for that
+  request id. Hook **evidence** on a resolve or withdraw (`toolUseId`, `requestRef`, `answers`,
   `permission`, `tool`, `command`, all bounded and validated) can only mark an answer BMN sent as
   confirmed; it never makes one.
 - Requests are validated for schema and size before anything runs.

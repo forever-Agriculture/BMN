@@ -1,5 +1,5 @@
 // MODULE: telegram-card-keeper.test.ts - card lifecycle: taps, single-use tokens, outcomes, in-place edits, restart sweep, fallback
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { AttentionPrompt, AttentionRecord } from '@bmn/protocol'
 import type { TelegramCardData, TelegramCardRecord, TelegramCardState } from './database-companion-store'
 import type { AnswerOutcome, AnswerRequest } from './remote-answer'
@@ -39,6 +39,10 @@ class FakeConnector implements CardConnector {
   readonly toasts: Array<{ id: string; text: string }> = []
   refuseHtml = false
   failAll = false
+  /** While set, edits wait for it: an edit still on its way to Telegram. */
+  holdEdits: Promise<void> | null = null
+  failEdits = false
+  editError: Error | null = null
   private next = 100
 
   async sendMessage(text: string, options: CardMessageOptions = {}): Promise<{ messageId: number }> {
@@ -52,6 +56,9 @@ class FakeConnector implements CardConnector {
   }
 
   async editMessageText(id: number, text: string, options: Omit<CardMessageOptions, 'replyToMessageId'> = {}): Promise<void> {
+    if (this.holdEdits) await this.holdEdits
+    if (this.editError) throw this.editError
+    if (this.failEdits) throw new TelegramConnectorError('network', 'down')
     this.edits.push({ id, text, options })
   }
 
@@ -77,6 +84,7 @@ function setup(options: {
   answerability?: Answerability
   answer?: (request: AnswerRequest) => Promise<AnswerOutcome>
   stored?: TelegramCardRecord[]
+  retryMs?: number[]
 } = {}) {
   const connector = new FakeConnector()
   const state = { record: options.record === undefined ? record(QUESTION) : options.record, connected: true }
@@ -104,6 +112,7 @@ function setup(options: {
     },
     home: null,
     settleMs: 1,
+    retryMs: options.retryMs ?? [5, 5],
     token: () => `tok-${++token}`
   })
   const tap = (data: string, messageId = 100): InboundTap =>
@@ -141,6 +150,17 @@ describe('sending a card', () => {
     await off.keeper.page(off.state.record!)
     expect(off.connector.sends[0]?.text).toContain('<i>Answer this at the laptop.</i>')
     expect(off.connector.sends[0]?.options.keyboard).toBeNull()
+  })
+
+  it('mints no tokens for a permission whose command the card would clip', async () => {
+    const long = { ...BASH, command: `${'x'.repeat(3100)}; touch unseen.txt` } as AttentionPrompt
+    const h = setup({ record: record(long) })
+    await h.keeper.page(h.state.record!)
+    expect(h.connector.sends[0]?.options.keyboard).toBeNull()
+    expect(h.connector.sends[0]?.text).toContain('The command is too long to show here. Answer at the laptop.')
+    expect(h.puts[0]?.state).toBe('open')
+    await h.keeper.tap(h.tap('tok-1'))
+    expect(h.answers).toEqual([])
   })
 
   it('resends a card Telegram refuses to format once as plain words without buttons', async () => {
@@ -190,6 +210,48 @@ describe('sending a card', () => {
     await h.keeper.tap(h.tap('tok-1'))
     expect(h.connector.toasts).toEqual([{ id: 'cb-tok-1', text: 'This button is no longer active.' }])
     expect(h.answers).toEqual([])
+  })
+})
+
+describe('buttons drawn for one revision', () => {
+  it('never answer the next revision while its card is still on the way (Astra A1)', async () => {
+    const h = setup({ record: record(BASH) })
+    let epoch = 4
+    ;(h.keeper as unknown as { deps: { answerEpoch: () => number } }).deps.answerEpoch = () => epoch
+    await h.keeper.page(h.state.record!)
+    expect(h.connector.buttons()).toEqual(['tok-1', 'tok-2'])
+    let release!: () => void
+    h.connector.holdEdits = new Promise((resolve) => { release = resolve })
+    h.state.record = record(BASH, { revision: 2 })
+    epoch = 5
+    h.keeper.changed('s1')
+    await settle()
+    // The revision-2 card is still being drawn: the revision-1 Allow once must not answer it.
+    const tapped = h.keeper.tap(h.tap('tok-1'))
+    await settle()
+    expect(h.connector.toasts).toEqual([{ id: 'cb-tok-1', text: 'This button is no longer active.' }])
+    release()
+    h.connector.holdEdits = null
+    await tapped
+    await settle()
+    expect(h.answers).toEqual([])
+    expect(h.connector.editButtons()).toEqual(['tok-3', 'tok-4'])
+    await h.keeper.tap(h.tap('tok-3'))
+    await settle()
+    expect(h.answers).toEqual([expect.objectContaining({ revision: 2, epoch: 5, answer: { type: 'permission', decision: 'allow' } })])
+  })
+
+  it('stay dead when the new card could not be drawn, and answer nothing', async () => {
+    const h = setup({ record: record(BASH) })
+    await h.keeper.page(h.state.record!)
+    h.connector.failEdits = true
+    h.state.record = record(BASH, { revision: 2 })
+    h.keeper.changed('s1')
+    await settle()
+    await h.keeper.tap(h.tap('tok-1'))
+    await settle()
+    expect(h.answers).toEqual([])
+    expect(h.connector.toasts[0]?.text).toBe('This button is no longer active.')
   })
 })
 
@@ -348,6 +410,47 @@ describe('after a restart', () => {
   const card = (messageId: number, state: TelegramCardState, format: 'html' | 'plain' = 'html'): TelegramCardRecord => ({
     messageId, sessionId: 's1', requestId: `r${messageId}`, incarnationId: 'i0', revision: 1, state,
     card: { base: '❓ <b>api</b>\n<b>Q?</b>', format }
+  })
+
+  it('keeps a card whose ending Telegram did not take unfinished, retries it and never answers again (Astra A7)', async () => {
+    const h = setup({ retryMs: [100, 100] })
+    await h.keeper.page(h.state.record!)
+    h.connector.failEdits = true
+    await h.keeper.tap(h.tap('tok-1'))
+    await settle()
+    expect(h.answers).toHaveLength(1)
+    expect(h.updates.map((update) => update.state)).not.toContain('final')
+    h.connector.failEdits = false
+    await vi.waitFor(() => expect(h.updates.map((update) => update.state)).toContain('final'))
+    expect(h.connector.lastEdit()).toMatchObject({ id: 100, options: { keyboard: null } })
+    expect(h.connector.lastEdit()?.text).toContain('Sent: JWT')
+    expect(h.answers).toHaveLength(1)
+  })
+
+  it('gives up retrying after the last wait and leaves the stored card for the next start', async () => {
+    const h = setup()
+    await h.keeper.page(h.state.record!)
+    h.connector.failEdits = true
+    await h.keeper.tap(h.tap('tok-1'))
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    expect(h.updates.map((update) => update.state)).not.toContain('final')
+  })
+
+  it('finishes a card Telegram will never edit instead of retrying it', async () => {
+    const h = setup({ stored: [card(1, 'buttons')] })
+    h.connector.editError = new TelegramConnectorError('http', 'Telegram editMessageText failed (400): message to edit not found', 400)
+    await h.keeper.sweep()
+    expect(h.updates.map((update) => [update.messageId, update.state])).toEqual([[1, 'final']])
+  })
+
+  it('leaves a stale card unfinished when its restart edit fails, and finishes it on the next sweep', async () => {
+    const h = setup({ stored: [card(1, 'buttons')] })
+    h.connector.failEdits = true
+    await h.keeper.sweep()
+    expect(h.updates).toEqual([])
+    h.connector.failEdits = false
+    await h.keeper.sweep()
+    expect(h.updates.map((update) => [update.messageId, update.state])).toEqual([[1, 'final']])
   })
 
   it('finishes cards left with buttons or sending, once, and leaves the rest', async () => {

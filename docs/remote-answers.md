@@ -112,13 +112,16 @@ reaches it (a unit test reads the sources to keep it that way).
 - **Recognition.** A dialog is on screen only when its option list appears in order at one column,
   followed by the harness's own extra entry (`Type something.` for Claude, `None of the above` for
   Codex), with the question text directly above it. Codex steps must also show `Question i/N`.
-  Claude's review must list exactly the answers sent. A permission must show `Bash command`, the
-  exact command ending on a row boundary, and `Do you want to proceed?`, with the digits of the
+  Claude's review must list exactly the answers sent. A permission must show `Bash command`, every
+  line of the exact command each ending on a row boundary, nothing else before
+  `Do you want to proceed?` but the command's own description (Claude's `tool_input.description`,
+  kept in the prompt), and the digits of the
   plain `Yes` and `No` entries read from the screen. Frame and cursor glyphs and whitespace runs are
   normalised; soft-wrapped rows are joined.
 - **Epoch.** Every open, resolve or withdraw a hook sends for a session raises the epoch of each of
   its followed requests before the store is touched, and so does the recognised dialog leaving the
-  screen. A card is bound to the epoch at send time. This is what refuses an allow for a prompt whose
+  screen, checked on every screen change (not while BMN is typing its own answer), so even a brief
+  departure counts. A card is bound to the epoch at send time. This is what refuses an allow for a prompt whose
   identical successor now shows. To the store the successor is the same request at the same revision.
 - **Checks before a key.** The request is claimed before any await, so a second tap loses as
   `claimed`. Then: the process that asked is live (`gone`); revision and epoch match (`changed`); the
@@ -128,10 +131,15 @@ reaches it (a unit test reads the sources to keep it that way).
   (`not-on-screen`). Each question of a stepped dialog is re-checked just before its own key. A
   failure after the first key stops at once as `partial`.
 - **OpenCode.** The answer waits for the session's own plugin to collect it through `answer.take`
-  (5 s, else `not-delivered` and nothing was sent). The plugin posts it to its own server.
+  (5 s, else `not-delivered` and nothing was sent). A queued Deny is dropped as `changed` if another
+  permission has opened meanwhile. The plugin posts it to its own server, rechecks that a reject
+  answers only that one permission, and reports the server's response: accepted is `confirmed`,
+  refused is `gone` (nothing was applied).
 - **Outcomes.** `confirmed` only when the harness reports exactly that answer within 10 s: the
   question tool's answers, the permitted tool with the same input, or OpenCode's replied event for
-  that request id. The request then closes as answered by `telegram`. Otherwise the answer is
+  that request id, or the plugin's accepted report for it. A report counts only for the prompt's own
+  process, and after the request has closed only when it names the prompt's own id, so an identical
+  successor's report never confirms an earlier answer. The request then closes as answered by `telegram`. Otherwise the answer is
   `sent-unconfirmed`: never retried, and still upgraded to `confirmed` if the report comes within ten
   minutes. A Claude deny is always `sent-unconfirmed`, and BMN closes its request itself with
   "Deny sent from Telegram, not confirmed", because no hook will.
