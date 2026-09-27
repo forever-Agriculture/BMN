@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_APP_SETTINGS, type AgentHistorySettings } from '@bmn/protocol'
+import { cursorHistoryAdapter } from './agent-history-cursor'
 import {
   AgentHistory,
   DAY_MS,
@@ -352,5 +353,41 @@ describe('agent history limit', () => {
     await writeFile(join(proc, '42', 'cmdline'), 'opencode\0-s\0ses_0123456789abABCDEFGHIJKLMN\0')
     await mkdir(join(proc, 'self'))
     expect(runningCommandLines(proc)).toContain('opencode -s ses_0123456789abABCDEFGHIJKLMN')
+  })
+})
+
+describe('Cursor in the history section (Story 31.3 AC3)', () => {
+  it('shows Cursor as keeping its own history and never asks it to delete anything', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'bmn-history-cursor-'))
+    roots.push(home)
+    const bin = join(home, 'bin')
+    await mkdir(bin)
+    await writeFile(join(bin, 'cursor-agent'), '#!/bin/sh\n', { mode: 0o755 })
+    const cursor = cursorHistoryAdapter({ home, env: { PATH: bin } })
+    const remove = vi.spyOn(cursor, 'remove')
+    const codex = fakeAdapter('codex', [{ id: 'old', updatedAt: daysAgo(40) }])
+    const f = await fixture({ adapters: [codex, cursor] })
+
+    await f.history.confirm()
+    await f.history.run()
+    const status = await f.history.status()
+
+    expect(status.agents).toEqual([
+      expect.objectContaining({ agent: 'codex', state: 'managed' }),
+      { agent: 'cursor', state: 'own', detail: 'Cursor has no command to delete a chat' }
+    ])
+    expect(codex.removed).toEqual(['old'])
+    expect(remove).not.toHaveBeenCalled()
+    expect(f.logs.join('\n')).not.toContain('cursor')
+  })
+
+  it('leaves Cursor out when it is neither on PATH nor has kept a chat', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'bmn-history-cursor-'))
+    roots.push(home)
+    expect(await cursorHistoryAdapter({ home, env: { PATH: join(home, 'none') } }).available())
+      .toEqual({ ok: false, reason: 'cursor-agent is not on PATH', absent: true })
+    await mkdir(join(home, '.cursor', 'chats'), { recursive: true })
+    expect(await cursorHistoryAdapter({ home, env: { PATH: join(home, 'none') } }).available())
+      .toMatchObject({ ok: false, own: true })
   })
 })

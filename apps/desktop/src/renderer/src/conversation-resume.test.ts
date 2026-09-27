@@ -67,6 +67,15 @@ describe('the confirmation shown before Resume starts anything', () => {
       .toBe('Resume the Claude Code conversation in "Review". This command runs:')
   })
 
+  it('names Cursor and says BMN chose what to leave behind', () => {
+    const cursor = { ...preview, agentCli: 'cursor' as const, command: '/usr/bin/cursor-agent --resume=c741bb07-352f-457b-8e7c-ee00517cd9ff', notCarried: '--force' }
+    expect(resumeConfirmationPresentation(cursor, 'Cursor')).toEqual({
+      message: 'Resume the Cursor conversation in "Cursor". This command runs:',
+      command: cursor.command,
+      notCarried: { names: '--force', reason: 'BMN carries only --model and --workspace into cursor-agent --resume.' }
+    })
+  })
+
   it('names OpenCode and shows its own session command', () => {
     const shown = resumeConfirmationPresentation({
       ...preview,

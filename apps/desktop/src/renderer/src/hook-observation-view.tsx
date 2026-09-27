@@ -6,7 +6,7 @@ import { failureDetail } from './bridge-error'
 import { modelOriginFlag, modelOriginLabel } from './session-presentation'
 import './hook-observation-view.css'
 
-const AGENT_NAMES = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode' } as const
+const AGENT_NAMES = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor' } as const
 
 export function HookObservationView(props: {
   sessionId: string

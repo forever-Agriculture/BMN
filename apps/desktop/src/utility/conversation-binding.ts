@@ -19,7 +19,7 @@ export const OPENCODE_REFERENCE_PATTERN = /^ses_[0-9a-f]{12}[A-Za-z0-9]{14}$/
 export function isConversationReference(agent: AgentCli, value: unknown): value is string {
   return typeof value === 'string' && (agent === 'opencode'
     ? OPENCODE_REFERENCE_PATTERN.test(value)
-    : (agent === 'claude' || agent === 'codex') && UUID_PATTERN.test(value))
+    : (agent === 'claude' || agent === 'codex' || agent === 'cursor') && UUID_PATTERN.test(value))
 }
 
 export const RELEVANT_ENVIRONMENT_KEYS: ReadonlySet<string> = new Set([
@@ -251,6 +251,8 @@ export function agentCli(executable: string): AgentCli {
   if (command === 'claude' || command === 'claude.exe') return 'claude'
   if (command === 'codex' || command === 'codex.exe') return 'codex'
   if (command === 'opencode' || command === 'opencode.exe') return 'opencode'
+  // Cursor also installs the same program as `agent`, a name too generic to claim.
+  if (command === 'cursor-agent') return 'cursor'
   return 'other'
 }
 
@@ -271,7 +273,8 @@ function invalidBoundBinding(input: unknown, reason: string): UnsupportedConvers
   const context = record(candidate?.launchContext)
   const executable = typeof context?.executable === 'string' ? context.executable : ''
   const candidateCli = candidate?.agentCli
-  const cli: AgentCli = candidateCli === 'claude' || candidateCli === 'codex' || candidateCli === 'opencode' || candidateCli === 'other'
+  const cli: AgentCli = candidateCli === 'claude' || candidateCli === 'codex' || candidateCli === 'opencode' ||
+    candidateCli === 'cursor' || candidateCli === 'other'
     ? candidateCli
     : agentCli(executable)
   return {
@@ -308,6 +311,7 @@ export function parseBoundBinding(input: unknown): PersistedConversationBinding 
     candidate.agentCli !== 'claude' &&
     candidate.agentCli !== 'codex' &&
     candidate.agentCli !== 'opencode' &&
+    candidate.agentCli !== 'cursor' &&
     candidate.agentCli !== 'other'
   ) {
     return invalidBoundBinding(input, 'stored agent CLI is invalid')
@@ -353,14 +357,14 @@ export function parseBoundBinding(input: unknown): PersistedConversationBinding 
       !isConversationReference(candidate.agentCli, candidate.conversationReference) ||
       (candidate.agentCli !== 'opencode' && !isLowercaseConversationReference(String(candidate.conversationReference ?? '')))
     ) {
-      return invalidBoundBinding(input, 'stored conversation reference must match the agent format (lowercase UUID for Claude and Codex)')
+      return invalidBoundBinding(input, 'stored conversation reference must match the agent format (lowercase UUID for Claude, Codex and Cursor)')
     }
     if (
       (candidate.agentCli === 'claude' &&
         candidate.captureRoute !== 'claude-session-id' &&
         candidate.captureRoute !== 'explicit-resume-reference' &&
         candidate.captureRoute !== 'hook-session-start') ||
-      (candidate.agentCli === 'opencode' && candidate.captureRoute !== 'hook-session-start') ||
+      ((candidate.agentCli === 'opencode' || candidate.agentCli === 'cursor') && candidate.captureRoute !== 'hook-session-start') ||
       (candidate.agentCli === 'codex' &&
         candidate.captureRoute !== 'explicit-resume-reference' &&
         candidate.captureRoute !== 'hook-session-start')
@@ -551,6 +555,13 @@ export async function prepareConversationLaunch(
       executable: input.executable, argv: [...input.argv], injectedArguments: [],
       binding: unsupportedBinding(sessionId, cli, launchContext,
         'OpenCode reports its session when it starts; Resume becomes available then', capturedAt)
+    }
+  }
+  if (cli === 'cursor') {
+    return {
+      executable: input.executable, argv: [...input.argv], injectedArguments: [],
+      binding: unsupportedBinding(sessionId, cli, launchContext,
+        'Cursor reports its chat when it starts or a prompt is sent; Resume becomes available then', capturedAt)
     }
   }
   if (cli === 'codex') {
@@ -776,20 +787,25 @@ export function codexResumeCommand(binding: BoundConversationBinding): string {
   ])
 }
 
+/** The harnesses that report their own conversation, each of which Resume can reopen. */
+export type ObservedAgentCli = BoundConversationBinding['agentCli']
+
 /** The control socket's detail limit, so every composed binding detail fits a request field. */
 export const MAX_BINDING_DETAIL_CHARACTERS = 2_000
 
-const OBSERVATION_AGENT_NAMES: Readonly<Record<'claude' | 'codex' | 'opencode', string>> = {
+const OBSERVATION_AGENT_NAMES: Readonly<Record<ObservedAgentCli, string>> = {
   claude: 'Claude Code',
   codex: 'Codex',
-  opencode: 'OpenCode'
+  opencode: 'OpenCode',
+  cursor: 'Cursor'
 }
 
 const OBSERVATION_SOURCE_PHRASES: Readonly<Record<ConversationObservationSource, string>> = {
   startup: 'at session start',
   resume: 'when the conversation resumed',
   clear: 'after the conversation was cleared',
-  fork: 'after the conversation was forked'
+  fork: 'after the conversation was forked',
+  prompt: 'when a prompt was sent'
 }
 
 export function conversationObservationDetail(
@@ -800,17 +816,17 @@ export function conversationObservationDetail(
 
 /** "Reported by Codex at session start" - the harness's own word, named by its source. */
 export function conversationObservationSourceDetail(
-  agent: 'claude' | 'codex' | 'opencode',
+  agent: ObservedAgentCli,
   source: ConversationObservationSource
 ): string {
   return `Reported by ${OBSERVATION_AGENT_NAMES[agent]} ${OBSERVATION_SOURCE_PHRASES[source]}`
 }
 
 export interface ConversationObservationInput {
-  agentCli: 'claude' | 'codex' | 'opencode'
+  agentCli: ObservedAgentCli
   conversationReference: string
   source: ConversationObservationSource
-  transcriptPath?: string
+  transcriptPath?: string | undefined
 }
 
 /**
@@ -845,7 +861,9 @@ export function bindingFromObservation(
     ? describeDroppedCodexArguments(codexResumeArguments(binding.launchContext.argv))
     : observation.agentCli === 'opencode'
       ? describeDroppedOpenCodeArguments(opencodeResumeArguments(binding.launchContext.argv))
-      : undefined
+      : observation.agentCli === 'cursor'
+        ? describeDroppedCodexArguments(cursorResumeArguments(binding.launchContext.argv))
+        : undefined
   return {
     ...binding,
     // The transcript path goes last: it is the only unbounded part, so the detail cap cuts it
@@ -856,7 +874,9 @@ export function bindingFromObservation(
       observation.agentCli === 'codex' ? `Resume runs: ${codexResumeCommand(binding)}`
         : observation.agentCli === 'opencode'
           ? `Resume runs: ${shownCommand(binding.launchContext.executable, ['--session', binding.conversationReference, ...opencodeResumeArguments(binding.launchContext.argv).carried])}`
-          : undefined,
+          : observation.agentCli === 'cursor'
+            ? `Resume runs: ${shownCommand(binding.launchContext.executable, cursorResumeArgv(binding))}`
+            : undefined,
       dropped === undefined ? undefined : `not carried: ${dropped}`,
       observation.transcriptPath === undefined ? undefined : `transcript ${observation.transcriptPath}`
     ])
@@ -921,6 +941,68 @@ export function describeDroppedOpenCodeArguments(dropped: OpenCodeResumeArgument
   return describeDroppedCodexArguments(dropped)
 }
 
+/** Resume policy checked against `cursor-agent --help` 2026.09.26-dd393fe on 2026-09-28. */
+export const CURSOR_RESUME_OPTIONS_CLI_VERSION = '2026.09.26-dd393fe'
+/** Kept on Resume: the model, and the workspace the chat is stored under (`~/.cursor/chats/<md5(workspace)>`). */
+export const CURSOR_RESUME_OPTIONS: ReadonlySet<string> = new Set(['--model', '--workspace'])
+const CURSOR_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+  '--api-key', '-H', '--header', '-e', '--endpoint', '--output-format', '--mode', '--model', '--sandbox',
+  '--workspace', '--add-dir', '--plugin-dir', '--worktree-base'
+])
+const CURSOR_OPTIONAL_VALUE_OPTIONS: ReadonlySet<string> = new Set(['--resume', '-w', '--worktree'])
+
+/**
+ * Splits a stored Cursor launch command into what `cursor-agent --resume=<id>` keeps and the rest. An option's
+ * value is never named (`--api-key` carries a secret); a positional is almost always the prompt typed.
+ */
+export function cursorResumeArguments(argv: readonly string[]): CodexResumeArguments {
+  const result: CodexResumeArguments = { carried: [], droppedOptions: [], droppedPositionals: 0 }
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index]!
+    if (token === '--') {
+      result.droppedPositionals += argv.length - index - 1
+      break
+    }
+    if (!token.startsWith('-')) {
+      result.droppedPositionals += 1
+      continue
+    }
+    const equals = token.indexOf('=')
+    const name = equals < 0 ? token : token.slice(0, equals)
+    const next = argv[index + 1]
+    // A value never starts with a dash, so a missing one cannot swallow the next option.
+    const takesNext = equals < 0 && next !== undefined && !next.startsWith('-') &&
+      (CURSOR_VALUE_OPTIONS.has(name) || CURSOR_OPTIONAL_VALUE_OPTIONS.has(name))
+    if (CURSOR_RESUME_OPTIONS.has(name) && (takesNext || (equals >= 0 && token.length > equals + 1))) {
+      result.carried.push(...(takesNext ? [token, next!] : [token]))
+    } else if (name !== '--resume' && name !== '--continue') {
+      result.droppedOptions.push(name)
+    }
+    if (takesNext) index += 1
+  }
+  return result
+}
+
+/** `cursor-agent --resume=<id>`, the form Cursor itself prints on exit, then the options it keeps. */
+export function cursorResumeArgv(binding: Pick<BoundConversationBinding, 'conversationReference' | 'launchContext'>): string[] {
+  return [`--resume=${binding.conversationReference}`, ...cursorResumeArguments(binding.launchContext.argv).carried]
+}
+
+/** Cursor keeps each chat at `~/.cursor/chats/<md5 of its workspace>/<chat id>/`; any workspace will do. */
+async function cursorChatExists(reference: string, home: string): Promise<boolean> {
+  const chats = join(home, '.cursor', 'chats')
+  let workspaces
+  try {
+    workspaces = await readdir(chats, { withFileTypes: true })
+  } catch {
+    return false
+  }
+  for (const workspace of workspaces) {
+    if (workspace.isDirectory() && await pathExists(join(chats, workspace.name, reference))) return true
+  }
+  return false
+}
+
 export function buildNativeResumeLaunch(
   binding: BoundConversationBinding,
   claudeGrammar?: ClaudeOptionGrammar
@@ -945,6 +1027,8 @@ export function buildNativeResumeLaunch(
     argv = [...parsed.contextArgv, '--resume', binding.conversationReference]
   } else if (binding.agentCli === 'opencode') {
     argv = ['--session', binding.conversationReference, ...opencodeResumeArguments(binding.launchContext.argv).carried]
+  } else if (binding.agentCli === 'cursor') {
+    argv = cursorResumeArgv(binding)
   } else if (binding.captureRoute === 'hook-session-start') {
     // A hook-captured binding keeps the session's full argv, so Resume carries what `codex resume`
     // still accepts and drops the rest, which the binding detail names.
@@ -996,7 +1080,8 @@ async function codexRolloutExists(directory: string, suffix: string, depth = 0):
 }
 
 export async function conversationReferenceExists(
-  binding: BoundConversationBinding
+  binding: BoundConversationBinding,
+  home = homedir()
 ): Promise<boolean> {
   if (binding.agentCli === 'claude') {
     const configRoot = binding.launchContext.environment.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude')
@@ -1010,6 +1095,7 @@ export async function conversationReferenceExists(
     )
   }
   if (binding.agentCli === 'opencode') return true
+  if (binding.agentCli === 'cursor') return cursorChatExists(binding.conversationReference, home)
   const codexRoot = binding.launchContext.environment.CODEX_HOME ?? join(homedir(), '.codex')
   return codexRolloutExists(
     join(codexRoot, 'sessions'),

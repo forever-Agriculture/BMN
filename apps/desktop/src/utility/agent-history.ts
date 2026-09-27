@@ -31,7 +31,11 @@ export interface HistoryCandidate {
 }
 
 /** `absent`: the agent is not installed here, so History does not list it. */
-export type AdapterAvailability = { ok: true; sessions: number } | { ok: false; reason: string; absent?: true }
+export type AdapterAvailability =
+  | { ok: true; sessions: number }
+  | { ok: false; reason: string; absent?: true }
+  /** Present, but the agent has no command BMN may delete its sessions with; the row says so and nothing runs. */
+  | { ok: false; reason: string; own: true }
 
 /** One agent whose sessions BMN deletes through the agent's own command. A new agent adds one of these. */
 export interface AgentHistoryAdapter {
@@ -211,7 +215,11 @@ export class AgentHistory {
       try {
         const available = await adapter.available()
         if (!available.ok) {
-          if (available.absent) continue
+          if ('absent' in available) continue
+          if ('own' in available) {
+            rows.push({ agent: adapter.agent, state: 'own', detail: available.reason })
+            continue
+          }
           rows.push({ agent: adapter.agent, state: 'unrecognised', detail: available.reason, ...run })
           continue
         }

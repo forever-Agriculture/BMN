@@ -49,6 +49,8 @@ import { routeTerminalSavedOutputGet } from './saved-output-route'
 import { type AgentHistoryAdapter } from './agent-history'
 import { codexHistoryAdapter } from './agent-history-codex'
 import { openCodeHistoryAdapter } from './agent-history-opencode'
+import { cursorHistoryAdapter } from './agent-history-cursor'
+import { conversationReferenceExists } from './conversation-binding'
 import type { OpenReadOnly } from './agent-history-store'
 import {
   HostControlError,
@@ -241,12 +243,17 @@ async function purgeExpiredArchives(
   }
 }
 
-/** Codex and OpenCode, pruned by their own delete commands; their databases are only ever opened read-only. */
+/** The home agent stores are read from: the owner's, or the Electron self-test's own. */
+function agentHome(): string {
+  return process.env.BMN_SELF_TEST_HOME && process.argv.includes('--self-test-host') ? process.env.BMN_SELF_TEST_HOME : homedir()
+}
+
+/** Codex and OpenCode, pruned by their own delete commands (databases only ever opened read-only); Cursor keeps its own. */
 function historyAdapters(): AgentHistoryAdapter[] {
-  const home = process.env.BMN_SELF_TEST_HOME && process.argv.includes('--self-test-host') ? process.env.BMN_SELF_TEST_HOME : homedir()
+  const home = agentHome()
   const open: OpenReadOnly = (path) => new (BetterSqlite3 as unknown as new (path: string, options: { readonly: true; fileMustExist: true }) =>
     ReturnType<OpenReadOnly>)(path, { readonly: true, fileMustExist: true })
-  return [codexHistoryAdapter({ home, open }), openCodeHistoryAdapter({ home, open })]
+  return [codexHistoryAdapter({ home, open }), openCodeHistoryAdapter({ home, open }), cursorHistoryAdapter({ home })]
 }
 
 async function start(): Promise<void> {
@@ -283,6 +290,7 @@ async function start(): Promise<void> {
         encoding: null
       }),
     sendTerminalMessage: (message) => terminalPort?.postMessage(message),
+    conversationReferenceExists: (binding) => conversationReferenceExists(binding, agentHome()),
     onSessionStateChange: (message) => {
       parentPort.postMessage(message)
       companionHolder.current?.sessionStateChanged(message.sessionId, message.state)

@@ -514,5 +514,9 @@ describe('model origin presentation', () => {
     expect(observedAgentName('claude')).toBe('Claude')
     expect(observedAgentName('codex')).toBe('Codex')
     expect(observedAgentName('opencode')).toBe('OpenCode')
+    expect(observedAgentName('cursor')).toBe('Cursor')
+    // cursor-agent launched directly, or typed into a shell the launcher started.
+    expect(agentTag('/home/owner/.local/bin/cursor-agent')).toBe('Cursor')
+    expect(agentTag('/bin/bash', ['-ic', 'cursor-agent; exec bash -i'])).toBe('Cursor')
   })
 })

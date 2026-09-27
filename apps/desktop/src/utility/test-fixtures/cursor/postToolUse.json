@@ -1,0 +1,23 @@
+{
+  "conversation_id": "c741bb07-352f-457b-8e7c-ee00517cd9ff",
+  "generation_id": "77a71613-7c00-4482-9545-0c0985b806c8",
+  "model": "default",
+  "tool_name": "Shell",
+  "tool_input": {
+    "command": "touch cursor-perm.txt",
+    "cwd": "",
+    "timeout": 30000
+  },
+  "tool_output": "{\"output\":\"\",\"exitCode\":0}",
+  "duration": 15677.964,
+  "tool_use_id": "dbe78936-9583-4231-8a60-40e849e96f79",
+  "cwd": "",
+  "session_id": "c741bb07-352f-457b-8e7c-ee00517cd9ff",
+  "hook_event_name": "postToolUse",
+  "cursor_version": "2026.09.26-dd393fe",
+  "workspace_roots": [
+    "/work/project"
+  ],
+  "user_email": "owner@example.com",
+  "transcript_path": "/home/owner/.cursor/projects/work-project/agent-transcripts/c741bb07-352f-457b-8e7c-ee00517cd9ff/c741bb07-352f-457b-8e7c-ee00517cd9ff.jsonl"
+}

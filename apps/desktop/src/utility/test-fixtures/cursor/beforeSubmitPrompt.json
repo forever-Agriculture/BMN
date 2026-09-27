@@ -1,0 +1,15 @@
+{
+  "conversation_id": "c741bb07-352f-457b-8e7c-ee00517cd9ff",
+  "generation_id": "77a71613-7c00-4482-9545-0c0985b806c8",
+  "model": "default",
+  "prompt": "Run the shell command `touch cursor-perm.txt` in this directory, then reply with the single word done.",
+  "attachments": [],
+  "session_id": "c741bb07-352f-457b-8e7c-ee00517cd9ff",
+  "hook_event_name": "beforeSubmitPrompt",
+  "cursor_version": "2026.09.26-dd393fe",
+  "workspace_roots": [
+    "/work/project"
+  ],
+  "user_email": "owner@example.com",
+  "transcript_path": null
+}

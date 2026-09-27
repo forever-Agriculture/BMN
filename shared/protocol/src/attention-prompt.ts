@@ -2,7 +2,7 @@
 import { hasExactKeys } from './closed-shape'
 
 /** The harness whose dialog the prompt is; each is answered its own way (docs/remote-answers.md). */
-export type AttentionPromptHarness = 'claude' | 'codex' | 'opencode'
+export type AttentionPromptHarness = 'claude' | 'codex' | 'opencode' | 'cursor'
 
 /**
  * Which row of the remote-answer shape matrix this prompt is. `choice` covers one or several
@@ -84,7 +84,7 @@ export const ATTENTION_PROMPT_LIMITS = Object.freeze({
   answer: 4_000
 })
 
-const HARNESSES: readonly AttentionPromptHarness[] = ['claude', 'codex', 'opencode']
+const HARNESSES: readonly AttentionPromptHarness[] = ['claude', 'codex', 'opencode', 'cursor']
 const QUESTION_SHAPES: readonly AttentionQuestionsPrompt['shape'][] = ['choice', 'async-choice', 'multi-select', 'subagent']
 const PERMISSION_SHAPES: readonly AttentionPermissionPrompt['shape'][] = ['permission', 'sandbox-network', 'subagent']
 

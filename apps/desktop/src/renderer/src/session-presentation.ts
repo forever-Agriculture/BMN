@@ -5,6 +5,7 @@ import {
   MODEL_ORIGIN_COUNTRY_NAMES,
   PROGRESS_STALE_AFTER_MS,
   type AttentionRecord,
+  type HookEventAgent,
   type HookOriginRecord,
   type InputDraftRecord,
   type ProgressEvidence,
@@ -68,6 +69,8 @@ const AGENT_TAGS: Readonly<Record<string, string>> = Object.freeze({
   claude: 'Claude',
   codex: 'Codex',
   opencode: 'OpenCode',
+  cursor: 'Cursor',
+  'cursor-agent': 'Cursor',
   gemini: 'Gemini',
   aider: 'Aider',
   bash: 'Shell',
@@ -152,10 +155,11 @@ export function relativeAge(fromIso: string, now: number): string {
   return `${Math.round(hours / 24)} d ago`
 }
 
-const ORIGIN_AGENT_NAMES: Readonly<Record<string, string>> = Object.freeze({
+const ORIGIN_AGENT_NAMES: Readonly<Record<HookEventAgent, string>> = Object.freeze({
   claude: 'Claude',
   codex: 'Codex',
   opencode: 'OpenCode',
+  cursor: 'Cursor',
   terminal: 'the terminal'
 })
 
@@ -168,7 +172,7 @@ function originName(origin: string | null, action: 'opened' | 'closed'): string 
     const separator = rest.indexOf(':')
     const agent = separator < 0 ? rest : rest.slice(0, separator)
     const event = separator < 0 ? '' : rest.slice(separator + 1)
-    return `${ORIGIN_AGENT_NAMES[agent] ?? agent} ${event}`.trim()
+    return `${(ORIGIN_AGENT_NAMES as Readonly<Record<string, string>>)[agent] ?? agent} ${event}`.trim()
   }
   // A terminal's own notification: the program said it, BMN only read it off the screen.
   if (origin.startsWith('osc:')) return `the terminal (OSC ${origin.slice('osc:'.length)})`

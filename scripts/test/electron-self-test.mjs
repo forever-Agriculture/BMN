@@ -196,6 +196,21 @@ const receiptContract = [
       row.events.every(event => event.agent === 'opencode') &&
       row.events[1].effects.includes('opened') && row.events[2].effects.includes('answered')
   }],
+  ['cursorAcceptance', (receipt) => {
+    const row = receipt.cursorAcceptance
+    const chat = 'c741bb07-352f-457b-8e7c-ee00517cd9ff'
+    return row?.notice === 'Cursor finished its turn' && row.openedBy === 'hook:cursor:stop' &&
+      row.needsYou?.shown === true && row.needsYou.provenance === 'from Cursor stop' &&
+      row.binding.status === 'bound' && row.binding.agentCli === 'cursor' &&
+      row.binding.captureRoute === 'hook-session-start' && row.binding.conversationReference === chat &&
+      JSON.stringify(row.events.map((event) => event.event)) ===
+        JSON.stringify(['sessionStart', 'beforeSubmitPrompt', 'postToolUse', 'stop']) &&
+      row.events.every((event) => event.agent === 'cursor') && row.events[3].effects.includes('opened') &&
+      row.chip === 'Cursor' && row.paneChip === 'Cursor' && row.modelRow?.includes('default') &&
+      row.shellBinding === 'unsupported' &&
+      row.preview.endsWith(`cursor-agent --resume=${chat} --model fixture-model`) && row.notCarried === '--force' &&
+      JSON.stringify(row.resumedArguments) === JSON.stringify([`--resume=${chat}`, '--model', 'fixture-model'])
+  }],
   [
     'hiddenPaneSize',
     (receipt) =>
@@ -561,7 +576,7 @@ const receiptContract = [
     'survivalTable',
     (receipt) =>
       receipt.survivalTable?.rendererCrash?.liveProcesses === 4 &&
-      receipt.survivalTable.rendererCrash.incarnationRecords === 17 &&
+      receipt.survivalTable.rendererCrash.incarnationRecords === 20 &&
       receipt.survivalTable.rendererCrash.openRequestsBefore > 0 &&
       receipt.survivalTable.rendererCrash.openRequestsAfter ===
         receipt.survivalTable.rendererCrash.openRequestsBefore &&

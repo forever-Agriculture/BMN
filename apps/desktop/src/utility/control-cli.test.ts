@@ -2178,7 +2178,7 @@ it('ends every Codex report with the limit of what it checked', async () => {
 
     // Both agents, each at its own default path, and the moved Codex directory is the one consulted.
     const report = JSON.parse(result.stdout)
-    expect(report.agents.map((agent: { agent: string }) => agent.agent)).toEqual(['claude', 'codex', 'opencode'])
+    expect(report.agents.map((agent: { agent: string }) => agent.agent)).toEqual(['claude', 'codex', 'opencode', 'cursor'])
     expect(report.agents[0].file).toBe(join(home.root, '.claude', 'settings.json'))
     expect(report.agents[1].file).toBe(join(codexHome, 'hooks.json'))
     expect(report.agents[0].events.find((row: { event: string }) => row.event === 'Stop').state).toBe('wired')
@@ -3271,3 +3271,174 @@ describe('bmn answer take (Epic 30.2)', () => {
     expect(fixture.handlers.takeAnswers).not.toHaveBeenCalled()
   })
 })
+
+// Payloads recorded from cursor-agent 2026.09.26-dd393fe on 2026-09-28, sanitised (docs/agent-control.md).
+const CURSOR_FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'test-fixtures', 'cursor')
+const CURSOR_FOREGROUND = { ...HOLDS_TERMINAL, comm: 'MainThread' }
+const CURSOR_CHAT = 'c741bb07-352f-457b-8e7c-ee00517cd9ff'
+const DOCUMENTED_CURSOR = '[ -n "$BMN_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook cursor; exit 0'
+
+async function cursorEvent(name: string, extra: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  return { ...JSON.parse(await readFile(join(CURSOR_FIXTURES, name), 'utf8')) as Record<string, unknown>, ...extra }
+}
+
+describe('Cursor hooks (Epic 31.3)', () => {
+  const calls = (fixture: Awaited<ReturnType<typeof cliFixture>>): string[] => [
+    ...fixture.handlers.openAttention.mock.calls.map(([params]) => `open ${params.requestKey} ${params.title}`),
+    ...fixture.handlers.withdrawAttention.mock.calls.map(([params]) => `withdraw ${params.requestKey}`),
+    ...fixture.handlers.resolveAttention.mock.calls.map(([params]) => `resolve ${params.requestKey}`)
+  ]
+
+  it.each([
+    ['sessionStart.json', {}, ['withdraw cursor:turn'], 'startup'],
+    ['beforeSubmitPrompt.json', {}, ['withdraw cursor:turn'], 'prompt'],
+    ['beforeSubmitPrompt.resumed.json', {}, ['withdraw cursor:turn'], 'prompt'],
+    ['postToolUse.json', {}, ['withdraw cursor:turn'], null],
+    ['stop.json', {}, ['open cursor:turn Cursor finished its turn'], null],
+    ['stop.json', { status: 'error' }, ['open cursor:turn Cursor stopped with an error'], null],
+    ['stop.json', { status: 'aborted' }, ['withdraw cursor:turn'], null],
+    ['sessionEnd.json', {}, ['withdraw cursor:turn'], null],
+    ['preToolUse.json', {}, [], null],
+    ['beforeShellExecution.json', {}, [], null],
+    ['afterAgentResponse.json', {}, [], null]
+  ] as const)('maps the recorded %s %j to the turn notice and the chat id', async (name, extra, expected, source) => {
+    const fixture = await cliFixture()
+    const event = await cursorEvent(name, extra)
+
+    expect(await runHook(fixture, 'cursor', event, CURSOR_FOREGROUND)).toEqual(QUIET)
+
+    expect(calls(fixture)).toEqual(expected)
+    for (const [params] of [...fixture.handlers.openAttention.mock.calls, ...fixture.handlers.withdrawAttention.mock.calls]) {
+      expect(params.origin).toBe(`hook:cursor:${String(event.hook_event_name)}`)
+    }
+    if (source === null) {
+      expect(fixture.handlers.observeConversation).not.toHaveBeenCalled()
+    } else {
+      expect(fixture.handlers.observeConversation.mock.calls[0]?.[0]).toEqual({
+        sessionId: 'session-1', incarnationId: 'incarnation-1', agentCli: 'cursor', conversationReference: CURSOR_CHAT, source,
+        ...(typeof event.transcript_path === 'string' ? { transcriptPath: event.transcript_path } : {})
+      })
+    }
+    // Every event is logged with the model Cursor named, and nothing Claude-only rides along.
+    const observed = fixture.handlers.observeHookEvent.mock.calls[0]?.[0]
+    expect(observed).toMatchObject({ agent: 'cursor', event: event.hook_event_name, model: 'default' })
+    expect(observed).not.toHaveProperty('claudeConfigDir')
+    expect(observed).not.toHaveProperty('apiHost')
+    expect(observed).not.toHaveProperty('fingerprint')
+  })
+
+  it('reports no chat for an id that is not a UUID', async () => {
+    const fixture = await cliFixture()
+
+    await runHook(fixture, 'cursor', await cursorEvent('sessionStart.json', { conversation_id: 'not-a-chat' }), CURSOR_FOREGROUND)
+
+    expect(fixture.handlers.observeConversation).not.toHaveBeenCalled()
+    expect(calls(fixture)).toEqual(['withdraw cursor:turn'])
+  })
+
+  it('ignores a Cursor payload that reaches bmn hook claude through Cursor\'s Claude hook support', async () => {
+    const fixture = await cliFixture()
+
+    for (const name of ['stop.json', 'sessionStart.json', 'postToolUse.json']) {
+      expect(await runHook(fixture, 'claude', await cursorEvent(name), CURSOR_FOREGROUND)).toEqual(QUIET)
+    }
+
+    expect(calls(fixture)).toEqual([])
+    expect(fixture.handlers.observeHookEvent).not.toHaveBeenCalled()
+    expect(fixture.handlers.observeConversation).not.toHaveBeenCalled()
+  })
+
+  it('says nothing for a cursor-agent run from a tool call, which holds no terminal', async () => {
+    const fixture = await cliFixture()
+
+    await runHook(fixture, 'cursor', await cursorEvent('stop.json'), { ...CURSOR_FOREGROUND, tty: 0 })
+
+    expect(calls(fixture)).toEqual([])
+    expect(fixture.handlers.observeHookEvent).not.toHaveBeenCalled()
+  })
+
+  it('installs Cursor\'s own flat format into a new file, and check then reads every event wired', async () => {
+    const path = await hookFileFixture(undefined, 'hooks.json')
+
+    const install = await runHooks(['install', 'cursor', '--file', path, '--json'])
+    const check = await runHooks(['check', 'cursor', '--file', path, '--json'])
+    const again = await runHooks(['install', 'cursor', '--file', path, '--json'])
+
+    expect(install.code).toBe(0)
+    expect(JSON.parse(install.stdout)).toMatchObject({ installed: CURSOR_EVENTS, backup: null })
+    const entry = { command: DOCUMENTED_CURSOR, timeout: 5 }
+    expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({
+      version: 1, hooks: Object.fromEntries(CURSOR_EVENTS.map((event) => [event, [entry]]))
+    })
+    expect(check.code).toBe(0)
+    expect(JSON.parse(check.stdout).agents[0].events.map((row: { state: string }) => row.state))
+      .toEqual(CURSOR_EVENTS.map(() => 'wired'))
+    expect(JSON.parse(again.stdout)).toMatchObject({ installed: [], backup: null })
+  })
+
+  it('adds beside the owner\'s entries after a backup, keeps them byte for byte and keeps the file\'s version', async () => {
+    const owner = { command: './my-audit.sh', timeout: 30 }
+    const original = { version: 1, hooks: { stop: [owner], afterFileEdit: [{ command: 'fmt' }] } }
+    const path = await hookFileFixture(original, 'hooks.json')
+
+    const install = await runHooks(['install', 'cursor', '--file', path, '--json'])
+
+    const report = JSON.parse(install.stdout)
+    expect(report.installed).toEqual(CURSOR_EVENTS)
+    expect(JSON.parse(await readFile(report.backup, 'utf8'))).toEqual(original)
+    const written = JSON.parse(await readFile(path, 'utf8'))
+    expect(written.hooks.stop).toEqual([owner, { command: DOCUMENTED_CURSOR, timeout: 5 }])
+    expect(written.hooks.afterFileEdit).toEqual(original.hooks.afterFileEdit)
+    expect(written.version).toBe(1)
+  })
+
+  it('counts only an entry Cursor would run for every call: no matcher, not a prompt, a positive timeout', async () => {
+    const path = await hookFileFixture({ version: 1, hooks: {
+      sessionStart: [{ command: DOCUMENTED_CURSOR }],
+      beforeSubmitPrompt: [{ command: DOCUMENTED_CURSOR, type: 'command', timeout: 5 }],
+      postToolUse: [{ command: DOCUMENTED_CURSOR, matcher: 'Shell' }],
+      stop: [{ command: DOCUMENTED_CURSOR, type: 'prompt' }],
+      sessionEnd: [{ command: DOCUMENTED_CURSOR, timeout: 0 }]
+    } }, 'hooks.json')
+
+    const report = JSON.parse((await runHooks(['check', 'cursor', '--file', path, '--json'])).stdout).agents[0]
+
+    expect(Object.fromEntries(report.events.map((row: { event: string; state: string }) => [row.event, row.state]))).toEqual({
+      sessionStart: 'wired', beforeSubmitPrompt: 'wired', postToolUse: 'missing', stop: 'missing', sessionEnd: 'missing'
+    })
+    expect(report.events.find((row: { event: string }) => row.event === 'postToolUse').gated).toEqual([DOCUMENTED_CURSOR])
+    expect(report.missing).toEqual(['postToolUse', 'stop', 'sessionEnd'])
+  })
+
+  it('reads ~/.cursor/hooks.json when no --file is given, beside the other agents', async () => {
+    const home = await cliFixture()
+
+    // A moved Codex home is Codex's alone; Cursor still reads its file in the home directory.
+    const result = await runHooks(['check', '--json'], { HOME: home.root, CODEX_HOME: join(home.root, 'moved-codex') })
+
+    const report = JSON.parse(result.stdout)
+    expect(report.agents.map((agent: { agent: string }) => agent.agent)).toEqual(['claude', 'codex', 'opencode', 'cursor'])
+    expect(report.agents[3].file).toBe(join(home.root, '.cursor', 'hooks.json'))
+  })
+
+  it('drives bmn hook cursor with every event check expects, and each one reaches the app', async () => {
+    const fixture = await cliFixture()
+    const path = await hookFileFixture({}, 'hooks.json')
+    const events: string[] = JSON.parse((await runHooks(['check', 'cursor', '--file', path, '--json'])).stdout)
+      .agents[0].events.map((row: { event: string }) => row.event)
+    expect(events).toEqual(CURSOR_EVENTS)
+    const recorded: Record<string, string> = {
+      sessionStart: 'sessionStart.json', beforeSubmitPrompt: 'beforeSubmitPrompt.json', postToolUse: 'postToolUse.json',
+      stop: 'stop.json', sessionEnd: 'sessionEnd.json'
+    }
+    for (const event of events) {
+      fixture.handlers.observeHookEvent.mockClear()
+      const before = calls(fixture).length
+      await runHook(fixture, 'cursor', await cursorEvent(recorded[event]!), CURSOR_FOREGROUND)
+      expect(calls(fixture).length, `cursor ${event} changed nothing in Needs you`).toBeGreaterThan(before)
+      expect(fixture.handlers.observeHookEvent, `cursor ${event} was not logged`).toHaveBeenCalled()
+    }
+  })
+})
+
+const CURSOR_EVENTS = ['sessionStart', 'beforeSubmitPrompt', 'postToolUse', 'stop', 'sessionEnd']

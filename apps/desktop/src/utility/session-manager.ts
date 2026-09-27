@@ -78,6 +78,7 @@ import {
   isConversationReference,
   isLowercaseConversationReference,
   opencodeResumeArguments,
+  cursorResumeArguments,
   parseBoundBinding,
   parseClaudeHelpOptionGrammar,
   prepareConversationLaunch,
@@ -722,6 +723,12 @@ export class SessionManager {
       const name = await this.storedSessionName(holder.sessionId)
       return refuse(`already resumed in ${JSON.stringify(name)}`)
     }
+    // Cursor names its chat with every prompt; the same chat again changes nothing and is not rewritten.
+    if (observation.source === 'prompt' && current.status === 'bound' && current.agentCli === observation.agentCli &&
+      current.conversationReference === observation.conversationReference) {
+      this.swapConversationClaim(live, identity)
+      return { accepted: true, detail: current.detail }
+    }
     const binding = bindingFromObservation(observation, current, new Date().toISOString())
     const restoreClaim = this.swapConversationClaim(live, identity)
     try {
@@ -1118,6 +1125,8 @@ export class SessionManager {
       ? describeDroppedCodexArguments(codexResumeArguments(binding.launchContext.argv))
       : binding.agentCli === 'opencode'
         ? describeDroppedOpenCodeArguments(opencodeResumeArguments(binding.launchContext.argv))
+      : binding.agentCli === 'cursor'
+        ? describeDroppedCodexArguments(cursorResumeArguments(binding.launchContext.argv))
       : undefined
     return {
       sessionId,
@@ -1158,7 +1167,8 @@ export class SessionManager {
       startedAt,
       (record) => this.store.createResuming(record),
       binding.agentCli === 'claude' ? ['--resume']
-        : binding.agentCli === 'opencode' ? ['--session'] : ['resume'],
+        : binding.agentCli === 'opencode' ? ['--session']
+          : binding.agentCli === 'cursor' ? ['--resume'] : ['resume'],
       reservation
     )
     try {

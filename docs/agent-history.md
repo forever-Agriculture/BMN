@@ -31,6 +31,8 @@ A session is never deleted when it is bound to a running BMN session, was active
 | Codex | `$CODEX_HOME/state_5.sqlite` (default `~/.codex`), `threads.id` | `threads.updated_at` (epoch s), archived or not | `codex delete --force <uuid>` |
 | OpenCode | `$XDG_DATA_HOME/opencode/opencode.db` (default `~/.local/share`), `session.id`, every project | `session.time_updated` (epoch ms) | `opencode session delete <id> --pure` |
 
+Cursor's terminal agent keeps its chats under `~/.cursor/chats/` and has no command to delete one (measured on 2026.09.26-dd393fe, [agent-control.md](agent-control.md#cursors-terminal-agent)), so its row reads "keeps its own history · not managed by BMN" whenever `cursor-agent` is on PATH or that folder exists, and no run touches it.
+
 A missing binary or store hides the agent's row (BMN has never seen it). A table without the expected columns reads "not recognised: reason" and deletes nothing.
 
 ## Spike (Story 31.2 AC1), 2026-09-27

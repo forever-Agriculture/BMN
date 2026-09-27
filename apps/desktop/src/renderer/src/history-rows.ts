@@ -62,7 +62,7 @@ export function folderValue(folder: AgentHistoryClaudeFolder): HistoryValue {
 }
 
 export function agentValue(row: AgentHistoryAgentRow, status: AgentHistoryStatus): HistoryValue {
-  if (row.state === 'own') return { kind: 'settled', text: 'keeps its own history' }
+  if (row.state === 'own') return { kind: 'settled', text: 'keeps its own history · not managed by BMN', ...(row.detail ? { title: row.detail } : {}) }
   if (row.state === 'unrecognised') return { kind: 'settled', text: 'not recognised' }
   const candidates = row.candidates ?? 0
   if (status.needsConfirmation && status.keepDays !== null) {

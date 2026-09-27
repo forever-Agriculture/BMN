@@ -29,6 +29,8 @@ export interface HistoryFixture {
   work: string
   codexLog: string
   openCodeLog: string
+  /** A stand-in `cursor-agent` on PATH, so Cursor's own-history row shows on any machine; nothing may call it. */
+  cursorLog: string
   ids: { oldCodex: string; recentCodex: string; heldCodex: string; oldOpenCode: string; recentOpenCode: string; heldOpenCode: string }
   holder: ChildProcess
   /** Every file under the two agent stores with its size, so the run can be shown to remove none. */
@@ -106,10 +108,11 @@ export function prepareHistoryFixture(isolatedCwd: string, now = Date.now()): Hi
 
   const codexLog = recordingBinary(roots.bin, 'codex')
   const openCodeLog = recordingBinary(roots.bin, 'opencode')
+  const cursorLog = recordingBinary(roots.bin, 'cursor-agent')
   // A process outside BMN that has both held sessions open, as `codex resume <id>` would.
   const holder = spawn('/bin/sh', ['-c', 'sleep 120', 'bmn-history-holder', ids.heldCodex, ids.heldOpenCode], { stdio: 'ignore' })
   return {
-    home: roots.home, claudeHome, glm, work, codexLog, openCodeLog, ids, holder,
+    home: roots.home, claudeHome, glm, work, codexLog, openCodeLog, cursorLog, ids, holder,
     storeFiles: () => [...listFiles(codexHome), ...listFiles(join(dataHome, 'opencode'))]
   }
 }

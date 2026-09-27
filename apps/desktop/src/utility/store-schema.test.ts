@@ -20,9 +20,9 @@ afterEach(async () => {
 })
 
 describe('owned database schema', () => {
-  it('contains the seventeen ordered migrations and only the owned tables', () => {
+  it('contains the nineteen ordered migrations and only the owned tables', () => {
     expect(DATABASE_MIGRATIONS.map((migration) => migration.version))
-      .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18])
+      .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19])
     expect(STORY_SCHEMA_TABLES).toEqual([
       'app_setting',
       'artifact',
@@ -190,7 +190,7 @@ describe('owned database schema', () => {
           { version: 1 }, { version: 2 }, { version: 3 }, { version: 4 },
           { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 },
           { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 },
-          { version: 15 }, { version: 16 }, { version: 17 }, { version: 18 }
+          { version: 15 }, { version: 16 }, { version: 17 }, { version: 18 }, { version: 19 }
         ])
       expect(database.prepare('SELECT applied_at FROM schema_migration WHERE version = 3').get())
         .toEqual({ applied_at: migratedAt })
@@ -304,7 +304,8 @@ describe('owned database schema', () => {
           { version: 15, applied_at: migratedAt },
           { version: 16, applied_at: migratedAt },
           { version: 17, applied_at: migratedAt },
-          { version: 18, applied_at: migratedAt }
+          { version: 18, applied_at: migratedAt },
+          { version: 19, applied_at: migratedAt }
         ])
       expect(database.prepare('SELECT COUNT(*) AS count FROM workspace_layout').get())
         .toEqual({ count: 2 })
@@ -351,7 +352,7 @@ describe('owned database schema', () => {
         state: 'draft'
       })
       expect(database.prepare('SELECT version FROM schema_migration ORDER BY version DESC LIMIT 1').get())
-        .toEqual({ version: 18 })
+        .toEqual({ version: 19 })
     } finally {
       database.close()
     }
@@ -570,5 +571,59 @@ it('upgrades schema 14 additively without seeding launch sets or changing templa
       before.map((row) => ({ ...row as object, terminal_graphics: null }))
     )
     expect(database.pragma('foreign_key_check')).toEqual([])
+  } finally { database.close() }
+})
+
+it('widens the binding CHECKs for Cursor at version 19 and keeps every earlier row verbatim', () => {
+  const database = new BetterSqlite3(':memory:')
+  const at = '2026-09-27T00:00:00.000Z'
+  const cursorBinding = `INSERT INTO conversation_binding(
+       session_id, agent_cli, status, conversation_reference, capture_route,
+       launch_cwd, launch_executable, launch_argv_json, launch_environment_json, detail, captured_at
+     ) VALUES ('cursor-session', 'cursor', 'bound', 'c741bb07-352f-457b-8e7c-ee00517cd9ff', 'hook-session-start',
+       '/work', '/usr/bin/cursor-agent', '["--model","fixture"]', '{}', 'Reported by Cursor at session start', ?)`
+  try {
+    for (const migration of DATABASE_MIGRATIONS.filter((item) => item.version <= 18)) {
+      database.exec(migration.sql)
+      database.prepare('INSERT INTO schema_migration VALUES (?, ?)').run(migration.version, at)
+    }
+    const insertSession = database.prepare(
+      `INSERT INTO session(session_id, workspace_id, name, cwd, executable, argv_json, revision, created_at, position)
+       VALUES (?, ?, ?, ?, ?, '[]', 1, ?, ?)`
+    )
+    const bindings = [
+      ['claude-session', 'claude', 'bound', '01a0b657-21a8-7f00-addd-b73646828f5b', 'claude-session-id', '/usr/bin/claude'],
+      ['codex-session', 'codex', 'bound', '01a0b659-2862-7d93-a4c5-bc1bd2a47915', 'hook-session-start', '/usr/bin/codex'],
+      ['opencode-session', 'opencode', 'bound', 'ses_0123456789abSyntheticTest0', 'hook-session-start', '/usr/bin/opencode'],
+      ['shell-session', 'other', 'unsupported', null, 'unsupported', '/bin/bash']
+    ] as const
+    bindings.forEach(([session, cli, status, reference, route, executable], index) => {
+      insertSession.run(session, DEFAULT_WORKSPACE_ID, session, '/work', executable, at, index)
+      database.prepare(
+        `INSERT INTO conversation_binding(
+           session_id, agent_cli, status, conversation_reference, capture_route,
+           launch_cwd, launch_executable, launch_argv_json, launch_environment_json, detail, captured_at
+         ) VALUES (?, ?, ?, ?, ?, '/work', ?, '[]', '{"TERM":"xterm"}', 'kept', ?)`
+      ).run(session, cli, status, reference, route, executable, at)
+    })
+    insertSession.run('cursor-session', DEFAULT_WORKSPACE_ID, 'Cursor', '/work', '/usr/bin/cursor-agent', at, 9)
+    // Before the migration a Cursor binding is refused by the table itself.
+    expect(() => database.prepare(cursorBinding).run(at)).toThrow(/CHECK constraint/)
+    const before = database.prepare('SELECT * FROM conversation_binding ORDER BY session_id').all()
+
+    initializeDatabase(database, '2026-09-28T00:00:00.000Z')
+
+    expect(database.prepare('SELECT * FROM conversation_binding ORDER BY session_id').all()).toEqual(before)
+    database.prepare(cursorBinding).run(at)
+    expect(database.prepare("SELECT agent_cli, status, capture_route FROM conversation_binding WHERE session_id = 'cursor-session'").get())
+      .toEqual({ agent_cli: 'cursor', status: 'bound', capture_route: 'hook-session-start' })
+    // A bound row still needs a reference, and an unknown CLI is still refused.
+    expect(() => database.prepare(`UPDATE conversation_binding SET conversation_reference = NULL WHERE session_id = 'cursor-session'`).run())
+      .toThrow(/CHECK constraint/)
+    expect(() => database.prepare(`UPDATE conversation_binding SET agent_cli = 'gemini' WHERE session_id = 'cursor-session'`).run())
+      .toThrow(/CHECK constraint/)
+    expect(database.pragma('foreign_key_check')).toEqual([])
+    initializeDatabase(database, '2026-09-28T01:00:00.000Z')
+    expect(database.prepare('SELECT COUNT(*) AS count FROM conversation_binding').get()).toEqual({ count: 5 })
   } finally { database.close() }
 })

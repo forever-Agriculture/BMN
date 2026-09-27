@@ -4243,6 +4243,48 @@ describe('conversation identity reported by the harness', () => {
     expect([spawned.executable, ...spawned.argv].join(' ')).toBe(preview.command)
   })
 
+  it('binds Cursor from its first report, leaves a repeated prompt report unwritten and resumes with --resume=<id>', async () => {
+    const fixture = await codexFixture(['--model', 'sonnet-4', '--force'], ['Cursor'], 'cursor-agent')
+    const [created] = fixture.sessions
+    const chat = 'c741bb07-352f-457b-8e7c-ee00517cd9ff'
+    const observe = (source: 'startup' | 'prompt', conversationReference = chat) => fixture.manager.observeConversation({
+      sessionId: created!.sessionId, incarnationId: created!.incarnationId, agentCli: 'cursor', conversationReference, source
+    })
+    expect(created!.binding).toMatchObject({ agentCli: 'cursor', status: 'unsupported' })
+
+    const first = await observe('prompt')
+    expect(first).toEqual({ accepted: true, detail: `Reported by Cursor when a prompt was sent; Resume runs: ${fixture.executable} --resume=${chat} --model sonnet-4; not carried: --force` })
+    // The same chat again is not rewritten; a session start still is.
+    const writes = vi.spyOn(fixture.store, 'replaceConversationBinding')
+    expect(await observe('prompt')).toEqual(first)
+    expect(writes).not.toHaveBeenCalled()
+    expect(await observe('startup')).toMatchObject({ accepted: true, detail: expect.stringContaining('Reported by Cursor at session start') })
+    expect(writes).toHaveBeenCalledTimes(1)
+    // A different chat from a prompt replaces the binding, as `/resume` inside Cursor would.
+    const other = '9f0c7a3e-1b2d-4c5e-8f6a-7b8c9d0e1f2a'
+    expect(await observe('prompt', other)).toMatchObject({ accepted: true, detail: expect.stringContaining(`replaces ${chat}`) })
+
+    const preview = await fixture.manager.conversationResumePreview(created!.sessionId)
+    expect(preview).toMatchObject({ agentCli: 'cursor', command: `${fixture.executable} --resume=${other} --model sonnet-4`, notCarried: '--force' })
+    fixture.ptys[0]!.emitExit({ exitCode: 0 })
+    await vi.waitFor(async () => {
+      await expect(fixture.manager.health()).resolves.toMatchObject({ liveSessions: 0 })
+    })
+    await fixture.manager.resume({ sessionId: created!.sessionId, cols: 80, rows: 24 })
+    const spawned = fixture.spawns.at(-1)!
+    expect([spawned.executable, ...spawned.argv].join(' ')).toBe(preview.command)
+  })
+
+  it('refuses a Cursor report from a session that runs a shell, as for every agent', async () => {
+    const fixture = await codexFixture([], ['Shell'], 'bash')
+    const [created] = fixture.sessions
+
+    expect(await fixture.manager.observeConversation({
+      sessionId: created!.sessionId, incarnationId: created!.incarnationId, agentCli: 'cursor',
+      conversationReference: 'c741bb07-352f-457b-8e7c-ee00517cd9ff', source: 'startup'
+    })).toEqual({ accepted: false, detail: 'Reported by Cursor at session start; refused: the session was launched as other, not cursor' })
+  })
+
   it('refuses a preview for a session whose conversation it never learned', async () => {
     const fixture = await codexFixture()
 

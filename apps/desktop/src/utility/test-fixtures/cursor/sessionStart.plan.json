@@ -1,0 +1,15 @@
+{
+  "conversation_id": "b8fb0298-c8d0-4641-abed-a851bbdb2606",
+  "generation_id": "b8fb0298-c8d0-4641-abed-a851bbdb2606",
+  "model": "default",
+  "is_background_agent": false,
+  "composer_mode": "plan",
+  "session_id": "b8fb0298-c8d0-4641-abed-a851bbdb2606",
+  "hook_event_name": "sessionStart",
+  "cursor_version": "2026.09.26-dd393fe",
+  "workspace_roots": [
+    "/work/project"
+  ],
+  "user_email": "owner@example.com",
+  "transcript_path": null
+}

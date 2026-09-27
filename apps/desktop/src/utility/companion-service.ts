@@ -1244,14 +1244,15 @@ export class CompanionService {
         // so the same agent's last model still speaks within its session; a new agent, or a new
         // session in it (SessionStart other than compaction), starts from what it reports itself.
         const previous = this.hookOrigins.get(p.sessionId)
-        const newSession = p.event === 'SessionStart' && p.source !== 'compact'
+        // Cursor names its events in camel case and never compacts into a new session.
+        const newSession = (p.event === 'SessionStart' && p.source !== 'compact') || (p.agent === 'cursor' && p.event === 'sessionStart')
         const carried = previous !== undefined && previous.incarnationId === p.incarnationId &&
           previous.agent === p.agent && !newSession ? previous : null
         const model = p.model ?? carried?.model ?? null
         const apiHost = p.apiHost ?? null
         // An agent that ended leaves a plain shell behind in the same run, and a shell has no flag;
         // a late end from an agent that has already been replaced leaves the newer one's facts.
-        const ended = p.event === 'SessionEnd'
+        const ended = p.event === 'SessionEnd' || (p.agent === 'cursor' && p.event === 'sessionEnd')
         const staleEnd = ended && previous !== undefined && previous.incarnationId === p.incarnationId &&
           previous.agent !== p.agent
         const next: HookOriginRecord | null | undefined = staleEnd ? previous : ended ? null : {

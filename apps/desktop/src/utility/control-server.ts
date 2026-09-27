@@ -213,14 +213,14 @@ const ATTENTION_KINDS: readonly AttentionKind[] = ['question', 'permission', 're
  * The harnesses a session token may report as. `terminal` is BMN's own label for a notification the
  * window read out of a session's output, so nothing on the socket may wear it.
  */
-const HOOK_EVENT_AGENTS: readonly HookEventAgent[] = ['claude', 'codex', 'opencode']
+const HOOK_EVENT_AGENTS: readonly HookEventAgent[] = ['claude', 'codex', 'opencode', 'cursor']
 const HOOK_EVENT_EFFECTS: readonly HookEventEffect[] = ['opened', 'withdrew', 'answered']
 const MAX_HOOK_EVENT_EFFECTS = 8
-const CONVERSATION_AGENT_CLIS: readonly ConversationAgentCli[] = ['claude', 'codex', 'opencode']
+const CONVERSATION_AGENT_CLIS: readonly ConversationAgentCli[] = ['claude', 'codex', 'opencode', 'cursor']
 const CONVERSATION_OBSERVATION_SOURCES: readonly ConversationObservationSource[] = [
-  'startup', 'resume', 'clear', 'fork'
+  'startup', 'resume', 'clear', 'fork', 'prompt'
 ]
-/** 8-4-4-4-12 hex, the shape both Claude Code session ids and Codex rollout ids use. */
+/** 8-4-4-4-12 hex, the shape Claude Code session ids, Codex rollout ids and Cursor chat ids use. */
 const CONVERSATION_REFERENCE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/
 const SESSION_TOKEN_TEXT = /s1\.[A-Za-z0-9_:-]+\.[A-Za-z0-9_:-]+\.[0-9a-fA-F]{16,}/g

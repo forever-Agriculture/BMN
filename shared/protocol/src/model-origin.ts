@@ -9,7 +9,7 @@
  */
 
 /** The agents whose hooks can report model facts; `terminal` notices never carry any. */
-export type ModelOriginAgent = 'claude' | 'codex' | 'opencode'
+export type ModelOriginAgent = 'claude' | 'codex' | 'opencode' | 'cursor'
 
 export interface ModelOriginFacts {
   agent: ModelOriginAgent
@@ -132,7 +132,9 @@ export const MODEL_ORIGIN_TABLE: readonly ModelOriginRow[] = Object.freeze([
 const DEFAULT_PROVIDER_COUNTRIES: Readonly<Record<ModelOriginAgent, ModelOriginCountry | null>> = Object.freeze({
   claude: 'US',
   codex: 'US',
-  opencode: null
+  opencode: null,
+  // Cursor's Auto reports the model as `default`, and Cursor serves every maker's models.
+  cursor: null
 })
 
 function hostMatches(host: string, entry: string): boolean {

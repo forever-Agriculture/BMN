@@ -145,8 +145,8 @@ submission enabled; it cannot deliver the handoff.
 
 ## Agent hooks: Needs you for Claude Code, Codex and OpenCode
 
-`bmn hook claude`, `bmn hook codex` and `bmn hook opencode` read one hook event as JSON on stdin and keep **Needs
-you** in step with the agent. They print nothing and always exit 0, so a hook can never disturb the
+`bmn hook claude`, `bmn hook codex`, `bmn hook opencode` and `bmn hook cursor` read one hook event as JSON on stdin
+and keep **Needs you** in step with the agent ([Cursor](#cursors-terminal-agent) gets its turn notice and chat id only). They print nothing and always exit 0, so a hook can never disturb the
 agent, and they do nothing outside BMN.
 
 | Event | Effect |
@@ -165,6 +165,43 @@ agent, and they do nothing outside BMN.
 | `SessionStart` (not after compaction), `SessionEnd` | Withdraws everything the hook opened |
 | `SessionStart` with `startup`, `resume`, `clear` or `fork` | Also reports the conversation the process is now in, so Resume reopens that one |
 | Codex `Interrupt` | Withdraws open prompts |
+
+### Cursor's terminal agent
+
+Measured on `cursor-agent` 2026.09.26-dd393fe (installed from `https://cursor.com/install`, owner account) on
+2026-09-27/28, in a scratch project under tmux with `BMN_*`/`AITERM_*` unset, then with fake `BMN_*` values set to
+see what reaches a hook. Payloads are sanitised in
+[`apps/desktop/src/utility/test-fixtures/cursor/`](../apps/desktop/src/utility/test-fixtures/cursor/); the log is
+`.dev-auto/log.md` (2026-09-28 ~00:50–01:40).
+
+| Question | Result |
+| --- | --- |
+| Hook support | **VERIFIED.** `hooks.json` version 1, `{ "version": 1, "hooks": { "<event>": [{ "command": "…", "timeout": 5 }] } }`, one flat entry per command (no matcher groups). The terminal agent reads the user file `~/.cursor/hooks.json` (a one-entry `stop` capture fired) and a project `.cursor/hooks.json` (every event below fired), not only the editor. Commands run under `bash`, with the session's environment (`BMN_CONTROL_SOCKET`, `BMN_TOKEN` and `BMN_SESSION_ID` reached every hook). Cursor also lists Claude Code's settings files as "third-party" hook sources; a project `.claude/settings.json` hook did **not** fire by default. |
+| Events seen | `sessionStart` (a new chat only, not on `--resume`), `beforeSubmitPrompt`, `preToolUse`/`postToolUse` (`tool_name` `Shell`), `beforeShellExecution` (every command, before any approval prompt), `afterShellExecution`, `afterAgentThought`, `afterAgentResponse` (the reply text), `stop` (`status` `completed`; `error` and `aborted` appear in its code, unmeasured), `sessionEnd` (`reason`, `final_status`). |
+| Payload fields | Every event: `conversation_id` (equal to `session_id`, a UUID), `generation_id`, `hook_event_name`, `model` (`default` under Auto), `cursor_version`, `workspace_roots`, `user_email`, `transcript_path` (`~/.cursor/projects/<slug>/agent-transcripts/<id>/<id>.jsonl`, null on the first events). `stop` adds `status`, `loop_count` and token counts. |
+| Conversation id | **VERIFIED.** `conversation_id` of `sessionStart` and of every `beforeSubmitPrompt` (a resumed chat reports the same id). |
+| Resume command | **VERIFIED.** Exit prints `To resume this session: agent --resume=<id>`; `cursor-agent --resume=<id>` reopened the chat (and its Plan mode) with the same `conversation_id`. |
+| Local session store and delete | Store **VERIFIED**: `~/.cursor/chats/<md5 of the workspace path>/<id>/` (`store.db`, `meta.json`, `prompt_history.json`). Delete **UNSUPPORTED**: the CLI has no chat delete command (its `delete` subcommands are for automations and environments), so History reads "keeps its own history · not managed by BMN" and BMN removes nothing. |
+| Terminal notices (OSC 9/777/99) | **UNSUPPORTED** in BMN: Cursor emits them only for terminals it detects by `TERM_PROGRAM` (Apple Terminal, Ghostty, iTerm2, kitty, …); only OSC 0 titles were seen. |
+| Model and host | `model` is `default` under Auto, or the chosen model's name; no base-URL variable or host. BMN logs the model for the flag and adds no Cursor host to the classifier; `default` shows no flag. |
+| Question dialog | **UNSUPPORTED.** The question tool was not offered to the model in the default mode, Plan mode or a fresh `--plan` session, so no Epic 30 answer shape applies. |
+| Permission prompt | Seen (`Run this command? … Run (once) (y) / Add Shell(touch) to allowlist? (tab) / Run Everything (shift+tab) / Skip (esc or n)`), but **no event marks it**: `beforeShellExecution` fires for every command before BMN could know a prompt is shown. No Needs you request and no buttons. |
+| Nested agents | A hook's parent is `bash` and then Cursor's node process (`MainThread`), which holds the terminal's foreground group, so BMN's nested-agent rule applies unchanged: a `cursor-agent` run from a tool call reports nothing. |
+
+What `bmn hook cursor` does:
+
+| Event | Effect |
+| --- | --- |
+| `sessionStart` | Withdraws the turn notice and reports the chat (`startup`) |
+| `beforeSubmitPrompt` | Withdraws the turn notice and reports the chat (`prompt`); the same chat again changes nothing, another replaces the binding |
+| `postToolUse` | Withdraws the turn notice (a stop hook may send the agent back to work) |
+| `stop` | Opens a `notice`: "Cursor finished its turn", or "Cursor stopped with an error"; `aborted` (Escape) withdraws instead |
+| `sessionEnd` | Withdraws the turn notice |
+
+Resume works for a session BMN started as `cursor-agent` (the bare `agent` alias is too generic to claim), as for the
+other agents: `cursor-agent --resume=<id>` keeps `--model` and `--workspace` and names what it leaves behind, never
+an option's value (`--api-key` holds a secret). A `bmn hook claude` payload carrying `cursor_version` is Cursor
+running Claude's hook files and is ignored. No screen mirror runs for Cursor: nothing is answered by keys.
 
 ### Notifications from any program
 
@@ -257,6 +294,7 @@ bmn hooks check              # what each agent's own hook file carries, for ever
 bmn hooks install claude     # add only the missing entries, after backing the file up
 bmn hooks install codex
 bmn hooks install opencode   # install BMN's plugin in OpenCode's plugin folder
+bmn hooks install cursor     # ~/.cursor/hooks.json, Cursor's own flat format
 ```
 
 `check` prints one line per event: `wired` for the documented command, `wired (older wording)` for
@@ -280,13 +318,18 @@ and after three failed calls, so an absent BMN costs nothing. A plugin installed
 Epic 30 shows as `wired (older wording)` until `bmn hooks install opencode` replaces it. This was checked against OpenCode CLI 1.18.31 and locally
 installed plugin SDK 1.4.9 on 2026-09-22; real interactive event delivery is still unverified.
 
-For Claude and Codex, `install` copies the file to `<file>.bmn-backup-<timestamp>`, adds the missing entries next to the
+For Claude, Codex and Cursor, `install` copies the file to `<file>.bmn-backup-<timestamp>`, adds the missing entries next to the
 hooks already registered for that event, writes the file atomically and prints a unified diff. It
 never removes, reorders or rewrites an entry, including one with the older wording, and writes
 nothing when nothing is missing. A file that is not valid JSON is reported and left untouched, as is
 one whose `hooks` is not an object or whose event is not a list: BMN says what it cannot add to
 rather than replacing somebody's configuration. If the file changed while `install` was reading it,
 nothing is written and it says so; run it again.
+
+Cursor's file holds flat entries, so `install` appends `{ "command": "…", "timeout": 5 }` to each missing event's
+list and writes `"version": 1` only into a new file. `check` counts an entry that has no `matcher`, is not a
+`"type": "prompt"` entry and has an absent or positive `timeout`; those rules are BMN's reading of Cursor's code
+(it runs any non-prompt entry and waits `timeout` seconds), not a run of every shape.
 
 That check closes the window it can. If your harness writes the same file in the instant between
 that check and the rename, **its change is lost and the backup does not contain it** — the backup is
@@ -404,7 +447,7 @@ too. Run `/hooks` in Codex once, then confirm the event shows up under Hook even
 check BMN cannot do for you.
 
 Preferences → **Local agent control** can show a dated, read-only `hooks check` report for
-Claude Code, Codex and OpenCode. It shows configured and missing entries without exposing the
+Claude Code, Codex, OpenCode and Cursor. It shows configured and missing entries without exposing the
 file contents. Session details separately shows the latest hook event **Observed by BMN** in
 that session's run, or **Not observed in this run**. One received event proves only that event
 reached BMN; neither view says every hook or permission path works.
@@ -518,6 +561,8 @@ Submission is not delivery
 
 bmn hook is not yours
   bmn hook <agent> is how BMN reads your harness's own hook events. Never run it by hand.
+  Claude, Codex and OpenCode report Needs you, take answers from the phone and resume.
+  Cursor reports finished turns and resumes; its questions and permissions stay in its terminal.
 ```
 
 ## What the app enforces

@@ -12,9 +12,8 @@
 
 ## Progress
 
-- Board: epic-31 in-progress; 31-1, 31-2 review (793b157); 31-4 review (commit after 793b157, log ~01:35); 31-3 backlog → in implementation. Baseline cb6ea18.
-- 31.4 implemented: answer forms `QuestionChoice` (toggle set / typed), Claude/Codex key routes screen-verified, OpenCode `answers[][]` with `custom`, cards 8–11 (toggles, Other…, ‹ Back, typing view, reply routing), docs/remote-answers.md + telegram.md.
-- 31.3: measurement done (log ~00:50–01:15, fixtures `apps/desktop/src/utility/test-fixtures/cursor/`). Decided from it: hooks VERIFIED (stop, sessionStart/End, beforeSubmitPrompt, postToolUse) → wire done notice, conversation id, Resume `cursor-agent --resume=<id>`, chip, `bmn hooks check/install cursor` (~/.cursor/hooks.json v1); no permission/question event → Needs you and answer buttons UNSUPPORTED; no chat delete → History row "keeps its own history · not managed by BMN"; model `default`, no host → no model-origin flag; no terminal notices in BMN. Wiring not started.
+- Board: epic-31 in-progress; 31-1, 31-2 review (793b157); 31-4 review (a6b0606); 31-3 review (commit after a6b0606, log ~02:10). Baseline cb6ea18.
+- All four stories implemented and self-checked; acceptance reviews next.
 - Active helpers: none.
 
 ## Decisions and findings
@@ -22,13 +21,14 @@
 - Original or approved intent changes: none.
 - Material pending findings: none.
 - Cross-epic obligations: Epic 30 answer checks kept for 31.4; archive setting keeps meaning (31.1); Epic 18 precedent for 31.3; deadline 2026-10-08 for 31.2.
-- Deviation to state at acceptance: 31.3 AC1 measured in tmux with BMN_*/AITERM_* unset, not a live BMN bash session; plan an isolated dev-BMN Cursor run for the Electron/real check.
+- Deviations to state at acceptance: 31.3 AC1 measured in tmux (BMN_* unset, then fake BMN_* for env/process chain), not inside a live BMN; Cursor Needs you for permissions/questions UNSUPPORTED (no event); parity diff = aggregate `hooks check` exit code only.
 
 ## Evidence
 
-- 31.1+31.2: unit 114/2142 PASS, Electron run 4 EXIT 0, history screenshots (log ~23:10–23:30).
-- 31.4: unit 114/2178 PASS after two lint fixes + fixture field drop (log ~01:35; `.dev-auto/evidence/epic-31/e31-gate-314.log`), Electron run 7 EXIT 0 incl. fullerAnswers (`e31-electron-run7.log`).
-- Untested: Claude's own deletion after cleanupPeriodDays; OpenCode TUI idle on an old session without the id on its command line; 31.4 on the owner's real phone; Fable visual review of History screenshots pending.
+- 31.1+31.2: unit 114/2142, Electron run 4, history screenshots (log ~23:10–23:30).
+- 31.4: unit 114/2178 (log ~01:35), Electron run 7 fullerAnswers.
+- 31.3: unit 114/2211, Electron run 12 EXIT 0 (cursorAcceptance), parity before/after, real-copy migration (log ~02:10).
+- Untested: Claude's own deletion after cleanupPeriodDays; OpenCode TUI idle on an old session without the id on its command line; 31.4 on the owner's real phone; Cursor on the packaged build (owner check; owner does not use Cursor).
 
 ## Measurement
 
@@ -40,5 +40,5 @@
 
 ## Resume
 
-- Next safe action: implement 31.3 wiring (unions, schema bump, bin/bmn hook cursor + hooks check/install, Resume, chip, help agents, docs/agent-control.md Cursor table, before/after hooks-check artifacts, tests, Electron fake Cursor phase); then GLM pre-review + own final checks, Astra medium epic review, Fable visual review, acceptance.
-- Status: ACTIVE — 31.1, 31.2, 31.4 in review; 31.3 wiring next.
+- Next safe action: freeze candidate; GLM pre-review (sanitised git-archive export, code/diffs only) alongside final checks + Fable visual review of History screenshots; one repair; Astra medium epic review; repair/recheck; acceptance; push/update decision via Fable.
+- Status: ACTIVE — all stories in review; acceptance reviews next.

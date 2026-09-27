@@ -1,0 +1,15 @@
+{
+  "conversation_id": "c741bb07-352f-457b-8e7c-ee00517cd9ff",
+  "generation_id": "b20629b7-4a2d-48ef-90e6-8003d77c3e44",
+  "model": "default",
+  "prompt": "Run the shell command `touch cursor-perm-2.txt`, then reply done.",
+  "attachments": [],
+  "session_id": "c741bb07-352f-457b-8e7c-ee00517cd9ff",
+  "hook_event_name": "beforeSubmitPrompt",
+  "cursor_version": "2026.09.26-dd393fe",
+  "workspace_roots": [
+    "/work/project"
+  ],
+  "user_email": "owner@example.com",
+  "transcript_path": "/home/owner/.cursor/projects/work-project/agent-transcripts/c741bb07-352f-457b-8e7c-ee00517cd9ff/c741bb07-352f-457b-8e7c-ee00517cd9ff.jsonl"
+}

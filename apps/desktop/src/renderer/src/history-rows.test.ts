@@ -57,3 +57,14 @@ describe('History rows', () => {
     expect(keepHelp(status())).toBe('Each agent deletes sessions untouched longer.')
   })
 })
+
+describe('Cursor\'s history row (Story 31.3 AC3)', () => {
+  it('reads "keeps its own history · not managed by BMN" with its reason as the title', () => {
+    const row: AgentHistoryAgentRow = { agent: 'cursor', state: 'own', detail: 'Cursor has no command to delete a chat' }
+    const status: AgentHistoryStatus = { keepDays: 30, confirmedKeepDays: 30, needsConfirmation: false, running: false, claude: [], agents: [row] }
+    expect(agentValue(row, status)).toEqual({
+      kind: 'settled', text: 'keeps its own history · not managed by BMN', title: 'Cursor has no command to delete a chat'
+    })
+    expect(agentFailure(row)).toBeNull()
+  })
+})

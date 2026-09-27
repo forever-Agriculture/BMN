@@ -1,0 +1,17 @@
+{
+  "conversation_id": "c741bb07-352f-457b-8e7c-ee00517cd9ff",
+  "generation_id": "c741bb07-352f-457b-8e7c-ee00517cd9ff",
+  "model": "default",
+  "reason": "completed",
+  "duration_ms": 123829,
+  "is_background_agent": false,
+  "final_status": "completed",
+  "session_id": "c741bb07-352f-457b-8e7c-ee00517cd9ff",
+  "hook_event_name": "sessionEnd",
+  "cursor_version": "2026.09.26-dd393fe",
+  "workspace_roots": [
+    "/work/project"
+  ],
+  "user_email": "owner@example.com",
+  "transcript_path": "/home/owner/.cursor/projects/work-project/agent-transcripts/c741bb07-352f-457b-8e7c-ee00517cd9ff/c741bb07-352f-457b-8e7c-ee00517cd9ff.jsonl"
+}

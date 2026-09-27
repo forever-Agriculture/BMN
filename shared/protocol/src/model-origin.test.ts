@@ -159,3 +159,12 @@ describe('modelOrigin precedence', () => {
     expect(classify('opencode', 'openrouter.ai', 'nova-fitness-plan')).toBe('US')
   })
 })
+
+describe('Cursor as a model-origin agent (Epic 31.3)', () => {
+  it('flags only the model Cursor names: its Auto reports "default", and Cursor itself decides nothing', () => {
+    expect(modelOrigin({ agent: 'cursor', apiHost: null, model: 'default' })).toBeNull()
+    expect(modelOrigin({ agent: 'cursor', apiHost: null, model: null })).toBeNull()
+    expect(modelOrigin({ agent: 'cursor', apiHost: null, model: 'claude-4.5-sonnet' })).toBe('US')
+    expect(modelOrigin({ agent: 'cursor', apiHost: null, model: 'kimi-k2' })).toBe('CN')
+  })
+})

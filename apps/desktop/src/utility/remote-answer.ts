@@ -123,7 +123,8 @@ const MAX_KEY_OPTIONS = 8
 
 /** Which verified route answers this prompt, or null for every shape the matrix leaves without buttons. */
 export function answerRoute(prompt: AttentionPrompt | null): AnswerRoute | null {
-  if (!prompt) return null
+  // Cursor's terminal agent reports no question or permission dialog (docs/agent-control.md), so its cards have no buttons.
+  if (!prompt || prompt.harness === 'cursor') return null
   if (prompt.type === 'questions') {
     // The shape and the questions must agree: `multi-select` exactly when some question is one.
     const multi = prompt.questions.some((question) => question.multiSelect)
@@ -957,7 +958,7 @@ export class RemoteAnswers {
 
 /** Whether the dialog of a keystroke-answered prompt is on screen, at any of its steps. */
 export function dialogOnScreen(lines: readonly string[], prompt: AttentionPrompt): boolean {
-  if (prompt.harness === 'opencode') return false
+  if (prompt.harness === 'opencode' || prompt.harness === 'cursor') return false
   if (prompt.type === 'permission') {
     return prompt.command !== null && claudePermissionOnScreen(lines, prompt.tool, prompt.command, prompt.description ?? null) !== null
   }

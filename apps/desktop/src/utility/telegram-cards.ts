@@ -46,7 +46,8 @@ export interface RenderedCard {
 const AGENT_NAMES: Readonly<Record<ModelOriginAgent, string>> = Object.freeze({
   claude: 'Claude',
   codex: 'Codex',
-  opencode: 'OpenCode'
+  opencode: 'OpenCode',
+  cursor: 'Cursor'
 })
 
 export function escapeHtml(text: string): string {

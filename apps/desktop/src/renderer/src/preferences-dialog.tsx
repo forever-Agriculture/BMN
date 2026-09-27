@@ -6,6 +6,7 @@ import type {
   BackupManifest,
   BackupVerifyResult,
   ControlInfo,
+  HookCheckAgent,
   HookCheckReport,
   NotificationSettings,
   TelegramStatus,
@@ -45,6 +46,10 @@ const USAGE_LINES = [
 ]
 
 const TEST_MESSAGE_DISABLED_TITLE = 'Send a test message once Telegram is connected and polling'
+
+const HOOK_CHECK_NAMES: Readonly<Record<HookCheckAgent, string>> = {
+  claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor'
+}
 
 export function PreferencesDialog(props: {
   settings: AppSettings
@@ -743,7 +748,7 @@ export function PreferencesDialog(props: {
                   <p>Unavailable: {hookCheck.reason}</p>
                 ) : hookCheck.agents.map((agent) => (
                   <section key={agent.agent} aria-label={agent.agent === 'claude' ? 'Claude Code hooks' : `${agent.agent} hooks`}>
-                    <h4>{agent.agent === 'claude' ? 'Claude Code' : agent.agent === 'codex' ? 'Codex' : 'OpenCode'}</h4>
+                    <h4>{HOOK_CHECK_NAMES[agent.agent]}</h4>
                     <p>{agent.state === 'read'
                       ? agent.missing.length === 0 ? 'Configured' : 'Missing entry'
                       : agent.state === 'missing' ? 'File missing · Missing entry' : 'Unable to read'}

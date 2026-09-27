@@ -1,6 +1,6 @@
 /* global window, document */
 // MODULE: history-visual.mjs - screenshots Preferences → History, pending and settled, in every identity and colour mode (Epic 31)
-// The app runs with a scratch HOME, CODEX_HOME and XDG folders and stand-in `codex`/`opencode` binaries, so no owner
+// The app runs with a scratch HOME, CODEX_HOME and XDG folders and stand-in `codex`/`opencode`/`cursor-agent` binaries, so no owner
 // file is read or shown. Screenshots land in .dev-auto/evidence/epic-31/history/ (ignored).
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -72,6 +72,9 @@ function fixture(root, roots) {
   opencode.close()
   standIn(bin, 'codex', join(codexHome, 'state_5.sqlite'), 'threads')
   standIn(bin, 'opencode', join(roots.data, 'opencode', 'opencode.db'), 'session')
+  // Cursor has no delete command, so its row only says it keeps its own history; the stand-in is never run.
+  writeFileSync(join(bin, 'cursor-agent'), '#!/bin/sh\nexit 1\n')
+  chmodSync(join(bin, 'cursor-agent'), 0o755)
   return { home, bin, codexHome }
 }
 

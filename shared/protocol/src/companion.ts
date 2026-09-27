@@ -105,7 +105,7 @@ export const ATTENTION_ORIGINS = Object.freeze([
 export const AGENT_ATTENTION_ORIGINS = Object.freeze(['cli'] as const)
 
 /** `terminal` is not a harness: it is what a program's own OSC notification is logged as. */
-export const HOOK_EVENT_AGENTS = Object.freeze(['claude', 'codex', 'opencode', 'terminal'] as const)
+export const HOOK_EVENT_AGENTS = Object.freeze(['claude', 'codex', 'opencode', 'cursor', 'terminal'] as const)
 export type HookEventAgent = (typeof HOOK_EVENT_AGENTS)[number]
 
 /** `RULES.source` size: the whole origin and a hook event name alike are at most this many characters. */
@@ -169,7 +169,7 @@ export const MAX_HOOK_EVENT_EFFECTS = 8
  * The harnesses whose own hook files `bmn hooks check` reads. A report says what is *configured*,
  * never that a hook fired; the labels for that limit live with the report, not in the data.
  */
-export const HOOK_CHECK_AGENTS = Object.freeze(['claude', 'codex', 'opencode'] as const)
+export const HOOK_CHECK_AGENTS = Object.freeze(['claude', 'codex', 'opencode', 'cursor'] as const)
 export type HookCheckAgent = (typeof HOOK_CHECK_AGENTS)[number]
 
 /** What the checker could do with one harness's hook file; the reason detail stays out of the window. */

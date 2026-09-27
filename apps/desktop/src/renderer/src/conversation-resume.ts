@@ -77,13 +77,19 @@ export function resumeConfirmationPresentation(
   sessionName: string
 ): ResumeConfirmationPresentation {
   const cli = preview.agentCli === 'claude' ? 'Claude Code'
-    : preview.agentCli === 'opencode' ? 'OpenCode' : 'Codex'
+    : preview.agentCli === 'opencode' ? 'OpenCode'
+      : preview.agentCli === 'cursor' ? 'Cursor' : 'Codex'
   return {
     message: `Resume the ${cli} conversation in "${sessionName}". This command runs:`,
     command: preview.command,
     // Saying why keeps a dropped argument from reading as something BMN mislaid.
     notCarried: preview.notCarried === ''
       ? null
-      : { names: preview.notCarried, reason: `${preview.agentCli} resume does not accept them.` }
+      : {
+          names: preview.notCarried,
+          reason: preview.agentCli === 'cursor'
+            ? 'BMN carries only --model and --workspace into cursor-agent --resume.'
+            : `${preview.agentCli} resume does not accept them.`
+        }
   }
 }

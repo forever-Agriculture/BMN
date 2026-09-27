@@ -64,9 +64,12 @@ either: BMN strips agent session variables such as `CLAUDE_CODE_SESSION_ID` and 
 from the environment the command runs in, so the new session starts clean. BMN tags common
 commands — Claude, Codex, OpenCode, Gemini, Aider, Shell — but the deeper
 integration (attention hooks and conversation resume) is built for Claude Code, Codex and OpenCode.
+Cursor's terminal agent (`cursor-agent`) gets its finished-turn notice, its agent name and Resume through
+its hooks (`bmn hooks install cursor`); it reports no question or permission prompt, so those stay in
+its terminal ([Agent control](agent-control.md#cursors-terminal-agent)).
 Any other CLI still runs as a normal terminal session, without those.
 
-**Model origin flag.** While a Claude Code, Codex or OpenCode run reports through its own hooks,
+**Model origin flag.** While a Claude Code, Codex, OpenCode or Cursor run reports through its own hooks,
 its sidebar row, pane heading and Session details show the agent it really is (not "Shell") and
 a small flag for the country of the company that made its model — 🇺🇸 for Anthropic, OpenAI and
 other US labs, 🇨🇳 for GLM, Kimi, Qwen, DeepSeek, MiniMax or Xiaomi MiMo, and the flag of the main
@@ -78,7 +81,8 @@ unrecognised model shows no flag rather than a guess. How it is decided:
 **Agent history.** Preferences → History → Keep agent history (7, 30 or 90 days, or Never; default
 30) is one limit for every agent: Claude Code and `claude glm` get it as their own
 `cleanupPeriodDays`, and BMN deletes Codex and OpenCode sessions untouched for longer through their
-own delete commands, at most 200 per agent per daily run. Nothing is written or deleted until you
+own delete commands, at most 200 per agent per daily run. Cursor has no delete command, so its row
+reads "keeps its own history · not managed by BMN". Nothing is written or deleted until you
 press Start cleanup once; the Preferences button shows the attention dot while it waits. Sessions in
 use are never deleted. See [Agent history](agent-history.md).
 
@@ -133,7 +137,8 @@ never replayed into a terminal. **Start again** runs the stored command fresh. O
 before a crash, after the last snapshot, can be lost; BMN says so when it recovers.
 
 **Resume** reopens the conversation a stopped agent was in. For Claude Code and Codex it goes
-through each CLI's own resume; for OpenCode through `opencode --session <id>`. It works only for a
+through each CLI's own resume; for OpenCode through `opencode --session <id>`; for Cursor through
+`cursor-agent --resume=<id>`. It works only for a
 session whose conversation BMN knows: one pinned at launch, one you located by hand, or one the
 harness reported. Anything else says so and offers **Start again** instead. The Resume dialog shows
 the exact command before anything runs, and names any stored argument the CLI's resume will not

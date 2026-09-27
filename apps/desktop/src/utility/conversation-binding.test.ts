@@ -1,8 +1,13 @@
-import { readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { BoundConversationBinding } from '@bmn/protocol'
 import {
   agentCli,
+  conversationReferenceExists,
+  cursorResumeArguments,
+  CURSOR_RESUME_OPTIONS_CLI_VERSION,
   isConversationReference,
   opencodeResumeArguments,
   OPENCODE_RESUME_OPTIONS_CLI_VERSION,
@@ -705,5 +710,76 @@ describe('OpenCode 1.18.31 conversation binding', () => {
     expect(opencodeResumeArguments(['--mini', '--no-replay', '--mdns', '--replay-limit', '20', '/project']))
       .toEqual({ carried: [], droppedOptions: ['--mini', '--no-replay', '--mdns', '--replay-limit'],
         droppedPositionals: 0, projectPath: '/project' })
+  })
+})
+
+describe('Cursor 2026.09.26 conversation binding (Epic 31.3)', () => {
+  // A chat id Cursor reported as conversation_id on 2026-09-28 (test-fixtures/cursor).
+  const reference = 'c741bb07-352f-457b-8e7c-ee00517cd9ff'
+  const context = {
+    cwd: '/repo', executable: '/home/owner/.local/bin/cursor-agent', argv: [] as string[],
+    environment: captureRelevantLaunchEnvironment({})
+  }
+  const bound: BoundConversationBinding = {
+    sessionId: 'bmn-session', agentCli: 'cursor', status: 'bound', conversationReference: reference,
+    captureRoute: 'hook-session-start', launchContext: context, detail: 'Reported by Cursor', capturedAt
+  }
+
+  it('claims cursor-agent, never the generic agent alias, and waits for the hook', async () => {
+    expect(agentCli('/home/owner/.local/bin/cursor-agent')).toBe('cursor')
+    expect(agentCli('/home/owner/.local/bin/agent')).toBe('other')
+    const capability = vi.fn(supportedCapability)
+    const result = await prepareConversationLaunch('bmn-session', context, {}, () => conversationId, capturedAt, capability)
+    expect(result.binding).toMatchObject({ agentCli: 'cursor', status: 'unsupported',
+      detail: 'Cursor reports its chat when it starts or a prompt is sent; Resume becomes available then' })
+    expect(result.injectedArguments).toEqual([])
+    expect(capability).not.toHaveBeenCalled()
+  })
+
+  it('stores a lowercase UUID chat only as a hook-reported binding', () => {
+    expect(isConversationReference('cursor', reference)).toBe(true)
+    expect(isConversationReference('cursor', 'ses_0123456789abSyntheticTest0')).toBe(false)
+    expect(parseBoundBinding(bound)).toEqual(bound)
+    expect(parseBoundBinding({ ...bound, captureRoute: 'explicit-resume-reference' }).status).toBe('unsupported')
+    expect(parseBoundBinding({ ...bound, conversationReference: reference.toUpperCase() }).status).toBe('unsupported')
+    expect(parseBoundBinding({ ...bound, launchContext: { ...context, executable: '/bin/bash' } }).status).toBe('unsupported')
+  })
+
+  it('resumes with --resume=<id>, keeps the model and workspace, and names what it drops without values', () => {
+    expect(CURSOR_RESUME_OPTIONS_CLI_VERSION).toBe('2026.09.26-dd393fe')
+    const argv = ['--model', 'sonnet-4', '--api-key', 'SECRET-KEY', '--workspace=/repo/app', '--force', '--resume', 'old-chat', '-w', 'tree', 'private prompt']
+    const observed = bindingFromObservation({ agentCli: 'cursor', conversationReference: reference, source: 'startup' },
+      { ...bound, launchContext: { ...context, argv } }, capturedAt)
+    const launch = buildNativeResumeLaunch(observed)
+    expect(launch).toMatchObject({ cwd: '/repo', executable: context.executable,
+      argv: [`--resume=${reference}`, '--model', 'sonnet-4', '--workspace=/repo/app'] })
+    expect(observed.detail).toContain('Reported by Cursor at session start')
+    expect(observed.detail).toContain(`Resume runs: ${shownCommand(launch.executable, launch.argv)}`)
+    expect(observed.detail).toContain('not carried: --api-key, --force, -w, 1 positional argument')
+    expect(observed.detail).not.toContain('SECRET-KEY')
+    expect(observed.detail).not.toContain('private prompt')
+    expect(bindingFromObservation({ agentCli: 'cursor', conversationReference: reference, source: 'prompt' }, bound, capturedAt).detail)
+      .toContain('Reported by Cursor when a prompt was sent')
+  })
+
+  it('reads optional-value and valueless options without swallowing the next option', () => {
+    expect(cursorResumeArguments(['--resume', '--model', 'gpt-5', '--continue', '--plan', '--', 'a', 'b'])).toEqual({
+      carried: ['--model', 'gpt-5'], droppedOptions: ['--plan'], droppedPositionals: 2
+    })
+    expect(cursorResumeArguments(['--model', '--force', '--workspace='])).toEqual({
+      carried: [], droppedOptions: ['--model', '--force', '--workspace'], droppedPositionals: 0
+    })
+  })
+
+  it('finds a chat under any workspace folder of ~/.cursor/chats, and nothing else', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'bmn-cursor-chats-'))
+    try {
+      await expect(conversationReferenceExists(bound, home)).resolves.toBe(false)
+      mkdirSync(join(home, '.cursor', 'chats', 'ad1d693d0ef6ba25e4496bcf0e44c0ba', reference), { recursive: true })
+      await expect(conversationReferenceExists(bound, home)).resolves.toBe(true)
+      await expect(conversationReferenceExists({ ...bound, conversationReference: conversationId }, home)).resolves.toBe(false)
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
   })
 })

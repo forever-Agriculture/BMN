@@ -58,7 +58,7 @@ Commands:
                                             waits up to S seconds (0-${MAX_ANSWER_WAIT_SECONDS}) for one to arrive.
                                             --reported says whether OpenCode accepted the reply to request R
   hook <agent>                              Turn an agent hook event on stdin into Needs you requests;
-                                            agent is one of claude|codex|opencode; prints nothing, always exits 0
+                                            agent is one of claude|codex|opencode|cursor; prints nothing, always exits 0
   hooks print opencode                     Print the shipped OpenCode TypeScript plugin
   hooks check [agent] [--file PATH]         Say which of BMN's hook entries each agent's own hook file
                                             carries: wired, wired (older wording) or missing
@@ -82,7 +82,7 @@ const HOOKS_USAGE = `Usage: bmn hooks check [agent] [--file PATH] [--json]
        bmn hooks install <agent> [--file PATH] [--json]
        bmn hooks print opencode
 
-Agents: ${['claude', 'codex', 'opencode'].join('|')}. With no agent, check reads every one of them.
+Agents: ${['claude', 'codex', 'opencode', 'cursor'].join('|')}. With no agent, check reads every one of them.
 
 check   reads each agent's own hook file and prints one line per event BMN expects:
         wired for the entry BMN writes, wired (older wording) for the two other entries
@@ -148,7 +148,9 @@ Submission is not delivery
   When an outcome is uncertain, do not resend: a repeat without that key does the work twice.
 
 bmn hook is not yours
-  bmn hook <agent> is how BMN reads your harness's own hook events. Never run it by hand.`
+  bmn hook <agent> is how BMN reads your harness's own hook events. Never run it by hand.
+  Claude, Codex and OpenCode report Needs you, take answers from the phone and resume.
+  Cursor reports finished turns and resumes; its questions and permissions stay in its terminal.`
 
 const TERMINAL_BRIEF = `BMN terminal images
 
@@ -462,7 +464,7 @@ async function call(socketPath, token, method, params, timeoutMs = TIMEOUT_MS) {
   return outcome.result
 }
 
-const HOOK_AGENTS = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode' }
+const HOOK_AGENTS = { claude: 'Claude', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor' }
 const OPENCODE_PLUGIN = `import type { Plugin } from "@opencode-ai/plugin"
 
 // Shipped by BMN. Reinstall with bmn hooks install opencode.
@@ -944,6 +946,7 @@ function hookRequests(agent, event) {
       default: return []
     }
   }
+  if (agent === 'cursor') return cursorRequests(event, open, withdraw)
   switch (event.hook_event_name) {
     case 'PreToolUse': {
       if (agent === 'claude' && event.tool_name === 'AskUserQuestion') {
@@ -1029,6 +1032,40 @@ function hookRequests(agent, event) {
 }
 
 /**
+ * Cursor's terminal agent (measured on 2026.09.26-dd393fe, docs/agent-control.md): no hook marks a question or a
+ * permission prompt, so it gets the turn notice and its chat id only. sessionStart does not fire on `--resume`,
+ * so every prompt names the chat as well.
+ */
+function cursorRequests(event, open, withdraw) {
+  const observed = (source) => {
+    const reference = event.conversation_id
+    if (typeof reference !== 'string' || !CONVERSATION_REFERENCE.test(reference)) return []
+    const transcript = event.transcript_path
+    return [{
+      method: 'conversation.observe',
+      params: {
+        agentCli: 'cursor',
+        conversationReference: reference,
+        source,
+        ...(typeof transcript === 'string' && transcript.startsWith('/') ? { transcriptPath: transcript } : {})
+      }
+    }]
+  }
+  switch (event.hook_event_name) {
+    case 'sessionStart': return [...withdraw('turn'), ...observed('startup')]
+    case 'beforeSubmitPrompt': return [...withdraw('turn'), ...observed('prompt')]
+    // A stop hook may send the agent back to work without a new prompt.
+    case 'postToolUse': return withdraw('turn')
+    case 'stop':
+      // The owner pressed Escape at the terminal, so nobody is waiting for a notice.
+      if (event.status === 'aborted') return withdraw('turn')
+      return open('turn', 'notice', event.status === 'error' ? 'Cursor stopped with an error' : 'Cursor finished its turn')
+    case 'sessionEnd': return withdraw('turn')
+    default: return []
+  }
+}
+
+/**
  * The hook file each agent reads, and the events BMN expects to find wired in it. `hooks check`
  * reports exactly this list and `hooks install` writes exactly these entries; a unit test drives
  * `bmn hook <agent>` with every listed event and fails when one of them no longer does anything,
@@ -1069,6 +1106,18 @@ const HOOK_FILES = {
     // load - which is why every Codex report closes by saying BMN does not check that it loads.
     timeout: 'whole-non-negative-number',
     ungated: ['absent', 'null', 'empty']
+  },
+  // Cursor's own format: `{ "version": 1, "hooks": { "<event>": [{ "command", "timeout", "matcher" }] } }`, each
+  // entry flat rather than inside a matcher group. The terminal agent reads the user-level file (measured).
+  // Its code runs any entry whose `type` is not "prompt" and waits `timeout` seconds; the rules below are
+  // that reading of the code, not a run of every shape.
+  cursor: {
+    path: ['.cursor', 'hooks.json'],
+    events: ['sessionStart', 'beforeSubmitPrompt', 'postToolUse', 'stop', 'sessionEnd'],
+    optional: [],
+    flat: true,
+    timeout: 'positive-number',
+    ungated: ['absent']
   }
 }
 
@@ -1087,7 +1136,8 @@ function hookFilePath(agent) {
     return `${absoluteUncollapsed(config)}/${folder}/bmn.ts`
   }
   const [directory, ...rest] = HOOK_FILES[agent].path
-  const moved = agent === 'claude' ? process.env.CLAUDE_CONFIG_DIR : process.env.CODEX_HOME
+  // Cursor's terminal agent reads the one file in the home directory; it has no variable to move it.
+  const moved = agent === 'claude' ? process.env.CLAUDE_CONFIG_DIR : agent === 'codex' ? process.env.CODEX_HOME : undefined
   // The owner's own home can hold a `..` as easily as a directory they moved the config to.
   return `${absoluteUncollapsed(moved || `${homedir()}/${directory}`)}/${rest.join('/')}`
 }
@@ -1203,8 +1253,12 @@ function oneLine(command) {
  * BMN recognises. A recognised entry settles the event; the named ones are carried out so that
  * `check` can print them beside it.
  */
-function hookEventState(groups, agent, event) {
-  if (!Array.isArray(groups)) return { state: 'missing', unrecognised: [], gated: [] }
+function hookEventState(listed, agent, event) {
+  if (!Array.isArray(listed)) return { state: 'missing', unrecognised: [], gated: [] }
+  // A flat file's entry is its own group, and Cursor runs any entry that is not a prompt as a command.
+  const groups = HOOK_FILES[agent].flat
+    ? listed.map((entry) => isObject(entry) ? { matcher: entry.matcher, hooks: [entry.type === undefined ? { ...entry, type: 'command' } : entry] } : entry)
+    : listed
   let older = false
   const unrecognised = []
   const gatedEntries = []
@@ -1405,9 +1459,18 @@ function checkHooks(agent, path, file = agent === 'opencode' ? undefined : readH
 
 /** The documented entry added for each missing event, beside the hooks already registered for it. */
 function installHooks(agent, data, missing) {
-  const next = { ...data, hooks: isObject(data.hooks) ? { ...data.hooks } : {} }
+  const flat = HOOK_FILES[agent].flat === true
+  // A new Cursor file needs the format version its loader reads; an existing file keeps its own.
+  const next = { ...(flat && data.version === undefined ? { version: 1 } : {}), ...data, hooks: isObject(data.hooks) ? { ...data.hooks } : {} }
   for (const event of missing) {
     const groups = Array.isArray(next.hooks[event]) ? [...next.hooks[event]] : []
+    if (flat) {
+      const entry = hookEntry(agent)
+      delete entry.type
+      groups.push(entry)
+      next.hooks[event] = groups
+      continue
+    }
     // Appended as its own group: an existing group carries a matcher this entry must not inherit.
     const matcher = HOOK_FILES[agent].matchers?.[event]
     groups.push({ ...(matcher === undefined ? {} : { matcher }), hooks: [hookEntry(agent)] })
@@ -1768,6 +1831,9 @@ async function runHook(args) {
   // Defence in depth: every branch below keys on `hook_event_name`, so nothing that is not an
   // object reaches one. No test can tell this line from its neighbours; it is not claimed as fenced.
   if (!isObject(event)) return 0
+  // Cursor can also run Claude Code's hook files for its own agent (off by default, docs/agent-control.md);
+  // such a payload speaks for a Cursor chat, never for a Claude conversation.
+  if (agent === 'claude' && Object.hasOwn(event, 'cursor_version')) return 0
   const requests = hookRequests(agent, event)
   const opens = requests.filter((request) => request.method === 'attention.open')
   if (agent === 'claude' && opens.length > 0 && claudeRemoteControlled(agentPid, event.session_id)) {

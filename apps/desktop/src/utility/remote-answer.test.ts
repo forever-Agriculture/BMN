@@ -157,6 +157,9 @@ describe('which shapes have a route (decision 7)', () => {
     expect(answerRoute({ ...CLAUDE_BASH, tool: 'Edit' })).toBeNull()
     expect(answerRoute({ ...CLAUDE_BASH, command: null })).toBeNull()
     expect(answerRoute({ ...CLAUDE_BASH, harness: 'codex' })).toBeNull()
+    // Cursor reports no dialog it could be answered in, so a prompt claiming to be one has no buttons.
+    expect(answerRoute({ ...CLAUDE_SINGLE, harness: 'cursor' })).toBeNull()
+    expect(answerRoute({ ...CLAUDE_BASH, harness: 'cursor' })).toBeNull()
     expect(answerRoute({ ...OPENCODE_PERMISSION, shape: 'sandbox-network' })).toBeNull()
   })
 

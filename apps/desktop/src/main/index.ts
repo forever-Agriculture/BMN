@@ -110,6 +110,7 @@ import {
   prepareHistoryFixture,
   recordedCalls,
   selfTestHistoryEnvironment,
+  selfTestHistoryRoots,
   type HistoryFixture
 } from './agent-history-self-test'
 import { installVoiceIpcHandlers } from './voice-ipc'
@@ -4292,6 +4293,83 @@ async function runSelfTest(): Promise<void> {
       { sessionId: openCodeResumed.sessionId, incarnationId: openCodeResumed.incarnationId }
     ]) await client.request(METHOD_REGISTRY.sessionStop, { ...stopped, cause: 'explicit' })
 
+    console.error('[BMN] self-test phase: Cursor terminal agent')
+    // Payloads shaped like the recorded ones (utility/test-fixtures/cursor), sent through the real `bmn hook cursor`.
+    const cursorChat = 'c741bb07-352f-457b-8e7c-ee00517cd9ff'
+    const cursorEvents = [
+      `const conversation_id = ${JSON.stringify(cursorChat)}`,
+      "const base = { conversation_id, session_id: conversation_id, generation_id: 'gen-1', model: 'default', cursor_version: '2026.09.26-dd393fe', workspace_roots: [process.cwd()], user_email: 'owner@example.com', transcript_path: null }",
+      "const event = (hook_event_name, props = {}) => cli(['hook', 'cursor'], JSON.stringify({ ...base, hook_event_name, ...props }))"
+    ]
+    const cursorDirectory = join(isolatedCwd, 'cursor-acceptance')
+    const cursorExecutable = writeAcceptanceHarness(cursorDirectory, 'cursor-agent', [
+      ...cursorEvents,
+      "if (process.argv.slice(2).some((argument) => argument.startsWith('--resume='))) {",
+      "  event('beforeSubmitPrompt', { prompt: 'again' })",
+      "  writeFileSync(file('resumed'), '')",
+      "  return",
+      "}",
+      "event('sessionStart', { is_background_agent: false, composer_mode: 'agent' })",
+      "event('beforeSubmitPrompt', { prompt: 'hello' })",
+      "event('postToolUse', { tool_name: 'Shell', tool_input: { command: 'true' } })",
+      "event('stop', { status: 'completed', loop_count: 0 })",
+      "writeFileSync(file('finished'), '')"
+    ])
+    const cursorSession = await createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
+      name: 'Cursor acceptance', cwd: isolatedCwd, executable: cursorExecutable,
+      argv: ['--model', 'fixture-model', '--force'], cols: 80, rows: 24 }, true)
+    await untilFileExists(join(cursorDirectory, 'finished'), 'finished Cursor events')
+    const cursorNotice = await acceptanceWait(async () =>
+      (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
+        .find(row => row.sessionId === cursorSession.session.sessionId && row.kind === 'notice' && row.state === 'open'), 'Cursor turn notice')
+    await recoverApplicationRenderer(applicationWindow)
+    const cursorNeedsYou = await applicationWindow.webContents.executeJavaScript(`(async () => {
+      const wait = async (read) => { const end = Date.now() + 10000; while (Date.now() < end) {
+        const value = read(); if (value) return value; await new Promise(r => setTimeout(r, 25));
+      } throw new Error('Cursor Needs you row timed out'); };
+      (await wait(() => document.querySelector('.needs-you-button'))).click();
+      const row = await wait(() => [...document.querySelectorAll('.attention-item')]
+        .find(r => r.textContent.includes('Cursor finished its turn')));
+      const provenance = row.querySelector('.provenance')?.textContent ?? null;
+      document.querySelector('.needs-you-button').click();
+      return { shown: true, provenance };
+    })()`) as { shown: boolean; provenance: string | null }
+    const cursorBinding = await client.request<PersistedConversationBinding>(METHOD_REGISTRY.sessionBindingGet, { sessionId: cursorSession.session.sessionId })
+    const cursorEventLog = await client.request<Array<{ agent: string; event: string; effects: string[] }>>(METHOD_REGISTRY.hookEventsList, { sessionId: cursorSession.session.sessionId })
+    // The owner's way: cursor-agent typed into a shell. The chip says "Shell" until Cursor's own hooks report.
+    const cursorShellDirectory = join(isolatedCwd, 'cursor-shell-acceptance')
+    const cursorShellHarness = writeAcceptanceHarness(cursorShellDirectory, 'cursor-in-shell', [
+      ...cursorEvents,
+      "event('sessionStart', { is_background_agent: false, composer_mode: 'agent' })",
+      "event('stop', { status: 'completed', loop_count: 0 })",
+      "writeFileSync(file('finished'), '')"
+    ])
+    const cursorShell = await createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
+      name: 'Cursor in a shell', cwd: isolatedCwd, executable: '/bin/bash',
+      argv: ['-c', cursorShellHarness], cols: 80, rows: 24 }, true)
+    await untilFileExists(join(cursorShellDirectory, 'finished'), 'finished shell Cursor events')
+    await recoverApplicationRenderer(applicationWindow)
+    const cursorChip = await modelOriginProbe(applicationWindow, cursorShell.session.sessionId, 'Cursor in a shell', 'default')
+    const cursorShellBinding = await client.request<PersistedConversationBinding>(METHOD_REGISTRY.sessionBindingGet, { sessionId: cursorShell.session.sessionId })
+    // Resume reopens the chat Cursor reported; its chat folder lives in the self-test's own home.
+    mkdirSync(join(selfTestHistoryRoots()!.home, '.cursor', 'chats', 'self-test-workspace', cursorChat), { recursive: true })
+    await client.request(METHOD_REGISTRY.sessionStop, { sessionId: cursorSession.session.sessionId,
+      incarnationId: cursorSession.session.lastProcess?.incarnationId, cause: 'explicit' })
+    const cursorPreview = await client.request<{ command: string; notCarried: string }>(METHOD_REGISTRY.sessionResumePreview, { sessionId: cursorSession.session.sessionId })
+    const cursorResumed = await client.request<SessionIdentity>(METHOD_REGISTRY.sessionResume, { sessionId: cursorSession.session.sessionId, cols: 80, rows: 24 })
+    const cursorArguments = await untilHarnessRuns(join(cursorDirectory, 'argv.log'), 2)
+    await untilFileExists(join(cursorDirectory, 'resumed'), 'the resumed Cursor prompt')
+    const cursorAcceptance = {
+      notice: cursorNotice.title, openedBy: cursorNotice.openedBy, needsYou: cursorNeedsYou,
+      binding: cursorBinding, events: cursorEventLog, chip: cursorChip.rowChip, paneChip: cursorChip.paneChip,
+      modelRow: cursorChip.modelRow, shellBinding: cursorShellBinding.status,
+      preview: cursorPreview.command, notCarried: cursorPreview.notCarried, resumedArguments: cursorArguments[1]
+    }
+    for (const stopped of [
+      { sessionId: cursorResumed.sessionId, incarnationId: cursorResumed.incarnationId },
+      { sessionId: cursorShell.session.sessionId, incarnationId: cursorShell.session.lastProcess?.incarnationId }
+    ]) await client.request(METHOD_REGISTRY.sessionStop, { ...stopped, cause: 'explicit' })
+
     console.error('[BMN] self-test phase: subagent routing and repeat watch')
     const dormantSidebar = await applicationWindow.webContents.executeJavaScript(`(async () => {
       const button = document.querySelector('button[data-session-id="${petitionDestination.session.sessionId}"]');
@@ -4533,7 +4611,8 @@ async function runSelfTest(): Promise<void> {
     const stoppedBeforeRestartSessionIds = new Set([
       reportingSession.sessionId, rivalSession.sessionId,
       petitionSource.session.sessionId, petitionDestination.session.sessionId,
-      openCodeSession.session.sessionId, routingSession.session.sessionId, repeatSession.session.sessionId
+      openCodeSession.session.sessionId, routingSession.session.sessionId, repeatSession.session.sessionId,
+      cursorSession.session.sessionId, cursorShell.session.sessionId
     ])
     // The rival's report was refused; the owner must be able to read why while BMN is still running.
     const refusalLog = join(resolveApplicationRoots().state, 'refused-requests.log')
@@ -4986,6 +5065,7 @@ async function runSelfTest(): Promise<void> {
         glmEnvKept: JSON.parse(readFileSync(join(historyFixture.glm, 'settings.json'), 'utf8')).env?.ANTHROPIC_MODEL === 'glm',
         codexCalls: recordedCalls(historyFixture.codexLog),
         openCodeCalls: recordedCalls(historyFixture.openCodeLog),
+        cursorCalls: recordedCalls(historyFixture.cursorLog),
         runs: historySettled.agents.map((row) => ({ agent: row.agent, deleted: row.lastRun?.deleted, failures: row.lastRun?.failures.length })),
         storeUnchanged: JSON.stringify(historyFixture.storeFiles()) === JSON.stringify(historyStoreBefore),
         view: historySettledView
@@ -4998,7 +5078,9 @@ async function runSelfTest(): Promise<void> {
     if (!agentHistory.pending.needsConfirmation || !pendingFolder(historyFixture.claudeHome, null) ||
       !pendingFolder(historyFixture.glm, 90) || !pendingFolder(historyFixture.work, null) ||
       JSON.stringify(agentHistory.pending.agents) !== JSON.stringify([
-        { agent: 'codex', state: 'managed', sessions: 3, candidates: 1 }, { agent: 'opencode', state: 'managed', sessions: 3, candidates: 1 }]) ||
+        { agent: 'codex', state: 'managed', sessions: 3, candidates: 1 }, { agent: 'opencode', state: 'managed', sessions: 3, candidates: 1 },
+        { agent: 'cursor', state: 'own' }]) ||
+      !historyPendingView.rows.includes('Cursor | keeps its own history · not managed by BMN') ||
       !historyPendingView.dot || historyPendingView.confirm !== 'Sets 3 Claude folders to 30 days; deletes 2 sessions for good.' ||
       !historyPendingView.rows.some((row) => row.startsWith('GLM | ') && row.endsWith('90 days → 30 days')) ||
       agentHistory.settled.needsConfirmation || historySettledView.dot || historySettledView.confirm !== null ||
@@ -5006,7 +5088,8 @@ async function runSelfTest(): Promise<void> {
       !agentHistory.settled.glmEnvKept ||
       JSON.stringify(agentHistory.settled.codexCalls) !== JSON.stringify([`${historyFixture.home}|delete --force ${historyFixture.ids.oldCodex}`]) ||
       JSON.stringify(agentHistory.settled.openCodeCalls) !== JSON.stringify([`${historyFixture.home}|session delete ${historyFixture.ids.oldOpenCode} --pure`]) ||
-      JSON.stringify(agentHistory.settled.runs) !== '[{"agent":"codex","deleted":1,"failures":0},{"agent":"opencode","deleted":1,"failures":0}]' ||
+      JSON.stringify(agentHistory.settled.runs) !== '[{"agent":"codex","deleted":1,"failures":0},{"agent":"opencode","deleted":1,"failures":0},{"agent":"cursor"}]' ||
+      agentHistory.settled.cursorCalls.length !== 0 ||
       !agentHistory.settled.storeUnchanged || learnedFolders.some((folder) => !historySettled.claude.some((row) => row.path === folder && !row.pending))) {
       throw new Error(`agent history went wrong: ${JSON.stringify(agentHistory)}`)
     }
@@ -5028,7 +5111,8 @@ async function runSelfTest(): Promise<void> {
     // fixtures add two more incarnations, and all are stopped again. Epic 29's model-origin run adds
     // one live incarnation that the application restart below interrupts.
     // Epic 30.2's remote-answer stand-in adds one more incarnation, stopped before this check.
-    if (afterRenderer.liveSessions !== 4 || afterRenderer.incarnationRecords !== 17) {
+    // Epic 31.3's Cursor phase adds three (direct, typed into a shell, resumed), all stopped.
+    if (afterRenderer.liveSessions !== 4 || afterRenderer.incarnationRecords !== 20) {
       throw new Error(`renderer restart duplicated or stopped a process: ${afterRenderer.liveSessions} live, ${afterRenderer.incarnationRecords} incarnations`)
     }
     // "What survives", renderer-crash row: the processes, the layout and the open requests outlive the view.
@@ -5850,7 +5934,7 @@ async function runSelfTest(): Promise<void> {
       const configured = report.textContent.includes('Claude Code') &&
         report.textContent.includes('Configured') && report.textContent.includes('Checked ');
       const missing = report.textContent.includes('Codex') &&
-        report.textContent.includes('OpenCode') && report.textContent.includes('Missing entry');
+        report.textContent.includes('OpenCode') && report.textContent.includes('Cursor') && report.textContent.includes('Missing entry');
       preferences.querySelector('.app-dialog-heading button').click();
       const inputAfter = window.__aitermTest.snapshot(hookSessionId).inputEvents;
       document.querySelector('.session-inspector .panel-heading button')?.click();
@@ -6859,6 +6943,7 @@ async function runSelfTest(): Promise<void> {
       cspProbe,
       graphicsTerminfo,
       openCodeAcceptance,
+      cursorAcceptance,
       subagentAcceptance,
       repeatAcceptance,
       quietSidebarAcceptance,

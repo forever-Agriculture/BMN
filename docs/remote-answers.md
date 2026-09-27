@@ -3,7 +3,9 @@
 BMN can answer an agent's question or permission prompt from Telegram (Epic 30). This page records,
 per agent version and prompt shape, exactly how that answer is delivered, how BMN recognises the
 dialog on screen, and what proves the answer landed. Code follows this table: a shape that is not
-**VERIFIED** here gets a card without buttons.
+**VERIFIED** here gets a card without buttons. Cursor's terminal agent reports no question or permission
+prompt through its hooks, so it has no row here: its only card is the finished-turn notice
+([agent-control.md](agent-control.md#cursors-terminal-agent)).
 
 Measured 2026-09-27 (Epic 30; multi-select, typed answers and Back in Epic 31, same night, same versions) against Claude Code 2.1.283, codex-cli 0.157.1 and OpenCode 1.18.32, each driven
 in a real terminal (tmux, 200×50 and 80×40) with BMN's control variables removed. Raw captures and a
