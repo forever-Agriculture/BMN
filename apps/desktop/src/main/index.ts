@@ -632,7 +632,7 @@ function requireKnownSession(event: IpcMainInvokeEvent, sessionId: unknown): str
     throw new MainIpcError(ERROR_CODES.invalidArgument, 'An explicit sessionId is required')
   }
   if (!sessionRecords.has(sessionId)) {
-    throw new MainIpcError(ERROR_CODES.notFound, `Session ${sessionId} was not found`)
+    throw new MainIpcError(ERROR_CODES.notFound, 'The session was not found')
   }
   return sessionId
 }
@@ -977,7 +977,7 @@ function installIpcHandlers(): void {
     }
     for (const entry of request.entries) {
       if (!sessionRecords.has(entry.sessionId)) {
-        throw new MainIpcError(ERROR_CODES.notFound, `Session ${entry.sessionId} was not found`)
+        throw new MainIpcError(ERROR_CODES.notFound, 'The session was not found')
       }
     }
     const result = await requireHostClient().request<SessionCohortResumeResult>(

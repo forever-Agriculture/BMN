@@ -106,8 +106,9 @@ function invalid(message: string): never {
   throw new WorkspaceStoreError(ERROR_CODES.invalidArgument, message)
 }
 
-function missing(kind: string, id: string): never {
-  throw new WorkspaceStoreError(ERROR_CODES.notFound, `${kind} ${id} was not found`)
+/** The owner reads this, so it names the kind of record and never its raw id. */
+function missing(kind: string): never {
+  throw new WorkspaceStoreError(ERROR_CODES.notFound, `The ${kind} was not found`)
 }
 
 function conflict(kind: string, id: string, revision: number): never {
@@ -252,7 +253,7 @@ export function selectWorkspace(database: DatabaseConnection, workspaceId: strin
        FROM workspace WHERE workspace_id = ?`
     )
     .get(workspaceId) as WorkspaceRow | undefined
-  if (!row) return missing('Workspace', workspaceId)
+  if (!row) return missing('workspace')
   return workspaceRecord(row)
 }
 
@@ -262,7 +263,7 @@ export function selectSession(database: DatabaseConnection, sessionId: string): 
       `${SESSION_SELECT} WHERE s.session_id = ?`
     )
     .get(sessionId) as SessionRow | undefined
-  if (!row) return missing('Session', sessionId)
+  if (!row) return missing('session')
   return sessionRecord(row)
 }
 
@@ -572,7 +573,7 @@ export function getLaunchSet(
 ): LaunchSetRecord {
   const row = database.prepare('SELECT * FROM launch_set WHERE workspace_id = ? AND set_id = ?')
     .get(workspaceId, setId) as LaunchSetRow | undefined
-  if (!row) return missing('Launch set', setId)
+  if (!row) return missing('launch set')
   return launchSetRecord(row)
 }
 export function createLaunchSet(

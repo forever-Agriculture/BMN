@@ -23,6 +23,8 @@ import {
   listTemplates,
   listWorkspaces,
   putLayout,
+  selectSession,
+  selectWorkspace,
   updateSession,
   updateWorkspace
 } from './database-workspace-store'
@@ -630,6 +632,25 @@ describe('workspace database store', () => {
         argv: ['healthy-session']
       })
       expect(listWorkspaces(database)).toHaveLength(1)
+    } finally {
+      database.close()
+    }
+  })
+})
+
+describe('missing records (Story 38.1 FR73)', () => {
+  it('names the kind of record and never its raw id', () => {
+    const database = new BetterSqlite3(':memory:')
+    try {
+      initializeDatabase(database, now)
+      const id = 'b3f1c2d4-0000-4000-8000-00000000abcd'
+      for (const [read, message] of [
+        [() => selectSession(database, id), 'The session was not found'],
+        [() => selectWorkspace(database, id), 'The workspace was not found'],
+        [() => getLaunchSet(database, DEFAULT_WORKSPACE_ID, id), 'The launch set was not found']
+      ] as const) {
+        expect(read).toThrowError(expect.objectContaining({ code: ERROR_CODES.notFound, message }))
+      }
     } finally {
       database.close()
     }
