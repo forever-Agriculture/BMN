@@ -431,6 +431,7 @@ export function VoicePreferences(props: {
           <p>Hold Space in a terminal, or press Speak or {SHORTCUT_LABELS['voice-toggle']} to start and again to stop; the transcript is pasted without Enter.</p>
           <p>Turn off Hold Space to talk for programs that use a held Space, such as paging in less.</p>
           <p>Suggestions come from the session you are working in. Whisper may still miss a word.</p>
+          <p>The hint holds at most {VOICE_VOCABULARY_MAX_PROMPT_BYTES} bytes; most non-English letters take two.</p>
         </div>
       </details>
     </section>

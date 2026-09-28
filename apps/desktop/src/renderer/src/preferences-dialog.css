@@ -87,6 +87,13 @@
   color: var(--muted);
 }
 
+/* An error is read in full, never cut to one line. */
+.preferences-dialog .telegram-status dd.error {
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .preferences-dialog .preferences-section > .advanced {
   margin-top: 8px;
 }

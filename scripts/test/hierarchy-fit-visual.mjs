@@ -230,8 +230,18 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       result[`${colorMode}Rows`] = rows.length
 
       phase(`${colorMode}: Needs you cards`)
-      await page.locator('.needs-you-button').click()
+      // Opened from the keyboard: Tab then walks the cards' buttons in the order they read, none skipped.
+      await page.locator('.needs-you-button').focus()
+      await page.keyboard.press('Enter')
       await page.waitForSelector('.needs-you-popover .attention-item')
+      await page.waitForFunction(() => document.activeElement?.closest('.needs-you-popover'))
+      const tabOrder = []
+      for (let step = 0; step < 6; step++) {
+        tabOrder.push(await page.evaluate(() => [...document.querySelectorAll('.needs-you-popover button:not(:disabled)')]
+          .indexOf(document.activeElement)))
+        await page.keyboard.press('Tab')
+      }
+      assert.ok(tabOrder[0] >= 0 && tabOrder.every((index, step) => index === tabOrder[0] + step), `${colorMode} tab order: ${tabOrder}`)
       await sleep(300)
       await shot(`${colorMode}-needs-you.png`, '.needs-you-popover')
       const popover = await page.evaluate(() => ({
@@ -337,6 +347,18 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       await shot(`${colorMode}-sidebar-hover.png`, '.workspace-sidebar')
       await page.mouse.move(900, 500)
     }
+    phase('black: a stopped row and keyboard focus on a row')
+    await setColorMode(page, 'black')
+    await page.evaluate((sessionId) => window.aiTerminal.stopSession(sessionId), watcher)
+    await until(() => page.evaluate((sessionId) => document.querySelector(`.session-row button[data-session-id="${sessionId}"]`)
+      ?.closest('.session-row')?.getAttribute('data-live') === 'false', watcher), 'the stopped row')
+    const rowButtons = page.locator('.session-row > button:first-child')
+    await rowButtons.nth(1).focus()
+    await page.keyboard.press('Shift+Tab')
+    await page.keyboard.press('Tab')
+    await sleep(200)
+    await shot('black-sidebar-focus-stopped.png', '.workspace-sidebar')
+    assertRows(await readRows(page), 'black sidebar with a stopped row')
     console.log(JSON.stringify({ hierarchyFitVisual: 'PASS', directory: evidenceDirectory, ...result }))
   } finally {
     // BMN asks before closing with live sessions, so a graceful close can wait; the scratch app is stopped either way.

@@ -51,6 +51,30 @@ const HOOK_CHECK_NAMES: Readonly<Record<HookCheckAgent, string>> = {
   claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor'
 }
 
+/**
+ * Telegram's status as a list. An error is said once: in the cue while it shows, otherwise in full under Last error;
+ * State then gives only its word.
+ */
+export function TelegramStatusList(props: { status: TelegramStatus; cueShown: boolean }): React.JSX.Element {
+  const status = props.status
+  return (
+    <dl className="kv telegram-status" aria-label="Telegram status">
+      <dt>State</dt>
+      <dd>{status.lastError === null ? `${status.state} · ${status.detail}` : status.state}</dd>
+      <dt>Token</dt>
+      <dd className={status.tokenMask ? undefined : 'none'}>{status.tokenMask ?? 'not set'}</dd>
+      <dt>Last poll</dt>
+      <dd className={status.lastPollAt ? undefined : 'none'}>{status.lastPollAt ? new Date(status.lastPollAt).toLocaleString() : 'never'}</dd>
+      <dt>Last error</dt>
+      {props.cueShown && status.lastError
+        ? <dd className="none">shown above</dd>
+        : <dd className={status.lastError ? 'error' : 'none'}>{status.lastError ?? 'none'}</dd>}
+      <dt>Rejected updates</dt>
+      <dd>{status.rejectedUpdates}</dd>
+    </dl>
+  )
+}
+
 export function PreferencesDialog(props: {
   settings: AppSettings
   initialSection?: 'agent-control' | undefined
@@ -503,21 +527,7 @@ export function PreferencesDialog(props: {
           </div>
         </div>
         {telegramStatus ? (
-          // An error is said once: in the cue while it shows, otherwise under Last error; State then gives only its word.
-          <dl className="kv telegram-status" aria-label="Telegram status">
-            <dt>State</dt>
-            <dd>{telegramStatus.lastError === null ? `${telegramStatus.state} · ${telegramStatus.detail}` : telegramStatus.state}</dd>
-            <dt>Token</dt>
-            <dd className={telegramStatus.tokenMask ? undefined : 'none'}>{telegramStatus.tokenMask ?? 'not set'}</dd>
-            <dt>Last poll</dt>
-            <dd className={telegramStatus.lastPollAt ? undefined : 'none'}>{telegramStatus.lastPollAt ? new Date(telegramStatus.lastPollAt).toLocaleString() : 'never'}</dd>
-            <dt>Last error</dt>
-            {props.telegramCue && telegramStatus.lastError
-              ? <dd className="none">shown above</dd>
-              : <dd className={telegramStatus.lastError ? undefined : 'none'} title={telegramStatus.lastError ?? undefined}>{telegramStatus.lastError ?? 'none'}</dd>}
-            <dt>Rejected updates</dt>
-            <dd>{telegramStatus.rejectedUpdates}</dd>
-          </dl>
+          <TelegramStatusList status={telegramStatus} cueShown={!!props.telegramCue} />
         ) : (
           !telegramStatusBusy && <p className="preferences-help">Status unavailable.</p>
         )}
