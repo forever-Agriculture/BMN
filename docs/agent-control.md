@@ -31,11 +31,12 @@ socket, can address any session and requires `--session`.
 bmn snapshot                                   Show the current state snapshot
 bmn list                                       List sessions
 bmn publish <file> [--name N] [--key K]        Publish a file to the Files panel
-bmn progress <state> <label> [--source S] [--detail D] [--evidence-id ID ...]
-bmn ask <request-key> <title> [--kind K] [--body B] [--expires ISO]
+bmn progress <state> <label> [--source S] [--detail D | --detail-file -] [--evidence-id ID ...]
+bmn ask <request-key> <title> [--kind K] [--body B | --body-file -] [--expires ISO]
 bmn withdraw <request-key>                     Withdraw your request
 bmn resolve <request-key> <resolution>         Mark a request resolved
-bmn send <text> [--submit] [--key K]           Paste text into the session; --submit presses Enter
+bmn send <text> | --text-file - [--submit] [--key K]
+                                               Paste text into the session; --submit presses Enter
 bmn answer take [--wait S] [--reported R=ok|failed]
                                                Collect, once, the answers BMN decided from a Telegram tap
                                                for this session's own OpenCode requests (BMN's plugin
@@ -64,6 +65,34 @@ Request kinds: `question` (default), `permission`, `review`, `notice`.
 
 Exit status: `0` success, `1` remote or connection error, `2` usage error. `bmn hooks` uses `1` for
 "something is missing or unreadable": it reads and writes files instead of talking to the socket.
+
+### Long text from standard input
+
+Long or multi-line text breaks inside one shell-quoted argument: quotes, backticks and `$( )` in it
+get read by the shell. Four options read their field from standard input instead, so an agent can
+pipe it or use a quoted heredoc:
+
+```bash
+bmn ask review-plan "Review the migration plan?" --body-file - <<'EOF'
+Plan: copy `users` in batches of 500, then swap the table.
+Risk: the "legacy" column keeps $(old) values.
+EOF
+cat notes.md | bmn handoff <destination-session-id> --text-file - --key result-2
+```
+
+| Option | Field | Limit |
+| --- | --- | --- |
+| `ask … --body-file -` | request body | 8,000 characters |
+| `progress … --detail-file -` | progress detail | 2,000 characters |
+| `send --text-file -` | pasted text | 64 KiB |
+| `handoff … --text-file -` | handoff text | 16 KiB |
+
+Only `-` is accepted; to send a file, `cat` it into `bmn`. A field takes exactly one source, so
+`--body` with `--body-file`, `--text` or `-- text` with `--text-file`, and `send` text with
+`--text-file` are refused. Standard input that is a terminal is refused ("needs piped input")
+instead of waiting for typing. Text over the limit, counted the way the app counts that field, or
+that is not valid UTF-8 is refused before anything is sent. One trailing newline, which a heredoc
+always adds, is dropped; every other byte is kept.
 
 ## Examples
 

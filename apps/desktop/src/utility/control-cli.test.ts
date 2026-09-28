@@ -34,7 +34,7 @@ interface CliResult {
 
 function runCli(
   args: string[],
-  options: { env?: Record<string, string>; cwd?: string; input?: string } = {}
+  options: { env?: Record<string, string>; cwd?: string; input?: string | Buffer } = {}
 ): Promise<CliResult> {
   const env: NodeJS.ProcessEnv = { ...process.env }
   for (const key of Object.keys(env)) {
@@ -368,6 +368,109 @@ describe('bmn handoff CLI', () => {
       expect(refused.code).toBe(2)
     }
     expect(fixture.handlers.prepareHandoff).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('long text from standard input (Story 35.1)', () => {
+  // Quotes, backticks, command substitution, tabs, blank lines and non-ASCII that shell quoting mangles.
+  const AWKWARD = 'He said "don\'t" and `ls` then $(rm -rf /tmp/x) & ${HOME}\n\n\tindented — ünïcödé ✓\nlast line'
+
+  it('reads the ask body, handoff text, send text and progress detail exactly as piped', async () => {
+    const fixture = await cliFixture()
+    const env = fixture.sessionEnv
+
+    expect((await runCli(['ask', 'k1', 'Title', '--body-file', '-'], { env, input: `${AWKWARD}\n` })).code).toBe(0)
+    expect(fixture.handlers.openAttention).toHaveBeenLastCalledWith(expect.objectContaining({ body: AWKWARD }))
+    expect((await runCli(['handoff', 'session-2', '--text-file', '-', '--key', 'h1'], { env, input: AWKWARD })).code).toBe(0)
+    expect(fixture.handlers.prepareHandoff).toHaveBeenLastCalledWith(expect.objectContaining({ text: AWKWARD }))
+    expect((await runCli(['send', '--text-file=-', '--submit'], { env, input: `${AWKWARD}\n` })).code).toBe(0)
+    expect(fixture.handlers.submitInput).toHaveBeenLastCalledWith(expect.objectContaining({ text: AWKWARD, submit: true }))
+    expect((await runCli(['progress', 'running', 'Build', '--detail-file', '-'], { env, input: AWKWARD })).code).toBe(0)
+    expect(fixture.handlers.reportProgress).toHaveBeenLastCalledWith(expect.objectContaining({ detail: AWKWARD }))
+  })
+
+  it('drops exactly one trailing newline and keeps every other byte', async () => {
+    const fixture = await cliFixture()
+    const env = fixture.sessionEnv
+    for (const [input, body] of [['one\n\n', 'one\n'], ['two\r\n', 'two\r'], ['  spaced  ', '  spaced  ']]) {
+      expect((await runCli(['ask', 'k', 'Title', '--body-file', '-'], { env, input })).code).toBe(0)
+      expect(fixture.handlers.openAttention).toHaveBeenLastCalledWith(expect.objectContaining({ body }))
+    }
+    // Send text is pasted as it is, so a leading byte-order mark reaches the app too.
+    const bom = '\uFEFFstarts with a byte-order mark'
+    expect((await runCli(['send', '--text-file', '-'], { env, input: `${bom}\n` })).code).toBe(0)
+    expect(fixture.handlers.submitInput).toHaveBeenLastCalledWith(expect.objectContaining({ text: bom }))
+  })
+
+  it.each([
+    [['ask', 'k', 'T', '--body', 'inline', '--body-file', '-'], 'ask takes its body from one source: --body or --body-file -, not both'],
+    [['progress', 'running', 'L', '--detail', 'inline', '--detail-file', '-'],
+      'progress takes its detail from one source: --detail or --detail-file -, not both'],
+    [['send', 'inline', '--text-file', '-'], 'send takes its text from one source: text or --text-file -, not both'],
+    [['send', '--text-file', '-', '--', 'inline'], 'send takes its text from one source: text or --text-file -, not both'],
+    [['handoff', 'session-2', '--text', 'inline', '--text-file', '-', '--key', 'k'],
+      'handoff takes its text from one source: --text T or -- text or --text-file -, not both'],
+    [['handoff', 'session-2', '--text-file', '-', '--key', 'k', '--', 'inline'],
+      'handoff takes its text from one source: --text T or -- text or --text-file -, not both'],
+    [['ask', 'k', 'T', '--body-file', 'notes.md'], '--body-file accepts only - (standard input); to send a file, cat it into bmn'],
+    [['publish', 'report.md', '--body-file', '-'], 'publish does not accept --body-file'],
+    [['ask', 'k', 'T', '--text-file', '-'], 'ask does not accept --text-file']
+  ])('refuses %j as a usage error without reading or sending', async (args, message) => {
+    const fixture = await cliFixture()
+    const refused = await runCli(args, { env: fixture.sessionEnv, input: 'piped text' })
+    expect(refused).toEqual({ code: 2, stdout: '', stderr: `bmn: ${message}\nRun "bmn help" for usage.\n` })
+    for (const handler of [fixture.handlers.openAttention, fixture.handlers.reportProgress,
+      fixture.handlers.submitInput, fixture.handlers.prepareHandoff, fixture.handlers.publishArtifact]) {
+      expect(handler).not.toHaveBeenCalled()
+    }
+  })
+
+  it.each([
+    [['ask', 'k', 'T', '--body-file', '-'], 'x'.repeat(8001), 'body from standard input must be at most 8000 characters'],
+    [['ask', 'k', 'T', '--body-file', '-'], '✓'.repeat(20000), 'body from standard input must be at most 8000 characters'],
+    [['progress', 'running', 'L', '--detail-file', '-'], 'é'.repeat(2001), 'detail from standard input must be at most 2000 characters'],
+    [['send', '--text-file', '-'], 'x'.repeat(64 * 1024 + 1), 'text from standard input must be at most 65536 bytes'],
+    [['handoff', 'session-2', '--text-file', '-', '--key', 'k'], 'é'.repeat(8193), 'text from standard input must be at most 16384 bytes'],
+    [['ask', 'k', 'T', '--body-file', '-'], Buffer.from([0x6f, 0x6b, 0xff, 0xfe]), 'body from standard input is not valid UTF-8']
+  ])('refuses %j over its limit or not UTF-8 before opening the socket', async (args, input, message) => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'aitcli-')))
+    createdRoots.add(root)
+    const socketPath = join(root, 'count.sock')
+    let connections = 0
+    const counter = createServer((socket) => {
+      connections += 1
+      socket.destroy()
+    })
+    await new Promise<void>((resolve) => counter.listen(socketPath, resolve))
+    try {
+      const refused = await runCli(args, { env: { BMN_CONTROL_SOCKET: socketPath, BMN_TOKEN: 'unused' }, input })
+      expect(refused).toEqual({ code: 2, stdout: '', stderr: `bmn: ${message}\nRun "bmn help" for usage.\n` })
+      expect(connections).toBe(0)
+    } finally {
+      await new Promise((resolve) => counter.close(resolve))
+    }
+  })
+
+  it('accepts input exactly at the limit, counted in the app\'s own unit', async () => {
+    const fixture = await cliFixture()
+    const env = fixture.sessionEnv
+    expect((await runCli(['ask', 'k', 'T', '--body-file', '-'], { env, input: `${'ü'.repeat(8000)}\n` })).code).toBe(0)
+    expect((await runCli(['handoff', 'session-2', '--text-file', '-', '--key', 'k'], { env, input: 'é'.repeat(8192) })).code).toBe(0)
+    expect(fixture.handlers.prepareHandoff).toHaveBeenLastCalledWith(expect.objectContaining({ text: 'é'.repeat(8192) }))
+  })
+
+  it.skipIf(!existsSync('/usr/bin/script'))('refuses a terminal on standard input instead of waiting for typing', async () => {
+    const fixture = await cliFixture()
+    const command = [process.execPath, CLI, 'ask', 'k', 'T', '--body-file', '-'].map((part) => `'${part}'`).join(' ')
+    // util-linux script(1) gives the CLI a real pseudo-terminal as standard input.
+    const result = await new Promise<{ code: number | null; output: string }>((resolve) => {
+      execFile('/usr/bin/script', ['-qec', command, '/dev/null'], {
+        env: { ...process.env, ...fixture.sessionEnv }, timeout: 15_000
+      }, (error, stdout) => resolve({ code: error === null ? 0 : typeof error.code === 'number' ? error.code : null, output: stdout }))
+    })
+    expect(result.code).toBe(2)
+    expect(result.output).toContain('bmn: --body-file - needs piped input, not a terminal')
+    expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
   })
 })
 

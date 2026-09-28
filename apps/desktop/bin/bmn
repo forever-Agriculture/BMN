@@ -20,8 +20,20 @@ const CONVERSATION_REFERENCE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}
 const OPENCODE_REFERENCE = /^ses_[0-9a-f]{12}[A-Za-z0-9]{14}$/
 const ATTENTION_KINDS = ['question', 'permission', 'review', 'notice']
 const VALUE_OPTIONS = new Set([
-  'name', 'session', 'key', 'source', 'detail', 'observed', 'kind', 'body', 'expires', 'socket', 'token-file', 'file', 'text', 'wait', 'reported'
+  'name', 'session', 'key', 'source', 'detail', 'observed', 'kind', 'body', 'expires', 'socket', 'token-file', 'file', 'text', 'wait', 'reported',
+  'body-file', 'text-file', 'detail-file'
 ])
+/**
+ * Story 35.1: the one field each command can read from standard input instead of an argument, and the app's
+ * limit for it in the app's own unit (control-server.ts RULES and handoff text). `twin` is the inline source it
+ * replaces; null means the command's positional text.
+ */
+const PIPED_FIELDS = {
+  ask: { option: 'body-file', twin: 'body', field: 'body', limit: 8000, unit: 'characters' },
+  progress: { option: 'detail-file', twin: 'detail', field: 'detail', limit: 2000, unit: 'characters' },
+  send: { option: 'text-file', twin: null, field: 'text', limit: 64 * 1024, unit: 'bytes' },
+  handoff: { option: 'text-file', twin: 'text', field: 'text', limit: 16 * 1024, unit: 'bytes' }
+}
 /** The longest `answer take --wait` the app accepts (control-server MAX_ANSWER_WAIT_SECONDS). */
 const MAX_ANSWER_WAIT_SECONDS = 25
 /** Options that may be repeated; each occurrence appends, so the order given is the order stored. */
@@ -35,9 +47,9 @@ Commands:
   snapshot                                  Show the current state snapshot
   list                                      List sessions
   publish <file> [--name N] [--key K]       Publish a file as an artifact
-  handoff <destination-id> --text T [--file-id ID ...] --key K
+  handoff <destination-id> --text T | --text-file - [--file-id ID ...] --key K
   handoff status [draft-id]                 Prepare an owner-delivered handoff; read its bounded receipt
-  progress <state> <label> [--source S] [--detail D] [--observed ISO]
+  progress <state> <label> [--source S] [--detail D | --detail-file -] [--observed ISO]
                             [--evidence-id ID ...]
                                             Report progress; state is one of
                                             ${PROGRESS_STATES.join('|')}.
@@ -46,12 +58,13 @@ Commands:
                                             returned id, then report). BMN stores and shows the
                                             link; it never checks the files or the claim, so
                                             attached evidence certifies nothing.
-  ask <request-key> <title> [--kind K] [--body B] [--expires ISO]
+  ask <request-key> <title> [--kind K] [--body B | --body-file -] [--expires ISO]
                                             Ask for attention; kind is one of
                                             ${ATTENTION_KINDS.join('|')} (default question)
   withdraw <request-key>                    Withdraw an attention request
   resolve <request-key> <resolution>        Resolve an attention request
-  send <text> [--submit] [--key K]          Paste text into the session; --submit also presses Enter
+  send <text> | --text-file - [--submit] [--key K]
+                                            Paste text into the session; --submit also presses Enter
   answer take [--wait S] [--reported R=ok|failed]
                                             Collect, once, the answers BMN decided from a Telegram tap for
                                             this session's own OpenCode requests (used by BMN's plugin);
@@ -66,6 +79,11 @@ Commands:
                                             after backing the file up; OpenCode replaces its BMN plugin
   help [agents|terminal]                    Show this help or a short agent/terminal guide
 
+Long text from standard input (instead of one quoted argument; only - is accepted, pipe a file with cat):
+  ask ... --body-file -         progress ... --detail-file -
+  send --text-file -            handoff <destination-id> --text-file - --key K
+  Exactly one source per field; a terminal is refused, input must be piped. One trailing newline is
+  dropped. Limits: body 8000 and detail 2000 characters, send text 64 KiB and handoff text 16 KiB.
 Options:
   --session ID       Target session (defaults to your own; required with owner credentials)
   --json             Print the raw result as JSON
@@ -2048,6 +2066,54 @@ function describeHandoffStatus(snapshot, draftId) {
   return visible.map((row) => `${row.draftId}\t${handoffStateWord(row.state)}\t${row.destinationSessionId ?? row.sessionId}\t${row.updatedAt}`).join('\n')
 }
 
+/**
+ * Reads a piped field, stopping once the input is certainly over the limit: past the byte limit, or past four
+ * bytes per allowed character. Nothing is sent when it is over, empty of valid UTF-8, or not piped at all.
+ */
+async function readPipedField(piped) {
+  if (process.stdin.isTTY) throw new UsageError(`--${piped.option} - needs piped input, not a terminal`)
+  const cap = piped.unit === 'bytes' ? piped.limit : piped.limit * 4
+  const chunks = []
+  let size = 0
+  for await (const chunk of process.stdin) {
+    chunks.push(chunk)
+    size += chunk.length
+    if (size > cap) break
+  }
+  const tooLong = new UsageError(`${piped.field} from standard input must be at most ${piped.limit} ${piped.unit}`)
+  if (size > cap) throw tooLong
+  let text
+  try {
+    text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(Buffer.concat(chunks))
+  } catch {
+    throw new UsageError(`${piped.field} from standard input is not valid UTF-8`)
+  }
+  // A heredoc always ends in a newline the agent did not mean; anything else is kept exactly.
+  if (text.endsWith('\n')) text = text.slice(0, -1)
+  if ((piped.unit === 'bytes' ? Buffer.byteLength(text, 'utf8') : text.length) > piped.limit) throw tooLong
+  return text
+}
+
+/** Replaces `--<field>-file -` with the text read from standard input, refusing a second source for the field. */
+async function takePipedField(command, parsed, positionals) {
+  const piped = Object.hasOwn(PIPED_FIELDS, command) ? PIPED_FIELDS[command] : null
+  if (piped === null || parsed.options[piped.option] === undefined) return positionals
+  if (parsed.options[piped.option] !== '-') {
+    throw new UsageError(`--${piped.option} accepts only - (standard input); to send a file, cat it into bmn`)
+  }
+  const inline = piped.twin === null ? positionals.length > 0
+    : parsed.options[piped.twin] !== undefined || (command === 'handoff' && parsed.literalStart !== null)
+  if (inline) {
+    const other = piped.twin === null ? 'text' : command === 'handoff' ? '--text T or -- text' : `--${piped.twin}`
+    throw new UsageError(`${command} takes its ${piped.field} from one source: ${other} or --${piped.option} -, not both`)
+  }
+  const text = await readPipedField(piped)
+  delete parsed.options[piped.option]
+  if (piped.twin === null) return [text]
+  parsed.options[piped.twin] = text
+  return positionals
+}
+
 function usageFailure(message) {
   process.stderr.write(`bmn: ${message}\nRun "bmn help" for usage.\n`)
   return 2
@@ -2074,6 +2140,7 @@ async function main(argv) {
       process.stderr.write(`${USAGE}\n`)
       return 2
     }
+    if (command !== 'handoff' || positionals[0] !== 'status') positionals = await takePipedField(command, parsed, positionals)
     if (command === 'handoff') {
       for (const name of Object.keys(parsed.options)) {
         if (!GLOBAL_OPTIONS.includes(name) && !['text', 'file-id', 'key'].includes(name)) {
@@ -2089,12 +2156,12 @@ async function main(argv) {
       } else {
         if (positionals.length < 1 || (parsed.literalStart === null && positionals.length !== 1) ||
           (parsed.literalStart !== null && parsed.literalStart !== 2)) {
-          throw new UsageError('handoff expects a destination id and --text T or -- text')
+          throw new UsageError('handoff expects a destination id and --text T, --text-file - or -- text')
         }
         if (!parsed.options.key) throw new UsageError('handoff requires --key for safe retries')
         const body = parsed.options.text ?? positionals.slice(1).join(' ')
         if (!body || (parsed.options.text !== undefined && parsed.literalStart !== null)) {
-          throw new UsageError('handoff requires exactly one text source: --text T or -- text')
+          throw new UsageError('handoff requires exactly one text source: --text T, --text-file - or -- text')
         }
         const artifactIds = parsed.options['file-id'] ?? []
         if (artifactIds.length > 10 || new Set(artifactIds).size !== artifactIds.length) {
