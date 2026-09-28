@@ -2762,8 +2762,8 @@ describe('session ports (Story 41.1)', () => {
   const HEADER = '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode'
   // 127.0.0.1:5173 and 0.0.0.0:8000, both listening.
   const TCP = [HEADER,
-    '   0: 0100007F:1435 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 101 1 0 100 0 0 10 0',
-    '   1: 00000000:1F40 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 201 1 0 100 0 0 10 0'].join('\n')
+    `   0: 0100007F:1435 00000000:0000 0A 00000000:00000000 00:00000000 00000000  ${process.getuid!()}        0 101 1 0 100 0 0 10 0`,
+    `   1: 00000000:1F40 00000000:0000 0A 00000000:00000000 00:00000000 00000000  ${process.getuid!()}        0 201 1 0 100 0 0 10 0`].join('\n')
   const processes: Record<string, { environ: string; fd: string; comm: string }> = {
     '10': { environ: 'BMN_SESSION_ID=s1\0', fd: 'socket:[101]', comm: 'vite' },
     // A server whose session BMN no longer knows.

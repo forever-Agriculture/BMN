@@ -5,6 +5,7 @@ import { METHOD_REGISTRY } from '@bmn/protocol'
 import type { UtilityProcess } from 'electron'
 import {
   closeWithinDeadline,
+  drainAfterExit,
   HOST_DIAGNOSTIC_BUFFER_BYTES,
   PtyHostClient,
   PtyHostExitedError,
@@ -151,6 +152,30 @@ describe('PtyHostClient lifecycle', () => {
 
     await expect(client.close()).resolves.toEqual({ graceful: false })
     expect(signalProcess.mock.calls.map((call) => call[1])).toEqual(['SIGTERM', 'SIGKILL'])
+  })
+})
+
+describe('drainAfterExit', () => {
+  it('stops waiting at its timeout when a stream never ends, keeping what arrived meanwhile', async () => {
+    const stream = new PassThrough()
+    const seen: string[] = []
+    const started = Date.now()
+    const drained = drainAfterExit([[stream, (chunk) => seen.push(chunk.toString())]], 50)
+    await Promise.resolve()
+    stream.write('late line')
+    await drained
+    expect(Date.now() - started).toBeGreaterThanOrEqual(45)
+    expect(seen).toEqual(['late line'])
+  })
+
+  it('returns at once for streams that already ended or were never there', async () => {
+    const ended = new PassThrough()
+    ended.resume()
+    ended.end()
+    await new Promise((resolve) => ended.once('end', resolve))
+    const started = Date.now()
+    await drainAfterExit([[ended, () => undefined], [null, () => undefined]], 5_000)
+    expect(Date.now() - started).toBeLessThan(1_000)
   })
 })
 

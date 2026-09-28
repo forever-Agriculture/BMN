@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   PROCESSES_PER_SLICE,
+  createScanMemory,
   parseListeningSockets,
   portsByPreference,
   scanSessionPorts,
@@ -12,8 +13,8 @@ import {
 } from './listening-ports'
 
 const HEADER = '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode'
-const row4 = (address: string, port: number, state: string, inode: number): string =>
-  `   0: ${address}:${port.toString(16).toUpperCase().padStart(4, '0')} 00000000:0000 ${state} 00000000:00000000 00:00000000 00000000  1000        0 ${inode} 1 0000000000000000 100 0 0 10 0`
+const row4 = (address: string, port: number, state: string, inode: number, uid = 1000): string =>
+  `   0: ${address}:${port.toString(16).toUpperCase().padStart(4, '0')} 00000000:0000 ${state} 00000000:00000000 00:00000000 00000000  ${uid}        0 ${inode} 1 0000000000000000 100 0 0 10 0`
 const row6 = (address: string, port: number, state: string, inode: number): string =>
   `   0: ${address}:${port.toString(16).toUpperCase().padStart(4, '0')} 00000000000000000000000000000000:0000 ${state} 00000000:00000000 00:00000000 00000000  1000        0 ${inode} 1 0000000000000000 100 0 0 10 0`
 
@@ -72,15 +73,15 @@ const env = (sessionId: string): string => `PATH=/usr/bin\0BMN_SESSION_ID=${sess
 describe('parsing /proc/net/tcp (Story 41.1)', () => {
   it('keeps only LISTEN rows and decodes IPv4 and IPv6 addresses', () => {
     expect(parseListeningSockets([HEADER, row4(LOOPBACK4, 5173, '0A', 11), row4(WILDCARD4, 3000, '01', 12),
-      row4(LAN4, 8080, '0A', 13)].join('\n'), 4)).toEqual([
-      { inode: '11', address: '127.0.0.1', port: 5173 },
-      { inode: '13', address: '192.168.1.10', port: 8080 }
+      row4(LAN4, 8080, '0A', 13, 0)].join('\n'), 4)).toEqual([
+      { inode: '11', address: '127.0.0.1', port: 5173, uid: 1000 },
+      { inode: '13', address: '192.168.1.10', port: 8080, uid: 0 }
     ])
     expect(parseListeningSockets([HEADER, row6(LOOPBACK6, 5173, '0A', 21), row6(WILDCARD6, 4000, '0A', 22),
       row6(MAPPED6, 9000, '0A', 23), row6(WILDCARD6, 4001, '06', 24)].join('\n'), 6)).toEqual([
-      { inode: '21', address: '::1', port: 5173 },
-      { inode: '22', address: '::', port: 4000 },
-      { inode: '23', address: '::ffff:127.0.0.1', port: 9000 }
+      { inode: '21', address: '::1', port: 5173, uid: 1000 },
+      { inode: '22', address: '::', port: 4000, uid: 1000 },
+      { inode: '23', address: '::ffff:127.0.0.1', port: 9000, uid: 1000 }
     ])
   })
 
@@ -138,9 +139,13 @@ describe('attributing ports to sessions', () => {
     }
     const proc = fixture(tables, [], processes)
     const known = new Set(['session-a', 'session-b'])
-    expect([...(await scanSessionPorts(proc, known, 1000)).keys()]).toEqual(['session-a'])
+    // The memory keeps where the socket was, never whose it is: the environment decides on every scan.
+    const memory = createScanMemory()
+    expect([...(await scanSessionPorts(proc, known, 1000, memory)).keys()]).toEqual(['session-a'])
     processes['30'] = { environ: env('session-b'), fds: { '3': 'socket:[101]' }, comm: 'vite' }
-    expect([...(await scanSessionPorts(proc, known, 1000)).keys()]).toEqual(['session-b'])
+    expect([...(await scanSessionPorts(proc, known, 1000, memory)).keys()]).toEqual(['session-b'])
+    processes['30'] = { environ: 'PATH=/usr/bin\0', fds: { '3': 'socket:[101]' }, comm: 'vite' }
+    expect(await scanSessionPorts(proc, known, 1000, memory)).toEqual(new Map())
   })
 
   it('reads the process table in slices, so terminal output is not held up for a whole scan', async () => {
@@ -153,6 +158,74 @@ describe('attributing ports to sessions', () => {
     await scanning
     expect(readsWhenOtherWorkRan).toBeGreaterThan(0)
     expect(readsWhenOtherWorkRan).toBeLessThan(proc.reads.length)
+  })
+
+  it('also ends a slice after a few milliseconds, since one process can hold many descriptors', async () => {
+    let clock = 0
+    const fds = Object.fromEntries(Array.from({ length: 10 }, (_, fd) => [String(fd), '/dev/null']))
+    const base = fixture(tables, [], Object.fromEntries(['40', '41', '42'].map((pid) => [pid, { environ: env('session-a'), fds }])))
+    // Each descriptor read costs a millisecond on this clock, so one process fills a whole slice.
+    const proc: ProcReader = { ...base, readlink: (path) => { clock += 1; return base.readlink(path) } }
+    const scanning = scanSessionPorts(proc, new Set(['session-a']), 1000, createScanMemory(), () => clock)
+    let readsWhenOtherWorkRan = -1
+    setImmediate(() => { readsWhenOtherWorkRan = base.reads.length })
+    await scanning
+    expect(readsWhenOtherWorkRan).toBeGreaterThan(0)
+    expect(readsWhenOtherWorkRan).toBeLessThan(base.reads.length)
+  })
+
+  it('reads one link per placed socket on later scans, and searches again only when that link no longer holds it', async () => {
+    const processes: Record<string, FixtureProcess> = {
+      '50': { environ: env('session-a'), fds: { '0': '/dev/pts/1', '1': '/dev/pts/1', '7': 'socket:[101]' }, comm: 'vite' },
+      '51': { environ: env('session-a'), fds: { '0': '/dev/pts/1', '4': '/dev/null' }, comm: 'node' }
+    }
+    const proc = fixture([row4(LOOPBACK4, 5173, '0A', 101)], [], processes)
+    const memory = createScanMemory()
+    const known = new Set(['session-a'])
+    const vite = { port: 5173, address: '127.0.0.1', pid: 50, command: 'vite' }
+    expect(Object.fromEntries(await scanSessionPorts(proc, known, 1000, memory))).toEqual({ 'session-a': [vite] })
+    proc.reads.length = 0
+    expect(Object.fromEntries(await scanSessionPorts(proc, known, 1000, memory))).toEqual({ 'session-a': [vite] })
+    expect(proc.reads.filter((path) => path.includes('/fd'))).toEqual(['/proc/50/fd/7'])
+    // The server hands its socket to a worker and exits: the one link read fails, so the search finds the worker.
+    delete processes['50']
+    processes['51'] = { ...processes['51']!, fds: { '0': '/dev/pts/1', '9': 'socket:[101]' } }
+    expect(Object.fromEntries(await scanSessionPorts(proc, known, 1000, memory))).toEqual({ 'session-a': [{ ...vite, pid: 51, command: 'node' }] })
+  })
+
+  it('searches for a socket no session holds only in processes it has not searched yet', async () => {
+    const processes: Record<string, FixtureProcess> = {
+      '60': { environ: env('session-a'), fds: { '3': 'socket:[999]' }, comm: 'bash' }
+    }
+    const proc = fixture([row4(LOOPBACK4, 5432, '0A', 201)], [], processes)
+    const memory = createScanMemory()
+    const scan = () => scanSessionPorts(proc, new Set(['session-a']), 1000, memory)
+    const descriptorReads = (): string[] => proc.reads.filter((path) => path.includes('/fd'))
+    expect(await scan()).toEqual(new Map())
+    expect(descriptorReads()).toEqual(['/proc/60/fd', '/proc/60/fd/3'])
+    proc.reads.length = 0
+    expect(await scan()).toEqual(new Map())
+    expect(descriptorReads()).toEqual([])
+    // A daemon's child now holds it: a new process, so it alone is searched.
+    processes['61'] = { environ: env('session-a'), fds: { '4': 'socket:[201]' }, comm: 'postgres' }
+    expect(Object.fromEntries(await scan())).toEqual({ 'session-a': [{ port: 5432, address: '127.0.0.1', pid: 61, command: 'postgres' }] })
+    expect(descriptorReads()).toEqual(['/proc/61/fd', '/proc/61/fd/4'])
+    // A pid that went away and came back is another process, searched again.
+    proc.reads.length = 0
+    const leftover = fixture([row4(LOOPBACK4, 6000, '0A', 301)], [], { '62': { environ: env('session-a'), fds: {} } })
+    const again = createScanMemory()
+    await scanSessionPorts(leftover, new Set(['session-a']), 1000, again)
+    const reused = fixture([row4(LOOPBACK4, 6000, '0A', 301)], [], {})
+    await scanSessionPorts(reused, new Set(['session-a']), 1000, again)
+    expect(again.foreign.get('301')).toEqual(new Set())
+  })
+
+  it('never considers a socket another user created, even when a session process holds it', async () => {
+    const proc = fixture([row4(LOOPBACK4, 5173, '0A', 101, 0)], [], {
+      '70': { environ: env('session-a'), fds: { '3': 'socket:[101]' }, comm: 'node' }
+    })
+    expect(await scanSessionPorts(proc, new Set(['session-a']), 1000)).toEqual(new Map())
+    expect(proc.reads.filter((path) => path.includes('/fd'))).toEqual([])
   })
 
   it('reads nothing when no session is known, and throws only when the IPv4 table is unreadable', async () => {

@@ -1,5 +1,6 @@
 // MODULE: listening-ports.ts - the local TCP ports each session's own programs listen on, read from /proc (Story 41.1)
 import { readdirSync, readFileSync, readlinkSync, statSync } from 'node:fs'
+import { performance } from 'node:perf_hooks'
 import type { ListeningPort } from '@bmn/protocol'
 
 /**
@@ -21,8 +22,12 @@ export const procReader: ProcReader = {
   ownerUid: (path) => statSync(path).uid
 }
 
-/** Processes read between two event-loop turns: a slice takes a few milliseconds, so terminal output keeps flowing. */
+/**
+ * A slice of the process table ends after this many processes or this long, whichever comes first, and the event loop
+ * turns before the next: an agent's processes hold many descriptors, so counting processes alone does not bound it.
+ */
 export const PROCESSES_PER_SLICE = 50
+export const SLICE_MS = 4
 
 /** ssh, http and https: a session's own program almost never holds them, and showing them would mislead. */
 const DROPPED_PORTS: ReadonlySet<number> = new Set([22, 80, 443])
@@ -34,6 +39,25 @@ interface ListeningSocket {
   inode: string
   address: string
   port: number
+  /** Who created the socket; only the owner's own sockets can be a session's. */
+  uid: number
+}
+
+/**
+ * What one scan leaves the next, so descriptors are read only where something may have changed. Each session's socket
+ * remembers the process and descriptor it was found at, checked again every scan with one link read. A socket no
+ * session's process held remembers which processes were searched for it, and only a process not among them, such as a
+ * daemon's child, is searched again. (A process already searched that is later handed the socket over a Unix socket is
+ * not found until the socket is reopened: rare enough to accept for a list of dev servers.)
+ */
+export interface ScanMemory {
+  holders: Map<string, { pid: string; fd: string }>
+  /** Socket inode → the session processes already searched without finding it. */
+  foreign: Map<string, Set<string>>
+}
+
+export function createScanMemory(): ScanMemory {
+  return { holders: new Map(), foreign: new Map() }
 }
 
 /** A /proc/net word is the address in host byte order, 32 bits at a time. */
@@ -75,8 +99,9 @@ export function parseListeningSockets(table: string, family: 4 | 6): ListeningSo
     const inode = fields[9]!
     if (!addressHex || !portHex || addressHex.length !== (family === 4 ? 8 : 32) || !/^\d+$/.test(inode) || inode === '0') continue
     const port = Number.parseInt(portHex, 16)
-    if (!Number.isInteger(port) || port <= 0) continue
-    sockets.push({ inode, address: family === 4 ? ipv4(addressHex) : ipv6(addressHex), port })
+    const uid = Number(fields[7])
+    if (!Number.isInteger(port) || port <= 0 || !Number.isInteger(uid)) continue
+    sockets.push({ inode, address: family === 4 ? ipv4(addressHex) : ipv6(addressHex), port, uid })
   }
   return sockets
 }
@@ -115,38 +140,44 @@ function readOrNull<T>(read: () => T): T | null {
   }
 }
 
-/** The listening sockets one process holds, under its session, or none when anything about it does not check out. */
-function processPorts(
-  proc: ProcReader,
-  pid: string,
-  sockets: ReadonlyMap<string, ListeningSocket[]>,
-  sessionIds: ReadonlySet<string>,
-  uid: number
-): Array<[string, ListeningPort]> {
-  if (readOrNull(() => proc.ownerUid(`/proc/${pid}`)) !== uid) return []
+/** The session a process belongs to, from its environment read now, or null when it is not the owner's or names none. */
+function processSession(proc: ProcReader, pid: string, sessionIds: ReadonlySet<string>, uid: number): string | null {
+  if (readOrNull(() => proc.ownerUid(`/proc/${pid}`)) !== uid) return null
   const environ = readOrNull(() => proc.readFile(`/proc/${pid}/environ`))
   const sessionId = environ ? sessionIdFromEnviron(environ) : null
-  if (sessionId === null || !sessionIds.has(sessionId)) return []
-  const held = (readOrNull(() => proc.readdir(`/proc/${pid}/fd`)) ?? []).flatMap((fd) => {
-    const inode = /^socket:\[(\d+)\]$/.exec(readOrNull(() => proc.readlink(`/proc/${pid}/fd/${fd}`)) ?? '')?.[1]
-    return inode ? sockets.get(inode) ?? [] : []
-  })
-  if (held.length === 0) return []
-  const comm = readOrNull(() => proc.readFile(`/proc/${pid}/comm`))
-  const command = comm ? comm.toString('utf8').trim() || null : null
-  return held.map((socket) => [sessionId, { port: socket.port, address: socket.address, pid: Number(pid), command }])
+  return sessionId !== null && sessionIds.has(sessionId) ? sessionId : null
+}
+
+function socketInode(link: string | null): string | null {
+  return link?.startsWith('socket:[') && link.endsWith(']') ? link.slice(8, -1) : null
+}
+
+/** Waits for the event loop to turn once the current slice has run long enough. */
+function slicer(now: () => number): () => Promise<void> {
+  let start = now()
+  let processes = 0
+  return async () => {
+    processes += 1
+    if (processes <= PROCESSES_PER_SLICE && now() - start < SLICE_MS) return
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    start = now()
+    processes = 1
+  }
 }
 
 /**
- * One pass over the process table for every session at once. A process counts only when it is the owner's, its
- * environment names a session BMN knows (read now, never remembered by pid: a reused pid may be anyone), and one of
- * its descriptors is a listening socket. Anything unreadable is skipped: an unattributed port is better than a wrong
- * one. Throws only when the socket tables themselves cannot be read, so the caller can keep its previous result.
+ * One pass over the process table for every session at once. A process counts only when it is the owner's and its
+ * environment names a session BMN knows, read now and never remembered by pid: a reused pid may be anyone. A socket
+ * counts only when the owner created it and one of those processes holds it. Anything unreadable is skipped: an
+ * unattributed port is better than a wrong one. Throws only when the IPv4 socket table cannot be read, so the caller
+ * can keep its previous result.
  */
 export async function scanSessionPorts(
   proc: ProcReader,
   sessionIds: ReadonlySet<string>,
-  uid: number
+  uid: number,
+  memory: ScanMemory = createScanMemory(),
+  now: () => number = () => performance.now()
 ): Promise<Map<string, ListeningPort[]>> {
   const result = new Map<string, ListeningPort[]>()
   if (sessionIds.size === 0) return result
@@ -154,15 +185,64 @@ export async function scanSessionPorts(
   const tcp6 = readOrNull(() => proc.readFile('/proc/net/tcp6'))
   const sockets = new Map<string, ListeningSocket[]>()
   for (const socket of [...tcp, ...(tcp6 ? parseListeningSockets(tcp6.toString('utf8'), 6) : [])]) {
-    sockets.set(socket.inode, [...(sockets.get(socket.inode) ?? []), socket])
+    if (socket.uid === uid) sockets.set(socket.inode, [...(sockets.get(socket.inode) ?? []), socket])
+  }
+  for (const remembered of [memory.holders, memory.foreign]) {
+    for (const inode of remembered.keys()) if (!sockets.has(inode)) remembered.delete(inode)
   }
   if (sockets.size === 0) return result
 
-  const pids = proc.readdir('/proc').filter((name) => /^\d+$/.test(name))
+  const pause = slicer(now)
+  const attributed = new Map<string, string>()
+  for (const pid of proc.readdir('/proc').filter((name) => /^\d+$/.test(name))) {
+    await pause()
+    const sessionId = processSession(proc, pid, sessionIds, uid)
+    if (sessionId !== null) attributed.set(pid, sessionId)
+  }
+
+  // A socket placed before stays placed while the same descriptor of a session's process still holds it.
+  const placed = new Map<string, string>()
+  const unplaced = new Set<string>()
+  for (const inode of sockets.keys()) {
+    const holder = memory.holders.get(inode)
+    if (holder && attributed.has(holder.pid) &&
+      socketInode(readOrNull(() => proc.readlink(`/proc/${holder.pid}/fd/${holder.fd}`))) === inode) {
+      placed.set(inode, holder.pid)
+      continue
+    }
+    memory.holders.delete(inode)
+    const searched = memory.foreign.get(inode)
+    if (!searched) unplaced.add(inode)
+    // A pid that left the session processes and came back is another process: it is searched again.
+    else for (const pid of searched) if (!attributed.has(pid)) searched.delete(pid)
+  }
+  // Search the sessions' processes, newest first since a new server usually is one: every process while a socket is
+  // unplaced, else only those not yet searched for a socket no session held. Whatever a full pass leaves unplaced
+  // belongs to no session's process, for now.
+  const unsearched = (pid: string): boolean => [...memory.foreign.values()].some((searched) => !searched.has(pid))
+  for (const pid of [...attributed.keys()].sort((left, right) => Number(right) - Number(left))) {
+    if (unplaced.size === 0 && !unsearched(pid)) continue
+    await pause()
+    for (const fd of readOrNull(() => proc.readdir(`/proc/${pid}/fd`)) ?? []) {
+      const inode = socketInode(readOrNull(() => proc.readlink(`/proc/${pid}/fd/${fd}`)))
+      if (inode === null || !(unplaced.delete(inode) || memory.foreign.delete(inode))) continue
+      memory.holders.set(inode, { pid, fd })
+      placed.set(inode, pid)
+    }
+    for (const searched of memory.foreign.values()) searched.add(pid)
+  }
+  for (const inode of unplaced) memory.foreign.set(inode, new Set(attributed.keys()))
+
+  const commands = new Map<string, string | null>()
   const found: Array<[string, ListeningPort]> = []
-  for (const [index, pid] of pids.entries()) {
-    if (index > 0 && index % PROCESSES_PER_SLICE === 0) await new Promise<void>((resolve) => setImmediate(resolve))
-    found.push(...processPorts(proc, pid, sockets, sessionIds, uid))
+  for (const [inode, pid] of placed) {
+    if (!commands.has(pid)) {
+      const comm = readOrNull(() => proc.readFile(`/proc/${pid}/comm`))
+      commands.set(pid, comm ? comm.toString('utf8').trim() || null : null)
+    }
+    for (const socket of sockets.get(inode)!) {
+      found.push([attributed.get(pid)!, { port: socket.port, address: socket.address, pid: Number(pid), command: commands.get(pid)! }])
+    }
   }
   const bySession = new Map<string, ListeningPort[]>()
   for (const [sessionId, port] of found) bySession.set(sessionId, [...(bySession.get(sessionId) ?? []), port])

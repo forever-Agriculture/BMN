@@ -69,7 +69,7 @@ import { PAGE_AFTER_MS, createAttentionPager } from './attention-pager'
 import { RemoteAnswers, answerRoute, type AnswerOutcome, type AnswerRequest, type PluginAnswer } from './remote-answer'
 import { observeRepeat, REPEAT_NOTICE_AT, type RepeatState, type RepeatSegment } from './repeat-watch'
 import { TelegramCardKeeper } from './telegram-card-keeper'
-import { procReader, scanSessionPorts, type ProcReader } from './listening-ports'
+import { createScanMemory, procReader, scanSessionPorts, type ProcReader } from './listening-ports'
 import { PortWatch } from './port-watch'
 import { AGENT_HISTORY_STATE_KEY, AgentHistory, readHistoryState, type AgentHistoryAdapter } from './agent-history'
 import { TelegramConnector, maskToken, redactToken, type ConnectorHealth, type InboundReply } from './telegram-connector'
@@ -379,8 +379,9 @@ export class CompanionService {
     this.now = options.now ?? (() => new Date())
     const proc = options.proc ?? procReader
     const uid = process.getuid?.() ?? -1
+    const scanMemory = createScanMemory()
     this.ports = new PortWatch({
-      scan: (sessionIds) => scanSessionPorts(proc, sessionIds, uid),
+      scan: (sessionIds) => scanSessionPorts(proc, sessionIds, uid, scanMemory),
       knownSessionIds: () => new Set(this.knownSessions.keys()),
       liveSessionIds: () => options.manager.liveSessionIds(),
       changed: () => this.emit('ports', null)

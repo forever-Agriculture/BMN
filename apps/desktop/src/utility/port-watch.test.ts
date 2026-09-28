@@ -1,7 +1,7 @@
 // MODULE: port-watch.test.ts - scan cadence, hint lines and the kept result (Story 41.1)
 import type { ListeningPort } from '@bmn/protocol'
 import { describe, expect, it } from 'vitest'
-import { BUSY_SCAN_MS, HINT_SCAN_DELAY_MS, PortWatch, QUIET_SCAN_MS, RECENT_OUTPUT_MS } from './port-watch'
+import { BUSY_SCAN_MS, HINT_SCAN_DELAY_MS, HINT_SCAN_SPACING_MS, PortWatch, QUIET_SCAN_MS, RECENT_OUTPUT_MS } from './port-watch'
 
 const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve))
 const bytes = (text: string): Uint8Array => new Uint8Array(Buffer.from(text, 'utf8'))
@@ -95,22 +95,40 @@ describe('hint lines', () => {
     const { watch, state, advance, output } = harness()
     watch.start()
     await advance(0)
-    const before = state.scans.length
+    let before = state.scans.length
     // Vite colours the word and the port, so only the line with its escapes removed reads as a hint.
     output('session-a', '  \x1b[32m➜\x1b[39m  \x1b[1mLocal\x1b[22m:   \x1b[36mhttp://localhost:\x1b[1m5173\x1b[22m/\x1b[39m\r\n')
     await advance(HINT_SCAN_DELAY_MS - 1)
     expect(state.scans).toHaveLength(before)
     await advance(1)
     expect(state.scans).toHaveLength(before + 1)
+    // More listening lines in the same burst add nothing.
     output('session-a', 'listening on 0.0.0.0:5173\r\n')
     output('session-a', 'Server running at http://localhost:5173/\r\n')
     await advance(HINT_SCAN_DELAY_MS)
-    expect(state.scans).toHaveLength(before + 2)
-    // A line split across two chunks is still one line.
+    expect(state.scans).toHaveLength(before + 1)
+    // After the spacing a hint counts again, and a line split across two chunks is still one line.
+    await advance(HINT_SCAN_SPACING_MS)
+    before = state.scans.length
     output('session-b', 'Serving HTTP')
     output('session-b', ' on 0.0.0.0 port 8000 ...\n')
     await advance(HINT_SCAN_DELAY_MS)
-    expect(state.scans).toHaveLength(before + 3)
+    expect(state.scans).toHaveLength(before + 1)
+    watch.stop()
+  })
+
+  it('scans for hints at most once per busy interval under a steady stream of URLs', async () => {
+    const { watch, state, advance, output } = harness()
+    watch.start()
+    await advance(0)
+    const start = state.scans.length
+    // A request log: a matching URL every 100 ms for ten seconds.
+    for (let tick = 0; tick < 100; tick++) {
+      output('session-a', `GET http://localhost:3000/api/items/${tick} 200 4ms\r\n`)
+      await advance(100)
+    }
+    // One hint scan per 5 s, sharing its slot with the busy cadence: two scans, not twenty.
+    expect(state.scans.length - start).toBeLessThanOrEqual(3)
     watch.stop()
   })
 
@@ -182,7 +200,11 @@ describe('the kept result', () => {
     watch.stop()
   })
 
-  it('runs one more scan after the one in flight instead of two at once', async () => {
+  it.each([
+    { live: ['session-a'], scans: 2 },
+    // The last session ended during the scan: nothing live, so nothing more scans.
+    { live: [], scans: 1 }
+  ])('runs one more scan after the one in flight instead of two at once (live $live)', async ({ live, scans: expected }) => {
     let release: () => void = () => undefined
     let running = 0
     let most = 0
@@ -197,7 +219,7 @@ describe('the kept result', () => {
         return new Map()
       },
       knownSessionIds: () => new Set(['session-a']),
-      liveSessionIds: () => [],
+      liveSessionIds: () => live,
       changed: () => undefined
     })
     const first = watch.scanNow()
@@ -208,6 +230,6 @@ describe('the kept result', () => {
     await flush()
     release()
     await flush()
-    expect({ scans, most }).toEqual({ scans: 2, most: 1 })
+    expect({ scans, most }).toEqual({ scans: expected, most: 1 })
   })
 })

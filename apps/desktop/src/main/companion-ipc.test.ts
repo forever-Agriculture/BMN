@@ -11,7 +11,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('electron', () => ({}))
 
-const { activateAttentionNotification, createAppEventForwarder, noticeResolution } = await import('./companion-ipc')
+const { activateAttentionNotification, createAppEventForwarder, listedPortUrl, noticeResolution } = await import('./companion-ipc')
 
 function request(requestId: string, sessionId: string, revision = 1): AttentionRecord {
   return {
@@ -312,5 +312,27 @@ describe('desktop notice when Telegram stops delivering', () => {
     off.set('conflict', false)
     await telegramEvent(off.events)
     expect(off.shown).toEqual([])
+  })
+})
+
+describe('opening a listed port (Story 41.2)', () => {
+  const listed = [
+    { sessionId: 'session-a', stopped: false, ports: [{ port: 5173, address: '127.0.0.1', pid: 10, command: 'vite' }] },
+    { sessionId: 'session-b', stopped: true, ports: [{ port: 8000, address: '192.168.1.10', pid: 11, command: 'python3' }] }
+  ]
+
+  it('opens only a port the last scan lists under that session, at the address it was found on', () => {
+    expect(listedPortUrl(listed, 'session-a', 5173)).toBe('http://localhost:5173/')
+    expect(listedPortUrl(listed, 'session-b', 8000)).toBe('http://192.168.1.10:8000/')
+    // Another session's port, a port nobody lists, an unknown session.
+    expect(() => listedPortUrl(listed, 'session-a', 8000)).toThrow(/no longer listening/)
+    expect(() => listedPortUrl(listed, 'session-a', 3000)).toThrow(/no longer listening/)
+    expect(() => listedPortUrl(listed, 'session-z', 5173)).toThrow(/no longer listening/)
+  })
+
+  it('refuses anything that is not a port number, so the window can never name an address', () => {
+    for (const port of ['5173', 'http://evil.example/', 0, 65_536, 5173.5, null]) {
+      expect(() => listedPortUrl(listed, 'session-a', port)).toThrow(/port is invalid/)
+    }
   })
 })

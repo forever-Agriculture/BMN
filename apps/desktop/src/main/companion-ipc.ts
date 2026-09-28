@@ -96,6 +96,19 @@ function windowFor(sender: WebContents): BrowserWindow | undefined {
   return BrowserWindow.fromWebContents(sender) ?? undefined
 }
 
+/**
+ * The address to open for a port the renderer names: only one the last scan lists under that session, and built from
+ * the scanned address, so the renderer can never choose a URL.
+ */
+export function listedPortUrl(listed: readonly SessionPorts[], sessionId: string, port: unknown): string {
+  if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new MainIpcError(ERROR_CODES.invalidArgument, 'The port is invalid')
+  }
+  const found = listed.find((entry) => entry.sessionId === sessionId)?.ports.find((each) => each.port === port)
+  if (!found) throw new MainIpcError(ERROR_CODES.invalidArgument, 'That port is no longer listening')
+  return listeningPortUrl(found)
+}
+
 export function installCompanionIpcHandlers(ipc: CompanionIpcRegistrar, actions: CompanionIpcActions): void {
   const handle = (
     channel: string,
@@ -207,14 +220,8 @@ export function installCompanionIpcHandlers(ipc: CompanionIpcRegistrar, actions:
   // from the renderer, and the browser is the owner's default one.
   handle('aiterm:ports:open', async (_event, params) => {
     const sessionId = requiredText(params, 'sessionId')
-    const port = params.port
-    if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65_535) {
-      throw new MainIpcError(ERROR_CODES.invalidArgument, 'The port is invalid')
-    }
     const listed = await actions.client().request<SessionPorts[]>(METHOD_REGISTRY.portsList, {})
-    const found = listed.find((entry) => entry.sessionId === sessionId)?.ports.find((each) => each.port === port)
-    if (!found) throw new MainIpcError(ERROR_CODES.invalidArgument, 'That port is no longer listening')
-    const url = listeningPortUrl(found)
+    const url = listedPortUrl(listed, sessionId, params.port)
     await shell.openExternal(url)
     return { url }
   })

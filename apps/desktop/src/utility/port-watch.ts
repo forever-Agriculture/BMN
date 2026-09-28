@@ -9,6 +9,8 @@ export const QUIET_SCAN_MS = 30_000
 export const RECENT_OUTPUT_MS = 60_000
 /** A server's own "listening" line is printed just before or after it binds; scan shortly after. */
 export const HINT_SCAN_DELAY_MS = 500
+/** At most one hint scan per busy interval: a request log full of URLs is one burst, not a scan every half second. */
+export const HINT_SCAN_SPACING_MS = BUSY_SCAN_MS
 
 /**
  * Lines a dev server prints when it starts listening. They stay narrow on purpose: looser ones matched ssh banners
@@ -50,6 +52,7 @@ export class PortWatch {
   private timer: unknown = null
   private timerDueAt = 0
   private hintTimer: unknown = null
+  private lastHintAt = Number.NEGATIVE_INFINITY
   private lastScanAt = Number.NEGATIVE_INFINITY
   private scanning: Promise<void> | null = null
   private rescanAfterCurrent = false
@@ -97,7 +100,7 @@ export class PortWatch {
     // Output after a quiet spell: the next scan comes at the busy interval, not up to 30 s later.
     const busyDue = Math.max(this.now(), this.lastScanAt + BUSY_SCAN_MS)
     if (this.timer !== null && this.timerDueAt > busyDue) this.arm(busyDue - this.now())
-    if (this.hintTimer !== null) return
+    if (this.hintTimer !== null || this.now() - this.lastHintAt < HINT_SCAN_SPACING_MS) return
     const tail = bytes.byteLength > HINT_READ_BYTES ? bytes.subarray(bytes.byteLength - HINT_READ_BYTES) : bytes
     const text = (this.carry.get(sessionId) ?? '') + Buffer.from(tail.buffer, tail.byteOffset, tail.byteLength).toString('latin1')
     const plain = text.replace(ESCAPES, '')
@@ -105,6 +108,7 @@ export class PortWatch {
     if (!HINT_PATTERNS.some((pattern) => pattern.test(plain))) return
     // One scan per burst: further matching lines before it runs add nothing.
     this.carry.set(sessionId, '')
+    this.lastHintAt = this.now()
     this.hintTimer = this.setTimer(() => {
       this.hintTimer = null
       // The session may have ended within the half second; with none live, nothing scans.
@@ -136,12 +140,13 @@ export class PortWatch {
     }
     if (this.timer !== null) this.clearTimer(this.timer)
     this.timer = null
-    this.scanning = this.runScan().finally(() => {
+    // A listener that throws must not become an unhandled rejection in the process that owns every terminal.
+    this.scanning = this.runScan().catch(() => undefined).finally(() => {
       this.scanning = null
-      if (this.rescanAfterCurrent) {
-        this.rescanAfterCurrent = false
-        void this.scanNow()
-      } else this.schedule()
+      const again = this.rescanAfterCurrent && this.options.liveSessionIds().length > 0
+      this.rescanAfterCurrent = false
+      if (again) void this.scanNow()
+      else this.schedule()
     })
     return this.scanning
   }

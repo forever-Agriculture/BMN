@@ -10,11 +10,14 @@ const port = (portNumber: number, address = '127.0.0.1', command: string | null 
 const entry = (ports: ListeningPort[], stopped = false): SessionPorts => ({ sessionId: 'session-a', stopped, ports })
 
 describe('port labels and addresses (Story 41.2)', () => {
-  it('names every loopback and wildcard bind localhost, and any other address as bound', () => {
-    for (const address of ['127.0.0.1', '0.0.0.0', '::1', '::', '::ffff:127.0.0.1', '127.0.1.1']) {
+  it('names 127.0.0.1, ::1 and the wildcards localhost, and any other address as bound', () => {
+    for (const address of ['127.0.0.1', '0.0.0.0', '::1', '::', '::ffff:127.0.0.1', '::ffff:0.0.0.0']) {
       expect(listeningPortLabel(port(5173, address))).toBe('localhost:5173')
       expect(listeningPortUrl(port(5173, address))).toBe('http://localhost:5173/')
     }
+    // Another loopback address answers only at itself: localhost would reach 127.0.0.1, maybe another program.
+    expect(listeningPortLabel(port(5173, '127.0.1.1'))).toBe('127.0.1.1:5173')
+    expect(listeningPortUrl(port(5173, '127.0.1.1'))).toBe('http://127.0.1.1:5173/')
     expect(listeningPortLabel(port(8080, '192.168.1.10'))).toBe('192.168.1.10:8080')
     expect(listeningPortUrl(port(8080, 'fe80::1'))).toBe('http://[fe80::1]:8080/')
   })
