@@ -1,7 +1,8 @@
 import { SearchAddon } from '@xterm/addon-search'
-import { failureDetail } from './bridge-error'
+import { failureDetail, hasBridgeErrorCode } from './bridge-error'
 import type { Terminal as BrowserTerminal, ITerminalOptions } from '@xterm/xterm'
 import {
+  ERROR_CODES,
   TERMINAL_SCROLLBACK_LINES,
   type SavedOutputCapture,
   type SavedOutputCatalog,
@@ -104,6 +105,13 @@ export function captureLiveTerminalSnapshot(
   }
 }
 
+/**
+ * Saves a live view's output: every 30 s when output arrived since the last successful save, 250 ms
+ * after a scheduled change, and on every explicit `captureNow()`. `finish()` is the process exit: one
+ * last save when there is unsaved output, then the timer and scheduler stop for good. A save the host
+ * refuses as not found means the session's runtime or view is already gone (a race at exit or stop);
+ * it is not an owner-facing failure.
+ */
 export function startSavedOutputCapture(
   terminal: CaptureTerminal,
   save: (capture: SavedOutputCapture) => Promise<unknown>,
@@ -113,11 +121,15 @@ export function startSavedOutputCapture(
   write(bytes: Uint8Array, settled: () => void): void
   captureNow(): Promise<void>
   schedule(): void
+  finish(): void
   dispose(): void
 } {
   let scheduled: ReturnType<typeof setTimeout> | undefined
   let acceptedWrites = 0
   let completedWrites = 0
+  // The accepted-write count the last successful save covered; a failed save leaves it, so the next tick retries.
+  let savedWrites = 0
+  let finished = false
   let captureTail = Promise.resolve()
   const writeWaiters = new Set<{ boundary: number; resolve(): void }>()
   const settleWriteWaiters = (): void => {
@@ -141,22 +153,31 @@ export function startSavedOutputCapture(
       await waitForWritesThrough(boundary)
       try {
         await save(captureLiveTerminalSnapshot(terminal, () => new Date(), transportDroppedBytes()))
+        savedWrites = Math.max(savedWrites, boundary)
       } catch (error) {
-        const detail = failureDetail(error, 'unknown persistence error')
-        onFailure(`Saved output could not be captured: ${detail.slice(0, 240)}`)
+        if (!hasBridgeErrorCode(error, ERROR_CODES.notFound)) {
+          const detail = failureDetail(error, 'unknown persistence error')
+          onFailure(`Saved output could not be captured: ${detail.slice(0, 240)}`)
+        }
         throw error
       }
     })
     captureTail = capture.catch(() => undefined)
     return capture
   }
-  const timer = setInterval(
-    () => void captureNow().catch(() => undefined),
-    SAVED_OUTPUT_CAPTURE_INTERVAL_MS
-  )
+  const unsaved = (): boolean => acceptedWrites !== savedWrites
+  const timer = setInterval(() => {
+    if (unsaved()) void captureNow().catch(() => undefined)
+  }, SAVED_OUTPUT_CAPTURE_INTERVAL_MS)
   const schedule = (): void => {
+    if (finished) return
     if (scheduled) clearTimeout(scheduled)
     scheduled = setTimeout(() => void captureNow().catch(() => undefined), 250)
+  }
+  const stop = (): void => {
+    clearInterval(timer)
+    if (scheduled) clearTimeout(scheduled)
+    scheduled = undefined
   }
   return {
     write: (bytes, settled) => {
@@ -169,10 +190,13 @@ export function startSavedOutputCapture(
     },
     captureNow,
     schedule,
-    dispose: () => {
-      clearInterval(timer)
-      if (scheduled) clearTimeout(scheduled)
-    }
+    finish: () => {
+      if (finished) return
+      finished = true
+      stop()
+      if (unsaved()) void captureNow().catch(() => undefined)
+    },
+    dispose: stop
   }
 }
 

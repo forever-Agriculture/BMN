@@ -24,3 +24,8 @@ export function failureDetail(error: unknown, fallback: string): string {
   }
   return fallback
 }
+
+/** Failure feedback for one session's action, naming the session by its name (main's messages never carry its id). */
+export function sessionFailureDetail(sessionName: string, error: unknown, fallback: string): string {
+  return `${sessionName}: ${failureDetail(error, fallback)}`
+}

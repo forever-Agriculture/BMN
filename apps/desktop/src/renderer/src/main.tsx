@@ -32,7 +32,7 @@ import {
 import type { RendererCohortResumeResult } from '../../preload/bridge'
 import './styles.css'
 import { checkSixelRenderer } from './terminal-images'
-import { failureDetail } from './bridge-error'
+import { failureDetail, sessionFailureDetail } from './bridge-error'
 import { CommandPalette, paletteFileSearchRootLabel, type PaletteCommand } from './command-palette'
 import { conversationBindingPresentation } from './conversation-resume'
 import { FileReferenceDialog, type FileReferenceRequest, type FileReferenceSendTarget } from './file-reference-dialog'
@@ -794,7 +794,7 @@ function App(): React.JSX.Element {
       })
       await reloadWorkspaceSessions(record.workspaceId)
       brief(`Stopped ${record.name}.`)
-    }).catch(fail('Stop failed'))
+    }).catch((error: unknown) => setFailure(sessionFailureDetail(record.name, error, 'Stop failed')))
   }
 
   const deliver = async (records: readonly ArtifactRecord[], sessionId: string): Promise<void> => {
@@ -1288,7 +1288,7 @@ function App(): React.JSX.Element {
         outcome === 'reset' ? `Terminal modes reset for ${session.name}`
           : outcome === 'busy' ? `Terminal modes not reset: ${session.name} is in the middle of writing. Try again in a moment`
             : `Terminal modes reset for ${session.name} could not be confirmed`))
-      .catch(fail('Terminal modes were not reset'))
+      .catch((error: unknown) => setFailure(sessionFailureDetail(session.name, error, 'Terminal modes were not reset')))
   }
 
   const paneMenuEntries = (session: SessionRecord): MenuEntry[] => [

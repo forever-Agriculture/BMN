@@ -26,7 +26,8 @@ export function requireSessionRuntime<Runtime>(
     throw new MainIpcError(ERROR_CODES.invalidArgument, 'An explicit sessionId is required')
   }
   const runtime = runtimes.get(sessionId)
-  if (!runtime) throw new MainIpcError(ERROR_CODES.notFound, `Session ${sessionId} is not live`)
+  // The renderer names the session where it shows this; a raw id means nothing to the owner.
+  if (!runtime) throw new MainIpcError(ERROR_CODES.notFound, "This session's process is not running.")
   return runtime
 }
 

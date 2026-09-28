@@ -17,7 +17,7 @@ import {
   type VoiceSettings,
   type WorkspaceMarker
 } from '@bmn/protocol'
-import { failureDetail, isBridgeError } from './bridge-error'
+import { failureDetail, isBridgeError, sessionFailureDetail } from './bridge-error'
 import { createFileReferenceLinkProvider } from './file-reference-links'
 import { openReferenceFromPane, runEpic27FileReferenceIntegration, runFileReferenceIntegration } from './file-reference-self-test'
 import { runProgressEvidenceIntegration } from './progress-evidence-self-test'
@@ -221,7 +221,7 @@ export function SessionTerminal(props: {
     const capture = startSavedOutputCapture(
       terminal,
       (snapshot) => window.aiTerminal.saveTerminalSnapshot(props.startup.sessionId, snapshot),
-      props.onFailure
+      (message) => onFailure.current(`${startup.current.name}: ${message}`)
     )
     const tracking = trackTerminalView({
       terminal,
@@ -242,7 +242,7 @@ export function SessionTerminal(props: {
         .resizeTerminal(props.startup.sessionId, terminal.cols, terminal.rows)
         .then((dimensions) => (ptyDimensions = dimensions))
         .catch((error: unknown) => {
-          props.onFailure(failureDetail(error, 'Terminal resize failed'))
+          onFailure.current(sessionFailureDetail(startup.current.name, error, 'Terminal resize failed'))
         })
     }
     refit.current = resize
@@ -391,6 +391,8 @@ export function SessionTerminal(props: {
           setStatus: setExitStatus,
           onFailure: (failure) => onFailure.current(failure)
         })
+        // The program is gone: save any unsaved last screen once, then ask for no more saves.
+        capture.finish()
       },
       disconnect: (reason) => {
         void window.aiTerminal.recoverTerminalView(props.startup.sessionId, reason)
@@ -1110,7 +1112,7 @@ export function SessionTerminal(props: {
     activated.current = true
     void window.aiTerminal.activateTerminal(props.startup.sessionId).catch((error: unknown) => {
       activated.current = false
-      props.onFailure(failureDetail(error, 'Terminal activation failed'))
+      props.onFailure(sessionFailureDetail(props.startup.name, error, 'Terminal activation failed'))
     })
   }
 

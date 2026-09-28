@@ -30,6 +30,14 @@ describe('workspace IPC', () => {
     const event = {} as IpcMainInvokeEvent
     expect(() => requireSessionRuntime(event, 'missing', () => true, runtimes))
       .toThrowError(expect.objectContaining({ code: ERROR_CODES.notFound }))
+    // Story 38.1: the owner reads this under the session's name; the raw id never appears in it.
+    expect(() => requireSessionRuntime(event, 'session-5152c2b0', () => true, runtimes))
+      .toThrowError("This session's process is not running.")
+    try {
+      requireSessionRuntime(event, 'session-5152c2b0', () => true, runtimes)
+    } catch (error) {
+      expect((error as Error).message).not.toContain('session-5152c2b0')
+    }
     expect(() => requireSessionRuntime(event, undefined, () => true, runtimes))
       .toThrowError(expect.objectContaining({ code: ERROR_CODES.invalidArgument }))
     expect(requireSessionRuntime(event, 'focused', () => true, runtimes)).toBe(focused)

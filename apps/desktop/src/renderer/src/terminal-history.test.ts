@@ -1,5 +1,6 @@
 import { Terminal } from '@xterm/headless'
 import {
+  ERROR_CODES,
   SAVED_OUTPUT_FORMAT_VERSION,
   TERMINAL_SCROLLBACK_LINES,
   TERMINAL_SAVED_OUTPUT_RETENTION,
@@ -7,8 +8,9 @@ import {
   type SavedOutputCapture,
   type SavedOutputSnapshot
 } from '@bmn/protocol'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  SAVED_OUTPUT_CAPTURE_INTERVAL_MS,
   captureLiveTerminalSnapshot,
   installLiveTerminalSearch,
   liveTerminalOptions,
@@ -20,6 +22,162 @@ import {
 function write(terminal: Terminal, data: string): Promise<void> {
   return new Promise((resolve) => terminal.write(data, resolve))
 }
+
+/** A terminal whose writes parse at once, so fake timers drive only the capture's own clock. */
+function instantTerminal() {
+  const lines: string[] = []
+  return {
+    buffer: {
+      active: {
+        get length() { return lines.length },
+        getLine: (index: number) => ({ translateToString: () => lines[index] ?? '' })
+      }
+    },
+    write(data: string | Uint8Array, callback?: () => void) {
+      lines.push(typeof data === 'string' ? data : new TextDecoder().decode(data))
+      queueMicrotask(() => callback?.())
+    }
+  }
+}
+
+function captureHarness(save: (capture: SavedOutputCapture) => Promise<unknown> = async () => undefined) {
+  const terminal = instantTerminal()
+  const saves = vi.fn(save)
+  const failures: string[] = []
+  const capture = startSavedOutputCapture(terminal, saves, (message) => failures.push(message))
+  const output = (text: string): void => capture.write(new TextEncoder().encode(text), () => undefined)
+  return { capture, saves, failures, output }
+}
+
+const TICK = SAVED_OUTPUT_CAPTURE_INTERVAL_MS
+const runtimeGone = {
+  name: 'BridgeError',
+  code: ERROR_CODES.notFound,
+  message: "This session's process is not running."
+}
+
+describe('saved output capture cadence (Story 38.1)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('writes nothing on a tick when no output arrived since the last successful save', async () => {
+    vi.useFakeTimers()
+    const { capture, saves } = captureHarness()
+    try {
+      await vi.advanceTimersByTimeAsync(3 * TICK)
+      expect(saves).not.toHaveBeenCalled()
+    } finally {
+      capture.dispose()
+    }
+  })
+
+  it('saves once after new output, then stays quiet while idle', async () => {
+    vi.useFakeTimers()
+    const { capture, saves, output } = captureHarness()
+    try {
+      output('first line')
+      await vi.advanceTimersByTimeAsync(TICK)
+      expect(saves).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(2 * TICK)
+      expect(saves).toHaveBeenCalledTimes(1)
+      output('second line')
+      await vi.advanceTimersByTimeAsync(TICK)
+      expect(saves).toHaveBeenCalledTimes(2)
+      expect(saves.mock.calls[1]?.[0].content).toContain('second line')
+    } finally {
+      capture.dispose()
+    }
+  })
+
+  it('retries a failed save on the next tick, because a failure does not count as saved', async () => {
+    vi.useFakeTimers()
+    let fail = true
+    const { capture, saves, failures, output } = captureHarness(async () => {
+      if (fail) throw new Error('disk full')
+    })
+    try {
+      output('unsaved')
+      await vi.advanceTimersByTimeAsync(TICK)
+      expect(saves).toHaveBeenCalledTimes(1)
+      expect(failures).toEqual(['Saved output could not be captured: disk full'])
+      fail = false
+      await vi.advanceTimersByTimeAsync(TICK)
+      expect(saves).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(TICK)
+      expect(saves).toHaveBeenCalledTimes(2)
+    } finally {
+      capture.dispose()
+    }
+  })
+
+  it('keeps explicit and scheduled captures unconditional', async () => {
+    vi.useFakeTimers()
+    const { capture, saves } = captureHarness()
+    try {
+      await capture.captureNow()
+      expect(saves).toHaveBeenCalledTimes(1)
+      capture.schedule()
+      await vi.advanceTimersByTimeAsync(250)
+      expect(saves).toHaveBeenCalledTimes(2)
+    } finally {
+      capture.dispose()
+    }
+  })
+
+  it('makes one final capture at exit when output is unsaved, then requests nothing for 90 s', async () => {
+    vi.useFakeTimers()
+    const { capture, saves, output } = captureHarness()
+    try {
+      output('last screen')
+      capture.schedule()
+      capture.finish()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(saves).toHaveBeenCalledTimes(1)
+      expect(saves.mock.calls[0]?.[0].content).toContain('last screen')
+      capture.schedule()
+      capture.finish()
+      await vi.advanceTimersByTimeAsync(90_000)
+      expect(saves).toHaveBeenCalledTimes(1)
+    } finally {
+      capture.dispose()
+    }
+  })
+
+  it('makes no final capture at exit when everything was already saved', async () => {
+    vi.useFakeTimers()
+    const { capture, saves, output } = captureHarness()
+    try {
+      output('saved already')
+      await vi.advanceTimersByTimeAsync(TICK)
+      expect(saves).toHaveBeenCalledTimes(1)
+      capture.finish()
+      await vi.advanceTimersByTimeAsync(90_000)
+      expect(saves).toHaveBeenCalledTimes(1)
+    } finally {
+      capture.dispose()
+    }
+  })
+
+  it('does not raise a failure when the runtime is already gone, but still raises any other save failure', async () => {
+    vi.useFakeTimers()
+    let failure: unknown = runtimeGone
+    const { capture, failures, output } = captureHarness(async () => {
+      throw failure
+    })
+    try {
+      output('racing the exit')
+      capture.finish()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(failures).toEqual([])
+      failure = { name: 'BridgeError', code: ERROR_CODES.ioError, message: 'Saved output storage is unavailable' }
+      await expect(capture.captureNow()).rejects.toMatchObject({ code: ERROR_CODES.ioError })
+      expect(failures).toEqual(['Saved output could not be captured: Saved output storage is unavailable'])
+    } finally {
+      capture.dispose()
+    }
+  })
+})
 
 describe('live terminal history and saved output', () => {
   it('waits for every previously accepted real xterm write before persisting a final capture', async () => {
