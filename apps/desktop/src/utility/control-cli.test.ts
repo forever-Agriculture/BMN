@@ -34,7 +34,7 @@ interface CliResult {
 
 function runCli(
   args: string[],
-  options: { env?: Record<string, string>; cwd?: string; input?: string | Buffer } = {}
+  options: { env?: Record<string, string>; cwd?: string; input?: string | Buffer | undefined } = {}
 ): Promise<CliResult> {
   const env: NodeJS.ProcessEnv = { ...process.env }
   for (const key of Object.keys(env)) {
