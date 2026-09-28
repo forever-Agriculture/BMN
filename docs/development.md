@@ -18,6 +18,11 @@ pnpm install
 `postinstall` downloads Electron and rebuilds the native modules against Electron's Node.js ABI.
 If a native module later fails to load, run `pnpm run rebuild:native`.
 
+Fresh releases wait three days: `pnpm-workspace.yaml` sets `minimumReleaseAge: 4320` (minutes), so
+pnpm refuses a package version published less than three days ago. To let one urgent security fix
+through, add it to `minimumReleaseAgeExclude` in `pnpm-workspace.yaml` as `name@version` with a dated
+comment, and remove the entry once the version is three days old.
+
 ## Ubuntu 24.04 AppArmor
 
 Ubuntu 24.04 restricts unprivileged user namespaces, which Chromium's sandbox needs. Without an

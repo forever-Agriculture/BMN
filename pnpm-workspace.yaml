@@ -5,6 +5,9 @@ packages:
 engineStrict: true
 saveExact: true
 
+# Refuse versions published in the last three days: a compromised npm release is usually pulled by then.
+minimumReleaseAge: 4320
+
 allowBuilds:
   electron: true
   node-pty: true
