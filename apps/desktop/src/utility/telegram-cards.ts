@@ -89,7 +89,7 @@ export function plainText(html: string): string {
 
 function headerLine(glyph: string, header: CardHeader, suffix = ''): string {
   const agent = header.agent ? ` · ${AGENT_NAMES[header.agent]}${header.flag ? ` ${header.flag}` : ''}` : ''
-  return `${glyph} <b>${escapeHtml(clip(header.session, SESSION_CHARS))}</b>${agent}${suffix}`
+  return `${glyph} <b>${escapeHtml(clip(said(header.session), SESSION_CHARS))}</b>${agent}${suffix}`
 }
 
 /**

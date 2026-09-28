@@ -243,8 +243,10 @@ const RULES = {
   path: { min: 1, max: 4096, unit: 'bytes', controls: 'reject' },
   name: { min: 1, max: 255, unit: 'characters', controls: 'reject' },
   source: { min: 1, max: 64, unit: 'characters', controls: 'reject' },
+  /** A progress or hook source and a tool name: shown to the owner, so cleaned like any agent words. */
+  shownSource: { min: 1, max: 64, unit: 'characters', controls: 'reject', strip: true },
   apiHost: { min: 1, max: 255, unit: 'characters', controls: 'reject' },
-  model: { min: 1, max: 128, unit: 'characters', controls: 'reject' },
+  model: { min: 1, max: 128, unit: 'characters', controls: 'reject', strip: true },
   label: { min: 1, max: 200, unit: 'characters', controls: 'reject', strip: true },
   detail: { min: 1, max: 2000, unit: 'characters', controls: 'allow-whitespace', strip: true },
   title: { min: 1, max: 200, unit: 'characters', controls: 'reject', strip: true },
@@ -821,7 +823,7 @@ export class ControlServer {
         const params = closedParams(rawParams, [
           'sessionId', 'source', 'state', 'label', 'detail', 'observedAt', 'evidenceIds'
         ])
-        const source = requireText(params, 'source', RULES.source)
+        const source = requireText(params, 'source', RULES.shownSource)
         const state = requireEnum(params, 'state', PROGRESS_STATES)
         const label = requireText(params, 'label', RULES.label)
         const detail = readText(params, 'detail', RULES.detail)
@@ -977,8 +979,8 @@ export class ControlServer {
         const agent = requireEnum(params, 'agent', HOOK_EVENT_AGENTS)
         const event = requireText(params, 'event', RULES.source)
         if (!isHookEventName(event)) throw invalid('event must be printable ASCII without spaces')
-        const source = readText(params, 'source', RULES.source)
-        const toolName = readText(params, 'toolName', RULES.source)
+        const source = readText(params, 'source', RULES.shownSource)
+        const toolName = readText(params, 'toolName', RULES.shownSource)
         const fingerprint = readText(params, 'fingerprint', RULES.source)
         if (fingerprint !== undefined && !/^[0-9a-f]{16}$/.test(fingerprint)) {
           throw invalid('fingerprint must be 16 lowercase hexadecimal characters')

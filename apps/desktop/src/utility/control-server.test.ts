@@ -943,6 +943,21 @@ describe('format characters in agent text (Story 34.1)', () => {
     }))
   })
 
+  it('strips them from hook sources, tool names and models, and from a progress source (pre-review)', async () => {
+    const fixture = await serverFixture()
+    const client = await authenticated(fixture, sessionToken(fixture))
+
+    await client.request('hook.observe', {
+      agent: 'claude', event: 'SessionStart', source: 'start\u200Bup', toolName: 'Ba\u202Esh', effects: [], model: 'GLM\u2066-5.3\u2069'
+    })
+    await client.request('progress.report', { source: 'dev\uFEFF-auto', state: 'running', label: 'Build' })
+
+    expect(fixture.handlers.observeHookEvent).toHaveBeenLastCalledWith(expect.objectContaining({
+      source: 'startup', toolName: 'Bash', model: 'GLM-5.3'
+    }))
+    expect(fixture.handlers.reportProgress).toHaveBeenLastCalledWith(expect.objectContaining({ source: 'dev-auto' }))
+  })
+
   it('strips them from handoff text', async () => {
     const fixture = await serverFixture()
     const client = await authenticated(fixture, sessionToken(fixture))

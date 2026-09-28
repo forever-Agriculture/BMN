@@ -21,9 +21,9 @@ const SHAPES: readonly { pattern: RegExp; keep?: (match: string, ...groups: stri
   // OpenAI and Anthropic keys, `sk-proj-` and `sk-ant-` included.
   { pattern: /\bsk-[A-Za-z0-9_-]{20,}/g },
   // An AWS access key id.
-  { pattern: /\bAKIA[0-9A-Z]{16}\b/g },
+  { pattern: /\bAKIA[0-9A-Z]{16}/g },
   // GitHub tokens: classic `ghp_` and its siblings, and fine-grained `github_pat_`.
-  { pattern: /\bgh[pousr]_[A-Za-z0-9]{36,}/g },
+  { pattern: /\bgh[pousr]_[A-Za-z0-9_]{36,}/g },
   { pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}/g },
   // Slack tokens.
   { pattern: /\bxox[abprs]-[A-Za-z0-9-]{10,}/g },

@@ -18,6 +18,8 @@ describe('maskSecrets', () => {
     ['a bearer token', 'Authorization: Bearer abc.DEF-ghi_jkl~mno+pq/r=', `Authorization: Bearer ${SECRET_MASK}`],
     ['a lower-case bearer token', 'bearer 0123456789abcdefXYZ', `bearer ${SECRET_MASK}`],
     ['a classic GitHub token', 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij', SECRET_MASK],
+    ['a GitHub token with an underscore', 'ghs_ABCDEFGHIJ_KLMNOPQRSTUVWXYZabcdefghij', SECRET_MASK],
+    ['an AWS key id run into a word', 'AKIAABCDEFGHIJKLMNOPQRS', `${SECRET_MASK}QRS`],
     ['a GitHub OAuth token', 'gho_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij12', SECRET_MASK],
     ['a fine-grained GitHub token', 'github_pat_11ABCDEFG0123456789_abcdefghijklmnop', SECRET_MASK],
     ['a Slack token', 'xoxb-1234567890-abcdefghij', SECRET_MASK],

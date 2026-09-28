@@ -492,6 +492,10 @@ from main
       .toBe('✓ <i>Sent: Yes</i>')
   })
 
+  it('cleans the session name on the first line (pre-review)', () => {
+    expect(exitCard({ session: 'api\u202Erevres', agent: null, flag: null })).toBe('■ <b>apirevres</b> exited')
+  })
+
   it('keeps the joiners in emoji and Persian text', () => {
     const card = requestCard(CLAUDE, { kind: 'question', title: 'می‌خواهم \u{1F468}‍\u{1F469}', body: null })
     expect(card.text).toContain('<b>می‌خواهم \u{1F468}‍\u{1F469}</b>')
