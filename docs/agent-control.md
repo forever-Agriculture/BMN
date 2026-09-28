@@ -576,8 +576,9 @@ automatic compaction (with `PreCompact`/`PostCompact`, trigger `auto`), but its 
 sends only `PreCompact` and `PostCompact` with trigger `manual`. `PostCompact` is therefore an
 optional Codex entry, reported by `check` and never installed: add it to see manual compactions too;
 BMN counts its `manual` trigger only, so an automatic compaction still counts once. Codex runs the same
-compaction hooks and automatic call site whichever way it compacts (locally or on OpenAI's side), so the
-split follows the trigger, not the provider; only the local path was measured. OpenCode's compactions
+`PreCompact`/`PostCompact` hooks and the same automatic call site whichever way it compacts (locally or
+on OpenAI's side), but only the local path was measured, so whether `SessionStart` with source
+`compact` also follows an automatic compaction on OpenAI's side is not yet known. OpenCode's compactions
 count for the session the plugin holds as yours: the first one it hears from, or the one you last
 selected in its session list. A compaction in any other session is logged as a subagent's and not
 counted, so the line can undercount but never invents one.
