@@ -2,7 +2,14 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { parseListeningSockets, portsByPreference, scanSessionPorts, sessionIdFromEnviron, type ProcReader } from './listening-ports'
+import {
+  PROCESSES_PER_SLICE,
+  parseListeningSockets,
+  portsByPreference,
+  scanSessionPorts,
+  sessionIdFromEnviron,
+  type ProcReader
+} from './listening-ports'
 
 const HEADER = '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode'
 const row4 = (address: string, port: number, state: string, inode: number): string =>
@@ -31,13 +38,13 @@ function fixture(tcp: string[], tcp6: string[] | null, processes: Record<string,
   const pid = (path: string): FixtureProcess => processes[path.split('/')[2]!] ?? fail(path)
   return {
     reads,
-    async readdir(path) {
+    readdir(path) {
       reads.push(path)
       if (path === '/proc') return [...Object.keys(processes), 'self', 'net', 'sys']
       const fds = pid(path).fds
       return fds ? Object.keys(fds) : fail(path)
     },
-    async readFile(path) {
+    readFile(path) {
       reads.push(path)
       if (path === '/proc/net/tcp') return Buffer.from([HEADER, ...tcp].join('\n'))
       if (path === '/proc/net/tcp6') return tcp6 ? Buffer.from([HEADER, ...tcp6].join('\n')) : fail(path)
@@ -49,12 +56,12 @@ function fixture(tcp: string[], tcp6: string[] | null, processes: Record<string,
       if (path.endsWith('/comm')) return entry.comm ? Buffer.from(`${entry.comm}\n`) : fail(path)
       return fail(path)
     },
-    async readlink(path) {
+    readlink(path) {
       reads.push(path)
       const fd = path.split('/')[4]!
       return pid(path).fds?.[fd] ?? fail(path)
     },
-    async ownerUid(path) {
+    ownerUid(path) {
       return pid(path).uid ?? 1000
     }
   }
@@ -136,11 +143,23 @@ describe('attributing ports to sessions', () => {
     expect([...(await scanSessionPorts(proc, known, 1000)).keys()]).toEqual(['session-b'])
   })
 
+  it('reads the process table in slices, so terminal output is not held up for a whole scan', async () => {
+    const processes = Object.fromEntries(Array.from({ length: 2 * PROCESSES_PER_SLICE + 50 }, (_, index) =>
+      [String(1_000 + index), { environ: env('another-session') }]))
+    const proc = fixture(tables, [], processes)
+    const scanning = scanSessionPorts(proc, new Set(['session-a']), 1000)
+    let readsWhenOtherWorkRan = -1
+    setImmediate(() => { readsWhenOtherWorkRan = proc.reads.length })
+    await scanning
+    expect(readsWhenOtherWorkRan).toBeGreaterThan(0)
+    expect(readsWhenOtherWorkRan).toBeLessThan(proc.reads.length)
+  })
+
   it('reads nothing when no session is known, and throws only when the IPv4 table is unreadable', async () => {
     const proc = fixture(tables, [], {})
     expect(await scanSessionPorts(proc, new Set(), 1000)).toEqual(new Map())
     expect(proc.reads).toEqual([])
-    const broken: ProcReader = { ...fixture(tables, [], {}), readFile: async () => { throw new Error('EIO') } }
+    const broken: ProcReader = { ...fixture(tables, [], {}), readFile: () => { throw new Error('EIO') } }
     await expect(scanSessionPorts(broken, new Set(['session-a']), 1000)).rejects.toThrow('EIO')
   })
 

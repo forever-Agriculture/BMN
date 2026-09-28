@@ -114,6 +114,19 @@ describe('hint lines', () => {
     watch.stop()
   })
 
+  it('does not scan for a hint when the session ends within the half second', async () => {
+    const { watch, state, advance, output } = harness()
+    watch.start()
+    await advance(0)
+    const before = state.scans.length
+    output('session-a', 'Serving HTTP on 127.0.0.1 port 8000 (http://127.0.0.1:8000/) ...\r\n')
+    state.live = []
+    watch.sessionsChanged()
+    await advance(HINT_SCAN_DELAY_MS + 2 * QUIET_SCAN_MS)
+    expect(state.scans).toHaveLength(before)
+    watch.stop()
+  })
+
   it('ignores ssh banners, timestamps and other addresses', async () => {
     const { watch, state, advance, output } = harness()
     watch.start()

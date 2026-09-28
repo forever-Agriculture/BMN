@@ -405,7 +405,7 @@ stays listed under its session, marked "still running after the session stopped"
 clears or replaces its environment is not attributed. Ports 22, 80 and 443 are never shown. BMN reads
 `/proc` every 5 seconds while a session is printing, every 30 seconds otherwise, and half a second
 after a line such as `Local: http://localhost:5173/`; it starts no process and reads nothing when no
-session is running.
+session is running, so what it last found stays listed until a session runs again.
 
 ### Wiring the hooks
 

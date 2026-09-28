@@ -2771,15 +2771,15 @@ describe('session ports (Story 41.1)', () => {
   }
   const fail = (): never => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) }
   const proc: ProcReader = {
-    readdir: async (path) => path === '/proc' ? Object.keys(processes) : processes[path.split('/')[2]!] ? ['3'] : fail(),
-    readFile: async (path) => {
+    readdir: (path) => path === '/proc' ? Object.keys(processes) : processes[path.split('/')[2]!] ? ['3'] : fail(),
+    readFile: (path) => {
       if (path === '/proc/net/tcp') return Buffer.from(TCP)
       const entry = processes[path.split('/')[2]!]
       if (!entry) return fail()
       return Buffer.from(path.endsWith('/environ') ? entry.environ : path.endsWith('/comm') ? `${entry.comm}\n` : fail())
     },
-    readlink: async (path) => processes[path.split('/')[2]!]?.fd ?? fail(),
-    ownerUid: async () => process.getuid!()
+    readlink: (path) => processes[path.split('/')[2]!]?.fd ?? fail(),
+    ownerUid: () => process.getuid!()
   }
   const listed = (target: CompanionService) => target.route(METHOD_REGISTRY.portsList, {}) as Promise<SessionPorts[]>
 

@@ -1,21 +1,28 @@
 // MODULE: listening-ports.ts - the local TCP ports each session's own programs listen on, read from /proc (Story 41.1)
-import { readdir, readFile, readlink, stat } from 'node:fs/promises'
+import { readdirSync, readFileSync, readlinkSync, statSync } from 'node:fs'
 import type { ListeningPort } from '@bmn/protocol'
 
-/** The few /proc reads a scan needs, so tests can hand it a fixture tree. */
+/**
+ * The few /proc reads a scan needs, so tests can hand it a fixture tree. Each is one quick system call on a kernel
+ * file, made directly: queued as promises, a scan of ~700 processes became thousands of thread-pool jobs and took about
+ * three times as long under load (Story 41.1 AC4, measured 2026-09-29).
+ */
 export interface ProcReader {
-  readdir(path: string): Promise<string[]>
-  readFile(path: string): Promise<Buffer>
-  readlink(path: string): Promise<string>
-  ownerUid(path: string): Promise<number>
+  readdir(path: string): string[]
+  readFile(path: string): Buffer
+  readlink(path: string): string
+  ownerUid(path: string): number
 }
 
 export const procReader: ProcReader = {
-  readdir: (path) => readdir(path),
-  readFile: (path) => readFile(path),
-  readlink: (path) => readlink(path),
-  ownerUid: async (path) => (await stat(path)).uid
+  readdir: (path) => readdirSync(path),
+  readFile: (path) => readFileSync(path),
+  readlink: (path) => readlinkSync(path),
+  ownerUid: (path) => statSync(path).uid
 }
+
+/** Processes read between two event-loop turns: a slice takes a few milliseconds, so terminal output keeps flowing. */
+export const PROCESSES_PER_SLICE = 50
 
 /** ssh, http and https: a session's own program almost never holds them, and showing them would mislead. */
 const DROPPED_PORTS: ReadonlySet<number> = new Set([22, 80, 443])
@@ -100,12 +107,34 @@ export function sessionIdFromEnviron(environ: Buffer): string | null {
   return null
 }
 
-async function readOrNull<T>(read: () => Promise<T>): Promise<T | null> {
+function readOrNull<T>(read: () => T): T | null {
   try {
-    return await read()
+    return read()
   } catch {
     return null
   }
+}
+
+/** The listening sockets one process holds, under its session, or none when anything about it does not check out. */
+function processPorts(
+  proc: ProcReader,
+  pid: string,
+  sockets: ReadonlyMap<string, ListeningSocket[]>,
+  sessionIds: ReadonlySet<string>,
+  uid: number
+): Array<[string, ListeningPort]> {
+  if (readOrNull(() => proc.ownerUid(`/proc/${pid}`)) !== uid) return []
+  const environ = readOrNull(() => proc.readFile(`/proc/${pid}/environ`))
+  const sessionId = environ ? sessionIdFromEnviron(environ) : null
+  if (sessionId === null || !sessionIds.has(sessionId)) return []
+  const held = (readOrNull(() => proc.readdir(`/proc/${pid}/fd`)) ?? []).flatMap((fd) => {
+    const inode = /^socket:\[(\d+)\]$/.exec(readOrNull(() => proc.readlink(`/proc/${pid}/fd/${fd}`)) ?? '')?.[1]
+    return inode ? sockets.get(inode) ?? [] : []
+  })
+  if (held.length === 0) return []
+  const comm = readOrNull(() => proc.readFile(`/proc/${pid}/comm`))
+  const command = comm ? comm.toString('utf8').trim() || null : null
+  return held.map((socket) => [sessionId, { port: socket.port, address: socket.address, pid: Number(pid), command }])
 }
 
 /**
@@ -121,33 +150,22 @@ export async function scanSessionPorts(
 ): Promise<Map<string, ListeningPort[]>> {
   const result = new Map<string, ListeningPort[]>()
   if (sessionIds.size === 0) return result
-  const tables = await Promise.all([
-    proc.readFile('/proc/net/tcp').then((table) => parseListeningSockets(table.toString('utf8'), 4)),
-    readOrNull(() => proc.readFile('/proc/net/tcp6')).then((table) => table ? parseListeningSockets(table.toString('utf8'), 6) : [])
-  ])
+  const tcp = parseListeningSockets(proc.readFile('/proc/net/tcp').toString('utf8'), 4)
+  const tcp6 = readOrNull(() => proc.readFile('/proc/net/tcp6'))
   const sockets = new Map<string, ListeningSocket[]>()
-  for (const socket of tables.flat()) sockets.set(socket.inode, [...(sockets.get(socket.inode) ?? []), socket])
+  for (const socket of [...tcp, ...(tcp6 ? parseListeningSockets(tcp6.toString('utf8'), 6) : [])]) {
+    sockets.set(socket.inode, [...(sockets.get(socket.inode) ?? []), socket])
+  }
   if (sockets.size === 0) return result
 
-  const pids = (await proc.readdir('/proc')).filter((name) => /^\d+$/.test(name))
-  const found = await Promise.all(pids.map(async (pid): Promise<Array<[string, ListeningPort]>> => {
-    if (await readOrNull(() => proc.ownerUid(`/proc/${pid}`)) !== uid) return []
-    const environ = await readOrNull(() => proc.readFile(`/proc/${pid}/environ`))
-    const sessionId = environ ? sessionIdFromEnviron(environ) : null
-    if (sessionId === null || !sessionIds.has(sessionId)) return []
-    const descriptors = await readOrNull(() => proc.readdir(`/proc/${pid}/fd`)) ?? []
-    const links = await Promise.all(descriptors.map((fd) => readOrNull(() => proc.readlink(`/proc/${pid}/fd/${fd}`))))
-    const held = links.flatMap((link) => {
-      const inode = /^socket:\[(\d+)\]$/.exec(link ?? '')?.[1]
-      return inode ? sockets.get(inode) ?? [] : []
-    })
-    if (held.length === 0) return []
-    const comm = await readOrNull(() => proc.readFile(`/proc/${pid}/comm`))
-    const command = comm ? comm.toString('utf8').trim() || null : null
-    return held.map((socket) => [sessionId, { port: socket.port, address: socket.address, pid: Number(pid), command }])
-  }))
+  const pids = proc.readdir('/proc').filter((name) => /^\d+$/.test(name))
+  const found: Array<[string, ListeningPort]> = []
+  for (const [index, pid] of pids.entries()) {
+    if (index > 0 && index % PROCESSES_PER_SLICE === 0) await new Promise<void>((resolve) => setImmediate(resolve))
+    found.push(...processPorts(proc, pid, sockets, sessionIds, uid))
+  }
   const bySession = new Map<string, ListeningPort[]>()
-  for (const [sessionId, port] of found.flat()) bySession.set(sessionId, [...(bySession.get(sessionId) ?? []), port])
+  for (const [sessionId, port] of found) bySession.set(sessionId, [...(bySession.get(sessionId) ?? []), port])
   for (const [sessionId, ports] of bySession) {
     const kept = portsByPreference(ports)
     if (kept.length > 0) result.set(sessionId, kept)

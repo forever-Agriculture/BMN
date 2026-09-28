@@ -107,7 +107,8 @@ export class PortWatch {
     this.carry.set(sessionId, '')
     this.hintTimer = this.setTimer(() => {
       this.hintTimer = null
-      void this.scanNow()
+      // The session may have ended within the half second; with none live, nothing scans.
+      if (this.options.liveSessionIds().length > 0) void this.scanNow()
     }, HINT_SCAN_DELAY_MS)
   }
 
@@ -123,7 +124,8 @@ export class PortWatch {
       }
     }
     if (this.liveChanged() || removed) this.options.changed()
-    if (!this.stopped && this.timer === null && this.scanning === null) this.schedule()
+    // Re-plan even with a timer armed: output may have brought it forward for a session that has just ended.
+    if (!this.stopped && this.scanning === null) this.schedule()
   }
 
   /** Runs one scan now, or once more right after the one in flight. */
