@@ -27,6 +27,20 @@ class FakeUtilityProcess extends EventEmitter {
   readonly stdout = new PassThrough()
   readonly pid = 4242
   readonly postMessage = vi.fn<(message: unknown, ports?: unknown[]) => void>()
+
+  /**
+   * Exits the way Electron 44 does: the exit listeners run, then every stdio listener is dropped, and output the
+   * child wrote just before exiting can still arrive afterwards (5 of 60 children under load, 2026-09-28).
+   */
+  exitLikeElectron(code: number, lateStderr: string): void {
+    this.emit('exit', code)
+    this.stderr.removeAllListeners()
+    this.stdout.removeAllListeners()
+    setTimeout(() => {
+      this.stderr.end(lateStderr)
+      this.stdout.end()
+    }, 5)
+  }
 }
 
 async function connectedClient(options: ConstructorParameters<typeof PtyHostClient>[1] = {}) {
@@ -79,6 +93,13 @@ describe('PtyHostClient lifecycle', () => {
       PtyHostRequestTimeoutError
     )
     expect(Date.now() - startedAt).toBeLessThan(100)
+  })
+
+  it('keeps the stderr a host wrote just before it died, even when it arrives after the exit', async () => {
+    const process = new FakeUtilityProcess()
+    const client = new PtyHostClient(process as unknown as UtilityProcess, { readyTimeoutMs: 2_000 })
+    process.exitLikeElectron(1, '[BMN] the terminal host cannot start: native module "node-pty" failed to load. No sessions were started.')
+    await expect(client.ready).rejects.toThrow(/native module \\"node-pty\\" failed to load.*No sessions were started/)
   })
 
   it('bounds retained host diagnostics while preserving the newest stderr', async () => {

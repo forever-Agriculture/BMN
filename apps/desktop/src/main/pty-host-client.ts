@@ -37,6 +37,37 @@ interface PendingRequest {
 }
 
 export const HOST_DIAGNOSTIC_BUFFER_BYTES = 16 * 1024
+/** How long a dead host's last output may take to arrive before its startup failure is reported without it. */
+export const HOST_OUTPUT_DRAIN_MS = 1_000
+
+/**
+ * Electron drops every listener on a utility process's stdout and stderr once its exit listeners return, and output
+ * written just before the exit can arrive after it: under load, 5 of 60 children lost their last line this way
+ * (Electron 44.3.0, 2026-09-28). Called from an exit listener with the streams read before the exit, it listens again
+ * once Electron has let go and resolves when every stream has ended, or after `timeoutMs`.
+ */
+export function drainAfterExit(
+  streams: ReadonlyArray<readonly [NodeJS.ReadableStream | null | undefined, (chunk: Buffer) => void]>,
+  timeoutMs: number
+): Promise<void> {
+  return new Promise((resolve) => {
+    queueMicrotask(() => {
+      const open = streams.filter(([stream]) => stream && !(stream as { readableEnded?: boolean }).readableEnded)
+      if (open.length === 0) return resolve()
+      let remaining = open.length
+      const timer = setTimeout(resolve, timeoutMs)
+      for (const [stream, onData] of open) {
+        if (stream!.listenerCount('data') === 0) stream!.on('data', onData)
+        stream!.once('end', () => {
+          remaining -= 1
+          if (remaining > 0) return
+          clearTimeout(timer)
+          resolve()
+        })
+      }
+    })
+  })
+}
 
 interface PtyHostClientOptions {
   readyTimeoutMs?: number
@@ -156,9 +187,20 @@ export class PtyHostClient {
     this.signalProcess = options.signalProcess ?? killProcess
     this.output = { stderr: Buffer.alloc(0), stdout: Buffer.alloc(0) }
     this.exitComplete = new Promise((resolve) => (this.resolveExit = resolve))
-    process.stderr?.on('data', (chunk: Buffer) => this.appendDiagnostic('stderr', chunk))
-    process.stdout?.on('data', (chunk: Buffer) => this.appendDiagnostic('stdout', chunk))
-    process.once('exit', (code) => this.handleExit(code))
+    const onStderr = (chunk: Buffer): void => this.appendDiagnostic('stderr', chunk)
+    const onStdout = (chunk: Buffer): void => this.appendDiagnostic('stdout', chunk)
+    // Held here: Electron clears both properties at the exit.
+    const stderr = process.stderr
+    const stdout = process.stdout
+    stderr?.on('data', onStderr)
+    stdout?.on('data', onStdout)
+    process.once('exit', (code) => {
+      this.handleExit(code)
+      // A host that dies before it is ready says why on stderr, and that line may arrive after the exit. Everything
+      // else learns of the exit at once; startup waits for the line so the owner reads the reason, not an empty one.
+      void drainAfterExit([[stderr, onStderr], [stdout, onStdout]], HOST_OUTPUT_DRAIN_MS)
+        .then(() => this.rejectReady(new PtyHostExitedError(code, this.exitMessage(code))))
+    })
     this.ready = new Promise((resolve, reject) => {
       this.rejectReady = reject
       const timer = setTimeout(
@@ -316,7 +358,6 @@ export class PtyHostClient {
     if (this.exitedError) return
     const error = new PtyHostExitedError(code, this.exitMessage(code))
     this.exitedError = error
-    this.rejectReady(error)
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer)
       pending.reject(error)

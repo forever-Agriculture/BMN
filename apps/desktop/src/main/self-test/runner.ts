@@ -34,6 +34,7 @@ import {
 } from '../launch-set-repository-self-test'
 import {
   closeWithinDeadline,
+  drainAfterExit,
   PtyHostRemoteError
 } from '../pty-host-client'
 import {
@@ -221,12 +222,14 @@ async function nativeFailureSelfTest(hostEntry: string, repoRoot: string): Promi
     }
   })
   let stderr = ''
-  child.stderr?.on('data', (chunk: Buffer) => {
+  const collect = (chunk: Buffer): void => {
     stderr += chunk.toString('utf8')
-  })
-  // Output can still be in flight when the exit arrives; on a loaded machine a fixed 500 ms wait
-  // read an empty stderr once (2026-09-28, load average 14). The stream's end means all of it arrived.
-  const stderrEnded = new Promise<void>((resolve) => child.stderr?.once('end', resolve) ?? resolve())
+  }
+  const stream = child.stderr
+  stream?.on('data', collect)
+  // The message can arrive after the exit, when Electron has already dropped this listener (an empty stderr twice
+  // under load, 2026-09-28); the drain listens again and waits for the stream's end.
+  let drained: Promise<void> = Promise.resolve()
   const exitCode = await new Promise<number>((resolveExit, reject) => {
     const timer = setTimeout(() => {
       child.kill()
@@ -234,10 +237,11 @@ async function nativeFailureSelfTest(hostEntry: string, repoRoot: string): Promi
     }, SELF_TEST_TIMEOUT_MS)
     child.once('exit', (code) => {
       clearTimeout(timer)
+      drained = drainAfterExit([[stream, collect]], 10_000)
       resolveExit(code)
     })
   })
-  await Promise.race([stderrEnded, new Promise<void>((resolve) => setTimeout(resolve, 10_000))])
+  await drained
   if (exitCode === 0) throw new Error('native failure host unexpectedly exited zero')
   if (!stderr.includes('native module "node-pty" failed to load') || !stderr.includes('No sessions were started.')) {
     throw new Error(`native failure copy was not actionable (exit ${exitCode}): ${stderr.slice(-480)}`)
