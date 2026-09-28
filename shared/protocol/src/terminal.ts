@@ -180,6 +180,41 @@ export function isSessionProcessStateChangedMessage(
   )
 }
 
+/** herdr's cap on one clipboard write a program sends with OSC 52: the decoded text, at most 192 KiB (Story 42.1). */
+export const PROGRAM_COPY_MAX_BYTES = 192 * 1024
+
+export type ProgramCopyTarget = 'clipboard' | 'primary'
+
+/** The host saw a live program ask for text on the clipboard; main decides whether to write it. */
+export interface ProgramCopyMessage {
+  kind: 'program-copy'
+  sessionId: string
+  targets: ProgramCopyTarget[]
+  text: string
+}
+
+/** What main tells the window after a copy it carried out: whose program it was and how much it copied. */
+export interface ProgramCopyNotice {
+  sessionId: string
+  characters: number
+}
+
+export function isProgramCopyMessage(value: unknown): value is ProgramCopyMessage {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Partial<ProgramCopyMessage>
+  return (
+    candidate.kind === 'program-copy' &&
+    typeof candidate.sessionId === 'string' &&
+    candidate.sessionId.length > 0 &&
+    Array.isArray(candidate.targets) &&
+    candidate.targets.length > 0 &&
+    candidate.targets.every((target) => target === 'clipboard' || target === 'primary') &&
+    typeof candidate.text === 'string' &&
+    candidate.text.length > 0 &&
+    new TextEncoder().encode(candidate.text).byteLength <= PROGRAM_COPY_MAX_BYTES
+  )
+}
+
 export interface SavedOutputCapture {
   capturedAt: string
   content: string

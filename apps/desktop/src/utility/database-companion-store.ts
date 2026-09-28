@@ -1200,6 +1200,9 @@ export function validateSettingsSection(section: string, value: unknown): AppSet
         claudeConfigDirs: [...new Set(folders as string[])]
       }
     }
+    case 'terminal':
+      if (typeof candidate.programClipboard !== 'boolean') invalid('Letting programs copy to the clipboard must be on or off')
+      return { programClipboard: candidate.programClipboard }
     default:
       return invalid(`Unknown settings section ${section}`)
   }
@@ -1217,7 +1220,7 @@ function upgradeStoredSection(section: SettingsSection, value: unknown): unknown
 }
 
 export function getSettings(database: DatabaseConnection): AppSettings {
-  const rows = database.prepare("SELECT key, value_json FROM app_setting WHERE key IN ('appearance', 'notifications', 'telegram', 'voice', 'archive', 'agentHistory')")
+  const rows = database.prepare("SELECT key, value_json FROM app_setting WHERE key IN ('appearance', 'notifications', 'telegram', 'voice', 'archive', 'agentHistory', 'terminal')")
     .all() as Array<{ key: SettingsSection; value_json: string }>
   const settings: AppSettings = {
     appearance: { ...DEFAULT_APP_SETTINGS.appearance },
@@ -1225,7 +1228,8 @@ export function getSettings(database: DatabaseConnection): AppSettings {
     telegram: { ...DEFAULT_APP_SETTINGS.telegram },
     voice: { ...DEFAULT_APP_SETTINGS.voice },
     archive: { ...DEFAULT_APP_SETTINGS.archive },
-    agentHistory: { ...DEFAULT_APP_SETTINGS.agentHistory, claudeConfigDirs: [] }
+    agentHistory: { ...DEFAULT_APP_SETTINGS.agentHistory, claudeConfigDirs: [] },
+    terminal: { ...DEFAULT_APP_SETTINGS.terminal }
   }
   for (const row of rows) {
     try {

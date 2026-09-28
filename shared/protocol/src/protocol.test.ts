@@ -30,6 +30,8 @@ import {
   isTerminalExitMessage,
   isTerminalViewDisconnectedMessage,
   isSessionProcessStateChangedMessage,
+  isProgramCopyMessage,
+  PROGRAM_COPY_MAX_BYTES,
   isWorkspaceCreateParams,
   isWorkspaceLayoutState,
   isWorkspaceMarker,
@@ -447,6 +449,16 @@ describe('terminal byte messages', () => {
       incarnationId: 'incarnation-1',
       state: 'live'
     })).toBe(false)
+  })
+  it('accepts a program copy only with known targets and non-empty text of at most 192 KiB (Story 42.1)', () => {
+    const copy = { kind: 'program-copy', sessionId: 'session-1', targets: ['clipboard', 'primary'], text: 'hello' }
+    expect(isProgramCopyMessage(copy)).toBe(true)
+    expect(isProgramCopyMessage({ ...copy, targets: [] })).toBe(false)
+    expect(isProgramCopyMessage({ ...copy, targets: ['cut-buffer-0'] })).toBe(false)
+    expect(isProgramCopyMessage({ ...copy, text: '' })).toBe(false)
+    expect(isProgramCopyMessage({ ...copy, sessionId: '' })).toBe(false)
+    expect(isProgramCopyMessage({ ...copy, text: 'é'.repeat(PROGRAM_COPY_MAX_BYTES / 2) })).toBe(true)
+    expect(isProgramCopyMessage({ ...copy, text: `${'é'.repeat(PROGRAM_COPY_MAX_BYTES / 2)}x` })).toBe(false)
   })
   it('exports distinct parser-atom, undelivered-output, and acknowledgement limits', () => {
     expect(TERMINAL_PARSER_ATOM_BYTES).toBe(64 * 1024)

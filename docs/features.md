@@ -117,6 +117,13 @@ that multiplexer and may reject pets. Saved output is text only; pet pixels are 
 - **Copy and paste.** Selecting with the mouse copies. `Ctrl+Shift+C` copies the selection; paste
   with `Ctrl+V`, `Ctrl+Shift+V`, `Shift+Insert` or right-click. Dragging across text also copies when
   a program enables mouse reporting, as Codex does. `Ctrl+Shift+A` selects all.
+- **Programs that copy.** tmux with `set-clipboard on`, Neovim's OSC 52 clipboard provider and
+  anything over SSH copy with the standard OSC 52 sequence; BMN puts that text on your clipboard
+  (or the primary selection, on Linux) as plain text, up to 192 KiB, and says "Copied from
+  *session* (*N* characters)". No program can read the clipboard: a read request gets no answer.
+  Only output that arrives live, while BMN's window is open, copies; reopening the window or
+  rebuilding a view never copies again. Preferences → Terminal → **Let programs copy to the clipboard** turns it
+  off.
 - **Keys that belong to the program.** `Ctrl+Shift+\` sends the next key straight to the terminal —
   use it first for a literal `Ctrl+V`. Right-click pastes even while a program reads mouse input;
   `Ctrl+click` remains available to that program. Use **Open file reference…** in the

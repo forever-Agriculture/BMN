@@ -1,6 +1,7 @@
 // MODULE: bridge.d.ts - the typed window.aiTerminal bridge the preload exposes to the renderer
 import type {
   AppEventMessage,
+  ProgramCopyNotice,
   AgentHistoryStatus,
   AppSettings,
   ArtifactPreview,
@@ -214,6 +215,8 @@ export interface AiTerminalBridge {
   onClosePrompt(listener: (request: ClosePromptRequest) => void): () => void
   answerClosePrompt(requestId: string, decision: ClosePromptDecision): void
   onOpenSession(listener: (sessionId: string) => void): () => void
+  /** Story 42.1: a program in one of the window's sessions put text on the clipboard with OSC 52. */
+  onProgramCopy(listener: (notice: ProgramCopyNotice) => void): () => void
   /** Whether the owner has left the desktop idle; replays the current value to each new listener. */
   onPresence(listener: (presence: { away: boolean }) => void): () => void
   /** Desktop notifications skip the session the owner is looking at. */

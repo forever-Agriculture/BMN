@@ -47,6 +47,7 @@ import { prepareWorkspaceHandoffReview, sameHandoffDraft } from './workspace-han
 import { HookObservationView } from './hook-observation-view'
 import { PlanUseDialog, PlanUseView } from './plan-use-view'
 import { SessionPortsSection, portDetail, portsFor } from './session-ports'
+import { createProgramCopyBurst, programCopyMessage } from './program-copy-toast'
 import { ResumeInterruptedDialog } from './resume-interrupted-dialog'
 import { LaunchSetsDialog } from './launch-sets-dialog'
 import { RepositoryIdentityView, identityChanged, useRepositoryIdentity } from './repository-identity'
@@ -559,6 +560,14 @@ function App(): React.JSX.Element {
       void refresh[message.topic]().catch(fail('Companion data refresh failed'))
     })
     const stopOpenSession = window.aiTerminal.onOpenSession((sessionId) => openSessionRef.current(sessionId))
+    const programCopyBurst = createProgramCopyBurst()
+    const stopProgramCopy = window.aiTerminal.onProgramCopy((copy) => {
+      const name = sessionsRef.current.find((item) => item.sessionId === copy.sessionId)?.name ?? 'a session'
+      const message = programCopyMessage(name, copy.characters)
+      // A burst keeps its one toast, updated to the latest copy, and is announced once.
+      if (programCopyBurst(Date.now()) === 'new') brief(message)
+      else setNotice(message)
+    })
     const stopClosePrompt = window.aiTerminal.onClosePrompt(setClosePrompt)
     const ticker = setInterval(() => setNow(Date.now()), APP_EVENT_REFRESH_MS)
     const spaceHold = createSpaceHold({
@@ -618,6 +627,7 @@ function App(): React.JSX.Element {
       stopCapture()
       stopAppEvent()
       stopOpenSession()
+      stopProgramCopy()
       stopClosePrompt()
       clearInterval(ticker)
       window.removeEventListener('keydown', onKeyDown, true)

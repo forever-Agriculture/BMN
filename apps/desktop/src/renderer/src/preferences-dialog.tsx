@@ -9,6 +9,7 @@ import type {
   HookCheckAgent,
   HookCheckReport,
   NotificationSettings,
+  TerminalSettings,
   TelegramStatus,
   VoiceSettings
 } from '@bmn/protocol'
@@ -138,6 +139,28 @@ export function PreferencesDialog(props: {
       setNotificationsError(failureDetail(error, 'Could not save notification settings'))
     } finally {
       setNotificationsBusy(false)
+    }
+  }
+
+  // --- Terminal ---------------------------------------------------------
+  const [terminal, setTerminal] = useState<TerminalSettings>(props.settings.terminal)
+  const [terminalBusy, setTerminalBusy] = useState(false)
+  const [terminalError, setTerminalError] = useState<string | null>(null)
+
+  async function saveTerminal(next: TerminalSettings): Promise<void> {
+    const previous = terminal
+    setTerminal(next)
+    setTerminalBusy(true)
+    setTerminalError(null)
+    try {
+      const result = await window.aiTerminal.putSettings('terminal', next)
+      setTerminal(result.terminal)
+      onSettings.current(result)
+    } catch (error) {
+      setTerminal(previous)
+      setTerminalError(failureDetail(error, 'Could not save terminal settings'))
+    } finally {
+      setTerminalBusy(false)
     }
   }
 
@@ -469,6 +492,33 @@ export function PreferencesDialog(props: {
         {appearanceError && (
           <p className="preferences-error" role="alert">
             {appearanceError}
+          </p>
+        )}
+      </section>
+
+      <section className="preferences-section">
+        <h3>Terminal</h3>
+        <div className="preferences-row">
+          <div className="preferences-row-label">
+            <span>Clipboard</span>
+          </div>
+          <div className="preferences-row-control">
+            <label className="preferences-radio">
+              <input
+                id="preferences-program-clipboard"
+                type="checkbox"
+                checked={terminal.programClipboard}
+                disabled={terminalBusy}
+                onChange={(event) => void saveTerminal({ programClipboard: event.target.checked })}
+              />
+              Let programs copy to the clipboard
+            </label>
+            <p className="preferences-help">tmux, Neovim or SSH can copy; no program can read it.</p>
+          </div>
+        </div>
+        {terminalError && (
+          <p className="preferences-error" role="alert">
+            {terminalError}
           </p>
         )}
       </section>

@@ -6,13 +6,15 @@ import {
   isAppEventMessage,
   isProtocolError,
   isSessionProcessStateChangedMessage,
+  isProgramCopyMessage,
   type AppEventMessage,
   type ProtocolError,
   type ProtocolMethod,
   type RpcFailure,
   type RpcSuccess,
   type SessionProcessState,
-  type SessionProcessStateChangedMessage
+  type SessionProcessStateChangedMessage,
+  type ProgramCopyMessage
 } from '@bmn/protocol'
 import { utilityProcess, type MessagePortMain, type UtilityProcess } from 'electron'
 
@@ -170,6 +172,7 @@ export class PtyHostClient {
     (message: SessionProcessStateChangedMessage) => void
   >()
   private readonly latestSessionStates = new Map<string, SessionProcessStateChangedMessage>()
+  private readonly programCopyListeners = new Set<(message: ProgramCopyMessage) => void>()
   private readonly exitComplete: Promise<void>
   private resolveExit = (): void => undefined
   private rejectReady: (error: Error) => void = () => undefined
@@ -225,6 +228,10 @@ export class PtyHostClient {
       if (isSessionProcessStateChangedMessage(message)) {
         this.latestSessionStates.set(message.sessionId, message)
         for (const listener of this.sessionStateListeners) listener(message)
+        return
+      }
+      if (isProgramCopyMessage(message)) {
+        for (const listener of this.programCopyListeners) listener(message)
         return
       }
       if (!isControlResponse(message)) return
@@ -297,6 +304,12 @@ export class PtyHostClient {
     this.exitListeners.add(listener)
     if (this.exitedError) queueMicrotask(() => listener(this.exitedError!))
     return () => this.exitListeners.delete(listener)
+  }
+
+  /** Story 42.1: clipboard writes live programs asked for; nothing is replayed to a later listener. */
+  onProgramCopy(listener: (message: ProgramCopyMessage) => void): () => void {
+    this.programCopyListeners.add(listener)
+    return () => this.programCopyListeners.delete(listener)
   }
 
   onSessionStateChanged(listener: (message: SessionProcessStateChangedMessage) => void): () => void {

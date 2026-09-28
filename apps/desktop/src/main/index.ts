@@ -30,6 +30,7 @@ import {
   app,
   autoUpdater,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   Menu,
@@ -44,6 +45,7 @@ import {
   type WebContents
 } from 'electron'
 import { PtyHostClient, PtyHostRemoteError, type HostReady } from './pty-host-client'
+import { createProgramCopy } from './program-copy'
 import {
   connectRendererChannel,
   createRendererRecoveryCoalescer,
@@ -418,6 +420,19 @@ async function initializeApplication(testMode: boolean): Promise<ApplicationStar
   hostRendererPort = launched.applicationPort
   trackSessionProcessStates(launched.client)
   launched.client.onAppEvent((message) => appEvents.forward(message))
+  const programCopy = createProgramCopy({
+    allowed: async () =>
+      (await launched.client.request<AppSettings>(METHOD_REGISTRY.settingsGet, {})).terminal.programClipboard,
+    write: async (target, text) => {
+      // The primary selection exists on Linux only; elsewhere a write to it is ignored.
+      const board = target === 'clipboard' ? clipboard : clipboard.selection
+      if (!board) return false
+      await board.writeText(text)
+      return true
+    },
+    announce: (notice) => applicationWindow?.webContents.send('aiterm:program-copy', notice)
+  })
+  launched.client.onProgramCopy((message) => void programCopy(message))
   void appEvents.prime()
   reportPresence()
   let startup = await loadApplicationStartup(testMode)

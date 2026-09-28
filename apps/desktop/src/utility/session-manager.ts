@@ -47,6 +47,7 @@ import {
   type SessionStopCause,
   type TerminalGraphicsChoice,
   type SessionProcessStateChangedMessage,
+  type ProgramCopyMessage,
   type TerminalAckMessage,
   type TerminalActivationResult,
   type TerminalInputMessage,
@@ -63,6 +64,7 @@ import { HostOutputQueue, type HostOutputQueueTransition } from './transport'
 import { TerminalByteFramer, type TerminalFrame } from './terminal-byte-framer'
 import { terminalGraphicsEnvironment, type TerminfoAsset } from './terminal-graphics'
 import { DecsetModeTracker } from './decset-modes'
+import { Osc52Reader } from './osc52'
 import { OutputTail, ScreenMirror } from './screen-mirror'
 import {
   agentCli,
@@ -250,6 +252,8 @@ interface SessionManagerOptions {
   onSessionStateChange?: (message: SessionProcessStateChangedMessage) => void
   /** Every chunk a session's program writes, before any view sees it; it must return quickly. */
   onOutput?: (sessionId: string, bytes: Uint8Array) => void
+  /** Story 42.1: text a program asked, with OSC 52, to put on the clipboard while a window had its view. */
+  onProgramCopy?: (message: ProgramCopyMessage) => void
   /** Addressed-control variables added after the private-variable filter for each process incarnation. */
   sessionEnvironment?: (identity: SessionIdentity) => Readonly<Record<string, string>>
 }
@@ -273,6 +277,8 @@ interface LiveSession extends SessionIdentity {
   outputFramer: TerminalByteFramer
   /** The private modes this program has turned on, read from its own output as it streams. */
   decsetModes: DecsetModeTracker
+  /** Clipboard writes (OSC 52) read from the live stream; replayed or saved output never passes here. */
+  programCopy: Osc52Reader
   /** The last output bytes, so a screen mirror started when an agent shows up can see what it drew. */
   outputTail: OutputTail
   /** A headless copy of the screen, only for sessions running an agent (Epic 30). */
@@ -508,6 +514,7 @@ export class SessionManager {
   private readonly capabilityProbeTimeoutMs: number
   private readonly onSessionStateChange: (message: SessionProcessStateChangedMessage) => void
   private readonly onOutput: ((sessionId: string, bytes: Uint8Array) => void) | undefined
+  private readonly onProgramCopy: ((message: ProgramCopyMessage) => void) | undefined
   private readonly claudeSessionIdCapabilities = new Map<string, Promise<ClaudeCapabilityProbeResult>>()
   private readonly conversationBindings = new Map<string, PersistedConversationBinding>()
   /** One SessionStart observation at a time per session, so a claim swap is never interleaved. */
@@ -542,6 +549,7 @@ export class SessionManager {
     this.capabilityProbeTimeoutMs = options.capabilityProbeTimeoutMs ?? 2_000
     this.onSessionStateChange = options.onSessionStateChange ?? (() => undefined)
     this.onOutput = options.onOutput
+    this.onProgramCopy = options.onProgramCopy
   }
 
   async create(
@@ -1252,6 +1260,7 @@ export class SessionManager {
       captureStartedAt,
       outputFramer: new TerminalByteFramer(),
       decsetModes: new DecsetModeTracker(),
+      programCopy: new Osc52Reader(),
       outputTail: new OutputTail(),
       undeliveredOutput: [],
       undeliveredOutputState: {
@@ -2098,7 +2107,21 @@ export class SessionManager {
     session.decsetModes.read(bytes)
     session.outputTail.push(bytes)
     session.mirror?.write(bytes)
-    this.onOutput?.(session.sessionId, bytes)
+    // Neither the port watch nor a clipboard write may cost the view this chunk: a failure in one stops here.
+    try {
+      this.onOutput?.(session.sessionId, bytes)
+    } catch {
+      // The next chunk tries again.
+    }
+    try {
+      // Read always, so a sequence split across chunks stays whole. A copy counts only while a BMN window has this
+      // session's view, the way herdr hands it to an attached client only: output kept for a later view never copies.
+      for (const write of session.programCopy.push(bytes)) {
+        if (session.outputQueue) this.onProgramCopy?.({ kind: 'program-copy', sessionId: session.sessionId, ...write })
+      }
+    } catch {
+      // A copy that could not be reported is lost; the program is never told either way.
+    }
     this.deliverFrames(session, session.outputFramer.push(bytes))
   }
 

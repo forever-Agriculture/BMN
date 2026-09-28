@@ -9,6 +9,7 @@ import {
   isAppEventMessage,
   isClosePromptRequest,
   type AppEventMessage,
+  type ProgramCopyNotice,
   type AgentHistoryStatus,
   type AppSettings,
   type ArtifactPreview,
@@ -288,6 +289,14 @@ ipcRenderer.on('aiterm:lifecycle:close-prompt', (_event, request: unknown) => {
   for (const listener of closePromptListeners) listener(request)
 })
 
+const programCopyListeners = new Set<(notice: ProgramCopyNotice) => void>()
+
+ipcRenderer.on('aiterm:program-copy', (_event, message: unknown) => {
+  const notice = message as Partial<ProgramCopyNotice> | null
+  if (!notice || typeof notice.sessionId !== 'string' || !Number.isInteger(notice.characters)) return
+  for (const listener of programCopyListeners) listener({ sessionId: notice.sessionId, characters: notice.characters! })
+})
+
 const presenceListeners = new Set<(presence: { away: boolean }) => void>()
 let presence = { away: false }
 
@@ -507,6 +516,10 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   onOpenSession(listener: (sessionId: string) => void): () => void {
     openSessionListeners.add(listener)
     return () => openSessionListeners.delete(listener)
+  },
+  onProgramCopy(listener: (notice: ProgramCopyNotice) => void): () => void {
+    programCopyListeners.add(listener)
+    return () => programCopyListeners.delete(listener)
   },
   onClosePrompt(listener: (request: ClosePromptRequest) => void): () => void {
     closePromptListeners.add(listener)

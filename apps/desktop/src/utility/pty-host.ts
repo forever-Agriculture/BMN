@@ -297,6 +297,8 @@ async function start(): Promise<void> {
       companionHolder.current?.sessionStateChanged(message.sessionId, message.state)
     },
     onOutput: (sessionId, bytes) => companionHolder.current?.sessionOutput(sessionId, bytes),
+    // Main owns the clipboard and the owner's setting; the host only reports what a live program asked for.
+    onProgramCopy: (message) => parentPort.postMessage(message),
     sessionEnvironment: (sessionIdentity) => companionHolder.current?.sessionEnvironment(sessionIdentity) ?? {}
   })
   const cliPath = process.env.BMN_CLI_PATH ?? join(__dirname, '..', '..', 'bin', 'bmn')

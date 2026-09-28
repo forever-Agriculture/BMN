@@ -494,6 +494,11 @@ export interface NotificationSettings {
   desktop: boolean
 }
 
+/** Story 42.1: whether a program may put text on the clipboard with OSC 52; it can never read it. */
+export interface TerminalSettings {
+  programClipboard: boolean
+}
+
 export interface TelegramSettings {
   enabled: boolean
   allowedChatId: number | null
@@ -585,6 +590,7 @@ export interface AppSettings {
   voice: VoiceSettings
   archive: ArchiveSettings
   agentHistory: AgentHistorySettings
+  terminal: TerminalSettings
 }
 
 /** One Claude-family config folder in Preferences → History. */
@@ -651,7 +657,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = Object.freeze({
   }),
   voice: Object.freeze({ model: 'base', language: 'auto', modelFolder: null, holdSpaceToTalk: true, vocabulary: Object.freeze([]) as unknown as string[] }),
   archive: Object.freeze({ deleteAfterDays: null }),
-  agentHistory: Object.freeze({ keepDays: 30, claudeConfigDirs: Object.freeze([]) as unknown as string[] })
+  agentHistory: Object.freeze({ keepDays: 30, claudeConfigDirs: Object.freeze([]) as unknown as string[] }),
+  terminal: Object.freeze({ programClipboard: true })
 }) as AppSettings
 
 export type TelegramConnectorState =

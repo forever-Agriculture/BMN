@@ -18,6 +18,7 @@ import {
   type SavedOutputFinalCaptureUnavailable,
   type SavedOutputSnapshot,
   type SessionRecord,
+  type ProgramCopyMessage,
   type TerminalPortMessage,
   type TerminalViewDisconnectReason,
   type WorkspaceRecord
@@ -527,7 +528,8 @@ async function flowFixture(
     consumerBytes: number
     hostBytes: number
     acknowledgementDeadlineMs?: number
-  }
+  },
+  extra: { onProgramCopy?: (message: ProgramCopyMessage) => void; onOutput?: (sessionId: string, bytes: Uint8Array) => void } = {}
 ): Promise<{
   manager: SessionManager
   pty: FakePty
@@ -545,7 +547,8 @@ async function flowFixture(
     spawnPty: () => pty,
     processStartIdentity: async () => 'linux-proc-start:flow',
     sendTerminalMessage: harness.send,
-    ...(outputQueueLimits === undefined ? {} : { outputQueueLimits })
+    ...(outputQueueLimits === undefined ? {} : { outputQueueLimits }),
+    ...extra
   })
   harness.setAcknowledger((attachmentId, streamSeq) => {
     manager.acknowledge({ attachmentId, streamSeq })
@@ -1314,6 +1317,54 @@ describe('shell session lifecycle', () => {
     expect(harness.acknowledgements).toEqual([0, 1])
     expect(decoded(harness.writes)).toBe('create-banner-window')
     expect(harness.recoveries).toEqual([])
+  })
+
+  it('copies for a program only from live output while a view is attached, never from the replayed backlog (Story 42.1)', async () => {
+    const copies: ProgramCopyMessage[] = []
+    const { manager, pty, harness, cwd } = await flowFixture(undefined, { onProgramCopy: (message) => copies.push(message) })
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION,
+      cwd,
+      executable: process.execPath,
+      argv: [],
+      cols: 80,
+      rows: 24
+    })
+    const osc52 = (text: string): string => `\u001b]52;c;${Buffer.from(text).toString('base64')}\u0007`
+    // No view: the sequence waits in the backlog for the next view and copies nothing.
+    pty.emit(`hidden ${osc52('while hidden')}`)
+    const attached = manager.attach(created)
+    harness.flow.attach(attached.attachmentId)
+    manager.activateAttachment(attached.attachmentId)
+    // The view receives the backlog byte for byte, and replaying it copies nothing.
+    expect(decoded(harness.writes)).toBe(`hidden ${osc52('while hidden')}`)
+    expect(copies).toEqual([])
+    // Live output while shown copies, even when the sequence arrives split across chunks.
+    const live = osc52('hello')
+    pty.emit(live.slice(0, 9))
+    pty.emit(live.slice(9))
+    expect(copies).toEqual([{ kind: 'program-copy', sessionId: created.sessionId, targets: ['clipboard'], text: 'hello' }])
+    expect(decoded(harness.writes)).toBe(`hidden ${osc52('while hidden')}${live}`)
+  })
+
+  it('delivers every chunk to the view even when the output hooks throw', async () => {
+    const { manager, pty, harness, cwd } = await flowFixture(undefined, {
+      onOutput: () => { throw new Error('port watch failed') },
+      onProgramCopy: () => { throw new Error('host port closed') }
+    })
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION,
+      cwd,
+      executable: process.execPath,
+      argv: [],
+      cols: 80,
+      rows: 24
+    })
+    const attached = manager.attach(created)
+    harness.flow.attach(attached.attachmentId)
+    manager.activateAttachment(attached.attachmentId)
+    const copy = `\u001b]52;c;${Buffer.from('hello').toString('base64')}\u0007`
+    pty.emit(`before ${copy} after`)
+    pty.emit(' next')
+    expect(decoded(harness.writes)).toBe(`before ${copy} after next`)
   })
 
   it('T-D delivers pre-activation output through the paced stream without a spurious disconnect', async () => {

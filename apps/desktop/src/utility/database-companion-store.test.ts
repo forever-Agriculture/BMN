@@ -672,6 +672,15 @@ describe('companion store', () => {
     expect(getSettings(database).appearance).toEqual({ identity: 'knight', colorMode: 'black', terminalFontSize: 14 })
   })
 
+  it('lets programs copy to the clipboard by default, and keeps the owner\'s choice (Story 42.1)', () => {
+    expect(getSettings(database).terminal).toEqual({ programClipboard: true })
+    putSettingsSection(database, 'terminal', { programClipboard: false }, now)
+    expect(getSettings(database).terminal).toEqual({ programClipboard: false })
+    expect(() => putSettingsSection(database, 'terminal', { programClipboard: 'no' }, now)).toThrow(/copy to the clipboard/)
+    expect(() => putSettingsSection(database, 'terminal', {}, now)).toThrow(/copy to the clipboard/)
+    expect(getSettings(database).terminal).toEqual({ programClipboard: false })
+  })
+
   it('validates settings and keeps the stored value on invalid input', () => {
     expect(getSettings(database)).toEqual(DEFAULT_APP_SETTINGS)
     putSettingsSection(database, 'appearance', { identity: 'cross', colorMode: 'dark', terminalFontSize: 16 }, now)
