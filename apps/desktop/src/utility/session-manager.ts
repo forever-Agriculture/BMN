@@ -559,6 +559,15 @@ export class SessionManager {
     )
     const bindingIdentity = conversationIdentity(prepared.binding)
     const reservation = bindingIdentity ? this.claimConversation(bindingIdentity, sessionId) : undefined
+    // A launch that names an existing conversation (`codex resume <id>`) stands back from cleanup as Resume does.
+    if (reservation && prepared.binding.status === 'bound') {
+      try {
+        this.refuseWhileDeleted(prepared.binding)
+      } catch (error) {
+        this.removeIfCurrent(reservation)
+        throw error
+      }
+    }
     let recordPersisted = false
     let live: LiveSession
     try {
@@ -1146,12 +1155,7 @@ export class SessionManager {
     binding: BoundConversationBinding,
     reservation: ConversationReservation
   ): Promise<SessionResumeResult> {
-    if (this.beingDeleted(binding)) {
-      throw new HostControlError(
-        ERROR_CODES.invalidArgument,
-        `BMN is cleaning up this ${binding.agentCli} conversation's history right now; try again in a moment`
-      )
-    }
+    this.refuseWhileDeleted(binding)
     if (!await this.referenceExists(binding)) {
       throw new HostControlError(
         ERROR_CODES.notFound,
@@ -1189,6 +1193,16 @@ export class SessionManager {
     } catch (error) {
       await this.teardownSession(live)
       throw error
+    }
+  }
+
+  /** Called only after the conversation's reservation is held, so cleanup either saw it or is deleting now. */
+  private refuseWhileDeleted(binding: BoundConversationBinding): void {
+    if (this.beingDeleted(binding)) {
+      throw new HostControlError(
+        ERROR_CODES.invalidArgument,
+        `BMN is cleaning up this ${binding.agentCli} conversation's history right now; try again in a moment`
+      )
     }
   }
 

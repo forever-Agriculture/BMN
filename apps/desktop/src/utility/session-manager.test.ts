@@ -4362,6 +4362,24 @@ describe('conversation identity reported by the harness', () => {
     }
   })
 
+  it('refuses a start naming a conversation cleanup is deleting, and releases its hold', async () => {
+    const fixture = await codexFixture([], [])
+    const launch = { ...DEFAULT_SESSION_CREATION, name: 'Explicit', cwd: fixture.cwd, executable: fixture.executable,
+      argv: ['resume', OBSERVED], cols: 80, rows: 24 }
+    deletingReferences.add(OBSERVED)
+    try {
+      await expect(fixture.manager.create(launch))
+        .rejects.toThrow("BMN is cleaning up this codex conversation's history right now; try again in a moment")
+      expect(fixture.spawns).toHaveLength(0)
+      expect(fixture.manager.heldConversationReferences()).toEqual([])
+    } finally {
+      deletingReferences.delete(OBSERVED)
+    }
+    const started = await fixture.manager.create(launch)
+    expect(started.binding).toMatchObject({ status: 'bound', conversationReference: OBSERVED })
+    expect(fixture.spawns).toHaveLength(1)
+  })
+
   it('refuses a Cursor report from a session that runs a shell, as for every agent', async () => {
     const fixture = await codexFixture([], ['Shell'], 'bash')
     const [created] = fixture.sessions
