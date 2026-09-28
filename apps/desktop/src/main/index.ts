@@ -1407,7 +1407,7 @@ interface RendererIntegrationProbe {
     editedText: string
     /** Story 35.2: Insert outline offered on an empty box, off once it holds text, and the outline pasted whole. */
     outline: Record<'outlineOfferedEmpty' | 'outlineFilled' | 'outlineFocused' | 'outlineOfferedAgain' | 'outlineOffAfterTyping' |
-      'outlineOffForSavedText' | 'pastedWhole', boolean>
+      'outlineOffForWhitespace' | 'outlineOffForSavedText' | 'pastedWhole', boolean>
     fileName: string
     acceptedState: string
     existingInputPreserved: boolean
@@ -3536,7 +3536,7 @@ async function runSelfTest(): Promise<void> {
     if (
       preloadProbe.handoffFlow.targetSessionId !== session.sessionId ||
       preloadProbe.handoffFlow.editedText !== HANDOFF_OUTLINE.replace('Goal:', 'Goal: Edited handoff line one\nQuestion line two') ||
-      Object.values(preloadProbe.handoffFlow.outline ?? {}).length !== 7 ||
+      Object.values(preloadProbe.handoffFlow.outline ?? {}).length !== 8 ||
       Object.values(preloadProbe.handoffFlow.outline ?? {}).some((value) => value !== true) ||
       preloadProbe.handoffFlow.fileName !== handoffArtifact.originalName ||
       preloadProbe.handoffFlow.acceptedState !== 'accepted' ||

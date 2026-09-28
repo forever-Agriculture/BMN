@@ -2081,12 +2081,13 @@ function describeHandoffStatus(snapshot, draftId) {
 }
 
 /**
- * Reads a piped field, stopping once the input is certainly over the limit: past the byte limit, or past four
- * bytes per allowed character. Nothing is sent when it is over, empty of valid UTF-8, or not piped at all.
+ * Reads a piped field, stopping once the input is certainly over the limit: past the byte limit plus the one
+ * trailing newline that is removed, or past four bytes per allowed character. Nothing is sent when it is over,
+ * not valid UTF-8, or not piped at all.
  */
 async function readPipedField(piped) {
   if (process.stdin.isTTY) throw new UsageError(`--${piped.option} - needs piped input, not a terminal`)
-  const cap = piped.unit === 'bytes' ? piped.limit : piped.limit * 4
+  const cap = piped.unit === 'bytes' ? piped.limit + 1 : piped.limit * 4
   const chunks = []
   let size = 0
   for await (const chunk of process.stdin) {

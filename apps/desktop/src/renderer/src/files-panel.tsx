@@ -423,7 +423,7 @@ export function FilesPanel(props: {
               <div className="handoff-text-heading">
                 <label htmlFor={handoffTextId}>Summary or question</label>
                 {/* Story 35.2: an optional outline, offered only while there is nothing to overwrite. */}
-                <button type="button" disabled={handoffText.trim() !== ''} onClick={() => {
+                <button type="button" disabled={handoffText !== ''} onClick={() => {
                   setHandoffText(HANDOFF_OUTLINE)
                   handoffTextArea.current?.focus()
                 }}>Insert outline</button>

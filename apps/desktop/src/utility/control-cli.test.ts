@@ -430,6 +430,8 @@ describe('long text from standard input (Story 35.1)', () => {
     [['ask', 'k', 'T', '--body-file', '-'], '✓'.repeat(20000), 'body from standard input must be at most 8000 characters'],
     [['progress', 'running', 'L', '--detail-file', '-'], 'é'.repeat(2001), 'detail from standard input must be at most 2000 characters'],
     [['send', '--text-file', '-'], 'x'.repeat(64 * 1024 + 1), 'text from standard input must be at most 65536 bytes'],
+    [['send', '--text-file', '-'], `${'x'.repeat(64 * 1024 + 1)}\n`, 'text from standard input must be at most 65536 bytes'],
+    [['handoff', 'session-2', '--text-file', '-', '--key', 'k'], 'x'.repeat(16 * 1024 + 1), 'text from standard input must be at most 16384 bytes'],
     [['handoff', 'session-2', '--text-file', '-', '--key', 'k'], 'é'.repeat(8193), 'text from standard input must be at most 16384 bytes'],
     [['ask', 'k', 'T', '--body-file', '-'], Buffer.from([0x6f, 0x6b, 0xff, 0xfe]), 'body from standard input is not valid UTF-8']
   ])('refuses %j over its limit or not UTF-8 before opening the socket', async (args, input, message) => {
@@ -457,6 +459,10 @@ describe('long text from standard input (Story 35.1)', () => {
     expect((await runCli(['ask', 'k', 'T', '--body-file', '-'], { env, input: `${'ü'.repeat(8000)}\n` })).code).toBe(0)
     expect((await runCli(['handoff', 'session-2', '--text-file', '-', '--key', 'k'], { env, input: 'é'.repeat(8192) })).code).toBe(0)
     expect(fixture.handlers.prepareHandoff).toHaveBeenLastCalledWith(expect.objectContaining({ text: 'é'.repeat(8192) }))
+    // Astra review: the heredoc's trailing newline does not count against a field exactly at its byte limit.
+    expect((await runCli(['handoff', 'session-2', '--text-file', '-', '--key', 'k2'], { env, input: `${'a'.repeat(16 * 1024)}\n` })).code).toBe(0)
+    expect(fixture.handlers.prepareHandoff).toHaveBeenLastCalledWith(expect.objectContaining({ text: 'a'.repeat(16 * 1024) }))
+    expect((await runCli(['send', '--text-file', '-'], { env, input: `${'s'.repeat(64 * 1024)}\n` })).code).toBe(0)
   })
 
   it.skipIf(!existsSync('/usr/bin/script'))('refuses a terminal on standard input instead of waiting for typing', async () => {

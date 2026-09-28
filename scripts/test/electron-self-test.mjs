@@ -282,7 +282,7 @@ const receiptContract = [
       typeof receipt.handoffFlow.targetSessionId === 'string' &&
       receipt.handoffFlow.editedText.startsWith('Goal: Edited handoff line one\nQuestion line two\n\nWhere it stands:') &&
       receipt.handoffFlow.editedText.endsWith('How to check:') &&
-      Object.values(receipt.handoffFlow.outline ?? {}).length === 7 &&
+      Object.values(receipt.handoffFlow.outline ?? {}).length === 8 &&
       Object.values(receipt.handoffFlow.outline).every((value) => value === true) &&
       receipt.handoffFlow.fileName === 'handoff-self-test.txt' &&
       receipt.handoffFlow.acceptedState === 'accepted' &&
