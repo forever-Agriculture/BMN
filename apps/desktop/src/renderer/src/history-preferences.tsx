@@ -203,7 +203,7 @@ export function HistoryPreferences(props: {
           </button>
         </div>
       )}
-      {error && <p className="preferences-help" role="alert">{error}</p>}
+      {error && <p className="preferences-error" role="alert">{error}</p>}
       <div className="preferences-row history-archive">
         <div className="preferences-row-label">
           <span id="preferences-archive-delete-after">Delete archived sessions and workspaces</span>

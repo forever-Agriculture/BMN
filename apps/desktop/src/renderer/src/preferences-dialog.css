@@ -23,9 +23,11 @@
   color: var(--muted);
 }
 
+/* Story 40.3: a fixed label column and one-line help in the control column, beside a checkbox or under the control,
+   so no help wraps under a narrow label. Longer explanations sit behind the section's Advanced disclosure. */
 .preferences-dialog .preferences-row {
   display: grid;
-  grid-template-columns: minmax(160px, 240px) 1fr;
+  grid-template-columns: 200px minmax(0, 1fr);
   gap: 8px 16px;
   align-items: start;
   padding: 8px 0;
@@ -35,6 +37,7 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+  padding-top: 7px;
   color: var(--text);
   font-size: 13px;
 }
@@ -44,6 +47,54 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  min-height: 32px;
+}
+
+.preferences-dialog .preferences-row-control > .preferences-help {
+  flex: 1 1 100%;
+}
+
+/* A control that starts with words rather than a 32 px field starts its text on the label's line. */
+.preferences-dialog .preferences-row-control:has(> :is(span, code, .preferences-help):first-child) {
+  min-height: 0;
+  padding-top: 7px;
+}
+
+.preferences-dialog .preferences-row-control > input[type='checkbox'] + .preferences-help {
+  flex: 1 1 0;
+}
+
+/* The section head carries its one small action (Telegram's Refresh) on the heading's line. */
+.preferences-dialog .preferences-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 24px;
+  margin: 0 0 12px;
+}
+
+.preferences-dialog .preferences-section-head h3 {
+  margin: 0;
+}
+
+.preferences-dialog .telegram-status {
+  grid-template-columns: 200px minmax(0, 1fr);
+  column-gap: 16px;
+  padding: 4px 0 8px;
+}
+
+.preferences-dialog .telegram-status dd.none {
+  color: var(--muted);
+}
+
+.preferences-dialog .preferences-section > .advanced {
+  margin-top: 8px;
+}
+
+.preferences-dialog .advanced-body > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 /* Three identities, each with a motto, stack one per line instead of wrapping unevenly. */
@@ -82,9 +133,9 @@
   width: 100%;
   margin-top: 8px;
   padding: 8px 10px;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: 6px;
-  background: var(--surface);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
   color: var(--text);
   white-space: pre;
   overflow-x: auto;
@@ -117,14 +168,31 @@
 .preferences-dialog .preferences-usage {
   margin: 8px 0;
   padding: 10px 12px;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: 6px;
-  background: var(--surface);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
   color: var(--text);
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.6;
   overflow-x: auto;
+}
+
+/* A path keeps its tail (the part that names the file) on one line beside its Copy plate, as .kv dd.path does. */
+.preferences-dialog .preferences-path {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  direction: rtl;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+.preferences-dialog .preferences-path > bdi {
+  direction: ltr;
+  unicode-bidi: isolate;
 }
 
 .preferences-dialog .preferences-error {
@@ -147,6 +215,11 @@
 @media (max-width: 560px) {
   .preferences-dialog .preferences-row {
     grid-template-columns: 1fr;
+  }
+
+  .preferences-dialog .preferences-row-label,
+  .preferences-dialog .preferences-row-control:has(> :is(span, code, .preferences-help):first-child) {
+    padding-top: 0;
   }
 }
 
@@ -329,17 +402,6 @@
   flex-direction: column;
   align-items: stretch;
   gap: 8px;
-}
-
-/* A 30px track beside an 18px label line: pad the label so both baselines meet. */
-.preferences-dialog .history-section .preferences-row-label {
-  padding-top: 6px;
-}
-
-@media (max-width: 560px) {
-  .preferences-dialog .history-section .preferences-row-label {
-    padding-top: 0;
-  }
 }
 
 /* Segmented: one track, the chosen segment a raised plate with a short gold bar; focus is the white ring. */

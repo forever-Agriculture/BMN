@@ -91,7 +91,7 @@ export function NeedsYouPopover(props: {
 
   const where = (sessionId: string): React.JSX.Element => {
     const place = props.place(sessionId)
-    return <><span>{place.workspace}</span><span className="separator">›</span><span className="name">{place.session}</span></>
+    return <><span>{place.workspace}</span><span className="separator">›</span><span className="name" title={place.session}>{place.session}</span></>
   }
 
   const kindLabel = (request: AttentionRecord): string =>
@@ -112,7 +112,6 @@ export function NeedsYouPopover(props: {
           <span className={`status-dot ${actionable ? 'needs-you' : ''}`} aria-hidden="true" />
           {where(request.sessionId)}
           <span className="attention-kind">{kindLabel(request)}</span>
-          <span className="provenance">{attentionProvenance(request)}</span>
           <span className="age">{expiry ? `${age} · ${expiry}` : age}</span>
         </div>
         <h3>{request.title}</h3>
@@ -125,6 +124,8 @@ export function NeedsYouPopover(props: {
             : request.seenAt
               ? `Seen ${relativeAge(request.seenAt, props.now)} · informational update`
               : 'Not seen yet · informational update'}
+          {' · '}
+          <span className="provenance">{attentionProvenance(request)}</span>
         </p>
         <div className="actions">
           <button type="button" className="primary" onClick={() => props.onOpenSession(request.sessionId, request)}>
@@ -134,7 +135,7 @@ export function NeedsYouPopover(props: {
             {actionable ? 'Acknowledge' : 'Dismiss'}
           </button>
           {actionable && request.kind !== 'handoff' ? (
-            <button type="button" className="ghost" title="Close this request after answering it in the terminal" onClick={() => props.onMarkAnswered(request)}>
+            <button type="button" title="Close this request after answering it in the terminal" onClick={() => props.onMarkAnswered(request)}>
               Mark answered
             </button>
           ) : null}
@@ -159,7 +160,7 @@ export function NeedsYouPopover(props: {
     >
       <header>
         <strong>Needs you</strong>
-        <span>{responses.length} need response · {updates.length} updates · {props.unread.length} unread</span>
+        <span>{responses.length} need response · {updates.length} {updates.length === 1 ? 'update' : 'updates'} · {props.unread.length} unread</span>
         <kbd>Ctrl Shift U</kbd>
       </header>
       {openCount === 0 ? <p className="popover-empty">No requests or updates.</p> : null}

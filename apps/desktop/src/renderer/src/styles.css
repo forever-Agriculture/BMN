@@ -234,7 +234,8 @@ input[type='radio'] {
   outline: none;
 }
 
-.eyebrow {
+.eyebrow,
+.launch-sets-dialog legend {
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
@@ -609,7 +610,7 @@ input[type='radio'] {
   display: grid;
   grid-template-columns: 7px minmax(0, 1fr) auto;
   grid-template-rows: auto auto;
-  column-gap: 8px;
+  column-gap: 0;
   flex: 1;
   justify-content: stretch;
   min-width: 0;
@@ -626,61 +627,95 @@ input[type='radio'] {
   align-self: center;
 }
 
+/* The gaps are margins, not a column gap, so a row without a flag gives its name the whole width. */
 .session-row .session-name {
+  grid-row: 1;
+  grid-column: 2;
+  margin-left: 8px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* AC3: the row says the observed word, not only the mark and a tooltip. The word leads the second line and
-   the path gives way to it, because a path the row already names in its tooltip is the less useful of the two. */
+/* Story 40.2: line one is the mark, the name across the row and the origin flag; line two is kind chip · state
+   word · path. The word is never cut: the path gives way first, then the chip, whole. Line two wraps and shows
+   only its last line, so a chip that does not fit beside the word moves to a clipped line above it. No gap: a
+   gap could wrap the path alone. */
+.session-row .origin-flag {
+  grid-row: 1;
+  grid-column: 3;
+  align-self: center;
+  height: 18px;
+  margin-left: 6px;
+  overflow: hidden;
+  line-height: 18px;
+}
+
 .session-row .session-detail {
   display: flex;
+  flex-wrap: wrap;
+  align-content: flex-end;
+  align-items: center;
   grid-row: 2;
-  grid-column: 2;
-  align-items: baseline;
-  gap: 6px;
-  min-width: 0;
-}
-
-.session-row .session-state {
-  flex: 0 1 auto;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Zero basis, so the path gives up its width first and the word keeps its own. */
-.session-row .session-directory {
-  flex: 1 1 0;
+  grid-column: 2 / -1;
+  height: 18px;
+  margin-left: 8px;
   min-width: 0;
   overflow: hidden;
-  color: var(--muted);
-  font: 11px/1.3 var(--font-mono);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .session-row .chips {
-  grid-row: 1 / span 2;
-  grid-column: 3;
   display: flex;
+  flex: none;
   align-items: center;
-  gap: 4px;
-  min-width: 0;
-  align-self: center;
+  height: 18px;
+  margin-right: 6px;
 }
 
 .session-row .chip {
-  grid-row: auto;
-  grid-column: auto;
+  font-size: 10.5px;
+  line-height: 16px;
 }
 
 /* Every session starts in a shell, so a bare "Shell" tag on each row is noise. The element stays in
-   the DOM: the self-test reads its text. */
-.session-row .chip[data-generic='true'] {
+   the DOM: the self-test reads its text. Its wrapper goes too, so the word starts the line. */
+.session-row .chip[data-generic='true'],
+.session-row .chips:has(> .chip[data-generic='true']) {
   display: none;
+}
+
+.session-row .session-state {
+  flex: none;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Zero basis, so the path gives up its width first; below about 60 px an ellipsis says nothing, so it goes. */
+.session-row .session-path {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 18px;
+  container: session-path / inline-size;
+}
+
+.session-row .session-directory {
+  display: block;
+  overflow: hidden;
+  padding-left: 6px;
+  color: var(--muted);
+  font: 11px/18px var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@container session-path (width < 66px) {
+  .session-row .session-directory {
+    display: none;
+  }
 }
 
 .session-row.archived .session-name {
@@ -717,7 +752,10 @@ input[type='radio'] {
   pointer-events: none;
 }
 
+/* Beside the name on line one, outside the row button so its words stay the session's own. */
 .session-row .unread-mark {
+  align-self: flex-start;
+  margin-top: 5px;
   color: var(--muted);
   font-size: 11px;
 }
@@ -1471,28 +1509,29 @@ input[type='radio'] {
   font-size: 12px;
 }
 
-/* Buttons in these panels are filled plates, as in dialogs: outlined boxes read as unfinished. */
-:is(.session-inspector, .session-launcher, .stopped-session) :where(button:not(.icon-button, .progress-open, .primary, .ghost, [role='radio'])) {
+/* Buttons in these panels and in a Needs you card's action row are filled plates, as in dialogs: outlined boxes
+   read as unfinished. :where() keeps the card's selector from raising the rule's specificity for the panels. */
+:is(.session-inspector, .session-launcher, .stopped-session, :where(.attention-item) .actions) :where(button:not(.icon-button, .progress-open, .primary, .ghost, [role='radio'])) {
   border-color: transparent;
   background: color-mix(in srgb, var(--text) 8%, transparent);
   font-weight: 500;
 }
 
-:is(.session-inspector, .session-launcher, .stopped-session) :where(button:not(.icon-button, .progress-open, .primary, .ghost, [role='radio'])):hover:not(:disabled) {
+:is(.session-inspector, .session-launcher, .stopped-session, :where(.attention-item) .actions) :where(button:not(.icon-button, .progress-open, .primary, .ghost, [role='radio'])):hover:not(:disabled) {
   background: color-mix(in srgb, var(--text) 13%, transparent);
 }
 
-:is(.session-inspector, .session-launcher, .stopped-session) :where(button:not(.icon-button, .progress-open, .primary, .ghost, [role='radio'])):active:not(:disabled) {
+:is(.session-inspector, .session-launcher, .stopped-session, :where(.attention-item) .actions) :where(button:not(.icon-button, .progress-open, .primary, .ghost, [role='radio'])):active:not(:disabled) {
   background: color-mix(in srgb, var(--text) 16%, transparent);
   box-shadow: none;
 }
 
-:is(.session-inspector, .session-launcher, .stopped-session) button:disabled:not(.primary) {
+:is(.session-inspector, .session-launcher, .stopped-session, :where(.attention-item) .actions) button:disabled:not(.primary) {
   border-color: transparent;
   background: color-mix(in srgb, var(--text) 4%, transparent);
 }
 
-:is(.session-inspector, .session-launcher) button.small {
+:is(.session-inspector, .session-launcher, .preferences-dialog) button.small {
   min-height: 24px;
   padding: 1px 8px;
   font-size: 12px;
@@ -1660,15 +1699,37 @@ input[type='radio'] {
   gap: 8px;
 }
 
+/* Each entry is a section under a hairline, headed like one, not an outlined box (Story 40.3). */
 .launch-sets-dialog fieldset {
-  border: 1px solid var(--hairline);
-  border-radius: 6px;
-  padding: 10px;
+  margin: 0;
+  padding: 10px 0 0;
+  border: 0;
+  border-top: 1px solid var(--hairline);
+  border-radius: 0;
+}
+
+.launch-sets-dialog legend {
+  padding: 0 6px 0 0;
 }
 
 .launch-sets-dialog label {
   display: grid;
   gap: 4px;
+}
+
+.launch-sets-dialog .actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Beside a 32 px plate, a select in the same row is no taller. */
+.launch-sets-dialog .actions select {
+  min-height: 32px;
+  height: 32px;
+  padding-top: 4px;
+  padding-bottom: 4px;
 }
 
 .launch-sets-dialog code {
@@ -1727,8 +1788,9 @@ input[type='radio'] {
   border-color: color-mix(in srgb, var(--text) 22%, transparent);
 }
 
-/* Native select without the platform arrow: a muted chevron that reads in every colour mode. */
-.session-launcher select {
+/* Native select without the platform arrow: a muted chevron that reads in every colour mode. Every select in the
+   window, launcher, dialogs and panels alike, takes it (Story 40.3); `.shell-window` outranks the dialog field rule. */
+.shell-window select {
   appearance: none;
   padding-right: 30px;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16' fill='none' stroke='%23a3a3a3' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.5 6.5 8 10l3.5-3.5'/%3E%3C/svg%3E");
@@ -1736,7 +1798,7 @@ input[type='radio'] {
   background-repeat: no-repeat;
 }
 
-.session-launcher select option {
+.shell-window select option {
   color: var(--text);
   background: var(--raised);
 }
@@ -1810,19 +1872,20 @@ input[type='radio'] {
   text-overflow: ellipsis;
 }
 
-/* Advanced: the resolved command stays on the summary line, so nothing is hidden. */
-.create-form .advanced {
+/* Advanced: the resolved command stays on the summary line, so nothing is hidden. Preferences keeps its longer
+   explanations behind the same disclosure (Story 40.3). */
+:is(.create-form, .preferences-dialog) .advanced {
   padding-top: 6px;
   border-top: 1px solid var(--hairline);
 }
 
-.create-form .advanced-body {
+:is(.create-form, .preferences-dialog) .advanced-body {
   display: grid;
   gap: 12px;
   padding-top: 8px;
 }
 
-.create-form .advanced > summary {
+:is(.create-form, .preferences-dialog) .advanced > summary {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1839,11 +1902,11 @@ input[type='radio'] {
   transition: var(--hover-transition);
 }
 
-.create-form .advanced > summary::-webkit-details-marker {
+:is(.create-form, .preferences-dialog) .advanced > summary::-webkit-details-marker {
   display: none;
 }
 
-.create-form .advanced > summary::before {
+:is(.create-form, .preferences-dialog) .advanced > summary::before {
   flex: none;
   width: 5px;
   height: 5px;
@@ -1854,11 +1917,11 @@ input[type='radio'] {
   transition: rotate 100ms ease-out;
 }
 
-.create-form .advanced[open] > summary::before {
+:is(.create-form, .preferences-dialog) .advanced[open] > summary::before {
   rotate: 45deg;
 }
 
-.create-form .advanced > summary code {
+:is(.create-form, .preferences-dialog) .advanced > summary code {
   min-width: 0;
   overflow: hidden;
   color: var(--faint);
@@ -1867,11 +1930,11 @@ input[type='radio'] {
   text-overflow: ellipsis;
 }
 
-.create-form .advanced[open] > summary code {
+:is(.create-form, .preferences-dialog) .advanced[open] > summary code {
   display: none;
 }
 
-.create-form .advanced > summary:hover {
+:is(.create-form, .preferences-dialog) .advanced > summary:hover {
   color: var(--text);
   background: var(--hover);
 }
@@ -2569,11 +2632,17 @@ input[type='radio'] {
   font-size: 12px;
 }
 
-.attention-item .where .provenance {
+/* One line: the session name gives way (its full text is the title), never the kind, age or expiry. */
+.attention-item .where > * {
+  flex: none;
+}
+
+.attention-item .where .name {
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
-  max-width: 45%;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .attention-item .where .age {
@@ -2618,7 +2687,8 @@ input[type='radio'] {
 
 .attention-item .attention-kind {
   padding: 1px 5px;
-  border: 1px solid var(--hairline);
+  border: 0;
+  background: color-mix(in srgb, var(--text) 7%, transparent);
   border-radius: 4px;
   color: var(--text);
   font-size: 10px;

@@ -225,17 +225,15 @@ export function VoicePreferences(props: {
       <div className="preferences-row">
         <div className="preferences-row-label">
           <span>Dictation engine</span>
-          <p className="preferences-help">
-            Whisper runs on this computer. Recordings are deleted right after transcription.
-          </p>
         </div>
         <div className="preferences-row-control">
           {!status ? (
             <p className="preferences-help">Checking…</p>
           ) : status.engineAvailable ? (
-            <p className="preferences-help">
-              Ready. Hold Space in a terminal, or press Speak or {SHORTCUT_LABELS['voice-toggle']} to start and again to stop; the transcript is pasted without Enter.
-            </p>
+            <>
+              <span>Ready</span>
+              <p className="preferences-help">Runs on this computer; recordings are deleted after transcription.</p>
+            </>
           ) : (
             <p className="preferences-error">
               Not built. Run <code className="preferences-mono">pnpm run voice:build</code>, then rebuild the app.
@@ -246,9 +244,6 @@ export function VoicePreferences(props: {
       <div className="preferences-row">
         <div className="preferences-row-label">
           <label htmlFor="preferences-voice-hold-space">Hold Space to talk</label>
-          <p className="preferences-help">
-            In any terminal, hold Space to record and release it to paste. A quick tap still types a space. Turn off for programs that use a held Space, such as paging in less.
-          </p>
         </div>
         <div className="preferences-row-control">
           <input
@@ -261,12 +256,12 @@ export function VoicePreferences(props: {
               void save((current) => ({ ...current, holdSpaceToTalk }))
             }}
           />
+          <p className="preferences-help">Hold to record, release to paste; a quick tap still types a space.</p>
         </div>
       </div>
       <div className="preferences-row">
         <div className="preferences-row-label">
           <span>Model folder</span>
-          <p className="preferences-help">Downloads go here. A folder that already holds the model files is used as is.</p>
         </div>
         <div className="preferences-row-control voice-folder">
           {status && (
@@ -285,6 +280,7 @@ export function VoicePreferences(props: {
                   </button>
                 )}
               </div>
+              <p className="preferences-help">Downloads go here; existing model files are used as is.</p>
             </>
           )}
         </div>
@@ -292,7 +288,6 @@ export function VoicePreferences(props: {
       <div className="preferences-row">
         <div className="preferences-row-label">
           <span>Model</span>
-          <p className="preferences-help">Downloaded once from Hugging Face and checked against a pinned checksum.</p>
         </div>
         <div className="preferences-row-control voice-models" role="radiogroup" aria-label="Voice model">
           {(status?.models ?? []).map((model) => (
@@ -310,12 +305,12 @@ export function VoicePreferences(props: {
               <div className="voice-model-state">{modelState(model)}</div>
             </div>
           ))}
+          <p className="preferences-help">Downloaded once from Hugging Face, checked against a pinned checksum.</p>
         </div>
       </div>
       <div className="preferences-row">
         <div className="preferences-row-label">
           <label htmlFor="preferences-voice-language">Language</label>
-          <p className="preferences-help">Choosing your language is faster and more accurate than detection.</p>
         </div>
         <div className="preferences-row-control">
           <select
@@ -331,19 +326,18 @@ export function VoicePreferences(props: {
               <option key={language.code} value={language.code}>{language.label}</option>
             ))}
           </select>
+          <p className="preferences-help">A set language is faster and more accurate than detection.</p>
         </div>
       </div>
       <div className="preferences-row">
         <div className="preferences-row-label">
           <span id="preferences-voice-vocabulary-label">Vocabulary</span>
-          <p className="preferences-help">
-            Names Whisper should expect, such as project names and identifiers. Suggestions come from the session you are working in; approved words are passed to Whisper as a hint on every recording. Whisper may still miss a word. The hint holds at most {VOICE_VOCABULARY_MAX_PROMPT_BYTES} bytes; most non-English letters take two.
-          </p>
         </div>
         <div className="preferences-row-control voice-vocabulary">
           <div className="preferences-button-row">
             <button type="button" disabled={busy} onClick={suggest}>Suggest from current session</button>
           </div>
+          <p className="preferences-help">Names Whisper should expect; sent as a hint with every recording.</p>
           {suggestNote && <p className="preferences-help" role="status">{suggestNote}</p>}
           {candidates.length > 0 && (
             <ul className="voice-vocabulary-candidates" aria-label="Suggested words">
@@ -416,7 +410,7 @@ export function VoicePreferences(props: {
           <div className="voice-vocabulary-prompt">
             <div className="voice-vocabulary-prompt-head">
               <span className="eyebrow">Sent to Whisper</span>
-              <span className="voice-vocabulary-count">
+              <span className="voice-vocabulary-count" title={`The hint holds at most ${VOICE_VOCABULARY_MAX_PROMPT_BYTES} bytes; most non-English letters take two.`}>
                 {voice.vocabulary.length} of {VOICE_VOCABULARY_MAX_WORDS} words · {vocabularyPromptBytes(voice.vocabulary)} of {VOICE_VOCABULARY_MAX_PROMPT_BYTES} bytes
               </span>
             </div>
@@ -431,6 +425,14 @@ export function VoicePreferences(props: {
           {error}
         </p>
       )}
+      <details className="advanced">
+        <summary>Advanced</summary>
+        <div className="advanced-body">
+          <p>Hold Space in a terminal, or press Speak or {SHORTCUT_LABELS['voice-toggle']} to start and again to stop; the transcript is pasted without Enter.</p>
+          <p>Turn off Hold Space to talk for programs that use a held Space, such as paging in less.</p>
+          <p>Suggestions come from the session you are working in. Whisper may still miss a word.</p>
+        </div>
+      </details>
     </section>
   )
 }

@@ -1697,17 +1697,19 @@ function App(): React.JSX.Element {
                           >
                             <span className={`status-dot ${status.dot}`} aria-hidden="true" />
                             <span className="session-name">{session.name}</span>
-                            <span className="chips">
-                              <span className="chip" data-generic={origin === null && agentTag(session.executable, session.argv) === 'Shell' ? 'true' : undefined}>
-                                {origin === null ? agentTag(session.executable, session.argv) : observedAgentName(origin.agent)}
-                              </span>
-                              {originFlag === null ? null : (
-                                <span className="origin-flag" role="img" title={originLabel ?? undefined} aria-label={originLabel ?? undefined}>{originFlag}</span>
-                              )}
-                            </span>
+                            {originFlag === null ? null : (
+                              <span className="origin-flag" role="img" title={originLabel ?? undefined} aria-label={originLabel ?? undefined}>{originFlag}</span>
+                            )}
                             <span className="session-detail">
+                              <span className="chips">
+                                <span className="chip" data-generic={origin === null && agentTag(session.executable, session.argv) === 'Shell' ? 'true' : undefined}>
+                                  {origin === null ? agentTag(session.executable, session.argv) : observedAgentName(origin.agent)}
+                                </span>
+                              </span>
                               <span className="session-state">{status.word}</span>
-                              <span className="session-directory">{displayPath(session.cwd, home)}</span>
+                              <span className="session-path">
+                                <span className="session-directory">{displayPath(session.cwd, home)}</span>
+                              </span>
                             </span>
                           </button>
                           {unread[session.sessionId] && !selected ? <span className="unread-mark" title="New output">new</span> : null}

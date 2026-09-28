@@ -452,6 +452,31 @@ describe('session presentation', () => {
     expect(popover([{ ...soon, expiresAt: null }])).not.toContain('expires')
   })
 
+  it('gives every card one primary and plates for the rest, and says the source on the seen line (Story 40.1)', () => {
+    const markup = renderToStaticMarkup(createElement(NeedsYouPopover, {
+      requests: [
+        { ...request('asked', 's1', '2026-09-14T11:55:00.000Z'), openedBy: 'cli' },
+        { ...request('allow', 's1', '2026-09-14T11:50:00.000Z'), kind: 'permission' as const, openedBy: 'hook:claude:PermissionRequest' },
+        { ...request('built', 's1', '2026-09-14T11:45:00.000Z'), kind: 'notice' as const, openedBy: 'osc:9' }
+      ],
+      unread: [], now, anchor: null,
+      place: () => ({ workspace: 'Work', session: 'Builder' }),
+      onOpenSession: () => undefined, onAcknowledge: () => undefined,
+      onMarkAnswered: () => undefined, onClose: () => undefined
+    }))
+    const actions = [...markup.matchAll(/<div class="actions">(.*?)<\/div>/gu)].map((match) => match[1]!)
+    expect(actions).toHaveLength(3)
+    for (const row of actions) {
+      expect(row.match(/class="primary"/gu)).toHaveLength(1)
+      expect(row).not.toContain('ghost')
+    }
+    expect(markup).toContain('<p class="seen">Not seen yet · needs your response · <span class="provenance">from bmn ask</span></p>')
+    expect(markup).toContain('needs your response · <span class="provenance">from Claude PermissionRequest</span>')
+    expect(markup).toContain('informational update · <span class="provenance">from the terminal (OSC 9)</span>')
+    // The top line keeps workspace › session · kind · age, with no source squeezed into it.
+    expect([...markup.matchAll(/<div class="where">(.*?)<\/div>/gu)].every((match) => !match[1]!.includes('provenance'))).toBe(true)
+  })
+
   it('closes a session\'s open prompts and notices, but not a review or handoff, when the owner types into it', () => {
     const records = [
       { ...request('turn', 's1', '2026-09-14T11:20:00.000Z'), kind: 'notice' as const },

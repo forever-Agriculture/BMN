@@ -359,7 +359,6 @@ export function PreferencesDialog(props: {
         <div className="preferences-row">
           <div className="preferences-row-label">
             <span>Identity</span>
-            <p className="preferences-help">The emblem and motto in the header.</p>
           </div>
           <div className="preferences-row-control preferences-identities" role="radiogroup" aria-label="Identity">
             {IDENTITY_NAMES.map((identity) => (
@@ -380,7 +379,6 @@ export function PreferencesDialog(props: {
         <div className="preferences-row">
           <div className="preferences-row-label">
             <span>Color mode</span>
-            <p className="preferences-help">Colors of the app and the terminal.</p>
           </div>
           <div className="preferences-row-control" role="radiogroup" aria-label="Color mode">
             {COLOR_MODE_NAMES.map((colorMode) => (
@@ -400,9 +398,6 @@ export function PreferencesDialog(props: {
         <div className="preferences-row">
           <div className="preferences-row-label">
             <span>Terminal font size</span>
-            <p className="preferences-help">
-              {TERMINAL_FONT_SIZE_RANGE.min}–{TERMINAL_FONT_SIZE_RANGE.max}px
-            </p>
           </div>
           <div className="preferences-row-control">
             <div className="preferences-font-size">
@@ -440,6 +435,7 @@ export function PreferencesDialog(props: {
               >
                 Reset
               </button>
+              <span className="preferences-help">{TERMINAL_FONT_SIZE_RANGE.min}–{TERMINAL_FONT_SIZE_RANGE.max}px</span>
             </div>
             <div className="preferences-font-preview" style={{ fontFamily: 'var(--font-mono)', fontSize: `${appearance.terminalFontSize}px` }}>
               Ґґ Єє Іі Її — Hello, terminal ─┼─ ✓
@@ -457,8 +453,7 @@ export function PreferencesDialog(props: {
         <h3>Notifications</h3>
         <div className="preferences-row">
           <div className="preferences-row-label">
-            <label htmlFor="preferences-desktop-notifications">Desktop notifications when a session needs you</label>
-            <p className="preferences-help">Shown only while no BMN window is focused.</p>
+            <label htmlFor="preferences-desktop-notifications">Desktop notifications</label>
           </div>
           <div className="preferences-row-control">
             <input
@@ -468,6 +463,7 @@ export function PreferencesDialog(props: {
               disabled={notificationsBusy}
               onChange={(event) => void saveNotifications({ desktop: event.target.checked })}
             />
+            <p className="preferences-help">When a session needs you and no BMN window is focused.</p>
           </div>
         </div>
         {notificationsError && (
@@ -480,7 +476,12 @@ export function PreferencesDialog(props: {
       <VoicePreferences settings={props.settings.voice} save={props.saveVoice} suggest={props.suggestVocabulary} />
 
       <section className="preferences-section">
-        <h3>Telegram</h3>
+        <div className="preferences-section-head">
+          <h3>Telegram</h3>
+          <button type="button" className="small" disabled={telegramStatusBusy} onClick={() => void refreshTelegramStatus()}>
+            {telegramStatusBusy ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
         {props.telegramCue ? (
           <div className="history-confirm telegram-cue" role="status">
             <span className="status-dot needs-you" aria-hidden="true" />
@@ -489,27 +490,37 @@ export function PreferencesDialog(props: {
         ) : null}
         <div className="preferences-row">
           <div className="preferences-row-label">
-            <span>Status</span>
+            <label htmlFor="preferences-telegram-enabled">Enabled</label>
           </div>
           <div className="preferences-row-control">
-            {telegramStatus ? (
-              <div className="preferences-status">
-                <p>
-                  <strong>{telegramStatus.state}</strong> · {telegramStatus.detail}
-                </p>
-                <p className="preferences-help">Token: {telegramStatus.tokenMask ?? 'not set'}</p>
-                <p className="preferences-help">Last poll: {telegramStatus.lastPollAt ?? 'never'}</p>
-                <p className="preferences-help">Last error: {telegramStatus.lastError ?? 'none'}</p>
-                <p className="preferences-help">Rejected updates: {telegramStatus.rejectedUpdates}</p>
-              </div>
-            ) : (
-              !telegramStatusBusy && <p className="preferences-help">Status unavailable.</p>
-            )}
-            <button type="button" disabled={telegramStatusBusy} onClick={() => void refreshTelegramStatus()}>
-              {telegramStatusBusy ? 'Refreshing…' : 'Refresh'}
-            </button>
+            <input
+              id="preferences-telegram-enabled"
+              type="checkbox"
+              checked={telegramEnabled}
+              disabled={telegramFormBusy}
+              onChange={(event) => setTelegramEnabled(event.target.checked)}
+            />
           </div>
         </div>
+        {telegramStatus ? (
+          // An error is said once: in the cue while it shows, otherwise under Last error; State then gives only its word.
+          <dl className="kv telegram-status" aria-label="Telegram status">
+            <dt>State</dt>
+            <dd>{telegramStatus.lastError === null ? `${telegramStatus.state} · ${telegramStatus.detail}` : telegramStatus.state}</dd>
+            <dt>Token</dt>
+            <dd className={telegramStatus.tokenMask ? undefined : 'none'}>{telegramStatus.tokenMask ?? 'not set'}</dd>
+            <dt>Last poll</dt>
+            <dd className={telegramStatus.lastPollAt ? undefined : 'none'}>{telegramStatus.lastPollAt ? new Date(telegramStatus.lastPollAt).toLocaleString() : 'never'}</dd>
+            <dt>Last error</dt>
+            {props.telegramCue && telegramStatus.lastError
+              ? <dd className="none">shown above</dd>
+              : <dd className={telegramStatus.lastError ? undefined : 'none'} title={telegramStatus.lastError ?? undefined}>{telegramStatus.lastError ?? 'none'}</dd>}
+            <dt>Rejected updates</dt>
+            <dd>{telegramStatus.rejectedUpdates}</dd>
+          </dl>
+        ) : (
+          !telegramStatusBusy && <p className="preferences-help">Status unavailable.</p>
+        )}
         {telegramStatusError && (
           <p className="preferences-error" role="alert">
             {telegramStatusError}
@@ -563,6 +574,7 @@ export function PreferencesDialog(props: {
               disabled={telegramFormBusy}
               onChange={(event) => setChatIdInput(event.target.value)}
             />
+            <p className="preferences-help">Only the allowed chat can reply, and only to a notification.</p>
           </div>
         </div>
 
@@ -601,8 +613,7 @@ export function PreferencesDialog(props: {
 
         <div className="preferences-row">
           <div className="preferences-row-label">
-            <label htmlFor="preferences-telegram-auto-submit">Type replies into the session and press Enter</label>
-            <p className="preferences-help">Off: replies are kept as drafts in the Files panel.</p>
+            <label htmlFor="preferences-telegram-auto-submit">Type replies into the session</label>
           </div>
           <div className="preferences-row-control">
             <input
@@ -612,16 +623,13 @@ export function PreferencesDialog(props: {
               disabled={telegramFormBusy}
               onChange={(event) => setAutoSubmitReplies(event.target.checked)}
             />
+            <p className="preferences-help">Presses Enter too. Off: replies are kept as drafts in Files.</p>
           </div>
         </div>
 
         <div className="preferences-row">
           <div className="preferences-row-label">
-            <label htmlFor="preferences-telegram-answer-permissions">Answer permission prompts from Telegram</label>
-            <p className="preferences-help">
-              Adds Allow once and Deny to permission cards. Each tap answers only the exact prompt on screen, never
-              "always allow".
-            </p>
+            <label htmlFor="preferences-telegram-answer-permissions">Answer permissions</label>
           </div>
           <div className="preferences-row-control">
             <input
@@ -631,21 +639,7 @@ export function PreferencesDialog(props: {
               disabled={telegramFormBusy}
               onChange={(event) => setAnswerPermissions(event.target.checked)}
             />
-          </div>
-        </div>
-
-        <div className="preferences-row">
-          <div className="preferences-row-label">
-            <label htmlFor="preferences-telegram-enabled">Enabled</label>
-          </div>
-          <div className="preferences-row-control">
-            <input
-              id="preferences-telegram-enabled"
-              type="checkbox"
-              checked={telegramEnabled}
-              disabled={telegramFormBusy}
-              onChange={(event) => setTelegramEnabled(event.target.checked)}
-            />
+            <p className="preferences-help">Adds Allow once and Deny to cards; never "always allow".</p>
           </div>
         </div>
 
@@ -653,7 +647,7 @@ export function PreferencesDialog(props: {
           <div className="preferences-row-label" />
           <div className="preferences-row-control">
             <div className="preferences-button-row">
-              <button type="button" disabled={telegramFormBusy} onClick={() => void saveTelegramForm()}>
+              <button type="button" className="primary" disabled={telegramFormBusy} onClick={() => void saveTelegramForm()}>
                 {telegramFormBusy ? 'Saving…' : 'Save Telegram settings'}
               </button>
               <button
@@ -687,9 +681,13 @@ export function PreferencesDialog(props: {
             {testSuccess}
           </p>
         )}
-        <p className="preferences-help">
-          Only the allowed chat can reply. Replies must answer a notification; they never go to the focused session.
-        </p>
+        <details className="advanced">
+          <summary>Advanced</summary>
+          <div className="advanced-body">
+            <p>A reply must answer a notification; it never goes to the focused session.</p>
+            <p>A permission tap answers only the exact prompt on screen.</p>
+          </div>
+        </details>
       </section>
 
       <HistoryPreferences settings={props.settings} onSettings={(next) => onSettings.current(next)} />
@@ -717,7 +715,7 @@ export function PreferencesDialog(props: {
                 <span>Socket path</span>
               </div>
               <div className="preferences-row-control">
-                <code className="preferences-mono">{controlInfo.socketPath}</code>
+                <code className="preferences-mono preferences-path" title={controlInfo.socketPath}><bdi>{controlInfo.socketPath}</bdi></code>
                 <button type="button" disabled={copying === 'socket'} onClick={() => void copyText('socket', controlInfo.socketPath)}>
                   Copy
                 </button>
@@ -728,7 +726,7 @@ export function PreferencesDialog(props: {
                 <span>CLI path</span>
               </div>
               <div className="preferences-row-control">
-                <code className="preferences-mono">{controlInfo.cliPath}</code>
+                <code className="preferences-mono preferences-path" title={controlInfo.cliPath}><bdi>{controlInfo.cliPath}</bdi></code>
                 <button type="button" disabled={copying === 'cli'} onClick={() => void copyText('cli', controlInfo.cliPath)}>
                   Copy
                 </button>
@@ -748,7 +746,6 @@ export function PreferencesDialog(props: {
               {hookCheckBusy ? 'Checking…' : 'Check configured hooks'}
             </button>
             <p className="preferences-help">Configured entries do not prove hooks fired.</p>
-            <p className="preferences-help">For Codex, trust hooks with /hooks in Codex and check a real Hook events entry.</p>
             {hookCheck ? (
               <div className="hook-check-report" role="status">
                 <p>Checked {new Date(hookCheck.checkedAt).toLocaleString()} · snapshot of harness files</p>
@@ -787,14 +784,22 @@ export function PreferencesDialog(props: {
             {copyMessage}
           </p>
         )}
-        <pre className="preferences-usage">{USAGE_LINES.join('\n')}</pre>
-        <p className="preferences-help">Sessions started by BMN get BMN_CONTROL_SOCKET and BMN_TOKEN automatically.</p>
+        <details className="advanced">
+          <summary>Advanced</summary>
+          <div className="advanced-body">
+            <p>For Codex, trust hooks with /hooks in Codex and check a real Hook events entry.</p>
+            <pre className="preferences-usage">{USAGE_LINES.join('\n')}</pre>
+            <p>Sessions started by BMN get BMN_CONTROL_SOCKET and BMN_TOKEN automatically.</p>
+          </div>
+        </details>
       </section>
 
       <section className="preferences-section">
         <h3>Backup</h3>
         <div className="preferences-row">
-          <div className="preferences-row-label" />
+          <div className="preferences-row-label">
+            <span>Export and verify</span>
+          </div>
           <div className="preferences-row-control">
             <div className="preferences-button-row">
               <button type="button" disabled={exportBusy} onClick={() => void runExportBackup()}>
@@ -804,6 +809,7 @@ export function PreferencesDialog(props: {
                 {verifyBusy ? 'Verifying…' : 'Verify a backup…'}
               </button>
             </div>
+            <p className="preferences-help">Saves the database and artifacts to a folder you choose.</p>
           </div>
         </div>
         {exportError && (

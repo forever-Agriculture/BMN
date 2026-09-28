@@ -3065,7 +3065,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       const preferences = await wait(() => document.querySelector('dialog.preferences-dialog[open]'), 'Preferences');
       const section = await wait(() => [...preferences.querySelectorAll('.preferences-section')].find(s => s.querySelector('h3')?.textContent === 'Telegram'), 'section');
       const text = section.querySelector('.telegram-cue')?.textContent ?? null;
-      const first = section.querySelector('h3')?.nextElementSibling?.classList.contains('telegram-cue') ?? false;
+      const first = section.querySelector('.preferences-section-head')?.nextElementSibling?.classList.contains('telegram-cue') ?? false;
       preferences.querySelector('.app-dialog-heading button').click();
       await wait(() => !document.querySelector('dialog.preferences-dialog[open]') ? true : null, 'close');
       return { text, first };

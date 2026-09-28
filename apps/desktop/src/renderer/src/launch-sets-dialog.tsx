@@ -262,8 +262,7 @@ export function LaunchSetsDialog({
           })}>
           <option value="">Default (on)</option><option value="sixel">On</option><option value="standard">Off</option>
         </select></label>
-        <small>Every session uses images unless set to Off. For SSH, sudo or containers without BMN
-          terminfo, choose Off or prefix the command with <code>TERM=xterm-256color</code>.</small>
+        <small title="Or prefix the command with TERM=xterm-256color.">Images are on unless set to Off; choose Off for SSH, sudo or containers.</small>
         <div className="actions">
           <button type="button" disabled={index === 0} onClick={() => moveEntry(index, -1)}>Move up</button>
           <button type="button" disabled={index === forms.length - 1} onClick={() => moveEntry(index, 1)}>Move down</button>
