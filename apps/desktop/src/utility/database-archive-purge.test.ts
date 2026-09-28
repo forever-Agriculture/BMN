@@ -286,13 +286,20 @@ describe('agent history setting (Story 31.1)', () => {
     expect(getSettings(database).agentHistory.confirmedKeepDays).toBeUndefined()
   })
 
-  it.each([7, 30, 90, null] as const)('stores %s days with its confirmation and learned folders', (days) => {
+  it('reads a stored, retired 7-day limit as 10 days and keeps its learned folders', () => {
+    database.prepare("INSERT INTO app_setting(key, value_json, updated_at) VALUES ('agentHistory', ?, ?)")
+      .run(JSON.stringify({ keepDays: 7, confirmedKeepDays: 7, claudeConfigDirs: ['/home/o/.claude-glm'] }), now)
+    expect(getSettings(database).agentHistory).toEqual({ keepDays: 10, confirmedKeepDays: 10, claudeConfigDirs: ['/home/o/.claude-glm'] })
+    expect(() => putSettingsSection(database, 'agentHistory', { keepDays: 7, claudeConfigDirs: [] }, now)).toThrow()
+  })
+
+  it.each([10, 30, 90, null] as const)('stores %s days with its confirmation and learned folders', (days) => {
     putSettingsSection(database, 'agentHistory', { keepDays: days, confirmedKeepDays: days, claudeConfigDirs: ['/home/o/.claude-glm'] }, now)
     expect(getSettings(database).agentHistory).toEqual({ keepDays: days, confirmedKeepDays: days, claudeConfigDirs: ['/home/o/.claude-glm'] })
   })
 
   it.each([
-    ['an unknown limit', { keepDays: 10, claudeConfigDirs: [] }],
+    ['an unknown limit', { keepDays: 14, claudeConfigDirs: [] }],
     ['a text limit', { keepDays: '30', claudeConfigDirs: [] }],
     ['an unknown confirmed limit', { keepDays: 30, confirmedKeepDays: 0, claudeConfigDirs: [] }],
     ['a relative folder', { keepDays: 30, claudeConfigDirs: ['conf/glm'] }],

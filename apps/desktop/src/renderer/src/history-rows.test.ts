@@ -53,7 +53,7 @@ describe('History rows', () => {
   })
 
   it('says which limit stays in force while a shorter one waits', () => {
-    expect(keepHelp(status({ keepDays: 7, confirmedKeepDays: 30 }))).toBe('30 days stays in force until you confirm 7 days.')
+    expect(keepHelp(status({ keepDays: 10, confirmedKeepDays: 30 }))).toBe('30 days stays in force until you confirm 10 days.')
     expect(keepHelp(status())).toBe('Each agent deletes sessions untouched longer.')
   })
 })

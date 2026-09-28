@@ -96,7 +96,7 @@ async function fixture(options: {
 
 describe('agent history limit', () => {
   it('orders limits with Never longest', () => {
-    expect(isShorterLimit(7, 30)).toBe(true)
+    expect(isShorterLimit(10, 30)).toBe(true)
     expect(isShorterLimit(90, null)).toBe(true)
     expect(isShorterLimit(null, 90)).toBe(false)
     expect(isShorterLimit(30, 30)).toBe(false)
@@ -136,27 +136,27 @@ describe('agent history limit', () => {
   })
 
   it('a shorter limit waits for confirmation while the confirmed one stays in force', async () => {
-    const codex = fakeAdapter('codex', [{ id: 'ten', updatedAt: daysAgo(10) }])
+    const codex = fakeAdapter('codex', [{ id: 'twelve', updatedAt: daysAgo(12) }])
     const f = await fixture({ adapters: [codex] })
     await f.history.confirm()
     await f.history.run()
 
-    await f.history.setKeepDays(7)
+    await f.history.setKeepDays(10)
     await f.history.run()
     let status = await f.history.status()
 
-    expect(f.settings()).toMatchObject({ keepDays: 7, confirmedKeepDays: 30 })
+    expect(f.settings()).toMatchObject({ keepDays: 10, confirmedKeepDays: 30 })
     expect(await f.claudeDays()).toBe(30)
     expect(codex.removed).toEqual([])
     expect(status).toMatchObject({ needsConfirmation: true })
-    expect(status.claude[0]).toMatchObject({ currentDays: 30, targetDays: 7, pending: true })
+    expect(status.claude[0]).toMatchObject({ currentDays: 30, targetDays: 10, pending: true })
     expect(status.agents[0]).toMatchObject({ candidates: 1 })
 
     await f.history.confirm()
     await f.history.run()
     status = await f.history.status()
-    expect(await f.claudeDays()).toBe(7)
-    expect(codex.removed).toEqual(['ten'])
+    expect(await f.claudeDays()).toBe(10)
+    expect(codex.removed).toEqual(['twelve'])
     expect(status.needsConfirmation).toBe(false)
   })
 

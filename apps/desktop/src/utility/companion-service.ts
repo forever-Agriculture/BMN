@@ -712,7 +712,7 @@ export class CompanionService {
           const value = params.value as { keepDays?: unknown } | null
           const keepDays = value && typeof value === 'object' ? value.keepDays : undefined
           if (!AGENT_HISTORY_KEEP_DAYS.includes(keepDays as AgentHistoryKeepDays)) {
-            invalid('Keep agent history must be 7, 30 or 90 days, or Never')
+            invalid('Keep agent history must be 10, 30 or 90 days, or Never')
           }
           await this.history.setKeepDays(keepDays as AgentHistoryKeepDays)
           return database.companion('getSettings')

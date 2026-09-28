@@ -324,79 +324,97 @@
   padding-left: 20px;
 }
 
-/* History (Epic 31): segmented limits, agent rows and the one confirm line. Gold marks selection only. */
+/* History (Epic 31): one filled track per limit, kv rows, the one confirm band. Gold marks selection only. */
 .preferences-dialog .history-control {
   flex-direction: column;
   align-items: stretch;
-  gap: 6px;
+  gap: 8px;
 }
 
+/* A 30px track beside an 18px label line: pad the label so both baselines meet. */
+.preferences-dialog .history-section .preferences-row-label {
+  padding-top: 6px;
+}
+
+@media (max-width: 560px) {
+  .preferences-dialog .history-section .preferences-row-label {
+    padding-top: 0;
+  }
+}
+
+/* Segmented: one track, the chosen segment a raised plate with a short gold bar; focus is the white ring. */
 .segmented {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 6px;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 
 .segmented [role='radio'] {
   position: relative;
-  height: 32px;
-  padding: 0 8px 0 11px;
+  min-height: 26px;
+  height: 26px;
+  padding: 0 8px;
   overflow: hidden;
-  border: 1px solid var(--hairline);
-  border-radius: 8px;
-  background: var(--raised);
-  color: var(--text);
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 500;
   white-space: nowrap;
   text-overflow: ellipsis;
+  box-shadow: none;
 }
 
 .segmented [role='radio']::before {
   position: absolute;
-  top: 8px;
-  bottom: 8px;
-  left: 0;
-  width: 2px;
-  border-radius: 0 1px 1px 0;
+  right: 10px;
+  bottom: 3px;
+  left: 10px;
+  height: 2px;
+  border-radius: 1px;
   background: transparent;
   content: '';
   transition: var(--hover-transition);
 }
 
 .segmented [role='radio']:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--text) 18%, transparent);
-  background: var(--hover);
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.segmented [role='radio']:disabled {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  opacity: 1;
 }
 
 .segmented [role='radio'][aria-checked='true'] {
-  border-color: color-mix(in srgb, var(--text) 22%, transparent);
-  background: var(--selected);
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 14%, transparent);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 35%);
 }
 
 .segmented [role='radio'][aria-checked='true']::before {
   background: var(--identity);
 }
 
-.segmented [role='radio']:disabled {
-  opacity: 0.45;
+.segmented:has([role='radio']:disabled) {
+  opacity: 0.5;
 }
 
+/* Agent rows follow .kv: muted keys, bright values, the value column flush right. */
 .preferences-dialog .history-rows {
   grid-template-columns: 96px minmax(0, 1fr) auto;
-  gap: 0 10px;
-  margin: 4px 0 12px;
+  gap: 2px 12px;
+  margin: 4px 0 0;
 }
 
 .preferences-dialog .history-row {
   display: contents;
-}
-
-.preferences-dialog .history-rows dt {
-  color: var(--text);
-  font-weight: 600;
-}
-
-.preferences-dialog .history-rows dd {
-  color: var(--muted);
 }
 
 .preferences-dialog .history-rows dd.value {
@@ -405,6 +423,7 @@
   text-align: right;
 }
 
+.preferences-dialog .history-rows dd.value[title],
 .preferences-dialog .history-rows .next {
   color: var(--text);
 }
@@ -412,13 +431,17 @@
 .preferences-dialog .history-rows dd.failure,
 .preferences-dialog .history-rows dd.note {
   grid-column: 2 / -1;
+  color: var(--muted);
 }
 
+/* The confirm band is its own row: hairline above, dot on the sentence's first line, primary centred on the whole. */
 .preferences-dialog .history-confirm {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 8px 0 12px;
+  margin-top: 10px;
+  padding: 10px 0 12px;
+  border-top: 1px solid var(--hairline);
 }
 
 .preferences-dialog .history-confirm p {
@@ -428,7 +451,6 @@
   font-size: 13px;
 }
 
-/* The sentence may wrap in a narrow window: the dot stays on its first line, the button centred on the whole of it. */
 .preferences-dialog .history-confirm .status-dot {
   margin-top: 6px;
 }
@@ -438,6 +460,7 @@
 }
 
 .preferences-dialog .history-archive {
+  margin-top: 4px;
   border-top: 1px solid var(--hairline);
   padding-top: 12px;
 }

@@ -421,9 +421,9 @@ export interface ArchiveSettings {
 }
 
 /** Days every agent keeps a session untouched before its own mechanism deletes it; null keeps everything. */
-export type AgentHistoryKeepDays = 7 | 30 | 90 | null
+export type AgentHistoryKeepDays = 10 | 30 | 90 | null
 /** Shortest to longest, Never last: the order the segmented control shows. */
-export const AGENT_HISTORY_KEEP_DAYS: readonly AgentHistoryKeepDays[] = Object.freeze([7, 30, 90, null])
+export const AGENT_HISTORY_KEEP_DAYS: readonly AgentHistoryKeepDays[] = Object.freeze([10, 30, 90, null])
 /** What BMN writes as Claude's `cleanupPeriodDays` for Never; 0 is never written (docs/agent-history.md). */
 export const CLAUDE_KEEP_FOREVER_DAYS = 36_500
 /** At most this many sessions per agent are deleted in one run; the rest wait for the next. */

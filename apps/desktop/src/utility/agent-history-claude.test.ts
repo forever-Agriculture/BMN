@@ -49,7 +49,7 @@ describe('Claude history folders', () => {
   it('writes Never as a century and can never write 0', async () => {
     expect(claudeTargetDays(null)).toBe(CLAUDE_KEEP_FOREVER_DAYS)
     expect(CLAUDE_KEEP_FOREVER_DAYS).toBe(36_500)
-    for (const days of [7, 30, 90] as const) expect(claudeTargetDays(days)).toBe(days)
+    for (const days of [10, 30, 90] as const) expect(claudeTargetDays(days)).toBe(days)
     const root = await folder('{"cleanupPeriodDays": 30}')
 
     expect(() => writeClaudeFolder(root, 0)).toThrow(RangeError)

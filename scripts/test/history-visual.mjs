@@ -194,7 +194,7 @@ setTimeout(() => {}, 600_000)
     await page.waitForTimeout(300)
 
     phase('a shorter limit waits for confirmation')
-    await page.locator('.history-section [role="radio"]', { hasText: '7 days' }).first().click()
+    await page.locator('.history-section [role="radio"]', { hasText: '10 days' }).first().click()
     await page.locator('.history-confirm').waitFor()
     await page.locator('.history-section').screenshot({ path: join(evidenceDirectory, 'shorter-pending-black-knight.png') })
     console.log(JSON.stringify({ pending: pending.length, settled: settled.length, directory: evidenceDirectory, agents: settledStatus.agents }))

@@ -78,7 +78,7 @@ model is hosted; Session details adds a Model row with the model name and API ho
 unrecognised model shows no flag rather than a guess. How it is decided:
 [Agent control](agent-control.md#model-origin-flag).
 
-**Agent history.** Preferences → History → Keep agent history (7, 30 or 90 days, or Never; default
+**Agent history.** Preferences → History → Keep agent history (10, 30 or 90 days, or Never; default
 30) is one limit for every agent: Claude Code and `claude glm` get it as their own
 `cleanupPeriodDays`, and BMN deletes Codex and OpenCode sessions untouched for longer through their
 own delete commands, at most 200 per agent per daily run. Cursor has no delete command, so its row

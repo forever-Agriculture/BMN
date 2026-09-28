@@ -1166,7 +1166,7 @@ export function validateSettingsSection(section: string, value: unknown): AppSet
       return { deleteAfterDays: candidate.deleteAfterDays as ArchiveDeleteAfterDays }
     case 'agentHistory': {
       if (!AGENT_HISTORY_KEEP_DAYS.includes(candidate.keepDays as AgentHistoryKeepDays)) {
-        invalid('Keep agent history must be 7, 30 or 90 days, or Never')
+        invalid('Keep agent history must be 10, 30 or 90 days, or Never')
       }
       const confirmed = candidate.confirmedKeepDays
       if (confirmed !== undefined && !AGENT_HISTORY_KEEP_DAYS.includes(confirmed as AgentHistoryKeepDays)) {
@@ -1190,6 +1190,17 @@ export function validateSettingsSection(section: string, value: unknown): AppSet
   }
 }
 
+/** 7 days was retired for 10: a stored 7 reads as 10, so its confirmation and learned folders survive. */
+function upgradeStoredSection(section: SettingsSection, value: unknown): unknown {
+  if (section !== 'agentHistory' || !value || typeof value !== 'object') return value
+  const stored = value as { keepDays?: unknown; confirmedKeepDays?: unknown }
+  return {
+    ...stored,
+    ...(stored.keepDays === 7 ? { keepDays: 10 } : {}),
+    ...(stored.confirmedKeepDays === 7 ? { confirmedKeepDays: 10 } : {})
+  }
+}
+
 export function getSettings(database: DatabaseConnection): AppSettings {
   const rows = database.prepare("SELECT key, value_json FROM app_setting WHERE key IN ('appearance', 'notifications', 'telegram', 'voice', 'archive', 'agentHistory')")
     .all() as Array<{ key: SettingsSection; value_json: string }>
@@ -1203,7 +1214,7 @@ export function getSettings(database: DatabaseConnection): AppSettings {
   }
   for (const row of rows) {
     try {
-      Object.assign(settings[row.key], validateSettingsSection(row.key, JSON.parse(row.value_json)))
+      Object.assign(settings[row.key], validateSettingsSection(row.key, upgradeStoredSection(row.key, JSON.parse(row.value_json))))
     } catch {
       // A corrupt stored section falls back to defaults; the next valid save replaces it.
     }
