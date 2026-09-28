@@ -48,13 +48,15 @@ structure, units and timing were kept, never the owner's values. Raw receipts ar
   - Receipts: `wrapper/wrapper-timing.txt`, `wrapper/wrapper-timing.py`, `wrapper/fake-socket.py`.
     An earlier design, in which a Node runner ran the original, added 87 ms and was dropped
     (`wrapper/wrapper-timing-no-socket.txt`).
-- **Live check.** Claude Code 2.1.283 was run with the wrapped command against a stand-in control
-  socket for one Haiku turn. The owner's line showed on all three refreshes, and the one refresh
-  carrying `rate_limits` produced one valid report (5-hour and weekly windows, context share).
-  Receipts: `wrapper/live-claude-2.1.283-original-shapes.jsonl` and
-  `wrapper/live-claude-2.1.283-socket-shapes.jsonl` (structure and range checks only).
+- **Live check.** A settings file was wrapped by the shipped `bmn statusline install`, then Claude
+  Code 2.1.283 ran one Haiku turn with it against a stand-in control socket. The owner's line showed
+  on all three refreshes, and the one refresh carrying `rate_limits` produced one valid report: windows
+  of 300 and 10 080 minutes and a context share. Receipts:
+  `wrapper/live2-claude-2.1.283-original-shapes.jsonl` and
+  `wrapper/live2-claude-2.1.283-socket-shapes.jsonl` (structure and range checks only).
 - **Limit.** The wrapper needs a status-line command to wrap. `install` leaves a file without one
-  untouched and says so.
+  untouched and says so, as it does a command that already runs `bmn statusline report` in a form
+  this `bmn` did not write.
 
 ## `claude glm` (Claude Code 2.1.283 against Z.ai)
 
@@ -83,11 +85,12 @@ and never lets such a reading replace Claude's plan reading.
 - **Size and time.** On the owner's machine there were 887 rollout files: p50 0.85 MB, p90 4.1 MB,
   p99 25 MB, largest 63 MB. 53 of the 60 newest had a `token_count` line within 256 KiB of the end;
   the other 7 were ~20 KB files without one. The shipped reader:
-  - synthetic 50 MB file with the line near the end: p50 0.42 ms;
-  - synthetic 50 MB file with no line within 256 KiB: p50 1.64 ms, gives up;
-  - the owner's newest real file (0.67 MB): p50 0.35 ms.
+  - synthetic 50 MB file with the line near the end: p50 0.32 ms;
+  - synthetic 50 MB file with no line within 256 KiB: p50 1.45 ms, gives up;
+  - the owner's newest real file (0.67 MB): p50 0.29 ms.
 
-  Receipts: `codex-reader/reader-timing.json` and `codex-reader/reader-timing.test.ts`; the file
+  Receipts: `codex-reader/reader-timing.json` (41 runs each, low machine load) and
+  `codex-reader/reader-timing.timing.ts`; the file
   counts are in `.dev-auto/log.md`, 2026-09-28.
 
 ## OpenCode 1.18.32

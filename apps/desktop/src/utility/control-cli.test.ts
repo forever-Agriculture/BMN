@@ -3689,7 +3689,9 @@ describe('bmn statusline (Story 37.2)', () => {
   it.each([
     ['no statusLine command', { theme: 'dark' }, 'has no statusLine command'],
     ['a statusLine that is not a command', { statusLine: { type: 'static', text: 'x' } }, 'not a command'],
-    ['a file that is not JSON', '{ "statusLine": ', 'is not valid JSON']
+    ['a file that is not JSON', '{ "statusLine": ', 'is not valid JSON'],
+    // Wrapped by another version, or by hand: a second line in front would report every refresh twice.
+    ['a line another bmn wrote', { statusLine: { type: 'command', command: 'bmn statusline report & exec my-line' } }, 'in a form this bmn did not write']
   ])('leaves a file with %s untouched', async (_label, contents, reason) => {
     const path = await hookFileFixture(contents)
     const before = await readFile(path, 'utf8')

@@ -1872,9 +1872,10 @@ function readStatusLine(path) {
     return { state: 'not-a-command', text, data }
   }
   const original = unwrappedStatusLine(statusLine.command)
-  return original === null
-    ? { state: 'unwrapped', text, data, original: statusLine.command }
-    : { state: 'wrapped', text, data, original }
+  if (original !== null) return { state: 'wrapped', text, data, original }
+  // A line another bmn wrote, or one edited by hand: wrapping it again would report twice.
+  if (statusLine.command.includes('bmn statusline report')) return { state: 'other-wrapper', text, data }
+  return { state: 'unwrapped', text, data, original: statusLine.command }
 }
 
 const STATUS_LINE_WORDS = {
@@ -1883,7 +1884,9 @@ const STATUS_LINE_WORDS = {
   none: 'has no statusLine command, so there is nothing to wrap',
   'not-a-command': 'has a statusLine that is not a command, so there is nothing to wrap',
   unwrapped: 'has its own statusLine command, not wrapped by BMN',
-  wrapped: 'has its statusLine command wrapped by BMN'
+  wrapped: 'has its statusLine command wrapped by BMN',
+  'other-wrapper': 'has a statusLine command that already runs bmn statusline report in a form this bmn did not write; '
+    + 'edit it by hand'
 }
 
 function statusLineCommand(argv) {
