@@ -296,6 +296,7 @@ async function start(): Promise<void> {
       parentPort.postMessage(message)
       companionHolder.current?.sessionStateChanged(message.sessionId, message.state)
     },
+    onOutput: (sessionId, bytes) => companionHolder.current?.sessionOutput(sessionId, bytes),
     sessionEnvironment: (sessionIdentity) => companionHolder.current?.sessionEnvironment(sessionIdentity) ?? {}
   })
   const cliPath = process.env.BMN_CLI_PATH ?? join(__dirname, '..', '..', 'bin', 'bmn')

@@ -391,6 +391,22 @@ Your command is kept byte for byte and prints what it printed. Outside a BMN ses
 `bmn` on `PATH`, the added line does nothing. A settings file without a `statusLine` command is left
 alone. Readings are kept in memory only; BMN makes no network call and shows no costs.
 
+### Dev servers
+
+A server a session starts (`pnpm dev`, a preview, `python3 -m http.server`) shows as a plate such as
+**localhost:5173** in the session's pane header, with the full list under **Session details → Ports**
+and an **Open localhost:5173 — session** entry in the palette. A click opens the address in your
+default browser and does nothing to the process. The sidebar shows nothing new.
+
+BMN finds the ports in `/proc`: a listening TCP socket counts for a session when the process holding
+it is yours and its environment carries that session's `BMN_SESSION_ID`, the variable every child
+inherits. That includes a server an agent left running in the background after its shell exited; it
+stays listed under its session, marked "still running after the session stopped". A program that
+clears or replaces its environment is not attributed. Ports 22, 80 and 443 are never shown. BMN reads
+`/proc` every 5 seconds while a session is printing, every 30 seconds otherwise, and half a second
+after a line such as `Local: http://localhost:5173/`; it starts no process and reads nothing when no
+session is running.
+
 ### Wiring the hooks
 
 Two commands do it, and neither needs BMN to be running:

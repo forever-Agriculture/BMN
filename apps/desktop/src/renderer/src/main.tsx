@@ -16,6 +16,9 @@ import {
   type ExplicitConversationBinding,
   type InputDraftRecord,
   type HookOriginRecord,
+  type ListeningPort,
+  type SessionPorts,
+  listeningPortLabel,
   type InterruptedSessionCohort,
   type LaunchTemplateRecord,
   type ProgressRecord,
@@ -43,6 +46,7 @@ import { WorkspaceResultsDialog } from './workspace-results'
 import { prepareWorkspaceHandoffReview, sameHandoffDraft } from './workspace-handoff-review'
 import { HookObservationView } from './hook-observation-view'
 import { PlanUseDialog, PlanUseView } from './plan-use-view'
+import { SessionPortsSection, portDetail, portsFor } from './session-ports'
 import { ResumeInterruptedDialog } from './resume-interrupted-dialog'
 import { LaunchSetsDialog } from './launch-sets-dialog'
 import { RepositoryIdentityView, identityChanged, useRepositoryIdentity } from './repository-identity'
@@ -225,6 +229,7 @@ function App(): React.JSX.Element {
   const [attention, setAttention] = useState<AttentionRecord[]>([])
   const [progress, setProgress] = useState<ProgressRecord[]>([])
   const [hookOrigins, setHookOrigins] = useState<HookOriginRecord[]>([])
+  const [ports, setPorts] = useState<SessionPorts[]>([])
   const [drafts, setDrafts] = useState<InputDraftRecord[]>([])
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS)
   /** Preferences → History waits for Start cleanup (Story 31.1); the gear carries the one attention dot. */
@@ -356,6 +361,10 @@ function App(): React.JSX.Element {
   }
 
   const fail = (fallback: string) => (error: unknown): void => setFailure(failureDetail(error, fallback))
+  /** Opens a listed port in the owner's browser; the process is left alone. */
+  const openPort = (sessionId: string, port: ListeningPort): void => {
+    void window.aiTerminal.openPort(sessionId, port.port).catch(fail(`Could not open ${listeningPortLabel(port)}`))
+  }
   const announce = (message: string): void => {
     setAnnouncement('')
     requestAnimationFrame(() => setAnnouncement(message))
@@ -455,6 +464,8 @@ function App(): React.JSX.Element {
     progress: () => window.aiTerminal.listProgress().then(setProgress),
     // One list read backs every origin flag in the window; each hook event invalidates it.
     hooks: () => window.aiTerminal.listHookOrigins().then(setHookOrigins),
+    // Each scan that changes any session's ports announces it; the list is the last scan's, never a new read of /proc.
+    ports: () => window.aiTerminal.listPorts().then(setPorts),
     drafts: () => window.aiTerminal.listDrafts().then(setDrafts),
     settings: async () => {
       setSettings(await window.aiTerminal.getSettings())
@@ -1383,6 +1394,16 @@ function App(): React.JSX.Element {
         context: ((count) => `${count} ${count === 1 ? 'session' : 'sessions'}`)(visibleWorkspaceSessions(sessions, workspace.workspaceId, false).length),
         run: () => setTree((current) => selectTreeWorkspace(current, workspace.workspaceId))
       })),
+      ...ports.flatMap((entry) => {
+        const session = sessions.find((each) => each.sessionId === entry.sessionId)
+        return session ? entry.ports.map((port): PaletteCommand => ({
+          id: `port-${entry.sessionId}-${port.port}`,
+          group: 'Commands',
+          label: `Open ${listeningPortLabel(port)} — ${session.name}`,
+          context: portDetail(port, entry.stopped),
+          run: () => openPort(entry.sessionId, port)
+        })) : []
+      }),
       command('next-attention', 'Go to next request needing you', nextNeedingYou, { shortcut: SHORTCUT_LABELS['attention-next'], context: `${unresolved.length} waiting` }),
       command('new-workspace', 'New workspace…', () => setDialog({ kind: 'new-workspace' })),
       command('new-session', 'New session…', () => beginNewSession(activeWorkspace), { disabled: !activeWorkspace, context: activeWorkspace?.name }),
@@ -1759,6 +1780,8 @@ function App(): React.JSX.Element {
                 attention={sessionAttention(unresolved, terminalStartup.sessionId)}
                 activity={activity[terminalStartup.sessionId] ?? null}
                 modelOrigin={record ? activeHookOrigin(hookOrigins, record, terminalStartup.incarnationId) : null}
+                ports={portsFor(ports, terminalStartup.sessionId)}
+                onOpenPort={(port) => openPort(terminalStartup.sessionId, port)}
                 onTitle={(title) => noteTitle(terminalStartup.sessionId, title)}
                 onAnswer={() => answerByTyping(terminalStartup.sessionId)}
                 armed={armed}
@@ -1996,6 +2019,8 @@ function App(): React.JSX.Element {
                   incarnationId={sessionIncarnation(selectedRecord)}
                   refreshTick={now}
                 />
+                <SessionPortsSection entry={portsFor(ports, selectedRecord.sessionId)}
+                  onOpen={(port) => openPort(selectedRecord.sessionId, port)} />
                 <section className="inspector-section binding">
                   <h3>Conversation</h3>
                   <p>{bindingPresentation.label}</p>

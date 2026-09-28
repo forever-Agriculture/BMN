@@ -19,6 +19,7 @@ import {
   type HookCheckReport,
   type HookObservation,
   type HookOriginRecord,
+  type SessionPorts,
   type SessionUsage,
   type UsageReading,
   type BackupManifest,
@@ -605,6 +606,12 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   listUsage(): Promise<UsageReading[]> {
     return invokeBridge('aiterm:usage:list', {})
+  },
+  listPorts(): Promise<SessionPorts[]> {
+    return invokeBridge('aiterm:ports:list', {})
+  },
+  openPort(sessionId: string, port: number): Promise<{ url: string }> {
+    return invokeBridge('aiterm:ports:open', { sessionId, port })
   },
   checkHookConfiguration(): Promise<HookCheckReport> {
     return invokeBridge('aiterm:hooks:check', {})

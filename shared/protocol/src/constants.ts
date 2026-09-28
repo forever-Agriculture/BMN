@@ -63,6 +63,7 @@ export const METHOD_REGISTRY = Object.freeze({
   hookOriginsList: 'hookOrigins.list',
   usageGet: 'usage.get',
   usageList: 'usage.list',
+  portsList: 'ports.list',
   progressList: 'progress.list',
   draftList: 'draft.list',
   handoffReview: 'handoff.review',

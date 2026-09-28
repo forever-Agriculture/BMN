@@ -8,6 +8,8 @@ import {
   type AttentionKind,
   type AttentionRecord,
   type ProtocolMethod,
+  type SessionPorts,
+  listeningPortUrl,
   type TelegramOwnerEntry,
   stripFormatCharacters,
   telegramOwnerCue
@@ -49,6 +51,7 @@ const ROUTES = {
   'aiterm:hook-origins:list': METHOD_REGISTRY.hookOriginsList,
   'aiterm:usage:get': METHOD_REGISTRY.usageGet,
   'aiterm:usage:list': METHOD_REGISTRY.usageList,
+  'aiterm:ports:list': METHOD_REGISTRY.portsList,
   'aiterm:hooks:check': METHOD_REGISTRY.hooksCheck,
   'aiterm:attention:terminal-notice': METHOD_REGISTRY.attentionTerminalNotice,
   'aiterm:progress:list': METHOD_REGISTRY.progressList,
@@ -198,6 +201,22 @@ export function installCompanionIpcHandlers(ipc: CompanionIpcRegistrar, actions:
     const failure = await shell.openPath(artifact.storedPath)
     if (failure) throw new MainIpcError(ERROR_CODES.ioError, failure.slice(0, 200))
     return { opened: true }
+  })
+
+  // A port opens only while the last scan lists it under that session; the address is built here, never taken
+  // from the renderer, and the browser is the owner's default one.
+  handle('aiterm:ports:open', async (_event, params) => {
+    const sessionId = requiredText(params, 'sessionId')
+    const port = params.port
+    if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65_535) {
+      throw new MainIpcError(ERROR_CODES.invalidArgument, 'The port is invalid')
+    }
+    const listed = await actions.client().request<SessionPorts[]>(METHOD_REGISTRY.portsList, {})
+    const found = listed.find((entry) => entry.sessionId === sessionId)?.ports.find((each) => each.port === port)
+    if (!found) throw new MainIpcError(ERROR_CODES.invalidArgument, 'That port is no longer listening')
+    const url = listeningPortUrl(found)
+    await shell.openExternal(url)
+    return { url }
   })
 
   handle('aiterm:artifact:show', async (_event, params) => {

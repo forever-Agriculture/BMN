@@ -9,6 +9,8 @@ import {
   TERMINAL_NOTICE_CODES,
   type ColorModeName,
   type HookOriginRecord,
+  type ListeningPort,
+  type SessionPorts,
   type SessionRecord,
   type TerminalExitMessage,
   type TerminalOutputMessage,
@@ -25,6 +27,7 @@ import { ProgressStrip } from './progress-strip'
 import { capTitle, type SessionActivity } from './session-activity'
 import type { ProgressPresentation, SessionAttention } from './session-presentation'
 import { agentTag, modelOriginFlag, modelOriginLabel, observedAgentName } from './session-presentation'
+import { PanePorts } from './session-ports'
 import { parseTerminalNotice } from './terminal-notice'
 import { installTerminalTestHook, type TerminalTestHandle } from './test-hook'
 import { liveTerminalOptions, startSavedOutputCapture } from './terminal-history'
@@ -94,6 +97,9 @@ export function SessionTerminal(props: {
   onTitle(title: string): void
   /** This run's model-origin facts, or null: they name the agent chip and its flag in the heading. */
   modelOrigin: HookOriginRecord | null
+  /** The ports this session's programs listen on, from the last scan (Story 41.2). */
+  ports: SessionPorts | null
+  onOpenPort(port: ListeningPort): void
   /** The owner typed, pasted or dictated into the pane while it needs them. */
   onAnswer(): void
   armed: boolean
@@ -606,6 +612,7 @@ export function SessionTerminal(props: {
           <span className="pane-state">{stateWord}</span>
           <span className="pane-directory">{` · ${props.startup.cwd}`}</span>
         </span>
+        <PanePorts entry={props.ports} onOpen={props.onOpenPort} />
         <div className="pane-actions">
           <button type="button" aria-pressed={props.split} title={`Split (${SHORTCUT_LABELS['split-toggle']})`} onClick={props.onSplit}>
             <Icon name="split" /><span className="button-label">{props.split ? 'Unsplit' : 'Split'}</span>

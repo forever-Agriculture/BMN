@@ -24,6 +24,7 @@ import {
   type HookObservation,
   type HookOriginRecord,
   type HandoffReviewSnapshot,
+  type SessionPorts,
   type SessionRecord,
   type SessionUsage,
   type TelegramStatus,
@@ -38,6 +39,7 @@ import { initializeDatabase, type DatabaseConnection } from './database-initiali
 import { selectConversationRoutes } from './database-binding-store'
 import { createWorkspace, listSessions, listWorkspaces } from './database-workspace-store'
 import type { SessionManager } from './session-manager'
+import type { ProcReader } from './listening-ports'
 import type { ScreenLike } from './remote-answer'
 import type { TelegramConnector } from './telegram-connector'
 import { DEFAULT_WORKSPACE_ID } from './store-schema'
@@ -124,6 +126,7 @@ beforeEach(() => {
   screens = new Map()
   const manager = {
     liveIncarnationId: (sessionId: string) => liveIncarnations.get(sessionId),
+    liveSessionIds: () => [...liveIncarnations.keys()],
     liveLaunchDirectory: (sessionId: string) => liveDirectories.get(sessionId),
     writeToSession: (sessionId: string, bytes: Uint8Array) => writes.push({ sessionId, bytes }),
     screenMirror: (sessionId: string) => screens.get(sessionId),
@@ -2752,5 +2755,48 @@ describe('plan use (Story 37.2)', () => {
 
     expect((service as unknown as { usageReadings: Map<string, unknown> }).usageReadings.has('s1')).toBe(false)
     await expect(plans()).resolves.toHaveLength(1)
+  })
+})
+
+describe('session ports (Story 41.1)', () => {
+  const HEADER = '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode'
+  // 127.0.0.1:5173 and 0.0.0.0:8000, both listening.
+  const TCP = [HEADER,
+    '   0: 0100007F:1435 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 101 1 0 100 0 0 10 0',
+    '   1: 00000000:1F40 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 201 1 0 100 0 0 10 0'].join('\n')
+  const processes: Record<string, { environ: string; fd: string; comm: string }> = {
+    '10': { environ: 'BMN_SESSION_ID=s1\0', fd: 'socket:[101]', comm: 'vite' },
+    // A server whose session BMN no longer knows.
+    '11': { environ: 'BMN_SESSION_ID=deleted-session\0', fd: 'socket:[201]', comm: 'python3' }
+  }
+  const fail = (): never => { throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) }
+  const proc: ProcReader = {
+    readdir: async (path) => path === '/proc' ? Object.keys(processes) : processes[path.split('/')[2]!] ? ['3'] : fail(),
+    readFile: async (path) => {
+      if (path === '/proc/net/tcp') return Buffer.from(TCP)
+      const entry = processes[path.split('/')[2]!]
+      if (!entry) return fail()
+      return Buffer.from(path.endsWith('/environ') ? entry.environ : path.endsWith('/comm') ? `${entry.comm}\n` : fail())
+    },
+    readlink: async (path) => processes[path.split('/')[2]!]?.fd ?? fail(),
+    ownerUid: async () => process.getuid!()
+  }
+  const listed = (target: CompanionService) => target.route(METHOD_REGISTRY.portsList, {}) as Promise<SessionPorts[]>
+
+  it('lists what a scan attributed, marks a stopped session, and forgets a deleted one', async () => {
+    const scanning = new CompanionService({ ...service['options'], proc })
+    await scanning.sessionsChanged()
+    await expect(listed(scanning)).resolves.toEqual([])
+    await (scanning as unknown as { ports: { scanNow(): Promise<void> } }).ports.scanNow()
+    const vite = { port: 5173, address: '127.0.0.1', pid: 10, command: 'vite' }
+    await expect(listed(scanning)).resolves.toEqual([{ sessionId: 's1', stopped: false, ports: [vite] }])
+    expect(emitted.filter((message) => message.topic === 'ports')).toEqual([{ kind: 'app-event', topic: 'ports', sessionId: null }])
+    // The session's own process stops; the server it started keeps listening under it.
+    liveIncarnations.delete('s1')
+    await expect(listed(scanning)).resolves.toEqual([{ sessionId: 's1', stopped: true, ports: [vite] }])
+    database.prepare('DELETE FROM session WHERE session_id = ?').run('s1')
+    await scanning.sessionsChanged()
+    await expect(listed(scanning)).resolves.toEqual([])
+    expect(emitted.filter((message) => message.topic === 'ports')).toHaveLength(2)
   })
 })

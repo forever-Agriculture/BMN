@@ -50,6 +50,7 @@ import {
   type SessionRecord,
   type TelegramStatus,
   type TerminalNoticeCode,
+  type SessionPorts,
   type SessionUsage,
   type UsageAgent,
   type UsageReading
@@ -68,6 +69,8 @@ import { PAGE_AFTER_MS, createAttentionPager } from './attention-pager'
 import { RemoteAnswers, answerRoute, type AnswerOutcome, type AnswerRequest, type PluginAnswer } from './remote-answer'
 import { observeRepeat, REPEAT_NOTICE_AT, type RepeatState, type RepeatSegment } from './repeat-watch'
 import { TelegramCardKeeper } from './telegram-card-keeper'
+import { procReader, scanSessionPorts, type ProcReader } from './listening-ports'
+import { PortWatch } from './port-watch'
 import { AGENT_HISTORY_STATE_KEY, AgentHistory, readHistoryState, type AgentHistoryAdapter } from './agent-history'
 import { TelegramConnector, maskToken, redactToken, type ConnectorHealth, type InboundReply } from './telegram-connector'
 
@@ -135,6 +138,8 @@ export interface CompanionServiceOptions {
   /** How long a question or permission waits before it is paged; only the self-test host shortens it. */
   pageAfterMs?: number
   now?: () => Date
+  /** Where port scans read /proc; tests hand it a fixture tree. */
+  proc?: ProcReader
 }
 
 function invalid(message: string): never {
@@ -267,6 +272,8 @@ export class CompanionService {
   private readonly telegramHost = randomUUID()
   private telegramDetail = 'Telegram is off'
   private sweepTimer: NodeJS.Timeout | undefined
+  /** Local ports each session's programs listen on, read from /proc on its own cadence (Story 41.1). */
+  private readonly ports: PortWatch
   private readonly now: () => Date
   /** Whether the owner is away from the desk, as the app last reported; null while it cannot tell. */
   private ownerAway: boolean | null = null
@@ -370,6 +377,14 @@ export class CompanionService {
 
   constructor(private readonly options: CompanionServiceOptions) {
     this.now = options.now ?? (() => new Date())
+    const proc = options.proc ?? procReader
+    const uid = process.getuid?.() ?? -1
+    this.ports = new PortWatch({
+      scan: (sessionIds) => scanSessionPorts(proc, sessionIds, uid),
+      knownSessionIds: () => new Set(this.knownSessions.keys()),
+      liveSessionIds: () => options.manager.liveSessionIds(),
+      changed: () => this.emit('ports', null)
+    })
     this.pager = createAttentionPager({
       current: (requestId) => this.options.database.companion('getAttention', requestId).catch(() => null),
       send: (record) => this.cards.page(record),
@@ -554,6 +569,7 @@ export class CompanionService {
     }
     this.sweepTimer = setInterval(() => void this.sweepAttention(), ATTENTION_SWEEP_MS)
     this.sweepTimer.unref()
+    this.ports.start()
     // Telegram's first network check must never delay terminal startup.
     void this.restartTelegram().catch(() => undefined)
     // After the archive purge (it ran before this service existed), and late enough not to compete with launches.
@@ -575,12 +591,18 @@ export class CompanionService {
 
   async close(): Promise<void> {
     this.history.stop()
+    this.ports.stop()
     if (this.sweepTimer) clearInterval(this.sweepTimer)
     this.pager.close()
     this.cards.dispose()
     this.answers.dispose()
     await Promise.allSettled([this.control.close(), this.telegram?.stop()])
     await unlink(join(dirname(this.socketPath), 'owner.token')).catch(() => undefined)
+  }
+
+  /** Every chunk a session's program writes: it paces the port scan and may bring it forward. */
+  sessionOutput(sessionId: string, bytes: Uint8Array): void {
+    this.ports.output(sessionId, bytes)
   }
 
   /** Called for every session process transition so exit notices and the session cache stay current. */
@@ -658,6 +680,9 @@ export class CompanionService {
       case METHOD_REGISTRY.usageList:
         // The latest plan reading per agent: the plan is the account's, so any session's reading speaks for it.
         return [...this.planReadings.values()]
+      case METHOD_REGISTRY.portsList:
+        // Read-only: what the last scan found, with a stopped session's leftovers marked. Nothing here reads /proc.
+        return this.ports.list() satisfies SessionPorts[]
       case METHOD_REGISTRY.hookOriginsList:
         // Read-only: each session's own latest origin, never another session's facts beside it.
         return [...this.hookOrigins.values()]
@@ -846,6 +871,7 @@ export class CompanionService {
         if (!this.knownSessions.has(sessionId)) map.delete(sessionId)
       }
     }
+    this.ports.sessionsChanged()
   }
 
   private async sessionsFor(scope: ControlScope): Promise<SessionRecord[]> {

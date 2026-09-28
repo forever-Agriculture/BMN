@@ -958,6 +958,65 @@ input[type='radio'] {
   margin-left: auto;
 }
 
+/* A session's listening ports: small plates, each opening the owner's browser (Story 41.2). No mark, no colour. */
+.pane-ports {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
+.pane-ports .port-chip {
+  min-height: 0;
+  height: 22px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  font: 11px/22px var(--font-mono);
+  white-space: nowrap;
+}
+
+.pane-ports button.port-chip:hover {
+  background: color-mix(in srgb, var(--text) 13%, transparent);
+}
+
+.pane-ports button.port-chip:active {
+  background: color-mix(in srgb, var(--text) 16%, transparent);
+}
+
+.pane-ports .port-chip.more {
+  color: var(--muted);
+}
+
+.session-ports ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The address plate, and under it the program and the bound address in full. */
+.session-ports li {
+  display: grid;
+  justify-items: start;
+  gap: 3px;
+  min-width: 0;
+}
+
+.session-ports .port-open {
+  font-family: var(--font-mono);
+}
+
+.session-ports .port-detail {
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .pane-actions button {
   border-color: transparent;
   color: var(--muted);
@@ -3015,7 +3074,8 @@ input[type='radio'] {
   /* AC5: no state may depend on the mark alone. The directory goes, the agent chip goes, and the session
      name gives up its width before the word does - the name is the one of the three that has a tooltip. */
   .pane-heading .pane-directory,
-  .pane-heading .chip {
+  .pane-heading .chip,
+  .pane-heading .pane-ports {
     display: none;
   }
 

@@ -25,6 +25,7 @@ import type {
   HookEventRecord,
   HookObservation,
   HookOriginRecord,
+  SessionPorts,
   SessionUsage,
   UsageReading,
   InputDraftRecord,
@@ -262,6 +263,13 @@ export interface AiTerminalBridge {
   getUsage(sessionId: string): Promise<SessionUsage>
   /** Read-only: the latest plan reading per agent across all sessions, since a plan belongs to the account. */
   listUsage(): Promise<UsageReading[]>
+  /** Read-only: the local ports each session's programs listen on, as the last /proc scan found them (Story 41.1). */
+  listPorts(): Promise<SessionPorts[]>
+  /**
+   * Opens one listed port in the default browser (Story 41.2). The main process checks the port is still listed
+   * for that session and builds the address itself; nothing is sent to the process.
+   */
+  openPort(sessionId: string, port: number): Promise<{ url: string }>
   /**
    * Read-only: a dated snapshot of what the hook checker found configured for Claude Code, Codex
    * and OpenCode. Never writes a hook file, and carries no configuration contents; exit 1 with a

@@ -239,6 +239,24 @@ export interface UsageReading {
   readAt: string
 }
 
+/** One local TCP port a session's own program listens on (Story 41.1). */
+export interface ListeningPort {
+  port: number
+  /** The bound address: 127.0.0.1, 0.0.0.0, ::1, :: or another interface's own address. */
+  address: string
+  pid: number
+  /** The program's name from `/proc/<pid>/comm`, or null when it could not be read. */
+  command: string | null
+}
+
+/** The ports one session's programs listen on, read from /proc; nothing is stored. */
+export interface SessionPorts {
+  sessionId: string
+  /** The session's own process has stopped, yet a program it started still listens. */
+  stopped: boolean
+  ports: readonly ListeningPort[]
+}
+
 /** What one run of a session reported about plan use, and whose harness it runs when it reported none. */
 export interface SessionUsage {
   sessionId: string
@@ -717,7 +735,8 @@ export const APP_EVENT_TOPICS = [
   'hooks',
   'settings',
   'telegram',
-  'conversations'
+  'conversations',
+  'ports'
 ] as const
 
 export type AppEventTopic = (typeof APP_EVENT_TOPICS)[number]

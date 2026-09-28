@@ -248,6 +248,8 @@ interface SessionManagerOptions {
   conversationBeingDeleted?: (binding: BoundConversationBinding) => boolean
   capabilityProbeTimeoutMs?: number
   onSessionStateChange?: (message: SessionProcessStateChangedMessage) => void
+  /** Every chunk a session's program writes, before any view sees it; it must return quickly. */
+  onOutput?: (sessionId: string, bytes: Uint8Array) => void
   /** Addressed-control variables added after the private-variable filter for each process incarnation. */
   sessionEnvironment?: (identity: SessionIdentity) => Readonly<Record<string, string>>
 }
@@ -505,6 +507,7 @@ export class SessionManager {
   private readonly beingDeleted: (binding: BoundConversationBinding) => boolean
   private readonly capabilityProbeTimeoutMs: number
   private readonly onSessionStateChange: (message: SessionProcessStateChangedMessage) => void
+  private readonly onOutput: ((sessionId: string, bytes: Uint8Array) => void) | undefined
   private readonly claudeSessionIdCapabilities = new Map<string, Promise<ClaudeCapabilityProbeResult>>()
   private readonly conversationBindings = new Map<string, PersistedConversationBinding>()
   /** One SessionStart observation at a time per session, so a claim swap is never interleaved. */
@@ -538,6 +541,7 @@ export class SessionManager {
     this.beingDeleted = options.conversationBeingDeleted ?? (() => false)
     this.capabilityProbeTimeoutMs = options.capabilityProbeTimeoutMs ?? 2_000
     this.onSessionStateChange = options.onSessionStateChange ?? (() => undefined)
+    this.onOutput = options.onOutput
   }
 
   async create(
@@ -2094,6 +2098,7 @@ export class SessionManager {
     session.decsetModes.read(bytes)
     session.outputTail.push(bytes)
     session.mirror?.write(bytes)
+    this.onOutput?.(session.sessionId, bytes)
     this.deliverFrames(session, session.outputFramer.push(bytes))
   }
 
