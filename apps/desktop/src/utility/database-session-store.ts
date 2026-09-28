@@ -67,12 +67,54 @@ export function createStartingSession(
   })()
 }
 
-/** Production SQLite write used by the database worker for a resumed session incarnation. */
+/**
+ * Production SQLite write used by the database worker for a resumed session incarnation. A new process started any
+ * other way than by the reported command's own Resume ends that command's claim on the session (Story 43.1 AC4).
+ */
 export function createResumingSession(
   database: DatabaseConnection,
   record: CreateResumingRecord
 ): void {
-  insertIncarnation(database, record)
+  database.transaction(() => {
+    insertIncarnation(database, record)
+    if (!record.keepReportedResume) {
+      database.prepare('UPDATE session SET reported_resume_json = NULL WHERE session_id = ?').run(record.sessionId)
+    }
+  })()
+}
+
+/** The session's process that is running now; a report from any other is refused. */
+const LIVE_INCARNATION = `EXISTS (
+  SELECT 1 FROM process_incarnation i
+  WHERE i.incarnation_id = ? AND i.session_id = session.session_id AND i.state IN ('starting', 'running')
+)`
+
+/**
+ * Story 43.1: keeps the command a program reported for resuming it, replacing any earlier one, with the process that
+ * reported it. Throws when that process is no longer the session's running one.
+ */
+export function setReportedResume(
+  database: DatabaseConnection,
+  record: { sessionId: string; incarnationId: string; argv: readonly string[]; reportedAt: string }
+): void {
+  const json = JSON.stringify({ argv: record.argv, reportedAt: record.reportedAt, incarnationId: record.incarnationId })
+  const result = database
+    .prepare(`UPDATE session SET reported_resume_json = ? WHERE session_id = ? AND ${LIVE_INCARNATION}`)
+    .run(json, record.sessionId, record.incarnationId)
+  if (Number(result.changes) !== 1) throw new Error(`incarnation ${record.incarnationId} is not current`)
+}
+
+/** Removes the session's reported command at its running process's request; false when none was kept. */
+export function clearReportedResume(
+  database: DatabaseConnection,
+  record: { sessionId: string; incarnationId: string }
+): boolean {
+  const live = database
+    .prepare(`SELECT reported_resume_json AS kept FROM session WHERE session_id = ? AND ${LIVE_INCARNATION}`)
+    .get(record.sessionId, record.incarnationId) as { kept: string | null } | undefined
+  if (!live) throw new Error(`incarnation ${record.incarnationId} is not current`)
+  database.prepare('UPDATE session SET reported_resume_json = NULL WHERE session_id = ?').run(record.sessionId)
+  return live.kept !== null
 }
 
 function updateState(

@@ -4,6 +4,7 @@ import type {
   InterruptedSessionEntry,
   ResumableStopCause
 } from '@bmn/protocol'
+import { reportedResumeProvenance } from './conversation-resume'
 
 export type ResumeRowOutcome =
   | { kind: 'pending' }
@@ -21,6 +22,8 @@ export interface ResumeInterruptedRow {
   notCarried: string
   /** Why this row can only be started again; empty for a Resume row. */
   relaunchReason: string
+  /** Who said this Resume command, for a command a program reported (Story 43.2); empty otherwise. */
+  reported: string
   checked: boolean
   outcome: ResumeRowOutcome
 }
@@ -69,7 +72,8 @@ export function resumeInterruptedSummary(cohort: InterruptedSessionCohort): stri
 /**
  * Resume rows are checked: reopening a conversation is what the owner was doing by hand anyway.
  * Start again rows are not, because rerunning a stored command is not the same as resuming
- * a conversation, and BMN cannot tell what that command would do a second time.
+ * a conversation, and BMN cannot tell what that command would do a second time. Nor is a Resume
+ * that runs a command a program reported (Story 43.2): the owner ticks it after reading it.
  */
 export function resumeInterruptedRows(
   cohort: InterruptedSessionCohort
@@ -82,7 +86,8 @@ export function resumeInterruptedRows(
     command: entry.command,
     notCarried: entry.notCarried,
     relaunchReason: entry.relaunchReason ?? '',
-    checked: entry.action === 'resume',
+    reported: entry.reportedAt === undefined ? '' : reportedResumeProvenance(entry.reportedAt),
+    checked: entry.action === 'resume' && entry.reportedAt === undefined,
     outcome: { kind: 'pending' }
   }))
 }

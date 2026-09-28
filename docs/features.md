@@ -149,9 +149,11 @@ before a crash, after the last snapshot, can be lost; BMN says so when it recove
 through each CLI's own resume; for OpenCode through `opencode --session <id>`; for Cursor through
 `cursor-agent --resume=<id>`. It works only for a
 session whose conversation BMN knows: one pinned at launch, one you located by hand, or one the
-harness reported. Anything else says so and offers **Start again** instead. The Resume dialog shows
-the exact command before anything runs, and names any stored argument the CLI's resume will not
-take.
+harness reported. Any other program can report its own resume command with `bmn resume-command`
+([agent-control.md](agent-control.md#resume-for-any-program)); where BMN has no conversation of its
+own, Resume offers that command, shown exactly with the folder and the time the program reported
+it. Anything else says so and offers **Start again** instead. The Resume dialog shows the exact
+command before anything runs, and names any stored argument the CLI's resume will not take.
 
 Windows and processes end separately:
 
@@ -168,7 +170,8 @@ update waits for BMN to exit; it does not stop sessions itself. Quit to get the 
 update. Closing the last window and choosing Stop records *last window close* instead, so those
 sessions remain individually resumable without a resume-all offer.
 Each row shows the exact command — *Resume*, or *Start again* for a session without a bound
-conversation. Resume rows are pre-checked; the rows start in order, one at a time, and stop after
+conversation. Resume rows are pre-checked, except a Resume that runs a command a program reported,
+which you tick yourself; the rows start in order, one at a time, and stop after
 the first failure, so every row ends up reading *started*, *failed* with the reason, or *not
 started*. Nothing begins until you press the button, the offer is made once per stop, and
 **Resume interrupted sessions…** in the palette reopens it afterwards.

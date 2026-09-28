@@ -19,6 +19,8 @@ import {
 import {
   clearSessionConversationBinding,
   createResumingSession,
+  clearReportedResume,
+  setReportedResume,
   createStartingSession,
   getSessionConversationBinding,
   listSessionConversationRoutes,
@@ -165,7 +167,20 @@ function handle(request: WorkerRequest): unknown {
         sessionId: requiredString(params, 'sessionId'),
         incarnationId: requiredString(params, 'incarnationId'),
         processStartIdentity: requiredString(params, 'processStartIdentity'),
-        startedAt: requiredString(params, 'startedAt')
+        startedAt: requiredString(params, 'startedAt'),
+        ...(params.keepReportedResume === true ? { keepReportedResume: true as const } : {})
+      })
+    case 'resume-command-set':
+      return setReportedResume(database, {
+        sessionId: requiredString(params, 'sessionId'),
+        incarnationId: requiredString(params, 'incarnationId'),
+        argv: requiredStringArray(params, 'argv'),
+        reportedAt: requiredString(params, 'reportedAt')
+      })
+    case 'resume-command-clear':
+      return clearReportedResume(database, {
+        sessionId: requiredString(params, 'sessionId'),
+        incarnationId: requiredString(params, 'incarnationId')
       })
     case 'binding-get':
       return getSessionConversationBinding(database, requiredString(params, 'sessionId'))

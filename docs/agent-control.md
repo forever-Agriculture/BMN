@@ -56,6 +56,12 @@ Commands:
   resolve <request-key> <resolution>        Resolve an attention request
   send <text> | --text-file - [--submit] [--key K]
                                             Paste text into the session; --submit also presses Enter
+  resume-command -- <command> [args...] [--key K]
+  resume-command --clear [--key K]          Tell BMN the exact command that resumes the program running in
+                                            this session: a plain name on PATH, then its arguments, at most 64
+                                            parts. Resume offers it only when BMN has no conversation of its
+                                            own, and runs it only after the owner reads it. Outside BMN it
+                                            records nothing and exits 0
   answer take [--wait S] [--reported R=ok|failed]
                                             Collect, once, the answers BMN decided from a Telegram tap for
                                             this session's own OpenCode requests (used by BMN's plugin);
@@ -411,6 +417,33 @@ session runs again. After its first read, each read spends at most a few millise
 programs' open files, so while tests open and close servers, or when a long-running program opens a
 new port, that port can take a read or two more to appear.
 
+### Resume for any program
+
+BMN resumes Claude Code, Codex, OpenCode and Cursor itself. Any other program — a wrapper, a new
+agent, a long-running script — can tell BMN how to resume it:
+
+```bash
+bmn resume-command -- my-agent --resume "$MY_SESSION_ID" --model my-model
+bmn resume-command --clear
+```
+
+Everything after `--` is the command exactly as it will run: a plain command name found on the
+session's `PATH` (not a path), then its arguments, at most 64 parts of at most 1,024 bytes each and
+8 KiB in all, with no control or invisible formatting characters. A command that breaks a rule is
+refused with the rule it broke. A later report replaces the earlier one; `--key` makes a retry
+safe. Outside BMN the command records nothing, says so and exits 0, so a wrapper can run it
+anywhere.
+
+BMN keeps the command with the session, so it survives a restart, until a new process starts in
+the session any way other than its own Resume. **Session details** shows it under Conversation
+with the time it was reported. When BMN has a conversation of its own for the session, Resume
+reopens that, as before; otherwise Resume offers the reported command, showing it exactly with the
+program it resolves to, the session's folder and who reported it when, and runs it only when you
+press Resume. It starts the way every session launch does — BMN's environment rules and a new
+token, never through a shell. If the program is no longer on `PATH`, Resume says so and offers
+**Start again**. The **Resume interrupted sessions…** dialog lists such a session with its command,
+unchecked.
+
 ### Wiring the hooks
 
 Two commands do it, and neither needs BMN to be running:
@@ -666,6 +699,7 @@ What to send, and when
   progress <state> <label>  a real change of state, not a running commentary.
   ask <key> <title>       a decision only the owner can make; go on with what does not need it.
   withdraw <key>          the moment the answer arrives or the question stops mattering.
+  resume-command -- <cmd> [args]  the exact command that resumes you, once you know it.
 
 Your states are claims, not verdicts
   claimed-done says you believe the work is finished. The owner sees it as your claim.
@@ -731,6 +765,10 @@ bmn hook is not yours
   throws away what the app answers, so every refusal is written with its reason to
   `refused-requests.log` in BMN's state folder (`$XDG_STATE_HOME/bmn/`), newest last and owner-only.
   The file is trimmed back to its newest half as soon as an append carries it past 256 KiB.
+- `resume.report` and `resume.clear` are accepted only from a session token, for its own live
+  process. A reported command is never started by the report: only the owner's Resume runs it,
+  after the dialog showed it, and a start whose command no longer matches what was shown is
+  refused.
 - `bmn list` and `bmn snapshot` carry each session's conversation route beside the fields they
   already had, as `conversation: { status, captureRoute }`, or `null` for a session with no
   binding. The reference itself is never listed, and a session sees only its own.

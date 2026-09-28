@@ -84,6 +84,7 @@ export function ResumeInterruptedDialog(props: {
               <span className="action">{row.action === 'resume' ? 'Resume' : 'Start again'}:</span>{' '}
               <code>{row.command}</code>
             </p>
+            {row.reported ? <p className="note">{row.reported}</p> : null}
             {row.notCarried ? <p className="note">{row.notCarried}</p> : null}
             {row.relaunchReason ? <p className="note">{row.relaunchReason}</p> : null}
             {row.outcome.kind !== 'pending'

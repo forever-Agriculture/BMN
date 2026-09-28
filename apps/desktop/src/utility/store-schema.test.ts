@@ -20,9 +20,9 @@ afterEach(async () => {
 })
 
 describe('owned database schema', () => {
-  it('contains the nineteen ordered migrations and only the owned tables', () => {
+  it('contains the twenty ordered migrations and only the owned tables', () => {
     expect(DATABASE_MIGRATIONS.map((migration) => migration.version))
-      .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19])
+      .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20])
     expect(STORY_SCHEMA_TABLES).toEqual([
       'app_setting',
       'artifact',
@@ -190,7 +190,8 @@ describe('owned database schema', () => {
           { version: 1 }, { version: 2 }, { version: 3 }, { version: 4 },
           { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }, { version: 9 },
           { version: 10 }, { version: 11 }, { version: 12 }, { version: 13 }, { version: 14 },
-          { version: 15 }, { version: 16 }, { version: 17 }, { version: 18 }, { version: 19 }
+          { version: 15 }, { version: 16 }, { version: 17 }, { version: 18 }, { version: 19 },
+          { version: 20 }
         ])
       expect(database.prepare('SELECT applied_at FROM schema_migration WHERE version = 3').get())
         .toEqual({ applied_at: migratedAt })
@@ -305,7 +306,8 @@ describe('owned database schema', () => {
           { version: 16, applied_at: migratedAt },
           { version: 17, applied_at: migratedAt },
           { version: 18, applied_at: migratedAt },
-          { version: 19, applied_at: migratedAt }
+          { version: 19, applied_at: migratedAt },
+          { version: 20, applied_at: migratedAt }
         ])
       expect(database.prepare('SELECT COUNT(*) AS count FROM workspace_layout').get())
         .toEqual({ count: 2 })
@@ -352,7 +354,7 @@ describe('owned database schema', () => {
         state: 'draft'
       })
       expect(database.prepare('SELECT version FROM schema_migration ORDER BY version DESC LIMIT 1').get())
-        .toEqual({ version: 19 })
+        .toEqual({ version: 20 })
     } finally {
       database.close()
     }
@@ -625,5 +627,31 @@ it('widens the binding CHECKs for Cursor at version 19 and keeps every earlier r
     expect(database.pragma('foreign_key_check')).toEqual([])
     initializeDatabase(database, '2026-09-28T01:00:00.000Z')
     expect(database.prepare('SELECT COUNT(*) AS count FROM conversation_binding').get()).toEqual({ count: 5 })
+  } finally { database.close() }
+})
+
+it('adds the reported resume command at version 20, empty for every existing session and only as valid JSON', () => {
+  const database = new BetterSqlite3(':memory:')
+  const at = '2026-09-29T00:00:00.000Z'
+  try {
+    for (const migration of DATABASE_MIGRATIONS.filter((item) => item.version <= 19)) {
+      database.exec(migration.sql)
+      database.prepare('INSERT INTO schema_migration VALUES (?, ?)').run(migration.version, at)
+    }
+    database.prepare(
+      `INSERT INTO session(session_id, workspace_id, name, cwd, executable, argv_json, revision, created_at, position)
+       VALUES ('old-session', ?, 'Old', '/work', '/bin/bash', '[]', 1, ?, 0)`
+    ).run(DEFAULT_WORKSPACE_ID, at)
+    const before = database.prepare("SELECT * FROM session WHERE session_id = 'old-session'").get() as object
+
+    initializeDatabase(database, '2026-09-29T01:00:00.000Z')
+
+    expect(database.prepare("SELECT * FROM session WHERE session_id = 'old-session'").get())
+      .toEqual({ ...before, reported_resume_json: null })
+    database.prepare("UPDATE session SET reported_resume_json = ? WHERE session_id = 'old-session'")
+      .run('{"argv":["my-agent","--resume","abc"],"reportedAt":"2026-09-29T01:00:00.000Z","incarnationId":"i-1"}')
+    expect(() => database.prepare("UPDATE session SET reported_resume_json = 'not json' WHERE session_id = 'old-session'").run())
+      .toThrow(/CHECK constraint/)
+    expect(database.pragma('foreign_key_check')).toEqual([])
   } finally { database.close() }
 })

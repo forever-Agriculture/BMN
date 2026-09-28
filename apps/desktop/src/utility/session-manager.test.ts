@@ -28,6 +28,7 @@ import {
   PersistedSessionStartError,
   SessionManager,
   buildShellEnvironment,
+  findStoredSession,
   resolveHomeDirectory,
   type CreateResumingRecord,
   type CreateStartingRecord,
@@ -45,11 +46,13 @@ import {
   initializeDatabase,
   type DatabaseConnection
 } from './database-initialization'
-import { captureRelevantLaunchEnvironment } from './conversation-binding'
+import { captureRelevantLaunchEnvironment, shownCommand } from './conversation-binding'
 import {
+  clearReportedResume,
   clearSessionConversationBinding,
   createResumingSession,
   createStartingSession,
+  setReportedResume,
   getSessionConversationBinding,
   markCohortOffered,
   markSessionExited,
@@ -59,6 +62,7 @@ import {
   selectInterruptedIncarnations
 } from './database-session-store'
 import { listSessions, listWorkspaces } from './database-workspace-store'
+import { missingProgramReason } from './reported-resume'
 import { installBundledTerminfo } from './terminal-graphics'
 import { TerminalByteFramer, type TerminalFrame } from './terminal-byte-framer'
 import { HostOutputQueue } from './transport'
@@ -275,6 +279,8 @@ function sqliteSessionStore(database: DatabaseConnection): SessionStore {
     getConversationBinding: async (sessionId) => getSessionConversationBinding(database, sessionId),
     replaceConversationBinding: async (binding) => replaceSessionConversationBinding(database, binding),
     clearConversationBinding: async (sessionId) => clearSessionConversationBinding(database, sessionId),
+    setReportedResume: async (record) => setReportedResume(database, record),
+    clearReportedResume: async (record) => clearReportedResume(database, record),
     markRunning: async (incarnationId) => markSessionRunning(database, incarnationId),
     markExited: async (incarnationId, exit) => markSessionExited(database, incarnationId, exit),
     markInterrupted: async (incarnationId, reason) => markSessionInterrupted(database, incarnationId, reason),
@@ -311,6 +317,8 @@ class FakeStore implements SessionStore {
   readonly running = new Set<string>()
   readonly exited = new Map<string, IncarnationExit>()
   readonly interrupted = new Map<string, string>()
+  /** Story 43.1: each session's reported resume command, with the process that reported it. */
+  readonly reportedResume = new Map<string, { argv: string[]; reportedAt: string; incarnationId: string }>()
   /** Holds a binding write open, so a test can act while a claim swap is still uncommitted. */
   replaceGate: (() => Promise<void>) | undefined
   /** Fails the next binding write once, to exercise the rollback of an uncommitted swap. */
@@ -336,7 +344,8 @@ class FakeStore implements SessionStore {
   async listSessions(workspaceId: string): Promise<readonly SessionRecord[]> {
     const sessionIds = new Set([
       ...this.startingRecords.map((record) => record.sessionId),
-      ...this.bindings.keys()
+      ...this.bindings.keys(),
+      ...this.reportedResume.keys()
     ])
     return [...sessionIds].map((sessionId, position) => {
       const created = this.startingRecords.find((record) => record.sessionId === sessionId)
@@ -353,7 +362,9 @@ class FakeStore implements SessionStore {
         revision: 1,
         createdAt: created?.startedAt ?? '2026-09-13T00:00:00.000Z',
         archivedAt: null,
-        lastProcess: null
+        lastProcess: null,
+        ...((reported) => reported ? { reportedResume: { argv: [...reported.argv], reportedAt: reported.reportedAt } } : {})(
+          this.reportedResume.get(sessionId))
       }
     })
   }
@@ -368,6 +379,17 @@ class FakeStore implements SessionStore {
 
   async createResuming(record: CreateResumingRecord): Promise<void> {
     this.resuming.push(record.incarnationId)
+    if (!record.keepReportedResume) this.reportedResume.delete(record.sessionId)
+  }
+
+  async setReportedResume(record: { sessionId: string; incarnationId: string; argv: readonly string[]; reportedAt: string }): Promise<void> {
+    if (!this.running.has(record.incarnationId)) throw new Error(`incarnation ${record.incarnationId} is not current`)
+    this.reportedResume.set(record.sessionId, { argv: [...record.argv], reportedAt: record.reportedAt, incarnationId: record.incarnationId })
+  }
+
+  async clearReportedResume(record: { sessionId: string; incarnationId: string }): Promise<boolean> {
+    if (!this.running.has(record.incarnationId)) throw new Error(`incarnation ${record.incarnationId} is not current`)
+    return this.reportedResume.delete(record.sessionId)
   }
 
   async getConversationBinding(
@@ -5415,5 +5437,319 @@ describe('screen mirror for sessions running an agent (Epic 30.2)', () => {
     expect(restarted.lines().join('\n')).toContain('the dialog')
     pty.emitExit({ exitCode: 0 })
     expect(manager.screenMirror(created.sessionId)).toBeUndefined()
+  })
+})
+
+describe('a command a program in the session reports to resume it (Epic 43)', () => {
+  const reference = '01a0b657-21a8-7f00-addd-b73646828f5b'
+
+  /**
+   * Real records, because the command lives in them: one session whose PATH holds a single program, `my-agent`, in a
+   * folder of its own. `build` makes another manager over the same records, as BMN does when it starts again.
+   */
+  async function reportingSession(options: { executableName?: string; argv?: readonly string[] } = {}) {
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-reported-resume-'))
+    createdRoots.add(cwd)
+    const bin = join(cwd, 'bin')
+    await mkdir(bin)
+    const program = join(bin, 'my-agent')
+    await writeFile(program, '#!/bin/sh\n')
+    await chmod(program, 0o700)
+    let executable = process.execPath
+    if (options.executableName) {
+      executable = join(cwd, options.executableName)
+      await writeFile(executable, '#!/bin/sh\n')
+      await chmod(executable, 0o700)
+    }
+    const database = new BetterSqlite3(':memory:')
+    initializeDatabase(database, '2026-09-29T09:00:00.000Z')
+    const spawns: Array<{
+      executable: string
+      argv: readonly string[]
+      cwd: string | undefined
+      env: Readonly<Record<string, string | undefined>>
+    }> = []
+    const build = (): SessionManager => new SessionManager({
+      store: sqliteSessionStore(database),
+      spawnPty: (command, argv, spawnOptions) => {
+        spawns.push({ executable: command, argv: [...argv], cwd: spawnOptions.cwd, env: spawnOptions.env })
+        return new SignalExitFakePty()
+      },
+      processStartIdentity: async (pid) => `linux-proc-start:${pid}`,
+      conversationReferenceExists: async () => true,
+      sessionPath: () => `/bmn-test-missing-folder:${bin}`,
+      sendTerminalMessage: () => undefined
+    })
+    const manager = build()
+    const created = await manager.create({
+      ...DEFAULT_SESSION_CREATION,
+      name: 'Wrapper',
+      cwd,
+      executable,
+      argv: [...(options.argv ?? ['--version'])],
+      cols: 80,
+      rows: 24
+    })
+    const stored = async () => (await findStoredSession(sqliteSessionStore(database), created.sessionId))?.reportedResume
+    const report = (argv: readonly string[], from = manager) =>
+      from.reportResumeCommand({ sessionId: created.sessionId, incarnationId: created.incarnationId, argv })
+    return { database, manager, build, created, cwd, program, executable, spawns, stored, report }
+  }
+
+  it('records the command for the running process, replaces an earlier one, and clears it (43.1 AC1)', async () => {
+    const { database, manager, created, stored, report } = await reportingSession()
+    try {
+      const first = await report(['my-agent', '--resume', 'abc'])
+      expect(first).toEqual({ argv: ['my-agent', '--resume', 'abc'], reportedAt: expect.any(String) })
+      await expect(stored()).resolves.toEqual(first)
+
+      const second = await report(['my-agent', '--resume', 'def', '--model', 'my-model'])
+      await expect(stored()).resolves.toEqual(second)
+
+      const identity = { sessionId: created.sessionId, incarnationId: created.incarnationId }
+      await expect(manager.clearResumeCommand(identity)).resolves.toBe(true)
+      await expect(stored()).resolves.toBeUndefined()
+      await expect(manager.clearResumeCommand(identity)).resolves.toBe(false)
+    } finally {
+      database.close()
+    }
+  })
+
+  it('refuses a command that breaks a rule, says which, and keeps the one it had (43.1 AC2)', async () => {
+    const { database, stored, report } = await reportingSession()
+    try {
+      const kept = await report(['my-agent', '--resume', 'abc'])
+      const refusals: Array<[readonly string[], string]> = [
+        [[], 'The command is missing'],
+        [['/usr/bin/my-agent'], 'The program must be a plain command name found on PATH, not a path'],
+        [['./my-agent'], 'The program must be a plain command name found on PATH, not a path'],
+        [['missing-agent', '--resume'], 'The program "missing-agent" is not on this session\'s PATH'],
+        [['my-agent', 'a‮b'], 'Part 2 of the command contains a control or invisible formatting character'],
+        [['my-agent', 'line\nbreak'], 'Part 2 of the command contains a control or invisible formatting character'],
+        [['my-agent', ...Array.from({ length: 64 }, () => 'x')], 'The command has 65 parts; at most 64 are allowed'],
+        [['my-agent', 'x'.repeat(1025)], 'each may be at most 1024'],
+        [['my-agent', ...Array.from({ length: 9 }, () => 'x'.repeat(1000))], 'at most 8192 are allowed']
+      ]
+      for (const [argv, message] of refusals) {
+        await expect(report(argv)).rejects.toMatchObject({
+          code: ERROR_CODES.invalidArgument,
+          message: expect.stringContaining(message)
+        })
+      }
+      await expect(stored()).resolves.toEqual(kept)
+    } finally {
+      database.close()
+    }
+  })
+
+  it('accepts a report only from the process that is running now (43.1 AC1)', async () => {
+    const { database, manager, created, stored, report } = await reportingSession()
+    try {
+      const refused = { code: ERROR_CODES.unauthorized, message: 'This process is no longer the session\'s running one' }
+      await expect(manager.reportResumeCommand({
+        sessionId: created.sessionId, incarnationId: 'not-the-running-one', argv: ['my-agent']
+      })).rejects.toMatchObject(refused)
+      await report(['my-agent', '--resume', 'abc'])
+      await manager.stop(created, 'explicit')
+
+      await expect(report(['my-agent', '--resume', 'later'])).rejects.toMatchObject(refused)
+      await expect(manager.clearResumeCommand({ sessionId: created.sessionId, incarnationId: created.incarnationId }))
+        .rejects.toMatchObject(refused)
+      await expect(stored()).resolves.toMatchObject({ argv: ['my-agent', '--resume', 'abc'] })
+    } finally {
+      database.close()
+    }
+  })
+
+  it('keeps the command through a stop and a restart of BMN, and drops it when Start again runs (43.1 AC4, AC5)', async () => {
+    const { database, manager, build, created, stored, report } = await reportingSession()
+    try {
+      const reported = await report(['my-agent', '--resume', 'abc'])
+      await manager.stop(created, 'explicit')
+      await expect(stored()).resolves.toEqual(reported)
+
+      const restarted = build()
+      await expect(restarted.conversationResumePreview(created.sessionId))
+        .resolves.toMatchObject({ source: 'reported', argv: reported.argv, reportedAt: reported.reportedAt })
+
+      await restarted.relaunch({ sessionId: created.sessionId, cols: 80, rows: 24 })
+      await expect(stored()).resolves.toBeUndefined()
+      // What a session never bound says today (43.2 AC5).
+      await expect(restarted.conversationResumePreview(created.sessionId))
+        .rejects.toThrow('Native conversation resume is available only for direct')
+    } finally {
+      database.close()
+    }
+  })
+
+  it('Resume starts the reported command in the session folder, exactly as shown, and keeps it (43.2 AC2)', async () => {
+    const { database, manager, created, cwd, program, spawns, stored, report } = await reportingSession()
+    try {
+      const reported = await report(['my-agent', '--resume', 'abc', '--title', 'two words'])
+      await manager.stop(created, 'explicit')
+      const preview = await manager.conversationResumePreview(created.sessionId)
+      expect(preview).toEqual({
+        sessionId: created.sessionId,
+        source: 'reported',
+        argv: reported.argv,
+        program,
+        cwd,
+        reportedAt: reported.reportedAt,
+        command: shownCommand(program, ['--resume', 'abc', '--title', 'two words']),
+        refusal: null
+      })
+      const firstLaunch = spawns[0]!
+
+      await expect(manager.resume({
+        sessionId: created.sessionId, cols: 80, rows: 24, expectedCommand: `${preview.command} --yolo`
+      })).rejects.toThrow('The command changed since it was shown; nothing was started')
+      expect(spawns).toHaveLength(1)
+
+      const resumed = await manager.resume({
+        sessionId: created.sessionId, cols: 100, rows: 30, expectedCommand: preview.command
+      })
+      expect(resumed.launch).toEqual({ cwd, executable: program })
+      expect(resumed.binding).toBeUndefined()
+      // The words arrive as separate arguments, so no shell ever read them; the environment is any launch's.
+      expect(spawns.at(-1)).toEqual({
+        executable: program, argv: ['--resume', 'abc', '--title', 'two words'], cwd, env: firstLaunch.env
+      })
+      await expect(stored()).resolves.toEqual(reported)
+      await expect(manager.health()).resolves.toMatchObject({ liveSessions: 1 })
+    } finally {
+      database.close()
+    }
+  })
+
+  it('refuses Resume once the program has left PATH, names why, and Start again still runs (43.2 AC4)', async () => {
+    const { database, manager, created, program, executable, spawns, report } = await reportingSession()
+    try {
+      await report(['my-agent', '--resume', 'abc'])
+      await manager.stop(created, 'explicit')
+      await rm(program)
+      spawns.length = 0
+
+      await expect(manager.conversationResumePreview(created.sessionId)).resolves.toMatchObject({
+        source: 'reported', program: null, command: '', refusal: missingProgramReason('my-agent')
+      })
+      await expect(manager.resume({ sessionId: created.sessionId, cols: 80, rows: 24 }))
+        .rejects.toMatchObject({ code: ERROR_CODES.notFound, message: missingProgramReason('my-agent') })
+      expect(spawns).toEqual([])
+
+      await manager.relaunch({ sessionId: created.sessionId, cols: 80, rows: 24 })
+      expect(spawns.map(({ executable: started, argv }) => [started, argv])).toEqual([[executable, ['--version']]])
+    } finally {
+      database.close()
+    }
+  })
+
+  it('says so when a session has neither a conversation nor a reported command (43.2 AC5)', async () => {
+    const { database, manager, created, spawns } = await reportingSession()
+    try {
+      await manager.stop(created, 'explicit')
+      spawns.length = 0
+      // The binding's own reason, as before this epic.
+      const neither = 'Native conversation resume is available only for direct'
+      await expect(manager.conversationResumePreview(created.sessionId)).rejects.toThrow(neither)
+      await expect(manager.resume({ sessionId: created.sessionId, cols: 80, rows: 24 })).rejects.toThrow(neither)
+      expect(spawns).toEqual([])
+    } finally {
+      database.close()
+    }
+  })
+
+  it('resumes a captured conversation as before even when a command was reported, and then drops the command (43.2 AC1)', async () => {
+    const { database, manager, created, cwd, executable, spawns, stored, report } =
+      await reportingSession({ executableName: 'codex', argv: ['--model', 'gpt-6'] })
+    try {
+      await report(['my-agent', '--resume', 'abc'])
+      await manager.observeConversation({
+        sessionId: created.sessionId,
+        incarnationId: created.incarnationId,
+        agentCli: 'codex',
+        conversationReference: reference,
+        source: 'startup'
+      })
+      await manager.stop(created, 'explicit')
+      await expect(manager.conversationResumePreview(created.sessionId))
+        .resolves.toMatchObject({ agentCli: 'codex', conversationReference: reference })
+
+      const resumed = await manager.resume({ sessionId: created.sessionId, cols: 80, rows: 24 })
+
+      expect(resumed.binding).toMatchObject({ status: 'bound', conversationReference: reference })
+      expect(resumed.launch).toEqual({ cwd, executable })
+      expect(spawns.at(-1)).toMatchObject({ executable, argv: ['resume', reference, '--model', 'gpt-6'], cwd })
+      await expect(stored()).resolves.toBeUndefined()
+    } finally {
+      database.close()
+    }
+  })
+
+  it('resumes an agent BMN knows but holds no conversation for by the command it reported (43.2 AC2)', async () => {
+    const { database, manager, created, program, spawns, report } =
+      await reportingSession({ executableName: 'codex', argv: ['--model', 'gpt-6'] })
+    try {
+      await expect(manager.conversationBinding(created.sessionId)).resolves.toMatchObject({ status: 'unsupported' })
+      await report(['my-agent', '--resume', 'abc'])
+      await manager.stop(created, 'explicit')
+      const preview = await manager.conversationResumePreview(created.sessionId)
+      expect(preview).toMatchObject({ source: 'reported', program })
+
+      await manager.resume({ sessionId: created.sessionId, cols: 80, rows: 24, expectedCommand: preview.command })
+
+      expect(spawns.at(-1)).toMatchObject({ executable: program, argv: ['--resume', 'abc'] })
+    } finally {
+      database.close()
+    }
+  })
+
+  it('lists a reported command after an update restart with its exact command, and starts it from the row (43.2 AC3)', async () => {
+    const { database, manager, created, cwd, program, spawns, report } = await reportingSession()
+    try {
+      const reported = await report(['my-agent', '--resume', 'abc'])
+      await manager.stop(created, 'update-restart')
+      spawns.length = 0
+      const command = shownCommand(program, ['--resume', 'abc'])
+
+      const cohort = (await manager.interruptedCohort())!
+      expect(cohort.entries).toEqual([expect.objectContaining({
+        sessionId: created.sessionId,
+        action: 'resume',
+        command,
+        notCarried: '',
+        relaunchReason: null,
+        reportedAt: reported.reportedAt
+      })])
+
+      const result = await manager.resumeCohort({
+        cohortId: cohort.cohortId,
+        idempotencyKey: 'reported-1',
+        entries: [{ sessionId: created.sessionId, action: 'resume', command, cols: 80, rows: 24 }]
+      })
+      expect(result.entries[0]).toMatchObject({ outcome: 'started', started: { cwd, executable: program } })
+      expect(spawns).toEqual([expect.objectContaining({ executable: program, argv: ['--resume', 'abc'], cwd })])
+    } finally {
+      database.close()
+    }
+  })
+
+  it('lists a reported command whose program is gone as Start again, with the reason (43.2 AC3, AC4)', async () => {
+    const { database, manager, created, program, executable, report } = await reportingSession()
+    try {
+      await report(['my-agent', '--resume', 'abc'])
+      await manager.stop(created, 'update-restart')
+      await rm(program)
+
+      const cohort = (await manager.interruptedCohort())!
+      expect(cohort.entries).toEqual([expect.objectContaining({
+        sessionId: created.sessionId,
+        action: 'relaunch',
+        command: shownCommand(executable, ['--version']),
+        relaunchReason: missingProgramReason('my-agent')
+      })])
+      expect(cohort.entries[0]).not.toHaveProperty('reportedAt')
+    } finally {
+      database.close()
+    }
   })
 })

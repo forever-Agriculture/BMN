@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { ConversationResumePreview, MissingConversationBinding } from '@bmn/protocol'
+import type {
+  ConversationBindingState,
+  ConversationResumePreview,
+  MissingConversationBinding,
+  ReportedResumePreview
+} from '@bmn/protocol'
 import {
   conversationBindingPresentation,
+  reportedResumeConfirmation,
+  reportedResumeLine,
+  resumeAvailable,
   resumeBoundConversation,
   resumeConfirmationPresentation
 } from './conversation-resume'
@@ -89,5 +97,67 @@ describe('the confirmation shown before Resume starts anything', () => {
       command: '/usr/bin/opencode --session ses_0123456789abSyntheticTest0 --model provider/model',
       notCarried: { names: '--prompt', reason: 'opencode resume does not accept them.' }
     })
+  })
+})
+
+describe('Resume for a command a program reported (Epic 43)', () => {
+  const launchContext = { cwd: '/work', executable: '/bin/bash', argv: [], environment: {} }
+  const none: ConversationBindingState = {
+    sessionId: 'session-1', agentCli: 'other', status: 'unsupported', captureRoute: 'unsupported', launchContext,
+    detail: 'No conversation binding was captured for this session', capturedAt: '2026-09-29T10:00:00.000Z'
+  }
+  const bound: ConversationBindingState = {
+    sessionId: 'session-1', agentCli: 'codex', status: 'bound', conversationReference: '01a0b657-0000-4000-8000-000000000001',
+    captureRoute: 'hook-session-start', launchContext, detail: 'Reported by Codex', capturedAt: '2026-09-29T10:00:00.000Z'
+  }
+  const missing: ConversationBindingState = { ...bound, status: 'missing' } as ConversationBindingState
+  const processStatus = (state: 'live' | 'exited' | 'interrupted') =>
+    ({ incarnationId: 'i-1', state, exitCode: null, signal: null, detail: null })
+  const reportedResume = { argv: ['my-agent', '--resume', 'ses 1'], reportedAt: '2026-09-29T10:15:00.000Z' }
+  const reported = { reportedResume, lastProcess: processStatus('exited') }
+
+  it('offers Resume in the host\'s own order: a captured conversation, else a stopped session\'s reported command', () => {
+    expect(resumeAvailable(bound, reported, undefined)).toBe(true)
+    expect(resumeAvailable(bound, { lastProcess: processStatus('live') }, 'i-1')).toBe(true)
+    expect(resumeAvailable(none, reported, undefined)).toBe(true)
+    expect(resumeAvailable(none, { reportedResume, lastProcess: processStatus('interrupted') }, undefined)).toBe(true)
+    // A captured conversation that went missing is still the conversation; nothing reported is nothing to offer.
+    expect(resumeAvailable(missing, reported, undefined)).toBe(false)
+    expect(resumeAvailable(none, { lastProcess: processStatus('exited') }, undefined)).toBe(false)
+    expect(resumeAvailable(undefined, reported, undefined)).toBe(false)
+  })
+
+  it('offers a reported command once the program has ended, even while its pane still shows the output', () => {
+    // The program exited by itself: the window keeps the pane, and the record says that very process ended.
+    expect(resumeAvailable(none, reported, 'i-1')).toBe(true)
+    // Still running, or a newer process started that the record has not caught up with: nothing to resume.
+    expect(resumeAvailable(none, { reportedResume, lastProcess: processStatus('live') }, 'i-1')).toBe(false)
+    expect(resumeAvailable(none, reported, 'i-2')).toBe(false)
+  })
+
+  it('shows the command exactly as reported in Session details, with the time', () => {
+    const line = reportedResumeLine(reported.reportedResume)
+    expect(line.label).toBe('Resume command reported by the program:')
+    expect(line.argv).toBe("my-agent --resume 'ses 1'")
+    expect(line.when).toMatch(/^at \d\d:\d\d$/)
+  })
+
+  it('says what runs, where, and who reported it; a program no longer on PATH gets its reason', () => {
+    const preview: ReportedResumePreview = {
+      sessionId: 'session-1', source: 'reported', argv: ['my-agent', '--resume', 'ses 1'], program: '/opt/bin/my-agent',
+      cwd: '/work/app', reportedAt: '2026-09-29T10:15:00.000Z', command: "/opt/bin/my-agent --resume \"ses 1\"", refusal: null
+    }
+    const shown = reportedResumeConfirmation(preview, 'Wrapper')
+    expect(shown).toMatchObject({
+      message: 'Resume "Wrapper" with the command a program in it reported. This command runs:',
+      argv: "my-agent --resume 'ses 1'",
+      program: '/opt/bin/my-agent',
+      folder: '/work/app',
+      refusal: null
+    })
+    expect(shown.provenance).toMatch(/^Reported by the program in this session at \d\d:\d\d$/)
+    const refused = reportedResumeConfirmation({ ...preview, program: null, command: '', refusal: 'gone' }, 'Wrapper')
+    expect(refused).toMatchObject({ program: null, refusal: 'gone' })
+    expect(refused.message).toBe('"Wrapper" cannot be resumed with the command a program in it reported:')
   })
 })

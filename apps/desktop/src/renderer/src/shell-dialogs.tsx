@@ -1,8 +1,8 @@
 // MODULE: shell-dialogs.tsx - small shell dialogs: workspace name, conversation reference and destructive confirmation
 import { useState } from 'react'
 import { Dialog } from './dialog'
-import { resumeConfirmationPresentation } from './conversation-resume'
-import type { ConversationResumePreview } from '@bmn/protocol'
+import { reportedResumeConfirmation, resumeConfirmationPresentation } from './conversation-resume'
+import { isReportedResumePreview, type ReportedResumePreview, type SessionResumePreview } from '@bmn/protocol'
 
 export function WorkspaceDialog(props: {
   mode: 'create' | 'rename'
@@ -103,11 +103,13 @@ export function ConfirmDialog(props: {
  * behind. Nothing is launched until the owner confirms what they have read.
  */
 export function ResumeDialog(props: {
-  preview: ConversationResumePreview
+  preview: SessionResumePreview
   sessionName: string
   onConfirm(): void
+  onStartAgain(): void
   onClose(): void
 }): React.JSX.Element {
+  if (isReportedResumePreview(props.preview)) return <ReportedResumeDialog {...props} preview={props.preview} />
   const shown = resumeConfirmationPresentation(props.preview, props.sessionName)
   return (
     <Dialog label="Resume conversation" onClose={props.onClose}>
@@ -125,6 +127,47 @@ export function ResumeDialog(props: {
           props.onClose()
           props.onConfirm()
         }}>Resume</button>
+      </div>
+    </Dialog>
+  )
+}
+
+/**
+ * Story 43.2: Resume for a session BMN has no conversation of its own for, with the command a program in it reported.
+ * It shows the command exactly as reported, the program and folder it runs in, and who said so; when the program is
+ * no longer on PATH it says why and offers Start again instead.
+ */
+function ReportedResumeDialog(props: {
+  preview: ReportedResumePreview
+  sessionName: string
+  onConfirm(): void
+  onStartAgain(): void
+  onClose(): void
+}): React.JSX.Element {
+  const shown = reportedResumeConfirmation(props.preview, props.sessionName)
+  return (
+    <Dialog label="Resume with the reported command" onClose={props.onClose}>
+      <p>{shown.message}</p>
+      <pre className="resume-command">{shown.argv}</pre>
+      <dl className="resume-facts">
+        <dt>Program</dt><dd>{shown.program ?? 'Not found on PATH'}</dd>
+        <dt>Folder</dt><dd>{shown.folder}</dd>
+      </dl>
+      <p className="dialog-note">{shown.provenance}.</p>
+      {shown.refusal ? <p className="inline-error" role="alert">{shown.refusal}</p> : null}
+      <div className="dialog-actions">
+        <button type="button" className="ghost" onClick={props.onClose}>Cancel</button>
+        {shown.refusal ? (
+          <button type="button" className="primary" autoFocus onClick={() => {
+            props.onClose()
+            props.onStartAgain()
+          }}>Start again</button>
+        ) : (
+          <button type="button" className="primary" autoFocus onClick={() => {
+            props.onClose()
+            props.onConfirm()
+          }}>Resume</button>
+        )}
       </div>
     </Dialog>
   )

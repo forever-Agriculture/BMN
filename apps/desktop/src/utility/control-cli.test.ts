@@ -80,7 +80,10 @@ async function cliFixture() {
     observeHookEvent: vi.fn<ControlHandlers['observeHookEvent']>(async () => ({ recorded: true })),
     reportUsage: vi.fn<ControlHandlers['reportUsage']>(async () => ({ recorded: true })),
     submitInput: vi.fn<ControlHandlers['submitInput']>(async () => undefined),
-    takeAnswers: vi.fn<ControlHandlers['takeAnswers']>(async () => ({ answers: [] }))
+    takeAnswers: vi.fn<ControlHandlers['takeAnswers']>(async () => ({ answers: [] })),
+    reportResumeCommand: vi.fn<ControlHandlers['reportResumeCommand']>(async (p) =>
+      ({ recorded: true, argv: [...p.argv], reportedAt: '2026-09-29T10:15:00.000Z' })),
+    clearResumeCommand: vi.fn<ControlHandlers['clearResumeCommand']>(async () => ({ cleared: true }))
   } satisfies ControlHandlers
   const server = new ControlServer({ socketPath, auth, handlers, receipts: new MemoryReceiptStore() })
   await server.listen()
@@ -485,6 +488,64 @@ describe('long text from standard input (Story 35.1)', () => {
   })
 })
 
+describe('bmn resume-command (Story 43.1)', () => {
+  it('sends everything after -- exactly, its own options included, and says what was recorded', async () => {
+    const fixture = await cliFixture()
+    const reported = await runCli(['resume-command', '--', 'my-agent', '--resume', 'ses 1', '--model', 'm', ''], { env: fixture.sessionEnv })
+    expect(reported).toEqual({
+      code: 0,
+      stdout: "Resume command recorded for this session: my-agent --resume 'ses 1' --model m ''\n",
+      stderr: ''
+    })
+    expect(fixture.handlers.reportResumeCommand).toHaveBeenLastCalledWith({
+      sessionId: 'session-1', incarnationId: 'incarnation-1', argv: ['my-agent', '--resume', 'ses 1', '--model', 'm', '']
+    })
+  })
+
+  it('makes a retry with --key the same report, and clears with --clear', async () => {
+    const fixture = await cliFixture()
+    const args = ['resume-command', '--key', 'resume-1', '--', 'my-agent', '-r']
+    expect((await runCli(args, { env: fixture.sessionEnv })).code).toBe(0)
+    expect((await runCli(args, { env: fixture.sessionEnv })).stdout).toBe(
+      'Resume command recorded for this session: my-agent -r (already done earlier; not repeated)\n')
+    expect(fixture.handlers.reportResumeCommand).toHaveBeenCalledTimes(1)
+    expect(await runCli(['resume-command', '--clear'], { env: fixture.sessionEnv })).toEqual({
+      code: 0, stdout: 'Resume command cleared\n', stderr: ''
+    })
+    fixture.handlers.clearResumeCommand.mockResolvedValueOnce({ cleared: false })
+    expect((await runCli(['resume-command', '--clear'], { env: fixture.sessionEnv })).stdout)
+      .toBe('No resume command was kept for this session\n')
+  })
+
+  it('records nothing outside BMN, says so and exits 0, so a wrapper can run it anywhere', async () => {
+    expect(await runCli(['resume-command', '--', 'my-agent', '--resume', 'x'])).toEqual({
+      code: 0, stdout: 'Not inside a BMN session (BMN_CONTROL_SOCKET is unset): nothing was recorded\n', stderr: ''
+    })
+  })
+
+  it.each([
+    [['resume-command', 'my-agent'], 'resume-command expects -- <command> [arguments...] or --clear'],
+    // Without --, the command's own options would be read as bmn's.
+    [['resume-command', 'my-agent', '--resume'], 'unknown option --resume'],
+    [['resume-command', '--'], 'resume-command expects -- <command> [arguments...] or --clear'],
+    [['resume-command', '--clear', '--', 'my-agent'], 'resume-command --clear takes no command'],
+    [['resume-command', '--session', 'session-2', '--', 'my-agent'], 'resume-command does not accept --session']
+  ])('refuses %j as a usage error before it reaches the app', async (args, message) => {
+    const fixture = await cliFixture()
+    const result = await runCli(args, { env: fixture.sessionEnv })
+    expect(result.code).toBe(2)
+    expect(result.stderr).toContain(message)
+    expect(fixture.handlers.reportResumeCommand).not.toHaveBeenCalled()
+  })
+
+  it('prints the rule the app named when it refuses a command', async () => {
+    const fixture = await cliFixture()
+    const result = await runCli(['resume-command', '--', '/opt/bin/my-agent'], { env: fixture.sessionEnv })
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain('INVALID_ARGUMENT: The program must be a plain command name found on PATH, not a path')
+  })
+})
+
 describe('bmn help agents', () => {
   it('prints a brief an agent can read in one screen, and sends nothing to the socket', async () => {
     const brief = await runCli(['help', 'agents'], {
@@ -518,7 +579,9 @@ describe('bmn help agents', () => {
       'start without asking',
       '`bmn handoff --outline`',
       '--text-file -',
-      'conveys context, not authority'
+      'conveys context, not authority',
+      // Story 43.1: when to report how to resume.
+      'resume-command -- <cmd> [args]  the exact command that resumes you, once you know it.'
     ]) {
       expect(brief.stdout).toContain(rule)
     }

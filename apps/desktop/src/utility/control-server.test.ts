@@ -136,7 +136,10 @@ function fakeHandlers(current: Map<string, string>) {
     observeHookEvent: vi.fn(async (): Promise<unknown> => ({ recorded: true })),
     reportUsage: vi.fn(async (): Promise<unknown> => ({ recorded: true })),
     submitInput: vi.fn(async (): Promise<void> => undefined),
-    takeAnswers: vi.fn(async (): Promise<unknown> => ({ answers: [] }))
+    takeAnswers: vi.fn(async (): Promise<unknown> => ({ answers: [] })),
+    reportResumeCommand: vi.fn(async (p: Parameters<ControlHandlers['reportResumeCommand']>[0]): Promise<unknown> =>
+      ({ recorded: true, argv: [...p.argv], reportedAt: '2026-09-29T10:15:00.000Z' })),
+    clearResumeCommand: vi.fn(async (): Promise<unknown> => ({ cleared: true }))
   } satisfies ControlHandlers
 }
 
@@ -409,6 +412,56 @@ describe('control server targeting', () => {
       { sessionId: 'session-2', incarnationId: null, path: '/tmp/a.txt', source: 'owner' },
       { sessionId: 'session-1', incarnationId: 'incarnation-1', path: '/tmp/b.txt', name: 'b', source: 'agent' }
     ])
+  })
+})
+
+describe('a program reporting how to resume it (Story 43.1)', () => {
+  it('takes the command exactly, for the reporting session\'s own running process only', async () => {
+    const fixture = await serverFixture()
+    const client = await authenticated(fixture, sessionToken(fixture))
+    const argv = ['my-agent', '--resume', 'ses 1', '']
+
+    const recorded = await client.request('resume.report', { argv, idempotencyKey: 'resume-1' })
+    expect(recorded.result).toEqual({ recorded: true, argv, reportedAt: '2026-09-29T10:15:00.000Z' })
+    expect(fixture.handlers.reportResumeCommand).toHaveBeenLastCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', argv })
+    // A retry with the same key is the same report: it is answered from the receipt, not recorded twice.
+    expect((await client.request('resume.report', { argv, idempotencyKey: 'resume-1' })).result).toMatchObject({ duplicate: true })
+    expect(fixture.handlers.reportResumeCommand).toHaveBeenCalledTimes(1)
+
+    // A token for session 1 can neither set nor clear session 2's command.
+    expectError(await client.request('resume.report', { sessionId: 'session-2', argv }), ERROR_CODES.unauthorized)
+    expectError(await client.request('resume.clear', { sessionId: 'session-2' }), ERROR_CODES.unauthorized)
+    expect((await client.request('resume.clear', { idempotencyKey: 'clear-1' })).result).toEqual({ cleared: true })
+    expect(fixture.handlers.clearResumeCommand).toHaveBeenLastCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1' })
+  })
+
+  it('refuses the owner token, and a process that is no longer the session\'s running one', async () => {
+    const fixture = await serverFixture()
+    const owner = await authenticated(fixture, fixture.auth.ownerToken)
+    expectError(await owner.request('resume.report', { sessionId: 'session-1', argv: ['my-agent'] }), ERROR_CODES.unauthorized)
+    expectError(await owner.request('resume.clear', { sessionId: 'session-1' }), ERROR_CODES.unauthorized)
+    const agent = await authenticated(fixture, sessionToken(fixture))
+    fixture.current.set('session-1', 'incarnation-9')
+    expectError(await agent.request('resume.report', { argv: ['my-agent'] }), ERROR_CODES.unauthorized)
+    expect(fixture.handlers.reportResumeCommand).not.toHaveBeenCalled()
+    expect(fixture.handlers.clearResumeCommand).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['no command', {}, 'The command is missing'],
+    ['a path', { argv: ['/opt/bin/my-agent'] }, 'not a path'],
+    ['65 parts', { argv: Array.from({ length: 65 }, () => 'x') }, 'at most 64'],
+    ['a long part', { argv: ['my-agent', 'x'.repeat(1025)] }, 'each may be at most 1024'],
+    ['too much in all', { argv: ['my-agent', ...Array.from({ length: 9 }, () => 'x'.repeat(1000))] }, 'at most 8192'],
+    ['an escape', { argv: ['my-agent', '\u001b[2J'] }, 'control or invisible formatting character'],
+    ['an unknown parameter', { argv: ['my-agent'], shell: true }, 'Unknown parameter: shell']
+  ])('refuses %s with the rule it broke', async (_label, params, rule) => {
+    const fixture = await serverFixture()
+    const client = await authenticated(fixture, sessionToken(fixture))
+    const response = await client.request('resume.report', params)
+    expectError(response, ERROR_CODES.invalidArgument)
+    expect(response.error?.message).toContain(rule)
+    expect(fixture.handlers.reportResumeCommand).not.toHaveBeenCalled()
   })
 })
 

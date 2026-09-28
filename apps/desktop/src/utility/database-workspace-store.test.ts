@@ -1,3 +1,4 @@
+// MODULE: database-workspace-store.test.ts - workspace, session, template, layout and launch-set records read and written through SQLite
 import { mkdtemp, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -591,6 +592,34 @@ describe('workspace database store', () => {
       }, now))()
       expect(repaired.argv).toEqual(['--fixed'])
       expect(repaired).not.toHaveProperty('launchDisabledReason')
+    } finally {
+      database.close()
+    }
+  })
+
+  it('reads a reported resume command back, and a damaged one as none without hiding its session (Story 43.1)', () => {
+    const database = new BetterSqlite3(':memory:')
+    try {
+      initializeDatabase(database, now)
+      const stored = {
+        'session-reported': { argv: ['my-agent', '--resume', 'abc'], reportedAt: now, incarnationId: 'incarnation-1' },
+        'session-path': { argv: ['/usr/bin/my-agent'], reportedAt: now, incarnationId: 'incarnation-2' },
+        'session-shape': { argv: 'my-agent --resume abc', reportedAt: now }
+      }
+      for (const [position, [sessionId, command]] of Object.entries(stored).entries()) {
+        insertSession(database, { sessionId, workspaceId: DEFAULT_WORKSPACE_ID, position, cwd: '/workspace', argv: [] })
+        database.prepare('UPDATE session SET reported_resume_json = ? WHERE session_id = ?')
+          .run(JSON.stringify(command), sessionId)
+      }
+
+      const records = new Map(listSessions(database, DEFAULT_WORKSPACE_ID)
+        .map((record) => [record.sessionId, record]))
+      expect(records.get('session-reported')?.reportedResume)
+        .toEqual({ argv: ['my-agent', '--resume', 'abc'], reportedAt: now })
+      for (const sessionId of ['session-path', 'session-shape']) {
+        expect(records.get(sessionId)).not.toHaveProperty('reportedResume')
+        expect(records.get(sessionId)).not.toHaveProperty('launchDisabledReason')
+      }
     } finally {
       database.close()
     }

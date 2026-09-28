@@ -38,7 +38,7 @@ const PIPED_FIELDS = {
 const MAX_ANSWER_WAIT_SECONDS = 25
 /** Options that may be repeated; each occurrence appends, so the order given is the order stored. */
 const LIST_OPTIONS = new Set(['evidence-id', 'file-id'])
-const FLAG_OPTIONS = new Set(['json', 'owner', 'submit', 'help', 'outline'])
+const FLAG_OPTIONS = new Set(['json', 'owner', 'submit', 'help', 'outline', 'clear'])
 const GLOBAL_OPTIONS = ['json', 'owner', 'token-file', 'socket', 'help']
 /**
  * Story 35.2: what `bmn handoff --outline` prints. bin/bmn runs unbundled, so this is a copy of HANDOFF_OUTLINE in
@@ -81,6 +81,12 @@ Commands:
   resolve <request-key> <resolution>        Resolve an attention request
   send <text> | --text-file - [--submit] [--key K]
                                             Paste text into the session; --submit also presses Enter
+  resume-command -- <command> [args...] [--key K]
+  resume-command --clear [--key K]          Tell BMN the exact command that resumes the program running in
+                                            this session: a plain name on PATH, then its arguments, at most 64
+                                            parts. Resume offers it only when BMN has no conversation of its
+                                            own, and runs it only after the owner reads it. Outside BMN it
+                                            records nothing and exits 0
   answer take [--wait S] [--reported R=ok|failed]
                                             Collect, once, the answers BMN decided from a Telegram tap for
                                             this session's own OpenCode requests (used by BMN's plugin);
@@ -159,6 +165,7 @@ What to send, and when
   progress <state> <label>  a real change of state, not a running commentary.
   ask <key> <title>       a decision only the owner can make; go on with what does not need it.
   withdraw <key>          the moment the answer arrives or the question stops mattering.
+  resume-command -- <cmd> [args]  the exact command that resumes you, once you know it.
 
 Your states are claims, not verdicts
   claimed-done says you believe the work is finished. The owner sees it as your claim.
@@ -2164,6 +2171,13 @@ function describeResult(command, positionals, options, result) {
       return `Attention request ${positionals[0]} resolved`
     case 'send':
       return `${options.submit ? 'Input submitted' : 'Input pasted'}${duplicate}`
+    case 'resume-command':
+      if (options.clear) {
+        return isObject(result) && result.cleared === false
+          ? `No resume command was kept for this session${duplicate}`
+          : `Resume command cleared${duplicate}`
+      }
+      return `Resume command recorded for this session: ${positionals.map(shellWord).join(' ')}${duplicate}`
     default:
       return JSON.stringify(result, null, 2)
   }
@@ -2241,6 +2255,33 @@ function usageFailure(message) {
   return 2
 }
 
+/**
+ * Story 43.1: `resume-command -- <command> [args...]` reports how to resume the program running in this session;
+ * `--clear` forgets it. Everything after -- is the command exactly as given, so its own options are never read as
+ * bmn's. The app checks the rules and names the one a command breaks.
+ */
+function resumeCommandRequest(positionals, parsed) {
+  for (const name of Object.keys(parsed.options)) {
+    if (!GLOBAL_OPTIONS.includes(name) && !['clear', 'key'].includes(name)) {
+      throw new UsageError(`resume-command does not accept --${name}`)
+    }
+  }
+  const idempotencyKey = parsed.options.key ?? randomUUID()
+  if (parsed.options.clear) {
+    if (positionals.length > 0 || parsed.literalStart !== null) throw new UsageError('resume-command --clear takes no command')
+    return { method: 'resume.clear', params: { idempotencyKey } }
+  }
+  if (parsed.literalStart !== 1 || positionals.length === 0) {
+    throw new UsageError('resume-command expects -- <command> [arguments...] or --clear')
+  }
+  return { method: 'resume.report', params: { argv: positionals, idempotencyKey } }
+}
+
+/** One shell word per argument, so the confirmation shows each argument's own boundaries. */
+function shellWord(value) {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`
+}
+
 async function main(argv) {
   if (argv[0] === 'hook') return runHook(argv.slice(1)).catch(() => 0)
   // hooks reads and writes the owner's own hook files; it never opens the control socket.
@@ -2306,6 +2347,8 @@ async function main(argv) {
           text: body, artifactIds, idempotencyKey: parsed.options.key
         } }
       }
+    } else if (command === 'resume-command') {
+      request = resumeCommandRequest(positionals, parsed)
     } else {
     if (!Object.hasOwn(COMMANDS, command)) throw new UsageError(`unknown command ${command}`)
     const spec = COMMANDS[command]
@@ -2323,6 +2366,12 @@ async function main(argv) {
   } catch (error) {
     if (error instanceof UsageError) return usageFailure(error.message)
     throw error
+  }
+  // A wrapper may report its resume command wherever it runs; outside BMN that is not a failure.
+  if (command === 'resume-command' && parsed.options.socket === undefined &&
+    !process.env.BMN_CONTROL_SOCKET && !process.env.AITERM_CONTROL_SOCKET) {
+    process.stdout.write('Not inside a BMN session (BMN_CONTROL_SOCKET is unset): nothing was recorded\n')
+    return 0
   }
   try {
     const { socketPath, token } = readCredentials(parsed.options)

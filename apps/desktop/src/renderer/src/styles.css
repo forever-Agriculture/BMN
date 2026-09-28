@@ -2188,6 +2188,34 @@ input[type='radio'] {
   font-size: 12px;
 }
 
+/* What a reported command runs and where (Story 43.2), shown whole: the owner confirms all of it. */
+.resume-facts {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 3px 12px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.resume-facts dt {
+  color: var(--muted);
+}
+
+.resume-facts dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+/* Session details: the command a program reported (Story 43.1), exactly as it said it, on a line of its own. */
+.reported-resume code {
+  display: block;
+  margin: 2px 0;
+  font: 12px/1.45 var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
 /* ---------- Closing with sessions still running ---------- */
 
 .close-sessions-summary {

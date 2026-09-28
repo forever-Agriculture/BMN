@@ -1,7 +1,7 @@
 import {
   METHOD_REGISTRY,
   type ConversationBindingState,
-  type ConversationResumePreview,
+  type SessionResumePreview,
   type ExplicitConversationBinding,
   type ProtocolMethod,
   type SessionBindingClearResult,
@@ -26,18 +26,21 @@ export function loadConversationBinding(
 export function previewConversationResume(
   client: ConversationHostClient,
   sessionId: string
-): Promise<ConversationResumePreview> {
+): Promise<SessionResumePreview> {
   return client.request(METHOD_REGISTRY.sessionResumePreview, { sessionId })
 }
 
+/** `expectedCommand` is the command the owner confirmed; a start that would run anything else is refused. */
 export async function resumeBoundSession(
   client: ConversationHostClient,
   sessionId: string,
-  dimensions: { cols: number; rows: number }
+  dimensions: { cols: number; rows: number },
+  expectedCommand?: string
 ): Promise<ResumedAttachment> {
   return client.request<SessionResumeResult>(METHOD_REGISTRY.sessionResume, {
     sessionId,
-    ...dimensions
+    ...dimensions,
+    ...(expectedCommand === undefined ? {} : { expectedCommand })
   })
 }
 

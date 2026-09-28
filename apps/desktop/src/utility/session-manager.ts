@@ -20,7 +20,6 @@ import {
   type ConversationBindingState,
   type ConversationObservation,
   type ConversationObservationResult,
-  type ConversationResumePreview,
   type ExplicitConversationBinding,
   type PersistedConversationBinding,
   type ReplaceableConversationBinding,
@@ -43,7 +42,12 @@ import {
   type SessionCohortResumeResult,
   type SessionCohortStartedProcess,
   type SessionResumeParams,
+  type SessionResumePreview,
   type SessionResumeResult,
+  type ReportedResumeCommand,
+  type ReportedResumePreview,
+  isReportedResumePreview,
+  reportedResumeArgvProblem,
   type SessionStopCause,
   type TerminalGraphicsChoice,
   type SessionProcessStateChangedMessage,
@@ -65,6 +69,7 @@ import { TerminalByteFramer, type TerminalFrame } from './terminal-byte-framer'
 import { terminalGraphicsEnvironment, type TerminfoAsset } from './terminal-graphics'
 import { DecsetModeTracker } from './decset-modes'
 import { Osc52Reader } from './osc52'
+import { findProgramOnPath, missingProgramReason } from './reported-resume'
 import { OutputTail, ScreenMirror } from './screen-mirror'
 import {
   agentCli,
@@ -132,6 +137,8 @@ export interface CreateResumingRecord {
   incarnationId: string
   processStartIdentity: string
   startedAt: string
+  /** Only the reported command's own Resume keeps it; every other start clears it (Story 43.1 AC4). */
+  keepReportedResume?: true
 }
 
 /** The manager's store also owns stored-session reads, so resume gates on the persisted record. */
@@ -152,6 +159,9 @@ export interface SessionStore extends StoredSessionReader {
     binding: ReplaceableConversationBinding
   ): Promise<PersistedConversationBinding>
   clearConversationBinding(sessionId: string): Promise<boolean>
+  /** Story 43.1: throws when `incarnationId` is not the session's running process. */
+  setReportedResume(record: { sessionId: string; incarnationId: string; argv: readonly string[]; reportedAt: string }): Promise<void>
+  clearReportedResume(record: { sessionId: string; incarnationId: string }): Promise<boolean>
   markRunning(incarnationId: string): Promise<void>
   markExited(incarnationId: string, exit: IncarnationExit): Promise<void>
   markInterrupted(incarnationId: string, reason: string): Promise<void>
@@ -254,6 +264,8 @@ interface SessionManagerOptions {
   onOutput?: (sessionId: string, bytes: Uint8Array) => void
   /** Story 42.1: text a program asked, with OSC 52, to put on the clipboard while a window had its view. */
   onProgramCopy?: (message: ProgramCopyMessage) => void
+  /** Story 43.1: the PATH every process this manager starts sees; a reported resume command must resolve on it. */
+  sessionPath?: () => string
   /** Addressed-control variables added after the private-variable filter for each process incarnation. */
   sessionEnvironment?: (identity: SessionIdentity) => Readonly<Record<string, string>>
 }
@@ -499,6 +511,7 @@ export class SessionManager {
   private readonly sessionEnvironment:
     | ((identity: SessionIdentity) => Readonly<Record<string, string>>)
     | undefined
+  private readonly sessionPath: () => string
   private readonly signalProcess: (pid: number, signal: NodeJS.Signals) => boolean
   private readonly stopGraceMs: number
   private readonly stopKillWaitMs: number
@@ -537,6 +550,7 @@ export class SessionManager {
     this.terminfoAsset = options.terminfoAsset
     this.homeDirectory = options.homeDirectory ?? homedir()
     this.sessionEnvironment = options.sessionEnvironment
+    this.sessionPath = options.sessionPath ?? (() => buildShellEnvironment(this.environment).PATH ?? '')
     this.signalProcess = options.signalProcess ?? signalProcessByPid
     this.stopGraceMs = options.stopGraceMs ?? 2_000
     this.stopKillWaitMs = options.stopKillWaitMs ?? 2_000
@@ -827,10 +841,113 @@ export class SessionManager {
     if (stored.archivedAt !== null) {
       throw new HostControlError(ERROR_CODES.invalidArgument, 'Restore the session before starting it')
     }
-    const knownBinding = this.conversationBindings.get(params.sessionId)
-    return knownBinding
-      ? this.resumeBinding(params, knownBinding)
-      : this.loadBindingAndResume(params)
+    // Story 43.2: a conversation BMN captured wins; else the command a program in the session reported; else
+    // neither, and the binding's own reason, or its absence, is what the owner reads.
+    const binding = this.conversationBindings.get(params.sessionId) ?? await this.loadStoredBinding(params.sessionId)
+    if (binding?.status === 'bound' || (binding && !stored.reportedResume)) return this.resumeBinding(params, binding)
+    if (stored.reportedResume) return this.resumeReported(params, stored, stored.reportedResume)
+    throw new HostControlError(ERROR_CODES.invalidArgument, 'No conversation binding was captured for this session')
+  }
+
+  /**
+   * Story 43.1: a program in the session reports the command that resumes it, for its own running process only,
+   * replacing any earlier one. The name must resolve on the PATH the session's processes see, the one Resume uses.
+   */
+  async reportResumeCommand(p: {
+    sessionId: string
+    incarnationId: string
+    argv: readonly string[]
+  }): Promise<ReportedResumeCommand> {
+    const problem = reportedResumeArgvProblem(p.argv)
+    if (problem !== null) throw new HostControlError(ERROR_CODES.invalidArgument, problem)
+    if (findProgramOnPath(p.argv[0]!, this.sessionPath()) === null) {
+      throw new HostControlError(ERROR_CODES.invalidArgument, `The program "${p.argv[0]}" is not on this session's PATH`)
+    }
+    const command: ReportedResumeCommand = { argv: [...p.argv], reportedAt: new Date().toISOString() }
+    await this.whileCurrent(p, () => this.store.setReportedResume({ ...p, ...command }))
+    return command
+  }
+
+  /** Story 43.1: `bmn resume-command --clear`; false when nothing was kept. */
+  async clearResumeCommand(p: { sessionId: string; incarnationId: string }): Promise<boolean> {
+    return this.whileCurrent(p, () => this.store.clearReportedResume(p))
+  }
+
+  /** Runs a write that belongs to the session's running process, and names a refusal when that process has ended. */
+  private async whileCurrent<Result>(
+    p: { sessionId: string; incarnationId: string },
+    write: () => Promise<Result>
+  ): Promise<Result> {
+    const ended = (): HostControlError =>
+      new HostControlError(ERROR_CODES.unauthorized, 'This process is no longer the session\'s running one')
+    if (this.liveIncarnationId(p.sessionId) !== p.incarnationId) throw ended()
+    try {
+      return await write()
+    } catch (error) {
+      if (this.liveIncarnationId(p.sessionId) !== p.incarnationId) throw ended()
+      throw new HostControlError(
+        ERROR_CODES.ioError,
+        `The resume command could not be saved: ${error instanceof Error ? error.message : 'unknown database error'}`
+      )
+    }
+  }
+
+  /**
+   * Story 43.2: starts the command a program reported, as any session launch starts (BMN's environment rules, a new
+   * token, no shell), in the session's working folder. The name is resolved on the session's PATH again now, and the
+   * command the owner confirmed must be the one that runs.
+   */
+  private async resumeReported(
+    params: ConfirmedStartParams,
+    stored: SessionRecord,
+    command: ReportedResumeCommand
+  ): Promise<SessionResumeResult> {
+    const program = findProgramOnPath(command.argv[0]!, this.sessionPath())
+    if (program === null) throw new HostControlError(ERROR_CODES.notFound, missingProgramReason(command.argv[0]!))
+    const argv = command.argv.slice(1)
+    requireConfirmedCommand(params.expectedCommand, shownCommand(program, argv))
+    const releaseLaunch = this.claimSessionLaunch(params.sessionId)
+    try {
+      const launchParams: PtyLaunchParams = {
+        cwd: stored.cwd,
+        executable: program,
+        argv,
+        cols: params.cols,
+        rows: params.rows,
+        terminalGraphics: stored.terminalGraphics
+      }
+      await validateLaunch(launchParams)
+      const live = await this.startIncarnation(
+        params.sessionId,
+        launchParams,
+        this.environment,
+        new Date().toISOString(),
+        (record) => this.store.createResuming({ ...record, keepReportedResume: true })
+      )
+      try {
+        return { ...this.attach(live), launch: { cwd: stored.cwd, executable: program } }
+      } catch (error) {
+        await this.teardownSession(live)
+        throw error
+      }
+    } finally {
+      releaseLaunch()
+    }
+  }
+
+  /** What Resume shows for a reported command; a program no longer on PATH is shown with the reason it cannot run. */
+  private reportedResumePreview(stored: SessionRecord, command: ReportedResumeCommand): ReportedResumePreview {
+    const program = findProgramOnPath(command.argv[0]!, this.sessionPath())
+    return {
+      sessionId: stored.sessionId,
+      source: 'reported',
+      argv: [...command.argv],
+      program,
+      cwd: stored.cwd,
+      reportedAt: command.reportedAt,
+      command: program === null ? '' : shownCommand(program, command.argv.slice(1)),
+      refusal: program === null ? missingProgramReason(command.argv[0]!) : null
+    }
   }
 
   /**
@@ -952,8 +1069,8 @@ export class SessionManager {
       streamSeq: resumed.streamSeq,
       captureStartedAt: resumed.captureStartedAt,
       modes: resumed.modes,
-      cwd: resumed.binding.launchContext.cwd,
-      executable: resumed.binding.launchContext.executable
+      cwd: resumed.launch.cwd,
+      executable: resumed.launch.executable
     }
   }
 
@@ -983,6 +1100,13 @@ export class SessionManager {
     }
     try {
       const preview = await this.conversationResumePreview(row.sessionId)
+      if (isReportedResumePreview(preview)) {
+        // Story 43.2: listed with its exact command, never checked for the owner; one that cannot run any more
+        // offers Start again and says why.
+        return preview.refusal === null
+          ? { ...shared, action: 'resume', command: preview.command, notCarried: '', relaunchReason: null, reportedAt: preview.reportedAt }
+          : { ...shared, action: 'relaunch', command: shownCommand(row.executable, row.argv), notCarried: '', relaunchReason: preview.refusal }
+      }
       return {
         ...shared,
         action: 'resume',
@@ -1049,17 +1173,11 @@ export class SessionManager {
     }
   }
 
-  private async loadBindingAndResume(params: ConfirmedStartParams): Promise<SessionResumeResult> {
-    const stored = await this.store.getConversationBinding(params.sessionId)
+  private async loadStoredBinding(sessionId: string): Promise<PersistedConversationBinding | undefined> {
+    const stored = await this.store.getConversationBinding(sessionId)
     const binding = stored ? parseBoundBinding(stored) : undefined
-    if (!binding) {
-      throw new HostControlError(
-        ERROR_CODES.invalidArgument,
-        'No conversation binding was captured for this session'
-      )
-    }
-    this.conversationBindings.set(params.sessionId, binding)
-    return this.resumeBinding(params, binding)
+    if (binding) this.conversationBindings.set(sessionId, binding)
+    return binding
   }
 
   private resumeBinding(
@@ -1136,11 +1254,14 @@ export class SessionManager {
    * What Resume would run for a session, without starting anything. The owner reads this before
    * confirming, so no conversation is reopened by a command they have not seen.
    */
-  async conversationResumePreview(sessionId: string): Promise<ConversationResumePreview> {
+  async conversationResumePreview(sessionId: string): Promise<SessionResumePreview> {
     const stored = this.conversationBindings.get(sessionId)
       ?? await this.store.getConversationBinding(sessionId)
     const binding = stored ? parseBoundBinding(stored) : undefined
     if (!binding || binding.status !== 'bound') {
+      // Story 43.2: without a conversation of its own, BMN offers what a program in the session reported.
+      const session = await findStoredSession(this.store, sessionId)
+      if (session?.reportedResume) return this.reportedResumePreview(session, session.reportedResume)
       throw new HostControlError(
         ERROR_CODES.invalidArgument,
         binding?.detail ?? 'No conversation binding was captured for this session'
@@ -1201,7 +1322,8 @@ export class SessionManager {
     try {
       return {
         ...this.attach(live),
-        binding
+        binding,
+        launch: { cwd: launch.cwd, executable: launch.executable }
       }
     } catch (error) {
       await this.teardownSession(live)

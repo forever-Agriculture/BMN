@@ -1,3 +1,5 @@
+import type { ReportedResumePreview } from './resume-command'
+
 export type AgentCli = 'claude' | 'codex' | 'opencode' | 'cursor' | 'other'
 
 export interface ConversationLaunchContext {
@@ -91,7 +93,10 @@ export interface SessionResumeResult {
   captureStartedAt: string
   /** The private terminal modes a new view would get wrong; empty when a fresh view matches. */
   modes: number[]
-  binding: BoundConversationBinding
+  /** The conversation Resume reopened; absent when it ran the command a program reported (Story 43.2). */
+  binding?: BoundConversationBinding
+  /** Where the process started, and the program that runs there. */
+  launch: { cwd: string; executable: string }
 }
 
 /**
@@ -105,6 +110,13 @@ export interface ConversationResumePreview {
   command: string
   /** Stored arguments `<cli> resume` will not accept, named for the owner; empty when none. */
   notCarried: string
+}
+
+/** What Resume shows before anything starts: a conversation BMN captured, or else a command a program reported. */
+export type SessionResumePreview = ConversationResumePreview | ReportedResumePreview
+
+export function isReportedResumePreview(preview: SessionResumePreview): preview is ReportedResumePreview {
+  return 'source' in preview && preview.source === 'reported'
 }
 
 export interface TerminalActivateParams {

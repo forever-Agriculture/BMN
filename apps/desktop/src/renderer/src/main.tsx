@@ -12,7 +12,8 @@ import {
   type ArtifactRecord,
   type AttentionRecord,
   type ConversationBindingState,
-  type ConversationResumePreview,
+  isReportedResumePreview,
+  type SessionResumePreview,
   type ExplicitConversationBinding,
   type InputDraftRecord,
   type HookOriginRecord,
@@ -37,7 +38,7 @@ import './styles.css'
 import { checkSixelRenderer } from './terminal-images'
 import { failureDetail, sessionFailureDetail } from './bridge-error'
 import { CommandPalette, paletteFileSearchRootLabel, type PaletteCommand } from './command-palette'
-import { conversationBindingPresentation } from './conversation-resume'
+import { conversationBindingPresentation, reportedResumeLine, resumeAvailable } from './conversation-resume'
 import { FileReferenceDialog, type FileReferenceRequest, type FileReferenceSendTarget } from './file-reference-dialog'
 import { FilesPanel } from './files-panel'
 import { HookEventsDialog } from './hook-events-dialog'
@@ -165,7 +166,7 @@ type ShellDialog =
   | { kind: 'locate'; session: SessionRecord; binding: ConversationBindingState }
   | { kind: 'stop'; session: SessionRecord }
   /** Shows the exact command before Resume starts anything. */
-  | { kind: 'resume'; session: SessionRecord; preview: ConversationResumePreview }
+  | { kind: 'resume'; session: SessionRecord; preview: SessionResumePreview }
   | { kind: 'file-reference'; request: FileReferenceRequest }
   /** The one offer to resume what an update or a quit stopped; every row shows its command. */
   | { kind: 'resume-interrupted'; cohort: InterruptedSessionCohort }
@@ -479,8 +480,13 @@ function App(): React.JSX.Element {
       const status = await window.aiTerminal.getTelegramStatus().catch(() => null)
       if (status) setTelegramStatus(status)
     },
-    // A hook can rebind a conversation at any time; the window reloads the binding it is showing.
-    conversations: async () => setBindingRevision((revision) => revision + 1)
+    // A hook can rebind a conversation, and a program report its resume command, at any time: the window reloads the
+    // binding it is showing and the session's record.
+    conversations: async (sessionId: string | null = null) => {
+      setBindingRevision((revision) => revision + 1)
+      const workspaceId = sessionsRef.current.find((item) => item.sessionId === sessionId)?.workspaceId
+      if (workspaceId) await reloadWorkspaceSessions(workspaceId)
+    }
   }
 
   const reloadWorkspaceSessions = (workspaceId: string): Promise<void> =>
@@ -557,7 +563,7 @@ function App(): React.JSX.Element {
     })
     const stopAppEvent = window.aiTerminal.onAppEvent((message) => {
       if (message.topic === 'drafts') handoffReviewEpoch.current += 1
-      void refresh[message.topic]().catch(fail('Companion data refresh failed'))
+      void refresh[message.topic](message.sessionId).catch(fail('Companion data refresh failed'))
     })
     const stopOpenSession = window.aiTerminal.onOpenSession((sessionId) => openSessionRef.current(sessionId))
     const programCopyBurst = createProgramCopyBurst()
@@ -1483,6 +1489,8 @@ function App(): React.JSX.Element {
   const bindingPresentation = conversationBindingPresentation(binding)
   const identity = IDENTITY_PRESENTATION[settings.appearance.identity]
   const selectedRecord = sessions.find((session) => session.sessionId === selectedSessionId)
+  const canResume = resumeAvailable(binding, selectedRecord, selectedRecord ? live[selectedRecord.sessionId]?.incarnationId : undefined)
+  const selectedReportedResume = selectedRecord?.reportedResume ? reportedResumeLine(selectedRecord.reportedResume) : null
   const detailsRepository = useRepositoryIdentity(
     panel === 'details' ? selectedRecord?.cwd ?? null : null,
     selectedRecord ? `${selectedRecord.sessionId}:${selectedRecord.cwd}` : null
@@ -1878,11 +1886,11 @@ function App(): React.JSX.Element {
               <p>{sessionProcessLabel(selectedRecord.lastProcess)} · {selectedRecord.cwd}</p>
               <ProgressStrip progress={selectedProgress} onOpen={() => openProgressDetail(selectedRecord, selectedProgress)} />
               <div className="actions">
-                {bindingPresentation.canResume ? (
+                {canResume ? (
                   <button type="button" className="primary" disabled={!!selectedRecord.launchDisabledReason} title={selectedRecord.launchDisabledReason}
                     onClick={() => confirmResume(selectedRecord)}>Resume</button>
                 ) : null}
-                <button type="button" className={bindingPresentation.canResume ? undefined : 'primary'}
+                <button type="button" className={canResume ? undefined : 'primary'}
                   disabled={!!selectedRecord.launchDisabledReason} title={selectedRecord.launchDisabledReason ?? 'Run the saved command again in a new process'}
                   onClick={() => relaunchSession(selectedRecord)}>Start again</button>
                 <button type="button" onClick={() => {
@@ -1988,7 +1996,7 @@ function App(): React.JSX.Element {
                     </p>
                   ) : null}
                   <div className="actions">
-                    {bindingPresentation.canResume ? <button type="button" className="primary" onClick={() => confirmResume(selectedRecord)} disabled={!!selectedRecord.launchDisabledReason}
+                    {canResume ? <button type="button" className="primary" onClick={() => confirmResume(selectedRecord)} disabled={!!selectedRecord.launchDisabledReason}
                       title={selectedRecord.launchDisabledReason}>Resume</button> : null}
                     {!live[selectedRecord.sessionId] ? (
                       <button type="button" disabled={!!selectedRecord.launchDisabledReason}
@@ -2035,6 +2043,12 @@ function App(): React.JSX.Element {
                   <h3>Conversation</h3>
                   <p>{bindingPresentation.label}</p>
                   <small>{bindingPresentation.detail}</small>
+                  {selectedReportedResume ? (
+                    <p className="reported-resume">
+                      {selectedReportedResume.label} <code>{selectedReportedResume.argv}</code>{' '}
+                      <small>{selectedReportedResume.when}</small>
+                    </p>
+                  ) : null}
                   <div className="actions">
                     {bindingPresentation.canLocate && binding && binding.agentCli !== 'other' ? (
                       <button type="button" className="small" onClick={() => setDialog({ kind: 'locate', session: selectedRecord, binding })}>Locate chat</button>
@@ -2391,7 +2405,9 @@ function App(): React.JSX.Element {
         <ResumeDialog
           preview={dialog.preview}
           sessionName={dialog.session.name}
-          onConfirm={() => resumeSession(dialog.session)}
+          // A reported command runs only as shown: the host refuses a start that would run anything else.
+          onConfirm={() => resumeSession(dialog.session, isReportedResumePreview(dialog.preview) ? dialog.preview.command : undefined)}
+          onStartAgain={() => relaunchSession(dialog.session)}
           onClose={() => setDialog(null)}
         />
       ) : null}
@@ -2455,8 +2471,8 @@ function App(): React.JSX.Element {
       .catch(fail('Resume unavailable'))
   }
 
-  function resumeSession(record: SessionRecord): void {
-    void window.aiTerminal.resumeConversation(record.sessionId).then((next) => {
+  function resumeSession(record: SessionRecord, expectedCommand?: string): void {
+    void window.aiTerminal.resumeConversation(record.sessionId, expectedCommand).then((next) => {
       setLive((current) => ({ ...current, [next.sessionId]: next }))
       setFailure(undefined)
     }).catch(fail('Resume failed'))

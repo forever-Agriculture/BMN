@@ -572,5 +572,15 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
       DROP TABLE conversation_binding;
       ALTER TABLE conversation_binding_next RENAME TO conversation_binding;
     `
+  },
+  {
+    // Story 43.1: the command a program in the session reported for resuming it, kept with the session's other
+    // launch facts so it survives a restart. NULL for every existing session.
+    version: 20,
+    sql: `
+      ALTER TABLE session ADD COLUMN reported_resume_json TEXT NULL CHECK (
+        reported_resume_json IS NULL OR json_valid(reported_resume_json)
+      );
+    `
   }
 ])

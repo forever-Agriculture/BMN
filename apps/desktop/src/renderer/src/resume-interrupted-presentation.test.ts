@@ -98,6 +98,7 @@ describe('the rows the offer draws', () => {
     ]))
     expect(rows.map((row) => [row.action, row.checked])).toEqual([['resume', true], ['relaunch', false]])
     expect(rows[1]?.relaunchReason).toBe('No conversation binding was captured for this session')
+    expect(rows.map((row) => row.reported)).toEqual(['', ''])
     expect(rows.every((row) => row.outcome.kind === 'pending')).toBe(true)
   })
 
@@ -162,5 +163,20 @@ describe('what each row reads after the action', () => {
       { sessionId: 'c', outcome: 'not-started' }
     ])
     expect(startableRows(applied).map((row) => row.sessionId)).toEqual(['c'])
+  })
+})
+
+describe('a session whose Resume runs a command a program reported (Story 43.2 AC3)', () => {
+  it('is listed with its exact command and who reported it, and never checked for the owner', () => {
+    const rows = resumeInterruptedRows(cohort([
+      entry({ sessionId: 'bound' }),
+      entry({ sessionId: 'reported', command: '/opt/bin/my-agent --resume ses_1', reportedAt: '2026-09-21T09:58:00.000Z' })
+    ]))
+    expect(rows.map((row) => [row.action, row.command, row.checked])).toEqual([
+      ['resume', '/usr/bin/codex resume 01999f0a', true],
+      ['resume', '/opt/bin/my-agent --resume ses_1', false]
+    ])
+    expect(rows[1]?.reported).toMatch(/^Reported by the program in this session at \d\d:\d\d$/)
+    expect(resumeInterruptedButtonLabel(rows)).toBe('Resume 1 session')
   })
 })

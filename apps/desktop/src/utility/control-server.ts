@@ -15,6 +15,7 @@ import {
   isProtocolErrorCode,
   parseAttentionEvidence,
   parseAttentionPrompt,
+  reportedResumeArgvProblem,
   stripFormatCharacters,
   type AttentionKind,
   type AttentionEvidence,
@@ -149,6 +150,12 @@ export interface ControlHandlers {
   }): Promise<unknown>
   /** Writes text into the PTY as a bracketed paste; appends '\r' only when submit is true. */
   submitInput(p: { sessionId: string; text: string; submit: boolean }): Promise<void>
+  /**
+   * Story 43.1: the command that resumes the session's running program, reported by a program in the session for
+   * that process only. The shape is checked here; whether the name is on the session's PATH is the handler's check.
+   */
+  reportResumeCommand(p: { sessionId: string; incarnationId: string; argv: readonly string[] }): Promise<unknown>
+  clearResumeCommand(p: { sessionId: string; incarnationId: string }): Promise<unknown>
 }
 
 export interface ReceiptRecord {
@@ -1121,6 +1128,25 @@ export class ControlServer {
           await handlers.submitInput({ sessionId, text, submit })
           return { ok: true }
         })
+      }
+      case 'resume.report': {
+        const params = closedParams(rawParams, ['sessionId', 'argv', 'idempotencyKey'])
+        if (scope.kind !== 'session') throw unauthorized('Only a program in the session may report how to resume it')
+        const problem = reportedResumeArgvProblem(params.argv)
+        if (problem !== null) throw invalid(problem)
+        const argv = params.argv as string[]
+        const idempotencyKey = readText(params, 'idempotencyKey', RULES.idempotencyKey)
+        const sessionId = this.target(scope, params)
+        return this.idempotent(scope, method, idempotencyKey, params, () =>
+          handlers.reportResumeCommand({ sessionId, incarnationId: scope.incarnationId, argv }))
+      }
+      case 'resume.clear': {
+        const params = closedParams(rawParams, ['sessionId', 'idempotencyKey'])
+        if (scope.kind !== 'session') throw unauthorized('Only a program in the session may clear how to resume it')
+        const idempotencyKey = readText(params, 'idempotencyKey', RULES.idempotencyKey)
+        const sessionId = this.target(scope, params)
+        return this.idempotent(scope, method, idempotencyKey, params, () =>
+          handlers.clearResumeCommand({ sessionId, incarnationId: scope.incarnationId }))
       }
       default:
         throw invalid(`Unknown method: ${method.slice(0, 64)}`)

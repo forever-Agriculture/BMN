@@ -101,6 +101,14 @@ export class DatabaseWorkerClient implements SessionStore {
     await this.request('create-resuming', { ...record })
   }
 
+  async setReportedResume(record: { sessionId: string; incarnationId: string; argv: readonly string[]; reportedAt: string }): Promise<void> {
+    await this.request('resume-command-set', { ...record, argv: [...record.argv] })
+  }
+
+  async clearReportedResume(record: { sessionId: string; incarnationId: string }): Promise<boolean> {
+    return (await this.request('resume-command-clear', { ...record })) as boolean
+  }
+
   async getConversationBinding(
     sessionId: string
   ): Promise<PersistedConversationBinding | undefined> {

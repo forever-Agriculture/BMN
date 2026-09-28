@@ -1,5 +1,6 @@
 import type { BoundConversationBinding, PersistedConversationBinding } from './binding'
 import { hasExactKeys } from './closed-shape'
+import { parseReportedResumeCommand, type ReportedResumeCommand } from './resume-command'
 
 export const DEFAULT_WORKSPACE_ID = '00000000-0000-4000-8000-000000000001'
 export const WORKSPACE_NAME_MAX_LENGTH = 120
@@ -108,6 +109,8 @@ export interface SessionRecord {
   lastProcess: SessionProcessStatus | null
   /** Actionable reason persisted launch metadata cannot currently be used. */
   launchDisabledReason?: string
+  /** The command a program in the session reported for resuming it (Story 43.1); absent when none is kept. */
+  reportedResume?: ReportedResumeCommand
 }
 
 export interface LaunchTemplateRecord {
@@ -225,6 +228,11 @@ export interface InterruptedSessionEntry {
   interruptedAt: string
   /** Why this session can only be started again: no binding, or the binding's own detail. */
   relaunchReason: string | null
+  /**
+   * Set when this row's Resume runs the command a program in the session reported (Story 43.2): the time it was
+   * reported. Such a row is never checked for the owner.
+   */
+  reportedAt?: string
 }
 
 /**
@@ -370,7 +378,7 @@ const SESSION_RECORD_KEYS = [
   'sessionId', 'workspaceId', 'name', 'cwd', 'executable', 'argv', 'position', 'backgroundChoice', 'terminalGraphics',
   'revision', 'createdAt', 'archivedAt', 'lastProcess'
 ] as const
-const SESSION_RECORD_OPTIONAL_KEYS = ['launchDisabledReason'] as const
+const SESSION_RECORD_OPTIONAL_KEYS = ['launchDisabledReason', 'reportedResume'] as const
 const SESSION_PROCESS_KEYS = ['incarnationId', 'state', 'exitCode', 'signal', 'detail'] as const
 const TEMPLATE_RECORD_KEYS = [
   'templateId', 'name', 'executable', 'argv', 'cwd', 'backgroundChoice', 'terminalGraphics', 'revision', 'createdAt'
@@ -487,7 +495,8 @@ export function isSessionRecord(value: unknown): value is SessionRecord {
     (!('launchDisabledReason' in value) ||
       (typeof value.launchDisabledReason === 'string' &&
         value.launchDisabledReason.trim().length > 0)) &&
-    (value.lastProcess === null || isSessionProcessStatus(value.lastProcess))
+    (value.lastProcess === null || isSessionProcessStatus(value.lastProcess)) &&
+    (!('reportedResume' in value) || parseReportedResumeCommand(value.reportedResume) !== null)
   )
 }
 

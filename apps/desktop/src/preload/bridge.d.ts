@@ -40,7 +40,7 @@ import type {
   VoiceModelId,
   VoiceStatus,
   ConversationBindingState,
-  ConversationResumePreview,
+  SessionResumePreview,
   ExplicitConversationBinding,
   LaunchTemplateRecord,
   LaunchSetRecord,
@@ -172,10 +172,11 @@ export interface AiTerminalBridge {
   getSavedOutput(sessionId: string): Promise<SavedOutputCatalog>
   stopSession(sessionId: string): Promise<{ stopped: true }>
   getConversationBinding(sessionId: string): Promise<ConversationBindingState>
-  previewConversationResume(sessionId: string): Promise<ConversationResumePreview>
+  previewConversationResume(sessionId: string): Promise<SessionResumePreview>
   locateConversation(binding: ExplicitConversationBinding): Promise<ExplicitConversationBinding>
   startNewConversation(sessionId: string): Promise<{ cleared: boolean }>
-  resumeConversation(sessionId: string): Promise<TerminalStartupSuccess>
+  /** `expectedCommand`, the command the Resume dialog showed, makes a start that would run anything else fail. */
+  resumeConversation(sessionId: string, expectedCommand?: string): Promise<TerminalStartupSuccess>
   /** Runs the saved command again in a new process; agents start a fresh conversation. */
   relaunchSession(sessionId: string): Promise<TerminalStartupSuccess>
   /** What the newest update or quit interrupted, with the command each row would run. */

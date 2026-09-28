@@ -47,7 +47,7 @@ import {
   type VoiceModelId,
   type VoiceStatus,
   type ConversationBindingState,
-  type ConversationResumePreview,
+  type SessionResumePreview,
   type ExplicitConversationBinding,
   type LaunchTemplateRecord,
   type LaunchSetRecord,
@@ -389,7 +389,7 @@ contextBridge.exposeInMainWorld('aiTerminal', {
     return invokeBridge('aiterm:session:binding-get', sessionId)
   },
   /** What Resume would run for this session. Read-only: no process is started. */
-  previewConversationResume(sessionId: string): Promise<ConversationResumePreview> {
+  previewConversationResume(sessionId: string): Promise<SessionResumePreview> {
     return invokeBridge('aiterm:session:resume-preview', sessionId)
   },
   locateConversation(binding: ExplicitConversationBinding): Promise<ExplicitConversationBinding> {
@@ -398,8 +398,11 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   startNewConversation(sessionId: string): Promise<{ cleared: boolean }> {
     return invokeBridge('aiterm:session:binding-clear', sessionId)
   },
-  async resumeConversation(sessionId: string): Promise<StartupSuccess> {
-    const startup = await invokeBridge<StartupSuccess>('aiterm:session:resume', sessionId)
+  async resumeConversation(sessionId: string, expectedCommand?: string): Promise<StartupSuccess> {
+    // Only a reported command's Resume carries the command the owner read (Story 43.2).
+    const startup = expectedCommand === undefined
+      ? await invokeBridge<StartupSuccess>('aiterm:session:resume', sessionId)
+      : await invokeBridge<StartupSuccess>('aiterm:session:resume', sessionId, expectedCommand)
     latestExit = undefined
     recordLiveSession(startup)
     return startup

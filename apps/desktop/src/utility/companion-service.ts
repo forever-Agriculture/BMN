@@ -494,6 +494,17 @@ export class CompanionService {
         reportUsage: (p) => this.controlCall(async () => this.recordUsage(p)),
         submitInput: (p) => this.controlCall(async () => {
           this.options.manager.writeToSession(p.sessionId, bracketedPaste(p.text, p.submit))
+        }),
+        // The window shows the command in Session details and offers Resume with it, so it reloads the record.
+        reportResumeCommand: (p) => this.controlCall(async () => {
+          const command = await options.manager.reportResumeCommand(p)
+          this.emit('conversations', p.sessionId)
+          return { recorded: true, ...command }
+        }),
+        clearResumeCommand: (p) => this.controlCall(async () => {
+          const cleared = await options.manager.clearResumeCommand(p)
+          this.emit('conversations', p.sessionId)
+          return { cleared }
         })
       }
     })
@@ -536,9 +547,13 @@ export class CompanionService {
     await writeFile(path, firstLineBreak === -1 ? kept : kept.subarray(firstLineBreak + 1), { mode: 0o600 })
   }
 
+  /** The PATH every session's processes see: BMN's CLI first, then BMN's own PATH. */
+  sessionPath(): string {
+    return [dirname(this.options.cliPath), process.env.PATH ?? '/usr/bin:/bin'].join(':')
+  }
+
   /** Environment for one incarnation: its scoped control credential and the CLI on PATH. */
   sessionEnvironment(identity: SessionIdentity): Record<string, string> {
-    const binDirectory = dirname(this.options.cliPath)
     const token = this.auth.sessionToken(identity.sessionId, identity.incarnationId)
     return {
       BMN_CONTROL_SOCKET: this.socketPath,
@@ -548,7 +563,7 @@ export class CompanionService {
       AITERM_CONTROL_SOCKET: this.socketPath,
       AITERM_TOKEN: token,
       AITERM_SESSION_ID: identity.sessionId,
-      PATH: [binDirectory, process.env.PATH ?? '/usr/bin:/bin'].join(':')
+      PATH: this.sessionPath()
     }
   }
 

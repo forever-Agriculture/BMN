@@ -42,7 +42,7 @@ interface ApplicationStartup {
 
 interface PreloadApi {
   onStartup(listener: (startup: ApplicationStartup) => void): () => void
-  resumeConversation(sessionId: string): Promise<LiveStartup>
+  resumeConversation(sessionId: string, expectedCommand?: string): Promise<LiveStartup>
   createSession(params: object): Promise<{ session: { sessionId: string }; startup: LiveStartup }>
 }
 
@@ -107,5 +107,13 @@ describe('preload startup replay for late subscribers', () => {
       'attachment-session-c-1'
     ])
     expect(replayed.sessions).toContainEqual({ sessionId: 'session-c', name: 'C' })
+  })
+
+  it('sends the command the owner read with a reported command\'s Resume (Story 43.2)', async () => {
+    electron.invoke.mockResolvedValueOnce({ ok: true, result: live('session-a', '3') })
+
+    await api.resumeConversation('session-a', '/home/owner/bin/my-agent --resume abc')
+
+    expect(electron.invoke).toHaveBeenLastCalledWith('aiterm:session:resume', 'session-a', '/home/owner/bin/my-agent --resume abc')
   })
 })

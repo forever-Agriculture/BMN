@@ -299,7 +299,8 @@ async function start(): Promise<void> {
     onOutput: (sessionId, bytes) => companionHolder.current?.sessionOutput(sessionId, bytes),
     // Main owns the clipboard and the owner's setting; the host only reports what a live program asked for.
     onProgramCopy: (message) => parentPort.postMessage(message),
-    sessionEnvironment: (sessionIdentity) => companionHolder.current?.sessionEnvironment(sessionIdentity) ?? {}
+    sessionEnvironment: (sessionIdentity) => companionHolder.current?.sessionEnvironment(sessionIdentity) ?? {},
+    sessionPath: () => companionHolder.current?.sessionPath() ?? process.env.PATH ?? ''
   })
   const cliPath = process.env.BMN_CLI_PATH ?? join(__dirname, '..', '..', 'bin', 'bmn')
   const companion = new CompanionService({
@@ -552,7 +553,8 @@ async function start(): Promise<void> {
         return manager.resume({
           sessionId: stringValue(params, 'sessionId'),
           cols: numberValue(params, 'cols'),
-          rows: numberValue(params, 'rows')
+          rows: numberValue(params, 'rows'),
+          ...(params.expectedCommand === undefined ? {} : { expectedCommand: stringValue(params, 'expectedCommand') })
         })
       case METHOD_REGISTRY.sessionRelaunch:
         if (!terminalPort) {

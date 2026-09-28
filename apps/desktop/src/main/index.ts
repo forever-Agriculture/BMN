@@ -751,11 +751,14 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
     runtimes.set(id, runtime)
     return startupForRuntime(runtime)
   }
-  bridgeIpc.handle('aiterm:session:resume', async (event, sessionId: unknown) => {
+  bridgeIpc.handle('aiterm:session:resume', async (event, sessionId: unknown, expectedCommand: unknown) => {
     const id = requireKnownSession(event, sessionId)
+    if (expectedCommand !== undefined && (typeof expectedCommand !== 'string' || expectedCommand.length === 0)) {
+      throw new MainIpcError(ERROR_CODES.invalidArgument, 'The confirmed command must be text')
+    }
     const dimensions = runtimes.get(id)?.dimensions ?? { cols: 80, rows: 24 }
-    const resumed = await resumeBoundSession(requireHostClient(), id, dimensions)
-    return adoptRestartedRuntime(id, resumed, resumed.binding.launchContext, dimensions)
+    const resumed = await resumeBoundSession(requireHostClient(), id, dimensions, expectedCommand)
+    return adoptRestartedRuntime(id, resumed, resumed.launch, dimensions)
   })
   bridgeIpc.handle('aiterm:session:cohort-list', (event) => {
     if (!senderIsAllowed(event)) {
