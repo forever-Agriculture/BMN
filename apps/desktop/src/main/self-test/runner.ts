@@ -221,14 +221,12 @@ async function nativeFailureSelfTest(hostEntry: string, repoRoot: string): Promi
     }
   })
   let stderr = ''
-  let resolveActionableCopy = (): void => undefined
-  const actionableCopyReceived = new Promise<void>((resolve) => {
-    resolveActionableCopy = resolve
-  })
   child.stderr?.on('data', (chunk: Buffer) => {
     stderr += chunk.toString('utf8')
-    if (stderr.includes('native module "node-pty" failed to load')) resolveActionableCopy()
   })
+  // Output can still be in flight when the exit arrives; on a loaded machine a fixed 500 ms wait
+  // read an empty stderr once (2026-09-28, load average 14). The stream's end means all of it arrived.
+  const stderrEnded = new Promise<void>((resolve) => child.stderr?.once('end', resolve) ?? resolve())
   const exitCode = await new Promise<number>((resolveExit, reject) => {
     const timer = setTimeout(() => {
       child.kill()
@@ -239,13 +237,10 @@ async function nativeFailureSelfTest(hostEntry: string, repoRoot: string): Promi
       resolveExit(code)
     })
   })
-  await Promise.race([
-    actionableCopyReceived,
-    new Promise<void>((resolve) => setTimeout(resolve, 500))
-  ])
+  await Promise.race([stderrEnded, new Promise<void>((resolve) => setTimeout(resolve, 10_000))])
   if (exitCode === 0) throw new Error('native failure host unexpectedly exited zero')
   if (!stderr.includes('native module "node-pty" failed to load') || !stderr.includes('No sessions were started.')) {
-    throw new Error(`native failure copy was not actionable: ${stderr.slice(-480)}`)
+    throw new Error(`native failure copy was not actionable (exit ${exitCode}): ${stderr.slice(-480)}`)
   }
   if (existsSync(databasePath)) {
     throw new Error('native failure created the database before dependency loading completed')
@@ -371,6 +366,9 @@ async function verifyRegisteredInvokeEnvelopes(): Promise<string[]> {
   } as unknown as IpcMainInvokeEvent
   const channels: string[] = []
   for (const registration of host.bridgeRegistrations()) {
+    if (!registration.channel.startsWith('aiterm:')) {
+      throw new Error(`invoke channel ${registration.channel} is outside the aiterm: namespace`)
+    }
     const answer = await registration.invoke(event)
     if (
       answer.ok !== false ||
@@ -385,6 +383,12 @@ async function verifyRegisteredInvokeEnvelopes(): Promise<string[]> {
     throw new Error('runtime invoke-channel enumeration was empty or duplicated')
   }
   return channels
+}
+
+/** A binding the agent's SessionStart hook recorded, naming this conversation. */
+function boundBy(binding: PersistedConversationBinding, agentCli: string, reference: string): boolean {
+  return binding.status === 'bound' && binding.agentCli === agentCli && binding.captureRoute === 'hook-session-start' &&
+    binding.conversationReference === reference
 }
 
 /** The one printer for a failed self-test: the first failure is the reason, printed once. */
@@ -886,9 +890,11 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       METHOD_REGISTRY.attentionList,
       {}
     )).find((request) => request.requestId === revisedPrompt.requestId)
-    const staleNoticeRejected = true
     const revisedPromptPreserved =
       revisedAfterStaleActivation?.kind === 'question' && revisedAfterStaleActivation.state === 'open'
+    if (!revisedPromptPreserved) {
+      throw new Error(`activating a stale notice changed the question it became: ${JSON.stringify(revisedAfterStaleActivation)}`)
+    }
     await client.request(METHOD_REGISTRY.attentionResolve, {
       requestId: revisedPrompt.requestId,
       resolution: 'Self-test cleanup'
@@ -1024,8 +1030,8 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     if (!(sixelRender.ownStorageMB > 0 && sixelRender.ownLayer)) {
       throw new Error(`the real pane could not decode the Sixel fixture: ${JSON.stringify(sixelRender)}`)
     }
-    if (!sixelRender.otherImageUnchanged) {
-      throw new Error('Sixel output changed the other pane image layer')
+    if (!sixelRender.otherImageUnchanged || sixelRender.otherStorageMB !== 0) {
+      throw new Error(`Sixel output changed the other pane image layer: ${JSON.stringify(sixelRender)}`)
     }
 
     // Epic 28.1 AC2/AC3/AC5: a Codex-style animation in one of two visible panes. Codex 0.157.1's
@@ -1105,7 +1111,6 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     })()`) as { storageMB: number; imageLines: number[];
       quiet: { lines: string[]; storageMB: number; layer: boolean; selection: string } }
     const sixelAnimation = {
-      frames: 184,
       noViewRebuild: host.runtimes.get(secondSession.sessionId)?.attachment.attachmentId === animatedAttachment,
       storageMB: animation.storageMB,
       imageLinesAfterScroll: animation.imageLines.length,
@@ -1138,7 +1143,6 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       throw new Error('the second animated pane never finished');
     })()`)
     const sixelTwoPaneAnimation = {
-      framesPerPane: 64,
       noViewRebuild: host.runtimes.get(session.sessionId)?.attachment.attachmentId === quietAttachment &&
         host.runtimes.get(secondSession.sessionId)?.attachment.attachmentId === animatedAttachmentBoth,
       storageMB: await host.applicationWindow.webContents.executeJavaScript(`(() => {
@@ -1146,7 +1150,8 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         return [snapshots[${animatedId}].imageStorageMB, snapshots[${quietId}].imageStorageMB];
       })()`) as number[]
     }
-    if (!sixelTwoPaneAnimation.noViewRebuild || sixelTwoPaneAnimation.storageMB.some((value) => !(value > 0))) {
+    if (!sixelTwoPaneAnimation.noViewRebuild || sixelTwoPaneAnimation.storageMB.length !== 2 ||
+      sixelTwoPaneAnimation.storageMB.some((value) => !(value > 0))) {
       throw new Error(`the two-pane animation rebuilt a view or lost its images: ${JSON.stringify(sixelTwoPaneAnimation)}`)
     }
     await client.request(METHOD_REGISTRY.terminalWrite, { attachmentId: quietAttachment,
@@ -1275,6 +1280,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       )
     }
     if (
+      typeof preloadProbe.handoffFlow.draftId !== 'string' ||
       preloadProbe.handoffFlow.targetSessionId !== session.sessionId ||
       preloadProbe.handoffFlow.editedText !== HANDOFF_OUTLINE.replace('Goal:', 'Goal: Edited handoff line one\nQuestion line two') ||
       Object.values(preloadProbe.handoffFlow.outline ?? {}).length !== 8 ||
@@ -1450,7 +1456,6 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     ) {
       throw new Error(`the renderer did not complete the voice flow: ${JSON.stringify({ ...voiceFlow, transcriptions: taps.voiceTranscriptions })}`)
     }
-    preloadProbe.attentionTriage.staleNoticeRejected = staleNoticeRejected
     preloadProbe.attentionTriage.revisedPromptPreserved = revisedPromptPreserved
 
     const selectedBeforeUnavailableTarget = (await client.request<LayoutGetResult>(
@@ -1476,6 +1481,9 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     )).layout.selectedSessionId
     preloadProbe.attentionTriage.unavailableTargetIgnored =
       unavailableFeedback.length > 0 && selectedAfterUnavailableTarget === selectedBeforeUnavailableTarget
+    if (!preloadProbe.attentionTriage.unavailableTargetIgnored) {
+      throw new Error('opening an unavailable session changed the selection or said nothing')
+    }
     if (
       preloadProbe.launchUnavailable.sessionId !== secondSession.sessionId ||
       preloadProbe.launchUnavailable.notice !==
@@ -1893,11 +1901,10 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         .find(row => row.requestId === ${JSON.stringify(petitionRequest.requestId)});
       return { reportShown: reportShown && progressMatches, evidenceShown, pendingHandoffShown,
         exactDraftReviewed, attentionUnchanged: requestBefore?.state === 'open' &&
-          requestAfter?.state === 'open' && requestBefore.revision === requestAfter.revision,
-        terminalRefitsUnchanged: true };
+          requestAfter?.state === 'open' && requestBefore.revision === requestAfter.revision };
     })()`) as {
       reportShown: boolean; evidenceShown: boolean; pendingHandoffShown: boolean;
-      exactDraftReviewed: boolean; attentionUnchanged: boolean; terminalRefitsUnchanged: boolean
+      exactDraftReviewed: boolean; attentionUnchanged: boolean
     }
     const workspaceResultsAcceptance = {
       ...workspaceResultsUi,
@@ -1947,6 +1954,14 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       status: readFileSync(join(petitionDirectory, 'status.txt'), 'utf8'),
       bounded: petitionSnapshot.handoffs?.length === 1 &&
         JSON.stringify(Object.keys(petitionSnapshot.handoffs[0]).sort()) === JSON.stringify(['destinationSessionId', 'draftId', 'state', 'updatedAt'])
+    }
+    if (!agentHandoff.preparedWithoutDelivery || !agentHandoff.destinationMatches || agentHandoff.text !== petitionText ||
+      !agentHandoff.byline.includes('Prepared by the agent in Petition source') || agentHandoff.provenance !== 'from bmn handoff' ||
+      agentHandoff.resolvedBy !== 'owner' || agentHandoff.resolution !== 'pasted, not submitted' ||
+      agentHandoff.payloadOccurrences !== 1 || !agentHandoff.agentOwnerStamp || !agentHandoff.publishedFile ||
+      !agentHandoff.bracketedPaste || !agentHandoff.noSubmit || !agentHandoff.status.includes('pasted (not submitted)') ||
+      !agentHandoff.bounded) {
+      throw new Error(`the agent's handoff was not prepared, then pasted by the owner: ${JSON.stringify(agentHandoff)}`)
     }
     // The raw-mode synthetic receiver records the exact PTY bytes for this owner-confirmed file send.
     const beforeFileReferenceWire = terminalModeProgramInput(destinationHarness.input)
@@ -2003,7 +2018,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       noEnter: !fileReferenceWireBytes.includes('\r'),
       onePaste: fileReferenceWireBytes.split(fileReferenceWirePayload).length - 1 === 1
     }
-    if (Object.values(fileReferenceWire).some((value) => value !== true)) {
+    if (Object.values(fileReferenceWire).length !== 6 || Object.values(fileReferenceWire).some((value) => value !== true)) {
       throw new Error(`the file-reference wire proof failed: ${JSON.stringify(fileReferenceWire)}`)
     }
     const openCodeDirectory = join(isolatedCwd, 'opencode-acceptance')
@@ -2064,6 +2079,18 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       events: openCodeEvents, binding: openCodeBinding, preview: openCodePreview.command,
       resumedArguments: openCodeArguments[1]
     }
+    if (openCodeAcceptance.provenance !== 'from OpenCode permission.asked' ||
+      openCodeAcceptance.openedBy !== 'hook:opencode:permission.asked' ||
+      openCodeAcceptance.resolvedBy !== 'hook:opencode:permission.replied' || openCodeAcceptance.permissionState !== 'answered' ||
+      !openCodeAcceptance.notice || !boundBy(openCodeBinding, 'opencode', openCodeReference) ||
+      !openCodeAcceptance.preview.includes('--session ' + openCodeReference) ||
+      JSON.stringify(openCodeAcceptance.resumedArguments) !== JSON.stringify(['--session', openCodeReference, '--model', 'fixture/model']) ||
+      JSON.stringify(openCodeEvents.map((event) => event.event)) !==
+        JSON.stringify(['session.created', 'permission.asked', 'permission.replied', 'session.idle']) ||
+      !openCodeEvents.every((event) => event.agent === 'opencode') ||
+      !openCodeEvents[1]?.effects.includes('opened') || !openCodeEvents[2]?.effects.includes('answered')) {
+      throw new Error(`OpenCode acceptance failed: ${JSON.stringify(openCodeAcceptance)}`)
+    }
     for (const stopped of [
       { sessionId: petitionSource.session.sessionId, incarnationId: petitionSource.session.lastProcess?.incarnationId },
       { sessionId: petitionDestination.session.sessionId, incarnationId: petitionDestination.session.lastProcess?.incarnationId },
@@ -2109,8 +2136,8 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         .find(r => r.textContent.includes('Cursor finished its turn')));
       const provenance = row.querySelector('.provenance')?.textContent ?? null;
       document.querySelector('.needs-you-button').click();
-      return { shown: true, provenance };
-    })()`) as { shown: boolean; provenance: string | null }
+      return { provenance };
+    })()`) as { provenance: string | null }
     const cursorBinding = await client.request<PersistedConversationBinding>(METHOD_REGISTRY.sessionBindingGet, { sessionId: cursorSession.session.sessionId })
     const cursorEventLog = await client.request<Array<{ agent: string; event: string; effects: string[] }>>(METHOD_REGISTRY.hookEventsList, { sessionId: cursorSession.session.sessionId })
     // The owner's way: cursor-agent typed into a shell. The chip says "Shell" until Cursor's own hooks report.
@@ -2141,6 +2168,18 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       binding: cursorBinding, events: cursorEventLog, chip: cursorChip.rowChip, paneChip: cursorChip.paneChip,
       modelRow: cursorChip.modelRow, shellBinding: cursorShellBinding.status,
       preview: cursorPreview.command, notCarried: cursorPreview.notCarried, resumedArguments: cursorArguments[1]
+    }
+    if (cursorAcceptance.notice !== 'Cursor finished its turn' || cursorAcceptance.openedBy !== 'hook:cursor:stop' ||
+      cursorNeedsYou.provenance !== 'from Cursor stop' || !boundBy(cursorBinding, 'cursor', cursorChat) ||
+      JSON.stringify(cursorEventLog.map((event) => event.event)) !==
+        JSON.stringify(['sessionStart', 'beforeSubmitPrompt', 'postToolUse', 'stop']) ||
+      !cursorEventLog.every((event) => event.agent === 'cursor') || !cursorEventLog[3]?.effects.includes('opened') ||
+      cursorAcceptance.chip !== 'Cursor' || cursorAcceptance.paneChip !== 'Cursor' || !cursorAcceptance.modelRow?.includes('default') ||
+      cursorAcceptance.shellBinding !== 'unsupported' ||
+      !cursorAcceptance.preview.endsWith(`cursor-agent --resume=${cursorChat} --model fixture-model`) ||
+      cursorAcceptance.notCarried !== '--force' ||
+      JSON.stringify(cursorAcceptance.resumedArguments) !== JSON.stringify([`--resume=${cursorChat}`, '--model', 'fixture-model'])) {
+      throw new Error(`Cursor acceptance failed: ${JSON.stringify(cursorAcceptance)}`)
     }
     for (const stopped of [
       { sessionId: cursorResumed.sessionId, incarnationId: cursorResumed.incarnationId },
@@ -2186,6 +2225,11 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         throw new Error(`Tab to dormant session actions diagnostic: ${JSON.stringify(diagnostic)}`, { cause: error })
       })
     const quietSidebarAcceptance = { ...dormantSidebar, ...dormantMenu }
+    if (quietSidebarAcceptance.live !== 'false' || typeof quietSidebarAcceptance.muted !== 'string' ||
+      quietSidebarAcceptance.colour !== quietSidebarAcceptance.muted || !quietSidebarAcceptance.focused ||
+      quietSidebarAcceptance.opacity !== '1' || quietSidebarAcceptance.hovered !== false) {
+      throw new Error(`a dormant session row was not quiet or its actions not reachable by Tab: ${JSON.stringify(quietSidebarAcceptance)}`)
+    }
     const routingWorkspace = await client.request<WorkspaceRecord>(METHOD_REGISTRY.workspaceCreate, {
       name: 'Routing acceptance B', defaultCwd: isolatedCwd, position: 20
     })
@@ -2236,6 +2280,19 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       open: routingOpened.map(({ requestKey, kind, title, body, state }) => ({ requestKey, kind, title, body, state })),
       resolved: routingResolved.map(({ requestKey, state, resolvedBy }) => ({ requestKey, state, resolvedBy })),
       workspaceAttentionOpened, workspaceAttentionCleared
+    }
+    const openedRouting = (key: string) => subagentAcceptance.open.find((request) => request.requestKey === key && request.state === 'open')
+    const resolvedRouting = (key: string, state: string, event: string) => subagentAcceptance.resolved.some((request) =>
+      request.requestKey === key && request.state === state && request.resolvedBy === event)
+    if (openedRouting('opencode:permission')?.kind !== 'permission' ||
+      openedRouting('opencode:subagent-permission')?.kind !== 'permission' ||
+      openedRouting('opencode:subagent-permission')?.title !== 'OpenCode subagent asks to child-tool' ||
+      openedRouting('opencode:subagent-permission')?.body !== 'child-pattern' ||
+      openedRouting('opencode:subagent-question')?.kind !== 'question' ||
+      !resolvedRouting('opencode:subagent-permission', 'answered', 'hook:opencode:permission.replied') ||
+      !resolvedRouting('opencode:subagent-question', 'withdrawn', 'hook:opencode:question.rejected') ||
+      !workspaceAttentionOpened.selectedInA || workspaceAttentionOpened.text !== '1 waiting for your response') {
+      throw new Error(`subagent requests were not routed and answered as their own: ${JSON.stringify(subagentAcceptance)}`)
     }
     await client.request(METHOD_REGISTRY.sessionStop, { sessionId: routingSession.session.sessionId,
       incarnationId: routingSession.session.lastProcess?.incarnationId, cause: 'explicit' })
@@ -2304,6 +2361,11 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       noticeCount: repeatRows.length, kind: repeatRows[0]?.kind, openedBy: repeatRows[0]?.openedBy,
       provenance: repeatProvenance, ptyInputEvents: repeatInputAfterNotice,
       resetState: repeatAfterReset?.state
+    }
+    if (!repeatAcceptance.logShowsThree || repeatAcceptance.noticeCount !== 1 || repeatAcceptance.kind !== 'notice' ||
+      repeatAcceptance.openedBy !== 'watch:repeat' || repeatAcceptance.provenance !== "from BMN's repeat watch" ||
+      repeatAcceptance.resetState !== 'withdrawn') {
+      throw new Error(`the repeat watch did not open one notice and withdraw it: ${JSON.stringify(repeatAcceptance)}`)
     }
     await client.request(METHOD_REGISTRY.sessionStop, { sessionId: repeatSession.session.sessionId,
       incarnationId: repeatSession.session.lastProcess?.incarnationId, cause: 'explicit' })
@@ -2534,6 +2596,20 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       launchArguments: harnessRunArguments[0] ?? null
     }
     console.error(`[BMN] self-test phase: conversation reported ${JSON.stringify(conversationFromHook)}`)
+    const reportedConversation = '01a0b657-21a8-7f00-addd-b73646828f5b'
+    const listedRow = conversationFromHook.listed.conversation as { status?: string; captureRoute?: string } | null
+    if (conversationFromHook.startedRoute !== 'unsupported' ||
+      conversationFromHook.reportedReference !== reportedConversation ||
+      !conversationFromHook.reportedDetail?.startsWith('Reported by Codex at session start') ||
+      !conversationFromHook.reportedDetail.includes('not carried: --full-auto') ||
+      conversationFromHook.rivalRoute !== 'unsupported' ||
+      conversationFromHook.listed.sessions !== 1 || listedRow?.status !== 'bound' ||
+      listedRow.captureRoute !== 'hook-session-start' ||
+      !conversationFromHook.refusalReason?.endsWith('already resumed in "Hook-reported Codex"') ||
+      JSON.stringify(conversationFromHook.launchArguments) !== JSON.stringify(['--model', 'gpt-6', '--full-auto']) ||
+      JSON.stringify(conversationFromHook.resumedArguments) !== JSON.stringify(['resume', reportedConversation, '--model', 'gpt-6'])) {
+      throw new Error(`the conversation a Codex hook reported was not bound, listed and resumed: ${JSON.stringify(conversationFromHook)}`)
+    }
 
     const openRequestCount = async (): Promise<number> =>
       (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
@@ -2594,7 +2670,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     if (
       !modesAfterRestart.bracketedPasteMode ||
       !modesAfterRestart.sendFocusMode ||
-      modesAfterRestart.mouseTrackingMode === 'none' ||
+      modesAfterRestart.mouseTrackingMode !== modesBeforeRestart.mouseTrackingMode ||
       // A mode the program turned off is as much its state as one it turned on.
       modesAfterRestart.wraparoundMode
     ) {
@@ -2674,6 +2750,12 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       startedNothing: liveAfterCancel === liveBeforeConfirmation
     }
     console.error(`[BMN] self-test phase: resume confirmation ${JSON.stringify(resumeConfirmationShownToOwner)}`)
+    if (!resumeConfirmationShownToOwner.matchesSpawnedArguments ||
+      !resumeConfirmationShownToOwner.command?.includes('resume 01a0b657-21a8-7f00-addd-b73646828f5b --model gpt-6') ||
+      resumeConfirmationShownToOwner.note !==
+        'Not carried over from the original launch: --full-auto. codex resume does not accept them.') {
+      throw new Error(`the Resume confirmation did not show the command that runs: ${JSON.stringify(resumeConfirmationShownToOwner)}`)
+    }
 
     // Epic 29: the model maker's flag, from what a Claude stand-in's own `bmn hook claude` reports
     // under each base URL. This run stays live into the application restart below.
@@ -2762,7 +2844,9 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     const answered = (run: typeof single, keys: string[], sent: string[]) =>
       JSON.stringify(run.keys) === JSON.stringify(keys) && run.outcome?.state === 'confirmed' &&
       JSON.stringify(run.outcome.sent) === JSON.stringify(sent) && run.request?.resolvedBy === 'telegram'
-    if (!answered(single, ['2'], ['Session cookies']) || !answered(three, ['1', '2', '1', '1'], ['Postgres', 'Later', 'Staging']) ||
+    if (remoteAnswers.readBack?.type !== 'questions' ||
+      remoteAnswers.readBack.labels?.join('|') !== 'JWT|Session cookies|OAuth only' ||
+      !answered(single, ['2'], ['Session cookies']) || !answered(three, ['1', '2', '1', '1'], ['Postgres', 'Later', 'Staging']) ||
       !answered(codexTwo, ['2', '1'], ['SQLite', 'Yes']) || !answered(allowOnce, ['1'], ['Allow once']) ||
       permissionsOff.outcome?.state !== 'refused' || permissionsOff.outcome.reason !== 'permissions-off' || permissionsOff.keys.length !== 0 ||
       denied.outcome?.state !== 'sent-unconfirmed' || JSON.stringify(denied.keys) !== '["3"]' || denied.request?.resolvedBy !== 'telegram' ||
@@ -2823,7 +2907,8 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       'edit:4:<i>Nothing is sent until this answer.</i>', 'toast:Sending Postgres · Later · Staging…',
       'edit:0:<i>Sending: Postgres · Later · Staging…</i>', 'edit:0:✓ <i>Sent: Postgres · Later · Staging</i>'
     ]
-    if (telegramCards.card?.parseMode !== 'HTML' || JSON.stringify(telegramCards.sequence) !== JSON.stringify(expectedSequence) ||
+    if (telegramCards.card?.parseMode !== 'HTML' || !telegramCards.card.header?.startsWith('❓ <b>') ||
+      JSON.stringify(telegramCards.sequence) !== JSON.stringify(expectedSequence) ||
       JSON.stringify(telegramCards.keys) !== '["1","2","1","1"]' || telegramCards.request?.resolvedBy !== 'telegram') {
       throw new Error(`telegram cards went wrong: ${JSON.stringify(telegramCards)}`)
     }
@@ -3127,6 +3212,10 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       openRequestsBefore: openRequestsBeforeRendererRestart,
       openRequestsAfter: await openRequestCount()
     }
+    if (!(survivingRendererCrash.openRequestsBefore > 0) ||
+      survivingRendererCrash.openRequestsAfter !== survivingRendererCrash.openRequestsBefore) {
+      throw new Error(`open requests did not outlive the renderer crash: ${JSON.stringify(survivingRendererCrash)}`)
+    }
     const archivedStillLive = afterRenderer.sessions.some(
       (candidate) => candidate.sessionId === thirdSession.sessionId && candidate.state === 'live'
     )
@@ -3139,7 +3228,6 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     ))
 
     console.error('[BMN] self-test phase: application restart')
-    const supersededHostPid = client.process.pid
     const firstHostAbandoned = new Promise<void>((resolveAbandoned) => {
       const onMessage = (message: unknown): void => {
         if (
@@ -3239,6 +3327,10 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       throw new Error('session.list did not report the interrupted incarnation after application restart')
     }
     const openRequestsAfterApplicationRestart = await openRequestCount()
+    if (openRequestsAfterApplicationRestart !== survivingRendererCrash.openRequestsAfter) {
+      throw new Error(`open requests did not outlive the application restart: ${openRequestsAfterApplicationRestart} ` +
+        `after, ${survivingRendererCrash.openRequestsAfter} before`)
+    }
     const lifecycleStoppedAfterRestart = restoredDefaultSessions.find(
       (record) => record.sessionId === preloadProbe.templateCreatedSession.sessionId
     )?.lastProcess
@@ -3434,7 +3526,6 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         `the recovered workspace did not show the exited session as stopped: ${JSON.stringify(recoveredExitLabel)}`
       )
     }
-    const rendererRecoveredAfterShellExit = true
 
     // Epic 14.1: the working/idle word the shell observes, from real output and real titles, with
     // nothing derived acting. Each fixture waits on a gate file, so its clock starts after the
@@ -3749,7 +3840,6 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       summary: offerAfterUpdate.summary,
       commands: offerAfterUpdate.rows.map((row) => row.command),
       startsUnchecked: offerAfterUpdate.rows.every((row) => !row.checked),
-      dismissedStartedNothing: true,
       reopenedFromPalette: reopenedOffer.rows.map((row) => row.command),
       outcomes: offerResult.rows.map((row) => row.outcome),
       argv: restartedArgv.map((runs) => runs[1] ?? null),
@@ -4080,7 +4170,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       marker: string,
       stop: () => Promise<unknown> | void,
       description: string
-    ): Promise<{ lifecycleCaptureAcknowledged: boolean }> => {
+    ): Promise<void> => {
       const catalog = await catalogFor(sessionId)
       if ([catalog.current, ...catalog.history].some((entry) => entry?.content.includes(marker))) {
         throw new Error(`the ${marker} marker already exists in the saved output`)
@@ -4101,7 +4191,6 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       await acceptanceWait(async () =>
         (await savedCurrent(sessionId))?.includes(marker) ? true : undefined,
         `the ${description} saved output carries ${marker}`)
-      return { lifecycleCaptureAcknowledged: true }
     }
 
     const openRequestIds = async (): Promise<string[]> =>
@@ -4163,7 +4252,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         : {})
     })
     if (!explicitTarget) throw new Error('the explicit-stop session is not a running target')
-    const explicitProof = await stopWithFinalCapture(explicitId, 'SURVIVAL-EXPLICIT-MARKER', () =>
+    await stopWithFinalCapture(explicitId, 'SURVIVAL-EXPLICIT-MARKER', () =>
       host.applicationLifecycle.stopCurrentTarget(explicitTarget), 'explicit')
     const explicitRow = await acceptanceWait(async () => {
       const row = await processRow(explicitId)
@@ -4174,8 +4263,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       recordedExit: explicitRow?.exitCode ?? null,
       recordedSignal: explicitRow?.signal ?? null,
       neverInterrupted: explicitRow?.state === 'exited',
-      finalCaptureTookTheMarker: (await savedCurrent(explicitId))?.includes('SURVIVAL-EXPLICIT-MARKER') === true,
-      lifecycleCaptureAcknowledged: explicitProof.lifecycleCaptureAcknowledged
+      finalCaptureTookTheMarker: (await savedCurrent(explicitId))?.includes('SURVIVAL-EXPLICIT-MARKER') === true
     }
 
     const answerTheClosePrompt = host.applicationWindow!.webContents.executeJavaScript(`
@@ -4216,7 +4304,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     await rememberChoice(keptId, 'hide')
     const requestsBeforeClose = await openRequestIds()
     const closeCaptureStart = taps.lifecycleCaptures.length
-    const closeProof = await stopWithFinalCapture(closeStopId, 'SURVIVAL-CLOSE-STOP-MARKER', async () => {
+    await stopWithFinalCapture(closeStopId, 'SURVIVAL-CLOSE-STOP-MARKER', async () => {
       host.applicationLifecycle.closeLastWindow({ preventDefault(): void {} })
       await answerTheClosePrompt
     }, 'close-last-window')
@@ -4239,12 +4327,17 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
           ? true
           : false)
     }
+    if (!closeWindowKeep.noInterruption || !closeWindowKeep.noLifecycleCapture || closeWindowKeep.requestsStayOpen === false) {
+      throw new Error(`keeping sessions on window close interrupted, captured or closed something: ${JSON.stringify(closeWindowKeep)}`)
+    }
     const closeAndStop = {
       recordedInterrupted: closeStopRow?.state === 'interrupted',
       recordedDetail: closeStopRow?.detail ?? '',
       finalCaptureTookTheMarker: (await savedCurrent(closeStopId))?.includes('SURVIVAL-CLOSE-STOP-MARKER') === true,
-      lifecycleCaptureAcknowledged: closeProof.lifecycleCaptureAcknowledged,
       keptSessionStillLive: (await processRow(keptId))?.state === 'live'
+    }
+    if (!closeAndStop.keptSessionStillLive) {
+      throw new Error(`stopping on window close stopped a session the owner kept: ${JSON.stringify(closeAndStop)}`)
     }
     // The close lifecycle minimized the window, as production does; the remaining phases need a
     // live renderer again, so the harness recovers it the same way a crash does.
@@ -4415,6 +4508,12 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     if (terminalNotice.resolvedState === 'open' || terminalNotice.resolvedBy !== 'input') {
       throw new Error(`typing did not resolve the terminal notice: ${JSON.stringify(terminalNotice)}`)
     }
+    const aroundSecondNotice = terminalNotice.aroundSecondNotice
+    if (aroundSecondNotice.title !== 'BMN self-test second notice' || aroundSecondNotice.openedBy !== 'osc:9' ||
+      !aroundSecondNotice.sameSize || !aroundSecondNotice.sameElement || aroundSecondNotice.refits !== 0 ||
+      aroundSecondNotice.inputEvents !== 0) {
+      throw new Error(`a second terminal notice resized, rebuilt or wrote to its pane: ${JSON.stringify(aroundSecondNotice)}`)
+    }
 
     console.error('[BMN] self-test phase: launch sets and repository identity')
     const launchSetRepository = await runLaunchSetRepositorySelfTest(host.applicationWindow, {
@@ -4444,7 +4543,10 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         !launchSetRepository.ordinaryChangedBlocked ||
         !launchSetRepository.nonRepositoryStarted ||
         !launchSetRepository.detailRoots[0]?.includes(isolatedCwd) ||
-        !launchSetRepository.detailRoots[1]?.includes(join(isolatedCwd, 'nested-launch-repo'))) {
+        !launchSetRepository.detailRoots[1]?.includes(join(isolatedCwd, 'nested-launch-repo')) ||
+        launchSetRepository.detailRoots.length !== 2 ||
+        launchSetRepository.detailRoots[0] === launchSetRepository.detailRoots[1] ||
+        !/^git version /u.test(launchSetRepository.gitVersion)) {
       throw new Error(`launch set or repository acceptance failed: ${JSON.stringify(launchSetRepository)}`)
     }
 
@@ -4581,7 +4683,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     await host.applicationWindow.webContents.executeJavaScript(
       `window.aiTerminal.putSettings('appearance', ${JSON.stringify(appearanceBefore)})`)
     await new Promise((resolve) => setTimeout(resolve, 400))
-    if (sixelPlacement.some((row) => !row.fontApplied || row.rows === 0 || row.cssCellHeight <= 0)) {
+    if (sixelPlacement.length !== 4 || sixelPlacement.some((row) => !row.fontApplied || row.rows === 0 || row.cssCellHeight <= 0)) {
       throw new Error(`Sixel placement could not be measured: ${JSON.stringify(sixelPlacement)}`)
     }
 
@@ -4673,7 +4775,6 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       viewLimitMB: coldViews.viewLimitMB,
       largestViewMB: Math.max(...coldViews.capStorageMB),
       totalStorageMB: coldViews.totalStorageMB,
-      textAfterImages: true,
       withinLimits: coldViews.capStorageMB.every((value) => value > 0 && value <= coldViews.viewLimitMB + 0.01) &&
         coldViews.totalStorageMB <= 128
     }
@@ -4753,7 +4854,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       const fields = Object.fromEntries(`${result.line.replace(/^.*REGRESSION /, '')} ${result2.line.replace(/^.*REGRESSION2 /, '')}`
         .trim().split(' ').map((pair) => pair.split('=') as [string, string]))
       shellRegression[shell.label] = { ...fields, bracketedPaste: atPrompt.bracketedPasteMode,
-        lessMouse: inLess.mouseTrackingMode, lessQuit: true, promptSeen: prompt.line.includes('PROMPT-READY') }
+        lessMouse: inLess.mouseTrackingMode, promptSeen: prompt.line.includes('PROMPT-READY') }
     }
     const expectedTerms: Record<string, string> = { 'clean-sixel': 'xterm-sixel-256color',
       'clean-standard': 'xterm-256color', 'owner-sixel': 'xterm-sixel-256color' }
@@ -4886,25 +4987,21 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       throw new Error('database worker did not enable WAL, foreign keys, and the busy timeout')
     }
 
+    // The fourteen reads checked with the file-reference flow, plus the one the send dialog made.
+    if (taps.readFileReferences.length !== 15) {
+      throw new Error(`the renderer read file references ${taps.readFileReferences.length} times, not 15`)
+    }
+    const registeredInvokeChannels = host.bridgeRegistrations().map(({ channel }) => channel)
+    if (JSON.stringify(registeredInvokeChannels) !== JSON.stringify(envelopedInvokeChannels)) {
+      throw new Error('an invoke channel was registered after the typed-envelope check')
+    }
     receipt = {
       selfTest: 'session-roundtrip',
       electronVersion: ready.electronVersion,
       nativeModules: ready.nativeModules,
-      markerObserved: true,
-      helloHandshake: true,
       streamMessages: observed.sequences.length,
-      resized: { cols: 101, rows: 37 },
-      detachedProcessSurvived: true,
       workspaceCount: restoredWorkspaces.length,
       sessionCount: restoredHealth.sessionRecords,
-      sameCliSameCwdBindings: true,
-      locateAndStartNewBindingIsolation: true,
-      archivedRunningReachable: true,
-      layoutOrderSelectionScrollFollowTailRestored: true,
-      rendererRestartNoDuplicateProcesses: true,
-      applicationRestartNoAutoStart: true,
-      sameDatabaseHostRestart: true,
-      supersededHostPidRecorded: typeof supersededHostPid === 'number',
       interruptedIncarnations: restoredHealth.interruptedIncarnations,
       bindingsRestored: restoredBindings.length,
       mainPreloadWorkspaceMethod: preloadProbe.workspaceCount,
@@ -4919,19 +5016,18 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       rendererLiveExitLabel,
       rendererLiveExitSidebarWord,
       closePrompt,
-      rendererRecoveredAfterShellExit,
-      registeredInvokeChannels: host.bridgeRegistrations().map(({ channel }) => channel),
+      registeredInvokeChannels,
       envelopedInvokeChannels,
       templateCreatedSession: preloadProbe.templateCreatedSession,
       treeSelectionLayoutPut: preloadProbe.treeSelection,
       crossWorkspaceSplit: preloadProbe.crossWorkspaceSplit,
       workspaceMarkers: preloadProbe.workspaceMarkers,
-      progressEvidence: { ...progressEvidence, persistedAfterRestart: true },
+      progressEvidence,
       progressEvidenceSurface: preloadProbe.progressEvidenceSurface,
       workspaceResults: workspaceResultsAcceptance,
       crossWorkspaceResults,
       hiddenPaneSize: preloadProbe.hiddenPaneSize,
-      handoffFlow: { ...preloadProbe.handoffFlow, persistedAfterRestart: true },
+      handoffFlow: preloadProbe.handoffFlow,
       agentHandoff,
       fileReferenceWire,
       sixelRender,
@@ -4968,7 +5064,6 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       inactiveFollowingOutputLayoutPuts,
       inactiveFollowingOutputCaptured,
       launchBackgroundChoiceRecorded,
-      sessionProcessStatus: { beforeRestart: 'live', afterApplicationRestart: 'interrupted' },
       applicationQuitStoppedSession: {
         beforeRestart: lifecycleStoppedBeforeRestart,
         afterRestart: lifecycleStoppedAfterRestart
@@ -4994,9 +5089,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         },
         closeWindowKeep,
         closeAndStop,
-        explicitStop,
-        // Rows no automated check exercises; docs/architecture.md marks them UNVERIFIED.
-        documented: ['app-crash-or-reboot', 'desktop-update']
+        explicitStop
       },
       // Epic 17.1: what the offer said after an update stop, what the button started, and that it asked once.
       resumeOffer: {
@@ -5004,7 +5097,6 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         summary: offerAfterUpdate.summary,
         button: offerAfterUpdate.button,
         startsUnchecked: offerAfterUpdate.rows.every((row) => !row.checked),
-        dismissedStartedNothing: true,
         reopenedFromPalette: reopenedOffer.rows.length,
         outcomes: offerResult.rows.map((row) => row.outcome),
         argv: restartedArgv.map((runs) => runs[1] ?? null),
@@ -5012,12 +5104,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       },
       // Epic 17.2: the modes the rebuilt view came back with, and what the program was sent through them.
       terminalModes,
-      rendererRestarted: true,
-      schemaTables: restoredHealth.schemaTables,
-      nativeFailureBeforeDatabase: true,
-      invalidLaunchesStayedNonLive: true,
-      invalidSessionEditStayedUnchanged: true,
-      shellEnvironmentSanitized: true
+      schemaTables: restoredHealth.schemaTables
     }
   } catch (error) {
     // Print the reason before release, so a release that stalls cannot hide it.

@@ -91,7 +91,7 @@ The six columns are the survival table's own: **process**, **live screen**, **sa
   kept sibling are proven. The self-test now also requires an acknowledged production lifecycle
   capture request for this exact session during the close ending; the renderer's separate activity
   capture cannot satisfy that assertion. The marker can still have entered the store through an
-  earlier activity capture, so the receipt proves both facts rather than attributing its bytes to
+  earlier activity capture, so the self-test checks both facts rather than attributing its bytes to
   one request. The resume and `SessionEnd`-withdrawal cells were not re-driven (the synthetic session is not a direct CLI
   launch, so no bound conversation; resume and withdrawals are exercised by the same run's
   conversationFromHook and hook-contract checks). Result lines below.

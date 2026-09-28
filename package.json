@@ -9,7 +9,7 @@
   "scripts": {
     "postinstall": "pnpm run install:electron && node scripts/build/rebuild-native.mjs",
     "install:electron": "node apps/desktop/node_modules/electron/install.js",
-    "test:unit": "pnpm --filter @bmn/protocol run build && vitest run",
+    "test:unit": "pnpm --filter @bmn/protocol run build && vitest run --maxWorkers=50% --exclude '.claude/**'",
     "test:electron": "pnpm run build && node scripts/test/electron-self-test.mjs && node scripts/test/electron-normal-start.mjs",
     "test:visual": "pnpm run build && node scripts/test/electron-visual.mjs",
     "test:run": "pnpm run test:unit && pnpm run test:electron",

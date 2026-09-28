@@ -232,18 +232,21 @@ describe('speech check before transcription', () => {
   // The real detector and model exist after `pnpm run voice:build`; whisper.cpp's JFK sample sits in its source cache.
   const engine = engineFiles(fileURLToPath(new URL('../../resources/whisper/whisper-cli', import.meta.url)))
   const jfk = fileURLToPath(new URL('../../../../node_modules/.cache/whisper.cpp/whisper.cpp-1.9.4/samples/jfk.wav', import.meta.url))
+  // Runs the real speech detector three times on one thread: its worker threads spin-wait on each other, so with
+  // several threads a loaded machine (load average 16-21, 2026-09-28) stretched 89 ms past 30 s. Measured on one
+  // thread: 110 ms idle, 251 ms at load average 14 (twelve busy loops on 12 cores).
   it.skipIf(!existsSync(engine.speechDetector) || !existsSync(engine.speechModel))('finds speech in speech and none in silence or faint noise with the bundled model', async () => {
     const segments = async (samples: Float32Array | Uint8Array) => {
       const wavPath = join(folder, 'probe.wav')
       await writeFile(wavPath, samples instanceof Uint8Array ? samples : encodeWav(samples, 16_000))
-      return speechSegmentsFromOutput(await runWhisper({ binary: engine.speechDetector, args: speechDetectionArguments({ modelPath: engine.speechModel, wavPath }) }))
+      return speechSegmentsFromOutput(await runWhisper({ binary: engine.speechDetector, args: speechDetectionArguments({ modelPath: engine.speechModel, wavPath, threads: 1 }) }))
     }
     let seed = 1
     const noise = Float32Array.from({ length: 16_000 * 3 }, () => ((seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648) / 2_147_483_648 - 0.5) * 0.02)
     expect(await segments(new Float32Array(16_000 * 3))).toBe(0)
     expect(await segments(noise)).toBe(0)
     if (existsSync(jfk)) expect(await segments(await readFile(jfk))).toBeGreaterThan(0)
-  })
+  }, 10_000)
 })
 
 describe('voice model download', () => {

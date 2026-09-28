@@ -426,6 +426,7 @@ describe('terminal output cut into host chunks and xterm writes', () => {
     30_000
   )
 
+  // Measured 1.7 s on an idle 12-core machine (2026-09-28); it timed out at vitest's default 5 s at load average 16.
   it('cuts only where xterm decodes the pieces as it decodes the uncut bytes', () => {
     const random = seeded(0xc07)
     const pieces = [[0x41], [0x7f], [0x80], [0x94], [0xbf], [0xc2], [0xc3, 0xa9], [0xe2, 0x80], [0xe2, 0x80, 0x94], [0xe2],
@@ -447,7 +448,7 @@ describe('terminal output cut into host chunks and xterm writes', () => {
       expect({ codePoints, interim: cut.interim }, Buffer.from(bytes).toString('hex'))
         .toEqual({ codePoints: expected, interim: uncut.interim })
     }
-  })
+  }, 30_000)
 
   it.each([4, 5, 6, 7])('delivers every character with the smallest credit a view may have, %i bytes', async (consumerBytes) => {
     const stream = encoder.encode('\u{1F600}\u2014é\u2026x\u{10000}'.repeat(200))

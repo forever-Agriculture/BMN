@@ -105,7 +105,6 @@ export interface RendererIntegrationProbe {
     focusReturned: boolean
     focusStableAfterIncomingUpdate: boolean
     firstResponseRow: { age: string; label: string }
-    staleNoticeRejected?: boolean
     revisedPromptPreserved?: boolean
     unavailableTargetIgnored?: boolean
   }

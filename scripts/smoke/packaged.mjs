@@ -121,11 +121,6 @@ await withTemporaryRoot(temporaryRootContracts.packagedSmoke, async ({ roots }) 
     receipt.electronVersion !== '44.3.0' ||
     receipt.nativeModules?.nodePty !== true ||
     receipt.nativeModules?.betterSqlite3 !== true ||
-    receipt.helloHandshake !== true ||
-    receipt.markerObserved !== true ||
-    receipt.resized?.cols !== 101 ||
-    receipt.resized?.rows !== 37 ||
-    receipt.rendererRestartNoDuplicateProcesses !== true ||
     receipt.sixelPty?.beforeMB !== 0 || !(receipt.sixelPty?.afterMB > 0) ||
     receipt.sixelPty?.layer !== true ||
     !(receipt.sixelRender?.ownStorageMB > 0 && receipt.sixelRender?.ownLayer === true &&
@@ -135,7 +130,6 @@ await withTemporaryRoot(temporaryRootContracts.packagedSmoke, async ({ roots }) 
     receipt.graphicsTerminfo?.standardResolved !== true ||
     receipt.graphicsTerminfo?.initialTerm !== 'xterm-sixel-256color' ||
     receipt.graphicsTerminfo?.fallbackTerm !== 'xterm-256color' ||
-    receipt.applicationRestartNoAutoStart !== true ||
     receipt.graceful !== true
   ) {
     throw new Error(`packaged self-test receipt was incomplete: ${JSON.stringify(receipt)}`)
