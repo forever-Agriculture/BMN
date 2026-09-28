@@ -4,10 +4,12 @@
 // The app runs in test mode with scratch XDG folders and a synthetic fake agent on its PATH; every file it writes stays
 // in the temporary root. Screenshots land in .dev-auto/evidence/epic-43/shots/ (ignored).
 import assert from 'node:assert/strict'
+import { execFile } from 'node:child_process'
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
 import { _electron as electron } from 'playwright'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
 
@@ -17,6 +19,7 @@ const appDirectory = join(repoRoot, 'apps/desktop')
 const evidenceDirectory = join(repoRoot, '.dev-auto/evidence/epic-43/shots')
 const electronBinary = createRequire(join(appDirectory, 'package.json'))('electron')
 const phase = (label) => console.error(`[BMN reported resume visual] ${label}`)
+const execFileAsync = promisify(execFile)
 
 const originalRuntime = process.env.XDG_RUNTIME_DIR
 const originalWaylandDisplay = process.env.WAYLAND_DISPLAY
@@ -222,6 +225,23 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await shot('resume-refused-black.png', 'dialog.app-dialog')
     await refused.locator('button.ghost', { hasText: 'Cancel' }).click()
     assert.equal(runLines().length, 4)
+
+    phase('an agent typed into a shell session reports the same way, and Resume offers its command')
+    writeProgram()
+    const shellId = await page.evaluate(async ({ cwd }) => {
+      const primary = (await window.aiTerminal.listWorkspaces()).find((item) => !item.archivedAt)
+      return (await window.aiTerminal.createSession({ workspaceId: primary.workspaceId, name: 'Shell with an agent', cwd,
+        executable: '/bin/bash', argv: ['--noprofile', '--norc'], cols: 100, rows: 24, backgroundChoice: 'stop' })).session.sessionId
+    }, { cwd: work })
+    await execFileAsync(process.execPath, [join(appDirectory, 'bin/bmn'), 'send', 'fake-agent --typed', '--submit',
+      '--session', shellId, '--owner', '--socket', join(roots.runtime, 'bmn/control/control.sock')])
+    const typed = await until(async () => (await record(page, shellId))?.reportedResume, 'the typed agent\'s report')
+    assert.deepEqual(typed.argv, ['fake-agent', '--resume', 'abc'])
+    await until(() => runLines().some((entry) => entry === `started:--typed cwd:${work}`), 'the typed run')
+    await page.evaluate((id) => window.aiTerminal.stopSession(id), shellId)
+    result.shellPreview = await page.evaluate((id) => window.aiTerminal.previewConversationResume(id), shellId)
+    assert.equal(result.shellPreview.source, 'reported')
+    assert.equal(result.shellPreview.command, `${program} --resume abc`)
     console.log(JSON.stringify({ reportedResumeVisual: 'PASS', directory: evidenceDirectory, ...result }))
   } finally {
     await Promise.race([application.close(), sleep(10_000)])
