@@ -14,6 +14,7 @@ import {
   isProtocolErrorCode,
   parseAttentionEvidence,
   parseAttentionPrompt,
+  stripFormatCharacters,
   type AttentionKind,
   type AttentionEvidence,
   type AttentionPrompt,
@@ -196,6 +197,11 @@ interface TextRule {
   max: number
   unit: 'characters' | 'bytes'
   controls: 'reject' | 'allow-whitespace' | 'allow'
+  /**
+   * Agent-written text the owner reads: invisible and direction-changing format characters are removed before
+   * the length rule, so a field that held only those is empty (Story 34.1).
+   */
+  strip?: true
 }
 
 const JSONRPC_SERVER_ERROR = -32000
@@ -239,10 +245,10 @@ const RULES = {
   source: { min: 1, max: 64, unit: 'characters', controls: 'reject' },
   apiHost: { min: 1, max: 255, unit: 'characters', controls: 'reject' },
   model: { min: 1, max: 128, unit: 'characters', controls: 'reject' },
-  label: { min: 1, max: 200, unit: 'characters', controls: 'reject' },
-  detail: { min: 1, max: 2000, unit: 'characters', controls: 'allow-whitespace' },
-  title: { min: 1, max: 200, unit: 'characters', controls: 'reject' },
-  body: { min: 1, max: 8000, unit: 'characters', controls: 'allow-whitespace' },
+  label: { min: 1, max: 200, unit: 'characters', controls: 'reject', strip: true },
+  detail: { min: 1, max: 2000, unit: 'characters', controls: 'allow-whitespace', strip: true },
+  title: { min: 1, max: 200, unit: 'characters', controls: 'reject', strip: true },
+  body: { min: 1, max: 8000, unit: 'characters', controls: 'allow-whitespace', strip: true },
   resolution: { min: 1, max: 200, unit: 'characters', controls: 'reject' },
   conversationReference: { min: 36, max: 36, unit: 'characters', controls: 'reject' },
   text: { min: 0, max: MAX_INPUT_TEXT_BYTES, unit: 'bytes', controls: 'allow' },
@@ -281,7 +287,12 @@ function closedParams(value: unknown, allowed: readonly string[]): Params {
   return value
 }
 
-function checkedText(key: string, value: string, rule: TextRule): string {
+/**
+ * The value a handler receives. Stripping returns a new string and never rewrites `params`, so an idempotency
+ * receipt keeps hashing the parameters exactly as received and a retry of an earlier request still matches.
+ */
+function checkedText(key: string, received: string, rule: TextRule): string {
+  const value = rule.strip ? stripFormatCharacters(received) : received
   const size = rule.unit === 'bytes' ? Buffer.byteLength(value, 'utf8') : value.length
   if (size < rule.min || size > rule.max) {
     throw invalid(`${key} must be ${rule.min}..${rule.max} ${rule.unit}`)
@@ -791,7 +802,7 @@ export class ControlServer {
         if (scope.kind !== 'session') throw unauthorized('Only a session may prepare a handoff')
         const destinationSessionId = requireText(params, 'destinationSessionId', RULES.sessionId)
         const handoffText = requireText(params, 'text', {
-          min: 1, max: 16 * 1024, unit: 'bytes', controls: 'allow-whitespace'
+          min: 1, max: 16 * 1024, unit: 'bytes', controls: 'allow-whitespace', strip: true
         })
         if (hasDisallowedHandoffControl(handoffText)) {
           throw invalid('Handoff text may contain only newline and tab control characters')

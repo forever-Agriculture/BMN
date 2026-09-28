@@ -1,9 +1,10 @@
 // MODULE: telegram-cards.ts - the Telegram card for a page: escaped HTML, the length rule, buttons and outcome lines (Story 30.3)
-import type {
-  AttentionPermissionPrompt,
-  AttentionQuestionsPrompt,
-  AttentionRecord,
-  ModelOriginAgent
+import {
+  stripFormatCharacters,
+  type AttentionPermissionPrompt,
+  type AttentionQuestionsPrompt,
+  type AttentionRecord,
+  type ModelOriginAgent
 } from '@bmn/protocol'
 import type { AnswerOutcome, AnswerRefusal } from './remote-answer'
 
@@ -54,6 +55,14 @@ export function escapeHtml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
+/**
+ * Agent-written text on its way to Telegram, before any escaping or clipping: a record stored before Story 34.1
+ * may still hold invisible or direction-changing format characters, and none of them leave the machine.
+ */
+export function said(text: string): string {
+  return stripFormatCharacters(text)
+}
+
 /** Clips to at most `max` characters including the ellipsis, never splitting a surrogate pair. */
 export function clip(text: string, max: number): string {
   const chars = [...text]
@@ -81,7 +90,7 @@ function headerLine(glyph: string, header: CardHeader, suffix = ''): string {
  * on a paragraph break at 3,000 characters and saying where the rest is.
  */
 function agentText(text: string): string {
-  const trimmed = text.trim()
+  const trimmed = said(text).trim()
   if (trimmed.split('\n').length <= QUOTE_LINES && [...trimmed].length <= QUOTE_CHARS) return escapeHtml(trimmed)
   let kept = trimmed
   if ([...kept].length > QUOTE_CHARS) {
@@ -133,7 +142,7 @@ function questionChip(prompt: AttentionQuestionsPrompt, index: number): string |
   const question = prompt.questions[index]!
   const parts: string[] = []
   if (prompt.questions.length > 1) parts.push(`Question ${index + 1} of ${prompt.questions.length}`)
-  if (question.header) parts.push(question.header)
+  if (question.header) parts.push(said(question.header))
   let chip = parts.join(' · ')
   if (question.multiSelect) chip = chip ? `${chip} · choose any` : 'Choose any'
   return chip ? `<i>${escapeHtml(chip)}</i>` : null
@@ -146,11 +155,11 @@ function questionBody(
 ): string {
   const question = prompt.questions[index]!
   const options = question.options.map((option, number) => {
-    const description = option.description ? clip(option.description, limits.description) : ''
-    return `<b>${number + 1}. ${escapeHtml(option.label)}</b>${description ? `\n${escapeHtml(description)}` : ''}`
+    const description = option.description ? clip(said(option.description), limits.description) : ''
+    return `<b>${number + 1}. ${escapeHtml(said(option.label))}</b>${description ? `\n${escapeHtml(description)}` : ''}`
   })
   return [
-    `<b>${escapeHtml(clip(question.text, limits.question))}</b>`,
+    `<b>${escapeHtml(clip(said(question.text), limits.question))}</b>`,
     '',
     options.join('\n\n')
   ].join('\n')
@@ -176,7 +185,7 @@ function fitted(render: (limits: { description: number; question: number }) => s
 }
 
 function outcomeBase(header: string, questions: string[]): string {
-  return [header, ...questions.map((text) => `<b>${escapeHtml(clip(text, OUTCOME_QUESTION_CHARS))}</b>`)].join('\n')
+  return [header, ...questions.map((text) => `<b>${escapeHtml(clip(said(text), OUTCOME_QUESTION_CHARS))}</b>`)].join('\n')
 }
 
 /**
@@ -203,7 +212,7 @@ export function questionCard(input: QuestionCardInput): RenderedCard {
   }
   const earlier = chosen.map((label, index) => {
     const question = prompt.questions[index]!
-    return `${escapeHtml(question.header ?? `Question ${index + 1}`)}: <b>${escapeHtml(label)}</b>`
+    return `${escapeHtml(question.header === null ? `Question ${index + 1}` : said(question.header))}: <b>${escapeHtml(said(label))}</b>`
   })
   const question = prompt.questions[step]!
   const final = step === prompt.questions.length - 1
@@ -219,13 +228,13 @@ export function questionCard(input: QuestionCardInput): RenderedCard {
     const text = fitted((limits) => [
       ...intro,
       '',
-      `<b>${escapeHtml(clip(question.text, limits.question))}</b>`,
+      `<b>${escapeHtml(clip(said(question.text), limits.question))}</b>`,
       '',
       '<i>Reply to this message with your answer.</i>'
     ].join('\n'))
     return { text, keyboard: [[{ text: '‹ Options', callback_data: input.typing }]], base }
   }
-  const labels = question.options.map((option) => option.label)
+  const labels = question.options.map((option) => said(option.label))
   const toggled = input.toggled ?? null
   // Multi-select: the body repeats the choice in full, because buttons clip; with none, it says what to do.
   const status = toggled === null
@@ -255,7 +264,7 @@ export function questionCard(input: QuestionCardInput): RenderedCard {
 
 function permissionWants(prompt: AttentionPermissionPrompt): string {
   if (prompt.shape === 'sandbox-network') return 'Wants network access'
-  const what = /^bash$/i.test(prompt.tool) ? 'to run a command' : `to use ${prompt.tool}`
+  const what = /^bash$/i.test(prompt.tool) ? 'to run a command' : `to use ${said(prompt.tool)}`
   return prompt.shape === 'subagent' ? `A subagent wants ${what}` : `Wants ${what}`
 }
 
@@ -286,13 +295,13 @@ export interface PermissionCardInput {
 
 export function permissionCard(input: PermissionCardInput): RenderedCard {
   const { prompt } = input
-  const command = prompt.command === null ? 'The agent did not say exactly what.' : clip(prompt.command, COMMAND_CHARS)
+  const command = prompt.command === null ? 'The agent did not say exactly what.' : clip(said(prompt.command), COMMAND_CHARS)
   const base = [
     headerLine('🔐', input.header),
     `<i>${escapeHtml(permissionWants(prompt))}</i>`,
     '',
     `<pre>${escapeHtml(command)}</pre>`,
-    ...(prompt.cwd ? [`in <code>${escapeHtml(clip(homeRelative(prompt.cwd, input.home), 300))}</code>`] : [])
+    ...(prompt.cwd ? [`in <code>${escapeHtml(clip(homeRelative(said(prompt.cwd), input.home), 300))}</code>`] : [])
   ].join('\n')
   const tokens = prompt.command !== null && !commandShownWhole(prompt) ? null : input.tokens
   const trailer = tokens !== null
@@ -313,7 +322,7 @@ export function permissionCard(input: PermissionCardInput): RenderedCard {
 export function requestCard(header: CardHeader, record: Pick<AttentionRecord, 'kind' | 'title' | 'body'>): RenderedCard {
   const base = [
     headerLine(record.kind === 'permission' ? '🔐' : '❓', header),
-    `<b>${escapeHtml(clip(record.title, 500))}</b>`,
+    `<b>${escapeHtml(clip(said(record.title), 500))}</b>`,
     ...(record.body ? ['', agentText(record.body)] : [])
   ].join('\n')
   return { text: `${base}\n\n<i>Reply to this message to answer.</i>`, keyboard: null, base }
@@ -330,7 +339,7 @@ export function noticeCard(
   }
   const base = [
     headerLine('⚠', header),
-    `<b>${escapeHtml(clip(record.title, 500))}</b>`,
+    `<b>${escapeHtml(clip(said(record.title), 500))}</b>`,
     ...(record.body ? ['', agentText(record.body)] : [])
   ].join('\n')
   return { text: `${base}\n\n<i>Reply to this message to answer.</i>`, keyboard: null, base }
@@ -364,7 +373,7 @@ export const REFUSAL_WORDS: Readonly<Record<AnswerRefusal, string>> = Object.fre
 export function endingLine(ending: CardEnding): string {
   switch (ending.type) {
     case 'sending':
-      return `<i>Sending: ${escapeHtml(ending.labels.join(' · '))}…</i>`
+      return `<i>Sending: ${escapeHtml(ending.labels.map(said).join(' · '))}…</i>`
     case 'laptop':
       return '<i>Answered at the laptop.</i>'
     case 'telegram':
@@ -378,7 +387,7 @@ export function endingLine(ending: CardEnding): string {
     case 'outcome': {
       const outcome = ending.outcome
       if (outcome.state === 'refused') return `⚠ <i>${escapeHtml(REFUSAL_WORDS[outcome.reason])}</i>`
-      const sent = escapeHtml(outcome.sent.join(' · '))
+      const sent = escapeHtml(outcome.sent.map(said).join(' · '))
       if (outcome.state === 'confirmed') {
         if (ending.permission) return outcome.sent[0] === 'Deny' ? '✓ <i>Denied</i>' : '✓ <i>Allowed once</i>'
         return `✓ <i>Sent: ${sent}</i>`

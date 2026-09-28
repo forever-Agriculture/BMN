@@ -133,3 +133,34 @@ describe('OpenCode\'s custom flag (Epic 31)', () => {
     expect(parseAttentionPrompt({ ...question, questions: [{ ...question.questions[0]!, custom: 'no' }] }).ok).toBe(false)
   })
 })
+
+describe('format characters in a prompt (Story 34.1)', () => {
+  const spoofed = (patch: Record<string, unknown>) => ({
+    ...question,
+    questions: [{ ...(question as { questions: object[] }).questions[0], ...patch }]
+  })
+
+  it('removes them from the header, question text, option labels and descriptions', () => {
+    const parsed = parseAttentionPrompt(spoofed({
+      header: 'Auth​ method',
+      text: 'Which ‮auth‬ method?',
+      options: [{ label: 'J⁦WT⁩', description: 'Stateless﻿ tokens' }, { label: 'Keep \u{1F468}‍\u{1F469}', description: null }]
+    }))
+    expect(parsed.ok && parsed.value.type === 'questions' && parsed.value.questions[0]).toMatchObject({
+      header: 'Auth method',
+      text: 'Which auth method?',
+      options: [{ label: 'JWT', description: 'Stateless tokens' }, { label: 'Keep \u{1F468}‍\u{1F469}', description: null }]
+    })
+  })
+
+  it('rejects a label that held only format characters, as an empty one', () => {
+    const parsed = parseAttentionPrompt(spoofed({ options: [{ label: '‮​', description: null }] }))
+    expect(parsed).toEqual({ ok: false, error: `prompt option label must be 1..${ATTENTION_PROMPT_LIMITS.label} characters` })
+  })
+
+  it('never rewrites the tool, command or folder an answer is matched against', () => {
+    const parsed = parseAttentionPrompt({ ...permission, command: 'touch a​b.txt', cwd: '/tmp/⁦x' })
+    expect(parsed.ok && parsed.value.type === 'permission' && [parsed.value.command, parsed.value.cwd])
+      .toEqual(['touch a​b.txt', '/tmp/⁦x'])
+  })
+})

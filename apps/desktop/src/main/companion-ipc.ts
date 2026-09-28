@@ -9,6 +9,7 @@ import {
   type AttentionRecord,
   type ProtocolMethod,
   type TelegramOwnerEntry,
+  stripFormatCharacters,
   telegramOwnerCue
 } from '@bmn/protocol'
 import {
@@ -338,7 +339,8 @@ export function createAppEventForwarder(options: AppEventForwarderOptions): {
       const place = await options.place?.(request.sessionId).catch(() => null) ?? null
       options.notify({
         title: request.kind === 'notice' ? place ?? 'BMN' : `${place ?? 'A session'} needs you`,
-        body: request.title.slice(0, 200),
+        // A record stored before Story 34.1 may still hold format characters; the notification never shows them.
+        body: stripFormatCharacters(request.title).slice(0, 200),
         sessionId: request.sessionId,
         requestId: request.requestId,
         kind: request.kind,

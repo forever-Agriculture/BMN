@@ -66,3 +66,16 @@ describe('parseTerminalNotice', () => {
     expect(parseTerminalNotice(777, 'notify;Title;   ')).toEqual({ title: 'Title' })
   })
 })
+
+describe('format characters in a terminal notice (Story 34.1)', () => {
+  it('removes them from the title and body before the notice is opened', () => {
+    expect(parseTerminalNotice(777, 'notify;Deploy ‮gnigats‬;done​ here')).toEqual({
+      title: 'Deploy gnigats',
+      body: 'done here'
+    })
+  })
+
+  it('opens nothing for a message of format characters alone', () => {
+    expect(parseTerminalNotice(9, '‮⁦​')).toBeNull()
+  })
+})

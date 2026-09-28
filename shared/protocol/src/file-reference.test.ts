@@ -6,6 +6,9 @@ import {
   formatFileReference,
   exactAbsoluteFileReference,
   parseFileReference,
+  hasControlOrFormatCharacter,
+  STRIPPED_FORMAT_CHARACTERS,
+  stripFormatCharacters,
   type FileReference
 } from './file-reference'
 
@@ -175,5 +178,44 @@ describe('fileReferenceLines and formatFileReference', () => {
     const spaced = formatFileReference('/p/My Notes/a b.md', 3, null)
     expect(spaced).toBe('"/p/My Notes/a b.md":3')
     expect(parsed(spaced)).toEqual({ path: '/p/My Notes/a b.md', line: 3, column: null })
+  })
+})
+
+describe('stripFormatCharacters (Story 34.1)', () => {
+  it('removes a right-to-left override that would make a title read backwards', () => {
+    expect(stripFormatCharacters('Approve ‮txt.exe‬ now')).toBe('Approve txt.exe now')
+  })
+
+  it('removes directional isolates and marks', () => {
+    expect(stripFormatCharacters('⁦from main⁩ ‎ok‏ ؜fine')).toBe('from main ok fine')
+  })
+
+  it('removes zero-width spaces and byte-order marks inside words', () => {
+    expect(stripFormatCharacters('pass​word ﻿reset⁠ ⁤done')).toBe('password reset done')
+  })
+
+  it('keeps the joiners emoji and Persian need, and every letter and emoji', () => {
+    const family = '\u{1F468}‍\u{1F469}‍\u{1F467}'
+    const flag = '\u{1F1FA}\u{1F1E6}'
+    const persian = 'می‌خواهم'
+    for (const text of [family, flag, persian, 'مرحبا بالعالم', 'שלום עולם', 'Ωμέγα', '漢字']) {
+      expect(stripFormatCharacters(text)).toBe(text)
+    }
+  })
+
+  it('removes exactly the named set, which leaves both joiners out', () => {
+    const named = STRIPPED_FORMAT_CHARACTERS.flatMap(([from, to]) =>
+      Array.from({ length: to - from + 1 }, (_, index) => from + index))
+    expect(named.map((code) => code.toString(16))).toEqual([
+      '61c', '200b', '200e', '200f', '202a', '202b', '202c', '202d', '202e',
+      '2060', '2061', '2062', '2063', '2064', '2066', '2067', '2068', '2069', 'feff'
+    ])
+    for (const code of named) expect(stripFormatCharacters(`a${String.fromCodePoint(code)}b`)).toBe('ab')
+    expect(stripFormatCharacters('a‌b‍b')).toBe('a‌b‍b')
+  })
+
+  it('leaves the file-reference rejection as it was', () => {
+    expect(hasControlOrFormatCharacter('/tmp/‮txt.sh')).toBe(true)
+    expect(hasControlOrFormatCharacter('/tmp/a‍b')).toBe(true)
   })
 })

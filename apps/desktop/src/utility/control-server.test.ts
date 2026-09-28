@@ -903,6 +903,91 @@ describe('control server validation', () => {
   })
 })
 
+describe('format characters in agent text (Story 34.1)', () => {
+  const SPOOF = 'Approve \u202Ecod.exe\u202C \u200Bnow'
+
+  it('strips them from attention titles, bodies and prompt text before the handler stores anything', async () => {
+    const fixture = await serverFixture()
+    const client = await authenticated(fixture, sessionToken(fixture))
+    const prompt = {
+      type: 'questions', harness: 'claude', shape: 'choice', requestRef: null, toolUseId: 'toolu_1',
+      questions: [{ id: null, header: 'Pi\u2066ck\u2069', text: SPOOF, multiSelect: false,
+        options: [{ label: 'Y\uFEFFes', description: 'Go\u200F on' }, { label: 'No', description: null }] }]
+    }
+
+    const response = await client.request('attention.open', {
+      requestKey: 'q', kind: 'question', title: SPOOF, body: 'line one\n\u2067two\u2069', prompt
+    })
+
+    expect(response.error).toBeUndefined()
+    expect(fixture.handlers.openAttention).toHaveBeenLastCalledWith(expect.objectContaining({
+      title: 'Approve cod.exe now',
+      body: 'line one\ntwo',
+      prompt: expect.objectContaining({ questions: [expect.objectContaining({
+        header: 'Pick', text: 'Approve cod.exe now',
+        options: [{ label: 'Yes', description: 'Go on' }, { label: 'No', description: null }]
+      })] })
+    }))
+  })
+
+  it('strips them from progress labels and details', async () => {
+    const fixture = await serverFixture()
+    const client = await authenticated(fixture, sessionToken(fixture))
+
+    await client.request('progress.report', {
+      source: 'agent', state: 'running', label: 'Build\u202E ing', detail: 'step\u200B 2\nof 3'
+    })
+
+    expect(fixture.handlers.reportProgress).toHaveBeenLastCalledWith(expect.objectContaining({
+      label: 'Build ing', detail: 'step 2\nof 3'
+    }))
+  })
+
+  it('strips them from handoff text', async () => {
+    const fixture = await serverFixture()
+    const client = await authenticated(fixture, sessionToken(fixture))
+
+    await client.request('handoff.prepare', {
+      destinationSessionId: 'session-2', text: 'Done\u2066 here\u2069\n\tnext', artifactIds: [], idempotencyKey: 'h'
+    })
+
+    expect(fixture.handlers.prepareHandoff).toHaveBeenLastCalledWith(expect.objectContaining({ text: 'Done here\n\tnext' }))
+  })
+
+  it.each([
+    ['attention.open', { requestKey: 'q', kind: 'question', title: '\u202E\u200B' }, 'title must be 1..200 characters'],
+    ['progress.report', { source: 'agent', state: 'running', label: '\uFEFF' }, 'label must be 1..200 characters'],
+    ['handoff.prepare', { destinationSessionId: 'session-2', text: '\u2066\u2069', artifactIds: [], idempotencyKey: 'e' },
+      'text must be 1..16384 bytes']
+  ])('%s refuses a field that held only format characters as empty', async (method, params, message) => {
+    const fixture = await serverFixture()
+    const client = await authenticated(fixture, sessionToken(fixture))
+
+    const response = await client.request(method, params)
+
+    expectError(response, ERROR_CODES.invalidArgument)
+    expect(response.error?.message).toBe(message)
+  })
+
+  it('keeps hashing the parameters as received, so a retry of a request sent before this change is a duplicate', async () => {
+    const receipts = new MemoryReceiptStore()
+    const raw = { requestKey: 'spoof', kind: 'question', title: SPOOF }
+    const paramsHash = createHash('sha256').update(
+      `{"kind":"question","requestKey":"spoof","title":${JSON.stringify(SPOOF)}}`
+    ).digest('hex')
+    await receipts.put({
+      key: 'session:session-1|attention.open|ask-1', paramsHash, state: 'done', result: { requestId: 'request-9' }
+    })
+    const fixture = await serverFixture(receipts)
+    const client = await authenticated(fixture, sessionToken(fixture))
+
+    const retry = await client.request('attention.open', { ...raw, idempotencyKey: 'ask-1' })
+
+    expect(retry.result).toEqual({ requestId: 'request-9', duplicate: true })
+    expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
+  })
+})
+
 describe('control server idempotency', () => {
   it('returns the stored result for a duplicate without calling the handler again', async () => {
     const fixture = await serverFixture()

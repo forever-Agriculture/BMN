@@ -106,6 +106,14 @@ describe('desktop notifications for attention requests', () => {
     ])
   })
 
+  it('shows a request stored before Story 34.1 without its format characters', async () => {
+    const { events, open, shown } = forwarder('session-watched')
+    await events.prime()
+    open.push({ ...request('spoof', 'session-other'), title: 'Allow \u202Ecod.exe\u202C \u200Bnow' })
+    await attentionEvent(events)
+    expect(shown.map((notification) => notification.body)).toEqual(['Allow cod.exe now'])
+  })
+
   it('stays quiet for the session the owner is looking at and counts its request as seen', async () => {
     const { events, open, shown, seen } = forwarder('session-watched')
     await events.prime()

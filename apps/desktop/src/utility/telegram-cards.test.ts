@@ -456,3 +456,44 @@ One file, no server to run.`)
     expect(none.text.endsWith('<i>Choose one or more, then Next.</i>')).toBe(true)
   })
 })
+
+describe('format characters on the way to Telegram (Story 34.1)', () => {
+  const SPOOF = 'Approve ‮cod.exe‬ ​now'
+
+  it('cleans a stored request title and body before the card is built', () => {
+    const card = requestCard(CLAUDE, { kind: 'question', title: SPOOF, body: 'from ⁦main⁩﻿' })
+    expect(card.text).toBe(`❓ <b>api-server</b> · Claude 🇺🇸
+<b>Approve cod.exe now</b>
+
+from main
+
+<i>Reply to this message to answer.</i>`)
+  })
+
+  it('cleans a notice, every question field, button labels and the permission lines', () => {
+    expect(noticeCard(CLAUDE, { title: SPOOF, body: null, requestKey: 'n' }).text).toContain('<b>Approve cod.exe now</b>')
+    const spoofed = { ...TESTS, header: 'Te​sts', text: 'Add ‮tests‬?', options: [
+      { label: 'Y⁦es⁩', description: 'Run ﻿them' }, { label: 'Later', description: null }] }
+    const card = questionCard({ header: CLAUDE, prompt: questions(AUTH, spoofed), step: 1, chosen: ['J​WT'], tokens: ['y', 'l'] })
+    expect(card.text).toContain('<i>Question 2 of 2 · Tests</i>')
+    expect(card.text).toContain('Auth method: <b>JWT</b>')
+    expect(card.text).toContain('<b>Add tests?</b>')
+    expect(card.text).toContain('<b>1. Yes</b>\nRun them')
+    expect(card.keyboard).toEqual([[{ text: '1 · Yes', callback_data: 'y' }, { text: '2 · Later', callback_data: 'l' }]])
+    const permission = permissionCard({
+      header: CLAUDE, prompt: { ...BASH, tool: 'W​eb', command: 'rm ‮txt.a‬', cwd: '/home/owner/⁦api' },
+      tokens: null, closedBecause: 'unsupported', home: '/home/owner'
+    })
+    expect(permission.text).toContain('<i>Wants to use Web</i>')
+    expect(permission.text).toContain('<pre>rm txt.a</pre>')
+    expect(permission.text).toContain('in <code>~/api</code>')
+    expect(endingLine({ type: 'sending', labels: ['Y​es'] })).toBe('<i>Sending: Yes…</i>')
+    expect(endingLine({ type: 'outcome', permission: false, outcome: { state: 'confirmed', sent: ['Y‮es'] } }))
+      .toBe('✓ <i>Sent: Yes</i>')
+  })
+
+  it('keeps the joiners in emoji and Persian text', () => {
+    const card = requestCard(CLAUDE, { kind: 'question', title: 'می‌خواهم \u{1F468}‍\u{1F469}', body: null })
+    expect(card.text).toContain('<b>می‌خواهم \u{1F468}‍\u{1F469}</b>')
+  })
+})

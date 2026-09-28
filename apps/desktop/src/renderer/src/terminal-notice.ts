@@ -2,6 +2,7 @@
 import {
   TERMINAL_NOTICE_BODY_MAX,
   TERMINAL_NOTICE_TITLE_MAX,
+  stripFormatCharacters,
   type TerminalNoticeCode
 } from '@bmn/protocol'
 
@@ -13,10 +14,11 @@ export interface TerminalNotice {
 /**
  * Control characters never reach a request: the control socket rejects them in a title and the body
  * is one block of text, not a screen. Newlines and tabs survive in a body and become spaces in a title.
+ * Invisible and direction-changing format characters are removed too (Story 34.1).
  */
 function clean(value: string, keepLines: boolean): string {
   // eslint-disable-next-line no-control-regex
-  const stripped = value.replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
+  const stripped = stripFormatCharacters(value.replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, ''))
   return keepLines ? stripped.trim() : stripped.replace(/[\n\t]+/g, ' ').replace(/ {2,}/g, ' ').trim()
 }
 

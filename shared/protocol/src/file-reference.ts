@@ -138,6 +138,30 @@ export function hasControlOrFormatCharacter(text: string): boolean {
   return /[\p{Cc}\p{Cf}]/u.test(text)
 }
 
+/**
+ * The invisible and direction-changing format characters removed from agent-written text (Story 34.1): they can
+ * make a title, notification or card read differently from what it holds ("Trojan Source"). U+200C and U+200D,
+ * the zero-width non-joiner and joiner, stay: Persian words and emoji sequences such as a family need them.
+ */
+export const STRIPPED_FORMAT_CHARACTERS: readonly (readonly [number, number])[] = Object.freeze([
+  [0x061c, 0x061c],
+  [0x200b, 0x200b],
+  [0x200e, 0x200f],
+  [0x202a, 0x202e],
+  [0x2060, 0x2064],
+  [0x2066, 0x2069],
+  [0xfeff, 0xfeff]
+] as const)
+
+const STRIPPED_FORMAT = new RegExp(`[${STRIPPED_FORMAT_CHARACTERS
+  .map(([from, to]) => from === to ? `\\u{${from.toString(16)}}` : `\\u{${from.toString(16)}}-\\u{${to.toString(16)}}`)
+  .join('')}]`, 'gu')
+
+/** Agent text without the characters in STRIPPED_FORMAT_CHARACTERS; everything else is kept as it was. */
+export function stripFormatCharacters(text: string): string {
+  return text.replace(STRIPPED_FORMAT, '')
+}
+
 const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/
 const SUFFIX = /^(.+?):(\d+)(?::(\d+))?$/s
 /** A file name's last dot starts an extension that names a type, so it holds a letter. */

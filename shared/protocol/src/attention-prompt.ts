@@ -1,5 +1,6 @@
 // MODULE: attention-prompt.ts - the structured question or permission an agent asked, as hooks report it
 import { hasExactKeys } from './closed-shape'
+import { stripFormatCharacters } from './file-reference'
 
 /** The harness whose dialog the prompt is; each is answered its own way (docs/remote-answers.md). */
 export type AttentionPromptHarness = 'claude' | 'codex' | 'opencode' | 'cursor'
@@ -118,6 +119,19 @@ function nullableText(value: unknown, key: string, max: number, multiline = fals
   return value === null ? null : text(value, key, max, multiline)
 }
 
+/**
+ * Words the owner reads as the agent's (Story 34.1): invisible and direction-changing format characters are
+ * removed first, so text that held only those is empty. The tool, command and folder are never rewritten: an
+ * answer is matched against them exactly as the harness shows them.
+ */
+function shownText(value: unknown, key: string, max: number, multiline = false): string {
+  return text(typeof value === 'string' ? stripFormatCharacters(value) : value, key, max, multiline)
+}
+
+function nullableShownText(value: unknown, key: string, max: number, multiline = false): string | null {
+  return value === null ? null : shownText(value, key, max, multiline)
+}
+
 function oneOf<T extends string>(value: unknown, key: string, allowed: readonly T[]): T {
   if (typeof value !== 'string' || !allowed.includes(value as T)) throw new PromptError(`prompt ${key} is not recognised`)
   return value as T
@@ -133,8 +147,8 @@ function list(value: unknown, key: string, max: number): unknown[] {
 function option(value: unknown): AttentionPromptOption {
   if (!isRecord(value) || !hasExactKeys(value, ['label', 'description'])) throw new PromptError('prompt option has the wrong shape')
   return {
-    label: text(value.label, 'option label', ATTENTION_PROMPT_LIMITS.label),
-    description: nullableText(value.description, 'option description', ATTENTION_PROMPT_LIMITS.description, true)
+    label: shownText(value.label, 'option label', ATTENTION_PROMPT_LIMITS.label),
+    description: nullableShownText(value.description, 'option description', ATTENTION_PROMPT_LIMITS.description, true)
   }
 }
 
@@ -146,8 +160,8 @@ function question(value: unknown): AttentionPromptQuestion {
   if ('custom' in value && typeof value.custom !== 'boolean') throw new PromptError('prompt question custom must be true or false')
   return {
     id: nullableText(value.id, 'question id', ATTENTION_PROMPT_LIMITS.identifier),
-    header: nullableText(value.header, 'question header', ATTENTION_PROMPT_LIMITS.header),
-    text: text(value.text, 'question text', ATTENTION_PROMPT_LIMITS.text, true),
+    header: nullableShownText(value.header, 'question header', ATTENTION_PROMPT_LIMITS.header),
+    text: shownText(value.text, 'question text', ATTENTION_PROMPT_LIMITS.text, true),
     multiSelect: value.multiSelect,
     options: list(value.options, 'options', ATTENTION_PROMPT_LIMITS.options).map(option),
     ...('custom' in value ? { custom: value.custom as boolean } : {})
