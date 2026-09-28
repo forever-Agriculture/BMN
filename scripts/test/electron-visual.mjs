@@ -181,7 +181,11 @@ async function assertSearchFloats(page, { colorModes, size, onAppearance }) {
         frameRight: frame.right,
         chromeBottom: Math.max(rect(pane.querySelector('.pane-heading')).bottom,
           rect(pane.querySelector('.progress-strip'))?.bottom ?? 0),
-        inputWidth: rect(search.querySelector('input')).width
+        inputWidth: rect(search.querySelector('input')).width,
+        spills: [...search.children].filter((child) => {
+          const box = rect(child)
+          return box.left < barBox.left - 0.5 || box.right > barBox.right + 0.5 || box.bottom > barBox.bottom + 0.5
+        }).length
       }
     })
     assert.equal(bar.position, 'absolute')
@@ -191,6 +195,7 @@ async function assertSearchFloats(page, { colorModes, size, onAppearance }) {
     assert.ok(bar.right <= bar.frameRight && bar.right >= bar.frameRight - 24, 'search sits at the top right')
     assert.ok(bar.left >= bar.frameLeft, 'search stays inside the pane')
     assert.ok(bar.width <= Math.min(420, bar.paneWidth - 24) + 0.5, 'search is at most min(420px, pane - 24px) wide')
+    assert.equal(bar.spills, 0, 'every search control stays inside the bar')
 
     await page.keyboard.type(term)
     await unchanged('type')
@@ -951,6 +956,11 @@ const evidence = await withTemporaryRoot(
       screenshots.push(await screenshot(page, 'black-knight-900x600.png'))
       screenshots.push(...await assertSearchFloats(page, {
         colorModes: ['black', 'steel'], size: 'narrow', onAppearance: disableTarget
+      }))
+      await setContentSize(application, page, 640, 600)
+      await disableTarget()
+      screenshots.push(...await assertSearchFloats(page, {
+        colorModes: ['black'], size: 'tiny', onAppearance: disableTarget
       }))
       phase('narrow layout checks passed')
 

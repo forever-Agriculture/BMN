@@ -1226,6 +1226,21 @@ input[type='radio'] {
   }
 }
 
+/* Too narrow for one row of controls: the bar still floats, with the input on its own row above them. */
+@container pane (max-width: 300px) {
+  .terminal-search {
+    flex-wrap: wrap;
+  }
+
+  .terminal-search input {
+    flex: 1 1 100%;
+  }
+
+  .terminal-search .search-result {
+    flex: 1 1 0;
+  }
+}
+
 .terminal-search button {
   flex: none;
 }
