@@ -575,7 +575,12 @@ measured on a disposable profile on 2026-09-28, sends `SessionStart` with source
 automatic compaction (with `PreCompact`/`PostCompact`, trigger `auto`), but its manual `/compact`
 sends only `PreCompact` and `PostCompact` with trigger `manual`. `PostCompact` is therefore an
 optional Codex entry, reported by `check` and never installed: add it to see manual compactions too;
-BMN counts its `manual` trigger only, so an automatic compaction still counts once.
+BMN counts its `manual` trigger only, so an automatic compaction still counts once. Codex runs the same
+compaction hooks and automatic call site whichever way it compacts (locally or on OpenAI's side), so the
+split follows the trigger, not the provider; only the local path was measured. OpenCode's compactions
+count for the session the plugin holds as yours: the first one it hears from, or the one you last
+selected in its session list. A compaction in any other session is logged as a subagent's and not
+counted, so the line can undercount but never invents one.
 
 BMN shows a desktop notification for a new request unless you are looking at that session. Telegram
 gets it only while you are away from the desk (a minute without keyboard or mouse input), only if it

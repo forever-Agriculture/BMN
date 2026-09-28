@@ -53,8 +53,11 @@ export function HookObservationView(props: {
       {reading && observation === null ? <p className="meta">Reading hook observations…</p> : null}
       {error ? <p className="inline-error" role="status">Observation unavailable: {error}</p> : null}
       {observation?.state === 'none' ? (
-        <p><strong>Not observed in this run.</strong> <span className="meta">A relevant hook may simply not have
-          happened yet.{props.incarnationId ? null : ' No process run is recorded.'}</span></p>
+        <>
+          <p><strong>Not observed in this run.</strong> <span className="meta">A relevant hook may simply not have
+            happened yet.{props.incarnationId ? null : ' No process run is recorded.'}</span></p>
+          <p className="hook-compaction">{compactionWords(null)}</p>
+        </>
       ) : null}
       {observation?.state === 'observed' ? (
         <>

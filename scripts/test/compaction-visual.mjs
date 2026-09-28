@@ -44,7 +44,10 @@ async function until(read, label, timeoutMs = 20_000) {
   }
 }
 
-/** The Harness section's compaction line, once the view has read this run's observation. */
+/**
+ * The Harness section's compaction line, once the view has read this run's observation. It is read without
+ * pressing Refresh observation, so the line must follow the window's own periodic re-read (15 s).
+ */
 async function compactionLine(page, expected) {
   const harness = page.locator('section.hook-observation')
   if (!await harness.isVisible()) {
@@ -54,11 +57,9 @@ async function compactionLine(page, expected) {
   }
   await harness.waitFor()
   return until(async () => {
-    await harness.locator('button', { hasText: 'Refresh observation' }).click()
-    await page.waitForTimeout(300)
-    const text = await harness.locator('.hook-compaction').textContent().catch(() => null)
+    const text = await harness.locator('.hook-compaction').textContent({ timeout: 500 }).catch(() => null)
     return text !== null && expected.test(text) ? text : null
-  }, `a compaction line matching ${expected}`)
+  }, `a compaction line matching ${expected}`, 40_000)
 }
 
 mkdirSync(evidenceDirectory, { recursive: true })
@@ -171,6 +172,15 @@ done
       .then((observation) => ({ fresh: observation.incarnationId !== before.incarnationId, compaction: observation.compaction }))
     await setColorMode(page, 'black')
     await page.locator('section.hook-observation').screenshot({ path: join(evidenceDirectory, 'harness-relaunched-black.png') })
+
+    phase('a session whose harness never reported still says no compaction was observed')
+    const shell = await page.evaluate(async (id) => {
+      const primary = (await window.aiTerminal.listWorkspaces()).find((item) => !item.archivedAt)
+      return (await window.aiTerminal.listSessions(primary.workspaceId)).find((session) => session.sessionId !== id)
+    }, created.sessionId)
+    await page.locator(`.session-row > button[data-session-id="${shell.sessionId}"]`).click()
+    result.plainShell = await compactionLine(page, /^No compaction observed in this run$/)
+    result.plainShellState = await page.locator('section.hook-observation strong').first().textContent()
     console.log(JSON.stringify({ directory: evidenceDirectory, ...result }))
   } finally {
     // Playwright's close has hung after screenshots before (Epic 31); the scratch app is stopped either way.
