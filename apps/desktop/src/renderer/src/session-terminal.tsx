@@ -5,7 +5,6 @@ import { SearchAddon } from '@xterm/addon-search'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import {
-  decsetResetSequence,
   decsetRestoreSequence,
   TERMINAL_NOTICE_CODES,
   type ColorModeName,
@@ -78,8 +77,6 @@ export interface TerminalController {
    * text; rows xterm wrapped are joined. Reads only.
    */
   recentText(maxRows: number, maxBytes: number): string[]
-  /** Story 32.3: writes the mode reset into this view only; `armed` is what the host's tracker had on. */
-  resetModes(armed: readonly number[]): void
 }
 
 export function SessionTerminal(props: {
@@ -405,8 +402,7 @@ export function SessionTerminal(props: {
         requestAnimationFrame(() => searchInput.current?.select())
       },
       focus: () => terminal.focus(),
-      recentText: (maxRows, maxBytes) => readRecentLines(terminal.buffer.active, maxRows, maxBytes),
-      resetModes: (armed) => terminal.write(decsetResetSequence(armed))
+      recentText: (maxRows, maxBytes) => readRecentLines(terminal.buffer.active, maxRows, maxBytes)
     }
     props.register(props.startup.sessionId, controller)
     const removeTestHook = installTerminalTestHook({

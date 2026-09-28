@@ -534,6 +534,11 @@ export interface TelegramStatus {
   rejectedUpdates: number
   /** When the current run of transient failures began; null once Telegram answers. */
   failingSince: string | null
+  /**
+   * Counts state changes since BMN started, across connector restarts: the same state with a new number is a new
+   * entry into it, so the desktop notice for a stopped channel is raised once per entry, however late it is read.
+   */
+  stateEntry: number
 }
 
 /** A shorter outage, such as a laptop waking up, retries quietly. */

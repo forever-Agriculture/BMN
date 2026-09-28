@@ -209,6 +209,12 @@ wrong, in both directions: what the program turned on, and the autowrap and curs
 The view sets them in itself. The program is never written to and never asked to repeat the modes,
 so it neither redraws twice nor learns the view was replaced.
 
+**Reset terminal modes** undoes modes a program left armed when it died under a living shell. The
+host sets its record back to a fresh terminal's and adds the matching reset to the view's own output
+stream, after every byte already read, so the view and the record change at the same point. Origin
+mode and the alternate screen are reset only when armed, since both move the cursor. Nothing is
+written to the program, and saved output keeps only the program's own bytes.
+
 Resume shows the exact command first. The confirmation is built from the same launch the process is
 started with, so what you read is what runs, and it names any stored argument the CLI's own resume
 will not take — by kind, never quoting a prompt you typed.

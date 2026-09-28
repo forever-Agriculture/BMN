@@ -1342,6 +1342,36 @@ describe('shell session lifecycle', () => {
     expect(overflow.manager.hasAttachment(attached.attachmentId)).toBe(true)
   })
 
+  it('orders a mode reset after output the view has not received yet, and before output that follows (Story 32.3)', async () => {
+    const { manager, pty, harness, cwd } = await flowFixture({ consumerBytes: 4, hostBytes: 1024 })
+    const held: Array<{ attachmentId: string; streamSeq: number }> = []
+    harness.setAcknowledger((attachmentId, streamSeq) => held.push({ attachmentId, streamSeq }))
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION,
+      cwd,
+      executable: process.execPath,
+      argv: [],
+      cols: 80,
+      rows: 24
+    })
+    const attached = manager.attach(created)
+    harness.flow.attach(attached.attachmentId)
+    manager.activateAttachment(attached.attachmentId)
+    // The view's credit runs out, so the program's mouse mode is still queued for it when the owner resets.
+    pty.emit('ok\r\n\u001b[?1000h')
+    expect(manager.resetTerminalModes(created)).toEqual({ modes: [1000] })
+    // A program that is still running arms paste afterwards; the view must follow it, as the tracker does.
+    pty.emit('\u001b[?2004h')
+    while (held.length > 0) manager.acknowledge(held.shift()!)
+
+    const view = new Terminal({ allowProposedApi: true, cols: 80, rows: 24 })
+    for (const bytes of harness.writes) await writeTerminal(view, bytes)
+    expect(view.modes.mouseTrackingMode).toBe('none')
+    expect(view.modes.bracketedPasteMode).toBe(true)
+    expect(manager.resetTerminalModes(created).modes).toEqual([2004])
+    expect(pty.writes).toEqual([])
+    view.dispose()
+  })
+
   it('T-E refuses a second activation without disturbing the active stream', async () => {
     const { manager, pty, harness, cwd } = await flowFixture()
     const created = await manager.create({ ...DEFAULT_SESSION_CREATION,

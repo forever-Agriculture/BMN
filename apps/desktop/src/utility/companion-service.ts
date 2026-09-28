@@ -242,6 +242,8 @@ export class CompanionService {
   private telegram: TelegramConnector | undefined
   private telegramToken: string | null = null
   private telegramHealth: ConnectorHealth | undefined
+  /** Story 32.2: one more for every connector state change, kept across restarts (`TelegramStatus.stateEntry`). */
+  private telegramStateEntry = 0
   private telegramDetail = 'Telegram is off'
   private sweepTimer: NodeJS.Timeout | undefined
   private readonly now: () => Date
@@ -1957,7 +1959,8 @@ export class CompanionService {
         lastPollAt: this.telegramHealth.lastPollAt,
         lastError: redact(this.telegramHealth.lastError),
         rejectedUpdates: this.telegramHealth.rejectedUpdates,
-        failingSince: this.telegramHealth.failingSince
+        failingSince: this.telegramHealth.failingSince,
+        stateEntry: this.telegramStateEntry
       }
     }
     const settings = await this.options.database.companion('getSettings')
@@ -1968,7 +1971,8 @@ export class CompanionService {
       lastPollAt: null,
       lastError: null,
       rejectedUpdates: 0,
-      failingSince: null
+      failingSince: null,
+      stateEntry: this.telegramStateEntry
     }
   }
 
@@ -2005,6 +2009,7 @@ export class CompanionService {
         onTap: (tap) => this.cards.tap(tap),
         onHealth: (health) => {
           if (this.telegram !== connector) return
+          if (health.state !== this.telegramHealth?.state) this.telegramStateEntry += 1
           this.telegramHealth = health
           // Cards a previous run left with buttons are finished once Telegram is reachable, before new pages.
           if (health.state === 'polling') void this.cards.sweep()

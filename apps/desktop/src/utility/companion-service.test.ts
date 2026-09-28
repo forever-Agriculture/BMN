@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   AGENT_ATTENTION_ORIGINS,
+  DEFAULT_APP_SETTINGS,
   ERROR_CODES,
   HOOK_EVENT_LOG_LIMIT,
   isAttentionOrigin,
@@ -22,7 +23,8 @@ import {
   type HookObservation,
   type HookOriginRecord,
   type HandoffReviewSnapshot,
-  type SessionRecord
+  type SessionRecord,
+  type TelegramStatus
 } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CompanionService } from './companion-service'
@@ -1181,6 +1183,27 @@ describe('Telegram attention notifications', () => {
     expect(COMPANION_OPERATIONS.listDrafts(database)).toContainEqual(
       expect.objectContaining({ origin: 'telegram', state: 'draft', text: 'racing answer' })
     )
+  })
+})
+
+describe('Telegram state entries (Story 32.2)', () => {
+  it('numbers every state change, so a re-entry into the same stopped state after a restart is a new entry', async () => {
+    await database.transaction(() => COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', {
+      ...DEFAULT_APP_SETTINGS.telegram, enabled: true, allowedChatId: 1
+    }, new Date(clock).toISOString()))()
+    const conflicted = new CompanionService({
+      ...service['options'],
+      telegramApiOrigin: 'http://127.0.0.1:9',
+      fetch: async () => new Response(JSON.stringify({ ok: false, error_code: 409, description: 'Conflict' }),
+        { status: 409, headers: { 'content-type': 'application/json' } })
+    })
+    const first = await conflicted.route(METHOD_REGISTRY.telegramConfigure, { token: '123456789:ENTRY_fake_token_not_real' }) as TelegramStatus
+    const again = await conflicted.route(METHOD_REGISTRY.telegramConfigure, { token: '123456789:ENTRY_fake_token_not_real' }) as TelegramStatus
+    expect(first.state).toBe('conflict')
+    expect(again.state).toBe('conflict')
+    expect(again.stateEntry).toBeGreaterThan(first.stateEntry)
+    await expect(conflicted.route(METHOD_REGISTRY.telegramStatus, {})).resolves.toMatchObject({ stateEntry: again.stateEntry })
+    await conflicted.close()
   })
 })
 

@@ -168,18 +168,25 @@ describe('desktop notice when Telegram stops delivering', () => {
     events: ReturnType<typeof createAppEventForwarder>
     set(state: TelegramStatus['state'], enabled?: boolean): void
     shown: Array<{ title: string; body: string }>
+    hold(on: boolean): void
   } {
     let status: TelegramStatus = {
       state: 'polling', detail: 'Waiting for Telegram replies', tokenMask: null, lastPollAt: null, lastError: null,
-      rejectedUpdates: 0, failingSince: null
+      rejectedUpdates: 0, failingSince: null, stateEntry: 1
     }
     let settings = { ...DEFAULT_APP_SETTINGS, notifications: { ...DEFAULT_APP_SETTINGS.notifications, desktop },
       telegram: { ...DEFAULT_APP_SETTINGS.telegram, enabled: true } }
     const shown: Array<{ title: string; body: string }> = []
+    const held: Array<() => void> = []
+    let holdSettings = false
     const events = createAppEventForwarder({
       client: () => ({
-        request: async <Result,>(method: string) =>
-          (method === METHOD_REGISTRY.telegramStatus ? status : method === METHOD_REGISTRY.attentionList ? [] : settings) as Result
+        request: async <Result,>(method: string) => {
+          if (method === METHOD_REGISTRY.telegramStatus) return status as Result
+          if (method === METHOD_REGISTRY.attentionList) return [] as Result
+          if (holdSettings) await new Promise<void>((resolve) => held.push(resolve))
+          return settings as Result
+        }
       }),
       targets: () => [],
       watching: () => false,
@@ -191,10 +198,15 @@ describe('desktop notice when Telegram stops delivering', () => {
     const set = (state: TelegramStatus['state'], enabled = true): void => {
       const detail = state === 'conflict' ? 'Another client is polling this bot token'
         : state === 'unauthorized' ? 'Telegram rejected the bot token' : 'Telegram is unreachable; retrying in 60s'
-      status = { ...status, state, detail, failingSince: state === 'backoff' ? '2026-09-28T10:00:00.000Z' : null }
+      status = { ...status, state, detail, failingSince: state === 'backoff' ? '2026-09-28T10:00:00.000Z' : null,
+        stateEntry: status.state === state ? status.stateEntry : status.stateEntry + 1 }
       settings = { ...settings, telegram: { ...settings.telegram, enabled } }
     }
-    return { events, set, shown }
+    const hold = (on: boolean): void => {
+      holdSettings = on
+      if (!on) for (const release of held.splice(0)) release()
+    }
+    return { events, set, shown, hold }
   }
   const telegramEvent = async (events: ReturnType<typeof createAppEventForwarder>): Promise<void> => {
     events.forward({ kind: 'app-event', topic: 'telegram', sessionId: null })
@@ -219,6 +231,23 @@ describe('desktop notice when Telegram stops delivering', () => {
       { title: 'BMN', body: 'Telegram is not delivering: Another client is polling this bot token' },
       { title: 'BMN', body: 'Telegram is not delivering: Telegram rejected the bot token' },
       { title: 'BMN', body: 'Telegram is not delivering: Telegram rejected the bot token' }
+    ])
+  })
+
+  it('still notifies a quick re-entry into the same state while an earlier check waits for its answer', async () => {
+    const { events, set, shown, hold } = telegramForwarder()
+    hold(true)
+    set('conflict')
+    await telegramEvent(events)
+    set('starting')
+    await telegramEvent(events)
+    set('conflict')
+    await telegramEvent(events)
+    hold(false)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(shown.map((notice) => notice.body)).toEqual([
+      'Telegram is not delivering: Another client is polling this bot token',
+      'Telegram is not delivering: Another client is polling this bot token'
     ])
   })
 

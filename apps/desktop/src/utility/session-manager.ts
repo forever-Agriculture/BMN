@@ -12,6 +12,7 @@ import {
   TERMINAL_SCROLLBACK_LINES,
   SAVED_OUTPUT_FORMAT_VERSION,
   TERMINAL_SAVED_OUTPUT_RETENTION,
+  decsetResetSequence,
   lifecycleStopDetail,
   lifecycleStopSource,
   type BackgroundChoice,
@@ -1691,9 +1692,17 @@ export class SessionManager {
     return { ...this.current(identity).undeliveredOutputState }
   }
 
-  /** Story 32.3: forgets the modes this incarnation armed and says which they were; nothing reaches the PTY. */
+  /**
+   * Story 32.3: returns the view and the tracker to a fresh terminal's modes at one point in the output stream. The
+   * reset bytes follow every byte already read, so output still queued for the view cannot re-arm it after the
+   * reset, and output that comes later reaches the view and the tracker in the same order. They go to the view only:
+   * nothing reaches the PTY, and saved output keeps the program's own bytes.
+   */
   resetTerminalModes(identity: SessionIdentity): { modes: number[] } {
-    return { modes: this.current(identity).decsetModes.reset() }
+    const session = this.current(identity)
+    const armed = session.decsetModes.reset()
+    this.deliverFrames(session, session.outputFramer.push(new TextEncoder().encode(decsetResetSequence(armed))))
+    return { modes: armed }
   }
 
   async saveTerminalSnapshot(

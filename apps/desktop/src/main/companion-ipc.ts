@@ -8,7 +8,6 @@ import {
   type AttentionKind,
   type AttentionRecord,
   type ProtocolMethod,
-  type TelegramConnectorState,
   type TelegramStatus,
   telegramNeedsOwner,
   telegramOwnerCue
@@ -296,9 +295,13 @@ export function createAppEventForwarder(options: AppEventForwarderOptions): {
 } {
   const notified = new Set<string>()
   let primed = false
-  let telegramState: TelegramConnectorState | null = null
+  let telegramEntry: number | null = null
   let telegramQueue = Promise.resolve()
-  /** One notice per entry into a state only the owner can fix; a retrying outage never notifies. */
+  /**
+   * One notice per entry into a state only the owner can fix; a retrying outage never notifies. The host numbers each
+   * entry, so a check that reads late still sees a re-entry; entries that come and go before any check reads them
+   * share one notice.
+   */
   const notifyTelegram = async (): Promise<void> => {
     const client = options.client()
     if (!client) return
@@ -306,9 +309,8 @@ export function createAppEventForwarder(options: AppEventForwarderOptions): {
       client.request<TelegramStatus>(METHOD_REGISTRY.telegramStatus, {}),
       client.request<AppSettings>(METHOD_REGISTRY.settingsGet, {})
     ])
-    const entered = status.state !== telegramState
-    telegramState = status.state
-    if (!entered || !telegramNeedsOwner(status.state)) return
+    if (!telegramNeedsOwner(status.state) || status.stateEntry === telegramEntry) return
+    telegramEntry = status.stateEntry
     const cue = telegramOwnerCue(settings.telegram.enabled, status, Date.now())
     if (!cue || !settings.notifications.desktop || !(options.appNotificationsEnabled ?? options.notificationsEnabled)()) return
     options.notifyApp?.({ title: 'BMN', body: cue })

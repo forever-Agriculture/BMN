@@ -1276,13 +1276,13 @@ function App(): React.JSX.Element {
       : { label: 'Archive session', onSelect: () => void archiveSession(session, true).catch(fail('Session archive failed')) }
   ]
 
-  /** A program that died with mouse or paste modes on leaves them armed; this returns the view to a plain terminal. */
+  /**
+   * A program that died with mouse or paste modes on leaves them armed; this returns the view to a plain terminal.
+   * The host puts the reset into the view's own output stream, in order with the program's output.
+   */
   const resetTerminalModes = (session: SessionRecord): void => {
     void window.aiTerminal.resetTerminalModes(session.sessionId)
-      .then(({ modes }) => {
-        controllers.current.get(session.sessionId)?.resetModes(modes)
-        brief(`Terminal modes reset for ${session.name}`)
-      })
+      .then(() => brief(`Terminal modes reset for ${session.name}`))
       .catch(fail('Terminal modes were not reset'))
   }
 
