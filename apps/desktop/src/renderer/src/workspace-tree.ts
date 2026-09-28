@@ -99,7 +99,7 @@ function sessionAction(
     tree: (state) => selectTreeWorkspace(state, workspaceId),
     change: (layout) => {
       if (layout.workspaceId !== workspaceId) {
-        throw new Error(`Session ${sessionId} does not belong to workspace ${layout.workspaceId}`)
+        throw new Error('The session belongs to another workspace')
       }
       return transition(layout, sessionId, sessionIds)
     }

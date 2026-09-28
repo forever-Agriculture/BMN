@@ -211,7 +211,7 @@ export function routeSessionView(
     workspaceId,
     change: (state) => {
       if (state.workspaceId !== workspaceId) {
-        throw new Error(`Session ${sessionId} does not belong to workspace ${state.workspaceId}`)
+        throw new Error('The session belongs to another workspace')
       }
       const acceptedSessionIds = sessionIdsForViewChange(state, sessionIds)
       return update.kind === 'follow-tail'

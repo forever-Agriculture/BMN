@@ -47,7 +47,7 @@ describe('workspace tree semantics', () => {
     expect(switched.workspaceId).toBe('b')
     expect(switched.tree(initial).selectedWorkspaceId).toBe('b')
     expect(switched.change(layoutB).selectedSessionId).toBe('b-1')
-    expect(() => switched.change(layoutA)).toThrow(/does not belong/)
+    expect(() => switched.change(layoutA)).toThrow('The session belongs to another workspace')
     expect(layoutA.selectedSessionId).toBe('a-2')
     expect(selectTreeSession(sessions, 'unknown')).toBeNull()
     expect(orderedWorkspaceSessions(sessions, 'a').map((session) => session.sessionId))

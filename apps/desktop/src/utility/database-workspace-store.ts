@@ -199,7 +199,7 @@ function sessionRecord(row: SessionRow): SessionRecord {
     executable: row.executable,
     ...storedArgvFields(
       row.argv_json,
-      `Session ${row.session_id}`,
+      'This session',
       'Edit and save its arguments before launching or resuming it.'
     ),
     position: row.position,
@@ -215,7 +215,7 @@ function sessionRecord(row: SessionRow): SessionRecord {
     lastProcess: recordedProcessStatus(row)
   }
   if (!isSessionRecord(record)) {
-    throw new WorkspaceStoreError(ERROR_CODES.ioError, `Session ${row.session_id} is invalid`)
+    throw new WorkspaceStoreError(ERROR_CODES.ioError, 'A stored session record is invalid')
   }
   return record
 }
@@ -227,7 +227,7 @@ function templateRecord(row: TemplateRow): LaunchTemplateRecord {
     executable: row.executable,
     ...storedArgvFields(
       row.argv_json,
-      `Template ${row.template_id}`,
+      'This launch template',
       'Recreate this launch template before applying it.'
     ),
     cwd: row.cwd,
@@ -241,7 +241,7 @@ function templateRecord(row: TemplateRow): LaunchTemplateRecord {
     createdAt: row.created_at
   }
   if (!isLaunchTemplateRecord(record)) {
-    throw new WorkspaceStoreError(ERROR_CODES.ioError, `Template ${row.template_id} is invalid`)
+    throw new WorkspaceStoreError(ERROR_CODES.ioError, 'A stored launch template record is invalid')
   }
   return record
 }
@@ -552,7 +552,7 @@ function launchSetRecord(row: LaunchSetRow): LaunchSetRecord {
     entries, revision: row.revision, createdAt: row.created_at
   }
   if (!isLaunchSetRecord(record)) {
-    throw new WorkspaceStoreError(ERROR_CODES.ioError, `Launch set ${row.set_id} is invalid`)
+    throw new WorkspaceStoreError(ERROR_CODES.ioError, 'A stored launch set record is invalid')
   }
   return record
 }

@@ -129,7 +129,7 @@ describe('session view router', () => {
     expect(route?.workspaceId).toBe('workspace-inactive')
     const next = route!.change(inactiveLayout)
     expect(next.sessionView['inactive-a']).toEqual({ scrollLine: 12, followTail: false })
-    expect(() => route!.change(activeLayout)).toThrow(/does not belong to workspace workspace-active/)
+    expect(() => route!.change(activeLayout)).toThrow('The session belongs to another workspace')
   })
 
   it('updates a session when its home layout retains a cross-workspace pane', () => {

@@ -81,7 +81,7 @@ export async function attachCreatedSession<Attachment extends { attachmentId: st
       workspaceId: params.workspaceId
     })
     const record = sessions.find((candidate) => candidate.sessionId === identity.sessionId)
-    if (!record) throw new Error(`Created session ${identity.sessionId} was not persisted`)
+    if (!record) throw new Error('The created session was not saved')
     return { identity, attachment, record }
   } catch (error) {
     if (attachment) {
@@ -100,7 +100,7 @@ export async function attachCreatedSession<Attachment extends { attachmentId: st
     } catch (stopError) {
       throw new AggregateError(
         [error, stopError],
-        `Created session ${identity.sessionId} could not be registered or stopped`,
+        'The created session could not be registered or stopped',
         { cause: stopError }
       )
     }

@@ -739,7 +739,7 @@ function installIpcHandlers(): void {
     for (const entry of result.entries) {
       if (!entry.sessionId) continue
       const record = byId.get(entry.sessionId)
-      if (!record) throw new Error(`Started session ${entry.sessionId} was not persisted`)
+      if (!record) throw new Error('A started session was not saved')
       sessionRecords.set(record.sessionId, record)
       sessions.push(record)
       if (!shouldAdoptLaunchSetRuntime(
@@ -5887,7 +5887,7 @@ async function runSelfTest(): Promise<void> {
     }
     for (const [key, count] of Object.entries(sessionActivity.updates)) {
       if (count > sessionActivity.updateCap) {
-        throw new Error(`session ${key} published ${count} activity updates, past the throttle`)
+        throw new Error(`${count} activity updates for ${key}, past the throttle`)
       }
     }
     if (Object.values(sessionActivity.inputEvents).some((count) => count !== 0)) {

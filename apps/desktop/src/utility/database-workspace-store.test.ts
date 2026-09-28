@@ -568,7 +568,9 @@ describe('workspace database store', () => {
         .map((record) => [record.sessionId, record]))
       expect(records.get('session-broken')).toMatchObject({
         argv: [],
-        launchDisabledReason: expect.stringContaining('Edit and save its arguments')
+        // FR73: the owner reads this in the session's own panel, so it never names the raw id.
+        launchDisabledReason:
+          'This session has invalid stored arguments. Edit and save its arguments before launching or resuming it.'
       })
       expect(records.get('session-healthy')).toMatchObject({ argv: ['healthy'] })
       expect(records.get('session-healthy')).not.toHaveProperty('launchDisabledReason')

@@ -1201,7 +1201,7 @@ describe('shell session lifecycle', () => {
         manager.resume({ sessionId: 'session-corrupt-argv', cols: 80, rows: 24 })
       ).rejects.toMatchObject<Partial<HostControlError>>({
         code: ERROR_CODES.ioError,
-        message: expect.stringContaining('Session session-corrupt-argv has invalid stored arguments')
+        message: expect.stringContaining('This session has invalid stored arguments')
       })
       expect(spawnPty).not.toHaveBeenCalled()
       await expect(manager.health()).resolves.toMatchObject({ liveSessions: 0 })

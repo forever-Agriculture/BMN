@@ -540,7 +540,7 @@ function App(): React.JSX.Element {
     })
     const stopCapture = window.aiTerminal.onSavedOutputCaptureRequest(async (sessionId) => {
       const controller = controllers.current.get(sessionId)
-      if (!controller) throw new Error(`Session ${sessionId} has no live terminal view`)
+      if (!controller) throw new Error('This session has no live terminal view')
       await controller.capture()
     })
     const stopAppEvent = window.aiTerminal.onAppEvent((message) => {
