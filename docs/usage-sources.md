@@ -130,9 +130,11 @@ Its context share was not driven, so it is not read.
   - **Why 10 minutes.** It is a product assumption, not a measured bound. Across the owner's 200
     newest Codex session files (10 089 readings, three weekly periods), one period's reset moved by at
     most 10 s (receipt `codex-reader/resets-drift.txt`, script `codex-reader/resets-drift.py`, drift
-    sizes only). Claude's reset was not followed over time. Windows are at least five hours long, so
-    one account's periods never fall within 10 minutes of each other.
+    sizes only). Every reading measured was the weekly window; Codex's 5-hour window and Claude's
+    reset were not followed over time. Windows are at least five hours long, so one account's periods
+    never fall within 10 minutes of each other.
   - **Known limits.** BMN has no account identity: two accounts whose resets fall within 10 minutes of
-    each other share one notice. A notice expires at the reset time stored when it opened, even if the
+    each other share one notice. A reset that moves more than 10 minutes within one period reads as a
+    new period and notifies again. A notice expires at the reset time stored when it opened, even if the
     agent reports a different one later. When an archived session is deleted after the archive period,
     its notices go with it, so a window still at 90% may notify once more.
