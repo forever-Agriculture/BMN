@@ -13,6 +13,20 @@ const binaryFlag = process.argv.indexOf('--binary')
 const packagedBinary = binaryFlag === -1 ? undefined : resolve(process.argv[binaryFlag + 1] ?? '')
 const executablePath = packagedBinary ?? createRequire(join(appDirectory, 'package.json'))('electron')
 
+/**
+ * One string unique to each main-process self-test module. Error messages and fixture words survive minification,
+ * and each module gets its own, so a static import of any one of them (not only the runner) is caught.
+ */
+const MAIN_SELF_TEST_MARKERS = [
+  'native failure self-test timed out', // self-test/runner.ts
+  'the stopped session tree button was not rendered', // self-test/probes.ts
+  'codex harness ready', // self-test/harnesses.ts
+  'Stored arguments are unavailable in the renderer boundary probe.', // self-test/taps.ts
+  'Conflict: terminated by other getUpdates request', // fake-bot-api.ts
+  'ses_f1b971253ffeDV9XIFvU67lmdh', // agent-history-self-test.ts
+  'launch set exact command preview missing' // launch-set-repository-self-test.ts
+]
+
 /** One message unique to each renderer self-test module; none may sit in the renderer's entry chunk. */
 const RENDERER_SELF_TEST_MARKERS = [
   'renderer behavioural integration step timed out',
@@ -55,7 +69,7 @@ const loaded = await withTemporaryRoot(temporaryRootContracts.electronDevelopmen
     cdp.on('Debugger.scriptParsed', (event) => { if (event.url.endsWith('.js')) scripts.push(event.url) })
     await cdp.send('Debugger.enable')
     await cdp.send('Debugger.disable')
-    const main = await application.evaluate((_electron, markers) => {
+    const main = await application.evaluate((_electron, { markers, mainMarkers }) => {
       const main = process.mainModule
       if (!main) throw new Error('the main process has no main module to read the module list from')
       const modules = Object.keys(main.constructor._cache)
@@ -70,15 +84,21 @@ const loaded = await withTemporaryRoot(temporaryRootContracts.electronDevelopmen
       if (!rendererEntry) throw new Error('the renderer index.html names no entry script')
       const assets = fs.readdirSync(path.join(renderer, 'assets')).filter((name) => name.endsWith('.js'))
       const text = (name) => fs.readFileSync(path.join(renderer, 'assets', name), 'utf8')
+      const chunkDirectory = path.join(path.dirname(entry), 'chunks')
+      const chunks = fs.readdirSync(chunkDirectory)
+      const loadedMain = modules.filter((file) => /[\\/]out[\\/]main[\\/]/u.test(file))
       return {
         modules,
-        chunks: fs.readdirSync(path.join(path.dirname(entry), 'chunks')),
-        entryHoldsRunner: fs.readFileSync(entry, 'utf8').includes('function writeCodexHarness('),
+        chunks,
+        mainMarkersLoaded: loadedMain.flatMap((file) => mainMarkers.filter((marker) => fs.readFileSync(file, 'utf8').includes(marker))
+          .map((marker) => `${path.basename(file)}: ${marker}`)),
+        mainMarkerChunks: mainMarkers.map((marker) => chunks.filter((name) =>
+          fs.readFileSync(path.join(chunkDirectory, name), 'utf8').includes(marker))),
         rendererEntry,
         markersInEntry: markers.filter((marker) => text(rendererEntry).includes(marker)),
         markerChunks: markers.map((marker) => assets.filter((name) => name !== rendererEntry && text(name).includes(marker)))
       }
-    }, RENDERER_SELF_TEST_MARKERS)
+    }, { markers: RENDERER_SELF_TEST_MARKERS, mainMarkers: MAIN_SELF_TEST_MARKERS })
     return { ...main, scripts }
   } finally {
     // The close prompt would wait for an answer about the live session; nothing here needs a graceful quit.
@@ -86,8 +106,11 @@ const loaded = await withTemporaryRoot(temporaryRootContracts.electronDevelopmen
   }
 })
 
-// The runner must stay its own chunk: a static import would inline it into index.js and load it every start.
-assert.equal(loaded.entryHoldsRunner, false, 'the main entry holds the self-test runner')
+// The self-test must stay out of every module a normal start loads: a static import of any of its modules would
+// inline it into index.js or a shared chunk and load it every start. Each marker must still be in some chunk.
+assert.deepEqual(loaded.mainMarkersLoaded, [], 'a normal start loaded main-process self-test code')
+assert.ok(loaded.mainMarkerChunks.every((chunks) => chunks.length > 0),
+  `a main-process self-test module is missing from the build's chunks: ${JSON.stringify(loaded.mainMarkerChunks)}`)
 assert.equal(loaded.chunks.filter((name) => /^runner-[^/]*\.js$/u.test(name)).length, 1,
   `the build has no single self-test chunk: ${JSON.stringify(loaded.chunks)}`)
 const mainModules = loaded.modules.filter((path) => /[\\/]out[\\/]main[\\/]/u.test(path))

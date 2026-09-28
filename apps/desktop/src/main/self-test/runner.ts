@@ -4265,6 +4265,10 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       neverInterrupted: explicitRow?.state === 'exited',
       finalCaptureTookTheMarker: (await savedCurrent(explicitId))?.includes('SURVIVAL-EXPLICIT-MARKER') === true
     }
+    // Read again once the exit is recorded: a later write must not have replaced the final capture.
+    if (!explicitStop.finalCaptureTookTheMarker) {
+      throw new Error(`the explicit stop's saved output lost its final capture: ${JSON.stringify(explicitStop)}`)
+    }
 
     const answerTheClosePrompt = host.applicationWindow!.webContents.executeJavaScript(`
       new Promise((resolve, reject) => {
@@ -4338,6 +4342,9 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     }
     if (!closeAndStop.keptSessionStillLive) {
       throw new Error(`stopping on window close stopped a session the owner kept: ${JSON.stringify(closeAndStop)}`)
+    }
+    if (!closeAndStop.finalCaptureTookTheMarker) {
+      throw new Error(`the window-close stop's saved output lost its final capture: ${JSON.stringify(closeAndStop)}`)
     }
     // The close lifecycle minimized the window, as production does; the remaining phases need a
     // live renderer again, so the harness recovers it the same way a crash does.
