@@ -231,7 +231,28 @@ async function assertSearchFloats(page, { colorModes, size, onAppearance, report
       document.activeElement === document.querySelector('.session-terminal.selected .xterm-helper-textarea'))
     await unchanged('close')
   }
-  if (reportFocus) await setFocusReporting(false)
+  if (reportFocus) {
+    // Leaving the pane from its search bar is one focus-out; coming straight back into the bar is one focus-in;
+    // closing search after that reports nothing more (Astra recheck).
+    const inputEvents = async () => (await read()).snapshot.inputEvents
+    const searchInput = page.locator('.session-terminal.selected .terminal-search input')
+    await terminalInput.focus()
+    await settleTerminalLayout(page)
+    const start = await inputEvents()
+    await page.keyboard.press('Control+Shift+F')
+    await page.waitForFunction(() =>
+      document.activeElement === document.querySelector('.session-terminal.selected .terminal-search input'))
+    assert.equal(await inputEvents(), start, 'opening search reports no focus change')
+    await page.evaluate(() => document.activeElement.blur())
+    assert.equal(await inputEvents(), start + 1, 'leaving the pane from search reports focus-out once')
+    await searchInput.focus()
+    assert.equal(await inputEvents(), start + 2, 'coming back into search reports focus-in once')
+    await page.keyboard.press('Escape')
+    await page.waitForFunction(() => !document.querySelector('.terminal-search') &&
+      document.activeElement === document.querySelector('.session-terminal.selected .xterm-helper-textarea'))
+    assert.equal(await inputEvents(), start + 2, 'closing search reports nothing more')
+    await setFocusReporting(false)
+  }
   await setAppearance(page, 'knight', 'black')
   await onAppearance()
   await settleTerminalLayout(page)

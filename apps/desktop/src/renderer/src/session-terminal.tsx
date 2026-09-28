@@ -623,13 +623,18 @@ export function SessionTerminal(props: {
         const outlineOfferedAgain = await waitFor(() => insertOutline.disabled ? undefined : true)
         setControlValue(handoffTextarea, 'x')
         const outlineOffAfterTyping = await waitFor(() => insertOutline.disabled ? true : undefined)
+        // Spaces and line breaks are text the owner typed: the outline never replaces them.
+        setControlValue(handoffTextarea, ' \n\t')
+        const outlineOffForWhitespace = await waitFor(() => insertOutline.disabled ? true : undefined)
         setControlValue(handoffTextarea, '')
         await waitFor(() => insertOutline.disabled ? undefined : true)
         insertOutline.click()
         await waitFor(() => handoffTextarea.value === HANDOFF_OUTLINE ? true : undefined)
         const createdText = handoffTextarea.value.replace('Goal:', 'Goal: Synthetic handoff line one\nQuestion line two')
         setControlValue(handoffTextarea, createdText)
-        const outlineFlow = { outlineOfferedEmpty, outlineFilled, outlineFocused, outlineOfferedAgain, outlineOffAfterTyping }
+        const outlineFlow = {
+          outlineOfferedEmpty, outlineFilled, outlineFocused, outlineOfferedAgain, outlineOffAfterTyping, outlineOffForWhitespace
+        }
         artifactChoice.click()
         handoffForm.requestSubmit()
         const createdHandoff = await waitFor(async () => (await window.aiTerminal.listDrafts()).find((draft) =>
@@ -1219,6 +1224,9 @@ export function SessionTerminal(props: {
             const next = event.relatedTarget
             if (next instanceof Node && (event.currentTarget.contains(next) || next === terminalRef.current?.textarea)) return
             paneFocus.current(false)
+          }} onFocus={() => {
+            // Coming back into the bar from elsewhere is coming back to the pane; from the terminal it changes nothing.
+            paneFocus.current(true)
           }}>
             <input
               ref={searchInput}
