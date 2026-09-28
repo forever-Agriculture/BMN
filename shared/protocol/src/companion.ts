@@ -113,9 +113,10 @@ export function terminalNoticeOrigin(code: TerminalNoticeCode): string {
 
 export const ATTENTION_ORIGINS = Object.freeze([
   'cli', 'owner', 'input', 'telegram', 'expiry',
-  // App-assigned terminal notifications and repeat watch. Never claimable by a token.
+  // App-assigned terminal notifications, repeat watch and plan-use watch. Never claimable by a token.
   ...TERMINAL_NOTICE_CODES.map(terminalNoticeOrigin),
-  'watch:repeat'
+  'watch:repeat',
+  'watch:usage'
 ] as const)
 
 /** Origins a session's own token may claim: its harness's hook events, and the CLI it runs itself. */
@@ -200,6 +201,81 @@ export interface HookCompaction {
   lastAt: string
   /** Compactions reported in this run; a new incarnation starts from none. */
   count: number
+}
+
+/**
+ * The agents whose plan use BMN can read without a network call (Story 37.1, docs/usage-sources.md):
+ * Claude Code through its status-line input, Codex through the `token_count` lines of its own session
+ * file. `claude glm`, OpenCode and Cursor report no plan windows on this machine.
+ */
+export const USAGE_AGENTS = Object.freeze(['claude', 'codex'] as const)
+export type UsageAgent = (typeof USAGE_AGENTS)[number]
+
+/** Claude reports a five-hour and a weekly window; Codex a primary and a secondary one. */
+export const MAX_USAGE_WINDOWS = 2
+
+/** A window at or above this share of its limit opens one Needs you notice per reset period (Story 37.2). */
+export const USAGE_NOTICE_PERCENT = 90
+
+/** One plan window as the agent reported it: its length, how much of it is used, and when it starts over. */
+export interface UsageWindow {
+  minutes: number
+  usedPercent: number
+  resetsAt: string
+}
+
+/**
+ * One reading of an agent's plan use, kept in memory only (a restart forgets it). A reading with no
+ * windows still carries context use, as `claude glm` reports it; it never replaces an agent's plan reading.
+ */
+export interface UsageReading {
+  sessionId: string
+  incarnationId: string
+  agent: UsageAgent
+  windows: readonly UsageWindow[]
+  /** How full the conversation's context window is, when the agent says so. */
+  contextUsedPercent: number | null
+  /** When BMN received or read it, independent of when the agent measured it. */
+  readAt: string
+}
+
+/** What one run of a session reported about plan use, and whose harness it runs when it reported none. */
+export interface SessionUsage {
+  sessionId: string
+  incarnationId: string | null
+  reading: UsageReading | null
+  /** The harness this run last reported through its hooks, or null when none has. */
+  agent: Exclude<HookEventAgent, 'terminal'> | null
+}
+
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const
+
+/** The whole percent BMN shows and the notice threshold compares, so a shown 90% is the one that notifies. */
+export function usagePercent(value: number): number {
+  return Math.round(value)
+}
+
+/** "5-hour" and "week" in a row; "5-hour" and "weekly" when naming the limit in a notice. */
+export function usageWindowName(minutes: number, form: 'row' | 'limit'): string {
+  if (minutes === 10_080) return form === 'row' ? 'week' : 'weekly'
+  if (minutes === 1_440) return form === 'row' ? 'day' : 'daily'
+  if (minutes % 1_440 === 0) return `${minutes / 1_440}-day`
+  if (minutes % 60 === 0) return `${minutes / 60}-hour`
+  return `${minutes}-minute`
+}
+
+/** A local time a reader can place: "16:10" today, "Fri 09:00" within the week, "Oct 3 09:00" beyond it. */
+export function usageClock(iso: string, now: Date): string {
+  const at = new Date(iso)
+  if (Number.isNaN(at.getTime())) return '--:--'
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  const clock = `${pad(at.getHours())}:${pad(at.getMinutes())}`
+  const day = (value: Date): number => new Date(value.getFullYear(), value.getMonth(), value.getDate()).getTime()
+  const days = Math.round((day(at) - day(now)) / 86_400_000)
+  if (days === 0) return clock
+  if (days > 0 && days < 7) return `${WEEKDAYS[at.getDay()]} ${clock}`
+  return `${MONTHS[at.getMonth()]} ${at.getDate()} ${clock}`
 }
 
 /** The most recent hook events the utility keeps per session; older ones are dropped. */

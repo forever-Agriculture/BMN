@@ -25,6 +25,8 @@ import type {
   HookEventRecord,
   HookObservation,
   HookOriginRecord,
+  SessionUsage,
+  UsageReading,
   InputDraftRecord,
   InterruptedSessionCohort,
   SessionCohortOfferedResult,
@@ -253,6 +255,13 @@ export interface AiTerminalBridge {
    * kept per live incarnation in memory only. One list read backs every flag in the window.
    */
   listHookOrigins(): Promise<HookOriginRecord[]>
+  /**
+   * Read-only: what one session's current run reported about plan use (Story 37.2), in memory only.
+   * A Codex run's own session file is read first when its last read is older than 15 s.
+   */
+  getUsage(sessionId: string): Promise<SessionUsage>
+  /** Read-only: the latest plan reading per agent across all sessions, since a plan belongs to the account. */
+  listUsage(): Promise<UsageReading[]>
   /**
    * Read-only: a dated snapshot of what the hook checker found configured for Claude Code, Codex
    * and OpenCode. Never writes a hook file, and carries no configuration contents; exit 1 with a

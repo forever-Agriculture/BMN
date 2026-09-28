@@ -25,7 +25,10 @@ import {
   type HookOriginRecord,
   type HandoffReviewSnapshot,
   type SessionRecord,
-  type TelegramStatus
+  type SessionUsage,
+  type TelegramStatus,
+  type UsageReading,
+  type UsageWindow
 } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CompanionService } from './companion-service'
@@ -57,6 +60,8 @@ let archiveAtFinalTargetRead: (() => void) | null
 let workspaceReads: number
 let targetAvailabilityReads: number
 let holdFinalAvailabilityResponse: (() => Promise<void>) | null
+/** Conversation bindings the store would return, by session; none unless a test sets one. */
+let bindings: Map<string, unknown>
 
 /** Runs the real store operations the worker would, on an in-memory database. */
 function workerLike(connection: DatabaseConnection): DatabaseWorkerClient {
@@ -88,7 +93,8 @@ function workerLike(connection: DatabaseConnection): DatabaseWorkerClient {
       return listWorkspaces(connection, includeArchived)
     },
     listSessions: async (workspaceId: string) => listSessions(connection, workspaceId),
-    listConversationRoutes: async () => selectConversationRoutes(connection)
+    listConversationRoutes: async () => selectConversationRoutes(connection),
+    getConversationBinding: async (sessionId: string) => bindings.get(sessionId)
   } as unknown as DatabaseWorkerClient
 }
 
@@ -98,6 +104,7 @@ beforeEach(() => {
   workspaceReads = 0
   targetAvailabilityReads = 0
   holdFinalAvailabilityResponse = null
+  bindings = new Map()
   root = mkdtempSync(join(tmpdir(), 'bmn-companion-'))
   database = new BetterSqlite3(':memory:')
   initializeDatabase(database, now)
@@ -2506,5 +2513,131 @@ describe('answers from the phone go only into the dialog that asked (Epic 30.2)'
     expect([...service.matchAll(/this\.answers\.answer\(/g)]).toHaveLength(1)
     const cli = readFileSync(join(__dirname, '..', '..', 'bin', 'bmn'), 'utf8')
     expect([...cli.matchAll(/method: '(answer\.[^']*)'/g)].map((match) => match[1])).toEqual(['answer.take'])
+  })
+})
+
+describe('plan use (Story 37.2)', () => {
+  const RESETS = '2026-09-14T16:10:00.000Z'
+  const WEEK_RESETS = '2026-09-18T09:00:00.000Z'
+  const report = (p: { sessionId?: string; incarnationId?: string; agent?: 'claude' | 'codex'; windows?: UsageWindow[]; contextUsedPercent?: number | null }) =>
+    (service as unknown as { recordUsage(p: Omit<UsageReading, 'readAt'>): Promise<{ recorded: boolean }> }).recordUsage({
+      sessionId: p.sessionId ?? 's1',
+      incarnationId: p.incarnationId ?? liveIncarnations.get(p.sessionId ?? 's1') ?? 'none',
+      agent: p.agent ?? 'claude',
+      windows: p.windows ?? [],
+      contextUsedPercent: p.contextUsedPercent ?? null
+    })
+  const usage = (sessionId: string) => service.route(METHOD_REGISTRY.usageGet, { sessionId }) as Promise<SessionUsage>
+  const plans = () => service.route(METHOD_REGISTRY.usageList, {}) as Promise<UsageReading[]>
+  const notices = async () => (await service.route(METHOD_REGISTRY.attentionList, {}) as AttentionRecord[])
+    .filter((row) => row.requestKey.startsWith('usage:'))
+  const observe = (sessionId: string, agent: HookEventRecord['agent'], event: string) =>
+    (service as unknown as { observeHookEvent(p: object): Promise<unknown> }).observeHookEvent({
+      sessionId, incarnationId: liveIncarnations.get(sessionId) ?? null, agent, event, source: null, toolName: null, effects: []
+    })
+
+  it('keeps each run\'s reading and each agent\'s plan reading; a reading with no windows keeps only its context use', async () => {
+    const windows = [{ minutes: 300, usedPercent: 42, resetsAt: RESETS }, { minutes: 10_080, usedPercent: 18, resetsAt: WEEK_RESETS }]
+    await expect(report({ windows, contextUsedPercent: 37 })).resolves.toEqual({ recorded: true })
+    clock = '2026-09-14T12:01:00.000Z'
+    // `claude glm` in another session: context use only, and Claude's plan reading stands.
+    await report({ sessionId: 's2', contextUsedPercent: 12 })
+
+    await expect(usage('s1')).resolves.toEqual({
+      sessionId: 's1', incarnationId: 'incarnation-1', agent: null,
+      reading: { sessionId: 's1', incarnationId: 'incarnation-1', agent: 'claude', windows, contextUsedPercent: 37, readAt: now }
+    })
+    await expect(usage('s2')).resolves.toMatchObject({ reading: { windows: [], contextUsedPercent: 12 } })
+    await expect(plans()).resolves.toEqual([expect.objectContaining({ sessionId: 's1', agent: 'claude', windows })])
+    await expect(notices()).resolves.toEqual([])
+  })
+
+  it('names the reporting harness when a run has no reading', async () => {
+    await observe('s1', 'opencode', 'session.idle')
+    await expect(usage('s1')).resolves.toEqual({ sessionId: 's1', incarnationId: 'incarnation-1', agent: 'opencode', reading: null })
+  })
+
+  it('forgets a replaced run\'s reading and ignores a late one from it', async () => {
+    await report({ windows: [{ minutes: 300, usedPercent: 42, resetsAt: RESETS }] })
+    liveIncarnations.set('s1', 'incarnation-9')
+
+    await expect(usage('s1')).resolves.toMatchObject({ incarnationId: 'incarnation-9', reading: null })
+    await expect(report({ incarnationId: 'incarnation-1', windows: [{ minutes: 300, usedPercent: 99, resetsAt: RESETS }] }))
+      .resolves.toEqual({ recorded: false })
+    await expect(notices()).resolves.toEqual([])
+  })
+
+  it('opens one notice per agent, window and reset period at 90%, and it expires when the window resets', async () => {
+    const five = (usedPercent: number, resetsAt = RESETS) => report({ windows: [{ minutes: 300, usedPercent, resetsAt }] })
+    await five(89)
+    await five(89.4)
+    await expect(notices()).resolves.toEqual([])
+
+    await five(89.6)
+    await five(91)
+    await five(95)
+    const opened = await notices()
+    expect(opened).toEqual([expect.objectContaining({
+      kind: 'notice', state: 'open', sessionId: 's1', openedBy: 'watch:usage', expiresAt: RESETS
+    })])
+    expect(opened[0]!.title).toMatch(/^Claude 5-hour limit at 90% · resets \S/)
+
+    // Dismissed by the owner, it stays closed for the rest of this period.
+    await service.route(METHOD_REGISTRY.attentionResolve, { requestId: opened[0]!.requestId })
+    await five(97)
+    await expect(notices()).resolves.toEqual([expect.objectContaining({ state: 'answered' })])
+
+    // The weekly window of the same agent is its own notice, worded as a limit.
+    await report({ windows: [{ minutes: 10_080, usedPercent: 93, resetsAt: WEEK_RESETS }] })
+    expect((await notices()).filter((row) => row.state === 'open').map((row) => row.title))
+      .toEqual([expect.stringMatching(/^Claude weekly limit at 93% · resets /)])
+
+    // The window resets: the open notice expires, and the next period may notify again.
+    clock = '2026-09-18T09:00:01.000Z'
+    await (service as unknown as { sweepAttention(): Promise<void> }).sweepAttention()
+    expect((await notices()).filter((row) => row.state === 'open')).toEqual([])
+    await report({ windows: [{ minutes: 10_080, usedPercent: 90, resetsAt: '2026-09-25T09:00:00.000Z' }] })
+    expect((await notices()).filter((row) => row.state === 'open')).toHaveLength(1)
+  })
+
+  it('opens no notice for a window that has already reset', async () => {
+    await report({ windows: [{ minutes: 300, usedPercent: 99, resetsAt: '2026-09-14T11:59:00.000Z' }] })
+    await expect(notices()).resolves.toEqual([])
+  })
+
+  it('reads a Codex run\'s plan windows from its own session file, through the conversation it is bound to', async () => {
+    const conversation = '01a0e82f-81fe-7f70-b2d6-df18576f6cb9'
+    const codexHome = join(root, 'codex-home')
+    const folder = join(codexHome, 'sessions', '2026', '09', '14')
+    await mkdir(folder, { recursive: true })
+    const line = (used: number) => JSON.stringify({ type: 'event_msg', payload: { type: 'token_count', info: null,
+      rate_limits: { primary: { used_percent: used, window_minutes: 10_080, resets_at: Date.parse(WEEK_RESETS) / 1000 }, secondary: null } } })
+    const file = join(folder, `rollout-2026-09-14T11-00-00-${conversation}.jsonl`)
+    await writeFile(file, `${line(40)}\n{"type":"response_item","payload":{"type":"message"}}\n`)
+    bindings.set('s2', { status: 'bound', agentCli: 'codex', conversationReference: conversation,
+      launchContext: { cwd: '/work/two', executable: '/usr/bin/codex', argv: [], environment: { CODEX_HOME: codexHome } } })
+
+    await observe('s2', 'codex', 'SessionStart')
+    await expect(usage('s2')).resolves.toMatchObject({
+      agent: 'codex', reading: { agent: 'codex', windows: [{ minutes: 10_080, usedPercent: 40, resetsAt: WEEK_RESETS }], contextUsedPercent: null }
+    })
+
+    // A busy run is not reread on every event; a finished turn reads again at once.
+    await writeFile(file, `${line(92)}\n`, { flag: 'a' })
+    await observe('s2', 'codex', 'PostToolUse')
+    await expect(usage('s2')).resolves.toMatchObject({ reading: { windows: [{ usedPercent: 40 }] } })
+    await observe('s2', 'codex', 'Stop')
+    await expect(usage('s2')).resolves.toMatchObject({ reading: { windows: [{ usedPercent: 92 }] } })
+    expect((await notices()).map((row) => row.title)).toEqual([expect.stringMatching(/^Codex weekly limit at 92% · resets /)])
+    await expect(plans()).resolves.toEqual([expect.objectContaining({ agent: 'codex', sessionId: 's2' })])
+  })
+
+  it('forgets a deleted session\'s reading but keeps the agent\'s plan reading', async () => {
+    await report({ windows: [{ minutes: 300, usedPercent: 42, resetsAt: RESETS }] })
+    database.prepare("DELETE FROM session WHERE session_id = 's1'").run()
+    await service.sessionsChanged()
+
+    expect((service as unknown as { usageReadings: Map<string, unknown> }).usageReadings.has('s1')).toBe(false)
+    await expect(plans()).resolves.toHaveLength(1)
   })
 })

@@ -1,9 +1,10 @@
 // MODULE: session-presentation.test.ts - status, tags, progress staleness and needs-you navigation
-import type { AttentionRecord, HookOriginRecord, InputDraftRecord, ProgressRecord, SessionRecord } from '@bmn/protocol'
+import { usageClock, usageWindowName, type AttentionRecord, type HookOriginRecord, type InputDraftRecord, type ProgressRecord, type SessionRecord, type UsageReading } from '@bmn/protocol'
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { NeedsYouPopover } from './needs-you-popover'
+import { PlanWindows } from './plan-use-view'
 import {
   activeHookOrigin,
   agentTag,
@@ -23,6 +24,10 @@ import {
   progressPresentation,
   relativeAge,
   compactionWords,
+  contextUseWords,
+  planSourceWords,
+  planUseMissingWords,
+  planUseWords,
   requestsAnsweredByTyping,
   sessionAttention,
   sessionProcessLive,
@@ -622,5 +627,54 @@ describe('compaction words (Story 36.1)', () => {
     expect(compactionWords({ lastAt: at, count: 1 })).toBe('Compacted: 09:05 (1 time this run)')
     expect(compactionWords({ lastAt: at, count: 3 })).toBe('Compacted: 09:05 (3 times this run)')
     expect(compactionWords(null)).toBe('No compaction observed in this run')
+  })
+})
+
+describe('plan use wording (Story 37.2)', () => {
+  // Local times, so the words are the same in every timezone the suite runs in.
+  const now = new Date(2026, 8, 25, 14, 0).getTime()
+  const reading = (windows: UsageReading['windows'], contextUsedPercent: number | null = 37): UsageReading => ({
+    sessionId: 's1', incarnationId: 'i1', agent: 'claude', windows, contextUsedPercent,
+    readAt: new Date(now - 120_000).toISOString()
+  })
+  const today = new Date(2026, 8, 25, 16, 10).toISOString()
+  const friday = new Date(2026, 8, 26, 9, 0).toISOString()
+
+  it('names windows and reset times the way a reader says them', () => {
+    expect([300, 10_080, 1_440, 2_880, 90].map((minutes) => usageWindowName(minutes, 'row'))).toEqual(['5-hour', 'week', 'day', '2-day', '90-minute'])
+    expect(usageWindowName(10_080, 'limit')).toBe('weekly')
+    expect(usageClock(today, new Date(now))).toBe('16:10')
+    expect(usageClock(friday, new Date(now))).toBe('Sat 09:00')
+    expect(usageClock(new Date(2026, 9, 3, 9, 0).toISOString(), new Date(now))).toBe('Oct 3 09:00')
+    expect(usageClock('not a time', new Date(now))).toBe('--:--')
+  })
+
+  it('reads one reading as one line, with context use on its own', () => {
+    const claude = reading([{ minutes: 300, usedPercent: 42, resetsAt: today }, { minutes: 10_080, usedPercent: 18.4, resetsAt: friday }])
+    expect(planUseWords(claude, now)).toBe("5-hour 42% · resets 16:10 · week 18% · resets Sat 09:00 · from Claude's status line · read 2 min ago")
+    expect(planSourceWords({ ...claude, agent: 'codex' }, now)).toBe("from Codex's session file · read 2 min ago")
+    expect(contextUseWords(claude)).toBe('Context window 37% used')
+    expect(contextUseWords(reading([], null))).toBeNull()
+    expect(planUseWords(reading([]), now)).toBeNull()
+  })
+
+  it('marks a window past its reset as stale with the reading\'s time, and one at 90% or more as high', () => {
+    const past = new Date(2026, 8, 25, 13, 0).toISOString()
+    const markup = renderToStaticMarkup(createElement(PlanWindows, {
+      reading: reading([{ minutes: 300, usedPercent: 95, resetsAt: past }, { minutes: 10_080, usedPercent: 89.6, resetsAt: friday }]), now
+    }))
+    expect(markup).toContain('<li class="stale"><span class="name">5-hour</span>')
+    expect(markup).toContain('stale · read 13:58')
+    expect(markup).toContain('<li class="high"><span class="name">Week</span>')
+    expect(markup).toContain('>90%<')
+    expect(markup).toContain('aria-label="5-hour 95% · stale · read 13:58 · week 90% · resets Sat 09:00')
+  })
+
+  it('says whose report is missing when a run has no plan reading', () => {
+    expect(planUseMissingWords({ agent: 'opencode', reading: null })).toBe('Not reported by OpenCode')
+    expect(planUseMissingWords({ agent: 'cursor', reading: null })).toBe('Not reported by Cursor')
+    expect(planUseMissingWords({ agent: 'claude', reading: null })).toContain('bmn statusline install')
+    expect(planUseMissingWords({ agent: null, reading: null })).toBe('No reading yet')
+    expect(planUseMissingWords({ agent: 'claude', reading: reading([], 12) })).toContain('claude glm')
   })
 })

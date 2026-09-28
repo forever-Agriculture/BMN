@@ -1062,21 +1062,29 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
-async function codexRolloutExists(directory: string, suffix: string, depth = 0): Promise<boolean> {
-  if (depth > 3) return false
+/**
+ * The Codex rollout file for one conversation under `sessions/YYYY/MM/DD/`, or null when there is none.
+ * Plan use (Story 37.2) reads the same file this finds for Resume.
+ */
+export async function codexRolloutPath(directory: string, conversationReference: string, depth = 0): Promise<string | null> {
+  if (depth > 3) return null
   let entries
   try {
     entries = await readdir(directory, { withFileTypes: true })
   } catch {
-    return false
+    return null
   }
+  const suffix = `-${conversationReference}.jsonl`
   for (const entry of entries) {
-    if (entry.isFile() && entry.name.startsWith('rollout-') && entry.name.endsWith(suffix)) return true
-    if (entry.isDirectory() && await codexRolloutExists(join(directory, entry.name), suffix, depth + 1)) {
-      return true
-    }
+    if (entry.isFile() && entry.name.startsWith('rollout-') && entry.name.endsWith(suffix)) return join(directory, entry.name)
   }
-  return false
+  // Newest dated folder first: a live conversation's file is usually today's.
+  const folders = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort().reverse()
+  for (const folder of folders) {
+    const found = await codexRolloutPath(join(directory, folder), conversationReference, depth + 1)
+    if (found !== null) return found
+  }
+  return null
 }
 
 export async function conversationReferenceExists(
@@ -1097,8 +1105,5 @@ export async function conversationReferenceExists(
   if (binding.agentCli === 'opencode') return true
   if (binding.agentCli === 'cursor') return cursorChatExists(binding.conversationReference, home)
   const codexRoot = binding.launchContext.environment.CODEX_HOME ?? join(homedir(), '.codex')
-  return codexRolloutExists(
-    join(codexRoot, 'sessions'),
-    `-${binding.conversationReference}.jsonl`
-  )
+  return (await codexRolloutPath(join(codexRoot, 'sessions'), binding.conversationReference)) !== null
 }

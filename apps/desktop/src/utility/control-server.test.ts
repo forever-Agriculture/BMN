@@ -134,6 +134,7 @@ function fakeHandlers(current: Map<string, string>) {
     withdrawAttention: vi.fn(async (): Promise<unknown> => ({ withdrawn: true })),
     resolveAttention: vi.fn(async (): Promise<unknown> => ({ resolved: true })),
     observeHookEvent: vi.fn(async (): Promise<unknown> => ({ recorded: true })),
+    reportUsage: vi.fn(async (): Promise<unknown> => ({ recorded: true })),
     submitInput: vi.fn(async (): Promise<void> => undefined),
     takeAnswers: vi.fn(async (): Promise<unknown> => ({ answers: [] }))
   } satisfies ControlHandlers
@@ -576,7 +577,23 @@ describe('control server validation', () => {
     ['claude config folder from codex', 'hook.observe', { agent: 'codex', event: 'Stop', effects: [], claudeConfigDir: '/srv/glm' }],
     ['control character claude config folder', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], claudeConfigDir: '/srv/\u0007glm' }],
     ['empty claude config folder', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], claudeConfigDir: '' }],
-    ['non-string claude config folder', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], claudeConfigDir: 7 }]
+    ['non-string claude config folder', 'hook.observe', { agent: 'claude', event: 'Stop', effects: [], claudeConfigDir: 7 }],
+    // Story 37.2: only Claude's status line reports, and only plan windows and context use.
+    ['usage from codex', 'usage.report', { agent: 'codex', windows: [{ minutes: 300, usedPercent: 42, resetsAt: '2026-09-14T16:10:00.000Z' }] }],
+    ['usage without an agent', 'usage.report', { windows: [{ minutes: 300, usedPercent: 42, resetsAt: '2026-09-14T16:10:00.000Z' }] }],
+    ['usage windows not an array', 'usage.report', { agent: 'claude', windows: { minutes: 300, usedPercent: 42, resetsAt: '2026-09-14T16:10:00.000Z' } }],
+    ['three usage windows', 'usage.report', { agent: 'claude', windows: [{ minutes: 300, usedPercent: 42, resetsAt: '2026-09-14T16:10:00.000Z' }, { ...{ minutes: 300, usedPercent: 42, resetsAt: '2026-09-14T16:10:00.000Z' }, minutes: 10_080 }, { ...{ minutes: 300, usedPercent: 42, resetsAt: '2026-09-14T16:10:00.000Z' }, minutes: 60 }] }],
+    ['a repeated usage window', 'usage.report', { agent: 'claude', windows: [{ minutes: 300, usedPercent: 42, resetsAt: '2026-09-14T16:10:00.000Z' }, { minutes: 300, usedPercent: 42, resetsAt: '2026-09-14T16:10:00.000Z' }] }],
+    ['a fractional window length', 'usage.report', { agent: 'claude', windows: [{ ...{ minutes: 300, usedPercent: 42, resetsAt: '2026-09-14T16:10:00.000Z' }, minutes: 1.5 }] }],
+    ['a negative share used', 'usage.report', { agent: 'claude', windows: [{ ...{ minutes: 300, usedPercent: 42, resetsAt: '2026-09-14T16:10:00.000Z' }, usedPercent: -1 }] }],
+    ['a share used over 1000', 'usage.report', { agent: 'claude', windows: [{ ...{ minutes: 300, usedPercent: 42, resetsAt: '2026-09-14T16:10:00.000Z' }, usedPercent: 1001 }] }],
+    ['a share used as text', 'usage.report', { agent: 'claude', windows: [{ ...{ minutes: 300, usedPercent: 42, resetsAt: '2026-09-14T16:10:00.000Z' }, usedPercent: '42' }] }],
+    ['a reset without a timezone', 'usage.report', { agent: 'claude', windows: [{ ...{ minutes: 300, usedPercent: 42, resetsAt: '2026-09-14T16:10:00.000Z' }, resetsAt: '2026-09-14T16:10:00' }] }],
+    ['a reset as epoch seconds', 'usage.report', { agent: 'claude', windows: [{ ...{ minutes: 300, usedPercent: 42, resetsAt: '2026-09-14T16:10:00.000Z' }, resetsAt: 1_790_610_000 }] }],
+    ['an unknown window field', 'usage.report', { agent: 'claude', windows: [{ ...{ minutes: 300, usedPercent: 42, resetsAt: '2026-09-14T16:10:00.000Z' }, limitId: 'x' }] }],
+    ['an unknown usage parameter', 'usage.report', { agent: 'claude', windows: [{ minutes: 300, usedPercent: 42, resetsAt: '2026-09-14T16:10:00.000Z' }], statusLine: '{}' }],
+    ['a context share as text', 'usage.report', { agent: 'claude', windows: [], contextUsedPercent: '37' }],
+    ['an empty reading', 'usage.report', { agent: 'claude', windows: [] }]
   ])('rejects %s with INVALID_ARGUMENT and keeps the connection', async (_label, method, params) => {
     const fixture = await serverFixture()
     const client = await authenticated(fixture, sessionToken(fixture))
@@ -591,10 +608,29 @@ describe('control server validation', () => {
       fixture.handlers.resolveAttention,
       fixture.handlers.submitInput,
       fixture.handlers.observeConversation,
-      fixture.handlers.observeHookEvent
+      fixture.handlers.observeHookEvent,
+      fixture.handlers.reportUsage
     ]) {
       expect(handler).not.toHaveBeenCalled()
     }
+  })
+
+  it('passes a session\'s plan-use reading to the service with its own run, and refuses the owner', async () => {
+    const fixture = await serverFixture()
+    const client = await authenticated(fixture, sessionToken(fixture))
+    const windows = [{ minutes: 300, usedPercent: 42, resetsAt: '2026-09-14T16:10:00.000Z' }, { minutes: 10_080, usedPercent: 18.5, resetsAt: '2026-09-18T09:00:00+03:00' }]
+
+    expect((await client.request('usage.report', { agent: 'claude', windows, contextUsedPercent: 37 })).result).toEqual({ recorded: true })
+    expect((await client.request('usage.report', { agent: 'claude', windows: [], contextUsedPercent: 12 })).result).toEqual({ recorded: true })
+    expect(fixture.handlers.reportUsage).toHaveBeenNthCalledWith(1, {
+      sessionId: 'session-1', incarnationId: 'incarnation-1', agent: 'claude', contextUsedPercent: 37,
+      windows: [windows[0], { minutes: 10_080, usedPercent: 18.5, resetsAt: '2026-09-18T06:00:00.000Z' }]
+    })
+    expect(fixture.handlers.reportUsage).toHaveBeenNthCalledWith(2, expect.objectContaining({ windows: [], contextUsedPercent: 12 }))
+
+    const owner = await authenticated(fixture, fixture.auth.ownerToken)
+    expectError(await owner.request('usage.report', { sessionId: 'session-1', agent: 'claude', windows }), ERROR_CODES.unauthorized)
+    expect(fixture.handlers.reportUsage).toHaveBeenCalledTimes(2)
   })
 
   it('stores the closed origin vocabulary and records one hook event per call', async () => {

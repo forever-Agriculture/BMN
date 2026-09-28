@@ -8,6 +8,7 @@ import {
   ERROR_CODES,
   MAX_CONTROL_FRAME_BYTES,
   MAX_PROGRESS_EVIDENCE,
+  MAX_USAGE_WINDOWS,
   isAttentionOrigin,
   hasDisallowedHandoffControl,
   isHookEventName,
@@ -23,7 +24,8 @@ import {
   type HookEventEffect,
   type AgentCli,
   type ProgressState,
-  type ProtocolErrorCode
+  type ProtocolErrorCode,
+  type UsageWindow
 } from '@bmn/protocol'
 import type { ControlAuth, ControlScope } from './control-auth'
 import { OPENCODE_REFERENCE_PATTERN } from './conversation-binding'
@@ -133,6 +135,17 @@ export interface ControlHandlers {
     /** The Claude config folder the CLI resolved (Story 31.1); absent from other agents and old CLIs. */
     claudeConfigDir?: string | undefined
     effects: readonly HookEventEffect[]
+  }): Promise<unknown>
+  /**
+   * One plan-use reading from Claude's status line (Story 37.2): the windows and context share the
+   * status-line input carried, never the input itself. It is kept in memory for the reporting run.
+   */
+  reportUsage(p: {
+    sessionId: string
+    incarnationId: string
+    agent: 'claude'
+    windows: readonly UsageWindow[]
+    contextUsedPercent: number | null
   }): Promise<unknown>
   /** Writes text into the PTY as a bracketed paste; appends '\r' only when submit is true. */
   submitInput(p: { sessionId: string; text: string; submit: boolean }): Promise<void>
@@ -326,6 +339,16 @@ function readTimestamp(params: Params, key: string): string | undefined {
     throw invalid(`${key} must be an ISO 8601 timestamp with a timezone`)
   }
   return new Date(time).toISOString()
+}
+
+/** A share of a limit as the agent reported it; above 100 when a plan is overdrawn, never negative. */
+function readPercent(params: Params, key: string): number | undefined {
+  const value = params[key]
+  if (value === undefined) return undefined
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1000) {
+    throw invalid(`${key} must be a number from 0 to 1000`)
+  }
+  return value
 }
 
 function readBoolean(params: Params, key: string): boolean | undefined {
@@ -1050,6 +1073,39 @@ export class ControlServer {
           ...(model === undefined ? {} : { model }),
           ...(claudeConfigDir === undefined ? {} : { claudeConfigDir }),
           effects
+        })
+      }
+      case 'usage.report': {
+        // Only a session's own status line reports, and only what it read for the run it belongs to.
+        const params = closedParams(rawParams, ['sessionId', 'agent', 'windows', 'contextUsedPercent'])
+        if (scope.kind !== 'session') throw unauthorized('Only a session credential may report its plan use')
+        if (params.agent !== 'claude') throw invalid('agent must be claude')
+        const raw = params.windows
+        if (!Array.isArray(raw) || raw.length > MAX_USAGE_WINDOWS) {
+          throw invalid(`windows must be an array of at most ${MAX_USAGE_WINDOWS} windows`)
+        }
+        const windows = raw.map((item): UsageWindow => {
+          const window = closedParams(item, ['minutes', 'usedPercent', 'resetsAt'])
+          const minutes = window.minutes
+          if (typeof minutes !== 'number' || !Number.isInteger(minutes) || minutes < 1 || minutes > 527_040) {
+            throw invalid('windows[].minutes must be a whole number of minutes')
+          }
+          const usedPercent = readPercent(window, 'usedPercent')
+          const resetsAt = readTimestamp(window, 'resetsAt')
+          if (usedPercent === undefined || resetsAt === undefined) throw invalid('windows[] needs usedPercent and resetsAt')
+          return { minutes, usedPercent, resetsAt }
+        })
+        if (new Set(windows.map((window) => window.minutes)).size !== windows.length) {
+          throw invalid('windows must not repeat a window length')
+        }
+        const contextUsedPercent = readPercent(params, 'contextUsedPercent') ?? null
+        if (windows.length === 0 && contextUsedPercent === null) throw invalid('a reading needs a window or context use')
+        return handlers.reportUsage({
+          sessionId: this.target(scope, params),
+          incarnationId: scope.incarnationId,
+          agent: 'claude',
+          windows,
+          contextUsedPercent
         })
       }
       case 'input.submit': {

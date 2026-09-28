@@ -20,6 +20,10 @@ import {
   TERMINAL_NOTICE_WINDOW_MS,
   terminalNoticeOrigin,
   isCompactionEvent,
+  USAGE_NOTICE_PERCENT,
+  usageClock,
+  usagePercent,
+  usageWindowName,
   type AppEventMessage,
   type AppEventTopic,
   AGENT_HISTORY_KEEP_DAYS,
@@ -45,7 +49,10 @@ import {
   type ProgressRecord,
   type SessionRecord,
   type TelegramStatus,
-  type TerminalNoticeCode
+  type TerminalNoticeCode,
+  type SessionUsage,
+  type UsageAgent,
+  type UsageReading
 } from '@bmn/protocol'
 import { ArtifactFileError, ArtifactFileStore, type InstalledOriginal } from './artifact-files'
 import { ControlAuth, writeOwnerToken, type ControlScope } from './control-auth'
@@ -54,6 +61,8 @@ import type { DatabaseWorkerClient } from './database-client'
 import type { ApplicationRoots } from './roots'
 import { HostControlError, type SessionIdentity, type SessionManager } from './session-manager'
 import { runHookConfigurationCheck } from './hook-configuration-check'
+import { codexRolloutPath } from './conversation-binding'
+import { readCodexUsage } from './codex-usage'
 import { searchFileReferences } from './file-reference-search'
 import { PAGE_AFTER_MS, createAttentionPager } from './attention-pager'
 import { RemoteAnswers, answerRoute, type AnswerOutcome, type AnswerRequest, type PluginAnswer } from './remote-answer'
@@ -75,6 +84,8 @@ const TELEGRAM_DOWNLOAD_BYTES = 20 * 1024 * 1024
 const TELEGRAM_TOKEN_FILE = 'telegram-bot.token'
 const TELEGRAM_OFFSET_KEY = 'telegram.offset'
 const ATTENTION_SWEEP_MS = 30_000
+/** How often a busy Codex run's session file is reread for plan use (Story 37.2). */
+const CODEX_USAGE_READ_EVERY_MS = 15_000
 /** The first history run waits this long after start, so restored sessions launch first. */
 const HISTORY_FIRST_RUN_DELAY_MS = 30_000
 const REMOTE_ANSWER_RESOLUTION = 'Answered from Telegram'
@@ -316,6 +327,17 @@ export class CompanionService {
    * bounded log for the same reason as the observation, and in memory only: information, never an ask.
    */
   private readonly hookCompactions = new Map<string, HookCompaction & { incarnationId: string }>()
+  /**
+   * Plan use (Story 37.2): each session's latest reading from its current run, and each agent's latest
+   * reading that named plan windows, because a plan belongs to the account rather than the session.
+   * In memory only, so a restart shows no reading until the agent reports again.
+   */
+  private readonly usageReadings = new Map<string, UsageReading>()
+  private readonly planReadings = new Map<UsageAgent, UsageReading>()
+  /** Windows whose 90% notice has opened, by agent, length and reset, so each period opens one. */
+  private readonly usageNotices = new Set<string>()
+  /** Each Codex session's last read of its own file, so a busy run is not reread on every tool call. */
+  private readonly codexUsageReads = new Map<string, { at: number; running: Promise<void> | null }>()
   /** The terminal notice each session has open, so a burst becomes more lines and not more rows. */
   private readonly terminalNotices = new Map<string, {
     requestId: string
@@ -441,6 +463,7 @@ export class CompanionService {
           async (): Promise<{ answers: PluginAnswer[] }> => ({ answers: await this.answers.take(p.sessionId, p.incarnationId, p.waitMs, p.report ?? undefined) })
         ),
         observeHookEvent: (p) => this.controlCall(async () => this.observeHookEvent(p)),
+        reportUsage: (p) => this.controlCall(async () => this.recordUsage(p)),
         submitInput: (p) => this.controlCall(async () => {
           this.options.manager.writeToSession(p.sessionId, bracketedPaste(p.text, p.submit))
         })
@@ -617,6 +640,12 @@ export class CompanionService {
       case METHOD_REGISTRY.hookObservationGet:
         // Read-only and scoped to one session's run; no other session's observation reaches this answer.
         return this.hookObservation(text(params, 'sessionId'), optionalText(params, 'incarnationId') ?? undefined)
+      case METHOD_REGISTRY.usageGet:
+        // Read-only and scoped to one session's current run; a Codex run's own file is read first when due.
+        return this.sessionUsage(text(params, 'sessionId'))
+      case METHOD_REGISTRY.usageList:
+        // The latest plan reading per agent: the plan is the account's, so any session's reading speaks for it.
+        return [...this.planReadings.values()]
       case METHOD_REGISTRY.hookOriginsList:
         // Read-only: each session's own latest origin, never another session's facts beside it.
         return [...this.hookOrigins.values()]
@@ -800,7 +829,7 @@ export class CompanionService {
     // A deleted session keeps no hook events: the log, and everything else kept per session in
     // memory here, follows the sessions that still exist.
     for (const map of [this.hookEvents, this.hookReporters, this.hookObservations, this.hookOrigins, this.hookCompactions,
-      this.terminalNotices, this.repeatStates]) {
+      this.usageReadings, this.codexUsageReads, this.terminalNotices, this.repeatStates]) {
       for (const sessionId of map.keys()) {
         if (!this.knownSessions.has(sessionId)) map.delete(sessionId)
       }
@@ -1252,6 +1281,7 @@ export class CompanionService {
           event: p.event,
           observedAt
         })
+        if (p.agent === 'codex') void this.readCodexUsage(p.sessionId, p.incarnationId, p.event === 'Stop')
         if (isCompactionEvent(p)) {
           const earlier = this.hookCompactions.get(p.sessionId)
           const count = earlier?.incarnationId === p.incarnationId ? earlier.count + 1 : 1
@@ -1347,6 +1377,100 @@ export class CompanionService {
     const stored = this.hookCompactions.get(sessionId)
     return stored === undefined || stored.incarnationId !== incarnationId
       ? null : { lastAt: stored.lastAt, count: stored.count }
+  }
+
+  /**
+   * Keeps one plan-use reading for the run that sent it. A reading with plan windows also becomes its
+   * agent's plan reading and may open the 90% notice; one without (`claude glm`) keeps only its context use.
+   */
+  private async recordUsage(p: Omit<UsageReading, 'readAt'>): Promise<{ recorded: boolean }> {
+    // Only the live run speaks for the session, as with hook observations.
+    if (this.options.manager.liveIncarnationId(p.sessionId) !== p.incarnationId) return { recorded: false }
+    const reading: UsageReading = {
+      sessionId: p.sessionId,
+      incarnationId: p.incarnationId,
+      agent: p.agent,
+      windows: p.windows.map((window) => ({ ...window })),
+      contextUsedPercent: p.contextUsedPercent,
+      readAt: this.iso()
+    }
+    this.usageReadings.set(p.sessionId, reading)
+    if (reading.windows.length > 0) {
+      this.planReadings.set(reading.agent, reading)
+      await this.usageNotice(reading)
+    }
+    return { recorded: true }
+  }
+
+  /**
+   * One Needs you notice per agent, window and reset period once a window reaches 90%. It expires when
+   * the window resets, and it reaches Telegram only by the pager's rule for any notice.
+   */
+  private async usageNotice(reading: UsageReading): Promise<void> {
+    const now = this.now()
+    for (const window of reading.windows) {
+      const resetsAt = Date.parse(window.resetsAt)
+      if (usagePercent(window.usedPercent) < USAGE_NOTICE_PERCENT || resetsAt <= now.getTime()) continue
+      const requestKey = `usage:${reading.agent}:${window.minutes}:${Math.round(resetsAt / 60_000)}`
+      if (this.usageNotices.has(requestKey)) continue
+      this.usageNotices.add(requestKey)
+      const agent = reading.agent === 'claude' ? 'Claude' : 'Codex'
+      try {
+        await this.openAttention({
+          sessionId: reading.sessionId,
+          incarnationId: reading.incarnationId,
+          requestKey,
+          kind: 'notice',
+          origin: 'watch:usage',
+          title: `${agent} ${usageWindowName(window.minutes, 'limit')} limit at ${usagePercent(window.usedPercent)}% · resets ${usageClock(window.resetsAt, now)}`,
+          body: `${agent} reported this in ${this.knownSessions.get(reading.sessionId)?.name ?? 'a session'}. BMN only shows it; nothing was stopped or changed.`,
+          expiresAt: window.resetsAt
+        })
+      } catch {
+        // Not opened, so a later reading may try again.
+        this.usageNotices.delete(requestKey)
+      }
+    }
+  }
+
+  /**
+   * Reads a Codex run's plan windows from the tail of its own session file, found through the
+   * conversation it is bound to, the way Resume finds it. At most once every 15 s per session unless
+   * forced (a finished turn, or the owner opening Session details); reads never overlap.
+   */
+  private readCodexUsage(sessionId: string, incarnationId: string, force: boolean): Promise<void> {
+    const last = this.codexUsageReads.get(sessionId)
+    if (last?.running) return last.running
+    const now = this.now().getTime()
+    if (last && !force && now - last.at < CODEX_USAGE_READ_EVERY_MS) return Promise.resolve()
+    const running = (async () => {
+      const binding = await this.options.database.getConversationBinding(sessionId).catch(() => undefined)
+      if (binding?.status !== 'bound' || binding.agentCli !== 'codex') return
+      const home = binding.launchContext.environment.CODEX_HOME ?? join(homedir(), '.codex')
+      const path = await codexRolloutPath(join(home, 'sessions'), binding.conversationReference)
+      const windows = path === null ? null : await readCodexUsage(path)
+      if (windows === null || windows.length === 0) return
+      await this.recordUsage({ sessionId, incarnationId, agent: 'codex', windows, contextUsedPercent: null })
+    })().catch(() => undefined).finally(() => {
+      this.codexUsageReads.set(sessionId, { at: now, running: null })
+    })
+    this.codexUsageReads.set(sessionId, { at: last?.at ?? 0, running })
+    return running
+  }
+
+  /** What the session's current run reported about plan use; a Codex run's file is read first when due. */
+  private async sessionUsage(sessionId: string): Promise<SessionUsage> {
+    const incarnationId = this.options.manager.liveIncarnationId(sessionId) ?? null
+    const observed = this.hookObservations.get(sessionId)
+    const agent = incarnationId !== null && observed?.incarnationId === incarnationId ? observed.agent : null
+    if (incarnationId !== null && agent === 'codex') await this.readCodexUsage(sessionId, incarnationId, false)
+    const stored = this.usageReadings.get(sessionId)
+    return {
+      sessionId,
+      incarnationId,
+      reading: stored !== undefined && stored.incarnationId === incarnationId ? stored : null,
+      agent
+    }
   }
 
   private async sweepAttention(): Promise<void> {

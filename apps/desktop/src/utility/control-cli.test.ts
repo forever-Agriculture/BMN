@@ -78,6 +78,7 @@ async function cliFixture() {
     withdrawAttention: vi.fn<ControlHandlers['withdrawAttention']>(async () => ({ withdrawn: true })),
     resolveAttention: vi.fn<ControlHandlers['resolveAttention']>(async () => ({ resolved: true })),
     observeHookEvent: vi.fn<ControlHandlers['observeHookEvent']>(async () => ({ recorded: true })),
+    reportUsage: vi.fn<ControlHandlers['reportUsage']>(async () => ({ recorded: true })),
     submitInput: vi.fn<ControlHandlers['submitInput']>(async () => undefined),
     takeAnswers: vi.fn<ControlHandlers['takeAnswers']>(async () => ({ answers: [] }))
   } satisfies ControlHandlers
@@ -3638,5 +3639,169 @@ describe('compaction events (Story 36.1)', () => {
     const installed = JSON.parse(await readFile(path, 'utf8')) as { hooks: Record<string, unknown> }
     expect(Object.keys(installed.hooks)).not.toContain('PostCompact')
     expect(Object.keys(installed.hooks)).toContain('SessionStart')
+  })
+})
+
+describe('bmn statusline (Story 37.2)', () => {
+  const ORIGINAL = 'input=$(cat); printf \'%s\' "$input" | wc -c; echo "it\'s the owner\'s" >&2; exit 4'
+  const settings = { theme: 'dark', statusLine: { type: 'command', command: ORIGINAL, padding: 1 }, zzz: [1, 2] }
+  const runStatusLine = (args: string[], env?: Record<string, string>) => runCli(['statusline', ...args], env === undefined ? {} : { env })
+  /** Status-line input in the shape Claude Code 2.1.283 sends (docs/usage-sources.md), with synthetic values. */
+  const input = (rateLimits: unknown) => JSON.stringify({
+    session_id: '11111111-1111-4111-8111-111111111111', cwd: '/synthetic', model: { id: 'synthetic' },
+    context_window: { used_percentage: 37 }, rate_limits: rateLimits
+  })
+  const LIMITS = { five_hour: { used_percentage: 42, resets_at: 1_790_610_000 }, seven_day: { used_percentage: 18, resets_at: 1_790_900_000 } }
+
+  it('wraps the owner\'s command without changing it, and uninstall gives the file back byte for byte', async () => {
+    const path = await hookFileFixture(settings)
+    const original = await readFile(path, 'utf8')
+
+    expect((await runStatusLine(['check', '--file', path])).code).toBe(1)
+    const install = await runStatusLine(['install', '--file', path])
+    const wrapped = JSON.parse(await readFile(path, 'utf8'))
+
+    expect(install.code).toBe(0)
+    expect(install.stdout).toContain(`Backup: ${path}.bmn-backup-`)
+    expect(wrapped.statusLine.command.endsWith(`\n${ORIGINAL}`)).toBe(true)
+    expect({ ...wrapped, statusLine: { ...wrapped.statusLine, command: ORIGINAL } }).toEqual(settings)
+    const [backup] = await backupsOf(path)
+    expect(await readFile(join(dirname(path), backup ?? ''), 'utf8')).toBe(original)
+    expect((await runStatusLine(['check', '--file', path])).code).toBe(0)
+
+    const again = await runStatusLine(['install', '--file', path, '--json'])
+    expect(again.code).toBe(0)
+    expect(JSON.parse(again.stdout)).toMatchObject({ state: 'wrapped', changed: false, backup: null })
+    expect(await backupsOf(path)).toHaveLength(1)
+
+    const uninstall = await runStatusLine(['uninstall', '--file', path])
+    expect(uninstall.code).toBe(0)
+    expect(await readFile(path, 'utf8')).toBe(original)
+    expect(await backupsOf(path)).toHaveLength(2)
+  })
+
+  it('finds Claude\'s settings the way hooks install does when no file is named', async () => {
+    const path = await hookFileFixture(settings)
+    const check = await runStatusLine(['check', '--json'], { CLAUDE_CONFIG_DIR: dirname(path) })
+    expect(JSON.parse(check.stdout)).toEqual({ file: path, state: 'unwrapped' })
+  })
+
+  it.each([
+    ['no statusLine command', { theme: 'dark' }, 'has no statusLine command'],
+    ['a statusLine that is not a command', { statusLine: { type: 'static', text: 'x' } }, 'not a command'],
+    ['a file that is not JSON', '{ "statusLine": ', 'is not valid JSON']
+  ])('leaves a file with %s untouched', async (_label, contents, reason) => {
+    const path = await hookFileFixture(contents)
+    const before = await readFile(path, 'utf8')
+
+    for (const action of ['install', 'uninstall']) {
+      const result = await runStatusLine([action, '--file', path])
+      expect(result.code).toBe(1)
+      expect(result.stderr).toContain(reason)
+    }
+    expect(await readFile(path, 'utf8')).toBe(before)
+    expect(await backupsOf(path)).toEqual([])
+  })
+
+  it('refuses rather than overwriting a file another writer changed while it was reading', async () => {
+    const path = await hookFileFixture(settings)
+    const gate = join(dirname(path), 'gate')
+    const installing = runStatusLine(['install', '--file', path], { BMN_HOOKS_TEST_GATE: gate })
+    const deadline = Date.now() + 10_000
+    while (!existsSync(`${gate}.waiting`)) {
+      if (Date.now() > deadline) throw new Error('the installer never reached its check')
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    await writeFile(path, `${JSON.stringify({ ...settings, other: 'ADDED BY SOMEBODY ELSE' }, null, 2)}\n`)
+    await writeFile(gate, '')
+    const install = await installing
+
+    expect(install.code).toBe(1)
+    expect(install.stderr).toContain('changed while BMN was reading it')
+    expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({ other: 'ADDED BY SOMEBODY ELSE', statusLine: { command: ORIGINAL } })
+    expect((await readdir(dirname(path))).filter((entry) => entry.endsWith('.tmp'))).toEqual([])
+  })
+
+  describe('the installed line, run as Claude runs it', () => {
+    /** `/bin/sh -c <command>` with the input on stdin, and a `bmn` on PATH that is this CLI. */
+    const runLine = async (command: string, stdin: string, env: Record<string, string>) => {
+      const root = await realpath(await mkdtemp(join(tmpdir(), 'aitline-')))
+      createdRoots.add(root)
+      await mkdir(join(root, 'bin'))
+      await writeFile(join(root, 'bin', 'bmn'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} "$@"\n`, { mode: 0o755 })
+      const clean = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BMN_') && !key.startsWith('AITERM_')))
+      return new Promise<CliResult & { tmp: string }>((resolve) => {
+        const child = execFile('/bin/sh', ['-c', command], {
+          env: { ...clean, PATH: `${join(root, 'bin')}:${process.env.PATH ?? ''}`, TMPDIR: root, ...env }, timeout: 15_000
+        }, (error, stdout, stderr) => {
+          resolve({ code: error === null ? 0 : typeof error.code === 'number' ? error.code : null, stdout, stderr, tmp: root })
+        })
+        child.stdin?.end(stdin)
+      })
+    }
+    const wrappedCommand = async () => {
+      const path = await hookFileFixture(settings)
+      await runStatusLine(['install', '--file', path])
+      return JSON.parse(await readFile(path, 'utf8')).statusLine.command as string
+    }
+    const reported = async (handler: ReturnType<typeof vi.fn>, calls: number) => {
+      const deadline = Date.now() + 10_000
+      while (handler.mock.calls.length < calls && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+
+    it('prints what the owner\'s command printed and exits with its code, inside BMN and outside it', async () => {
+      const fixture = await cliFixture()
+      const command = await wrappedCommand()
+      const stdin = input(LIMITS)
+      const expected = await runLine(ORIGINAL, stdin, {})
+
+      const inside = await runLine(command, stdin, fixture.sessionEnv)
+      const outside = await runLine(command, stdin, {})
+
+      expect(expected).toMatchObject({ code: 4, stdout: `${Buffer.byteLength(stdin)}\n`, stderr: "it's the owner's\n" })
+      for (const result of [inside, outside]) {
+        expect({ code: result.code, stdout: result.stdout, stderr: result.stderr })
+          .toEqual({ code: expected.code, stdout: expected.stdout, stderr: expected.stderr })
+      }
+      await reported(fixture.handlers.reportUsage, 1)
+      // Only the windows and the context share reach BMN, and only from inside a session.
+      expect(fixture.handlers.reportUsage).toHaveBeenCalledTimes(1)
+      expect(fixture.handlers.reportUsage).toHaveBeenCalledWith({
+        sessionId: 'session-1', incarnationId: 'incarnation-1', agent: 'claude', contextUsedPercent: 37,
+        windows: [
+          { minutes: 300, usedPercent: 42, resetsAt: new Date(1_790_610_000_000).toISOString() },
+          { minutes: 10_080, usedPercent: 18, resetsAt: new Date(1_790_900_000_000).toISOString() }
+        ]
+      })
+      // The copy of the input is removed at once; nothing is left in the temporary folder.
+      expect((await readdir(inside.tmp)).filter((entry) => entry !== 'bin')).toEqual([])
+    })
+
+    it('runs the owner\'s command unchanged when BMN\'s own bmn is not on PATH', async () => {
+      const fixture = await cliFixture()
+      const command = await wrappedCommand()
+      const stdin = input(LIMITS)
+      const clean = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BMN_')))
+      const result = await new Promise<CliResult>((resolve) => {
+        const child = execFile('/bin/sh', ['-c', command], { env: { ...clean, PATH: '/usr/bin:/bin', ...fixture.sessionEnv } },
+          (error, stdout, stderr) => resolve({ code: error === null ? 0 : typeof error.code === 'number' ? error.code : null, stdout, stderr }))
+        child.stdin?.end(stdin)
+      })
+      expect(result).toEqual({ code: 4, stdout: `${Buffer.byteLength(stdin)}\n`, stderr: "it's the owner's\n" })
+      expect(fixture.handlers.reportUsage).not.toHaveBeenCalled()
+    })
+
+    it('sends context use alone when the plan reports no limits, and nothing when the input carries neither', async () => {
+      const fixture = await cliFixture()
+      const report = (stdin: string) => runCli(['statusline', 'report'], { env: fixture.sessionEnv, input: stdin })
+
+      expect(await report(input(null))).toEqual({ code: 0, stdout: '', stderr: '' })
+      expect(await report('{"cwd":"/synthetic"}')).toEqual({ code: 0, stdout: '', stderr: '' })
+      expect(await report('not json')).toEqual({ code: 0, stdout: '', stderr: '' })
+      expect(fixture.handlers.reportUsage).toHaveBeenCalledTimes(1)
+      expect(fixture.handlers.reportUsage).toHaveBeenCalledWith(expect.objectContaining({ windows: [], contextUsedPercent: 37 }))
+      // Outside BMN the report is silent and sends nothing.
+      expect(await runCli(['statusline', 'report'], { input: input(LIMITS) })).toEqual({ code: 0, stdout: '', stderr: '' })
+    })
   })
 })

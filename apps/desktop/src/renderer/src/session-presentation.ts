@@ -4,6 +4,10 @@ import {
   countryFlag,
   MODEL_ORIGIN_COUNTRY_NAMES,
   PROGRESS_STALE_AFTER_MS,
+  USAGE_NOTICE_PERCENT,
+  usageClock,
+  usagePercent,
+  usageWindowName,
   type AttentionKind,
   type AttentionRecord,
   type HookCompaction,
@@ -13,7 +17,10 @@ import {
   type ProgressEvidence,
   type ProgressRecord,
   type ProgressState,
-  type SessionRecord
+  type SessionRecord,
+  type SessionUsage,
+  type UsageAgent,
+  type UsageReading
 } from '@bmn/protocol'
 
 export type SessionDot = 'running' | 'running-idle' | 'needs-you' | 'exited' | 'idle'
@@ -157,6 +164,73 @@ export function compactionWords(compaction: HookCompaction | null): string {
   return `Compacted: ${clock} (${compaction.count} ${compaction.count === 1 ? 'time' : 'times'} this run)`
 }
 
+/** Who reports plan use, and where BMN read it (Story 37.2, docs/usage-sources.md). */
+const USAGE_SOURCE_WORDS: Readonly<Record<UsageAgent, string>> = {
+  claude: "Claude's status line",
+  codex: "Codex's session file"
+}
+
+export interface PlanWindowView {
+  /** "5-hour", "Week". */
+  name: string
+  percent: number
+  /** "resets 16:10", or "stale · read 14:02" once the window has reset since the reading. */
+  when: string
+  stale: boolean
+  /** At or above the notice threshold, so it carries the attention mark. */
+  high: boolean
+}
+
+/** Each window of one reading, as its row shows it. */
+export function planWindowViews(reading: Pick<UsageReading, 'windows' | 'readAt'>, now: number): PlanWindowView[] {
+  return reading.windows.map((window) => {
+    const stale = Date.parse(window.resetsAt) <= now
+    const name = usageWindowName(window.minutes, 'row')
+    const percent = usagePercent(window.usedPercent)
+    return {
+      name: name.charAt(0).toUpperCase() + name.slice(1),
+      percent,
+      when: stale ? `stale · read ${usageClock(reading.readAt, new Date(now))}` : `resets ${usageClock(window.resetsAt, new Date(now))}`,
+      stale,
+      high: !stale && percent >= USAGE_NOTICE_PERCENT
+    }
+  })
+}
+
+/**
+ * One reading in one line: "5-hour 42% · resets 16:10 · week 18% · resets Fri 09:00 · from Claude's
+ * status line · read 2 min ago". Null when the reading names no plan window.
+ */
+export function planUseWords(reading: UsageReading, now: number): string | null {
+  if (reading.windows.length === 0) return null
+  const windows = planWindowViews(reading, now).map((window) =>
+    `${window.name.toLowerCase()} ${window.percent}% · ${window.when}`)
+  return [...windows, `from ${USAGE_SOURCE_WORDS[reading.agent]}`, `read ${relativeAge(reading.readAt, now)}`].join(' · ')
+}
+
+/** "from Claude's status line · read 2 min ago". */
+export function planSourceWords(reading: UsageReading, now: number): string {
+  return `from ${USAGE_SOURCE_WORDS[reading.agent]} · read ${relativeAge(reading.readAt, now)}`
+}
+
+/** Context use is its own line, never mixed into plan use. */
+export function contextUseWords(reading: UsageReading | null): string | null {
+  return reading === null || reading.contextUsedPercent === null
+    ? null : `Context window ${usagePercent(reading.contextUsedPercent)}% used`
+}
+
+/** What the Plan use row says when a run has no plan reading, by the harness its hooks reported. */
+export function planUseMissingWords(usage: Pick<SessionUsage, 'agent' | 'reading'>): string {
+  if (usage.reading !== null) return 'No plan limits reported by this Claude profile (claude glm and API keys report none)'
+  switch (usage.agent) {
+    case 'claude': return 'No reading yet. Claude reports it through its status line once bmn statusline install has run.'
+    case 'codex': return 'No reading yet. Codex writes it after its first reply.'
+    case 'opencode': return 'Not reported by OpenCode'
+    case 'cursor': return 'Not reported by Cursor'
+    default: return 'No reading yet'
+  }
+}
+
 export function relativeAge(fromIso: string, now: number): string {
   const elapsed = Math.max(0, now - Date.parse(fromIso))
   if (!Number.isFinite(elapsed)) return 'unknown time'
@@ -221,6 +295,7 @@ function originName(origin: string | null, action: 'opened' | 'closed'): string 
     case 'input': return 'typing'
     case 'telegram': return 'Telegram'
     case 'watch:repeat': return "BMN's repeat watch"
+    case 'watch:usage': return "BMN's plan-use watch"
     case 'expiry': return 'expiry'
     default: return origin
   }

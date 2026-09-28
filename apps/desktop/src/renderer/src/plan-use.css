@@ -1,0 +1,82 @@
+/* MODULE: plan-use.css - Plan use meters in Session details and the Plan use dialog (Story 37.2) */
+
+/* One row per plan window: name, a hairline meter, the share used, and when it resets. */
+.plan-use-windows {
+  display: grid;
+  /* The words keep their width; the meter is what gives way in a narrow panel. */
+  grid-template-columns: max-content minmax(24px, 1fr) max-content max-content;
+  gap: 4px 10px;
+  align-items: center;
+  margin: 0;
+  padding: 0;
+  font-size: 12px;
+  line-height: 18px;
+  list-style: none;
+}
+
+.plan-use-windows li { display: contents; }
+.plan-use-windows .name { color: var(--muted); }
+
+.plan-use-windows .meter {
+  height: 4px;
+  overflow: hidden;
+  background: var(--hairline);
+  border-radius: 2px;
+}
+
+.plan-use-windows .meter > span {
+  display: block;
+  height: 100%;
+  background: var(--muted);
+}
+
+.plan-use-windows .value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.plan-use-windows .when {
+  overflow: hidden;
+  color: var(--muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Near the limit: the attention gold, the one colour BMN uses for "look here". */
+.plan-use-windows .high .meter > span { background: var(--attention); }
+.plan-use-windows .high .value { color: var(--attention); font-weight: 600; }
+
+/* Past its reset the number no longer describes the window, so it recedes. */
+.plan-use-windows .stale .meter > span { background: var(--faint); }
+.plan-use-windows .stale .value,
+.plan-use-windows .stale .when { color: var(--faint); }
+
+.plan-use-dialog .plan-use-agents {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.plan-use-dialog .plan-use-agents > li {
+  display: grid;
+  gap: 6px;
+  padding: 10px 0;
+  border-top: 1px solid var(--hairline);
+}
+
+.plan-use-dialog .plan-use-agents > li:first-child { border-top: 0; }
+
+.plan-use-dialog .plan-use-agents h3 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.plan-use-dialog small,
+.plan-use .plan-use-note { color: var(--muted); font-size: 11px; }

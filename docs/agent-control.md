@@ -46,6 +46,9 @@ bmn hook <agent>                               Turn an agent hook event on stdin
 bmn hooks print opencode                       Print the shipped OpenCode TypeScript plugin
 bmn hooks check [agent] [--file PATH]          Say which of BMN's hook entries each hook file carries
 bmn hooks install <agent> [--file PATH]        Add the missing entries, after backing the file up
+bmn statusline check|install|uninstall [--file PATH]
+                                               Wrap Claude Code's own statusLine command so BMN sees
+                                               plan use, or restore it; see "Plan use" below
 bmn help [agents]                              Show usage; `help agents` prints the agent brief
 ```
 
@@ -346,6 +349,24 @@ also checks that the agent above it holds the terminal; nested, non-interactive 
 Typing, pasting or dictating into a session answers its open prompts and notices, the way agterm
 clears a session's status on a keystroke, so they leave **Needs you** as soon as you respond, even
 when the agent sends no hook for it (a denied permission, or Esc). Review and handoff requests stay open.
+
+### Plan use
+
+BMN shows how much of each plan window Claude Code and Codex have used, from what they already write
+on this machine ([usage-sources.md](usage-sources.md)): **Session details → Plan use**, the palette's
+**Plan use…** dialog, and one **Needs you** notice per window and reset period at 90%. Codex needs
+nothing: BMN reads the `token_count` lines at the end of the session's own file. Claude Code reports
+through its status line, so wrap your existing command once:
+
+```bash
+bmn statusline install     # back up settings.json, then put BMN's line in front of your command
+bmn statusline check       # exit 0 when wrapped
+bmn statusline uninstall   # put your command back exactly as it was
+```
+
+Your command is kept byte for byte and prints what it printed. Outside a BMN session, or without
+`bmn` on `PATH`, the added line does nothing. A settings file without a `statusLine` command is left
+alone. Readings are kept in memory only; BMN makes no network call and shows no costs.
 
 ### Wiring the hooks
 
@@ -666,6 +687,9 @@ bmn hook is not yours
 - A session token can publish, report and send only for its own session, and only while that
   process incarnation is current. `handoff.prepare` is its one exception: it may name a destination
   ID, but only prepares a bounded draft for owner delivery and cannot list another session.
+- `usage.report` is accepted only from a session token, for its own live process, with at most two
+  plan windows (minutes, a share from 0 to 1000, an ISO reset time) and a context share. It never
+  carries the status-line input itself.
 - A conversation reported by `SessionStart` is accepted only from the session's own live process,
   only when the agent it names matches the command the session was launched with, and only as a
   UUID for Claude Code and Codex or the `ses_` ID OpenCode 1.18.31 uses. Two live sessions can never

@@ -42,6 +42,7 @@ import { ProgressEvidenceDialog } from './progress-evidence-dialog'
 import { WorkspaceResultsDialog } from './workspace-results'
 import { prepareWorkspaceHandoffReview, sameHandoffDraft } from './workspace-handoff-review'
 import { HookObservationView } from './hook-observation-view'
+import { PlanUseDialog, PlanUseView } from './plan-use-view'
 import { ResumeInterruptedDialog } from './resume-interrupted-dialog'
 import { LaunchSetsDialog } from './launch-sets-dialog'
 import { RepositoryIdentityView, identityChanged, useRepositoryIdentity } from './repository-identity'
@@ -165,6 +166,7 @@ type ShellDialog =
   | { kind: 'resume-interrupted'; cohort: InterruptedSessionCohort }
   /** Read-only: what this session's harness reported, for a request that did or did not arrive. */
   | { kind: 'hook-events'; session: SessionRecord }
+  | { kind: 'plan-use' }
   /**
    * Read-only: one progress observation and the published files it points at. The observation is
    * captured when the detail opens, so a newer report cannot swap itself in under the owner.
@@ -1394,6 +1396,7 @@ function App(): React.JSX.Element {
       command('search', 'Search terminal output', () => runCommand('search'), { shortcut: SHORTCUT_LABELS.search, disabled: !selectedSessionId || !live[selectedSessionId] }),
       command('files', panel === 'files' ? 'Close files' : 'Show files', () => setPanel(panel === 'files' ? null : 'files')),
       command('details', 'Session details', () => setPanel('details'), { disabled: !selectedRecord }),
+      command('plan-use', 'Plan use…', () => setDialog({ kind: 'plan-use' })),
       command('file-reference', 'Open file reference…', () => openFileReference(
         selectedRecord?.sessionId ?? null,
         selectedReferenceText(selectedRecord?.sessionId ?? null),
@@ -1985,6 +1988,12 @@ function App(): React.JSX.Element {
                   onOpenEvents={() => setDialog({ kind: 'hook-events', session: selectedRecord })}
                   onOpenConfiguration={() => setDialog({ kind: 'preferences', section: 'agent-control' })}
                 />
+                <PlanUseView
+                  key={`plan-use:${selectedRecord.sessionId}:${sessionIncarnation(selectedRecord) ?? ''}`}
+                  sessionId={selectedRecord.sessionId}
+                  incarnationId={sessionIncarnation(selectedRecord)}
+                  refreshTick={now}
+                />
                 <section className="inspector-section binding">
                   <h3>Conversation</h3>
                   <p>{bindingPresentation.label}</p>
@@ -2349,6 +2358,7 @@ function App(): React.JSX.Element {
           onClose={() => setDialog(null)}
         />
       ) : null}
+      {dialog?.kind === 'plan-use' ? <PlanUseDialog now={now} onClose={() => setDialog(null)} /> : null}
       {dialog?.kind === 'hook-events' ? (
         <HookEventsDialog
           sessionId={dialog.session.sessionId}

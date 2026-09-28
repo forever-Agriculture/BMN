@@ -19,6 +19,8 @@ import {
   type HookCheckReport,
   type HookObservation,
   type HookOriginRecord,
+  type SessionUsage,
+  type UsageReading,
   type BackupManifest,
   type BackupVerifyResult,
   type ControlInfo,
@@ -597,6 +599,12 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   listHookOrigins(): Promise<HookOriginRecord[]> {
     return invokeBridge('aiterm:hook-origins:list', {})
+  },
+  getUsage(sessionId: string): Promise<SessionUsage> {
+    return invokeBridge('aiterm:usage:get', { sessionId })
+  },
+  listUsage(): Promise<UsageReading[]> {
+    return invokeBridge('aiterm:usage:list', {})
   },
   checkHookConfiguration(): Promise<HookCheckReport> {
     return invokeBridge('aiterm:hooks:check', {})
