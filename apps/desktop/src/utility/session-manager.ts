@@ -904,6 +904,13 @@ export class SessionManager {
   ): Promise<SessionResumeResult> {
     const program = findProgramOnPath(command.argv[0]!, this.sessionPath())
     if (program === null) throw new HostControlError(ERROR_CODES.notFound, missingProgramReason(command.argv[0]!))
+    // A reported command came from text in the session, so it never runs without the command the owner confirmed.
+    if (params.expectedCommand === undefined) {
+      throw new HostControlError(
+        ERROR_CODES.invalidArgument,
+        'A command a program reported runs only after the owner has seen it; nothing was started'
+      )
+    }
     const argv = command.argv.slice(1)
     requireConfirmedCommand(params.expectedCommand, shownCommand(program, argv))
     const releaseLaunch = this.claimSessionLaunch(params.sessionId)

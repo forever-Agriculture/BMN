@@ -5603,6 +5603,11 @@ describe('a command a program in the session reports to resume it (Epic 43)', ()
       await expect(manager.resume({
         sessionId: created.sessionId, cols: 80, rows: 24, expectedCommand: `${preview.command} --yolo`
       })).rejects.toThrow('The command changed since it was shown; nothing was started')
+      // Text from the session never starts unseen: a caller that confirmed nothing starts nothing.
+      await expect(manager.resume({ sessionId: created.sessionId, cols: 80, rows: 24 })).rejects.toMatchObject({
+        code: ERROR_CODES.invalidArgument,
+        message: 'A command a program reported runs only after the owner has seen it; nothing was started'
+      })
       expect(spawns).toHaveLength(1)
 
       const resumed = await manager.resume({
@@ -5616,6 +5621,11 @@ describe('a command a program in the session reports to resume it (Epic 43)', ()
       })
       await expect(stored()).resolves.toEqual(reported)
       await expect(manager.health()).resolves.toMatchObject({ liveSessions: 1 })
+      // A second Resume while that process runs starts nothing.
+      await expect(manager.resume({
+        sessionId: created.sessionId, cols: 80, rows: 24, expectedCommand: preview.command
+      })).rejects.toThrow('The session is already running')
+      expect(spawns).toHaveLength(2)
     } finally {
       database.close()
     }
