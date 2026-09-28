@@ -123,8 +123,25 @@ async function settleTerminalLayout(page) {
  * Story 33.1: search is a lens over the selected pane. Opening it, typing, stepping through matches and closing it
  * leave the terminal's cols, rows, refit count, PTY size, surface box and PTY input untouched in every colour mode.
  */
-async function assertSearchFloats(page, { colorModes, size, onAppearance }) {
+async function assertSearchFloats(page, { colorModes, size, onAppearance, reportFocus = false }) {
   const shots = []
+  const terminalInput = page.locator('.session-terminal.selected .xterm-helper-textarea')
+  const focusReporting = () => page.evaluate(() => {
+    const sessionId = document.querySelector('.session-terminal.selected')?.getAttribute('data-session-id')
+    return window.__aitermTest.snapshot(sessionId).modes.sendFocusMode
+  })
+  // E33-A1: with DECSET 1004 on, moving focus into the search bar and back must not report focus to the program.
+  const setFocusReporting = async (on) => {
+    await terminalInput.focus()
+    await page.keyboard.press('Control+U')
+    await page.keyboard.type(`printf '\\033[?1004${on ? 'h' : 'l'}'`)
+    await page.keyboard.press('Enter')
+    await page.waitForFunction((wanted) => {
+      const sessionId = document.querySelector('.session-terminal.selected')?.getAttribute('data-session-id')
+      return window.__aitermTest.snapshot(sessionId).modes.sendFocusMode === wanted
+    }, on)
+  }
+  if (reportFocus) await setFocusReporting(true)
   const read = () => page.evaluate(() => {
     const pane = document.querySelector('.session-terminal.selected')
     const sessionId = pane?.getAttribute('data-session-id')
@@ -139,8 +156,11 @@ async function assertSearchFloats(page, { colorModes, size, onAppearance }) {
   for (const colorMode of colorModes) {
     await setAppearance(page, 'knight', colorMode)
     await onAppearance()
+    // Search is opened from a focused terminal, the way the owner reaches it.
+    await terminalInput.focus()
     await settleTerminalLayout(page)
     const before = await read()
+    assert.equal(await focusReporting(), reportFocus)
     assert.ok(before.surface)
     assert.equal(before.snapshot.ptyCols, before.snapshot.cols)
     assert.equal(before.snapshot.ptyRows, before.snapshot.rows)
@@ -211,6 +231,7 @@ async function assertSearchFloats(page, { colorModes, size, onAppearance }) {
       document.activeElement === document.querySelector('.session-terminal.selected .xterm-helper-textarea'))
     await unchanged('close')
   }
+  if (reportFocus) await setFocusReporting(false)
   await setAppearance(page, 'knight', 'black')
   await onAppearance()
   await settleTerminalLayout(page)
@@ -909,7 +930,7 @@ const evidence = await withTemporaryRoot(
       }
       phase('pointer, keyboard, single-pane, focus-mode and reduced-motion checks passed')
       screenshots.push(...await assertSearchFloats(page, {
-        colorModes: ['black', 'steel'], size: 'wide', onAppearance: disableTarget
+        colorModes: ['black', 'steel'], size: 'wide', onAppearance: disableTarget, reportFocus: true
       }))
       phase('wide floating search checks passed')
 

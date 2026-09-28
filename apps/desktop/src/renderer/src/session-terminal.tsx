@@ -137,6 +137,9 @@ export function SessionTerminal(props: {
   const refit = useRef<() => void>(() => undefined)
   const searchAddon = useRef<SearchAddon>(null)
   const searchInput = useRef<HTMLInputElement>(null)
+  const searchBar = useRef<HTMLDivElement>(null)
+  /** Tells the program whether the owner is looking at this pane (DECSET 1004); set once the terminal exists. */
+  const paneFocus = useRef<(focused: boolean) => void>(() => undefined)
   const startup = useRef(props.startup)
   const record = useRef(props.record)
   const view = useRef(props.view)
@@ -245,14 +248,16 @@ export function SessionTerminal(props: {
     refit.current = resize
     const observer = new ResizeObserver(resize)
     observer.observe(container)
+    // Counted for the self-test: everything this pane puts on the PTY, focus reports included, so a display-only
+    // change can prove it wrote nothing.
+    let inputEvents = 0
     const send = (data: string): void => {
+      inputEvents += 1
       window.aiTerminal.sendTerminalInput(startup.current.attachmentId, new TextEncoder().encode(data))
     }
     const focusReports = createFocusReports({ reportsEnabled: () => terminal.modes.sendFocusMode, send })
-    // Counted for the self-test: everything this pane would put on the PTY, so a display-only change can prove it wrote nothing.
-    let inputEvents = 0
+    paneFocus.current = (focused) => focusReports.paneFocus(focused)
     const input = terminal.onData((data) => {
-      inputEvents += 1
       if (!focusReports.isFocusReport(data)) send(data)
     })
     // onKey fires only for the owner's own keys, not for the replies xterm sends to terminal queries.
@@ -284,7 +289,12 @@ export function SessionTerminal(props: {
       return true
     }))
     const textareaFocus = (): void => focusReports.paneFocus(true)
-    const textareaBlur = (): void => focusReports.paneFocus(false)
+    // Story 33.1: focus moving into this pane's own search bar is still the owner looking at this pane, so the
+    // program is told nothing when search opens, is used or closes.
+    const textareaBlur = (event: FocusEvent): void => {
+      if (event.relatedTarget instanceof Node && searchBar.current?.contains(event.relatedTarget)) return
+      focusReports.paneFocus(false)
+    }
     terminal.textarea?.addEventListener('focus', textareaFocus)
     terminal.textarea?.addEventListener('blur', textareaBlur)
     if (terminal.textarea && document.activeElement === terminal.textarea && document.hasFocus()) {
@@ -1204,7 +1214,12 @@ export function SessionTerminal(props: {
       {/* Search floats over the surface so opening it never changes the surface's size and never resizes the PTY. */}
       <div className="terminal-frame">
         {searchOpen ? (
-          <div className="terminal-search" role="search">
+          <div ref={searchBar} className="terminal-search" role="search" onBlur={(event) => {
+            // Leaving the bar for anywhere but the bar or this terminal is leaving the pane.
+            const next = event.relatedTarget
+            if (next instanceof Node && (event.currentTarget.contains(next) || next === terminalRef.current?.textarea)) return
+            paneFocus.current(false)
+          }}>
             <input
               ref={searchInput}
               aria-label={`Search ${name} output`}
