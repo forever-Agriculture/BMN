@@ -1186,28 +1186,61 @@ input[type='radio'] {
   overflow: auto;
 }
 
+/* A lens over the terminal, not a row beside it: the surface keeps its size, so the program is never resized. */
+.terminal-frame {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .terminal-search {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 10;
   display: flex;
   align-items: center;
   gap: 6px;
-  flex: none;
-  padding: 5px 12px;
-  border-bottom: 1px solid var(--hairline);
+  box-sizing: border-box;
+  width: max-content;
+  max-width: min(420px, calc(100% - 24px));
+  padding: 4px 6px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
   background: var(--raised);
+  box-shadow: 0 12px 32px rgb(0 0 0 / 40%);
 }
 
+/* The input gives up its width first; the result text truncates only once the input is at its minimum. */
 .terminal-search input {
-  width: min(320px, 50%);
+  flex: 0 100 180px;
+  min-width: 140px;
   font-family: var(--font-mono);
 }
 
-.terminal-search .search-result {
-  flex: 1;
-  color: var(--muted);
-  font-size: 12px;
+@container pane (max-width: 520px) {
+  .terminal-search input {
+    min-width: 72px;
+  }
 }
 
-.session-terminal > .terminal-surface {
+.terminal-search button {
+  flex: none;
+}
+
+.terminal-search .search-result {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-frame > .terminal-surface {
   flex: 1;
   min-height: 0;
   padding: 8px 12px;

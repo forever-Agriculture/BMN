@@ -119,6 +119,99 @@ async function settleTerminalLayout(page) {
   await page.waitForTimeout(250)
 }
 
+/**
+ * Story 33.1: search is a lens over the selected pane. Opening it, typing, stepping through matches and closing it
+ * leave the terminal's cols, rows, refit count, PTY size, surface box and PTY input untouched in every colour mode.
+ */
+async function assertSearchFloats(page, { colorModes, size, onAppearance }) {
+  const shots = []
+  const read = () => page.evaluate(() => {
+    const pane = document.querySelector('.session-terminal.selected')
+    const sessionId = pane?.getAttribute('data-session-id')
+    if (!pane || !sessionId || !window.__aitermTest) throw new Error('selected terminal unavailable for search')
+    const box = pane.querySelector('.terminal-surface')?.getBoundingClientRect()
+    return {
+      sessionId,
+      snapshot: window.__aitermTest.snapshot(sessionId),
+      surface: box ? [box.left, box.top, box.width, box.height] : null
+    }
+  })
+  for (const colorMode of colorModes) {
+    await setAppearance(page, 'knight', colorMode)
+    await onAppearance()
+    await settleTerminalLayout(page)
+    const before = await read()
+    assert.ok(before.surface)
+    assert.equal(before.snapshot.ptyCols, before.snapshot.cols)
+    assert.equal(before.snapshot.ptyRows, before.snapshot.rows)
+    const unchanged = async (step) => {
+      await settleTerminalLayout(page)
+      const now = await read()
+      assert.equal(now.sessionId, before.sessionId, step)
+      for (const key of ['cols', 'rows', 'refits', 'ptyCols', 'ptyRows', 'inputEvents']) {
+        assert.equal(now.snapshot[key], before.snapshot[key], `${colorMode} ${size} search ${step}: ${key} changed`)
+      }
+      assert.deepEqual(now.surface, before.surface, `${colorMode} ${size} search ${step}: surface moved`)
+    }
+    const term = before.snapshot.bufferLines.join(' ').match(/[A-Za-z]{4,}/u)?.[0]
+    assert.ok(term, 'the selected terminal shows a word to search for')
+
+    await page.keyboard.press('Control+Shift+F')
+    await page.waitForFunction(() =>
+      document.activeElement === document.querySelector('.session-terminal.selected .terminal-search input'))
+    await unchanged('open')
+    const bar = await page.evaluate(() => {
+      const pane = document.querySelector('.session-terminal.selected')
+      const search = pane.querySelector('.terminal-search')
+      const style = getComputedStyle(search)
+      const rect = (element) => element?.getBoundingClientRect()
+      const barBox = rect(search)
+      const frame = rect(pane.querySelector('.terminal-frame'))
+      return {
+        position: style.position,
+        animation: style.animationName,
+        transition: style.transitionDuration,
+        top: barBox.top,
+        left: barBox.left,
+        right: barBox.right,
+        width: barBox.width,
+        paneWidth: rect(pane).width,
+        frameTop: frame.top,
+        frameLeft: frame.left,
+        frameRight: frame.right,
+        chromeBottom: Math.max(rect(pane.querySelector('.pane-heading')).bottom,
+          rect(pane.querySelector('.progress-strip'))?.bottom ?? 0),
+        inputWidth: rect(search.querySelector('input')).width
+      }
+    })
+    assert.equal(bar.position, 'absolute')
+    assert.equal(bar.animation, 'none')
+    assert.equal(bar.transition, '0s')
+    assert.ok(bar.top >= bar.frameTop && bar.top >= bar.chromeBottom, 'search sits below the heading and progress strip')
+    assert.ok(bar.right <= bar.frameRight && bar.right >= bar.frameRight - 24, 'search sits at the top right')
+    assert.ok(bar.left >= bar.frameLeft, 'search stays inside the pane')
+    assert.ok(bar.width <= Math.min(420, bar.paneWidth - 24) + 0.5, 'search is at most min(420px, pane - 24px) wide')
+
+    await page.keyboard.type(term)
+    await unchanged('type')
+    await page.keyboard.press('Enter')
+    await page.waitForFunction((word) => document.querySelector('.session-terminal.selected .search-result')
+      ?.textContent === `Match for “${word}” highlighted`, term)
+    await unchanged('next')
+    await page.keyboard.press('Shift+Enter')
+    await unchanged('previous')
+    shots.push(await screenshot(page, `${colorMode}-knight-search-${size}.png`))
+    await page.keyboard.press('Escape')
+    await page.waitForFunction(() => !document.querySelector('.terminal-search') &&
+      document.activeElement === document.querySelector('.session-terminal.selected .xterm-helper-textarea'))
+    await unchanged('close')
+  }
+  await setAppearance(page, 'knight', 'black')
+  await onAppearance()
+  await settleTerminalLayout(page)
+  return shots
+}
+
 async function pointerStates(page, locator, activeScreenshotName) {
   const read = () => locator.evaluate((element) => {
     const style = getComputedStyle(element)
@@ -491,7 +584,7 @@ const evidence = await withTemporaryRoot(
       await page.waitForSelector('.command-palette[open]')
       await page.keyboard.press('ArrowDown')
       const paletteFocus = await page.evaluate(() => ({
-        inputFocused: document.activeElement?.getAttribute('aria-label') === 'Search commands, workspaces and sessions',
+        inputFocused: document.activeElement?.getAttribute('aria-label') === 'Search commands, workspaces, sessions and files',
         activeOption: document.querySelector('.palette-results [aria-selected="true"]')?.textContent?.trim()
       }))
       assert.equal(paletteFocus.inputFocused, true)
@@ -810,6 +903,10 @@ const evidence = await withTemporaryRoot(
         assert.equal(navigation.restoredSnapshots[sessionId].rows, terminalBefore.snapshots[sessionId].rows)
       }
       phase('pointer, keyboard, single-pane, focus-mode and reduced-motion checks passed')
+      screenshots.push(...await assertSearchFloats(page, {
+        colorModes: ['black', 'steel'], size: 'wide', onAppearance: disableTarget
+      }))
+      phase('wide floating search checks passed')
 
       await setContentSize(application, page, 900, 600)
       await disableTarget()
@@ -852,6 +949,9 @@ const evidence = await withTemporaryRoot(
       assert.ok(narrowLabels.paneTitle?.includes('Reference audit'))
       assert.equal(narrowLabels.controlsInsideHeading, true)
       screenshots.push(await screenshot(page, 'black-knight-900x600.png'))
+      screenshots.push(...await assertSearchFloats(page, {
+        colorModes: ['black', 'steel'], size: 'narrow', onAppearance: disableTarget
+      }))
       phase('narrow layout checks passed')
 
       await setContentSize(application, page, 1440, 900)

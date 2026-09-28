@@ -1178,35 +1178,38 @@ export function SessionTerminal(props: {
         </div>
       </header>
       <ProgressStrip progress={progress} onOpen={props.onOpenProgress} />
-      {searchOpen ? (
-        <div className="terminal-search" role="search">
-          <input
-            ref={searchInput}
-            aria-label={`Search ${name} output`}
-            placeholder="Search output"
-            value={searchTerm}
-            onChange={(event) => {
-              setSearchTerm(event.target.value)
-              setSearchResult('')
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault()
-                find(event.shiftKey ? -1 : 1)
-              } else if (event.key === 'Escape') {
-                event.preventDefault()
-                event.stopPropagation()
-                closeSearch()
-              }
-            }}
-          />
-          <button type="button" onClick={() => find(-1)}>Previous</button>
-          <button type="button" onClick={() => find(1)}>Next</button>
-          <span className="search-result" aria-live="polite">{searchStatusText(searchResult)}</span>
-          <button type="button" className="icon-button" aria-label="Close search" onClick={closeSearch}><Icon name="close" /></button>
-        </div>
-      ) : null}
-      <div ref={element} className="terminal-surface" />
+      {/* Search floats over the surface so opening it never changes the surface's size and never resizes the PTY. */}
+      <div className="terminal-frame">
+        {searchOpen ? (
+          <div className="terminal-search" role="search">
+            <input
+              ref={searchInput}
+              aria-label={`Search ${name} output`}
+              placeholder="Search output"
+              value={searchTerm}
+              onChange={(event) => {
+                setSearchTerm(event.target.value)
+                setSearchResult('')
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  find(event.shiftKey ? -1 : 1)
+                } else if (event.key === 'Escape') {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  closeSearch()
+                }
+              }}
+            />
+            <button type="button" onClick={() => find(-1)}>Previous</button>
+            <button type="button" onClick={() => find(1)}>Next</button>
+            <span className="search-result" aria-live="polite">{searchStatusText(searchResult)}</span>
+            <button type="button" className="icon-button" aria-label="Close search" onClick={closeSearch}><Icon name="close" /></button>
+          </div>
+        ) : null}
+        <div ref={element} className="terminal-surface" />
+      </div>
       {imageWarning ? <div className="terminal-image-warning" role="status">
         Terminal images are unavailable in this pane. Text remains usable.
       </div> : null}

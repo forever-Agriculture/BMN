@@ -111,7 +111,9 @@ that multiplexer and may reject pets. Saved output is text only; pet pixels are 
   stacked.
 - **Focus mode** (`Ctrl+Shift+Z`, or the Focus button in the pane header).
 - **Search** (`Ctrl+Shift+F`) searches the terminal's output; `Enter` finds the next match,
-  `Shift+Enter` the previous one.
+  `Shift+Enter` the previous one, `Escape` closes it. The search bar floats over the top-right of
+  the terminal, so opening, using and closing it never resizes the terminal or makes the program
+  redraw. While open it covers the end of the first rows; `Enter` moves past a match it hides.
 - **Copy and paste.** Selecting with the mouse copies. `Ctrl+Shift+C` copies the selection; paste
   with `Ctrl+V`, `Ctrl+Shift+V`, `Shift+Insert` or right-click. Dragging across text also copies when
   a program enables mouse reporting, as Codex does. `Ctrl+Shift+A` selects all.
