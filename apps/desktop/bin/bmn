@@ -1193,13 +1193,8 @@ function hookEntry(agent) {
 }
 
 /**
- * BMN recognises its own hook entry by what it is, not by reading the shell it is written in.
- *
- * Seven rounds of review each found the same class of defect in a grammar that tried to read it:
- * every round produced a command reported as wired that could not actually report - a group
- * carrying a redirection, a substitution that ate the event first, a construct that counted as
- * balanced but that bash refuses to parse. Each one leaves the owner with no hook and no warning,
- * which is the one outcome this command exists to prevent. Shell is not worth reading for this.
+ * BMN recognises its own hook entry by what it is, not by reading the shell it is written in: a
+ * command wrongly read as wired leaves the owner with no hook and no warning.
  *
  * So an entry counts only when it is one BMN itself writes, the earlier wording of one, or the bare
  * call. Anything else reads as missing - and when it mentions `bmn hook <agent>`, `check` prints it,
@@ -1257,40 +1252,6 @@ function collapsed(command) {
 }
 
 /**
- * A command short enough to sit under the event it was registered for, written so that what is
- * printed says exactly what is in the file.
- *
- * The rule is one line: printable ASCII is printed, and every other code point is printed as
- * `\uXXXX`. Nothing else is safe to fold away. A pasted entry refused for a non-breaking space
- * would otherwise print as `bmn hook claude`, byte-identical to the bare call the same command
- * calls wired, under a line saying it is not an entry BMN recognises. Deciding character by
- * character which ones a reader can see is the same guessing game the shell grammar lost: a
- * combining mark and a variation selector are invisible and are in neither `\p{C}` nor `\p{Z}`.
- *
- * A backslash is escaped too, so the literal text `\u00a0` in a command cannot be mistaken for
- * the character. Space, tab and newline are the blanks bash drops, so they stay as spacing.
- */
-function oneLine(command) {
-  const shown = []
-  let length = 0
-  // Only the blanks bash drops, and only those - `trim` here would silently eat the very
-  // character the line exists to show.
-  for (const character of command.replace(/[ \t\n]+/g, ' ').replace(SHELL_BLANKS, '')) {
-    const code = character.codePointAt(0)
-    // Delimited, because a bare `\u10000` is both U+10000 and U+1000 followed by a `0`, and the
-    // whole point of the line is that two different commands never print the same.
-    const token = character === '\\'
-      ? '\\\\'
-      : (code >= 0x20 && code <= 0x7e ? character : `\\u{${code.toString(16)}}`)
-    // Never half an escape: the line stops at the last whole token that fits.
-    if (length + token.length > 119) return `${shown.join('')}\u2026`
-    shown.push(token)
-    length += token.length
-  }
-  return shown.join('')
-}
-
-/**
  * One event's state, and any command registered for it that names the hook without being an entry
  * BMN recognises. A recognised entry settles the event; the named ones are carried out so that
  * `check` can print them beside it.
@@ -1304,11 +1265,8 @@ function hookEventState(listed, agent, event) {
   let older = false
   const unrecognised = []
   const gatedEntries = []
-  // Only Codex's timeout rule is a guess rather than a measurement, so only a Codex verdict says
-  // so beside itself; a Claude or OpenCode report stays byte-for-byte as it was.
-  const qualifiedRule = HOOK_FILES[agent].timeout === 'whole-non-negative-number'
-  let looseTimeout = false
-  let olderTimeoutQualification
+  // Only Codex's timeout rule names its reason; a Claude or OpenCode report stays as it was.
+  const wholeSeconds = HOOK_FILES[agent].timeout === 'whole-non-negative-number'
   let droppedTimeout = false
   for (const group of groups) {
     if (!isObject(group)) continue
@@ -1332,44 +1290,23 @@ function hookEventState(listed, agent, event) {
       const runnable = runnableEntry(entry, agent)
       const read = runnable ? recognition : (namesHook(entry.command, agent) ? 'named' : 'missing')
       if (gated && read !== 'missing') {
-        gatedEntries.push(oneLine(entry.command))
+        gatedEntries.push(entry.command)
         continue
       }
-      // The timeout rule contributing to a verdict: an entry of BMN's own it kept from wiring, or
-      // one it counts wired although the timeout passes the cheap rule only past what u64 holds.
-      if (qualifiedRule && (recognition === 'wired' || recognition === 'older') && !runnable) {
-        droppedTimeout = true
-      }
+      // One of BMN's own entries, kept from wiring by its timeout alone: say why beside the verdict.
+      if (wholeSeconds && (recognition === 'wired' || recognition === 'older') && !runnable) droppedTimeout = true
       // Nothing is missing for this event, so there is nothing for the owner to look at.
-      if (read === 'wired') {
-        return {
-          state: 'wired',
-          unrecognised: [],
-          gated: [],
-          ...((qualification) => qualification ? { timeoutQualification: qualification } : {})(qualifiedRule ? timeoutQualificationFor(entry) : undefined)
-        }
-      }
-      if (read === 'older') {
-        older = true
-        if (qualifiedRule && timeoutQualificationFor(entry) !== undefined) olderTimeoutQualification = timeoutQualificationFor(entry)
-        if (qualifiedRule && pastSafeInteger(entry.timeout)) looseTimeout = true
-      }
-      if (read === 'named') unrecognised.push(oneLine(entry.command))
+      if (read === 'wired') return { state: 'wired', unrecognised: [], gated: [] }
+      if (read === 'older') older = true
+      if (read === 'named') unrecognised.push(entry.command)
     }
   }
-  if (older) {
-    return {
-      state: 'wired (older wording)',
-      unrecognised: [],
-      gated: [],
-      ...((qualification) => qualification ? { timeoutQualification: qualification } : {})(looseTimeout ? TIMEOUT_PAST_SAFE_INTEGER : olderTimeoutQualification)
-    }
-  }
+  if (older) return { state: 'wired (older wording)', unrecognised: [], gated: [] }
   return {
     state: 'missing',
     unrecognised,
     gated: gatedEntries,
-    ...(droppedTimeout ? { timeoutQualification: TIMEOUT_NOT_LOADABLE } : {})
+    ...(droppedTimeout ? { reason: TIMEOUT_NOT_WHOLE_SECONDS } : {})
   }
 }
 
@@ -1428,40 +1365,13 @@ function runnableEntry(entry, agent) {
   const timeout = entry.timeout
   if (timeout === undefined) return true
   if (HOOK_FILES[agent].timeout === 'positive-number') return typeof timeout === 'number' && timeout > 0
-  // Codex was never run here, so its rule is the cheap one: the whole number its `u64` declares,
-  // or the `null` its `Option` reads as absence.
-  return timeout === null || (Number.isInteger(timeout) && timeout >= 0)
+  // Codex reads `Option<u64>` seconds: `null` is absence, and a whole number is accepted up to the
+  // largest one a JSON number holds exactly.
+  return timeout === null || (Number.isSafeInteger(timeout) && timeout >= 0)
 }
 
-/**
- * The first double past Number.MAX_SAFE_INTEGER. Above it a parsed JSON number cannot be verified
- * to be a whole number at all - neighbouring doubles are two or more apart, so a literal at 2^53+1
- * parses to the same value as 2^53+2 - and at 2^64 the value is one Codex's `u64` cannot load. The
- * qualification names exactly that uncertainty instead of claiming a measurement BMN never made.
- */
-const UNVERIFIABLE_TIMEOUT_FROM = 2 ** 53
-
-function pastSafeInteger(timeout) {
-  return typeof timeout === 'number' && timeout >= UNVERIFIABLE_TIMEOUT_FROM
-}
-
-/** The rule contributed whenever it judged a timeout value; absent means BMN claims nothing. */
-function timeoutQualificationFor(entry) {
-  if (entry.timeout === undefined || entry.timeout === null) return undefined
-  return pastSafeInteger(entry.timeout) ? TIMEOUT_PAST_SAFE_INTEGER : TIMEOUT_RULE_UNMEASURED
-}
-
-/**
- * What a Codex verdict says beside itself when the cheap timeout rule contributed to it. The same
- * string is the machine-readable field in `--json`, so the two cannot drift. A Claude or OpenCode
- * report never carries one: their rules are measured, and their bytes stay as they were.
- */
-const TIMEOUT_PAST_SAFE_INTEGER =
-  'timeout at or above 2^53 as BMN reads it, where a whole number cannot be verified; whether Codex\'s u64 loads the exact value is unmeasured'
-const TIMEOUT_RULE_UNMEASURED =
-  'the timeout shape is BMN\'s reading of Codex\'s u64, not a measurement against a run'
-const TIMEOUT_NOT_LOADABLE =
-  'an entry here is one of BMN\'s own commands whose timeout is not a whole number at or above zero or null; Codex\'s u64 would not load it'
+/** Why one of BMN's own Codex entries does not count; printed beside the verdict and kept as `reason` in `--json`. */
+const TIMEOUT_NOT_WHOLE_SECONDS = 'timeout is not a whole number of seconds'
 
 /**
  * Whether this matcher leaves its group gated, by what the harness in question treats as absence. The one
@@ -1492,7 +1402,7 @@ function checkHooks(agent, path, file = agent === 'opencode' ? undefined : readH
       state: read.state,
       ...(read.unrecognised.length === 0 ? {} : { unrecognised: read.unrecognised }),
       ...(read.gated.length === 0 ? {} : { gated: read.gated }),
-      ...(read.timeoutQualification === undefined ? {} : { timeoutQualification: read.timeoutQualification })
+      ...(read.reason === undefined ? {} : { reason: read.reason })
     }
   })
   const missing = events.filter((row) => !row.optional && row.state === 'missing').map((row) => row.event)
@@ -1608,21 +1518,20 @@ function describeHookCheck(report) {
   if (report.state === 'unusable') lines.push(`  BMN cannot add to this file: ${report.detail}`)
   for (const row of report.events) {
     const optional = row.optional ? ' (optional)' : ''
-    // The timeout-rule qualification sits beside the verdict it contributed to, never only in the
-    // closing limit below: a `wired` line must not read stronger than what BMN measured.
-    const qualified = row.timeoutQualification === undefined ? '' : `  ${row.timeoutQualification}`
-    lines.push(`  ${row.event.padEnd(19)}${row.state}${optional}${qualified}`)
+    const reason = row.reason === undefined ? '' : `  ${row.reason}`
+    lines.push(`  ${row.event.padEnd(19)}${row.state}${optional}${reason}`)
     // Not a command BMN recognises, so it reads as missing; show it rather than leave the owner
-    // wondering where the duplicate `install` is about to add came from.
+    // wondering where the duplicate `install` is about to add came from. JSON quoting shows the
+    // command exactly: control characters are escaped and nothing is folded away.
     for (const command of row.unrecognised ?? []) {
       lines.push(`    an entry here names bmn hook ${report.agent} but is not one BMN recognises:`)
-      lines.push(`      ${command}`)
+      lines.push(`      ${JSON.stringify(command)}`)
     }
     // An entry BMN would otherwise answer for, sitting inside a matcher. Saying it is "not one BMN
     // recognises" would be self-contradictory: it is, and the matcher is the whole reason.
     for (const command of row.gated ?? []) {
       lines.push('    an entry here is inside a matcher, so it wires only part of this event:')
-      lines.push(`      ${command}`)
+      lines.push(`      ${JSON.stringify(command)}`)
     }
   }
   // The limit is the same whatever the file said, so it is printed unconditionally rather than as

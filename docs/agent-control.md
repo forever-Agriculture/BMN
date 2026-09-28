@@ -27,47 +27,70 @@ socket, can address any session and requires `--session`.
 
 ## Commands
 
+This is exactly what `bmn help` prints; a unit test keeps the two identical.
+
+<!-- BEGIN `bmn help` (generated: pnpm run docs:bmn-help) -->
 ```text
-bmn snapshot                                   Show the current state snapshot
-bmn list                                       List sessions
-bmn publish <file> [--name N] [--key K]        Publish a file to the Files panel
-bmn progress <state> <label> [--source S] [--detail D | --detail-file -] [--evidence-id ID ...]
-bmn ask <request-key> <title> [--kind K] [--body B | --body-file -] [--expires ISO]
-bmn withdraw <request-key>                     Withdraw your request
-bmn resolve <request-key> <resolution>         Mark a request resolved
-bmn send <text> | --text-file - [--submit] [--key K]
-                                               Paste text into the session; --submit presses Enter
-bmn answer take [--wait S] [--reported R=ok|failed]
-                                               Collect, once, the answers BMN decided from a Telegram tap
-                                               for this session's own OpenCode requests (BMN's plugin
-                                               runs this); waits up to S seconds, 0-25. --reported says
-                                               whether OpenCode accepted the reply to request R
-bmn hook <agent>                               Turn an agent hook event on stdin into Needs you requests
-bmn hooks print opencode                       Print the shipped OpenCode TypeScript plugin
-bmn hooks check [agent] [--file PATH]          Say which of BMN's hook entries each hook file carries
-bmn hooks install <agent> [--file PATH]        Add the missing entries, after backing the file up
-bmn statusline check|install|uninstall [--file PATH]
-                                               Wrap Claude Code's own statusLine command so BMN sees
-                                               plan use, or restore it; see "Plan use" below
-bmn help [agents]                              Show usage; `help agents` prints the agent brief
-```
+Usage: bmn <command> [arguments] [options]
 
+Commands:
+  snapshot                                  Show the current state snapshot
+  list                                      List sessions
+  publish <file> [--name N] [--key K]       Publish a file as an artifact
+  handoff <destination-id> --text T | --text-file - [--file-id ID ...] --key K
+  handoff status [draft-id]                 Prepare an owner-delivered handoff; read its bounded receipt
+  handoff --outline                         Print the optional outline of a complete handoff; sends nothing
+  progress <state> <label> [--source S] [--detail D | --detail-file -] [--observed ISO]
+                            [--evidence-id ID ...]
+                                            Report progress; state is one of
+                                            running|waiting|blocked|claimed-done|verified|failed|unknown.
+                                            --evidence-id points at up to 10 files this session
+                                            already published (publish with --key, keep the
+                                            returned id, then report). BMN stores and shows the
+                                            link; it never checks the files or the claim, so
+                                            attached evidence certifies nothing.
+  ask <request-key> <title> [--kind K] [--body B | --body-file -] [--expires ISO]
+                                            Ask for attention; kind is one of
+                                            question|permission|review|notice (default question)
+  withdraw <request-key>                    Withdraw an attention request
+  resolve <request-key> <resolution>        Resolve an attention request
+  send <text> | --text-file - [--submit] [--key K]
+                                            Paste text into the session; --submit also presses Enter
+  answer take [--wait S] [--reported R=ok|failed]
+                                            Collect, once, the answers BMN decided from a Telegram tap for
+                                            this session's own OpenCode requests (used by BMN's plugin);
+                                            waits up to S seconds (0-25) for one to arrive.
+                                            --reported says whether OpenCode accepted the reply to request R
+  hook <agent>                              Turn an agent hook event on stdin into Needs you requests;
+                                            agent is one of claude|codex|opencode|cursor; prints nothing, always exits 0
+  hooks print opencode                     Print the shipped OpenCode TypeScript plugin
+  hooks check [agent] [--file PATH]         Say which of BMN's hook entries each agent's own hook file
+                                            carries: wired, wired (older wording) or missing
+  hooks install <agent> [--file PATH]       Add the missing entries next to the hooks already there,
+                                            after backing the file up; OpenCode replaces its BMN plugin
+  statusline check|install|uninstall [--file PATH]
+                                            Put one line in front of Claude Code's own status-line command so
+                                            its plan use reaches BMN; the command itself is kept unchanged
+  help [agents|terminal]                    Show this help or a short agent/terminal guide
+
+Long text from standard input (instead of one quoted argument; only - is accepted, pipe a file with cat):
+  ask ... --body-file -         progress ... --detail-file -
+  send --text-file -            handoff <destination-id> --text-file - --key K
+  Exactly one source per field; a terminal is refused, input must be piped. One trailing newline is
+  dropped. Limits: body 8000 and detail 2000 characters, send text 64 KiB and handoff text 16 KiB.
 Options:
+  --session ID       Target session (defaults to your own; required with owner credentials)
+  --json             Print the raw result as JSON
+  --owner            Use owner.token next to the control socket instead of BMN_TOKEN
+  --token-file PATH  Read the token from PATH instead of BMN_TOKEN
+  --socket PATH      Control socket path (default: BMN_CONTROL_SOCKET)
+  --                 Treat every following argument as text
 
-| Option | Meaning |
-| --- | --- |
-| `--session ID` | Target session (defaults to your own; required with the owner token) |
-| `--json` | Print the raw result as JSON |
-| `--owner` | Use `owner.token` next to the socket instead of `BMN_TOKEN` |
-| `--token-file PATH` | Read the token from a file |
-| `--socket PATH` | Use another socket path |
-| `--` | Treat every following argument as text |
-
-Progress states: `running`, `waiting`, `blocked`, `claimed-done`, `verified`, `failed`, `unknown`.
-Request kinds: `question` (default), `permission`, `review`, `notice`.
-
-Exit status: `0` success, `1` remote or connection error, `2` usage error. `bmn hooks` uses `1` for
-"something is missing or unreadable": it reads and writes files instead of talking to the socket.
+Environment: BMN_CONTROL_SOCKET, BMN_TOKEN
+Exit status: 0 success, 1 remote or connection error, 2 usage error
+             hooks uses 1 for "something is missing or unreadable"; it needs no socket and no token
+```
+<!-- END `bmn help` -->
 
 ### Long text from standard input
 
@@ -510,24 +533,16 @@ so `check` does not call it one. Under Claude Code this was measured one entry a
 real tool call, each with a control that fired: an absent `timeout` ran, `1` and `1.5` ran, and
 `"5"`, `-1`, `null` and `0` did not. So BMN counts a Claude entry only when its `timeout` is absent
 or a positive number, and prints the entry under the event like any other it did not count. For
-Codex, which has never been run here, the rule is the cheap one its `Option<u64>` suggests: absent,
-`null`, or a whole number at or above zero. That can be wrong either way — too strict and you get a
-duplicate entry, too loose and BMN calls an entry wired that Codex will not load. So when that rule
-contributes to a Codex verdict — any timeout value the rule judged, with the stronger note at or
-above 2^53 where a JavaScript number cannot verify a whole number at all (and at 2^64, one the
-`u64` cannot load), or one of BMN's own entries the rule kept from wiring — the report says so
-beside that verdict line itself, in text and in `--json`, not only in the closing limit the next
-paragraph describes. An entry with no timeout value carries nothing: BMN claims nothing about one.
+Codex the rule follows its `Option<u64>` seconds: absent, `null`, or a whole number from 0 to
+9,007,199,254,740,991 (`Number.MAX_SAFE_INTEGER`, the largest a JSON number holds exactly). Any
+other value keeps the entry from counting; when it is one of BMN's own entries, the event's line
+says `timeout is not a whole number of seconds`, and `--json` carries the same text as `reason`.
 
 **What `check` does not do: read your harness's config file for it.** Codex in particular loads its
 hook file strictly, so a mistake anywhere in that file can stop every hook in it, BMN's included.
-BMN does not check for that and does not pretend to: it was tried, over five rounds, and every rule
-rested on a reading of somebody else's schema that no run here could confirm — the rules were wrong
-in both directions, refusing files that work and passing files that do not. So every Codex report
-ends with the limit instead: this command reports what is *configured*, never that a hook fired.
-Where the cheap timeout rule contributed to a verdict, its qualification sits beside that verdict
-too. Run `/hooks` in Codex once, then confirm the event shows up under Hook events. That is the
-check BMN cannot do for you.
+BMN does not check for that, so every Codex report ends with the limit instead: this command reports
+what is *configured*, never that a hook fired. Run `/hooks` in Codex once, then confirm the event
+shows up under Hook events. That is the check BMN cannot do for you.
 
 Preferences → **Local agent control** can show a dated, read-only `hooks check` report for
 Claude Code, Codex, OpenCode and Cursor. It shows configured and missing entries without exposing the
@@ -555,12 +570,9 @@ broken, and not the same as one that works. `check` no longer has an opinion eit
 want to keep only yours, confirm it delivers first (make the harness fire that event and look at the
 session's **Hook events…** list), then remove BMN's and accept that `check` will read `missing`.
 
-That is the whole rule, and it is deliberate. Earlier versions of this command read the shell around
-the call and tried to say whether it would deliver the event. Seven rounds of review each found a
-command it called `wired` that could not report — a group carrying a redirection, a substitution that
-consumed the event first, a construct that balanced but that bash refuses to parse. Every one of them
-left the owner with no hook and no warning, which is the one outcome this command exists to prevent.
-A duplicate entry is visible and harmless; a silent gap is neither. So BMN stopped reading shell.
+That is the whole rule: BMN does not read the shell around the call, because a command it wrongly
+called `wired` would leave you with no hook and no warning. A duplicate entry is visible and
+harmless; a silent gap is neither.
 
 The consequence to be clear about: `check` tells you what is **configured**, and now makes no claim
 at all about a command it does not recognise. A hand-written entry that works perfectly still reads

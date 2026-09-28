@@ -55,7 +55,7 @@ claim changes nothing. The claim-shaped flows and their state:
 
 A flow that already holds the invariant is not rewritten; a migration happens only behind a fence
 test that first fails on the demonstrated interleaving. An async gap that no test covers is recorded
-as unverified in the [tracked claim audit](claim-audit.md), never as protected.
+as UNVERIFIED in the State column above, never as protected.
 
 **Your CLIs stay in charge.** Sessions run the installed executables in real PTYs with your saved
 arguments and working directory. The app adds no bypass flags and never copies CLI credentials.

@@ -1,5 +1,5 @@
 // MODULE: protocol.test.ts - frozen surface, defaults and guards of the protocol package
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_WORKSPACE_MARKER,
   WORKSPACE_MARKERS,
@@ -7,10 +7,6 @@ import {
   DEFAULT_APP_SETTINGS,
   isAppEventMessage,
   ERROR_CODES,
-  FrameDecoder,
-  MalformedFrameError,
-  FrameTooLargeError,
-  MAX_CONTROL_FRAME_BYTES,
   MAX_TERMINAL_CHUNK_BYTES,
   METHOD_REGISTRY,
   PROTOCOL_VERSION,
@@ -22,10 +18,8 @@ import {
   TERMINAL_SAVED_OUTPUT_BYTES,
   TERMINAL_SAVED_OUTPUT_RETENTION,
   TERMINAL_SCROLLBACK_LINES,
-  TruncatedFrameError,
-  encodeFrame,
   isCompatibleProtocol,
-  isRpcEnvelope,
+  isRpcRequest,
   isLaunchTemplateRecord,
   isSessionCreateParams,
   isSessionRecord,
@@ -426,81 +420,15 @@ describe('protocol surface', () => {
   })
 })
 
-describe('JSON-RPC envelope', () => {
+describe('JSON-RPC request', () => {
   it('accepts a valid hello and checks protocol-major compatibility', () => {
-    expect(isRpcEnvelope(hello)).toBe(true)
+    expect(isRpcRequest(hello)).toBe(true)
     expect(isCompatibleProtocol(PROTOCOL_VERSION)).toBe(true)
     expect(isCompatibleProtocol({ major: 2, minor: 0 })).toBe(false)
   })
 
-  it('rejects unknown methods and unsafe error shapes', () => {
-    expect(isRpcEnvelope({ ...hello, method: 'artifact.delete' })).toBe(false)
-    expect(
-      isRpcEnvelope({
-        jsonrpc: '2.0',
-        id: 1,
-        error: { code: -32000, message: '', data: { code: 'IO_ERROR', retryable: false } }
-      })
-    ).toBe(false)
-  })
-})
-
-describe('4-byte big-endian framing', () => {
-  it('round-trips a split frame and encodes the byte length in big-endian order', () => {
-    const frame = encodeFrame(hello)
-    const bodyBytes = new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getUint32(0, false)
-    expect(bodyBytes).toBe(frame.byteLength - 4)
-
-    const decoder = new FrameDecoder()
-    const output = [
-      ...decoder.push(frame.subarray(0, 2)),
-      ...decoder.push(frame.subarray(2, 7)),
-      ...decoder.push(frame.subarray(7))
-    ]
-    decoder.finish()
-    expect(output).toEqual([hello])
-  })
-
-  it('decodes multiple frames from one chunk', () => {
-    const first = encodeFrame(hello)
-    const second = encodeFrame({ jsonrpc: '2.0', id: 2, result: { healthy: true } })
-    const both = new Uint8Array(first.byteLength + second.byteLength)
-    both.set(first)
-    both.set(second, first.byteLength)
-    expect(new FrameDecoder().push(both)).toHaveLength(2)
-  })
-
-  it('rejects an oversized declared frame before allocating its body', () => {
-    const allocateBody = vi.fn((size: number) => new Uint8Array(size))
-    const decoder = new FrameDecoder(allocateBody)
-    const header = new Uint8Array(4)
-    new DataView(header.buffer).setUint32(0, MAX_CONTROL_FRAME_BYTES + 1, false)
-
-    expect(() => decoder.push(header)).toThrow(FrameTooLargeError)
-    expect(allocateBody).not.toHaveBeenCalled()
-  })
-
-  it('rejects a truncated stream', () => {
-    const frame = encodeFrame(hello)
-    const decoder = new FrameDecoder()
-    decoder.push(frame.subarray(0, frame.byteLength - 1))
-    expect(() => decoder.finish()).toThrow(TruncatedFrameError)
-  })
-
-  it('rejects a zero-length frame with the typed malformed-frame error', () => {
-    expect(() => new FrameDecoder().push(new Uint8Array(4))).toThrow(MalformedFrameError)
-  })
-
-  it('fails closed on non-JSON and can decode a later valid frame', () => {
-    const malformedBody = new TextEncoder().encode('not-json')
-    const malformed = new Uint8Array(4 + malformedBody.byteLength)
-    new DataView(malformed.buffer).setUint32(0, malformedBody.byteLength, false)
-    malformed.set(malformedBody, 4)
-    const decoder = new FrameDecoder()
-
-    expect(() => decoder.push(malformed)).toThrow(MalformedFrameError)
-    expect(() => decoder.finish()).not.toThrow()
-    expect(decoder.push(encodeFrame(hello))).toEqual([hello])
+  it('rejects unknown methods', () => {
+    expect(isRpcRequest({ ...hello, method: 'artifact.delete' })).toBe(false)
   })
 })
 

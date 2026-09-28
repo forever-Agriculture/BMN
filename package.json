@@ -21,7 +21,8 @@
     "voice:build": "node scripts/voice/build-whisper.mjs",
     "smoke:packaged": "node scripts/smoke/packaged.mjs",
     "install:desktop": "node scripts/install/desktop-entry.mjs",
-    "update:desktop": "node scripts/install/update-desktop.mjs"
+    "update:desktop": "node scripts/install/update-desktop.mjs",
+    "docs:bmn-help": "node scripts/docs/sync-bmn-help.mjs"
   },
   "devDependencies": {
     "@electron/rebuild": "4.2.0",

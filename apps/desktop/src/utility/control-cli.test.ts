@@ -558,6 +558,15 @@ describe('bmn help agents', () => {
     expect(fenced?.[1]).toBe(brief.stdout)
   })
 
+  it('keeps the documented command block identical to what `bmn help` prints (Story 38.3)', async () => {
+    const [usage, documentation] = await Promise.all([runCli(['help']), readFile(AGENT_CONTROL_DOC, 'utf8')])
+    const block = /<!-- BEGIN `bmn help` [^\n]*-->\n```text\n([\s\S]*?)```\n<!-- END `bmn help` -->/.exec(documentation)
+
+    expect(usage.code).toBe(0)
+    expect(block?.[1], 'docs/agent-control.md differs from `bmn help`; regenerate it with `pnpm run docs:bmn-help`')
+      .toBe(usage.stdout)
+  })
+
   it('names the brief in its usage, and plain help still prints the commands', async () => {
     const usage = await runCli(['help'])
 
@@ -1676,9 +1685,10 @@ describe('bmn hooks check', () => {
     expect(plain.code).toBe(1)
     expect(plain.stdout).toMatch(/Stop\s+missing/)
     expect(plain.stdout).toContain('names bmn hook claude but is not one BMN recognises')
-    expect(plain.stdout).toContain('timeout 5 bmn hook claude # mine')
+    // Story 38.4: printed as JSON quotes it, exactly as it is in the file.
+    expect(plain.stdout).toContain(`      ${JSON.stringify(written)}\n`)
     expect(JSON.parse(json.stdout).agents[0].events.find((row: { event: string }) => row.event === 'Stop'))
-      .toEqual({ event: 'Stop', optional: false, state: 'missing', unrecognised: ['timeout 5 bmn hook claude # mine'] })
+      .toEqual({ event: 'Stop', optional: false, state: 'missing', unrecognised: [written] })
   })
 
   it('says nothing about an unrecognised entry for an event that is already wired', async () => {
@@ -1747,54 +1757,35 @@ describe('bmn hooks check', () => {
     expect(report.events.find((row: { event: string }) => row.event === 'Stop').state).toBe('wired')
   })
 
+  // Story 38.4: an unrecognised command prints as JSON.stringify quotes it - unambiguous, control
+  // characters escaped - and `--json` carries the command itself.
   it.each([
-    ['a variation selector', 'bmn hook claude\ufe0f', 'bmn hook claude\\u{fe0f}'],
-    ['a combining grapheme joiner', 'bmn\u034fhook claude', 'bmn\\u{34f}hook claude'],
-    ['an astral character', 'bmn hook claude \u{1f600}', 'bmn hook claude \\u{1f600}'],
-    // The literal text and the character it names must not print the same, or the note cannot be
-    // trusted to mean what it says.
-    ['the text of an escape', '\\u00a0bmn hook claude', '\\\\u00a0bmn hook claude']
-  ])('prints %s as its code point rather than as itself', async (_label, command, shown) => {
+    ['a variation selector', 'bmn hook claude\ufe0f'],
+    ['a combining grapheme joiner', 'bmn\u034fhook claude'],
+    ['an astral character', 'bmn hook claude \u{1f600}'],
+    ['the text of an escape', '\\u00a0bmn hook claude'],
+    ['a non-breaking space', '\u00a0bmn hook claude'],
+    ['carriage returns', 'bmn\rhook\rclaude'],
+    ['a long entry, in full', `bmn hook claude\n${'# padding '.repeat(30)}`]
+  ])('prints %s exactly as JSON quotes it', async (_label, command) => {
     const path = await hookFileFixture({ hooks: { Stop: [entryGroup(command)] } })
 
-    const result = await runHooks(['check', 'claude', '--file', path, '--json'])
+    const plain = await runHooks(['check', 'claude', '--file', path])
+    const json = await runHooks(['check', 'claude', '--file', path, '--json'])
 
-    expect(JSON.parse(result.stdout).agents[0].events
-      .find((row: { event: string }) => row.event === 'Stop').unrecognised).toEqual([shown])
+    expect(plain.stdout).toContain(`not one BMN recognises:\n      ${JSON.stringify(command)}\n`)
+    expect(JSON.parse(json.stdout).agents[0].events
+      .find((row: { event: string }) => row.event === 'Stop').unrecognised).toEqual([command])
   })
 
-  it('never cuts an escape in half when it shortens a long entry', async () => {
-    const path = await hookFileFixture({
-      hooks: { Stop: [entryGroup(`bmn hook claude ${'a'.repeat(100)}\u00a0${'b'.repeat(40)}`)] }
-    })
+  it('shows the character that stopped an entry being recognised, escaped where it is a control', async () => {
+    const path = await hookFileFixture({ hooks: { Notification: [entryGroup('bmn\rhook\rclaude')] } })
 
-    const result = await runHooks(['check', 'claude', '--file', path, '--json'])
-    const shown = JSON.parse(result.stdout).agents[0].events
-      .find((row: { event: string }) => row.event === 'Stop').unrecognised[0]
-
-    expect(shown.endsWith('\u2026')).toBe(true)
-    expect(shown.length).toBeLessThanOrEqual(120)
-    // A trailing `\u00a` would name a character that is not the one in the file.
-    expect(/\\u[0-9a-f]{0,3}\u2026$/.test(shown)).toBe(false)
-  })
-
-  it('shows the invisible character that stopped an entry being recognised', async () => {
-    const path = await hookFileFixture({
-      hooks: {
-        Stop: [entryGroup('\u00a0bmn hook claude')],
-        Notification: [entryGroup('bmn\rhook\rclaude')]
-      }
-    })
-
-    const result = await runHooks(['check', 'claude', '--file', path, '--json'])
-    const events = JSON.parse(result.stdout).agents[0].events
+    const plain = await runHooks(['check', 'claude', '--file', path])
 
     // Folding the whitespace away would print `bmn hook claude` under a line saying that is not an
     // entry BMN recognises - true, self-contradictory, and with the cause erased.
-    expect(events.find((row: { event: string }) => row.event === 'Stop').unrecognised)
-      .toEqual(['\\u{a0}bmn hook claude'])
-    expect(events.find((row: { event: string }) => row.event === 'Notification').unrecognised)
-      .toEqual(['bmn\\u{d}hook\\u{d}claude'])
+    expect(plain.stdout).toContain('"bmn\\rhook\\rclaude"')
   })
 
   it('says what check recognises in its own usage text', async () => {
@@ -1817,7 +1808,7 @@ describe('bmn hooks check', () => {
     // The verdict compares the command as bash would read it; the note may look past any
     // whitespace at all, because the owner needs to see the entry however it is spaced.
     expect(JSON.parse(result.stdout).agents[0].events.find((row: { event: string }) => row.event === 'Stop'))
-      .toEqual({ event: 'Stop', optional: false, state: 'missing', unrecognised: ['bmn hook claude'] })
+      .toEqual({ event: 'Stop', optional: false, state: 'missing', unrecognised: ['bmn  hook\tclaude'] })
   })
 
   it('says nothing about an entry that names a different agent', async () => {
@@ -1983,9 +1974,12 @@ it('ends every Codex report with the limit of what it checked', async () => {
     ['wired', 'null', null],
     ['wired', 'zero', 0],
     ['wired', 'a plain number', 30],
+    ['wired', 'the largest whole number a JSON number holds exactly', Number.MAX_SAFE_INTEGER],
     ['missing', 'a fraction, which u64 does not hold', 1.5],
     ['missing', 'negative', -1],
-    ['missing', 'a string', '5']
+    ['missing', 'a string', '5'],
+    ['missing', '2^53, past the largest exact whole number', 2 ** 53],
+    ['missing', '1e30', 1e30]
   ])('reads %s for a Codex timeout of %s', async (state, _label, timeout) => {
     const path = await hookFileFixture({
       hooks: { Stop: [{ hooks: [{ type: 'command', timeout, command: DOCUMENTED_CODEX }] }] }
@@ -1993,112 +1987,63 @@ it('ends every Codex report with the limit of what it checked', async () => {
 
     const result = await runHooks(['check', 'codex', '--file', path, '--json'])
 
-    // Codex was never run here, so the rule is the cheap one its `Option<u64>` suggests: a whole
-    // number, or the null it reads as absence. Wrong either way: too strict costs a duplicate, too
-    // loose calls an entry wired that Codex will not load.
+    // Story 38.4: `Option<u64>` seconds - null, absent, or a whole number up to
+    // Number.MAX_SAFE_INTEGER; anything else keeps the entry from counting.
     expect(JSON.parse(result.stdout).agents[0].events
       .find((row: { event: string }) => row.event === 'Stop').state).toBe(state)
   })
 
-  // Epic 26.3 / FR47 / UX-DR24: when the cheap timeout rule contributes to a Codex verdict, the
-  // qualification sits beside that verdict line itself, and the same string is the machine-readable
-  // field, so text and JSON cannot drift.
-  const RULE_UNMEASURED =
-    'the timeout shape is BMN\'s reading of Codex\'s u64, not a measurement against a run'
-  const PAST_SAFE_INTEGER =
-    'timeout at or above 2^53 as BMN reads it, where a whole number cannot be verified; whether Codex\'s u64 loads the exact value is unmeasured'
-  const NOT_LOADABLE =
-    'an entry here is one of BMN\'s own commands whose timeout is not a whole number at or above zero or null; Codex\'s u64 would not load it'
+  // Story 38.4: one plain reason, beside the verdict and as `reason` in JSON, only when one of BMN's
+  // own Codex entries was kept from counting by its timeout. The 2^53 qualification is gone.
+  const NOT_WHOLE_SECONDS = 'timeout is not a whole number of seconds'
 
-  it('qualifies a Codex wired verdict whose timeout is past the safe-integer range', async () => {
+  it.each([
+    ['a string', '5'],
+    ['2^53', 2 ** 53]
+  ])('names the reason when one of BMN\'s own Codex entries has a timeout of %s', async (_label, timeout) => {
     const path = await hookFileFixture({
-      hooks: { Stop: [{ hooks: [{ type: 'command', timeout: 1e30, command: DOCUMENTED_CODEX }] }] }
+      hooks: { Stop: [{ hooks: [{ type: 'command', timeout, command: DOCUMENTED_CODEX }] }] }
     }, 'hooks.json')
 
     const plain = await runHooks(['check', 'codex', '--file', path])
     const json = await runHooks(['check', 'codex', '--file', path, '--json'])
 
-    expect(plain.stdout).toContain(`  Stop               wired  ${PAST_SAFE_INTEGER}`)
+    expect(plain.stdout).toContain(`  Stop               missing  ${NOT_WHOLE_SECONDS}\n`)
     const stop = JSON.parse(json.stdout).agents[0].events
       .find((row: { event: string }) => row.event === 'Stop')
-    expect(stop.timeoutQualification).toBe(PAST_SAFE_INTEGER)
+    expect(stop.reason).toBe(NOT_WHOLE_SECONDS)
+    expect(stop).not.toHaveProperty('timeoutQualification')
   })
 
-  it('qualifies the first double past the safe-integer range, including one u64 could hold', async () => {
-    // 2^53 exactly: u64 would load it if the literal is integral, but a JavaScript number cannot
-    // verify that, so the verdict still carries the qualification instead of silence.
-    const path = await hookFileFixture({
-      hooks: { Stop: [{ hooks: [{ type: 'command', timeout: 2 ** 53, command: DOCUMENTED_CODEX }] }] }
-    }, 'hooks.json')
+  it('prints a wired Codex verdict with nothing beside it, whatever valid timeout it has', async () => {
+    for (const timeout of [undefined, null, 5, Number.MAX_SAFE_INTEGER]) {
+      const entry: Record<string, unknown> = { type: 'command', command: DOCUMENTED_CODEX }
+      if (timeout !== undefined) entry.timeout = timeout
+      const path = await hookFileFixture({ hooks: { Stop: [{ hooks: [entry] }] } }, 'hooks.json')
 
-    const plain = await runHooks(['check', 'codex', '--file', path])
-    const json = await runHooks(['check', 'codex', '--file', path, '--json'])
+      const plain = await runHooks(['check', 'codex', '--file', path])
+      const json = await runHooks(['check', 'codex', '--file', path, '--json'])
 
-    expect(plain.stdout).toContain(`  Stop               wired  ${PAST_SAFE_INTEGER}`)
-    expect(JSON.parse(json.stdout).agents[0].events
-      .find((row: { event: string }) => row.event === 'Stop')
-      .timeoutQualification).toBe(PAST_SAFE_INTEGER)
-  })
-
-  it('qualifies an ordinary numeric timeout with the unmeasured-rule note, in text and JSON', async () => {
-    const path = await hookFileFixture({
-      hooks: { Stop: [{ hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CODEX }] }] }
-    }, 'hooks.json')
-
-    const plain = await runHooks(['check', 'codex', '--file', path])
-    const json = await runHooks(['check', 'codex', '--file', path, '--json'])
-
-    expect(plain.stdout).toContain(`  Stop               wired  ${RULE_UNMEASURED}`)
-    expect(JSON.parse(json.stdout).agents[0].events
-      .find((row: { event: string }) => row.event === 'Stop')
-      .timeoutQualification).toBe(RULE_UNMEASURED)
-  })
-
-  it('carries nothing where no timeout value was judged: absent or null', async () => {
-    const path = await hookFileFixture({
-      hooks: { Stop: [{ hooks: [{ type: 'command', command: DOCUMENTED_CODEX }] }] }
-    }, 'hooks.json')
-
-    const json = await runHooks(['check', 'codex', '--file', path, '--json'])
-
-    for (const row of JSON.parse(json.stdout).agents[0].events) {
-      expect(row.timeoutQualification).toBeUndefined()
+      expect(plain.stdout).toContain('  Stop               wired\n')
+      expect(JSON.parse(json.stdout).agents[0].events.find((row: { event: string }) => row.event === 'Stop'))
+        .toEqual({ event: 'Stop', optional: false, state: 'wired' })
     }
   })
 
-  it('qualifies a Codex missing verdict the timeout rule produced from one of BMN\'s own entries', async () => {
-    const path = await hookFileFixture({
-      hooks: { Stop: [{ hooks: [{ type: 'command', timeout: '5', command: DOCUMENTED_CODEX }] }] }
-    }, 'hooks.json')
-
-    const plain = await runHooks(['check', 'codex', '--file', path])
-    const json = await runHooks(['check', 'codex', '--file', path, '--json'])
-
-    expect(plain.stdout).toContain(`  Stop               missing  ${NOT_LOADABLE}`)
-    const stop = JSON.parse(json.stdout).agents[0].events
-      .find((row: { event: string }) => row.event === 'Stop')
-    expect(stop.timeoutQualification).toBe(NOT_LOADABLE)
-  })
-
-  it('a dead sibling the rule dropped does not stamp the wired verdict as not loadable', async () => {
+  it('a dead sibling the rule dropped does not give the wired verdict a reason', async () => {
     const path = await hookFileFixture({
       hooks: {
-        // The dead first entry did not produce the verdict: the wired one beside it did, so the
-        // verdict carries the ordinary unmeasured-rule note, not the not-loadable one.
         Stop: [{ hooks: [{ type: 'command', timeout: '5', command: DOCUMENTED_CODEX }] }, entryGroup(DOCUMENTED_CODEX)]
       }
     }, 'hooks.json')
 
-    const plain = await runHooks(['check', 'codex', '--file', path])
     const json = await runHooks(['check', 'codex', '--file', path, '--json'])
 
-    expect(plain.stdout).toContain(`  Stop               wired  ${RULE_UNMEASURED}`)
-    const stop = JSON.parse(json.stdout).agents[0].events
-      .find((row: { event: string }) => row.event === 'Stop')
-    expect(stop.timeoutQualification).toBe(RULE_UNMEASURED)
+    expect(JSON.parse(json.stdout).agents[0].events.find((row: { event: string }) => row.event === 'Stop'))
+      .toEqual({ event: 'Stop', optional: false, state: 'wired' })
   })
 
-  it('keeps Claude reports free of the Codex qualification', async () => {
+  it('keeps Claude reports free of the Codex reason', async () => {
     const path = await hookFileFixture({
       hooks: {
         Notification: [{ hooks: [{ type: 'command', timeout: 0, command: DOCUMENTED_CLAUDE }] }],
@@ -2109,11 +2054,9 @@ it('ends every Codex report with the limit of what it checked', async () => {
     const plain = await runHooks(['check', 'claude', '--file', path])
     const json = await runHooks(['check', 'claude', '--file', path, '--json'])
 
-    // Claude's rule is measured, not a guess: its verdicts carry nothing, and its bytes are
-    // unchanged by the Codex qualification (byte-compared before and after in the epic receipts).
-    expect(plain.stdout).not.toContain('u64')
+    expect(plain.stdout).not.toContain(NOT_WHOLE_SECONDS)
     for (const row of JSON.parse(json.stdout).agents[0].events) {
-      expect(row.timeoutQualification).toBeUndefined()
+      expect(row.reason).toBeUndefined()
     }
   })
 
@@ -2188,18 +2131,6 @@ it('ends every Codex report with the limit of what it checked', async () => {
     expect(install.code).toBe(0)
     expect(install.stdout).toContain('Nothing to do')
     expect(await readFile(path, 'utf8')).toBe(before)
-  })
-
-  it('shortens a long unrecognised entry to one line', async () => {
-    const written = `bmn hook claude\n${'# padding '.repeat(30)}`
-    const path = await hookFileFixture({ hooks: { Stop: [entryGroup(written)] } })
-
-    const result = await runHooks(['check', 'claude', '--file', path, '--json'])
-
-    const row = JSON.parse(result.stdout).agents[0].events.find((r: { event: string }) => r.event === 'Stop')
-    expect(row.unrecognised[0]).toHaveLength(120)
-    expect(row.unrecognised[0].endsWith('…')).toBe(true)
-    expect(row.unrecognised[0]).not.toContain('\n')
   })
 
   it('leaves an unrecognised entry exactly as it was when install adds its own beside it', async () => {
