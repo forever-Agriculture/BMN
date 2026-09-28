@@ -402,10 +402,12 @@ export function attentionActionWhenOpened(
   return request.seenAt === null ? 'mark-seen' : null
 }
 
-/** Ctrl+Shift+U goes to what blocks an agent first: permissions and questions, then reviews and handoffs, then notices. */
+/**
+ * Ctrl+Shift+U goes to what blocks an agent first. It reads the same tiers as `compareAttention`, except that
+ * permissions and questions share one: the owner cycles through every prompt holding an agent.
+ */
 function nextRequestTier(kind: AttentionKind): number {
-  if (kind === 'permission' || kind === 'question') return 0
-  return kind === 'notice' ? 2 : 1
+  return Math.max(ATTENTION_TIER[kind], 1)
 }
 
 /** The next unresolved request in the highest waiting tier, after the current session's, wrapping; null when none wait. */
