@@ -28,6 +28,15 @@ export const procReader: ProcReader = {
  */
 export const PROCESSES_PER_SLICE = 50
 export const SLICE_MS = 4
+/** Descriptors of one process read between checks of the slice's time. */
+const DESCRIPTORS_PER_CHECK = 64
+/**
+ * How long a scan after the first searches descriptors for sockets not placed yet. The search goes on in the next scan
+ * from where this one stopped, so a scan's cost stays bounded while a test suite opens and closes listeners faster than
+ * a scan can find them, or an old process opens a new one (Epic 41 recheck, measured 2026-09-29). The first scan
+ * searches to the end, once, so the first list is complete.
+ */
+export const SEARCH_MS = 15
 
 /** ssh, http and https: a session's own program almost never holds them, and showing them would mislead. */
 const DROPPED_PORTS: ReadonlySet<number> = new Set([22, 80, 443])
@@ -45,19 +54,22 @@ interface ListeningSocket {
 
 /**
  * What one scan leaves the next, so descriptors are read only where something may have changed. Each session's socket
- * remembers the process and descriptor it was found at, checked again every scan with one link read. A socket no
- * session's process held remembers which processes were searched for it, and only a process not among them, such as a
- * daemon's child, is searched again. (A process already searched that is later handed the socket over a Unix socket is
- * not found until the socket is reopened: rare enough to accept for a list of dev servers.)
+ * remembers the process and descriptor it was found at, checked again every scan with one link read. A socket not found
+ * in a session's process yet remembers which processes were searched for it, and only a process not among them, such as
+ * a daemon's child or one the last scan had no time for, is searched again. (A process already searched that is later
+ * handed the socket over a Unix socket is not found until the socket is reopened: rare enough to accept for a list of
+ * dev servers.)
  */
 export interface ScanMemory {
   holders: Map<string, { pid: string; fd: string }>
-  /** Socket inode → the session processes already searched without finding it. */
-  foreign: Map<string, Set<string>>
+  /** Socket inode → the session processes already searched without finding it; the socket seen first comes first. */
+  pending: Map<string, Set<string>>
+  /** Whether a scan has searched once already, so later searches keep to SEARCH_MS. */
+  searched: boolean
 }
 
 export function createScanMemory(): ScanMemory {
-  return { holders: new Map(), foreign: new Map() }
+  return { holders: new Map(), pending: new Map(), searched: false }
 }
 
 /** A /proc/net word is the address in host byte order, 32 bits at a time. */
@@ -152,16 +164,30 @@ function socketInode(link: string | null): string | null {
   return link?.startsWith('socket:[') && link.endsWith(']') ? link.slice(8, -1) : null
 }
 
-/** Waits for the event loop to turn once the current slice has run long enough. */
-function slicer(now: () => number): () => Promise<void> {
+interface Slicer {
+  /** Before each process: the slice ends after PROCESSES_PER_SLICE of them or SLICE_MS. */
+  process(): Promise<void>
+  /** Among one process's descriptors: the slice ends after SLICE_MS, since one process can hold thousands. */
+  descriptors(): Promise<void>
+}
+
+/** Lets the event loop turn once the current slice has run long enough. */
+function slicer(now: () => number): Slicer {
   let start = now()
   let processes = 0
-  return async () => {
-    processes += 1
-    if (processes <= PROCESSES_PER_SLICE && now() - start < SLICE_MS) return
+  const turn = async (): Promise<void> => {
     await new Promise<void>((resolve) => setImmediate(resolve))
     start = now()
-    processes = 1
+    processes = 0
+  }
+  return {
+    async process() {
+      if (processes + 1 > PROCESSES_PER_SLICE || now() - start >= SLICE_MS) await turn()
+      processes += 1
+    },
+    async descriptors() {
+      if (now() - start >= SLICE_MS) await turn()
+    }
   }
 }
 
@@ -187,22 +213,21 @@ export async function scanSessionPorts(
   for (const socket of [...tcp, ...(tcp6 ? parseListeningSockets(tcp6.toString('utf8'), 6) : [])]) {
     if (socket.uid === uid) sockets.set(socket.inode, [...(sockets.get(socket.inode) ?? []), socket])
   }
-  for (const remembered of [memory.holders, memory.foreign]) {
+  for (const remembered of [memory.holders, memory.pending]) {
     for (const inode of remembered.keys()) if (!sockets.has(inode)) remembered.delete(inode)
   }
   if (sockets.size === 0) return result
 
-  const pause = slicer(now)
+  const slice = slicer(now)
   const attributed = new Map<string, string>()
   for (const pid of proc.readdir('/proc').filter((name) => /^\d+$/.test(name))) {
-    await pause()
+    await slice.process()
     const sessionId = processSession(proc, pid, sessionIds, uid)
     if (sessionId !== null) attributed.set(pid, sessionId)
   }
 
   // A socket placed before stays placed while the same descriptor of a session's process still holds it.
   const placed = new Map<string, string>()
-  const unplaced = new Set<string>()
   for (const inode of sockets.keys()) {
     const holder = memory.holders.get(inode)
     if (holder && attributed.has(holder.pid) &&
@@ -211,27 +236,38 @@ export async function scanSessionPorts(
       continue
     }
     memory.holders.delete(inode)
-    const searched = memory.foreign.get(inode)
-    if (!searched) unplaced.add(inode)
+    const searched = memory.pending.get(inode)
+    if (!searched) memory.pending.set(inode, new Set())
     // A pid that left the session processes and came back is another process: it is searched again.
     else for (const pid of searched) if (!attributed.has(pid)) searched.delete(pid)
   }
-  // Search the sessions' processes, newest first since a new server usually is one: every process while a socket is
-  // unplaced, else only those not yet searched for a socket no session held. Whatever a full pass leaves unplaced
-  // belongs to no session's process, for now.
-  const unsearched = (pid: string): boolean => [...memory.foreign.values()].some((searched) => !searched.has(pid))
-  for (const pid of [...attributed.keys()].sort((left, right) => Number(right) - Number(left))) {
-    if (unplaced.size === 0 && !unsearched(pid)) continue
-    await pause()
-    for (const fd of readOrNull(() => proc.readdir(`/proc/${pid}/fd`)) ?? []) {
+  // Search the sessions' processes each pending socket has not been searched in: the processes the socket seen first
+  // still needs come first, so a stream of new sockets cannot starve an older one, and among them the newest first,
+  // since a new server usually is one. One process read counts for every pending socket. After the first search, a
+  // search stops once it has run SEARCH_MS, so it always reads at least one process, and the next scan goes on with
+  // what is left.
+  const newestFirst = [...attributed.keys()].sort((left, right) => Number(right) - Number(left))
+  const order = new Set<string>()
+  for (const searched of memory.pending.values()) for (const pid of newestFirst) if (!searched.has(pid)) order.add(pid)
+  const unsearched = (pid: string): boolean => [...memory.pending.values()].some((searched) => !searched.has(pid))
+  const searchStart = now()
+  const budget = memory.searched ? SEARCH_MS : Number.POSITIVE_INFINITY
+  memory.searched = true
+  for (const pid of order) {
+    if (!unsearched(pid)) continue
+    if (now() - searchStart >= budget) break
+    await slice.process()
+    const fds = readOrNull(() => proc.readdir(`/proc/${pid}/fd`)) ?? []
+    for (let index = 0; index < fds.length; index++) {
+      if (index > 0 && index % DESCRIPTORS_PER_CHECK === 0) await slice.descriptors()
+      const fd = fds[index]!
       const inode = socketInode(readOrNull(() => proc.readlink(`/proc/${pid}/fd/${fd}`)))
-      if (inode === null || !(unplaced.delete(inode) || memory.foreign.delete(inode))) continue
+      if (inode === null || !memory.pending.delete(inode)) continue
       memory.holders.set(inode, { pid, fd })
       placed.set(inode, pid)
     }
-    for (const searched of memory.foreign.values()) searched.add(pid)
+    for (const searched of memory.pending.values()) searched.add(pid)
   }
-  for (const inode of unplaced) memory.foreign.set(inode, new Set(attributed.keys()))
 
   const commands = new Map<string, string | null>()
   const found: Array<[string, ListeningPort]> = []

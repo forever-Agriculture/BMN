@@ -109,10 +109,12 @@ export class PortWatch {
     // One scan per burst: further matching lines before it runs add nothing.
     this.carry.set(sessionId, '')
     this.lastHintAt = this.now()
+    const scanFrom = this.lastHintAt + HINT_SCAN_DELAY_MS
     this.hintTimer = this.setTimer(() => {
       this.hintTimer = null
-      // The session may have ended within the half second; with none live, nothing scans.
-      if (this.options.liveSessionIds().length > 0) void this.scanNow()
+      // The session may have ended within the half second; with none live, nothing scans. A scan that started once the
+      // half second was up, such as the busy one falling due at the same moment, has already seen what the line announced.
+      if (this.options.liveSessionIds().length > 0 && this.lastScanAt < scanFrom) void this.scanNow()
     }, HINT_SCAN_DELAY_MS)
   }
 
@@ -127,7 +129,14 @@ export class PortWatch {
         if (map === this.result) removed = true
       }
     }
-    if (this.liveChanged() || removed) this.options.changed()
+    if (this.liveChanged() || removed) {
+      // Called from the session's own start and stop: a listener that throws must not break those.
+      try {
+        this.options.changed()
+      } catch {
+        // The window hears of it with the next change.
+      }
+    }
     // Re-plan even with a timer armed: output may have brought it forward for a session that has just ended.
     if (!this.stopped && this.scanning === null) this.schedule()
   }

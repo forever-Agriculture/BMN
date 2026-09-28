@@ -399,15 +399,17 @@ and an **Open localhost:5173 — session** entry in the palette. A click opens t
 default browser and does nothing to the process. A server bound to one other address, such as
 `192.168.1.10` or `127.0.1.1`, shows and opens at that address. The sidebar shows nothing new.
 
-BMN finds the ports in `/proc`: a listening TCP socket counts for a session when the process holding
-it is yours and its environment carries that session's `BMN_SESSION_ID`, the variable every child
-inherits. That includes a server an agent left running in the background after its shell exited; it
+BMN finds the ports in `/proc`: a listening TCP socket counts for a session when you created it, the
+process holding it is yours and its environment carries that session's `BMN_SESSION_ID`, the variable
+every child inherits. That includes a server an agent left running in the background after its shell exited; it
 stays listed under its session, marked "still running after the session stopped". A program that
 clears or replaces its environment is not attributed. Ports 22, 80 and 443 are never shown. BMN reads
 `/proc` every 5 seconds while a session is printing, every 30 seconds otherwise, and half a second
 after a line such as `Local: http://localhost:5173/` (at most once every 5 seconds); it starts no
 process and reads nothing when no session is running, so what it last found stays listed until a
-session runs again.
+session runs again. After its first read, each read spends at most a few milliseconds looking through
+programs' open files, so while tests open and close servers, or when a long-running program opens a
+new port, that port can take a read or two more to appear.
 
 ### Wiring the hooks
 

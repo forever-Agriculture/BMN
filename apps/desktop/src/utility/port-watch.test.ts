@@ -127,8 +127,8 @@ describe('hint lines', () => {
       output('session-a', `GET http://localhost:3000/api/items/${tick} 200 4ms\r\n`)
       await advance(100)
     }
-    // One hint scan per 5 s, sharing its slot with the busy cadence: two scans, not twenty.
-    expect(state.scans.length - start).toBeLessThanOrEqual(3)
+    // One hint scan per 5 s, and none when the busy scan falls due at the same moment: two scans, not twenty.
+    expect(state.scans.length - start).toBeLessThanOrEqual(2)
     watch.stop()
   })
 
@@ -198,6 +198,20 @@ describe('the kept result', () => {
     expect(state.changes).toBe(changes + 1)
     expect(watch.list().map((entry) => entry.sessionId)).toEqual(['session-a'])
     watch.stop()
+  })
+
+  it('keeps the session change going when the listener throws', async () => {
+    let live = ['session-a']
+    const watch = new PortWatch({
+      scan: async () => new Map([['session-a', [port(5173)]]]),
+      knownSessionIds: () => new Set(['session-a']),
+      liveSessionIds: () => live,
+      changed: () => { throw new Error('window gone') }
+    })
+    await watch.scanNow()
+    // The session stops: its leftover server is announced as such, and that announcement fails.
+    live = []
+    expect(() => watch.sessionsChanged()).not.toThrow()
   })
 
   it.each([

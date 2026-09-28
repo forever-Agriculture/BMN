@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   PROCESSES_PER_SLICE,
+  SEARCH_MS,
   createScanMemory,
   parseListeningSockets,
   portsByPreference,
@@ -174,6 +175,19 @@ describe('attributing ports to sessions', () => {
     expect(readsWhenOtherWorkRan).toBeLessThan(base.reads.length)
   })
 
+  it('lets the event loop turn among one process\'s descriptors, since it can hold thousands', async () => {
+    let clock = 0
+    const fds = Object.fromEntries(Array.from({ length: 1_000 }, (_, fd) => [String(fd), '/dev/null']))
+    const base = fixture(tables, [], { '45': { environ: env('session-a'), fds } })
+    const proc: ProcReader = { ...base, readlink: (path) => { clock += 1; return base.readlink(path) } }
+    const scanning = scanSessionPorts(proc, new Set(['session-a']), 1000, createScanMemory(), () => clock)
+    let linkReadsWhenOtherWorkRan = -1
+    setImmediate(() => { linkReadsWhenOtherWorkRan = clock })
+    await scanning
+    expect(linkReadsWhenOtherWorkRan).toBeGreaterThan(0)
+    expect(linkReadsWhenOtherWorkRan).toBeLessThan(1_000)
+  })
+
   it('reads one link per placed socket on later scans, and searches again only when that link no longer holds it', async () => {
     const processes: Record<string, FixtureProcess> = {
       '50': { environ: env('session-a'), fds: { '0': '/dev/pts/1', '1': '/dev/pts/1', '7': 'socket:[101]' }, comm: 'vite' },
@@ -217,7 +231,70 @@ describe('attributing ports to sessions', () => {
     await scanSessionPorts(leftover, new Set(['session-a']), 1000, again)
     const reused = fixture([row4(LOOPBACK4, 6000, '0A', 301)], [], {})
     await scanSessionPorts(reused, new Set(['session-a']), 1000, again)
-    expect(again.foreign.get('301')).toEqual(new Set())
+    expect(again.pending.get('301')).toEqual(new Set())
+  })
+
+  it('after the first search, searches for SEARCH_MS a scan, goes on where it stopped, and serves the oldest socket first', async () => {
+    let clock = 0
+    const quiet = { '0': '/dev/null', '1': '/dev/null' }
+    const processes: Record<string, FixtureProcess> = Object.fromEntries(['100', '101', '102', '103', '104', '105']
+      .map((pid) => [pid, { environ: env('session-a'), fds: quiet, comm: 'node' }]))
+    processes['100'] = { ...processes['100']!, fds: { ...quiet, '5': 'socket:[201]' }, comm: 'postgres' }
+    processes['105'] = { ...processes['105']!, fds: { ...quiet, '5': 'socket:[101]' }, comm: 'vite' }
+    const table = [row4(LOOPBACK4, 5173, '0A', 101)]
+    const base = fixture(table, [], processes)
+    // Reading a process's descriptors costs half the search budget on this clock: two processes a scan.
+    const proc: ProcReader = {
+      ...base,
+      readdir: (path) => { if (path.endsWith('/fd')) clock += SEARCH_MS / 2; return base.readdir(path) }
+    }
+    const memory = createScanMemory()
+    const scan = async (): Promise<number[]> => {
+      base.reads.length = 0
+      const ports = await scanSessionPorts(proc, new Set(['session-a']), 1000, memory, () => clock)
+      return (ports.get('session-a') ?? []).map((port) => port.port)
+    }
+    const searched = (): string[] => base.reads.filter((path) => path.endsWith('/fd'))
+    // Newest first: the new server is found at once.
+    expect(await scan()).toEqual([5173])
+    expect(searched()).toEqual(['/proc/105/fd'])
+    // An old process opens a server: two processes a scan, newest first.
+    table.push(row4(LOOPBACK4, 5432, '0A', 201))
+    expect(await scan()).toEqual([5173])
+    expect(searched()).toEqual(['/proc/105/fd', '/proc/104/fd'])
+    // A socket that is gone before any search finds it, as a test suite's servers are, arrives in every scan: the
+    // older socket still gets the processes it has not been searched in, never the newest ones again.
+    table.push(row4(LOOPBACK4, 40001, '0A', 301))
+    expect(await scan()).toEqual([5173])
+    expect(searched()).toEqual(['/proc/103/fd', '/proc/102/fd'])
+    table.push(row4(LOOPBACK4, 40002, '0A', 302))
+    expect(await scan()).toEqual([5173, 5432])
+    expect(searched()).toEqual(['/proc/101/fd', '/proc/100/fd'])
+    expect(memory.pending.get('301')).toEqual(new Set(['100', '101', '102', '103']))
+  })
+
+  it('searches every process on the first scan, then at least one process a scan however long it takes', async () => {
+    let clock = 0
+    const table = [row4(LOOPBACK4, 5432, '0A', 201)]
+    const processes: Record<string, FixtureProcess> = {
+      '110': { environ: env('session-a'), fds: { '5': 'socket:[201]' }, comm: 'postgres' },
+      '111': { environ: env('session-a'), fds: {} },
+      '112': { environ: env('session-a'), fds: {} }
+    }
+    const base = fixture(table, [], processes)
+    const proc: ProcReader = { ...base, readdir: (path) => { if (path.endsWith('/fd')) clock += 3 * SEARCH_MS; return base.readdir(path) } }
+    const memory = createScanMemory()
+    const scan = () => scanSessionPorts(proc, new Set(['session-a']), 1000, memory, () => clock)
+    // The first list is complete, however long the search takes.
+    expect([...(await scan()).keys()]).toEqual(['session-a'])
+    // Later, the oldest process opens another server: one process a scan until it is found.
+    processes['110'] = { ...processes['110']!, fds: { '5': 'socket:[201]', '6': 'socket:[202]' } }
+    table.push(row4(LOOPBACK4, 5433, '0A', 202))
+    base.reads.length = 0
+    expect((await scan()).get('session-a')!.map((port) => port.port)).toEqual([5432])
+    expect((await scan()).get('session-a')!.map((port) => port.port)).toEqual([5432])
+    expect((await scan()).get('session-a')!.map((port) => port.port)).toEqual([5432, 5433])
+    expect(base.reads.filter((path) => path.endsWith('/fd'))).toEqual(['/proc/112/fd', '/proc/111/fd', '/proc/110/fd'])
   })
 
   it('never considers a socket another user created, even when a session process holds it', async () => {
