@@ -1,7 +1,7 @@
 // MODULE: program-copy.test.ts - clipboard writes programs ask for, under the owner's setting (Story 42.1)
-import type { ProgramCopyMessage, ProgramCopyNotice, ProgramCopyTarget } from '@bmn/protocol'
+import { DEFAULT_APP_SETTINGS, type ProgramCopyMessage, type ProgramCopyNotice, type ProgramCopyTarget } from '@bmn/protocol'
 import { describe, expect, it } from 'vitest'
-import { createProgramCopy } from './program-copy'
+import { createProgramCopy, programCopyAllowed } from './program-copy'
 
 const copy = (text: string, targets: ProgramCopyTarget[] = ['clipboard']): ProgramCopyMessage =>
   ({ kind: 'program-copy', sessionId: 'session-a', targets, text })
@@ -32,6 +32,14 @@ describe('program copies in main (Story 42.1)', () => {
     const { state, run } = fake({ allowed: false })
     await run(copy('secret'))
     expect(state).toMatchObject({ writes: [], notices: [] })
+  })
+
+  it('copies only on an explicit yes, so settings without the switch copy nothing', () => {
+    expect(programCopyAllowed(DEFAULT_APP_SETTINGS)).toBe(true)
+    expect(programCopyAllowed({ ...DEFAULT_APP_SETTINGS, terminal: { programClipboard: false } })).toBe(false)
+    // A host from before the switch sends no terminal section at all.
+    expect(programCopyAllowed(Object.fromEntries(Object.entries(DEFAULT_APP_SETTINGS).filter(([key]) => key !== 'terminal')))).toBe(false)
+    expect(programCopyAllowed(null)).toBe(false)
   })
 
   it('writes the primary selection where there is one, and ignores it elsewhere', async () => {

@@ -45,7 +45,7 @@ import {
   type WebContents
 } from 'electron'
 import { PtyHostClient, PtyHostRemoteError, type HostReady } from './pty-host-client'
-import { createProgramCopy } from './program-copy'
+import { createProgramCopy, programCopyAllowed } from './program-copy'
 import {
   connectRendererChannel,
   createRendererRecoveryCoalescer,
@@ -421,8 +421,7 @@ async function initializeApplication(testMode: boolean): Promise<ApplicationStar
   trackSessionProcessStates(launched.client)
   launched.client.onAppEvent((message) => appEvents.forward(message))
   const programCopy = createProgramCopy({
-    allowed: async () =>
-      (await launched.client.request<AppSettings>(METHOD_REGISTRY.settingsGet, {})).terminal.programClipboard,
+    allowed: async () => programCopyAllowed(await launched.client.request<Partial<AppSettings>>(METHOD_REGISTRY.settingsGet, {})),
     write: async (target, text) => {
       // The primary selection exists on Linux only; elsewhere a write to it is ignored.
       const board = target === 'clipboard' ? clipboard : clipboard.selection

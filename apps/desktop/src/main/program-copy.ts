@@ -1,5 +1,10 @@
 // MODULE: program-copy.ts - clipboard writes live programs ask for with OSC 52, under the owner's setting (Story 42.1)
-import type { ProgramCopyMessage, ProgramCopyNotice, ProgramCopyTarget } from '@bmn/protocol'
+import type { AppSettings, ProgramCopyMessage, ProgramCopyNotice, ProgramCopyTarget } from '@bmn/protocol'
+
+/** Only an explicit yes copies: settings from a host that does not know the switch copy nothing. */
+export function programCopyAllowed(settings: Partial<AppSettings> | null | undefined): boolean {
+  return settings?.terminal?.programClipboard === true
+}
 
 export interface ProgramCopyActions {
   /** The owner's choice, read at each copy so turning it off takes effect at once. */

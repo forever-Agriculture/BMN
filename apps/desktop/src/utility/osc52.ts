@@ -3,8 +3,10 @@ import { PROGRAM_COPY_MAX_BYTES, type ProgramCopyTarget } from '@bmn/protocol'
 
 /** herdr's cap: the decoded text of one write, at most 192 KiB. */
 export const OSC52_MAX_TEXT_BYTES = PROGRAM_COPY_MAX_BYTES
+/** The longest selection parameter a write may name; `c`, `p` and `s` are what programs send. */
+const MAX_SELECTION_CHARACTERS = 16
 /** The longest encoded body kept while a sequence is open: a selection, ';' and the base64 of the largest text. */
-const MAX_BODY_BYTES = 16 + Math.ceil(OSC52_MAX_TEXT_BYTES / 3) * 4
+const MAX_BODY_BYTES = MAX_SELECTION_CHARACTERS + 1 + Math.ceil(OSC52_MAX_TEXT_BYTES / 3) * 4
 const ESC = 0x1b
 const BEL = 0x07
 const BACKSLASH = 0x5c
@@ -40,6 +42,8 @@ export function parseOsc52Body(body: string): Osc52Write | null {
   if (separator < 0) return null
   const selection = body.slice(0, separator)
   const data = body.slice(separator + 1)
+  // The same bound the stream reader keeps, so a body parses the same however it arrived.
+  if (selection.length > MAX_SELECTION_CHARACTERS) return null
   // A read request is answered with nothing at all: no program learns what the clipboard holds.
   if (data === '?' || data === '') return null
   if (!/^[A-Za-z0-9+/]+={0,2}$/.test(data) || data.length % 4 === 1) return null

@@ -64,6 +64,15 @@ describe('reading OSC 52 from a stream', () => {
       .toEqual([{ targets: ['clipboard'], text: 'after' }])
   })
 
+  it('reads the largest write with the longest selection whole, from a body or a stream alike', () => {
+    const largest = 'é'.repeat(OSC52_MAX_TEXT_BYTES / 2)
+    const longest = 'c'.repeat(16)
+    expect(parseOsc52Body(`${longest};${b64(largest)}`)?.text).toBe(largest)
+    expect(read(`\x1b]52;${longest};${b64(largest)}\x07`)).toEqual([{ targets: ['clipboard'], text: largest }])
+    expect(parseOsc52Body(`${longest}c;${b64('x')}`)).toBeNull()
+    expect(read(`\x1b]52;${longest}c;${b64('x')}\x07`)).toEqual([])
+  })
+
   it('does nothing for a read request', () => {
     expect(read('\x1b]52;c;?\x07', '\x1b]52;;?\x1b\\')).toEqual([])
   })
