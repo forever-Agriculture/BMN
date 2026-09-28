@@ -14,6 +14,7 @@
 
 - Board: epic-31 done; 31-1..31-4 done, accepted at a9c646a (log, acceptance entry). Baseline cb6ea18. Astra reviewed 08ffd7c (4 defects + 1 gap); repair b3756bc; recheck 1 found a repair-introduced defect → stop-repair rule → Fable consultant decisions → consolidated repair 2ad34f7 (log 02:26-02:40). Final recheck of 2ad34f7: all closed except A2 (log 02:39-02:44). Owner chose A (log, after compaction): A2 repair 7de08dd (recheck 3 closed it) and the same race on the start path a9c646a (delta check closed it); gate 114/2223 PASS; Electron runs 16, 17 EXIT 0.
 - GLM pre-review done (no code repair); Fable visual review ACCEPT WITH FIXES, fixes applied in 08ffd7c (log ~01:26-01:40).
+- Delivery (owner: "update local and push to GH", log 3335): pushed 6d4e2f5; its update FAILED on the packaged smoke's 120 s timeout (self-test now ~2 min). Fix `scripts/smoke/packaged.mjs` timeout 300 s + output tail on error; packaged self-test exit 0 in 123 s against the 6d4e2f5 release (log, 2026-09-28 ~11:00). Fix committed and pushed with this handoff; `pnpm run update:desktop` requeued; installs when the owner closes BMN.
 - Active helpers: none.
 
 ## Decisions and findings
@@ -40,5 +41,5 @@
 
 ## Resume
 
-- Next safe action: none for dev-auto; push to main and `pnpm run update:desktop` await the owner's authorisation.
-- Status: COMPLETE
+- Next safe action: none for dev-auto; owner closes BMN so the queued update installs; check `~/.local/state/bmn/source-update/latest.json` phase complete.
+- Status: COMPLETE — Epic 31 accepted at a9c646a; delivery fix pushed, desktop update queued.

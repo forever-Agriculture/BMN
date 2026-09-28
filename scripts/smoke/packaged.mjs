@@ -79,8 +79,9 @@ const waylandDisplay =
 await withTemporaryRoot(temporaryRootContracts.packagedSmoke, async ({ roots }) => {
   const result = spawnSync(packagedBinary, ['--self-test'], {
     encoding: 'utf8',
-    // The self-test now covers renderer and host restarts; it takes about 40 seconds.
-    timeout: 120_000,
+    // The self-test covers renderer and host restarts, remote answers and agent history; it took
+    // about two minutes by Epic 31, so the bound leaves room for slower machines and later phases.
+    timeout: 300_000,
     env: {
       ...process.env,
       XDG_CONFIG_HOME: roots.config,
@@ -100,7 +101,10 @@ await withTemporaryRoot(temporaryRootContracts.packagedSmoke, async ({ roots }) 
       ...(waylandDisplay ? { WAYLAND_DISPLAY: waylandDisplay } : {})
     }
   })
-  if (result.error) throw result.error
+  // A timeout keeps the output so far; its last lines name the phase the self-test was in.
+  if (result.error) {
+    throw new Error(`packaged self-test failed: ${result.error.message}; last output=${JSON.stringify(result.stdout?.slice(-1_000) ?? '')}`)
+  }
   if (result.signal) throw new Error(`packaged self-test terminated by ${result.signal}`)
   if (result.status !== 0) {
     throw new Error(
