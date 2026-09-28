@@ -57,9 +57,9 @@ All commands run from the repository root.
 | `pnpm run test:run` | Unit tests, then the Electron self-test |
 | `pnpm run voice:build` | Build the pinned whisper.cpp engine (`node scripts/voice/build-whisper.mjs --force` rebuilds) |
 | `pnpm run package` | Voice engine, app build and an unpacked Linux build in `apps/desktop/release` |
-| `pnpm run smoke:packaged` | Start the packaged build against a temporary data folder and check it |
+| `pnpm run smoke:packaged [--root FOLDER]` | Start the packaged build (or the one in `FOLDER`) against a temporary data folder and check it |
 | `pnpm run install:desktop [-- --pin]` | Install the launcher and icons, `--pin` adds it to the GNOME dock |
-| `pnpm run update:desktop` | Queue a clean pushed `main` build; wait for BMN to exit, package, smoke-test, install and notify; a desktop start during the update waits for it |
+| `pnpm run update:desktop` | Queue a clean pushed `main` build; wait for BMN to exit, package into `linux-unpacked.next`, smoke-test it, swap it into `linux-unpacked` (the replaced build stays as `linux-unpacked.prev` until the next update), install and notify. A failed check leaves the live build as it was; a desktop start during the update waits for it |
 
 `make test`, `make lint`, `make typecheck` and `make build` wrap the same commands.
 
@@ -71,7 +71,9 @@ All commands run from the repository root.
 - The Electron self-test and the packaged smoke test run with temporary `XDG_*` folders. Your real
   BMN data is not touched.
 - Close a running BMN before `pnpm run package`, since packaging replaces the binary it
-  runs from.
+  runs from. `update:desktop` packages beside it instead and swaps only after BMN has exited.
+- `BMN_SMOKE_FORCE_FAILURE=1` makes `smoke:packaged` fail at once, for proving what a failed update
+  leaves behind; nothing else reads it.
 - `scripts/lib/sandbox-flag-audit.mjs` fails the tests if a flag that disables Chromium's sandbox
   appears anywhere in `apps`, `shared` or `scripts`.
 

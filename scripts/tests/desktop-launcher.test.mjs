@@ -34,7 +34,7 @@ function linkSystemTools(bin) {
 }
 
 /** A launcher wired to a fake systemctl that reports the update unit active for `activeChecks` calls. */
-function fixture({ phase, activeChecks, binary, zenity, log }) {
+function fixture({ phase, activeChecks, binary, zenity, log, liveBuild }) {
   const root = mkdtempSync(join(tmpdir(), 'bmn-launcher-'))
   roots.push(root)
   const bin = join(root, 'bin')
@@ -49,7 +49,7 @@ echo check >> '${checks}'
   executable(join(bin, 'xdg-open'), `#!/bin/sh\necho "$@" >> '${join(root, 'opened')}'\n`)
   if (zenity) executable(join(bin, 'zenity'), zenity.replaceAll('{root}', root))
   const statusPath = join(root, 'latest.json')
-  writeFileSync(statusPath, `${JSON.stringify({ phase, commit: 'abc' }, null, 2)}\n`)
+  writeFileSync(statusPath, `${JSON.stringify({ phase, commit: 'abc', ...(liveBuild ? { liveBuild } : {}) }, null, 2)}\n`)
   if (log !== undefined) writeFileSync(join(root, 'latest.log'), log)
   const packaged = binary ?? join(root, 'bmn')
   if (!binary) executable(packaged, `#!/bin/sh\necho "started $* after $(wc -l < '${checks}') checks" > '${join(root, 'started')}'\n`)
@@ -119,21 +119,66 @@ describe('desktop launcher', () => {
     expect(run.read('zenity-args')).toContain("Don't wait")
   }, 15_000)
 
-  it('offers the previous build after a failed update, and opens the log instead when asked', () => {
-    const accept = fixture({ phase: 'failed', activeChecks: 1, zenity: fakeZenity() })
+  // Story 38.2: the words match what the launcher opens - the unchanged previous build, the new build
+  // that passed its checks, or nothing when the swap stopped half way.
+  it.each([
+    [undefined, 'The update failed its checks. Your previous build is unchanged.'],
+    ['previous', 'The update failed its checks. Your previous build is unchanged.'],
+    ['new', 'The new build passed its checks, but the update did not finish. Open BMN starts the new build.']
+  ])('after a failed update with liveBuild %s, says so and opens BMN, or opens the log instead when asked', (liveBuild, text) => {
+    const accept = fixture({ phase: 'failed', activeChecks: 1, zenity: fakeZenity(), liveBuild })
     const accepted = spawnSync(accept.launcher, [], { env: accept.env, encoding: 'utf8', timeout: 10_000 })
 
     expect(accepted.status).toBe(0)
-    expect(accept.read('zenity-args')).toContain('BMN update failed')
+    const args = accept.read('zenity-args').split('\n')
+    expect(args).toContain('BMN update failed')
+    expect(args).toContain(text)
+    expect(args).toContain('Open BMN')
+    expect(args).toContain('Show log')
+    expect(accept.read('zenity-args')).not.toContain('previous build\n--ok-label\nOpen previous build')
     expect(accept.read('started')).not.toBeNull()
 
-    const showLog = fixture({ phase: 'failed', activeChecks: 1, zenity: fakeZenity({ exit: 1 }) })
+    const showLog = fixture({ phase: 'failed', activeChecks: 1, zenity: fakeZenity({ exit: 1 }), liveBuild })
     const declined = spawnSync(showLog.launcher, [], { env: showLog.env, encoding: 'utf8', timeout: 10_000 })
 
     expect(declined.status).toBe(0)
     expect(showLog.read('opened')).toBe(`${join(showLog.root, 'latest.log')}\n`)
     expect(showLog.read('started')).toBeNull()
   }, 20_000)
+
+  it('opens nothing when the failed update left no build in place, and says so', () => {
+    const run = fixture({ phase: 'failed', activeChecks: 1, zenity: fakeZenity(), liveBuild: 'none' })
+    const result = spawnSync(run.launcher, [], { env: run.env, encoding: 'utf8', timeout: 10_000 })
+
+    expect(result.status).toBe(1)
+    expect(run.read('zenity-args')).toContain('The update stopped while replacing the build, so there is no build to open. Nothing was started.')
+    expect(run.read('zenity-args')).not.toContain('Open BMN')
+    expect(run.read('started')).toBeNull()
+    expect(run.read('opened')).toBe(`${join(run.root, 'latest.log')}\n`)
+  }, 15_000)
+
+  it('says the same in the notification when zenity is not installed', () => {
+    const run = fixture({ phase: 'failed', activeChecks: 1, liveBuild: 'previous' })
+    const result = spawnSync(run.launcher, [], { env: run.env, encoding: 'utf8', timeout: 10_000 })
+
+    expect(result.status).toBe(0)
+    expect(run.read('notified')).toContain('The update failed its checks. Your previous build is unchanged.')
+    expect(run.read('started')).not.toBeNull()
+  }, 15_000)
+
+  it('opens nothing from the previous folder when an update stopped between its renames', () => {
+    const root = mkdtempSync(join(tmpdir(), 'bmn-launcher-half-'))
+    roots.push(root)
+    const binary = join(root, 'linux-unpacked', 'bmn')
+    mkdirSync(join(root, 'linux-unpacked.prev'))
+    executable(join(root, 'linux-unpacked.prev', 'bmn'), `#!/bin/sh\necho ran > '${join(root, 'prev-ran')}'\n`)
+    const run = fixture({ phase: 'building', activeChecks: 0, binary, zenity: fakeZenity({ exit: 1 }) })
+    const result = spawnSync(run.launcher, [], { env: run.env, encoding: 'utf8', timeout: 10_000 })
+
+    expect(result.status).toBe(1)
+    expect(run.read('zenity-args')).toContain(`An update stopped while replacing the build; the previous build is in ${join(root, 'linux-unpacked.prev')}. Nothing was started.`)
+    expect(existsSync(join(root, 'prev-ran'))).toBe(false)
+  }, 15_000)
 
   it('never reports an older failed update to a start that did not wait for one', () => {
     const run = fixture({ phase: 'failed', activeChecks: 0, zenity: fakeZenity() })

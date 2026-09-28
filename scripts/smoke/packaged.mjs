@@ -10,7 +10,10 @@ import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(scriptDirectory, '../..')
-const { binary: packagedBinary, resources: packagedResources } = packagedApp(repoRoot)
+// `--root FOLDER` smokes a build other than the live one: the update checks its staged build before swapping it in.
+const rootIndex = process.argv.indexOf('--root')
+const root = rootIndex > 0 ? resolve(process.argv[rootIndex + 1] ?? '') : undefined
+const { binary: packagedBinary, resources: packagedResources } = packagedApp(repoRoot, { root })
 const packagedTerminfo = join(packagedResources, 'terminfo/x/xterm-sixel-256color')
 const ownerRoots = [
   join(homedir(), '.config/bmn'),
@@ -37,6 +40,8 @@ function parseReceipt(stdout) {
   throw new Error(`packaged self-test emitted no session-roundtrip receipt: ${stdout.slice(-1_000)}`)
 }
 
+// Test-only switch: lets a real update run prove what a failed smoke leaves behind.
+if (process.env.BMN_SMOKE_FORCE_FAILURE === '1') throw new Error('packaged smoke failed on purpose (BMN_SMOKE_FORCE_FAILURE=1)')
 if (!existsSync(packagedBinary)) throw new Error(`packaged binary is missing: ${packagedBinary}`)
 if (!existsSync(packagedTerminfo)) throw new Error(`packaged Sixel terminfo is missing: ${packagedTerminfo}`)
 if (!existsSync(join(packagedResources, 'self-test/remote-answers/claude/ask-single.pre-tool-use.json'))) {

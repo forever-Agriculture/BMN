@@ -18,10 +18,14 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { UPDATE_UNIT, launcherPath, launcherScript, updateStateDirectory } from '../lib/desktop-launcher.mjs'
 import { packagedApp } from '../lib/packaged-app.mjs'
+import { buildFolders, packageSmokeAndSwap } from '../lib/staged-build.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const workerPath = fileURLToPath(import.meta.url)
-const { binary, archive } = packagedApp(repoRoot)
+const { root: liveRoot, binary, archive } = packagedApp(repoRoot)
+const folders = buildFolders(liveRoot)
+/** Which build the live path holds if this update fails: the launcher words its dialog from it. */
+let liveBuild = 'previous'
 const stateDirectory = updateStateDirectory()
 const statusPath = join(stateDirectory, 'latest.json')
 const logPath = join(stateDirectory, 'latest.log')
@@ -148,8 +152,14 @@ async function runWorker() {
   if (readiness) throw new Error(readiness)
   writeStatus({ phase: 'building', commit: buildingState.head, updatedAt: new Date().toISOString(), logPath })
 
-  runStep('package', ['run', 'package'])
-  runStep('packaged smoke test', ['run', 'smoke:packaged'])
+  // The live build is not touched until the new one has passed its smoke test in a folder beside it.
+  await packageSmokeAndSwap({
+    folders,
+    step: runStep,
+    waitForExit: waitForPackagedAppToExit,
+    log,
+    onLiveBuild: (state) => { liveBuild = state }
+  })
   runStep('desktop install', ['run', 'install:desktop'])
 
   const completedState = gitState()
@@ -165,7 +175,7 @@ async function runWorker() {
   }
 
   const completedAt = new Date().toISOString()
-  writeStatus({ phase: 'complete', commit: completedState.head, completedAt, logPath, binary })
+  writeStatus({ phase: 'complete', commit: completedState.head, completedAt, logPath, binary, liveBuild })
   log(`COMPLETE commit ${completedState.head}`)
   notify('BMN updated', `Reopen BMN to run ${completedState.head.slice(0, 7)}.`)
 }
@@ -210,7 +220,7 @@ if (directlyInvoked) {
     .then(() => worker ? runWorker() : queueWorker())
     .catch((error) => {
       const message = error instanceof Error ? error.message : String(error)
-      writeStatus({ phase: 'failed', error: message, updatedAt: new Date().toISOString(), logPath })
+      writeStatus({ phase: 'failed', error: message, liveBuild, updatedAt: new Date().toISOString(), logPath })
       log(`FAILED ${message}`)
       notify('BMN update failed', `See ${logPath}`, 'critical')
       console.error(`BMN update failed: ${message}`)

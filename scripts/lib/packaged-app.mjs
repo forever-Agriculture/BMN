@@ -11,11 +11,11 @@ function unpackedDirectory(platform, arch) {
 }
 
 /**
- * What `pnpm run package` produced: the folder it wrote, the binary to start, and the resources
- * beside it.
+ * A packaged build's folder, the binary to start and the resources beside it. With no `root` it is
+ * the live build `pnpm run package` writes; an update passes its staging or previous folder.
  */
-export function packagedApp(repoRoot, platform = process.platform, arch = process.arch) {
-  const root = join(repoRoot, 'apps/desktop/release', unpackedDirectory(platform, arch))
+export function packagedApp(repoRoot, { platform = process.platform, arch = process.arch, root } = {}) {
+  root ??= join(repoRoot, 'apps/desktop/release', unpackedDirectory(platform, arch))
   const resources = join(root, 'resources')
   return {
     root,

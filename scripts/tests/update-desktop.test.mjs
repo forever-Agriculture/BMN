@@ -58,6 +58,17 @@ describe('desktop source update', () => {
     }
   })
 
+  it('hands the staging output option to electron-builder through both package scripts (Story 38.2)', () => {
+    // pnpm appends `pnpm run package <args>` to the end of the script, so the option reaches only the
+    // last command of each script: that must be the desktop package, and there electron-builder.
+    const root = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'))
+    const desktop = JSON.parse(readFileSync(join(repoRoot, 'apps/desktop/package.json'), 'utf8'))
+
+    expect(root.scripts.package.split('&&').at(-1).trim()).toBe('pnpm --filter @bmn/desktop run package')
+    expect(desktop.scripts.package.split('&&').at(-1).trim()).toMatch(/^electron-builder --linux dir$/u)
+    expect(root.scripts['smoke:packaged']).toBe('node scripts/smoke/packaged.mjs')
+  })
+
   it('verifies the installed desktop entry starts BMN through the update-aware launcher', () => {
     const launcher = '/home/owner/.local/share/bmn/launch-bmn'
     expect(desktopEntryRunsLauncher(`[Desktop Entry]\nExec="${launcher}"\n`, launcher)).toBe(true)
