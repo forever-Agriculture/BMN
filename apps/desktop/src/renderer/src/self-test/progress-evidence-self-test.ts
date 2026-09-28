@@ -1,6 +1,6 @@
 // MODULE: progress-evidence-self-test.ts - Electron self-test of the progress detail: honest words, no PTY input, no resize
 import type { Terminal } from '@xterm/xterm'
-import type { ProgressEvidenceProbe } from './progress-evidence-probe'
+import type { ProgressEvidenceProbe } from '../progress-evidence-probe'
 
 /** The first two waits sit behind a shell that publishes and reports, so they wait a real while. */
 async function waitFor<Value>(

@@ -156,7 +156,7 @@ interface TerminalLine {
   translateToString(trimRight?: boolean): string
 }
 
-interface TestableTerminal {
+export interface TestableTerminal {
   cols: number
   rows: number
   modes: {
@@ -192,60 +192,70 @@ interface RegisteredTerminalHook {
 const terminalHooks = new WeakMap<HookTarget, Map<string, RegisteredTerminalHook>>()
 const terminalFacades = new WeakMap<HookTarget, TerminalTestHook>()
 
-export function installTerminalTestHook(options: {
-  enabled: boolean
-  target: HookTarget
-  sessionId: string
-  terminal: TestableTerminal
-  getPtyDimensions(): { cols: number; rows: number } | undefined
-  getRefitCount(): number
-  getInputCount(): number
-  getImageStorageMB(): number
+/** What a test-mode pane hands the hook and its behavioural self-test: the terminal and the counters it keeps. */
+export interface TerminalTestHandle<Term extends TestableTerminal = TestableTerminal> {
+  startup: { sessionId: string; workspaceId: string; name: string }
+  terminal: Term
+  /** The pane's own section element. */
+  section: { readonly current: HTMLElement | null }
+  ptyDimensions(): { cols: number; rows: number } | undefined
+  refitCount(): number
+  inputEvents(): number
+  imageStorageMB(): number
   imageLayerPresent(): boolean
   sixelFixture(): Promise<{ storageMB: number; layer: boolean }>
   view?: TerminalViewProbe
+}
+
+export function installTerminalTestHook<Term extends TestableTerminal>(options: {
+  enabled: boolean
+  target: HookTarget
+  handle: TerminalTestHandle<Term>
+  /** The selected pane's behavioural self-test; the pane loads it only when this is called. */
   integration?(): Promise<TerminalIntegrationProbe>
 }): () => void {
   if (!options.enabled) return () => undefined
+  const { handle } = options
+  const sessionId = handle.startup.sessionId
 
   const entry: RegisteredTerminalHook = {
     snapshot: () => {
       const bufferLines: string[] = []
-      const buffer = options.terminal.buffer.active
+      const buffer = handle.terminal.buffer.active
       for (let index = 0; index < buffer.length; index += 1) {
         const line = buffer.getLine(index)
         if (line) bufferLines.push(line.translateToString(true))
       }
-      const ptyDimensions = options.getPtyDimensions()
+      const ptyDimensions = handle.ptyDimensions()
       return {
         bufferLines,
-        cols: options.terminal.cols,
-        rows: options.terminal.rows,
-        refits: options.getRefitCount(),
-        inputEvents: options.getInputCount(),
-        imageStorageMB: options.getImageStorageMB(),
-        imageLayerPresent: options.imageLayerPresent(),
+        cols: handle.terminal.cols,
+        rows: handle.terminal.rows,
+        refits: handle.refitCount(),
+        inputEvents: handle.inputEvents(),
+        imageStorageMB: handle.imageStorageMB(),
+        imageLayerPresent: handle.imageLayerPresent(),
         modes: {
-          bracketedPasteMode: options.terminal.modes.bracketedPasteMode,
-          sendFocusMode: options.terminal.modes.sendFocusMode,
-          mouseTrackingMode: options.terminal.modes.mouseTrackingMode,
-          wraparoundMode: options.terminal.modes.wraparoundMode,
-          applicationCursorKeysMode: options.terminal.modes.applicationCursorKeysMode,
-          originMode: options.terminal.modes.originMode,
-          cursorHidden: options.terminal._core?.coreService?.isCursorHidden ?? null,
-          mouseEncoding: options.terminal._core?.coreMouseService?.activeEncoding ?? null,
-          alternateScreen: options.terminal.buffer.active.type === 'alternate'
+          bracketedPasteMode: handle.terminal.modes.bracketedPasteMode,
+          sendFocusMode: handle.terminal.modes.sendFocusMode,
+          mouseTrackingMode: handle.terminal.modes.mouseTrackingMode,
+          wraparoundMode: handle.terminal.modes.wraparoundMode,
+          applicationCursorKeysMode: handle.terminal.modes.applicationCursorKeysMode,
+          originMode: handle.terminal.modes.originMode,
+          cursorHidden: handle.terminal._core?.coreService?.isCursorHidden ?? null,
+          mouseEncoding: handle.terminal._core?.coreMouseService?.activeEncoding ?? null,
+          alternateScreen: handle.terminal.buffer.active.type === 'alternate'
         },
         ...(ptyDimensions ? { ptyCols: ptyDimensions.cols, ptyRows: ptyDimensions.rows } : {})
       }
     },
-    sixelFixture: options.sixelFixture,
-    ...(options.view ? { view: options.view } : {}),
+    sixelFixture: handle.sixelFixture,
+    ...(handle.view ? { view: handle.view } : {}),
     ...(options.integration ? { integration: options.integration } : {})
   }
   const registry = terminalHooks.get(options.target) ?? new Map<string, RegisteredTerminalHook>()
   terminalHooks.set(options.target, registry)
-  registry.set(options.sessionId, entry)
+  registry.set(sessionId, entry)
 
   let facade = terminalFacades.get(options.target)
   if (!facade) {
@@ -287,7 +297,7 @@ export function installTerminalTestHook(options: {
     })
   }
   return () => {
-    if (registry.get(options.sessionId) === entry) registry.delete(options.sessionId)
+    if (registry.get(sessionId) === entry) registry.delete(sessionId)
     if (registry.size > 0) return
     terminalHooks.delete(options.target)
     terminalFacades.delete(options.target)

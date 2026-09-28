@@ -1607,6 +1607,8 @@ export class SessionManager {
     }
   }
 
+  /** Electron self-test only: ends every session the way a crashed host would; reached only from pty-host's
+   * `selfTestHealthProbe` in a host started with `--self-test-host`. */
   abandonForHostLossSelfTest(): void {
     for (const session of this.sessions.values()) {
       if (session.attachmentId) this.revokeAttachment(session)

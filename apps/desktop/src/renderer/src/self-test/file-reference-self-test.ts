@@ -1,6 +1,6 @@
 // MODULE: file-reference-self-test.ts - Electron self-test of file references: keyboard palette, Ctrl+click, mouse mode, no PTY input
 import type { Terminal } from '@xterm/xterm'
-import type { FileReferenceFlowProbe } from './file-reference-probe'
+import type { FileReferenceFlowProbe } from '../file-reference-probe'
 
 
 const MARKER = 'FILEREF refs/src/parser.ts:42:7'

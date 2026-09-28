@@ -53,7 +53,7 @@ All commands run from the repository root.
 | `pnpm run lint` | ESLint over `apps`, `shared` and `scripts` |
 | `pnpm run typecheck` | TypeScript project build of the protocol, main/preload and renderer |
 | `pnpm run test:unit` | Vitest unit and integration tests |
-| `pnpm run test:electron` | Build, then start the real Electron app in self-test mode |
+| `pnpm run test:electron` | Build, run the real Electron app in self-test mode, then check that a normal start loads no self-test code |
 | `pnpm run test:run` | Unit tests, then the Electron self-test |
 | `pnpm run voice:build` | Build the pinned whisper.cpp engine (`node scripts/voice/build-whisper.mjs --force` rebuilds) |
 | `pnpm run package` | Voice engine, app build and an unpacked Linux build in `apps/desktop/release` |
@@ -109,6 +109,7 @@ See [architecture.md](architecture.md) for processes and rules. Useful entry poi
 | PTY sessions | `apps/desktop/src/utility/session-manager.ts` |
 | Files, requests, control socket, Telegram, backups | `apps/desktop/src/utility/companion-service.ts` |
 | Database | `apps/desktop/src/utility/database-*.ts` |
+| Self-test (loaded only under `--self-test`) | `apps/desktop/src/main/self-test/`, `apps/desktop/src/renderer/src/self-test/` |
 | Shared message types | `shared/protocol/src` |
 | Header identities and sigils | `apps/desktop/src/renderer/src/theme.ts`, `icons.tsx` |
 

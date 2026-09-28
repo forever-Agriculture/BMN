@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { installTerminalTestHook } from './test-hook'
+import { installTerminalTestHook, type TerminalTestHandle } from './test-hook'
 
 function fakeTerminal(
   cols = 101,
@@ -23,20 +23,29 @@ function fakeTerminal(
   }
 }
 
+/** The handle a 101x37 test pane with two refits and five input events would hand the hook. */
+function handle(sessionId: string, overrides: Partial<TerminalTestHandle> = {}): TerminalTestHandle {
+  return {
+    startup: { sessionId, workspaceId: 'workspace-a', name: 'Pane' },
+    terminal: fakeTerminal(),
+    section: { current: null },
+    ptyDimensions: () => ({ cols: 101, rows: 37 }),
+    refitCount: () => 2,
+    inputEvents: () => 5,
+    imageStorageMB: () => 0,
+    imageLayerPresent: () => false,
+    sixelFixture: async () => ({ storageMB: 0, layer: false }),
+    ...overrides
+  }
+}
+
 describe('renderer acceptance hook', () => {
   it('is absent in normal mode', () => {
     const target: Record<string, unknown> = {}
     const dispose = installTerminalTestHook({
       enabled: false,
       target,
-      sessionId: 'session-a',
-      terminal: fakeTerminal(),
-      getPtyDimensions: () => ({ cols: 101, rows: 37 }),
-      getRefitCount: () => 2,
-      getInputCount: () => 5,
-      getImageStorageMB: () => 0,
-      imageLayerPresent: () => false,
-      sixelFixture: async () => ({ storageMB: 0, layer: false })
+      handle: handle('session-a')
     })
     expect(Object.hasOwn(target, '__aitermTest')).toBe(false)
     dispose()
@@ -47,14 +56,7 @@ describe('renderer acceptance hook', () => {
     const dispose = installTerminalTestHook({
       enabled: true,
       target,
-      sessionId: 'session-a',
-      terminal: fakeTerminal(),
-      getPtyDimensions: () => ({ cols: 101, rows: 37 }),
-      getRefitCount: () => 2,
-      getInputCount: () => 5,
-      getImageStorageMB: () => 0,
-      imageLayerPresent: () => false,
-      sixelFixture: async () => ({ storageMB: 0, layer: false })
+      handle: handle('session-a')
     })
     const hook = target.__aitermTest as { snapshot(sessionId?: string): unknown; snapshots(): unknown }
     expect(hook).toBeTypeOf('object')
@@ -278,14 +280,7 @@ describe('renderer acceptance hook', () => {
     installTerminalTestHook({
       enabled: true,
       target,
-      sessionId: 'session-a',
-      terminal: fakeTerminal(),
-      getPtyDimensions: () => undefined,
-      getRefitCount: () => 2,
-      getInputCount: () => 5,
-      getImageStorageMB: () => 0,
-      imageLayerPresent: () => false,
-      sixelFixture: async () => ({ storageMB: 0, layer: false }),
+      handle: handle('session-a', { ptyDimensions: () => undefined }),
       integration
     })
     await expect((target.__aitermTest as { integration(): Promise<unknown> }).integration())
@@ -297,26 +292,17 @@ describe('renderer acceptance hook', () => {
     const disposeA = installTerminalTestHook({
       enabled: true,
       target,
-      sessionId: 'session-a',
-      terminal: fakeTerminal(),
-      getPtyDimensions: () => ({ cols: 101, rows: 37 }),
-      getRefitCount: () => 2,
-      getInputCount: () => 5,
-      getImageStorageMB: () => 0,
-      imageLayerPresent: () => false,
-      sixelFixture: async () => ({ storageMB: 0, layer: false })
+      handle: handle('session-a')
     })
     const disposeB = installTerminalTestHook({
       enabled: true,
       target,
-      sessionId: 'session-b',
-      terminal: fakeTerminal(80, 24, ['foreign']),
-      getPtyDimensions: () => ({ cols: 80, rows: 24 }),
-      getRefitCount: () => 3,
-      getInputCount: () => 7,
-      getImageStorageMB: () => 0,
-      imageLayerPresent: () => false,
-      sixelFixture: async () => ({ storageMB: 0, layer: false })
+      handle: handle('session-b', {
+        terminal: fakeTerminal(80, 24, ['foreign']),
+        ptyDimensions: () => ({ cols: 80, rows: 24 }),
+        refitCount: () => 3,
+        inputEvents: () => 7
+      })
     })
     const hook = target.__aitermTest as {
       snapshot(sessionId?: string): { cols: number; rows: number; refits: number }

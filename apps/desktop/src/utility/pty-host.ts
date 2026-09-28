@@ -371,6 +371,41 @@ async function start(): Promise<void> {
     port.start()
   }
 
+  /**
+   * Electron self-test only: the two health.get requests the self-test uses to end this host abruptly
+   * (host loss) and to answer an open request at a key the way a Telegram tap will (Epic 30.2).
+   * Undefined for every other request and for any host not started with `--self-test-host`; the control
+   * socket never reaches it.
+   */
+  function selfTestHealthProbe(params: Record<string, unknown>): Promise<unknown> | undefined {
+    if (!process.argv.includes('--self-test-host')) return undefined
+    if (params.selfTestHostLoss === true) {
+      setTimeout(() => {
+        void database.close().then(() => {
+          parentPort.postMessage({ kind: 'host-loss-self-test-ready' })
+          manager.abandonForHostLossSelfTest()
+          process.exit(0)
+        })
+      }, 0)
+      return Promise.resolve({ selfTestHostLossScheduled: true })
+    }
+    if (params.selfTestRemoteAnswer === undefined) return undefined
+    const probe = record(params.selfTestRemoteAnswer)
+    return (async () => {
+      const rows = await database.companion('listAttention')
+      const open = rows.find((row) => row.sessionId === probe.sessionId && row.requestKey === probe.requestKey && row.state === 'open')
+      if (!open) return { selfTestRemoteAnswer: { outcome: null, request: null } }
+      const outcome = await companionService.answerAttention({
+        requestId: open.requestId,
+        revision: open.revision,
+        epoch: companionService.answerEpoch(open.requestId) ?? -1,
+        incarnationId: open.incarnationId ?? '',
+        answer: probe.answer as AnswerRequest['answer']
+      })
+      return { selfTestRemoteAnswer: { outcome, request: await database.companion('getAttention', open.requestId) } }
+    })()
+  }
+
   async function route(request: RpcRequest): Promise<unknown> {
     if (!handshaken && request.method !== METHOD_REGISTRY.hello) {
       throw new HostControlError(
@@ -392,33 +427,7 @@ async function start(): Promise<void> {
         return { protocol: PROTOCOL_VERSION, instanceId: randomUUID() }
       }
       case METHOD_REGISTRY.healthGet:
-        if (params.selfTestHostLoss === true && process.argv.includes('--self-test-host')) {
-          setTimeout(() => {
-            void database.close().then(() => {
-              parentPort.postMessage({ kind: 'host-loss-self-test-ready' })
-              manager.abandonForHostLossSelfTest()
-              process.exit(0)
-            })
-          }, 0)
-          return { selfTestHostLossScheduled: true }
-        }
-        if (params.selfTestRemoteAnswer !== undefined && process.argv.includes('--self-test-host')) {
-          // Electron self-test only (Epic 30.2): answers the open request at a key the way a Telegram tap will.
-          // Not on the control socket, and absent from every build that is not started with this flag.
-          const probe = record(params.selfTestRemoteAnswer)
-          const rows = await database.companion('listAttention')
-          const open = rows.find((row) => row.sessionId === probe.sessionId && row.requestKey === probe.requestKey && row.state === 'open')
-          if (!open) return { selfTestRemoteAnswer: { outcome: null, request: null } }
-          const outcome = await companionService.answerAttention({
-            requestId: open.requestId,
-            revision: open.revision,
-            epoch: companionService.answerEpoch(open.requestId) ?? -1,
-            incarnationId: open.incarnationId ?? '',
-            answer: probe.answer as AnswerRequest['answer']
-          })
-          return { selfTestRemoteAnswer: { outcome, request: await database.companion('getAttention', open.requestId) } }
-        }
-        return manager.health()
+        return selfTestHealthProbe(params) ?? manager.health()
       case METHOD_REGISTRY.workspaceList:
         if ('includeArchived' in params && typeof params.includeArchived !== 'boolean') {
           throw new HostControlError(

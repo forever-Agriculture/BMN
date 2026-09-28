@@ -1,7 +1,7 @@
 // MODULE: voice-self-test.ts - Electron self-test of voice vocabulary: suggest, approve, add, remove, snapshot, restart, no Enter
 import type { Terminal } from '@xterm/xterm'
 import type { SessionRecord } from '@bmn/protocol'
-import type { VoiceFlowProbe } from './voice-probe'
+import type { VoiceFlowProbe } from '../voice-probe'
 
 const FIXTURE_LINE = 'VOCAB SessionManager pty_host sk-abcdefghijklmnopqrstuvwxyz 3f2a9c1e7b0d https://example.com/x/y 2026-09-19'
 const EXCLUDED = ['sk-abcdefghijklmnopqrstuvwxyz', '3f2a9c1e7b0d', 'https', 'example.com', '2026-09-19', 'VOCAB']
