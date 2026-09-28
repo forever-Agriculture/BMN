@@ -433,8 +433,10 @@ session's `PATH` (not a path), then its arguments, at most 64 parts of at most 1
 refused with the rule it broke. The session's `PATH` is the one BMN starts every session with: the
 folder holding `bmn`, then BMN's own `PATH`. A folder that only a shell's startup files add (a
 `.bashrc` line, a version manager) is not on it, because Resume runs the program directly, not
-through a shell; such a name is refused when it is reported, not when Resume is pressed. A later report replaces the earlier one; `--key` makes a retry
-safe. Outside BMN the command records nothing, says so and exits 0, so a wrapper can run it
+through a shell; such a name is refused when it is reported, not when Resume is pressed. Each
+report replaces the one before it, as soon as it arrives, so repeating one is always safe; `--key`
+is accepted but keeps no receipt, because a receipt would turn a later report with the same key
+into a no-op. Outside BMN the command records nothing, says so and exits 0, so a wrapper can run it
 anywhere.
 
 BMN keeps the command with the session, so it survives a restart, until a new process starts in

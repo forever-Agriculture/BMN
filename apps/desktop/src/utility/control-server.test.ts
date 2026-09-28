@@ -424,15 +424,35 @@ describe('a program reporting how to resume it (Story 43.1)', () => {
     const recorded = await client.request('resume.report', { argv, idempotencyKey: 'resume-1' })
     expect(recorded.result).toEqual({ recorded: true, argv, reportedAt: '2026-09-29T10:15:00.000Z' })
     expect(fixture.handlers.reportResumeCommand).toHaveBeenLastCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', argv })
-    // A retry with the same key is the same report: it is answered from the receipt, not recorded twice.
-    expect((await client.request('resume.report', { argv, idempotencyKey: 'resume-1' })).result).toMatchObject({ duplicate: true })
-    expect(fixture.handlers.reportResumeCommand).toHaveBeenCalledTimes(1)
+    // A retry with the same key sets the same command again, which leaves exactly that command stored.
+    expect((await client.request('resume.report', { argv, idempotencyKey: 'resume-1' })).result)
+      .toEqual({ recorded: true, argv, reportedAt: '2026-09-29T10:15:00.000Z' })
+    expect(fixture.handlers.reportResumeCommand).toHaveBeenCalledTimes(2)
+    expect(fixture.handlers.reportResumeCommand).toHaveBeenLastCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', argv })
 
     // A token for session 1 can neither set nor clear session 2's command.
     expectError(await client.request('resume.report', { sessionId: 'session-2', argv }), ERROR_CODES.unauthorized)
     expectError(await client.request('resume.clear', { sessionId: 'session-2' }), ERROR_CODES.unauthorized)
     expect((await client.request('resume.clear', { idempotencyKey: 'clear-1' })).result).toEqual({ cleared: true })
     expect(fixture.handlers.clearResumeCommand).toHaveBeenLastCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1' })
+  })
+
+  it('lets every report take effect, even one that reuses an earlier key in the same process', async () => {
+    const fixture = await serverFixture()
+    const client = await authenticated(fixture, sessionToken(fixture))
+    const first = ['my-agent', '--resume', 'abc']
+    const second = ['my-agent', '--resume', 'def']
+    await client.request('resume.report', { argv: first, idempotencyKey: 'wrapper' })
+    await client.request('resume.clear', { idempotencyKey: 'wrapper-clear' })
+    await client.request('resume.report', { argv: first, idempotencyKey: 'wrapper' })
+    // A shell outlives several agent runs: the same line after a clear records the command again.
+    expect(fixture.handlers.reportResumeCommand).toHaveBeenCalledTimes(2)
+    await client.request('resume.report', { argv: second, idempotencyKey: 'other' })
+    await client.request('resume.report', { argv: first, idempotencyKey: 'wrapper' })
+    // The last report wins, whatever key it carried.
+    expect(fixture.handlers.reportResumeCommand).toHaveBeenLastCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', argv: first })
+    expect(fixture.handlers.reportResumeCommand).toHaveBeenCalledTimes(4)
+    expect(fixture.handlers.clearResumeCommand).toHaveBeenCalledTimes(1)
   })
 
   it('takes the same key from the session\'s next process as a new report, not a retry', async () => {

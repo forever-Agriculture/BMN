@@ -888,6 +888,7 @@ export class SessionManager {
     } catch {
       throw ended()
     }
+    if (this.liveIncarnationId(p.sessionId) !== p.incarnationId) throw ended()
     try {
       return await write()
     } catch (error) {

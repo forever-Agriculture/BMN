@@ -1135,19 +1135,18 @@ export class ControlServer {
         const problem = reportedResumeArgvProblem(params.argv)
         if (problem !== null) throw invalid(problem)
         const argv = params.argv as string[]
-        const idempotencyKey = readText(params, 'idempotencyKey', RULES.idempotencyKey)
+        readText(params, 'idempotencyKey', RULES.idempotencyKey)
         const sessionId = this.target(scope, params)
-        // Keyed per process: the same wrapper line in the session's next process is a new report, not a retry.
-        return this.idempotent(scope, method, idempotencyKey, params, () =>
-          handlers.reportResumeCommand({ sessionId, incarnationId: scope.incarnationId, argv }), { perIncarnation: true })
+        // No receipt: a report only replaces the process's own command, so repeating one is harmless, while a
+        // receipt would answer a later report with the same key (after a clear, or another report) and store nothing.
+        return handlers.reportResumeCommand({ sessionId, incarnationId: scope.incarnationId, argv })
       }
       case 'resume.clear': {
         const params = closedParams(rawParams, ['sessionId', 'idempotencyKey'])
         if (scope.kind !== 'session') throw unauthorized('Only a program in the session may clear how to resume it')
-        const idempotencyKey = readText(params, 'idempotencyKey', RULES.idempotencyKey)
+        readText(params, 'idempotencyKey', RULES.idempotencyKey)
         const sessionId = this.target(scope, params)
-        return this.idempotent(scope, method, idempotencyKey, params, () =>
-          handlers.clearResumeCommand({ sessionId, incarnationId: scope.incarnationId }), { perIncarnation: true })
+        return handlers.clearResumeCommand({ sessionId, incarnationId: scope.incarnationId })
       }
       default:
         throw invalid(`Unknown method: ${method.slice(0, 64)}`)
@@ -1163,12 +1162,10 @@ export class ControlServer {
     method: string,
     idempotencyKey: string | undefined,
     params: Params,
-    run: () => Promise<unknown>,
-    options: { perIncarnation?: boolean } = {}
+    run: () => Promise<unknown>
   ): Promise<unknown> {
     if (idempotencyKey === undefined) return run()
-    const incarnation = options.perIncarnation ? incarnationOf(scope) : null
-    const key = `${scopeKey(scope)}${incarnation === null ? '' : `@${incarnation}`}|${method}|${idempotencyKey}`
+    const key = `${scopeKey(scope)}|${method}|${idempotencyKey}`
     const hash = paramsHash(params)
     return this.withReceiptLock(key, async () => {
       const { receipts } = this.options

@@ -502,13 +502,14 @@ describe('bmn resume-command (Story 43.1)', () => {
     })
   })
 
-  it('makes a retry with --key the same report, and clears with --clear', async () => {
+  it('makes a retry with --key set the same command again, and clears with --clear', async () => {
     const fixture = await cliFixture()
     const args = ['resume-command', '--key', 'resume-1', '--', 'my-agent', '-r']
     expect((await runCli(args, { env: fixture.sessionEnv })).code).toBe(0)
-    expect((await runCli(args, { env: fixture.sessionEnv })).stdout).toBe(
-      'Resume command recorded for this session: my-agent -r (already done earlier; not repeated)\n')
-    expect(fixture.handlers.reportResumeCommand).toHaveBeenCalledTimes(1)
+    // No receipt answers it: the retry records the same command, which is where a retry should leave it.
+    expect((await runCli(args, { env: fixture.sessionEnv })).stdout).toBe('Resume command recorded for this session: my-agent -r\n')
+    expect(fixture.handlers.reportResumeCommand).toHaveBeenCalledTimes(2)
+    expect(fixture.handlers.reportResumeCommand).toHaveBeenLastCalledWith(expect.objectContaining({ argv: ['my-agent', '-r'] }))
     expect(await runCli(['resume-command', '--clear'], { env: fixture.sessionEnv })).toEqual({
       code: 0, stdout: 'Resume command cleared\n', stderr: ''
     })
