@@ -582,10 +582,17 @@ ${FOOTNOTE}`)
     expect(commandShownWhole(BASH)).toBe(true)
   })
 
-  it('hides a key run into by an underscore on a card (Astra review)', () => {
-    const card = requestCard(CLAUDE, { kind: 'question', title: 'Restore?', body: `from backup_${KEY}` })
+  it('hides a key run into other text on a card (Astra review)', () => {
+    const card = requestCard(CLAUDE, { kind: 'question', title: 'Restore?', body: `from backup_${KEY} and backupAKIAABCDEFGHIJKLMNOP` })
     expect(card.text).not.toContain(KEY)
+    expect(card.text).not.toContain('AKIA')
     expect(card.text.endsWith(FOOTNOTE)).toBe(true)
+  })
+
+  it('leaves no tail of a key that overlaps another on a card (Astra recheck)', () => {
+    const card = requestCard(CLAUDE, { kind: 'question', title: 'Keys?', body: `AIza${'_'.repeat(10)}AIza${'B'.repeat(35)}` })
+    expect(card.text).not.toMatch(/B{2,}/)
+    expect(card.text).toContain('[secret hidden]')
   })
 
   it('cleans, masks and footnotes a card stored before this change when it is ended after a restart (Astra review)', () => {

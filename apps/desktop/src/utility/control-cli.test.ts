@@ -453,6 +453,10 @@ describe('long text from standard input (Story 35.1)', () => {
     }
   })
 
+  it('ships the CLI executable, since sessions find it on PATH (Astra recheck)', async () => {
+    expect((await stat(CLI)).mode & 0o111).not.toBe(0)
+  })
+
   it('accepts input exactly at the limit, counted in the app\'s own unit', async () => {
     const fixture = await cliFixture()
     const env = fixture.sessionEnv

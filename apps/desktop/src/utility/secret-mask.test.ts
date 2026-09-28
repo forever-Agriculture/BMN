@@ -34,8 +34,16 @@ describe('maskSecrets', () => {
     ['an apikey assignment', 'apikey = 12345678', `apikey = ${SECRET_MASK}`],
     ['a secret assignment', 'secret:swordfish99', `secret:${SECRET_MASK}`],
     ['a passwd assignment', 'PASSWD=correcthorse', `PASSWD=${SECRET_MASK}`],
-    // Astra review: a word character before the prefix that is not a letter or digit still leaves a key.
+    // Astra review and recheck: a key is hidden wherever its shape appears, run into other text or not.
     ['an sk- key after an underscore', 'backup_sk-abcdefghijklmnopqrstuvwxyz0123', `backup_${SECRET_MASK}`],
+    ['an AWS key id run into letters', 'backupAKIAABCDEFGHIJKLMNOP', `backup${SECRET_MASK}`],
+    ['a GitHub token run into a letter', 'xghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij', `x${SECRET_MASK}`],
+    ['an sk-ant- key run into letters', 'keysk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWx', `key${SECRET_MASK}`],
+    // The specified sk- shape also takes a hyphenated word ending in sk with a long slug: hidden, footnoted.
+    ['a slug the sk- shape takes (accepted over-hiding)', 'task-add-telegram-masking-support', `ta${SECRET_MASK}`],
+    ['one Google key overlapping another', `AIza${'_'.repeat(10)}AIza${'B'.repeat(35)}`, SECRET_MASK],
+    ['an AWS key id inside an assignment', 'password=AKIAABCDEFGHIJKLMNOPxyz', `password=${SECRET_MASK}`],
+    ['a key the kept assignment name runs over', 'sk-abcdefghijklmnopqrstuvwxyz_token=abcdefgh12', `${SECRET_MASK}=${SECRET_MASK}`],
     ['an AWS key id after an underscore', 'id_AKIAABCDEFGHIJKLMNOP', `id_${SECRET_MASK}`],
     ['a quoted GitHub token', '"ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij"', `"${SECRET_MASK}"`],
     ['a Google API key after a colon', 'key:AIzaSyA-1234567890abcdefghijklmnopqrstu', `key:${SECRET_MASK}`]
@@ -51,8 +59,7 @@ describe('maskSecrets', () => {
     ['ordinary prose', 'Should I keep the token refresh logic, or is the secret rotation enough?'],
     ['a longer name that ends elsewhere', 'tokenizer=bert-base-uncased max_tokens=4096'],
     ['a short bearer word', 'Bearer of bad news'],
-    ['sk- inside a word', 'task-abcdefghijklmnopqrstuvwxyz'],
-    ['a branch name ending in sk', 'risk-assessment-for-the-new-module'],
+    ['a short slug after sk', 'task-list-view'],
     ['an emoji and right-to-left text', 'שלום \u{1F468}‍\u{1F469} مرحبا']
   ])('keeps %s', (_label, text) => {
     expect(maskSecrets(text)).toBe(text)
@@ -72,6 +79,14 @@ describe('clipOutsideSecrets', () => {
     const clipped = clipOutsideSecrets(text, 200)
     expect(clipped).toBe(`${'a'.repeat(185)} `)
     expect(clipped).not.toContain('AKIA')
-    expect(clipOutsideSecrets(`${'b'.repeat(190)} password=hunter2hunter2`, 200)).toBe(`${'b'.repeat(190)} `)
+    // The name of an assignment is not secret; its value is never split.
+    expect(clipOutsideSecrets(`${'b'.repeat(190)} password=hunter2hunter2`, 200)).toBe(`${'b'.repeat(190)} password=`)
+    expect(clipOutsideSecrets(`${'b'.repeat(185)} password=hunter2hunter2`, 200)).toBe(`${'b'.repeat(185)} password=`)
+  })
+
+  it('moves the cut back past overlapping secrets, not only the first (Astra recheck)', () => {
+    const overlapping = `${'x'.repeat(149)} AIza${'_'.repeat(10)}AIza${'B'.repeat(35)}`
+    expect(clipOutsideSecrets(overlapping, 200)).toBe(`${'x'.repeat(149)} `)
+    expect(maskSecrets(overlapping)).toBe(`${'x'.repeat(149)} ${SECRET_MASK}`)
   })
 })

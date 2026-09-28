@@ -519,6 +519,11 @@ describe('companion store', () => {
     prepareAgentHandoff(database, { ...agentHandoff('secret-draft', 'secret-request'), text }, now)
     expect(getAttention(database, 'secret-request')?.body).toBe(`${'a'.repeat(185)} `)
     expect(getDraft(database, 'secret-draft')?.text).toBe(text)
+    // Astra recheck: a second key overlapping the first is not left split at the cut either.
+    const overlapping = `${'x'.repeat(149)} AIza${'_'.repeat(10)}AIza${'B'.repeat(35)} tail`
+    const later = new Date(Date.parse(now) + 60_000).toISOString()
+    prepareAgentHandoff(database, { ...agentHandoff('overlap-draft', 'overlap-request', later), text: overlapping }, later)
+    expect(getAttention(database, 'overlap-request')?.body).toBe(`${'x'.repeat(149)} `)
   })
 
   it('creates an agent petition and exposes only its own metadata projection', () => {

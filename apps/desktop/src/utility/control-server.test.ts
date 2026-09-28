@@ -1024,6 +1024,20 @@ describe('format characters in agent text (Story 34.1)', () => {
     expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
     await expect(receipts.get('session:session-1|attention.open|ask-3')).resolves.toBeUndefined()
   })
+
+  it('never replays a receipt for another method spelled to reach its key (Astra recheck)', async () => {
+    const fixture = await serverFixture()
+    const client = await authenticated(fixture, sessionToken(fixture))
+    const params = { requestKey: 'k', kind: 'question', title: 'T' }
+
+    const first = await client.request('attention.open', { ...params, idempotencyKey: 'a|b' })
+    const alias = await client.request('attention.open|a', { ...params, idempotencyKey: 'b' })
+
+    expect(first.error).toBeUndefined()
+    expectError(alias, ERROR_CODES.invalidArgument)
+    expect(alias.error?.message).toBe('Unknown method: attention.open|a')
+    expect(fixture.handlers.openAttention).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('control server idempotency', () => {

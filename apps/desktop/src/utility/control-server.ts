@@ -447,6 +447,9 @@ function replayed(existing: ReceiptRecord): unknown {
   throw new ControlError(code, stored?.message || 'Earlier attempt failed')
 }
 
+/** The methods whose stripped fields can make a request accepted before Story 34.1 fail validation now. */
+const STRIPPED_IDEMPOTENT_METHODS: ReadonlySet<string> = new Set(['attention.open', 'handoff.prepare'])
+
 function withDuplicate(result: unknown): unknown {
   return isRecord(result) ? { ...result, duplicate: true } : { result: result ?? null, duplicate: true }
 }
@@ -786,7 +789,10 @@ export class ControlServer {
     try {
       return await this.dispatch(scope, method, rawParams)
     } catch (error) {
-      if (!(error instanceof ControlError) || error.code !== ERROR_CODES.invalidArgument || !isRecord(rawParams)) throw error
+      // Only those methods: a receipt key joins scope, method and key with `|`, so an unknown method must never
+      // reach a receipt.
+      if (!STRIPPED_IDEMPOTENT_METHODS.has(method) || !(error instanceof ControlError) ||
+        error.code !== ERROR_CODES.invalidArgument || !isRecord(rawParams)) throw error
       let idempotencyKey: string | undefined
       try {
         idempotencyKey = readText(rawParams, 'idempotencyKey', RULES.idempotencyKey)

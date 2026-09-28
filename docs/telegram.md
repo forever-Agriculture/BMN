@@ -113,9 +113,9 @@ typed line cannot pick an option. If Telegram refuses a card's formatting, it is
   JWTs, PEM private keys, BMN's own session tokens, and the value of an `api_key`, `apikey`, `token`,
   `secret`, `password` or `passwd` assignment of 8 or more characters (the name stays). This covers
   every card, option label, button and toast. A card that hid something ends with "Some text looked
-  like a secret and was hidden. The full text is on the laptop." A key run into by punctuation or an
-  underscore (`backup_sk-…`) is hidden too; a letter or digit right before the prefix (`task-…`)
-  makes it a word. A permission whose command had part hidden, or held invisible characters, gets no
+  like a secret and was hidden. The full text is on the laptop." A key is hidden wherever its shape
+  appears, even run into other text; the `sk-` shape also takes a hyphenated word ending in `sk` with a
+  long slug (`task-add-…`), which is hidden too. A permission whose command had part hidden, or held invisible characters, gets no
   Allow button: answer it at the laptop. A handoff preview is never cut through a secret. A tapped option still answers that option.
   Only what leaves for Telegram is masked; the terminal, saved output, Needs you, Files and handoff
   drafts keep the exact text. Invisible and direction-changing characters are removed as well.
