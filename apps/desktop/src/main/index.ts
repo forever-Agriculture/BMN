@@ -2271,7 +2271,7 @@ function writeRemoteAnswerHarness(directory: string, fixtures: string): string {
     "    if (/^\\d$/.test(key)) { show(null); return [Q.options[Number(key) - 1].label] }",
     "  }",
     "}",
-    "for (const scenario of ['single', 'three', 'codex', 'off', 'allow', 'deny', 'card', 'claude-more', 'codex-other', 'opencode-more']) {",
+    "for (const scenario of ['single', 'three', 'codex', 'off', 'allow', 'deny', 'card', 'claude-more', 'codex-other', 'opencode-more', 'secret-ask']) {",
     "  await wait('fire-' + scenario)",
     "  keys.length = 0",
     "  if (scenario === 'single') {",
@@ -2340,6 +2340,12 @@ function writeRemoteAnswerHarness(directory: string, fixtures: string): string {
     "      hook('opencode', 'opencode/question.replied.multiple-typed.json', { requestID: requestRef, sessionID: asked.sessionID, answers: taken.answers })",
     "      cli(['answer', 'take', '--wait', '0', '--reported', requestRef + '=ok', '--json'])",
     "    }",
+    // Story 34.2: a plain `bmn ask` whose body quotes a synthetic key, withdrawn once its card has been checked.
+    "  } else if (scenario === 'secret-ask') {",
+    "    cli(['ask', 'secret-ask', 'Commit the key I found?', '--body', 'Should I commit ' + 'sk-ant-api03-' + 'SelfTestSyntheticKey_0123456789 to the repo?'])",
+    "    writeFileSync(file('opened-' + scenario), '')",
+    "    await wait('fire-secret-ask-close')",
+    "    cli(['withdraw', 'secret-ask'])",
     "  } else {",
     "    show('claude-bash-permission.txt'); hook('claude', 'claude/bash.permission-request.json')",
     "    writeFileSync(file('opened-' + scenario), '')",
@@ -5160,6 +5166,43 @@ async function runSelfTest(): Promise<void> {
       ]) || openCodeMore.keys !== '[["Rate limiting"],["Sessions"]]' || openCodeMore.request?.resolvedBy !== 'telegram') {
       throw new Error(`fuller telegram answers went wrong: ${JSON.stringify(fuller)}`)
     }
+    // Story 34.2: a `bmn ask` body quoting a key reaches the Bot API with the key hidden and the card saying so.
+    console.error('[BMN] self-test phase: telegram secret masking')
+    const secretKey = 'sk-ant-api03-' + 'SelfTestSyntheticKey_0123456789'
+    const secretFrom = bot.calls.length
+    writeFileSync(join(answerDirectory, 'fire-secret-ask'), '')
+    const secretCard = (): FakeBotCall | undefined => bot.calls.slice(secretFrom).find((call) =>
+      call.method === 'sendMessage' && String(call.body.text).includes('Commit the key I found?'))
+    const secretBy = Date.now() + 30_000
+    while (!secretCard()) {
+      if (existsSync(join(answerDirectory, 'error'))) {
+        throw new Error(`remote answer stand-in failed: ${readFileSync(join(answerDirectory, 'error'), 'utf8')}`)
+      }
+      if (Date.now() > secretBy) throw new Error(`the secret-ask card never arrived: ${JSON.stringify(bot.calls.slice(secretFrom))}`)
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    // Needs you keeps the exact text; only what leaves for Telegram is masked.
+    const secretStored = (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
+      .filter((row) => row.sessionId === answerSession.sessionId && row.requestKey === 'secret-ask')
+      .sort((left, right) => right.openedAt.localeCompare(left.openedAt))[0]
+    writeFileSync(join(answerDirectory, 'fire-secret-ask-close'), '')
+    const secretClosedBy = Date.now() + 15_000
+    while (!existsSync(join(answerDirectory, 'done-secret-ask')) && Date.now() < secretClosedBy) {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    const secretMasking = {
+      card: String(secretCard()!.body.text),
+      leaked: bot.calls.slice(secretFrom).some((call) => JSON.stringify(call.body).includes(secretKey)),
+      storedWhole: secretStored?.body?.includes(secretKey) ?? false,
+      withdrawn: existsSync(join(answerDirectory, 'done-secret-ask'))
+    }
+    console.error(`[BMN] self-test phase: telegram secret masking ${JSON.stringify({ ...secretMasking, card: secretMasking.card.replaceAll(secretKey, '<key>') })}`)
+    if (secretMasking.leaked || !secretMasking.card.includes('Should I commit [secret hidden] to the repo?') ||
+      !secretMasking.card.endsWith('<i>Some text looked like a secret and was hidden. The full text is on the laptop.</i>') ||
+      !secretMasking.storedWhole || !secretMasking.withdrawn) {
+      throw new Error(`telegram secret masking went wrong: ${JSON.stringify({ ...secretMasking, card: secretMasking.card.replaceAll(secretKey, '<key>') })}`)
+    }
+
     // Story 32.2: a channel that stops delivering shows on the gear and notifies once; a short outage stays quiet.
     console.error('[BMN] self-test phase: telegram channel cue')
     const telegramStatusNow = (): Promise<TelegramStatus> => client.request<TelegramStatus>(METHOD_REGISTRY.telegramStatus, {})

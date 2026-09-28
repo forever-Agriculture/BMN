@@ -108,6 +108,15 @@ typed line cannot pick an option. If Telegram refuses a card's formatting, it is
 - A tap can only choose among the buttons BMN drew for one open request. Nothing an agent can reach
   (the control socket or the `bmn` CLI) can create or change an answer.
 - The connector uses outbound long polling. Nothing listens for incoming connections.
+- Text that looks like a secret is hidden before BMN sends it, as `[secret hidden]`: `sk-` keys
+  (`sk-ant-`, `sk-proj-`), AWS access key ids, `Bearer` tokens, GitHub, Slack and Google API keys,
+  JWTs, PEM private keys, BMN's own session tokens, and the value of an `api_key`, `apikey`, `token`,
+  `secret`, `password` or `passwd` assignment of 8 or more characters (the name stays). This covers
+  every card, option label, button and toast. A card that hid something ends with "Some text looked
+  like a secret and was hidden. The full text is on the laptop." A permission whose command had part
+  hidden gets no Allow button: answer it at the laptop. A tapped option still answers that option.
+  Only what leaves for Telegram is masked; the terminal, saved output, Needs you, Files and handoff
+  drafts keep the exact text. Invisible and direction-changing characters are removed as well.
 
 ## One program per bot
 

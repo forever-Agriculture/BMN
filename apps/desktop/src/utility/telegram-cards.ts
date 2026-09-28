@@ -7,6 +7,7 @@ import {
   type ModelOriginAgent
 } from '@bmn/protocol'
 import type { AnswerOutcome, AnswerRefusal } from './remote-answer'
+import { SECRET_FOOTNOTE, SECRET_MASK, maskSecrets } from './secret-mask'
 
 /** Telegram's limit on one message's text; every card is measured as the HTML string itself, which is never shorter. */
 export const TELEGRAM_TEXT_LIMIT = 4096
@@ -57,10 +58,16 @@ export function escapeHtml(text: string): string {
 
 /**
  * Agent-written text on its way to Telegram, before any escaping or clipping: a record stored before Story 34.1
- * may still hold invisible or direction-changing format characters, and none of them leave the machine.
+ * may still hold invisible or direction-changing format characters, and none of them leave the machine; nor
+ * does anything shaped like a secret (Story 34.2).
  */
 export function said(text: string): string {
-  return stripFormatCharacters(text)
+  return maskSecrets(stripFormatCharacters(text))
+}
+
+/** A card whose text hides a secret ends by saying so, so the owner knows the laptop has the full text. */
+function footnoted(text: string): string {
+  return text.includes(SECRET_MASK) ? `${text}\n\n<i>${SECRET_FOOTNOTE}</i>` : text
 }
 
 /** Clips to at most `max` characters including the ellipsis, never splitting a surrogate pair. */
@@ -169,7 +176,8 @@ function questionBody(
  * Fits the card in Telegram's limit by one rule: descriptions are clipped first, then question text,
  * never labels. `render` is called with ever smaller caps until the text fits or the caps are spent.
  */
-function fitted(render: (limits: { description: number; question: number }) => string): string {
+function fitted(draw: (limits: { description: number; question: number }) => string): string {
+  const render = (limits: { description: number; question: number }): string => footnoted(draw(limits))
   const unlimited = Number.MAX_SAFE_INTEGER
   let text = render({ description: unlimited, question: unlimited })
   if (text.length <= TELEGRAM_TEXT_LIMIT) return text
@@ -274,9 +282,17 @@ function homeRelative(path: string, home: string | null): string {
   return path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path
 }
 
-/** Whether the card can show the whole command; a permission is never approved from a clipped one. */
+/** Whether masking hid part of the command (Story 34.2). */
+function commandMasked(prompt: AttentionPermissionPrompt): boolean {
+  return prompt.command !== null && said(prompt.command) !== stripFormatCharacters(prompt.command)
+}
+
+/**
+ * Whether the card can show the whole command; a permission is never approved from a clipped one, nor from one
+ * with part of it hidden as a secret.
+ */
 export function commandShownWhole(prompt: AttentionPermissionPrompt): boolean {
-  return prompt.command !== null && clip(prompt.command, COMMAND_CHARS) === prompt.command
+  return prompt.command !== null && clip(prompt.command, COMMAND_CHARS) === prompt.command && !commandMasked(prompt)
 }
 
 export interface PermissionCardInput {
@@ -306,12 +322,14 @@ export function permissionCard(input: PermissionCardInput): RenderedCard {
   const tokens = prompt.command !== null && !commandShownWhole(prompt) ? null : input.tokens
   const trailer = tokens !== null
     ? input.note ? `⚠ <i>${escapeHtml(input.note)}</i>` : null
+    : prompt.command !== null && commandMasked(prompt)
+      ? '<i>Part of the command is hidden here. Answer at the laptop.</i>'
     : prompt.command !== null && !commandShownWhole(prompt)
       ? '<i>The command is too long to show here. Answer at the laptop.</i>'
       : input.closedBecause === 'permissions-off'
         ? '<i>Answer this at the laptop.</i>'
         : '<i>No buttons for this kind yet. Answer at the laptop.</i>'
-  const text = trailer ? `${base}\n\n${trailer}` : base
+  const text = footnoted(trailer ? `${base}\n\n${trailer}` : base)
   if (tokens === null) return { text, keyboard: null, base }
   const row: InlineButton[] = [{ text: 'Allow once', callback_data: tokens.allow }]
   if (tokens.deny !== null) row.push({ text: 'Deny', callback_data: tokens.deny })
@@ -325,7 +343,7 @@ export function requestCard(header: CardHeader, record: Pick<AttentionRecord, 'k
     `<b>${escapeHtml(clip(said(record.title), 500))}</b>`,
     ...(record.body ? ['', agentText(record.body)] : [])
   ].join('\n')
-  return { text: `${base}\n\n<i>Reply to this message to answer.</i>`, keyboard: null, base }
+  return { text: footnoted(`${base}\n\n<i>Reply to this message to answer.</i>`), keyboard: null, base }
 }
 
 /** A notice: a finished turn reads as the agent finishing, anything else as a warning with its title. */
@@ -335,14 +353,14 @@ export function noticeCard(
 ): RenderedCard {
   if (record.requestKey === 'turn') {
     const base = [headerLine('✓', header, ' finished'), ...(record.body ? ['', agentText(record.body)] : [])].join('\n')
-    return { text: `${base}\n<i>Reply to this message to continue.</i>`, keyboard: null, base }
+    return { text: footnoted(`${base}\n<i>Reply to this message to continue.</i>`), keyboard: null, base }
   }
   const base = [
     headerLine('⚠', header),
     `<b>${escapeHtml(clip(said(record.title), 500))}</b>`,
     ...(record.body ? ['', agentText(record.body)] : [])
   ].join('\n')
-  return { text: `${base}\n\n<i>Reply to this message to answer.</i>`, keyboard: null, base }
+  return { text: footnoted(`${base}\n\n<i>Reply to this message to answer.</i>`), keyboard: null, base }
 }
 
 export function exitCard(header: CardHeader): string {
@@ -409,5 +427,5 @@ export function endingReply(outcome: AnswerOutcome): string | null {
 }
 
 export function endedCard(base: string, ending: CardEnding): string {
-  return `${base}\n\n${endingLine(ending)}`
+  return footnoted(`${base}\n\n${endingLine(ending)}`)
 }

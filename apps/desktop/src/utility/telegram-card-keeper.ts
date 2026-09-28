@@ -22,6 +22,7 @@ import {
   questionCard,
   REFUSAL_WORDS,
   requestCard,
+  said,
   type CardEnding,
   type CardHeader,
   type InlineKeyboard,
@@ -289,7 +290,7 @@ export class TelegramCardKeeper {
       case 'toggle': {
         const on = !progress.toggled.includes(action.index)
         progress.toggled = on ? [...progress.toggled, action.index] : progress.toggled.filter((index) => index !== action.index)
-        callback = `${on ? '●' : '○'} ${question.options[action.index]!.label}`
+        callback = `${on ? '●' : '○'} ${said(question.options[action.index]!.label)}`
         break
       }
       case 'other':
@@ -388,7 +389,7 @@ export class TelegramCardKeeper {
     const answer: RemoteAnswer = { type: 'choices', choices: progress.choices }
     const labels = progress.choices.map((choice, index) => shownChoice(prompt.questions[index]!, choice))
     card.state = 'sending'
-    await callback(`Sending ${labels.join(' · ')}…`)
+    await callback(`Sending ${labels.map(said).join(' · ')}…`)
     await this.enqueue(card, () => this.showSending(card, labels))
     void this.deliver(card, answer, labels, binding)
   }

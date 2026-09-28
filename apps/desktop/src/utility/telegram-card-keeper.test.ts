@@ -163,6 +163,13 @@ describe('sending a card', () => {
     expect(h.answers).toEqual([])
   })
 
+  it('mints no tokens for a permission whose command has a secret hidden (Story 34.2)', async () => {
+    const h = setup({ record: record({ ...BASH, command: 'export OPENAI_API_KEY=abcdefgh12345678' } as AttentionPrompt) })
+    await h.keeper.page(h.state.record!)
+    expect(h.connector.buttons()).toEqual([])
+    expect(h.connector.sends[0]!.text).toContain('Part of the command is hidden here. Answer at the laptop.')
+  })
+
   it('resends a card Telegram refuses to format once as plain words without buttons', async () => {
     const h = setup()
     h.connector.refuseHtml = true
@@ -267,6 +274,35 @@ describe('a tap', () => {
     expect(h.connector.edits.every((edit) => (edit.options.keyboard ?? null) === null)).toBe(true)
     expect(h.connector.sends).toHaveLength(1)
     expect(h.updates.map((update) => update.state)).toEqual(['sending', 'final'])
+  })
+
+  it('answers a masked option by its identity and never sends the secret in a card or toast (Story 34.2)', async () => {
+    // A synthetic key in the sk-ant- shape; not a real credential.
+    const key = 'sk-ant-api03-SyntheticKeyForTests_0123456789'
+    const masked: AttentionPrompt = { ...QUESTION, questions: [{ ...QUESTION.questions[0]!,
+      options: [{ label: 'JWT', description: null }, { label: `Keep ${key}`, description: null }] }] } as AttentionPrompt
+    const h = setup({ record: record(masked), answer: async () => ({ state: 'confirmed', sent: [`Keep ${key}`] }) })
+    await h.keeper.page(h.state.record!)
+    expect((h.connector.sends[0]!.options.keyboard ?? []).flat().slice(0, 2))
+      .toEqual([{ text: '1 · JWT', callback_data: 'tok-1' }, { text: '2 · Keep [secret hidden]', callback_data: 'tok-2' }])
+    await h.keeper.tap(h.tap('tok-2'))
+    await settle()
+    expect(h.answers.map((answer) => answer.answer)).toEqual([{ type: 'choices', choices: [1] }])
+    expect(h.connector.toasts).toEqual([{ id: 'cb-tok-2', text: 'Sending Keep [secret hidden]…' }])
+    const sent = [...h.connector.sends.map((send) => send.text), ...h.connector.edits.map((edit) => edit.text), ...h.connector.toasts.map((toast) => toast.text)]
+    expect(sent.some((text) => text.includes(key))).toBe(false)
+    expect(h.connector.lastEdit()?.text.endsWith('The full text is on the laptop.</i>')).toBe(true)
+  })
+
+  it('toasts a masked multi-select toggle without the secret', async () => {
+    const key = 'sk-ant-api03-SyntheticKeyForTests_0123456789'
+    const multi: AttentionPrompt = { ...QUESTION, questions: [{ ...QUESTION.questions[0]!, multiSelect: true,
+      options: [{ label: `Keep ${key}`, description: null }, { label: 'JWT', description: null }] }] } as AttentionPrompt
+    const h = setup({ record: record(multi) })
+    await h.keeper.page(h.state.record!)
+    await h.keeper.tap(h.tap('tok-1'))
+    await settle()
+    expect(h.connector.toasts).toEqual([{ id: 'cb-tok-1', text: '● Keep [secret hidden]' }])
   })
 
   it('returns to the poll loop before the answer is confirmed', async () => {

@@ -497,3 +497,76 @@ from main
     expect(card.text).toContain('<b>می‌خواهم \u{1F468}‍\u{1F469}</b>')
   })
 })
+
+describe('secret shapes on the way to Telegram (Story 34.2)', () => {
+  // A synthetic key in the sk-ant- shape; not a real credential.
+  const KEY = 'sk-ant-api03-SyntheticKeyForTests_0123456789'
+  const FOOTNOTE = '<i>Some text looked like a secret and was hidden. The full text is on the laptop.</i>'
+
+  it('hides a key in a request body and ends the card with the one footnote', () => {
+    const card = requestCard(CLAUDE, { kind: 'question', title: 'Commit the key?', body: `Should I commit ${KEY} I found?` })
+    expect(card.text).toBe(`❓ <b>api-server</b> · Claude 🇺🇸
+<b>Commit the key?</b>
+
+Should I commit [secret hidden] I found?
+
+<i>Reply to this message to answer.</i>
+
+${FOOTNOTE}`)
+    expect(plainText(card.text)).not.toContain(KEY)
+    expect(plainText(card.text).endsWith('The full text is on the laptop.')).toBe(true)
+  })
+
+  it('adds no footnote when nothing was hidden', () => {
+    expect(requestCard(CLAUDE, { kind: 'question', title: 'Pick a branch', body: 'commit 69f0fd50a5a2a390bca40e417b68e5e1a167def7' }).text)
+      .not.toContain('looked like a secret')
+  })
+
+  it('hides a notice title and a finished turn', () => {
+    const notice = noticeCard(CLAUDE, { title: `token=${KEY}`, body: null, requestKey: 'n' })
+    expect(notice.text).toContain('<b>token=[secret hidden]</b>')
+    expect(notice.text.endsWith(FOOTNOTE)).toBe(true)
+    const turn = noticeCard(CLAUDE, { title: 'done', body: `Exported ${KEY}`, requestKey: 'turn' })
+    expect(turn.text).not.toContain(KEY)
+    expect(turn.text.endsWith(FOOTNOTE)).toBe(true)
+  })
+
+  it('hides option labels, descriptions and earlier answers, keeping each button on its own option', () => {
+    const leaky = { ...TESTS, text: `Rotate ${KEY}?`, options: [
+      { label: `Keep ${KEY}`, description: `Bearer ${KEY}` }, { label: 'Rotate', description: null }] }
+    const card = questionCard({ header: CLAUDE, prompt: questions(AUTH, leaky), step: 1, chosen: [`password=${KEY}`], tokens: ['k', 'r'] })
+    expect(card.text).not.toContain(KEY)
+    expect(card.text).toContain('Auth method: <b>password=[secret hidden]</b>')
+    expect(card.text).toContain('<b>1. Keep [secret hidden]</b>\nBearer [secret hidden]')
+    expect(card.text.endsWith(FOOTNOTE)).toBe(true)
+    expect(card.keyboard).toEqual([[{ text: '1 · Keep [secret hidden]', callback_data: 'k' }], [{ text: '2 · Rotate', callback_data: 'r' }]])
+    expect(card.base).not.toContain(KEY)
+  })
+
+  it('keeps a long masked question card within the limit, footnote included', () => {
+    const long = { ...TESTS, text: `${KEY} ${'x'.repeat(5000)}` }
+    const card = questionCard({ header: CLAUDE, prompt: questions(long), step: 0, chosen: [], tokens: ['y', 'l'] })
+    expect(card.text.length).toBeLessThanOrEqual(TELEGRAM_TEXT_LIMIT)
+    expect(card.text.endsWith(FOOTNOTE)).toBe(true)
+  })
+
+  it('never offers Allow once for a command with part of it hidden', () => {
+    const card = permissionCard({
+      header: CLAUDE, prompt: { ...BASH, command: `curl -H "Authorization: Bearer ${KEY}" api` },
+      tokens: { allow: 'a', deny: 'd' }, closedBecause: null, home: null
+    })
+    expect(card.keyboard).toBeNull()
+    expect(card.text).toContain('<pre>curl -H "Authorization: Bearer [secret hidden]" api</pre>')
+    expect(card.text).toContain('<i>Part of the command is hidden here. Answer at the laptop.</i>')
+    expect(card.text.endsWith(FOOTNOTE)).toBe(true)
+  })
+
+  it('keeps the footnote last once a card is decided', () => {
+    const base = requestCard(CLAUDE, { kind: 'question', title: `Use ${KEY}?`, body: null }).base
+    const ended = endedCard(base, { type: 'outcome', permission: false, outcome: { state: 'confirmed', sent: [`Keep ${KEY}`] } })
+    expect(ended).not.toContain(KEY)
+    expect(ended).toContain('✓ <i>Sent: Keep [secret hidden]</i>')
+    expect(ended.endsWith(FOOTNOTE)).toBe(true)
+    expect(endingLine({ type: 'sending', labels: [`Keep ${KEY}`] })).toBe('<i>Sending: Keep [secret hidden]…</i>')
+  })
+})
