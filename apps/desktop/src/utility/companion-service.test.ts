@@ -2075,11 +2075,17 @@ describe('terminal notices (OSC 9, 99, 777)', () => {
   it('forgets a deleted session rather than keeping its notice and hook state for ever', async () => {
     await service.sessionsChanged()
     await observeHook('s1', 'incarnation-1')
+    await (service as unknown as { observeHookEvent(p: unknown): Promise<unknown> }).observeHookEvent({
+      sessionId: 's1', incarnationId: 'incarnation-1', agent: 'claude', event: 'SessionStart', source: 'compact',
+      toolName: null, effects: []
+    })
     await notice({ sessionId: 's2', incarnationId: 'incarnation-2', title: 'Still open' })
     const kept = service as unknown as {
       hookReporters: Map<string, unknown>; hookObservations: Map<string, unknown>; terminalNotices: Map<string, unknown>
+      hookCompactions: Map<string, unknown>
     }
-    expect([kept.hookReporters.size, kept.hookObservations.size, kept.terminalNotices.size]).toEqual([1, 1, 1])
+    expect([kept.hookReporters.size, kept.hookObservations.size, kept.terminalNotices.size, kept.hookCompactions.size])
+      .toEqual([1, 1, 1, 1])
 
     database.prepare("DELETE FROM attention_request WHERE session_id IN ('s1', 's2')").run()
     database.prepare("DELETE FROM session WHERE session_id IN ('s1', 's2')").run()
@@ -2087,7 +2093,8 @@ describe('terminal notices (OSC 9, 99, 777)', () => {
 
     // These are in memory and per session, so a long-lived app must not accumulate one entry per
     // session it has ever had. They are pruned with the hook log, on the same pass.
-    expect([kept.hookReporters.size, kept.hookObservations.size, kept.terminalNotices.size]).toEqual([0, 0, 0])
+    expect([kept.hookReporters.size, kept.hookObservations.size, kept.terminalNotices.size, kept.hookCompactions.size])
+      .toEqual([0, 0, 0, 0])
     await expect(service.route(METHOD_REGISTRY.hookObservationGet, {
       sessionId: 's1', incarnationId: 'incarnation-1'
     })).resolves.toEqual({ state: 'none', sessionId: 's1', incarnationId: 'incarnation-1' })

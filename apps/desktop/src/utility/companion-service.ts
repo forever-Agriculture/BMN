@@ -799,7 +799,8 @@ export class CompanionService {
     }
     // A deleted session keeps no hook events: the log, and everything else kept per session in
     // memory here, follows the sessions that still exist.
-    for (const map of [this.hookEvents, this.hookReporters, this.hookObservations, this.hookOrigins, this.terminalNotices, this.repeatStates]) {
+    for (const map of [this.hookEvents, this.hookReporters, this.hookObservations, this.hookOrigins, this.hookCompactions,
+      this.terminalNotices, this.repeatStates]) {
       for (const sessionId of map.keys()) {
         if (!this.knownSessions.has(sessionId)) map.delete(sessionId)
       }
