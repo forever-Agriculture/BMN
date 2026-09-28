@@ -6,8 +6,12 @@ import { Dialog } from './dialog'
 import { contextUseWords, planSourceWords, planUseMissingWords, planUseWords, planWindowViews } from './session-presentation'
 import './plan-use.css'
 
-/** One reading's windows as meters; the list's label is the whole reading in one line. */
-export function PlanWindows(props: { reading: UsageReading; now: number }): React.JSX.Element {
+/**
+ * One reading's windows as meters; the list's label is the whole reading in one line. With `context`, the
+ * reading's context share follows as one more row, so its number lines up under the windows' numbers.
+ */
+export function PlanWindows(props: { reading: UsageReading; now: number; context?: boolean }): React.JSX.Element {
+  const context = props.context === true ? contextUseWords(props.reading) : null
   return (
     <ul className="plan-use-windows" aria-label={planUseWords(props.reading, props.now) ?? undefined}>
       {planWindowViews(props.reading, props.now).map((window) => (
@@ -18,7 +22,26 @@ export function PlanWindows(props: { reading: UsageReading; now: number }): Reac
           <span className="when" title={window.when}>{window.when}</span>
         </li>
       ))}
+      {context === null || props.reading.contextUsedPercent == null ? null : (
+        <li className="plan-use-context" title={context} aria-label={context}>
+          <span className="name">Context window</span>
+          <span aria-hidden="true" />
+          <span className="value">{usagePercent(props.reading.contextUsedPercent)}%</span>
+        </li>
+      )}
     </ul>
+  )
+}
+
+/** Context use on its own, for a reading without plan windows (`claude glm`). */
+function ContextUse(props: { reading: UsageReading | null }): React.JSX.Element | null {
+  const context = contextUseWords(props.reading)
+  if (context === null || props.reading?.contextUsedPercent == null) return null
+  return (
+    <p className="plan-use-context" title={context} aria-label={context}>
+      <span className="name">Context window</span>
+      <span className="value">{usagePercent(props.reading.contextUsedPercent)}%</span>
+    </p>
   )
 }
 
@@ -46,19 +69,15 @@ export function PlanUseView(props: { sessionId: string; incarnationId: string | 
   }, [props.sessionId, props.incarnationId, props.refreshTick])
 
   const reading = usage?.reading ?? null
-  const context = contextUseWords(reading)
   return (
     <section className="plan-use inspector-section" aria-label="Plan use">
       <h3>Plan use</h3>
       {failed ? <p className="inline-error" role="status">Plan use unavailable</p> : null}
-      {reading !== null && reading.windows.length > 0 ? <PlanWindows reading={reading} now={props.refreshTick} />
-        : <p className="plan-use-note">{withCommands(planUseMissingWords(usage ?? { agent: null, reading: null }))}</p>}
-      {context === null || reading?.contextUsedPercent == null ? null : (
-        <p className="plan-use-context" title={context} aria-label={context}>
-          <span className="name">Context window</span>
-          <span className="value">{usagePercent(reading.contextUsedPercent)}%</span>
-        </p>
-      )}
+      {reading !== null && reading.windows.length > 0 ? <PlanWindows reading={reading} now={props.refreshTick} context />
+        : <>
+          <p className="plan-use-note">{withCommands(planUseMissingWords(usage ?? { agent: null, reading: null }))}</p>
+          <ContextUse reading={reading} />
+        </>}
       {reading === null ? null : <small>{planSourceWords(reading, props.refreshTick)}</small>}
     </section>
   )

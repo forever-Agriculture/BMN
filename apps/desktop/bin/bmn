@@ -1827,9 +1827,10 @@ function holdAtTestGate() {
  */
 const STATUS_LINE_WRAPPER = 'if [ -n "${BMN_CONTROL_SOCKET:-}" ] && command -v bmn >/dev/null 2>&1 && ' +
   'bmn_statusline=$(mktemp 2>/dev/null); then ' +
-  'if cat > "$bmn_statusline" && exec 3<"$bmn_statusline" 4<"$bmn_statusline"; then rm -f "$bmn_statusline"; ' +
+  'if cat > "$bmn_statusline" 2>/dev/null && exec 3<"$bmn_statusline" 4<"$bmn_statusline"; then rm -f "$bmn_statusline"; ' +
   'bmn statusline report 0<&3 3<&- 4<&- >/dev/null 2>&1 & exec 0<&4 3<&- 4<&-; ' +
-  // A copy that failed part-way (a full disk) still gives the owner's command every byte that was read.
+  // A copy that failed part-way (a full disk) fails quietly and gives the owner's command the bytes it holds;
+  // the rest of the input is lost with it.
   'else exec 0<"$bmn_statusline"; rm -f "$bmn_statusline"; fi; fi\n'
 /** Claude's two plan windows and their lengths in minutes, the unit Codex also reports. */
 const STATUS_LINE_WINDOWS = { five_hour: 300, seven_day: 10_080 }

@@ -86,6 +86,13 @@ const TELEGRAM_OFFSET_KEY = 'telegram.offset'
 const ATTENTION_SWEEP_MS = 30_000
 /** How often a busy Codex run's session file is reread for plan use (Story 37.2). */
 const CODEX_USAGE_READ_EVERY_MS = 15_000
+/**
+ * Two readings of one window whose reset times lie this close are one reset period: a product assumption
+ * (docs/usage-sources.md). Across the owner's 200 newest Codex session files, one period's reset moved by
+ * at most 10 s; Claude's was not followed over time. A window is at least five hours long, so one account's
+ * periods never fall this close; with no account identity, two accounts whose resets do share one notice.
+ */
+const USAGE_PERIOD_TOLERANCE_MS = 10 * 60_000
 /** The first history run waits this long after start, so restored sessions launch first. */
 const HISTORY_FIRST_RUN_DELAY_MS = 30_000
 const REMOTE_ANSWER_RESOLUTION = 'Answered from Telegram'
@@ -334,10 +341,15 @@ export class CompanionService {
    */
   private readonly usageReadings = new Map<string, UsageReading>()
   private readonly planReadings = new Map<UsageAgent, UsageReading>()
-  /** Windows whose 90% notice this process has opened; the store answers for earlier runs and other sessions. */
-  private readonly usageNotices = new Set<string>()
+  /** The 90% notice decisions, one at a time (Story 37.2). */
+  private usageNoticeQueue: Promise<void> = Promise.resolve()
   /** Each Codex session's last read of its own file, so a busy run is not reread on every tool call. */
-  private readonly codexUsageReads = new Map<string, { at: number; running: Promise<void> | null }>()
+  private readonly codexUsageReads = new Map<string, {
+    at: number
+    running: Promise<void> | null
+    /** The one read that follows the running one for every finished turn that arrived during it. */
+    again: Promise<void> | null
+  }>()
   /** The terminal notice each session has open, so a burst becomes more lines and not more rows. */
   private readonly terminalNotices = new Map<string, {
     requestId: string
@@ -1403,36 +1415,46 @@ export class CompanionService {
     if (kept !== null) return { recorded: true }
     if (reading.windows.length > 0) {
       this.planReadings.set(reading.agent, reading)
-      await this.usageNotice(reading)
+      // The reading stands whatever becomes of its notice; the next reading at 90% or more decides again.
+      await this.usageNotice(reading).catch(() => undefined)
     }
     return { recorded: true }
   }
 
   /**
    * One Needs you notice per agent, window and reset period once a window reaches 90%. It expires when
-   * the window resets, and it reaches Telegram only by the pager's rule for any notice.
+   * the window resets, and it reaches Telegram only by the pager's rule for any notice. Every decision
+   * waits its turn in one queue, so two readings arriving together cannot both find no notice and both
+   * open one.
    */
-  private async usageNotice(reading: UsageReading): Promise<void> {
+  private usageNotice(reading: UsageReading): Promise<void> {
+    const decided = this.usageNoticeQueue.then(() => this.usageNoticeNow(reading))
+    // A decision that failed must not hold up the ones queued behind it.
+    this.usageNoticeQueue = decided.catch(() => undefined)
+    return decided
+  }
+
+  private async usageNoticeNow(reading: UsageReading): Promise<void> {
+    // Checked when its turn comes rather than when it queued: the run may have been replaced meanwhile.
+    if (this.options.manager.liveIncarnationId(reading.sessionId) !== reading.incarnationId) return
     const now = this.now()
     for (const window of reading.windows) {
       const resetsAt = Date.parse(window.resetsAt)
       if (usagePercent(window.usedPercent) < USAGE_NOTICE_PERCENT || resetsAt <= now.getTime()) continue
       const period = `usage:${reading.agent}:${window.minutes}:`
-      const requestKey = `${period}${Math.round(resetsAt / 60_000)}`
-      if (this.usageNotices.has(requestKey)) continue
-      // A period ends only when its reset passes, so any notice for this window whose expiry is still ahead
-      // is this period's, whichever session opened it, whatever the owner did with it, and even if the
-      // agent's reset time has drifted by a few seconds since. A store that cannot answer opens nothing now.
-      const pending = await this.options.database.companion('attentionKeyPending', period, now.toISOString()).catch(() => null)
-      if (pending === null) continue
-      this.usageNotices.add(requestKey)
-      if (pending) continue
+      // A period is known by its reset time, anchored at the first notice's expiry: a notice of any state,
+      // from any session and from before a BMN restart, whose reset lies within the tolerance is this
+      // period's. A store that cannot answer opens nothing now, and a later reading asks again.
+      const noticed = await this.options.database.companion('usageNoticeExists', period,
+        new Date(resetsAt - USAGE_PERIOD_TOLERANCE_MS).toISOString(),
+        new Date(resetsAt + USAGE_PERIOD_TOLERANCE_MS).toISOString()).catch(() => null)
+      if (noticed !== false) continue
       const agent = reading.agent === 'claude' ? 'Claude' : 'Codex'
       try {
         await this.openAttention({
           sessionId: reading.sessionId,
           incarnationId: reading.incarnationId,
-          requestKey,
+          requestKey: `${period}${Math.round(resetsAt / 60_000)}`,
           kind: 'notice',
           origin: 'watch:usage',
           title: `${agent} ${usageWindowName(window.minutes, 'limit')} limit at ${usagePercent(window.usedPercent)}% · resets ${usageClock(window.resetsAt, now)}`,
@@ -1440,8 +1462,7 @@ export class CompanionService {
           expiresAt: window.resetsAt
         })
       } catch {
-        // Not opened, so a later reading may try again.
-        this.usageNotices.delete(requestKey)
+        // Nothing was stored, so the next reading at 90% or more tries again.
       }
     }
   }
@@ -1452,12 +1473,24 @@ export class CompanionService {
    * forced (a finished turn, or the owner opening Session details); reads never overlap.
    */
   private readCodexUsage(sessionId: string, incarnationId: string, force: boolean): Promise<void> {
-    const last = this.codexUsageReads.get(sessionId)
-    // A finished turn arriving mid-read may have written a newer line than that read saw, so it reads again.
-    if (last?.running) return force ? last.running.then(() => this.readCodexUsage(sessionId, incarnationId, true)) : last.running
+    let state = this.codexUsageReads.get(sessionId)
+    if (state === undefined) {
+      state = { at: -Infinity, running: null, again: null }
+      this.codexUsageReads.set(sessionId, state)
+    }
+    const current = state
+    if (current.running) {
+      if (!force) return current.running
+      // A finished turn arriving mid-read may have written a newer line than that read saw, so one more read
+      // follows it; every finished turn until that read starts shares it.
+      return current.again ??= current.running.then(() => {
+        current.again = null
+        return this.readCodexUsage(sessionId, incarnationId, true)
+      })
+    }
     const now = this.now().getTime()
-    if (last && !force && now - last.at < CODEX_USAGE_READ_EVERY_MS) return Promise.resolve()
-    const running = (async () => {
+    if (!force && now - current.at < CODEX_USAGE_READ_EVERY_MS) return Promise.resolve()
+    current.running = (async () => {
       const binding = await this.options.database.getConversationBinding(sessionId).catch(() => undefined)
       if (binding?.status !== 'bound' || binding.agentCli !== 'codex') return
       const home = binding.launchContext.environment.CODEX_HOME ?? join(homedir(), '.codex')
@@ -1466,10 +1499,10 @@ export class CompanionService {
       if (windows === null || windows.length === 0) return
       await this.recordUsage({ sessionId, incarnationId, agent: 'codex', windows, contextUsedPercent: null })
     })().catch(() => undefined).finally(() => {
-      this.codexUsageReads.set(sessionId, { at: now, running: null })
+      current.at = now
+      current.running = null
     })
-    this.codexUsageReads.set(sessionId, { at: last?.at ?? 0, running })
-    return running
+    return current.running
   }
 
   /** What the session's current run reported about plan use; a Codex run's file is read first when due. */

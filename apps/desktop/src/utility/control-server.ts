@@ -909,6 +909,8 @@ export class ControlServer {
         ])
         const requestKey = requireText(params, 'requestKey', RULES.requestKey)
         if (requestKey.startsWith('handoff:')) throw invalid('The handoff request key is reserved')
+        // Only the plan-use watch opens these; a session re-opening one would rewrite its reset period (Story 37.2).
+        if (requestKey.startsWith('usage:')) throw invalid('The usage request key is reserved')
         const kind = requireEnum(params, 'kind', ATTENTION_KINDS)
         const title = requireText(params, 'title', RULES.title)
         const body = readText(params, 'body', RULES.body)

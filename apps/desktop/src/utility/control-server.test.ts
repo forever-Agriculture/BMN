@@ -501,6 +501,7 @@ describe('control server validation', () => {
     ['relative path', 'artifact.publish', { path: 'notes.md', idempotencyKey: 'k' }],
     ['missing publish key', 'artifact.publish', { path: '/tmp/notes.md' }],
     ['bad kind', 'attention.open', { requestKey: 'q', kind: 'urgent', title: 'Title' }],
+    ['the plan-use notice key', 'attention.open', { requestKey: 'usage:codex:10080:29823300', kind: 'notice', title: 'T' }],
     ['expiry without timezone', 'attention.open', { requestKey: 'q', kind: 'question', title: 'T', expiresAt: '2026-09-14T12:00:00' }],
     ['unknown prompt type', 'attention.open', { requestKey: 'q', kind: 'question', title: 'T', prompt: { type: 'survey' } }],
     ['permission prompt on a question', 'attention.open', { requestKey: 'q', kind: 'question', title: 'T', prompt: {

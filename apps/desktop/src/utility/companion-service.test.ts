@@ -2624,6 +2624,60 @@ describe('plan use (Story 37.2)', () => {
     expect((await notices()).filter((row) => row.state === 'open')).toEqual([expect.objectContaining({ sessionId: 's2' })])
   })
 
+  it.each([
+    ['the same reset time', 0],
+    ['reset times 30 s apart', 30_000]
+  ])('opens one notice when two sessions report the same window at the same moment, with %s', async (_, drift) => {
+    const week = (sessionId: string, resetsAt: string) => report({
+      sessionId, agent: 'codex', windows: [{ minutes: 10_080, usedPercent: 92, resetsAt }]
+    })
+    await Promise.all([week('s1', WEEK_RESETS), week('s2', new Date(Date.parse(WEEK_RESETS) + drift).toISOString())])
+
+    expect(await notices()).toEqual([expect.objectContaining({ state: 'open', sessionId: 's1' })])
+  })
+
+  it('counts a reset time within ten minutes of a notice\'s as its period, even once that notice expired', async () => {
+    const week = (usedPercent: number, offset: number) => report({
+      agent: 'codex', windows: [{ minutes: 10_080, usedPercent, resetsAt: new Date(Date.parse(WEEK_RESETS) + offset).toISOString() }]
+    })
+    await week(91, 0)
+    await week(92, -10 * 60_000)
+    await week(93, 10 * 60_000)
+    expect(await notices()).toEqual([expect.objectContaining({ state: 'open', expiresAt: WEEK_RESETS })])
+
+    // The stored reset passes and the notice expires, while Codex now gives a reset a few minutes later.
+    clock = '2026-09-18T09:00:01.000Z'
+    await (service as unknown as { sweepAttention(): Promise<void> }).sweepAttention()
+    await week(94, 5 * 60_000)
+    expect(await notices()).toEqual([expect.objectContaining({ state: 'expired' })])
+
+    // Further than ten minutes from the stored reset is another period.
+    await week(95, 10 * 60_000 + 1_000)
+    expect((await notices()).map((row) => row.state).sort()).toEqual(['expired', 'open'])
+  })
+
+  it('decides again after a failed decision or a store that could not answer', async () => {
+    const five = () => report({ windows: [{ minutes: 300, usedPercent: 95, resetsAt: RESETS }] })
+    const decide = vi.spyOn(service as unknown as { usageNoticeNow(reading: UsageReading): Promise<void> }, 'usageNoticeNow')
+      .mockRejectedValueOnce(new Error('synthetic failure'))
+    await expect(five()).resolves.toEqual({ recorded: true })
+    expect(decide).toHaveBeenCalledTimes(1)
+    await expect(notices()).resolves.toEqual([])
+
+    const databaseClient = service['options'].database as { companion: (op: string, ...args: unknown[]) => Promise<unknown> }
+    const companion = databaseClient.companion.bind(databaseClient)
+    let unanswered = 0
+    databaseClient.companion = async (op, ...args) => {
+      if (op === 'usageNoticeExists' && unanswered++ === 0) throw new Error('synthetic busy store')
+      return companion(op, ...args)
+    }
+    await five()
+    await expect(notices()).resolves.toEqual([])
+    await five()
+    await five()
+    await expect(notices()).resolves.toEqual([expect.objectContaining({ state: 'open', openedBy: 'watch:usage' })])
+  })
+
   it('keeps a run\'s windows and their time when a later refresh carries only context use', async () => {
     const windows = [{ minutes: 300, usedPercent: 42, resetsAt: RESETS }]
     await report({ windows, contextUsedPercent: 30 })
@@ -2667,6 +2721,28 @@ describe('plan use (Story 37.2)', () => {
     await expect(usage('s2')).resolves.toMatchObject({ reading: { windows: [{ usedPercent: 92 }] } })
     expect((await notices()).map((row) => row.title)).toEqual([expect.stringMatching(/^Codex weekly limit at 92% · resets /)])
     await expect(plans()).resolves.toEqual([expect.objectContaining({ agent: 'codex', sessionId: 's2' })])
+  })
+
+  it('follows a running Codex read with one more read for every finished turn that arrived during it', async () => {
+    const held = [Promise.withResolvers<void>(), Promise.withResolvers<void>()]
+    let reads = 0
+    const databaseClient = service['options'].database as { getConversationBinding(sessionId: string): Promise<unknown> }
+    const binding = databaseClient.getConversationBinding.bind(databaseClient)
+    databaseClient.getConversationBinding = async (sessionId) => {
+      await held[reads++]?.promise
+      return binding(sessionId)
+    }
+
+    await observe('s2', 'codex', 'SessionStart')
+    for (let turn = 0; turn < 3; turn += 1) await observe('s2', 'codex', 'Stop')
+    held[0]!.resolve()
+    await vi.waitFor(() => expect(reads).toBe(2))
+    // A turn that finishes during that follow-up read is not lost either.
+    await observe('s2', 'codex', 'Stop')
+    held[1]!.resolve()
+    await vi.waitFor(() => expect(reads).toBe(3))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(reads).toBe(3)
   })
 
   it('forgets a deleted session\'s reading but keeps the agent\'s plan reading', async () => {

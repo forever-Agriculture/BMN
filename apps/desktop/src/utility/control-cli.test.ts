@@ -3779,7 +3779,7 @@ describe('bmn statusline (Story 37.2)', () => {
       expect((await readdir(inside.tmp)).filter((entry) => entry !== 'bin')).toEqual([])
     })
 
-    it('gives the owner\'s command what was read and leaves no copy when the copy fails part-way', async () => {
+    it('gives the owner\'s command what was copied and leaves no copy or message when the copy fails part-way', async () => {
       const fixture = await cliFixture()
       const command = await wrappedCommand()
       const stdin = input(LIMITS)
@@ -3788,7 +3788,7 @@ describe('bmn statusline (Story 37.2)', () => {
       // A full disk, played by a `cat` that stops after 40 bytes when it writes into the temporary folder.
       await mkdir(join(root, 'shim'))
       await writeFile(join(root, 'shim', 'cat'), `#!/bin/sh
-case "$(readlink /proc/$$/fd/1)" in ${root}/tmp/*) head -c 40; exit 1 ;; esac
+case "$(readlink /proc/$$/fd/1)" in ${root}/tmp/*) head -c 40; echo 'cat: write error: No space left on device' >&2; exit 1 ;; esac
 exec /bin/cat "$@"
 `, { mode: 0o755 })
       await mkdir(join(root, 'tmp'))

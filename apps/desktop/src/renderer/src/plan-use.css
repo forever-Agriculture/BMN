@@ -87,8 +87,11 @@
   color: var(--text);
 }
 
-/* Context use is its own row, in the windows' type: a muted name and a mono share, no meter or gold. */
-.plan-use .plan-use-context {
+/*
+ * Context use is a row of its own in the windows' type: a muted name and a mono share, no meter or gold.
+ * Under windows it is the grid's last row, its share in the shares' column; alone it is one line.
+ */
+.plan-use p.plan-use-context {
   display: flex;
   gap: 10px;
   font-size: 12px;

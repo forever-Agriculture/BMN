@@ -689,7 +689,8 @@ bmn hook is not yours
   ID, but only prepares a bounded draft for owner delivery and cannot list another session.
 - `usage.report` is accepted only from a session token, for its own live process, with at most two
   plan windows (minutes, a share from 0 to 1000, an ISO reset time) and a context share. It never
-  carries the status-line input itself.
+  carries the status-line input itself. `attention.open` refuses `usage:` request keys: only BMN's
+  plan-use watch opens those notices.
 - A conversation reported by `SessionStart` is accepted only from the session's own live process,
   only when the agent it names matches the command the session was launched with, and only as a
   UUID for Claude Code and Codex or the `ses_` ID OpenCode 1.18.31 uses. Two live sessions can never

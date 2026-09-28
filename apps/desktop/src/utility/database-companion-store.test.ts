@@ -43,6 +43,7 @@ import {
   updateDraft,
   updateHandoffDraft,
   upsertProgress,
+  usageNoticeExists,
   withdrawAgentHandoff
 } from './database-companion-store'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
@@ -273,6 +274,25 @@ describe('companion store', () => {
       state: 'expired',
       resolvedBy: 'expiry'
     })
+  })
+
+  it('finds a plan-use period by its stored reset, in any state, for the watch\'s own notices only', () => {
+    const notice = (requestId: string, requestKey: string, expiresAt: string, origin = 'watch:usage') =>
+      openAttention(database, { sessionId: 's1', incarnationId: null, requestKey, kind: 'notice', title: 'Limit', expiresAt, origin }, requestId, now)
+    notice('r1', 'usage:codex:300:29823300', '2026-09-14T16:10:00.000Z')
+    closeAttention(database, { requestId: 'r1' }, 'answered', null, now)
+    notice('r2', 'usage:codex:3000:29823300', '2026-09-20T09:00:00.000Z')
+    notice('r3', 'usage:claude:300:29823300', '2026-09-22T09:00:00.000Z', 'cli')
+    const exists = (prefix: string, from: string, to: string) => usageNoticeExists(database, prefix, from, to)
+
+    // Closed by the owner, the period still counts; its ends are inclusive.
+    expect(exists('usage:codex:300:', '2026-09-14T16:00:00.000Z', '2026-09-14T16:10:00.000Z')).toBe(true)
+    expect(exists('usage:codex:300:', '2026-09-14T16:10:00.001Z', '2026-09-14T16:20:00.000Z')).toBe(false)
+    // A longer window whose minutes start with the same digits is another window.
+    expect(exists('usage:codex:300:', '2026-09-20T08:50:00.000Z', '2026-09-20T09:10:00.000Z')).toBe(false)
+    expect(exists('usage:codex:3000:', '2026-09-20T08:50:00.000Z', '2026-09-20T09:10:00.000Z')).toBe(true)
+    // A `usage:` request anything else opened says nothing about the period.
+    expect(exists('usage:claude:300:', '2026-09-22T08:50:00.000Z', '2026-09-22T09:10:00.000Z')).toBe(false)
   })
 
   it('stores what opened and what closed a request, and leaves both null when nobody says', () => {

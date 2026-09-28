@@ -170,6 +170,11 @@ while :; do [ -e ${JSON.stringify(quit)} ] && exit 0; sleep 0.2; done
     phase('Session details: Plan use for each session')
     result.claudeRow = await planUse(page, claudeSession.sessionId, /^5-hour 42% · resets .+ · week 18% · resets .+ · from Claude's status line · read /)
     result.claudeContext = await page.locator('section.plan-use .plan-use-context').getAttribute('aria-label')
+    // The context share sits in the windows' share column: every share ends at the same x.
+    result.contextShareAligned = await page.locator('section.plan-use .plan-use-windows').evaluate((list) => {
+      const edges = [...list.querySelectorAll('.value')].map((each) => Math.round(each.getBoundingClientRect().right))
+      return edges.length === 3 && new Set(edges).size === 1
+    })
     for (const colorMode of COLOR_MODES) {
       await setColorMode(page, colorMode)
       await page.locator('section.plan-use').screenshot({ path: join(evidenceDirectory, `plan-use-claude-${colorMode}.png`) })

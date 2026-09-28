@@ -670,6 +670,14 @@ describe('plan use wording (Story 37.2)', () => {
     expect(markup).toContain('aria-label="5-hour 95% · stale · read 13:58 · week 90% · resets Sat 09:00')
   })
 
+  it('puts the context share in the windows\' share column in Session details, and leaves it out of the dialog', () => {
+    const claude = reading([{ minutes: 300, usedPercent: 42, resetsAt: today }])
+    const details = renderToStaticMarkup(createElement(PlanWindows, { reading: claude, now, context: true }))
+    expect(details).toContain('<li class="plan-use-context" title="Context window 37% used" aria-label="Context window 37% used">' +
+      '<span class="name">Context window</span><span aria-hidden="true"></span><span class="value">37%</span></li></ul>')
+    expect(renderToStaticMarkup(createElement(PlanWindows, { reading: claude, now }))).not.toContain('Context window')
+  })
+
   it('says whose report is missing when a run has no plan reading', () => {
     expect(planUseMissingWords({ agent: 'opencode', reading: null })).toBe('Not reported by OpenCode')
     expect(planUseMissingWords({ agent: 'cursor', reading: null })).toBe('Not reported by Cursor')

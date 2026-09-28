@@ -38,14 +38,14 @@ structure, units and timing were kept, never the owner's values. Raw receipts ar
   keeps the command itself unchanged. Inside a BMN session, and only when `bmn` is on `PATH`, that
   line saves the input to a temporary file and opens it twice. It then removes the file, starts
   `bmn statusline report` in the background on one copy, and runs the owner's command on the other
-  with the same standard input. If the copy fails part-way (a full disk), the owner's command gets
-  every byte that was read, the file is still removed, and nothing is reported. Anywhere else it
-  does nothing. The report sends `usage.report` with
+  with the same standard input. If the copy fails part-way (a full disk), it fails without a message:
+  the owner's command gets the bytes the copy holds, the file is still removed, and nothing is
+  reported. Anywhere else it does nothing. The report sends `usage.report` with
   only the windows (as minutes, percent and reset time) and the context share.
   - Measured with a fake original command that reads its input, writes to stdout and stderr, and
     exits with code 4. Its stdout, stderr and exit code were byte-identical inside BMN, outside BMN,
     and with `bmn` missing from `PATH`, so a failing original fails the same way.
-  - Added delay with the shipped line: p50 6.0 ms inside BMN (target at most 50 ms), and nothing
+  - Added delay with the shipped line: p50 5.9 ms inside BMN (target at most 50 ms), and nothing
     measurable outside it. Every one of 41 timed runs reached the stand-in socket, and no
     temporary file was left.
   - Receipts: `wrapper/wrapper-timing.txt`, `wrapper/wrapper-timing.py`, `wrapper/fake-socket.py`.
@@ -55,8 +55,8 @@ structure, units and timing were kept, never the owner's values. Raw receipts ar
   Code 2.1.283 ran one Haiku turn with it against a stand-in control socket. The owner's line showed
   on all three refreshes, and the one refresh carrying `rate_limits` produced one valid report: windows
   of 300 and 10 080 minutes and a context share. Receipts:
-  `wrapper/live3-claude-2.1.283-original-shapes.jsonl` and
-  `wrapper/live3-claude-2.1.283-socket-shapes.jsonl` (structure and range checks only).
+  `wrapper/live4-claude-2.1.283-original-shapes.jsonl` and
+  `wrapper/live4-claude-2.1.283-socket-shapes.jsonl` (structure and range checks only).
 - **Limit.** The wrapper needs a status-line command to wrap. `install` leaves a file without one
   untouched and says so, as it does a command that already runs `bmn statusline report` in a form
   this `bmn` did not write.
@@ -122,3 +122,17 @@ Its context share was not driven, so it is not read.
   notice for that agent and window, for example "Codex weekly limit at 91% · resets Fri 09:00". It
   opens once per reset period, expires by itself when the window resets, and reaches Telegram only
   by the pager's rule for notices.
+  - **One period.** A period is known by its reset time, stored as the first notice's expiry. A later
+    reading of the same agent and window whose reset lies within 10 minutes of a stored one belongs to
+    that period, whichever session reports it, whether the notice is open, dismissed or expired, and
+    across BMN restarts. Readings are decided one at a time, so two sessions reporting together open
+    one notice. Only BMN's watch may open a `usage:` request.
+  - **Why 10 minutes.** It is a product assumption, not a measured bound. Across the owner's 200
+    newest Codex session files (10 089 readings, three weekly periods), one period's reset moved by at
+    most 10 s (receipt `codex-reader/resets-drift.txt`, script `codex-reader/resets-drift.py`, drift
+    sizes only). Claude's reset was not followed over time. Windows are at least five hours long, so
+    one account's periods never fall within 10 minutes of each other.
+  - **Known limits.** BMN has no account identity: two accounts whose resets fall within 10 minutes of
+    each other share one notice. A notice expires at the reset time stored when it opened, even if the
+    agent reports a different one later. When an archived session is deleted after the archive period,
+    its notices go with it, so a window still at 90% may notify once more.

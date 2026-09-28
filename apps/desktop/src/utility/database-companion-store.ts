@@ -396,14 +396,16 @@ export function markAttentionSeen(
 }
 
 /**
- * Whether any request whose key starts with `keyPrefix` still has its expiry ahead, whatever its state and
- * session. The plan-use watch (Story 37.2) asks this before a 90% notice, so a notice the owner dismissed,
- * one opened by another session, or one opened before a BMN restart still counts for its reset period.
+ * Whether the plan-use watch has noticed a window whose reset lies between `from` and `to`, in any state,
+ * from any session and before any restart (Story 37.2). A notice expires at its window's reset, so its
+ * expiry is the reset period's anchor: a notice the owner dismissed, or one that has expired, still says
+ * its period was noticed. Only the watch opens `usage:` keys, so no session can plant or move one.
  */
-export function attentionKeyPending(database: DatabaseConnection, keyPrefix: string, now: string): boolean {
+export function usageNoticeExists(database: DatabaseConnection, keyPrefix: string, from: string, to: string): boolean {
   return database.prepare(
-    'SELECT 1 FROM attention_request WHERE substr(request_key, 1, ?) = ? AND expires_at > ? LIMIT 1'
-  ).get(keyPrefix.length, keyPrefix, now) !== undefined
+    `SELECT 1 FROM attention_request
+     WHERE substr(request_key, 1, ?) = ? AND opened_by = 'watch:usage' AND expires_at BETWEEN ? AND ? LIMIT 1`
+  ).get(keyPrefix.length, keyPrefix, from, to) !== undefined
 }
 
 /** Every open request plus the most recent closed ones. */
@@ -1320,7 +1322,7 @@ export const COMPANION_OPERATIONS = Object.freeze({
   expireAttention,
   markAttentionSeen,
   listAttention,
-  attentionKeyPending,
+  usageNoticeExists,
   upsertProgress,
   listProgress,
   getReceipt,
