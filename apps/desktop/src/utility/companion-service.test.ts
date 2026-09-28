@@ -880,7 +880,7 @@ describe('Telegram attention notifications', () => {
       sendMessage: async () => ({ messageId: 77 })
     } as unknown as TelegramConnector
     service['telegramHealth'] = {
-      state: 'polling', detail: '', lastPollAt: null, lastError: null, rejectedUpdates: 0
+      state: 'polling', detail: '', lastPollAt: null, lastError: null, rejectedUpdates: 0, failingSince: null
     }
 
     const record = await service['openAttention']({
@@ -904,7 +904,7 @@ describe('Telegram attention notifications', () => {
         return { messageId: sent.length }
       }
     } as unknown as TelegramConnector
-    service['telegramHealth'] = { state: 'polling', detail: '', lastPollAt: null, lastError: null, rejectedUpdates: 0 }
+    service['telegramHealth'] = { state: 'polling', detail: '', lastPollAt: null, lastError: null, rejectedUpdates: 0, failingSince: null }
     const prompt = { sessionId: 's1', incarnationId: null, kind: 'permission' as const, title: 'Claude wants to use Bash' }
 
     await service['openAttention']({ ...prompt, requestKey: 'claude:permission' })
@@ -929,7 +929,7 @@ describe('Telegram attention notifications', () => {
         return { messageId: sent.length }
       }
     } as unknown as TelegramConnector
-    service['telegramHealth'] = { state: 'polling', detail: '', lastPollAt: null, lastError: null, rejectedUpdates: 0 }
+    service['telegramHealth'] = { state: 'polling', detail: '', lastPollAt: null, lastError: null, rejectedUpdates: 0, failingSince: null }
     service['sessionsChanged'] = async () => undefined
     await database.transaction(() => COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', {
       enabled: true, allowedChatId: 1, allowedUserId: null, notifyOn: 'attention-and-exit', autoSubmitReplies: false

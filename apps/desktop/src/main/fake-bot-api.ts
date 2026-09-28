@@ -25,6 +25,8 @@ export interface FakeBotApi {
    * text first contained `match`; every other card is left alone.
    */
   tapOn(match: string, options: FakeBotStep[]): void
+  /** Story 32.2: answer getMe and getUpdates with this HTTP error, or drop the connection; null serves again. */
+  failWith(mode: 409 | 401 | 'network' | null): void
   close(): Promise<void>
 }
 
@@ -51,6 +53,7 @@ export async function startFakeBotApi(chatId: number, userId: number): Promise<F
   let nextUpdate = 1
   let nextMessage = 5000
   let target: { match: string; options: FakeBotStep[]; messageId: number | null } | null = null
+  let failure: 409 | 401 | 'network' | null = null
 
   const tapLater = (messageId: number, keyboard: Keyboard): void => {
     if (!target || keyboard.length === 0 || target.messageId !== messageId) return
@@ -96,6 +99,16 @@ export async function startFakeBotApi(chatId: number, userId: number): Promise<F
     void (async () => {
       const method = (request.url ?? '').slice((request.url ?? '').lastIndexOf('/') + 1)
       const body = await readBody(request)
+      if (failure !== null && (method === 'getUpdates' || method === 'getMe')) {
+        if (failure === 'network') {
+          request.socket.destroy()
+          return
+        }
+        response.writeHead(failure, { 'content-type': 'application/json' })
+        response.end(JSON.stringify({ ok: false, error_code: failure,
+          description: failure === 409 ? 'Conflict: terminated by other getUpdates request' : 'Unauthorized' }))
+        return
+      }
       if (method === 'getUpdates') {
         const end = Date.now() + EMPTY_POLL_MS
         while (updates.length === 0 && Date.now() < end) await new Promise((resolve) => setTimeout(resolve, 25))
@@ -128,6 +141,9 @@ export async function startFakeBotApi(chatId: number, userId: number): Promise<F
     calls,
     tapOn: (match, options) => {
       target = { match, options: [...options], messageId: null }
+    },
+    failWith: (mode) => {
+      failure = mode
     },
     close: () => new Promise((resolve) => {
       server.closeAllConnections()

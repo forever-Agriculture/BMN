@@ -12,7 +12,18 @@ export interface TerminalTestSnapshot {
   imageStorageMB: number
   imageLayerPresent: boolean
   /** The view's own belief about the modes the program set; what paste, focus, mouse and wrapping read. */
-  modes: { bracketedPasteMode: boolean; sendFocusMode: boolean; mouseTrackingMode: string; wraparoundMode: boolean }
+  modes: {
+    bracketedPasteMode: boolean
+    sendFocusMode: boolean
+    mouseTrackingMode: string
+    wraparoundMode: boolean
+    /** Story 32.3: the rest of the tracked modes — 1, 6, 25, 1006 and 1049. */
+    applicationCursorKeysMode: boolean
+    originMode: boolean
+    cursorHidden: boolean | null
+    mouseEncoding: string | null
+    alternateScreen: boolean
+  }
   ptyCols?: number
   ptyRows?: number
 }
@@ -112,6 +123,8 @@ export interface TerminalIntegrationProbe {
     noticeResolved: boolean
     focusReturned: boolean
     focusStableAfterIncomingUpdate: boolean
+    /** Story 32.1: the first response row's age text and accessible name. */
+    firstResponseRow: { age: string; label: string }
   }
   handoffFlow: {
     draftId: string
@@ -143,9 +156,19 @@ interface TerminalLine {
 interface TestableTerminal {
   cols: number
   rows: number
-  modes: { bracketedPasteMode: boolean; sendFocusMode: boolean; mouseTrackingMode: string; wraparoundMode: boolean }
+  modes: {
+    bracketedPasteMode: boolean
+    sendFocusMode: boolean
+    mouseTrackingMode: string
+    wraparoundMode: boolean
+    applicationCursorKeysMode: boolean
+    originMode: boolean
+  }
+  /** xterm's own services; the cursor's visibility and the mouse encoding have no public reader. Test mode only. */
+  _core?: { coreService?: { isCursorHidden?: boolean }; coreMouseService?: { activeEncoding?: string } }
   buffer: {
     active: {
+      type?: string
       length: number
       getLine(index: number): TerminalLine | undefined
     }
@@ -203,7 +226,12 @@ export function installTerminalTestHook(options: {
           bracketedPasteMode: options.terminal.modes.bracketedPasteMode,
           sendFocusMode: options.terminal.modes.sendFocusMode,
           mouseTrackingMode: options.terminal.modes.mouseTrackingMode,
-          wraparoundMode: options.terminal.modes.wraparoundMode
+          wraparoundMode: options.terminal.modes.wraparoundMode,
+          applicationCursorKeysMode: options.terminal.modes.applicationCursorKeysMode,
+          originMode: options.terminal.modes.originMode,
+          cursorHidden: options.terminal._core?.coreService?.isCursorHidden ?? null,
+          mouseEncoding: options.terminal._core?.coreMouseService?.activeEncoding ?? null,
+          alternateScreen: options.terminal.buffer.active.type === 'alternate'
         },
         ...(ptyDimensions ? { ptyCols: ptyDimensions.cols, ptyRows: ptyDimensions.rows } : {})
       }

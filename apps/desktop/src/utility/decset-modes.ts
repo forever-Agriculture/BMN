@@ -90,6 +90,17 @@ export class DecsetModeTracker {
     return TRACKED_DECSET_MODES.filter((mode) => this.on.has(mode) !== DEFAULT_ON_DECSET_MODES.includes(mode))
   }
 
+  /**
+   * The owner reset the view's modes (Story 32.3): the tracker follows, so a rebuilt view does not re-arm them.
+   * Returns the modes that were armed; a sequence already under way keeps parsing, so the program is still followed.
+   */
+  reset(): number[] {
+    const armed = this.modes()
+    this.on.clear()
+    for (const mode of DEFAULT_ON_DECSET_MODES) this.on.add(mode)
+    return armed
+  }
+
   /** A process that ended has no modes: nothing of its state may reach a later view. */
   clear(): void {
     this.state = 'text'

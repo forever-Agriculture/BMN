@@ -28,7 +28,11 @@ import {
   sessionStatus,
   windowTitle,
   workspaceAttention,
-  attentionProvenance
+  attentionProvenance,
+  compareAttention,
+  expiryText,
+  openRequests,
+  preferencesGearCue
 } from './session-presentation'
 
 const now = Date.parse('2026-09-14T12:00:00.000Z')
@@ -350,6 +354,96 @@ describe('session presentation', () => {
     expect(sessionAttention(records, 'permissions')).toBe('response')
     expect(sessionAttention(records, 'updates')).toBe('update')
     expect(sessionAttention(records, 'missing')).toBeNull()
+  })
+
+  it('orders open requests by what blocks an agent, then oldest first, then by id', () => {
+    const kinds: AttentionRecord['kind'][] = ['permission', 'question', 'review', 'handoff', 'notice']
+    const tier = { permission: 0, question: 1, review: 2, handoff: 2, notice: 3 }
+    for (const left of kinds) {
+      for (const right of kinds) {
+        const older = { ...request('a', 's1', '2026-09-14T11:00:00.000Z'), kind: left }
+        const newer = { ...request('b', 's2', '2026-09-14T11:30:00.000Z'), kind: right }
+        const expected = Math.sign(tier[left] - tier[right]) || -1
+        expect(Math.sign(compareAttention(older, newer)), `${left} vs ${right}`).toBe(expected)
+      }
+    }
+    const sameTime = '2026-09-14T11:00:00.000Z'
+    expect(compareAttention({ ...request('b', 's1', sameTime), kind: 'review' }, { ...request('a', 's2', sameTime), kind: 'handoff' })).toBeGreaterThan(0)
+    const records = [
+      { ...request('review-1', 's1', '2026-09-14T10:00:00.000Z'), kind: 'review' as const },
+      { ...request('review-2', 's2', '2026-09-14T10:05:00.000Z'), kind: 'review' as const },
+      { ...request('permission', 's3', '2026-09-14T11:00:00.000Z'), kind: 'permission' as const },
+      { ...request('handoff', 's4', '2026-09-14T09:00:00.000Z'), kind: 'handoff' as const },
+      request('question', 's5', '2026-09-14T11:30:00.000Z'),
+      { ...request('notice-new', 's6', '2026-09-14T11:40:00.000Z'), kind: 'notice' as const },
+      { ...request('notice-old', 's7', '2026-09-14T08:00:00.000Z'), kind: 'notice' as const }
+    ]
+    const groups = openAttentionGroups(records)
+    expect(groups.responses.map((item) => item.requestId)).toEqual(['permission', 'question', 'handoff', 'review-1', 'review-2'])
+    expect(groups.updates.map((item) => item.requestId)).toEqual(['notice-old', 'notice-new'])
+    expect(openRequests(records).map((item) => item.requestId).at(-1)).toBe('notice-new')
+  })
+
+  it('goes to the highest waiting tier and cycles within it, never back to the current session while another waits', () => {
+    const reviews = [
+      { ...request('review-1', 's1', '2026-09-14T10:00:00.000Z'), kind: 'review' as const },
+      { ...request('review-2', 's2', '2026-09-14T10:05:00.000Z'), kind: 'review' as const }
+    ]
+    const permission = { ...request('permission', 's3', '2026-09-14T11:00:00.000Z'), kind: 'permission' as const }
+    const question = request('question', 's4', '2026-09-14T10:30:00.000Z')
+    const notice = { ...request('notice', 's5', '2026-09-14T09:00:00.000Z'), kind: 'notice' as const }
+    expect(nextRequest([...reviews, permission, notice], null)?.requestId).toBe('permission')
+    expect(nextRequest([...reviews, permission, notice], 's1')?.requestId).toBe('permission')
+    expect(nextRequest([...reviews, permission, notice], 's3')?.requestId).toBe('permission')
+    expect(nextRequest([...reviews, permission, question], 's3')?.requestId).toBe('question')
+    expect(nextRequest([...reviews, permission, question], 's4')?.requestId).toBe('permission')
+    expect(nextRequest([...reviews, notice], null)?.requestId).toBe('review-1')
+    expect(nextRequest([...reviews, notice], 's1')?.requestId).toBe('review-2')
+    expect(nextRequest([...reviews, notice], 's2')?.requestId).toBe('review-1')
+    expect(nextRequest([{ ...reviews[0]!, kind: 'handoff' as const }, reviews[1]!], 's1')?.requestId).toBe('review-2')
+    expect(nextRequest([notice], 's5')?.requestId).toBe('notice')
+  })
+
+  it('words a deadline only in its last hour', () => {
+    const at = (minutes: number): string => new Date(now + minutes * 60_000).toISOString()
+    expect(expiryText(at(61), now)).toBeNull()
+    expect(expiryText(at(60), now)).toBe('expires in 60 min')
+    expect(expiryText(at(59), now)).toBe('expires in 59 min')
+    expect(expiryText(at(59.2), now)).toBe('expires in 60 min')
+    expect(expiryText(at(1), now)).toBe('expires in 1 min')
+    expect(expiryText(at(0.5), now)).toBe('expires in under a minute')
+    expect(expiryText(at(0), now)).toBe('expiring')
+    expect(expiryText(at(-2), now)).toBe('expiring')
+    expect(expiryText(null, now)).toBeNull()
+  })
+
+  it('names history cleanup, a Telegram outage, or both on the one gear dot', () => {
+    const telegram = 'Telegram is not delivering: Telegram rejected the bot token'
+    expect(preferencesGearCue(false, null)).toEqual({ dot: false, title: 'Preferences', description: undefined })
+    expect(preferencesGearCue(false, telegram)).toEqual({ dot: true, title: `Preferences · ${telegram}`, description: telegram })
+    expect(preferencesGearCue(true, telegram)).toEqual({
+      dot: true,
+      title: `Preferences · History: Start cleanup waits for you · ${telegram}`,
+      description: `Agent history cleanup waits for you. ${telegram}`
+    })
+    expect(preferencesGearCue(true, null).title).toBe('Preferences · History: Start cleanup waits for you')
+  })
+
+  it('shows the deadline after the age and in the row name, and nothing without one', () => {
+    const popover = (requests: AttentionRecord[]): string => renderToStaticMarkup(createElement(NeedsYouPopover, {
+      requests, unread: [], now, anchor: null,
+      place: () => ({ workspace: 'Work', session: 'Builder' }),
+      onOpenSession: () => undefined, onAcknowledge: () => undefined,
+      onMarkAnswered: () => undefined, onClose: () => undefined
+    }))
+    const soon = { ...request('soon', 's1', '2026-09-14T11:55:00.000Z'), expiresAt: '2026-09-14T12:10:00.000Z' }
+    const markup = popover([soon])
+    expect(markup).toContain('<span class="age">5 min ago · expires in 10 min</span>')
+    expect(markup).toContain('aria-label="Question · soon · Work › Builder · 5 min ago · expires in 10 min"')
+    const later = popover([{ ...soon, expiresAt: '2026-09-14T13:10:00.000Z' }])
+    expect(later).toContain('<span class="age">5 min ago</span>')
+    expect(later).not.toContain('expires')
+    expect(popover([{ ...soon, expiresAt: null }])).not.toContain('expires')
   })
 
   it('closes a session\'s open prompts and notices, but not a review or handoff, when the owner types into it', () => {

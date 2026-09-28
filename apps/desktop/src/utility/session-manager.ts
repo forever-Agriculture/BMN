@@ -1691,6 +1691,11 @@ export class SessionManager {
     return { ...this.current(identity).undeliveredOutputState }
   }
 
+  /** Story 32.3: forgets the modes this incarnation armed and says which they were; nothing reaches the PTY. */
+  resetTerminalModes(identity: SessionIdentity): { modes: number[] } {
+    return { modes: this.current(identity).decsetModes.reset() }
+  }
+
   async saveTerminalSnapshot(
     identity: SessionIdentity,
     capture: SavedOutputCapture,

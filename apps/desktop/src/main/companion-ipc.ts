@@ -7,7 +7,11 @@ import {
   type ArtifactRecord,
   type AttentionKind,
   type AttentionRecord,
-  type ProtocolMethod
+  type ProtocolMethod,
+  type TelegramConnectorState,
+  type TelegramStatus,
+  telegramNeedsOwner,
+  telegramOwnerCue
 } from '@bmn/protocol'
 import {
   BrowserWindow,
@@ -231,6 +235,10 @@ export interface AppEventForwarderOptions {
   watching(sessionId: string): boolean
   notify(notification: AttentionNotification): void
   notificationsEnabled(): boolean
+  /** A notice about BMN itself, not a session: Telegram stopped delivering. */
+  notifyApp?(notice: { title: string; body: string }): void
+  /** Defaults to `notificationsEnabled`; a self-test records app notices instead of showing them. */
+  appNotificationsEnabled?(): boolean
   /** Workspace and session names, so a notification says where it comes from. */
   place?(sessionId: string): Promise<string | null>
 }
@@ -288,6 +296,23 @@ export function createAppEventForwarder(options: AppEventForwarderOptions): {
 } {
   const notified = new Set<string>()
   let primed = false
+  let telegramState: TelegramConnectorState | null = null
+  let telegramQueue = Promise.resolve()
+  /** One notice per entry into a state only the owner can fix; a retrying outage never notifies. */
+  const notifyTelegram = async (): Promise<void> => {
+    const client = options.client()
+    if (!client) return
+    const [status, settings] = await Promise.all([
+      client.request<TelegramStatus>(METHOD_REGISTRY.telegramStatus, {}),
+      client.request<AppSettings>(METHOD_REGISTRY.settingsGet, {})
+    ])
+    const entered = status.state !== telegramState
+    telegramState = status.state
+    if (!entered || !telegramNeedsOwner(status.state)) return
+    const cue = telegramOwnerCue(settings.telegram.enabled, status, Date.now())
+    if (!cue || !settings.notifications.desktop || !(options.appNotificationsEnabled ?? options.notificationsEnabled)()) return
+    options.notifyApp?.({ title: 'BMN', body: cue })
+  }
   const markWatchedSeen = async (client: CompanionHostClient, open: AttentionRecord[]): Promise<void> => {
     for (const request of open) {
       if (request.seenAt !== null || !options.watching(request.sessionId)) continue
@@ -329,6 +354,7 @@ export function createAppEventForwarder(options: AppEventForwarderOptions): {
         if (!target.isDestroyed()) target.send('aiterm:app-event', message)
       }
       if (message.topic === 'attention') void notifyNewAttention().catch(() => undefined)
+      if (message.topic === 'telegram') telegramQueue = telegramQueue.then(notifyTelegram).catch(() => undefined)
     },
     prime: () => notifyNewAttention().catch(() => undefined),
     watchChanged: () => {

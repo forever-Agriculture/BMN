@@ -90,6 +90,25 @@ const receiptContract = [
       answered(row.codexOther) && row.codexOther.keys === '\u001b[B\u001b[B\tPasskeys first\r' &&
       answered(row.openCodeMore) && row.openCodeMore.keys === '[["Rate limiting"],["Sessions"]]'
   }],
+  // Story 32.2: the gear's cue for 409 and 401, one notice each, nothing for a short outage, cleared on recovery.
+  ['telegramCue', (receipt) => {
+    const row = receipt.telegramCue
+    return row?.conflict?.dot === true && row.conflict.title.includes('Telegram is not delivering: Another client is polling this bot token') &&
+      row.conflictPreferences?.first === true && row.unauthorized?.dot === true &&
+      row.unauthorized.title.includes('Telegram is not delivering: Telegram rejected the bot token') &&
+      !row.shortOutage?.cue?.title.includes('Telegram') && !row.recovered?.cue?.title.includes('Telegram') &&
+      row.recovered.failingSince === null &&
+      row.notices?.length === 2
+  }],
+  // Story 32.3: armed modes answered a wheel with input; after the reset they are off, the wheel sends nothing,
+  // the PTY got nothing from the reset, and a rebuilt view stays plain.
+  ['resetModes', (receipt) => {
+    const row = receipt.resetModes
+    return row?.ran === 'ran' && row.toast === true && row.wheelInputBefore > 0 && row.armedWheelReached === true &&
+      row.wheelInputAfter === 0 && row.ptyUnchangedByReset === true && row.screenUnchanged === true &&
+      row.geometryUnchanged === true && row.after?.mouseTrackingMode === 'none' && row.after.bracketedPasteMode === false &&
+      row.rebuilt?.mouseTrackingMode === 'none' && row.rebuilt.sendFocusMode === false
+  }],
   ['sixelCsp', (receipt) => receipt.cspProbe?.evalRefused === true &&
     receipt.cspProbe?.wasmAllowed === true],
   ['graphicsTerminfo', (receipt) => receipt.graphicsTerminfo?.sixelResolved === true &&
@@ -232,7 +251,10 @@ const receiptContract = [
     'attentionTriage',
     (receipt) =>
       receipt.attentionTriage?.totalCount === 4 &&
-      receipt.attentionTriage.responseTitles?.length === 3 &&
+      // Story 32.1: the permission first, whatever order the requests arrived in, with its deadline.
+      JSON.stringify(receipt.attentionTriage.responseTitles) ===
+        JSON.stringify(['Allow the self-test action', 'Choose the self-test answer', 'Review the self-test result']) &&
+      / · expires in (9|10) min$/.test(receipt.attentionTriage.firstResponseRow?.age ?? '') &&
       JSON.stringify(receipt.attentionTriage.responseTitlesAfterUpdate) ===
         JSON.stringify(receipt.attentionTriage.responseTitles) &&
       JSON.stringify(receipt.attentionTriage.remainingResponseTitles) ===
@@ -576,7 +598,7 @@ const receiptContract = [
     'survivalTable',
     (receipt) =>
       receipt.survivalTable?.rendererCrash?.liveProcesses === 4 &&
-      receipt.survivalTable.rendererCrash.incarnationRecords === 20 &&
+      receipt.survivalTable.rendererCrash.incarnationRecords === 21 &&
       receipt.survivalTable.rendererCrash.openRequestsBefore > 0 &&
       receipt.survivalTable.rendererCrash.openRequestsAfter ===
         receipt.survivalTable.rendererCrash.openRequestsBefore &&

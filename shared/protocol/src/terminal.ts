@@ -72,6 +72,18 @@ export function decsetRestoreSequence(modes: readonly number[]): string {
     .join('')
 }
 
+/**
+ * Story 32.3: returns a view to a fresh terminal's modes after a program died with them armed — every tracked mode
+ * off except autowrap `7` and a visible cursor `25`. Two resets move the cursor, so each is written only when `armed`
+ * (the tracker's `modes()`) has it: origin mode `6` homes the cursor, and leaving the alternate screen `1049` restores
+ * the cursor saved on entry. Like the restore, this is written into the view and never to the process.
+ */
+export function decsetResetSequence(armed: readonly number[]): string {
+  return TRACKED_DECSET_MODES.filter((mode) => (mode !== 6 && mode !== 1049) || armed.includes(mode))
+    .map((mode) => `\x1b[?${mode}${DEFAULT_ON_DECSET_MODES.includes(mode) ? 'h' : 'l'}`)
+    .join('')
+}
+
 export interface TerminalByteMessage {
   attachmentId: string
   streamSeq: number

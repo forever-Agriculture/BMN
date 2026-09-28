@@ -5,7 +5,7 @@ function fakeTerminal(
   cols = 101,
   rows = 37,
   lines = ['prompt', 'AITERM-1-1-OK'],
-  modes = { bracketedPasteMode: false, sendFocusMode: false, mouseTrackingMode: 'none', wraparoundMode: true }
+  modes = { bracketedPasteMode: false, sendFocusMode: false, mouseTrackingMode: 'none', wraparoundMode: true, applicationCursorKeysMode: false, originMode: false }
 ) {
   return {
     cols,
@@ -67,7 +67,8 @@ describe('renderer acceptance hook', () => {
       imageStorageMB: 0,
       imageLayerPresent: false,
       // The modes a rebuilt view must come back with, read from the view itself.
-      modes: { bracketedPasteMode: false, sendFocusMode: false, mouseTrackingMode: 'none', wraparoundMode: true },
+      modes: { bracketedPasteMode: false, sendFocusMode: false, mouseTrackingMode: 'none', wraparoundMode: true,
+        applicationCursorKeysMode: false, originMode: false, cursorHidden: null, mouseEncoding: null, alternateScreen: false },
       ptyCols: 101,
       ptyRows: 37
     })
@@ -181,7 +182,8 @@ describe('renderer acceptance hook', () => {
         keyboardTargetSessionId: 'session-b',
         noticeResolved: true,
         focusReturned: true,
-        focusStableAfterIncomingUpdate: true
+        focusStableAfterIncomingUpdate: true,
+        firstResponseRow: { age: '1 s ago · expires in 10 min', label: 'Permission · Allow · Work › A · 1 s ago · expires in 10 min' }
       },
       handoffFlow: {
         draftId: 'handoff-1',

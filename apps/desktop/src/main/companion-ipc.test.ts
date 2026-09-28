@@ -1,5 +1,5 @@
 // MODULE: companion-ipc.test.ts - desktop notifications skip the watched session and repeat only on a new revision
-import { DEFAULT_APP_SETTINGS, METHOD_REGISTRY, type AttentionRecord } from '@bmn/protocol'
+import { DEFAULT_APP_SETTINGS, METHOD_REGISTRY, type AttentionRecord, type TelegramStatus } from '@bmn/protocol'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('electron', () => ({}))
@@ -160,5 +160,76 @@ describe('desktop notifications for attention requests', () => {
       expectedRevision: 7,
       origin: 'owner'
     })
+  })
+})
+
+describe('desktop notice when Telegram stops delivering', () => {
+  function telegramForwarder(desktop = true): {
+    events: ReturnType<typeof createAppEventForwarder>
+    set(state: TelegramStatus['state'], enabled?: boolean): void
+    shown: Array<{ title: string; body: string }>
+  } {
+    let status: TelegramStatus = {
+      state: 'polling', detail: 'Waiting for Telegram replies', tokenMask: null, lastPollAt: null, lastError: null,
+      rejectedUpdates: 0, failingSince: null
+    }
+    let settings = { ...DEFAULT_APP_SETTINGS, notifications: { ...DEFAULT_APP_SETTINGS.notifications, desktop },
+      telegram: { ...DEFAULT_APP_SETTINGS.telegram, enabled: true } }
+    const shown: Array<{ title: string; body: string }> = []
+    const events = createAppEventForwarder({
+      client: () => ({
+        request: async <Result,>(method: string) =>
+          (method === METHOD_REGISTRY.telegramStatus ? status : method === METHOD_REGISTRY.attentionList ? [] : settings) as Result
+      }),
+      targets: () => [],
+      watching: () => false,
+      notify: () => undefined,
+      notificationsEnabled: () => false,
+      notifyApp: (notice) => shown.push(notice),
+      appNotificationsEnabled: () => true
+    })
+    const set = (state: TelegramStatus['state'], enabled = true): void => {
+      const detail = state === 'conflict' ? 'Another client is polling this bot token'
+        : state === 'unauthorized' ? 'Telegram rejected the bot token' : 'Telegram is unreachable; retrying in 60s'
+      status = { ...status, state, detail, failingSince: state === 'backoff' ? '2026-09-28T10:00:00.000Z' : null }
+      settings = { ...settings, telegram: { ...settings.telegram, enabled } }
+    }
+    return { events, set, shown }
+  }
+  const telegramEvent = async (events: ReturnType<typeof createAppEventForwarder>): Promise<void> => {
+    events.forward({ kind: 'app-event', topic: 'telegram', sessionId: null })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+
+  it('notifies once per entry into conflict or unauthorized, and never for a retrying outage', async () => {
+    const { events, set, shown } = telegramForwarder()
+    set('backoff')
+    await telegramEvent(events)
+    await telegramEvent(events)
+    set('conflict')
+    await telegramEvent(events)
+    await telegramEvent(events)
+    set('unauthorized')
+    await telegramEvent(events)
+    set('polling')
+    await telegramEvent(events)
+    set('unauthorized')
+    await telegramEvent(events)
+    expect(shown).toEqual([
+      { title: 'BMN', body: 'Telegram is not delivering: Another client is polling this bot token' },
+      { title: 'BMN', body: 'Telegram is not delivering: Telegram rejected the bot token' },
+      { title: 'BMN', body: 'Telegram is not delivering: Telegram rejected the bot token' }
+    ])
+  })
+
+  it('stays quiet when desktop notifications or Telegram are off', async () => {
+    const quiet = telegramForwarder(false)
+    quiet.set('conflict')
+    await telegramEvent(quiet.events)
+    expect(quiet.shown).toEqual([])
+    const off = telegramForwarder()
+    off.set('conflict', false)
+    await telegramEvent(off.events)
+    expect(off.shown).toEqual([])
   })
 })

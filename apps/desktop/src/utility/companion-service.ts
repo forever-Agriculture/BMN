@@ -1956,7 +1956,8 @@ export class CompanionService {
         tokenMask: token ? maskToken(token) : null,
         lastPollAt: this.telegramHealth.lastPollAt,
         lastError: redact(this.telegramHealth.lastError),
-        rejectedUpdates: this.telegramHealth.rejectedUpdates
+        rejectedUpdates: this.telegramHealth.rejectedUpdates,
+        failingSince: this.telegramHealth.failingSince
       }
     }
     const settings = await this.options.database.companion('getSettings')
@@ -1966,7 +1967,8 @@ export class CompanionService {
       tokenMask: token ? maskToken(token) : null,
       lastPollAt: null,
       lastError: null,
-      rejectedUpdates: 0
+      rejectedUpdates: 0,
+      failingSince: null
     }
   }
 

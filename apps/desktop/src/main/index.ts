@@ -35,6 +35,7 @@ import {
   type SessionCreateParams,
   type SessionProcessState,
   type SessionRecord,
+  type TelegramStatus,
   type SessionStopCause,
   type TerminalOutputMessage,
   type WorkspaceLayoutState,
@@ -336,6 +337,8 @@ const SELF_TEST_RELEASE_CLOSE_DEADLINE_MS = 5_000
 let selfTestFailureReported = false
 /** Self-test hook: paths Show in folder received; the automated run never opens a file manager. */
 const selfTestShownFileReferences: string[] = []
+/** Story 32.2: app notices the self-test records instead of showing. */
+const selfTestAppNotices: Array<{ title: string; body: string }> = []
 /** Every reference the renderer asked to read during a self-test, in order: hovering and output must add none. */
 const selfTestReadFileReferences: Array<{ sessionId: string; reference: string }> = []
 /** Self-test hook: each transcription main ran, with the argv the real engine would get; no whisper process runs. */
@@ -419,6 +422,20 @@ const appEvents = createAppEventForwarder({
     notification.show()
   },
   notificationsEnabled: () => !selfTest,
+  notifyApp: (notice) => {
+    if (selfTest) {
+      selfTestAppNotices.push(notice)
+      return
+    }
+    if (!Notification.isSupported()) return
+    const notification = new Notification({ ...notice, silent: false })
+    notification.on('click', () => {
+      notification.close()
+      focusExistingWindow(applicationWindow)
+    })
+    notification.show()
+  },
+  appNotificationsEnabled: () => true,
   place: async (sessionId) => {
     const client = hostClient
     if (!client) return null
@@ -832,6 +849,10 @@ function installIpcHandlers(): void {
   bridgeIpc.handle('aiterm:terminal:recover-view', (event, sessionId: unknown, reason: unknown) => {
     requireRuntime(event, sessionId)
     return scheduleTerminalViewRecovery(reason, event.sender)
+  })
+  bridgeIpc.handle('aiterm:terminal:modes-reset', (event, sessionId: unknown) => {
+    const current = requireRuntime(event, sessionId)
+    return current.client.request<{ modes: number[] }>(METHOD_REGISTRY.terminalModesReset, current.session)
   })
   bridgeIpc.handle('aiterm:terminal:snapshot-save', async (event, sessionId: unknown, capture: SavedOutputCapture) => {
     const current = requireRuntime(event, sessionId)
@@ -1373,6 +1394,7 @@ interface RendererIntegrationProbe {
     noticeResolved: boolean
     focusReturned: boolean
     focusStableAfterIncomingUpdate: boolean
+    firstResponseRow: { age: string; label: string }
     staleNoticeRejected?: boolean
     revisedPromptPreserved?: boolean
     unavailableTargetIgnored?: boolean
@@ -2944,7 +2966,7 @@ async function runSelfTest(): Promise<void> {
     )
     writeFixtureCommand(
       secondSession,
-      'bmn ask self-permission "Allow the self-test action" --kind permission; ' +
+      `bmn ask self-permission "Allow the self-test action" --kind permission --expires ${new Date(Date.now() + 10 * 60_000).toISOString()}; ` +
       'bmn ask self-review "Review the self-test result" --kind review; ' +
       'bmn ask self-update "Self-test turn finished" --kind notice; ' +
       'bmn progress failed "Observed self-test failure" --source self-test ' +
@@ -3071,11 +3093,8 @@ async function runSelfTest(): Promise<void> {
       name: 'handoff-self-test.txt',
       bytes: new TextEncoder().encode('synthetic handoff original\n')
     })
-    const expectedResponseTitles = fixtureAttention
-      .filter((request) => request.state === 'open' && request.kind !== 'notice')
-      .toSorted((left, right) =>
-        left.openedAt.localeCompare(right.openedAt) || left.requestId.localeCompare(right.requestId))
-      .map((request) => request.title)
+    // Story 32.1: what holds an agent comes first, whatever order the requests arrived in.
+    const expectedResponseTitles = ['Allow the self-test action', 'Choose the self-test answer', 'Review the self-test result']
     writeFixtureCommand(session, 'bmn ask self-race "A stale notice" --kind notice')
     const raceNotice = await (async (): Promise<AttentionRecord> => {
       const deadline = Date.now() + 5_000
@@ -3490,7 +3509,11 @@ async function runSelfTest(): Promise<void> {
       !preloadProbe.attentionTriage.detailsProgressText.includes('Observed self-test failure') ||
       !preloadProbe.attentionTriage.detailsProgressText.includes('Last observed failed') ||
       !preloadProbe.attentionTriage.detailsProgressText.includes('stale') ||
+      // From the permission's own session, Ctrl+Shift+U stays in the top tier and moves to the question's session.
       preloadProbe.attentionTriage.keyboardTargetSessionId !== session.sessionId ||
+      !/^\d+ (s|min) ago · expires in (9|10) min$/.test(preloadProbe.attentionTriage.firstResponseRow.age) ||
+      !preloadProbe.attentionTriage.firstResponseRow.label.startsWith('Permission · Allow the self-test action · ') ||
+      !/ · expires in (9|10) min$/.test(preloadProbe.attentionTriage.firstResponseRow.label) ||
       !preloadProbe.attentionTriage.noticeResolved ||
       !preloadProbe.attentionTriage.focusReturned ||
       !preloadProbe.attentionTriage.focusStableAfterIncomingUpdate
@@ -4531,6 +4554,121 @@ async function runSelfTest(): Promise<void> {
     await client.request(METHOD_REGISTRY.sessionStop, { sessionId: repeatSession.session.sessionId,
       incarnationId: repeatSession.session.lastProcess?.incarnationId, cause: 'explicit' })
 
+    // Story 32.3: a TUI died with mouse, paste and focus modes on while its shell lives on. Reset terminal modes
+    // turns them off in the view and in the tracker, writing nothing to the PTY, and a rebuilt view stays plain.
+    console.error('[BMN] self-test phase: reset terminal modes')
+    const resetDirectory = join(isolatedCwd, 'reset-modes')
+    mkdirSync(resetDirectory, { recursive: true })
+    const resetInputLog = join(resetDirectory, 'input.log')
+    const resetExecutable = join(resetDirectory, 'shell.sh')
+    writeFileSync(resetExecutable, [
+      '#!/bin/sh',
+      'stty raw -echo',
+      "printf '\\033[?1000h\\033[?1006h\\033[?2004h\\033[?1004hMODES-ARMED\\r\\n'",
+      `exec cat > ${JSON.stringify(resetInputLog)}`,
+      ''
+    ].join('\n'), { mode: 0o755 })
+    const resetSession = await createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
+      name: 'Reset modes acceptance', cwd: isolatedCwd, executable: resetExecutable, argv: [], cols: 80, rows: 24 }, true)
+    const resetId = JSON.stringify(resetSession.session.sessionId)
+    const resetView = (): Promise<{ bufferLines: string[]; cols: number; rows: number; refits: number; inputEvents: number;
+      modes: Record<string, unknown> }> => applicationWindow!.webContents.executeJavaScript(
+      `window.__aitermTest.snapshot(${resetId})`) as never
+    const wheel = (): Promise<number> => applicationWindow!.webContents.executeJavaScript(`(async () => {
+      const pane = document.querySelector('.session-terminal[data-session-id=' + JSON.stringify(${resetId}) + ']:not(.session-terminal-hidden)');
+      const screen = pane?.querySelector('.xterm-screen');
+      if (!screen) throw new Error('reset modes: no terminal screen');
+      const box = screen.getBoundingClientRect();
+      const before = window.__aitermTest.snapshot(${resetId}).inputEvents;
+      screen.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, deltaMode: 0, bubbles: true, cancelable: true,
+        clientX: box.left + box.width / 2, clientY: box.top + box.height / 2 }));
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      return window.__aitermTest.snapshot(${resetId}).inputEvents - before;
+    })()`) as Promise<number>
+    const logSize = (): number => existsSync(resetInputLog) ? readFileSync(resetInputLog).byteLength : -1
+    // A session made through the host reaches the tree when the window reloads, as the repeat fixture's does.
+    await recoverApplicationRenderer(applicationWindow)
+    await applicationWindow.webContents.executeJavaScript(`(async () => {
+      const end = Date.now() + 10000;
+      while (Date.now() < end) {
+        document.querySelector('.session-row > button[data-session-id=' + JSON.stringify(${resetId}) + ']')?.click();
+        const shot = window.__aitermTest?.snapshots()?.[${resetId}];
+        if (shot && shot.bufferLines.some((line) => line.includes('MODES-ARMED')) && shot.modes.mouseTrackingMode !== 'none') return true;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      } throw new Error('reset modes: the fixture never armed its modes: ' + JSON.stringify({
+        row: !!document.querySelector('.session-row > button[data-session-id=' + JSON.stringify(${resetId}) + ']'),
+        shot: window.__aitermTest?.snapshots()?.[${resetId}] ?? null }).slice(0, 2000));
+    })()`)
+    await untilFileExists(resetInputLog, 'the reset fixture shell')
+    const armedModes = (await resetView()).modes
+    const logBeforeWheel = logSize()
+    const wheelInputBefore = await wheel()
+    const armedWheelReached = await acceptanceWait(async () => logSize() > logBeforeWheel ? true : undefined, 'armed wheel input at the PTY')
+    // The view was rebuilt moments ago; measure it once its fit has settled.
+    const settledView = async (): Promise<Awaited<ReturnType<typeof resetView>>> => {
+      let previous = await resetView()
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 250))
+        const current = await resetView()
+        if (current.cols === previous.cols && current.rows === previous.rows && current.refits === previous.refits &&
+          JSON.stringify(current.bufferLines) === JSON.stringify(previous.bufferLines)) return current
+        previous = current
+      }
+      return previous
+    }
+    // In the hidden self-test window a rebuilt view gets its first fit only when the layout next changes, and the
+    // palette's dialog is such a change; open and close it once so the reset is measured against a fitted view.
+    if (await runPaletteCommand(applicationWindow, 'No such command: fit before the reset baseline') !== 'missing') {
+      throw new Error('reset modes: the baseline palette probe ran a command')
+    }
+    const beforeReset = await settledView()
+    const logBeforeReset = readFileSync(resetInputLog)
+    const resetRan = await runPaletteCommand(applicationWindow, 'Reset terminal modes')
+    const resetToast = await acceptanceWait(async () => await applicationWindow!.webContents.executeJavaScript(
+      `document.body.textContent.includes('Terminal modes reset for Reset modes acceptance') || undefined`) as true | undefined,
+    'the reset toast')
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    const afterReset = await resetView()
+    const wheelInputAfter = await wheel()
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    const logAfterReset = readFileSync(resetInputLog)
+    await recoverApplicationRenderer(applicationWindow)
+    await applicationWindow.webContents.executeJavaScript(`(async () => {
+      const end = Date.now() + 10000;
+      while (Date.now() < end) {
+        document.querySelector('.session-row > button[data-session-id=' + JSON.stringify(${resetId}) + ']')?.click();
+        if (window.__aitermTest?.snapshots()?.[${resetId}]) return true;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      } throw new Error('reset modes: no rebuilt view');
+    })()`)
+    const rebuilt = await resetView()
+    const plainModes = (modes: Record<string, unknown>): boolean => modes.mouseTrackingMode === 'none' &&
+      modes.bracketedPasteMode === false && modes.sendFocusMode === false && modes.wraparoundMode === true &&
+      modes.applicationCursorKeysMode === false && modes.originMode === false && modes.alternateScreen === false &&
+      modes.cursorHidden === false && modes.mouseEncoding === 'DEFAULT'
+    const resetModes = {
+      armed: armedModes, ran: resetRan, toast: resetToast === true,
+      wheelInputBefore, armedWheelReached: armedWheelReached === true,
+      after: afterReset.modes, wheelInputAfter,
+      ptyUnchangedByReset: Buffer.compare(logBeforeReset, logAfterReset) === 0,
+      screenUnchanged: JSON.stringify(afterReset.bufferLines) === JSON.stringify(beforeReset.bufferLines),
+      geometryUnchanged: afterReset.cols === beforeReset.cols && afterReset.rows === beforeReset.rows &&
+        afterReset.refits === beforeReset.refits,
+      geometry: { before: [beforeReset.cols, beforeReset.rows, beforeReset.refits], after: [afterReset.cols, afterReset.rows, afterReset.refits] },
+      changedLines: afterReset.bufferLines.map((line, index) => line === beforeReset.bufferLines[index] ? null
+        : { index, before: beforeReset.bufferLines[index] ?? null, after: line }).filter(Boolean).slice(0, 3),
+      rebuilt: rebuilt.modes
+    }
+    console.error(`[BMN] self-test phase: reset terminal modes ${JSON.stringify(resetModes)}`)
+    if (armedModes.mouseTrackingMode === 'none' || armedModes.bracketedPasteMode !== true || armedModes.sendFocusMode !== true ||
+      armedModes.mouseEncoding !== 'SGR' || resetRan !== 'ran' || !resetModes.toast || wheelInputBefore < 1 ||
+      !resetModes.armedWheelReached || !plainModes(afterReset.modes) || wheelInputAfter !== 0 || !resetModes.ptyUnchangedByReset ||
+      !resetModes.screenUnchanged || !resetModes.geometryUnchanged || !plainModes(rebuilt.modes)) {
+      throw new Error(`Reset terminal modes went wrong: ${JSON.stringify(resetModes)}`)
+    }
+    await client.request(METHOD_REGISTRY.sessionStop, { sessionId: resetSession.session.sessionId,
+      incarnationId: resetSession.session.lastProcess?.incarnationId, cause: 'explicit' })
+
     // Return selection to the lifecycle fixture expected by the existing restart checks.
     await applicationWindow.webContents.executeJavaScript(`(() => {
       const row = document.querySelector('.session-row button[data-session-id="' + ${JSON.stringify(preloadProbe.templateCreatedSession.sessionId)} + '"]');
@@ -4612,7 +4750,7 @@ async function runSelfTest(): Promise<void> {
       reportingSession.sessionId, rivalSession.sessionId,
       petitionSource.session.sessionId, petitionDestination.session.sessionId,
       openCodeSession.session.sessionId, routingSession.session.sessionId, repeatSession.session.sessionId,
-      cursorSession.session.sessionId, cursorShell.session.sessionId
+      cursorSession.session.sessionId, cursorShell.session.sessionId, resetSession.session.sessionId
     ])
     // The rival's report was refused; the owner must be able to read why while BMN is still running.
     const refusalLog = join(resolveApplicationRoots().state, 'refused-requests.log')
@@ -5021,6 +5159,81 @@ async function runSelfTest(): Promise<void> {
       ]) || openCodeMore.keys !== '[["Rate limiting"],["Sessions"]]' || openCodeMore.request?.resolvedBy !== 'telegram') {
       throw new Error(`fuller telegram answers went wrong: ${JSON.stringify(fuller)}`)
     }
+    // Story 32.2: a channel that stops delivering shows on the gear and notifies once; a short outage stays quiet.
+    console.error('[BMN] self-test phase: telegram channel cue')
+    const telegramStatusNow = (): Promise<TelegramStatus> => client.request<TelegramStatus>(METHOD_REGISTRY.telegramStatus, {})
+    const gearCue = (): Promise<{ title: string; description: string | null; dot: boolean }> =>
+      applicationWindow!.webContents.executeJavaScript(`(() => {
+        const gear = document.querySelector('.preferences-button');
+        return { title: gear?.title ?? '', description: gear?.getAttribute('aria-description') ?? null,
+          dot: !!gear?.querySelector('.status-dot.needs-you') };
+      })()`) as Promise<{ title: string; description: string | null; dot: boolean }>
+    const gearUntil = async (label: string, match: (cue: Awaited<ReturnType<typeof gearCue>>) => boolean): Promise<Awaited<ReturnType<typeof gearCue>>> => {
+      const by = Date.now() + 15_000
+      for (;;) {
+        const cue = await gearCue()
+        if (match(cue)) return cue
+        if (Date.now() > by) throw new Error(`the gear never showed ${label}: ${JSON.stringify({ cue, status: await telegramStatusNow() })}`)
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+    }
+    const telegramToken = '123456789:SELFTEST_fake_bot_token_not_real'
+    const noticesBefore = selfTestAppNotices.length
+    bot.failWith(409)
+    const conflictCue = await gearUntil('the conflict cue', (cue) => cue.title.includes('Telegram is not delivering: Another client is polling this bot token'))
+    const conflictPreferences = await applicationWindow!.webContents.executeJavaScript(`(async () => {
+      const wait = async (read, label) => { const end = Date.now() + 10000; while (Date.now() < end) {
+        const value = read(); if (value) return value; await new Promise(r => setTimeout(r, 25));
+      } throw new Error('telegram cue preferences: ' + label); };
+      document.querySelector('.preferences-button').click();
+      const preferences = await wait(() => document.querySelector('dialog.preferences-dialog[open]'), 'Preferences');
+      const section = await wait(() => [...preferences.querySelectorAll('.preferences-section')].find(s => s.querySelector('h3')?.textContent === 'Telegram'), 'section');
+      const text = section.querySelector('.telegram-cue')?.textContent ?? null;
+      const first = section.querySelector('h3')?.nextElementSibling?.classList.contains('telegram-cue') ?? false;
+      preferences.querySelector('.app-dialog-heading button').click();
+      await wait(() => !document.querySelector('dialog.preferences-dialog[open]') ? true : null, 'close');
+      return { text, first };
+    })()`) as { text: string | null; first: boolean }
+    const noticesAfterConflict = selfTestAppNotices.slice(noticesBefore)
+    bot.failWith(401)
+    await client.request(METHOD_REGISTRY.telegramConfigure, { token: telegramToken })
+    const unauthorizedCue = await gearUntil('the unauthorized cue', (cue) => cue.title.includes('Telegram is not delivering: Telegram rejected the bot token'))
+    bot.failWith('network')
+    await client.request(METHOD_REGISTRY.telegramConfigure, { token: telegramToken })
+    const backoffBy = Date.now() + 15_000
+    while ((await telegramStatusNow()).state !== 'backoff') {
+      if (Date.now() > backoffBy) throw new Error(`the connector never backed off: ${JSON.stringify(await telegramStatusNow())}`)
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    const backoffStatus = await telegramStatusNow()
+    const shortOutageCue = await gearCue()
+    bot.failWith(null)
+    const recoveredBy = Date.now() + 15_000
+    while ((await telegramStatusNow()).state !== 'polling') {
+      if (Date.now() > recoveredBy) throw new Error(`the connector never recovered: ${JSON.stringify(await telegramStatusNow())}`)
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    }
+    const recoveredStatus = await telegramStatusNow()
+    // The gear may keep its dot for History cleanup; the Telegram words must go.
+    const recoveredCue = await gearUntil('no Telegram cue after recovery', (cue) => !cue.title.includes('Telegram'))
+    const telegramCue = {
+      conflict: conflictCue, conflictPreferences, unauthorized: unauthorizedCue,
+      shortOutage: { cue: shortOutageCue, failingSince: backoffStatus.failingSince },
+      recovered: { cue: recoveredCue, failingSince: recoveredStatus.failingSince },
+      notices: selfTestAppNotices.slice(noticesBefore), noticesAfterConflict
+    }
+    console.error(`[BMN] self-test phase: telegram channel cue ${JSON.stringify(telegramCue)}`)
+    if (!conflictCue.dot || conflictCue.description !== 'Telegram is not delivering: Another client is polling this bot token' &&
+      !conflictCue.description?.endsWith('. Telegram is not delivering: Another client is polling this bot token') ||
+      conflictPreferences.text !== 'Telegram is not delivering: Another client is polling this bot token' || !conflictPreferences.first ||
+      !unauthorizedCue.dot || shortOutageCue.title.includes('Telegram') || backoffStatus.failingSince === null ||
+      recoveredCue.title.includes('Telegram') || recoveredStatus.failingSince !== null ||
+      JSON.stringify(telegramCue.notices.map((notice) => notice.body)) !== JSON.stringify([
+        'Telegram is not delivering: Another client is polling this bot token',
+        'Telegram is not delivering: Telegram rejected the bot token'
+      ]) || noticesAfterConflict.length !== 1) {
+      throw new Error(`the Telegram channel cue went wrong: ${JSON.stringify(telegramCue)}`)
+    }
     await client.request(METHOD_REGISTRY.settingsPut, { section: 'telegram', value: telegramBefore })
     await client.request(METHOD_REGISTRY.telegramConfigure, { token: null })
     reportPresence()
@@ -5112,7 +5325,8 @@ async function runSelfTest(): Promise<void> {
     // one live incarnation that the application restart below interrupts.
     // Epic 30.2's remote-answer stand-in adds one more incarnation, stopped before this check.
     // Epic 31.3's Cursor phase adds three (direct, typed into a shell, resumed), all stopped.
-    if (afterRenderer.liveSessions !== 4 || afterRenderer.incarnationRecords !== 20) {
+    // Story 32.3's armed shell adds one more, stopped after its reset.
+    if (afterRenderer.liveSessions !== 4 || afterRenderer.incarnationRecords !== 21) {
       throw new Error(`renderer restart duplicated or stopped a process: ${afterRenderer.liveSessions} live, ${afterRenderer.incarnationRecords} incarnations`)
     }
     // "What survives", renderer-crash row: the processes, the layout and the open requests outlive the view.
@@ -6946,6 +7160,7 @@ async function runSelfTest(): Promise<void> {
       cursorAcceptance,
       subagentAcceptance,
       repeatAcceptance,
+      resetModes,
       quietSidebarAcceptance,
       interruptedSidebarAcceptance,
       voiceFlow: {
@@ -6978,6 +7193,7 @@ async function runSelfTest(): Promise<void> {
       remoteAnswers,
       telegramCards,
       fullerAnswers: fuller,
+      telegramCue,
       survivalTable: {
         rendererCrash: survivingRendererCrash,
         quit: {

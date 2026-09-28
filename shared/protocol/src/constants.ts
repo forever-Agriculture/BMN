@@ -40,6 +40,7 @@ export const METHOD_REGISTRY = Object.freeze({
   terminalResize: 'terminal.resize',
   terminalDetach: 'terminal.detach',
   terminalSnapshotSave: 'terminal.snapshot.save',
+  terminalModesReset: 'terminal.modes.reset',
   terminalFinalCaptureUnavailable: 'terminal.savedOutput.finalCaptureUnavailable',
   terminalSavedOutputGet: 'terminal.savedOutput.get',
   artifactList: 'artifact.list',

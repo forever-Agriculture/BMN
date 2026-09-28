@@ -364,6 +364,9 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   saveTerminalSnapshot(sessionId: string, capture: SavedOutputCapture): Promise<SavedOutputSnapshot> {
     return invokeBridge('aiterm:terminal:snapshot-save', sessionId, capture)
   },
+  resetTerminalModes(sessionId: string): Promise<{ modes: number[] }> {
+    return invokeBridge('aiterm:terminal:modes-reset', sessionId)
+  },
   getSavedOutput(sessionId: string): Promise<SavedOutputCatalog> {
     return invokeBridge('aiterm:terminal:saved-output-get', sessionId)
   },

@@ -422,6 +422,29 @@ describe('telegram connector failures', () => {
     expect(h.connector.health()).toMatchObject({ state: 'backoff', lastPollAt: NOW })
   })
 
+  it('remembers when a run of transient failures began and forgets it once Telegram answers', async () => {
+    let clock = Date.parse(NOW)
+    const h = await harness({ now: () => new Date(clock) })
+    const failAt = (minutes: number): Handler => () => {
+      clock = Date.parse(NOW) + minutes * 60_000
+      throw new TypeError('fetch failed')
+    }
+    h.api.updates.push(failAt(1), failAt(3), failAt(7), () => {
+      clock = Date.parse(NOW) + 8 * 60_000
+      return ok([])
+    }, failAt(9))
+
+    await h.connector.start()
+    await vi.waitFor(() => expect(h.api.count('getUpdates')).toBe(6))
+
+    const backoffs = h.healths.filter((health) => health.state === 'backoff').map((health) => health.failingSince)
+    expect(backoffs).toEqual([
+      '2026-09-14T10:01:00.000Z', '2026-09-14T10:01:00.000Z', '2026-09-14T10:01:00.000Z', '2026-09-14T10:09:00.000Z'
+    ])
+    expect(h.healths.filter((health) => health.state === 'polling').every((health) => health.failingSince === null)).toBe(true)
+    expect(h.connector.health()).toMatchObject({ state: 'backoff', failingSince: '2026-09-14T10:09:00.000Z' })
+  })
+
   it('retries getMe with backoff when Telegram is unreachable at start', async () => {
     const h = await harness()
     let attempts = 0

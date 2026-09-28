@@ -4,6 +4,7 @@ import {
   countryFlag,
   MODEL_ORIGIN_COUNTRY_NAMES,
   PROGRESS_STALE_AFTER_MS,
+  type AttentionKind,
   type AttentionRecord,
   type HookEventAgent,
   type HookOriginRecord,
@@ -155,6 +156,31 @@ export function relativeAge(fromIso: string, now: number): string {
   return `${Math.round(hours / 24)} d ago`
 }
 
+/** The Preferences gear's one dot and the words for it: history cleanup waiting, Telegram not delivering, or both. */
+export function preferencesGearCue(historyPending: boolean, telegramCue: string | null): {
+  dot: boolean
+  title: string
+  description: string | undefined
+} {
+  return {
+    dot: historyPending || telegramCue !== null,
+    title: ['Preferences', historyPending ? 'History: Start cleanup waits for you' : null, telegramCue].filter(Boolean).join(' · '),
+    description: [historyPending ? 'Agent history cleanup waits for you' : null, telegramCue].filter(Boolean).join('. ') || undefined
+  }
+}
+
+const EXPIRY_SHOWN_WITHIN_MS = 60 * 60_000
+
+/** A request's deadline in words, only within its last hour; null without an expiry or with more time left. */
+export function expiryText(expiresAt: string | null, now: number): string | null {
+  if (expiresAt === null) return null
+  const left = Date.parse(expiresAt) - now
+  if (!Number.isFinite(left) || left > EXPIRY_SHOWN_WITHIN_MS) return null
+  if (left <= 0) return 'expiring'
+  if (left < 60_000) return 'expires in under a minute'
+  return `expires in ${Math.ceil(left / 60_000)} min`
+}
+
 const ORIGIN_AGENT_NAMES: Readonly<Record<HookEventAgent, string>> = Object.freeze({
   claude: 'Claude',
   codex: 'Codex',
@@ -302,10 +328,21 @@ export function isActionableAttention(
   return request.kind !== 'notice'
 }
 
+/** What holds an agent comes first: a permission, then a question, then reviews and handoffs, then notices. */
+const ATTENTION_TIER: Readonly<Record<AttentionKind, number>> = { permission: 0, question: 1, review: 2, handoff: 2, notice: 3 }
+
+/** The one order for open requests: by tier, then oldest first, then by id. */
+export function compareAttention(
+  left: Pick<AttentionRecord, 'kind' | 'openedAt' | 'requestId'>,
+  right: Pick<AttentionRecord, 'kind' | 'openedAt' | 'requestId'>
+): number {
+  return ATTENTION_TIER[left.kind] - ATTENTION_TIER[right.kind] ||
+    left.openedAt.localeCompare(right.openedAt) ||
+    left.requestId.localeCompare(right.requestId)
+}
+
 export function openRequests(records: readonly AttentionRecord[]): AttentionRecord[] {
-  return records
-    .filter((record) => record.state === 'open')
-    .toSorted((left, right) => left.openedAt.localeCompare(right.openedAt) || left.requestId.localeCompare(right.requestId))
+  return records.filter((record) => record.state === 'open').toSorted(compareAttention)
 }
 
 export function openAttentionGroups(records: readonly AttentionRecord[]): {
@@ -365,14 +402,21 @@ export function attentionActionWhenOpened(
   return request.seenAt === null ? 'mark-seen' : null
 }
 
-/** The next unresolved request after the current session's, wrapping; null when none wait. */
+/** Ctrl+Shift+U goes to what blocks an agent first: permissions and questions, then reviews and handoffs, then notices. */
+function nextRequestTier(kind: AttentionKind): number {
+  if (kind === 'permission' || kind === 'question') return 0
+  return kind === 'notice' ? 2 : 1
+}
+
+/** The next unresolved request in the highest waiting tier, after the current session's, wrapping; null when none wait. */
 export function nextRequest(
   records: readonly AttentionRecord[],
   currentSessionId: string | null
 ): AttentionRecord | null {
-  const groups = openAttentionGroups(records)
-  const open = groups.responses.length > 0 ? groups.responses : groups.updates
-  if (open.length === 0) return null
+  const waiting = openRequests(records)
+  if (waiting.length === 0) return null
+  const tier = Math.min(...waiting.map((request) => nextRequestTier(request.kind)))
+  const open = waiting.filter((request) => nextRequestTier(request.kind) === tier)
   const currentIndex = open.findIndex((request) => request.sessionId === currentSessionId)
   if (currentIndex === -1) return open[0] ?? null
   for (let step = 1; step <= open.length; step += 1) {

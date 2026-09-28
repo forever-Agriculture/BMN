@@ -160,6 +160,8 @@ export interface AiTerminalBridge {
   detachTerminal(sessionId: string): Promise<{ detached: true }>
   recoverTerminalView(sessionId: string, reason: TerminalViewDisconnectReason): Promise<{ recovering: true }>
   saveTerminalSnapshot(sessionId: string, capture: SavedOutputCapture): Promise<SavedOutputSnapshot>
+  /** Story 32.3: the host forgets the modes the program armed and returns them; the view resets itself. */
+  resetTerminalModes(sessionId: string): Promise<{ modes: number[] }>
   getSavedOutput(sessionId: string): Promise<SavedOutputCatalog>
   stopSession(sessionId: string): Promise<{ stopped: true }>
   getConversationBinding(sessionId: string): Promise<ConversationBindingState>

@@ -60,6 +60,8 @@ export function PreferencesDialog(props: {
   saveVoice(change: (current: VoiceSettings) => VoiceSettings): Promise<AppSettings>
   /** Candidate dictation words from the selected live session, or why there are none. */
   suggestVocabulary(): { ok: true; words: string[] } | { ok: false; reason: string }
+  /** Why the gear shows a dot for Telegram, or null. */
+  telegramCue?: string | null
 }): React.JSX.Element {
   const onSettings = useRef(props.onSettings)
   onSettings.current = props.onSettings
@@ -479,6 +481,12 @@ export function PreferencesDialog(props: {
 
       <section className="preferences-section">
         <h3>Telegram</h3>
+        {props.telegramCue ? (
+          <div className="history-confirm telegram-cue" role="status">
+            <span className="status-dot needs-you" aria-hidden="true" />
+            <p>{props.telegramCue}</p>
+          </div>
+        ) : null}
         <div className="preferences-row">
           <div className="preferences-row-label">
             <span>Status</span>

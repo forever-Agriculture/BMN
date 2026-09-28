@@ -532,6 +532,34 @@ export interface TelegramStatus {
   lastPollAt: string | null
   lastError: string | null
   rejectedUpdates: number
+  /** When the current run of transient failures began; null once Telegram answers. */
+  failingSince: string | null
+}
+
+/** A shorter outage, such as a laptop waking up, retries quietly. */
+export const TELEGRAM_UNREACHABLE_CUE_AFTER_MS = 5 * 60_000
+
+/** `conflict` and `unauthorized` stop retrying: only the owner can fix them. */
+export function telegramNeedsOwner(state: TelegramConnectorState): boolean {
+  return state === 'conflict' || state === 'unauthorized'
+}
+
+/**
+ * The one sentence that says Telegram is not delivering, or null. A stopped connector needs the owner at once;
+ * a retrying one speaks only after five minutes without reaching the server. `clock` words a time as HH:MM.
+ */
+export function telegramOwnerCue(
+  enabled: boolean,
+  status: Pick<TelegramStatus, 'state' | 'detail' | 'failingSince'> | null,
+  now: number,
+  clock: (ms: number) => string = (ms) => new Date(ms).toTimeString().slice(0, 5)
+): string | null {
+  if (!enabled || !status) return null
+  if (telegramNeedsOwner(status.state)) return `Telegram is not delivering: ${status.detail}`
+  if (status.state !== 'backoff' || status.failingSince === null) return null
+  const since = Date.parse(status.failingSince)
+  if (!Number.isFinite(since) || now - since < TELEGRAM_UNREACHABLE_CUE_AFTER_MS) return null
+  return `Telegram cannot reach the server since ${clock(since)} · retrying`
 }
 
 /** One list, because a topic the validator does not know is a message the window never receives. */

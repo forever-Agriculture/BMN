@@ -99,3 +99,18 @@ describe('reading private modes from a program’s output', () => {
     expect(tracker.modes()).toEqual([1006])
   })
 })
+
+describe('the owner resetting the modes (Story 32.3)', () => {
+  it('returns what was armed and leaves a fresh terminal’s state, so a rebuilt view is not re-armed', () => {
+    const tracker = feed('\u001b[?1000h\u001b[?1006h\u001b[?2004h\u001b[?1004h\u001b[?25l')
+    expect(tracker.reset()).toEqual([25, 1000, 1004, 1006, 2004])
+    expect(tracker.modes()).toEqual([])
+  })
+
+  it('follows a program that arms a mode again afterwards, even one split across the reset', () => {
+    const tracker = feed('\u001b[?2004h\u001b[?10')
+    tracker.reset()
+    tracker.read(new TextEncoder().encode('00h'))
+    expect(tracker.modes()).toEqual([1000])
+  })
+})

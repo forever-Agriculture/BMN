@@ -9,7 +9,18 @@ interface TerminalTestSnapshot {
   refits: number
   /** Everything xterm would send to the PTY for this pane, counted since the terminal opened. */
   inputEvents: number
-  modes: { bracketedPasteMode: boolean; sendFocusMode: boolean; mouseTrackingMode: string; wraparoundMode: boolean }
+  modes: {
+    bracketedPasteMode: boolean
+    sendFocusMode: boolean
+    mouseTrackingMode: string
+    wraparoundMode: boolean
+    /** Story 32.3: the rest of the tracked modes — 1, 6, 25, 1006 and 1049. */
+    applicationCursorKeysMode: boolean
+    originMode: boolean
+    cursorHidden: boolean | null
+    mouseEncoding: string | null
+    alternateScreen: boolean
+  }
   ptyCols?: number
   ptyRows?: number
 }

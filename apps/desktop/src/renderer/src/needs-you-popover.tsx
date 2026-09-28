@@ -1,7 +1,7 @@
 // MODULE: needs-you-popover.tsx - unresolved requests, unread sessions and recent request history under the header count
 import { useEffect, useRef } from 'react'
 import type { AttentionPrompt, AttentionRecord } from '@bmn/protocol'
-import { attentionProvenance, isActionableAttention, openAttentionGroups, relativeAge } from './session-presentation'
+import { attentionProvenance, expiryText, isActionableAttention, openAttentionGroups, relativeAge } from './session-presentation'
 
 export interface SessionPlace {
   workspace: string
@@ -98,14 +98,21 @@ export function NeedsYouPopover(props: {
 
   const attentionItem = (request: AttentionRecord): React.JSX.Element => {
     const actionable = isActionableAttention(request)
+    const place = props.place(request.sessionId)
+    const age = relativeAge(request.openedAt, props.now)
+    const expiry = expiryText(request.expiresAt, props.now)
     return (
-      <article key={request.requestId} className={`attention-item ${actionable ? 'request' : 'update'}`}>
+      <article
+        key={request.requestId}
+        className={`attention-item ${actionable ? 'request' : 'update'}`}
+        aria-label={[kindLabel(request), request.title, `${place.workspace} › ${place.session}`, age, expiry].filter(Boolean).join(' · ')}
+      >
         <div className="where">
           <span className={`status-dot ${actionable ? 'needs-you' : ''}`} aria-hidden="true" />
           {where(request.sessionId)}
           <span className="attention-kind">{kindLabel(request)}</span>
           <span className="provenance">{attentionProvenance(request)}</span>
-          <span className="age">{relativeAge(request.openedAt, props.now)}</span>
+          <span className="age">{expiry ? `${age} · ${expiry}` : age}</span>
         </div>
         <h3>{request.title}</h3>
         {request.prompt ? <PromptDetail prompt={request.prompt} /> : request.body ? <pre>{request.body}</pre> : null}

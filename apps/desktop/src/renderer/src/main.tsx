@@ -21,7 +21,9 @@ import {
   type ProgressRecord,
   type ClosePromptRequest,
   type SessionRecord,
+  type TelegramStatus,
   exactAbsoluteFileReference,
+  telegramOwnerCue,
   effectiveTerminalGraphics,
   isWorkspaceMarker,
   type WorkspaceLayoutState,
@@ -91,6 +93,7 @@ import {
   neighbor,
   nextRequest,
   openRequests,
+  preferencesGearCue,
   progressPresentation,
   requestsAnsweredByTyping,
   handoffDraftForAttention,
@@ -224,6 +227,7 @@ function App(): React.JSX.Element {
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_APP_SETTINGS)
   /** Preferences → History waits for Start cleanup (Story 31.1); the gear carries the one attention dot. */
   const [historyPending, setHistoryPending] = useState(false)
+  const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null)
   const [panel, setPanel] = useState<SidePanel>(null)
   const [requestedHandoffDraftId, setRequestedHandoffDraftId] = useState<string | null>(null)
   const [requestedHandoffReviewDraft, setRequestedHandoffReviewDraft] = useState<InputDraftRecord | null>(null)
@@ -313,6 +317,8 @@ function App(): React.JSX.Element {
     ), [sessions, workspaces])
   const home = useMemo(() => inferHome(sessions.map((session) => session.cwd)), [sessions])
   const unresolved = useMemo(() => openRequests(attention), [attention])
+  const telegramCue = telegramOwnerCue(settings.telegram.enabled, telegramStatus, now)
+  const gearCue = preferencesGearCue(historyPending, telegramCue)
   const answering = useRef(new Set<string>())
 
   /** xterm reports the title the harness set; it refines the resting word and fills the row tooltip, nothing else. */
@@ -454,6 +460,11 @@ function App(): React.JSX.Element {
       const history = await window.aiTerminal.getHistoryStatus().catch(() => null)
       if (history) setHistoryPending(history.needsConfirmation)
     },
+    // A phone channel that stopped delivering must not sit unseen behind the gear either.
+    telegram: async () => {
+      const status = await window.aiTerminal.getTelegramStatus().catch(() => null)
+      if (status) setTelegramStatus(status)
+    },
     // A hook can rebind a conversation at any time; the window reloads the binding it is showing.
     conversations: async () => setBindingRevision((revision) => revision + 1)
   }
@@ -531,7 +542,6 @@ function App(): React.JSX.Element {
       await controller.capture()
     })
     const stopAppEvent = window.aiTerminal.onAppEvent((message) => {
-      if (message.topic === 'telegram') return
       if (message.topic === 'drafts') handoffReviewEpoch.current += 1
       void refresh[message.topic]().catch(fail('Companion data refresh failed'))
     })
@@ -1266,6 +1276,16 @@ function App(): React.JSX.Element {
       : { label: 'Archive session', onSelect: () => void archiveSession(session, true).catch(fail('Session archive failed')) }
   ]
 
+  /** A program that died with mouse or paste modes on leaves them armed; this returns the view to a plain terminal. */
+  const resetTerminalModes = (session: SessionRecord): void => {
+    void window.aiTerminal.resetTerminalModes(session.sessionId)
+      .then(({ modes }) => {
+        controllers.current.get(session.sessionId)?.resetModes(modes)
+        brief(`Terminal modes reset for ${session.name}`)
+      })
+      .catch(fail('Terminal modes were not reset'))
+  }
+
   const paneMenuEntries = (session: SessionRecord): MenuEntry[] => [
     { label: 'Session details', onSelect: () => setPanel('details') },
     // xterm consumes Tab inside the terminal, so the More menu is the keyboard route to the detail.
@@ -1280,6 +1300,7 @@ function App(): React.JSX.Element {
     { label: 'Paste', shortcut: SHORTCUT_LABELS.paste, onSelect: () => pasteClipboard(session.sessionId) },
     { label: 'Select all', shortcut: SHORTCUT_LABELS['select-all'], onSelect: () => controllers.current.get(session.sessionId)?.selectAll() },
     { label: 'Send next key to terminal', shortcut: SHORTCUT_LABELS['send-next-key'], onSelect: () => runCommand('send-next-key') },
+    { label: 'Reset terminal modes', disabled: !live[session.sessionId], onSelect: () => resetTerminalModes(session) },
     {
       label: layout?.split.orientation === 'stacked' ? 'Arrange side by side' : 'Arrange stacked',
       disabled: (layout?.split.panes.length ?? 0) < 2,
@@ -1383,6 +1404,10 @@ function App(): React.JSX.Element {
         disabled: voice?.phase !== 'recording' && (!selectedSessionId || !live[selectedSessionId])
       }),
       command('send-next-key', 'Send next key to terminal', () => runCommand('send-next-key'), { shortcut: SHORTCUT_LABELS['send-next-key'] }),
+      command('reset-modes', 'Reset terminal modes', () => selectedRecord && resetTerminalModes(selectedRecord), {
+        context: selectedRecord?.name,
+        disabled: !selectedRecord || !live[selectedRecord.sessionId]
+      }),
       command('font-increase', 'Increase terminal font', () => changeFontSize(1), { shortcut: SHORTCUT_LABELS['font-increase'] }),
       command('font-decrease', 'Decrease terminal font', () => changeFontSize(-1), { shortcut: SHORTCUT_LABELS['font-decrease'] }),
       command('font-reset', 'Reset terminal font', () => changeFontSize(null), { shortcut: SHORTCUT_LABELS['font-reset'] }),
@@ -1550,12 +1575,12 @@ function App(): React.JSX.Element {
             type="button"
             className="icon-button preferences-button"
             aria-label="Preferences"
-            aria-description={historyPending ? 'Agent history cleanup waits for you' : undefined}
-            title={historyPending ? 'Preferences · History: Start cleanup waits for you' : 'Preferences'}
+            aria-description={gearCue.description}
+            title={gearCue.title}
             onClick={() => setDialog({ kind: 'preferences' })}
           >
             <Icon name="gear" />
-            {historyPending ? <span className="status-dot needs-you" aria-hidden="true" /> : null}
+            {gearCue.dot ? <span className="status-dot needs-you" aria-hidden="true" /> : null}
           </button>
         </div>
         {needsYouOpen ? (
@@ -2227,6 +2252,7 @@ function App(): React.JSX.Element {
           onClose={() => setDialog(null)}
           saveVoice={(change) => voiceSettingsWriter.update(change)}
           suggestVocabulary={suggestVoiceVocabulary}
+          telegramCue={telegramCue}
         />
       ) : null}
       {dialog?.kind === 'workspace-results' ? (

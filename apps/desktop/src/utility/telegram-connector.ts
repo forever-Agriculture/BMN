@@ -25,6 +25,8 @@ export interface ConnectorHealth {
   lastPollAt: string | null
   lastError: string | null
   rejectedUpdates: number
+  /** When the current run of transient failures began; null once Telegram answers. */
+  failingSince: string | null
 }
 
 export interface InboundReply {
@@ -332,7 +334,8 @@ export class TelegramConnector {
     detail: 'Telegram connector has not started',
     lastPollAt: null,
     lastError: null,
-    rejectedUpdates: 0
+    rejectedUpdates: 0,
+    failingSince: null
   }
   private controller: AbortController | null = null
   private starting: Promise<void> | null = null
@@ -518,7 +521,7 @@ export class TelegramConnector {
     try {
       await this.call('getMe', {}, AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]))
       this.verified = true
-      this.publish({ state: 'polling', detail: 'Waiting for Telegram replies' })
+      this.publish({ state: 'polling', detail: 'Waiting for Telegram replies', failingSince: null })
     } catch (error) {
       if (signal.aborted) return
       if (await this.recordFailure(error) === 'halt') throw this.sanitized(error)
@@ -542,7 +545,8 @@ export class TelegramConnector {
         this.publish({
           state: 'polling',
           detail: 'Waiting for Telegram replies',
-          lastPollAt: this.now().toISOString()
+          lastPollAt: this.now().toISOString(),
+          failingSince: null
         })
         await this.handleUpdates(updates, signal)
       } catch (error) {
@@ -634,7 +638,8 @@ export class TelegramConnector {
     this.publish({
       state: 'backoff',
       detail: `Telegram is unreachable; retrying in ${Math.round(this.backoffMs / 1000)}s`,
-      lastError: message
+      lastError: message,
+      failingSince: this.current.failingSince ?? this.now().toISOString()
     })
     return 'retry'
   }

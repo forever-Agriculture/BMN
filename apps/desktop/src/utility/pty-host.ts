@@ -660,6 +660,8 @@ async function start(): Promise<void> {
       case METHOD_REGISTRY.terminalDetach:
         manager.detach({ attachmentId: stringValue(params, 'attachmentId') })
         return { detached: true }
+      case METHOD_REGISTRY.terminalModesReset:
+        return manager.resetTerminalModes(identity(params))
       case METHOD_REGISTRY.terminalSnapshotSave:
         return manager.saveTerminalSnapshot(
           identity(params),

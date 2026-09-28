@@ -2529,7 +2529,9 @@ input[type='radio'] {
 }
 
 .attention-item .where .age {
+  flex-shrink: 0;
   margin-left: auto;
+  white-space: nowrap;
 }
 
 .hook-events {

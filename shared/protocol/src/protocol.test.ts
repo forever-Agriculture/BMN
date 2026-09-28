@@ -105,6 +105,7 @@ describe('protocol surface', () => {
         'terminal.resize',
         'terminal.detach',
         'terminal.snapshot.save',
+        'terminal.modes.reset',
         'terminal.savedOutput.finalCaptureUnavailable',
         'terminal.savedOutput.get',
         'artifact.list',
@@ -144,7 +145,7 @@ describe('protocol surface', () => {
         'presence.set'
       ])
     )
-    expect(Object.values(METHOD_REGISTRY)).toHaveLength(73)
+    expect(Object.values(METHOD_REGISTRY)).toHaveLength(74)
   })
 
   it('exports the initial stable error codes', () => {
