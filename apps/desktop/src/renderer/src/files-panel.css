@@ -88,6 +88,20 @@
   min-width: 0;
 }
 
+.handoff-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.handoff-text-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .handoff-form textarea,
 .handoff-form select {
   width: 100%;

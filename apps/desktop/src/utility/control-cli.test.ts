@@ -11,7 +11,7 @@ import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ControlAuth, writeOwnerToken } from './control-auth'
-import { ERROR_CODES } from '@bmn/protocol'
+import { ERROR_CODES, HANDOFF_OUTLINE } from '@bmn/protocol'
 import { ControlError, ControlServer, MemoryReceiptStore, type ControlHandlers } from './control-server'
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
@@ -502,10 +502,39 @@ describe('bmn help agents', () => {
       'Submission is not delivery',
       '--key',
       'do not resend',
-      'Never run it by hand'
+      'Never run it by hand',
+      // Story 35.2: what a complete handoff holds, the outline, the stdin pattern and its authority.
+      'start without asking',
+      '`bmn handoff --outline`',
+      '--text-file -',
+      'conveys context, not authority'
     ]) {
       expect(brief.stdout).toContain(rule)
     }
+  })
+
+  it('prints the handoff outline and nothing else, without a socket or token (Story 35.2)', async () => {
+    const outline = await runCli(['handoff', '--outline'], {
+      env: { BMN_CONTROL_SOCKET: '/nonexistent/bmn-outline.sock', BMN_TOKEN: 'unused' }
+    })
+    expect(outline).toEqual({ code: 0, stdout: `${HANDOFF_OUTLINE}\n`, stderr: '' })
+    expect((await runCli(['handoff', '--outline'])).stdout).toBe(`${HANDOFF_OUTLINE}\n`)
+    for (const args of [['handoff', '--outline', 'session-2'], ['handoff', '--outline', '--key', 'k'], ['handoff', '--outline', '--text', 'x']]) {
+      expect(await runCli(args)).toEqual({ code: 2, stdout: '',
+        stderr: 'bmn: handoff --outline takes no arguments or other options\nRun "bmn help" for usage.\n' })
+    }
+  })
+
+  it('holds the CLI outline, the form outline and the documented one to one text (Story 35.2)', async () => {
+    const [outline, documentation] = await Promise.all([runCli(['handoff', '--outline']), readFile(AGENT_CONTROL_DOC, 'utf8')])
+    const fenced = /`bmn handoff --outline` prints[\s\S]*?```text\n([\s\S]*?)```/.exec(documentation)
+
+    expect(outline.stdout).toBe(`${HANDOFF_OUTLINE}\n`)
+    expect(fenced?.[1]).toBe(`${HANDOFF_OUTLINE}\n`)
+    expect(HANDOFF_OUTLINE.split('\n').filter((line) => line !== '')).toEqual([
+      'Goal:', 'Where it stands:', 'Done and checked (with published evidence ids):', 'Left to do:',
+      'Risks and open questions:', 'How to check:'
+    ])
   })
 
   it('keeps the printed brief and the documented one identical', async () => {

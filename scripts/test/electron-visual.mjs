@@ -1813,6 +1813,7 @@ const evidence = await withTemporaryRoot(
       phase('workspace identity marker checks passed')
 
       // ---------- Epic 20: workspace attention, dormant rows and quiet controls ----------
+      const handoffOutlineScreenshots = []
       phase('workspace glance states')
       const glanceScreenshots = []
       const glanceFixture = {
@@ -2114,6 +2115,22 @@ const evidence = await withTemporaryRoot(
       await page.keyboard.press('Escape')
       phase('workspace glance checks passed')
 
+      // Story 35.2: the owner's handoff form offers the outline while its text box is empty. Nothing is saved.
+      const selectedPane = page.locator('.session-terminal.selected')
+      await selectedPane.locator('.pane-actions button', { hasText: 'Files' }).click()
+      await page.getByRole('button', { name: 'Prepare handoff' }).click()
+      const handoffForm = page.locator('.handoff-form')
+      const insertOutline = handoffForm.getByRole('button', { name: 'Insert outline' })
+      const outlineText = handoffForm.locator('textarea')
+      assert.equal(await insertOutline.isEnabled(), true)
+      await insertOutline.click()
+      assert.match(await outlineText.inputValue(), /^Goal:\n\nWhere it stands:[\s\S]*How to check:$/)
+      assert.equal(await insertOutline.isEnabled(), false)
+      handoffOutlineScreenshots.push(await screenshot(page, 'black-knight-handoff-outline.png'))
+      await handoffForm.getByRole('button', { name: 'Cancel' }).click()
+      await page.locator('.files-close').click()
+      phase('handoff outline form checks passed')
+
       phase('all runtime checks passed')
       return {
         fixture,
@@ -2145,6 +2162,7 @@ const evidence = await withTemporaryRoot(
           after: 'Current repaired runtime.'
         },
         screenshots,
+        handoffOutlineScreenshots,
         measuredContrasts,
         hierarchyPolish,
         terminalBefore,

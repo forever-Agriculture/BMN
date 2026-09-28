@@ -130,6 +130,9 @@ export interface TerminalIntegrationProbe {
     draftId: string
     targetSessionId: string
     editedText: string
+    /** Story 35.2: Insert outline offered on an empty box, off once it holds text, and the outline pasted whole. */
+    outline: Record<'outlineOfferedEmpty' | 'outlineFilled' | 'outlineFocused' | 'outlineOfferedAgain' | 'outlineOffAfterTyping' |
+      'outlineOffForSavedText' | 'pastedWhole', boolean>
     fileName: string
     acceptedState: string
     existingInputPreserved: boolean

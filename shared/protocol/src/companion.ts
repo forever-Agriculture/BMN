@@ -45,6 +45,23 @@ export function hasDisallowedHandoffControl(value: string): boolean {
   return false
 }
 
+/**
+ * Story 35.2: the optional outline of a complete handoff, one that lets the receiver start without asking.
+ * `bmn handoff --outline` prints it, the owner's form inserts it and docs/agent-control.md shows it; a test holds
+ * all three to this text. Nothing checks that a handoff fills it in (Epic 7 keeps sections optional).
+ */
+export const HANDOFF_OUTLINE = `Goal:
+
+Where it stands:
+
+Done and checked (with published evidence ids):
+
+Left to do:
+
+Risks and open questions:
+
+How to check:`
+
 /** A request stays open until correlated resolution arrives; seeing it only changes `seenAt`. */
 export interface AttentionRecord {
   requestId: string

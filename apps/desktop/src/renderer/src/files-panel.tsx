@@ -1,11 +1,12 @@
 // MODULE: files-panel.tsx - the Files side panel: artifact preview/actions and addressed input drafts
-import { useEffect, useMemo, useState } from 'react'
-import type {
-  ArtifactRecord,
-  AttentionRecord,
-  InputDraftRecord,
-  SessionRecord,
-  WorkspaceRecord
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import {
+  HANDOFF_OUTLINE,
+  type ArtifactRecord,
+  type AttentionRecord,
+  type InputDraftRecord,
+  type SessionRecord,
+  type WorkspaceRecord
 } from '@bmn/protocol'
 import { sameHandoffDraft } from './workspace-handoff-review'
 import { Dialog } from './dialog'
@@ -88,6 +89,8 @@ export function FilesPanel(props: {
   const [handoffExpectedUpdatedAt, setHandoffExpectedUpdatedAt] = useState<string | null>(null)
   const [handoffTargetId, setHandoffTargetId] = useState('')
   const [handoffText, setHandoffText] = useState('')
+  const handoffTextId = useId()
+  const handoffTextArea = useRef<HTMLTextAreaElement>(null)
   const [handoffArtifactIds, setHandoffArtifactIds] = useState<ReadonlySet<string>>(new Set())
   const [requestedReviewError, setRequestedReviewError] = useState<string | null>(null)
 
@@ -416,9 +419,17 @@ export function FilesPanel(props: {
             ) : null}
             {preparation ? <p className="handoff-note">{preparation.byline}</p> : null}
             {preparation?.stale ? <p className="handoff-note" role="status">prepared by an earlier process of this session</p> : null}
-            <label>Summary or question
-              <textarea rows={6} required value={handoffText} onChange={(event) => setHandoffText(event.target.value)} />
-            </label>
+            <div className="handoff-text">
+              <div className="handoff-text-heading">
+                <label htmlFor={handoffTextId}>Summary or question</label>
+                {/* Story 35.2: an optional outline, offered only while there is nothing to overwrite. */}
+                <button type="button" disabled={handoffText.trim() !== ''} onClick={() => {
+                  setHandoffText(HANDOFF_OUTLINE)
+                  handoffTextArea.current?.focus()
+                }}>Insert outline</button>
+              </div>
+              <textarea id={handoffTextId} ref={handoffTextArea} rows={6} required value={handoffText} onChange={(event) => setHandoffText(event.target.value)} />
+            </div>
             {handoffChoices.length > 0 ? (
               <fieldset className="handoff-files">
                 <legend>Original files · up to 10</legend>

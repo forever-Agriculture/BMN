@@ -6,6 +6,7 @@ import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import {
   decsetRestoreSequence,
+  HANDOFF_OUTLINE,
   TERMINAL_NOTICE_CODES,
   type ColorModeName,
   type HookOriginRecord,
@@ -600,14 +601,32 @@ export function SessionTerminal(props: {
           control.dispatchEvent(new Event(control instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }))
         }
         setControlValue(destinationSelect, destination.sessionId)
-        setControlValue(handoffTextarea, 'Synthetic handoff line one\nQuestion line two')
+        // Story 35.2: Insert outline fills the empty box once, and is off while the box holds anything.
+        const insertOutline = [...handoffForm.querySelectorAll<HTMLButtonElement>('button')]
+          .find((button) => button.textContent?.trim() === 'Insert outline')
+        if (!insertOutline) throw new Error('the Insert outline button was not rendered')
+        const outlineOfferedEmpty = handoffTextarea.value === '' && !insertOutline.disabled
+        insertOutline.click()
+        const outlineFilled = await waitFor(() => handoffTextarea.value === HANDOFF_OUTLINE && insertOutline.disabled ? true : undefined)
+        const outlineFocused = document.activeElement === handoffTextarea
+        setControlValue(handoffTextarea, '')
+        const outlineOfferedAgain = await waitFor(() => insertOutline.disabled ? undefined : true)
+        setControlValue(handoffTextarea, 'x')
+        const outlineOffAfterTyping = await waitFor(() => insertOutline.disabled ? true : undefined)
+        setControlValue(handoffTextarea, '')
+        await waitFor(() => insertOutline.disabled ? undefined : true)
+        insertOutline.click()
+        await waitFor(() => handoffTextarea.value === HANDOFF_OUTLINE ? true : undefined)
+        const createdText = handoffTextarea.value.replace('Goal:', 'Goal: Synthetic handoff line one\nQuestion line two')
+        setControlValue(handoffTextarea, createdText)
+        const outlineFlow = { outlineOfferedEmpty, outlineFilled, outlineFocused, outlineOfferedAgain, outlineOffAfterTyping }
         artifactChoice.click()
         handoffForm.requestSubmit()
         const createdHandoff = await waitFor(async () => (await window.aiTerminal.listDrafts()).find((draft) =>
           draft.origin === 'handoff' &&
           draft.sourceSessionId === props.startup.sessionId &&
           draft.sessionId === destination.sessionId &&
-          draft.text === 'Synthetic handoff line one\nQuestion line two' &&
+          draft.text === createdText &&
           draft.artifactIds.length === 1
         ))
         console.warn('[BMN] renderer behavioural integration: handoff saved')
@@ -620,7 +639,10 @@ export function SessionTerminal(props: {
         const editForm = await waitFor(() => filesPanel.querySelector<HTMLFormElement>('.handoff-form'))
         const editTextarea = editForm.querySelector<HTMLTextAreaElement>('textarea')
         if (!editTextarea) throw new Error('the reopened handoff text was not rendered')
-        const editedText = 'Edited handoff line one\nQuestion line two'
+        const outlineOffForSavedText = [...editForm.querySelectorAll<HTMLButtonElement>('button')]
+          .find((button) => button.textContent?.trim() === 'Insert outline')?.disabled === true
+        // A saved outline handoff is edited and pasted as any other.
+        const editedText = editTextarea.value.replace('Synthetic handoff line one', 'Edited handoff line one')
         setControlValue(editTextarea, editedText)
         editForm.requestSubmit()
         const editedHandoff = await waitFor(async () => (await window.aiTerminal.listDrafts()).find((draft) =>
@@ -652,7 +674,7 @@ export function SessionTerminal(props: {
         const terminalText = await waitFor(() => {
           const snapshot = window.__aitermTest?.snapshot(destination.sessionId)
           const text = snapshot?.bufferLines.join('\n') ?? ''
-          return text.includes('EXISTING-HANDOFF-PREFIX') && text.includes('Edited handoff line one')
+          return text.includes('EXISTING-HANDOFF-PREFIX') && text.includes('Edited handoff line one') && text.includes('How to check:')
             ? text
             : undefined
         })
@@ -698,6 +720,7 @@ export function SessionTerminal(props: {
           draftId: acceptedHandoff.draftId,
           targetSessionId: destination.sessionId,
           editedText,
+          outline: { ...outlineFlow, outlineOffForSavedText, pastedWhole: terminalText.includes('Where it stands:') },
           fileName: 'handoff-self-test.txt',
           acceptedState: acceptedHandoff.state,
           existingInputPreserved: terminalText.includes('EXISTING-HANDOFF-PREFIX'),

@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import {
+  HANDOFF_OUTLINE,
   ERROR_CODES,
   METHOD_REGISTRY,
   isLaunchSetStartParams,
@@ -1404,6 +1405,9 @@ interface RendererIntegrationProbe {
     draftId: string
     targetSessionId: string
     editedText: string
+    /** Story 35.2: Insert outline offered on an empty box, off once it holds text, and the outline pasted whole. */
+    outline: Record<'outlineOfferedEmpty' | 'outlineFilled' | 'outlineFocused' | 'outlineOfferedAgain' | 'outlineOffAfterTyping' |
+      'outlineOffForSavedText' | 'pastedWhole', boolean>
     fileName: string
     acceptedState: string
     existingInputPreserved: boolean
@@ -3531,7 +3535,9 @@ async function runSelfTest(): Promise<void> {
     }
     if (
       preloadProbe.handoffFlow.targetSessionId !== session.sessionId ||
-      preloadProbe.handoffFlow.editedText !== 'Edited handoff line one\nQuestion line two' ||
+      preloadProbe.handoffFlow.editedText !== HANDOFF_OUTLINE.replace('Goal:', 'Goal: Edited handoff line one\nQuestion line two') ||
+      Object.values(preloadProbe.handoffFlow.outline ?? {}).length !== 7 ||
+      Object.values(preloadProbe.handoffFlow.outline ?? {}).some((value) => value !== true) ||
       preloadProbe.handoffFlow.fileName !== handoffArtifact.originalName ||
       preloadProbe.handoffFlow.acceptedState !== 'accepted' ||
       !preloadProbe.handoffFlow.existingInputPreserved ||
@@ -4140,7 +4146,7 @@ async function runSelfTest(): Promise<void> {
       const form = await wait(() => document.querySelector('.handoff-form'), 'exact handoff review');
       const exactDraftReviewed = form.querySelector('textarea')?.value === ${JSON.stringify(petitionText)} &&
         form.querySelector('select')?.value === ${JSON.stringify(petitionDestination.session.sessionId)};
-      form.querySelector('button[type="button"]')?.click();
+      [...form.querySelectorAll('button')].find(b => b.textContent === 'Cancel')?.click();
       document.querySelector('.files-close')?.click();
       const requestAfter = (await window.aiTerminal.listAttention())
         .find(row => row.requestId === ${JSON.stringify(petitionRequest.requestId)});
@@ -6761,7 +6767,7 @@ async function runSelfTest(): Promise<void> {
       const form = await wait(() => document.querySelector('.handoff-form'), 'cross-workspace review');
       const routeExact = form.querySelector('textarea')?.value === 'Synthetic cross-workspace handoff' &&
         form.querySelector('select')?.value === ${JSON.stringify(routingSession.session.sessionId)};
-      form.querySelector('button[type="button"]')?.click();
+      [...form.querySelectorAll('button')].find(b => b.textContent === 'Cancel')?.click();
       document.querySelector('.files-close')?.click();
       return { sourceReport, missingEvidence, sourceHandoffOnce, destinationNoReport,
         destinationHandoffOnce, routeExact };

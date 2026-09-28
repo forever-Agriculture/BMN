@@ -189,6 +189,8 @@ describe('renderer acceptance hook', () => {
         draftId: 'handoff-1',
         targetSessionId: 'session-b',
         editedText: 'Edited handoff',
+        outline: { outlineOfferedEmpty: true, outlineFilled: true, outlineFocused: true, outlineOfferedAgain: true,
+          outlineOffAfterTyping: true, outlineOffForSavedText: true, pastedWhole: true },
         fileName: 'result.txt',
         acceptedState: 'accepted',
         existingInputPreserved: true,
