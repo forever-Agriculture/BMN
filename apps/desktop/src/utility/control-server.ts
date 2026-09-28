@@ -438,6 +438,15 @@ function paramsHash(params: Params): string {
   return createHash('sha256').update(canonicalJson(rest)).digest('hex')
 }
 
+/** What an identical retry gets from its receipt: the result, 'uncertain' for a staged one, or the stored failure. */
+function replayed(existing: ReceiptRecord): unknown {
+  if (existing.state === 'done') return withDuplicate(existing.result)
+  if (existing.state === 'staged') return { state: 'uncertain', duplicate: true }
+  const stored = existing.error
+  const code = stored && isProtocolErrorCode(stored.code) ? stored.code : ERROR_CODES.ioError
+  throw new ControlError(code, stored?.message || 'Earlier attempt failed')
+}
+
 function withDuplicate(result: unknown): unknown {
   return isRecord(result) ? { ...result, duplicate: true } : { result: result ?? null, duplicate: true }
 }
@@ -637,7 +646,7 @@ export class ControlServer {
       return
     }
     try {
-      const result = await this.dispatch(scope, request.method, request.params)
+      const result = await this.dispatchOrReplay(scope, request.method, request.params)
       this.respond(connection, { jsonrpc: '2.0', id: request.id, result: result ?? null })
     } catch (error) {
       this.fail(connection, request.id, error, false)
@@ -766,6 +775,29 @@ export class ControlServer {
       throw new ControlError(ERROR_CODES.notFound, 'Session not found')
     }
     return requested
+  }
+
+  /**
+   * Story 34.1: a request accepted before format characters were stripped can now fail validation (a title
+   * that held only them is empty). An identical retry under the same idempotency key still gets its stored
+   * receipt, as `idempotent` would give it; a new request keeps the validation error.
+   */
+  private async dispatchOrReplay(scope: ControlScope, method: string, rawParams: unknown): Promise<unknown> {
+    try {
+      return await this.dispatch(scope, method, rawParams)
+    } catch (error) {
+      if (!(error instanceof ControlError) || error.code !== ERROR_CODES.invalidArgument || !isRecord(rawParams)) throw error
+      let idempotencyKey: string | undefined
+      try {
+        idempotencyKey = readText(rawParams, 'idempotencyKey', RULES.idempotencyKey)
+      } catch {
+        throw error
+      }
+      if (idempotencyKey === undefined) throw error
+      const existing = await this.options.receipts.get(`${scopeKey(scope)}|${method}|${idempotencyKey}`).catch(() => undefined)
+      if (existing === undefined || existing.paramsHash !== paramsHash(rawParams)) throw error
+      return replayed(existing)
+    }
   }
 
   private async dispatch(scope: ControlScope, method: string, rawParams: unknown): Promise<unknown> {
@@ -1052,11 +1084,7 @@ export class ControlServer {
         if (existing.paramsHash !== hash) {
           throw new ControlError(ERROR_CODES.revisionConflict, 'idempotency key reused with different parameters')
         }
-        if (existing.state === 'done') return withDuplicate(existing.result)
-        if (existing.state === 'staged') return { state: 'uncertain', duplicate: true }
-        const stored = existing.error
-        const code = stored && isProtocolErrorCode(stored.code) ? stored.code : ERROR_CODES.ioError
-        throw new ControlError(code, stored?.message || 'Earlier attempt failed')
+        return replayed(existing)
       }
       await receipts.put({ key, paramsHash: hash, state: 'staged' })
       let result: unknown

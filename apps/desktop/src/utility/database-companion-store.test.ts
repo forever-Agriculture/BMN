@@ -513,6 +513,14 @@ describe('companion store', () => {
     }, now)).toThrow(/Only an unsent handoff/)
   })
 
+  it('never cuts the handoff preview through a secret, and keeps the draft whole (Astra review)', () => {
+    // A synthetic AWS key id; not a real credential.
+    const text = `${'a'.repeat(185)} AKIAABCDEFGHIJKLMNOP and more`
+    prepareAgentHandoff(database, { ...agentHandoff('secret-draft', 'secret-request'), text }, now)
+    expect(getAttention(database, 'secret-request')?.body).toBe(`${'a'.repeat(185)} `)
+    expect(getDraft(database, 'secret-draft')?.text).toBe(text)
+  })
+
   it('creates an agent petition and exposes only its own metadata projection', () => {
     const prepared = prepareAgentHandoff(database, agentHandoff('agent-draft', 'agent-request'), now)
 

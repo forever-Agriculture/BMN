@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { AttentionEvidence, AttentionPrompt, AttentionRecord } from '@bmn/protocol'
+import { parseAttentionPrompt, type AttentionEvidence, type AttentionPrompt, type AttentionRecord } from '@bmn/protocol'
 import { RemoteAnswers, answerRoute, cleanTypedAnswer, evidenceConfirms, type AnswerOutcome, type QuestionChoice, type RemoteAnswer, type ScreenLike } from './remote-answer'
 
 const SCREENS = join(__dirname, 'test-fixtures', 'remote-answers', 'screens')
@@ -442,6 +442,16 @@ describe('answering OpenCode through its plugin', () => {
     h.engine.evidence('s1', 'opencode:question', evidence({ requestRef: 'que_1', answers: [['Session cookies']] }))
     await expect(pending).resolves.toEqual({ state: 'confirmed', sent: ['Session cookies'] })
     expect(h.writes).toEqual([])
+  })
+
+  it('sends and confirms the exact label of an option whose label holds a format character (Astra review)', async () => {
+    const parsed = parseAttentionPrompt({ ...OPENCODE_QUESTION, questions: [question('Which one?', 'A\u200BB', 'AB')] })
+    if (!parsed.ok) throw new Error(parsed.error)
+    const h = harness({ record: record(parsed.value) })
+    const pending = ask(h, choose(0))
+    await expect(h.engine.take('s1', 'inc-1', 500)).resolves.toEqual([{ requestRef: 'que_1', kind: 'question', answers: [['A\u200BB']] }])
+    h.engine.evidence('s1', 'opencode:question', evidence({ requestRef: 'que_1', answers: [['A\u200BB']] }))
+    await expect(pending).resolves.toEqual({ state: 'confirmed', sent: ['A\u200BB'] })
   })
 
   it('never hands one session\'s answer to another session or process', async () => {

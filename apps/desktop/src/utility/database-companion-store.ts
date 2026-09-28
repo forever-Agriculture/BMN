@@ -39,6 +39,7 @@ import {
 import { isAbsolute, normalize } from 'node:path'
 import type { DatabaseConnection } from './database-initialization'
 import { selectSession, selectWorkspace, WorkspaceStoreError } from './database-workspace-store'
+import { clipOutsideSecrets } from './secret-mask'
 
 interface ArtifactRow {
   artifact_id: string
@@ -872,7 +873,8 @@ export function prepareAgentHandoff(database: DatabaseConnection, p: {
   }, now)
   const titlePrefix = 'Asks to hand off to "'
   const title = `${titlePrefix}${p.destinationName.slice(0, 200 - titlePrefix.length - 1)}"`
-  const body = `${p.text.slice(0, 200)}${p.artifactIds.length ? `\n${p.artifactIds.length} files` : ''}`
+  // The preview may reach Telegram, which masks secrets; a cut through one would leave half a key unmasked.
+  const body = `${clipOutsideSecrets(p.text, 200)}${p.artifactIds.length ? `\n${p.artifactIds.length} files` : ''}`
   openAttention(database, {
     sessionId: p.sourceSessionId,
     incarnationId: p.sourceIncarnationId,

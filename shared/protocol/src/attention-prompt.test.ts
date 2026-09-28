@@ -140,7 +140,7 @@ describe('format characters in a prompt (Story 34.1)', () => {
     questions: [{ ...(question as { questions: object[] }).questions[0], ...patch }]
   })
 
-  it('removes them from the header, question text, option labels and descriptions', () => {
+  it('removes them from the header, question text and descriptions, and keeps option labels exact (Astra review)', () => {
     const parsed = parseAttentionPrompt(spoofed({
       header: 'Auth​ method',
       text: 'Which ‮auth‬ method?',
@@ -149,13 +149,19 @@ describe('format characters in a prompt (Story 34.1)', () => {
     expect(parsed.ok && parsed.value.type === 'questions' && parsed.value.questions[0]).toMatchObject({
       header: 'Auth method',
       text: 'Which auth method?',
-      options: [{ label: 'JWT', description: 'Stateless tokens' }, { label: 'Keep \u{1F468}‍\u{1F469}', description: null }]
+      options: [{ label: 'J⁦WT⁩', description: 'Stateless tokens' }, { label: 'Keep \u{1F468}‍\u{1F469}', description: null }]
     })
   })
 
-  it('rejects a label that held only format characters, as an empty one', () => {
-    const parsed = parseAttentionPrompt(spoofed({ options: [{ label: '‮​', description: null }] }))
-    expect(parsed).toEqual({ ok: false, error: `prompt option label must be 1..${ATTENTION_PROMPT_LIMITS.label} characters` })
+  it('rejects question text that held only format characters, as empty text', () => {
+    const parsed = parseAttentionPrompt(spoofed({ text: '‮​' }))
+    expect(parsed).toEqual({ ok: false, error: `prompt question text must be 1..${ATTENTION_PROMPT_LIMITS.text} characters` })
+  })
+
+  it('keeps labels that differ only by format characters apart: a label is the answer sent back', () => {
+    const parsed = parseAttentionPrompt(spoofed({ options: [{ label: 'A​B', description: null }, { label: 'AB', description: null }] }))
+    expect(parsed.ok && parsed.value.type === 'questions' && parsed.value.questions[0]!.options.map((option) => option.label))
+      .toEqual(['A​B', 'AB'])
   })
 
   it('never rewrites the tool, command or folder an answer is matched against', () => {

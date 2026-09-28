@@ -1,6 +1,6 @@
 // MODULE: needs-you-popover.tsx - unresolved requests, unread sessions and recent request history under the header count
 import { useEffect, useRef } from 'react'
-import type { AttentionPrompt, AttentionRecord } from '@bmn/protocol'
+import { stripFormatCharacters, type AttentionPrompt, type AttentionRecord } from '@bmn/protocol'
 import { attentionProvenance, expiryText, isActionableAttention, openAttentionGroups, relativeAge } from './session-presentation'
 
 export interface SessionPlace {
@@ -16,15 +16,16 @@ export interface UnreadEntry {
 
 /**
  * The agent's own question or permission, read-only: the owner answers in the terminal (or from Telegram);
- * this only shows what is being asked, option by option, instead of the flattened text.
+ * this only shows what is being asked, option by option, instead of the flattened text. The command, folder
+ * and option labels are stored exactly as the harness sent them, so they are cleaned here (Story 34.1).
  */
 function PromptDetail(props: { prompt: AttentionPrompt }): React.JSX.Element {
   const { prompt } = props
   if (prompt.type === 'permission') {
     return (
       <div className="attention-prompt">
-        {prompt.command ? <pre>{prompt.command}</pre> : null}
-        {prompt.cwd ? <span className="attention-prompt-where">in {prompt.cwd}</span> : null}
+        {prompt.command ? <pre>{stripFormatCharacters(prompt.command)}</pre> : null}
+        {prompt.cwd ? <span className="attention-prompt-where">in {stripFormatCharacters(prompt.cwd)}</span> : null}
       </div>
     )
   }
@@ -44,7 +45,7 @@ function PromptDetail(props: { prompt: AttentionPrompt }): React.JSX.Element {
           <ol>
             {question.options.map((option, optionIndex) => (
               <li key={optionIndex}>
-                <span className="attention-prompt-label">{option.label}</span>
+                <span className="attention-prompt-label">{stripFormatCharacters(option.label)}</span>
                 {option.description ? <span className="attention-prompt-description">{option.description}</span> : null}
               </li>
             ))}

@@ -121,8 +121,9 @@ function nullableText(value: unknown, key: string, max: number, multiline = fals
 
 /**
  * Words the owner reads as the agent's (Story 34.1): invisible and direction-changing format characters are
- * removed first, so text that held only those is empty. The tool, command and folder are never rewritten: an
- * answer is matched against them exactly as the harness shows them.
+ * removed first, so text that held only those is empty. The tool, command, folder and option labels are never
+ * rewritten: an answer is sent as, and matched against, them exactly as the harness shows them (remote-answer.ts,
+ * screen-mirror.ts); Needs you and Telegram clean them where they are shown.
  */
 function shownText(value: unknown, key: string, max: number, multiline = false): string {
   return text(typeof value === 'string' ? stripFormatCharacters(value) : value, key, max, multiline)
@@ -147,7 +148,7 @@ function list(value: unknown, key: string, max: number): unknown[] {
 function option(value: unknown): AttentionPromptOption {
   if (!isRecord(value) || !hasExactKeys(value, ['label', 'description'])) throw new PromptError('prompt option has the wrong shape')
   return {
-    label: shownText(value.label, 'option label', ATTENTION_PROMPT_LIMITS.label),
+    label: text(value.label, 'option label', ATTENTION_PROMPT_LIMITS.label),
     description: nullableShownText(value.description, 'option description', ATTENTION_PROMPT_LIMITS.description, true)
   }
 }

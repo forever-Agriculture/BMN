@@ -65,9 +65,30 @@ export function said(text: string): string {
   return maskSecrets(stripFormatCharacters(text))
 }
 
+/**
+ * Card HTML stored before Stories 34.1 and 34.2, sent again when a card is ended after a restart: the words
+ * between tags are cleaned and masked as fresh text is, and the tags BMN wrote stay intact.
+ */
+function saidHtml(html: string): string {
+  return html.split(/(<[^>]*>)/).map((part, index) => index % 2 === 1 ? part : escapeHtml(said(plainText(part)))).join('')
+}
+
 /** A card whose text hides a secret ends by saying so, so the owner knows the laptop has the full text. */
 function footnoted(text: string): string {
   return text.includes(SECRET_MASK) ? `${text}\n\n<i>${SECRET_FOOTNOTE}</i>` : text
+}
+
+/**
+ * The plain words sent when Telegram refuses a card's formatting. A card that had buttons is answered at the
+ * laptop, said before the secret footnote so the footnote stays the last line.
+ */
+export function plainFallback(html: string, answerAtLaptop: boolean): string {
+  const plain = plainText(html)
+  if (!answerAtLaptop) return plain
+  const footnote = `\n\n${SECRET_FOOTNOTE}`
+  return plain.endsWith(footnote)
+    ? `${plain.slice(0, -footnote.length)}\n\nAnswer at the laptop.${footnote}`
+    : `${plain}\n\nAnswer at the laptop.`
 }
 
 /** Clips to at most `max` characters including the ellipsis, never splitting a surrogate pair. */
@@ -288,11 +309,20 @@ function commandMasked(prompt: AttentionPermissionPrompt): boolean {
 }
 
 /**
- * Whether the card can show the whole command; a permission is never approved from a clipped one, nor from one
- * with part of it hidden as a secret.
+ * Whether cleaning removed invisible or direction-changing characters from what is approved (Story 34.1): the
+ * card would show different bytes from the ones the harness runs.
+ */
+function permissionCleaned(prompt: AttentionPermissionPrompt): boolean {
+  return [prompt.tool, prompt.command, prompt.cwd].some((value) => value !== null && stripFormatCharacters(value) !== value)
+}
+
+/**
+ * Whether the card can show the whole command exactly; a permission is never approved from a clipped one, one
+ * with part of it hidden as a secret, or one whose tool, command or folder the card had to clean.
  */
 export function commandShownWhole(prompt: AttentionPermissionPrompt): boolean {
-  return prompt.command !== null && clip(prompt.command, COMMAND_CHARS) === prompt.command && !commandMasked(prompt)
+  return prompt.command !== null && clip(prompt.command, COMMAND_CHARS) === prompt.command && !commandMasked(prompt) &&
+    !permissionCleaned(prompt)
 }
 
 export interface PermissionCardInput {
@@ -324,6 +354,8 @@ export function permissionCard(input: PermissionCardInput): RenderedCard {
     ? input.note ? `⚠ <i>${escapeHtml(input.note)}</i>` : null
     : prompt.command !== null && commandMasked(prompt)
       ? '<i>Part of the command is hidden here. Answer at the laptop.</i>'
+    : prompt.command !== null && permissionCleaned(prompt)
+      ? '<i>The command holds invisible characters. Answer at the laptop.</i>'
     : prompt.command !== null && !commandShownWhole(prompt)
       ? '<i>The command is too long to show here. Answer at the laptop.</i>'
       : input.closedBecause === 'permissions-off'
@@ -364,7 +396,7 @@ export function noticeCard(
 }
 
 export function exitCard(header: CardHeader): string {
-  return headerLine('■', header, ' exited')
+  return footnoted(headerLine('■', header, ' exited'))
 }
 
 /** The italic line that replaces the options once a card is decided. */
@@ -427,5 +459,5 @@ export function endingReply(outcome: AnswerOutcome): string | null {
 }
 
 export function endedCard(base: string, ending: CardEnding): string {
-  return footnoted(`${base}\n\n${endingLine(ending)}`)
+  return footnoted(`${saidHtml(base)}\n\n${endingLine(ending)}`)
 }

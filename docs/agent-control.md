@@ -638,12 +638,14 @@ bmn hook is not yours
 - Requests are validated for schema and size before anything runs.
 - Invisible and direction-changing format characters (such as a right-to-left override, U+202E,
   or a zero-width space, U+200B) are removed from the text an owner reads: request titles and
-  bodies, prompt questions, headers and option labels, progress labels and details, handoff text
-  and terminal notices. The two joiners emoji and Persian text need (U+200C, U+200D) stay. A field
-  that held only those characters is empty and refused. Desktop notifications and Telegram cards
-  clean requests stored earlier the same way. A prompt's tool, command and folder are kept exactly,
-  because an answer is matched against them; file references and artifact names still refuse
-  these characters.
+  bodies, prompt questions, headers and option descriptions, progress labels and details, handoff
+  text and terminal notices. The two joiners emoji and Persian text need (U+200C, U+200D) stay. A
+  field that held only those characters is empty and refused; an identical `--key` retry of a
+  request accepted before this rule still returns its stored result. Desktop notifications and
+  Telegram cards clean requests stored earlier the same way. A prompt's tool, command, folder and
+  option labels are kept exactly, because an answer is sent as and matched against them; Needs you
+  and Telegram clean them where they show them, and Telegram offers no Allow for a command it had
+  to clean. File references and artifact names still refuse these characters.
 - A session token can publish, report and send only for its own session, and only while that
   process incarnation is current. `handoff.prepare` is its one exception: it may name a destination
   ID, but only prepares a bounded draft for owner delivery and cannot list another session.

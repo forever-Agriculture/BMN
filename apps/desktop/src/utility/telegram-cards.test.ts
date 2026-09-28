@@ -4,6 +4,7 @@ import type { AttentionPermissionPrompt, AttentionQuestionsPrompt } from '@bmn/p
 import {
   TELEGRAM_TEXT_LIMIT,
   clip,
+  commandShownWhole,
   endedCard,
   endingLine,
   endingReply,
@@ -11,6 +12,7 @@ import {
   exitCard,
   noticeCard,
   permissionCard,
+  plainFallback,
   plainText,
   questionCard,
   requestCard,
@@ -563,6 +565,49 @@ ${FOOTNOTE}`)
     expect(card.text).toContain('<pre>curl -H "Authorization: Bearer [secret hidden]" api</pre>')
     expect(card.text).toContain('<i>Part of the command is hidden here. Answer at the laptop.</i>')
     expect(card.text.endsWith(FOOTNOTE)).toBe(true)
+  })
+
+  it('never offers Allow once for a command, tool or folder the card had to clean (Astra review)', () => {
+    for (const prompt of [
+      { ...BASH, command: "touch 'a\u200Bb'" },
+      { ...BASH, command: 'rm \u202Etxt.a' },
+      { ...BASH, tool: 'Ba\u200Bsh' },
+      { ...BASH, cwd: '/home/owner/\u2066api' }
+    ]) {
+      const card = permissionCard({ header: CLAUDE, prompt, tokens: { allow: 'a', deny: 'd' }, closedBecause: null, home: null })
+      expect(card.keyboard).toBeNull()
+      expect(card.text).toContain('<i>The command holds invisible characters. Answer at the laptop.</i>')
+      expect(commandShownWhole(prompt)).toBe(false)
+    }
+    expect(commandShownWhole(BASH)).toBe(true)
+  })
+
+  it('hides a key run into by an underscore on a card (Astra review)', () => {
+    const card = requestCard(CLAUDE, { kind: 'question', title: 'Restore?', body: `from backup_${KEY}` })
+    expect(card.text).not.toContain(KEY)
+    expect(card.text.endsWith(FOOTNOTE)).toBe(true)
+  })
+
+  it('cleans, masks and footnotes a card stored before this change when it is ended after a restart (Astra review)', () => {
+    const legacy = `❓ <b>api</b>\n<b>Use \u202E${KEY}</b>\n\n<pre>ls &amp;&amp; pwd &lt;x&gt;</pre>`
+    const ended = endedCard(legacy, { type: 'restarted' })
+    expect(ended).not.toContain(KEY)
+    expect(ended).not.toContain('\u202E')
+    expect(ended).toBe(`❓ <b>api</b>\n<b>Use [secret hidden]</b>\n\n<pre>ls &amp;&amp; pwd &lt;x&gt;</pre>\n\n<i>BMN restarted — answer at the laptop.</i>\n\n${FOOTNOTE}`)
+    expect(plainText(ended)).not.toContain(KEY)
+  })
+
+  it('footnotes an exit card whose session name was masked', () => {
+    expect(exitCard({ session: 'token=abcdefgh12345678', agent: null, flag: null }))
+      .toBe(`■ <b>token=[secret hidden]</b> exited\n\n${FOOTNOTE}`)
+  })
+
+  it('keeps the footnote last in the plain words sent when Telegram refuses the formatting', () => {
+    const card = requestCard(CLAUDE, { kind: 'question', title: 'Commit?', body: `the key ${KEY}` })
+    const plain = plainFallback(card.text, true)
+    expect(plain.endsWith('Answer at the laptop.\n\nSome text looked like a secret and was hidden. The full text is on the laptop.')).toBe(true)
+    expect(plainFallback('❓ <b>api</b>', true)).toBe('❓ api\n\nAnswer at the laptop.')
+    expect(plainFallback('❓ <b>api</b>', false)).toBe('❓ api')
   })
 
   it('keeps the footnote last once a card is decided', () => {

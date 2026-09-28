@@ -925,7 +925,7 @@ describe('format characters in agent text (Story 34.1)', () => {
       body: 'line one\ntwo',
       prompt: expect.objectContaining({ questions: [expect.objectContaining({
         header: 'Pick', text: 'Approve cod.exe now',
-        options: [{ label: 'Yes', description: 'Go on' }, { label: 'No', description: null }]
+        options: [{ label: 'Y\uFEFFes', description: 'Go on' }, { label: 'No', description: null }]
       })] })
     }))
   })
@@ -1000,6 +1000,29 @@ describe('format characters in agent text (Story 34.1)', () => {
 
     expect(retry.result).toEqual({ requestId: 'request-9', duplicate: true })
     expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
+  })
+
+  it('replays a receipt for a title that held only format characters, and refuses that title in a new request (Astra review)', async () => {
+    const receipts = new MemoryReceiptStore()
+    const raw = { requestKey: 'spoof', kind: 'question', title: '\u202E\u200B' }
+    const paramsHash = createHash('sha256').update(
+      `{"kind":"question","requestKey":"spoof","title":${JSON.stringify(raw.title)}}`
+    ).digest('hex')
+    await receipts.put({
+      key: 'session:session-1|attention.open|ask-2', paramsHash, state: 'done', result: { requestId: 'request-8' }
+    })
+    const fixture = await serverFixture(receipts)
+    const client = await authenticated(fixture, sessionToken(fixture))
+
+    const retry = await client.request('attention.open', { ...raw, idempotencyKey: 'ask-2' })
+    const fresh = await client.request('attention.open', { ...raw, idempotencyKey: 'ask-3' })
+    const changed = await client.request('attention.open', { ...raw, requestKey: 'other', idempotencyKey: 'ask-2' })
+
+    expect(retry.result).toEqual({ requestId: 'request-8', duplicate: true })
+    expectError(fresh, ERROR_CODES.invalidArgument)
+    expectError(changed, ERROR_CODES.invalidArgument)
+    expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
+    await expect(receipts.get('session:session-1|attention.open|ask-3')).resolves.toBeUndefined()
   })
 })
 

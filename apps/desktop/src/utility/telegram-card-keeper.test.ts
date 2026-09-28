@@ -182,6 +182,15 @@ describe('sending a card', () => {
     expect(h.puts[0]).toMatchObject({ state: 'open', card: { format: 'plain' } })
   })
 
+  it('says Answer at the laptop before the secret footnote in the plain words (Astra review)', async () => {
+    const leaky = { ...QUESTION, questions: [{ ...QUESTION.questions[0]!, text: 'Rotate sk-ant-api03-SyntheticKeyForTests_0123456789?' }] } as AttentionPrompt
+    const h = setup({ record: record(leaky) })
+    h.connector.refuseHtml = true
+    await h.keeper.page(h.state.record!)
+    expect(h.connector.sends[0]?.text).not.toContain('SyntheticKey')
+    expect(h.connector.sends[0]?.text.endsWith('Answer at the laptop.\n\nSome text looked like a secret and was hidden. The full text is on the laptop.')).toBe(true)
+  })
+
   it('still pages a card too long to fit, as plain words, instead of losing it', async () => {
     const huge: AttentionPrompt = {
       ...QUESTION,
@@ -517,6 +526,21 @@ describe('after a restart', () => {
       { id: 5, text: '❓ api\nQ?\n\nBMN restarted — answer at the laptop.', options: { html: false, keyboard: null } }
     ])
     expect(h.updates.map((update) => [update.messageId, update.state])).toEqual([[1, 'final'], [2, 'final'], [5, 'final']])
+  })
+
+  it('cleans and masks a card stored before Stories 34.1 and 34.2 when it finishes it (Astra review)', async () => {
+    // A synthetic key; not a real credential.
+    const key = 'sk-ant-api03-SyntheticKeyForTests_0123456789'
+    const legacy = (messageId: number, format: 'html' | 'plain'): TelegramCardRecord => ({
+      ...card(messageId, 'buttons', format), card: { base: `❓ <b>api</b>\n<b>Use \u202E${key}?</b>`, format }
+    })
+    const h = setup({ stored: [legacy(1, 'html'), legacy(2, 'plain')] })
+    await h.keeper.sweep()
+    const footnote = 'Some text looked like a secret and was hidden. The full text is on the laptop.'
+    expect(h.connector.edits).toEqual([
+      { id: 1, text: `❓ <b>api</b>\n<b>Use [secret hidden]?</b>\n\n<i>BMN restarted — answer at the laptop.</i>\n\n<i>${footnote}</i>`, options: { html: true, keyboard: null } },
+      { id: 2, text: `❓ api\nUse [secret hidden]?\n\nBMN restarted — answer at the laptop.\n\n${footnote}`, options: { html: false, keyboard: null } }
+    ])
   })
 
   it('does not sweep while Telegram is not connected, and sweeps once it is', async () => {

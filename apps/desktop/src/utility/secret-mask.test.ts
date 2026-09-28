@@ -1,6 +1,6 @@
 // MODULE: secret-mask.test.ts - the secret shapes hidden on text sent to Telegram, and what stays readable (Story 34.2)
 import { describe, expect, it } from 'vitest'
-import { SECRET_MASK, maskSecrets } from './secret-mask'
+import { SECRET_MASK, clipOutsideSecrets, maskSecrets } from './secret-mask'
 
 // Synthetic values in each shape; none is a real credential.
 const PEM = [
@@ -33,7 +33,12 @@ describe('maskSecrets', () => {
     ['a quoted JSON token', '{"token": "abcdefgh12345678"}', `{"token": ${SECRET_MASK}`],
     ['an apikey assignment', 'apikey = 12345678', `apikey = ${SECRET_MASK}`],
     ['a secret assignment', 'secret:swordfish99', `secret:${SECRET_MASK}`],
-    ['a passwd assignment', 'PASSWD=correcthorse', `PASSWD=${SECRET_MASK}`]
+    ['a passwd assignment', 'PASSWD=correcthorse', `PASSWD=${SECRET_MASK}`],
+    // Astra review: a word character before the prefix that is not a letter or digit still leaves a key.
+    ['an sk- key after an underscore', 'backup_sk-abcdefghijklmnopqrstuvwxyz0123', `backup_${SECRET_MASK}`],
+    ['an AWS key id after an underscore', 'id_AKIAABCDEFGHIJKLMNOP', `id_${SECRET_MASK}`],
+    ['a quoted GitHub token', '"ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij"', `"${SECRET_MASK}"`],
+    ['a Google API key after a colon', 'key:AIzaSyA-1234567890abcdefghijklmnopqrstu', `key:${SECRET_MASK}`]
   ])('hides %s', (_label, text, masked) => {
     expect(maskSecrets(text)).toBe(masked)
   })
@@ -47,8 +52,26 @@ describe('maskSecrets', () => {
     ['a longer name that ends elsewhere', 'tokenizer=bert-base-uncased max_tokens=4096'],
     ['a short bearer word', 'Bearer of bad news'],
     ['sk- inside a word', 'task-abcdefghijklmnopqrstuvwxyz'],
+    ['a branch name ending in sk', 'risk-assessment-for-the-new-module'],
     ['an emoji and right-to-left text', 'שלום \u{1F468}‍\u{1F469} مرحبا']
   ])('keeps %s', (_label, text) => {
     expect(maskSecrets(text)).toBe(text)
+  })
+})
+
+describe('clipOutsideSecrets', () => {
+  const AWS = 'AKIAABCDEFGHIJKLMNOP'
+
+  it('cuts where asked when no secret crosses the cut', () => {
+    expect(clipOutsideSecrets(`${'a'.repeat(10)} ${AWS}`, 5)).toBe('aaaaa')
+    expect(clipOutsideSecrets(`${'a'.repeat(10)} ${AWS}`, 200)).toBe(`${'a'.repeat(10)} ${AWS}`)
+  })
+
+  it('moves the cut back to the start of a secret it would split, so no fragment is left to escape masking', () => {
+    const text = `${'a'.repeat(185)} ${AWS} tail`
+    const clipped = clipOutsideSecrets(text, 200)
+    expect(clipped).toBe(`${'a'.repeat(185)} `)
+    expect(clipped).not.toContain('AKIA')
+    expect(clipOutsideSecrets(`${'b'.repeat(190)} password=hunter2hunter2`, 200)).toBe(`${'b'.repeat(190)} `)
   })
 })

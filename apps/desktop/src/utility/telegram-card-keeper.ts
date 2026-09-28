@@ -18,6 +18,7 @@ import {
   noticeCard,
   commandShownWhole,
   permissionCard,
+  plainFallback,
   plainText,
   questionCard,
   REFUSAL_WORDS,
@@ -186,7 +187,7 @@ export class TelegramCardKeeper {
       if (!isFormattingRefusal(error)) return
       // Telegram refused the formatting: the owner still gets the words, answered at the laptop.
       format = 'plain'
-      const fallback = `${plainText(composed.rendered.text)}${composed.state === 'buttons' ? '\n\nAnswer at the laptop.' : ''}`
+      const fallback = plainFallback(composed.rendered.text, composed.state === 'buttons')
       try {
         messageId = (await connector.sendMessage(fallback)).messageId
       } catch {
@@ -611,8 +612,7 @@ export class TelegramCardKeeper {
     }
     card.state = 'open'
     card.offersOther = false
-    await connector.editMessageText(card.messageId,
-      `${plainText(composed.rendered.text)}${composed.state === 'buttons' ? '\n\nAnswer at the laptop.' : ''}`)
+    await connector.editMessageText(card.messageId, plainFallback(composed.rendered.text, composed.state === 'buttons'))
     drawn()
     await this.save(card)
   }
