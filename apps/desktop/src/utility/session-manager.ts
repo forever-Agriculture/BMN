@@ -1498,6 +1498,15 @@ export class SessionManager {
     return { activated: true, undeliveredOutput: disclosure }
   }
 
+  /**
+   * Conversation references BMN holds now: resuming or starting, live, or awaiting an unconfirmed exit.
+   * History cleanup never deletes these; a Resume claims its hold before it checks cleanup's deleting mark,
+   * so either one sees the other.
+   */
+  heldConversationReferences(): string[] {
+    return [...this.conversationReservations.keys()].map((identity) => identity.slice(identity.indexOf(':') + 1))
+  }
+
   /** Sessions whose process this host holds live now. */
   liveSessionIds(): string[] {
     return [...this.sessions].filter(([, live]) => !live.exited).map(([sessionId]) => sessionId)

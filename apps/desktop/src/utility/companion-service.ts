@@ -515,9 +515,12 @@ export class CompanionService {
     this.history.startSchedule(HISTORY_FIRST_RUN_DELAY_MS)
   }
 
-  /** Conversation references bound to a session whose process runs now; the history runner never deletes these. */
+  /**
+   * Conversation references bound to a session whose process runs now, or held by a Resume or start still
+   * under way; the history runner never deletes these.
+   */
   private async liveConversationIds(): Promise<Set<string>> {
-    const ids = new Set<string>()
+    const ids = new Set<string>(this.options.manager.heldConversationReferences())
     for (const sessionId of this.options.manager.liveSessionIds()) {
       const binding = await this.options.database.getConversationBinding(sessionId).catch(() => undefined)
       if (binding?.status === 'bound' && binding.conversationReference) ids.add(binding.conversationReference)

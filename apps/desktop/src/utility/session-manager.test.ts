@@ -36,6 +36,7 @@ import {
   type SessionIdentity,
   type SessionStore
 } from './session-manager'
+import { AgentHistory, emptyHistoryState, type AgentHistoryAdapter } from './agent-history'
 import { FileSavedOutputStore } from './saved-output-store'
 import {
   APPLICATION_INTERRUPTION_REASON,
@@ -3796,6 +3797,10 @@ describe('conversation identity reported by the harness', () => {
 
   /** Conversations agent-history cleanup is deleting this moment, as codexFixture's managers see them. */
   const deletingReferences = new Set<string>()
+  /** Asked by codexFixture's managers before a Resume starts; a test may hold a Resume here. */
+  let referenceCheck: () => Promise<boolean> = async () => true
+  /** A history runner's deleting mark, when a test wires one in as pty-host does. */
+  let cleanupDeleting: (reference: string) => boolean = () => false
   async function codexFixture(argv: readonly string[] = [], names: readonly string[] = ['Codex'], agent = 'codex',
     graphics: 'sixel' | 'standard' | null = null, bundledTerminfo = false): Promise<{
     manager: SessionManager
@@ -3829,8 +3834,9 @@ describe('conversation identity reported by the harness', () => {
         return pty
       },
       processStartIdentity: async () => `linux-proc-start:${spawns.length}`,
-      conversationReferenceExists: async () => true,
-      conversationBeingDeleted: (binding) => deletingReferences.has(binding.conversationReference),
+      conversationReferenceExists: () => referenceCheck(),
+      conversationBeingDeleted: (binding) =>
+        deletingReferences.has(binding.conversationReference) || cleanupDeleting(binding.conversationReference),
       sendTerminalMessage: () => undefined
     })
     const sessions = []
@@ -4283,6 +4289,77 @@ describe('conversation identity reported by the harness', () => {
     await fixture.manager.resume({ sessionId: created!.sessionId, cols: 80, rows: 24 })
     const spawned = fixture.spawns.at(-1)!
     expect([spawned.executable, ...spawned.argv].join(' ')).toBe(preview.command)
+  })
+
+  it('keeps a conversation BMN is resuming out of history cleanup, and refuses Resume while cleanup deletes it', async () => {
+    const fixture = await codexFixture()
+    const [created] = fixture.sessions
+    await fixture.manager.observeConversation({
+      sessionId: created!.sessionId, incarnationId: created!.incarnationId, agentCli: 'codex', conversationReference: OBSERVED, source: 'startup'
+    })
+    const exitLatest = async (): Promise<void> => {
+      fixture.ptys.at(-1)!.emitExit({ exitCode: 0 })
+      await vi.waitFor(async () => {
+        await expect(fixture.manager.health()).resolves.toMatchObject({ liveSessions: 0 })
+      })
+    }
+    await exitLatest()
+    const removed: string[] = []
+    let holdRemove: (() => void) | undefined
+    let blockRemove = false
+    const codex: AgentHistoryAdapter = {
+      agent: 'codex',
+      available: async () => ({ ok: true, sessions: 1 }),
+      candidates: async () => removed.includes(OBSERVED) ? [] : [{ id: OBSERVED, updatedAt: 0 }],
+      remove: async (id) => {
+        if (blockRemove) await new Promise<void>((resolve) => { holdRemove = resolve })
+        removed.push(id)
+        return { ok: true }
+      }
+    }
+    const home = await mkdtemp(join(tmpdir(), 'bmn-history-race-'))
+    createdRoots.add(home)
+    // Wired as CompanionService and pty-host wire them: what the manager holds is protected, and Resume asks cleanup.
+    const history = new AgentHistory({
+      home,
+      adapters: [codex],
+      readSettings: async () => ({ keepDays: 30, confirmedKeepDays: 30, claudeConfigDirs: [] }),
+      writeSettings: async () => undefined,
+      readState: async () => emptyHistoryState(),
+      writeState: async () => undefined,
+      liveConversationIds: async () => new Set(fixture.manager.heldConversationReferences()),
+      commandLines: () => ''
+    })
+    cleanupDeleting = (reference) => history.isDeleting(reference)
+    try {
+      // Resume first: held past its guard at the conversation check, cleanup runs meanwhile and skips it (Astra recheck 2, A2).
+      let release: ((exists: boolean) => void) | undefined
+      referenceCheck = () => new Promise((resolve) => { release = resolve })
+      const resuming = fixture.manager.resume({ sessionId: created!.sessionId, cols: 80, rows: 24 })
+      await vi.waitFor(() => expect(release).toBeDefined())
+      await history.run()
+      expect(removed).toEqual([])
+      release!(true)
+      await resuming
+      expect(fixture.spawns.at(-1)!.argv).toContain(OBSERVED)
+      referenceCheck = async () => true
+      await exitLatest()
+
+      // Cleanup first: while its delete runs, Resume is refused and starts nothing.
+      blockRemove = true
+      const running = history.run()
+      await vi.waitFor(() => expect(holdRemove).toBeDefined())
+      const spawnsBefore = fixture.spawns.length
+      await expect(fixture.manager.resume({ sessionId: created!.sessionId, cols: 80, rows: 24 }))
+        .rejects.toThrow("BMN is cleaning up this codex conversation's history right now; try again in a moment")
+      expect(fixture.spawns).toHaveLength(spawnsBefore)
+      holdRemove!()
+      await running
+      expect(removed).toEqual([OBSERVED])
+    } finally {
+      referenceCheck = async () => true
+      cleanupDeleting = () => false
+    }
   })
 
   it('refuses a Cursor report from a session that runs a shell, as for every agent', async () => {
