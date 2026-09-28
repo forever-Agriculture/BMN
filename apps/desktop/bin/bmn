@@ -923,9 +923,7 @@ function hookRequests(agent, event) {
   const proven = (calls, evidence) => calls.map((call) => ({ ...call, params: { ...call.params, evidence } }))
   if (agent === 'opencode') {
     const id = event.sessionID ?? event.info?.id
-    const first = process.env.BMN_OPENCODE_SESSION_ID
-    const child = event.info?.parentID || (first && id && id !== first)
-    if (child) {
+    if (openCodeSubagent(event)) {
       switch (event.hook_event_name) {
         case 'permission.asked':
           return open('subagent-permission', 'permission', titleText(`OpenCode subagent asks to ${titleText(event.permission, 'use a tool')}`, 'OpenCode subagent asks permission'),
@@ -1063,6 +1061,13 @@ function hookRequests(agent, event) {
   }
 }
 
+/** An OpenCode event from a subagent's session rather than the one the plugin pinned for the owner. */
+function openCodeSubagent(event) {
+  const id = event.sessionID ?? event.info?.id
+  const first = process.env.BMN_OPENCODE_SESSION_ID
+  return Boolean(event.info?.parentID || (first && id && id !== first))
+}
+
 /**
  * Cursor's terminal agent (measured on 2026.09.26-dd393fe, docs/agent-control.md): no hook marks a question or a
  * permission prompt, so it gets the turn notice and its chat id only. sessionStart does not fire on `--resume`,
@@ -1104,6 +1109,8 @@ function cursorRequests(event, open, withdraw) {
  * so the list cannot drift away from what `hookRequests` handles.
  * `optional` events are reported but never installed: Codex fires `PermissionRequest` before Auto
  * Review decides whether the owner is needed, so it belongs only in a file without Auto Review.
+ * Codex's `PostCompact` only adds its manual `/compact` to the compaction record (Story 36.1): an
+ * automatic compaction already arrives as `SessionStart` with source `compact`.
  */
 const HOOK_FILES = {
   claude: {
@@ -1131,7 +1138,7 @@ const HOOK_FILES = {
   codex: {
     path: ['.codex', 'hooks.json'],
     events: ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'Stop', 'SessionStart', 'SessionEnd', 'Interrupt'],
-    optional: ['PermissionRequest'],
+    optional: ['PermissionRequest', 'PostCompact'],
     // Codex declares `Option<u64>`, so a whole number at or above zero is the closest cheap rule.
     // BMN does not police the rest of somebody else's schema. This can be wrong either way: too
     // strict costs the owner a duplicate entry, too loose calls an entry wired that Codex will not
@@ -1970,7 +1977,11 @@ function hookObservation(agent, event, requests, outcomes, apiHost = null, model
   })
   // `source` and `toolName` take the same `RULES.source` shape as the event name: a tool called "Éditeur"
   // belongs in the log as much as one called "Bash".
-  const source = hookEventName(event.source)
+  // Codex names what caused a compaction `trigger` (manual or auto), and a subagent's OpenCode
+  // compaction is logged as the subagent's, so neither is counted as the owner's (Story 36.1).
+  const source = hookEventName(event.source) ??
+    (agent === 'codex' && ['PreCompact', 'PostCompact'].includes(eventName) ? hookEventName(event.trigger)
+      : agent === 'opencode' && eventName === 'session.compacted' && openCodeSubagent(event) ? 'subagent' : undefined)
   const toolName = hookEventName(event.tool_name)
   const fingerprint = (agent === 'claude' && ['PostToolUse', 'PostToolUseFailure'].includes(eventName)) ||
     (agent === 'codex' && eventName === 'PostToolUse') ? toolFingerprint(event, agent) : undefined

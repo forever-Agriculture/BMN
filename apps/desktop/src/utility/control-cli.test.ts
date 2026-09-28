@@ -1479,7 +1479,7 @@ describe('bmn hooks check', () => {
     expect(result.stdout).toMatch(/Notification\s+missing/)
   })
 
-  it('shows Codex PermissionRequest as optional and does not fail the check for it', async () => {
+  it('shows Codex PermissionRequest and PostCompact as optional and does not fail the check for them', async () => {
     const codex = CODEX_EVENTS.map((event) => [event, [entryGroup(`bmn hook codex`)]])
     const path = await hookFileFixture({ hooks: Object.fromEntries(codex) }, 'hooks.json')
 
@@ -1487,6 +1487,7 @@ describe('bmn hooks check', () => {
 
     expect(result.code).toBe(0)
     expect(result.stdout).toMatch(/PermissionRequest\s+missing \(optional\)/)
+    expect(result.stdout).toMatch(/PostCompact\s+missing \(optional\)/)
   })
 
   it('reports an unparsable file as such with exit 1 and claims nothing about any event', async () => {
@@ -3584,3 +3585,58 @@ describe('Cursor hooks (Epic 31.3)', () => {
 })
 
 const CURSOR_EVENTS = ['sessionStart', 'beforeSubmitPrompt', 'postToolUse', 'stop', 'sessionEnd']
+
+describe('compaction events (Story 36.1)', () => {
+  it('logs Claude\'s and Codex\'s SessionStart compact with its source and asks nothing of the owner', async () => {
+    for (const agent of ['claude', 'codex'] as const) {
+      const fixture = await cliFixture()
+
+      const result = await runHook(fixture, agent, { hook_event_name: 'SessionStart', source: 'compact', session_id: OBSERVED_REFERENCE })
+
+      expect(result).toEqual(QUIET)
+      expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
+      expect(fixture.handlers.withdrawAttention).not.toHaveBeenCalled()
+      expect(fixture.handlers.observeConversation).not.toHaveBeenCalled()
+      expect(fixture.handlers.observeHookEvent).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        agent, event: 'SessionStart', source: 'compact', effects: []
+      }))
+    }
+  })
+
+  it.each(['manual', 'auto'])('logs Codex PostCompact with its %s trigger as the source', async (trigger) => {
+    const fixture = await cliFixture()
+
+    // Payload keys measured from Codex 0.157.1 on a disposable profile (docs/agent-control.md).
+    await runHook(fixture, 'codex', {
+      hook_event_name: 'PostCompact', trigger, session_id: OBSERVED_REFERENCE, turn_id: 'turn-1', model: 'gpt-test', cwd: '/tmp'
+    })
+
+    expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
+    expect(fixture.handlers.observeHookEvent).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      agent: 'codex', event: 'PostCompact', source: trigger, effects: []
+    }))
+  })
+
+  it('logs the owner\'s OpenCode session.compacted plainly and a subagent\'s as the subagent\'s', async () => {
+    const fixture = await cliFixture()
+    const bound = { ...fixture, sessionEnv: { ...fixture.sessionEnv, BMN_OPENCODE_SESSION_ID: 'ses_main' } }
+
+    await runHook(bound, 'opencode', { hook_event_name: 'session.compacted', sessionID: 'ses_main' }, OPENCODE_FOREGROUND)
+    await runHook(bound, 'opencode', { hook_event_name: 'session.compacted', sessionID: 'ses_child' }, OPENCODE_FOREGROUND)
+
+    const [owner, subagent] = fixture.handlers.observeHookEvent.mock.calls.map((call) => call[0])
+    expect(owner).toMatchObject({ agent: 'opencode', event: 'session.compacted', source: null, effects: [] })
+    expect(subagent).toMatchObject({ agent: 'opencode', event: 'session.compacted', source: 'subagent', effects: [] })
+    expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
+  })
+
+  it('never installs PostCompact: it is optional like PermissionRequest', async () => {
+    const path = await hookFileFixture({}, 'hooks.json')
+
+    expect((await runHooks(['install', 'codex', '--file', path])).code).toBe(0)
+
+    const installed = JSON.parse(await readFile(path, 'utf8')) as { hooks: Record<string, unknown> }
+    expect(Object.keys(installed.hooks)).not.toContain('PostCompact')
+    expect(Object.keys(installed.hooks)).toContain('SessionStart')
+  })
+})

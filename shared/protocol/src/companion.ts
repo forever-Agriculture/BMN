@@ -176,6 +176,32 @@ export interface HookEventRecord {
   observedAt: string
 }
 
+/**
+ * Whether one harness event says the conversation was compacted (Story 36.1), so each compaction
+ * counts once. Claude Code, and Codex 0.157.1 after an automatic compaction, send `SessionStart`
+ * with source `compact`; Codex's manual `/compact` sends only `PostCompact`, whose trigger the CLI
+ * logs as the source (measured 2026-09-28, docs/agent-control.md). Codex's automatic `PostCompact`
+ * is not counted because its `SessionStart` already was. OpenCode publishes `session.compacted`;
+ * the CLI logs a subagent's with source `subagent`, which is not the owner's conversation.
+ */
+export function isCompactionEvent(record: Pick<HookEventRecord, 'agent' | 'event' | 'source'>): boolean {
+  switch (record.agent) {
+    case 'claude': return record.event === 'SessionStart' && record.source === 'compact'
+    case 'codex': return (record.event === 'SessionStart' && record.source === 'compact') ||
+      (record.event === 'PostCompact' && record.source === 'manual')
+    case 'opencode': return record.event === 'session.compacted' && record.source !== 'subagent'
+    default: return false
+  }
+}
+
+/** The compactions one run has reported, kept in memory beside its hook observation. */
+export interface HookCompaction {
+  /** When BMN received the latest compaction event. */
+  lastAt: string
+  /** Compactions reported in this run; a new incarnation starts from none. */
+  count: number
+}
+
 /** The most recent hook events the utility keeps per session; older ones are dropped. */
 export const HOOK_EVENT_LOG_LIMIT = 30
 
@@ -239,6 +265,8 @@ export interface HookObservationObserved {
   observedAt: string
   /** False once the bounded log has evicted this event's row, so its detail is no longer readable. */
   detailAvailable: boolean
+  /** The compactions this run reported, or null when none was observed. */
+  compaction: HookCompaction | null
 }
 
 /**

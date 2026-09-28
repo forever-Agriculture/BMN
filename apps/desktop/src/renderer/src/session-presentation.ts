@@ -6,6 +6,7 @@ import {
   PROGRESS_STALE_AFTER_MS,
   type AttentionKind,
   type AttentionRecord,
+  type HookCompaction,
   type HookEventAgent,
   type HookOriginRecord,
   type InputDraftRecord,
@@ -142,6 +143,18 @@ export function inferHome(paths: readonly string[]): string | null {
     if (match?.[1]) return match[1]
   }
   return null
+}
+
+/**
+ * The Harness section's compaction line (Story 36.1), in local HH:MM. It says *observed*: a
+ * compaction whose event never reached BMN cannot be shown.
+ */
+export function compactionWords(compaction: HookCompaction | null): string {
+  if (compaction === null) return 'No compaction observed in this run'
+  const at = new Date(compaction.lastAt)
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  const clock = Number.isNaN(at.getTime()) ? '--:--' : `${pad(at.getHours())}:${pad(at.getMinutes())}`
+  return `Compacted: ${clock} (${compaction.count} ${compaction.count === 1 ? 'time' : 'times'} this run)`
 }
 
 export function relativeAge(fromIso: string, now: number): string {

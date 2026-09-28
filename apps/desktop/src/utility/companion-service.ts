@@ -19,6 +19,7 @@ import {
   TERMINAL_NOTICE_TITLE_MAX,
   TERMINAL_NOTICE_WINDOW_MS,
   terminalNoticeOrigin,
+  isCompactionEvent,
   type AppEventMessage,
   type AppEventTopic,
   AGENT_HISTORY_KEEP_DAYS,
@@ -33,6 +34,7 @@ import {
   type BackupManifestEntry,
   type BackupVerifyResult,
   type ControlInfo,
+  type HookCompaction,
   type HookEventEffect,
   type HookObservation,
   type HookOriginRecord,
@@ -309,6 +311,11 @@ export class CompanionService {
    * the observation it accompanies, so a restart of BMN starts empty and the next hook refills it.
    */
   private readonly hookOrigins = new Map<string, HookOriginRecord>()
+  /**
+   * The compactions each session's current run has reported (Story 36.1). Kept apart from the
+   * bounded log for the same reason as the observation, and in memory only: information, never an ask.
+   */
+  private readonly hookCompactions = new Map<string, HookCompaction & { incarnationId: string }>()
   /** The terminal notice each session has open, so a burst becomes more lines and not more rows. */
   private readonly terminalNotices = new Map<string, {
     requestId: string
@@ -1244,6 +1251,11 @@ export class CompanionService {
           event: p.event,
           observedAt
         })
+        if (isCompactionEvent(p)) {
+          const earlier = this.hookCompactions.get(p.sessionId)
+          const count = earlier?.incarnationId === p.incarnationId ? earlier.count + 1 : 1
+          this.hookCompactions.set(p.sessionId, { incarnationId: p.incarnationId, lastAt: observedAt, count })
+        }
         // Every hook event refreshes the origin, so a flag lost to a BMN restart comes back on the
         // next hook without waiting for a SessionStart. The CLI reads the base URL afresh for every
         // event, so the host is never carried: absent means unset now. Most events carry no model,
@@ -1325,8 +1337,15 @@ export class CompanionService {
       detailAvailable: (this.hookEvents.get(sessionId) ?? []).some(
         (row) => row.incarnationId === stored.incarnationId && row.agent === stored.agent &&
           row.event === stored.event && row.observedAt === stored.observedAt
-      )
+      ),
+      compaction: this.hookCompaction(sessionId, stored.incarnationId)
     }
+  }
+
+  private hookCompaction(sessionId: string, incarnationId: string): HookCompaction | null {
+    const stored = this.hookCompactions.get(sessionId)
+    return stored === undefined || stored.incarnationId !== incarnationId
+      ? null : { lastAt: stored.lastAt, count: stored.count }
   }
 
   private async sweepAttention(): Promise<void> {

@@ -1,6 +1,6 @@
 // MODULE: hook-events-dialog.tsx - read-only list of one session's recent hook events
 import { useEffect, useState } from 'react'
-import type { HookEventRecord } from '@bmn/protocol'
+import { isCompactionEvent, type HookEventRecord } from '@bmn/protocol'
 import { Dialog } from './dialog'
 import { relativeAge } from './session-presentation'
 
@@ -12,9 +12,13 @@ export function hookEffectWords(effects: readonly HookEventRecord['effects'][num
   return `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`
 }
 
-/** The event's own words: `PostToolUse · Bash · same call ×3`, `SessionStart · resume`. */
-export function hookEventWords(event: Pick<HookEventRecord, 'event' | 'source' | 'toolName'> &
+/**
+ * The event's own words: `PostToolUse · Bash · same call ×3`, `SessionStart · resume`. A compaction
+ * reads as what it did, in the same words for every agent that reports one.
+ */
+export function hookEventWords(event: Pick<HookEventRecord, 'agent' | 'event' | 'source' | 'toolName'> &
   Partial<Pick<HookEventRecord, 'repeat'>>): string {
+  if (isCompactionEvent(event)) return 'Conversation compacted'
   return [event.event, event.toolName, event.repeat !== undefined && event.repeat !== null && event.repeat >= 2
     ? `same call ×${event.repeat}` : null, event.source].filter((part) => !!part).join(' · ')
 }

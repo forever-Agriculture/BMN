@@ -75,6 +75,11 @@ describe('runHookConfigurationCheck', () => {
     expect(codex).toMatchObject({ state: 'read' })
     expect(codex.entries.find((entry) => entry.event === 'Stop')).toMatchObject({ state: 'wired (older wording)' })
     expect(codex.missing).toEqual(CODEX_EVENTS.filter((event) => event !== 'Stop'))
+    // Optional entries are listed for the owner but never counted as missing (Story 36.1 adds PostCompact).
+    expect(codex.entries.filter((entry) => entry.optional)).toEqual([
+      { event: 'PermissionRequest', optional: true, state: 'missing' },
+      { event: 'PostCompact', optional: true, state: 'missing' }
+    ])
     expect(agentNamed(report, 'opencode')).toMatchObject({
       state: 'missing',
       entries: [{ event: 'plugin', optional: false, state: 'missing' }],

@@ -1461,8 +1461,9 @@ describe('hook observation summary', () => {
     incarnationId?: string | null
     agent?: HookEventRecord['agent']
     event: string
+    source?: string | null
   }): Promise<void> => {
-    const { sessionId, incarnationId = liveIncarnations.get(sessionId) ?? null, agent = 'claude', event } = params
+    const { sessionId, incarnationId = liveIncarnations.get(sessionId) ?? null, agent = 'claude', event, source = null } = params
     await (service as unknown as {
       observeHookEvent(p: {
         sessionId: string
@@ -1478,7 +1479,7 @@ describe('hook observation summary', () => {
       incarnationId,
       agent,
       event,
-      source: null,
+      source,
       toolName: null,
       effects: []
     })
@@ -1499,8 +1500,71 @@ describe('hook observation summary', () => {
       agent: 'claude',
       event: 'PostToolUse',
       observedAt: '2026-09-14T12:00:01.000Z',
-      detailAvailable: true
+      detailAvailable: true,
+      compaction: null
     })
+  })
+
+  it('counts each agent\'s compaction in this run with the time of the last one (Story 36.1)', async () => {
+    await observe({ sessionId: 's1', event: 'SessionStart', source: 'startup' })
+    clock = '2026-09-14T12:00:01.000Z'
+    await observe({ sessionId: 's1', event: 'SessionStart', source: 'compact' })
+    clock = '2026-09-14T12:00:02.000Z'
+    await observe({ sessionId: 's1', event: 'PostToolUse' })
+    await expect(observation({ sessionId: 's1' })).resolves.toMatchObject({
+      event: 'PostToolUse', compaction: { lastAt: '2026-09-14T12:00:01.000Z', count: 1 }
+    })
+    clock = '2026-09-14T12:00:03.000Z'
+    await observe({ sessionId: 's1', event: 'SessionStart', source: 'compact' })
+    await expect(observation({ sessionId: 's1' })).resolves.toMatchObject({
+      compaction: { lastAt: '2026-09-14T12:00:03.000Z', count: 2 }
+    })
+
+    // Codex: automatic compaction arrives as PostCompact auto then SessionStart compact, and is one.
+    await observe({ sessionId: 's2', agent: 'codex', event: 'PostCompact', source: 'auto' })
+    await observe({ sessionId: 's2', agent: 'codex', event: 'SessionStart', source: 'compact' })
+    await observe({ sessionId: 's2', agent: 'codex', event: 'PreCompact', source: 'manual' })
+    await observe({ sessionId: 's2', agent: 'codex', event: 'PostCompact', source: 'manual' })
+    await expect(observation({ sessionId: 's2' })).resolves.toMatchObject({ compaction: { count: 2 } })
+
+    // OpenCode: the owner's session counts; a subagent's is logged but not counted.
+    liveIncarnations.set('s3', 'incarnation-3')
+    await observe({ sessionId: 's3', agent: 'opencode', event: 'session.compacted', source: 'subagent' })
+    await expect(observation({ sessionId: 's3' })).resolves.toMatchObject({ compaction: null })
+    await observe({ sessionId: 's3', agent: 'opencode', event: 'session.compacted' })
+    await expect(observation({ sessionId: 's3' })).resolves.toMatchObject({ compaction: { count: 1 } })
+  })
+
+  it('does not count a new conversation, a resume or a clear as a compaction', async () => {
+    for (const source of ['startup', 'resume', 'clear']) {
+      await observe({ sessionId: 's1', event: 'SessionStart', source })
+      await observe({ sessionId: 's1', agent: 'codex', event: 'SessionStart', source })
+    }
+    await observe({ sessionId: 's1', agent: 'cursor', event: 'sessionStart', source: 'compact' })
+
+    await expect(observation({ sessionId: 's1' })).resolves.toMatchObject({ state: 'observed', compaction: null })
+  })
+
+  it('starts a new incarnation from no compaction, and never counts a replaced run\'s late one', async () => {
+    await observe({ sessionId: 's1', event: 'SessionStart', source: 'compact' })
+    liveIncarnations.set('s1', 'incarnation-2')
+    await observe({ sessionId: 's1', incarnationId: 'incarnation-1', event: 'SessionStart', source: 'compact' })
+    await observe({ sessionId: 's1', event: 'SessionStart', source: 'startup' })
+
+    await expect(observation({ sessionId: 's1' })).resolves.toMatchObject({
+      incarnationId: 'incarnation-2', compaction: null
+    })
+    await observe({ sessionId: 's1', event: 'SessionStart', source: 'compact' })
+    await expect(observation({ sessionId: 's1' })).resolves.toMatchObject({ compaction: { count: 1 } })
+    // The replaced run's summary went with it.
+    await expect(observation({ sessionId: 's1', incarnationId: 'incarnation-1' })).resolves.toMatchObject({ state: 'none' })
+  })
+
+  it('treats a compaction as information: no Needs you row and no attention event', async () => {
+    await observe({ sessionId: 's1', event: 'SessionStart', source: 'compact' })
+
+    await expect(service.route(METHOD_REGISTRY.attentionList, {})).resolves.toEqual([])
+    expect(emitted.filter((message) => message.topic === 'attention')).toEqual([])
   })
 
   it('does not count terminal OSC notices as a harness observation', async () => {

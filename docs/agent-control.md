@@ -566,6 +566,17 @@ queued `request_user_input_async` questions because Codex has no `Notification` 
 `PermissionRequest` only without Auto Review: Codex fires it before Auto Review decides whether you
 must approve, so it would flag tools that never need you, and `install` therefore never adds it.
 
+Session details shows when a session's conversation was compacted ("Compacted: 16:10 (2 times this
+run)", or "No compaction observed in this run"), and the Hook events list reads such an event as
+"Conversation compacted". It is information only: nothing opens in Needs you or goes to Telegram,
+and a new run starts from none. Claude Code reports compaction as `SessionStart` with source
+`compact`, OpenCode as `session.compacted` (a subagent's is logged, not counted). Codex 0.157.1,
+measured on a disposable profile on 2026-09-28, sends `SessionStart` with source `compact` after an
+automatic compaction (with `PreCompact`/`PostCompact`, trigger `auto`), but its manual `/compact`
+sends only `PreCompact` and `PostCompact` with trigger `manual`. `PostCompact` is therefore an
+optional Codex entry, reported by `check` and never installed: add it to see manual compactions too;
+BMN counts its `manual` trigger only, so an automatic compaction still counts once.
+
 BMN shows a desktop notification for a new request unless you are looking at that session. Telegram
 gets it only while you are away from the desk (a minute without keyboard or mouse input), only if it
 is still open and unseen after 15 seconds (a finished-turn notice after 60), and each request only

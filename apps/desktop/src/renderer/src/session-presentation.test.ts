@@ -22,6 +22,7 @@ import {
   agedProgress,
   progressPresentation,
   relativeAge,
+  compactionWords,
   requestsAnsweredByTyping,
   sessionAttention,
   sessionProcessLive,
@@ -612,5 +613,14 @@ describe('model origin presentation', () => {
     // cursor-agent launched directly, or typed into a shell the launcher started.
     expect(agentTag('/home/owner/.local/bin/cursor-agent')).toBe('Cursor')
     expect(agentTag('/bin/bash', ['-ic', 'cursor-agent; exec bash -i'])).toBe('Cursor')
+  })
+})
+
+describe('compaction words (Story 36.1)', () => {
+  it('names the last compaction in local HH:MM with this run\'s count, and says observed when there is none', () => {
+    const at = new Date(2026, 8, 28, 9, 5).toISOString()
+    expect(compactionWords({ lastAt: at, count: 1 })).toBe('Compacted: 09:05 (1 time this run)')
+    expect(compactionWords({ lastAt: at, count: 3 })).toBe('Compacted: 09:05 (3 times this run)')
+    expect(compactionWords(null)).toBe('No compaction observed in this run')
   })
 })

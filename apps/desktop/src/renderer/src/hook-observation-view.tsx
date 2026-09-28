@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import type { HookObservation, HookOriginRecord } from '@bmn/protocol'
 import { boundedRead } from './bounded-read'
 import { failureDetail } from './bridge-error'
-import { modelOriginFlag, modelOriginLabel } from './session-presentation'
+import { compactionWords, modelOriginFlag, modelOriginLabel } from './session-presentation'
 import './hook-observation-view.css'
 
 const AGENT_NAMES = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor' } as const
@@ -81,6 +81,7 @@ export function HookObservationView(props: {
               </dd>
             ) : null}
           </dl>
+          <p className="hook-compaction">{compactionWords(observation.compaction)}</p>
           {observation.detailAvailable ? null
             : <p className="meta">Earlier event detail is no longer in the recent Hook events list.</p>}
         </>
