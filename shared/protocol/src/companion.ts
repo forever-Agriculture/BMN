@@ -534,11 +534,31 @@ export interface TelegramStatus {
   rejectedUpdates: number
   /** When the current run of transient failures began; null once Telegram answers. */
   failingSince: string | null
-  /**
-   * Counts state changes since BMN started, across connector restarts: the same state with a new number is a new
-   * entry into it, so the desktop notice for a stopped channel is raised once per entry, however late it is read.
-   */
-  stateEntry: number
+}
+
+/**
+ * One entry into a state only the owner can fix, as it was when it happened. It rides on the `telegram` app event,
+ * so each entry reaches the desktop notice with its own words however many follow before the notice is raised.
+ * `host` names the utility process that numbered it; `entry` grows with every state change in that process.
+ */
+export interface TelegramOwnerEntry {
+  host: string
+  entry: number
+  state: 'conflict' | 'unauthorized'
+  detail: string
+}
+
+const MAX_TELEGRAM_DETAIL_CHARACTERS = 500
+
+function isTelegramOwnerEntry(value: unknown): value is TelegramOwnerEntry {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Partial<TelegramOwnerEntry>
+  return (
+    typeof candidate.host === 'string' && candidate.host.length > 0 && candidate.host.length <= 64 &&
+    Number.isSafeInteger(candidate.entry) && candidate.entry! > 0 &&
+    (candidate.state === 'conflict' || candidate.state === 'unauthorized') &&
+    typeof candidate.detail === 'string' && candidate.detail.length <= MAX_TELEGRAM_DETAIL_CHARACTERS
+  )
 }
 
 /** A shorter outage, such as a laptop waking up, retries quietly. */
@@ -585,6 +605,8 @@ export interface AppEventMessage {
   kind: 'app-event'
   topic: AppEventTopic
   sessionId: string | null
+  /** Story 32.2: on a `telegram` event, the entry into `conflict` or `unauthorized` that raised it. */
+  telegramEntry?: TelegramOwnerEntry
 }
 
 export function isAppEventMessage(value: unknown): value is AppEventMessage {
@@ -594,7 +616,9 @@ export function isAppEventMessage(value: unknown): value is AppEventMessage {
     candidate.kind === 'app-event' &&
     typeof candidate.topic === 'string' &&
     (APP_EVENT_TOPICS as readonly string[]).includes(candidate.topic) &&
-    (candidate.sessionId === null || typeof candidate.sessionId === 'string')
+    (candidate.sessionId === null || typeof candidate.sessionId === 'string') &&
+    (candidate.telegramEntry === undefined ||
+      (candidate.topic === 'telegram' && isTelegramOwnerEntry(candidate.telegramEntry)))
   )
 }
 

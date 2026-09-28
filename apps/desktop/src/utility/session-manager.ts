@@ -1697,12 +1697,26 @@ export class SessionManager {
    * reset bytes follow every byte already read, so output still queued for the view cannot re-arm it after the
    * reset, and output that comes later reaches the view and the tracker in the same order. They go to the view only:
    * nothing reaches the PTY, and saved output keeps the program's own bytes.
+   *
+   * Only between characters and sequences: while the program is part-way through one, added bytes would split it,
+   * so nothing changes and the answer is `busy`. `reset` means the view acknowledged writing the reset; `unconfirmed`
+   * means the view went, or did not answer in time, first. The reset was sent then, and the tracker keeps it.
    */
-  resetTerminalModes(identity: SessionIdentity): { modes: number[] } {
+  async resetTerminalModes(
+    identity: SessionIdentity
+  ): Promise<{ outcome: 'reset' | 'busy' | 'unconfirmed'; modes: number[] }> {
     const session = this.current(identity)
+    if (session.exited || session.exitUnconfirmed) {
+      throw new HostControlError(ERROR_CODES.invalidArgument, 'The program in this session has exited')
+    }
+    const queue = session.outputQueue
+    if (!queue || session.undeliveredOutput.length > 0) {
+      throw new HostControlError(ERROR_CODES.notFound, 'This session has no terminal view to reset')
+    }
+    if (!session.outputFramer.atGround || !session.decsetModes.atGround) return { outcome: 'busy', modes: [] }
     const armed = session.decsetModes.reset()
     this.deliverFrames(session, session.outputFramer.push(new TextEncoder().encode(decsetResetSequence(armed))))
-    return { modes: armed }
+    return { outcome: (await queue.whenAcknowledged()) ? 'reset' : 'unconfirmed', modes: armed }
   }
 
   async saveTerminalSnapshot(

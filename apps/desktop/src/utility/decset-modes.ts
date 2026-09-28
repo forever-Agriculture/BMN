@@ -90,9 +90,14 @@ export class DecsetModeTracker {
     return TRACKED_DECSET_MODES.filter((mode) => this.on.has(mode) !== DEFAULT_ON_DECSET_MODES.includes(mode))
   }
 
+  /** Between sequences: a reset may happen only here, or a half-read mode sequence would finish after it. */
+  get atGround(): boolean {
+    return this.state === 'text'
+  }
+
   /**
    * The owner reset the view's modes (Story 32.3): the tracker follows, so a rebuilt view does not re-arm them.
-   * Returns the modes that were armed; a sequence already under way keeps parsing, so the program is still followed.
+   * Returns the modes that were armed. Called only `atGround`.
    */
   reset(): number[] {
     const armed = this.modes()

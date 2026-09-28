@@ -852,7 +852,8 @@ function installIpcHandlers(): void {
   })
   bridgeIpc.handle('aiterm:terminal:modes-reset', (event, sessionId: unknown) => {
     const current = requireRuntime(event, sessionId)
-    return current.client.request<{ modes: number[] }>(METHOD_REGISTRY.terminalModesReset, current.session)
+    return current.client.request<{ outcome: 'reset' | 'busy' | 'unconfirmed'; modes: number[] }>(
+      METHOD_REGISTRY.terminalModesReset, current.session)
   })
   bridgeIpc.handle('aiterm:terminal:snapshot-save', async (event, sessionId: unknown, capture: SavedOutputCapture) => {
     const current = requireRuntime(event, sessionId)

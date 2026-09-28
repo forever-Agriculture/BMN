@@ -147,6 +147,11 @@ export class TerminalByteFramer {
     return this.held.byteLength
   }
 
+  /** Story 32.3: between characters and sequences, where bytes of BMN's own can join the stream without splitting any. */
+  get atGround(): boolean {
+    return this.state === GROUND && this.held.byteLength === 0 && this.sequenceLength === 0
+  }
+
   /** xterm's parser state after every code point read so far. */
   get parserState(): number {
     return this.state

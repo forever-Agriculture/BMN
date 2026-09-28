@@ -8,8 +8,7 @@ import {
   type AttentionKind,
   type AttentionRecord,
   type ProtocolMethod,
-  type TelegramStatus,
-  telegramNeedsOwner,
+  type TelegramOwnerEntry,
   telegramOwnerCue
 } from '@bmn/protocol'
 import {
@@ -295,23 +294,20 @@ export function createAppEventForwarder(options: AppEventForwarderOptions): {
 } {
   const notified = new Set<string>()
   let primed = false
-  let telegramEntry: number | null = null
+  /** The newest entry already handled, per host process: a replayed or repeated event never notifies twice. */
+  const telegramEntries = new Map<string, number>()
   let telegramQueue = Promise.resolve()
   /**
-   * One notice per entry into a state only the owner can fix; a retrying outage never notifies. The host numbers each
-   * entry, so a check that reads late still sees a re-entry; entries that come and go before any check reads them
-   * share one notice.
+   * One notice per entry into a state only the owner can fix, in order and in that entry's own words; a retrying
+   * outage never notifies. The entry comes with its event, so entries that follow quickly each keep their notice.
    */
-  const notifyTelegram = async (): Promise<void> => {
+  const notifyTelegram = async (entry: TelegramOwnerEntry): Promise<void> => {
+    if (entry.entry <= (telegramEntries.get(entry.host) ?? 0)) return
+    telegramEntries.set(entry.host, entry.entry)
     const client = options.client()
     if (!client) return
-    const [status, settings] = await Promise.all([
-      client.request<TelegramStatus>(METHOD_REGISTRY.telegramStatus, {}),
-      client.request<AppSettings>(METHOD_REGISTRY.settingsGet, {})
-    ])
-    if (!telegramNeedsOwner(status.state) || status.stateEntry === telegramEntry) return
-    telegramEntry = status.stateEntry
-    const cue = telegramOwnerCue(settings.telegram.enabled, status, Date.now())
+    const settings = await client.request<AppSettings>(METHOD_REGISTRY.settingsGet, {})
+    const cue = telegramOwnerCue(settings.telegram.enabled, { ...entry, failingSince: null }, Date.now())
     if (!cue || !settings.notifications.desktop || !(options.appNotificationsEnabled ?? options.notificationsEnabled)()) return
     options.notifyApp?.({ title: 'BMN', body: cue })
   }
@@ -356,7 +352,8 @@ export function createAppEventForwarder(options: AppEventForwarderOptions): {
         if (!target.isDestroyed()) target.send('aiterm:app-event', message)
       }
       if (message.topic === 'attention') void notifyNewAttention().catch(() => undefined)
-      if (message.topic === 'telegram') telegramQueue = telegramQueue.then(notifyTelegram).catch(() => undefined)
+      const entry = message.telegramEntry
+      if (entry) telegramQueue = telegramQueue.then(() => notifyTelegram(entry)).catch(() => undefined)
     },
     prime: () => notifyNewAttention().catch(() => undefined),
     watchChanged: () => {

@@ -1282,7 +1282,10 @@ function App(): React.JSX.Element {
    */
   const resetTerminalModes = (session: SessionRecord): void => {
     void window.aiTerminal.resetTerminalModes(session.sessionId)
-      .then(() => brief(`Terminal modes reset for ${session.name}`))
+      .then(({ outcome }) => brief(
+        outcome === 'reset' ? `Terminal modes reset for ${session.name}`
+          : outcome === 'busy' ? `Terminal modes not reset: ${session.name} is in the middle of writing. Try again in a moment`
+            : `Terminal modes reset for ${session.name} could not be confirmed`))
       .catch(fail('Terminal modes were not reset'))
   }
 

@@ -1,5 +1,12 @@
 // MODULE: companion-ipc.test.ts - desktop notifications skip the watched session and repeat only on a new revision
-import { DEFAULT_APP_SETTINGS, METHOD_REGISTRY, type AttentionRecord, type TelegramStatus } from '@bmn/protocol'
+import {
+  DEFAULT_APP_SETTINGS,
+  METHOD_REGISTRY,
+  type AppEventMessage,
+  type AttentionRecord,
+  type TelegramOwnerEntry,
+  type TelegramStatus
+} from '@bmn/protocol'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('electron', () => ({}))
@@ -164,25 +171,31 @@ describe('desktop notifications for attention requests', () => {
 })
 
 describe('desktop notice when Telegram stops delivering', () => {
+  const DETAILS = {
+    conflict: 'Another client is polling this bot token',
+    unauthorized: 'Telegram rejected the bot token'
+  } as const
+  /** Plays the host: every state change is a new entry, and an entry into a stopped state rides on its event. */
   function telegramForwarder(desktop = true): {
     events: ReturnType<typeof createAppEventForwarder>
-    set(state: TelegramStatus['state'], enabled?: boolean): void
+    set(state: TelegramStatus['state'], enabled?: boolean, detail?: string): void
     shown: Array<{ title: string; body: string }>
     hold(on: boolean): void
+    sent: AppEventMessage[]
   } {
-    let status: TelegramStatus = {
-      state: 'polling', detail: 'Waiting for Telegram replies', tokenMask: null, lastPollAt: null, lastError: null,
-      rejectedUpdates: 0, failingSince: null, stateEntry: 1
-    }
+    let state: TelegramStatus['state'] = 'polling'
+    let entry = 1
+    let raised: TelegramOwnerEntry | undefined
     let settings = { ...DEFAULT_APP_SETTINGS, notifications: { ...DEFAULT_APP_SETTINGS.notifications, desktop },
       telegram: { ...DEFAULT_APP_SETTINGS.telegram, enabled: true } }
     const shown: Array<{ title: string; body: string }> = []
+    const sent: AppEventMessage[] = []
     const held: Array<() => void> = []
     let holdSettings = false
     const events = createAppEventForwarder({
       client: () => ({
         request: async <Result,>(method: string) => {
-          if (method === METHOD_REGISTRY.telegramStatus) return status as Result
+          if (method === METHOD_REGISTRY.telegramStatus) throw new Error('the notice must not reread Telegram status')
           if (method === METHOD_REGISTRY.attentionList) return [] as Result
           if (holdSettings) await new Promise<void>((resolve) => held.push(resolve))
           return settings as Result
@@ -195,18 +208,28 @@ describe('desktop notice when Telegram stops delivering', () => {
       notifyApp: (notice) => shown.push(notice),
       appNotificationsEnabled: () => true
     })
-    const set = (state: TelegramStatus['state'], enabled = true): void => {
-      const detail = state === 'conflict' ? 'Another client is polling this bot token'
-        : state === 'unauthorized' ? 'Telegram rejected the bot token' : 'Telegram is unreachable; retrying in 60s'
-      status = { ...status, state, detail, failingSince: state === 'backoff' ? '2026-09-28T10:00:00.000Z' : null,
-        stateEntry: status.state === state ? status.stateEntry : status.stateEntry + 1 }
+    const set = (next: TelegramStatus['state'], enabled = true, detail?: string): void => {
+      if (next !== state) entry += 1
+      raised = next !== state && (next === 'conflict' || next === 'unauthorized')
+        ? { host: 'host-1', entry, state: next, detail: detail ?? DETAILS[next] }
+        : undefined
+      state = next
       settings = { ...settings, telegram: { ...settings.telegram, enabled } }
     }
     const hold = (on: boolean): void => {
       holdSettings = on
       if (!on) for (const release of held.splice(0)) release()
     }
-    return { events, set, shown, hold }
+    const wrapped = {
+      ...events,
+      forward: (message: AppEventMessage) => {
+        const withEntry = raised ? { ...message, telegramEntry: raised } : message
+        raised = undefined
+        sent.push(withEntry)
+        events.forward(withEntry)
+      }
+    }
+    return { events: wrapped, set, shown, hold, sent }
   }
   const telegramEvent = async (events: ReturnType<typeof createAppEventForwarder>): Promise<void> => {
     events.forward({ kind: 'app-event', topic: 'telegram', sessionId: null })
@@ -249,6 +272,27 @@ describe('desktop notice when Telegram stops delivering', () => {
       'Telegram is not delivering: Another client is polling this bot token',
       'Telegram is not delivering: Another client is polling this bot token'
     ])
+  })
+
+  it('notifies every entry of a burst in order with its own words, and a replayed entry once', async () => {
+    const { events, set, shown, hold, sent } = telegramForwarder()
+    hold(true)
+    const expected: string[] = []
+    for (let index = 0; index < 10; index += 1) {
+      const state = index % 3 === 0 ? 'unauthorized' : 'conflict'
+      set(state, true, `${DETAILS[state]} (${index})`)
+      expected.push(`Telegram is not delivering: ${DETAILS[state]} (${index})`)
+      await telegramEvent(events)
+      set(index % 2 === 0 ? 'starting' : 'backoff')
+      await telegramEvent(events)
+    }
+    // A replay of an entry already handled, and an older one, add nothing.
+    const first = sent.find((message) => message.telegramEntry)!
+    events.forward(first)
+    events.forward(sent.filter((message) => message.telegramEntry).at(-1)!)
+    hold(false)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(shown.map((notice) => notice.body)).toEqual(expected)
   })
 
   it('stays quiet when desktop notifications or Telegram are off', async () => {

@@ -14,6 +14,7 @@ import {
   METHOD_REGISTRY,
   TERMINAL_NOTICE_BODY_MAX,
   TERMINAL_NOTICE_WINDOW_MS,
+  isAppEventMessage,
   type AppEventMessage,
   type ArtifactRecord,
   type AttentionRecord,
@@ -1187,22 +1188,30 @@ describe('Telegram attention notifications', () => {
 })
 
 describe('Telegram state entries (Story 32.2)', () => {
-  it('numbers every state change, so a re-entry into the same stopped state after a restart is a new entry', async () => {
+  it('sends every entry into a stopped state with its event, numbered across restarts and without the token', async () => {
     await database.transaction(() => COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', {
       ...DEFAULT_APP_SETTINGS.telegram, enabled: true, allowedChatId: 1
     }, new Date(clock).toISOString()))()
+    const token = '123456789:ENTRY_fake_token_not_real'
+    const emitted: AppEventMessage[] = []
     const conflicted = new CompanionService({
       ...service['options'],
+      emit: (message) => emitted.push(message),
       telegramApiOrigin: 'http://127.0.0.1:9',
-      fetch: async () => new Response(JSON.stringify({ ok: false, error_code: 409, description: 'Conflict' }),
+      fetch: async () => new Response(JSON.stringify({ ok: false, error_code: 409, description: `Conflict for ${token}` }),
         { status: 409, headers: { 'content-type': 'application/json' } })
     })
-    const first = await conflicted.route(METHOD_REGISTRY.telegramConfigure, { token: '123456789:ENTRY_fake_token_not_real' }) as TelegramStatus
-    const again = await conflicted.route(METHOD_REGISTRY.telegramConfigure, { token: '123456789:ENTRY_fake_token_not_real' }) as TelegramStatus
+    const first = await conflicted.route(METHOD_REGISTRY.telegramConfigure, { token }) as TelegramStatus
+    const again = await conflicted.route(METHOD_REGISTRY.telegramConfigure, { token }) as TelegramStatus
     expect(first.state).toBe('conflict')
     expect(again.state).toBe('conflict')
-    expect(again.stateEntry).toBeGreaterThan(first.stateEntry)
-    await expect(conflicted.route(METHOD_REGISTRY.telegramStatus, {})).resolves.toMatchObject({ stateEntry: again.stateEntry })
+    const entries = emitted.flatMap((message) => message.telegramEntry ? [message.telegramEntry] : [])
+    expect(entries).toHaveLength(2)
+    expect(entries.map((entry) => entry.state)).toEqual(['conflict', 'conflict'])
+    expect(entries[1]!.host).toBe(entries[0]!.host)
+    expect(entries[1]!.entry).toBeGreaterThan(entries[0]!.entry)
+    expect(JSON.stringify(emitted)).not.toContain(token)
+    expect(emitted.every((message) => isAppEventMessage(message))).toBe(true)
     await conflicted.close()
   })
 })

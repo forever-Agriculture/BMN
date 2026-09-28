@@ -651,4 +651,20 @@ describe('app events', () => {
     expect(isAppEventMessage({ kind: 'other', topic: 'attention', sessionId: null })).toBe(false)
     expect(isAppEventMessage({ kind: 'app-event', topic: 'attention', sessionId: 7 })).toBe(false)
   })
+
+  it('carries an entry into a stopped Telegram state only on the telegram topic, and only whole (Story 32.2)', () => {
+    const telegramEntry = { host: 'host-1', entry: 3, state: 'conflict', detail: 'Another client is polling this bot token' }
+    expect(isAppEventMessage({ kind: 'app-event', topic: 'telegram', sessionId: null, telegramEntry })).toBe(true)
+    expect(isAppEventMessage({ kind: 'app-event', topic: 'attention', sessionId: null, telegramEntry })).toBe(false)
+    for (const broken of [
+      { ...telegramEntry, state: 'backoff' },
+      { ...telegramEntry, entry: 0 },
+      { ...telegramEntry, entry: 1.5 },
+      { ...telegramEntry, host: '' },
+      { ...telegramEntry, detail: 'x'.repeat(501) },
+      null
+    ]) {
+      expect(isAppEventMessage({ kind: 'app-event', topic: 'telegram', sessionId: null, telegramEntry: broken })).toBe(false)
+    }
+  })
 })

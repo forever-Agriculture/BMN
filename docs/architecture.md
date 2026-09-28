@@ -213,7 +213,12 @@ so it neither redraws twice nor learns the view was replaced.
 host sets its record back to a fresh terminal's and adds the matching reset to the view's own output
 stream, after every byte already read, so the view and the record change at the same point. Origin
 mode and the alternate screen are reset only when armed, since both move the cursor. Nothing is
-written to the program, and saved output keeps only the program's own bytes.
+written to the program, and saved output keeps only the program's own bytes. The reset joins the
+stream only between characters and sequences: while the program is part-way through one (or has
+left one unfinished), nothing changes and the owner is told to try again. The toast says the modes
+were reset once the view acknowledges writing the reset; if the view detaches, is replaced or does
+not answer within its deadline first, it says the reset could not be confirmed, and the record keeps
+the reset. A session without a running program or an active view refuses before anything changes.
 
 Resume shows the exact command first. The confirmation is built from the same launch the process is
 started with, so what you read is what runs, and it names any stored argument the CLI's own resume

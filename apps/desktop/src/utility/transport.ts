@@ -25,6 +25,12 @@ interface PendingFrame {
   offset: number
 }
 
+interface AcknowledgementWaiter {
+  through: number
+  timer: ReturnType<typeof setTimeout>
+  settle: (written: boolean) => void
+}
+
 export interface HostOutputQueueTransition {
   unsentFrames: TerminalFrame[]
   discardedPartialFrameBytes: number
@@ -45,6 +51,10 @@ export class HostOutputQueue {
   private draining = false
   private stallTimer: ReturnType<typeof setTimeout> | undefined
   private readonly publicationWaiters = new Set<() => void>()
+  /** Bytes accepted for this view, and bytes the view has acknowledged writing, since it attached. */
+  private enqueuedBytes = 0
+  private acknowledgedBytes = 0
+  private readonly acknowledgementWaiters = new Set<AcknowledgementWaiter>()
   /** False until this view's stream reaches a point a fresh terminal parser can start from. */
   private synchronized = false
   private skipped = 0
@@ -75,6 +85,7 @@ export class HostOutputQueue {
     }
     this.pending.push({ frame, offset: 0 })
     this.pendingBytes += frame.bytes.byteLength
+    this.enqueuedBytes += frame.bytes.byteLength
     this.drain()
   }
 
@@ -92,8 +103,30 @@ export class HostOutputQueue {
     this.sizes.delete(streamSeq)
     this.nextAcknowledgement += 1
     this.inFlightBytes -= size
+    this.acknowledgedBytes += size
+    for (const waiter of this.acknowledgementWaiters) {
+      if (waiter.through <= this.acknowledgedBytes) this.settleAcknowledgement(waiter, true)
+    }
     this.clearStallDeadline()
     this.drain()
+  }
+
+  /**
+   * True once the view has acknowledged writing every byte accepted so far, so its terminal has parsed them;
+   * false if the view goes first (detached, replaced, overflowed) or does not answer within its deadline.
+   */
+  whenAcknowledged(): Promise<boolean> {
+    if (this.disconnected) return Promise.resolve(false)
+    if (this.acknowledgedBytes >= this.enqueuedBytes) return Promise.resolve(true)
+    return new Promise((settle) => {
+      const waiter: AcknowledgementWaiter = {
+        through: this.enqueuedBytes,
+        settle,
+        timer: setTimeout(() => this.settleAcknowledgement(waiter, false), this.acknowledgementDeadlineMs)
+      }
+      waiter.timer.unref()
+      this.acknowledgementWaiters.add(waiter)
+    })
   }
 
   whenPublished(): Promise<void> {
@@ -120,6 +153,7 @@ export class HostOutputQueue {
     this.pendingBytes = 0
     this.inFlightBytes = 0
     this.resolvePublicationWaiters()
+    for (const waiter of this.acknowledgementWaiters) this.settleAcknowledgement(waiter, false)
     this.disconnected = true
     try {
       accept(transition)
@@ -211,6 +245,12 @@ export class HostOutputQueue {
     if (!this.stallTimer) return
     clearTimeout(this.stallTimer)
     this.stallTimer = undefined
+  }
+
+  private settleAcknowledgement(waiter: AcknowledgementWaiter, written: boolean): void {
+    if (!this.acknowledgementWaiters.delete(waiter)) return
+    clearTimeout(waiter.timer)
+    waiter.settle(written)
   }
 
   private resolvePublicationWaiters(): void {

@@ -1358,18 +1358,86 @@ describe('shell session lifecycle', () => {
     manager.activateAttachment(attached.attachmentId)
     // The view's credit runs out, so the program's mouse mode is still queued for it when the owner resets.
     pty.emit('ok\r\n\u001b[?1000h')
-    expect(manager.resetTerminalModes(created)).toEqual({ modes: [1000] })
+    let answer: { outcome: string; modes: number[] } | undefined
+    const reset = manager.resetTerminalModes(created).then((result) => (answer = result))
     // A program that is still running arms paste afterwards; the view must follow it, as the tracker does.
     pty.emit('\u001b[?2004h')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    // Nothing is reported done while the view has not written the reset.
+    expect(answer).toBeUndefined()
     while (held.length > 0) manager.acknowledge(held.shift()!)
+    await expect(reset).resolves.toEqual({ outcome: 'reset', modes: [1000] })
 
     const view = new Terminal({ allowProposedApi: true, cols: 80, rows: 24 })
     for (const bytes of harness.writes) await writeTerminal(view, bytes)
     expect(view.modes.mouseTrackingMode).toBe('none')
     expect(view.modes.bracketedPasteMode).toBe(true)
-    expect(manager.resetTerminalModes(created).modes).toEqual([2004])
+    harness.setAcknowledger((attachmentId, streamSeq) => manager.acknowledge({ attachmentId, streamSeq }))
+    await expect(manager.resetTerminalModes(created)).resolves.toEqual({ outcome: 'reset', modes: [2004] })
     expect(pty.writes).toEqual([])
     view.dispose()
+  })
+
+  // Story 32.3: bytes added part-way through a character or a sequence would split it, so the reset waits for a gap.
+  it.each([
+    ['a mode sequence', [Buffer.from('\u001b[?1000'), Buffer.from('h$ ')], '$ ', [1000]],
+    ['a UTF-8 character', [Buffer.from([0x24, 0x20, 0xe2]), Buffer.from([0x82, 0xac])], '$ €', []],
+    ['a title string', [Buffer.from('\u001b]0;hello'), Buffer.from('world\u0007$ ')], '$ ', []],
+    ['a device control string', [Buffer.from('\u001bPq#0'), Buffer.from('\u001b\\$ ')], '$ ', []]
+  ] as const)('changes nothing while the program is part-way through %s, and resets once it ends', async (_name, parts, screen, armed) => {
+    const { manager, pty, harness, cwd } = await flowFixture()
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION,
+      cwd,
+      executable: process.execPath,
+      argv: [],
+      cols: 80,
+      rows: 24
+    })
+    const attached = manager.attach(created)
+    harness.flow.attach(attached.attachmentId)
+    manager.activateAttachment(attached.attachmentId)
+    pty.emit(new Uint8Array(parts[0]))
+    const before = harness.writes.length
+    await expect(manager.resetTerminalModes(created)).resolves.toEqual({ outcome: 'busy', modes: [] })
+    expect(harness.writes.length).toBe(before)
+    pty.emit(new Uint8Array(parts[1]))
+    await expect(manager.resetTerminalModes(created)).resolves.toEqual({ outcome: 'reset', modes: [...armed] })
+
+    const view = new Terminal({ allowProposedApi: true, cols: 80, rows: 24 })
+    for (const bytes of harness.writes) await writeTerminal(view, bytes)
+    expect(view.buffer.active.getLine(0)?.translateToString(true)).toBe(screen)
+    expect(view.modes.mouseTrackingMode).toBe('none')
+    expect(Buffer.concat(harness.writes.map((bytes) => Buffer.from(bytes))).includes(Buffer.concat([...parts]))).toBe(true)
+    expect(pty.writes).toEqual([])
+    view.dispose()
+  })
+
+  it('refuses a mode reset without a live program or an active view, and says when the view went first (Story 32.3)', async () => {
+    const { manager, pty, harness, cwd } = await flowFixture({ consumerBytes: 1024, hostBytes: 4096, acknowledgementDeadlineMs: 20 })
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION,
+      cwd,
+      executable: process.execPath,
+      argv: [],
+      cols: 80,
+      rows: 24
+    })
+    await expect(manager.resetTerminalModes(created)).rejects.toMatchObject({ code: ERROR_CODES.notFound })
+    const attached = manager.attach(created)
+    harness.flow.attach(attached.attachmentId)
+    manager.activateAttachment(attached.attachmentId)
+    pty.emit('\u001b[?1000h')
+    // The view stops answering: past its deadline the reset is sent but not confirmed.
+    harness.setAcknowledger(() => undefined)
+    await expect(manager.resetTerminalModes(created)).resolves.toEqual({ outcome: 'unconfirmed', modes: [1000] })
+    // The view is replaced while the reset waits: not confirmed either, and the tracker keeps the reset.
+    pty.emit('\u001b[?2004h')
+    const waiting = manager.resetTerminalModes(created)
+    manager.detach({ attachmentId: attached.attachmentId })
+    await expect(waiting).resolves.toEqual({ outcome: 'unconfirmed', modes: [2004] })
+    expect(manager.attach(created).modes).toEqual([])
+    pty.emitExit({ exitCode: 0 })
+    await expect(manager.resetTerminalModes(created)).rejects.toBeInstanceOf(HostControlError)
+    expect(pty.writes).toEqual([])
   })
 
   it('T-E refuses a second activation without disturbing the active stream', async () => {

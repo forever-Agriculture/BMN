@@ -242,8 +242,9 @@ export class CompanionService {
   private telegram: TelegramConnector | undefined
   private telegramToken: string | null = null
   private telegramHealth: ConnectorHealth | undefined
-  /** Story 32.2: one more for every connector state change, kept across restarts (`TelegramStatus.stateEntry`). */
+  /** Story 32.2: one more for every connector state change, kept across restarts; with `telegramHost`, names an entry. */
   private telegramStateEntry = 0
+  private readonly telegramHost = randomUUID()
   private telegramDetail = 'Telegram is off'
   private sweepTimer: NodeJS.Timeout | undefined
   private readonly now: () => Date
@@ -1959,8 +1960,7 @@ export class CompanionService {
         lastPollAt: this.telegramHealth.lastPollAt,
         lastError: redact(this.telegramHealth.lastError),
         rejectedUpdates: this.telegramHealth.rejectedUpdates,
-        failingSince: this.telegramHealth.failingSince,
-        stateEntry: this.telegramStateEntry
+        failingSince: this.telegramHealth.failingSince
       }
     }
     const settings = await this.options.database.companion('getSettings')
@@ -1971,8 +1971,7 @@ export class CompanionService {
       lastPollAt: null,
       lastError: null,
       rejectedUpdates: 0,
-      failingSince: null,
-      stateEntry: this.telegramStateEntry
+      failingSince: null
     }
   }
 
@@ -2009,11 +2008,21 @@ export class CompanionService {
         onTap: (tap) => this.cards.tap(tap),
         onHealth: (health) => {
           if (this.telegram !== connector) return
-          if (health.state !== this.telegramHealth?.state) this.telegramStateEntry += 1
+          const entered = health.state !== this.telegramHealth?.state
+          if (entered) this.telegramStateEntry += 1
           this.telegramHealth = health
           // Cards a previous run left with buttons are finished once Telegram is reachable, before new pages.
           if (health.state === 'polling') void this.cards.sweep()
-          this.emit('telegram', null)
+          // An entry into a stopped state travels with its event, as it is now, so no later change can hide it.
+          this.options.emit({
+            kind: 'app-event',
+            topic: 'telegram',
+            sessionId: null,
+            ...(entered && (health.state === 'conflict' || health.state === 'unauthorized')
+              ? { telegramEntry: { host: this.telegramHost, entry: this.telegramStateEntry, state: health.state,
+                  detail: redactToken(health.detail, token).slice(0, 500) } }
+              : {})
+          })
         }
       })
       this.telegram = connector

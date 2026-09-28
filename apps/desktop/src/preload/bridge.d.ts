@@ -160,8 +160,11 @@ export interface AiTerminalBridge {
   detachTerminal(sessionId: string): Promise<{ detached: true }>
   recoverTerminalView(sessionId: string, reason: TerminalViewDisconnectReason): Promise<{ recovering: true }>
   saveTerminalSnapshot(sessionId: string, capture: SavedOutputCapture): Promise<SavedOutputSnapshot>
-  /** Story 32.3: the host resets the tracker and, in order with the output, the view; returns what was armed. */
-  resetTerminalModes(sessionId: string): Promise<{ modes: number[] }>
+  /**
+   * Story 32.3: the host resets the tracker and, in order with the output, the view: `reset` once the view wrote it,
+   * `busy` (nothing changed) while the program is part-way through a sequence, `unconfirmed` if the view went first.
+   */
+  resetTerminalModes(sessionId: string): Promise<{ outcome: 'reset' | 'busy' | 'unconfirmed'; modes: number[] }>
   getSavedOutput(sessionId: string): Promise<SavedOutputCatalog>
   stopSession(sessionId: string): Promise<{ stopped: true }>
   getConversationBinding(sessionId: string): Promise<ConversationBindingState>
