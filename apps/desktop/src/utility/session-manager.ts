@@ -881,6 +881,13 @@ export class SessionManager {
     const ended = (): HostControlError =>
       new HostControlError(ERROR_CODES.unauthorized, 'This process is no longer the session\'s running one')
     if (this.liveIncarnationId(p.sessionId) !== p.incarnationId) throw ended()
+    // A program can report before its process's record is written (it is registered live first), as
+    // observeConversation also waits for.
+    try {
+      await this.sessions.get(p.sessionId)!.recordReady
+    } catch {
+      throw ended()
+    }
     try {
       return await write()
     } catch (error) {

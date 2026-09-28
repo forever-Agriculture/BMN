@@ -1137,8 +1137,9 @@ export class ControlServer {
         const argv = params.argv as string[]
         const idempotencyKey = readText(params, 'idempotencyKey', RULES.idempotencyKey)
         const sessionId = this.target(scope, params)
+        // Keyed per process: the same wrapper line in the session's next process is a new report, not a retry.
         return this.idempotent(scope, method, idempotencyKey, params, () =>
-          handlers.reportResumeCommand({ sessionId, incarnationId: scope.incarnationId, argv }))
+          handlers.reportResumeCommand({ sessionId, incarnationId: scope.incarnationId, argv }), { perIncarnation: true })
       }
       case 'resume.clear': {
         const params = closedParams(rawParams, ['sessionId', 'idempotencyKey'])
@@ -1146,7 +1147,7 @@ export class ControlServer {
         const idempotencyKey = readText(params, 'idempotencyKey', RULES.idempotencyKey)
         const sessionId = this.target(scope, params)
         return this.idempotent(scope, method, idempotencyKey, params, () =>
-          handlers.clearResumeCommand({ sessionId, incarnationId: scope.incarnationId }))
+          handlers.clearResumeCommand({ sessionId, incarnationId: scope.incarnationId }), { perIncarnation: true })
       }
       default:
         throw invalid(`Unknown method: ${method.slice(0, 64)}`)
@@ -1162,10 +1163,12 @@ export class ControlServer {
     method: string,
     idempotencyKey: string | undefined,
     params: Params,
-    run: () => Promise<unknown>
+    run: () => Promise<unknown>,
+    options: { perIncarnation?: boolean } = {}
   ): Promise<unknown> {
     if (idempotencyKey === undefined) return run()
-    const key = `${scopeKey(scope)}|${method}|${idempotencyKey}`
+    const incarnation = options.perIncarnation ? incarnationOf(scope) : null
+    const key = `${scopeKey(scope)}${incarnation === null ? '' : `@${incarnation}`}|${method}|${idempotencyKey}`
     const hash = paramsHash(params)
     return this.withReceiptLock(key, async () => {
       const { receipts } = this.options

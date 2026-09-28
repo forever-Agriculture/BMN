@@ -435,6 +435,23 @@ describe('a program reporting how to resume it (Story 43.1)', () => {
     expect(fixture.handlers.clearResumeCommand).toHaveBeenLastCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1' })
   })
 
+  it('takes the same key from the session\'s next process as a new report, not a retry', async () => {
+    const fixture = await serverFixture()
+    const first = await authenticated(fixture, sessionToken(fixture))
+    const argv = ['my-agent', '--resume', 'abc']
+    await first.request('resume.report', { argv, idempotencyKey: 'wrapper' })
+    await first.request('resume.clear', { idempotencyKey: 'wrapper-clear' })
+
+    // Start again cleared the command; the next process runs the same wrapper line with the same keys.
+    fixture.current.set('session-1', 'incarnation-2')
+    const next = await authenticated(fixture, sessionToken(fixture, 'session-1', 'incarnation-2'))
+    expect((await next.request('resume.report', { argv, idempotencyKey: 'wrapper' })).result).not.toHaveProperty('duplicate')
+    expect(fixture.handlers.reportResumeCommand).toHaveBeenCalledTimes(2)
+    expect(fixture.handlers.reportResumeCommand).toHaveBeenLastCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-2', argv })
+    expect((await next.request('resume.clear', { idempotencyKey: 'wrapper-clear' })).result).not.toHaveProperty('duplicate')
+    expect(fixture.handlers.clearResumeCommand).toHaveBeenCalledTimes(2)
+  })
+
   it('refuses the owner token, and a process that is no longer the session\'s running one', async () => {
     const fixture = await serverFixture()
     const owner = await authenticated(fixture, fixture.auth.ownerToken)

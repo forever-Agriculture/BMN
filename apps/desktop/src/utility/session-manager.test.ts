@@ -5561,6 +5561,67 @@ describe('a command a program in the session reports to resume it (Epic 43)', ()
     }
   })
 
+  it('refuses in the database itself a write for a process that is not the running one', async () => {
+    const { database, manager, created } = await reportingSession()
+    try {
+      const command = { argv: ['my-agent'], reportedAt: '2026-09-29T09:05:00.000Z' }
+      // The manager refuses first everywhere; this is the guard beneath it.
+      expect(() => setReportedResume(database, { sessionId: created.sessionId, incarnationId: 'not-running', ...command }))
+        .toThrow('incarnation not-running is not current')
+      expect(() => clearReportedResume(database, { sessionId: created.sessionId, incarnationId: 'not-running' }))
+        .toThrow('incarnation not-running is not current')
+      await manager.stop(created, 'explicit')
+      expect(() => setReportedResume(database, { sessionId: created.sessionId, incarnationId: created.incarnationId, ...command }))
+        .toThrow(`incarnation ${created.incarnationId} is not current`)
+    } finally {
+      database.close()
+    }
+  })
+
+  it('keeps a report that arrives before the process\'s record is written (Epic 43 review)', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'bmn-reported-early-'))
+    createdRoots.add(cwd)
+    const program = join(cwd, 'my-agent')
+    await writeFile(program, '#!/bin/sh\n')
+    await chmod(program, 0o700)
+    const database = new BetterSqlite3(':memory:')
+    try {
+      initializeDatabase(database, '2026-09-29T09:00:00.000Z')
+      const sqlite = sqliteSessionStore(database)
+      let openGate = (): void => undefined
+      const gate = new Promise<void>((resolve) => { openGate = resolve })
+      let early: Promise<unknown> | undefined
+      const manager: SessionManager = new SessionManager({
+        store: {
+          ...sqlite,
+          // The program reports while its record is still being written.
+          createStarting: async (record) => {
+            early = manager.reportResumeCommand({
+              sessionId: record.sessionId, incarnationId: record.incarnationId, argv: ['my-agent', '--resume', 'early']
+            })
+            await gate
+            return sqlite.createStarting(record)
+          }
+        },
+        spawnPty: () => new SignalExitFakePty(),
+        processStartIdentity: async (pid) => `linux-proc-start:${pid}`,
+        sessionPath: () => cwd,
+        sendTerminalMessage: () => undefined
+      })
+      const creating = manager.create({
+        ...DEFAULT_SESSION_CREATION, name: 'Early', cwd, executable: process.execPath, argv: ['--version'], cols: 80, rows: 24
+      })
+      await vi.waitFor(() => expect(early).toBeDefined())
+      openGate()
+      const created = await creating
+      await expect(early).resolves.toMatchObject({ argv: ['my-agent', '--resume', 'early'] })
+      await expect(findStoredSession(sqlite, created.sessionId))
+        .resolves.toMatchObject({ reportedResume: { argv: ['my-agent', '--resume', 'early'] } })
+    } finally {
+      database.close()
+    }
+  })
+
   it('keeps the command through a stop and a restart of BMN, and drops it when Start again runs (43.1 AC4, AC5)', async () => {
     const { database, manager, build, created, stored, report } = await reportingSession()
     try {
@@ -5585,7 +5646,8 @@ describe('a command a program in the session reports to resume it (Epic 43)', ()
   it('Resume starts the reported command in the session folder, exactly as shown, and keeps it (43.2 AC2)', async () => {
     const { database, manager, created, cwd, program, spawns, stored, report } = await reportingSession()
     try {
-      const reported = await report(['my-agent', '--resume', 'abc', '--title', 'two words'])
+      const odd = ['two words', '$(touch pwned)', `it's "quoted"`, '', '-rf', '*']
+      const reported = await report(['my-agent', '--resume', 'abc', '--title', ...odd])
       await manager.stop(created, 'explicit')
       const preview = await manager.conversationResumePreview(created.sessionId)
       expect(preview).toEqual({
@@ -5595,7 +5657,7 @@ describe('a command a program in the session reports to resume it (Epic 43)', ()
         program,
         cwd,
         reportedAt: reported.reportedAt,
-        command: shownCommand(program, ['--resume', 'abc', '--title', 'two words']),
+        command: shownCommand(program, ['--resume', 'abc', '--title', ...odd]),
         refusal: null
       })
       const firstLaunch = spawns[0]!
@@ -5615,9 +5677,10 @@ describe('a command a program in the session reports to resume it (Epic 43)', ()
       })
       expect(resumed.launch).toEqual({ cwd, executable: program })
       expect(resumed.binding).toBeUndefined()
-      // The words arrive as separate arguments, so no shell ever read them; the environment is any launch's.
+      // Each part arrives as it was reported, as its own argument, so no shell ever read them; the environment is
+      // any launch's.
       expect(spawns.at(-1)).toEqual({
-        executable: program, argv: ['--resume', 'abc', '--title', 'two words'], cwd, env: firstLaunch.env
+        executable: program, argv: ['--resume', 'abc', '--title', ...odd], cwd, env: firstLaunch.env
       })
       await expect(stored()).resolves.toEqual(reported)
       await expect(manager.health()).resolves.toMatchObject({ liveSessions: 1 })

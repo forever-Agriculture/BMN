@@ -2475,6 +2475,8 @@ function App(): React.JSX.Element {
     void window.aiTerminal.resumeConversation(record.sessionId, expectedCommand).then((next) => {
       setLive((current) => ({ ...current, [next.sessionId]: next }))
       setFailure(undefined)
+      // A new process may have cleared the command a program reported (Story 43.1): read the record again.
+      void reloadWorkspaceSessions(record.workspaceId).catch(fail('Session refresh failed'))
     }).catch(fail('Resume failed'))
   }
 
@@ -2513,6 +2515,8 @@ function App(): React.JSX.Element {
       setLive((current) => ({ ...current, [next.sessionId]: next }))
       setSavedOutput(undefined)
       setFailure(undefined)
+      // Start again clears the command a program reported (Story 43.1): read the record again.
+      void reloadWorkspaceSessions(record.workspaceId).catch(fail('Session refresh failed'))
       brief(`Started ${record.name} again.`)
     }).catch(fail('Start again failed'))
   }

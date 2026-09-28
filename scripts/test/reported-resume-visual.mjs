@@ -165,6 +165,18 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     result.resumedRun = runLines()[1]
     assert.equal(result.resumedRun, `started:--resume abc cwd:${work}`)
 
+    phase('the owner stops it and starts it again: the line goes, and comes back when the new process reports')
+    await until(async () => (await record(page, sessionId))?.lastProcess?.state === 'live', 'the resumed process')
+    await page.locator('.session-inspector .actions button', { hasText: 'Stop…' }).click()
+    await page.locator('dialog.app-dialog button', { hasText: /^Stop session$/ }).click()
+    await page.locator('.session-inspector .actions button', { hasText: /^Start again$/ }).click()
+    // The fake agent's first run waits 3 s before it reports, so the line must be gone well before that.
+    await until(async () => (await line.count()) === 0, 'the cleared line', 2_500)
+    result.clearedAfterStartAgain = true
+    await until(() => runLines().length === 3, 'the run Start again started')
+    assert.equal(runLines()[2], `started: cwd:${work}`)
+    result.lineAfterNewReport = await until(async () => (await line.textContent({ timeout: 500 }).catch(() => null)), 'the new report')
+
     phase('quit, start again: the offer lists it with its exact command, not ticked')
     await page.evaluate(() => { void window.aiTerminal.quitApplication() })
     const quitDialog = page.locator('dialog.app-dialog button', { hasText: 'Quit BMN' })
@@ -189,8 +201,8 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       }
     }
     await offer.locator('.dialog-actions button.primary').click()
-    await until(() => runLines().length === 3, 'the run the offer started')
-    result.offerRun = runLines()[2]
+    await until(() => runLines().length === 4, 'the run the offer started')
+    result.offerRun = runLines()[3]
     assert.equal(result.offerRun, `started:--resume abc cwd:${work}`)
     await offer.locator('.dialog-actions button.ghost').click()
 
@@ -209,7 +221,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     assert.equal(await refused.locator('button.primary').innerText(), 'Start again')
     await shot('resume-refused-black.png', 'dialog.app-dialog')
     await refused.locator('button.ghost', { hasText: 'Cancel' }).click()
-    assert.equal(runLines().length, 3)
+    assert.equal(runLines().length, 4)
     console.log(JSON.stringify({ reportedResumeVisual: 'PASS', directory: evidenceDirectory, ...result }))
   } finally {
     await Promise.race([application.close(), sleep(10_000)])
