@@ -3725,8 +3725,8 @@ describe('bmn statusline (Story 37.2)', () => {
   })
 
   describe('the installed line, run as Claude runs it', () => {
-    /** `/bin/sh -c <command>` with the input on stdin, and a `bmn` on PATH that is this CLI. */
-    const runLine = async (command: string, stdin: string, env: Record<string, string>) => {
+    /** `/bin/sh -c <command>` with the input on stdin, and a `bmn` on PATH that is this CLI (after `pathFirst`). */
+    const runLine = async (command: string, stdin: string, env: Record<string, string>, pathFirst = '') => {
       const root = await realpath(await mkdtemp(join(tmpdir(), 'aitline-')))
       createdRoots.add(root)
       await mkdir(join(root, 'bin'))
@@ -3734,7 +3734,7 @@ describe('bmn statusline (Story 37.2)', () => {
       const clean = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BMN_') && !key.startsWith('AITERM_')))
       return new Promise<CliResult & { tmp: string }>((resolve) => {
         const child = execFile('/bin/sh', ['-c', command], {
-          env: { ...clean, PATH: `${join(root, 'bin')}:${process.env.PATH ?? ''}`, TMPDIR: root, ...env }, timeout: 15_000
+          env: { ...clean, PATH: `${pathFirst}${join(root, 'bin')}:${process.env.PATH ?? ''}`, TMPDIR: root, ...env }, timeout: 15_000
         }, (error, stdout, stderr) => {
           resolve({ code: error === null ? 0 : typeof error.code === 'number' ? error.code : null, stdout, stderr, tmp: root })
         })
@@ -3777,6 +3777,27 @@ describe('bmn statusline (Story 37.2)', () => {
       })
       // The copy of the input is removed at once; nothing is left in the temporary folder.
       expect((await readdir(inside.tmp)).filter((entry) => entry !== 'bin')).toEqual([])
+    })
+
+    it('gives the owner\'s command what was read and leaves no copy when the copy fails part-way', async () => {
+      const fixture = await cliFixture()
+      const command = await wrappedCommand()
+      const stdin = input(LIMITS)
+      const root = await realpath(await mkdtemp(join(tmpdir(), 'aitcat-')))
+      createdRoots.add(root)
+      // A full disk, played by a `cat` that stops after 40 bytes when it writes into the temporary folder.
+      await mkdir(join(root, 'shim'))
+      await writeFile(join(root, 'shim', 'cat'), `#!/bin/sh
+case "$(readlink /proc/$$/fd/1)" in ${root}/tmp/*) head -c 40; exit 1 ;; esac
+exec /bin/cat "$@"
+`, { mode: 0o755 })
+      await mkdir(join(root, 'tmp'))
+      const result = await runLine(command, stdin, { ...fixture.sessionEnv, TMPDIR: join(root, 'tmp') }, `${join(root, 'shim')}:`)
+
+      expect(result).toMatchObject({ code: 4, stdout: '40\n', stderr: "it's the owner's\n" })
+      expect(await readdir(join(root, 'tmp'))).toEqual([])
+      await new Promise((resolve) => setTimeout(resolve, 300))
+      expect(fixture.handlers.reportUsage).not.toHaveBeenCalled()
     })
 
     it('runs the owner\'s command unchanged when BMN\'s own bmn is not on PATH', async () => {

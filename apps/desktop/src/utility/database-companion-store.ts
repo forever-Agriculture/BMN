@@ -395,6 +395,17 @@ export function markAttentionSeen(
   return getAttention(database, requestId)
 }
 
+/**
+ * Whether any request whose key starts with `keyPrefix` still has its expiry ahead, whatever its state and
+ * session. The plan-use watch (Story 37.2) asks this before a 90% notice, so a notice the owner dismissed,
+ * one opened by another session, or one opened before a BMN restart still counts for its reset period.
+ */
+export function attentionKeyPending(database: DatabaseConnection, keyPrefix: string, now: string): boolean {
+  return database.prepare(
+    'SELECT 1 FROM attention_request WHERE substr(request_key, 1, ?) = ? AND expires_at > ? LIMIT 1'
+  ).get(keyPrefix.length, keyPrefix, now) !== undefined
+}
+
 /** Every open request plus the most recent closed ones. */
 export function listAttention(database: DatabaseConnection): AttentionRecord[] {
   const open = database.prepare(
@@ -1309,6 +1320,7 @@ export const COMPANION_OPERATIONS = Object.freeze({
   expireAttention,
   markAttentionSeen,
   listAttention,
+  attentionKeyPending,
   upsertProgress,
   listProgress,
   getReceipt,

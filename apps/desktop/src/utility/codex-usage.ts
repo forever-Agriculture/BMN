@@ -12,8 +12,8 @@ const CHUNK = 64 * 1024
  * other line of the transcript are never kept (Epic 37 owner decision).
  */
 export function codexUsageFromLine(line: string): UsageWindow[] | null {
-  // Cheap test first: most lines are conversation, and they are never parsed.
-  if (!line.includes('"token_count"')) return null
+  // Cheap tests first: most lines are conversation, and they are never parsed.
+  if (!line.includes('"token_count"') || !line.includes('"event_msg"')) return null
   let parsed: unknown
   try {
     parsed = JSON.parse(line)

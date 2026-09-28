@@ -1826,8 +1826,11 @@ function holdAtTestGate() {
  * printed and exits with its code, and the report never waits in the redraw.
  */
 const STATUS_LINE_WRAPPER = 'if [ -n "${BMN_CONTROL_SOCKET:-}" ] && command -v bmn >/dev/null 2>&1 && ' +
-  'bmn_statusline=$(mktemp 2>/dev/null) && cat > "$bmn_statusline" && exec 3<"$bmn_statusline" 4<"$bmn_statusline"; ' +
-  'then rm -f "$bmn_statusline"; bmn statusline report 0<&3 3<&- 4<&- >/dev/null 2>&1 & exec 0<&4 3<&- 4<&-; fi\n'
+  'bmn_statusline=$(mktemp 2>/dev/null); then ' +
+  'if cat > "$bmn_statusline" && exec 3<"$bmn_statusline" 4<"$bmn_statusline"; then rm -f "$bmn_statusline"; ' +
+  'bmn statusline report 0<&3 3<&- 4<&- >/dev/null 2>&1 & exec 0<&4 3<&- 4<&-; ' +
+  // A copy that failed part-way (a full disk) still gives the owner's command every byte that was read.
+  'else exec 0<"$bmn_statusline"; rm -f "$bmn_statusline"; fi; fi\n'
 /** Claude's two plan windows and their lengths in minutes, the unit Codex also reports. */
 const STATUS_LINE_WINDOWS = { five_hour: 300, seven_day: 10_080 }
 const STATUS_LINE_USAGE = `Usage: bmn statusline check [--file PATH] [--json]

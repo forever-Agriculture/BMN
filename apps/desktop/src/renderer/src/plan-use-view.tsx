@@ -1,6 +1,6 @@
 // MODULE: plan-use-view.tsx - Session details' Plan use section and the palette's read-only Plan use dialog (Story 37.2)
 import { useEffect, useState } from 'react'
-import type { SessionUsage, UsageAgent, UsageReading } from '@bmn/protocol'
+import { usagePercent, type SessionUsage, type UsageAgent, type UsageReading } from '@bmn/protocol'
 import { boundedRead } from './bounded-read'
 import { Dialog } from './dialog'
 import { contextUseWords, planSourceWords, planUseMissingWords, planUseWords, planWindowViews } from './session-presentation'
@@ -20,6 +20,11 @@ export function PlanWindows(props: { reading: UsageReading; now: number }): Reac
       ))}
     </ul>
   )
+}
+
+/** Words with the command to type, set in backticks, shown as code. */
+function withCommands(words: string): React.JSX.Element {
+  return <>{words.split('`').map((part, index) => index % 2 === 1 ? <code key={index}>{part}</code> : part)}</>
 }
 
 /**
@@ -47,8 +52,13 @@ export function PlanUseView(props: { sessionId: string; incarnationId: string | 
       <h3>Plan use</h3>
       {failed ? <p className="inline-error" role="status">Plan use unavailable</p> : null}
       {reading !== null && reading.windows.length > 0 ? <PlanWindows reading={reading} now={props.refreshTick} />
-        : <p className="plan-use-note">{planUseMissingWords(usage ?? { agent: null, reading: null })}</p>}
-      {context === null ? null : <p className="plan-use-context">{context}</p>}
+        : <p className="plan-use-note">{withCommands(planUseMissingWords(usage ?? { agent: null, reading: null }))}</p>}
+      {context === null || reading?.contextUsedPercent == null ? null : (
+        <p className="plan-use-context" title={context} aria-label={context}>
+          <span className="name">Context window</span>
+          <span className="value">{usagePercent(reading.contextUsedPercent)}%</span>
+        </p>
+      )}
       {reading === null ? null : <small>{planSourceWords(reading, props.refreshTick)}</small>}
     </section>
   )
@@ -77,8 +87,7 @@ export function PlanUseDialog(props: { now: number; onClose(): void }): React.JS
 
   return (
     <Dialog label="Plan use" onClose={props.onClose} className="plan-use-dialog">
-      <p className="dialog-note">What each agent last reported about its plan, from files and input the agents
-        already write. Kept in memory only; BMN makes no network call for it.</p>
+      <p className="dialog-note">Latest reading per agent, from what the agents write locally. In memory only; no network calls.</p>
       {failed ? <p className="inline-error" role="status">Plan use unavailable</p> : null}
       {readings === null ? <p className="dialog-note">Reading…</p> : (
         <ul className="plan-use-agents" aria-label="Plan use by agent">
@@ -96,12 +105,9 @@ export function PlanUseDialog(props: { now: number; onClose(): void }): React.JS
               </li>
             )
           })}
-          {NOT_REPORTED.map((name) => (
-            <li key={name} data-agent={name}>
-              <h3>{name}</h3>
-              <small>Not reported by {name}</small>
-            </li>
-          ))}
+          <li className="not-reported" data-agent="none">
+            <small>Not reported by {NOT_REPORTED.slice(0, -1).join(', ')} or {NOT_REPORTED.at(-1)}</small>
+          </li>
         </ul>
       )}
     </Dialog>

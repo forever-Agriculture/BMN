@@ -630,6 +630,8 @@ describe('control server validation', () => {
 
     const owner = await authenticated(fixture, fixture.auth.ownerToken)
     expectError(await owner.request('usage.report', { sessionId: 'session-1', agent: 'claude', windows }), ERROR_CODES.unauthorized)
+    // A session may report only its own plan use.
+    expectError(await client.request('usage.report', { sessionId: 'session-2', agent: 'claude', windows }), ERROR_CODES.unauthorized)
     expect(fixture.handlers.reportUsage).toHaveBeenCalledTimes(2)
   })
 

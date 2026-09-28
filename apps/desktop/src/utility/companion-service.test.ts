@@ -2600,6 +2600,43 @@ describe('plan use (Story 37.2)', () => {
     expect((await notices()).filter((row) => row.state === 'open')).toHaveLength(1)
   })
 
+  it('keeps one notice per period across a BMN restart, another session and a drifting reset time', async () => {
+    const week = (usedPercent: number, resetsAt = WEEK_RESETS, sessionId = 's1', on = service) =>
+      (on as unknown as { recordUsage(p: Omit<UsageReading, 'readAt'>): Promise<unknown> }).recordUsage({
+        sessionId, incarnationId: liveIncarnations.get(sessionId)!, agent: 'codex', contextUsedPercent: null,
+        windows: [{ minutes: 10_080, usedPercent, resetsAt }]
+      })
+    await week(91)
+    const [opened] = await notices()
+    await service.route(METHOD_REGISTRY.attentionResolve, { requestId: opened!.requestId })
+
+    // update:desktop restarts BMN: the new process has no memory of the notice, the store does.
+    const restarted = new CompanionService(service['options'])
+    await week(95, WEEK_RESETS, 's1', restarted)
+    // Another session on the same account, with Codex's reset a few seconds later.
+    await week(96, new Date(Date.parse(WEEK_RESETS) + 30_000).toISOString(), 's2', restarted)
+    await expect(notices()).resolves.toEqual([expect.objectContaining({ state: 'answered' })])
+
+    // The period's reset passes; the next period may notify again, once.
+    clock = '2026-09-18T09:00:01.000Z'
+    await week(92, '2026-09-25T09:00:00.000Z', 's2', restarted)
+    await week(93, '2026-09-25T09:00:00.000Z', 's1', restarted)
+    expect((await notices()).filter((row) => row.state === 'open')).toEqual([expect.objectContaining({ sessionId: 's2' })])
+  })
+
+  it('keeps a run\'s windows and their time when a later refresh carries only context use', async () => {
+    const windows = [{ minutes: 300, usedPercent: 42, resetsAt: RESETS }]
+    await report({ windows, contextUsedPercent: 30 })
+    clock = '2026-09-14T12:05:00.000Z'
+    await report({ contextUsedPercent: 44 })
+
+    await expect(usage('s1')).resolves.toMatchObject({ reading: { windows, contextUsedPercent: 44, readAt: now } })
+    // A new run starts from what it reports itself.
+    liveIncarnations.set('s1', 'incarnation-5')
+    await report({ contextUsedPercent: 12 })
+    await expect(usage('s1')).resolves.toMatchObject({ reading: { windows: [], contextUsedPercent: 12 } })
+  })
+
   it('opens no notice for a window that has already reset', async () => {
     await report({ windows: [{ minutes: 300, usedPercent: 99, resetsAt: '2026-09-14T11:59:00.000Z' }] })
     await expect(notices()).resolves.toEqual([])

@@ -80,3 +80,24 @@
 
 .plan-use-dialog small,
 .plan-use .plan-use-note { color: var(--muted); font-size: 11px; }
+
+.plan-use code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+}
+
+/* Context use is its own row, in the windows' type: a muted name and a mono share, no meter or gold. */
+.plan-use .plan-use-context {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.plan-use .plan-use-context .name { color: var(--muted); }
+
+.plan-use .plan-use-context .value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}

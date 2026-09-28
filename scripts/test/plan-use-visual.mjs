@@ -169,7 +169,7 @@ while :; do [ -e ${JSON.stringify(quit)} ] && exit 0; sleep 0.2; done
 
     phase('Session details: Plan use for each session')
     result.claudeRow = await planUse(page, claudeSession.sessionId, /^5-hour 42% · resets .+ · week 18% · resets .+ · from Claude's status line · read /)
-    result.claudeContext = await page.locator('section.plan-use .plan-use-context').textContent()
+    result.claudeContext = await page.locator('section.plan-use .plan-use-context').getAttribute('aria-label')
     for (const colorMode of COLOR_MODES) {
       await setColorMode(page, colorMode)
       await page.locator('section.plan-use').screenshot({ path: join(evidenceDirectory, `plan-use-claude-${colorMode}.png`) })
@@ -195,7 +195,7 @@ while :; do [ -e ${JSON.stringify(quit)} ] && exit 0; sleep 0.2; done
     await dialog.locator('li[data-agent="codex"] .plan-use-windows').waitFor()
     await dialog.locator('li[data-agent="claude"] .plan-use-windows').waitFor()
     result.dialog = await dialog.locator('ul.plan-use-agents > li').evaluateAll((rows) => rows.map((row) => ({
-      agent: row.querySelector('h3')?.textContent,
+      agent: row.querySelector('h3')?.textContent ?? null,
       line: row.querySelector('.plan-use-windows')?.getAttribute('aria-label') ?? row.querySelector('small')?.textContent
     })))
     for (const colorMode of COLOR_MODES) {

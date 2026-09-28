@@ -219,12 +219,16 @@ export function contextUseWords(reading: UsageReading | null): string | null {
     ? null : `Context window ${usagePercent(reading.contextUsedPercent)}% used`
 }
 
-/** What the Plan use row says when a run has no plan reading, by the harness its hooks reported. */
+/**
+ * What the Plan use row says when a run has no plan reading, by the harness its hooks reported. A command
+ * to type is set in backticks.
+ */
 export function planUseMissingWords(usage: Pick<SessionUsage, 'agent' | 'reading'>): string {
-  if (usage.reading !== null) return 'No plan limits reported by this Claude profile (claude glm and API keys report none)'
+  // Before a run's first reply, and always for claude glm or an API key, Claude's input has no limits.
+  if (usage.reading !== null) return "No plan limits in Claude's last status line"
   switch (usage.agent) {
-    case 'claude': return 'No reading yet. Claude reports it through its status line once bmn statusline install has run.'
-    case 'codex': return 'No reading yet. Codex writes it after its first reply.'
+    case 'claude': return 'No reading yet. Run `bmn statusline install` once.'
+    case 'codex': return 'No reading yet; Codex writes one after its first reply.'
     case 'opencode': return 'Not reported by OpenCode'
     case 'cursor': return 'Not reported by Cursor'
     default: return 'No reading yet'

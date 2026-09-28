@@ -675,6 +675,6 @@ describe('plan use wording (Story 37.2)', () => {
     expect(planUseMissingWords({ agent: 'cursor', reading: null })).toBe('Not reported by Cursor')
     expect(planUseMissingWords({ agent: 'claude', reading: null })).toContain('bmn statusline install')
     expect(planUseMissingWords({ agent: null, reading: null })).toBe('No reading yet')
-    expect(planUseMissingWords({ agent: 'claude', reading: reading([], 12) })).toContain('claude glm')
+    expect(planUseMissingWords({ agent: 'claude', reading: reading([], 12) })).toBe("No plan limits in Claude's last status line")
   })
 })

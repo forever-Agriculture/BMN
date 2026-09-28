@@ -334,7 +334,7 @@ export class CompanionService {
    */
   private readonly usageReadings = new Map<string, UsageReading>()
   private readonly planReadings = new Map<UsageAgent, UsageReading>()
-  /** Windows whose 90% notice has opened, by agent, length and reset, so each period opens one. */
+  /** Windows whose 90% notice this process has opened; the store answers for earlier runs and other sessions. */
   private readonly usageNotices = new Set<string>()
   /** Each Codex session's last read of its own file, so a busy run is not reread on every tool call. */
   private readonly codexUsageReads = new Map<string, { at: number; running: Promise<void> | null }>()
@@ -1386,15 +1386,21 @@ export class CompanionService {
   private async recordUsage(p: Omit<UsageReading, 'readAt'>): Promise<{ recorded: boolean }> {
     // Only the live run speaks for the session, as with hook observations.
     if (this.options.manager.liveIncarnationId(p.sessionId) !== p.incarnationId) return { recorded: false }
+    const earlier = this.usageReadings.get(p.sessionId)
+    // Claude leaves `rate_limits` out of some refreshes (before a run's first reply, for one); a refresh
+    // like that updates the context share and keeps the windows this run already reported, with their time.
+    const kept = p.windows.length === 0 && earlier?.incarnationId === p.incarnationId && earlier.agent === p.agent &&
+      earlier.windows.length > 0 ? earlier : null
     const reading: UsageReading = {
       sessionId: p.sessionId,
       incarnationId: p.incarnationId,
       agent: p.agent,
-      windows: p.windows.map((window) => ({ ...window })),
+      windows: (kept?.windows ?? p.windows).map((window) => ({ ...window })),
       contextUsedPercent: p.contextUsedPercent,
-      readAt: this.iso()
+      readAt: kept?.readAt ?? this.iso()
     }
     this.usageReadings.set(p.sessionId, reading)
+    if (kept !== null) return { recorded: true }
     if (reading.windows.length > 0) {
       this.planReadings.set(reading.agent, reading)
       await this.usageNotice(reading)
@@ -1411,9 +1417,16 @@ export class CompanionService {
     for (const window of reading.windows) {
       const resetsAt = Date.parse(window.resetsAt)
       if (usagePercent(window.usedPercent) < USAGE_NOTICE_PERCENT || resetsAt <= now.getTime()) continue
-      const requestKey = `usage:${reading.agent}:${window.minutes}:${Math.round(resetsAt / 60_000)}`
+      const period = `usage:${reading.agent}:${window.minutes}:`
+      const requestKey = `${period}${Math.round(resetsAt / 60_000)}`
       if (this.usageNotices.has(requestKey)) continue
+      // A period ends only when its reset passes, so any notice for this window whose expiry is still ahead
+      // is this period's, whichever session opened it, whatever the owner did with it, and even if the
+      // agent's reset time has drifted by a few seconds since. A store that cannot answer opens nothing now.
+      const pending = await this.options.database.companion('attentionKeyPending', period, now.toISOString()).catch(() => null)
+      if (pending === null) continue
       this.usageNotices.add(requestKey)
+      if (pending) continue
       const agent = reading.agent === 'claude' ? 'Claude' : 'Codex'
       try {
         await this.openAttention({
@@ -1440,7 +1453,8 @@ export class CompanionService {
    */
   private readCodexUsage(sessionId: string, incarnationId: string, force: boolean): Promise<void> {
     const last = this.codexUsageReads.get(sessionId)
-    if (last?.running) return last.running
+    // A finished turn arriving mid-read may have written a newer line than that read saw, so it reads again.
+    if (last?.running) return force ? last.running.then(() => this.readCodexUsage(sessionId, incarnationId, true)) : last.running
     const now = this.now().getTime()
     if (last && !force && now - last.at < CODEX_USAGE_READ_EVERY_MS) return Promise.resolve()
     const running = (async () => {
