@@ -1,0 +1,24 @@
+# BMN's interactive Bash startup: run the user's normal startup file, then restore
+# the session-local CLI directory after tools such as nvm have changed PATH.
+if [ -r "$HOME/.bashrc" ]; then
+  . "$HOME/.bashrc"
+fi
+
+if [ -n "${BMN_CLI_BIN_DIR:-}" ]; then
+  case $PATH in "$BMN_CLI_BIN_DIR":*) ;; *) PATH="$BMN_CLI_BIN_DIR:$PATH" ;; esac
+  export PATH
+
+  # A nested interactive Bash reads the user's startup file again. Restore PATH
+  # before its prompt too, while preserving any existing prompt command.
+  bmn_path_prompt='case $PATH in "$BMN_CLI_BIN_DIR":*) ;; *) PATH="$BMN_CLI_BIN_DIR:$PATH" ;; esac'
+  if [[ ${PROMPT_COMMAND@a} == *a* ]]; then
+    PROMPT_COMMAND=( "$bmn_path_prompt" "${PROMPT_COMMAND[@]}" )
+  else
+    case ${PROMPT_COMMAND:-} in
+      "$bmn_path_prompt"*) ;;
+      *) PROMPT_COMMAND="$bmn_path_prompt${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;;
+    esac
+    export PROMPT_COMMAND
+  fi
+  unset bmn_path_prompt
+fi

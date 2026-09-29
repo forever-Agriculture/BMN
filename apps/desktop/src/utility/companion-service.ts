@@ -563,6 +563,7 @@ export class CompanionService {
       AITERM_CONTROL_SOCKET: this.socketPath,
       AITERM_TOKEN: token,
       AITERM_SESSION_ID: identity.sessionId,
+      BMN_CLI_BIN_DIR: dirname(this.options.cliPath),
       PATH: this.sessionPath()
     }
   }

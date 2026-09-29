@@ -20,6 +20,8 @@ extraResources:
     to: bin/bmn
   - from: bin/codex
     to: bin/codex
+  - from: bin/bmn-bashrc
+    to: bin/bmn-bashrc
   - from: bin/bmn
     to: bin/bmn.mjs
   # bmn.mjs imports it by relative path; the utility process bundles its own copy.

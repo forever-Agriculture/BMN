@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -727,6 +728,66 @@ describe('shell session lifecycle', () => {
       { executable: '/usr/bin/codex', argv: ['--disable', 'agents', 'agents', '--help'] },
       { executable: '/usr/bin/bash', argv: ['-ic', 'codex'] }
     ])
+  })
+
+  it('keeps the BMN Codex wrapper first after an interactive Bash startup changes PATH', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bmn-bash-path-'))
+    try {
+      const competingBin = join(root, 'real-bin')
+      await mkdir(competingBin)
+      await writeFile(join(competingBin, 'codex'), '#!/bin/sh\n', { mode: 0o755 })
+      await writeFile(join(root, '.bashrc'), `PATH=${competingBin}:$PATH\n`)
+      const bmnBin = fileURLToPath(new URL('../../bin/', import.meta.url))
+      let launched: { argv: readonly string[]; env: Readonly<Record<string, string | undefined>> } | null = null
+      const manager = new SessionManager({
+        store: new FakeStore(),
+        spawnPty: (_executable, argv, options) => {
+          launched = { argv, env: options.env }
+          return new FakePty()
+        },
+        sendTerminalMessage: () => undefined,
+        environment: { PATH: `${bmnBin}:/usr/bin:/bin`, HOME: root },
+        sessionEnvironment: () => ({
+          BMN_CONTROL_SOCKET: '/tmp/bmn-test.sock', BMN_TOKEN: 'test-token',
+          BMN_CLI_BIN_DIR: bmnBin, PATH: `${bmnBin}:/usr/bin:/bin`
+        })
+      })
+      manager.spawnValidatedPty(
+        { cwd: root, executable: '/bin/bash', argv: ['-ic', 'command -v codex'], cols: 80, rows: 24 },
+        undefined,
+        { sessionId: 's1', incarnationId: 'i1' }
+      )
+      expect(launched).not.toBeNull()
+      const actual = launched!
+      const result = spawnSync('/bin/bash', [...actual.argv], {
+        cwd: root, env: actual.env as NodeJS.ProcessEnv, encoding: 'utf8'
+      })
+      expect(result.status).toBe(0)
+      expect(result.stdout.trim()).toBe(join(bmnBin, 'codex'))
+
+      const afterPrompt = spawnSync('/bin/bash', [
+        ...actual.argv.slice(0, -1),
+        `PATH=${competingBin}:$PATH; eval "$PROMPT_COMMAND"; command -v codex`
+      ], { cwd: root, env: actual.env as NodeJS.ProcessEnv, encoding: 'utf8' })
+      expect(afterPrompt.status).toBe(0)
+      expect(afterPrompt.stdout.trim()).toBe(join(bmnBin, 'codex'))
+
+      manager.spawnValidatedPty(
+        { cwd: root, executable: '/bin/bash', argv: [], cols: 80, rows: 24 },
+        undefined,
+        { sessionId: 's2', incarnationId: 'i2' }
+      )
+      expect(launched!.argv).toEqual(['--rcfile', join(bmnBin, 'bmn-bashrc')])
+
+      manager.spawnValidatedPty(
+        { cwd: root, executable: '/bin/bash', argv: ['-c', '-i'], cols: 80, rows: 24 },
+        undefined,
+        { sessionId: 's3', incarnationId: 'i3' }
+      )
+      expect(launched!.argv).toEqual(['-c', '-i'])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
   })
 
   it('selects graphics at spawn from the saved choice, Sixel by default, then falls back if terminfo changes', async () => {

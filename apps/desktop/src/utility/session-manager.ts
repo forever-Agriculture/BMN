@@ -131,6 +131,27 @@ function codexSessionArgv(
   return ['--no-daemon', ...argv]
 }
 
+/** Bash startup files may move a global Codex ahead of BMN's session-local launcher on PATH. */
+function bashSessionArgv(
+  executable: string,
+  argv: readonly string[],
+  environment: Readonly<Record<string, string | undefined>>
+): readonly string[] {
+  const bin = environment.BMN_CLI_BIN_DIR
+  if (!bin || executable.split('/').pop() !== 'bash') return argv
+  let interactive = argv.length === 0
+  for (const arg of argv) {
+    if (arg === '--' || !arg.startsWith('-')) break
+    if (arg === '--norc' || arg === '--rcfile' || arg.startsWith('--rcfile=') ||
+      arg === '--init-file' || arg.startsWith('--init-file=') ||
+      arg === '--login' || /^-[^-]*l/.test(arg)) return argv
+    if (arg === '--interactive' || /^-[^-]*i/.test(arg)) interactive = true
+    // The word after -c is shell code, even when it begins with a dash.
+    if (/^-[^-]*c/.test(arg)) break
+  }
+  return interactive ? ['--rcfile', join(bin, 'bmn-bashrc'), ...argv] : argv
+}
+
 export interface PtyLike {
   readonly pid: number
   readonly cols: number
@@ -1503,8 +1524,9 @@ export class SessionManager {
         ...terminalGraphicsEnvironment(params.terminalGraphics ?? null, environment, this.terminfoAsset),
         ...(identity ? this.sessionEnvironment?.(identity) : undefined)
       }
-      return this.spawnPty(params.executable,
-        identity === undefined ? params.argv : codexSessionArgv(params.executable, params.argv, env), {
+      const argv = identity === undefined ? params.argv
+        : bashSessionArgv(params.executable, codexSessionArgv(params.executable, params.argv, env), env)
+      return this.spawnPty(params.executable, argv, {
         cwd: params.cwd,
         cols: params.cols,
         rows: params.rows,
