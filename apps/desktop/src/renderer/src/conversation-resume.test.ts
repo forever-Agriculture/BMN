@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import type {
   ConversationBindingState,
   ConversationResumePreview,
@@ -13,6 +15,7 @@ import {
   resumeBoundConversation,
   resumeConfirmationPresentation
 } from './conversation-resume'
+import { ResumeDialog } from './shell-dialogs'
 
 describe('visible conversation resume decisions', () => {
   it('surfaces a missing reference and never invokes the resume process action', async () => {
@@ -159,5 +162,19 @@ describe('Resume for a command a program reported (Epic 43)', () => {
     const refused = reportedResumeConfirmation({ ...preview, program: null, command: '', refusal: 'gone' }, 'Wrapper')
     expect(refused).toMatchObject({ program: null, refusal: 'gone' })
     expect(refused.message).toBe('"Wrapper" cannot be resumed with the command a program in it reported:')
+  })
+
+  it('shows the actual Codex launch beside the command the program reported', () => {
+    const preview: ReportedResumePreview = {
+      sessionId: 'session-1', source: 'reported', argv: ['codex', 'resume', 'abc'], program: '/usr/bin/codex',
+      cwd: '/work/app', reportedAt: '2026-09-29T10:15:00.000Z',
+      command: '/usr/bin/codex --no-daemon resume abc', refusal: null
+    }
+    const markup = renderToStaticMarkup(createElement(ResumeDialog, {
+      preview, sessionName: 'Codex', onConfirm: () => undefined,
+      onStartAgain: () => undefined, onClose: () => undefined
+    }))
+    expect(markup).toContain('<pre class="resume-command">/usr/bin/codex --no-daemon resume abc</pre>')
+    expect(markup).toContain('Reported command: <code>codex resume abc</code>')
   })
 })

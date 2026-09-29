@@ -99,6 +99,8 @@ export interface ReportedResumeConfirmation {
   message: string
   /** The command exactly as the program reported it. */
   argv: string
+  /** The resolved command BMN will launch after applying session arguments. */
+  command: string
   /** Where its name resolves on the session's PATH now; null when it no longer does. */
   program: string | null
   folder: string
@@ -117,6 +119,7 @@ export function reportedResumeConfirmation(
       ? `Resume "${sessionName}" with the command a program in it reported. This command runs:`
       : `"${sessionName}" cannot be resumed with the command a program in it reported:`,
     argv: quoteArgv(preview.argv),
+    command: preview.command,
     program: preview.program,
     folder: preview.cwd,
     provenance: reportedResumeProvenance(preview.reportedAt),

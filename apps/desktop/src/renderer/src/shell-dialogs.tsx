@@ -134,7 +134,7 @@ export function ResumeDialog(props: {
 
 /**
  * Story 43.2: Resume for a session BMN has no conversation of its own for, with the command a program in it reported.
- * It shows the command exactly as reported, the program and folder it runs in, and who said so; when the program is
+ * It shows the command BMN will run and the argv exactly as reported, the program and folder, and who said so; when the program is
  * no longer on PATH it says why and offers Start again instead.
  */
 function ReportedResumeDialog(props: {
@@ -148,7 +148,8 @@ function ReportedResumeDialog(props: {
   return (
     <Dialog label="Resume with the reported command" onClose={props.onClose}>
       <p>{shown.message}</p>
-      <pre className="resume-command">{shown.argv}</pre>
+      <pre className="resume-command">{shown.refusal ? shown.argv : shown.command}</pre>
+      {!shown.refusal ? <p className="dialog-note">Reported command: <code>{shown.argv}</code></p> : null}
       <dl className="resume-facts">
         <dt>Program</dt><dd>{shown.program ?? 'Not found on PATH'}</dd>
         <dt>Folder</dt><dd>{shown.folder}</dd>
