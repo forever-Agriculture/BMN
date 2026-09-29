@@ -30,8 +30,9 @@ exception, Electron exits at once with `SIGTRAP`, and the kernel log shows
 `apparmor="DENIED" operation="capable" profile="unprivileged_userns"`.
 
 BMN never disables the sandbox. Instead, `scripts/sandbox/bmn-electron` is an
-AppArmor profile that grants user namespaces to exactly two binaries in your checkout: the
-development Electron and the packaged `bmn`. Install it with your checkout's absolute path:
+AppArmor profile that grants user namespaces to the development Electron, the live packaged
+`bmn`, and the staged `.next/bmn` used by desktop updates. Install it with your checkout's
+absolute path:
 
 ```bash
 sed "s|@REPO_ROOT@|$PWD|g" scripts/sandbox/bmn-electron \
@@ -127,7 +128,7 @@ string for the stroke icon set in `icons.tsx` (stroke 1.4, round caps, no fill):
 ## Troubleshooting
 
 - **Electron exits with `SIGTRAP`.** Install the AppArmor profile above. It must name the path of
-  this checkout.
+  this checkout and include `.next/bmn` for staged desktop updates.
 - **`node-pty` or `better-sqlite3` fails to load.** Run `pnpm run rebuild:native`. The app's error
   names the module that failed.
 - **Agent control is unavailable.** A Unix socket path may hold 107 bytes on Linux. A very long

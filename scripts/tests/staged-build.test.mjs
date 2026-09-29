@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto'
 import * as nodeFs from 'node:fs'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
 import { buildFolders, liveBuildState, packageSmokeAndSwap, prepareBuildFolders, swapInStagedBuild } from '../lib/staged-build.mjs'
 
@@ -52,6 +53,14 @@ function steps(folders, { smokePasses }) {
 }
 
 describe('staged desktop update', () => {
+  it('allows Chromium user namespaces for the staged executable that the smoke runs', () => {
+    const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
+    const profile = readFileSync(join(repoRoot, 'scripts/sandbox/bmn-electron'), 'utf8')
+    const staged = buildFolders(join(repoRoot, 'apps/desktop/release/linux-unpacked')).next
+      .replace(repoRoot, '@REPO_ROOT@')
+    expect(profile).toMatch(new RegExp(`profile bmn-electron-packaged-next "${staged}/bmn" flags=\\(unconfined\\) \\{\\s+userns,`, 'u'))
+  })
+
   it('smokes the staged build and only then swaps it in, keeping the replaced one as prev', async () => {
     const folders = release()
     writeBuild(folders.live, 'old')
