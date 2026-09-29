@@ -9,6 +9,7 @@ import { runInNewContext } from 'node:vm'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { spawn as spawnPty } from 'node-pty'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ControlAuth, writeOwnerToken } from './control-auth'
 import { ERROR_CODES, HANDOFF_OUTLINE } from '@bmn/protocol'
@@ -1486,6 +1487,45 @@ function runHooks(args: string[], env?: Record<string, string>): Promise<CliResu
   return runCli(['hooks', ...args], env === undefined ? {} : { env })
 }
 
+function ttyHooks(args: string[], pipe: 'none' | 'stdin' | 'stdout' | 'stderr' = 'none'): {
+  write(text: string): void
+  waitFor(text: string): Promise<void>
+  finish: Promise<number>
+  output(): string
+} {
+  const stdio = [pipe === 'stdin' ? 'pipe' : 'inherit', pipe === 'stdout' ? 'pipe' : 'inherit',
+    pipe === 'stderr' ? 'pipe' : 'inherit']
+  const wrapper = `const { spawn } = require('node:child_process');
+    const child = spawn(process.execPath, process.argv.slice(1), { stdio: ${JSON.stringify(stdio)} });
+    ${pipe === 'stdin' ? 'child.stdin.end();' : ''}
+    ${pipe === 'stdout' || pipe === 'stderr'
+      ? `child.${pipe}.on('data', part => process.stdout.write(part));` : ''}
+    child.on('exit', code => { process.exitCode = code ?? 1 });`
+  const command = pipe === 'none' ? [CLI, 'hooks', ...args] : ['-e', wrapper, CLI, 'hooks', ...args]
+  const child = spawnPty(process.execPath, command, {
+    name: 'xterm-256color', cols: 100, rows: 32, cwd: process.cwd(),
+    env: { PATH: process.env.PATH ?? '', HOME: tmpdir() }
+  })
+  let output = ''
+  const waiting = new Set<{ text: string; resolve: () => void }>()
+  child.onData((part) => {
+    output += part
+    for (const item of waiting) {
+      if (output.includes(item.text)) { waiting.delete(item); item.resolve() }
+    }
+  })
+  return {
+    write: (text) => child.write(text),
+    output: () => output,
+    finish: new Promise((resolve) => child.onExit(({ exitCode }) => resolve(exitCode))),
+    waitFor: (text) => output.includes(text) ? Promise.resolve() : new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => { if (waiting.delete(item)) reject(new Error(`TTY did not show ${text}: ${output}`)) }, 5000)
+      const item = { text, resolve: () => { clearTimeout(timeout); resolve() } }
+      waiting.add(item)
+    })
+  }
+}
+
 describe('bmn hooks check', () => {
   it('reads a missing file as every event missing and exits 1 without a socket or a token', async () => {
     const path = await hookFileFixture()
@@ -1503,7 +1543,7 @@ describe('bmn hooks check', () => {
     await chmod(path, 0o000)
 
     const check = await runHooks(['check', 'claude', '--file', path])
-    const install = await runHooks(['install', 'claude', '--file', path])
+    const install = await runHooks(['install', '--yes', 'claude', '--file', path])
     await chmod(path, 0o600)
 
     expect(check.code).toBe(1)
@@ -1933,7 +1973,7 @@ describe('bmn hooks check', () => {
     const dead = { hooks: [{ type: 'command', timeout: '5', command: DOCUMENTED_CLAUDE }] }
     const path = await hookFileFixture({ hooks: { Stop: [dead] } })
 
-    await runHooks(['install', 'claude', '--file', path])
+    await runHooks(['install', '--yes', 'claude', '--file', path])
     const after = JSON.parse(await readFile(path, 'utf8'))
     const check = await runHooks(['check', 'claude', '--file', path, '--json'])
 
@@ -2148,7 +2188,7 @@ it('ends every Codex report with the limit of what it checked', async () => {
     const path = await hookFileFixture(`{ "keepMe": ${token}, "hooks": {} }`, 'hooks.json')
     const before = await readFile(path, 'utf8')
 
-    const install = await runHooks(['install', 'codex', '--file', path])
+    const install = await runHooks(['install', '--yes', 'codex', '--file', path])
 
     // `install` reserializes the file, and `JSON.stringify` does not promise the digits it was
     // handed. Silently editing a number BMN was not asked to touch is worse than declining, so it
@@ -2167,7 +2207,7 @@ it('ends every Codex report with the limit of what it checked', async () => {
   ])('installs normally into a file whose number is only respelled: %s', async (_label, token) => {
     const path = await hookFileFixture(`{ "keepMe": ${token}, "hooks": {} }`, 'hooks.json')
 
-    const install = await runHooks(['install', 'codex', '--file', path])
+    const install = await runHooks(['install', '--yes', 'codex', '--file', path])
     const after = JSON.parse(await readFile(path, 'utf8'))
 
     // `1.0` comes back as `1` and `1e3` as `1000`: the same numbers, written differently. That is
@@ -2188,7 +2228,7 @@ it('ends every Codex report with the limit of what it checked', async () => {
     )
     const before = await readFile(path, 'utf8')
 
-    const install = await runHooks(['install', 'codex', '--file', path])
+    const install = await runHooks(['install', '--yes', 'codex', '--file', path])
 
     // `epics.md:786` gives an already-wired file a successful no-op. The number matters only to a
     // write, and there is no write, so refusing here would fail an install that had nothing to do.
@@ -2201,7 +2241,7 @@ it('ends every Codex report with the limit of what it checked', async () => {
     const written = 'timeout 5 bmn hook claude'
     const path = await hookFileFixture({ hooks: { Stop: [entryGroup(written)] } })
 
-    const install = await runHooks(['install', 'claude', '--file', path])
+    const install = await runHooks(['install', '--yes', 'claude', '--file', path])
     const after = JSON.parse(await readFile(path, 'utf8'))
 
     expect(install.code).toBe(0)
@@ -2276,7 +2316,7 @@ it('ends every Codex report with the limit of what it checked', async () => {
     for (const [agent, file] of [['claude', 'settings.json'], ['codex', 'hooks.json']] as const) {
       const path = await hookFileFixture({}, file)
 
-      expect((await runHooks(['install', agent, '--file', path])).code).toBe(0)
+      expect((await runHooks(['install', '--yes', agent, '--file', path])).code).toBe(0)
       const check = await runHooks(['check', agent, '--file', path, '--json'])
 
       expect(check.code).toBe(0)
@@ -2330,7 +2370,7 @@ it('ends every Codex report with the limit of what it checked', async () => {
     const codexHome = join(home.root, 'moved-codex')
     const env = { HOME: home.root, CODEX_HOME: codexHome }
 
-    const install = await runHooks(['install', 'codex'], env)
+    const install = await runHooks(['install', '--yes', 'codex'], env)
     const check = await runHooks(['check', 'codex'], env)
 
     expect(install.code).toBe(0)
@@ -2364,6 +2404,164 @@ it('ends every Codex report with the limit of what it checked', async () => {
 })
 
 describe('bmn hooks install', () => {
+  it('allows piped stdout when stdin and stderr are TTYs, and rejects piped stdin or stderr', async () => {
+    const path = await hookFileFixture({}, 'hooks.json')
+    const accepted = ttyHooks(['install', 'codex', '--file', path], 'stdout')
+    await accepted.waitFor('Install these hooks? [y/N] ')
+    accepted.write('yes\r')
+    expect(await accepted.finish).toBe(0)
+    expect((await runHooks(['check', 'codex', '--file', path])).code).toBe(0)
+
+    const other = await hookFileFixture({}, 'hooks.json')
+    const denied = ttyHooks(['install', 'codex', '--file', other], 'stderr')
+    expect(await denied.finish).toBe(2)
+    expect(denied.output()).toContain('CONFIRMATION_REQUIRED')
+    expect(await backupsOf(other)).toEqual([])
+
+    const third = await hookFileFixture({}, 'hooks.json')
+    const deniedStdin = ttyHooks(['install', 'codex', '--file', third], 'stdin')
+    expect(await deniedStdin.finish).toBe(2)
+    expect(deniedStdin.output()).toContain('CONFIRMATION_REQUIRED')
+    expect(await backupsOf(third)).toEqual([])
+  })
+  it('accepts an interactive Yes and refuses No or EOF without a backup', async () => {
+    for (const answer of ['yes\r', 'n\r', '\u0004']) {
+      const path = await hookFileFixture({}, 'hooks.json')
+      const before = await readFile(path, 'utf8')
+      const tty = ttyHooks(['install', 'codex', '--file', path])
+      await tty.waitFor('Install these hooks? [y/N] ')
+      expect(await readFile(path, 'utf8')).toBe(before)
+      tty.write(answer)
+      expect(await tty.finish).toBe(answer === 'yes\r' ? 0 : 1)
+      if (answer === 'yes\r') {
+        expect((await runHooks(['check', 'codex', '--file', path])).code).toBe(0)
+        expect((await backupsOf(path)).length).toBe(1)
+      } else {
+        expect(await readFile(path, 'utf8')).toBe(before)
+        expect(await backupsOf(path)).toEqual([])
+      }
+    }
+  })
+
+  it('treats Ctrl-C at the prompt as refusal without creating a backup', async () => {
+    const path = await hookFileFixture({}, 'hooks.json')
+    const before = await readFile(path, 'utf8')
+    const tty = ttyHooks(['install', 'codex', '--file', path])
+    await tty.waitFor('Install these hooks? [y/N] ')
+    tty.write('\u0003')
+    expect(await tty.finish).toBe(1)
+    expect(await readFile(path, 'utf8')).toBe(before)
+    expect(await backupsOf(path)).toEqual([])
+  })
+
+  it('rejects --json on a TTY without --yes and rejects --yes on read-only hooks commands', async () => {
+    const path = await hookFileFixture({}, 'hooks.json')
+    const tty = ttyHooks(['install', 'claude', '--file', path, '--json'])
+    expect(await tty.finish).toBe(2)
+    expect(tty.output()).toContain('CONFIRMATION_REQUIRED')
+    expect(tty.output()).not.toContain('Install these hooks?')
+    expect(await backupsOf(path)).toEqual([])
+    for (const args of [['check', 'claude', '--file', path, '--yes'], ['print', 'opencode', '--yes']]) {
+      const refused = await runHooks(args)
+      expect(refused.code).toBe(2)
+      expect(refused.stdout).toBe('')
+    }
+  })
+
+  it('rejects changed bytes and a symlink retarget during an interactive prompt', async () => {
+    const path = await hookFileFixture({}, 'hooks.json')
+    const original = await readFile(path, 'utf8')
+    const changing = ttyHooks(['install', 'codex', '--file', path])
+    await changing.waitFor('Install these hooks? [y/N] ')
+    await writeFile(path, '{"owner":"changed"}\n')
+    changing.write('yes\r')
+    expect(await changing.finish).toBe(1)
+    expect(changing.output()).toContain('changed while bmn was reading it')
+    expect(await readFile(path, 'utf8')).toBe('{"owner":"changed"}\n')
+    expect(await backupsOf(path)).toEqual([])
+
+    const first = await hookFileFixture(original, 'first.json')
+    const second = join(dirname(first), 'second.json')
+    const link = join(dirname(first), 'alias.json')
+    await writeFile(second, original)
+    await symlink(first, link)
+    const retargeting = ttyHooks(['install', 'codex', '--file', link])
+    await retargeting.waitFor('Install these hooks? [y/N] ')
+    await rm(link)
+    await symlink(second, link)
+    retargeting.write('yes\r')
+    expect(await retargeting.finish).toBe(1)
+    expect(retargeting.output()).toContain('changed target while bmn was reading it')
+    expect(await readFile(first, 'utf8')).toBe(original)
+    expect(await readFile(second, 'utf8')).toBe(original)
+    expect(await backupsOf(link)).toEqual([])
+  })
+
+  it('shows the full OpenCode replacement and refuses a retargeted plugin link', async () => {
+    const first = await hookFileFixture('// existing plugin\n', 'first.ts')
+    const second = join(dirname(first), 'second.ts')
+    const link = join(dirname(first), 'bmn.ts')
+    await writeFile(second, '// existing plugin\n')
+    await symlink(first, link)
+    const tty = ttyHooks(['install', 'opencode', '--file', link])
+    await tty.waitFor('Install these hooks? [y/N] ')
+    expect(tty.output()).toContain('Proposed full file:')
+    expect(tty.output()).toContain('export const BMNPlugin: Plugin')
+    await rm(link)
+    await symlink(second, link)
+    tty.write('yes\r')
+    expect(await tty.finish).toBe(1)
+    expect(tty.output()).toContain('REVISION_CONFLICT')
+    expect(await readFile(first, 'utf8')).toBe('// existing plugin\n')
+    expect(await readFile(second, 'utf8')).toBe('// existing plugin\n')
+    expect(await backupsOf(link)).toEqual([])
+  })
+  it.each(['claude', 'codex', 'opencode', 'cursor'])('requires explicit approval before a non-interactive %s write', async (agent) => {
+    const path = await hookFileFixture(agent === 'opencode' ? '// older plugin\n' : {}, agent === 'claude' ? 'settings.json' : 'hooks.json')
+    const before = await readFile(path, 'utf8')
+    for (const args of [['install', agent, '--file', path], ['install', agent, '--file', path, '--json']]) {
+      const denied = await runHooks(args)
+      expect(denied).toMatchObject({ code: 2, stdout: '' })
+      expect(denied.stderr).toContain('CONFIRMATION_REQUIRED')
+      expect(await readFile(path, 'utf8')).toBe(before)
+      expect(await backupsOf(path)).toEqual([])
+    }
+    const installed = await runHooks(['install', agent, '--file', path, '--json', '--yes'])
+    expect(installed.code).toBe(0)
+    expect(JSON.parse(installed.stdout).installed.length).toBeGreaterThan(0)
+  })
+
+  it('shows the proposed diff before a real terminal answer and defaults to No', async () => {
+    const path = await hookFileFixture({}, 'hooks.json')
+    const before = await readFile(path, 'utf8')
+    const child = spawnPty(process.execPath, [CLI, 'hooks', 'install', 'codex', '--file', path], {
+      name: 'xterm-256color', cols: 80, rows: 24, cwd: process.cwd(),
+      env: { PATH: process.env.PATH ?? '', HOME: dirname(path) }
+    })
+    let output = ''
+    const finished = new Promise<number>((resolve) => child.onExit(({ exitCode }) => resolve(exitCode)))
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error(`Hook preview timed out: ${output}`)), 5000)
+      child.onData((part) => {
+        output += part
+        if (output.includes('Install these hooks? [y/N] ')) {
+          clearTimeout(timeout)
+          resolve()
+        }
+      })
+    })
+    expect(output).toContain(`Hook file: ${path}`)
+    expect(output).toContain(`Resolved target: ${path}`)
+    expect(output).toContain('Entries to add or replace:')
+    expect(output).toContain('Proposed diff:')
+    expect(output.indexOf('Proposed diff:')).toBeLessThan(output.indexOf('Install these hooks?'))
+    expect(await readFile(path, 'utf8')).toBe(before)
+    expect(await backupsOf(path)).toEqual([])
+    child.write('\r')
+    expect(await finished).toBe(1)
+    expect(await readFile(path, 'utf8')).toBe(before)
+    expect(await backupsOf(path)).toEqual([])
+  })
   it('adds only the missing entries, keeps foreign hooks byte for byte and leaves an older wording alone', async () => {
     const foreign = entryGroup('echo foreign', 9)
     const path = await hookFileFixture({
@@ -2372,7 +2570,7 @@ describe('bmn hooks install', () => {
     })
     const before = JSON.parse(await readFile(path, 'utf8'))
 
-    const install = await runHooks(['install', 'claude', '--file', path])
+    const install = await runHooks(['install', '--yes', 'claude', '--file', path])
     const after = JSON.parse(await readFile(path, 'utf8'))
 
     expect(install.code).toBe(0)
@@ -2420,7 +2618,7 @@ describe('bmn hooks install', () => {
     ].join('\n')
     const path = await hookFileFixture(original)
 
-    const install = await runHooks(['install', 'claude', '--file', path])
+    const install = await runHooks(['install', '--yes', 'claude', '--file', path])
     const after = await readFile(path, 'utf8')
 
     expect(install.code).toBe(0)
@@ -2442,7 +2640,7 @@ describe('bmn hooks install', () => {
     const path = await hookFileFixture(contents)
     const before = await readFile(path, 'utf8')
 
-    const install = await runHooks(['install', 'claude', '--file', path])
+    const install = await runHooks(['install', '--yes', 'claude', '--file', path])
     const check = await runHooks(['check', 'claude', '--file', path])
 
     expect(install.code).toBe(1)
@@ -2460,7 +2658,7 @@ describe('bmn hooks install', () => {
     await chmod(real, 0o640)
     await symlink(real, link)
 
-    const install = await runHooks(['install', 'claude', '--file', link])
+    const install = await runHooks(['install', '--yes', 'claude', '--file', link])
 
     expect(install.code).toBe(0)
     expect((await lstat(link)).isSymbolicLink()).toBe(true)
@@ -2479,7 +2677,7 @@ describe('bmn hooks install', () => {
     await writeFile(join(root, 'target.json'), 'SENTINEL: nothing to do with any harness\n')
     await writeFile(join(root, 'real', 'target.json'), '{"real":"target"}\n')
 
-    const install = await runHooks(['install', 'claude', '--file', join(root, 'alias', 'settings.json')])
+    const install = await runHooks(['install', '--yes', 'claude', '--file', join(root, 'alias', 'settings.json')])
 
     expect(install.code).toBe(0)
     expect(await readFile(join(root, 'target.json'), 'utf8')).toBe('SENTINEL: nothing to do with any harness\n')
@@ -2499,7 +2697,7 @@ describe('bmn hooks install', () => {
     await writeFile(join(root, 'target.json'), 'SENTINEL: nothing to do with any harness\n')
     await writeFile(join(root, 'real', 'target.json'), '{"real":true}\n')
 
-    const install = await runHooks(['install', 'claude', '--file', join(root, 'settings.json')])
+    const install = await runHooks(['install', '--yes', 'claude', '--file', join(root, 'settings.json')])
 
     expect(install.code).toBe(0)
     expect(await readFile(join(root, 'target.json'), 'utf8')).toBe('SENTINEL: nothing to do with any harness\n')
@@ -2515,7 +2713,7 @@ describe('bmn hooks install', () => {
     await symlink('missing/../target.json', join(root, 'settings.json'))
     await writeFile(join(root, 'target.json'), 'SENTINEL\n')
 
-    const install = await runHooks(['install', 'claude', '--file', join(root, 'settings.json')])
+    const install = await runHooks(['install', '--yes', 'claude', '--file', join(root, 'settings.json')])
 
     expect(install.code).toBe(1)
     expect(install.stderr).toContain('which does not exist; resolve it by hand')
@@ -2533,7 +2731,7 @@ describe('bmn hooks install', () => {
     await writeFile(join(root, 'settings.json'), 'SENTINEL\n')
     await symlink(join(root, 'cfg', 'claude'), join(root, 'x'))
 
-    const install = await runHooks(['install', 'claude', '--file', `${join(root, 'x')}/../settings.json`])
+    const install = await runHooks(['install', '--yes', 'claude', '--file', `${join(root, 'x')}/../settings.json`])
 
     expect(install.code).toBe(0)
     // The kernel reads `x/..` as `cfg`, so the hooks belong in cfg/settings.json...
@@ -2552,7 +2750,7 @@ describe('bmn hooks install', () => {
     await writeFile(join(root, 'settings.json'), 'SENTINEL\n')
     await symlink(join(root, 'cfg', 'claude'), join(root, 'x'))
 
-    const install = await runHooks(['install', 'claude'], { CLAUDE_CONFIG_DIR: `${join(root, 'x')}/..` })
+    const install = await runHooks(['install', '--yes', 'claude'], { CLAUDE_CONFIG_DIR: `${join(root, 'x')}/..` })
 
     expect(install.code).toBe(0)
     expect(Object.keys(JSON.parse(await readFile(join(root, 'cfg', 'settings.json'), 'utf8')).hooks))
@@ -2564,7 +2762,7 @@ describe('bmn hooks install', () => {
     const root = dirname(await hookFileFixture({ hooks: {} }, 'unused.json'))
     await writeFile(join(root, 'settings.json'), 'SENTINEL\n')
 
-    const install = await runHooks(['install', 'claude', '--file', `${join(root, 'none')}/../settings.json`])
+    const install = await runHooks(['install', '--yes', 'claude', '--file', `${join(root, 'none')}/../settings.json`])
 
     expect(install.code).toBe(1)
     expect(install.stderr).toContain('which does not exist; resolve it by hand')
@@ -2575,7 +2773,7 @@ describe('bmn hooks install', () => {
     // The refusal above must not catch the fresh machine, which is what install is for.
     const root = dirname(await hookFileFixture({ hooks: {} }, 'unused.json'))
 
-    const install = await runHooks(['install', 'codex', '--file', join(root, 'fresh', 'hooks.json')])
+    const install = await runHooks(['install', '--yes', 'codex', '--file', join(root, 'fresh', 'hooks.json')])
 
     expect(install.code).toBe(0)
     expect(Object.keys(JSON.parse(await readFile(join(root, 'fresh', 'hooks.json'), 'utf8')).hooks))
@@ -2591,7 +2789,7 @@ describe('bmn hooks install', () => {
       previous = join(root, `l${step}.json`)
     }
 
-    const install = await runHooks(['install', 'claude', '--file', join(root, 'l12.json')])
+    const install = await runHooks(['install', '--yes', 'claude', '--file', join(root, 'l12.json')])
 
     expect(install.code).toBe(1)
     expect(install.stderr).toContain('passes through more than 10 symlinks')
@@ -2607,7 +2805,7 @@ describe('bmn hooks install', () => {
     const link = join(root, 'settings.json')
     await symlink(real, link)
 
-    const install = await runHooks(['install', 'claude', '--file', link])
+    const install = await runHooks(['install', '--yes', 'claude', '--file', link])
 
     expect(install.code).toBe(0)
     expect((await lstat(link)).isSymbolicLink()).toBe(true)
@@ -2620,7 +2818,7 @@ describe('bmn hooks install', () => {
     // A handshake, not a race: the installer says when it is between its read and its rename, the
     // other writer goes then, and only then is the installer let go.
     const gate = join(dirname(path), 'gate')
-    const installing = runHooks(['install', 'claude', '--file', path], { BMN_HOOKS_TEST_GATE: gate })
+    const installing = runHooks(['install', '--yes', 'claude', '--file', path], { BMN_HOOKS_TEST_GATE: gate })
     const deadline = Date.now() + 10_000
     while (!existsSync(`${gate}.waiting`)) {
       if (Date.now() > deadline) throw new Error('the installer never reached its check')
@@ -2641,7 +2839,7 @@ describe('bmn hooks install', () => {
     const path = await hookFileFixture({ hooks: { Stop: [entryGroup(DOCUMENTED_CLAUDE)] } })
     const original = await readFile(path, 'utf8')
 
-    const install = await runHooks(['install', 'claude', '--file', path])
+    const install = await runHooks(['install', '--yes', 'claude', '--file', path])
     const [backup, ...extra] = await backupsOf(path)
 
     expect(install.code).toBe(0)
@@ -2661,7 +2859,7 @@ describe('bmn hooks install', () => {
   it('creates a missing file with only the hooks object and no backup', async () => {
     const path = await hookFileFixture()
 
-    const install = await runHooks(['install', 'claude', '--file', path])
+    const install = await runHooks(['install', '--yes', 'claude', '--file', path])
     const written = JSON.parse(await readFile(path, 'utf8'))
 
     expect(install.code).toBe(0)
@@ -2676,7 +2874,7 @@ describe('bmn hooks install', () => {
     })
     const before = await readFile(path, 'utf8')
 
-    const install = await runHooks(['install', 'claude', '--file', path])
+    const install = await runHooks(['install', '--yes', 'claude', '--file', path])
 
     expect(install.code).toBe(0)
     expect(install.stdout).toContain('Nothing to do')
@@ -2688,7 +2886,7 @@ describe('bmn hooks install', () => {
     const broken = '{ "hooks": { "Stop": [ }'
     const path = await hookFileFixture(broken)
 
-    const install = await runHooks(['install', 'claude', '--file', path])
+    const install = await runHooks(['install', '--yes', 'claude', '--file', path])
 
     expect(install.code).toBe(1)
     expect(install.stderr).toContain('not valid JSON')
@@ -2700,8 +2898,8 @@ describe('bmn hooks install', () => {
     const codexPath = await hookFileFixture({}, 'hooks.json')
     const claudePath = await hookFileFixture({})
 
-    const codex = await runHooks(['install', 'codex', '--file', codexPath])
-    const claude = await runHooks(['install', 'claude', '--file', claudePath])
+    const codex = await runHooks(['install', '--yes', 'codex', '--file', codexPath])
+    const claude = await runHooks(['install', '--yes', 'claude', '--file', claudePath])
 
     // The whole sentence, not just "/hooks": the fixture's own path ends in hooks.json.
     expect(codex.stdout).toContain('Codex must trust the hooks once: run /hooks in Codex.')
@@ -2714,7 +2912,7 @@ describe('bmn hooks install', () => {
   it('leaves check reporting everything wired afterwards', async () => {
     const path = await hookFileFixture({ hooks: { Stop: [entryGroup(OLDER_CLAUDE)] } })
 
-    await runHooks(['install', 'claude', '--file', path])
+    await runHooks(['install', '--yes', 'claude', '--file', path])
     const check = await runHooks(['check', 'claude', '--file', path])
 
     expect(check.code).toBe(0)
@@ -3080,16 +3278,16 @@ describe('OpenCode hooks', () => {
     expect(printed.stdout).toContain('export const BMNPlugin: Plugin')
     expect(printed.stdout).toContain('bmn hook opencode')
     expect((await runHooks(['check', 'opencode', '--file', path])).code).toBe(1)
-    const install = await runHooks(['install', 'opencode', '--file', path, '--json'])
+    const install = await runHooks(['install', '--yes', 'opencode', '--file', path, '--json'])
     expect(install.code).toBe(0)
     expect(await readFile(path, 'utf8')).toBe(printed.stdout)
     expect((await runHooks(['check', 'opencode', '--file', path])).code).toBe(0)
-    expect(JSON.parse((await runHooks(['install', 'opencode', '--file', path, '--json'])).stdout).installed).toEqual([])
+    expect(JSON.parse((await runHooks(['install', '--yes', 'opencode', '--file', path, '--json'])).stdout).installed).toEqual([])
     await writeFile(path, '// unrelated plugin\n')
     expect((await runHooks(['check', 'opencode', '--file', path])).stdout).toMatch(/plugin\s+missing/)
     await writeFile(path, '// Shipped by BMN\n// bmn hook opencode\n')
     expect((await runHooks(['check', 'opencode', '--file', path])).stdout).toContain('wired (older wording)')
-    const repair = JSON.parse((await runHooks(['install', 'opencode', '--file', path, '--json'])).stdout)
+    const repair = JSON.parse((await runHooks(['install', '--yes', 'opencode', '--file', path, '--json'])).stdout)
     expect(await readFile(repair.backup, 'utf8')).toBe('// Shipped by BMN\n// bmn hook opencode\n')
     expect(await readFile(path, 'utf8')).toBe(printed.stdout)
   })
@@ -3100,11 +3298,11 @@ describe('OpenCode hooks', () => {
     const env = { OPENCODE_CONFIG_DIR: config }
     const first = JSON.parse((await runHooks(['check', 'opencode', '--json'], env)).stdout)
     expect(first.agents[0].file).toBe(join(config, 'plugins', 'bmn.ts'))
-    const fresh = JSON.parse((await runHooks(['install', 'opencode', '--json'], env)).stdout)
+    const fresh = JSON.parse((await runHooks(['install', '--yes', 'opencode', '--json'], env)).stdout)
     expect(fresh.file).toBe(join(config, 'plugins', 'bmn.ts'))
     expect(await readFile(fresh.file, 'utf8')).toContain('export const BMNPlugin')
     await mkdir(join(config, 'plugin'), { recursive: true })
-    const installed = JSON.parse((await runHooks(['install', 'opencode', '--json'], env)).stdout)
+    const installed = JSON.parse((await runHooks(['install', '--yes', 'opencode', '--json'], env)).stdout)
     expect(installed.file).toBe(join(config, 'plugin', 'bmn.ts'))
   })
 })
@@ -3499,9 +3697,9 @@ describe('Cursor hooks (Epic 31.3)', () => {
   it('installs Cursor\'s own flat format into a new file, and check then reads every event wired', async () => {
     const path = await hookFileFixture(undefined, 'hooks.json')
 
-    const install = await runHooks(['install', 'cursor', '--file', path, '--json'])
+    const install = await runHooks(['install', '--yes', 'cursor', '--file', path, '--json'])
     const check = await runHooks(['check', 'cursor', '--file', path, '--json'])
-    const again = await runHooks(['install', 'cursor', '--file', path, '--json'])
+    const again = await runHooks(['install', '--yes', 'cursor', '--file', path, '--json'])
 
     expect(install.code).toBe(0)
     expect(JSON.parse(install.stdout)).toMatchObject({ installed: CURSOR_EVENTS, backup: null })
@@ -3520,7 +3718,7 @@ describe('Cursor hooks (Epic 31.3)', () => {
     const original = { version: 1, hooks: { stop: [owner], afterFileEdit: [{ command: 'fmt' }] } }
     const path = await hookFileFixture(original, 'hooks.json')
 
-    const install = await runHooks(['install', 'cursor', '--file', path, '--json'])
+    const install = await runHooks(['install', '--yes', 'cursor', '--file', path, '--json'])
 
     const report = JSON.parse(install.stdout)
     expect(report.installed).toEqual(CURSOR_EVENTS)
@@ -3629,7 +3827,7 @@ describe('compaction events (Story 36.1)', () => {
   it('never installs PostCompact: it is optional like PermissionRequest', async () => {
     const path = await hookFileFixture({}, 'hooks.json')
 
-    expect((await runHooks(['install', 'codex', '--file', path])).code).toBe(0)
+    expect((await runHooks(['install', '--yes', 'codex', '--file', path])).code).toBe(0)
 
     const installed = JSON.parse(await readFile(path, 'utf8')) as { hooks: Record<string, unknown> }
     expect(Object.keys(installed.hooks)).not.toContain('PostCompact')

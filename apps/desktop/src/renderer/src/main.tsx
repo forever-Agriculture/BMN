@@ -52,6 +52,7 @@ import { createProgramCopyBurst, programCopyMessage } from './program-copy-toast
 import { ResumeInterruptedDialog } from './resume-interrupted-dialog'
 import { LaunchSetsDialog } from './launch-sets-dialog'
 import { RepositoryIdentityView, identityChanged, useRepositoryIdentity } from './repository-identity'
+import { CheckoutPeerWarning, newlyDiscoveredCheckoutRisk, useCheckoutPeers } from './checkout-peers'
 import {
   interruptedStopWords,
   offerNeedsRecording,
@@ -1499,6 +1500,11 @@ function App(): React.JSX.Element {
     panel === 'new' && activeWorkspaceId && !editingSessionId ? sessionForm.cwd : null,
     `new:${activeWorkspaceId ?? ''}:${sessionForm.cwd}`
   )
+  const activeLiveIds = new Set(Object.keys(live))
+  const formPeers = useCheckoutPeers(
+    panel === 'new' && activeWorkspaceId && !editingSessionId ? sessionForm.cwd : null,
+    sessions, workspaces, activeLiveIds, `new:${activeWorkspaceId ?? ''}:${sessionForm.cwd}`
+  )
   const pickerOptions: PickerOption[] = [
     ...LAUNCH_AGENTS.map((agent) => ({ id: agent.id, label: agent.label, hint: agent.command ?? 'bash' })),
     ...templates.map((template) => ({
@@ -2104,6 +2110,15 @@ function App(): React.JSX.Element {
                       setFormError('Repository identity changed. Review the new value before starting.')
                       return
                     }
+                    const freshPeers = await formPeers.refresh()
+                    if (!freshPeers || sessionFormRef.current !== sessionForm || activeWorkspaceRef.current !== activeWorkspaceId) {
+                      setFormError('The launch details changed. Review them before starting.')
+                      return
+                    }
+                    if (!formPeers.report || newlyDiscoveredCheckoutRisk(formPeers.report, freshPeers)) {
+                      setFormError('Checkout peers changed or the check became incomplete. Review the warning before starting.')
+                      return
+                    }
                     const created = await window.aiTerminal.createSession(params)
                     setSessions((current) => [...current, created.session])
                     setLive((current) => ({ ...current, [created.session.sessionId]: created.startup }))
@@ -2145,6 +2160,7 @@ function App(): React.JSX.Element {
                 loading={formRepository.loading}
                 onRefresh={() => void formRepository.refresh()}
               /> : null}
+              {!editingSessionId ? <CheckoutPeerWarning report={formPeers.report} loading={formPeers.loading} /> : null}
               <details className="advanced" open={!!editingSessionId || undefined}>
                 <summary><span>Advanced</span><code>{resolvedCommand}</code></summary>
                 <div className="advanced-body">
@@ -2211,7 +2227,7 @@ function App(): React.JSX.Element {
               </details>
               {formError ? <span className="inline-error" role="alert">{formError}</span> : null}
               <div className="actions">
-                <button type="submit" className="primary" disabled={!editingSessionId && (formRepository.loading || !formRepository.identity)}>
+                <button type="submit" className="primary" disabled={!editingSessionId && (formRepository.loading || !formRepository.identity || formPeers.loading || !formPeers.report)}>
                   {editingSessionId ? 'Save session' : 'Create session'}
                 </button>
                   {editingSessionId ? <button type="button" className="ghost" onClick={() => {
@@ -2238,9 +2254,10 @@ function App(): React.JSX.Element {
       ) : null}
       {dialog?.kind === 'launch-sets' ? <LaunchSetsDialog
         workspace={dialog.workspace}
+        workspaces={workspaces}
         templates={templates}
         sessions={sessions}
-        liveSessionIds={new Set(Object.keys(live))}
+        liveSessionIds={activeLiveIds}
         initialMode={dialog.initialMode}
         onClose={() => setDialog(null)}
         onStarted={(started) => {

@@ -32,6 +32,7 @@ import type {
 import {
   runLaunchSetRepositorySelfTest
 } from '../launch-set-repository-self-test'
+import { runCheckoutPeersSelfTest } from '../checkout-peers-self-test'
 import {
   closeWithinDeadline,
   drainAfterExit,
@@ -4560,6 +4561,18 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         !/^git version /u.test(launchSetRepository.gitVersion)) {
       throw new Error(`launch set or repository acceptance failed: ${JSON.stringify(launchSetRepository)}`)
     }
+    const checkoutPeers = await runCheckoutPeersSelfTest(host.applicationWindow, {
+      directory: isolatedCwd,
+      workspaceId: DEFAULT_WORKSPACE_ID,
+      workspaceName: restoredWorkspaces.find((item) => item.workspaceId === DEFAULT_WORKSPACE_ID)!.name,
+      peerWorkspaceId: routingWorkspace.workspaceId,
+      peerWorkspaceName: routingWorkspace.name
+    })
+    if (!checkoutPeers.latePeerBlocked || !checkoutPeers.secondClickStarted ||
+      !checkoutPeers.bothPreviewsNamedPeer || !checkoutPeers.previewPreservedTerminal ||
+      !checkoutPeers.setPreviewDidNotStart) {
+      throw new Error(`checkout peer acceptance failed: ${JSON.stringify(checkoutPeers)}`)
+    }
 
     if (!progressEvidence) throw new Error('the results fixture has no evidence report')
     const evidenceArtifactId = progressEvidence.artifactId
@@ -5088,6 +5101,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       harnessObservations: { opencode: openCodeObservationUi, codex: codexObservationUi },
       terminalNotice,
       launchSetRepository,
+      checkoutPeers,
       modelOrigin: { flags: modelOriginFlags, afterRestart: modelOriginAfterRestart },
       remoteAnswers,
       telegramCards,

@@ -142,10 +142,14 @@ export async function runLaunchSetRepositorySelfTest(
   try {
     await window.webContents.executeJavaScript(`(async () => {
       const dialog = document.querySelector('.launch-sets-dialog[open]');
-      const start = [...dialog.querySelectorAll('button')]
-        .find(item => item.textContent.trim() === 'Start 3 new sessions');
-      if (!start || start.disabled) throw new Error('cancel probe start unavailable');
-      start.click();
+      const deadline = Date.now() + 12000;
+      for (;;) {
+        const start = [...dialog.querySelectorAll('button')]
+          .find(item => item.textContent.trim() === 'Start 3 new sessions');
+        if (start && !start.disabled) { start.click(); break; }
+        if (Date.now() > deadline) throw new Error('cancel probe start unavailable');
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
     })()`)
     await Promise.race([
       heldRead.entered,

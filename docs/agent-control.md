@@ -72,8 +72,8 @@ Commands:
   hooks print opencode                     Print the shipped OpenCode TypeScript plugin
   hooks check [agent] [--file PATH]         Say which of BMN's hook entries each agent's own hook file
                                             carries: wired, wired (older wording) or missing
-  hooks install <agent> [--file PATH]       Add the missing entries next to the hooks already there,
-                                            after backing the file up; OpenCode replaces its BMN plugin
+  hooks install <agent> [--file PATH]       Review and approve each hook-file change before installation;
+                                            use --yes for a non-interactive script
   statusline check|install|uninstall [--file PATH]
                                             Put one line in front of Claude Code's own status-line command so
                                             its plan use reaches BMN; the command itself is kept unchanged
@@ -455,7 +455,7 @@ Two commands do it, and neither needs BMN to be running:
 
 ```bash
 bmn hooks check              # what each agent's own hook file carries, for every event BMN expects
-bmn hooks install claude     # add only the missing entries, after backing the file up
+bmn hooks install claude     # review the target and diff, then answer Yes
 bmn hooks install codex
 bmn hooks install opencode   # install BMN's plugin in OpenCode's plugin folder
 bmn hooks install cursor     # ~/.cursor/hooks.json, Cursor's own flat format
@@ -484,7 +484,12 @@ installed plugin SDK 1.4.9 on 2026-09-22; real interactive event delivery is sti
 
 For Claude, Codex and Cursor, `install` copies the file to `<file>.bmn-backup-<timestamp>`, adds the missing entries next to the
 hooks already registered for that event, writes the file atomically and prints a unified diff. It
-never removes, reorders or rewrites an entry, including one with the older wording, and writes
+shows the requested path, resolved target, entries and proposed diff on stderr before writing, then
+asks Yes with No as the default. An empty answer, No or a closed prompt writes nothing. A script
+without TTY stdin and stderr must pass `--yes`; `--json` does not approve the write. The OpenCode
+prompt also shows the entire proposed plugin file. Approval only guards `bmn hooks install`:
+a process with filesystem access can still edit these files directly. Installation never removes,
+reorders or rewrites an entry, including one with the older wording, and writes
 nothing when nothing is missing. A file that is not valid JSON is reported and left untouched, as is
 one whose `hooks` is not an object or whose event is not a list: BMN says what it cannot add to
 rather than replacing somebody's configuration. If the file changed while `install` was reading it,
@@ -732,6 +737,7 @@ bmn hook is not yours
   bmn hook <agent> is how BMN reads your harness's own hook events. Never run it by hand.
   Claude, Codex and OpenCode report Needs you, take answers from the phone and resume.
   Cursor reports finished turns and resumes; its questions and permissions stay in its terminal.
+  bmn hooks install asks Yes for target/diff (default No); scripts need --yes; direct edits remain.
 ```
 
 ## What the app enforces

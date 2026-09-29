@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -71,6 +71,18 @@ describe('read-only repository identity', () => {
     expect(await inspectRepositoryIdentity(unborn, { now })).toMatchObject({
       state: 'repository', head: { state: 'unborn', name: 'main' }
     })
+  })
+
+  it('reports one physical root through a symlink alias', async () => {
+    const parent = fixture()
+    const repository = join(parent, 'repository')
+    mkdirSync(repository)
+    init(repository)
+    commit(repository)
+    const alias = join(parent, 'alias')
+    symlinkSync(repository, alias)
+    expect((await inspectRepositoryIdentity(alias)).state).toBe('repository')
+    expect(await inspectRepositoryIdentity(alias)).toMatchObject({ state: 'repository', root: repository })
   })
 
   it('separates non-repositories from missing directories and missing Git', async () => {

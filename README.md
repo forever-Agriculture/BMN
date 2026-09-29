@@ -162,7 +162,8 @@ pnpm --filter @bmn/desktop run dev
    accepts attachments and shows agent-published output.
 4. If you use Claude Code, Codex or OpenCode, run `bmn hooks check` inside its session to see
    whether its questions can appear in **Needs you**. `bmn hooks install <agent>` adds missing BMN
-   entries after backing up the harness settings file.
+   entries after showing the target and diff for approval. Scripts need `--yes`; BMN backs up
+   existing files before writing.
 5. Stop a session to keep its saved screen. **Start again** runs a fresh process; **Resume** reopens
    a conversation BMN knows, after showing the command it will run.
 

@@ -7,14 +7,16 @@ import {
   type LaunchSetEntryForm
 } from './launch-set-editor'
 import { RepositoryIdentityView, identityChanged, useRepositoryIdentity } from './repository-identity'
+import { CheckoutPeerWarning, newlyDiscoveredCheckoutRisk, useCheckoutPeers } from './checkout-peers'
 
 type StartResult = Awaited<ReturnType<Window['aiTerminal']['startLaunchSet']>>
 type Mode = 'manage' | 'edit' | 'preview' | 'result'
 
 export function LaunchSetsDialog({
-  workspace, templates, sessions, liveSessionIds, initialMode, onClose, onStarted, onOpenSession
+  workspace, workspaces, templates, sessions, liveSessionIds, initialMode, onClose, onStarted, onOpenSession
 }: {
   workspace: WorkspaceRecord
+  workspaces: readonly WorkspaceRecord[]
   templates: readonly LaunchTemplateRecord[]
   sessions: readonly SessionRecord[]
   liveSessionIds: ReadonlySet<string>
@@ -41,6 +43,8 @@ export function LaunchSetsDialog({
   const selected = sets.find((set) => set.setId === selectedId)
   const previewKey = `${selected?.setId ?? ''}:${selected?.revision ?? ''}:${directory}`
   const repository = useRepositoryIdentity(mode === 'preview' && directory ? directory : null, previewKey)
+  const checkoutPeers = useCheckoutPeers(mode === 'preview' && directory ? directory : null,
+    sessions, workspaces, liveSessionIds, previewKey)
   const actionKey = useRef(crypto.randomUUID())
   const actionGeneration = useRef(0)
   const mounted = useRef(true)
@@ -175,7 +179,8 @@ export function LaunchSetsDialog({
     onClose()
   }
   const start = async (): Promise<void> => {
-    if (!selected || !directory || !repository.identity || repository.loading || duplicates?.key !== duplicateKey) return
+    if (!selected || !directory || !repository.identity || repository.loading ||
+      !checkoutPeers.report || checkoutPeers.loading || duplicates?.key !== duplicateKey) return
     const snapshot = { selectedId, directory, revision: selected.revision }
     const action = ++actionGeneration.current
     const isCurrent = (): boolean => mounted.current && currentMode.current === 'preview' &&
@@ -199,6 +204,16 @@ export function LaunchSetsDialog({
       }
       if (identityChanged(repository.identity, refreshed)) {
         setMessage('Repository identity changed. Review the new value before starting.')
+        return
+      }
+      const freshPeers = await checkoutPeers.refresh()
+      if (!isCurrent()) return
+      if (!freshPeers) {
+        setMessage('The live sessions changed. Review the checkout warning before starting.')
+        return
+      }
+      if (newlyDiscoveredCheckoutRisk(checkoutPeers.report, freshPeers)) {
+        setMessage('Checkout peers changed or the check became incomplete. Review the warning before starting.')
         return
       }
       const started = await window.aiTerminal.startLaunchSet({
@@ -299,16 +314,12 @@ export function LaunchSetsDialog({
       {directory ? <RepositoryIdentityView directory={directory} identity={repository.identity}
         loading={repository.loading} onRefresh={() => void repository.refresh()} /> :
         <p role="status">Choose a launch directory.</p>}
-      {duplicateNames.length > 0 ? <p className="inline-warning" role="status">
-        Similar live sessions already use this directory and command: {duplicateNames.join(', ')}. Starting creates new sessions.
-      </p> : null}
+      <CheckoutPeerWarning report={checkoutPeers.report} loading={checkoutPeers.loading}
+        similarNames={duplicateNames} similarUnavailable={duplicates?.key === duplicateKey && duplicates.unavailable} />
       {checkingDuplicates ? <p role="status">Checking for matching live sessions…</p> : null}
-      {duplicates?.key === duplicateKey && duplicates.unavailable ? <p className="inline-warning" role="status">
-        Could not check for matching live sessions. Review existing sessions before starting.
-      </p> : null}
       <div className="actions">
         <button type="button" className="primary" disabled={busy || !directory || repository.loading ||
-          !repository.identity || checkingDuplicates}
+          !repository.identity || checkingDuplicates || checkoutPeers.loading || !checkoutPeers.report}
           onClick={() => void start()}>Start {selected.entries.length} new sessions</button>
         <button type="button" className="ghost" onClick={cancelPreview}>Cancel</button>
       </div>

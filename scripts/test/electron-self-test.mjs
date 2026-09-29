@@ -23,7 +23,7 @@ const requiredPhases = [
   'sixelPlacement', 'sixelResize', 'sixelCapPressure', 'sixelColdView', 'shellRegression', 'sixelViewSwap',
   'modelOrigin', 'remoteAnswers', 'telegramCards', 'fullerAnswers', 'telegramCue', 'resetModes', 'cspProbe',
   'graphicsTerminfo', 'workspaceResults', 'crossWorkspaceResults', 'hookIntegration', 'harnessObservations',
-  'launchSetRepository', 'graceful', 'quietSidebarAcceptance', 'interruptedSidebarAcceptance',
+  'launchSetRepository', 'checkoutPeers', 'graceful', 'quietSidebarAcceptance', 'interruptedSidebarAcceptance',
   'subagentAcceptance', 'repeatAcceptance', 'agentHandoff', 'openCodeAcceptance', 'cursorAcceptance',
   'hiddenPaneSize', 'inactiveFollowingOutputLayoutPuts', 'inactiveFollowingOutputCaptured',
   'stoppedStaleProgress', 'attentionTriage', 'handoffFlow', 'fileReferenceFlow', 'fileReferenceWire',

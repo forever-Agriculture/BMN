@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { stat } from 'node:fs/promises'
+import { realpath, stat } from 'node:fs/promises'
 import { isAbsolute, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import type { RepositoryIdentity } from '@bmn/protocol'
@@ -153,8 +153,12 @@ export async function inspectRepositoryIdentity(
       return unavailable(directory, observedAt(), readFailureReason(error, 'Git could not read HEAD'))
     }
   }
+  let physicalRoot: string
+  try { physicalRoot = await realpath(root) } catch {
+    return unavailable(directory, observedAt(), 'The worktree root is not accessible')
+  }
   return {
-    state: 'repository', directory, observedAt: observedAt(), root: resolve(root), head,
+    state: 'repository', directory, observedAt: observedAt(), root: physicalRoot, head,
     linkedWorktree: resolve(gitDir) !== resolve(commonDir)
   }
 }
