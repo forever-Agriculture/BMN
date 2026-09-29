@@ -37,7 +37,7 @@ if [ -n "${BMN_CONTROL_SOCKET:-}" ] && [ -n "${BMN_TOKEN:-}" ] &&
     case $argument in
       --) break ;;
       --no-daemon|--remote|--remote=*) exec "$real_codex" "$@" ;;
-      -c|--config|-C|--cd|-m|--model|-p|--profile|-s|--sandbox|-a|--ask-for-approval|--remote-auth-token-env|--add-dir|-i|--image|--local-provider)
+      -c|--config|-C|--cd|-m|--model|-p|--profile|-s|--sandbox|-a|--ask-for-approval|--remote-auth-token-env|--add-dir|-i|--image|--local-provider|--enable|--disable)
         skip_value=1 ;;
       -*) ;;
       *)

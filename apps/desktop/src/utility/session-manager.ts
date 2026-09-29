@@ -107,7 +107,8 @@ interface Disposable {
 /** A Codex app-server daemon keeps its first client's environment, so its hooks cannot address this session. */
 const CODEX_VALUE_OPTIONS = new Set([
   '-c', '--config', '-C', '--cd', '-m', '--model', '-p', '--profile', '-s', '--sandbox',
-  '-a', '--ask-for-approval', '--remote-auth-token-env', '--add-dir', '-i', '--image', '--local-provider'
+  '-a', '--ask-for-approval', '--remote-auth-token-env', '--add-dir', '-i', '--image', '--local-provider',
+  '--enable', '--disable'
 ])
 
 function codexSessionArgv(

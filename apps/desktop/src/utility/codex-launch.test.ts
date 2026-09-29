@@ -27,6 +27,8 @@ it('runs the real Codex with local hooks in BMN and preserves explicit remote la
     expect(run(['--', '--remote'], true)).toEqual(['--no-daemon', '--', '--remote'])
     expect(run(['--', '--no-daemon'], true)).toEqual(['--no-daemon', '--', '--no-daemon'])
     expect(run(['-C', '/work', 'agents', '--help'], true)).toEqual(['-C', '/work', 'agents', '--help'])
+    expect(run(['--enable', 'agents'], true)).toEqual(['--no-daemon', '--enable', 'agents'])
+    expect(run(['--disable', 'agents', 'agents', '--help'], true)).toEqual(['--disable', 'agents', 'agents', '--help'])
     expect(run(['-C', '/work'], false)).toEqual(['-C', '/work'])
   } finally {
     rmSync(root, { recursive: true, force: true })

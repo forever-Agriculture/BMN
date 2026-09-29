@@ -712,6 +712,8 @@ describe('shell session lifecycle', () => {
     launch('/usr/bin/codex', ['--', '--remote'])
     launch('/usr/bin/codex', ['--', '--no-daemon'])
     launch('/usr/bin/codex', ['-C', '/work', 'agents', '--help'])
+    launch('/usr/bin/codex', ['--enable', 'agents'])
+    launch('/usr/bin/codex', ['--disable', 'agents', 'agents', '--help'])
     launch('/usr/bin/bash', ['-ic', 'codex'])
     expect(launches).toEqual([
       { executable: '/usr/bin/codex', argv: ['--no-daemon', '--model', 'gpt-6'] },
@@ -721,6 +723,8 @@ describe('shell session lifecycle', () => {
       { executable: '/usr/bin/codex', argv: ['--no-daemon', '--', '--remote'] },
       { executable: '/usr/bin/codex', argv: ['--no-daemon', '--', '--no-daemon'] },
       { executable: '/usr/bin/codex', argv: ['-C', '/work', 'agents', '--help'] },
+      { executable: '/usr/bin/codex', argv: ['--no-daemon', '--enable', 'agents'] },
+      { executable: '/usr/bin/codex', argv: ['--disable', 'agents', 'agents', '--help'] },
       { executable: '/usr/bin/bash', argv: ['-ic', 'codex'] }
     ])
   })
