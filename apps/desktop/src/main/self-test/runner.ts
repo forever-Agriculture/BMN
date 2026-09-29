@@ -2610,8 +2610,8 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       conversationFromHook.listed.sessions !== 1 || listedRow?.status !== 'bound' ||
       listedRow.captureRoute !== 'hook-session-start' ||
       !conversationFromHook.refusalReason?.endsWith('already resumed in "Hook-reported Codex"') ||
-      JSON.stringify(conversationFromHook.launchArguments) !== JSON.stringify(['--model', 'gpt-6', '--full-auto']) ||
-      JSON.stringify(conversationFromHook.resumedArguments) !== JSON.stringify(['resume', reportedConversation, '--model', 'gpt-6'])) {
+      JSON.stringify(conversationFromHook.launchArguments) !== JSON.stringify(['--no-daemon', '--model', 'gpt-6', '--full-auto']) ||
+      JSON.stringify(conversationFromHook.resumedArguments) !== JSON.stringify(['--no-daemon', 'resume', reportedConversation, '--model', 'gpt-6'])) {
       throw new Error(`the conversation a Codex hook reported was not bound, listed and resumed: ${JSON.stringify(conversationFromHook)}`)
     }
 
@@ -4961,7 +4961,9 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     }).status === 0
     const fakeCodex = join(isolatedCwd, 'graphics-probe', 'codex')
     mkdirSync(join(isolatedCwd, 'graphics-probe'), { recursive: true })
-    writeFileSync(fakeCodex, '#!/bin/sh\nprintf "%s\\n" "$TERM" > "$1"\nsleep 2\n', { mode: 0o700 })
+    // BMN launches a direct Codex executable with --no-daemon so its hooks keep this session's environment.
+    writeFileSync(fakeCodex, '#!/bin/sh\n[ "$1" = "--no-daemon" ] && shift\nprintf "%s\\n" "$TERM" > "$1"\nsleep 2\n',
+      { mode: 0o700 })
     const probeTerm = async (file: string): Promise<string> => {
       await client.request(METHOD_REGISTRY.sessionCreate, {
         workspaceId: DEFAULT_WORKSPACE_ID, name: 'Synthetic graphics TERM probe',

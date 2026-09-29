@@ -1,0 +1,54 @@
+#!/bin/sh
+# Keep Codex's hooks in this BMN session. A shared Codex daemon inherits the
+# environment of the terminal that first started it, including stale BMN credentials.
+
+wrapper_dir=$(CDPATH= cd -P -- "$(dirname -- "$0")" && pwd -P) || exit 127
+original_path=$PATH
+remaining=$PATH
+search_path=
+first=1
+while :; do
+  case $remaining in
+    *:*) entry=${remaining%%:*}; remaining=${remaining#*:}; last=0 ;;
+    *) entry=$remaining; last=1 ;;
+  esac
+  resolved=$(CDPATH= cd -P -- "${entry:-.}" 2>/dev/null && pwd -P)
+  if [ "$resolved" != "$wrapper_dir" ]; then
+    if [ "$first" = 1 ]; then search_path=$entry; first=0
+    else search_path=$search_path:$entry
+    fi
+  fi
+  [ "$last" = 1 ] && break
+done
+PATH=$search_path
+real_codex=$(command -v codex) || {
+  printf '%s\n' 'codex: executable not found outside BMN' >&2
+  exit 127
+}
+PATH=$original_path
+export PATH
+
+if [ -n "${BMN_CONTROL_SOCKET:-}" ] && [ -n "${BMN_TOKEN:-}" ] &&
+   [ -z "${CODEX_EXEC_SERVER_URL:-}" ]; then
+  skip_value=0
+  seen_command=0
+  for argument do
+    if [ "$skip_value" = 1 ]; then skip_value=0; continue; fi
+    case $argument in
+      --) break ;;
+      --no-daemon|--remote|--remote=*) exec "$real_codex" "$@" ;;
+      -c|--config|-C|--cd|-m|--model|-p|--profile|-s|--sandbox|-a|--ask-for-approval|--remote-auth-token-env|--add-dir|-i|--image|--local-provider)
+        skip_value=1 ;;
+      -*) ;;
+      *)
+        if [ "$seen_command" = 0 ]; then
+          case $argument in
+            agents|app-server|remote-control) exec "$real_codex" "$@" ;;
+          esac
+          seen_command=1
+        fi ;;
+    esac
+  done
+  exec "$real_codex" --no-daemon "$@"
+fi
+exec "$real_codex" "$@"

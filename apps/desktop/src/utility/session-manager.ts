@@ -104,6 +104,32 @@ interface Disposable {
   dispose(): void
 }
 
+/** A Codex app-server daemon keeps its first client's environment, so its hooks cannot address this session. */
+const CODEX_VALUE_OPTIONS = new Set([
+  '-c', '--config', '-C', '--cd', '-m', '--model', '-p', '--profile', '-s', '--sandbox',
+  '-a', '--ask-for-approval', '--remote-auth-token-env', '--add-dir', '-i', '--image', '--local-provider'
+])
+
+function codexSessionArgv(
+  executable: string,
+  argv: readonly string[],
+  environment: Readonly<Record<string, string | undefined>>
+): readonly string[] {
+  if (agentCli(executable) !== 'codex' || environment.CODEX_EXEC_SERVER_URL) return argv
+  let skipValue = false
+  let command: string | null = null
+  for (const arg of argv) {
+    if (skipValue) { skipValue = false; continue }
+    // Following `--`, even flag-shaped words are prompt text.
+    if (arg === '--') break
+    if (arg === '--no-daemon' || arg === '--remote' || arg.startsWith('--remote=')) return argv
+    if (CODEX_VALUE_OPTIONS.has(arg)) { skipValue = true; continue }
+    if (!arg.startsWith('-') && command === null) command = arg
+  }
+  if (['agents', 'app-server', 'remote-control'].includes(command ?? '')) return argv
+  return ['--no-daemon', ...argv]
+}
+
 export interface PtyLike {
   readonly pid: number
   readonly cols: number
@@ -920,7 +946,7 @@ export class SessionManager {
       )
     }
     const argv = command.argv.slice(1)
-    requireConfirmedCommand(params.expectedCommand, shownCommand(program, argv))
+    requireConfirmedCommand(params.expectedCommand, shownCommand(program, codexSessionArgv(program, argv, this.environment)))
     const releaseLaunch = this.claimSessionLaunch(params.sessionId)
     try {
       const launchParams: PtyLaunchParams = {
@@ -960,7 +986,8 @@ export class SessionManager {
       program,
       cwd: stored.cwd,
       reportedAt: command.reportedAt,
-      command: program === null ? '' : shownCommand(program, command.argv.slice(1)),
+      command: program === null ? '' : shownCommand(program,
+        codexSessionArgv(program, command.argv.slice(1), this.environment)),
       refusal: program === null ? missingProgramReason(command.argv[0]!) : null
     }
   }
@@ -1120,7 +1147,8 @@ export class SessionManager {
         // offers Start again and says why.
         return preview.refusal === null
           ? { ...shared, action: 'resume', command: preview.command, notCarried: '', relaunchReason: null, reportedAt: preview.reportedAt }
-          : { ...shared, action: 'relaunch', command: shownCommand(row.executable, row.argv), notCarried: '', relaunchReason: preview.refusal }
+          : { ...shared, action: 'relaunch', command: shownCommand(row.executable,
+            codexSessionArgv(row.executable, row.argv, this.environment)), notCarried: '', relaunchReason: preview.refusal }
       }
       return {
         ...shared,
@@ -1134,7 +1162,7 @@ export class SessionManager {
       return {
         ...shared,
         action: 'relaunch',
-        command: shownCommand(row.executable, row.argv),
+        command: shownCommand(row.executable, codexSessionArgv(row.executable, row.argv, this.environment)),
         notCarried: '',
         relaunchReason: error instanceof Error
           ? error.message
@@ -1158,7 +1186,8 @@ export class SessionManager {
     if (stored.archivedAt !== null) {
       throw new HostControlError(ERROR_CODES.invalidArgument, 'Restore the session before starting it')
     }
-    requireConfirmedCommand(params.expectedCommand, shownCommand(stored.executable, stored.argv))
+    requireConfirmedCommand(params.expectedCommand, shownCommand(stored.executable,
+      codexSessionArgv(stored.executable, stored.argv, this.environment)))
     const releaseLaunch = this.claimSessionLaunch(params.sessionId)
     try {
       const launchParams: PtyLaunchParams = {
@@ -1256,7 +1285,8 @@ export class SessionManager {
       claudeGrammar = capability.grammar
     }
     try {
-      return { launch: buildNativeResumeLaunch(binding, claudeGrammar), environment }
+      const launch = buildNativeResumeLaunch(binding, claudeGrammar)
+      return { launch: { ...launch, argv: [...codexSessionArgv(launch.executable, launch.argv, environment)] }, environment }
     } catch (error) {
       throw new HostControlError(
         ERROR_CODES.invalidArgument,
@@ -1467,15 +1497,17 @@ export class SessionManager {
     identity?: SessionIdentity
   ): PtyLike {
     try {
-      return this.spawnPty(params.executable, params.argv, {
+      const env = {
+        ...buildShellEnvironment(environment),
+        ...terminalGraphicsEnvironment(params.terminalGraphics ?? null, environment, this.terminfoAsset),
+        ...(identity ? this.sessionEnvironment?.(identity) : undefined)
+      }
+      return this.spawnPty(params.executable,
+        identity === undefined ? params.argv : codexSessionArgv(params.executable, params.argv, env), {
         cwd: params.cwd,
         cols: params.cols,
         rows: params.rows,
-        env: {
-          ...buildShellEnvironment(environment),
-          ...terminalGraphicsEnvironment(params.terminalGraphics ?? null, environment, this.terminfoAsset),
-          ...(identity ? this.sessionEnvironment?.(identity) : undefined)
-        }
+        env
       })
     } catch (error) {
       throw new HostControlError(

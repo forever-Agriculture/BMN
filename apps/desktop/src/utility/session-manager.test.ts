@@ -690,6 +690,41 @@ describe('shell session lifecycle', () => {
     })
   })
 
+  it('keeps direct Codex hooks in this session unless the owner selected a remote server', () => {
+    const launches: Array<{ executable: string; argv: readonly string[] }> = []
+    const manager = new SessionManager({
+      store: new FakeStore(),
+      spawnPty: (executable, argv) => {
+        launches.push({ executable, argv })
+        return new FakePty()
+      },
+      sendTerminalMessage: () => undefined,
+      environment: { PATH: '/usr/bin' }
+    })
+    const identity = { sessionId: 'codex-session', incarnationId: 'codex-incarnation' }
+    const launch = (executable: string, argv: string[], environment?: Record<string, string>): void => {
+      manager.spawnValidatedPty({ cwd: '/tmp', executable, argv, cols: 80, rows: 24 }, environment, identity)
+    }
+    launch('/usr/bin/codex', ['--model', 'gpt-6'])
+    launch('/usr/bin/codex', ['--remote', 'unix:///tmp/owner.sock'])
+    launch('/usr/bin/codex', ['--no-daemon'])
+    launch('/usr/bin/codex', [], { CODEX_EXEC_SERVER_URL: 'unix:///tmp/executor.sock' })
+    launch('/usr/bin/codex', ['--', '--remote'])
+    launch('/usr/bin/codex', ['--', '--no-daemon'])
+    launch('/usr/bin/codex', ['-C', '/work', 'agents', '--help'])
+    launch('/usr/bin/bash', ['-ic', 'codex'])
+    expect(launches).toEqual([
+      { executable: '/usr/bin/codex', argv: ['--no-daemon', '--model', 'gpt-6'] },
+      { executable: '/usr/bin/codex', argv: ['--remote', 'unix:///tmp/owner.sock'] },
+      { executable: '/usr/bin/codex', argv: ['--no-daemon'] },
+      { executable: '/usr/bin/codex', argv: [] },
+      { executable: '/usr/bin/codex', argv: ['--no-daemon', '--', '--remote'] },
+      { executable: '/usr/bin/codex', argv: ['--no-daemon', '--', '--no-daemon'] },
+      { executable: '/usr/bin/codex', argv: ['-C', '/work', 'agents', '--help'] },
+      { executable: '/usr/bin/bash', argv: ['-ic', 'codex'] }
+    ])
+  })
+
   it('selects graphics at spawn from the saved choice, Sixel by default, then falls back if terminfo changes', async () => {
     const root = await mkdtemp(join(tmpdir(), 'bmn-terminal-env-'))
     try {
@@ -4052,7 +4087,7 @@ describe('conversation identity reported by the harness', () => {
 
     expect(fixture.spawns.at(-1)).toMatchObject({
       executable: fixture.executable,
-      argv: ['resume', OBSERVED, '--model', 'gpt-6']
+      argv: ['--no-daemon', 'resume', OBSERVED, '--model', 'gpt-6']
     })
   })
 
@@ -4409,7 +4444,7 @@ describe('conversation identity reported by the harness', () => {
       sessionId: created!.sessionId,
       agentCli: 'codex',
       conversationReference: OBSERVED,
-      command: `${fixture.executable} resume ${OBSERVED} --model gpt-6`,
+      command: `${fixture.executable} --no-daemon resume ${OBSERVED} --model gpt-6`,
       notCarried: '--full-auto, 1 positional argument'
     })
 
@@ -5751,7 +5786,7 @@ describe('a command a program in the session reports to resume it (Epic 43)', ()
 
       expect(resumed.binding).toMatchObject({ status: 'bound', conversationReference: reference })
       expect(resumed.launch).toEqual({ cwd, executable })
-      expect(spawns.at(-1)).toMatchObject({ executable, argv: ['resume', reference, '--model', 'gpt-6'], cwd })
+      expect(spawns.at(-1)).toMatchObject({ executable, argv: ['--no-daemon', 'resume', reference, '--model', 'gpt-6'], cwd })
       await expect(stored()).resolves.toBeUndefined()
     } finally {
       database.close()
