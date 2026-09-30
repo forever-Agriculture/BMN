@@ -2010,6 +2010,7 @@ input[type='radio'] {
 .app-dialog {
   width: min(520px, calc(100vw - 32px));
   max-height: 90vh;
+  overflow: clip;
   padding: 0;
   border: 0;
   border-radius: 14px;
