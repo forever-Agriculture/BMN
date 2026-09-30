@@ -77,6 +77,7 @@ import {
   type SessionLaunchForm
 } from './launch-template'
 import { NeedsYouPopover, type UnreadEntry } from './needs-you-popover'
+import { copyAttentionAnswer, dismissAttentionReminder } from './attention-actions'
 import { PopupMenu, type MenuAnchor, type MenuEntry } from './popup-menu'
 import { PreferencesDialog } from './preferences-dialog'
 import {
@@ -1201,19 +1202,14 @@ function App(): React.JSX.Element {
         brief('This handoff is no longer available. Refreshing drafts.')
         void refresh.drafts().catch(fail('Draft refresh failed'))
       }
+      return
     }
     const opening = attentionActionWhenOpened(request)
     if (!opening) return
-    const action = opening === 'resolve-notice'
-      ? window.aiTerminal.resolveAttention(request.requestId, 'Opened in BMN', {
-          kind: request.kind,
-          revision: request.revision
-        }, 'owner')
-      : window.aiTerminal.markAttentionSeen(request.requestId)
+    const action = dismissAttentionReminder(window.aiTerminal, request, 'Opened in BMN; reminder cleared')
     void action
       .catch((error: unknown) => {
-        // A notice can be resolved by its producing hook between render and activation.
-        if (opening !== 'resolve-notice') fail('Request update failed')(error)
+        fail('Request update failed')(error)
       })
       .then(() => refresh.attention())
       .catch(fail('Attention refresh failed'))
@@ -1649,16 +1645,22 @@ function App(): React.JSX.Element {
               if (request) recordAttentionOpened(request)
             }}
             onAcknowledge={(request) => {
-              const action = request.kind === 'notice'
-                ? window.aiTerminal.resolveAttention(request.requestId, 'Dismissed in BMN', {
-                    kind: request.kind,
-                    revision: request.revision
-                  }, 'owner')
-                : window.aiTerminal.markAttentionSeen(request.requestId)
+              const action = dismissAttentionReminder(window.aiTerminal, request)
               void action.then(() => refresh.attention()).catch(fail('Request update failed'))
             }}
+            onCopyAnswer={async (request, text) => {
+              await copyAttentionAnswer(window.aiTerminal, request, text)
+              await refresh.attention().catch(fail('Attention refresh failed'))
+              announce('Answer copied. Paste it into the terminal to submit.')
+            }}
+            handoffDestination={(request) => {
+              const draft = handoffDraftForAttention(request, drafts)
+              const destination = sessions.find((session) => session.sessionId === draft?.sessionId)
+              return destination ? { ...place(destination.sessionId), cwd: destination.cwd } : null
+            }}
             onMarkAnswered={(request) => {
-              void window.aiTerminal.resolveAttention(request.requestId, 'Answered in the terminal', undefined, 'input')
+              void window.aiTerminal.resolveAttention(request.requestId, 'Answered in the terminal',
+                { kind: request.kind, revision: request.revision }, 'owner')
                 .then(() => refresh.attention())
                 .catch(fail('Request update failed'))
             }}

@@ -1262,7 +1262,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       JSON.stringify(preloadProbe.attentionTriage.responseTitlesAfterUpdate) !==
         JSON.stringify(expectedResponseTitles) ||
       JSON.stringify(preloadProbe.attentionTriage.remainingResponseTitles) !==
-        JSON.stringify(expectedResponseTitles.toSorted()) ||
+        JSON.stringify(expectedResponseTitles.filter(title => title !== 'Choose the self-test answer').toSorted()) ||
       JSON.stringify(preloadProbe.attentionTriage.updateTitles) !== JSON.stringify(['Self-test turn finished']) ||
       JSON.stringify(preloadProbe.attentionTriage.updatedUpdateTitles) !== JSON.stringify(['Self-test turn revised']) ||
       !preloadProbe.attentionTriage.progressText.includes('Observed self-test failure') ||
@@ -1905,11 +1905,12 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       const requestAfter = (await window.aiTerminal.listAttention())
         .find(row => row.requestId === ${JSON.stringify(petitionRequest.requestId)});
       return { reportShown: reportShown && progressMatches, evidenceShown, pendingHandoffShown,
-        exactDraftReviewed, attentionUnchanged: requestBefore?.state === 'open' &&
-          requestAfter?.state === 'open' && requestBefore.revision === requestAfter.revision };
+        exactDraftReviewed, reminderCleared: requestBefore?.state === 'open' &&
+          requestAfter?.state === 'withdrawn' && requestAfter.resolvedBy === 'owner' &&
+          requestAfter.resolution === 'Opened in BMN; reminder cleared' };
     })()`) as {
       reportShown: boolean; evidenceShown: boolean; pendingHandoffShown: boolean;
-      exactDraftReviewed: boolean; attentionUnchanged: boolean
+      exactDraftReviewed: boolean; reminderCleared: boolean
     }
     const workspaceResultsAcceptance = {
       ...workspaceResultsUi,
@@ -1923,22 +1924,26 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       const wait = async (read) => { const end = Date.now() + 10000; while (Date.now() < end) {
         const value = read(); if (value) return value; await new Promise(r => setTimeout(r, 25));
       } throw new Error('petition UI timed out'); };
-      (await wait(() => document.querySelector('.needs-you-button'))).click();
-      const row = await wait(() => [...document.querySelectorAll('.attention-item')].find(r => r.textContent.includes('Petition source') && r.textContent.includes('Handoff')));
-      const provenance = row.querySelector('.provenance').textContent;
-      [...row.querySelectorAll('button')].find(b => b.textContent === 'Open handoff').click();
+      const files = await wait(() => document.querySelector('.session-terminal.selected button[title="Files"]') ||
+        [...document.querySelectorAll('.session-terminal.selected button')].find(b => b.textContent === 'Files'));
+      files.click();
+      const saved = await wait(() => [...document.querySelectorAll('.handoff-card')].find(r => r.textContent.includes(${JSON.stringify(petitionText)})));
+      [...saved.querySelectorAll('button')].find(b => b.textContent === 'Edit').click();
       const form = await wait(() => document.querySelector('.handoff-form'));
-      const result = { destination: form.querySelector('select').value, text: form.querySelector('textarea').value, byline: form.textContent, provenance,
+      const result = { destination: form.querySelector('select').value, text: form.querySelector('textarea').value, byline: form.textContent,
         fileListed: form.textContent.includes('petition-result.txt') };
       [...form.querySelectorAll('button')].find(b => b.textContent === 'Cancel').click();
       const card = await wait(() => [...document.querySelectorAll('.handoff-card')].find(r => r.textContent.includes(${JSON.stringify(petitionText)})));
       [...card.querySelectorAll('button')].find(b => b.textContent === 'Open destination').click();
       const paste = await wait(() => [...document.querySelectorAll('.handoff-card button')].find(b => b.textContent === 'Paste handoff' && !b.disabled));
       paste.click(); return result;
-    })()`) as { destination: string; text: string; byline: string; provenance: string; fileListed: boolean }
+    })()`) as { destination: string; text: string; byline: string; fileListed: boolean }
     const petitionResolved = await acceptanceWait(async () =>
       (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
         .find(row => row.requestId === petitionRequest.requestId && row.state !== 'open'), 'owner paste resolution')
+    const pastedDraft = await acceptanceWait(async () =>
+      (await client.request<InputDraftRecord[]>(METHOD_REGISTRY.draftList, {}))
+        .find(row => row.draftId === petitionRequest.requestKey?.slice('handoff:'.length) && row.state === 'accepted'), 'persisted handoff paste');
     const petitionPayload = await acceptanceWait(async () => {
       const input = terminalModeProgramInput(destinationHarness.input).slice(beforePetitionPaste.length)
       return input.includes(petitionText) ? input : undefined
@@ -1961,8 +1966,9 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         JSON.stringify(Object.keys(petitionSnapshot.handoffs[0]).sort()) === JSON.stringify(['destinationSessionId', 'draftId', 'state', 'updatedAt'])
     }
     if (!agentHandoff.preparedWithoutDelivery || !agentHandoff.destinationMatches || agentHandoff.text !== petitionText ||
-      !agentHandoff.byline.includes('Prepared by the agent in Petition source') || agentHandoff.provenance !== 'from bmn handoff' ||
-      agentHandoff.resolvedBy !== 'owner' || agentHandoff.resolution !== 'pasted, not submitted' ||
+      !agentHandoff.byline.includes('Prepared by the agent in Petition source') ||
+      agentHandoff.resolvedBy !== 'owner' || agentHandoff.state !== 'withdrawn' ||
+      pastedDraft.detail !== 'Pasted to terminal — not submitted' ||
       agentHandoff.payloadOccurrences !== 1 || !agentHandoff.agentOwnerStamp || !agentHandoff.publishedFile ||
       !agentHandoff.bracketedPaste || !agentHandoff.noSubmit || !agentHandoff.status.includes('pasted (not submitted)') ||
       !agentHandoff.bounded) {

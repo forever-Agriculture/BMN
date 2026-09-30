@@ -1,5 +1,5 @@
 // MODULE: needs-you-popover.tsx - unresolved requests, unread sessions and recent request history under the header count
-import { useEffect, useRef } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { stripFormatCharacters, type AttentionPrompt, type AttentionRecord } from '@bmn/protocol'
 import { attentionProvenance, expiryText, isActionableAttention, openAttentionGroups, relativeAge } from './session-presentation'
 
@@ -14,44 +14,90 @@ export interface UnreadEntry {
   at: string
 }
 
-/**
- * The agent's own question or permission, read-only: the owner answers in the terminal (or from Telegram);
- * this only shows what is being asked, option by option, instead of the flattened text. The command, folder
- * and option labels are stored exactly as the harness sent them, so they are cleaned here (Story 34.1).
- */
-function PromptDetail(props: { prompt: AttentionPrompt }): React.JSX.Element {
-  const { prompt } = props
-  if (prompt.type === 'permission') {
-    return (
-      <div className="attention-prompt">
-        {prompt.command ? <pre>{stripFormatCharacters(prompt.command)}</pre> : null}
-        {prompt.cwd ? <span className="attention-prompt-where">in {stripFormatCharacters(prompt.cwd)}</span> : null}
-      </div>
-    )
-  }
-  const several = prompt.questions.length > 1
+function QuestionChoices(props: {
+  prompt: Extract<AttentionPrompt, { type: 'questions' }>
+  feedback: string
+  onCopy?: ((text: string) => Promise<void>) | undefined
+}): React.JSX.Element {
+  const id = useId()
+  const [answers, setAnswers] = useState(() => props.prompt.questions.map(() => ({ selected: [] as number[], other: '', typed: false })))
+  const [copying, setCopying] = useState(false)
+  const pendingCopy = useRef(false)
+  const copyButton = useRef<HTMLButtonElement>(null)
+  useLayoutEffect(() => {
+    if (!copying && props.feedback) {
+      copyButton.current?.focus()
+      copyButton.current?.scrollIntoView({ block: 'nearest' })
+    }
+  }, [copying, props.feedback])
+  const values = props.prompt.questions.map((question, index) => {
+    const answer = answers[index]!
+    const selected = answer.selected.map((option) => question.options[option]!.label)
+    if (answer.typed || question.options.length === 0) {
+      if (!answer.other.trim()) return null
+      selected.push(answer.other.trim())
+    }
+    return selected.length ? selected.join(', ') : null
+  })
+  const ready = values.every((value) => value !== null)
+  return (
+    <div className="attention-question-choices">
+      {props.prompt.questions.map((question, index) => {
+        const answer = answers[index]!
+        const update = (change: Partial<typeof answer>): void => {
+          setAnswers((current) => current.map((value, row) => row === index ? { ...value, ...change } : value))
+        }
+        return (
+          <fieldset key={index} disabled={copying}>
+            <legend>{stripFormatCharacters(question.text)}</legend>
+            {question.options.map((option, optionIndex) => (
+              <label key={optionIndex}>
+                <input type={question.multiSelect ? 'checkbox' : 'radio'} name={`${id}-${index}`}
+                  checked={answer.selected.includes(optionIndex)} onChange={() => {
+                    update({ selected: question.multiSelect
+                      ? answer.selected.includes(optionIndex) ? answer.selected.filter((value) => value !== optionIndex) : [...answer.selected, optionIndex]
+                      : [optionIndex], ...(!question.multiSelect ? { typed: false } : {}) })
+                  }} />
+                <span><span className="attention-prompt-label">{stripFormatCharacters(option.label)}</span>
+                  {option.description ? <span className="attention-prompt-description">{stripFormatCharacters(option.description)}</span> : null}</span>
+              </label>
+            ))}
+            {question.options.length > 0 && question.custom !== false ? (
+              <label><input type={question.multiSelect ? 'checkbox' : 'radio'} name={`${id}-${index}`}
+                checked={answer.typed} onChange={() => update({ typed: !answer.typed, ...(!question.multiSelect ? { selected: [] } : {}) })} />
+                {question.options.some((option) => /^other(?:\.{3}|…)?$/i.test(option.label.trim())) ? 'Write answer' : 'Other'}</label>
+            ) : null}
+            {question.options.length === 0 && question.custom === false ? <p>Answer this question in the terminal.</p> : null}
+            {(answer.typed || question.options.length === 0) && question.custom !== false ? (
+              <label className="attention-other">Your answer
+                <textarea rows={2} value={answer.other} onChange={(event) => update({ other: event.target.value })} />
+              </label>
+            ) : null}
+          </fieldset>
+        )
+      })}
+      <p className="attention-copy-note">Copy your answer, then paste it into the terminal.</p>
+      {props.feedback ? <p role="status" className="inline-error">{props.feedback}</p> : null}
+      <button ref={copyButton} type="button" disabled={!ready || copying || !props.onCopy} onClick={() => {
+        if (!ready || pendingCopy.current || !props.onCopy) return
+        pendingCopy.current = true
+        setCopying(true)
+        const text = values.map((value, index) => values.length === 1 ? value!
+          : `${stripFormatCharacters(props.prompt.questions[index]!.text)}: ${value!}`).join('\n')
+        // The popover owns the outcome so it remains visible when this question is replaced.
+        void props.onCopy(text).catch(() => undefined)
+          .finally(() => { pendingCopy.current = false; setCopying(false) })
+      }}>{copying ? 'Copying…' : 'Copy answer'}</button>
+    </div>
+  )
+}
+
+/** Permission details remain read-only; opening or dismissing grants nothing. */
+function PermissionDetail(props: { prompt: Extract<AttentionPrompt, { type: 'permission' }> }): React.JSX.Element {
   return (
     <div className="attention-prompt">
-      {prompt.questions.map((question, index) => (
-        <section key={index} aria-label={question.header ?? `Question ${index + 1}`}>
-          {several || question.header ? (
-            <span className="attention-prompt-header">
-              {several ? `${index + 1} of ${prompt.questions.length}` : null}
-              {several && question.header ? ' · ' : null}
-              {question.header}
-            </span>
-          ) : null}
-          {several ? <p className="attention-prompt-text">{question.text}</p> : null}
-          <ol>
-            {question.options.map((option, optionIndex) => (
-              <li key={optionIndex}>
-                <span className="attention-prompt-label">{stripFormatCharacters(option.label)}</span>
-                {option.description ? <span className="attention-prompt-description">{option.description}</span> : null}
-              </li>
-            ))}
-          </ol>
-        </section>
-      ))}
+      {props.prompt.command ? <pre>{stripFormatCharacters(props.prompt.command)}</pre> : null}
+      {props.prompt.cwd ? <span className="attention-prompt-where">in {stripFormatCharacters(props.prompt.cwd)}</span> : null}
     </div>
   )
 }
@@ -64,10 +110,15 @@ export function NeedsYouPopover(props: {
   anchor: HTMLElement | null
   onOpenSession(sessionId: string, request: AttentionRecord | null): void
   onAcknowledge(request: AttentionRecord): void
+  onCopyAnswer?(request: AttentionRecord, text: string): Promise<void>
+  handoffDestination?(request: AttentionRecord): (SessionPlace & { cwd: string }) | null
   onMarkAnswered(request: AttentionRecord): void
   onClose(): void
 }): React.JSX.Element {
   const element = useRef<HTMLElement>(null)
+  const focusedRequest = useRef<{ id: string; revision: number } | null>(null)
+  const [actionFeedback, setActionFeedback] = useState('')
+  const [copyFeedbackFor, setCopyFeedbackFor] = useState<string | null>(null)
   const onClose = useRef(props.onClose)
   onClose.current = props.onClose
   const { responses, updates } = openAttentionGroups(props.requests)
@@ -89,6 +140,19 @@ export function NeedsYouPopover(props: {
     return () => document.removeEventListener('pointerdown', outside, true)
   }, [])
 
+  useLayoutEffect(() => {
+    const focused = focusedRequest.current
+    if (!focused || props.requests.some(request => request.state === 'open' &&
+      request.requestId === focused.id && request.revision === focused.revision)) return
+    // Keep focus elsewhere if the owner moved it while this action was pending.
+    if (document.activeElement !== document.body && document.activeElement !== document.documentElement) return
+    const next = element.current?.querySelector<HTMLButtonElement>('.attention-group .attention-item button.primary')
+    focusedRequest.current = null
+    const target = next ?? props.anchor
+    target?.focus()
+    target?.scrollIntoView({ block: 'nearest' })
+  }, [props.requests, props.anchor])
+
   const where = (sessionId: string): React.JSX.Element => {
     const place = props.place(sessionId)
     return <><span>{place.workspace}</span><span className="separator">›</span><span className="name" title={place.session}>{place.session}</span></>
@@ -102,9 +166,12 @@ export function NeedsYouPopover(props: {
     const place = props.place(request.sessionId)
     const age = relativeAge(request.openedAt, props.now)
     const expiry = expiryText(request.expiresAt, props.now)
+    const destination = request.kind === 'handoff' ? props.handoffDestination?.(request) : null
     return (
       <article
         key={request.requestId}
+        data-request-id={request.requestId}
+        data-request-revision={request.revision}
         className={`attention-item ${actionable ? 'request' : 'update'}`}
         aria-label={[kindLabel(request), request.title, `${place.workspace} › ${place.session}`, age, expiry].filter(Boolean).join(' · ')}
       >
@@ -114,8 +181,22 @@ export function NeedsYouPopover(props: {
           <span className="attention-kind">{kindLabel(request)}</span>
           <span className="age">{expiry ? `${age} · ${expiry}` : age}</span>
         </div>
-        <h3>{request.title}</h3>
-        {request.prompt ? <PromptDetail prompt={request.prompt} /> : request.body ? <pre>{request.body}</pre> : null}
+        <h3>{destination ? `Handoff to ${destination.workspace} › ${destination.session}` : request.title}</h3>
+        {destination ? <p className="attention-destination">{destination.cwd}</p> : null}
+        {request.prompt?.type === 'questions' ? <QuestionChoices key={`${request.requestId}:${request.revision}`}
+          prompt={request.prompt} feedback={copyFeedbackFor === `${request.requestId}:${request.revision}` ? actionFeedback : ''}
+          onCopy={props.onCopyAnswer ? async (text) => {
+            setCopyFeedbackFor(`${request.requestId}:${request.revision}`)
+            setActionFeedback('')
+            try {
+              await props.onCopyAnswer!(request, text)
+              setActionFeedback('Answer copied. Paste it into the terminal.')
+            } catch (error) {
+              setActionFeedback(error instanceof Error ? error.message : 'Could not copy. Try again.')
+              throw error
+            }
+          } : undefined} />
+          : request.prompt ? <PermissionDetail prompt={request.prompt} /> : request.body ? <pre>{request.body}</pre> : null}
         <p className="seen">
           {actionable
             ? request.seenAt
@@ -131,9 +212,8 @@ export function NeedsYouPopover(props: {
           <button type="button" className="primary" onClick={() => props.onOpenSession(request.sessionId, request)}>
             {request.kind === 'handoff' ? 'Open handoff' : actionable ? 'Open session' : 'Open update'}
           </button>
-          <button type="button" onClick={() => props.onAcknowledge(request)} disabled={actionable && !!request.seenAt}
-            title={actionable && request.seenAt ? 'Already seen; still waiting for your response.' : undefined}>
-            {actionable ? 'Acknowledge' : 'Dismiss'}
+          <button type="button" onClick={() => props.onAcknowledge(request)} title="Clear this reminder; keep the task or draft.">
+            Dismiss
           </button>
           {actionable && request.kind !== 'handoff' ? (
             <button type="button" title="Close this request after answering it in the terminal" onClick={() => props.onMarkAnswered(request)}>
@@ -151,6 +231,10 @@ export function NeedsYouPopover(props: {
       className="needs-you-popover"
       role="dialog"
       aria-label="Needs you"
+      onFocusCapture={(event) => {
+        const request = (event.target as HTMLElement).closest<HTMLElement>('.attention-item[data-request-id]')
+        focusedRequest.current = request ? { id: request.dataset.requestId!, revision: Number(request.dataset.requestRevision) } : null
+      }}
       onKeyDown={(event) => {
         if (event.key === 'Escape') {
           event.preventDefault()
@@ -164,6 +248,8 @@ export function NeedsYouPopover(props: {
         <span>{responses.length} need response · {updates.length} {updates.length === 1 ? 'update' : 'updates'} · {props.unread.length} unread</span>
         <kbd>Ctrl Shift U</kbd>
       </header>
+      {actionFeedback && !props.requests.some(request => request.state === 'open' &&
+        `${request.requestId}:${request.revision}` === copyFeedbackFor) ? <p role="status">{actionFeedback}</p> : null}
       {openCount === 0 ? <p className="popover-empty">No requests or updates.</p> : null}
       {responses.length > 0 ? (
         <div className="attention-group" aria-label="Needs your response">
@@ -196,7 +282,7 @@ export function NeedsYouPopover(props: {
           {recent.map((request) => (
             <button key={request.requestId} type="button" className="popover-row" onClick={() => props.onOpenSession(request.sessionId, null)}>
               {where(request.sessionId)}
-              <span>{request.title} · {attentionProvenance(request)}</span>
+              <span>{request.title} · {request.resolvedBy === 'owner' && request.resolution ? request.resolution : attentionProvenance(request)}</span>
               <span className="age">{relativeAge(request.resolvedAt ?? request.openedAt, props.now)}</span>
             </button>
           ))}

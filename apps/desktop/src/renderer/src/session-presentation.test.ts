@@ -490,13 +490,40 @@ describe('session presentation', () => {
     expect(requestsAnsweredByTyping(records, 's3')).toEqual([])
   })
 
-  it('resolves an opened notice but only marks unanswered prompts as seen', () => {
+  it('clears reminders for opened notices and prompts without claiming a producer answer', () => {
     const prompt = request('prompt', 's1', '2026-09-14T11:00:00.000Z')
-    expect(attentionActionWhenOpened(prompt)).toBe('mark-seen')
-    expect(attentionActionWhenOpened({ ...prompt, seenAt: now.toString() })).toBeNull()
-    expect(attentionActionWhenOpened({ ...prompt, kind: 'permission' })).toBe('mark-seen')
-    expect(attentionActionWhenOpened({ ...prompt, kind: 'notice' })).toBe('resolve-notice')
+    expect(attentionActionWhenOpened(prompt)).toBe('dismiss-reminder')
+    expect(attentionActionWhenOpened({ ...prompt, seenAt: now.toString() })).toBe('dismiss-reminder')
+    expect(attentionActionWhenOpened({ ...prompt, kind: 'permission' })).toBe('dismiss-reminder')
+    expect(attentionActionWhenOpened({ ...prompt, kind: 'notice' })).toBe('dismiss-reminder')
     expect(attentionActionWhenOpened({ ...prompt, kind: 'notice', state: 'answered' })).toBeNull()
+  })
+
+  it('clears a reviewed reminder without claiming an answer or approval (46.8)', () => {
+    const prompt = request('prompt', 's1', '2026-09-14T11:00:00.000Z')
+    for (const kind of ['question', 'permission', 'review', 'handoff', 'notice'] as const) {
+      expect(attentionActionWhenOpened({ ...prompt, kind })).toBe('dismiss-reminder')
+      expect(attentionActionWhenOpened({ ...prompt, kind, seenAt: now.toString() })).toBe('dismiss-reminder')
+    }
+    expect(attentionActionWhenOpened({ ...prompt, state: 'withdrawn' })).toBeNull()
+  })
+
+  it('offers actual option selection, Other and copy with an explicit dismiss action (46.8)', () => {
+    const markup = renderToStaticMarkup(createElement(NeedsYouPopover, {
+      requests: [{ ...request('asked', 's1', '2026-09-14T11:55:00.000Z'), prompt: {
+        type: 'questions', harness: 'codex', shape: 'async-choice', requestRef: null,
+        toolUseId: 'call_synthetic', questions: [{ id: 'color', header: 'Color', text: 'Which color?',
+          multiSelect: false, options: [{ label: 'Gold', description: null }, { label: 'Black', description: null }] }]
+      } }],
+      unread: [], now, anchor: null, place: () => ({ workspace: 'Work', session: 'Builder' }),
+      onOpenSession: () => undefined, onAcknowledge: () => undefined,
+      onMarkAnswered: () => undefined, onClose: () => undefined
+    }))
+    expect(markup).toContain('type="radio"')
+    expect(markup).toContain('Other')
+    expect(markup).toContain('Copy answer')
+    expect(markup).toContain('Dismiss')
+    expect(markup).not.toContain('Acknowledge')
   })
 
   it('wraps neighbors', () => {
@@ -558,7 +585,7 @@ describe('agent handoff entry and provenance', () => {
     expect(draft.text).toBe('Result for you')
     expect(draft.artifactIds).toEqual(['file-1'])
     expect(openAttentionGroups([petition]).responses).toEqual([petition])
-    expect(attentionActionWhenOpened(petition)).toBe('mark-seen')
+    expect(attentionActionWhenOpened(petition)).toBe('dismiss-reminder')
     expect(requestsAnsweredByTyping([petition], 'source')).toEqual([])
     expect(attentionProvenance(petition)).toBe('from bmn handoff')
   })
@@ -572,7 +599,7 @@ describe('agent handoff entry and provenance', () => {
     }))
     expect(markup).toContain('Open handoff')
     expect(markup).toContain('from bmn handoff')
-    expect(markup).toContain('Acknowledge')
+    expect(markup).toContain('Dismiss')
     expect(markup).not.toContain('Mark answered')
   })
 

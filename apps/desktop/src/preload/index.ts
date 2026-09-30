@@ -596,13 +596,15 @@ contextBridge.exposeInMainWorld('aiTerminal', {
     requestId: string,
     resolution?: string,
     expected?: Pick<AttentionRecord, 'kind' | 'revision'>,
-    origin?: AttentionOrigin
+    origin?: AttentionOrigin,
+    state?: 'answered' | 'withdrawn'
   ): Promise<AttentionRecord> {
     return invokeBridge('aiterm:attention:resolve', {
       requestId,
       ...(resolution ? { resolution } : {}),
       ...(expected ? { expectedKind: expected.kind, expectedRevision: expected.revision } : {}),
-      ...(origin ? { origin } : {})
+      ...(origin ? { origin } : {}),
+      ...(state ? { state } : {})
     })
   },
   listHookEvents(sessionId: string): Promise<HookEventRecord[]> {

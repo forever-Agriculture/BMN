@@ -42,7 +42,7 @@ const waylandDisplay = runtime && display && !isAbsolute(display) ? join(runtime
 const loaded = await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ root, roots }) => {
   const application = await electron.launch({
     executablePath,
-    args: [...(packagedBinary ? [] : [appDirectory]), '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
+    args: [...(packagedBinary ? [] : [appDirectory]), ...(!waylandDisplay && process.env.DISPLAY ? ['--ozone-platform=x11'] : []), '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
     cwd: repoRoot,
     env: {
       ...process.env,

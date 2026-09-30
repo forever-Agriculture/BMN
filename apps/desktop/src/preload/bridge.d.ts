@@ -246,7 +246,8 @@ export interface AiTerminalBridge {
     requestId: string,
     resolution?: string,
     expected?: Pick<AttentionRecord, 'kind' | 'revision'>,
-    origin?: AttentionOrigin
+    origin?: AttentionOrigin,
+    state?: 'answered' | 'withdrawn'
   ): Promise<AttentionRecord>
   /** Read-only: the recent hook events of one session, in memory only and never another session's. */
   listHookEvents(sessionId: string): Promise<HookEventRecord[]>

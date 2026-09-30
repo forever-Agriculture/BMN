@@ -22,7 +22,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
   const env = { ...process.env }
   for (const key of ['BMN_TOKEN', 'BMN_SESSION_ID', 'BMN_CONTROL_SOCKET', 'BMN_PTY_INCARNATION_ID']) delete env[key]
   const app = await _electron.launch({ executablePath: binary, cwd: repo, timeout: 20000,
-    args: [join(repo, 'apps/desktop'), '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
+    args: [join(repo, 'apps/desktop'), ...(!wayland && process.env.DISPLAY ? ['--ozone-platform=x11'] : []), '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
     env: { ...env, XDG_CONFIG_HOME: roots.config, XDG_DATA_HOME: roots.data,
       XDG_STATE_HOME: roots.state, XDG_CACHE_HOME: roots.cache, XDG_RUNTIME_DIR: roots.runtime,
       BMN_CONFIG_HOME: join(roots.config, 'bmn'), BMN_DATA_HOME: join(roots.data, 'bmn'),
@@ -118,10 +118,15 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       const overflow = await page.locator('.needs-you-popover').evaluate(el => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
       await page.screenshot({ path: join(evidence, `attention-${width}.png`) })
       if (!baseline) assert.ok(overflow.scrollWidth <= overflow.clientWidth, JSON.stringify(overflow))
-      const request = page.locator('.attention-item').filter({ hasText: 'Synthetic handoff: inspect, paste, then submit.' })
-      const openReview = request.getByRole('button', { name: 'Open handoff', exact: true })
-      if (!baseline) { await tabTo(openReview); assert.ok(await focusedVisible(openReview), 'Attention keyboard action clipped') }
-      await openReview.click()
+      if (baseline || width === 800) {
+        const request = page.locator('.attention-item').filter({ hasText: 'Synthetic handoff: inspect, paste, then submit.' })
+        const openReview = request.getByRole('button', { name: 'Open handoff', exact: true })
+        if (!baseline) { await tabTo(openReview); assert.ok(await focusedVisible(openReview), 'Attention keyboard action clipped') }
+        await openReview.click()
+      } else {
+        await page.locator('.needs-you-button').click()
+        await page.locator(`#handoff-${prepared.draftId}`).getByRole('button', { name: 'Edit', exact: true }).click()
+      }
       await page.waitForSelector('.handoff-form textarea')
       await page.waitForTimeout(200)
       const state = await page.evaluate(() => {
@@ -230,11 +235,11 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await savedCard.getByRole('button', { name: 'Edit', exact: true }).click()
     await page.getByRole('button', { name: 'Save handoff', exact: true }).click()
     await page.waitForSelector('.handoff-form', { state: 'detached' })
-    await page.waitForFunction(() => document.querySelector('.files-action-announcer')?.textContent.includes('Handoff saved'))
-    assert.match(await savedCard.locator('.files-action-outcome').innerText(), /Handoff saved.*Nothing was pasted/)
+    await page.waitForFunction(() => document.querySelector('.files-action-announcer')?.textContent.includes('Saved. Not sent.'))
+    assert.match(await savedCard.locator('.files-action-outcome').innerText(), /Saved\. Not sent\./)
     await savedCard.getByRole('button', { name: 'Edit', exact: true }).click()
     assert.ok(!(await page.locator('.handoff-form').innerText()).includes('Working…'), 'Save left a stale pending receipt')
-    assert.match(await page.locator('.handoff-form .files-action-outcome').innerText(), /Handoff saved.*Nothing was pasted/)
+    assert.match(await page.locator('.handoff-form .files-action-outcome').innerText(), /Saved\. Not sent\./)
     await page.locator('.handoff-form').getByRole('button', { name: 'Cancel', exact: true }).click()
     // Workspace Review must reveal the same draft too, without any terminal input.
     await page.getByRole('button', { name: `Actions for ${workspace.name}`, exact: true }).click()
@@ -253,8 +258,8 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await page.waitForSelector('.handoff-form', { state: 'detached' })
     const newCard = page.locator('.handoff-card').filter({ hasText: 'Synthetic new owner draft' })
     await newCard.locator('.files-action-outcome').waitFor()
-    assert.match(await newCard.locator('.files-action-outcome').innerText(), /Handoff saved.*Nothing was pasted/)
-    await page.waitForFunction(() => document.querySelector('.files-action-announcer')?.textContent.includes('Handoff saved'))
+    assert.match(await newCard.locator('.files-action-outcome').innerText(), /Saved\. Not sent\./)
+    await page.waitForFunction(() => document.querySelector('.files-action-announcer')?.textContent.includes('Saved. Not sent.'))
     result.newSavedDraftFeedback = { cardVisible: true, announcementUpdated: true }
     await page.locator('.files-panel').evaluate(el => { el.scrollTop = 0 })
     assert.equal(readFileSync(sourceInput, 'utf8'), '', 'Review/OS actions wrote source input')
@@ -300,8 +305,10 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     for (const [width, height] of [[800, 500], [1000, 700], [1280, 900]]) {
       await resize(width, height)
       if (width !== 800) {
-        await page.locator('.needs-you-button').click()
-        await page.locator('.attention-item').filter({ hasText: 'Synthetic handoff: inspect, paste, then submit.' }).getByRole('button', { name: 'Open handoff', exact: true }).click()
+        await page.getByRole('button', { name: 'Close files', exact: true }).click()
+        await page.locator('.session-row').filter({ hasText: 'Fixture source' }).click()
+        await page.locator('.session-terminal.selected').getByRole('button', { name: 'Files', exact: true }).click()
+        await card.getByRole('button', { name: 'Edit', exact: true }).click()
         await page.waitForSelector('.handoff-form textarea')
         await page.locator('.handoff-form').getByRole('button', { name: 'Cancel', exact: true }).click()
       }

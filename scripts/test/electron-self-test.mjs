@@ -36,7 +36,7 @@ const requiredPhases = [
 ]
 
 const exitCode = await withTemporaryRoot(temporaryRootContracts.electronSelfTest, async ({ roots }) => {
-  const child = spawn(electronBinary, [appDirectory, '--self-test'], {
+  const child = spawn(electronBinary, [appDirectory, ...(!waylandDisplay && process.env.DISPLAY ? ['--ozone-platform=x11'] : []), '--self-test'], {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: {
       ...process.env,

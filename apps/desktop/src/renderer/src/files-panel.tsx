@@ -94,6 +94,7 @@ export function FilesPanel(props: {
   const handoffTextId = useId()
   const handoffTextArea = useRef<HTMLTextAreaElement>(null)
   const handoffForm = useRef<HTMLFormElement>(null)
+  const dismissingHandoffs = useRef(new Set<string>())
   const [handoffArtifactIds, setHandoffArtifactIds] = useState<ReadonlySet<string>>(new Set())
   const [requestedReviewError, setRequestedReviewError] = useState<string | null>(null)
 
@@ -151,6 +152,20 @@ export function FilesPanel(props: {
     setHandoffArtifactIds(new Set(draft?.artifactIds ?? []))
     setHandoffOpen(true)
     revealHandoff()
+    if (draft) dismissHandoffReminder(draft)
+  }
+
+  const dismissHandoffReminder = (draft: InputDraftRecord): void => {
+    const request = props.attention?.find((record) => record.state === 'open' && record.kind === 'handoff' &&
+      record.requestKey === `handoff:${draft.draftId}` && record.sessionId === draft.sourceSessionId)
+    if (!request) return
+    const key = `${request.requestId}:${request.revision}`
+    if (dismissingHandoffs.current.has(key)) return
+    dismissingHandoffs.current.add(key)
+    void window.aiTerminal.resolveAttention(request.requestId, 'Opened in BMN; reminder cleared',
+      { kind: request.kind, revision: request.revision }, 'owner', 'withdrawn')
+      .catch((error: unknown) => props.onFailure(failureDetail(error, 'Could not clear the handoff reminder')))
+      .finally(() => dismissingHandoffs.current.delete(key))
   }
 
   useLayoutEffect(() => {
@@ -199,7 +214,7 @@ export function FilesPanel(props: {
     }
     setRequestedReviewError(null)
     if (draft.state === 'draft' && draft.sourceSessionId === props.session?.sessionId) beginHandoff(draft)
-    else revealHandoff(draft.draftId)
+    else { revealHandoff(draft.draftId); dismissHandoffReminder(draft) }
     props.onHandoffOpened?.()
   }, [props.requestedHandoffDraftId, props.requestedHandoffReviewDraft, props.drafts, props.session?.sessionId])
 
@@ -446,7 +461,7 @@ export function FilesPanel(props: {
               setHandoffDraftId(saved.draftId)
               setHandoffExpectedUpdatedAt(saved.updatedAt)
               setHandoffOpen(false)
-              outcome(key, `Handoff saved for ${sessionDescription(saved.sessionId)}. Nothing was pasted.`, `handoff-save:${saved.draftId}`)
+              outcome(key, 'Saved. Not sent.', `handoff-save:${saved.draftId}`)
               revealHandoff(saved.draftId)
             }, 'Could not save the handoff')
           }}>
@@ -501,19 +516,22 @@ export function FilesPanel(props: {
                 ))}
               </fieldset>
             ) : null}
-            <p className="handoff-note">Saving prepares a local draft. It does not type into either terminal.</p>
+            <p className="handoff-note">Save for review. Nothing is sent.</p>
             {actionOutcome(`handoff-save:${handoffDraftId ?? 'new'}`)}
             <div className="actions">
               <button type="submit" className="primary" disabled={isPending(`handoff-save:${handoffDraftId ?? 'new'}`)}>
                 {isPending(`handoff-save:${handoffDraftId ?? 'new'}`) ? 'Saving…' : 'Save handoff'}
               </button>
-              <button type="button" onClick={() => setHandoffOpen(false)}>Cancel</button>
+              <button type="button" onClick={() => {
+                setHandoffOpen(false)
+                if (handoffDraftId) revealHandoff(handoffDraftId)
+              }}>Cancel</button>
             </div>
           </form>
         ) : null}
         {relevantHandoffs.length > 0 ? (
           <ul className="files-draft-list handoff-list">
-            {relevantHandoffs.map((draft) => {
+            {relevantHandoffs.filter((draft) => !handoffOpen || draft.draftId !== handoffDraftId).map((draft) => {
               const files = draft.artifactIds.map((artifactId) =>
                 props.artifacts.find((artifact) => artifact.artifactId === artifactId))
               const isSource = draft.sourceSessionId === props.session?.sessionId
@@ -531,7 +549,7 @@ export function FilesPanel(props: {
                 ? 'Pasted to terminal — not submitted'
                 : draft.state === 'uncertain'
                   ? 'Paste outcome uncertain — inspect the destination before retrying'
-                  : draft.detail ?? 'Saved draft — nothing pasted'
+                  : draft.state === 'draft' ? 'Draft' : draft.detail ?? 'Not sent'
               return (
                 <li key={draft.draftId} id={`handoff-${draft.draftId}`} tabIndex={-1} className="files-draft handoff-card">
                   <p className="files-draft-meta">{formatClock(draft.createdAt)} · {stateLabel}</p>

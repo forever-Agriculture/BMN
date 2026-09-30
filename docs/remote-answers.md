@@ -106,7 +106,11 @@ Screens: `.dev-auto/evidence/epic-31/spike-31-4/screens/claude-*` (80 and 200 co
 - Codex's hooks read `CODEX_HOME`; hooks in a new file need trusting once (`/hooks`).
 
 Epic 46 retains async call identity and declared options, including omitted options, and explains
-its unavailable answer route. `accepted:true` acknowledges presentation, not an answer. Generic
+its unavailable remote answer route. Desktop question cards let you select options or enter Other,
+then **Copy answer** for manual submission. Copying clears the reminder and writes only to the
+clipboard; paste into the session yourself. Opening or dismissing a card also clears its reminder,
+without sending an answer or granting permission. Saved handoff drafts remain available in Files.
+`accepted:true` acknowledges presentation, not an answer. Generic
 `UserPromptSubmit` closes attention under the existing hook rule but does not confirm a Telegram
 answer or prove question consumption. An ordinary prompt route must first demonstrate correlation,
 at-most-once consumption, idle/empty input ownership, newer-question rejection and an attributable

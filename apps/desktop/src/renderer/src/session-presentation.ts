@@ -483,15 +483,14 @@ export function requestsAnsweredByTyping(records: readonly AttentionRecord[], se
   return openRequests(records).filter((record) => record.sessionId === sessionId && record.kind !== 'review' && record.kind !== 'handoff')
 }
 
-export type OpenAttentionAction = 'mark-seen' | 'resolve-notice' | null
+export type OpenAttentionAction = 'dismiss-reminder' | null
 
-/** Opening an informational notice completes it; opening a prompt only records that it was seen. */
+/** An explicit owner action clears the reminder; it does not answer or approve the underlying task. */
 export function attentionActionWhenOpened(
   request: Pick<AttentionRecord, 'kind' | 'state' | 'seenAt'>
 ): OpenAttentionAction {
   if (request.state !== 'open') return null
-  if (request.kind === 'notice') return 'resolve-notice'
-  return request.seenAt === null ? 'mark-seen' : null
+  return 'dismiss-reminder'
 }
 
 /**
