@@ -2,8 +2,9 @@
 
 BMN can answer an agent's question or permission prompt from Telegram (Epic 30). This page records,
 per agent version and prompt shape, exactly how that answer is delivered, how BMN recognises the
-dialog on screen, and what proves the answer landed. Code follows this table: a shape that is not
-**VERIFIED** here gets a card without buttons. Cursor's terminal agent reports no question or permission
+dialog on screen, and what proves the answer landed. Native dialog routes follow this table. Codex
+Default has a separate ordinary-message route approved by the owner on 2026-09-30; its receipt never
+claims native question consumption. Cursor's terminal agent reports no question or permission
 prompt through its hooks, so it has no row here: its only card is the finished-turn notice
 ([agent-control.md](agent-control.md#cursors-terminal-agent)).
 
@@ -19,7 +20,7 @@ payloads and screen text are the test fixtures in
 | --- | --- | --- | --- |
 | One question, one choice | **VERIFIED** keys | **VERIFIED** keys (Plan mode only) | **VERIFIED** API |
 | Several questions in one dialog | **VERIFIED** keys | **VERIFIED** keys | **VERIFIED** API (same call) |
-| Default async question | — | **BLOCKED**: no verified correlated consumption receipt or exclusive composer input contract; no remote answer buttons | — |
+| Default async question | — | Choices/Other submit ordinary session messages; native consumption remains **UNVERIFIED** | — |
 | Permission, allow once | **VERIFIED** keys (`Bash` only; other tools not driven) | out of scope (Auto Review) | **VERIFIED** API |
 | Permission, deny | **VERIFIED** keys (`Bash` only), never confirmed | out of scope | **VERIFIED** API, only when it is the session's single pending permission |
 | Sandbox network prompt | **UNSUPPORTED**: not driven (sandbox off on this machine); prompt-less, so no buttons | — | — |
@@ -102,19 +103,21 @@ Screens: `.dev-auto/evidence/epic-31/spike-31-4/screens/claude-*` (80 and 200 co
 - Keys: the option's digit answers the current question; with several questions each digit answers
   and advances, and the digit on the last question submits them all (no review screen).
 - `request_user_input_async` renders as an ordinary message with bulleted options and returns
-  `{"accepted": true}` at once; there is no picker to answer. No buttons.
+  `{"accepted": true}` at once; there is no picker to answer. Its buttons submit ordinary messages, never picker digits.
 - Codex's hooks read `CODEX_HOME`; hooks in a new file need trusting once (`/hooks`).
 
 Epic 46 retains async call identity and declared options, including omitted options, and explains
-its unavailable remote answer route. Desktop question cards let you select options or enter Other,
+its ordinary-message Telegram route. Desktop question cards let you select options or enter Other,
 then **Copy answer** for manual submission. Copying clears the reminder and writes only to the
 clipboard; paste into the session yourself. Opening or dismissing a card also clears its reminder,
 without sending an answer or granting permission. Saved handoff drafts remain available in Files.
 `accepted:true` acknowledges presentation, not an answer. Generic
 `UserPromptSubmit` closes attention under the existing hook rule but does not confirm a Telegram
-answer or prove question consumption. An ordinary prompt route must first demonstrate correlation,
-at-most-once consumption, idle/empty input ownership, newer-question rejection and an attributable
-receipt on the real Default producer. No picker digits or automatic prompt injection are added.
+answer or prove question consumption. The owner approved submitting Telegram choices/Other and card
+replies as ordinary messages on 2026-09-30. Submission uses the card's session/incarnation, request
+revision/epoch guards and a durable staged receipt; uncertain writes never replay. Pending native
+questions or permissions block ordinary message input. Native correlated consumption and exclusive
+composer ownership remain unverified; no receipt calls an ordinary message a native answer.
 
 ### Multi-select, typed answers and Back (Epic 31)
 

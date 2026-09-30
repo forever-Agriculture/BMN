@@ -41,8 +41,9 @@ import { createWorkspace, listSessions, listWorkspaces } from './database-worksp
 import type { SessionManager } from './session-manager'
 import type { ProcReader } from './listening-ports'
 import type { ScreenLike } from './remote-answer'
-import type { TelegramConnector } from './telegram-connector'
+import type { TelegramConnector, InboundReply } from './telegram-connector'
 import { DEFAULT_WORKSPACE_ID } from './store-schema'
+import { startFakeBotApi } from '../main/fake-bot-api'
 
 const testRequire = createRequire(import.meta.url)
 const BetterSqlite3 = testRequire('better-sqlite3') as new (path: string, options?: { readonly?: boolean; fileMustExist?: boolean }) => DatabaseConnection
@@ -1215,7 +1216,7 @@ describe('Telegram attention notifications', () => {
     typedReply.mockRestore()
   })
 
-  it('keeps a handoff page reply as a source draft even when automatic replies are enabled', async () => {
+  it('submits a handoff card reply as a message to its source session without delivering the handoff', async () => {
     const sent: string[] = []
     service['telegram'] = {
       sendMessage: async (message: string) => {
@@ -1246,13 +1247,164 @@ describe('Telegram attention notifications', () => {
       file: null
     })
 
-    expect(writes).toEqual([])
-    expect(sent).toEqual(['Saved as a draft in BMN for that session.'])
+    expect(writes.map(write => new TextDecoder().decode(write.bytes))).toEqual(['\x1b[200~Please revise the summary\x1b[201~\r'])
+    expect(sent).toEqual(['Message submitted to this session. Native answer not confirmed.'])
     expect(COMPANION_OPERATIONS.getAttention(database, request.requestId)).toMatchObject({ state: 'open' })
     expect(COMPANION_OPERATIONS.listDrafts(database)).toContainEqual(
-      expect.objectContaining({ sessionId: 's1', origin: 'telegram', state: 'draft', text: 'Please revise the summary' })
+      expect.objectContaining({ sessionId: 's1', origin: 'telegram', state: 'submitted', text: 'Please revise the summary' })
     )
   })
+
+  it('submits Codex Default button answers as one durable ordinary message without a native receipt', async () => {
+    await service.sessionsChanged()
+    const opened = await service['openAttention']({
+      sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'codex:async-fixture', kind: 'question', title: 'Which color?',
+      prompt: { type: 'questions', harness: 'codex', shape: 'async-choice', requestRef: 'async-1', toolUseId: 'call-1',
+        questions: [{ id: 'color', header: 'Color', text: 'Which color?', multiSelect: false,
+          options: [{ label: 'Gold', description: null }, { label: 'Black', description: null }] }] }
+    })
+    const record = COMPANION_OPERATIONS.getAttention(database, opened.requestId)
+    const request = { requestId: record.requestId, revision: record.revision, epoch: service.answerEpoch(record.requestId)!,
+      incarnationId: 'incarnation-1', answer: { type: 'choices' as const, choices: [0] } }
+    await expect(service.answerAttention(request)).resolves.toEqual({ state: 'submitted', sent: ['Which color?\nGold'] })
+    expect(writes).toHaveLength(1)
+    expect(writes[0]!.sessionId).toBe('s1')
+    expect(new TextDecoder().decode(writes[0]!.bytes)).toBe('\x1b[200~Which color?\nGold\x1b[201~\r')
+    expect(COMPANION_OPERATIONS.getAttention(database, record.requestId).state).toBe('open')
+    expect(COMPANION_OPERATIONS.listDrafts(database)).toContainEqual(expect.objectContaining({ state: 'submitted', requestId: record.requestId }))
+    await expect(service.answerAttention(request)).resolves.toMatchObject({ state: 'refused', reason: 'claimed' })
+    // Recreate the transient request claim; the durable submission still prevents replay.
+    service['answers'].closed(record); service['answers'].track(record)
+    await expect(service.answerAttention({ ...request, epoch: service.answerEpoch(record.requestId)! })).resolves.toMatchObject({ state: 'refused', reason: 'claimed' })
+    expect(writes).toHaveLength(1)
+  })
+
+  it('submits a direct async card reply once to that exact session and keeps the request unconfirmed', async () => {
+    const sent: string[] = []
+    service['telegram'] = { sendMessage: async (text: string) => { sent.push(text); return { messageId: sent.length } } } as unknown as TelegramConnector
+    await service.sessionsChanged()
+    COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', { enabled: true, allowedChatId: 1, allowedUserId: null,
+      notifyOn: 'attention-and-exit', autoSubmitReplies: true }, now)
+    const request = COMPANION_OPERATIONS.openAttention(database, { sessionId: 's1', incarnationId: 'incarnation-1',
+      requestKey: 'codex:async-reply', kind: 'question', title: 'Color?', prompt: { type: 'questions', harness: 'codex',
+        shape: 'async-choice', requestRef: 'async-reply', toolUseId: 'call-reply', questions: [{ id: null, header: null,
+          text: 'Color?', multiSelect: false, options: [{ label: 'Gold', description: null }] }] } }, 'async-reply', now)
+    COMPANION_OPERATIONS.putTelegramMessage(database, 77, 's1', request.requestId, 'incarnation-1', now)
+    const reply = { updateId: 88, chatId: 1, fromUserId: 1, messageId: 99, replyToMessageId: 77, text: 'My custom message', file: null }
+    await service['handleTelegramReply'](reply); await service['handleTelegramReply'](reply)
+    expect(writes).toHaveLength(1)
+    expect(writes[0]!.sessionId).toBe('s1')
+    expect(new TextDecoder().decode(writes[0]!.bytes)).toBe('\x1b[200~My custom message\x1b[201~\r')
+    expect(sent).toEqual(['Message submitted to this session. Native answer not confirmed.'])
+    expect(COMPANION_OPERATIONS.getAttention(database, request.requestId).state).toBe('open')
+  })
+
+  it('never replays an uncertain Codex Default message write', async () => {
+    await service.sessionsChanged()
+    const opened = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'uncertain-async',
+      kind: 'question', title: 'Custom?', prompt: { type: 'questions', harness: 'codex', shape: 'async-choice',
+        requestRef: 'uncertain-async', toolUseId: 'call-uncertain', questions: [{ id: null, header: null, text: 'Custom?', multiSelect: false, options: [] }] } })
+    let attempts = 0
+    service['options'].manager.writeToSession = () => { attempts++; throw new Error('ambiguous synthetic write') }
+    const row = COMPANION_OPERATIONS.getAttention(database, opened.requestId)
+    const request = { requestId: row.requestId, revision: row.revision, epoch: service.answerEpoch(row.requestId)!,
+      incarnationId: 'incarnation-1', answer: { type: 'choices' as const, choices: [{ typed: 'Custom text' }] } }
+    await expect(service.answerAttention(request)).resolves.toMatchObject({ state: 'sent-unconfirmed' })
+    expect(COMPANION_OPERATIONS.listDrafts(database)).toContainEqual(expect.objectContaining({ requestId: row.requestId, state: 'uncertain' }))
+    service['answers'].closed(row); service['answers'].track(row)
+    await expect(service.answerAttention({ ...request, epoch: service.answerEpoch(row.requestId)! })).resolves.toMatchObject({ state: 'refused', reason: 'claimed' })
+    expect(attempts).toBe(1)
+  })
+
+  it('refuses a Codex Default button while a native permission is pending in the same session', async () => {
+    await service.sessionsChanged()
+    const opened = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'async-blocked',
+      kind: 'question', title: 'Choice?', prompt: { type: 'questions', harness: 'codex', shape: 'async-choice',
+        requestRef: 'async-blocked', toolUseId: 'blocked-call', questions: [{ id: null, header: null, text: 'Choice?',
+          multiSelect: false, options: [{ label: 'Gold', description: null }] }] } })
+    COMPANION_OPERATIONS.openAttention(database, { sessionId: 's1', incarnationId: 'incarnation-1',
+      requestKey: 'native-pending', kind: 'permission', title: 'Never approve by ordinary message' }, 'native-pending', now)
+    const row = COMPANION_OPERATIONS.getAttention(database, opened.requestId)
+    await expect(service.answerAttention({ requestId: row.requestId, revision: row.revision, epoch: service.answerEpoch(row.requestId)!,
+      incarnationId: 'incarnation-1', answer: { type: 'choices', choices: [0] } })).resolves.toEqual({ state: 'refused', reason: 'unsupported' })
+    expect(writes).toEqual([])
+    expect(COMPANION_OPERATIONS.listDrafts(database)).toContainEqual(expect.objectContaining({ state: 'draft', requestId: row.requestId }))
+  })
+
+  it('round-trips Telegram choice, Other and card replies through the connector into a real PTY', async () => {
+    const bot = await startFakeBotApi(424242, 424242)
+    const receiver = join(root, 'receiver.txt')
+    const pty = (testRequire('node-pty') as typeof import('node-pty')).spawn(process.execPath, ['-e',
+      `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(receiver)},'');process.stdin.setRawMode(true);process.stdin.on('data',b=>fs.appendFileSync(${JSON.stringify(receiver)},b));process.stdout.write('READY');setInterval(()=>{},1000)`
+    ], { name: 'xterm-256color', cols: 100, rows: 30, cwd: root, env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } })
+    let output = ''
+    pty.onData(text => { output += text })
+    const options = service['options']
+    await service.close()
+    service = new CompanionService({ ...options, telegramApiOrigin: bot.origin, pageAfterMs: 5,
+      manager: { ...options.manager, writeToSession: (sessionId: string, bytes: Uint8Array) => {
+        expect(sessionId).toBe('s1'); writes.push({ sessionId, bytes }); pty.write(Buffer.from(bytes))
+        if (new TextDecoder().decode(bytes).includes('Uncertain custom')) throw new Error('synthetic ambiguous write')
+      } } as unknown as SessionManager })
+    const receivedReplies: InboundReply[] = []
+    const handleReply = service['handleTelegramReply'].bind(service)
+    let failOffsetSave = false, offsetFailures = 0
+    const store = service['options'].database
+    const companion = store.companion.bind(store)
+    const offsetSpy = vi.spyOn(store, 'companion').mockImplementation(async (name, ...args) => {
+      if (name === 'putRawSetting' && args[0] === 'telegram.offset' && failOffsetSave) {
+        failOffsetSave = false; offsetFailures++; throw new Error('synthetic offset persistence failure')
+      }
+      return companion(name, ...args)
+    })
+    service['handleTelegramReply'] = async reply => {
+      receivedReplies.push(reply)
+      if (reply.text === 'Custom answer') failOffsetSave = true
+      await handleReply(reply)
+    }
+    try {
+      await vi.waitFor(() => expect(output).toContain('READY'), { timeout: 5000 })
+      await service.sessionsChanged()
+      COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', { enabled: true, allowedChatId: 424242,
+        allowedUserId: 424242, notifyOn: 'attention', autoSubmitReplies: true }, now)
+      await service.route(METHOD_REGISTRY.telegramConfigure, { token: '123456789:SELFTEST_fake_bot_token_not_real' })
+      let expected = ''
+      const scenarios = [
+        { title: 'Synthetic choice', actions: [0], payload: 'Synthetic choice\nGold' },
+        { title: 'Synthetic custom', actions: [{ tap: 'Other…' }, { reply: 'Custom answer' }], payload: 'Synthetic custom\nCustom answer' },
+        { title: 'Synthetic reply', actions: [{ reply: 'Direct session message' }], payload: 'Direct session message' },
+        { title: 'Synthetic uncertain', actions: [{ tap: 'Other…' }, { reply: 'Uncertain custom' }], payload: 'Synthetic uncertain\nUncertain custom' }
+      ]
+      for (const scenario of scenarios) {
+        bot.tapOn(scenario.title, scenario.actions)
+        const opened = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1', requestKey: scenario.title,
+          kind: 'question', title: scenario.title, prompt: { type: 'questions', harness: 'codex', shape: 'async-choice',
+            requestRef: scenario.title, toolUseId: scenario.title, questions: [{ id: null, header: null,
+              text: scenario.title, multiSelect: false, options: [{ label: 'Gold', description: null }] }] } })
+        await service['cards'].page(COMPANION_OPERATIONS.getAttention(database, opened.requestId))
+        expected += `\x1b[200~${scenario.payload}\x1b[201~\r`
+        await vi.waitFor(() => expect(readFileSync(receiver, 'utf8')).toBe(expected), { timeout: 10000 })
+        expect(COMPANION_OPERATIONS.getAttention(database, opened.requestId).state).toBe('open')
+        if (scenario.title === 'Synthetic custom' || scenario.title === 'Synthetic uncertain') {
+          await vi.waitFor(() => expect(COMPANION_OPERATIONS.listTelegramCards(database, ['final'])
+            .some(card => card.requestId === opened.requestId)).toBe(true), { timeout: 5000 })
+          const reply = receivedReplies.find(reply => reply.text === (scenario.title === 'Synthetic custom' ? 'Custom answer' : 'Uncertain custom'))!
+          const before = writes.length
+          // Offset-save failure/reconnect can redeliver this same update after its Other card finished.
+          await service['restartTelegram']()
+          await handleReply(reply)
+          expect(writes).toHaveLength(before)
+          if (scenario.title === 'Synthetic uncertain') expect(COMPANION_OPERATIONS.listDrafts(database))
+            .toContainEqual(expect.objectContaining({ requestId: opened.requestId, state: 'uncertain' }))
+        }
+      }
+      expect(writes).toHaveLength(4)
+      expect(offsetFailures).toBe(1)
+      expect(bot.calls.some(call => String(call.body.text).includes('Message submitted'))).toBe(true)
+    } finally {
+      offsetSpy.mockRestore(); await service.close(); pty.kill(); await bot.close()
+    }
+  }, 30000)
 
   it('keeps the reply as a draft when the process changes immediately before the write', async () => {
     const sent: string[] = []

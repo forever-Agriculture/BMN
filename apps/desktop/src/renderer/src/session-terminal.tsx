@@ -620,7 +620,7 @@ export function SessionTerminal(props: {
           <button type="button" aria-pressed={props.focusMode} title={`Focus (${SHORTCUT_LABELS['focus-toggle']})`} onClick={props.onFocusMode}>
             <Icon name="focus" /><span className="button-label">Focus</span>
           </button>
-          <button type="button" aria-pressed={props.filesOpen} onClick={props.onFiles}>
+          <button type="button" aria-label="Files" aria-pressed={props.filesOpen} onClick={props.onFiles}>
             <Icon name="files" /><span className="button-label">Files</span>
           </button>
           <button type="button" className="icon-button" data-action="more" aria-haspopup="menu" aria-label={`More actions for ${name}`}

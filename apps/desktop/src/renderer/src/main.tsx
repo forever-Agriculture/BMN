@@ -1678,7 +1678,7 @@ function App(): React.JSX.Element {
         </div>
       ) : null}
       {notice ? <div className="feedback-notice brief"><span>{notice}</span></div> : null}
-      <div className={`workspace-body${panel ? ' with-panel' : ''}${focusMode ? ' focus-mode' : ''}`}>
+      <div className={`workspace-body${panel ? ' with-panel' : ''}${panel === 'files' ? ' with-files' : ''}${focusMode ? ' focus-mode' : ''}`}>
         {focusMode ? null : (
           <aside className="workspace-sidebar" aria-label="Workspaces and sessions">
             <nav className="workspace-tree">
@@ -1976,7 +1976,12 @@ function App(): React.JSX.Element {
                 return opened
               }}
               onRefreshDrafts={refresh.drafts}
-              onClose={() => setPanel(null)}
+              onClose={() => {
+                setPanel(null)
+                requestAnimationFrame(() => document.querySelector<HTMLButtonElement>(
+                  `.session-terminal[data-session-id="${selectedSessionId}"] button[aria-label="Files"]`
+                )?.focus({ preventScroll: true }))
+              }}
               onFailure={setFailure}
             />
           </div>

@@ -94,9 +94,16 @@ export function FilesPanel(props: {
   const handoffTextId = useId()
   const handoffTextArea = useRef<HTMLTextAreaElement>(null)
   const handoffForm = useRef<HTMLFormElement>(null)
+  const closeButton = useRef<HTMLButtonElement>(null)
   const dismissingHandoffs = useRef(new Set<string>())
   const [handoffArtifactIds, setHandoffArtifactIds] = useState<ReadonlySet<string>>(new Set())
   const [requestedReviewError, setRequestedReviewError] = useState<string | null>(null)
+
+  useLayoutEffect(() => {
+    // Plain Files opens over the terminal; do not leave keyboard focus on a covered pane button.
+    // A requested handoff owns its existing editor/card focus instead.
+    if (!props.requestedHandoffDraftId) closeButton.current?.focus({ preventScroll: true })
+  }, [])
 
   const sessionArtifacts = useMemo(
     () => props.artifacts.filter((artifact) => artifact.sessionId === props.session?.sessionId),
@@ -298,7 +305,7 @@ export function FilesPanel(props: {
         <h2>Files</h2>
         <span className="files-count">{sessionArtifacts.length}</span>
         <span className="files-session-name">{props.sessionLabel}</span>
-        <button type="button" className="icon-button files-close" aria-label="Close files" onClick={props.onClose}>
+        <button ref={closeButton} type="button" className="icon-button files-close" aria-label="Close files" onClick={props.onClose}>
           ×
         </button>
       </header>

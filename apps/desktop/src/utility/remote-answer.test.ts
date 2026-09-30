@@ -152,7 +152,7 @@ describe('which shapes have a route (decision 7)', () => {
     expect(answerRoute(OPENCODE_PERMISSION)).toBe('opencode-api')
     expect(answerRoute(null)).toBeNull()
     expect(answerRoute({ ...CLAUDE_SINGLE, shape: 'multi-select' })).toBeNull()
-    expect(answerRoute({ ...CODEX_TWO, shape: 'async-choice' })).toBeNull()
+    expect(answerRoute({ ...CODEX_TWO, shape: 'async-choice' })).toBe('codex-message')
     expect(answerRoute({ ...OPENCODE_QUESTION, shape: 'subagent' })).toBeNull()
     expect(answerRoute({ ...CLAUDE_BASH, tool: 'Edit' })).toBeNull()
     expect(answerRoute({ ...CLAUDE_BASH, command: null })).toBeNull()

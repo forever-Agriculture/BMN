@@ -251,6 +251,8 @@ export function questionCard(input: QuestionCardInput): RenderedCard {
   const chip = questionChip(prompt, step)
   const intro = [
     header,
+    ...(prompt.harness === 'codex' && prompt.shape === 'async-choice'
+      ? ['<i>Your answer will be submitted as a message to this session.</i>'] : []),
     ...(chip ? [chip] : []),
     ...(earlier.length > 0 ? ['', `<blockquote>${earlier.join('\n')}</blockquote>`] : []),
     ...(input.note ? ['', `⚠ <i>${escapeHtml(input.note)}</i>`] : [])
@@ -446,6 +448,7 @@ export function endingLine(ending: CardEnding): string {
       const outcome = ending.outcome
       if (outcome.state === 'refused') return `⚠ <i>${escapeHtml(REFUSAL_WORDS[outcome.reason])}</i>`
       const sent = escapeHtml(outcome.sent.map(said).join(' · '))
+      if (outcome.state === 'submitted') return `✓ <i>Message submitted: ${sent}. Native answer not confirmed.</i>`
       if (outcome.state === 'confirmed') {
         if (ending.permission) return outcome.sent[0] === 'Deny' ? '✓ <i>Denied</i>' : '✓ <i>Allowed once</i>'
         return `✓ <i>Sent: ${sent}</i>`
@@ -460,6 +463,7 @@ export function endingLine(ending: CardEnding): string {
 
 /** The short reply that makes the phone sound when an answer went wrong or is uncertain; null when it went right. */
 export function endingReply(outcome: AnswerOutcome): string | null {
+  if (outcome.state === 'submitted') return null
   if (outcome.state === 'confirmed') return null
   if (outcome.state === 'refused') return REFUSAL_WORDS[outcome.reason]
   if (outcome.state === 'partial') return `Sent ${outcome.sent.length} of ${outcome.total}, then the dialog changed. Check the laptop.`

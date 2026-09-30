@@ -513,6 +513,26 @@ input[type='radio'] {
   grid-template-columns: minmax(0, 1fr) minmax(300px, 340px);
 }
 
+/* Files is a drawer over the live view. Shrinking and re-expanding an inline TUI reflows its
+   already printed history; opening a file must not change the program's terminal dimensions. */
+.workspace-body.with-files {
+  grid-template-columns: 232px minmax(0, 1fr);
+}
+
+.workspace-body.focus-mode.with-files {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.workspace-body.with-files > .files-side-panel {
+  position: absolute;
+  top: 44px;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  width: min(340px, 90vw);
+  box-shadow: -12px 0 32px rgb(0 0 0 / 35%);
+}
+
 /* ---------- Workspace tree ---------- */
 
 .workspace-sidebar {
@@ -3099,7 +3119,8 @@ input[type='radio'] {
   }
 
   .workspace-body,
-  .workspace-body.with-panel {
+  .workspace-body.with-panel,
+  .workspace-body.with-files {
     grid-template-columns: 64px minmax(0, 1fr);
   }
 

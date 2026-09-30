@@ -112,7 +112,7 @@ interface LiveCard {
   progress: Progress
   /** Whether the card as drawn offers Other…, so a reply to it is a typed answer or refused. */
   offersOther: boolean
-  /** Whether it ever did: every later reply to it is still the keeper's, never a draft. */
+  /** Whether it offered Other: an in-flight answer retains later replies until it settles. */
   offeredOther: boolean
   tokens: string[]
   /** An answer reported `sent-unconfirmed` that a late report may still confirm. */
@@ -273,8 +273,8 @@ export class TelegramCardKeeper {
         return
       }
       if (action.type === 'follow-up') {
-        const note = 'Reply to this message. Your follow-up is saved as a draft for this session; nothing is sent automatically.'
-        await connector.answerCallbackQuery(tap.callbackId, 'Reply to this card to prepare a follow-up.').catch(() => undefined)
+        const note = 'Reply to this card to continue in this session. Turn on sending replies in Preferences to submit it directly.'
+        await connector.answerCallbackQuery(tap.callbackId, 'Reply to this card.').catch(() => undefined)
         await this.enqueue(card, () => this.show(card, this.composeNotice(record, note), binding))
       } else {
         try {
@@ -348,8 +348,8 @@ export class TelegramCardKeeper {
 
   /**
    * A reply to a card. On a card that offers Other… it is the typed answer once Other… was tapped, and refused
-   * before; on one that offered it, while an answer is sent or after, it is refused. Nothing else becomes of it
-   * (never a draft or a prompt). Any other reply is not the keeper's: false.
+   * before on native pickers. While an answer is in flight, another reply is refused. Direct async replies
+   * and replies after completion fall through to guarded ordinary conversation submission.
    */
   async typedReply(reply: InboundReply): Promise<boolean> {
     const connector = this.deps.connector()
@@ -362,11 +362,18 @@ export class TelegramCardKeeper {
       return true
     }
     if (card.state !== 'buttons' || !card.offersOther) {
+      if (card.state !== 'open') return false // A finished card can receive a new ordinary conversation message.
       await answer(card.state === 'open' ? 'Nothing was sent: answer this one at the laptop.' : REFUSAL_WORDS.gone)
       return true
     }
     if (!card.progress.typing) {
+      const record = await this.deps.getAttention(card.requestId).catch(() => null)
+      if (record?.prompt?.harness === 'codex' && record.prompt.shape === 'async-choice') return false
       await answer('Tap Other… first, then reply with your answer.')
+      return true
+    }
+    if (reply.file) {
+      await answer('Nothing submitted: use a text reply without an attachment.')
       return true
     }
     const typed = cleanTypedAnswer(reply.text ?? '')
@@ -616,7 +623,7 @@ export class TelegramCardKeeper {
       rendered: {
         ...rendered,
         text: rendered.text.replace(/Reply to this message to (?:continue|answer)\./,
-          note ?? 'Acknowledge this update, or use Other… and reply to this card to prepare a follow-up draft. Nothing is sent automatically.'),
+          note ?? 'Acknowledge this update, or use Other… to reply to this session.'),
         keyboard: [[{ text: 'Acknowledge', callback_data: this.newToken() }, { text: 'Other…', callback_data: this.newToken() }]]
       }
     }

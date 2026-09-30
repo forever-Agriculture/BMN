@@ -128,6 +128,19 @@ const settle = async (): Promise<void> => {
 }
 
 describe('sending a card', () => {
+  it('refuses an attachment caption after Other without turning it into an answer', async () => {
+    const h = setup()
+    await h.keeper.page(h.state.record!)
+    const other = h.connector.buttons().at(-1)!
+    await h.keeper.tap(h.tap(other))
+    const attachment = { updateId: 50, chatId: 1, fromUserId: 1, messageId: 500, replyToMessageId: 100,
+      text: 'Caption is not a text answer', file: {
+      fileId: 'synthetic-document', fileName: 'synthetic.txt', mimeType: 'text/plain', fileSize: 3, kind: 'document' as const
+    } }
+    await expect(h.keeper.typedReply(attachment)).resolves.toBe(true)
+    expect(h.answers).toEqual([])
+    expect(h.connector.sends.at(-1)?.text).toContain('text reply without an attachment')
+  })
   it('renews notice buttons after a failed acknowledgement of the unchanged revision', async () => {
     let attempts = 0
     const h = setup({ record: record(null, { kind: 'notice' }), acknowledge: async () => {
@@ -155,7 +168,7 @@ describe('sending a card', () => {
     expect(h.connector.sends[0]?.options.keyboard?.flat().map(b => b.text)).toEqual(['Acknowledge', 'Other…'])
     const [ack, other] = h.connector.buttons()
     await h.keeper.tap(h.tap(other!))
-    expect(h.connector.lastEdit()?.text).toContain('saved as a draft')
+    expect(h.connector.lastEdit()?.text).toContain('Reply to this card to continue in this session.')
     expect(h.answers).toEqual([])
     // Old buttons are revoked, including the acknowledgement from before Other….
     await h.keeper.tap(h.tap(ack!))
@@ -646,7 +659,7 @@ describe('multi-select, Other… and Back (Epic 31)', () => {
     expect(h.answers).toEqual([])
   })
 
-  it('keeps every later reply to an Other… card, while its answer is sent and after: never a draft (Astra recheck)', async () => {
+  it('refuses replies while an Other answer is sending and releases later conversation replies after completion', async () => {
     let release!: () => void
     const h = setup({ record: record(FEATURES), answer: () => new Promise((resolve) => { release = () => resolve({ state: 'confirmed', sent: ['“GraphQL”'] }) }) })
     await h.keeper.page(h.state.record!)
@@ -661,8 +674,8 @@ describe('multi-select, Other… and Back (Epic 31)', () => {
     expect(h.answers).toHaveLength(1)
     release()
     await settle()
-    await expect(h.keeper.typedReply(reply('And another', 100, 502))).resolves.toBe(true)
-    expect(h.connector.sends.at(-1)?.options).toMatchObject({ replyToMessageId: 502 })
+    // The owner now permits follow-up conversation messages after the original answer settles.
+    await expect(h.keeper.typedReply(reply('And another', 100, 502))).resolves.toBe(false)
     expect(h.answers).toHaveLength(1)
   })
 

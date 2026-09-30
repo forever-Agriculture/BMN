@@ -67,6 +67,8 @@ export type AnswerRefusal =
 
 export type AnswerOutcome =
   | { state: 'refused'; reason: AnswerRefusal }
+  /** An ordinary conversation message was submitted; no native question-consumption claim. */
+  | { state: 'submitted'; sent: string[] }
   /** The harness itself reported exactly this answer. */
   | { state: 'confirmed'; sent: string[] }
   /** Sent, but nothing attributable came back; never retried and never shown as success. */
@@ -83,7 +85,7 @@ export interface AnswerRequest {
   answer: RemoteAnswer
 }
 
-export type AnswerRoute = 'claude-keys' | 'codex-keys' | 'opencode-api'
+export type AnswerRoute = 'claude-keys' | 'codex-keys' | 'opencode-api' | 'codex-message'
 
 /** What an OpenCode plugin collects through `answer.take` and posts to its own server. */
 export type PluginAnswer =
@@ -103,6 +105,9 @@ export interface RemoteAnswerDependencies {
   screen(sessionId: string, incarnationId: string): ScreenLike | undefined
   write(sessionId: string, bytes: Uint8Array): void
   answerPermissions(): Promise<boolean>
+  /** Durable, idempotent ordinary message submission, revalidating the card immediately before input. */
+  submitMessage?(record: AttentionRecord, request: AnswerRequest, text: string,
+    current: () => boolean, markWritten: () => void): Promise<AnswerOutcome>
   timing?: Partial<AnswerTiming>
 }
 
@@ -127,6 +132,7 @@ export function answerRoute(prompt: AttentionPrompt | null): AnswerRoute | null 
   // Cursor's terminal agent reports no question or permission dialog (docs/agent-control.md), so its cards have no buttons.
   if (!prompt || prompt.harness === 'cursor') return null
   if (prompt.type === 'questions') {
+    if (prompt.harness === 'codex' && prompt.shape === 'async-choice') return 'codex-message'
     // The shape and the questions must agree: `multi-select` exactly when some question is one.
     const multi = prompt.questions.some((question) => question.multiSelect)
     if (prompt.shape !== (multi ? 'multi-select' : 'choice')) return null
@@ -570,6 +576,14 @@ export class RemoteAnswers {
     const current = (): boolean =>
       this.epochOf(record.requestId) === request.epoch &&
       this.deps.liveIncarnationId(record.sessionId) === request.incarnationId
+    if (route === 'codex-message') {
+      if (prompt.type !== 'questions' || request.answer.type !== 'choices' || !this.deps.submitMessage) return refused('unsupported')
+      const text = prompt.questions.map((question, index) => {
+        const parts = choiceParts(question, request.answer.type === 'choices' ? request.answer.choices[index]! : 0)
+        return `${cleanTypedAnswer(question.text)}\n${[...parts.labels.map(cleanTypedAnswer), ...(parts.typed === null ? [] : [parts.typed])].join(', ')}`
+      }).join('\n\n')
+      return this.deps.submitMessage(record, request, text, current, markWritten)
+    }
     if (route === 'opencode-api') return this.deliverToPlugin(record, prompt, request, current, markWritten)
     // While BMN types, its own keys walk the dialog through its steps, and each step is verified on its own.
     // One answer types into a session at a time; only the one typing may end that.

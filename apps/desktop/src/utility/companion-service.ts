@@ -283,6 +283,7 @@ export class CompanionService {
   /** The Telegram card of each page, kept true to its request (Story 30.3). */
   private readonly cards: TelegramCardKeeper
   private readonly draftOperations = new Map<string, Promise<void>>()
+  private readonly telegramReplyOperations = new Map<string, Promise<void>>()
   /** A request key claims the one PTY write before any asynchronous availability check. */
   private readonly fileReferencePastes = new Map<string, {
     fingerprint: string
@@ -419,6 +420,8 @@ export class CompanionService {
       liveIncarnationId: (sessionId) => options.manager.liveIncarnationId(sessionId),
       screen: (sessionId, incarnationId) => options.manager.screenMirror(sessionId, incarnationId),
       write: (sessionId, bytes) => options.manager.writeToSession(sessionId, bytes),
+      submitMessage: (record, request, text, current, markWritten) =>
+        this.submitTelegramAnswerMessage(record, request, text, current, markWritten),
       answerPermissions: async () => (await options.database.companion('getSettings')).telegram.answerPermissions
     })
     this.cards = new TelegramCardKeeper({
@@ -1233,6 +1236,43 @@ export class CompanionService {
   /** The dialog epoch a card for this request is sent for; null when it cannot be answered by a tap. */
   answerEpoch(requestId: string): number | null {
     return this.answers.epochOf(requestId)
+  }
+
+  /** A Codex Default card sends an ordinary message, never picker keys or a consumption receipt. */
+  private async submitTelegramAnswerMessage(
+    attention: AttentionRecord, request: AnswerRequest, text: string,
+    current: () => boolean, markWritten: () => void
+  ): Promise<AnswerOutcome> {
+    const refused = (reason: 'changed' | 'gone' | 'claimed' | 'unsupported'): AnswerOutcome => ({ state: 'refused', reason })
+    if (attention.kind !== 'question' || hasDisallowedHandoffControl(text) ||
+      new TextEncoder().encode(text).byteLength > HANDOFF_PAYLOAD_BYTES) return refused('unsupported')
+    const database = this.options.database
+    const { record } = await database.companion('createDraft', {
+      draftId: randomUUID(), sessionId: attention.sessionId, origin: 'telegram',
+      originKey: `telegram-answer:${attention.requestId}:${attention.revision}`, requestId: attention.requestId,
+      text, artifactId: null, state: 'draft', detail: null
+    }, this.iso())
+    return this.withDraft(record.draftId, async () => {
+      const draft = await database.companion('getDraft', record.draftId)
+      if (draft.state !== 'draft') return refused('claimed')
+      // Persist before input: a restart or ambiguous write cannot replay the message.
+      await database.companion('updateDraft', draft.draftId, 'uncertain', 'Message submission pending', this.iso())
+      const open = await database.companion('listAttention')
+      const latest = open.find(row => row.requestId === attention.requestId)
+      const nativeDialog = open.some(row => row.sessionId === attention.sessionId && row.state === 'open' &&
+        row.requestId !== attention.requestId && (row.kind === 'permission' || row.prompt !== null && answerRoute(row.prompt) !== 'codex-message'))
+      const reason = !latest || latest.state !== 'open' ? 'gone' :
+        latest.revision !== request.revision || !current() ? 'changed' : nativeDialog ? 'unsupported' : null
+      if (reason) {
+        await database.companion('updateDraft', draft.draftId, 'draft', 'Nothing submitted; card changed or a native dialog is open', this.iso())
+        return refused(reason)
+      }
+      markWritten()
+      this.options.manager.writeToSession(attention.sessionId, bracketedPaste(text, true))
+      await database.companion('updateDraft', draft.draftId, 'submitted', 'Ordinary message submitted; native answer not confirmed', this.iso())
+      this.emit('drafts', attention.sessionId)
+      return { state: 'submitted', sent: [text] }
+    })
   }
 
   /** Whether a tap could answer this request now, and whether it may offer Deny. */
@@ -2313,6 +2353,30 @@ export class CompanionService {
   private async handleTelegramReply(reply: InboundReply): Promise<void> {
     const connector = this.telegram
     if (!connector) return
+    const bot = createHash('sha256').update(this.telegramToken ?? 'unconfigured').digest('hex')
+    const key = `telegram-reply:${bot}:${reply.updateId}`
+    const pending = this.telegramReplyOperations.get(key)
+    if (pending) return pending
+    const database = this.options.database
+    const operation = (async () => {
+      // Claim the inbound update before either Other or conversation handling. Telegram can
+      // redeliver an update after offset-save failure/reconnect, even when the original card finished.
+      if (await database.companion('getReceipt', key)) return
+      const paramsHash = createHash('sha256').update(JSON.stringify(reply)).digest('hex')
+      await database.companion('putReceipt', { key, paramsHash, state: 'staged' }, this.iso())
+      if (this.telegram !== connector) return
+      await this.handleTelegramReplyOnce(reply)
+      await database.companion('putReceipt', { key, paramsHash, state: 'done' }, this.iso())
+    })()
+    this.telegramReplyOperations.set(key, operation)
+    try { await operation } finally {
+      if (this.telegramReplyOperations.get(key) === operation) this.telegramReplyOperations.delete(key)
+    }
+  }
+
+  private async handleTelegramReplyOnce(reply: InboundReply): Promise<void> {
+    const connector = this.telegram
+    if (!connector) return
     // A reply to a card that offers Other… is its typed answer (or refused), never a draft or a prompt.
     if (await this.cards.typedReply(reply)) return
     const database = this.options.database
@@ -2359,15 +2423,38 @@ export class CompanionService {
       live !== undefined &&
       target.incarnationId !== null &&
       live === target.incarnationId &&
-      request?.state === 'open' &&
-      request.sessionId === target.sessionId &&
-      (request.incarnationId === null || request.incarnationId === target.incarnationId)
+      (request === undefined || (request.sessionId === target.sessionId &&
+      (request.incarnationId === null || request.incarnationId === target.incarnationId)))
     // A typed line cannot pick an option in the agent's own dialog, so a reply to one stays a draft.
     const structured = request?.state === 'open' && request.prompt !== null
-    if (settings.telegram.autoSubmitReplies && currentTarget && request.kind !== 'handoff' && request.kind !== 'notice' && !structured) {
+    const ordinaryCard = !request || request.kind === 'notice' || request.kind === 'handoff' ||
+      request.kind === 'question' && request.state !== 'open' && request.prompt !== null ||
+      request.prompt?.type === 'questions' && request.prompt.harness === 'codex' && request.prompt.shape === 'async-choice'
+    if (settings.telegram.autoSubmitReplies && currentTarget && (ordinaryCard || request?.state === 'open' && !structured)) {
+      let messageWriteAttempted = false
       try {
-        await this.sendDraft(record.draftId, true, target.incarnationId)
-        if (reply.text) {
+        if (ordinaryCard) {
+          await this.withDraft(record.draftId, async () => {
+            await database.companion('updateDraft', record.draftId, 'uncertain', 'Message submission pending', this.iso())
+            const open = await database.companion('listAttention')
+            if (this.options.manager.liveIncarnationId(target.sessionId) !== target.incarnationId ||
+              open.some(row => row.state === 'open' && row.sessionId === target.sessionId &&
+                (row.kind === 'permission' || row.prompt !== null && answerRoute(row.prompt) !== 'codex-message'))) {
+              await database.companion('updateDraft', record.draftId, 'draft', 'Nothing submitted; session changed or a native dialog is open', this.iso())
+              throw new HostControlError(ERROR_CODES.revisionConflict, 'Answer the current native dialog first')
+            }
+            // One synchronous text write after the final incarnation/dialog checks. Attachments stay drafts.
+            if (!record.text || record.artifactId || hasDisallowedHandoffControl(record.text)) {
+              await database.companion('updateDraft', record.draftId, 'draft', 'Send a text reply without an attachment', this.iso())
+              throw new HostControlError(ERROR_CODES.revisionConflict, 'Send a text reply without an attachment')
+            }
+            messageWriteAttempted = true
+            this.options.manager.writeToSession(target.sessionId, bracketedPaste(record.text, true))
+            await database.companion('updateDraft', record.draftId, 'submitted', 'Ordinary message submitted; native answer not confirmed', this.iso())
+            this.emit('drafts', target.sessionId)
+          })
+        } else await this.sendDraft(record.draftId, true, target.incarnationId)
+        if (reply.text && !ordinaryCard && request) {
           await database.companion(
             'closeAttention',
             { requestId: request.requestId, expectedRevision: request.revision },
@@ -2378,9 +2465,14 @@ export class CompanionService {
           )
             .then(() => this.emit('attention', target.sessionId), () => undefined)
         }
-        await connector.sendMessage('Sent to the session.', { replyToMessageId: reply.messageId }).catch(() => undefined)
+        await connector.sendMessage(ordinaryCard ? 'Message submitted to this session. Native answer not confirmed.' : 'Sent to the session.', { replyToMessageId: reply.messageId }).catch(() => undefined)
         return
       } catch (error) {
+        if (ordinaryCard && messageWriteAttempted) {
+          await connector.sendMessage('Message submission is uncertain. Check this session before sending it again.',
+            { replyToMessageId: reply.messageId }).catch(() => undefined)
+          return
+        }
         if (!(error instanceof HostControlError) || error.code !== ERROR_CODES.revisionConflict) {
           await database.companion(
             'updateDraft', record.draftId, 'uncertain', 'Automatic submission failed', this.iso()
@@ -2388,7 +2480,7 @@ export class CompanionService {
         }
       }
     }
-    await connector.sendMessage(structured
+    await connector.sendMessage(structured && !ordinaryCard
       ? 'Saved as a draft in BMN. A typed reply cannot pick an option in this dialog: tap a button or answer at the laptop.'
       : 'Saved as a draft in BMN for that session.', {
       replyToMessageId: reply.messageId

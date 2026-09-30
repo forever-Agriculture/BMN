@@ -13,9 +13,9 @@ session. It uses a bot you create and own. It is off by default.
   [agent-control.md](agent-control.md#agent-hooks-needs-you-for-claude-code-codex-and-opencode).
 - Reply to that message in Telegram. By default the reply is saved as a **draft** for that exact
   session, and you send it from the Files panel. If you turn on **Type replies into the session and
-  press Enter**, the reply is typed into the session directly. Replies to handoff pages always stay
-  drafts for the source session. Informational-update replies also stay drafts, including with
-  automatic replies enabled, so they cannot answer another pending native question.
+  press Enter**, text replies to current-process cards are submitted to their exact session, including
+  informational and handoff cards. A handoff-card reply goes to its source session and does not deliver
+  the handoff. A pending native question or permission keeps a conversation reply as a draft.
 - A message that is not a reply to a notification gets a short answer asking you to reply to one,
   so text never lands in whichever session happens to be focused.
 - It cannot deliver handoffs or manage sessions remotely; inspect and deliver handoffs in BMN's Files
@@ -27,13 +27,14 @@ Supported questions show their declared choices and **Other…** by default, wit
 opt-in. When an agent already supplied an Other option, the separate typed route is labelled
 **Type an answer…** and the native option stays intact. Informational cards offer **Acknowledge**
 and **Other…**. Acknowledge closes only that update and sends no terminal input; Other requests a
-reply to that exact card and prepares an addressed follow-up draft.
+reply to that exact card. The reply preference controls submission or saving as a draft.
 
-Codex Default async questions remain **unsupported for remote answers**: their card explains that
-BMN has no verified correlated answer route. Call identity and declared options are retained,
-including a typed-only question without options. A normal submitted prompt does not prove that an
-async question consumed the answer. Plan mode retains its verified native picker route. Permission
-settings and producer custom-answer prohibitions still apply.
+Codex Default async cards offer choices and **Other…**. Their answers are submitted as ordinary
+messages to the session that asked, rather than native picker input. The receipt says **Message
+submitted; native answer not confirmed**. A reply directly to the card is a conversation message
+when **Type replies into the session** is enabled. Messages are staged before input and cannot
+automatically replay after a restart or uncertain write. Plan mode retains its native picker route.
+Permission settings and producer custom-answer prohibitions still apply.
 
 A page is a card: the session, the agent (with the model maker's flag when BMN has seen it), the
 question in bold and the options numbered, with one button per option. Tap one and the card says
@@ -42,6 +43,7 @@ edits the same card to say what happened:
 
 - **✓ Sent: JWT**, **✓ Allowed once** or **✓ Denied** only when the agent itself reported that
   answer back.
+- **Message submitted; native answer not confirmed** for an ordinary Codex Default message.
 - **⚠ Sent — not confirmed, check the laptop.** when it was sent but nothing confirmed it; BMN never
   sends it twice. A late confirmation still turns it into ✓.
 - **Nothing was sent: …** with the reason (the dialog changed, it is not on the screen, …) and fresh
@@ -58,9 +60,10 @@ repeats the choice in full as **Chosen: …**; toggling only edits the card. Onc
 **Send N selected** (or **Next · N selected** before the last question) goes on. **Other…** answers in
 your own words: tap it, then reply to the card; **‹ Options** goes back with your toggles intact. The
 reply is sent as one line (line breaks and control characters become spaces), clipped to 2,000
-characters, and never becomes a draft or a prompt. A reply to a card that offers Other… before you
-tapped it is refused with **Tap Other… first**; while its answer is on its way, or once it is done, a
-reply to it is refused too, never turned into a draft. A reply made only of frame glyphs such as `│`
+characters. On a native picker, a reply before tapping Other… is refused with **Tap Other… first**.
+On Codex Default, a direct reply can instead be submitted as an ordinary message. While an answer
+is on its way, a second reply is refused. Replies to finished cards can be new conversation messages
+to the same process, subject to the reply preference and pending-dialog guard. A native-picker reply made only of frame glyphs such as `│`
 or `✔` cannot be checked on a Claude or Codex screen and is refused. A new version of an open request edits its card instead
 of sending another. Uncertain, partial and refused answers also get a short reply, so the phone
 sounds. If Telegram does not take the final edit, BMN tries again after about 10 s, 1 min and 5 min
