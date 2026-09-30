@@ -138,9 +138,9 @@ function oneOf<T extends string>(value: unknown, key: string, allowed: readonly 
   return value as T
 }
 
-function list(value: unknown, key: string, max: number): unknown[] {
-  if (!Array.isArray(value) || value.length === 0 || value.length > max) {
-    throw new PromptError(`prompt ${key} must hold 1..${max} entries`)
+function list(value: unknown, key: string, max: number, minimum = 1): unknown[] {
+  if (!Array.isArray(value) || value.length < minimum || value.length > max) {
+    throw new PromptError(`prompt ${key} must hold ${minimum}..${max} entries`)
   }
   return value
 }
@@ -153,7 +153,7 @@ function option(value: unknown): AttentionPromptOption {
   }
 }
 
-function question(value: unknown): AttentionPromptQuestion {
+function question(value: unknown, typedOnly = false): AttentionPromptQuestion {
   if (!isRecord(value) || !hasExactKeys(value, ['id', 'header', 'text', 'multiSelect', 'options'], ['custom'])) {
     throw new PromptError('prompt question has the wrong shape')
   }
@@ -164,7 +164,7 @@ function question(value: unknown): AttentionPromptQuestion {
     header: nullableShownText(value.header, 'question header', ATTENTION_PROMPT_LIMITS.header),
     text: shownText(value.text, 'question text', ATTENTION_PROMPT_LIMITS.text, true),
     multiSelect: value.multiSelect,
-    options: list(value.options, 'options', ATTENTION_PROMPT_LIMITS.options).map(option),
+    options: list(value.options, 'options', ATTENTION_PROMPT_LIMITS.options, typedOnly ? 0 : 1).map(option),
     ...('custom' in value ? { custom: value.custom as boolean } : {})
   }
 }
@@ -185,7 +185,8 @@ export function parseAttentionPrompt(value: unknown): Parsed<AttentionPrompt> {
           shape: oneOf(value.shape, 'shape', QUESTION_SHAPES),
           requestRef: nullableText(value.requestRef, 'requestRef', ATTENTION_PROMPT_LIMITS.identifier),
           toolUseId: nullableText(value.toolUseId, 'toolUseId', ATTENTION_PROMPT_LIMITS.identifier),
-          questions: list(value.questions, 'questions', ATTENTION_PROMPT_LIMITS.questions).map(question)
+          questions: list(value.questions, 'questions', ATTENTION_PROMPT_LIMITS.questions)
+            .map((item) => question(item, value.harness === 'codex' && value.shape === 'async-choice'))
         }
       }
     }

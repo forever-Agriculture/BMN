@@ -1,5 +1,5 @@
 // MODULE: artifact-presentation.tsx - how a stored original is named, sized, iconed, previewed and viewed
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { ArtifactPreview, ArtifactState } from '@bmn/protocol'
 import { failureDetail } from './bridge-error'
 import {
@@ -53,11 +53,23 @@ export function ImageViewport(props: {
   size: 'inline' | 'expanded'
   onExpand: (() => void) | null
 }): React.JSX.Element {
+  // A new source owns new view state. An effect reset can erase a cached image's onLoad.
+  return <LoadedImageViewport key={props.src} {...props} />
+}
+
+function LoadedImageViewport(props: {
+  src: string
+  alt: string
+  size: 'inline' | 'expanded'
+  onExpand: (() => void) | null
+}): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
+  const imageRef = useRef<HTMLImageElement>(null)
   const naturalSizeRef = useRef<Size | null>(null)
   const dragRef = useRef<{ pointerId: number; startX: number; startY: number; startPan: Point } | null>(null)
 
   const [naturalSize, setNaturalSize] = useState<Size | null>(null)
+  const [decodeError, setDecodeError] = useState(false)
   const [fitMode, setFitMode] = useState(true)
   const [view, setView] = useState<ViewportState>({ scale: 1, pan: { x: 0, y: 0 } })
 
@@ -65,11 +77,13 @@ export function ImageViewport(props: {
     naturalSizeRef.current = naturalSize
   }, [naturalSize])
 
-  useEffect(() => {
-    setNaturalSize(null)
-    setFitMode(true)
-    setView({ scale: 1, pan: { x: 0, y: 0 } })
-  }, [props.src])
+  useLayoutEffect(() => {
+    const image = imageRef.current
+    if (image?.complete) {
+      if (image.naturalWidth > 0) loaded(image)
+      else setDecodeError(true)
+    }
+  }, [])
 
   function containerSize(): Size {
     const rect = containerRef.current?.getBoundingClientRect()
@@ -114,8 +128,10 @@ export function ImageViewport(props: {
     return () => element.removeEventListener('wheel', onWheel)
   }, [])
 
-  function onImgLoad(event: React.SyntheticEvent<HTMLImageElement>): void {
-    const image = { width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight }
+  function loaded(element: HTMLImageElement): void {
+    const image = { width: element.naturalWidth, height: element.naturalHeight }
+    naturalSizeRef.current = image
+    setDecodeError(false)
     setNaturalSize(image)
     applyFit(image)
   }
@@ -186,10 +202,12 @@ export function ImageViewport(props: {
         onKeyDown={onKeyDown}
       >
         <img
+          ref={imageRef}
           src={props.src}
           alt={props.alt}
           draggable={false}
-          onLoad={onImgLoad}
+          onLoad={(event) => loaded(event.currentTarget)}
+          onError={() => setDecodeError(true)}
           className="files-image-surface-img"
           style={
             naturalSize
@@ -201,6 +219,9 @@ export function ImageViewport(props: {
               : { visibility: 'hidden' }
           }
         />
+        {!naturalSize ? <p className={`files-preview-message${decodeError ? ' files-preview-error' : ''}`} role="status">
+          {decodeError ? 'This image could not be decoded. No image is loaded; zoom is unavailable. Select it again to retry, or save the original.' : 'Loading image… Zoom is available when the image loads.'}
+        </p> : null}
       </div>
       <div className="files-image-toolbar">
         <button type="button" aria-pressed={fitMode} disabled={!naturalSize} onClick={() => naturalSizeRef.current && applyFit(naturalSizeRef.current)}>
@@ -246,31 +267,25 @@ export interface ArtifactPreviewState {
  * evidence dialog use it, so an unreadable or unsupported original is explained the same way twice.
  */
 export function useArtifactPreview(artifactId: string | null): ArtifactPreviewState {
-  const [preview, setPreview] = useState<ArtifactPreview | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [result, setResult] = useState<ArtifactPreviewState & { artifactId: string | null }>({
+    artifactId: null, preview: null, error: null, loading: false
+  })
 
   useEffect(() => {
     if (!artifactId) {
-      setPreview(null)
-      setError(null)
-      setLoading(false)
+      setResult({ artifactId, preview: null, error: null, loading: false })
       return
     }
     let cancelled = false
-    setPreview(null)
-    setError(null)
-    setLoading(true)
+    setResult({ artifactId, preview: null, error: null, loading: true })
     window.aiTerminal.previewArtifact(artifactId).then(
       (result) => {
         if (cancelled) return
-        setPreview(result)
-        setLoading(false)
+        setResult({ artifactId, preview: result, error: null, loading: false })
       },
       (failure: unknown) => {
         if (cancelled) return
-        setError(failureDetail(failure, 'Preview unavailable'))
-        setLoading(false)
+        setResult({ artifactId, preview: null, error: failureDetail(failure, 'Preview unavailable'), loading: false })
       }
     )
     return () => {
@@ -278,5 +293,5 @@ export function useArtifactPreview(artifactId: string | null): ArtifactPreviewSt
     }
   }, [artifactId])
 
-  return { preview, error, loading }
+  return result.artifactId === artifactId ? result : { preview: null, error: null, loading: artifactId !== null }
 }

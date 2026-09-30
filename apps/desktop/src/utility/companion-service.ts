@@ -437,6 +437,13 @@ export class CompanionService {
       answerEpoch: (requestId) => this.answerEpoch(requestId),
       liveIncarnationId: (sessionId) => options.manager.liveIncarnationId(sessionId),
       answer: (request) => this.answerAttention(request),
+      acknowledge: async (record) => {
+        if (record.kind !== 'notice') invalid('Only an informational update can be acknowledged')
+        await options.database.companion('closeAttention', {
+          requestId: record.requestId, expectedKind: 'notice', expectedRevision: record.revision
+        }, 'answered', 'Update acknowledged from Telegram; no terminal input sent', this.iso(), 'telegram')
+        this.emit('attention', record.sessionId)
+      },
       store: {
         put: (card) => options.database.companion('putTelegramCard', card, this.iso()),
         update: (messageId, revision, state, card) =>
@@ -670,7 +677,7 @@ export class CompanionService {
       case METHOD_REGISTRY.artifactPreview:
         return this.preview(text(params, 'artifactId'))
       case METHOD_REGISTRY.artifactDeliver:
-        return this.deliver(text(params, 'artifactId'), text(params, 'sessionId'))
+        return this.deliver(text(params, 'artifactId'), text(params, 'sessionId'), optionalText(params, 'expectedIncarnationId'))
       case METHOD_REGISTRY.fileReferencePaste:
         return this.pasteFileReference(params)
       case METHOD_REGISTRY.fileReferenceSearch:
@@ -1638,14 +1645,27 @@ export class CompanionService {
    * Delivers an owned original to the target session by pasting a path to it, never pressing Enter.
    * The path is a symlink named with the original's extension so TUIs recognize images.
    */
-  private async deliver(artifactId: string, sessionId: string): Promise<{ delivered: true; path: string }> {
+  private async deliver(artifactId: string, sessionId: string, expectedIncarnationId: string | null = null): Promise<{ delivered: true; path: string; pastedAt: string }> {
     const artifact = await this.readyArtifact(artifactId)
-    if (!this.options.manager.liveIncarnationId(sessionId)) {
+    const incarnation = this.options.manager.liveIncarnationId(sessionId)
+    if (!incarnation) {
       throw new HostControlError(ERROR_CODES.notFound, 'The target session has no live process')
     }
+    if (expectedIncarnationId !== null && incarnation !== expectedIncarnationId) {
+      throw new HostControlError(ERROR_CODES.invalidArgument, 'The destination process changed. Review it before delivering.')
+    }
     const linkPath = await this.prepareArtifactLink(artifact)
-    this.options.manager.writeToSession(sessionId, bracketedPaste(`${this.quotePath(linkPath)} `, false))
-    return { delivered: true, path: linkPath }
+    if (this.options.manager.liveIncarnationId(sessionId) !== incarnation) {
+      throw new HostControlError(ERROR_CODES.invalidArgument, 'The destination stopped or changed before paste. Nothing was pasted.')
+    }
+    // One original has one delivery identity for this live destination, including after panel/host restart.
+    // Reuse the persisted paste guard: a lost response or uncertain write must never append again.
+    const requestId = `artifact-delivery:${createHash('sha256')
+      .update(JSON.stringify([artifactId, sessionId, incarnation])).digest('hex')}`
+    const receipt = await this.pasteFileReference({
+      requestId, sessionId, expectedIncarnationId: incarnation, sourcePath: linkPath, line: null, column: null
+    }, { retryRejected: true, ownedArtifactPath: linkPath })
+    return { delivered: true, path: linkPath, pastedAt: receipt.pastedAt }
   }
 
   private async prepareArtifactLink(artifact: ArtifactRecord): Promise<string> {
@@ -1687,7 +1707,10 @@ export class CompanionService {
     })
   }
 
-  private pasteFileReference(raw: Record<string, unknown>): Promise<FileReferencePasteReceipt> {
+  private pasteFileReference(
+    raw: Record<string, unknown>,
+    delivery: { retryRejected?: boolean; ownedArtifactPath?: string } = {}
+  ): Promise<FileReferencePasteReceipt> {
     const requestId = text(raw, 'requestId', 128)
     const sessionId = text(raw, 'sessionId', 128)
     const expectedIncarnationId = text(raw, 'expectedIncarnationId', 128)
@@ -1698,7 +1721,9 @@ export class CompanionService {
       (column !== null && (!Number.isSafeInteger(column) || Number(column) < 1))) {
       invalid('The reference position is invalid')
     }
-    const payload = exactAbsoluteFileReference(sourcePath, line as number | null, column as number | null)
+    const payload = delivery.ownedArtifactPath
+      ? `${this.quotePath(delivery.ownedArtifactPath)} `
+      : exactAbsoluteFileReference(sourcePath, line as number | null, column as number | null)
     if (!payload) invalid('This path cannot be sent as an exact file reference')
     const fingerprint = JSON.stringify([sessionId, expectedIncarnationId, payload])
     const paramsHash = createHash('sha256').update(fingerprint).digest('hex')
@@ -1719,11 +1744,15 @@ export class CompanionService {
           return previousReceipt.result as FileReferencePasteReceipt
         }
         if (previousReceipt.state === 'failed') {
+          if (!delivery.retryRejected) {
+            throw new HostControlError(ERROR_CODES.revisionConflict,
+              'The earlier paste was rejected before writing; choose the destination again')
+          }
+          // Artifact delivery may retry a definite pre-write rejection; staged/uncertain writes stay blocked.
+        } else {
           throw new HostControlError(ERROR_CODES.revisionConflict,
-            'The earlier paste was rejected before writing; choose the destination again')
+            'An earlier paste may have reached the input; inspect the destination before choosing it again')
         }
-        throw new HostControlError(ERROR_CODES.revisionConflict,
-          'An earlier paste may have reached the input; inspect the destination before choosing it again')
       }
       await this.availableFileReferenceTarget(sessionId, expectedIncarnationId)
       // The staged receipt survives a host crash. A retry with the same key never repeats an uncertain write.
@@ -2335,7 +2364,7 @@ export class CompanionService {
       (request.incarnationId === null || request.incarnationId === target.incarnationId)
     // A typed line cannot pick an option in the agent's own dialog, so a reply to one stays a draft.
     const structured = request?.state === 'open' && request.prompt !== null
-    if (settings.telegram.autoSubmitReplies && currentTarget && request.kind !== 'handoff' && !structured) {
+    if (settings.telegram.autoSubmitReplies && currentTarget && request.kind !== 'handoff' && request.kind !== 'notice' && !structured) {
       try {
         await this.sendDraft(record.draftId, true, target.incarnationId)
         if (reply.text) {

@@ -227,7 +227,7 @@ export interface AiTerminalBridge {
   attachDroppedFiles(sessionId: string, files: File[]): Promise<ArtifactRecord[]>
   pasteImage(sessionId: string): Promise<ArtifactRecord | null>
   previewArtifact(artifactId: string): Promise<ArtifactPreview>
-  deliverArtifact(artifactId: string, sessionId: string): Promise<{ delivered: true; path: string }>
+  deliverArtifact(artifactId: string, sessionId: string, expectedIncarnationId?: string): Promise<{ delivered: true; path: string; pastedAt: string }>
   saveArtifactAs(artifactId: string): Promise<{ saved: string | null }>
   openArtifact(artifactId: string): Promise<{ opened: true }>
   showArtifact(artifactId: string): Promise<{ shown: true }>

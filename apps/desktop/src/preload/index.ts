@@ -556,8 +556,8 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   previewArtifact(artifactId: string): Promise<ArtifactPreview> {
     return invokeBridge('aiterm:artifact:preview', { artifactId })
   },
-  deliverArtifact(artifactId: string, sessionId: string): Promise<{ delivered: true; path: string }> {
-    return invokeBridge('aiterm:artifact:deliver', { artifactId, sessionId })
+  deliverArtifact(artifactId: string, sessionId: string, expectedIncarnationId?: string): Promise<{ delivered: true; path: string; pastedAt: string }> {
+    return invokeBridge('aiterm:artifact:deliver', { artifactId, sessionId, expectedIncarnationId })
   },
   saveArtifactAs(artifactId: string): Promise<{ saved: string | null }> {
     return invokeBridge('aiterm:artifact:save-as', { artifactId })

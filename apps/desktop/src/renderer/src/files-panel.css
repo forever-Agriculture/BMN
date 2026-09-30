@@ -1,10 +1,16 @@
 /* MODULE: files-panel.css - the Files side panel and its expanded image preview dialog */
 
+.files-side-panel {
+  min-width: 0;
+  min-height: 0;
+}
+
 .files-panel {
   display: flex;
   flex-direction: column;
   overflow: auto;
   height: 100%;
+  min-height: 0;
   background: var(--surface);
   border-left: 1px solid var(--hairline);
   color: var(--text);
@@ -56,6 +62,12 @@
 .files-handoffs {
   padding: 12px;
   border-bottom: 1px solid var(--hairline);
+  flex: none;
+}
+
+.files-action-outcome {
+  margin: 6px 0;
+  overflow-wrap: anywhere;
 }
 
 .files-section-heading {
@@ -223,6 +235,13 @@
 
 .files-image-surface.is-pannable {
   cursor: grab;
+}
+
+.files-image-surface > .files-preview-message {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
 }
 
 .files-image-surface:focus-visible {

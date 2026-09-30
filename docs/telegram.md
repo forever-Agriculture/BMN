@@ -14,13 +14,26 @@ session. It uses a bot you create and own. It is off by default.
 - Reply to that message in Telegram. By default the reply is saved as a **draft** for that exact
   session, and you send it from the Files panel. If you turn on **Type replies into the session and
   press Enter**, the reply is typed into the session directly. Replies to handoff pages always stay
-  drafts for the source session.
+  drafts for the source session. Informational-update replies also stay drafts, including with
+  automatic replies enabled, so they cannot answer another pending native question.
 - A message that is not a reply to a notification gets a short answer asking you to reply to one,
   so text never lands in whichever session happens to be focused.
 - It cannot deliver handoffs or manage sessions remotely; inspect and deliver handoffs in BMN's Files
   panel.
 
 ## Tap to answer
+
+Supported questions show their declared choices and **Other…** by default, with no formatting
+opt-in. When an agent already supplied an Other option, the separate typed route is labelled
+**Type an answer…** and the native option stays intact. Informational cards offer **Acknowledge**
+and **Other…**. Acknowledge closes only that update and sends no terminal input; Other requests a
+reply to that exact card and prepares an addressed follow-up draft.
+
+Codex Default async questions remain **unsupported for remote answers**: their card explains that
+BMN has no verified correlated answer route. Call identity and declared options are retained,
+including a typed-only question without options. A normal submitted prompt does not prove that an
+async question consumed the answer. Plan mode retains its verified native picker route. Permission
+settings and producer custom-answer prohibitions still apply.
 
 A page is a card: the session, the agent (with the model maker's flag when BMN has seen it), the
 question in bold and the options numbered, with one button per option. Tap one and the card says

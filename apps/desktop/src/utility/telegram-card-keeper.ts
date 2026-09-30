@@ -50,6 +50,8 @@ export interface CardKeeperDependencies {
   answerEpoch(requestId: string): number | null
   liveIncarnationId(sessionId: string): string | undefined
   answer(request: AnswerRequest): Promise<AnswerOutcome>
+  /** Informational acknowledgement only; cannot grant a permission or answer a native question. */
+  acknowledge?(record: AttentionRecord): Promise<void>
   store: {
     put(card: TelegramCardRecord): Promise<void>
     update(messageId: number, revision: number | null, state: TelegramCardState, card: TelegramCardData): Promise<void>
@@ -66,6 +68,8 @@ export interface CardKeeperDependencies {
 }
 
 type TapAction =
+  | { type: 'acknowledge' }
+  | { type: 'follow-up' }
   | { type: 'choice' | 'toggle'; step: number; index: number }
   /** Send or Next on a multi-select question; Other…; ‹ Options back from a typed reply; ‹ Back a question. */
   | { type: 'submit' | 'other' | 'options' | 'back'; step: number }
@@ -261,6 +265,29 @@ export class TelegramCardKeeper {
     }
     this.revoke(card)
     const { action, binding } = entry
+    if (action.type === 'acknowledge' || action.type === 'follow-up') {
+      const record = await this.deps.getAttention(card.requestId).catch(() => null)
+      if (!record || record.state !== 'open' || record.revision !== binding.revision || record.kind !== 'notice') {
+        await connector.answerCallbackQuery(tap.callbackId, 'This update is no longer current.').catch(() => undefined)
+        await this.enqueue(card, () => this.refreshCard(card))
+        return
+      }
+      if (action.type === 'follow-up') {
+        const note = 'Reply to this message. Your follow-up is saved as a draft for this session; nothing is sent automatically.'
+        await connector.answerCallbackQuery(tap.callbackId, 'Reply to this card to prepare a follow-up.').catch(() => undefined)
+        await this.enqueue(card, () => this.show(card, this.composeNotice(record, note), binding))
+      } else {
+        try {
+          await this.deps.acknowledge?.(record)
+          await connector.answerCallbackQuery(tap.callbackId, 'Update acknowledged. No terminal input sent.').catch(() => undefined)
+          await this.enqueue(card, () => this.finish(card, { type: 'acknowledged' }))
+        } catch {
+          await connector.answerCallbackQuery(tap.callbackId, 'Acknowledgement failed. Nothing was sent.').catch(() => undefined)
+          await this.enqueue(card, () => this.refreshCard(card, 'Acknowledgement failed. Nothing was sent; try again.'))
+        }
+      }
+      return
+    }
     if (action.type === 'permission') {
       const label = action.decision === 'allow' ? 'Allow once' : 'Deny'
       card.state = 'sending'
@@ -517,6 +544,7 @@ export class TelegramCardKeeper {
     const prompt = record.prompt
     const none: Omit<Composed, 'rendered'> = { state: 'open', actions: [], offersOther: false }
     if (!prompt) {
+      if (record.kind === 'notice' && this.deps.acknowledge) return this.composeNotice(record, note)
       return { ...none, rendered: record.kind === 'notice' ? noticeCard(header, record) : requestCard(header, record) }
     }
     const answerability = await this.deps.answerability(record)
@@ -578,6 +606,19 @@ export class TelegramCardKeeper {
         submit,
         marked: multi ? null : progress.marked
       })
+    }
+  }
+
+  private composeNotice(record: AttentionRecord, note: string | null): Composed {
+    const rendered = noticeCard(this.deps.header(record.sessionId, record), record)
+    return {
+      state: 'buttons', actions: [{ type: 'acknowledge' }, { type: 'follow-up' }], offersOther: false,
+      rendered: {
+        ...rendered,
+        text: rendered.text.replace(/Reply to this message to (?:continue|answer)\./,
+          note ?? 'Acknowledge this update, or use Other… and reply to this card to prepare a follow-up draft. Nothing is sent automatically.'),
+        keyboard: [[{ text: 'Acknowledge', callback_data: this.newToken() }, { text: 'Other…', callback_data: this.newToken() }]]
+      }
     }
   }
 
@@ -672,7 +713,7 @@ export class TelegramCardKeeper {
   }
 
   /** Reads the request back and makes the card say what is true now. A card that is sending is left to its outcome. */
-  private async refreshCard(card: LiveCard): Promise<void> {
+  private async refreshCard(card: LiveCard, note: string | null = null): Promise<void> {
     if (card.state !== 'buttons' && card.state !== 'open') return
     const record = await this.deps.getAttention(card.requestId).catch(() => null)
     if (card.state !== 'buttons' && card.state !== 'open') return
@@ -683,12 +724,12 @@ export class TelegramCardKeeper {
       await this.finish(card, ending)
       return
     }
-    if (record.revision === card.revision) return
+    if (record.revision === card.revision && (card.state === 'open' || card.tokens.length > 0)) return
     // The old buttons die now, before the new card is composed or sent.
     this.revoke(card)
     card.progress = { ...START }
     const binding = this.bindingFor(card, record)
-    await this.show(card, await this.compose(record, START, null, binding.epoch), binding)
+    await this.show(card, await this.compose(record, START, note, binding.epoch), binding)
   }
 
   private bindingFor(card: LiveCard, record: AttentionRecord): Binding {

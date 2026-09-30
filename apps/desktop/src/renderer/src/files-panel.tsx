@@ -1,5 +1,5 @@
 // MODULE: files-panel.tsx - the Files side panel: artifact preview/actions and addressed input drafts
-import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   HANDOFF_OUTLINE,
   type ArtifactRecord,
@@ -11,7 +11,7 @@ import {
 import { sameHandoffDraft } from './workspace-handoff-review'
 import { Dialog } from './dialog'
 import { failureDetail } from './bridge-error'
-import { agentTag, handoffPreparedBy } from './session-presentation'
+import { handoffPreparedBy } from './session-presentation'
 import {
   ImageViewport,
   artifactIcon,
@@ -75,14 +75,16 @@ export function FilesPanel(props: {
   onHandoffOpened?(): void
   sessions: SessionRecord[]
   workspaces: WorkspaceRecord[]
-  onOpenSession(sessionId: string): boolean
+  onOpenSession(sessionId: string, draftId?: string): boolean
   onRefreshDrafts(): Promise<void>
   onClose(): void
   onFailure(message: string): void
-  onNotice(message: string): void
 }): React.JSX.Element {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [pending, setPending] = useState<ReadonlySet<string>>(new Set())
+  const pendingRef = useRef(new Set<string>())
+  const [outcomes, setOutcomes] = useState<Record<string, { text: string; failed: boolean }>>({})
+  const [announcement, setAnnouncement] = useState('')
   const [expanded, setExpanded] = useState(false)
   const [handoffOpen, setHandoffOpen] = useState(false)
   const [handoffDraftId, setHandoffDraftId] = useState<string | null>(null)
@@ -91,6 +93,7 @@ export function FilesPanel(props: {
   const [handoffText, setHandoffText] = useState('')
   const handoffTextId = useId()
   const handoffTextArea = useRef<HTMLTextAreaElement>(null)
+  const handoffForm = useRef<HTMLFormElement>(null)
   const [handoffArtifactIds, setHandoffArtifactIds] = useState<ReadonlySet<string>>(new Set())
   const [requestedReviewError, setRequestedReviewError] = useState<string | null>(null)
 
@@ -117,7 +120,19 @@ export function FilesPanel(props: {
     const record = sessionId ? props.sessions.find((session) => session.sessionId === sessionId) : undefined
     if (!record) return 'Removed session'
     const workspace = props.workspaces.find((item) => item.workspaceId === record.workspaceId)
-    return `${workspace?.name ?? 'Removed workspace'} › ${record.name} · ${agentTag(record.executable, record.argv)} · ${record.cwd}`
+    const state = record.sessionId === props.session?.sessionId
+      ? props.sessionLive ? 'live' : 'stopped'
+      : record.lastProcess?.state === 'live' ? 'live' : 'stopped'
+    return `${workspace?.name ?? 'Removed workspace'} › ${record.name} (saved name) · ${record.cwd} · ${state}`
+  }
+
+  const revealHandoff = (draftId?: string): void => {
+    requestAnimationFrame(() => {
+      const element = draftId ? document.getElementById(`handoff-${draftId}`) : handoffForm.current
+      element?.scrollIntoView({ block: 'start' })
+      const focus = draftId ? element : handoffTextArea.current
+      focus?.focus({ preventScroll: true })
+    })
   }
 
   const relevantHandoffs = props.drafts.filter((draft) =>
@@ -135,7 +150,12 @@ export function FilesPanel(props: {
     setHandoffText(draft?.text ?? '')
     setHandoffArtifactIds(new Set(draft?.artifactIds ?? []))
     setHandoffOpen(true)
+    revealHandoff()
   }
+
+  useLayoutEffect(() => {
+    if (handoffOpen) revealHandoff()
+  }, [handoffOpen, handoffDraftId])
 
   const editingDraft = props.drafts.find((draft) => draft.draftId === handoffDraftId)
   const preparation = handoffPreparedBy(editingDraft,
@@ -179,7 +199,7 @@ export function FilesPanel(props: {
     }
     setRequestedReviewError(null)
     if (draft.state === 'draft' && draft.sourceSessionId === props.session?.sessionId) beginHandoff(draft)
-    else requestAnimationFrame(() => document.getElementById(`handoff-${draft.draftId}`)?.focus())
+    else revealHandoff(draft.draftId)
     props.onHandoffOpened?.()
   }, [props.requestedHandoffDraftId, props.requestedHandoffReviewDraft, props.drafts, props.session?.sessionId])
 
@@ -194,18 +214,40 @@ export function FilesPanel(props: {
   }
 
   async function run(key: string, action: () => Promise<void>, failureFallback: string): Promise<void> {
+    if (pendingRef.current.has(key)) return
+    pendingRef.current.add(key)
     setPending((current) => new Set(current).add(key))
+    setOutcomes((current) => ({ ...current, [key]: { text: 'Working…', failed: false } }))
     try {
       await action()
     } catch (error) {
-      props.onFailure(failureDetail(error, failureFallback))
+      const text = failureDetail(error, failureFallback)
+      setOutcomes((current) => ({ ...current, [key]: { text, failed: true } }))
+      props.onFailure(text)
     } finally {
+      pendingRef.current.delete(key)
       setPending((current) => {
         const next = new Set(current)
         next.delete(key)
         return next
       })
     }
+  }
+
+  function outcome(key: string, text: string, savedKey = key): void {
+    setOutcomes((current) => {
+      const next = { ...current, [savedKey]: { text, failed: false } }
+      if (savedKey !== key) delete next[key]
+      return next
+    })
+    // Keep one mounted announcement even when saving closes the form or the same result repeats.
+    setAnnouncement('')
+    requestAnimationFrame(() => setAnnouncement(text))
+  }
+
+  function actionOutcome(key: string): React.JSX.Element | null {
+    const result = outcomes[key]
+    return result ? <p className={result.failed ? 'inline-error files-action-outcome' : 'files-action-outcome'}>{result.text}</p> : null
   }
 
   function renderPreviewBody(artifact: ArtifactRecord): React.JSX.Element {
@@ -236,6 +278,7 @@ export function FilesPanel(props: {
 
   return (
     <aside className="files-panel" aria-label="Files">
+      <div className="live-announcer files-action-announcer" role="status" aria-atomic="true">{announcement}</div>
       <header className="files-panel-header">
         <h2>Files</h2>
         <span className="files-count">{sessionArtifacts.length}</span>
@@ -282,6 +325,7 @@ export function FilesPanel(props: {
                     const artifactId = featured.artifactId
                     void run(`open:${artifactId}`, async () => {
                       await window.aiTerminal.openArtifact(artifactId)
+                      outcome(`open:${artifactId}`, 'The OS accepted the open request. The external application is not verified.')
                     }, 'Could not open the file')
                   }}
                 >
@@ -294,7 +338,7 @@ export function FilesPanel(props: {
                     const artifactId = featured.artifactId
                     void run(`save:${artifactId}`, async () => {
                       const result = await window.aiTerminal.saveArtifactAs(artifactId)
-                      if (result.saved !== null) props.onNotice(`Saved a copy to ${result.saved}`)
+                      outcome(`save:${artifactId}`, result.saved === null ? 'Save cancelled. No copy made.' : `Saved a copy to ${result.saved}`)
                     }, 'Could not save a copy')
                   }}
                 >
@@ -307,6 +351,7 @@ export function FilesPanel(props: {
                     const artifactId = featured.artifactId
                     void run(`show:${artifactId}`, async () => {
                       await window.aiTerminal.showArtifact(artifactId)
+                      outcome(`show:${artifactId}`, 'Requested Show in Folder from the OS. The external window is not verified.')
                     }, 'Could not show the file in its folder')
                   }}
                 >
@@ -314,21 +359,23 @@ export function FilesPanel(props: {
                 </button>
                 <button
                   type="button"
-                  disabled={!props.sessionLive || !props.session || isPending(`deliver:${featured.artifactId}`)}
+                  disabled={!props.sessionLive || !props.sessionIncarnationId || !props.session || isPending(`deliver:${featured.artifactId}`)}
                   title={props.sessionLive ? undefined : 'Deliver needs a live session'}
                   onClick={() => {
                     const artifactId = featured.artifactId
                     const session = props.session
                     if (!session) return
                     void run(`deliver:${artifactId}`, async () => {
-                      await window.aiTerminal.deliverArtifact(artifactId, session.sessionId)
-                      props.onNotice(`Path pasted into ${props.sessionLabel}. Nothing was submitted.`)
+                      const result = await window.aiTerminal.deliverArtifact(artifactId, session.sessionId, props.sessionIncarnationId!)
+                      outcome(`deliver:${artifactId}`, `Recorded paste at ${formatClock(result.pastedAt)}: ${result.path} into ${sessionDescription(session.sessionId)}. This file is pasted once while this process stays open. Not submitted; press Enter separately.`)
                     }, 'Could not deliver the file')
                   }}
                 >
                   {isPending(`deliver:${featured.artifactId}`) ? 'Delivering…' : 'Deliver to session'}
                 </button>
               </div>
+              <p className="handoff-note">Deliver destination: {sessionDescription(props.session?.sessionId ?? null)}. {!props.sessionLive ? 'Deliver needs a live destination.' : 'Appends the path without Enter.'}</p>
+              {(['open', 'save', 'show', 'deliver'] as const).map((action) => <div key={action}>{actionOutcome(`${action}:${featured.artifactId}`)}</div>)}
               <div className="files-meta-rows">
                 <div className="files-meta-row">
                   <span className="files-meta-label">Type</span>
@@ -383,7 +430,7 @@ export function FilesPanel(props: {
           </button>
         </div>
         {handoffOpen && props.session ? (
-          <form className="handoff-form" onSubmit={(event) => {
+          <form ref={handoffForm} className="handoff-form" onSubmit={(event) => {
             event.preventDefault()
             const sourceSessionId = props.session!.sessionId
             const key = `handoff-save:${handoffDraftId ?? 'new'}`
@@ -399,7 +446,8 @@ export function FilesPanel(props: {
               setHandoffDraftId(saved.draftId)
               setHandoffExpectedUpdatedAt(saved.updatedAt)
               setHandoffOpen(false)
-              props.onNotice(`Handoff saved for ${sessionDescription(saved.sessionId)}. Nothing was pasted.`)
+              outcome(key, `Handoff saved for ${sessionDescription(saved.sessionId)}. Nothing was pasted.`, `handoff-save:${saved.draftId}`)
+              revealHandoff(saved.draftId)
             }, 'Could not save the handoff')
           }}>
             <strong>{handoffDraftId ? 'Edit handoff' : 'Prepare handoff'}</strong>
@@ -454,6 +502,7 @@ export function FilesPanel(props: {
               </fieldset>
             ) : null}
             <p className="handoff-note">Saving prepares a local draft. It does not type into either terminal.</p>
+            {actionOutcome(`handoff-save:${handoffDraftId ?? 'new'}`)}
             <div className="actions">
               <button type="submit" className="primary" disabled={isPending(`handoff-save:${handoffDraftId ?? 'new'}`)}>
                 {isPending(`handoff-save:${handoffDraftId ?? 'new'}`) ? 'Saving…' : 'Save handoff'}
@@ -506,7 +555,9 @@ export function FilesPanel(props: {
                   ) : null}
                   <div className="files-draft-actions">
                     {!isDestination && targetAvailable ? (
-                      <button type="button" disabled={busy} onClick={() => props.onOpenSession(draft.sessionId)}>
+                      <button type="button" disabled={busy} onClick={() => {
+                        props.onOpenSession(draft.sessionId, draft.draftId)
+                      }}>
                         Open destination
                       </button>
                     ) : null}
@@ -528,9 +579,9 @@ export function FilesPanel(props: {
                                 expectedUpdatedAt: draft.updatedAt
                               })
                               if (result.state === 'accepted') {
-                                props.onNotice('Pasted to terminal — not submitted.')
+                                outcome(pasteKey, 'Pasted to terminal — not submitted.')
                               } else if (result.state === 'uncertain') {
-                                props.onNotice('Paste outcome uncertain — inspect the destination before retrying.')
+                                outcome(pasteKey, 'Paste outcome uncertain — inspect the destination before retrying.')
                               } else {
                                 throw new Error('The handoff changed before paste. Review it before trying again.')
                               }
@@ -547,7 +598,7 @@ export function FilesPanel(props: {
                       <button type="button" disabled={busy} onClick={() => {
                         void run(retryKey, async () => {
                           await window.aiTerminal.retryHandoffDraft(draft.draftId)
-                          props.onNotice('Created a separate retry draft. Check for a possible duplicate before pasting.')
+                          outcome(retryKey, 'Created a separate retry draft. Check for a possible duplicate before pasting.')
                         }, 'Could not create a retry draft')
                       }}>Create retry draft</button>
                     ) : null}
@@ -559,6 +610,9 @@ export function FilesPanel(props: {
                       }}>{isPending(discardKey) ? 'Discarding…' : 'Discard'}</button>
                     ) : null}
                   </div>
+                  {actionOutcome(`handoff-save:${draft.draftId}`)}
+                  {actionOutcome(pasteKey)}
+                  {actionOutcome(retryKey)}
                 </li>
               )
             })}

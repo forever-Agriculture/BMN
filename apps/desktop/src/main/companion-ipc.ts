@@ -228,6 +228,7 @@ export function installCompanionIpcHandlers(ipc: CompanionIpcRegistrar, actions:
 
   handle('aiterm:artifact:show', async (_event, params) => {
     const artifact = await findArtifact(requiredText(params, 'artifactId'))
+    await actions.client().request(METHOD_REGISTRY.artifactPreview, { artifactId: artifact.artifactId })
     shell.showItemInFolder(artifact.storedPath)
     return { shown: true }
   })

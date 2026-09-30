@@ -21,6 +21,17 @@ import {
 
 const CLAUDE: CardHeader = { session: 'api-server', agent: 'claude', flag: '🇺🇸' }
 
+it('preserves a supplied Other choice and gives the typed route a distinct label', () => {
+  const prompt: AttentionQuestionsPrompt = {
+    type: 'questions', harness: 'claude', shape: 'choice', requestRef: null, toolUseId: 'fixture',
+    questions: [{ id: null, header: null, text: 'Which fixture?', multiSelect: false,
+      options: [{ label: 'Other…', description: 'A declared native option' }] }]
+  }
+  const card = questionCard({ header: CLAUDE, prompt, step: 0, chosen: [], tokens: ['choice'], other: 'typed' })
+  expect(card.keyboard?.flat().map(b => b.text)).toEqual(['1 · Other…', 'Type an answer…'])
+  expect(card.text).toContain('A declared native option')
+})
+
 const AUTH = {
   id: null,
   header: 'Auth method',

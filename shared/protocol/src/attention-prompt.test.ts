@@ -29,6 +29,12 @@ const permission: AttentionPrompt = {
 }
 
 describe('parseAttentionPrompt', () => {
+  it('keeps a Codex Default typed-only question without inventing choices or widening blocking shapes', () => {
+    const typed = { ...question, harness: 'codex', shape: 'async-choice', questions: [{ ...question.questions[0], options: [] }] }
+    expect(parseAttentionPrompt(typed)).toEqual({ ok: true, value: typed })
+    expect(parseAttentionPrompt({ ...typed, shape: 'choice' }).ok).toBe(false)
+    expect(parseAttentionPrompt({ ...typed, harness: 'claude' }).ok).toBe(false)
+  })
   it('accepts a question and a permission prompt exactly as stored', () => {
     expect(parseAttentionPrompt(question)).toEqual({ ok: true, value: question })
     expect(parseAttentionPrompt(permission)).toEqual({ ok: true, value: permission })

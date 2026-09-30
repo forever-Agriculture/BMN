@@ -151,6 +151,84 @@ beforeEach(() => {
   })
 })
 
+describe('artifact delivery destination', () => {
+  it('permits explicit retry after a definite pre-write rejection while preserving the original path format', async () => {
+    const artifact = await service.route(METHOD_REGISTRY.artifactImportBytes, {
+      sessionId: 's1', name: 'retry.txt', bytes: new TextEncoder().encode('original')
+    }) as ArtifactRecord
+    const request = { artifactId: artifact.artifactId, sessionId: 's2', expectedIncarnationId: 'incarnation-2' }
+    archiveAtFinalTargetRead = () => database.prepare('UPDATE session SET archived_at = ? WHERE session_id = ?').run(now, 's2')
+    await expect(service.route(METHOD_REGISTRY.artifactDeliver, request)).rejects.toThrow(/archived/)
+    expect(writes).toEqual([])
+    archiveAtFinalTargetRead = null
+    database.prepare('UPDATE session SET archived_at = NULL WHERE session_id = ?').run('s2')
+    const result = await service.route(METHOD_REGISTRY.artifactDeliver, request) as { path: string }
+    expect(writes).toHaveLength(1)
+    expect(new TextDecoder().decode(writes[0]!.bytes)).toBe(`\u001b[200~${result.path} \u001b[201~`)
+    expect(readFileSync(artifact.storedPath, 'utf8')).toBe('original')
+  })
+
+  it('retains an uncertain file paste across retry and host reconstruction without appending twice', async () => {
+    const artifact = await service.route(METHOD_REGISTRY.artifactImportBytes, {
+      sessionId: 's1', name: 'uncertain.txt', bytes: new TextEncoder().encode('original')
+    }) as ArtifactRecord
+    const request = { artifactId: artifact.artifactId, sessionId: 's2', expectedIncarnationId: 'incarnation-2' }
+    const manager = service['options'].manager
+    manager.writeToSession = (sessionId, bytes) => {
+      writes.push({ sessionId, bytes })
+      throw new Error('Synthetic append succeeded but response failed')
+    }
+    await expect(service.route(METHOD_REGISTRY.artifactDeliver, request)).rejects.toThrow(/uncertain/)
+    await expect(service.route(METHOD_REGISTRY.artifactDeliver, request)).rejects.toThrow(/may have reached|uncertain/)
+    const receipt = database.prepare("SELECT state FROM control_receipt WHERE receipt_key LIKE 'file-reference-paste:%'").get()
+    expect(receipt).toMatchObject({ state: 'staged' })
+    const options = service['options']
+    await service.close()
+    service = new CompanionService(options)
+    await expect(service.route(METHOD_REGISTRY.artifactDeliver, request)).rejects.toThrow(/may have reached/)
+    expect(writes).toHaveLength(1)
+  })
+
+  it('joins pending file deliveries and returns the persisted result after a panel remount', async () => {
+    const artifact = await service.route(METHOD_REGISTRY.artifactImportBytes, {
+      sessionId: 's1', name: 'pending.txt', bytes: new TextEncoder().encode('original')
+    }) as ArtifactRecord
+    const request = { artifactId: artifact.artifactId, sessionId: 's2', expectedIncarnationId: 'incarnation-2' }
+    let release!: () => void
+    let reached!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    const snapshot = new Promise<void>(resolve => { reached = resolve })
+    holdFinalAvailabilityResponse = async () => { reached(); await held }
+    const pending = service.route(METHOD_REGISTRY.artifactDeliver, request)
+    // The renderer's remounted Files panel repeats the same addressed operation.
+    await Promise.race([snapshot, pending])
+    const remounted = service.route(METHOD_REGISTRY.artifactDeliver, request)
+    release()
+    expect(await remounted).toEqual(await pending)
+    expect(await service.route(METHOD_REGISTRY.artifactDeliver, request)).toEqual(await pending)
+    expect(writes).toHaveLength(1)
+    expect(new TextDecoder().decode(writes[0]!.bytes)).not.toContain('\r')
+  })
+
+  it('rejects a reviewed incarnation that changed before paste and preserves the original', async () => {
+    const artifact = await service.route(METHOD_REGISTRY.artifactImportBytes, {
+      sessionId: 's1', name: 'fixture.txt', bytes: new TextEncoder().encode('original bytes')
+    }) as ArtifactRecord
+    await expect(service.route(METHOD_REGISTRY.artifactDeliver, {
+      artifactId: artifact.artifactId, sessionId: 's2', expectedIncarnationId: 'previous-process'
+    })).rejects.toThrow(/changed/)
+    expect(writes).toEqual([])
+    expect(readFileSync(artifact.storedPath, 'utf8')).toBe('original bytes')
+    const result = await service.route(METHOD_REGISTRY.artifactDeliver, {
+      artifactId: artifact.artifactId, sessionId: 's2', expectedIncarnationId: 'incarnation-2'
+    }) as { path: string }
+    expect(writes).toHaveLength(1)
+    const bytes = new TextDecoder().decode(writes[0]!.bytes)
+    expect(bytes).toContain(result.path)
+    expect(bytes).not.toContain('\r')
+  })
+})
+
 describe('file reference paste', () => {
   const request = {
     requestId: 'paste-one', sessionId: 's2', expectedIncarnationId: 'incarnation-2',
@@ -1013,6 +1091,27 @@ describe('Telegram attention notifications', () => {
     expect(COMPANION_OPERATIONS.listDrafts(database)).toContainEqual(
       expect.objectContaining({ origin: 'telegram', state: 'draft', text: 'yes' })
     )
+  })
+
+  it('keeps a notice follow-up as a draft with auto replies enabled and another native question pending', async () => {
+    const sent: string[] = []
+    service['telegram'] = { sendMessage: async (text: string) => { sent.push(text); return { messageId: sent.length } } } as unknown as TelegramConnector
+    await service.sessionsChanged()
+    COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', {
+      enabled: true, allowedChatId: 1, allowedUserId: null, notifyOn: 'attention-and-exit', autoSubmitReplies: true
+    }, now)
+    const notice = COMPANION_OPERATIONS.openAttention(database, {
+      sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'update', kind: 'notice', title: 'Synthetic update'
+    }, 'notice-fixture', now)
+    const native = COMPANION_OPERATIONS.openAttention(database, {
+      sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'native', kind: 'permission', title: 'Do not grant this'
+    }, 'native-fixture', now)
+    COMPANION_OPERATIONS.putTelegramMessage(database, 77, 's1', notice.requestId, 'incarnation-1', now)
+    await service['handleTelegramReply']({ updateId: 88, chatId: 1, fromUserId: 1, messageId: 99, replyToMessageId: 77, text: 'Synthetic follow-up', file: null })
+    expect(writes).toEqual([])
+    expect(COMPANION_OPERATIONS.getAttention(database, native.requestId)?.state).toBe('open')
+    expect(COMPANION_OPERATIONS.listDrafts(database)).toContainEqual(expect.objectContaining({ sessionId: 's1', requestId: notice.requestId, text: 'Synthetic follow-up', state: 'draft' }))
+    expect(sent).toEqual(['Saved as a draft in BMN for that session.'])
   })
 
   it('submits a reply only while its exact notified process and request are current', async () => {

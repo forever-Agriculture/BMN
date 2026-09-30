@@ -2718,11 +2718,14 @@ input[type='radio'] {
   gap: 6px;
   color: var(--muted);
   font-size: 12px;
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
 }
 
 /* One line: the session name gives way (its full text is the title), never the kind, age or expiry. */
 .attention-item .where > * {
   flex: none;
+  max-width: 100%;
 }
 
 .attention-item .where .name {
@@ -2871,6 +2874,21 @@ input[type='radio'] {
   color: var(--muted);
   font-size: 12px;
   text-align: left;
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.popover-row > span {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.attention-item h3,
+.attention-item pre,
+.attention-item .seen {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .popover-row .name {

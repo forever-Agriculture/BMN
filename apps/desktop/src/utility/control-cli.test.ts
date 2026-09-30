@@ -765,6 +765,18 @@ describe('bmn hook', () => {
     expect(fixture.handlers.withdrawAttention.mock.calls.map(([params]) => params.requestKey)).toEqual(['codex:turn'])
   })
 
+  it('retains a typed-only Default question identity without invented choices', async () => {
+    const fixture = await cliFixture()
+    await runHook(fixture, 'codex', {
+      hook_event_name: 'PreToolUse', tool_name: 'request_user_input_async', tool_use_id: 'call_typed_only',
+      tool_input: { questions: [{ title: 'Describe the synthetic fixture' }] }
+    })
+    expect(fixture.handlers.openAttention.mock.calls[0]?.[0]).toMatchObject({
+      prompt: { shape: 'async-choice', toolUseId: 'call_typed_only',
+        questions: [{ text: 'Describe the synthetic fixture', options: [] }] }
+    })
+  })
+
   it('keeps a Codex async follow-up question open until the owner submits input', async () => {
     const fixture = await cliFixture()
 

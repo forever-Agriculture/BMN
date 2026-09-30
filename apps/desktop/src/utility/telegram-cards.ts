@@ -235,7 +235,9 @@ export function questionCard(input: QuestionCardInput): RenderedCard {
         return index === 0 ? [...(chip ? [chip] : []), '', body].join('\n') : [...(chip ? [chip, ''] : []), body].join('\n')
       }).join('\n\n'),
       '',
-      '<i>No buttons for this kind yet. Answer at the laptop.</i>'
+      prompt.harness === 'codex' && prompt.shape === 'async-choice'
+        ? '<i>Codex Default has no verified correlated answer route. Answer at the laptop; nothing was sent.</i>'
+        : '<i>No buttons for this kind yet. Answer at the laptop.</i>'
     ].join('\n'))
     return { text, keyboard: null, base }
   }
@@ -278,7 +280,10 @@ export function questionCard(input: QuestionCardInput): RenderedCard {
         text: clip(`${toggled.includes(index) ? '●' : '○'} ${index + 1} · ${label}`, BUTTON_CHARS),
         callback_data: tokens[index]!
       }])
-  if (input.other) keyboard.push([{ text: 'Other…', callback_data: input.other }])
+  if (input.other) keyboard.push([{
+    text: labels.some((label) => /^other[.\s…]*$/i.test(label)) ? 'Type an answer…' : 'Other…',
+    callback_data: input.other
+  }])
   const control: InlineButton[] = []
   if (input.back) control.push({ text: '‹ Back', callback_data: input.back })
   if (toggled !== null && toggled.length > 0 && input.submit) {
@@ -401,6 +406,7 @@ export function exitCard(header: CardHeader): string {
 
 /** The italic line that replaces the options once a card is decided. */
 export type CardEnding =
+  | { type: 'acknowledged' }
   | { type: 'sending'; labels: string[] }
   | { type: 'outcome'; outcome: AnswerOutcome; permission: boolean }
   | { type: 'laptop' }
@@ -422,6 +428,8 @@ export const REFUSAL_WORDS: Readonly<Record<AnswerRefusal, string>> = Object.fre
 
 export function endingLine(ending: CardEnding): string {
   switch (ending.type) {
+    case 'acknowledged':
+      return '✓ <i>Update acknowledged. No terminal input sent.</i>'
     case 'sending':
       return `<i>Sending: ${escapeHtml(ending.labels.map(said).join(' · '))}…</i>`
     case 'laptop':

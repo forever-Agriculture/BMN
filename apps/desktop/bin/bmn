@@ -194,7 +194,7 @@ Submission is not delivery
 
 bmn hook is not yours
   bmn hook <agent> is how BMN reads your harness's own hook events. Never run it by hand.
-  Claude, Codex and OpenCode report Needs you, take answers from the phone and resume.
+  Claude/Codex: offer concise options; cards add Other. Default async remote answers are blocked.
   Cursor reports finished turns and resumes; its questions and permissions stay in its terminal.
   bmn hooks install asks Yes for target/diff (default No); scripts need --yes; direct edits remain.`
 
@@ -718,7 +718,7 @@ function promptId(value) {
 
 /**
  * The agent's own questions as the app stores them (docs/remote-answers.md), or undefined when the
- * payload is not a well-formed dialog: every question needs text and at least one labelled option.
+ * payload is not well formed. Async questions may omit options; that never creates an answer route.
  * Claude and Codex name the text `question`, Codex async `title`; OpenCode marks multi-select `multiple`.
  */
 function questionsPrompt(harness, input, ids, shape) {
@@ -729,7 +729,7 @@ function questionsPrompt(harness, input, ids, shape) {
     if (!isObject(candidate)) return undefined
     const text = promptText(candidate.question ?? candidate.title, PROMPT_LIMITS.text)
     const raw = Array.isArray(candidate.options) ? candidate.options : []
-    if (text === null || raw.length === 0 || raw.length > PROMPT_LIMITS.options) return undefined
+    if (text === null || (raw.length === 0 && shape !== 'async-choice') || raw.length > PROMPT_LIMITS.options) return undefined
     const options = []
     for (const option of raw) {
       const label = promptLine(isObject(option) ? option.label : option, PROMPT_LIMITS.label)

@@ -83,12 +83,14 @@ function setup(options: {
   record?: AttentionRecord | null
   answerability?: Answerability
   answer?: (request: AnswerRequest) => Promise<AnswerOutcome>
+  acknowledge?: (record: AttentionRecord) => Promise<void>
   stored?: TelegramCardRecord[]
   retryMs?: number[]
 } = {}) {
   const connector = new FakeConnector()
   const state = { record: options.record === undefined ? record(QUESTION) : options.record, connected: true }
   const answers: AnswerRequest[] = []
+  const acknowledgements: AttentionRecord[] = []
   const puts: TelegramCardRecord[] = []
   const updates: Array<{ messageId: number; state: TelegramCardState; card: TelegramCardData }> = []
   const messages: number[] = []
@@ -104,6 +106,7 @@ function setup(options: {
       answers.push(request)
       return options.answer ? options.answer(request) : { state: 'confirmed', sent: ['JWT'] }
     },
+    acknowledge: async (record) => { acknowledgements.push(record); await options.acknowledge?.(record) },
     store: {
       put: async (card) => void puts.push(card),
       update: async (messageId, _revision, cardState, card) => void updates.push({ messageId, state: cardState, card }),
@@ -117,7 +120,7 @@ function setup(options: {
   })
   const tap = (data: string, messageId = 100): InboundTap =>
     ({ updateId: 1, callbackId: `cb-${data}`, chatId: 1, fromUserId: 1, messageId, data })
-  return { keeper, connector, state, answers, puts, updates, messages, tap }
+  return { keeper, connector, state, answers, acknowledgements, puts, updates, messages, tap }
 }
 
 const settle = async (): Promise<void> => {
@@ -125,6 +128,55 @@ const settle = async (): Promise<void> => {
 }
 
 describe('sending a card', () => {
+  it('renews notice buttons after a failed acknowledgement of the unchanged revision', async () => {
+    let attempts = 0
+    const h = setup({ record: record(null, { kind: 'notice' }), acknowledge: async () => {
+      if (++attempts === 1) throw new Error('Synthetic acknowledgement failure')
+    } })
+    await h.keeper.page(h.state.record!)
+    const original = h.connector.buttons()[0]!
+    await h.keeper.tap(h.tap(original))
+    expect(h.connector.lastEdit()?.text).toContain('Acknowledgement failed')
+    const renewed = h.connector.editButtons()[0]!
+    expect(renewed).toBeTruthy()
+    expect(renewed).not.toBe(original)
+    await h.keeper.tap(h.tap(original))
+    expect(attempts).toBe(1)
+    await h.keeper.tap(h.tap(renewed))
+    expect(attempts).toBe(2)
+    expect(h.connector.lastEdit()?.text).toContain('Update acknowledged. No terminal input sent.')
+    expect(h.answers).toEqual([])
+    h.keeper.dispose()
+  })
+
+  it('offers notice acknowledgement and an addressed draft follow-up without invoking native answers', async () => {
+    const h = setup({ record: record(null, { kind: 'notice', requestKey: 'update' }) })
+    await h.keeper.page(h.state.record!)
+    expect(h.connector.sends[0]?.options.keyboard?.flat().map(b => b.text)).toEqual(['Acknowledge', 'Other…'])
+    const [ack, other] = h.connector.buttons()
+    await h.keeper.tap(h.tap(other!))
+    expect(h.connector.lastEdit()?.text).toContain('saved as a draft')
+    expect(h.answers).toEqual([])
+    // Old buttons are revoked, including the acknowledgement from before Other….
+    await h.keeper.tap(h.tap(ack!))
+    expect(h.acknowledgements).toEqual([])
+    await h.keeper.tap(h.tap(h.connector.editButtons()[0]!))
+    expect(h.acknowledgements).toHaveLength(1)
+    expect(h.connector.lastEdit()?.text).toContain('Update acknowledged. No terminal input sent.')
+    expect(h.answers).toEqual([])
+    h.keeper.dispose()
+  })
+
+  it('does not acknowledge a notice whose revision changed', async () => {
+    const h = setup({ record: record(null, { kind: 'notice' }) })
+    await h.keeper.page(h.state.record!)
+    const token = h.connector.buttons()[0]!
+    h.state.record = { ...h.state.record!, revision: 2 }
+    await h.keeper.tap(h.tap(token))
+    expect(h.acknowledgements).toEqual([])
+    expect(h.answers).toEqual([])
+    h.keeper.dispose()
+  })
   it('sends one HTML card with a single-use token per option and stores it with its revision', async () => {
     const h = setup()
     await h.keeper.page(h.state.record!)

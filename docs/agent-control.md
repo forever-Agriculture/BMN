@@ -735,7 +735,7 @@ Submission is not delivery
 
 bmn hook is not yours
   bmn hook <agent> is how BMN reads your harness's own hook events. Never run it by hand.
-  Claude, Codex and OpenCode report Needs you, take answers from the phone and resume.
+  Claude/Codex: offer concise options; cards add Other. Default async remote answers are blocked.
   Cursor reports finished turns and resumes; its questions and permissions stay in its terminal.
   bmn hooks install asks Yes for target/diff (default No); scripts need --yes; direct edits remain.
 ```

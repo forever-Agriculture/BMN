@@ -131,7 +131,8 @@ export function NeedsYouPopover(props: {
           <button type="button" className="primary" onClick={() => props.onOpenSession(request.sessionId, request)}>
             {request.kind === 'handoff' ? 'Open handoff' : actionable ? 'Open session' : 'Open update'}
           </button>
-          <button type="button" onClick={() => props.onAcknowledge(request)} disabled={actionable && !!request.seenAt}>
+          <button type="button" onClick={() => props.onAcknowledge(request)} disabled={actionable && !!request.seenAt}
+            title={actionable && request.seenAt ? 'Already seen; still waiting for your response.' : undefined}>
             {actionable ? 'Acknowledge' : 'Dismiss'}
           </button>
           {actionable && request.kind !== 'handoff' ? (

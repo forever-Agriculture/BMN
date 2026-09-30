@@ -1951,7 +1951,7 @@ function App(): React.JSX.Element {
           ) : null}
         </section>
         {panel === 'files' ? (
-          <div className="side-panel">
+          <div className="side-panel files-side-panel">
             <FilesPanel
               session={selectedRecord ?? null}
               sessionLabel={selectedRecord ? `${workspaceName(selectedRecord.workspaceId)} › ${selectedRecord.name}` : 'No session selected'}
@@ -1968,11 +1968,14 @@ function App(): React.JSX.Element {
               }}
               sessions={sessions}
               workspaces={workspaces}
-              onOpenSession={openSession}
+              onOpenSession={(sessionId, draftId) => {
+                const opened = openSession(sessionId)
+                if (opened && draftId) setRequestedHandoffDraftId(draftId)
+                return opened
+              }}
               onRefreshDrafts={refresh.drafts}
               onClose={() => setPanel(null)}
               onFailure={setFailure}
-              onNotice={brief}
             />
           </div>
         ) : null}

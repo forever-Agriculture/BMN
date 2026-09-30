@@ -19,7 +19,7 @@ payloads and screen text are the test fixtures in
 | --- | --- | --- | --- |
 | One question, one choice | **VERIFIED** keys | **VERIFIED** keys (Plan mode only) | **VERIFIED** API |
 | Several questions in one dialog | **VERIFIED** keys | **VERIFIED** keys | **VERIFIED** API (same call) |
-| Async question | — | **UNSUPPORTED**: no picker; printed as a message, answered by typing a prompt | — |
+| Default async question | — | **BLOCKED**: no verified correlated consumption receipt or exclusive composer input contract; no remote answer buttons | — |
 | Permission, allow once | **VERIFIED** keys (`Bash` only; other tools not driven) | out of scope (Auto Review) | **VERIFIED** API |
 | Permission, deny | **VERIFIED** keys (`Bash` only), never confirmed | out of scope | **VERIFIED** API, only when it is the session's single pending permission |
 | Sandbox network prompt | **UNSUPPORTED**: not driven (sandbox off on this machine); prompt-less, so no buttons | — | — |
@@ -104,6 +104,13 @@ Screens: `.dev-auto/evidence/epic-31/spike-31-4/screens/claude-*` (80 and 200 co
 - `request_user_input_async` renders as an ordinary message with bulleted options and returns
   `{"accepted": true}` at once; there is no picker to answer. No buttons.
 - Codex's hooks read `CODEX_HOME`; hooks in a new file need trusting once (`/hooks`).
+
+Epic 46 retains async call identity and declared options, including omitted options, and explains
+its unavailable answer route. `accepted:true` acknowledges presentation, not an answer. Generic
+`UserPromptSubmit` closes attention under the existing hook rule but does not confirm a Telegram
+answer or prove question consumption. An ordinary prompt route must first demonstrate correlation,
+at-most-once consumption, idle/empty input ownership, newer-question rejection and an attributable
+receipt on the real Default producer. No picker digits or automatic prompt injection are added.
 
 ### Multi-select, typed answers and Back (Epic 31)
 
