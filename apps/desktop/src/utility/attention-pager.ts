@@ -16,7 +16,8 @@ export const LEFT_WITHIN_MS = 10 * 60_000
 export interface AttentionPagerOptions {
   /** The request as stored now, or null when it is gone. */
   current(requestId: string): Promise<AttentionRecord | null>
-  send(record: AttentionRecord): Promise<void>
+  /** False only when nothing was attempted and recovery may safely retry. */
+  send(record: AttentionRecord): Promise<void | boolean>
   schedule(callback: () => void, ms: number): () => void
   /** False while the owner is at the desk, where the app already notified them; null when presence cannot be read. */
   ownerAway(): boolean | null
@@ -34,6 +35,8 @@ export function createAttentionPager(options: AttentionPagerOptions): {
   opened(record: AttentionRecord): void
   /** Call when the owner turns away from the desk. */
   ownerLeft(): void
+  /** Telegram is available again; try only revisions definitely left unsent. */
+  retryUnsent(): void
   close(): void
 } {
   const pageAfterMs = options.pageAfterMs ?? PAGE_AFTER_MS
@@ -41,15 +44,38 @@ export function createAttentionPager(options: AttentionPagerOptions): {
   const pending = new Map<string, () => void>()
   const atDesk = new Map<string, { record: AttentionRecord; openedAt: number }>()
   const handled = new Set<string>()
+  const unsent = new Map<string, AttentionRecord>()
+  const inFlight = new Set<string>()
+  let availability = 0
   let closed = false
   const page = async (key: string, record: AttentionRecord): Promise<void> => {
+    if (closed || handled.has(key) || inFlight.has(key)) return
+    inFlight.add(key)
     atDesk.delete(key)
-    handled.add(key)
-    const current = await options.current(record.requestId).catch(() => null)
-    if (closed || !current || current.state !== 'open' || current.seenAt !== null || current.revision !== record.revision) {
-      return
+    unsent.delete(key)
+    const started = availability
+    let retry = false
+    try {
+      const current = await options.current(record.requestId).catch(() => null)
+      if (closed || !current || current.state !== 'open' || current.seenAt !== null || current.revision !== record.revision) {
+        handled.add(key)
+        return
+      }
+      // Departure made this revision eligible already; reconnects must not reset or expire that eligibility.
+      if (options.ownerAway() === false) {
+        unsent.set(key, current)
+        return
+      }
+      const consumed = await options.send(current).catch(() => true)
+      if (consumed === false && !closed) {
+        unsent.set(key, current)
+        retry = started !== availability
+      } else handled.add(key)
+    } finally {
+      inFlight.delete(key)
+      // Recovery may arrive while an unavailable attempt is still settling.
+      if (retry && options.ownerAway() !== false) void page(key, record)
     }
-    await options.send(current).catch(() => undefined)
   }
   const forgetStale = (): void => {
     for (const [key, waiting] of atDesk) {
@@ -61,7 +87,7 @@ export function createAttentionPager(options: AttentionPagerOptions): {
   return {
     opened: (record) => {
       const key = `${record.requestId}:${record.revision}`
-      if (closed || record.state !== 'open' || record.seenAt !== null || pending.has(key) || atDesk.has(key) || handled.has(key)) {
+      if (closed || record.state !== 'open' || record.seenAt !== null || pending.has(key) || atDesk.has(key) || handled.has(key) || unsent.has(key) || inFlight.has(key)) {
         return
       }
       const openedAt = options.now()
@@ -76,12 +102,22 @@ export function createAttentionPager(options: AttentionPagerOptions): {
       if (closed) return
       forgetStale()
       for (const [key, waiting] of [...atDesk]) void page(key, waiting.record)
+      if (options.ownerAway() !== false) {
+        availability += 1
+        for (const [key, record] of [...unsent]) void page(key, record)
+      }
+    },
+    retryUnsent: () => {
+      if (closed || options.ownerAway() === false) return
+      availability += 1
+      for (const [key, record] of [...unsent]) void page(key, record)
     },
     close: () => {
       closed = true
       for (const cancel of pending.values()) cancel()
       pending.clear()
       atDesk.clear()
+      unsent.clear()
     }
   }
 }

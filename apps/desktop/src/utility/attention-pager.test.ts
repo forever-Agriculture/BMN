@@ -164,3 +164,85 @@ describe('attention pager', () => {
     expect(sent).toEqual([])
   })
 })
+
+function retryFixture() {
+  const stored = new Map<string, AttentionRecord>()
+  const sent: AttentionRecord[] = []
+  const state = { away: true, now: 0, available: false, ambiguous: false, hold: null as Promise<void> | null, attempts: 0 }
+  let due: Array<() => void> = []
+  const pager = createAttentionPager({
+    current: async id => stored.get(id) ?? null,
+    ownerAway: () => state.away,
+    now: () => state.now,
+    send: async value => {
+      const available = state.available
+      state.attempts += 1
+      if (state.hold) await state.hold
+      if (!available) return false
+      if (state.ambiguous) throw new Error('Response lost after a possible send')
+      sent.push(value)
+      return true
+    },
+    schedule: callback => {
+      due.push(callback)
+      return () => { due = due.filter(value => value !== callback) }
+    }
+  })
+  const settle = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0))
+  const elapse = async (): Promise<void> => {
+    const ready = due; due = []
+    for (const callback of ready) callback()
+    await settle()
+  }
+  return { pager, stored, sent, state, settle, elapse }
+}
+
+describe('definitely unsent attention', () => {
+  it('sends once after recovery despite repeated recovery, departure and open events', async () => {
+    const h = retryFixture(), opened = record()
+    h.stored.set(opened.requestId, opened); h.pager.opened(opened)
+    await h.elapse(); expect(h.sent).toEqual([])
+    h.state.available = true
+    h.pager.retryUnsent(); h.pager.retryUnsent(); h.pager.ownerLeft(); h.pager.opened(opened)
+    await h.settle(); await h.elapse()
+    expect(h.sent).toEqual([opened]); expect(h.state.attempts).toBe(2)
+    h.pager.retryUnsent(); await h.settle(); expect(h.sent).toEqual([opened])
+  })
+
+  it('never retries an ambiguous send', async () => {
+    const h = retryFixture(), opened = record()
+    h.state.available = true; h.state.ambiguous = true
+    h.stored.set(opened.requestId, opened); h.pager.opened(opened); await h.elapse()
+    h.state.ambiguous = false; h.pager.retryUnsent(); h.pager.ownerLeft(); h.pager.opened(opened)
+    await h.elapse(); expect(h.state.attempts).toBe(1); expect(h.sent).toEqual([])
+  })
+
+  it.each(['seen', 'closed', 'revised', 'shutdown'] as const)('suppresses retained work after %s', async change => {
+    const h = retryFixture(), opened = record()
+    h.stored.set(opened.requestId, opened); h.pager.opened(opened); await h.elapse()
+    if (change === 'seen') h.stored.set(opened.requestId, { ...opened, seenAt: '2026-09-15T00:01:00Z' })
+    if (change === 'closed') h.stored.set(opened.requestId, { ...opened, state: 'answered' })
+    if (change === 'revised') h.stored.set(opened.requestId, { ...opened, revision: 2 })
+    if (change === 'shutdown') h.pager.close()
+    h.state.available = true; h.pager.retryUnsent(); await h.settle()
+    expect(h.sent).toEqual([]); expect(h.state.attempts).toBe(1)
+  })
+
+  it('waits for another departure and keeps prior away eligibility through a long outage', async () => {
+    const h = retryFixture(), opened = record()
+    h.stored.set(opened.requestId, opened); h.pager.opened(opened); await h.elapse()
+    h.state.available = true; h.state.away = false; h.state.now = 20 * 60_000
+    h.pager.retryUnsent(); await h.settle(); expect(h.sent).toEqual([])
+    h.state.away = true; h.pager.ownerLeft(); await h.settle()
+    expect(h.sent).toEqual([opened])
+  })
+
+  it('does not strand an unsent result when recovery arrives while the attempt settles', async () => {
+    const h = retryFixture(), opened = record()
+    let release!: () => void
+    h.state.hold = new Promise<void>(resolve => { release = resolve })
+    h.stored.set(opened.requestId, opened); h.pager.opened(opened); await h.elapse()
+    h.state.available = true; h.pager.retryUnsent(); h.state.hold = null; release()
+    await h.settle(); expect(h.sent).toEqual([opened]); expect(h.state.attempts).toBe(2)
+  })
+})

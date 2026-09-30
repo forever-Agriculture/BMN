@@ -967,6 +967,100 @@ describe('Telegram attention notifications', () => {
     vi.useRealTimers()
   })
 
+  it('keeps recovered pages behind stale-card cleanup across overlapping polling reports', async () => {
+    const bot = await startFakeBotApi(424242, 424242)
+    const options = service['options']
+    await service.close()
+    service = new CompanionService({ ...options, telegramApiOrigin: bot.origin, pageAfterMs: 20 })
+    let release!: () => void, reached!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    const started = new Promise<void>(resolve => { reached = resolve })
+    try {
+      COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', {
+        enabled: true, allowedChatId: 424242, allowedUserId: 424242, notifyOn: 'attention', autoSubmitReplies: true
+      }, now)
+      COMPANION_OPERATIONS.putTelegramCard(database, {
+        messageId: 123, sessionId: 's1', requestId: null, incarnationId: 'old-incarnation', revision: 1,
+        state: 'buttons', card: { base: 'Old synthetic question', format: 'html' }
+      }, now)
+      bot.failWith('network')
+      expect(await service.route(METHOD_REGISTRY.telegramConfigure, {
+        token: '123456789:SYNTHETIC_test_token_not_real'
+      })).toMatchObject({ state: 'backoff' })
+      await service.route(METHOD_REGISTRY.presenceSet, { away: true })
+      await service['openAttention']({
+        sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'recovery-order', kind: 'question',
+        title: 'New recovery question', prompt: {
+          type: 'questions', harness: 'codex', shape: 'async-choice', requestRef: null, toolUseId: 'recovery-order',
+          questions: [{ id: null, header: null, text: 'New recovery question', multiSelect: false,
+            options: [{ label: 'Blue', description: null }] }]
+        }
+      })
+      await new Promise(resolve => setTimeout(resolve, 80))
+      expect(bot.calls.filter(call => call.method === 'sendMessage')).toHaveLength(0)
+      const store = service['cards']['deps'].store
+      const list = store.list.bind(store)
+      vi.spyOn(store, 'list').mockImplementationOnce(async states => {
+        const rows = await list(states)
+        expect(rows.some(row => row.messageId === 123)).toBe(true)
+        reached(); await held
+        return rows
+      })
+      bot.failWith(null)
+      await vi.waitFor(() => expect(service['telegramHealth']?.state).toBe('polling'), { timeout: 3000, interval: 20 })
+      await started
+      const reports = emitted.filter(event => event.topic === 'telegram').length
+      // Each completed real connector poll emits another health report while the first sweep is held.
+      await vi.waitFor(() => expect(emitted.filter(event => event.topic === 'telegram').length).toBeGreaterThan(reports + 1), {
+        timeout: 1500, interval: 20
+      })
+      expect(bot.calls.filter(call => call.method === 'sendMessage')).toHaveLength(0)
+      expect(COMPANION_OPERATIONS.listTelegramCards(database, ['buttons']).some(row => row.messageId === 123)).toBe(true)
+      release()
+      await vi.waitFor(() => expect(bot.calls.filter(call => call.method === 'sendMessage')).toHaveLength(1), {
+        timeout: 800, interval: 20
+      })
+      expect(COMPANION_OPERATIONS.listTelegramCards(database, ['final']).some(row => row.messageId === 123)).toBe(true)
+      const methods = bot.calls.map(call => call.method)
+      expect(methods.indexOf('editMessageText')).toBeLessThan(methods.indexOf('sendMessage'))
+      await new Promise(resolve => setTimeout(resolve, 450))
+      expect(bot.calls.filter(call => call.method === 'sendMessage')).toHaveLength(1)
+    } finally {
+      release(); await new Promise(resolve => setTimeout(resolve, 20))
+      await service.close(); await bot.close()
+    }
+  })
+
+  it('delivers an unseen async card after the real connector recovers from a network failure', async () => {
+    const bot = await startFakeBotApi(424242, 424242)
+    const options = service['options']
+    await service.close()
+    service = new CompanionService({ ...options, telegramApiOrigin: bot.origin, pageAfterMs: 20 })
+    try {
+      COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', {
+        enabled: true, allowedChatId: 424242, allowedUserId: 424242, notifyOn: 'attention', autoSubmitReplies: true
+      }, now)
+      bot.failWith('network')
+      const status = await service.route(METHOD_REGISTRY.telegramConfigure, { token: '123456789:SYNTHETIC_test_token_not_real' }) as TelegramStatus
+      expect(status.state).toBe('backoff')
+      await service.route(METHOD_REGISTRY.presenceSet, { away: true })
+      const opened = await service['openAttention']({
+        sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'codex:question', kind: 'question', title: 'Reconnect question',
+        prompt: { type: 'questions', harness: 'codex', shape: 'async-choice', requestRef: null, toolUseId: 'reconnect',
+          questions: [{ id: null, header: null, text: 'Reconnect question', multiSelect: false, options: [{ label: 'Blue', description: null }] }] }
+      })
+      await new Promise(resolve => setTimeout(resolve, 80))
+      expect(bot.calls.filter(call => call.method === 'sendMessage')).toHaveLength(0)
+      bot.failWith(null)
+      await vi.waitFor(async () => expect(await service.route(METHOD_REGISTRY.telegramStatus, {})).toMatchObject({ state: 'polling' }), { timeout: 3000, interval: 20 })
+      await vi.waitFor(() => expect(bot.calls.filter(call => call.method === 'sendMessage')).toHaveLength(1), { timeout: 800, interval: 20 })
+      const message = bot.calls.find(call => call.method === 'sendMessage')!
+      expect(COMPANION_OPERATIONS.getTelegramMessage(database, message.messageId!)).toMatchObject({ requestId: opened.requestId, incarnationId: 'incarnation-1' })
+    } finally {
+      await service.close(); await bot.close()
+    }
+  })
+
   it('binds each notification to the process incarnation live when it was sent', async () => {
     service['telegram'] = {
       sendMessage: async () => ({ messageId: 77 })
@@ -1270,16 +1364,18 @@ describe('Telegram attention notifications', () => {
     expect(writes).toHaveLength(1)
     expect(writes[0]!.sessionId).toBe('s1')
     expect(new TextDecoder().decode(writes[0]!.bytes)).toBe('\x1b[200~Which color?\nGold\x1b[201~\r')
-    expect(COMPANION_OPERATIONS.getAttention(database, record.requestId).state).toBe('open')
+    expect(COMPANION_OPERATIONS.getAttention(database, record.requestId)).toMatchObject({
+      state: 'withdrawn', resolvedBy: 'telegram', resolution: 'Message submitted from Telegram; native answer not confirmed; reminder cleared'
+    })
     expect(COMPANION_OPERATIONS.listDrafts(database)).toContainEqual(expect.objectContaining({ state: 'submitted', requestId: record.requestId }))
-    await expect(service.answerAttention(request)).resolves.toMatchObject({ state: 'refused', reason: 'claimed' })
+    await expect(service.answerAttention(request)).resolves.toMatchObject({ state: 'refused' })
     // Recreate the transient request claim; the durable submission still prevents replay.
     service['answers'].closed(record); service['answers'].track(record)
-    await expect(service.answerAttention({ ...request, epoch: service.answerEpoch(record.requestId)! })).resolves.toMatchObject({ state: 'refused', reason: 'claimed' })
+    await expect(service.answerAttention({ ...request, epoch: service.answerEpoch(record.requestId)! })).resolves.toMatchObject({ state: 'refused' })
     expect(writes).toHaveLength(1)
   })
 
-  it('submits a direct async card reply once to that exact session and keeps the request unconfirmed', async () => {
+  it('submits a direct async card reply once and clears its reminder without claiming native confirmation', async () => {
     const sent: string[] = []
     service['telegram'] = { sendMessage: async (text: string) => { sent.push(text); return { messageId: sent.length } } } as unknown as TelegramConnector
     await service.sessionsChanged()
@@ -1296,7 +1392,27 @@ describe('Telegram attention notifications', () => {
     expect(writes[0]!.sessionId).toBe('s1')
     expect(new TextDecoder().decode(writes[0]!.bytes)).toBe('\x1b[200~My custom message\x1b[201~\r')
     expect(sent).toEqual(['Message submitted to this session. Native answer not confirmed.'])
-    expect(COMPANION_OPERATIONS.getAttention(database, request.requestId).state).toBe('open')
+    expect(COMPANION_OPERATIONS.getAttention(database, request.requestId)).toMatchObject({
+      state: 'withdrawn', resolvedBy: 'telegram', resolution: 'Message submitted from Telegram; native answer not confirmed; reminder cleared'
+    })
+  })
+
+  it('does not clear a newer async question when a submitted reply settles', async () => {
+    await service.sessionsChanged()
+    const prompt = { type: 'questions' as const, harness: 'codex' as const, shape: 'async-choice' as const,
+      requestRef: 'changed-message', toolUseId: 'changed-call', questions: [{ id: null, header: null, text: 'First?',
+        multiSelect: false, options: [{ label: 'Blue', description: null }] }] }
+    const input = { sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'changed-message', kind: 'question' as const,
+      title: 'First?', prompt }
+    const opened = await service['openAttention'](input)
+    const request = { requestId: opened.requestId, revision: opened.revision, epoch: service.answerEpoch(opened.requestId)!,
+      incarnationId: 'incarnation-1', answer: { type: 'choices' as const, choices: [0] } }
+    service['options'].manager.writeToSession = () => {
+      COMPANION_OPERATIONS.openAttention(database, { ...input, title: 'New question?',
+        prompt: { ...prompt, questions: [{ ...prompt.questions[0]!, text: 'New question?' }] } }, opened.requestId, now)
+    }
+    await expect(service.answerAttention(request)).resolves.toMatchObject({ state: 'submitted' })
+    expect(COMPANION_OPERATIONS.getAttention(database, opened.requestId)).toMatchObject({ state: 'open', revision: opened.revision + 1 })
   })
 
   it('never replays an uncertain Codex Default message write', async () => {
@@ -1310,6 +1426,7 @@ describe('Telegram attention notifications', () => {
     const request = { requestId: row.requestId, revision: row.revision, epoch: service.answerEpoch(row.requestId)!,
       incarnationId: 'incarnation-1', answer: { type: 'choices' as const, choices: [{ typed: 'Custom text' }] } }
     await expect(service.answerAttention(request)).resolves.toMatchObject({ state: 'sent-unconfirmed' })
+    expect(COMPANION_OPERATIONS.getAttention(database, row.requestId).state).toBe('open')
     expect(COMPANION_OPERATIONS.listDrafts(database)).toContainEqual(expect.objectContaining({ requestId: row.requestId, state: 'uncertain' }))
     service['answers'].closed(row); service['answers'].track(row)
     await expect(service.answerAttention({ ...request, epoch: service.answerEpoch(row.requestId)! })).resolves.toMatchObject({ state: 'refused', reason: 'claimed' })
@@ -1384,7 +1501,8 @@ describe('Telegram attention notifications', () => {
         await service['cards'].page(COMPANION_OPERATIONS.getAttention(database, opened.requestId))
         expected += `\x1b[200~${scenario.payload}\x1b[201~\r`
         await vi.waitFor(() => expect(readFileSync(receiver, 'utf8')).toBe(expected), { timeout: 10000 })
-        expect(COMPANION_OPERATIONS.getAttention(database, opened.requestId).state).toBe('open')
+        await vi.waitFor(() => expect(COMPANION_OPERATIONS.getAttention(database, opened.requestId).state)
+          .toBe(scenario.title === 'Synthetic uncertain' ? 'open' : 'withdrawn'))
         if (scenario.title === 'Synthetic custom' || scenario.title === 'Synthetic uncertain') {
           await vi.waitFor(() => expect(COMPANION_OPERATIONS.listTelegramCards(database, ['final'])
             .some(card => card.requestId === opened.requestId)).toBe(true), { timeout: 5000 })

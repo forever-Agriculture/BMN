@@ -111,7 +111,8 @@ export async function startFakeBotApi(chatId: number, userId: number): Promise<F
       }
       if (method === 'getUpdates') {
         const end = Date.now() + EMPTY_POLL_MS
-        while (updates.length === 0 && Date.now() < end) await new Promise((resolve) => setTimeout(resolve, 25))
+        while (!response.destroyed && updates.length === 0 && Date.now() < end) await new Promise((resolve) => setTimeout(resolve, 25))
+        if (response.destroyed) return
         return reply(response, updates.splice(0))
       }
       const call: FakeBotCall = { method, body, at: Date.now() }

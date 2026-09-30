@@ -162,16 +162,33 @@ export class TelegramCardKeeper {
 
   constructor(private readonly deps: CardKeeperDependencies) {}
 
-  /** Sends the page for a request, or brings its existing card to this revision instead of sending another. */
-  async page(record: AttentionRecord): Promise<void> {
+  private readonly paging = new Map<string, Promise<boolean>>()
+
+  /** True consumes the attempt; false means definitely unsent, so recovery may retry. */
+  async page(record: AttentionRecord): Promise<boolean> {
+    const previous = this.paging.get(record.requestId)
+    const work = (previous ?? Promise.resolve()).catch(() => undefined).then(() => this.pageCurrent(record))
+    this.paging.set(record.requestId, work)
+    try {
+      return await work
+    } finally {
+      if (this.paging.get(record.requestId) === work) this.paging.delete(record.requestId)
+    }
+  }
+
+  /** Initial creation is serialized across revisions; a queued revision rechecks the current request. */
+  private async pageCurrent(record: AttentionRecord): Promise<boolean> {
+    if (this.disposed) return true
+    const current = await this.deps.getAttention(record.requestId)
+    if (!current || current.state !== 'open' || current.seenAt !== null || current.revision !== record.revision) return true
     const connector = this.deps.connector()
-    if (!connector || this.disposed) return
+    if (!connector) return false
     const existing = this.cardFor(record.requestId)
     if (existing) {
       if (existing.state === 'buttons' || existing.state === 'open') {
         await this.enqueue(existing, () => this.refreshCard(existing))
       }
-      return
+      return true
     }
     const incarnationId = this.deps.liveIncarnationId(record.sessionId) ?? null
     const binding: Binding = {
@@ -188,14 +205,14 @@ export class TelegramCardKeeper {
         keyboard: composed.rendered.keyboard
       })).messageId
     } catch (error) {
-      if (!isFormattingRefusal(error)) return
+      if (!isFormattingRefusal(error)) return true
       // Telegram refused the formatting: the owner still gets the words, answered at the laptop.
       format = 'plain'
       const fallback = plainFallback(composed.rendered.text, composed.state === 'buttons')
       try {
         messageId = (await connector.sendMessage(fallback)).messageId
       } catch {
-        return
+        return true
       }
     }
     const state = format === 'plain' ? 'open' : composed.state
@@ -232,6 +249,7 @@ export class TelegramCardKeeper {
     }).catch(() => undefined)
     // The request may have closed while the card was on its way.
     await this.enqueue(card, () => this.refreshCard(card))
+    return true
   }
 
   /** A session's requests changed; its cards are read back once the burst settles. Null means every session. */

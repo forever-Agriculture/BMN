@@ -128,6 +128,37 @@ const settle = async (): Promise<void> => {
 }
 
 describe('sending a card', () => {
+  it('distinguishes an unavailable connector from an ambiguous send attempt', async () => {
+    const h = setup()
+    h.state.connected = false
+    expect(await h.keeper.page(h.state.record!)).toBe(false)
+    expect(h.connector.sends).toEqual([])
+    h.state.connected = true; h.connector.failAll = true
+    expect(await h.keeper.page(h.state.record!)).toBe(true)
+    h.keeper.dispose()
+  })
+
+  it('serializes first-card creation across concurrent revisions', async () => {
+    const h = setup()
+    let release!: () => void, started!: () => void
+    const held = new Promise<void>(resolve => { release = resolve })
+    const reached = new Promise<void>(resolve => { started = resolve })
+    const send = h.connector.sendMessage.bind(h.connector)
+    vi.spyOn(h.connector, 'sendMessage').mockImplementationOnce(async (text, options) => {
+      started(); await held; return send(text, options)
+    })
+    const initial = h.keeper.page(h.state.record!)
+    await reached
+    h.state.record = record(TWO, { revision: 2, title: 'Revised question' })
+    const revised = h.keeper.page(h.state.record)
+    const repeated = h.keeper.page(h.state.record)
+    release(); await Promise.all([initial, revised, repeated])
+    expect(h.connector.sends).toHaveLength(1)
+    expect(h.puts).toHaveLength(1)
+    expect(h.connector.lastEdit()?.text).toContain('1 of 2')
+    h.keeper.dispose()
+  })
+
   it('refuses an attachment caption after Other without turning it into an answer', async () => {
     const h = setup()
     await h.keeper.page(h.state.record!)

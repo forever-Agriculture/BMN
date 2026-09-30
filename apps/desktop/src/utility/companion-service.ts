@@ -267,6 +267,8 @@ export class CompanionService {
   private telegram: TelegramConnector | undefined
   private telegramToken: string | null = null
   private telegramHealth: ConnectorHealth | undefined
+  /** Overlapping polling reports share stale-card cleanup before any recovery pages are flushed. */
+  private telegramRecovery: Promise<void> | undefined
   /** Story 32.2: one more for every connector state change, kept across restarts; with `telegramHost`, names an entry. */
   private telegramStateEntry = 0
   private readonly telegramHost = randomUUID()
@@ -1217,6 +1219,9 @@ export class CompanionService {
    */
   async answerAttention(request: AnswerRequest): Promise<AnswerOutcome> {
     const outcome = await this.answers.answer(request)
+    if (outcome.state === 'submitted') {
+      await this.clearSubmittedQuestionReminder(request.requestId, request.revision)
+    }
     if (outcome.state === 'sent-unconfirmed' && request.answer.type === 'permission' && request.answer.decision === 'deny') {
       // Claude reports a deny through no hook, so its request would otherwise stay open after the dialog closed.
       const record = await this.options.database.companion('getAttention', request.requestId).catch(() => null)
@@ -1231,6 +1236,22 @@ export class CompanionService {
       }
     }
     return outcome
+  }
+
+  /** A successful ordinary message clears only its reminder, without a native answer receipt. */
+  private async clearSubmittedQuestionReminder(requestId: string, revision: number): Promise<void> {
+    const database = this.options.database
+    const record = await database.companion('getAttention', requestId).catch(() => null)
+    if (!record || record.state !== 'open' || record.revision !== revision || record.kind !== 'question' ||
+      answerRoute(record.prompt) !== 'codex-message') return
+    const closed = await database.companion('closeAttention',
+      { requestId, expectedKind: 'question', expectedRevision: revision }, 'withdrawn',
+      'Message submitted from Telegram; native answer not confirmed; reminder cleared', this.iso(), 'telegram'
+    ).catch(() => null)
+    if (closed) {
+      this.answers.closed(closed)
+      this.emit('attention', closed.sessionId)
+    }
   }
 
   /** The dialog epoch a card for this request is sent for; null when it cannot be answered by a tap. */
@@ -2315,7 +2336,13 @@ export class CompanionService {
           if (entered) this.telegramStateEntry += 1
           this.telegramHealth = health
           // Cards a previous run left with buttons are finished once Telegram is reachable, before new pages.
-          if (health.state === 'polling') void this.cards.sweep()
+          if (health.state === 'polling' && !this.telegramRecovery) {
+            this.telegramRecovery = this.cards.sweep().then(() => {
+              if (this.telegramHealth?.state === 'polling') this.pager.retryUnsent()
+            }).catch(() => undefined).finally(() => {
+              this.telegramRecovery = undefined
+            })
+          }
           // An entry into a stopped state travels with its event, as it is now, so no later change can hide it.
           this.options.emit({
             kind: 'app-event',
@@ -2454,6 +2481,7 @@ export class CompanionService {
             this.emit('drafts', target.sessionId)
           })
         } else await this.sendDraft(record.draftId, true, target.incarnationId)
+        if (ordinaryCard && request) await this.clearSubmittedQuestionReminder(request.requestId, request.revision)
         if (reply.text && !ordinaryCard && request) {
           await database.companion(
             'closeAttention',
