@@ -6,6 +6,9 @@ files:
   - out/**/*
   - '!node_modules/node-pty/prebuilds/**/*'
   - '!node_modules/node-pty/build/Release/obj.target/**/*'
+  # Keep exclusions in this file set: a separate linux.files exclusion creates a
+  # catch-all matcher that includes old releases when packaging into staging.
+  - '!node_modules/better-sqlite3/prebuilds/!(linux-${arch}).node'
 asar: true
 asarUnpack:
   - node_modules/node-pty/build/Release/pty.node
@@ -37,8 +40,6 @@ linux:
   target:
     - dir
   executableName: bmn
-  files:
-    - '!node_modules/better-sqlite3/prebuilds/!(linux-${arch}).node'
   asarUnpack:
     - node_modules/better-sqlite3/prebuilds/linux-*.node
     - node_modules/node-pty/bin/linux-*/node-pty.node
