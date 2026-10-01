@@ -136,9 +136,23 @@ adds no agent-control socket method.
 **Palette file search is an on-demand directory read.** It uses the selected session's live launch
 directory (or stored directory after exit), or the workspace's default directory when no session
 is selected. The utility caps traversal at six directory levels, 20,000 entries and 50 results,
-skips `.git` and `node_modules`, does not follow symbolic links and cancels superseded requests.
+skips `.git` and `node_modules` entries and descendant `dist`, `build`, `out`, `coverage`, `.next`
+and `.cache` directories. A context rooted there and regular files with the six generated names
+remain searchable. It does not follow symbolic links and cancels superseded requests.
 The renderer shows the searched root and routes a chosen file through the existing file-reference
 preview. No index, content search or watcher is maintained.
+
+**Archive shares host workspace admission.** Starts and moves claim admission before asynchronous
+checks; an archive reserves its mutation and refuses host-owned live, starting or exit-unconfirmed
+work. Session mutations also keep later starts out. Undo is a transient, revision-addressed restore,
+with one in-flight action and no process or layout activation.
+
+**Hook history is diagnostic metadata.** The existing owner-window IPC can separately read earlier
+host runs from one 0600 state snapshot in a 0700 directory. Explicit category/tool allowlists,
+30 rows per session, 1,024 globally and a 1 MiB byte cap bound it. One coalescing writer atomically
+replaces the snapshot; pending events can be lost on crash. Startup loads after archive purge and
+session enumeration, deletion prunes the rows, and backups exclude the file. History never becomes
+live observation, request, reporter, compaction or usage state and has no control-socket route.
 
 **Progress and requests keep their evidence.** Process state, progress reports, unread state and
 the resolution of an agent's question are stored separately. An agent saying it is done is shown as

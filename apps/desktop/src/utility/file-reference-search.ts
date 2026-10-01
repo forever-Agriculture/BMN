@@ -6,6 +6,7 @@ import type { FileReferenceSearchResult } from '@bmn/protocol'
 export const FILE_SEARCH_MAX_DEPTH = 6
 export const FILE_SEARCH_MAX_ENTRIES = 20_000
 export const FILE_SEARCH_MAX_RESULTS = 50
+const GENERATED_DIRECTORIES = new Set(['dist', 'build', 'out', 'coverage', '.next', '.cache'])
 
 export async function searchFileReferences(
   root: string | null,
@@ -41,7 +42,7 @@ export async function searchFileReferences(
         result.scanned += 1
         if (entry.name !== '.git' && entry.name !== 'node_modules' && !entry.isSymbolicLink()) {
           const path = join(folder.path, entry.name)
-          if (entry.isDirectory() && folder.depth < maxDepth) pending.push({ path, depth: folder.depth + 1 })
+          if (entry.isDirectory() && !GENERATED_DIRECTORIES.has(entry.name) && folder.depth < maxDepth) pending.push({ path, depth: folder.depth + 1 })
           else if (entry.isFile()) {
             const haystack = `${entry.name} ${path}`.toLocaleLowerCase()
             if (words.every((word) => haystack.includes(word))) {

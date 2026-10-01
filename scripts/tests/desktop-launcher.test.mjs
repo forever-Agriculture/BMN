@@ -203,12 +203,13 @@ describe('desktop launcher', () => {
     roots.push(root)
     // A real executable, so /proc/<pid>/exe resolves to the packaged path the launcher looks for.
     const binary = join(root, 'bmn')
-    copyFileSync('/bin/sleep', binary)
+    // /bin/sleep can be a multicall coreutils binary that exits when renamed to bmn.
+    copyFileSync(process.execPath, binary)
     chmodSync(binary, 0o755)
-    const running = spawn(binary, ['30'], { stdio: 'ignore' })
+    const running = spawn(binary, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
     try {
       const run = fixture({ phase: 'waiting-for-exit', activeChecks: 1_000, binary, zenity: fakeZenity() })
-      const result = spawnSync(run.launcher, ['0'], { env: run.env, encoding: 'utf8', timeout: 5_000 })
+      const result = spawnSync(run.launcher, ['-e', ''], { env: run.env, encoding: 'utf8', timeout: 5_000 })
 
       expect(result.status).toBe(0)
       expect(run.read('notified')).toBeNull()

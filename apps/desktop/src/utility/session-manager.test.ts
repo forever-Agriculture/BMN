@@ -62,7 +62,7 @@ import {
   replaceSessionConversationBinding,
   selectInterruptedIncarnations
 } from './database-session-store'
-import { listSessions, listWorkspaces } from './database-workspace-store'
+import { createWorkspace, listSessions, listWorkspaces, updateSession } from './database-workspace-store'
 import { missingProgramReason } from './reported-resume'
 import { installBundledTerminfo } from './terminal-graphics'
 import { TerminalByteFramer, type TerminalFrame } from './terminal-byte-framer'
@@ -915,6 +915,8 @@ describe('shell session lifecycle', () => {
 
   it('persists the supplied workspace and session name when creating a session', async () => {
     const { manager, store, cwd } = await fixture()
+    const workspaces = await store.listWorkspaces()
+    vi.spyOn(store, 'listWorkspaces').mockResolvedValue([{ ...workspaces[0]!, workspaceId: 'workspace-work' }])
 
     await manager.create({
       workspaceId: 'workspace-work',
@@ -5924,5 +5926,164 @@ describe('a command a program in the session reports to resume it (Epic 43)', ()
     } finally {
       database.close()
     }
+  })
+})
+
+describe('workspace admission and archive ordering (47.1)', () => {
+  function deferred() {
+    let resolve!: () => void
+    const promise = new Promise<void>(done => { resolve = done })
+    return { promise, resolve }
+  }
+  async function guardedFixture(unconfirmed = false) {
+    const f = await fixture()
+    const pty = unconfirmed ? new NonExitingFakePty() : f.pty
+    const spawn = vi.fn(() => pty)
+    const manager = new SessionManager({ store: f.store, spawnPty: spawn,
+      processStartIdentity: async () => 'synthetic:47', sendTerminalMessage: () => undefined,
+      stopGraceMs: 0, stopKillWaitMs: 0, signalProcess: () => true })
+    return { ...f, manager, pty, spawn,
+      launch: { ...DEFAULT_SESSION_CREATION, cwd: f.cwd, executable: '/bin/sh', argv: [], cols: 80, rows: 24 } }
+  }
+  it('refuses a live workspace and session with names, changing no records or process input', async () => {
+    const f = await guardedFixture(); const created = await f.manager.create(f.launch)
+    const mutate = vi.fn(async () => true)
+    await expect(f.manager.archiveWorkspace(f.launch.workspaceId, mutate)).rejects.toThrow('Shell')
+    await expect(f.manager.updateSessionAvailability(created.sessionId, { archived: true }, mutate)).rejects.toThrow('Shell')
+    expect(mutate).not.toHaveBeenCalled(); expect(f.pty.writes).toEqual([]); expect(f.pty.killed).toBe(false)
+  })
+  it('blocks workspace archive before creation has even enumerated its workspace', async () => {
+    const f = await guardedFixture(); const gate = deferred(); const entered = deferred()
+    const list = f.store.listWorkspaces.bind(f.store)
+    vi.spyOn(f.store, 'listWorkspaces').mockImplementation(async () => { entered.resolve(); await gate.promise; return list() })
+    const created = f.manager.create(f.launch); await entered.promise
+    const mutate = vi.fn(async () => true)
+    await expect(f.manager.archiveWorkspace(f.launch.workspaceId, mutate)).rejects.toThrow('Shell')
+    expect(f.spawn).not.toHaveBeenCalled(); expect(mutate).not.toHaveBeenCalled()
+    gate.resolve(); await created
+  })
+  it('reserves archive before its database await and refuses create without spawning', async () => {
+    const f = await guardedFixture(); const gate = deferred(); const entered = deferred()
+    const archive = f.manager.archiveWorkspace(f.launch.workspaceId, async () => { entered.resolve(); await gate.promise; return true })
+    await entered.promise
+    await expect(f.manager.create(f.launch)).rejects.toThrow(/being archived/)
+    expect(f.spawn).not.toHaveBeenCalled(); gate.resolve(); await archive
+    // A failed or completed mutation releases the reservation.
+    await f.manager.create(f.launch)
+  })
+  it('refuses starting ownership while the created record is still in flight', async () => {
+    const f = await guardedFixture(); const gate = deferred(); const entered = deferred()
+    f.store.createGate = async () => { entered.resolve(); await gate.promise }
+    const pending = f.manager.create(f.launch); await entered.promise
+    const mutate = vi.fn(async () => true)
+    await expect(f.manager.archiveWorkspace(f.launch.workspaceId, mutate)).rejects.toThrow('Shell')
+    expect(mutate).not.toHaveBeenCalled(); gate.resolve(); await pending
+  })
+  it('allows stopped records but keeps exit-unconfirmed ownership blocking both archives', async () => {
+    const stopped = await guardedFixture(); const created = await stopped.manager.create(stopped.launch)
+    await stopped.manager.stop(created, 'explicit')
+    await expect(stopped.manager.archiveWorkspace(stopped.launch.workspaceId, async () => 'archived')).resolves.toBe('archived')
+    await expect(stopped.manager.updateSessionAvailability(created.sessionId, { archived: true }, async () => 'archived')).resolves.toBe('archived')
+    const f = await guardedFixture(true); const live = await f.manager.create(f.launch)
+    await expect(f.manager.stop(live, 'explicit')).rejects.toThrow(/stop outcome is unknown/)
+    await expect(f.manager.archiveWorkspace(f.launch.workspaceId, async () => true)).rejects.toThrow('Shell')
+    await expect(f.manager.updateSessionAvailability(live.sessionId, { archived: true }, async () => true)).rejects.toThrow(/exit unconfirmed/)
+  })
+  it.each(['relaunch', 'resume'] as const)('revalidates %s after an archive wins its initial saved-record read', async route => {
+    const f = await guardedFixture(); const created = await f.manager.create(f.launch)
+    await f.manager.stop(created, 'explicit')
+    const gate = deferred(); const entered = deferred()
+    const read = f.store.listSessions.bind(f.store)
+    vi.spyOn(f.store, 'listSessions').mockImplementationOnce(async ws => { const rows = await read(ws); entered.resolve(); await gate.promise; return rows })
+    const pending = f.manager[route]({ sessionId: created.sessionId, cols: 80, rows: 24 })
+    await entered.promise
+    await f.manager.archiveWorkspace(f.launch.workspaceId, async () => {
+      const rows = await f.store.listWorkspaces(); vi.spyOn(f.store, 'listWorkspaces').mockResolvedValue(rows.map(row => ({ ...row, archivedAt: '2026-10-01' })))
+    })
+    gate.resolve(); await expect(pending).rejects.toThrow(/Restore the workspace/)
+    expect(f.spawn).toHaveBeenCalledTimes(1)
+  })
+  it('keeps a failed record write with an unconfirmed process exit blocking workspace archive', async () => {
+    const f = await guardedFixture(true)
+    f.store.createGate = async () => { throw new Error('Synthetic failed record write') }
+    await expect(f.manager.create(f.launch)).rejects.toThrow()
+    expect(f.store.startingRecords).toEqual([])
+    expect((await f.manager.health()).sessions).toEqual([expect.objectContaining({ state: 'exit-unconfirmed' })])
+    const mutate = vi.fn(async () => true)
+    await expect(f.manager.archiveWorkspace(f.launch.workspaceId, mutate)).rejects.toThrow('Shell')
+    expect(mutate).not.toHaveBeenCalled()
+  })
+  it('blocks session archive and moves while relaunch admission is waiting', async () => {
+    const f = await guardedFixture(); const created = await f.manager.create(f.launch); await f.manager.stop(created, 'explicit')
+    const gate = deferred(); const entered = deferred(); const list = f.store.listWorkspaces.bind(f.store)
+    vi.spyOn(f.store, 'listWorkspaces').mockImplementationOnce(() => list()).mockImplementationOnce(async () => { entered.resolve(); await gate.promise; return list() })
+    const pending = f.manager.relaunch({ sessionId: created.sessionId, cols: 80, rows: 24 }); await entered.promise
+    await expect(f.manager.updateSessionAvailability(created.sessionId, { archived: true }, async () => true)).rejects.toThrow(/starting/)
+    await expect(f.manager.updateSessionAvailability(created.sessionId, { workspaceId: 'destination' }, async () => true)).rejects.toThrow(/starting/)
+    gate.resolve(); await pending
+  })
+  it('move wins destination admission, archive refuses, and archive wins against a later move', async () => {
+    const f = await guardedFixture(); const created = await f.manager.create(f.launch)
+    const original = await f.store.listWorkspaces()
+    vi.spyOn(f.store, 'listWorkspaces').mockResolvedValue([...original, { ...original[0]!, workspaceId: 'destination' }])
+    const gate = deferred(); const entered = deferred()
+    const moved = f.manager.updateSessionAvailability(created.sessionId, { workspaceId: 'destination' }, async () => { entered.resolve(); await gate.promise })
+    await entered.promise
+    await expect(f.manager.archiveWorkspace('destination', async () => true)).rejects.toThrow('Shell')
+    gate.resolve(); await moved
+    await f.manager.stop(created, 'explicit')
+    // After the moved process confirms exit the destination can archive.
+    const readSource = f.store.listSessions.bind(f.store)
+    vi.spyOn(f.store, 'listSessions').mockImplementation(async ws => ws === 'destination' ? [] : readSource(ws))
+    const gate2 = deferred()
+    const archiveEntered = deferred()
+    const archived = f.manager.archiveWorkspace('destination', async () => { archiveEntered.resolve(); await gate2.promise })
+    await archiveEntered.promise
+    await expect(f.manager.updateSessionAvailability(created.sessionId, { workspaceId: 'destination' }, async () => true)).rejects.toThrow(/being archived/)
+    gate2.resolve(); await archived
+  })
+  it('holds a session archive across its write and refuses a concurrent start', async () => {
+    const f = await guardedFixture(); const created = await f.manager.create(f.launch); await f.manager.stop(created, 'explicit')
+    const gate = deferred(); const entered = deferred()
+    const archive = f.manager.updateSessionAvailability(created.sessionId, { archived: true }, async () => { entered.resolve(); await gate.promise })
+    await entered.promise
+    await expect(f.manager.relaunch({ sessionId: created.sessionId, cols: 80, rows: 24 })).rejects.toThrow(/being archived or moved/)
+    gate.resolve(); await archive
+  })
+  it('moves live ownership with the saved record, keeping only the destination blocked', async () => {
+    const f = await fixture()
+    const database = new BetterSqlite3(':memory:')
+    try {
+      const now = '2026-10-01T02:00:00.000Z'
+      initializeDatabase(database, now)
+      const store = sqliteSessionStore(database)
+      const source = listWorkspaces(database)[0]!
+      const destination = createWorkspace(database, { name: 'Destination', defaultCwd: f.cwd },
+        '00000000-0000-4000-8000-000000000047', now)
+      const manager = new SessionManager({ store, spawnPty: () => f.pty,
+        processStartIdentity: async () => 'synthetic:47', sendTerminalMessage: () => undefined })
+      const created = await manager.create({ workspaceId: source.workspaceId, name: 'Original',
+        cwd: f.cwd, executable: '/bin/sh', argv: [], cols: 80, rows: 24 })
+      const stored = listSessions(database, source.workspaceId)[0]!
+      await manager.updateSessionAvailability(created.sessionId, { workspaceId: destination.workspaceId }, async () =>
+        updateSession(database, { sessionId: created.sessionId, expectedRevision: stored.revision,
+          workspaceId: destination.workspaceId, name: 'Moved shell' }, now))
+      await expect(manager.archiveWorkspace(source.workspaceId, async () => true)).resolves.toBe(true)
+      await expect(manager.archiveWorkspace(destination.workspaceId, async () => true)).rejects.toThrow('Moved shell')
+      expect((await manager.health()).sessions).toEqual([expect.objectContaining({
+        sessionId: created.sessionId, incarnationId: created.incarnationId, state: 'live' })])
+      expect(f.pty.writes).toEqual([])
+      expect(f.pty.killed).toBe(false)
+      await manager.stop(created, 'explicit')
+    } finally {
+      database.close()
+    }
+  })
+  it('a session restore refuses an archived parent without overriding it', async () => {
+    const f = await guardedFixture(); const created = await f.manager.create(f.launch); await f.manager.stop(created, 'explicit')
+    const rows = await f.store.listWorkspaces(); vi.spyOn(f.store, 'listWorkspaces').mockResolvedValue(rows.map(row => ({ ...row, archivedAt: '2026-10-01' })))
+    const mutate = vi.fn(async () => true)
+    await expect(f.manager.updateSessionAvailability(created.sessionId, { archived: false }, mutate)).rejects.toThrow(/Restore the workspace/)
+    expect(mutate).not.toHaveBeenCalled()
   })
 })

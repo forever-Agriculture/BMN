@@ -321,8 +321,14 @@ Stop", "resolved by typing", "expired"). A request opened before this existed re
 Each hook event also records itself, whether or not it changed anything: the session's ⋯ menu has
 **Hook events…**, a read-only list of what the harness reported, with the event, the tool it ran and
 what it changed. That list is the answer to "why is there no request for this?". It is kept in
-memory only, at most 30 events per session, is never shown to another session, and starts empty
-again after BMN restarts.
+memory for this run, at most 30 events per session, and is never shown to another session.
+The owner dialog separately labels earlier host runs from an owner-only metadata snapshot: at most
+30 rows per session, 1,024 globally and 1 MiB, evicting the oldest first. It has no age expiry and
+keeps retained archives; deletion removes the session's rows. Unknown event/source/tool labels
+become `other`; payloads, prompts, answers, tool input/output, model/API-host data and configuration
+are excluded. Coalesced recent events can be lost before a completed atomic save, including on
+crash. History never replays requests or observations and is excluded from backups. It has no
+control-socket method and appears only in the owner window; a history failure leaves live events working.
 
 ### Model origin flag
 
@@ -347,7 +353,7 @@ One table in `shared/protocol/src/model-origin.ts` decides, in this order:
    (OpenAI).
 4. Otherwise nothing: an unknown host with an unknown model shows no flag.
 
-The origin is kept per run, in memory only, like **Hook events…**. The host is read afresh for every
+The origin is kept per run, in memory only. Retained Hook events history cannot restore it. The host is read afresh for every
 event, so it always describes the agent now. Most events carry no model, so the same agent keeps its
 last reported model within its session; a different agent, or a new session in it, starts from what
 it reports itself, and the agent's `SessionEnd` takes the flag away, since the shell it leaves behind

@@ -80,8 +80,8 @@ export interface TerminalIntegrationProbe {
     sourceWorkspaceId: string
     paneSessionIds: string[]
     selectedAfterFocus: string | null
-    sourceWorkspaceArchived: boolean
-    foreignPaneRemovedAfterArchive: boolean
+    sourceWorkspaceArchiveRefused: boolean
+    foreignPaneClosed: boolean
   }
   /** Epic 11: each pane's marker comes from its own workspace, and choosing one moves no geometry. */
   workspaceMarkers: {

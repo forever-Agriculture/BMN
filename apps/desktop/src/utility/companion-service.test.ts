@@ -1,7 +1,7 @@
 // MODULE: companion-service.test.ts - backup export/verify completeness and artifact reconciliation against the real store
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -891,6 +891,15 @@ describe('backup', () => {
     expect(await verifyBackup(directory)).toMatchObject({ ok: true, checked: 1002, failures: [] })
   }, 30_000)
 
+  it('explicitly excludes retained hook metadata from backups', async () => {
+    await mkdir(join(root, 'state'), { recursive: true })
+    await writeFile(join(root, 'state/hook-events.json'), JSON.stringify({ version: 1, rows: [] }))
+    const { manifest, directory } = await exportBackup(join(root, 'backups'))
+    expect(manifest.excluded).toContain('retained hook event history')
+    await expect(stat(join(directory, 'hook-events.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(stat(join(directory, 'state/hook-events.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('fails verification when a ready artifact in the backup database has no manifest entry', async () => {
     const [kept, dropped] = await storeArtifacts(2)
     const { directory } = await exportBackup(join(root, 'backups'))
@@ -1055,7 +1064,9 @@ describe('Telegram attention notifications', () => {
       await vi.waitFor(async () => expect(await service.route(METHOD_REGISTRY.telegramStatus, {})).toMatchObject({ state: 'polling' }), { timeout: 3000, interval: 20 })
       await vi.waitFor(() => expect(bot.calls.filter(call => call.method === 'sendMessage')).toHaveLength(1), { timeout: 800, interval: 20 })
       const message = bot.calls.find(call => call.method === 'sendMessage')!
-      expect(COMPANION_OPERATIONS.getTelegramMessage(database, message.messageId!)).toMatchObject({ requestId: opened.requestId, incarnationId: 'incarnation-1' })
+      // The fake server observes the request before the connector receives its response and saves the binding.
+      await vi.waitFor(() => expect(COMPANION_OPERATIONS.getTelegramMessage(database, message.messageId!))
+        .toMatchObject({ requestId: opened.requestId, incarnationId: 'incarnation-1' }), { timeout: 800, interval: 20 })
     } finally {
       await service.close(); await bot.close()
     }
@@ -1787,6 +1798,29 @@ describe('progress evidence through the service', () => {
 })
 
 describe('hook event log', () => {
+  it('retains metadata through reconstruction without replaying live state, and filters owner reads', async () => {
+    const sid = randomUUID(), incarnationId = randomUUID()
+    database.prepare('UPDATE session SET session_id = ? WHERE session_id = ?').run(sid, 's1')
+    liveIncarnations.delete('s1'); liveIncarnations.set(sid, incarnationId)
+    await service.start()
+    await service['observeHookEvent']({ sessionId: sid, incarnationId, agent: 'claude', event: 'SessionStart',
+      source: 'compact', toolName: 'secret-tool', effects: [], model: 'secret-model', apiHost: 'secret.invalid' })
+    await service.close()
+    const persisted = readFileSync(join(root, 'state/hook-events.json'), 'utf8')
+    expect(persisted).not.toContain('secret'); expect(JSON.parse(persisted).rows).toHaveLength(1)
+    service = new CompanionService(service['options']); liveIncarnations.clear(); await service.start()
+    const view = await service.route(METHOD_REGISTRY.hookEventsList, { sessionId: sid, includeHistory: true })
+    expect(view).toMatchObject({ events: [], earlier: [{ event: 'SessionStart', source: 'compact', toolName: 'other' }], historyUnavailable: false })
+    expect(service.hookObservation(sid)).toMatchObject({ state: 'none' })
+    expect(await service.route(METHOD_REGISTRY.hookOriginsList, {})).toEqual([])
+    expect(await service.route(METHOD_REGISTRY.attentionList, {})).toEqual([])
+    expect(writes).toEqual([])
+    await expect(service.route(METHOD_REGISTRY.hookEventsList, { sessionId: 'deleted', includeHistory: true })).rejects.toMatchObject({ code: ERROR_CODES.notFound })
+    database.prepare('DELETE FROM session WHERE session_id = ?').run(sid)
+    await service.sessionsChanged()
+    await service.close()
+    expect(JSON.parse(readFileSync(join(root, 'state/hook-events.json'), 'utf8')).rows).toEqual([])
+  })
   const observe = async (sessionId: string, event: string, effects: HookEventRecord['effects'] = []): Promise<void> => {
     await (service as unknown as {
       observeHookEvent(p: {

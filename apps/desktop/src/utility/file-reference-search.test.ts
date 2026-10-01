@@ -1,12 +1,19 @@
 // MODULE: file-reference-search.test.ts - bounded, cancellable filename search against a synthetic tree
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, symlink, writeFile, opendir } from 'node:fs/promises'
+import * as filesystem from 'node:fs/promises'
+import type { Dirent } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { searchFileReferences } from './file-reference-search'
 
+vi.mock('node:fs/promises', async importOriginal => {
+  const original = await importOriginal<typeof filesystem>()
+  return { ...original, opendir: vi.fn(original.opendir) }
+})
 const roots: string[] = []
 afterEach(async () => {
+  vi.restoreAllMocks()
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
 
@@ -17,6 +24,51 @@ async function fixture(): Promise<string> {
 }
 
 describe('searchFileReferences', () => {
+  it('finds source after generated entries would exhaust the original default cap', async () => {
+    const root = await fixture()
+    await mkdir(join(root, 'build')); await mkdir(join(root, 'src'))
+    for (let i = 0; i < 20_010; i++) await writeFile(join(root, 'build', `generated-${i}.js`), '')
+    await writeFile(join(root, 'src', 'target-source.ts'), '')
+    // Fix only the root's enumeration order so the regression cannot pass by visiting src first.
+    const rootHandle = await opendir(root)
+    const entries: Dirent[] = []
+    for await (const entry of rootHandle) entries.push(entry)
+    entries.sort((a, b) => a.name.localeCompare(b.name))
+    const { opendir: openDirectory } = await vi.importActual<typeof filesystem>('node:fs/promises')
+    vi.mocked(filesystem.opendir).mockImplementation(async (...args) => args[0] === root
+      ? { async *[Symbol.asyncIterator]() { yield* entries } } as Awaited<ReturnType<typeof opendir>>
+      : openDirectory(...args))
+    const found = await searchFileReferences(root, 'target-source.ts', new AbortController().signal)
+    expect(found.files.map(row => row.path)).toEqual([join(root, 'src', 'target-source.ts')])
+    expect(found.scanned).toBe(3)
+    expect(found.capped).toBe(false)
+  }, 15_000)
+  it('reaches source without spending the entry budget inside generated directories', async () => {
+    const root = await fixture()
+    // Every sibling tree has a source target, so directory enumeration order cannot decide the result.
+    for (const name of ['dist', 'build', 'out', 'coverage', '.next', '.cache', 'src']) {
+      await mkdir(join(root, name))
+      if (name !== 'src') for (let i = 0; i < 32; i++) await writeFile(join(root, name, `generated-${i}.js`), '')
+      await writeFile(join(root, name, 'target.ts'), '')
+    }
+    const found = await searchFileReferences(root, 'target.ts', new AbortController().signal, { maxEntries: 30 })
+    expect(found.files.map(row => row.path)).toEqual([join(root, 'src', 'target.ts')])
+    expect(found.scanned).toBe(8); expect(found.capped).toBe(false)
+  })
+  it.each(['dist', 'build', 'out', 'coverage', '.next', '.cache'])('searches a context root named %s and exact-named regular files', async name => {
+    const parent = await fixture(); const root = join(parent, name); await mkdir(root)
+    await writeFile(join(root, 'target.ts'), '')
+    expect((await searchFileReferences(root, 'target', new AbortController().signal)).files).toHaveLength(1)
+    await writeFile(join(parent, 'src-file'), '')
+    const regular = join(root, name); await writeFile(regular, '')
+    expect((await searchFileReferences(root, name, new AbortController().signal)).files.map(row => row.path)).toContain(regular)
+  })
+  it('keeps .git and node_modules excluded when they are regular files', async () => {
+    const root = await fixture()
+    await writeFile(join(root, '.git'), 'gitdir: elsewhere'); await writeFile(join(root, 'node_modules'), '')
+    expect((await searchFileReferences(root, 'git', new AbortController().signal)).files).toEqual([])
+    expect((await searchFileReferences(root, 'node_modules', new AbortController().signal)).files).toEqual([])
+  })
   it('matches names and directories, skips known trees and symlinks, and stops at depth six', async () => {
     const root = await fixture()
     await mkdir(join(root, '.git'))

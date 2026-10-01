@@ -38,6 +38,7 @@ import './styles.css'
 import { checkSixelRenderer } from './terminal-images'
 import { failureDetail, sessionFailureDetail } from './bridge-error'
 import { CommandPalette, paletteFileSearchRootLabel, type PaletteCommand } from './command-palette'
+import { restoreArchive, type ArchiveUndoTarget } from './archive-undo'
 import { conversationBindingPresentation, reportedResumeLine, resumeAvailable } from './conversation-resume'
 import { FileReferenceDialog, type FileReferenceRequest, type FileReferenceSendTarget } from './file-reference-dialog'
 import { FilesPanel } from './files-panel'
@@ -209,6 +210,9 @@ function App(): React.JSX.Element {
   const [startup, setStartup] = useState<SuccessfulStartup>()
   const [failure, setFailure] = useState<string>()
   const [notice, setNotice] = useState<string>()
+  const [archiveUndo, setArchiveUndo] = useState<ArchiveUndoTarget>()
+  const [noticeFocused, setNoticeFocused] = useState(false)
+  const undoInFlight = useRef(false)
   const [announcement, setAnnouncement] = useState('')
   const [workspaces, setWorkspaces] = useState<WorkspaceRecord[]>([])
   const [sessions, setSessions] = useState<SessionRecord[]>([])
@@ -373,16 +377,39 @@ function App(): React.JSX.Element {
     setAnnouncement('')
     requestAnimationFrame(() => setAnnouncement(message))
   }
-  const brief = (message: string): void => {
+  const brief = (message: string, undo?: ArchiveUndoTarget): void => {
+    setArchiveUndo(undo)
+    if (!undo) setNoticeFocused(false)
     setNotice(message)
     announce(message)
   }
 
   useEffect(() => {
-    if (!notice) return
-    const timer = setTimeout(() => setNotice(undefined), 6_000)
+    if (!notice || noticeFocused) return
+    const timer = setTimeout(() => { setNotice(undefined); setArchiveUndo(undefined) }, 6_000)
     return () => clearTimeout(timer)
-  }, [notice])
+  }, [notice, noticeFocused, archiveUndo])
+
+  const undoArchive = async (): Promise<void> => {
+    if (!archiveUndo || undoInFlight.current) return
+    const target = archiveUndo
+    undoInFlight.current = true
+    try {
+      const restored = await restoreArchive(target, window.aiTerminal)
+      if (restored.kind === 'workspace') {
+        const record = restored.record
+        setWorkspaces(current => current.map(row => row.workspaceId === record.workspaceId ? record : row))
+      } else {
+        const record = restored.record
+        setSessions(current => current.map(row => row.sessionId === record.sessionId ? record : row))
+      }
+      brief(`Restored ${restored.record.name}.`)
+    } catch (error) {
+      brief(failureDetail(error, 'Could not undo that archive.'))
+    } finally {
+      undoInFlight.current = false
+    }
+  }
 
   // One observation per live incarnation: a restart starts a fresh one, and a session that is no longer live has none.
   useEffect(() => {
@@ -574,7 +601,7 @@ function App(): React.JSX.Element {
       const message = programCopyMessage(name, copy.characters)
       // A burst keeps its one toast, updated to the latest copy, and is announced once.
       if (programCopyBurst(Date.now()) === 'new') brief(message)
-      else setNotice(message)
+      else { setArchiveUndo(undefined); setNoticeFocused(false); setNotice(message) }
     })
     const stopClosePrompt = window.aiTerminal.onClosePrompt(setClosePrompt)
     const ticker = setInterval(() => setNow(Date.now()), APP_EVENT_REFRESH_MS)
@@ -748,6 +775,9 @@ function App(): React.JSX.Element {
           return next
         })
       }
+      brief(`Archived ${updated.name}.`, { kind: 'workspace', id: updated.workspaceId, revision: updated.revision })
+    } else if (change.archived === false) {
+      brief(`Restored ${updated.name}.`)
     }
   }
 
@@ -778,7 +808,8 @@ function App(): React.JSX.Element {
           closeLayoutPane(state, updated.sessionId, sessionsRef.current.map((session) => session.sessionId)))
       }
     }
-    brief(archived ? `Archived ${updated.name}. Turn on Show archived to restore it.` : `Restored ${updated.name}.`)
+    brief(archived ? `Archived ${updated.name}.` : `Restored ${updated.name}.`,
+      archived ? { kind: 'session', id: updated.sessionId, revision: updated.revision } : undefined)
   }
 
   const createWorkspace = async (name: string, directory: string): Promise<void> => {
@@ -1299,7 +1330,7 @@ function App(): React.JSX.Element {
       : { label: 'Start again', disabled: !!session.launchDisabledReason, title: session.launchDisabledReason ?? undefined, onSelect: () => relaunchSession(session) },
     live[session.sessionId]
       ? { label: 'Archive session', disabled: true, title: 'Stop the session before archiving it', onSelect: () => undefined }
-      : { label: 'Archive session', onSelect: () => void archiveSession(session, true).catch(fail('Session archive failed')) }
+      : { label: 'Archive session', onSelect: () => void archiveSession(session, true).catch(error => brief(failureDetail(error, 'Session archive failed'))) }
   ]
 
   /**
@@ -1370,7 +1401,10 @@ function App(): React.JSX.Element {
     'separator',
     {
       label: workspace.archivedAt ? 'Restore workspace' : 'Archive workspace',
-      onSelect: () => void updateWorkspace(workspace, { archived: workspace.archivedAt === null }).catch(fail('Workspace update failed'))
+      disabled: workspace.archivedAt === null && sessions.some(session => session.workspaceId === workspace.workspaceId && processLive(session.sessionId)),
+      title: workspace.archivedAt === null && sessions.some(session => session.workspaceId === workspace.workspaceId && processLive(session.sessionId))
+        ? 'Stop this workspace’s running sessions before archiving.' : undefined,
+      onSelect: () => void updateWorkspace(workspace, { archived: workspace.archivedAt === null }).catch(error => brief(failureDetail(error, 'Workspace update failed')))
     }
   ]
 
@@ -1677,7 +1711,12 @@ function App(): React.JSX.Element {
           <button type="button" className="icon-button" aria-label="Dismiss notice" onClick={() => setFailure(undefined)}><Icon name="close" /></button>
         </div>
       ) : null}
-      {notice ? <div className="feedback-notice brief"><span>{notice}</span></div> : null}
+      {notice ? <div className="feedback-notice brief"
+        onFocus={() => setNoticeFocused(true)}
+        onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setNoticeFocused(false) }}>
+        <span>{notice}</span>
+        {archiveUndo ? <button type="button" onClick={() => void undoArchive()}>Undo</button> : null}
+      </div> : null}
       <div className={`workspace-body${panel ? ' with-panel' : ''}${panel === 'files' ? ' with-files' : ''}${focusMode ? ' focus-mode' : ''}`}>
         {focusMode ? null : (
           <aside className="workspace-sidebar" aria-label="Workspaces and sessions">

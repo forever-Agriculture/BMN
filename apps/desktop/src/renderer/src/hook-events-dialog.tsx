@@ -1,6 +1,6 @@
 // MODULE: hook-events-dialog.tsx - read-only list of one session's recent hook events
 import { useEffect, useState } from 'react'
-import { isCompactionEvent, type HookEventRecord } from '@bmn/protocol'
+import { isCompactionEvent, type HookEventRecord, type HookEventsView } from '@bmn/protocol'
 import { Dialog } from './dialog'
 import { relativeAge } from './session-presentation'
 
@@ -34,22 +34,38 @@ export function HookEventsDialog(props: {
   onClose(): void
   onFailure(message: string): void
 }): React.JSX.Element {
-  const [events, setEvents] = useState<HookEventRecord[] | null>(null)
+  const [loaded, setLoaded] = useState<{ sessionId: string; view: HookEventsView } | null>(null)
+  const view = loaded?.sessionId === props.sessionId ? loaded.view : null
+  const events = view?.events ?? null
 
   useEffect(() => {
     let live = true
-    window.aiTerminal.listHookEvents(props.sessionId)
-      .then((found) => { if (live) setEvents(found) })
-      .catch(() => { if (live) { setEvents([]); props.onFailure('Hook events are unavailable.') } })
+    window.aiTerminal.listHookEvents(props.sessionId, true)
+      .then((found) => { if (live) setLoaded({ sessionId: props.sessionId, view: found }) })
+      .catch(() => { if (live) { setLoaded({ sessionId: props.sessionId, view: { events: [], earlier: [], historyUnavailable: true } }); props.onFailure('Hook events are unavailable.') } })
     return () => { live = false }
   }, [props.sessionId])
 
   return (
     <Dialog label={`Hook events — ${props.sessionName}`} onClose={props.onClose} className="hook-events-dialog">
       <p className="dialog-note">
-        What {props.sessionName}&rsquo;s harness reported to BMN, newest last. Kept in memory only, so the
-        list starts empty after a restart.
+        What {props.sessionName}&rsquo;s harness reported to BMN, newest last. Earlier-run history keeps
+        approved metadata only: up to 30 entries per session, 1,024 globally and 1 MiB. Oldest entries
+        leave first; there is no age expiry. Recent events can be lost before a completed save,
+        including on crash. History never changes this run&apos;s state and is excluded from backups.
       </p>
+      {view?.historyUnavailable ? <p className="dialog-note" role="status">Recent history was unavailable. Live events continue; coalesced events can be lost before a completed save.</p> : null}
+      {view && view.earlier.length > 0 ? <>
+        <h3>Earlier host run · history</h3>
+        <ul className="hook-events" aria-label="Earlier host run history">
+          {view.earlier.map((event, index) => <li key={`${event.observedAt}-${index}`}>
+            <span className="hook-event-name">{hookEventWords(event)}</span>
+            <span className="hook-event-effects">Earlier run · {hookEffectWords(event.effects)}</span>
+            <span className="age">{relativeAge(event.observedAt, props.now)}</span>
+          </li>)}
+        </ul>
+      </> : null}
+      {view ? <h3>This host run</h3> : null}
       {events === null ? <p className="dialog-note">Reading…</p> : null}
       {events !== null && events.length === 0 ? (
         <p className="dialog-note">No hook events yet for this session.</p>

@@ -489,6 +489,10 @@ input[type='radio'] {
   pointer-events: none;
 }
 
+.feedback-notice.brief button {
+  pointer-events: auto;
+}
+
 .feedback-notice span {
   flex: 1;
   min-width: 0;

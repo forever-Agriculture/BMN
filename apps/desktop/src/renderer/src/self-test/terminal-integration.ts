@@ -534,11 +534,22 @@ export async function runTerminalIntegration(handle: TerminalTestHandle<Terminal
   const archiveWorkspace = await waitFor(() => [...document.querySelectorAll<HTMLButtonElement>(
     '.popup-menu [role="menuitem"]'
   )].find((item) => item.textContent?.trim() === 'Archive workspace'))
-  archiveWorkspace.click()
-  const archivedWorkspace = await waitFor(async () =>
-    (await window.aiTerminal.listWorkspaces(true))
-      .find((workspace) => workspace.workspaceId === sourceWorkspace.workspaceId && workspace.archivedAt !== null)
-  )
+  if (!archiveWorkspace.disabled) throw new Error('live workspace archive was not disabled')
+  let sourceWorkspaceArchiveRefused = false
+  try {
+    await window.aiTerminal.updateWorkspace({ workspaceId: sourceWorkspace.workspaceId,
+      expectedRevision: (await window.aiTerminal.listWorkspaces(true)).find(row => row.workspaceId === sourceWorkspace.workspaceId)!.revision,
+      archived: true })
+  } catch (error) {
+    sourceWorkspaceArchiveRefused = isBridgeError(error) && error.message.includes(sourceSession.name)
+  }
+  if (!sourceWorkspaceArchiveRefused) throw new Error('host did not refuse live workspace archive with the saved session name')
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  // Closing the foreign pane still changes only the layout; its process remains reachable.
+  const splitToggle = [...handle.section.current!.querySelectorAll<HTMLButtonElement>('.pane-actions button')]
+    .find(button => button.textContent?.trim() === 'Unsplit')
+  if (!splitToggle) throw new Error('the selected pane has no Split toggle')
+  splitToggle.click()
   const cleanedLayout = await waitFor(async () => {
     const next = await window.aiTerminal.getLayout(handle.startup.workspaceId)
     return next.layout.split.panes.some((pane) => pane.sessionId === sourceSession.sessionId)
@@ -578,8 +589,8 @@ export async function runTerminalIntegration(handle: TerminalTestHandle<Terminal
       sourceWorkspaceId: sourceWorkspace.workspaceId,
       paneSessionIds: crossWorkspaceLayout.split.panes.map((pane) => pane.sessionId),
       selectedAfterFocus: focusedLayout.selectedSessionId,
-      sourceWorkspaceArchived: archivedWorkspace.archivedAt !== null,
-      foreignPaneRemovedAfterArchive:
+      sourceWorkspaceArchiveRefused,
+      foreignPaneClosed:
         cleanedLayout.split.panes.some((pane) => pane.sessionId === sourceSession.sessionId) === false &&
         cleanedLayout.split.panes.some((pane) => pane.sessionId === handle.startup.sessionId)
     },

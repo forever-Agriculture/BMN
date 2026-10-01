@@ -114,8 +114,8 @@ describe('renderer acceptance hook', () => {
         sourceWorkspaceId: 'workspace-b',
         paneSessionIds: ['session-a', 'session-b'],
         selectedAfterFocus: 'session-a',
-        sourceWorkspaceArchived: true,
-        foreignPaneRemovedAfterArchive: true
+        sourceWorkspaceArchiveRefused: true,
+        foreignPaneClosed: true
       },
       workspaceMarkers: {
         before: {

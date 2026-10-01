@@ -3,6 +3,15 @@ import { describe, expect, it } from 'vitest'
 import { parseTerminalNotice } from './terminal-notice'
 
 describe('parseTerminalNotice', () => {
+  it.each(['4', '4;0', '4;1;50', '4;2', '4;3', '4;4;25', '4;', '4;malformed', '4;prose'])('ignores raw OSC9 progress %s', data => {
+    expect(parseTerminalNotice(9, data)).toBeNull()
+  })
+  it('keeps ordinary digit-leading text and other OSC9 subcommands', () => {
+    expect(parseTerminalNotice(9, '4 tests passed')).toEqual({ title: '4 tests passed' })
+    expect(parseTerminalNotice(9, '3;message')).toEqual({ title: '3;message' })
+    expect(parseTerminalNotice(777, 'notify;4;1;50')).toEqual({ title: '4', body: '1;50' })
+    expect(parseTerminalNotice(99, ';4;1;50')).toEqual({ title: '4;1;50' })
+  })
   it('reads an OSC 9 message as the whole notice', () => {
     expect(parseTerminalNotice(9, 'Build finished')).toEqual({ title: 'Build finished' })
   })

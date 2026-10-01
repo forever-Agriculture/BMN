@@ -400,7 +400,7 @@ export async function runFileReferenceIntegration(options: {
     view: window
   })
   screen.dispatchEvent(rightClick)
-  await pause(300)
+  await waitFor('right-click paste', () => rightClickInput.includes(rightClickPayload) ? true : undefined)
   mouseMode.rightClickPasted = rightClick.defaultPrevented && rightClickInput.includes(rightClickPayload)
   rightClickCounter.dispose()
   await window.aiTerminal.writeClipboardText(clipboardBeforeDrag.text)

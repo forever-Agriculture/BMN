@@ -57,6 +57,7 @@ import {
 } from '@bmn/protocol'
 import { ArtifactFileError, ArtifactFileStore, type InstalledOriginal } from './artifact-files'
 import { ControlAuth, writeOwnerToken, type ControlScope } from './control-auth'
+import { HookEventHistory } from './hook-event-history'
 import { ControlError, ControlServer, type ReceiptRecord } from './control-server'
 import type { DatabaseWorkerClient } from './database-client'
 import type { ApplicationRoots } from './roots'
@@ -315,6 +316,7 @@ export class CompanionService {
   }
   /** The last `HOOK_EVENT_LOG_LIMIT` hook events per session, in memory only; a restart clears them. */
   private readonly hookEvents = new Map<string, HookEventRecord[]>()
+  private readonly retainedHooks: HookEventHistory
   /**
    * The incarnation of each session whose harness has reported a hook of its own. It is kept apart
    * from `hookEvents` on purpose: that log is bounded at 30 entries and is a diagnostic, so reading
@@ -379,6 +381,8 @@ export class CompanionService {
   private refusalWrites: Promise<void> = Promise.resolve()
 
   constructor(private readonly options: CompanionServiceOptions) {
+    this.retainedHooks = new HookEventHistory({ root: options.roots.state,
+      sessionExists: sessionId => this.knownSessions.has(sessionId), live: () => this.liveHookEvents() })
     this.now = options.now ?? (() => new Date())
     const proc = options.proc ?? procReader
     const uid = process.getuid?.() ?? -1
@@ -582,6 +586,7 @@ export class CompanionService {
 
   async start(): Promise<void> {
     await this.sessionsChanged()
+    await this.retainedHooks.load()
     await this.files.reconcileStaging().catch(() => [])
     await this.reconcileArtifacts()
     try {
@@ -625,7 +630,7 @@ export class CompanionService {
     this.pager.close()
     this.cards.dispose()
     this.answers.dispose()
-    await Promise.allSettled([this.control.close(), this.telegram?.stop()])
+    await Promise.allSettled([this.control.close(), this.telegram?.stop(), this.retainedHooks.close()])
     await unlink(join(dirname(this.socketPath), 'owner.token')).catch(() => undefined)
   }
 
@@ -699,6 +704,13 @@ export class CompanionService {
         return database.companion('listAttention')
       case METHOD_REGISTRY.hookEventsList:
         // Read-only and scoped to one session; the log never reaches `state.snapshot` or another session.
+        if (params.includeHistory === true) {
+          await this.sessionsChanged()
+          const sessionId = text(params, 'sessionId')
+          if (!this.knownSessions.has(sessionId)) throw new HostControlError(ERROR_CODES.notFound, 'The session was not found')
+          return { events: this.listHookEvents(sessionId), earlier: this.retainedHooks.history(sessionId),
+            historyUnavailable: this.retainedHooks.unavailable }
+        }
         return this.listHookEvents(text(params, 'sessionId'))
       case METHOD_REGISTRY.hookObservationGet:
         // Read-only and scoped to one session's run; no other session's observation reaches this answer.
@@ -894,12 +906,18 @@ export class CompanionService {
     }
     // A deleted session keeps no hook events: the log, and everything else kept per session in
     // memory here, follows the sessions that still exist.
+    let removedHooks = false
     for (const map of [this.hookEvents, this.hookReporters, this.hookObservations, this.hookOrigins, this.hookCompactions,
       this.usageReadings, this.codexUsageReads, this.terminalNotices, this.repeatStates]) {
       for (const sessionId of map.keys()) {
-        if (!this.knownSessions.has(sessionId)) map.delete(sessionId)
+        if (!this.knownSessions.has(sessionId)) {
+          if (map === this.hookEvents) removedHooks = true
+          map.delete(sessionId)
+        }
       }
     }
+    this.retainedHooks.sessionsChanged()
+    if (removedHooks) this.retainedHooks.markDirty()
     this.ports.sessionsChanged()
   }
 
@@ -1460,7 +1478,12 @@ export class CompanionService {
     })
     if (log.length > HOOK_EVENT_LOG_LIMIT) log.splice(0, log.length - HOOK_EVENT_LOG_LIMIT)
     this.hookEvents.set(p.sessionId, log)
+    this.retainedHooks.markDirty()
     return { recorded: true }
+  }
+
+  private *liveHookEvents(): Generator<HookEventRecord> {
+    for (const rows of this.hookEvents.values()) yield* rows
   }
 
   /** The window's read-only view of one session's log; a session never sees another session's events. */
@@ -2184,7 +2207,7 @@ export class CompanionService {
       createdAt,
       database: { file: 'state.sqlite3', ...(await sha256File(databaseFile)) },
       artifacts,
-      excluded: ['Telegram bot token', 'control socket credentials', 'saved terminal output']
+      excluded: ['Telegram bot token', 'control socket credentials', 'saved terminal output', 'retained hook event history']
     }
     const manifestPath = join(directory, 'manifest.json')
     await writeFile(`${manifestPath}.tmp`, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 })

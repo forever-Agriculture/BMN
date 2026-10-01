@@ -1467,7 +1467,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       METHOD_REGISTRY.layoutGet,
       { workspaceId: DEFAULT_WORKSPACE_ID }
     )).layout.selectedSessionId
-    host.applicationWindow.webContents.send('aiterm:open-session', thirdSession.sessionId)
+    host.applicationWindow.webContents.send('aiterm:open-session', '00000000-0000-4000-8000-000000000099')
     const unavailableFeedback = await host.applicationWindow.webContents.executeJavaScript(`
       new Promise((resolve, reject) => {
         const deadline = Date.now() + 5000;
@@ -1539,8 +1539,8 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       preloadProbe.crossWorkspaceSplit.sourceWorkspaceId !== secondWorkspace.workspaceId ||
       !preloadProbe.crossWorkspaceSplit.paneSessionIds.includes(thirdSession.sessionId) ||
       preloadProbe.crossWorkspaceSplit.selectedAfterFocus !== preloadProbe.treeSelection.sessionId ||
-      !preloadProbe.crossWorkspaceSplit.sourceWorkspaceArchived ||
-      !preloadProbe.crossWorkspaceSplit.foreignPaneRemovedAfterArchive
+      !preloadProbe.crossWorkspaceSplit.sourceWorkspaceArchiveRefused ||
+      !preloadProbe.crossWorkspaceSplit.foreignPaneClosed
     ) {
       throw new Error(
         `the renderer did not keep a cross-workspace split in the active workspace: ${JSON.stringify(
@@ -3231,9 +3231,9 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       (candidate) => candidate.sessionId === thirdSession.sessionId && candidate.state === 'live'
     )
     if (!archivedStillLive || !showArchivedReachable) {
-      throw new Error('archived running session was not reachable')
+      throw new Error('archive-refused running session was not reachable')
     }
-    if (archivedWorkspace.archivedAt === null) throw new Error('workspace archive did not persist')
+    if (archivedWorkspace.archivedAt !== null) throw new Error('live workspace was archived despite host refusal')
     const expectedBindings = await Promise.all(identities.map((identity) =>
       client.request(METHOD_REGISTRY.sessionBindingGet, { sessionId: identity.sessionId })
     ))

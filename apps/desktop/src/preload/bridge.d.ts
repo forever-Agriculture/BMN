@@ -24,6 +24,7 @@ import type {
   HandoffReviewSnapshot,
   HookCheckReport,
   HookEventRecord,
+  HookEventsView,
   HookObservation,
   HookOriginRecord,
   SessionPorts,
@@ -251,6 +252,7 @@ export interface AiTerminalBridge {
   ): Promise<AttentionRecord>
   /** Read-only: the recent hook events of one session, in memory only and never another session's. */
   listHookEvents(sessionId: string): Promise<HookEventRecord[]>
+  listHookEvents(sessionId: string, includeHistory: true): Promise<HookEventsView>
   /**
    * Read-only: the latest harness event one run of a session actually reported, kept beyond the
    * 30-event log's evictions. `none` is an absence of evidence, never a verdict that hooks are broken.

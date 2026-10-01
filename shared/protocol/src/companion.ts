@@ -159,7 +159,7 @@ export function isHookEventName(value: string): boolean {
 export const HOOK_EVENT_EFFECTS = Object.freeze(['opened', 'withdrew', 'answered'] as const)
 export type HookEventEffect = (typeof HOOK_EVENT_EFFECTS)[number]
 
-/** The most recent hook events of one session, kept in memory only so a restart starts an empty log. */
+/** One live hook observation; only a restricted metadata projection is retained after restart. */
 export interface HookEventRecord {
   sessionId: string
   /** The process incarnation that reported it; null for a row recorded before this was tracked. */
@@ -175,6 +175,13 @@ export interface HookEventRecord {
   /** What the event changed in Needs you; empty when it changed nothing. */
   effects: readonly HookEventEffect[]
   observedAt: string
+}
+
+/** Owner-window diagnostics only; earlier rows never become current observations. */
+export interface HookEventsView {
+  events: HookEventRecord[]
+  earlier: HookEventRecord[]
+  historyUnavailable: boolean
 }
 
 /**

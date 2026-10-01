@@ -327,6 +327,8 @@ export interface UndeliveredOutputState {
 
 interface LiveSession extends SessionIdentity {
   pty: PtyLike
+  /** Host ownership survives a failed record write until the process confirms exit. */
+  ownership: Pick<SessionRecord, 'workspaceId' | 'name'>
   dataSubscription?: Disposable
   exitSubscription?: Disposable
   cwd: string
@@ -583,6 +585,10 @@ export class SessionManager {
   private readonly conversationReservations = new Map<string, ConversationReservation>()
   /** Sessions with a Start again or Resume between its checks and its process being tracked. */
   private readonly launchingSessions = new Set<string>()
+  /** One workspace admission boundary for starts and moves, paired with archive reservations. */
+  private readonly workspaceAdmissions = new Map<string, Set<{ sessionId?: string; name: string }>>()
+  private readonly archivingWorkspaces = new Set<string>()
+  private readonly mutatingSessions = new Set<string>()
   /**
    * One dialog action per key, for the process lifetime. Repeated clicks, IPC retries and renderer
    * reconnects join the run already in flight and read its recorded result; nothing starts twice.
@@ -615,6 +621,12 @@ export class SessionManager {
   }
 
   async create(
+    requested: CreateSessionParams
+  ): Promise<SessionIdentity & { binding: PersistedConversationBinding }> {
+    return this.withWorkspaceAdmission(requested.workspaceId, { name: requested.name }, () => this.createAdmitted(requested))
+  }
+
+  private async createAdmitted(
     requested: CreateSessionParams
   ): Promise<SessionIdentity & { binding: PersistedConversationBinding }> {
     const params = { ...requested, cwd: resolveHomeDirectory(requested.cwd, this.homeDirectory) }
@@ -655,6 +667,7 @@ export class SessionManager {
         },
         this.environment,
         captureStartedAt,
+        { workspaceId: params.workspaceId, name: params.name.trim() },
         async (record) => {
           await this.store.createStarting({
             ...record,
@@ -880,6 +893,12 @@ export class SessionManager {
    */
   async resume(params: ConfirmedStartParams): Promise<SessionResumeResult> {
     const stored = await findStoredSession(this.store, params.sessionId)
+    if (!stored) throw new HostControlError(ERROR_CODES.notFound, 'The session was not found')
+    return this.withWorkspaceAdmission(stored.workspaceId, { sessionId: stored.sessionId, name: stored.name }, () => this.resumeAdmitted(params))
+  }
+
+  private async resumeAdmitted(params: ConfirmedStartParams): Promise<SessionResumeResult> {
+    const stored = await findStoredSession(this.store, params.sessionId)
     if (!stored) {
       throw new HostControlError(ERROR_CODES.notFound, 'The session was not found')
     }
@@ -985,6 +1004,7 @@ export class SessionManager {
         launchParams,
         this.environment,
         new Date().toISOString(),
+        stored,
         (record) => this.store.createResuming({ ...record, keepReportedResume: true })
       )
       try {
@@ -1199,6 +1219,12 @@ export class SessionManager {
    */
   async relaunch(params: ConfirmedStartParams): Promise<AttachmentIdentity> {
     const stored = await findStoredSession(this.store, params.sessionId)
+    if (!stored) throw new HostControlError(ERROR_CODES.notFound, 'The session was not found')
+    return this.withWorkspaceAdmission(stored.workspaceId, { sessionId: stored.sessionId, name: stored.name }, () => this.relaunchAdmitted(params))
+  }
+
+  private async relaunchAdmitted(params: ConfirmedStartParams): Promise<AttachmentIdentity> {
+    const stored = await findStoredSession(this.store, params.sessionId)
     if (!stored) {
       throw new HostControlError(ERROR_CODES.notFound, 'The session was not found')
     }
@@ -1226,6 +1252,7 @@ export class SessionManager {
         launchParams,
         this.environment,
         new Date().toISOString(),
+        stored,
         (record) => this.store.createResuming(record)
       )
       try {
@@ -1365,13 +1392,15 @@ export class SessionManager {
     }
     const { launch, environment: resumeEnvironment } = await this.prepareResumeLaunch(binding)
     requireConfirmedCommand(params.expectedCommand, shownCommand(launch.executable, launch.argv))
+    const stored = await findStoredSession(this.store, params.sessionId)
+    if (!stored) throw new HostControlError(ERROR_CODES.notFound, 'The session was not found')
     const launchParams: PtyLaunchParams = {
       cwd: launch.cwd,
       executable: launch.executable,
       argv: launch.argv,
       cols: params.cols,
       rows: params.rows,
-      terminalGraphics: (await findStoredSession(this.store, params.sessionId))?.terminalGraphics ?? null
+      terminalGraphics: stored.terminalGraphics
     }
     await validateLaunch(launchParams)
     const startedAt = new Date().toISOString()
@@ -1380,6 +1409,7 @@ export class SessionManager {
       launchParams,
       resumeEnvironment,
       startedAt,
+      stored,
       (record) => this.store.createResuming(record),
       binding.agentCli === 'claude' ? ['--resume']
         : binding.agentCli === 'opencode' ? ['--session']
@@ -1413,6 +1443,7 @@ export class SessionManager {
     params: PtyLaunchParams,
     environment: Readonly<Record<string, string | undefined>>,
     captureStartedAt: string,
+    ownership: Pick<SessionRecord, 'workspaceId' | 'name'>,
     createRecord: (record: CreateResumingRecord) => Promise<void>,
     injectedArguments: readonly string[] = [],
     reservation?: ConversationReservation
@@ -1444,6 +1475,7 @@ export class SessionManager {
       sessionId,
       incarnationId,
       pty,
+      ownership: { workspaceId: ownership.workspaceId, name: ownership.name },
       cwd: params.cwd,
       executable: params.executable,
       captureStartedAt,
@@ -2172,6 +2204,105 @@ export class SessionManager {
     }
   }
 
+  /** Claim before the first await, then validate the saved catalogue under the reservation. */
+  private async withWorkspaceAdmission<T>(
+    workspaceId: string,
+    admission: { sessionId?: string; name: string },
+    action: () => Promise<T>
+  ): Promise<T> {
+    if (this.archivingWorkspaces.has(workspaceId)) {
+      throw new HostControlError(ERROR_CODES.invalidArgument, 'The workspace is being archived; nothing was started or moved')
+    }
+    if (admission.sessionId && this.mutatingSessions.has(admission.sessionId)) {
+      throw new HostControlError(ERROR_CODES.invalidArgument, 'The session is being archived or moved; try again')
+    }
+    const entries = this.workspaceAdmissions.get(workspaceId) ?? new Set()
+    entries.add(admission)
+    this.workspaceAdmissions.set(workspaceId, entries)
+    try {
+      const workspace = (await this.store.listWorkspaces(true)).find(row => row.workspaceId === workspaceId)
+      if (!workspace) throw new HostControlError(ERROR_CODES.notFound, 'The workspace was not found')
+      if (workspace.archivedAt !== null) {
+        throw new HostControlError(ERROR_CODES.invalidArgument, 'Restore the workspace before starting or moving a session into it')
+      }
+      if (admission.sessionId) {
+        const stored = await findStoredSession(this.store, admission.sessionId)
+        if (!stored || stored.workspaceId !== workspaceId) {
+          throw new HostControlError(ERROR_CODES.invalidArgument, 'The session changed before starting; nothing was started')
+        }
+        if (stored.archivedAt !== null) throw new HostControlError(ERROR_CODES.invalidArgument, 'Restore the session before starting it')
+      }
+      return await action()
+    } finally {
+      entries.delete(admission)
+      if (entries.size === 0) this.workspaceAdmissions.delete(workspaceId)
+    }
+  }
+
+  private ownsSession(sessionId: string): boolean {
+    const live = this.sessions.get(sessionId)
+    return !!live && (!live.exited || live.exitUnconfirmed) || this.launchingSessions.has(sessionId) ||
+      [...this.workspaceAdmissions.values()].some(entries => [...entries].some(entry => entry.sessionId === sessionId))
+  }
+
+  /** Host-authoritative archive gate; the reservation also refuses later asynchronous admissions. */
+  async archiveWorkspace<T>(workspaceId: string, mutation: () => Promise<T>): Promise<T> {
+    if (this.archivingWorkspaces.has(workspaceId)) {
+      throw new HostControlError(ERROR_CODES.invalidArgument, 'The workspace is already being archived')
+    }
+    this.archivingWorkspaces.add(workspaceId)
+    try {
+      const pending = [...(this.workspaceAdmissions.get(workspaceId) ?? [])].map(entry => entry.name)
+      const records = await this.store.listSessions(workspaceId)
+      const savedNames = new Map(records.map(row => [row.sessionId, row.name]))
+      const owned = [...this.sessions.values()].filter(live => live.ownership.workspaceId === workspaceId &&
+        (!live.exited || live.exitUnconfirmed)).map(live => savedNames.get(live.sessionId) ?? live.ownership.name)
+      const names = [...new Set([...pending, ...owned, ...records.filter(row => this.ownsSession(row.sessionId)).map(row => row.name)])]
+      if (names.length > 0) {
+        throw new HostControlError(ERROR_CODES.invalidArgument, `Stop the workspace's work before archiving: ${names.join(', ')}`)
+      }
+      return await mutation()
+    } finally {
+      this.archivingWorkspaces.delete(workspaceId)
+    }
+  }
+
+  /** Starts cannot overtake a session archive/move, and moves share destination admission. */
+  async updateSessionAvailability<T>(
+    sessionId: string,
+    change: { archived?: boolean; workspaceId?: string },
+    mutation: () => Promise<T>
+  ): Promise<T> {
+    if (this.mutatingSessions.has(sessionId)) {
+      throw new HostControlError(ERROR_CODES.invalidArgument, 'The session is already being archived or moved')
+    }
+    const owned = this.ownsSession(sessionId)
+    if (change.archived === true && owned) {
+      const stored = await findStoredSession(this.store, sessionId)
+      throw new HostControlError(ERROR_CODES.invalidArgument, `Stop ${stored?.name ?? 'the session'} before archiving it; its process may still be starting or its exit unconfirmed`)
+    }
+    // A live process may move; a start already in flight must finish in its admitted workspace.
+    if (change.workspaceId && (this.launchingSessions.has(sessionId) ||
+      [...this.workspaceAdmissions.values()].some(entries => [...entries].some(entry => entry.sessionId === sessionId)))) {
+      throw new HostControlError(ERROR_CODES.invalidArgument, 'The session is starting; wait before moving it')
+    }
+    this.mutatingSessions.add(sessionId)
+    try {
+      if (!change.workspaceId && change.archived !== false) return await mutation()
+      const stored = await findStoredSession(this.store, sessionId)
+      if (!stored) throw new HostControlError(ERROR_CODES.notFound, 'The session was not found')
+      // A move has no launch-record check, because its saved workspace is still the source.
+      return await this.withWorkspaceAdmission(change.workspaceId ?? stored.workspaceId, { name: stored.name }, async () => {
+        const result = await mutation()
+        const live = this.sessions.get(sessionId)
+        if (live && change.workspaceId) live.ownership.workspaceId = change.workspaceId
+        return result
+      })
+    } finally {
+      this.mutatingSessions.delete(sessionId)
+    }
+  }
+
   /** A stored session record with its latest incarnation state decided by the liveness rule. */
   sessionWithCurrentProcessState(record: SessionRecord): SessionRecord {
     const last = record.lastProcess
@@ -2189,6 +2320,9 @@ export class SessionManager {
    * proceeds, and never while an earlier process of the session is still tracked, which would lose control of it.
    */
   private claimSessionLaunch(sessionId: string): () => void {
+    if (this.mutatingSessions.has(sessionId)) {
+      throw new HostControlError(ERROR_CODES.invalidArgument, 'The session is being archived or moved; try again')
+    }
     const current = this.sessions.get(sessionId)
     if (current?.exitUnconfirmed) {
       throw new HostControlError(

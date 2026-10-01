@@ -42,6 +42,8 @@ function cap(value: string, max: number): string {
  * Returns null for a sequence that carries no text, which is nothing to show the owner.
  */
 export function parseTerminalNotice(code: TerminalNoticeCode, data: string): TerminalNotice | null {
+  // OSC 9's raw leading parameter 4 is reserved for progress, including malformed forms.
+  if (code === 9 && (data === '4' || data.startsWith('4;'))) return null
   if (code === 777) {
     const [kind, title, ...rest] = data.split(';')
     if (kind !== 'notify') return null

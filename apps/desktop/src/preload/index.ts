@@ -17,6 +17,7 @@ import {
   type AttentionOrigin,
   type AttentionRecord,
   type HookEventRecord,
+  type HookEventsView,
   type HookCheckReport,
   type HookObservation,
   type HookOriginRecord,
@@ -147,6 +148,12 @@ interface RendererMessagePort {
 /** Every `aiterm:*` invoke goes through this one envelope unwrap (typed BridgeError on failure). */
 function invokeBridge<Result>(channel: `aiterm:${string}`, ...args: unknown[]): Promise<Result> {
   return unwrapBridgeInvoke<Result>(() => ipcRenderer.invoke(channel, ...args))
+}
+
+function listHookEvents(sessionId: string): Promise<HookEventRecord[]>
+function listHookEvents(sessionId: string, includeHistory: true): Promise<HookEventsView>
+function listHookEvents(sessionId: string, includeHistory?: true): Promise<HookEventRecord[] | HookEventsView> {
+  return invokeBridge('aiterm:hook-events:list', { sessionId, ...(includeHistory ? { includeHistory } : {}) })
 }
 
 let terminalPort: RendererMessagePort | undefined
@@ -607,9 +614,7 @@ contextBridge.exposeInMainWorld('aiTerminal', {
       ...(state ? { state } : {})
     })
   },
-  listHookEvents(sessionId: string): Promise<HookEventRecord[]> {
-    return invokeBridge('aiterm:hook-events:list', { sessionId })
-  },
+  listHookEvents,
   getHookObservation(sessionId: string, incarnationId?: string): Promise<HookObservation> {
     return invokeBridge('aiterm:hook-observation:get', {
       sessionId,

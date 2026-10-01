@@ -19,6 +19,10 @@ The sidebar groups sessions into workspaces. A workspace is a named group of ses
 layout. Create more with **New workspace…** (the palette or the workspace menu), rename them,
 reorder them, give each one a marker so its panes are easy to tell apart, and archive a workspace
 when you are done with it. Archived items can be restored until the retention setting deletes them.
+Archive refuses work that is running, starting, or awaiting a confirmed process exit, and names
+the sessions to stop. A successful archive offers **Undo** for six seconds (longer while its button
+has keyboard focus). Undo restores list visibility only; it opens no pane and starts no process.
+New feedback replaces the action; a changed record or archived parent requires the ordinary Restore path.
 The workspace row shows an attention dot when any session in it, even an archived one, has an open
 request or update. Finished session names read more quietly; row action buttons appear on hover or
 keyboard focus and remain available to the keyboard and screen readers.
@@ -228,13 +232,21 @@ file; it does not prove a hook fired.
 For Claude Code, Codex and OpenCode, `bmn hooks check` reports which of BMN's entries each
 harness's own settings file carries, and `bmn hooks install claude` (or `codex`, `opencode`) adds
 the missing ones after backing the file up. A harness with no hook can still page you by writing
-the terminal's own OSC 9, 777 or 99 notification. BMN presents it as a notice, which clears when
-you type into the session. The session's ⋯ menu has **Hook events…**, a short in-memory list of
+the terminal's own OSC 9, 777 or 99 notification. OSC 9's leading `4` parameter (`4` or `4;…`)
+is reserved for progress and ignored, including malformed forms or prose using that parameter.
+Ordinary text such as `4 tests passed` remains a notice. BMN presents a notice, which clears when
+you type into the session. The session's ⋯ menu has **Hook events…**, a short list of
 what the harness actually reported, which answers "why is there no request for this?".
 Session details shows the latest harness event **Observed by BMN** for that session's current
 process run, with its receipt time and a link to Hook events. **Not observed in this run**
 can simply mean no relevant event happened. The observation is in memory and disappears
-after BMN restarts; the recent event list can lose older detail.
+after BMN restarts. The dialog also labels **Earlier host run · history**, a metadata-only snapshot
+kept in an owner-only state file. It retains up to 30 rows per session, 1,024 globally and 1 MiB;
+oldest rows leave first, so some sessions keep fewer. Unknown event/source/tool labels become `other`.
+It retains no prompts, answers, payloads, tool input/output, model/API-host details or configuration.
+History never recreates requests or current observations. There is no age expiry; deleted sessions
+lose their rows, retained archives keep theirs. Coalesced events can be lost before the next atomic
+save, including on crash. Unavailable history is explained in the dialog, and backups exclude it.
 OpenCode subagent permissions and questions use their own requests, so they do not replace the
 main session's prompt. For Claude Code and Codex, eight identical tool calls (failed ones count too) among the
 last 20 since your last message open one notice; the hook event list shows the repeat count. BMN
@@ -272,11 +284,20 @@ stops, restarts or is archived, choose it again. A path the reference grammar ca
 cannot be sent.
 
 In the command palette (`Ctrl+Shift+P`), typing a query also searches filenames and paths in a
-labelled **Files** group. With a selected session, the root is that process's launch directory while
+labelled **Files** group. **Commands** additionally accepts label abbreviations such as `nxt req`,
+with ordinary literal matches first and stable order inside each partition. Sessions, workspaces
+and files still use literal words; nothing runs until Enter or a click.
+Filename traversal excludes `.git` and `node_modules` by name, and descendant directories named
+`dist`, `build`, `out`, `coverage`, `.next` and `.cache`. A selected root with one of those names is
+still searched, as are regular files with the six generated names. Genuine source folders with
+those names can be hidden: use **Open file reference…** with the exact path or an existing context
+rooted there. This fixed policy does not interpret `.gitignore`.
+
+With a selected session, the filename-search root is that process's launch directory while
 it runs, or the session's stored directory after it stops. With no selected session, the root is the
 workspace's default directory; opening a match then asks you to select a session for the preview.
 The read is on demand and stops at six directory levels, 20,000 entries scanned or 50 matching files;
-the palette labels a cap. It skips `.git` and `node_modules`, does not follow symbolic links, and
+the palette labels a cap. It does not follow symbolic links, and
 new typing supersedes an older search. An unavailable directory shows no files. There is no index,
 content search or watcher.
 

@@ -32,6 +32,7 @@ import {
   type RpcSuccess,
   type SavedOutputProcessState,
   type SavedOutputUnavailableReason,
+  type SessionRecord,
   type TerminalPortMessage,
   type WorkspaceLayoutState
 } from '@bmn/protocol'
@@ -457,11 +458,12 @@ async function start(): Promise<void> {
           const finish = params.archived === true
             ? companionService.beginFileReferenceAvailabilityChange() : () => undefined
           try {
-            return await database.updateWorkspace(
+            const mutate = () => database.updateWorkspace(
               typeof params.defaultCwd === 'string'
                 ? { ...params, defaultCwd: resolveHomeDirectory(params.defaultCwd) }
                 : params
             )
+            return await (params.archived === true ? manager.archiveWorkspace(params.workspaceId, mutate) : mutate())
           } finally {
             finish()
           }
@@ -509,25 +511,22 @@ async function start(): Promise<void> {
         const finish = update.archived === true || typeof update.workspaceId === 'string'
           ? companionService.beginFileReferenceAvailabilityChange() : () => undefined
         try {
-          if (update.archived === true) {
-            const current = await findStoredSession(database, update.sessionId)
-            if (!current) throw new HostControlError(ERROR_CODES.notFound, 'The session was not found')
-            if (manager.sessionWithCurrentProcessState(current).lastProcess?.state === 'live') {
-              throw new HostControlError(ERROR_CODES.invalidArgument, 'Stop the session before archiving it')
+          const mutate = async (): Promise<SessionRecord> => {
+            if ('cwd' in update || 'executable' in update || 'argv' in update) {
+              const current = await findStoredSession(database, update.sessionId)
+              if (!current) throw new HostControlError(ERROR_CODES.notFound, 'The session was not found')
+              await validateLaunch({
+                cwd: update.cwd ?? current.cwd,
+                executable: update.executable ?? current.executable,
+                argv: update.argv ?? current.argv,
+                cols: 80,
+                rows: 24
+              })
             }
+            return manager.sessionWithCurrentProcessState(await database.updateSession(update))
           }
-          if ('cwd' in update || 'executable' in update || 'argv' in update) {
-            const current = await findStoredSession(database, update.sessionId)
-            if (!current) throw new HostControlError(ERROR_CODES.notFound, 'The session was not found')
-            await validateLaunch({
-              cwd: update.cwd ?? current.cwd,
-              executable: update.executable ?? current.executable,
-              argv: update.argv ?? current.argv,
-              cols: 80,
-              rows: 24
-            })
-          }
-          return manager.sessionWithCurrentProcessState(await database.updateSession(update))
+          return await (typeof update.archived === 'boolean' || typeof update.workspaceId === 'string'
+            ? manager.updateSessionAvailability(update.sessionId, update, mutate) : mutate())
         } finally {
           finish()
         }

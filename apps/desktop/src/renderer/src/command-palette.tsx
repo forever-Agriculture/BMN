@@ -43,14 +43,33 @@ export function matchingPaletteFileSearch(
     snapshot.sessionId === address.sessionId && snapshot.rootLabel === address.rootLabel ? snapshot.value : null
 }
 
-/** Every query word must appear in the label or context; nothing runs from a partial match without Enter. */
+/** Each word must be literal, or (Commands labels only) an ordered subsequence. No scores. */
 export function filterCommands(commands: readonly PaletteCommand[], query: string): PaletteCommand[] {
   const words = query.toLocaleLowerCase().split(/\s+/).filter(Boolean)
-  return commands.filter((command) => {
-    if (command.disabled) return false
+  const literal = (command: PaletteCommand): boolean => {
     const haystack = `${command.label} ${command.context ?? ''} ${command.group}`.toLocaleLowerCase()
     return words.every((word) => haystack.includes(word))
-  })
+  }
+  const subsequence = (word: string, label: string): boolean => {
+    let position = 0
+    for (const letter of word) {
+      position = label.indexOf(letter, position)
+      if (position === -1) return false
+      position += letter.length
+    }
+    return true
+  }
+  const matched = commands.filter(command => !command.disabled && (literal(command) ||
+    command.group === 'Commands' && words.every(word => subsequence(word, command.label.toLocaleLowerCase()))))
+  const commandRows = matched.filter(command => command.group === 'Commands')
+  const ordered = [...commandRows.filter(literal), ...commandRows.filter(command => !literal(command))]
+  let index = 0
+  return matched.map(command => command.group === 'Commands' ? ordered[index++]! : command)
+}
+
+/** Async rows cannot replace a surviving selected command. Missing selections fall back to row one. */
+export function paletteSelectionIndex(results: readonly PaletteCommand[], selectedId: string | null): number {
+  return Math.max(0, results.findIndex(command => command.id === selectedId))
 }
 
 export function CommandPalette(props: {
@@ -68,7 +87,7 @@ export function CommandPalette(props: {
   } | undefined
 }): React.JSX.Element {
   const [query, setQuery] = useState('')
-  const [active, setActive] = useState(0)
+  const [activeId, setActiveId] = useState<string | null>(null)
   const ownerId = useRef(crypto.randomUUID())
   const [fileResult, setFileResult] = useState<PaletteFileSearchSnapshot | null>(null)
   const [fileError, setFileError] = useState(false)
@@ -107,10 +126,14 @@ export function CommandPalette(props: {
       run: () => props.fileSearch?.open(file.path, fileResult?.sessionId ?? null)
     })) ?? [])
   ], [props.commands, query, matchingFiles, props.fileSearch, fileResult])
-  const activeIndex = Math.min(active, Math.max(0, results.length - 1))
+  const activeIndex = paletteSelectionIndex(results, activeId)
+  useEffect(() => {
+    const selected = results[activeIndex]?.id ?? null
+    if (selected !== activeId) setActiveId(selected)
+  }, [results, activeIndex, activeId])
 
   const invoke = (command: PaletteCommand | undefined): void => {
-    if (!command) return
+    if (!command || command.disabled) return
     props.onClose()
     // Run after the dialog closes so focus restoration never lands on top of the command's own focus.
     setTimeout(() => command.run(), 0)
@@ -130,13 +153,13 @@ export function CommandPalette(props: {
           setQuery(event.target.value)
           setFileResult(null)
           setFileError(false)
-          setActive(0)
+          setActiveId(null)
         }}
         onKeyDown={(event) => {
           if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
             event.preventDefault()
             const step = event.key === 'ArrowDown' ? 1 : -1
-            setActive((activeIndex + step + results.length) % Math.max(1, results.length))
+            setActiveId(results[(activeIndex + step + results.length) % Math.max(1, results.length)]?.id ?? null)
           } else if (event.key === 'Enter') {
             event.preventDefault()
             invoke(results[activeIndex])
@@ -157,7 +180,7 @@ export function CommandPalette(props: {
               data-group={command.group}
               data-live={command.live === undefined ? undefined : String(command.live)}
               aria-selected={index === activeIndex}
-              onMouseMove={() => setActive(index)}
+              onMouseMove={() => setActiveId(command.id)}
               onClick={() => invoke(command)}
             >
               {command.mark ? <span className={`status-dot ${command.mark}`} aria-hidden="true" /> : null}
