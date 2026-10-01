@@ -36,6 +36,19 @@ when **Type replies into the session** is enabled. Messages are staged before in
 automatically replay after a restart or uncertain write. Plan mode retains its native picker route.
 Permission settings and producer custom-answer prohibitions still apply.
 
+Manual checkpoints need explicit `bmn ask --choices-json` data; text-only asks do
+not gain inferred buttons. Their 2–8 labels plus Other are decisions sent as one
+ordinary message naming the request, to a freshly confirmed Claude/Codex foreground
+conversation. A tap or Other reply submits deliberately; a direct reply follows
+**Type replies into the session**, and a manual permission also requires **Answer
+permission prompts**. With either required setting off, keep the answer as a draft
+or use the laptop. Typed manual answers retain exact text up to 4,000 characters;
+invalid/control-bearing text is refused. Native picker limits below remain separate.
+Desktop Copy answer changes only the clipboard. A completed manual permission card
+can receive an ordinary follow-up under reply settings; that never renews its grant.
+An unconfirmed or stale manual destination stays draft-only/unavailable, even after
+its reminder is dismissed. Uncertain/submitted attempts never replay.
+
 A page is a card: the session, the agent (with the model maker's flag when BMN has seen it), the
 question in bold and the options numbered, with one button per option. Tap one and the card says
 **Sending…** at once; BMN then types or posts exactly that answer into the dialog that asked, and

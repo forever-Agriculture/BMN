@@ -1,6 +1,7 @@
 import type { BoundConversationBinding, PersistedConversationBinding } from './binding'
 import { hasExactKeys } from './closed-shape'
 import { parseReportedResumeCommand, type ReportedResumeCommand } from './resume-command'
+import { hasControlOrFormatCharacter } from './file-reference'
 
 export const DEFAULT_WORKSPACE_ID = '00000000-0000-4000-8000-000000000001'
 export const WORKSPACE_NAME_MAX_LENGTH = 120
@@ -72,6 +73,7 @@ export interface WorkspaceRecord {
   workspaceId: string
   name: string
   defaultCwd: string | null
+  pinnedFilePaths: string[]
   position: number
   /** Identity only: which workspace this is, never a process or attention state. */
   marker: WorkspaceMarker
@@ -160,6 +162,7 @@ export interface WorkspaceUpdateParams {
   position?: number
   marker?: WorkspaceMarker
   archived?: boolean
+  pinnedFilePaths?: string[]
 }
 
 export interface SessionListParams {
@@ -373,7 +376,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
-const WORKSPACE_RECORD_KEYS = ['workspaceId', 'name', 'defaultCwd', 'position', 'marker', 'archivedAt', 'revision'] as const
+const WORKSPACE_RECORD_KEYS = ['workspaceId', 'name', 'defaultCwd', 'pinnedFilePaths', 'position', 'marker', 'archivedAt', 'revision'] as const
 const SESSION_RECORD_KEYS = [
   'sessionId', 'workspaceId', 'name', 'cwd', 'executable', 'argv', 'position', 'backgroundChoice', 'terminalGraphics',
   'revision', 'createdAt', 'archivedAt', 'lastProcess'
@@ -384,7 +387,7 @@ const TEMPLATE_RECORD_KEYS = [
   'templateId', 'name', 'executable', 'argv', 'cwd', 'backgroundChoice', 'terminalGraphics', 'revision', 'createdAt'
 ] as const
 const TEMPLATE_RECORD_OPTIONAL_KEYS = ['launchDisabledReason'] as const
-const WORKSPACE_UPDATE_FIELDS = ['name', 'defaultCwd', 'position', 'marker', 'archived'] as const
+const WORKSPACE_UPDATE_FIELDS = ['name', 'defaultCwd', 'position', 'marker', 'archived', 'pinnedFilePaths'] as const
 const SESSION_UPDATE_FIELDS = [
   'workspaceId', 'name', 'cwd', 'executable', 'argv', 'position', 'backgroundChoice', 'terminalGraphics', 'archived'
 ] as const
@@ -455,6 +458,7 @@ export function isWorkspaceRecord(value: unknown): value is WorkspaceRecord {
     isIdentifier(value.workspaceId) &&
     isName(value.name) &&
     isNullableText(value.defaultCwd) &&
+    isPinnedFilePaths(value.pinnedFilePaths, true) &&
     isPosition(value.position) &&
     isWorkspaceMarker(value.marker) &&
     (value.archivedAt === null || isRfc3339(value.archivedAt)) &&
@@ -544,7 +548,14 @@ export function isWorkspaceUpdateParams(value: unknown): value is WorkspaceUpdat
   if ('position' in value && !isPosition(value.position)) return false
   if ('marker' in value && !isWorkspaceMarker(value.marker)) return false
   if ('archived' in value && typeof value.archived !== 'boolean') return false
+  if ('pinnedFilePaths' in value && !isPinnedFilePaths(value.pinnedFilePaths)) return false
   return WORKSPACE_UPDATE_FIELDS.some((key) => key in value)
+}
+
+export function isPinnedFilePaths(value: unknown, absolute = false): value is string[] {
+  return Array.isArray(value) && value.length <= 8 && new Set(value).size === value.length &&
+    value.every(path => typeof path === 'string' && path.trim().length > 0 && path.length <= 4096 &&
+      !hasControlOrFormatCharacter(path) && (!absolute || path.startsWith('/')))
 }
 
 export function isSessionCreateParams(value: unknown): value is SessionCreateParams {

@@ -1,4 +1,5 @@
 import {
+  isPinnedFilePaths,
   DEFAULT_WORKSPACE_MARKER,
   isLaunchSetCreateParams,
   isLaunchSetUpdateParams,
@@ -34,6 +35,7 @@ import {
   type WorkspaceRecord,
   type WorkspaceUpdateParams
 } from '@bmn/protocol'
+import { isAbsolute, normalize, resolve } from 'node:path'
 import type { DatabaseConnection } from './database-initialization'
 
 export class WorkspaceStoreError extends Error {
@@ -50,6 +52,7 @@ interface WorkspaceRow {
   workspace_id: string
   name: string
   default_cwd: string | null
+  pinned_file_paths_json: string
   position: number
   marker: string
   archived_at: string | null
@@ -169,10 +172,13 @@ function storedArgvFields(
 }
 
 function workspaceRecord(row: WorkspaceRow): WorkspaceRecord {
+  let pins: unknown
+  try { pins = JSON.parse(row.pinned_file_paths_json ?? '[]') } catch { pins = [] }
   const record: WorkspaceRecord = {
     workspaceId: row.workspace_id,
     name: row.name,
     defaultCwd: row.default_cwd,
+    pinnedFilePaths: isPinnedFilePaths(pins, true) ? pins : [],
     position: row.position,
     // A marker is decoration, so an unreadable one degrades to the default rather than hiding the
     // workspace and every session under it.
@@ -266,7 +272,7 @@ function templateRecord(row: TemplateRow): LaunchTemplateRecord {
 export function selectWorkspace(database: DatabaseConnection, workspaceId: string): WorkspaceRecord {
   const row = database
     .prepare(
-      `SELECT workspace_id, name, default_cwd, position, marker, archived_at, revision
+      `SELECT workspace_id, name, default_cwd, pinned_file_paths_json, position, marker, archived_at, revision
        FROM workspace WHERE workspace_id = ?`
     )
     .get(workspaceId) as WorkspaceRow | undefined
@@ -297,7 +303,7 @@ export function listWorkspaces(
 ): WorkspaceRecord[] {
   const rows = database
     .prepare(
-      `SELECT workspace_id, name, default_cwd, position, marker, archived_at, revision
+      `SELECT workspace_id, name, default_cwd, pinned_file_paths_json, position, marker, archived_at, revision
        FROM workspace
        WHERE ? = 1 OR archived_at IS NULL
        ORDER BY CASE WHEN archived_at IS NULL THEN 0 ELSE 1 END, position, workspace_id`
@@ -349,6 +355,15 @@ export function updateWorkspace(
   if (current.revision !== params.expectedRevision) {
     return conflict('Workspace', params.workspaceId, current.revision)
   }
+  let pins = current.pinnedFilePaths
+  if (params.pinnedFilePaths !== undefined) {
+    if (current.archivedAt !== null) invalid('Archived workspace pins cannot be changed')
+    pins = params.pinnedFilePaths.map(path => {
+      if (!isAbsolute(path) && (!current.defaultCwd || !isAbsolute(current.defaultCwd))) invalid('Choose an absolute path; this workspace has no default folder')
+      return isAbsolute(path) ? normalize(path) : resolve(current.defaultCwd!, path)
+    })
+    if (!isPinnedFilePaths(pins, true)) invalid('Use at most eight unique absolute paths of up to 4096 characters')
+  }
   const archivedAt = 'archived' in params
     ? params.archived
       ? current.archivedAt ?? now
@@ -357,7 +372,7 @@ export function updateWorkspace(
   database
     .prepare(
       `UPDATE workspace
-       SET name = ?, default_cwd = ?, position = ?, marker = ?, archived_at = ?, revision = ?
+       SET name = ?, default_cwd = ?, position = ?, marker = ?, archived_at = ?, revision = ?, pinned_file_paths_json = ?
        WHERE workspace_id = ? AND revision = ?`
     )
     .run(
@@ -367,6 +382,7 @@ export function updateWorkspace(
       params.marker ?? current.marker,
       archivedAt,
       current.revision + 1,
+      JSON.stringify(pins),
       current.workspaceId,
       current.revision
     )

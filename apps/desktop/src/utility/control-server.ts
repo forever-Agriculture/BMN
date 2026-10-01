@@ -15,6 +15,10 @@ import {
   isProtocolErrorCode,
   parseAttentionEvidence,
   parseAttentionPrompt,
+  parseAttentionProducer,
+  parseManualChoices,
+  type ManualChoices,
+  type AttentionProducer,
   reportedResumeArgvProblem,
   stripFormatCharacters,
   type AttentionKind,
@@ -80,6 +84,8 @@ export interface ControlHandlers {
     origin?: string
     /** The agent's own question or permission, already validated. */
     prompt?: AttentionPrompt
+    producer?: AttentionProducer
+    manualChoices?: ManualChoices
   }): Promise<unknown>
   /** A session may address one destination; only the handler creates the owner-delivered draft. */
   prepareHandoff(p: {
@@ -100,11 +106,12 @@ export interface ControlHandlers {
     source: ConversationObservationSource
     transcriptPath?: string
   }): Promise<unknown>
-  withdrawAttention(p: { sessionId: string; requestKey: string; origin?: string; evidence?: AttentionEvidence }): Promise<unknown>
+  withdrawAttention(p: { sessionId: string; requestKey: string; origin?: string; evidence?: AttentionEvidence; producer?: AttentionProducer }): Promise<unknown>
   resolveAttention(p: {
     sessionId: string
     requestKey: string
     resolution: string
+    producer?: AttentionProducer
     origin?: string
     /** What the harness reported about how the prompt ended; it can prove an answer, never make one. */
     evidence?: AttentionEvidence
@@ -795,6 +802,15 @@ export class ControlServer {
     return undefined
   }
 
+  private producer(params: Params, scope: ControlScope, origin: string | undefined): AttentionProducer | undefined {
+    if (params.producer === undefined) return undefined
+    const producer = parseAttentionProducer(params.producer)
+    if (!producer || scope.kind !== 'session' || !origin?.startsWith(`hook:${producer.agentCli}:`)) {
+      throw invalid('producer requires a matching foreground hook and session credential')
+    }
+    return producer
+  }
+
   private target(scope: ControlScope, params: Params): string {
     const requested = readText(params, 'sessionId', RULES.sessionId)
     if (scope.kind === 'session') {
@@ -912,7 +928,7 @@ export class ControlServer {
       case 'attention.open': {
         const params = closedParams(rawParams, [
           'sessionId', 'requestKey', 'kind', 'title', 'body', 'expiresAt', 'idempotencyKey', 'phoneNotified',
-          'origin', 'prompt'
+          'origin', 'prompt', 'producer', 'manualChoices'
         ])
         const requestKey = requireText(params, 'requestKey', RULES.requestKey)
         if (requestKey.startsWith('handoff:')) throw invalid('The handoff request key is reserved')
@@ -935,6 +951,11 @@ export class ControlServer {
           prompt = parsed.value
         }
         const origin = this.usableOrigin(params, scope, method, handlers)
+        const producer = this.producer(params, scope, origin)
+        const manualChoices = params.manualChoices === undefined ? undefined : parseManualChoices(params.manualChoices)
+        if (manualChoices === null || manualChoices && (prompt || origin !== 'cli' || !['question', 'permission'].includes(kind))) {
+          throw invalid('manualChoices require a CLI question or decision with 2–8 distinct choices and no native prompt')
+        }
         const sessionId = this.target(scope, params)
         return this.idempotent(scope, method, idempotencyKey, params, () => handlers.openAttention({
           sessionId,
@@ -946,7 +967,9 @@ export class ControlServer {
           ...(expiresAt === undefined ? {} : { expiresAt }),
           ...(phoneNotified === undefined ? {} : { phoneNotified }),
           ...(origin === undefined ? {} : { origin }),
-          ...(prompt === undefined ? {} : { prompt })
+          ...(prompt === undefined ? {} : { prompt }),
+          ...(manualChoices ? { manualChoices } : {}),
+          ...(producer === undefined ? {} : { producer })
         }))
       }
       case 'conversation.observe': {
@@ -995,35 +1018,39 @@ export class ControlServer {
         }
       }
       case 'attention.withdraw': {
-        const params = closedParams(rawParams, ['sessionId', 'requestKey', 'origin', 'evidence'])
+        const params = closedParams(rawParams, ['sessionId', 'requestKey', 'origin', 'evidence', 'producer'])
         const requestKey = requireText(params, 'requestKey', RULES.requestKey)
         if (requestKey.startsWith('handoff:') && scope.kind !== 'session') {
           throw unauthorized('Only the source session may withdraw its handoff')
         }
         const origin = this.usableOrigin(params, scope, method, handlers)
         const evidence = readEvidence(params)
+        const producer = this.producer(params, scope, origin)
         const sessionId = this.target(scope, params)
         return handlers.withdrawAttention({
           sessionId,
           requestKey,
           ...(origin === undefined ? {} : { origin }),
-          ...(evidence === undefined ? {} : { evidence })
+          ...(evidence === undefined ? {} : { evidence }),
+          ...(producer === undefined ? {} : { producer })
         })
       }
       case 'attention.resolve': {
-        const params = closedParams(rawParams, ['sessionId', 'requestKey', 'resolution', 'origin', 'evidence'])
+        const params = closedParams(rawParams, ['sessionId', 'requestKey', 'resolution', 'origin', 'evidence', 'producer'])
         const requestKey = requireText(params, 'requestKey', RULES.requestKey)
         if (requestKey.startsWith('handoff:')) throw invalid('Deliver or discard the handoff to resolve it')
         const resolution = requireText(params, 'resolution', RULES.resolution)
         const origin = this.usableOrigin(params, scope, method, handlers)
         const evidence = readEvidence(params)
+        const producer = this.producer(params, scope, origin)
         const sessionId = this.target(scope, params)
         return handlers.resolveAttention({
           sessionId,
           requestKey,
           resolution,
           ...(origin === undefined ? {} : { origin }),
-          ...(evidence === undefined ? {} : { evidence })
+          ...(evidence === undefined ? {} : { evidence }),
+          ...(producer === undefined ? {} : { producer })
         })
       }
       case 'answer.take': {

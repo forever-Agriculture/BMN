@@ -834,10 +834,11 @@ describe('workspace identity marker', () => {
           archived_at TEXT,
           revision INTEGER NOT NULL,
           position INTEGER NOT NULL DEFAULT 0,
-          marker TEXT NOT NULL DEFAULT 'none'
+          marker TEXT NOT NULL DEFAULT 'none',
+          pinned_file_paths_json TEXT NOT NULL DEFAULT '[]'
         );
         INSERT INTO workspace_unchecked
-          SELECT workspace_id, name, default_cwd, archived_at, revision, position, marker
+          SELECT workspace_id, name, default_cwd, archived_at, revision, position, marker, pinned_file_paths_json
           FROM workspace;
         DROP TABLE workspace;
         ALTER TABLE workspace_unchecked RENAME TO workspace;
@@ -1002,4 +1003,44 @@ it('leaves damaged legacy launch-set arrays invalid without blocking the graphic
       expect(() => getLaunchSet(db, DEFAULT_WORKSPACE_ID, `damaged-${index}`)).toThrow(/invalid/)
     }
   } finally { db.close() }
+})
+
+describe('bounded explicit workspace pins', () => {
+  it('defaults old workspaces, resolves relative paths once, preserves metadata and fences concurrent edits', () => {
+    const database = new BetterSqlite3(':memory:')
+    try {
+      database.exec('CREATE TABLE schema_migration (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)')
+      for (const migration of DATABASE_MIGRATIONS.filter(item => item.version <= 20)) database.exec(migration.sql)
+      database.prepare('INSERT INTO workspace(workspace_id, name, default_cwd, position, archived_at, revision, marker) VALUES (?, ?, ?, 1, NULL, 1, ?)')
+        .run('legacy-pins', 'Legacy', '/project', 'none')
+      // Record pre-existing migrations the way the initialization layer expects.
+      for (const migration of DATABASE_MIGRATIONS.filter(item => item.version <= 20)) database.prepare('INSERT INTO schema_migration(version, applied_at) VALUES (?, ?)').run(migration.version, now)
+      initializeDatabase(database, now)
+      const old = selectWorkspace(database, 'legacy-pins')
+      expect(old.pinnedFilePaths).toEqual([])
+      const pinned = updateWorkspace(database, { workspaceId: old.workspaceId, expectedRevision: old.revision,
+        pinnedFilePaths: ['docs/SPEC.md', '/different/AGENTS.md'] }, now)
+      expect(pinned.pinnedFilePaths).toEqual(['/project/docs/SPEC.md', '/different/AGENTS.md'])
+      const renamed = updateWorkspace(database, { workspaceId: old.workspaceId, expectedRevision: pinned.revision, name: 'Renamed', defaultCwd: '/changed' }, now)
+      expect(renamed.pinnedFilePaths).toEqual(pinned.pinnedFilePaths)
+      expect(() => updateWorkspace(database, { workspaceId: old.workspaceId, expectedRevision: pinned.revision, pinnedFilePaths: [] }, now)).toThrow()
+      expect(selectWorkspace(database, old.workspaceId).name).toBe('Renamed')
+      expect(() => updateWorkspace(database, { workspaceId: old.workspaceId, expectedRevision: renamed.revision,
+        pinnedFilePaths: ['/same', '/same/../same'] }, now)).toThrow()
+      const archived = updateWorkspace(database, { workspaceId: old.workspaceId, expectedRevision: renamed.revision, archived: true }, now)
+      expect(() => updateWorkspace(database, { workspaceId: old.workspaceId, expectedRevision: archived.revision, pinnedFilePaths: [] }, now)).toThrow()
+    } finally { database.close() }
+  })
+  it('requires an absolute path without a default folder and enforces count and length bounds', () => {
+    const database = new BetterSqlite3(':memory:')
+    try {
+      initializeDatabase(database, now)
+      const workspace = createWorkspace(database, { name: 'No folder' }, 'no-folder', now)
+      const update = (paths: string[]) => updateWorkspace(database, { workspaceId: workspace.workspaceId, expectedRevision: workspace.revision, pinnedFilePaths: paths }, now)
+      expect(() => update(['relative.md'])).toThrow()
+      expect(() => update(Array.from({ length: 9 }, (_, index) => `/file-${index}`))).toThrow()
+      expect(() => update(['/' + 'p'.repeat(4096)])).toThrow()
+      expect(update(['/absolute.md']).pinnedFilePaths).toEqual(['/absolute.md'])
+    } finally { database.close() }
+  })
 })

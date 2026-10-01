@@ -334,6 +334,7 @@ class FakeStore implements SessionStore {
       workspaceId: DEFAULT_SESSION_CREATION.workspaceId,
       name: 'Default',
       defaultCwd: null,
+      pinnedFilePaths: [],
       position: 0,
       marker: 'none',
       archivedAt: null,

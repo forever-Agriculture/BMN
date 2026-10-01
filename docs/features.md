@@ -117,7 +117,8 @@ that multiplexer and may reject pets. Saved output is text only; pet pixels are 
 - **Search** (`Ctrl+Shift+F`) searches the terminal's output; `Enter` finds the next match,
   `Shift+Enter` the previous one, `Escape` closes it. The search bar floats over the top-right of
   the terminal, so opening, using and closing it never resizes the terminal or makes the program
-  redraw. While open it covers the end of the first rows; `Enter` moves past a match it hides.
+  redraw. Use **Bottom**/**Top** to move Find away from a hidden match. Its query,
+  selected match and position stay with this mounted session view.
 - **Copy and paste.** Selecting with the mouse copies. `Ctrl+Shift+C` copies the selection; paste
   with `Ctrl+V`, `Ctrl+Shift+V`, `Shift+Insert` or right-click. Dragging across text also copies when
   a program enables mouse reporting, as Codex does. `Ctrl+Shift+A` selects all.
@@ -392,3 +393,18 @@ malicious program already running as your user.
 
 The `XDG_*` variables are respected and each folder can be overridden. Folders are created
 owner-only. [development.md](development.md) lists the override variables.
+
+Recent sessions (`Ctrl+Shift+R`, or **Recent sessions…** in the palette) lists up to
+20 sessions you selected or focused, newest first. The order stays fixed while the
+chooser is open; archived/deleted sessions disappear. Enter/click navigates only
+when you choose, and a session already in the other pane is focused there.
+
+**Pinned files…** in a workspace menu stores up to eight paths you choose. Relative
+Add paths resolve once against that workspace’s displayed default folder; without
+one, use an absolute path. Open reads the current file through the safe preview,
+including fresh symlink checks. Missing/unavailable files remain removable pins.
+Pins store paths only, and never send content to an agent.
+
+Collapsed workspace groups retain the selected unarchived session row and hide its
+siblings. Counts and Move up/down still refer to the complete group. In Preferences,
+**Jump to section** reaches every existing section without saving or resetting edits.

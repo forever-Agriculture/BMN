@@ -34,7 +34,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CompanionService } from './companion-service'
 import type { DatabaseWorkerClient } from './database-client'
-import { COMPANION_OPERATIONS, insertArtifact, listReadyArtifacts, type CompanionOperationName } from './database-companion-store'
+import { scrubBackupProducerBindings, COMPANION_OPERATIONS, insertArtifact, listReadyArtifacts, type CompanionOperationName } from './database-companion-store'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
 import { selectConversationRoutes } from './database-binding-store'
 import { createWorkspace, listSessions, listWorkspaces } from './database-workspace-store'
@@ -82,6 +82,8 @@ function workerLike(connection: DatabaseConnection): DatabaseWorkerClient {
     },
     backupInto: async (path: string) => {
       connection.prepare('VACUUM INTO ?').run(path)
+      const snapshot = new BetterSqlite3(path, { fileMustExist: true })
+      try { scrubBackupProducerBindings(snapshot) } finally { snapshot.close() }
     },
     readyArtifactsInBackup: async (path: string) => {
       const snapshot = new BetterSqlite3(path, { readonly: true, fileMustExist: true })
@@ -149,6 +151,69 @@ beforeEach(() => {
     cliPath: join(root, 'bin', 'bmn'),
     emit: (message) => emitted.push(message),
     now: () => new Date(clock)
+  })
+})
+
+describe('foreground question lifecycle ownership', () => {
+  it.each(['opencode', 'cursor'] as const)('preserves exact legacy %s cleanup after observing its unsupported producer', async agent => {
+    service['options'].manager.observeConversation = vi.fn(async () => ({ accepted: false as const, detail: 'Synthetic shell' }))
+    await service['control']['options'].handlers.observeConversation({ sessionId: 's1', incarnationId: 'incarnation-1', agentCli: agent,
+      conversationReference: agent === 'opencode' ? 'ses_synthetic_main' : 'cccccccc-cccc-cccc-cccc-cccccccccccc', source: 'startup' })
+    const requestKey = `${agent}:permission`
+    const opened = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1', requestKey,
+      kind: 'permission', title: 'Synthetic legacy permission', origin: `hook:${agent}:PermissionRequest` })
+    expect(opened.producer).toBeNull()
+    await service['closeAttentionByKey']('s1', requestKey, 'answered', null, `hook:${agent}:permission.replied`)
+    expect(COMPANION_OPERATIONS.getAttention(database, opened.requestId).state).toBe('answered')
+    expect(writes).toHaveLength(0)
+  })
+
+  const a = { agentCli: 'codex' as const, conversationReference: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }
+  const b = { ...a, conversationReference: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb' }
+  const ask = (producer: typeof a) => service['openAttention']({
+    sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'codex:question', kind: 'question', title: 'Color?',
+    origin: 'hook:codex:PreToolUse', producer,
+    prompt: { type: 'questions', harness: 'codex', shape: 'async-choice', requestRef: 'q', toolUseId: 'tool',
+      questions: [{ id: null, header: null, text: 'Color?', multiSelect: false,
+        options: [{ label: 'Gold', description: null }, { label: 'Black', description: null }] }] }
+  })
+
+  it('keeps the current question open after a late prior-conversation SessionEnd', async () => {
+    await ask(a)
+    const current = await ask(b)
+    await service['closeAttentionByKey']('s1', 'codex:question', 'withdrawn', null, 'hook:codex:SessionEnd', undefined, a)
+    expect(COMPANION_OPERATIONS.getAttention(database, current.requestId)).toMatchObject({ state: 'open', revision: current.revision, producer: b })
+    expect(await service.answerability(current)).toMatchObject({ answerable: true })
+    expect(writes).toHaveLength(0)
+    await service['closeAttentionByKey']('s1', 'codex:question', 'withdrawn', null, 'hook:codex:SessionEnd', undefined, b)
+    expect(COMPANION_OPERATIONS.getAttention(database, current.requestId).state).toBe('withdrawn')
+  })
+
+  it.each(['SessionEnd', 'Interrupt'])('retains returned A after ambiguous old A %s and never revives its controls', async event => {
+    await ask(a)
+    await ask(b)
+    const returned = await ask(a)
+    const epoch = service.answerEpoch(returned.requestId)!
+    await service['closeAttentionByKey']('s1', 'codex:question', 'withdrawn', null, `hook:codex:${event}`, undefined, a)
+    expect(COMPANION_OPERATIONS.getAttention(database, returned.requestId)).toMatchObject({ state: 'open', revision: returned.revision, producer: returned.producer })
+    expect(await service.answerability(returned)).toMatchObject({ answerable: false, detail: expect.stringContaining('Conversation unavailable') })
+    service['producers'].observe('s1', 'incarnation-1', a)
+    expect(await service.answerAttention({ requestId: returned.requestId, revision: returned.revision, epoch,
+      incarnationId: 'incarnation-1', answer: { type: 'choices', choices: [0] } })).toMatchObject({ state: 'refused' })
+    expect(writes).toHaveLength(0)
+  })
+
+  it('refuses stale and ambiguous cards without any PTY bytes', async () => {
+    const old = await ask(a)
+    const epoch = service.answerEpoch(old.requestId)!
+    service['producers'].observe('s1', 'incarnation-1', b)
+    expect(await service.answerAttention({ requestId: old.requestId, revision: old.revision, epoch,
+      incarnationId: 'incarnation-1', answer: { type: 'choices', choices: [0] } })).toEqual({ state: 'refused', reason: 'changed' })
+    const current = await ask(b)
+    await service['closeAttentionByKey']('s1', 'codex:question', 'withdrawn', null, 'hook:codex:SessionEnd')
+    expect(COMPANION_OPERATIONS.getAttention(database, current.requestId).state).toBe('open')
+    expect(await service.answerability(current)).toMatchObject({ answerable: false })
+    expect(writes).toHaveLength(0)
   })
 })
 
@@ -1088,7 +1153,8 @@ describe('Telegram attention notifications', () => {
     expect(COMPANION_OPERATIONS.getTelegramMessage(database, 77)).toEqual({
       sessionId: 's1',
       requestId: record.requestId,
-      incarnationId: 'incarnation-1'
+      incarnationId: 'incarnation-1',
+      revision: record.revision
     })
   })
 
@@ -1528,6 +1594,30 @@ describe('Telegram attention notifications', () => {
         }
       }
       expect(writes).toHaveLength(4)
+      // New manual cards use producer/revision/incarnation binding, never a native epoch.
+      service['producers'].observe('s1', 'incarnation-1', { agentCli: 'codex', conversationReference: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' })
+      COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', { ...COMPANION_OPERATIONS.getSettings(database).telegram, answerPermissions: true }, now)
+      for (const manual of [
+        { title: 'Manual choice', kind: 'question' as const, actions: [1], label: 'Wait' },
+        { title: 'Manual Other', kind: 'permission' as const, actions: [{ tap: 'Other…' }, { reply: 'Manual custom' }], label: 'Manual custom' },
+        { title: 'Manual direct', kind: 'question' as const, actions: [{ reply: 'Manual ordinary' }], label: 'Manual ordinary' }
+      ]) {
+        bot.tapOn(manual.title, manual.actions)
+        const opened = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1', requestKey: manual.title,
+          kind: manual.kind, title: manual.title, origin: 'cli', manualChoices: {
+            options: [{ label: 'Proceed', description: null }, { label: 'Wait', description: null }], allowOther: true } })
+        expect(service.answerEpoch(opened.requestId)).toBeNull()
+        await service['cards'].page(opened)
+        expected += `\x1b[200~Owner answer to ${JSON.stringify(manual.title)} (${JSON.stringify(manual.title)}):\n${manual.label}\x1b[201~\r`
+        await vi.waitFor(() => expect(readFileSync(receiver, 'utf8')).toBe(expected), { timeout: 10000 })
+        await vi.waitFor(() => expect(COMPANION_OPERATIONS.getAttention(database, opened.requestId).state).toBe('answered'))
+        const before = writes.length
+        const revision = opened.revision
+        await expect(service.answerAttention({ requestId: opened.requestId, revision, epoch: -1, incarnationId: 'incarnation-1',
+          answer: { type: 'choices', choices: [0] } })).resolves.toMatchObject({ state: 'refused' })
+        expect(writes).toHaveLength(before)
+      }
+      expect(writes).toHaveLength(7)
       expect(offsetFailures).toBe(1)
       expect(bot.calls.some(call => String(call.body.text).includes('Message submitted'))).toBe(true)
     } finally {
@@ -3202,4 +3292,312 @@ describe('session ports (Story 41.1)', () => {
     await expect(listed(scanning)).resolves.toEqual([])
     expect(emitted.filter((message) => message.topic === 'ports')).toHaveLength(2)
   })
+})
+
+describe('explicit manual answers to a live foreground conversation', () => {
+  const producer = { agentCli: 'codex' as const, conversationReference: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }
+  const choices = { options: [{ label: 'Proceed', description: null }, { label: 'Wait', description: 'Keep pending' }], allowOther: true as const }
+  const ask = (key = 'manual', kind: 'question' | 'permission' = 'question') => service['openAttention']({
+    sessionId: 's1', incarnationId: 'incarnation-1', requestKey: key, kind, title: 'Synthetic checkpoint', origin: 'cli', manualChoices: choices
+  })
+  const answer = (record: AttentionRecord, choice: number | { typed: string } = 0) => ({ requestId: record.requestId,
+    revision: record.revision, epoch: -1, incarnationId: 'incarnation-1', answer: { type: 'choices' as const, choices: [choice] } })
+  const stamp = () => service['producers'].observe('s1', 'incarnation-1', producer)
+
+  it('requires fresh identity for a shell-launched interactive agent, and keeps native epochs absent', async () => {
+    const unknown = await ask()
+    expect(await service.answerability(unknown)).toMatchObject({ answerable: false })
+    expect(await service.answerAttention(answer(unknown))).toMatchObject({ state: 'refused' })
+    stamp()
+    expect(await service.answerAttention(answer(unknown))).toMatchObject({ state: 'refused' })
+    const current = await ask()
+    expect(current.producer).toMatchObject(producer)
+    expect(service.answerEpoch(current.requestId)).toBeNull()
+    const [one, duplicate] = await Promise.all([service.answerAttention(answer(current)), service.answerAttention(answer(current))])
+    expect(one.state).toBe('submitted'); expect(duplicate.state).toBe('refused')
+    expect(writes).toHaveLength(1)
+    expect(Buffer.from(writes[0]!.bytes).toString()).toBe('\x1b[200~Owner answer to "manual" ("Synthetic checkpoint"):\nProceed\x1b[201~\r')
+    expect(COMPANION_OPERATIONS.getAttention(database, current.requestId)).toMatchObject({ state: 'answered', resolution: 'Submitted from Telegram: Proceed' })
+    expect(await service['closeAttentionByKey']('s1', 'manual', 'withdrawn', null, 'cli')).toMatchObject({ state: 'answered' })
+  })
+
+  it('lets two manual decisions coexist; permissions-off remains retryable with a different persisted answer', async () => {
+    stamp()
+    const decision = await ask('decision', 'permission')
+    const question = await ask('question')
+    expect(await service.answerAttention(answer(decision, 0))).toMatchObject({ state: 'refused' })
+    expect(writes).toHaveLength(0)
+    COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', { ...DEFAULT_APP_SETTINGS.telegram, answerPermissions: true }, now)
+    expect(await service.answerAttention(answer(decision, 1))).toMatchObject({ state: 'submitted' })
+    expect(Buffer.from(writes[0]!.bytes).toString()).toContain('\nWait\x1b[201~\r')
+    const draft = COMPANION_OPERATIONS.listDrafts(database).find(row => row.requestId === decision.requestId)!
+    expect(draft.text).toContain('\nWait'); expect(draft.state).toBe('submitted')
+    expect(await service.answerAttention(answer(question, { typed: 'Keep the exact  double space.' }))).toMatchObject({ state: 'submitted' })
+    expect(Buffer.from(writes[1]!.bytes).toString()).toContain('exact  double space.')
+    expect(writes).toHaveLength(2)
+  })
+
+  it('refuses a changed producer at the transactional final boundary and never replays uncertain input', async () => {
+    stamp()
+    const record = await ask()
+    const original = service['options'].database.companion.bind(service['options'].database)
+    vi.spyOn(service['options'].database, 'companion').mockImplementation(async (name, ...args) => {
+      const result = await original(name, ...args)
+      if (name === 'telegramMessageBoundary') service['producers'].observe('s1', 'incarnation-1', { ...producer, conversationReference: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb' })
+      return result
+    })
+    expect(await service.answerAttention(answer(record))).toMatchObject({ state: 'refused' })
+    expect(writes).toHaveLength(0)
+  })
+
+  it('rejects an expired manual card before the expiry sweep and a direct reply to an older revision', async () => {
+    stamp()
+    const expired = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'expiry',
+      kind: 'question', title: 'Expired', origin: 'cli', manualChoices: choices, expiresAt: '2026-09-14T11:59:59.000Z' })
+    expect(await service.answerAttention(answer(expired))).toMatchObject({ state: 'refused', reason: 'gone' })
+    expect(await service.answerability(expired)).toMatchObject({ answerable: false, detail: expect.stringContaining('expired') })
+    const sent: string[] = []
+    service['telegram'] = { sendMessage: async (text: string) => { sent.push(text); return { messageId: sent.length } } } as unknown as TelegramConnector
+    await service.sessionsChanged()
+    COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', { ...DEFAULT_APP_SETTINGS.telegram, autoSubmitReplies: true }, now)
+    const old = await ask('changed')
+    COMPANION_OPERATIONS.putTelegramCard(database, { messageId: 77, sessionId: 's1', requestId: old.requestId,
+      incarnationId: 'incarnation-1', revision: old.revision, state: 'open', card: { base: 'Synthetic', format: 'plain' } }, now)
+    const revised = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'changed',
+      kind: 'question', title: 'Revised', origin: 'cli', manualChoices: choices })
+    expect(revised.revision).toBe(old.revision + 1)
+    await service['handleTelegramReply']({ updateId: 88, chatId: 1, fromUserId: 1, messageId: 99, replyToMessageId: 77, text: 'Proceed', file: null })
+    expect(sent).toEqual([expect.stringContaining('This card changed')])
+    expect(writes).toHaveLength(0)
+    expect(COMPANION_OPERATIONS.getAttention(database, revised.requestId)).toMatchObject({ state: 'open' })
+  })
+
+  it('retains options across storage and invalidates changed choices without creating a native prompt', async () => {
+    stamp()
+    const old = await ask()
+    const revised = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'manual',
+      kind: 'question', title: 'Synthetic checkpoint', origin: 'cli', manualChoices: { ...choices, options: [...choices.options].reverse() } })
+    expect(revised.requestId).toBe(old.requestId); expect(revised.revision).toBe(old.revision + 1)
+    expect(COMPANION_OPERATIONS.getAttention(database, revised.requestId)).toMatchObject({ prompt: null, manualChoices: revised.manualChoices })
+    expect(await service.answerAttention(answer(old))).toMatchObject({ state: 'refused' })
+    expect(writes).toHaveLength(0)
+  })
+})
+
+it('refuses a manual answer when a same-producer request changes after the final store snapshot', async () => {
+  service['producers'].observe('s1', 'incarnation-1', { agentCli: 'codex', conversationReference: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' })
+  const params = { sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'revision-race', kind: 'question' as const,
+    title: 'Revision race', origin: 'cli', manualChoices: { options: [{ label: 'Proceed', description: null }, { label: 'Wait', description: null }], allowOther: true as const } }
+  const record = await service['openAttention'](params)
+  const original = service['options'].database.companion.bind(service['options'].database)
+  vi.spyOn(service['options'].database, 'companion').mockImplementation(async (name, ...args) => {
+    const result = await original(name, ...args)
+    if (name === 'telegramMessageBoundary') await service['openAttention']({ ...params, manualChoices: { ...params.manualChoices, options: [...params.manualChoices.options].reverse() } })
+    return result
+  })
+  expect(await service.answerAttention({ requestId: record.requestId, revision: record.revision, epoch: -1,
+    incarnationId: 'incarnation-1', answer: { type: 'choices', choices: [0] } })).toMatchObject({ state: 'refused' })
+  expect(writes).toHaveLength(0)
+  expect(COMPANION_OPERATIONS.getAttention(database, record.requestId)).toMatchObject({ state: 'open', revision: record.revision + 1 })
+})
+
+it('invalidates native input before an attribution read waits on lifecycle cleanup', async () => {
+  const record = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'codex:question',
+    kind: 'question', title: 'Race', prompt: { type: 'questions', harness: 'codex', shape: 'async-choice', requestRef: null,
+      toolUseId: null, questions: [{ id: null, header: null, text: 'Race?', multiSelect: false, options: [{ label: 'Proceed', description: null }] }] } })
+  const epoch = service.answerEpoch(record.requestId)!
+  let release!: () => void, reached!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const started = new Promise<void>(resolve => { reached = resolve })
+  const original = service['options'].database.companion.bind(service['options'].database)
+  vi.spyOn(service['options'].database, 'companion').mockImplementation(async (name, ...args) => {
+    const result = await original(name, ...args)
+    if (name === 'listAttention') { reached(); await held }
+    return result
+  })
+  const closing = service['closeAttentionByKey']('s1', 'codex:question', 'withdrawn', null, 'hook:codex:SessionEnd')
+  await started
+  try {
+    expect(await service.answerAttention({ requestId: record.requestId, revision: record.revision, epoch,
+      incarnationId: 'incarnation-1', answer: { type: 'choices', choices: [0] } })).toMatchObject({ state: 'refused' })
+    expect(writes).toHaveLength(0)
+  } finally { release(); await closing }
+})
+
+it('restores a definite pre-write draft failure for a different deliberate retry without replaying uncertain text', async () => {
+  service['producers'].observe('s1', 'incarnation-1', { agentCli: 'codex', conversationReference: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' })
+  const record = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'prepare-race',
+    kind: 'question', title: 'Retry', origin: 'cli', manualChoices: { options: [{ label: 'Proceed', description: null }, { label: 'Wait', description: null }], allowOther: true } })
+  const original = service['options'].database.companion.bind(service['options'].database)
+  let refused = false
+  vi.spyOn(service['options'].database, 'companion').mockImplementation(async (name, ...args) => {
+    if (name === 'telegramMessageBoundary' && !refused) { refused = true; throw new Error('synthetic pre-write refusal') }
+    return original(name, ...args)
+  })
+  const request = { requestId: record.requestId, revision: record.revision, epoch: -1, incarnationId: 'incarnation-1', answer: { type: 'choices' as const, choices: [0] } }
+  expect(await service.answerAttention(request)).toMatchObject({ state: 'refused' })
+  expect(writes).toHaveLength(0)
+  expect(COMPANION_OPERATIONS.listDrafts(database)[0]).toMatchObject({ state: 'draft' })
+  expect(await service.answerAttention({ ...request, answer: { type: 'choices', choices: [1] } })).toMatchObject({ state: 'submitted' })
+  expect(Buffer.from(writes[0]!.bytes).toString()).toContain('\nWait\x1b[201~\r')
+  expect(COMPANION_OPERATIONS.listDrafts(database)[0]!.text).toContain('\nWait')
+  expect(writes).toHaveLength(1)
+})
+
+it('keeps live producer binding private in agent snapshots and control responses', async () => {
+  const producer = { agentCli: 'codex' as const, conversationReference: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }
+  service['producers'].observe('s1', 'incarnation-1', producer)
+  const record = await service['control']['options'].handlers.openAttention({ sessionId: 's1', incarnationId: 'incarnation-1',
+    requestKey: 'privacy', kind: 'question', title: 'Synthetic', origin: 'cli' })
+  expect(JSON.stringify(record)).not.toContain(producer.conversationReference)
+  const session = await service['snapshot']({ kind: 'session', sessionId: 's1', incarnationId: 'incarnation-1' })
+  expect(JSON.stringify(session)).not.toContain(producer.conversationReference)
+  const owner = await service['snapshot']({ kind: 'owner' })
+  expect(JSON.stringify(owner)).toContain(producer.conversationReference)
+})
+
+
+it('refreshes cards on a new foreground binding even when durable shell Resume attribution is refused', async () => {
+  const observe = service['control']['options'].handlers.observeConversation
+  service['options'].manager.observeConversation = vi.fn(async () => ({ accepted: false as const, detail: 'Synthetic shell launch' }))
+  const changes = vi.spyOn(service['cards'], 'changed')
+  const a = { sessionId: 's1', incarnationId: 'incarnation-1', agentCli: 'codex' as const,
+    conversationReference: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', source: 'startup' as const }
+  await observe(a)
+  expect(changes).toHaveBeenCalledWith('s1')
+  changes.mockClear()
+  await observe(a)
+  expect(changes).not.toHaveBeenCalled()
+  await observe({ ...a, conversationReference: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb' })
+  expect(changes).toHaveBeenCalledWith('s1')
+})
+
+it('excludes live producer bindings from the copied backup and retains them in the live store', async () => {
+  const producer = { agentCli: 'codex' as const, conversationReference: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }
+  service['producers'].observe('s1', 'incarnation-1', producer)
+  const request = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'backup-privacy',
+    kind: 'question', title: 'Synthetic', origin: 'cli' })
+  COMPANION_OPERATIONS.putReceipt(database, { key: 'old-producer-receipt', paramsHash: 'synthetic', state: 'done', result: request }, now)
+  const { directory, manifest } = await exportBackup(join(root, 'backups'))
+  expect(manifest.excluded).toContain('live question producer bindings')
+  const snapshot = new BetterSqlite3(join(directory, 'state.sqlite3'), { readonly: true })
+  try {
+    expect(COMPANION_OPERATIONS.getAttention(snapshot, request.requestId).producer).toBeNull()
+    expect(JSON.stringify(COMPANION_OPERATIONS.getReceipt(snapshot, 'old-producer-receipt'))).not.toContain(producer.conversationReference)
+  } finally { snapshot.close() }
+  expect(readFileSync(join(directory, 'state.sqlite3')).includes(Buffer.from(producer.conversationReference))).toBe(false)
+  expect(COMPANION_OPERATIONS.getAttention(database, request.requestId).producer).toMatchObject(producer)
+  expect(await verifyBackup(directory)).toMatchObject({ ok: true })
+})
+
+it('never replays an ambiguous manual write, including a deliberate retry with another selection', async () => {
+  service['producers'].observe('s1', 'incarnation-1', { agentCli: 'codex', conversationReference: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' })
+  const record = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'uncertain-manual',
+    kind: 'question', title: 'Synthetic', origin: 'cli', manualChoices: { options: [{ label: 'Proceed', description: null }, { label: 'Wait', description: null }], allowOther: true } })
+  const actual = service['options'].manager.writeToSession.bind(service['options'].manager)
+  vi.spyOn(service['options'].manager, 'writeToSession').mockImplementation((id, bytes) => { actual(id, bytes); throw new Error('Synthetic ambiguous write') })
+  const request = { requestId: record.requestId, revision: record.revision, incarnationId: 'incarnation-1', epoch: -1,
+    answer: { type: 'choices' as const, choices: [0] } }
+  expect(await service.answerAttention(request)).toMatchObject({ state: 'sent-unconfirmed' })
+  expect(COMPANION_OPERATIONS.listDrafts(database)[0]).toMatchObject({ state: 'uncertain', text: expect.stringContaining('\nProceed') })
+  expect(await service.answerAttention({ ...request, answer: { type: 'choices', choices: [1] } })).toMatchObject({ state: 'refused', reason: 'claimed' })
+  expect(writes).toHaveLength(1)
+  expect(COMPANION_OPERATIONS.listDrafts(database)[0]!.text).not.toContain('\nWait')
+})
+
+it('handles a completed manual permission reply as an ordinary follow-up without renewing its grant', async () => {
+  const sent: string[] = []
+  service['telegram'] = { sendMessage: async (text: string) => { sent.push(text); return { messageId: sent.length } } } as unknown as TelegramConnector
+  await service.sessionsChanged()
+  service['producers'].observe('s1', 'incarnation-1', { agentCli: 'codex', conversationReference: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' })
+  COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', { ...DEFAULT_APP_SETTINGS.telegram, answerPermissions: true, autoSubmitReplies: true }, now)
+  const record = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'completed-permission',
+    kind: 'permission', title: 'Synthetic decision', origin: 'cli', manualChoices: { options: [{ label: 'Proceed', description: null }, { label: 'Wait', description: null }], allowOther: true } })
+  COMPANION_OPERATIONS.putTelegramCard(database, { messageId: 77, sessionId: 's1', requestId: record.requestId,
+    incarnationId: 'incarnation-1', revision: record.revision, state: 'final', card: { base: 'Synthetic', format: 'plain' } }, now)
+  expect(await service.answerAttention({ requestId: record.requestId, revision: record.revision, incarnationId: 'incarnation-1', epoch: -1,
+    answer: { type: 'choices', choices: [0] } })).toMatchObject({ state: 'submitted' })
+  const answered = COMPANION_OPERATIONS.getAttention(database, record.requestId)
+  COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', { ...DEFAULT_APP_SETTINGS.telegram, answerPermissions: false, autoSubmitReplies: true }, now)
+  await service['handleTelegramReply']({ updateId: 88, chatId: 1, fromUserId: 1, messageId: 99, replyToMessageId: 77, text: 'Synthetic follow-up', file: null })
+  expect(writes).toHaveLength(2)
+  expect(Buffer.from(writes[1]!.bytes).toString()).toBe('\x1b[200~Synthetic follow-up\x1b[201~\r')
+  expect(COMPANION_OPERATIONS.getAttention(database, record.requestId)).toEqual(answered)
+  expect(sent).toEqual(['Message submitted to this session. Native answer not confirmed.'])
+})
+
+
+describe('full review manual delivery fences', () => {
+  const choices = { options: [{ label: 'Proceed', description: null }, { label: 'Wait', description: null }], allowOther: true as const }
+  it.each(['question', 'permission'] as const)('requires fresh ownership for a closed unknown manual %s follow-up', async kind => {
+    const sent: string[] = []
+    service['telegram'] = { sendMessage: async (text: string) => { sent.push(text); return { messageId: sent.length } } } as unknown as TelegramConnector
+    await service.sessionsChanged()
+    COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', { ...DEFAULT_APP_SETTINGS.telegram, autoSubmitReplies: true, answerPermissions: true }, now)
+    const record = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'unknown-closed',
+      kind, title: 'Synthetic', origin: 'cli', manualChoices: choices })
+    COMPANION_OPERATIONS.putTelegramCard(database, { messageId: 77, sessionId: 's1', requestId: record.requestId,
+      incarnationId: 'incarnation-1', revision: record.revision, state: 'final', card: { base: 'Synthetic', format: 'plain' } }, now)
+    await service.route(METHOD_REGISTRY.attentionResolve, { requestId: record.requestId, state: 'withdrawn', expectedRevision: record.revision })
+    await service['handleTelegramReply']({ updateId: 88, chatId: 1, fromUserId: 1, messageId: 99, replyToMessageId: 77, text: 'Synthetic follow-up', file: null })
+    expect(writes).toHaveLength(0)
+    expect(COMPANION_OPERATIONS.listDrafts(database)[0]?.state).toBe('draft')
+  })
+
+  it('refuses when owner dismissal completes after the final manual snapshot', async () => {
+    service['producers'].observe('s1', 'incarnation-1', { agentCli: 'codex', conversationReference: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' })
+    const record = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'owner-cancel',
+      kind: 'question', title: 'Synthetic', origin: 'cli', manualChoices: choices })
+    const original = service['options'].database.companion.bind(service['options'].database)
+    vi.spyOn(service['options'].database, 'companion').mockImplementation(async (name, ...args) => {
+      const result = await original(name, ...args)
+      if (name === 'telegramMessageBoundary') await service.route(METHOD_REGISTRY.attentionResolve,
+        { requestId: record.requestId, state: 'withdrawn', expectedRevision: record.revision })
+      return result
+    })
+    const result = await service.answerAttention({ requestId: record.requestId, revision: record.revision, epoch: -1,
+      incarnationId: 'incarnation-1', answer: { type: 'choices', choices: [0] } })
+    expect(writes).toHaveLength(0)
+    expect(result.state).toBe('refused')
+  })
+
+  it.each(['SessionEnd', 'Interrupt'])('retains an unknown Default request unavailable after identified %s', async event => {
+    const record = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'codex:question',
+      kind: 'question', title: 'Synthetic', prompt: { type: 'questions', harness: 'codex', shape: 'async-choice', requestRef: null, toolUseId: null,
+        questions: [{ id: null, header: null, text: 'Synthetic?', multiSelect: false, options: [{ label: 'Proceed', description: null }] }] } })
+    await service['closeAttentionByKey']('s1', 'codex:question', 'withdrawn', null, `hook:codex:${event}`, undefined,
+      { agentCli: 'codex', conversationReference: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' })
+    await service.answerAttention({ requestId: record.requestId, revision: record.revision, epoch: service.answerEpoch(record.requestId)!,
+      incarnationId: 'incarnation-1', answer: { type: 'choices', choices: [0] } })
+    expect(writes).toHaveLength(0)
+    expect(await service.answerability(record)).toMatchObject({ answerable: false })
+    expect(COMPANION_OPERATIONS.getAttention(database, record.requestId)).toMatchObject({ state: 'open', revision: record.revision })
+  })
+
+  it('refuses prior supported ownership after observing an unsupported OpenCode switch', async () => {
+    service['producers'].observe('s1', 'incarnation-1', { agentCli: 'codex', conversationReference: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' })
+    const record = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'supported-before-switch',
+      kind: 'question', title: 'Synthetic', origin: 'cli', manualChoices: choices })
+    service['options'].manager.observeConversation = vi.fn(async () => ({ accepted: false as const, detail: 'Synthetic shell' }))
+    await service['control']['options'].handlers.observeConversation({ sessionId: 's1', incarnationId: 'incarnation-1', agentCli: 'opencode',
+      conversationReference: 'ses_0123456789abSyntheticTest0', source: 'startup' })
+    await service.answerAttention({ requestId: record.requestId, revision: record.revision, epoch: -1,
+      incarnationId: 'incarnation-1', answer: { type: 'choices', choices: [0] } })
+    expect(writes).toHaveLength(0)
+  })
+})
+
+
+it('preserves the correlated native OpenCode route while old supported ownership and new manual requests are unavailable', async () => {
+  service['producers'].observe('s1', 'incarnation-1', { agentCli: 'codex', conversationReference: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' })
+  const plugin = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'opencode:question',
+    kind: 'question', title: 'Synthetic plugin request', origin: 'hook:opencode:question.asked',
+    prompt: { type: 'questions', harness: 'opencode', shape: 'choice', requestRef: 'que_synthetic_unique', toolUseId: null,
+      questions: [{ id: null, header: null, text: 'Synthetic?', multiSelect: false, options: [{ label: 'Proceed', description: null }] }] } })
+  expect(plugin.producer).toBeNull()
+  expect(await service.answerability(plugin)).toMatchObject({ answerable: true })
+  const unknown = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'manual-on-unsupported',
+    kind: 'question', title: 'Synthetic', origin: 'cli', manualChoices: { options: [{ label: 'Proceed', description: null }, { label: 'Wait', description: null }], allowOther: true } })
+  expect(await service.answerability(unknown)).toMatchObject({ answerable: false })
+  expect(writes).toHaveLength(0)
 })

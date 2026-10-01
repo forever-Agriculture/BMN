@@ -1,6 +1,6 @@
 // MODULE: needs-you-popover.tsx - unresolved requests, unread sessions and recent request history under the header count
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import { stripFormatCharacters, type AttentionPrompt, type AttentionRecord } from '@bmn/protocol'
+import { stripFormatCharacters, manualChoiceQuestion, type AttentionPrompt, type AttentionPromptQuestion, type AttentionRecord } from '@bmn/protocol'
 import { attentionProvenance, expiryText, isActionableAttention, openAttentionGroups, relativeAge } from './session-presentation'
 
 export interface SessionPlace {
@@ -15,12 +15,12 @@ export interface UnreadEntry {
 }
 
 function QuestionChoices(props: {
-  prompt: Extract<AttentionPrompt, { type: 'questions' }>
+  questions: AttentionPromptQuestion[]
   feedback: string
   onCopy?: ((text: string) => Promise<void>) | undefined
 }): React.JSX.Element {
   const id = useId()
-  const [answers, setAnswers] = useState(() => props.prompt.questions.map(() => ({ selected: [] as number[], other: '', typed: false })))
+  const [answers, setAnswers] = useState(() => props.questions.map(() => ({ selected: [] as number[], other: '', typed: false })))
   const [copying, setCopying] = useState(false)
   const pendingCopy = useRef(false)
   const copyButton = useRef<HTMLButtonElement>(null)
@@ -30,7 +30,7 @@ function QuestionChoices(props: {
       copyButton.current?.scrollIntoView({ block: 'nearest' })
     }
   }, [copying, props.feedback])
-  const values = props.prompt.questions.map((question, index) => {
+  const values = props.questions.map((question, index) => {
     const answer = answers[index]!
     const selected = answer.selected.map((option) => question.options[option]!.label)
     if (answer.typed || question.options.length === 0) {
@@ -42,7 +42,7 @@ function QuestionChoices(props: {
   const ready = values.every((value) => value !== null)
   return (
     <div className="attention-question-choices">
-      {props.prompt.questions.map((question, index) => {
+      {props.questions.map((question, index) => {
         const answer = answers[index]!
         const update = (change: Partial<typeof answer>): void => {
           setAnswers((current) => current.map((value, row) => row === index ? { ...value, ...change } : value))
@@ -83,7 +83,7 @@ function QuestionChoices(props: {
         pendingCopy.current = true
         setCopying(true)
         const text = values.map((value, index) => values.length === 1 ? value!
-          : `${stripFormatCharacters(props.prompt.questions[index]!.text)}: ${value!}`).join('\n')
+          : `${stripFormatCharacters(props.questions[index]!.text)}: ${value!}`).join('\n')
         // The popover owns the outcome so it remains visible when this question is replaced.
         void props.onCopy(text).catch(() => undefined)
           .finally(() => { pendingCopy.current = false; setCopying(false) })
@@ -159,7 +159,8 @@ export function NeedsYouPopover(props: {
   }
 
   const kindLabel = (request: AttentionRecord): string =>
-    request.kind === 'notice' ? 'Update' : `${request.kind[0]!.toUpperCase()}${request.kind.slice(1)}`
+    request.manualChoices ? request.kind === 'permission' ? 'Manual decision' : 'Manual question'
+      : request.kind === 'notice' ? 'Update' : `${request.kind[0]!.toUpperCase()}${request.kind.slice(1)}`
 
   const attentionItem = (request: AttentionRecord): React.JSX.Element => {
     const actionable = isActionableAttention(request)
@@ -181,30 +182,33 @@ export function NeedsYouPopover(props: {
           <span className="attention-kind">{kindLabel(request)}</span>
           <span className="age">{expiry ? `${age} · ${expiry}` : age}</span>
         </div>
-        <h3>{destination ? `Handoff to ${destination.workspace} › ${destination.session}` : request.title}</h3>
+        {!(request.manualChoices || request.prompt?.type === 'questions' && request.prompt.questions.length === 1 &&
+          request.prompt.questions[0]!.text === request.title) ?
+          <h3>{destination ? `Handoff to ${destination.workspace} › ${destination.session}` : request.title}</h3> : null}
         {destination ? <p className="attention-destination">{destination.cwd}</p> : null}
-        {request.prompt?.type === 'questions' ? <QuestionChoices key={`${request.requestId}:${request.revision}`}
-          prompt={request.prompt} feedback={copyFeedbackFor === `${request.requestId}:${request.revision}` ? actionFeedback : ''}
+        {request.manualChoices || request.prompt?.type === 'questions' ? <QuestionChoices key={`${request.requestId}:${request.revision}`}
+          questions={request.manualChoices ? [manualChoiceQuestion(request.title, request.manualChoices)] : request.prompt?.type === 'questions' ? request.prompt.questions : []} feedback={copyFeedbackFor === `${request.requestId}:${request.revision}` ? actionFeedback : ''}
           onCopy={props.onCopyAnswer ? async (text) => {
             setCopyFeedbackFor(`${request.requestId}:${request.revision}`)
             setActionFeedback('')
             try {
               await props.onCopyAnswer!(request, text)
-              setActionFeedback('Answer copied. Paste it into the terminal.')
+              setActionFeedback('Answer copied; not submitted')
             } catch (error) {
               setActionFeedback(error instanceof Error ? error.message : 'Could not copy. Try again.')
               throw error
             }
           } : undefined} />
           : request.prompt ? <PermissionDetail prompt={request.prompt} /> : request.body ? <pre>{request.body}</pre> : null}
+        {request.manualChoices && request.body ? <pre>{request.body}</pre> : null}
         <p className="seen">
           {actionable
             ? request.seenAt
-              ? `Seen ${relativeAge(request.seenAt, props.now)} · still waiting for your response`
-              : 'Not seen yet · needs your response'
+              ? `Seen ${relativeAge(request.seenAt, props.now)} · awaiting answer`
+              : 'Unseen · awaiting answer'
             : request.seenAt
-              ? `Seen ${relativeAge(request.seenAt, props.now)} · informational update`
-              : 'Not seen yet · informational update'}
+              ? `Seen ${relativeAge(request.seenAt, props.now)} · update`
+              : 'Unseen · update'}
           {' · '}
           <span className="provenance">{attentionProvenance(request)}</span>
         </p>

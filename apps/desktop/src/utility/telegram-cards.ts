@@ -385,6 +385,36 @@ export function requestCard(header: CardHeader, record: Pick<AttentionRecord, 'k
   return { text: footnoted(`${base}\n\n<i>Reply to this message to answer.</i>`), keyboard: null, base }
 }
 
+/** Full labels/context are essential; descriptions and body alone may be shortened. */
+export function manualCardFits(title: string, labels: readonly string[], requestKey = ''): boolean {
+  return escapeHtml(title).length + escapeHtml(requestKey).length + labels.reduce((sum, label) => sum + escapeHtml(label).length + 12, 0) + 1000 <= 4096
+}
+
+export function manualChoiceCard(header: CardHeader, record: AttentionRecord,
+  tokens: string[] | null, other: string | null, typing: string | null, note: string | null): RenderedCard {
+  const choices = record.manualChoices!
+  const essential = [headerLine(record.kind === 'permission' ? '🔐' : '❓', header),
+    `<b>${escapeHtml(said(record.title))}</b>`,
+    `<i>Manual ${record.kind === 'permission' ? 'decision' : 'question'} · sends a message</i>`,
+    `<code>${escapeHtml(said(record.requestKey))}</code>`]
+  const detail = [record.body ?? '', ...choices.options.map(option => option.description ?? '')]
+  let cap = 500
+  const draw = (): string => [...essential, ...choices.options.map((option, index) =>
+    `${index + 1}. <b>${escapeHtml(said(option.label))}</b>${option.description ? ` — ${escapeHtml(clip(said(option.description), cap))}` : ''}`),
+    ...(record.body ? ['', escapeHtml(clip(said(record.body), cap))] : []),
+    ...(detail.some(text => [...text].length > cap) ? ['<i>Full text at laptop</i>'] : [])].join('\n')
+  const words = note ?? (tokens ? typing ? 'Reply to this card with your answer.' : 'Choose an option or Other.' : 'Nothing sent. Conversation not confirmed or phone answers unavailable; use the laptop.')
+  const trailer = escapeHtml(clip(words, 240))
+  let base = draw()
+  while (base.length + trailer.length + 12 > 4096 && cap > 0) { cap = Math.max(0, cap - 25); base = draw() }
+  const text = `${base}\n\n<i>${trailer}</i>`
+  const keyboard: InlineKeyboard | null = tokens === null ? null : typing
+    ? [[{ text: 'Options', callback_data: typing }]]
+    : [...choices.options.map((option, index) => [{ text: said(option.label), callback_data: tokens[index]! }]),
+      ...(other ? [[{ text: 'Other…', callback_data: other }]] : [])]
+  return { text, keyboard, base }
+}
+
 /** A notice: a finished turn reads as the agent finishing, anything else as a warning with its title. */
 export function noticeCard(
   header: CardHeader,

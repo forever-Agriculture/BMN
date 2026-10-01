@@ -50,6 +50,7 @@ Commands:
                                             link; it never checks the files or the claim, so
                                             attached evidence certifies nothing.
   ask <request-key> <title> [--kind K] [--body B | --body-file -] [--expires ISO]
+      [--choices-json JSON | --choices-file -]  Explicit 2–8 options; BMN adds Other.
                                             Ask for attention; kind is one of
                                             question|permission|review|notice (default question)
   withdraw <request-key>                    Withdraw an attention request
@@ -247,8 +248,8 @@ agent, and they do nothing outside BMN.
 | OpenCode main `session.created`, `tui.session.select`, `session.deleted` | Captures the conversation or clears the plugin's requests, including subagent requests on select/delete. These events from subagents are ignored |
 | `PostToolUse`, Claude `PostToolUseFailure`, `UserPromptSubmit` | Clears the turn notice. Claude resolves open prompts after a tool completes or fails. Codex resolves permission after any tool and resolves a question only after synchronous `request_user_input` or `UserPromptSubmit`; an async question stays open while later tools run. A `PostToolUse` resolve carries **evidence**: the chosen answers of the question tool in question order, or the tool and exact input that ran (see below) |
 | `Stop` | Withdraws open prompts and opens a `notice` that the turn finished, with the last message. Codex keeps a queued async question open until the owner submits input. When Claude still has background tasks or a scheduled wake-up, it opens nothing: the agent resumes without you |
-| `SessionStart` (not after compaction), `SessionEnd` | Withdraws everything the hook opened |
-| `SessionStart` with `startup`, `resume`, `clear` or `fork` | Also reports the conversation the process is now in, so Resume reopens that one |
+| `SessionEnd` | Retires requests attributable to that producer; ambiguous events leave them unavailable |
+| `SessionStart` with `startup`, `resume`, `clear` or `fork` | Reports current ownership; invalidates older controls without racing a new question. Separately reports the durable conversation for Resume |
 | Codex `Interrupt` | Withdraws open prompts |
 
 ### Cursor's terminal agent
@@ -741,7 +742,7 @@ Submission is not delivery
 
 bmn hook is not yours
   bmn hook <agent> is how BMN reads your harness's own hook events. Never run it by hand.
-  Claude/Codex: offer concise options; cards add Other. Default async remote answers are blocked.
+  Manual cards: ask ... --choices-json JSON. BMN adds Other; phone answers send ordinary messages.
   Cursor reports finished turns and resumes; its questions and permissions stay in its terminal.
   bmn hooks install asks Yes for target/diff (default No); scripts need --yes; direct edits remain.
 ```
@@ -801,3 +802,30 @@ bmn hook is not yours
 
 These checks separate sessions from each other inside the app. They are not a sandbox against a
 malicious program that already runs as your user and can read your files.
+
+Manual checkpoint cards need explicit choices; BMN does not infer buttons from prose:
+
+```sh
+bmn ask synthetic-checkpoint "Continue the synthetic check?" --choices-json \
+  '{"options":[{"label":"Continue","description":null},{"label":"Wait","description":"Keep it pending"}]}'
+```
+
+`--choices-file -` reads the same JSON from stdin, with only one stdin field per
+invocation. Choices apply only to question and permission asks. Other is automatic.
+Desktop Copy answer is clipboard-only (“Answer copied; not submitted”). Telegram
+taps/Other send a bounded ordinary message naming the request and decision to its
+freshly attributed foreground conversation, including agents launched in a shell.
+Without that stamp, the new route stays unavailable/draft-only. A manual permission
+needs **Answer permissions** enabled and conveys an owner decision as text; native
+Allow, Auto Review and command execution remain separate. No submitted/uncertain
+attempt is replayed. Text-only asks retain their existing behavior.
+
+Live question ownership is scoped to the foreground agent and current PTY incarnation,
+separate from durable Resume binding. Native Codex Default cards without observed
+identity retain their existing guarded ordinary-message route and show “Conversation
+not confirmed”; this cannot detect an unobserved switch. An observed switch, mismatch
+or ambiguous end disables stale controls. Reused IDs have bounded conservative
+lifecycle attribution: an ambiguous late end retains the request, refuses input and
+shows “Conversation unavailable”. A fresh question gets a new binding; old cards
+never revive. Actual producer ordering and the original withdrawal incident remain
+unverified until isolated configured-CLI trials pass.

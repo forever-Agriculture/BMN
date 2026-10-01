@@ -105,6 +105,7 @@ export interface RemoteAnswerDependencies {
   screen(sessionId: string, incarnationId: string): ScreenLike | undefined
   write(sessionId: string, bytes: Uint8Array): void
   answerPermissions(): Promise<boolean>
+  producerCurrent?(record: AttentionRecord): boolean
   /** Durable, idempotent ordinary message submission, revalidating the card immediately before input. */
   submitMessage?(record: AttentionRecord, request: AnswerRequest, text: string,
     current: () => boolean, markWritten: () => void): Promise<AnswerOutcome>
@@ -561,6 +562,7 @@ export class RemoteAnswers {
     const refused = (reason: AnswerRefusal): AnswerOutcome => ({ state: 'refused', reason })
     const record = await this.deps.getAttention(request.requestId)
     if (!record || record.state !== 'open') return refused('gone')
+    if (this.deps.producerCurrent && !this.deps.producerCurrent(record)) return refused('changed')
     if (record.incarnationId !== request.incarnationId ||
       this.deps.liveIncarnationId(record.sessionId) !== request.incarnationId) return refused('gone')
     if (record.revision !== request.revision || this.epochOf(record.requestId) !== request.epoch) return refused('changed')
@@ -574,6 +576,7 @@ export class RemoteAnswers {
       }
     }
     const current = (): boolean =>
+      (!this.deps.producerCurrent || this.deps.producerCurrent(record)) &&
       this.epochOf(record.requestId) === request.epoch &&
       this.deps.liveIncarnationId(record.sessionId) === request.incarnationId
     if (route === 'codex-message') {

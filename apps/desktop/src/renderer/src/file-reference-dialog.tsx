@@ -7,7 +7,9 @@ import { baseDescription, byteSize, previewLines } from './file-reference-presen
 
 /** Captured when the action starts: the session and its launch directory never follow later focus. */
 export interface FileReferenceRequest {
-  sessionId: string
+  sessionId?: string
+  workspaceId?: string
+  openedFromWorkspaceId?: string | null
   sessionName: string
   workspaceName: string
   /** Shown before the first read; the utility reports the directory it actually used. */
@@ -52,7 +54,7 @@ export function FileReferenceDialog(props: {
     setBusy(true)
     setError(null)
     setFeedback('')
-    window.aiTerminal.readFileReference({ sessionId: request.sessionId, reference, baseDirectory })
+    window.aiTerminal.readFileReference({ ...(request.workspaceId ? { workspaceId: request.workspaceId } : { sessionId: request.sessionId! }), reference, baseDirectory })
       .then((next) => {
         if (count === readCount.current) setResult(next)
       })
@@ -68,6 +70,7 @@ export function FileReferenceDialog(props: {
 
   useEffect(() => {
     if (request.openNow) read(request.reference, null)
+    return () => { readCount.current += 1 }
   }, [])
 
   useEffect(() => {
@@ -149,8 +152,8 @@ export function FileReferenceDialog(props: {
         <button type="submit" className="primary" disabled={busy}>Open</button>
       </form>
       <dl className="file-reference-meta">
-        <dt>Session</dt>
-        <dd>{request.sessionName} · {request.workspaceName}</dd>
+        <dt>{request.workspaceId ? 'Workspace' : 'Session'}</dt>
+        <dd>{request.workspaceId ? request.workspaceName : `${request.sessionName} · ${request.workspaceName}`}</dd>
         <dt>{shownBase.label}</dt>
         <dd>
           {shownBase.path ? <span className="mono">{shownBase.path}</span> : <span>no base folder needed</span>}
@@ -199,7 +202,7 @@ export function FileReferenceDialog(props: {
           )}
         </>
       ) : null}
-      {snapshot ? (
+      {snapshot && props.targets.length > 0 ? (
         <div className="file-reference-send">
           <label>Send to session
             <select aria-label="Send to session" disabled={busy} value={sendTarget?.sessionId ?? ''} onChange={(event) => {

@@ -8,6 +8,7 @@ const workspace = (workspaceId: string, name: string, marker: WorkspaceRecord['m
   workspaceId,
   name,
   defaultCwd: null,
+  pinnedFilePaths: [],
   position: 0,
   marker,
   archivedAt: null,

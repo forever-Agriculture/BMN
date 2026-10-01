@@ -196,7 +196,7 @@ export function WorkspaceResultsDialog(props: {
 
   return (
     <Dialog label={`Workspace results — ${props.workspace.name}`} onClose={props.onClose} className="workspace-results-dialog">
-      <p className="dialog-note">Latest reports by session and source; handoffs from BMN's bounded current draft list. Agent claims and attached files are not BMN verification. This is not history.</p>
+      <p className="dialog-note">Agent report: reported by the agent; BMN has not verified it. Current reports and handoffs; use History for earlier records.</p>
       <div className="workspace-results-toolbar">
         <button type="button" onClick={() => void load()}>Refresh results</button>
         {snapshot && state === 'ready' ? <span>Read {new Date(snapshot.checkedAt).toLocaleString()}</span> : null}
@@ -206,7 +206,7 @@ export function WorkspaceResultsDialog(props: {
       {error ? <p className="inline-error" role="alert">{error}</p> : null}
       {results ? (
         <>
-          <h3>Reports</h3>
+          <h3>Agent reports</h3>
           {results.sessions.length === 0 ? <p>No sessions in this workspace.</p> : (
             <ul className="workspace-results-sessions">
               {results.sessions.map(({ session, reports }) => (

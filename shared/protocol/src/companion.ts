@@ -1,6 +1,8 @@
 // MODULE: companion.ts - records, topics and settings for the host-side companion service
 import type { ModelOriginAgent, ModelOriginCountry } from './model-origin'
 import type { AttentionPrompt } from './attention-prompt'
+import type { AttentionProducerBinding } from './attention-producer'
+import type { ManualChoices } from './manual-choices'
 import type { SessionRecord, WorkspaceRecord } from './workspace'
 
 export type ArtifactDirection = 'input' | 'output'
@@ -84,6 +86,9 @@ export interface AttentionRecord {
   resolvedBy: AttentionOrigin | null
   /** The agent's own question or permission, as its hook reported it; null for plain requests. */
   prompt: AttentionPrompt | null
+  /** Absent/null on old records. Never reconstructed from historical resume metadata. */
+  producer?: AttentionProducerBinding | null
+  manualChoices?: ManualChoices | null
 }
 
 /**
@@ -742,6 +747,7 @@ export function telegramOwnerCue(
 
 /** One list, because a topic the validator does not know is a message the window never receives. */
 export const APP_EVENT_TOPICS = [
+  'catalogue',
   'artifacts',
   'attention',
   'progress',

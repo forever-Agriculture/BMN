@@ -288,6 +288,7 @@ describe('protocol surface', () => {
     workspaceId: 'workspace-1',
     name: 'Personal',
     defaultCwd: null,
+    pinnedFilePaths: [],
     position: 0,
     marker: 'none',
     archivedAt: null,

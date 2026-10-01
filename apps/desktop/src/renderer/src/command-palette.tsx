@@ -68,8 +68,12 @@ export function filterCommands(commands: readonly PaletteCommand[], query: strin
 }
 
 /** Async rows cannot replace a surviving selected command. Missing selections fall back to row one. */
-export function paletteSelectionIndex(results: readonly PaletteCommand[], selectedId: string | null): number {
-  return Math.max(0, results.findIndex(command => command.id === selectedId))
+export function paletteSelectionIndex(results: readonly PaletteCommand[], selectedId: string | null, previousIndex = 0, previousIds: readonly string[] = []): number {
+  const found = results.findIndex(command => command.id === selectedId)
+  if (found >= 0) return found
+  const removed = selectedId === null ? -1 : previousIds.indexOf(selectedId)
+  const next = removed < 0 ? undefined : previousIds.slice(removed + 1).find(id => results.some(row => row.id === id))
+  return next ? results.findIndex(row => row.id === next) : Math.max(0, Math.min(previousIndex, results.length - 1))
 }
 
 export function CommandPalette(props: {
@@ -79,6 +83,7 @@ export function CommandPalette(props: {
   label?: string
   searchLabel?: string
   placeholder?: string
+  emptyMessage?: string
   fileSearch?: {
     workspaceId: string
     sessionId: string | null
@@ -88,6 +93,8 @@ export function CommandPalette(props: {
 }): React.JSX.Element {
   const [query, setQuery] = useState('')
   const [activeId, setActiveId] = useState<string | null>(null)
+  const previousIndex = useRef(0)
+  const previousIds = useRef<string[]>([])
   const ownerId = useRef(crypto.randomUUID())
   const [fileResult, setFileResult] = useState<PaletteFileSearchSnapshot | null>(null)
   const [fileError, setFileError] = useState(false)
@@ -126,7 +133,9 @@ export function CommandPalette(props: {
       run: () => props.fileSearch?.open(file.path, fileResult?.sessionId ?? null)
     })) ?? [])
   ], [props.commands, query, matchingFiles, props.fileSearch, fileResult])
-  const activeIndex = paletteSelectionIndex(results, activeId)
+  const activeIndex = paletteSelectionIndex(results, activeId, previousIndex.current, previousIds.current)
+  previousIndex.current = activeIndex
+  previousIds.current = results.map(row => row.id)
   useEffect(() => {
     const selected = results[activeIndex]?.id ?? null
     if (selected !== activeId) setActiveId(selected)
@@ -167,7 +176,7 @@ export function CommandPalette(props: {
         }}
       />
       <ul id="palette-results" className="palette-results" role="listbox" aria-label="Results">
-        {results.length === 0 ? <li className="popover-empty">No matching results.</li> : null}
+        {results.length === 0 ? <li className="popover-empty">{props.emptyMessage ?? 'No matching results.'}</li> : null}
         {results.map((command, index) => {
           const heading = command.group !== lastGroup ? command.group : null
           lastGroup = command.group

@@ -929,7 +929,7 @@ describe('bmn hook', () => {
     ['claude', 'clear', {}],
     ['codex', 'resume', {}],
     ['codex', 'fork', {}]
-  ])('reports the conversation %s is in when SessionStart says %s, on top of the withdrawals', async (agent, source, extra) => {
+  ])('reports the conversation %s is in when SessionStart says %s, without racing a new question with withdrawals', async (agent, source, extra) => {
     const fixture = await cliFixture()
 
     const result = await runHook(fixture, agent, {
@@ -940,9 +940,7 @@ describe('bmn hook', () => {
     })
 
     expect(result).toEqual(QUIET)
-    expect(fixture.handlers.withdrawAttention.mock.calls.map(([params]) => params.requestKey)).toEqual([
-      `${agent}:permission`, `${agent}:question`, `${agent}:turn`
-    ])
+    expect(fixture.handlers.withdrawAttention).not.toHaveBeenCalled()
     expect(fixture.handlers.observeConversation).toHaveBeenCalledTimes(1)
     expect(fixture.handlers.observeConversation.mock.calls[0]?.[0]).toEqual({
       sessionId: 'session-1',
@@ -968,12 +966,10 @@ describe('bmn hook', () => {
 
     expect(result).toEqual(QUIET)
     expect(fixture.handlers.observeConversation).not.toHaveBeenCalled()
-    expect(fixture.handlers.withdrawAttention).toHaveBeenCalledTimes(
-      (event as { source?: string }).source === 'compact' ? 0 : 3
-    )
+    expect(fixture.handlers.withdrawAttention).not.toHaveBeenCalled()
   })
 
-  it('keeps the withdrawals when the app refuses the conversation it reported', async () => {
+  it('does not withdraw questions when the app refuses the conversation it reported', async () => {
     const fixture = await cliFixture()
     fixture.handlers.observeConversation.mockRejectedValue(
       new ControlError(ERROR_CODES.invalidArgument, 'conversationReference must be a UUID')
@@ -986,7 +982,7 @@ describe('bmn hook', () => {
     })
 
     expect(result).toEqual(QUIET)
-    expect(fixture.handlers.withdrawAttention).toHaveBeenCalledTimes(3)
+    expect(fixture.handlers.withdrawAttention).not.toHaveBeenCalled()
   })
 
   it('reports nothing from a nested agent, whose conversation is not the owner\'s', async () => {
@@ -2976,7 +2972,8 @@ describe('the hook event lists check and hook share', () => {
         const after = fixture.handlers.openAttention.mock.calls.length +
           fixture.handlers.withdrawAttention.mock.calls.length +
           fixture.handlers.resolveAttention.mock.calls.length
-        expect(after, `${agent} ${event} changed nothing in Needs you`).toBeGreaterThan(before)
+        if (event === 'SessionStart') expect(fixture.handlers.observeConversation).toHaveBeenCalled()
+        else expect(after, `${agent} ${event} changed nothing in Needs you`).toBeGreaterThan(before)
         expect(fixture.handlers.observeHookEvent, `${agent} ${event} was not logged`).toHaveBeenCalled()
       }
     }
@@ -4032,4 +4029,54 @@ exec /bin/cat "$@"
       expect(await runCli(['statusline', 'report'], { input: input(LIMITS) })).toEqual({ code: 0, stdout: '', stderr: '' })
     })
   })
+})
+
+describe('manual structured ask inputs', () => {
+  const choices = { options: [{ label: 'Proceed', description: null }, { label: 'Wait', description: 'Keep pending' }] }
+  it('accepts explicit JSON and one piped choices source through the real socket', async () => {
+    const fixture = await cliFixture()
+    expect((await runCli(['ask', 'json', 'Checkpoint', '--choices-json', JSON.stringify(choices)], { env: fixture.sessionEnv })).code).toBe(0)
+    expect(fixture.handlers.openAttention).toHaveBeenLastCalledWith(expect.objectContaining({ manualChoices: { ...choices, allowOther: true }, origin: 'cli' }))
+    expect((await runCli(['ask', 'piped', 'Decision', '--kind', 'permission', '--choices-file', '-'], { env: fixture.sessionEnv, input: JSON.stringify(choices) })).code).toBe(0)
+    expect(fixture.handlers.openAttention).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'permission', manualChoices: { ...choices, allowOther: true } }))
+  })
+  it.each([
+    ['--kind', 'notice', '--choices-json', JSON.stringify(choices)],
+    ['--choices-json', '{}'],
+    ['--choices-json', JSON.stringify({ ...choices, allowOther: false })],
+    ['--choices-json', JSON.stringify({ options: [choices.options[0], choices.options[0]] })],
+    ['--choices-json', '{'],
+    ['--choices-json', JSON.stringify(choices), '--choices-file', '-'],
+    ['--choices-file', '-', '--body-file', '-']
+  ])('rejects invalid/conflicting sources without creating a request: %s', async (...flags) => {
+    const fixture = await cliFixture()
+    expect((await runCli(['ask', 'invalid', 'Checkpoint', ...flags], { env: fixture.sessionEnv, input: JSON.stringify(choices) })).code).toBe(2)
+    expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
+  })
+})
+
+it('carries foreground conversation identity without SessionStart cleanup and on native mutations', async () => {
+  const fixture = await cliFixture()
+  const identity = { agentCli: 'codex', conversationReference: OBSERVED_REFERENCE }
+  expect(await runHook(fixture, 'codex', { hook_event_name: 'SessionStart', source: 'startup', session_id: OBSERVED_REFERENCE },
+    { ...HOLDS_TERMINAL, comm: 'codex' })).toEqual(QUIET)
+  expect(fixture.handlers.observeConversation).toHaveBeenCalled()
+  expect(fixture.handlers.withdrawAttention).not.toHaveBeenCalled()
+  expect(await runHook(fixture, 'codex', { hook_event_name: 'PreToolUse', session_id: OBSERVED_REFERENCE,
+    tool_name: 'functions.request_user_input_async', tool_input: { questions: [{ id: 'color', header: 'Color', question: 'Which?',
+      options: [{ label: 'Gold', description: 'Gold' }, { label: 'Black', description: 'Black' }] }] } },
+    { ...HOLDS_TERMINAL, comm: 'codex' })).toEqual(QUIET)
+  expect(fixture.handlers.openAttention).toHaveBeenCalledWith(expect.objectContaining({ producer: identity }))
+  expect(await runHook(fixture, 'codex', { hook_event_name: 'SessionEnd', session_id: OBSERVED_REFERENCE },
+    { ...HOLDS_TERMINAL, comm: 'codex' })).toEqual(QUIET)
+  expect(fixture.handlers.withdrawAttention).toHaveBeenLastCalledWith(expect.objectContaining({ producer: identity }))
+})
+
+
+it.each(['\u00ad', '\u061c', '\u2060'])('refuses a format-bearing manual option at the CLI before host mutation %s', async character => {
+  const fixture = await cliFixture()
+  const options = { options: [{ label: `Pro${character}ceed`, description: null }, { label: 'Wait', description: null }] }
+  const result = await runCli(['ask', 'format-choice', 'Synthetic', '--choices-json', JSON.stringify(options)], { env: fixture.sessionEnv })
+  expect(result.code).toBe(2)
+  expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
 })

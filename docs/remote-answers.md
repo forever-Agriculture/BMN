@@ -240,3 +240,26 @@ reaches it (a unit test reads the sources to keep it that way).
   `sent-unconfirmed`: never retried, and still upgraded to `confirmed` if the report comes within ten
   minutes. A Claude deny is always `sent-unconfirmed`, and BMN closes its request itself with
   "Deny sent from Telegram, not confirmed", because no hook will.
+
+
+## Explicit manual checkpoints (Epics 50–52)
+
+`bmn ask --choices-json '{"options":[{"label":"Proceed","description":null},{"label":"Wait","description":null}]}'`
+(or `--choices-file -`) stores separate manual choices, never a native prompt.
+Other is automatic. Phone options/Other send one addressed ordinary message;
+manual permission decisions additionally require `answerPermissions`. Direct text
+replies follow `autoSubmitReplies`, including ordinary follow-ups to completed cards
+without renewing a permission grant. Every manual write, including a follow-up,
+requires fresh current-incarnation Claude/Codex ownership; an unstamped shell target
+stays unavailable/draft-only. Desktop Copy answer is clipboard-only.
+
+The native Codex Default missing-ID compatibility route retains its prior guards
+and “Conversation not confirmed” label only before a switch/conflict or ambiguous
+lifecycle event. Reused identities fail closed for uncorrelated destruction.
+OpenCode native replies retain their existing exact plugin-request/epoch/incarnation
+contract; this does not enable unknown manual routes. Live producer metadata is
+excluded from agent control responses and copied backups.
+
+Source and isolated connector/real-PTY tests are separate evidence from configured
+CLI-producer continuation, installed-release and live-phone acceptance. The latter
+remain pending in this run; the original withdrawal incident cause is UNCONFIRMED.

@@ -67,3 +67,17 @@ describe('palette file search result address', () => {
     })).toBeNull()
   })
 })
+
+it('keeps a surviving highlight identity and uses the next remaining row after removal', () => {
+  const rows = ['a', 'b', 'c'].map(id => ({ id, label: id, group: 'Sessions' as const, run: () => {} }))
+  expect(paletteSelectionIndex(rows, 'b', 0)).toBe(1)
+  expect(paletteSelectionIndex([rows[0]!, rows[2]!], 'b', 1)).toBe(1)
+  expect(paletteSelectionIndex([], 'b', 1)).toBe(0)
+})
+
+
+it('full review preserves the next surviving identity after simultaneous highlight and preceding-row removal', () => {
+  const row = (id: string): PaletteCommand => ({ id, label: id, group: 'Sessions', run: () => {} })
+  const before = ['a', 'b', 'c', 'd'].map(row), after = before.slice(2)
+  expect(paletteSelectionIndex(after, 'b', 1, before.map(row => row.id))).toBe(0)
+})

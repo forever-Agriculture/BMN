@@ -347,7 +347,7 @@ export function FilesPanel(props: {
                     const artifactId = featured.artifactId
                     void run(`open:${artifactId}`, async () => {
                       await window.aiTerminal.openArtifact(artifactId)
-                      outcome(`open:${artifactId}`, 'The OS accepted the open request. The external application is not verified.')
+                      outcome(`open:${artifactId}`, 'Open requested')
                     }, 'Could not open the file')
                   }}
                 >
@@ -373,7 +373,7 @@ export function FilesPanel(props: {
                     const artifactId = featured.artifactId
                     void run(`show:${artifactId}`, async () => {
                       await window.aiTerminal.showArtifact(artifactId)
-                      outcome(`show:${artifactId}`, 'Requested Show in Folder from the OS. The external window is not verified.')
+                      outcome(`show:${artifactId}`, 'Show in Folder requested')
                     }, 'Could not show the file in its folder')
                   }}
                 >

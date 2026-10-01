@@ -17,7 +17,8 @@ import {
 import { HostControlError } from './session-manager'
 
 export interface FileReferenceReadRequest {
-  sessionId: string
+  sessionId?: string
+  workspaceId?: string
   reference: unknown
   baseDirectory: unknown
   /** Where the session's process was started, from the host; never the shell's current directory. */
@@ -89,7 +90,8 @@ export async function readFileReference(
       ? { kind: 'chosen-directory', path: chosen }
       : { kind: 'launch-directory', path: request.launchDirectory }
   const target: FileReferenceTarget = {
-    sessionId: request.sessionId,
+    sessionId: request.sessionId ?? null,
+    ...(request.workspaceId ? { workspaceId: request.workspaceId } : {}),
     reference: request.reference.trim(),
     line,
     column,

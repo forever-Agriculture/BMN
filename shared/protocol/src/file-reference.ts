@@ -30,8 +30,7 @@ export interface FileReferenceMatch {
   reference: FileReference
 }
 
-export interface FileReferenceReadParams {
-  sessionId: string
+export type FileReferenceReadParams = ({ sessionId: string; workspaceId?: never } | { workspaceId: string; sessionId?: never }) & {
   /** The reference as entered or linked; the utility parses it again. */
   reference: string
   /** A folder the owner chose for this opening; the session's launch directory otherwise. */
@@ -46,7 +45,8 @@ export interface FileReferenceBase {
 }
 
 export interface FileReferenceTarget {
-  sessionId: string
+  sessionId: string | null
+  workspaceId?: string
   reference: string
   line: number | null
   column: number | null

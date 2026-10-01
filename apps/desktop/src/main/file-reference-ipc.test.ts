@@ -134,3 +134,14 @@ describe('file-reference IPC', () => {
       .toBe('UNAUTHORIZED')
   })
 })
+
+it('addresses workspace previews exclusively through the owner window and retains shown-path guards', async () => {
+  const { handlers, requests, shown } = install()
+  const read = handlers.get('aiterm:file-reference:read')!
+  await read(allowed, { workspaceId: 'workspace-1', reference: '/project/AGENTS.md' })
+  expect(requests[0]!.params).toEqual({ workspaceId: 'workspace-1', reference: '/project/AGENTS.md', baseDirectory: null })
+  expect((await failure(() => read(allowed, { workspaceId: 'w', sessionId: 's', reference: '/x' }))).code).toBe('INVALID_ARGUMENT')
+  expect((await failure(() => read(stranger, { workspaceId: 'w', reference: '/x' }))).code).toBe('UNAUTHORIZED')
+  await handlers.get('aiterm:file-reference:show')!(allowed, { path: '/home/me/project/src/a.ts' })
+  expect(shown).toEqual(['/home/me/project/src/a.ts'])
+})

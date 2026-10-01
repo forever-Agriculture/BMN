@@ -582,5 +582,21 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
         reported_resume_json IS NULL OR json_valid(reported_resume_json)
       );
     `
+  },
+  {
+    version: 21,
+    sql: `ALTER TABLE attention_request ADD COLUMN producer_json TEXT NULL CHECK (
+      producer_json IS NULL OR json_valid(producer_json)
+    );`
+  },
+  {
+    version: 22,
+    sql: `ALTER TABLE attention_request ADD COLUMN manual_choices_json TEXT NULL CHECK (
+      manual_choices_json IS NULL OR json_valid(manual_choices_json)
+    );`
+  },
+  {
+    version: 23,
+    sql: `ALTER TABLE workspace ADD COLUMN pinned_file_paths_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(pinned_file_paths_json));`
   }
 ])

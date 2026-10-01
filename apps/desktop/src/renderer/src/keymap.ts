@@ -7,6 +7,7 @@ export type AppCommand =
   | 'session-next'
   | 'attention-next'
   | 'palette'
+  | 'recent-sessions'
   | 'copy'
   | 'paste'
   | 'select-all'
@@ -37,6 +38,7 @@ export const SHORTCUT_LABELS: Readonly<Record<AppCommand, string>> = Object.free
   'session-next': 'Ctrl Shift ↓',
   'attention-next': 'Ctrl Shift U',
   palette: 'Ctrl Shift P',
+  'recent-sessions': 'Ctrl Shift R',
   copy: 'Ctrl Shift C',
   paste: 'Ctrl V',
   'select-all': 'Ctrl Shift A',
@@ -58,6 +60,7 @@ const CTRL_SHIFT_CODES: Readonly<Record<string, AppCommand>> = Object.freeze({
   ArrowDown: 'session-next',
   KeyU: 'attention-next',
   KeyP: 'palette',
+  KeyR: 'recent-sessions',
   KeyC: 'copy',
   KeyV: 'paste',
   KeyA: 'select-all',

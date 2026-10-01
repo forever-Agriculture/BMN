@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { restoreArchive } from './archive-undo'
 import type { SessionRecord, WorkspaceRecord } from '@bmn/protocol'
 
-const workspace: WorkspaceRecord = { workspaceId: 'workspace', name: 'Saved work', defaultCwd: null, archivedAt: '2026-10-01', revision: 2, marker: 'none', position: 0 }
+const workspace: WorkspaceRecord = { workspaceId: 'workspace', name: 'Saved work', defaultCwd: null, pinnedFilePaths: [], archivedAt: '2026-10-01', revision: 2, marker: 'none', position: 0 }
 const session = { sessionId: 'session', workspaceId: 'workspace', name: 'Stopped', archivedAt: '2026-10-01', revision: 3 } as SessionRecord
 function api() {
   return { listWorkspaces: vi.fn().mockResolvedValue([workspace]), listSessions: vi.fn().mockResolvedValue([session]),

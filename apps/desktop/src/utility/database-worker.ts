@@ -48,7 +48,7 @@ import {
   updateSession,
   updateWorkspace
 } from './database-workspace-store'
-import { COMPANION_OPERATIONS, listReadyArtifacts, type CompanionOperationName } from './database-companion-store'
+import { COMPANION_OPERATIONS, listReadyArtifacts, scrubBackupProducerBindings, type CompanionOperationName } from './database-companion-store'
 
 type DatabaseConstructor = new (path: string, options?: { readonly?: boolean; fileMustExist?: boolean }) => DatabaseConnection
 
@@ -272,10 +272,14 @@ function handle(request: WorkerRequest): unknown {
         (params.incarnationIds as string[]) ?? [],
         requiredString(params, 'offeredAt')
       )
-    case 'backup-into':
+    case 'backup-into': {
       // VACUUM INTO writes a consistent snapshot and cannot run inside a transaction.
-      database.prepare('VACUUM INTO ?').run(requiredString(params, 'path'))
+      const path = requiredString(params, 'path')
+      database.prepare('VACUUM INTO ?').run(path)
+      const snapshot = new BetterSqlite3(path, { fileMustExist: true })
+      try { scrubBackupProducerBindings(snapshot) } finally { snapshot.close() }
       return null
+    }
     case 'backup-ready-artifacts': {
       const snapshot = new BetterSqlite3(requiredString(params, 'path'), { readonly: true, fileMustExist: true })
       try {

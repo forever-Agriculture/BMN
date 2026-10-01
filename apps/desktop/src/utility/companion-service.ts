@@ -10,6 +10,7 @@ import {
   HOOK_EVENT_LOG_LIMIT,
   isAttentionOrigin,
   hasDisallowedHandoffControl,
+  hasControlOrFormatCharacter,
   METHOD_REGISTRY,
   countryFlag,
   modelOrigin,
@@ -33,6 +34,8 @@ import {
   type ArtifactRecord,
   type AttentionEvidence,
   type AttentionPrompt,
+  type AttentionProducer,
+  type ManualChoices,
   type AttentionRecord,
   type BackupManifest,
   type BackupManifestEntry,
@@ -58,6 +61,7 @@ import {
 import { ArtifactFileError, ArtifactFileStore, type InstalledOriginal } from './artifact-files'
 import { ControlAuth, writeOwnerToken, type ControlScope } from './control-auth'
 import { HookEventHistory } from './hook-event-history'
+import { LiveProducers } from './live-producers'
 import { ControlError, ControlServer, type ReceiptRecord } from './control-server'
 import type { DatabaseWorkerClient } from './database-client'
 import type { ApplicationRoots } from './roots'
@@ -70,6 +74,7 @@ import { PAGE_AFTER_MS, createAttentionPager } from './attention-pager'
 import { RemoteAnswers, answerRoute, type AnswerOutcome, type AnswerRequest, type PluginAnswer } from './remote-answer'
 import { observeRepeat, REPEAT_NOTICE_AT, type RepeatState, type RepeatSegment } from './repeat-watch'
 import { TelegramCardKeeper } from './telegram-card-keeper'
+import { manualCardFits } from './telegram-cards'
 import { createScanMemory, procReader, scanSessionPorts, type ProcReader } from './listening-ports'
 import { PortWatch } from './port-watch'
 import { AGENT_HISTORY_STATE_KEY, AgentHistory, readHistoryState, type AgentHistoryAdapter } from './agent-history'
@@ -323,6 +328,9 @@ export class CompanionService {
    * suppression out of it would let 30 suppressed notices evict the hook and switch suppression off.
    */
   private readonly hookReporters = new Map<string, string>()
+  private readonly producers: LiveProducers
+  private readonly manualAnswerClaims = new Set<string>()
+  private readonly attentionChanges = new Map<string, { generation: number; pending: number }>()
   /**
    * The latest harness event each session's current run has actually reported, with its receipt
    * time. Kept apart from `hookEvents` because that log is bounded at 30 entries: terminal notices
@@ -421,9 +429,11 @@ export class CompanionService {
       log: (line) => process.stderr.write(line),
       changed: () => this.emit('settings', null)
     })
+    this.producers = new LiveProducers((sessionId) => options.manager.liveIncarnationId(sessionId))
     this.answers = new RemoteAnswers({
       getAttention: (requestId) => options.database.companion('getAttention', requestId).catch(() => null),
       liveIncarnationId: (sessionId) => options.manager.liveIncarnationId(sessionId),
+      producerCurrent: (record) => this.nativeProducerCurrent(record) && !this.requestExpired(record),
       screen: (sessionId, incarnationId) => options.manager.screenMirror(sessionId, incarnationId),
       write: (sessionId, bytes) => options.manager.writeToSession(sessionId, bytes),
       submitMessage: (record, request, text, current, markWritten) =>
@@ -486,10 +496,21 @@ export class CompanionService {
         listSessions: (scope) => this.controlCall(async () => this.listedSessions(scope)),
         publishArtifact: (p) => this.controlCall(() => this.publishArtifact(p)),
         reportProgress: (p) => this.controlCall(() => this.reportProgress(p)),
-        openAttention: (p) => this.controlCall(() => this.openAttention(p)),
+        openAttention: (p) => this.controlCall(async () => this.publicAttention(await this.openAttention(p))),
         prepareHandoff: (p) => this.controlCall(() => this.prepareAgentHandoff(p)),
         reportRefusal: (method, sessionId, reason) => this.logRefusal(method, sessionId, reason),
         observeConversation: (p) => this.controlCall(async () => {
+          if (p.agentCli === 'claude' || p.agentCli === 'codex') {
+            const previous = this.producers.stamp(p.sessionId, p.incarnationId)
+            const current = this.producers.observe(p.sessionId, p.incarnationId, {
+              agentCli: p.agentCli, conversationReference: p.conversationReference
+            })
+            if (current && current.generation !== previous?.generation) this.emit('attention', p.sessionId)
+          } else if (p.incarnationId === options.manager.liveIncarnationId(p.sessionId)) {
+            // Observing another supported harness is a conflict for the lightweight Claude/Codex stamp.
+            this.producers.unavailable(p.sessionId)
+            this.emit('attention', p.sessionId)
+          }
           const result = await options.manager.observeConversation(p)
           if (!result.accepted) this.logRefusal('conversation.observe', p.sessionId, result.detail)
           // The window loads a binding when the selection changes; a hook changes it at any time.
@@ -498,10 +519,10 @@ export class CompanionService {
         }),
         withdrawAttention: (p) => this.controlCall(() => p.requestKey.startsWith('handoff:')
           ? this.withdrawAgentHandoff(p.sessionId, p.requestKey.slice('handoff:'.length))
-          : this.closeAttentionByKey(p.sessionId, p.requestKey, 'withdrawn', null, p.origin ?? null, p.evidence)
+          : this.closeAttentionByKey(p.sessionId, p.requestKey, 'withdrawn', null, p.origin ?? null, p.evidence, p.producer).then(record => this.publicAttention(record))
         ),
         resolveAttention: (p) => this.controlCall(
-          () => this.closeAttentionByKey(p.sessionId, p.requestKey, 'answered', p.resolution, p.origin ?? null, p.evidence)
+          () => this.closeAttentionByKey(p.sessionId, p.requestKey, 'answered', p.resolution, p.origin ?? null, p.evidence, p.producer).then(record => this.publicAttention(record))
         ),
         takeAnswers: (p) => this.controlCall(
           async (): Promise<{ answers: PluginAnswer[] }> => ({ answers: await this.answers.take(p.sessionId, p.incarnationId, p.waitMs, p.report ?? undefined) })
@@ -773,10 +794,13 @@ export class CompanionService {
         }
         const origin = optionalText(params, 'origin')
         if (origin !== null && !isAttentionOrigin(origin)) invalid('The request origin is invalid')
-        const record = await database.companion(
+        const requestId = text(params, 'requestId')
+        const held = await database.companion('getAttention', requestId)
+        this.answers.hookReported(held.sessionId)
+        const record = await this.withAttentionChange(held.sessionId, () => database.companion(
           'closeAttention',
           {
-            requestId: text(params, 'requestId'),
+            requestId,
             ...(expectedKind !== undefined ? { expectedKind } : {}),
             ...(expectedRevision !== undefined ? { expectedRevision: Number(expectedRevision) } : {})
           },
@@ -784,7 +808,7 @@ export class CompanionService {
           optionalText(params, 'resolution') ?? 'Acknowledged in BMN',
           this.iso(),
           origin
-        )
+        ))
         this.emit('attention', record.sessionId)
         return record
       }
@@ -888,6 +912,9 @@ export class CompanionService {
     if (topic === 'attention') this.cards.changed(sessionId)
   }
 
+  /** Owner-window catalogue invalidation; no new agent socket capability. */
+  catalogueChanged(): void { this.emit('catalogue', null) }
+
   private async controlCall<Result>(operation: () => Promise<Result>): Promise<Result> {
     try {
       return await operation()
@@ -908,7 +935,7 @@ export class CompanionService {
     // memory here, follows the sessions that still exist.
     let removedHooks = false
     for (const map of [this.hookEvents, this.hookReporters, this.hookObservations, this.hookOrigins, this.hookCompactions,
-      this.usageReadings, this.codexUsageReads, this.terminalNotices, this.repeatStates]) {
+      this.usageReadings, this.codexUsageReads, this.terminalNotices, this.repeatStates, this.attentionChanges]) {
       for (const sessionId of map.keys()) {
         if (!this.knownSessions.has(sessionId)) {
           if (map === this.hookEvents) removedHooks = true
@@ -948,6 +975,12 @@ export class CompanionService {
     })
   }
 
+  private publicAttention(record: AttentionRecord): AttentionRecord {
+    const visible = { ...record }
+    delete visible.producer
+    return visible
+  }
+
   private async snapshot(scope: ControlScope): Promise<unknown> {
     await this.refreshHandoffStaleness()
     const sessions = await this.listedSessions(scope)
@@ -969,7 +1002,8 @@ export class CompanionService {
         process: session.lastProcess?.state ?? 'never-started',
         conversation: session.conversation
       })),
-      attention: attention.filter((request) => request.state === 'open' && visible.has(request.sessionId)),
+      attention: attention.filter((request) => request.state === 'open' && visible.has(request.sessionId))
+        .map(request => scope.kind === 'owner' ? request : this.publicAttention(request)),
       handoffs: scope.kind === 'owner'
         ? handoffs.filter((draft) => 'origin' in draft && draft.origin === 'handoff')
         : handoffs,
@@ -1061,7 +1095,18 @@ export class CompanionService {
     return { applied: result.applied, current: result.record }
   }
 
-  private async openAttention(p: {
+  private async withAttentionChange<Result>(sessionId: string, operation: () => Promise<Result>): Promise<Result> {
+    const held = this.attentionChanges.get(sessionId) ?? { generation: 0, pending: 0 }
+    this.attentionChanges.set(sessionId, held)
+    held.generation += 1; held.pending += 1
+    try { return await operation() } finally { held.pending -= 1 }
+  }
+
+  private openAttention(p: Parameters<CompanionService['openAttentionOnce']>[0]): ReturnType<CompanionService['openAttentionOnce']> {
+    return this.withAttentionChange(p.sessionId, () => this.openAttentionOnce(p))
+  }
+
+  private async openAttentionOnce(p: {
     sessionId: string
     incarnationId: string | null
     requestKey: string
@@ -1072,7 +1117,25 @@ export class CompanionService {
     phoneNotified?: boolean
     origin?: string
     prompt?: AttentionPrompt
+    producer?: AttentionProducer
+    manualChoices?: ManualChoices
   }): Promise<AttentionRecord & { changed: boolean }> {
+    if (p.manualChoices && !manualCardFits(p.title, p.manualChoices.options.map(option => option.label), p.requestKey)) {
+      throw new HostControlError(ERROR_CODES.invalidArgument, 'Choice labels and decision title do not fit a Telegram card')
+    }
+    const pluginPrompt = p.prompt?.harness === 'opencode'
+    if (pluginPrompt) this.producers.unavailable(p.sessionId)
+    const producer = pluginPrompt ? null : p.producer && p.origin?.endsWith(':PreToolUse')
+      ? this.producers.observe(p.sessionId, p.incarnationId, p.producer)
+      : this.producers.stamp(p.sessionId, p.incarnationId)
+    if (p.producer && producer && (p.producer.agentCli !== producer.agentCli ||
+      p.producer.conversationReference !== producer.conversationReference)) {
+      throw new HostControlError(ERROR_CODES.revisionConflict, 'This hook belongs to an earlier conversation')
+    }
+    if (producer && p.origin?.startsWith('hook:') && !p.origin.startsWith(`hook:${producer.agentCli}:`)) {
+      this.producers.unavailable(p.sessionId)
+      throw new HostControlError(ERROR_CODES.revisionConflict, 'Foreground producer not confirmed for this harness')
+    }
     // Before the store is touched: a card sent for the dialog as it was must not answer what comes next.
     this.answers.hookReported(p.sessionId)
     const record = await this.options.database.companion('openAttention', {
@@ -1084,7 +1147,9 @@ export class CompanionService {
       ...(p.body !== undefined ? { body: p.body } : {}),
       ...(p.expiresAt !== undefined ? { expiresAt: new Date(p.expiresAt).toISOString() } : {}),
       ...(p.origin !== undefined ? { origin: p.origin } : {}),
-      ...(p.prompt !== undefined ? { prompt: p.prompt } : {})
+      ...(p.prompt !== undefined ? { prompt: p.prompt } : {}),
+      ...(p.manualChoices !== undefined ? { manualChoices: p.manualChoices } : {}),
+      ...(producer ? { producer } : {})
     }, randomUUID(), this.iso())
     this.answers.track(record)
     this.emit('attention', p.sessionId)
@@ -1196,22 +1261,51 @@ export class CompanionService {
     })
   }
 
-  private async closeAttentionByKey(
+  private closeAttentionByKey(...args: Parameters<CompanionService['closeAttentionByKeyOnce']>): Promise<AttentionRecord> {
+    // Invalidate native claims before even the attribution read can yield.
+    this.answers.hookReported(args[0])
+    return this.withAttentionChange(args[0], () => this.closeAttentionByKeyOnce(...args))
+  }
+
+  private async closeAttentionByKeyOnce(
     sessionId: string,
     requestKey: string,
     state: 'answered' | 'withdrawn',
     resolution: string | null,
     origin: string | null = null,
-    evidence?: AttentionEvidence
+    evidence?: AttentionEvidence,
+    producer?: AttentionProducer
   ): Promise<AttentionRecord> {
-    this.answers.hookReported(sessionId)
+    const held = (await this.options.database.companion('listAttention')).find(
+      row => row.sessionId === sessionId && row.requestKey === requestKey && row.state === 'open')
+    if (!held && origin === 'cli' && state === 'withdrawn') {
+      const completed = (await this.options.database.companion('listAttention')).find(
+        row => row.sessionId === sessionId && row.requestKey === requestKey && row.state !== 'open' && row.manualChoices)
+      if (completed) return completed
+    }
+    const correlated = !!held?.prompt && !!evidence && (
+      !!evidence.requestRef && evidence.requestRef === held.prompt.requestRef ||
+      !!evidence.toolUseId && evidence.toolUseId === held.prompt.toolUseId)
+    // OpenCode/Cursor keep their existing exact-key hook cleanup. Their unbound legacy
+    // notices are independent of the lightweight Claude/Codex conversation slot.
+    const legacyHookCleanup = !!held && !held.producer && !held.manualChoices && (
+      held.prompt?.harness === 'opencode' && !!origin?.startsWith('hook:opencode:') ||
+      (['opencode', 'cursor'] as const).some(agent =>
+        origin?.startsWith(`hook:${agent}:`) && held.openedBy?.startsWith(`hook:${agent}:`)))
+    if (held && !legacyHookCleanup && origin?.startsWith('hook:') &&
+      !this.producers.canClose(held, producer, correlated, !!origin?.endsWith(':SessionEnd') || !!origin?.endsWith(':Interrupt'))) {
+      this.emit('attention', sessionId)
+      return Object.assign(held, { changed: false })
+    }
+    if (origin?.endsWith(':SessionEnd') || origin?.endsWith(':Interrupt')) this.producers.ended(sessionId, producer)
     // The harness reporting exactly the answer sent from the phone closes the request as the phone's.
     const remoteRequestId = evidence ? this.answers.evidence(sessionId, requestKey, evidence) : null
     const answeredRemotely = remoteRequestId !== null
     const record = await this.options.database.companion(
       'closeAttention',
       // A report about another request of the same slot (OpenCode's queued permissions) leaves this one open.
-      { sessionId, requestKey, ...(evidence?.requestRef ? { expectedRequestRef: evidence.requestRef } : {}) },
+      { sessionId, requestKey, ...(held ? { expectedRevision: held.revision, expectedProducer: held.producer ?? null } : {}),
+        ...(evidence?.requestRef ? { expectedRequestRef: evidence.requestRef } : {}) },
       answeredRemotely ? 'answered' : state,
       answeredRemotely ? REMOTE_ANSWER_RESOLUTION : resolution,
       this.iso(),
@@ -1236,6 +1330,8 @@ export class CompanionService {
    * socket method, owner route or CLI command reaches it, because agents can read the owner token.
    */
   async answerAttention(request: AnswerRequest): Promise<AnswerOutcome> {
+    const manual = await this.options.database.companion('getAttention', request.requestId).catch(() => null)
+    if (manual?.manualChoices) return this.answerManual(manual, request, false)
     const outcome = await this.answers.answer(request)
     if (outcome.state === 'submitted') {
       await this.clearSubmittedQuestionReminder(request.requestId, request.revision)
@@ -1254,6 +1350,44 @@ export class CompanionService {
       }
     }
     return outcome
+  }
+
+  private async answerManual(record: AttentionRecord, request: AnswerRequest, automatic: boolean): Promise<AnswerOutcome> {
+    if (this.requestExpired(record)) return { state: 'refused', reason: 'gone' }
+    if (!record.manualChoices || record.state !== 'open' || record.revision !== request.revision ||
+      record.incarnationId !== request.incarnationId || !this.producers.current(record, false)) {
+      return { state: 'refused', reason: 'changed' }
+    }
+    if (request.answer.type !== 'choices' || request.answer.choices.length !== 1) return { state: 'refused', reason: 'unsupported' }
+    const choice = request.answer.choices[0]!
+    const label = typeof choice === 'number' ? record.manualChoices.options[choice]?.label :
+      'typed' in choice && !('set' in choice) ? choice.typed : undefined
+    if (label === undefined || !label.trim() || label.length > 4000 || hasControlOrFormatCharacter(label)) {
+      return { state: 'refused', reason: 'unsupported' }
+    }
+    const key = `${record.requestId}:${record.revision}`
+    if (this.manualAnswerClaims.has(key)) return { state: 'refused', reason: 'claimed' }
+    this.manualAnswerClaims.add(key)
+    const generation = this.attentionChanges.get(record.sessionId)?.generation ?? 0
+    const current = (): boolean => {
+      const changes = this.attentionChanges.get(record.sessionId)
+      return this.producers.current(record, false) && (changes?.generation ?? 0) === generation && (changes?.pending ?? 0) === 0
+    }
+    let attempted = false
+    try {
+      const text = `Owner answer to ${JSON.stringify(record.requestKey)} (${JSON.stringify(record.title)}):\n${label}`
+      const outcome = await this.submitTelegramAnswerMessage(record, request, text,
+        current, () => { attempted = true }, automatic)
+      if (outcome.state === 'submitted') {
+        const closed = await this.options.database.companion('closeAttention',
+          { requestId: record.requestId, expectedRevision: record.revision, expectedProducer: record.producer ?? null },
+          'answered', `Submitted from Telegram: ${typeof choice === 'number' ? label : 'Other'}`, this.iso(), 'telegram').catch(() => null)
+        if (closed) this.emit('attention', closed.sessionId)
+      }
+      return outcome.state === 'submitted' ? { state: 'submitted', sent: [label] } : outcome
+    } catch {
+      return attempted ? { state: 'sent-unconfirmed', sent: [label] } : { state: 'refused', reason: 'unsupported' }
+    } finally { this.manualAnswerClaims.delete(key) }
   }
 
   /** A successful ordinary message clears only its reminder, without a native answer receipt. */
@@ -1280,51 +1414,86 @@ export class CompanionService {
   /** A Codex Default card sends an ordinary message, never picker keys or a consumption receipt. */
   private async submitTelegramAnswerMessage(
     attention: AttentionRecord, request: AnswerRequest, text: string,
-    current: () => boolean, markWritten: () => void
+    current: () => boolean, markWritten: () => void, automatic = false
   ): Promise<AnswerOutcome> {
     const refused = (reason: 'changed' | 'gone' | 'claimed' | 'unsupported'): AnswerOutcome => ({ state: 'refused', reason })
-    if (attention.kind !== 'question' || hasDisallowedHandoffControl(text) ||
+    if (!(attention.kind === 'question' || attention.kind === 'permission' && attention.manualChoices) || hasDisallowedHandoffControl(text) ||
       new TextEncoder().encode(text).byteLength > HANDOFF_PAYLOAD_BYTES) return refused('unsupported')
     const database = this.options.database
+    const availabilityEpoch = this.fileReferenceAvailabilityEpoch
     const { record } = await database.companion('createDraft', {
       draftId: randomUUID(), sessionId: attention.sessionId, origin: 'telegram',
       originKey: `telegram-answer:${attention.requestId}:${attention.revision}`, requestId: attention.requestId,
       text, artifactId: null, state: 'draft', detail: null
     }, this.iso())
     return this.withDraft(record.draftId, async () => {
-      const draft = await database.companion('getDraft', record.draftId)
+      let draft = await database.companion('getDraft', record.draftId)
       if (draft.state !== 'draft') return refused('claimed')
-      // Persist before input: a restart or ambiguous write cannot replay the message.
-      await database.companion('updateDraft', draft.draftId, 'uncertain', 'Message submission pending', this.iso())
-      const open = await database.companion('listAttention')
-      const latest = open.find(row => row.requestId === attention.requestId)
-      const nativeDialog = open.some(row => row.sessionId === attention.sessionId && row.state === 'open' &&
-        row.requestId !== attention.requestId && (row.kind === 'permission' || row.prompt !== null && answerRoute(row.prompt) !== 'codex-message'))
-      const reason = !latest || latest.state !== 'open' ? 'gone' :
-        latest.revision !== request.revision || !current() ? 'changed' : nativeDialog ? 'unsupported' : null
-      if (reason) {
-        await database.companion('updateDraft', draft.draftId, 'draft', 'Nothing submitted; card changed or a native dialog is open', this.iso())
-        return refused(reason)
+      if (draft.text !== text) draft = await database.companion('replaceDraftText', draft.draftId, draft.updatedAt, text, this.iso())
+      let written = false
+      try {
+        // Persist before input: a restart or ambiguous write cannot replay the message.
+        await database.companion('updateDraft', draft.draftId, 'uncertain', 'Message submission pending', this.iso())
+        const { attention: open, available, settings } = await database.companion('telegramMessageBoundary', attention.sessionId)
+        const latest = open.find(row => row.requestId === attention.requestId)
+        const nativeDialog = open.some(row => row.sessionId === attention.sessionId && row.state === 'open' &&
+          row.requestId !== attention.requestId && this.nativeMessageBlocker(row))
+        const policyOff = attention.manualChoices && (attention.kind === 'permission' && !settings.telegram.answerPermissions || automatic && !settings.telegram.autoSubmitReplies)
+        const reason = !latest || latest.state !== 'open' || this.requestExpired(latest) ? 'gone' :
+          latest.revision !== request.revision || !current() || !available ||
+            this.fileReferenceAvailabilityEpoch !== availabilityEpoch || this.fileReferenceAvailabilityChanges > 0 ? 'changed' : nativeDialog || policyOff ? 'unsupported' : null
+        if (reason) {
+          await database.companion('updateDraft', draft.draftId, 'draft', 'Nothing submitted; card changed or a native dialog is open', this.iso())
+          return refused(reason)
+        }
+        written = true
+        markWritten()
+        this.options.manager.writeToSession(attention.sessionId, bracketedPaste(draft.text!, true))
+        await database.companion('updateDraft', draft.draftId, 'submitted', 'Ordinary message submitted; native answer not confirmed', this.iso())
+        this.emit('drafts', attention.sessionId)
+        return { state: 'submitted', sent: [text] }
+      } catch (error) {
+        if (!written) await database.companion('updateDraft', draft.draftId, 'draft', 'Nothing submitted; preparation failed. Try again.', this.iso()).catch(() => undefined)
+        throw error
       }
-      markWritten()
-      this.options.manager.writeToSession(attention.sessionId, bracketedPaste(text, true))
-      await database.companion('updateDraft', draft.draftId, 'submitted', 'Ordinary message submitted; native answer not confirmed', this.iso())
-      this.emit('drafts', attention.sessionId)
-      return { state: 'submitted', sent: [text] }
     })
+  }
+
+  private nativeProducerCurrent(record: AttentionRecord): boolean {
+    return record.prompt?.harness === 'opencode'
+      ? record.incarnationId !== null && this.options.manager.liveIncarnationId(record.sessionId) === record.incarnationId
+      : this.producers.current(record)
   }
 
   /** Whether a tap could answer this request now, and whether it may offer Deny. */
   async answerability(record: AttentionRecord): Promise<
-    { answerable: true; deny: boolean } | { answerable: false; reason: 'unsupported' | 'permissions-off' }
+    { answerable: true; deny: boolean } | { answerable: false; reason: 'unsupported' | 'permissions-off'; detail?: string }
   > {
+    if (this.requestExpired(record)) return { answerable: false, reason: 'unsupported', detail: 'This request expired. Nothing sent.' }
+    if (record.manualChoices) {
+      if (!this.producers.current(record, false)) return { answerable: false, reason: 'unsupported', detail: record.producer ? 'Conversation unavailable. Nothing sent; use its current question at the laptop.' : 'Conversation not confirmed. Nothing sent; use the laptop.' }
+      const settings = await this.options.database.companion('getSettings')
+      if (record.state !== 'open' || !this.producers.current(record, false)) return { answerable: false, reason: 'unsupported' }
+      return record.kind === 'permission' && !settings.telegram.answerPermissions
+        ? { answerable: false, reason: 'permissions-off' } : { answerable: true, deny: false }
+    }
+    if (!this.nativeProducerCurrent(record)) return { answerable: false, reason: 'unsupported', detail: 'Conversation unavailable. Nothing sent; use its current question at the laptop.' }
     if (record.state !== 'open' || answerRoute(record.prompt) === null) return { answerable: false, reason: 'unsupported' }
     if (record.prompt?.type === 'permission') {
       const settings = await this.options.database.companion('getSettings')
       if (!settings.telegram.answerPermissions) return { answerable: false, reason: 'permissions-off' }
+      if (!this.nativeProducerCurrent(record)) return { answerable: false, reason: 'unsupported' }
       return { answerable: true, deny: this.answers.canDeny(record) }
     }
     return { answerable: true, deny: false }
+  }
+
+  private nativeMessageBlocker(record: AttentionRecord): boolean {
+    return !record.manualChoices && (record.prompt ? answerRoute(record.prompt) !== 'codex-message' : record.kind === 'permission')
+  }
+
+  private requestExpired(record: AttentionRecord): boolean {
+    return record.expiresAt !== null && Date.parse(record.expiresAt) <= this.now().getTime()
   }
 
   /** The repeat watch is the sole exception to the otherwise diagnostic hook log. */
@@ -2207,7 +2376,7 @@ export class CompanionService {
       createdAt,
       database: { file: 'state.sqlite3', ...(await sha256File(databaseFile)) },
       artifacts,
-      excluded: ['Telegram bot token', 'control socket credentials', 'saved terminal output', 'retained hook event history']
+      excluded: ['Telegram bot token', 'control socket credentials', 'saved terminal output', 'retained hook event history', 'live question producer bindings']
     }
     const manifestPath = join(directory, 'manifest.json')
     await writeFile(`${manifestPath}.tmp`, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 })
@@ -2439,7 +2608,28 @@ export class CompanionService {
       }).catch(() => undefined)
       return
     }
+    const manual = target.requestId ? await this.options.database.companion('getAttention', target.requestId).catch(() => null) : null
+    if (manual?.manualChoices && manual.state === 'open' && reply.text && !reply.file) {
+      if (target.revision !== manual.revision) {
+        await connector.sendMessage('Nothing sent. This card changed; use its latest controls or open the request at the laptop.',
+          { replyToMessageId: reply.messageId }).catch(() => undefined)
+        return
+      }
+      const policy = await this.options.database.companion('getSettings')
+      if (policy.telegram.autoSubmitReplies && (manual.kind !== 'permission' || policy.telegram.answerPermissions)) {
+        const outcome = await this.answerManual(manual, {
+          requestId: manual.requestId, revision: manual.revision, epoch: -1, incarnationId: target.incarnationId ?? '',
+          answer: { type: 'choices', choices: [{ typed: reply.text }] }
+        }, true)
+        await connector.sendMessage(outcome.state === 'submitted' ? 'Message submitted to the named conversation.' :
+          outcome.state === 'refused' ? 'Nothing sent. Review this card or its draft at the laptop.' : 'Submission uncertain. Check the laptop before retrying.',
+          { replyToMessageId: reply.messageId }).catch(() => undefined)
+        return
+      }
+    }
     const originKey = `telegram:${reply.updateId}`
+    const attentionGeneration = this.attentionChanges.get(target.sessionId)?.generation ?? 0
+    const availabilityEpoch = this.fileReferenceAvailabilityEpoch
     let artifactId: string | null = null
     if (reply.file) {
       const downloaded = await connector.downloadFile(reply.file.fileId, TELEGRAM_DOWNLOAD_BYTES)
@@ -2470,14 +2660,16 @@ export class CompanionService {
       ? await database.companion('getAttention', target.requestId).catch(() => undefined)
       : undefined
     const currentTarget =
+      (!request || !this.requestExpired(request) && request.state !== 'expired') &&
       live !== undefined &&
       target.incarnationId !== null &&
       live === target.incarnationId &&
       (request === undefined || (request.sessionId === target.sessionId &&
       (request.incarnationId === null || request.incarnationId === target.incarnationId)))
     // A typed line cannot pick an option in the agent's own dialog, so a reply to one stays a draft.
-    const structured = request?.state === 'open' && request.prompt !== null
+    const structured = request?.state === 'open' && (request.prompt !== null || !!request.manualChoices)
     const ordinaryCard = !request || request.kind === 'notice' || request.kind === 'handoff' ||
+      !!request.manualChoices && request.state !== 'open' ||
       request.kind === 'question' && request.state !== 'open' && request.prompt !== null ||
       request.prompt?.type === 'questions' && request.prompt.harness === 'codex' && request.prompt.shape === 'async-choice'
     if (settings.telegram.autoSubmitReplies && currentTarget && (ordinaryCard || request?.state === 'open' && !structured)) {
@@ -2486,10 +2678,16 @@ export class CompanionService {
         if (ordinaryCard) {
           await this.withDraft(record.draftId, async () => {
             await database.companion('updateDraft', record.draftId, 'uncertain', 'Message submission pending', this.iso())
-            const open = await database.companion('listAttention')
+            const boundary = await database.companion('telegramMessageBoundary', target.sessionId)
+            const open = boundary.attention
             if (this.options.manager.liveIncarnationId(target.sessionId) !== target.incarnationId ||
+              this.fileReferenceAvailabilityEpoch !== availabilityEpoch || this.fileReferenceAvailabilityChanges > 0 ||
+              (this.attentionChanges.get(target.sessionId)?.generation ?? 0) !== attentionGeneration ||
+              (this.attentionChanges.get(target.sessionId)?.pending ?? 0) > 0 ||
+              !boundary.settings.telegram.autoSubmitReplies || !boundary.available ||
+              request && !this.producers.current(request, !request.manualChoices) ||
               open.some(row => row.state === 'open' && row.sessionId === target.sessionId &&
-                (row.kind === 'permission' || row.prompt !== null && answerRoute(row.prompt) !== 'codex-message'))) {
+                this.nativeMessageBlocker(row))) {
               await database.companion('updateDraft', record.draftId, 'draft', 'Nothing submitted; session changed or a native dialog is open', this.iso())
               throw new HostControlError(ERROR_CODES.revisionConflict, 'Answer the current native dialog first')
             }

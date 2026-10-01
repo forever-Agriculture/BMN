@@ -22,7 +22,7 @@ const OPENCODE_REFERENCE = /^ses_[0-9a-f]{12}[A-Za-z0-9]{14}$/
 const ATTENTION_KINDS = ['question', 'permission', 'review', 'notice']
 const VALUE_OPTIONS = new Set([
   'name', 'session', 'key', 'source', 'detail', 'observed', 'kind', 'body', 'expires', 'socket', 'token-file', 'file', 'text', 'wait', 'reported',
-  'body-file', 'text-file', 'detail-file'
+  'body-file', 'text-file', 'detail-file', 'choices-json', 'choices-file'
 ])
 /**
  * Story 35.1: the one field each command can read from standard input instead of an argument, and the app's
@@ -76,6 +76,7 @@ Commands:
                                             link; it never checks the files or the claim, so
                                             attached evidence certifies nothing.
   ask <request-key> <title> [--kind K] [--body B | --body-file -] [--expires ISO]
+      [--choices-json JSON | --choices-file -]  Explicit 2–8 options; BMN adds Other.
                                             Ask for attention; kind is one of
                                             ${ATTENTION_KINDS.join('|')} (default question)
   withdraw <request-key>                    Withdraw an attention request
@@ -194,7 +195,7 @@ Submission is not delivery
 
 bmn hook is not yours
   bmn hook <agent> is how BMN reads your harness's own hook events. Never run it by hand.
-  Claude/Codex: offer concise options; cards add Other. Default async remote answers are blocked.
+  Manual cards: ask ... --choices-json JSON. BMN adds Other; phone answers send ordinary messages.
   Cursor reports finished turns and resumes; its questions and permissions stay in its terminal.
   bmn hooks install asks Yes for target/diff (default No); scripts need --yes; direct edits remain.`
 
@@ -214,6 +215,27 @@ class UsageError extends Error {}
 
 /** A refusal with a stable code; the shared config writer throws the same class. */
 const CliError = ConfigWriteError
+
+function cliManualChoices(json, kind, title, requestKey) {
+  const bad = () => { throw new UsageError('choices require a question/permission and 2–8 unique labels (1–200 characters), with null/0–500 character descriptions') }
+  let data
+  try { data = JSON.parse(json) } catch { return bad() }
+  if (!['question', 'permission'].includes(kind) || !isObject(data) || Object.keys(data).join() !== 'options' ||
+    !Array.isArray(data.options) || data.options.length < 2 || data.options.length > 8) return bad()
+  const labels = new Set()
+  const safe = value => typeof value === 'string' && !/[\u0000-\u001f\u007f-\u009f\p{Cf}]/u.test(value)
+  for (const option of data.options) {
+    if (!isObject(option) || Object.keys(option).length !== 2 || !Object.hasOwn(option, 'label') || !Object.hasOwn(option, 'description') ||
+      !safe(option.label) || !option.label.trim() || option.label.length > 200 || labels.has(option.label) ||
+      option.description !== null && (!safe(option.description) || option.description.length > 500)) return bad()
+    labels.add(option.label)
+  }
+  const escaped = value => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  if (data.options.reduce((sum, option) => sum + escaped(option.label).length + 12, 0) + escaped(title).length + escaped(requestKey).length + 1000 > 4096) {
+    throw new UsageError('Choice labels cannot fit a Telegram card; use shorter labels')
+  }
+  return data
+}
 
 function isObject(value) {
   return !!value && typeof value === 'object' && !Array.isArray(value)
@@ -276,7 +298,7 @@ const COMMANDS = {
   },
   ask: {
     args: ['request-key', 'title'],
-    options: ['kind', 'body', 'expires', 'session'],
+    options: ['kind', 'body', 'expires', 'session', 'choices-json'],
     build: ([requestKey, title], options) => {
       const kind = options.kind ?? 'question'
       if (!ATTENTION_KINDS.includes(kind)) {
@@ -289,6 +311,7 @@ const COMMANDS = {
           kind,
           title: requireNonEmpty(title, 'title'),
           origin: 'cli',
+          ...(options['choices-json'] === undefined ? {} : { manualChoices: cliManualChoices(options['choices-json'], kind, title, requestKey) }),
           ...(options.body === undefined ? {} : { body: options.body }),
           ...(options.expires === undefined ? {} : { expiresAt: options.expires })
         })
@@ -917,21 +940,26 @@ function hookRequests(agent, event) {
   const requestKey = (slot) => `${agent}:${slot}`
   // Every call this event makes carries the event that made it, so Needs you can say where a row came from.
   const origin = hookOrigin(agent, event.hook_event_name)
+  const producer = (agent === 'claude' || agent === 'codex') &&
+    (event.agent_id === undefined || event.agent_id === null) &&
+    typeof event.session_id === 'string' && CONVERSATION_REFERENCE.test(event.session_id)
+    ? { agentCli: agent, conversationReference: event.session_id.toLowerCase() } : undefined
+  const attribution = producer === undefined ? {} : { producer }
   const open = (slot, kind, title, body, prompt) => [{
     method: 'attention.open',
     params: {
-      requestKey: requestKey(slot), kind, title, origin,
+      requestKey: requestKey(slot), kind, title, origin, ...attribution,
       ...(body === undefined ? {} : { body }),
       ...(prompt === undefined ? {} : { prompt })
     }
   }]
   const withdraw = (...slots) => slots.map((slot) => ({
     method: 'attention.withdraw',
-    params: { requestKey: requestKey(slot), origin }
+    params: { requestKey: requestKey(slot), origin, ...attribution }
   }))
   const answered = (...slots) => slots.map((slot) => ({
     method: 'attention.resolve',
-    params: { requestKey: requestKey(slot), resolution: IN_TERMINAL, origin }
+    params: { requestKey: requestKey(slot), resolution: IN_TERMINAL, origin, ...attribution }
   }))
   // The harness's own report of the answer, so an answer sent from the phone can be confirmed.
   const proven = (calls, evidence) => calls.map((call) => ({ ...call, params: { ...call.params, evidence } }))
@@ -1063,8 +1091,8 @@ function hookRequests(agent, event) {
       // Compaction keeps the same conversation and the same open requests.
       if (event.source === 'compact') return []
       const observation = conversationObservation(agent, event)
-      const withdrawals = withdraw('permission', 'question', 'turn')
-      return observation ? [...withdrawals, observation] : withdrawals
+      // Ownership invalidates older controls. Separate generic withdrawals can race a new same-ID question.
+      return observation ? [observation] : []
     }
     case 'SessionEnd':
       return withdraw('permission', 'question', 'turn')
@@ -2290,6 +2318,13 @@ async function readPipedField(piped) {
 
 /** Replaces `--<field>-file -` with the text read from standard input, refusing a second source for the field. */
 async function takePipedField(command, parsed, positionals) {
+  if (command === 'ask' && parsed.options['choices-file'] !== undefined) {
+    if (parsed.options['body-file'] !== undefined || parsed.options['choices-json'] !== undefined || parsed.options['choices-file'] !== '-') {
+      throw new UsageError('choices take one source: --choices-json or --choices-file -; only one stdin source is allowed')
+    }
+    parsed.options['choices-json'] = await readPipedField({ option: 'choices-file', field: 'choices', limit: 24 * 1024, unit: 'bytes' })
+    delete parsed.options['choices-file']
+  }
   const piped = Object.hasOwn(PIPED_FIELDS, command) ? PIPED_FIELDS[command] : null
   if (piped === null || parsed.options[piped.option] === undefined) return positionals
   if (parsed.options[piped.option] !== '-') {

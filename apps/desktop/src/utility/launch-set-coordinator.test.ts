@@ -16,7 +16,7 @@ function set(): LaunchSetRecord {
 }
 
 const workspace = {
-  workspaceId: 'workspace-1', name: 'Project', defaultCwd: '/tmp', marker: 'none', position: 0,
+  workspaceId: 'workspace-1', name: 'Project', defaultCwd: '/tmp', pinnedFilePaths: [], marker: 'none', position: 0,
   archivedAt: null, revision: 1
 } satisfies WorkspaceRecord
 

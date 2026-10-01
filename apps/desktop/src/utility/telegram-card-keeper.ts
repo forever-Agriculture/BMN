@@ -1,6 +1,11 @@
 // MODULE: telegram-card-keeper.ts - keeps each Telegram card true to its request: sends, edits in place, taps and outcomes (Story 30.3)
 import { randomBytes } from 'node:crypto'
-import type { AttentionQuestionsPrompt, AttentionRecord } from '@bmn/protocol'
+import { hasControlOrFormatCharacter, manualChoiceQuestion, type AttentionQuestionsPrompt, type AttentionRecord } from '@bmn/protocol'
+
+function questionsFor(record: AttentionRecord | null): Pick<AttentionQuestionsPrompt, 'questions'> | null {
+  return record?.manualChoices ? { questions: [manualChoiceQuestion(record.title, record.manualChoices)] }
+    : record?.prompt?.type === 'questions' ? record.prompt : null
+}
 import type { TelegramCardData, TelegramCardRecord, TelegramCardState } from './database-companion-store'
 import {
   cleanTypedAnswer,
@@ -23,6 +28,7 @@ import {
   questionCard,
   REFUSAL_WORDS,
   requestCard,
+  manualChoiceCard,
   said,
   type CardEnding,
   type CardHeader,
@@ -39,7 +45,7 @@ export interface CardConnector {
 
 export type Answerability =
   | { answerable: true; deny: boolean }
-  | { answerable: false; reason: 'unsupported' | 'permissions-off' }
+  | { answerable: false; reason: 'unsupported' | 'permissions-off'; detail?: string }
 
 export interface CardKeeperDependencies {
   /** The polling connector, or undefined while Telegram is off or not connected. */
@@ -109,6 +115,7 @@ interface LiveCard {
   format: TelegramCardData['format']
   base: string
   permission: boolean
+  manual?: boolean
   progress: Progress
   /** Whether the card as drawn offers Other…, so a reply to it is a typed answer or refused. */
   offersOther: boolean
@@ -210,12 +217,13 @@ export class TelegramCardKeeper {
       format = 'plain'
       const fallback = plainFallback(composed.rendered.text, composed.state === 'buttons')
       try {
-        messageId = (await connector.sendMessage(fallback)).messageId
+        messageId = (await connector.sendMessage(record.manualChoices ? plainText(composed.rendered.text) : fallback,
+          record.manualChoices ? { keyboard: composed.rendered.keyboard } : undefined)).messageId
       } catch {
         return true
       }
     }
-    const state = format === 'plain' ? 'open' : composed.state
+    const state = format === 'plain' && !record.manualChoices ? 'open' : composed.state
     const card: LiveCard = {
       messageId,
       sessionId: record.sessionId,
@@ -227,6 +235,7 @@ export class TelegramCardKeeper {
       format,
       base: composed.rendered.base,
       permission: record.prompt?.type === 'permission',
+      manual: !!record.manualChoices,
       progress: { ...START },
       offersOther: state === 'buttons' && composed.offersOther,
       offeredOther: state === 'buttons' && composed.offersOther,
@@ -315,8 +324,8 @@ export class TelegramCardKeeper {
       return
     }
     const record = await this.deps.getAttention(card.requestId).catch(() => null)
-    const prompt = record?.prompt
-    if (!record || record.revision !== binding.revision || prompt?.type !== 'questions' || action.step !== card.progress.step) {
+    const prompt = questionsFor(record)
+    if (!record || record.revision !== binding.revision || !prompt || action.step !== card.progress.step) {
       await connector.answerCallbackQuery(tap.callbackId, 'This button is no longer active.').catch(() => undefined)
       await this.enqueue(card, () => this.refreshCard(card))
       return
@@ -386,7 +395,7 @@ export class TelegramCardKeeper {
     }
     if (!card.progress.typing) {
       const record = await this.deps.getAttention(card.requestId).catch(() => null)
-      if (record?.prompt?.harness === 'codex' && record.prompt.shape === 'async-choice') return false
+      if (record?.manualChoices || record?.prompt?.harness === 'codex' && record.prompt.shape === 'async-choice') return false
       await answer('Tap Other… first, then reply with your answer.')
       return true
     }
@@ -394,15 +403,21 @@ export class TelegramCardKeeper {
       await answer('Nothing submitted: use a text reply without an attachment.')
       return true
     }
-    const typed = cleanTypedAnswer(reply.text ?? '')
+    const source = reply.text ?? ''
+    const currentRecord = await this.deps.getAttention(card.requestId).catch(() => null)
+    if (currentRecord?.manualChoices && (source.length > 4000 || hasControlOrFormatCharacter(source) || !source.trim())) {
+      await answer('Nothing sent. Use 1–4000 characters without controls.')
+      return true
+    }
+    const typed = currentRecord?.manualChoices ? source : cleanTypedAnswer(source)
     if (typed === '') {
       await answer('Reply with your answer as text.')
       return true
     }
     const binding: Binding = { revision: card.revision, epoch: card.epoch, incarnationId: card.incarnationId }
     const record = await this.deps.getAttention(card.requestId).catch(() => null)
-    const prompt = record?.prompt
-    if (!record || record.state !== 'open' || record.revision !== binding.revision || prompt?.type !== 'questions') {
+    const prompt = questionsFor(record)
+    if (!record || record.state !== 'open' || record.revision !== binding.revision || !prompt) {
       await answer(record?.state === 'open' ? REFUSAL_WORDS.changed : REFUSAL_WORDS.gone)
       await this.enqueue(card, () => this.refreshCard(card))
       return true
@@ -421,7 +436,7 @@ export class TelegramCardKeeper {
   private async advance(
     card: LiveCard,
     record: AttentionRecord,
-    prompt: AttentionQuestionsPrompt,
+    prompt: Pick<AttentionQuestionsPrompt, 'questions'>,
     binding: Binding,
     callbackId: string | null
   ): Promise<void> {
@@ -567,12 +582,26 @@ export class TelegramCardKeeper {
   ): Promise<Composed> {
     const header = this.deps.header(record.sessionId, record)
     const prompt = record.prompt
+    if (!note && prompt?.harness === 'codex' && prompt.shape === 'async-choice' && !record.producer) note = 'Conversation not confirmed'
     const none: Omit<Composed, 'rendered'> = { state: 'open', actions: [], offersOther: false }
+    if (record.manualChoices) {
+      const ability = await this.deps.answerability(record)
+      const active = ability.answerable && record.incarnationId !== null && record.incarnationId === this.deps.liveIncarnationId(record.sessionId)
+      const tokens = active ? record.manualChoices.options.map(() => this.newToken()) : null
+      const other = active && !progress.typing ? this.newToken() : null
+      const typing = active && progress.typing ? this.newToken() : null
+      const actions: TapAction[] = !active ? [] : typing ? [{ type: 'options', step: 0 }]
+        : [...record.manualChoices.options.map((_, index): TapAction => ({ type: 'choice', step: 0, index })), { type: 'other', step: 0 }]
+      return { state: active ? 'buttons' : 'open', actions, offersOther: active,
+        rendered: manualChoiceCard(header, record, tokens, other, typing, note ?? (!ability.answerable
+          ? ability.detail ?? (ability.reason === 'permissions-off' ? 'Phone permission answers are off. Use the laptop.' : null) : null)) }
+    }
     if (!prompt) {
       if (record.kind === 'notice' && this.deps.acknowledge) return this.composeNotice(record, note)
       return { ...none, rendered: record.kind === 'notice' ? noticeCard(header, record) : requestCard(header, record) }
     }
     const answerability = await this.deps.answerability(record)
+    if (!answerability.answerable && answerability.detail) note = answerability.detail
     const bound = (epoch ?? this.deps.answerEpoch(record.requestId)) !== null &&
       (record.incarnationId ?? this.deps.liveIncarnationId(record.sessionId)) !== undefined
     const answerable = answerability.answerable && bound
@@ -676,10 +705,12 @@ export class TelegramCardKeeper {
         card.format = 'plain'
       }
     }
-    card.state = 'open'
-    card.offersOther = false
-    await connector.editMessageText(card.messageId, plainFallback(composed.rendered.text, composed.state === 'buttons'))
+    card.state = card.manual ? composed.state : 'open'
+    card.offersOther = !!card.manual && composed.offersOther
+    await connector.editMessageText(card.messageId, card.manual ? plainText(composed.rendered.text) : plainFallback(composed.rendered.text, composed.state === 'buttons'),
+      card.manual ? { keyboard: composed.rendered.keyboard } : undefined)
     drawn()
+    if (card.manual && composed.state === 'buttons') this.mint(card, composed, binding)
     await this.save(card)
   }
 
@@ -749,7 +780,9 @@ export class TelegramCardKeeper {
       await this.finish(card, ending)
       return
     }
-    if (record.revision === card.revision && (card.state === 'open' || card.tokens.length > 0)) return
+    if (record.revision === card.revision && card.tokens.length > 0 &&
+      this.deps.answerEpoch(record.requestId) === card.epoch && (await this.deps.answerability(record)).answerable) return
+    if (!record.manualChoices && !record.producer && record.revision === card.revision && card.state === 'open') return
     // The old buttons die now, before the new card is composed or sent.
     this.revoke(card)
     card.progress = { ...START }

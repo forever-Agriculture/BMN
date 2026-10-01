@@ -77,11 +77,13 @@ export function installFileReferenceIpcHandlers(ipc: FileReferenceIpcRegistrar, 
 
   handle('aiterm:file-reference:read', (event, params) => {
     const input = objectParams(params)
+    if ((input.sessionId !== undefined) === (input.workspaceId !== undefined)) invalid('Choose exactly one source session or workspace')
     const baseDirectory = input.baseDirectory
     if (baseDirectory !== undefined && baseDirectory !== null) boundedText(baseDirectory, 'The chosen folder')
     // Only the three known fields cross to the utility, which parses and checks all of them again.
     return actions.client().request<FileReferenceReadResult>(METHOD_REGISTRY.fileReferenceRead, {
-      sessionId: boundedText(input.sessionId, 'The source session'),
+      ...(input.workspaceId === undefined ? { sessionId: boundedText(input.sessionId, 'The source session') }
+        : { workspaceId: boundedText(input.workspaceId, 'The source workspace') }),
       reference: boundedText(input.reference, 'The file reference'),
       baseDirectory: baseDirectory ?? null
     }).then((result) => {

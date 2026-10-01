@@ -86,6 +86,7 @@ function setup(options: {
   acknowledge?: (record: AttentionRecord) => Promise<void>
   stored?: TelegramCardRecord[]
   retryMs?: number[]
+  epoch?: number | null
 } = {}) {
   const connector = new FakeConnector()
   const state = { record: options.record === undefined ? record(QUESTION) : options.record, connected: true }
@@ -100,7 +101,7 @@ function setup(options: {
     getAttention: async () => state.record,
     header: () => ({ session: 'api', agent: 'claude', flag: null }),
     answerability: async () => options.answerability ?? { answerable: true, deny: true },
-    answerEpoch: () => 4,
+    answerEpoch: () => options.epoch === undefined ? 4 : options.epoch,
     liveIncarnationId: () => 'i1',
     answer: async (request) => {
       answers.push(request)
@@ -791,4 +792,46 @@ describe('multi-select, Other… and Back (Epic 31)', () => {
     await settle()
     expect(h.answers).toEqual([expect.objectContaining({ answer: { type: 'choices', choices: [0, 1] } })])
   })
+})
+
+describe('manual choice cards without native epochs', () => {
+  const manual = () => record(null, { manualChoices: { options: [{ label: 'Proceed', description: null }, { label: 'Wait', description: 'Keep pending' }], allowOther: true } })
+  it('offers exact options and Other, submits once, and leaves direct replies to preference routing', async () => {
+    const h = setup({ record: manual(), epoch: null })
+    await h.keeper.page(h.state.record!)
+    expect(h.connector.sends[0]!.options.keyboard!.flat().map(button => button.text)).toEqual(['Proceed', 'Wait', 'Other…'])
+    expect(await h.keeper.typedReply({ updateId: 1, chatId: 1, fromUserId: 1, messageId: 200, replyToMessageId: 100, text: 'direct', file: null })).toBe(false)
+    const token = h.connector.buttons()[0]!
+    await Promise.all([h.keeper.tap(h.tap(token)), h.keeper.tap(h.tap(token))]); await settle()
+    expect(h.answers).toHaveLength(1); expect(h.answers[0]!.answer).toEqual({ type: 'choices', choices: [0] })
+    h.keeper.dispose()
+  })
+  it('preserves a usable keyboard on formatting fallback and full labels with maximal description/body text', async () => {
+    const request = manual()
+    request.manualChoices!.options = Array.from({ length: 8 }, (_, index) => ({ label: `${index}${'L'.repeat(199)}`, description: 'D'.repeat(500) }))
+    request.body = 'B'.repeat(8000)
+    const h = setup({ record: request, epoch: null })
+    h.connector.refuseHtml = true
+    await h.keeper.page(request)
+    expect(h.connector.sends[0]!.text.length).toBeLessThanOrEqual(4096)
+    expect(h.connector.buttons()).toHaveLength(9)
+    for (const option of request.manualChoices!.options) expect(h.connector.sends[0]!.text).toContain(option.label)
+    expect(h.connector.sends[0]!.text).toContain('Full text at laptop')
+    h.keeper.dispose()
+  })
+})
+
+
+it.each([false, true])('full review masks manual request keys/options through send, keyboard, edits and fallback=%s', async fallback => {
+  const secret = 'sk-ant-api03-' + 'SyntheticKeyForTests_0123456789'
+  const h = setup({ record: record(null, { requestKey: `request-${secret}`, manualChoices: { options: [
+    { label: `Keep ${secret}`, description: null }, { label: 'Wait', description: null }], allowOther: true } }), epoch: null,
+    answer: async () => ({ state: 'submitted', sent: [`Keep ${secret}`] }) })
+  h.connector.refuseHtml = fallback
+  await h.keeper.page(h.state.record!)
+  expect(JSON.stringify(h.connector.sends).includes(secret)).toBe(false)
+  await h.keeper.tap(h.tap(h.connector.buttons()[0]!)); await settle()
+  expect(h.answers.map(answer => answer.answer)).toEqual([{ type: 'choices', choices: [0] }])
+  expect(JSON.stringify([h.connector.sends, h.connector.edits, h.connector.toasts]).includes(secret)).toBe(false)
+  h.keeper.dispose()
 })

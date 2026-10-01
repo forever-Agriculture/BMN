@@ -38,6 +38,8 @@ import './styles.css'
 import { checkSixelRenderer } from './terminal-images'
 import { failureDetail, sessionFailureDetail } from './bridge-error'
 import { CommandPalette, paletteFileSearchRootLabel, type PaletteCommand } from './command-palette'
+import { rememberRecentSession } from './recent-sessions'
+import { WorkspacePinsDialog } from './workspace-pins-dialog'
 import { restoreArchive, type ArchiveUndoTarget } from './archive-undo'
 import { conversationBindingPresentation, reportedResumeLine, resumeAvailable } from './conversation-resume'
 import { FileReferenceDialog, type FileReferenceRequest, type FileReferenceSendTarget } from './file-reference-dialog'
@@ -159,6 +161,8 @@ import {
 
 type ShellDialog =
   | { kind: 'palette' }
+  | { kind: 'recent-sessions'; sessionIds: string[] }
+  | { kind: 'workspace-pins'; workspaceId: string; openedFromWorkspaceId: string | null }
   /** Chooses the session for a second pane beside `sessionId`. */
   | { kind: 'split-picker'; sessionId: string | null }
   | { kind: 'preferences'; section?: 'agent-control' }
@@ -256,6 +260,8 @@ function App(): React.JSX.Element {
   /** Its own state, not a ShellDialog: a close question must not replace work the owner has open. */
   const [closePrompt, setClosePrompt] = useState<ClosePromptRequest | null>(null)
   const [needsYouOpen, setNeedsYouOpen] = useState(false)
+  const recentSessions = useRef<string[]>([])
+  const catalogueReadSequence = useRef(0)
   const [armed, setArmed] = useState(false)
   const [dragRatio, setDragRatio] = useState<number | null>(null)
   const [now, setNow] = useState(() => Date.now())
@@ -313,7 +319,12 @@ function App(): React.JSX.Element {
   const activeWorkspace = workspaces.find((item) => item.workspaceId === activeWorkspaceId)
   useEffect(() => {
     if (dialog?.kind === 'workspace-results' && dialog.openedFromWorkspaceId !== activeWorkspaceId) setDialog(null)
-  }, [activeWorkspaceId, dialog])
+    if (dialog?.kind === 'workspace-pins' && (dialog.openedFromWorkspaceId !== activeWorkspaceId ||
+      !workspaces.some(workspace => workspace.workspaceId === dialog.workspaceId && workspace.archivedAt === null))) setDialog(null)
+    if (dialog?.kind === 'file-reference' && dialog.request.workspaceId &&
+      (dialog.request.openedFromWorkspaceId !== activeWorkspaceId ||
+        !workspaces.some(workspace => workspace.workspaceId === dialog.request.workspaceId && workspace.archivedAt === null))) setDialog(null)
+  }, [activeWorkspaceId, dialog, workspaces])
   const layout = activeWorkspaceId ? layouts[activeWorkspaceId] : undefined
   const selectedSessionId = layout?.selectedSessionId ?? null
   const activeSessions = useMemo(
@@ -490,6 +501,14 @@ function App(): React.JSX.Element {
   }
 
   const refresh = {
+    catalogue: async () => {
+      const sequence = ++catalogueReadSequence.current
+      const workspaces = await window.aiTerminal.listWorkspaces(true)
+      const sessions = (await Promise.all(workspaces.map(workspace => window.aiTerminal.listSessions(workspace.workspaceId)))).flat()
+      if (sequence !== catalogueReadSequence.current) return
+      setWorkspaces(workspaces)
+      setSessions(sessions)
+    },
     artifacts: () => window.aiTerminal.listArtifacts(null).then(setArtifacts),
     attention: () => window.aiTerminal.listAttention().then(setAttention),
     progress: () => window.aiTerminal.listProgress().then(setProgress),
@@ -709,6 +728,7 @@ function App(): React.JSX.Element {
 
   const applyTreeSessionAction = (action: TreeSessionAction | null): void => {
     if (!action) return
+    recentSessions.current = rememberRecentSession(recentSessions.current, action.sessionId)
     setTree(action.tree)
     writer.apply(action.workspaceId, action.change)
   }
@@ -729,9 +749,6 @@ function App(): React.JSX.Element {
       brief('That session is unavailable. Refreshing attention items.')
       return false
     }
-    setTree((current) => current.expandedWorkspaceIds.has(record.workspaceId)
-      ? current
-      : toggleWorkspaceExpanded(current, record.workspaceId))
     applyTreeSessionAction(selectTreeSession(sessionsRef.current, sessionId))
     setNeedsYouOpen(false)
     requestAnimationFrame(() => controllers.current.get(sessionId)?.focus())
@@ -1157,6 +1174,7 @@ function App(): React.JSX.Element {
   /** Selects a pane in the active composition without navigating to that session's own workspace. */
   const focusLayoutSession = (sessionId: string): void => {
     if (!activeWorkspaceId || !layout?.split.panes.some((pane) => pane.sessionId === sessionId)) return
+    recentSessions.current = rememberRecentSession(recentSessions.current, sessionId)
     writer.apply(activeWorkspaceId, (state) => selectLayoutSession(state, sessionId, allSessionIds))
     clearUnread(sessionId)
     requestAnimationFrame(() => controllers.current.get(sessionId)?.focus())
@@ -1282,6 +1300,7 @@ function App(): React.JSX.Element {
       }
       case 'attention-next': return nextNeedingYou()
       case 'palette': return setDialog({ kind: 'palette' })
+      case 'recent-sessions': return setDialog({ kind: 'recent-sessions', sessionIds: [...recentSessions.current] })
       case 'copy': return copySelection(selectedSessionId)
       case 'paste': return pasteClipboard(selectedSessionId)
       case 'select-all':
@@ -1377,6 +1396,8 @@ function App(): React.JSX.Element {
   ]
 
   const workspaceMenuEntries = (workspace: WorkspaceRecord, index: number, ordered: readonly WorkspaceRecord[]): MenuEntry[] => [
+    { label: 'Pinned files…', disabled: workspace.archivedAt !== null,
+      onSelect: () => setDialog({ kind: 'workspace-pins', workspaceId: workspace.workspaceId, openedFromWorkspaceId: activeWorkspaceId }) },
     { label: 'New session here', onSelect: () => beginNewSession(workspace) },
     { label: 'Review results…', onSelect: () =>
       setDialog({ kind: 'workspace-results', workspace, openedFromWorkspaceId: activeWorkspaceId }) },
@@ -1414,6 +1435,7 @@ function App(): React.JSX.Element {
     const command = (id: string, label: string, run: () => void, extra: Partial<PaletteCommand> = {}): PaletteCommand =>
       ({ id, group: 'Commands', label, run, ...extra })
     return [
+      command('recent-sessions', 'Recent sessions…', () => runCommand('recent-sessions'), { shortcut: SHORTCUT_LABELS['recent-sessions'] }),
       ...shown.flatMap((workspace) => visibleWorkspaceSessions(sessions, workspace.workspaceId, false).map((session): PaletteCommand => {
         const isLive = sessionProcessLive(session, live[session.sessionId]?.incarnationId)
         const status = sessionStatus(
@@ -1760,7 +1782,8 @@ function App(): React.JSX.Element {
                         onClick={(event) => openMenu(event.currentTarget, `${workspace.name} actions`, workspaceMenuEntries(workspace, workspaceIndex, ordered))}
                       >⋯</button>
                     </div>
-                    {isExpanded ? workspaceSessions.map((session, sessionIndex) => {
+                    {workspaceSessions.map((session, sessionIndex) => {
+                      if (!isExpanded && (session.sessionId !== selectedSessionId || session.archivedAt !== null)) return null
                       const observedProgress = observedProgressFor(session)
                       const observedActivity = activity[session.sessionId] ?? null
                       const isLive = sessionProcessLive(session, live[session.sessionId]?.incarnationId)
@@ -1809,7 +1832,7 @@ function App(): React.JSX.Element {
                           >⋯</button>
                         </div>
                       )
-                    }) : null}
+                    })}
                   </section>
                 )
               })}
@@ -2356,10 +2379,29 @@ function App(): React.JSX.Element {
           onClose={() => setDialog(null)}
         />
       ) : null}
+      {dialog?.kind === 'recent-sessions' ? <CommandPalette
+        label="Recent sessions" searchLabel="Choose a recently focused session" placeholder="Find recent session…"
+        emptyMessage="No recently focused sessions. Use the sidebar or Command palette."
+        commands={dialog.sessionIds.flatMap(id => {
+          const row = paletteCommands().find(command => command.id === `session-${id}`)
+          return row ? [{ ...row, context: `${id === selectedSessionId ? 'Current · ' : ''}${row.context ?? ''}`, run: async () => {
+            try {
+              const current = sessionsRef.current.find(session => session.sessionId === id && session.archivedAt === null)
+              const workspace = current && workspacesRef.current.find(item => item.workspaceId === current.workspaceId && item.archivedAt === null)
+              if (!current || !workspace) { brief('That session is unavailable.'); return }
+              const freshWorkspace = (await window.aiTerminal.listWorkspaces(true)).find(item => item.workspaceId === workspace.workspaceId && item.archivedAt === null)
+              const freshSession = freshWorkspace && (await window.aiTerminal.listSessions(workspace.workspaceId)).find(item => item.sessionId === id && item.archivedAt === null)
+              if (!freshSession) { brief('That session is unavailable.'); return }
+              if (layout?.split.panes.some(pane => pane.sessionId === id)) focusLayoutSession(id)
+              else openSession(id)
+            } catch { brief('That session is unavailable. Try again from the current catalogue.') }
+          } }] : []
+        })}
+        onClose={() => setDialog(null)} /> : null}
       {dialog?.kind === 'file-reference' ? (
         <FileReferenceDialog
           request={dialog.request}
-          targets={visibleWorkspaces(workspaces, false).flatMap((workspace) =>
+          targets={dialog.request.workspaceId ? [] : visibleWorkspaces(workspaces, false).flatMap((workspace) =>
             visibleWorkspaceSessions(sessions, workspace.workspaceId, false).map((session): FileReferenceSendTarget => ({
               sessionId: session.sessionId,
               sessionName: session.name,
@@ -2373,6 +2415,18 @@ function App(): React.JSX.Element {
           onClose={() => setDialog(null)}
         />
       ) : null}
+      {dialog?.kind === 'workspace-pins' ? (() => {
+        const workspace = workspaces.find(item => item.workspaceId === dialog.workspaceId && item.archivedAt === null)
+        return workspace ? <WorkspacePinsDialog workspace={workspace} onClose={() => setDialog(null)}
+          onUpdated={updated => setWorkspaces(current => current.map(item => item.workspaceId === updated.workspaceId && item.revision <= updated.revision ? updated : item))}
+          onOpen={path => {
+            const current = workspacesRef.current.find(item => item.workspaceId === workspace.workspaceId && item.archivedAt === null)
+            const reference = exactAbsoluteFileReference(path, null, null)
+            if (!current || !reference) { brief('This pin is unavailable. Reopen Pinned files.'); return }
+            setDialog({ kind: 'file-reference', request: { workspaceId: current.workspaceId, sessionName: '', workspaceName: current.name,
+              launchDirectory: current.defaultCwd ?? '/', reference, openNow: true, openedFromWorkspaceId: activeWorkspaceId } })
+          }} /> : null
+      })() : null}
       {dialog?.kind === 'preferences' ? (
         <PreferencesDialog
           settings={settings}

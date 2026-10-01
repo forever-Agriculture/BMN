@@ -156,6 +156,7 @@ export function SessionTerminal(props: {
   /** The presented exit status; undefined while the process is running. */
   const [exitStatus, setExitStatus] = useState<string>()
   const [searchOpen, setSearchOpen] = useState(false)
+  const [searchAtBottom, setSearchAtBottom] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [searchResult, setSearchResult] = useState('')
   const [dropTarget, setDropTarget] = useState(false)
@@ -549,9 +550,7 @@ export function SessionTerminal(props: {
   }
 
   const closeSearch = (): void => {
-    searchAddon.current?.clearDecorations()
     setSearchOpen(false)
-    setSearchResult('')
     terminalRef.current?.focus()
   }
 
@@ -633,7 +632,7 @@ export function SessionTerminal(props: {
       {/* Search floats over the surface so opening it never changes the surface's size and never resizes the PTY. */}
       <div className="terminal-frame">
         {searchOpen ? (
-          <div ref={searchBar} className="terminal-search" role="search" onBlur={(event) => {
+          <div ref={searchBar} className={`terminal-search${searchAtBottom ? ' terminal-search-bottom' : ''}`} role="search" onBlur={(event) => {
             // Leaving the bar for anywhere but the bar or this terminal is leaving the pane.
             const next = event.relatedTarget
             if (next instanceof Node && (event.currentTarget.contains(next) || next === terminalRef.current?.textarea)) return
@@ -665,6 +664,8 @@ export function SessionTerminal(props: {
             <button type="button" onClick={() => find(-1)}>Previous</button>
             <button type="button" onClick={() => find(1)}>Next</button>
             <span className="search-result" aria-live="polite">{searchStatusText(searchResult)}</span>
+            <button type="button" aria-label={searchAtBottom ? 'Move Find to top' : 'Move Find to bottom'}
+              onClick={() => setSearchAtBottom(value => !value)}>{searchAtBottom ? 'Top' : 'Bottom'}</button>
             <button type="button" className="icon-button" aria-label="Close search" onClick={closeSearch}><Icon name="close" /></button>
           </div>
         ) : null}

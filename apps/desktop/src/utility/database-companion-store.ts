@@ -12,6 +12,10 @@ import {
   VOICE_MODEL_IDS,
   mergeSamePrompt,
   readStoredPrompt,
+  readStoredProducer,
+  readStoredManualChoices,
+  type ManualChoices,
+  type AttentionProducerBinding,
   validateVocabulary,
   type AppearanceSettings,
   type AppSettings,
@@ -160,6 +164,8 @@ interface AttentionRow {
   opened_by: string | null
   resolved_by: string | null
   prompt_json: string | null
+  producer_json: string | null
+  manual_choices_json: string | null
 }
 
 function attentionFromRow(row: AttentionRow): AttentionRecord {
@@ -182,7 +188,9 @@ function attentionFromRow(row: AttentionRow): AttentionRecord {
     openedBy: row.opened_by,
     resolvedBy: row.resolved_by,
     // Rows written before migration 17, and prompts that no longer parse, read as plain requests.
-    prompt: readStoredPrompt(row.prompt_json ?? null)
+    prompt: readStoredPrompt(row.prompt_json ?? null),
+    producer: readStoredProducer(row.producer_json ?? null),
+    manualChoices: readStoredManualChoices(row.manual_choices_json ?? null)
   }
 }
 
@@ -198,6 +206,8 @@ export interface AttentionOpenParams {
   origin?: string
   /** The agent's own question or permission; validated by the control server before it gets here. */
   prompt?: AttentionPrompt
+  producer?: AttentionProducerBinding
+  manualChoices?: ManualChoices
 }
 
 /** Claude's delayed "needs your permission" notice; it names no tool, so it never outranks a structured prompt. */
@@ -216,6 +226,9 @@ export function openAttention(
   requestId: string,
   now: string
 ): AttentionOpenResult {
+  if (params.manualChoices && (params.prompt || !['question', 'permission'].includes(params.kind) || params.origin !== 'cli')) {
+    throw new WorkspaceStoreError(ERROR_CODES.invalidArgument, 'Manual choices require a CLI question or decision')
+  }
   // Claude sends "needs your permission" about 6 s after any prompt it is still waiting on, a question
   // included (docs/remote-answers.md). When a structured prompt of that session is already open, the notice
   // is that same dialog: opening a second, tool-less permission would page twice and stale the first card.
@@ -235,12 +248,14 @@ export function openAttention(
     const stored = readStoredPrompt(existing.prompt_json ?? null)
     // A plain re-open of a request that already holds the agent's own prompt adds nothing the prompt does not
     // say better: same kind, nothing changes, so no revision bump, no unread flag and no second page.
-    if (params.prompt === undefined && stored !== null && existing.kind === params.kind) {
+    const sameProducer = (existing.producer_json ?? null) === (params.producer ? JSON.stringify(params.producer) : null)
+    if (sameProducer && params.manualChoices === undefined && params.prompt === undefined && stored !== null && existing.kind === params.kind) {
       return { ...attentionFromRow(existing), changed: false }
     }
     const merged = params.prompt !== undefined && stored !== null ? mergeSamePrompt(stored, params.prompt) : null
-    const nextPrompt = merged ?? params.prompt ?? stored
-    const unchanged = existing.kind === params.kind &&
+    const nextPrompt = params.manualChoices ? null : merged ?? params.prompt ?? stored
+    const sameChoices = (existing.manual_choices_json ?? null) === (params.manualChoices ? JSON.stringify(params.manualChoices) : null)
+    const unchanged = sameChoices && sameProducer && existing.incarnation_id === params.incarnationId && existing.kind === params.kind &&
       existing.title === params.title &&
       existing.body === (params.body ?? null) &&
       existing.expires_at === (params.expiresAt ?? null) &&
@@ -258,7 +273,7 @@ export function openAttention(
     }
     database.prepare(
       `UPDATE attention_request SET kind = ?, title = ?, body = ?, expires_at = ?, incarnation_id = ?,
-         opened_by = ?, seen_at = NULL, revision = revision + 1, prompt_json = ?
+         opened_by = ?, seen_at = NULL, revision = revision + 1, prompt_json = ?, producer_json = ?, manual_choices_json = ?
        WHERE request_id = ?`
     ).run(
       params.kind,
@@ -268,14 +283,16 @@ export function openAttention(
       params.incarnationId,
       params.origin ?? null,
       nextPrompt === null ? null : JSON.stringify(nextPrompt),
+      params.producer ? JSON.stringify(params.producer) : null,
+      params.manualChoices ? JSON.stringify(params.manualChoices) : null,
       existing.request_id
     )
     return { ...getAttention(database, existing.request_id), changed: true }
   }
   database.prepare(
     `INSERT INTO attention_request(request_id, session_id, incarnation_id, request_key, kind, title, body,
-       state, resolution, opened_at, expires_at, resolved_at, seen_at, revision, opened_by, resolved_by, prompt_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'open', NULL, ?, ?, NULL, NULL, 1, ?, NULL, ?)`
+       state, resolution, opened_at, expires_at, resolved_at, seen_at, revision, opened_by, resolved_by, prompt_json, producer_json, manual_choices_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'open', NULL, ?, ?, NULL, NULL, 1, ?, NULL, ?, ?, ?)`
   ).run(
     requestId,
     params.sessionId,
@@ -287,7 +304,9 @@ export function openAttention(
     now,
     params.expiresAt ?? null,
     params.origin ?? null,
-    params.prompt === undefined ? null : JSON.stringify(params.prompt)
+    params.prompt === undefined ? null : JSON.stringify(params.prompt),
+    params.producer ? JSON.stringify(params.producer) : null,
+    params.manualChoices ? JSON.stringify(params.manualChoices) : null
   )
   return { ...getAttention(database, requestId), changed: true }
 }
@@ -309,6 +328,7 @@ export function closeAttention(
   target: ({ requestId: string } | { sessionId: string; requestKey: string }) & {
     expectedKind?: AttentionKind
     expectedRevision?: number
+    expectedProducer?: AttentionProducerBinding | null
     /** The harness request a report is about; a request holding a different one is not the one it closed. */
     expectedRequestRef?: string
   },
@@ -325,6 +345,9 @@ export function closeAttention(
         "SELECT * FROM attention_request WHERE session_id = ? AND request_key = ? AND state = 'open'"
   ).get(target.sessionId, target.requestKey)) as AttentionRow | undefined
   if (!row) throw new WorkspaceStoreError(ERROR_CODES.notFound, 'No matching open attention request')
+  if (target.expectedProducer !== undefined && JSON.stringify(readStoredProducer(row.producer_json ?? null)) !== JSON.stringify(target.expectedProducer)) {
+    throw new WorkspaceStoreError(ERROR_CODES.revisionConflict, 'The producing conversation changed')
+  }
   const heldRef = target.expectedRequestRef === undefined ? null : readStoredPrompt(row.prompt_json ?? null)?.requestRef ?? null
   if (heldRef !== null && heldRef !== target.expectedRequestRef) {
     throw new WorkspaceStoreError(ERROR_CODES.notFound, 'No matching open attention request')
@@ -751,6 +774,14 @@ export function readHandoffReview(
   return { draft, source, destination, sourceWorkspace, destinationWorkspace, token }
 }
 
+/** Only a definite pre-write draft may change its message before a retry claims it. */
+export function replaceDraftText(database: DatabaseConnection, draftId: string, expectedUpdatedAt: string, text: string, now: string): InputDraftRecord {
+  const updated = database.prepare("UPDATE input_draft SET text = ?, updated_at = ? WHERE draft_id = ? AND state = 'draft' AND updated_at = ?")
+    .run(text, monotonicDraftTime(expectedUpdatedAt, now), draftId, expectedUpdatedAt)
+  if (updated.changes !== 1) throw new WorkspaceStoreError(ERROR_CODES.revisionConflict, 'The draft was already claimed or changed')
+  return getDraft(database, draftId)
+}
+
 export function updateDraft(
   database: DatabaseConnection,
   draftId: string,
@@ -1070,16 +1101,18 @@ export function listTelegramCards(database: DatabaseConnection, states: Telegram
 export function getTelegramMessage(
   database: DatabaseConnection,
   messageId: number
-): { sessionId: string; requestId: string | null; incarnationId: string | null } | undefined {
+): { sessionId: string; requestId: string | null; incarnationId: string | null; revision?: number } | undefined {
   const row = database.prepare(
-    'SELECT session_id, request_id, incarnation_id FROM telegram_message WHERE message_id = ?'
+    'SELECT session_id, request_id, incarnation_id, revision FROM telegram_message WHERE message_id = ?'
   ).get(messageId) as {
     session_id: string
     request_id: string | null
     incarnation_id: string | null
+    revision: number | null
   } | undefined
   return row
-    ? { sessionId: row.session_id, requestId: row.request_id, incarnationId: row.incarnation_id }
+    ? { sessionId: row.session_id, requestId: row.request_id, incarnationId: row.incarnation_id,
+        ...(row.revision === null ? {} : { revision: row.revision }) }
     : undefined
 }
 
@@ -1289,6 +1322,13 @@ export function fileReferenceTargetAvailability(database: DatabaseConnection, se
   return address !== null && address.session.archivedAt === null && address.workspace.archivedAt === null
 }
 
+/** One transactional snapshot for the last ordinary-message boundary. */
+export function telegramMessageBoundary(database: DatabaseConnection, sessionId: string): {
+  available: boolean; settings: AppSettings; attention: AttentionRecord[]
+} {
+  return { available: fileReferenceTargetAvailability(database, sessionId), settings: getSettings(database), attention: listAttention(database) }
+}
+
 /** A selected session owns its root even when shown in another workspace's split pane. */
 export function fileReferenceSearchAddress(
   database: DatabaseConnection,
@@ -1309,9 +1349,20 @@ export function fileReferenceSearchAddress(
   }
 }
 
+/** Runtime producer identity is not portable backup state or agent-readable receipt data. */
+export function scrubBackupProducerBindings(database: DatabaseConnection): void {
+  database.pragma('secure_delete = ON')
+  database.transaction(() => {
+    database.prepare('UPDATE attention_request SET producer_json = NULL WHERE producer_json IS NOT NULL').run()
+    database.prepare("UPDATE control_receipt SET result_json = json_remove(result_json, '$.producer') WHERE json_valid(result_json) AND json_type(result_json, '$.producer') IS NOT NULL").run()
+  })()
+  database.exec('VACUUM')
+}
+
 /** Store functions reachable through the database worker; each runs in one transaction. */
 export const COMPANION_OPERATIONS = Object.freeze({
   fileReferenceTargetAvailability,
+  telegramMessageBoundary,
   fileReferenceSearchAddress,
   insertArtifact,
   listArtifacts,
@@ -1332,6 +1383,7 @@ export const COMPANION_OPERATIONS = Object.freeze({
   getReceipt,
   putReceipt,
   createDraft,
+  replaceDraftText,
   getDraft,
   updateDraft,
   updateHandoffDraft,

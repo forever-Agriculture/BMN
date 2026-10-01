@@ -401,6 +401,20 @@ export function PreferencesDialog(props: {
 
   return (
     <Dialog label="Preferences" className="preferences-dialog" onClose={props.onClose}>
+      <label className="preferences-jump">Jump to section
+        <select aria-label="Preferences section" defaultValue="" onChange={(event) => {
+          const target = [...(event.currentTarget.closest('dialog')?.querySelectorAll<HTMLElement>('.preferences-section h3') ?? [])]
+            .find(heading => heading.textContent === event.currentTarget.value)
+          if (!target) return
+          target.tabIndex = -1
+          target.scrollIntoView({ block: 'start' })
+          target.focus({ preventScroll: true })
+        }}>
+          <option value="" disabled>Choose section…</option>
+          {['Appearance', 'Terminal', 'Notifications', 'Voice', 'Telegram', 'History', 'Local agent control', 'Backup']
+            .map(section => <option key={section}>{section}</option>)}
+        </select>
+      </label>
       <section className="preferences-section">
         <h3>Appearance</h3>
         <div className="preferences-row">
@@ -699,7 +713,7 @@ export function PreferencesDialog(props: {
               disabled={telegramFormBusy}
               onChange={(event) => setAnswerPermissions(event.target.checked)}
             />
-            <p className="preferences-help">Adds Allow once and Deny to cards; never "always allow".</p>
+            <p className="preferences-help">Allow once/Deny for native cards. Also lets phone taps send manual authorization decisions as messages.</p>
           </div>
         </div>
 

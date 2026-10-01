@@ -18,6 +18,7 @@ export interface WorkspaceTreeState {
  * applies a stale snapshot.
  */
 export interface TreeSessionAction {
+  sessionId: string
   workspaceId: string
   tree(state: WorkspaceTreeState): WorkspaceTreeState
   change: LayoutChange
@@ -96,6 +97,7 @@ function sessionAction(
   const sessionIds = sessions.map((session) => session.sessionId)
   return {
     workspaceId,
+    sessionId,
     tree: (state) => selectTreeWorkspace(state, workspaceId),
     change: (layout) => {
       if (layout.workspaceId !== workspaceId) {

@@ -445,11 +445,15 @@ async function start(): Promise<void> {
         if (!isWorkspaceCreateParams(params)) {
           throw new HostControlError(ERROR_CODES.invalidArgument, 'Workspace create parameters are invalid')
         }
-        return database.createWorkspace(
-          typeof params.defaultCwd === 'string'
-            ? { ...params, defaultCwd: resolveHomeDirectory(params.defaultCwd) }
-            : params
-        )
+        {
+          const created = await database.createWorkspace(
+            typeof params.defaultCwd === 'string'
+              ? { ...params, defaultCwd: resolveHomeDirectory(params.defaultCwd) }
+              : params
+          )
+          companionService.catalogueChanged()
+          return created
+        }
       case METHOD_REGISTRY.workspaceUpdate:
         if (!isWorkspaceUpdateParams(params)) {
           throw new HostControlError(ERROR_CODES.invalidArgument, 'Workspace update parameters are invalid')
@@ -463,7 +467,9 @@ async function start(): Promise<void> {
                 ? { ...params, defaultCwd: resolveHomeDirectory(params.defaultCwd) }
                 : params
             )
-            return await (params.archived === true ? manager.archiveWorkspace(params.workspaceId, mutate) : mutate())
+            const updated = await (params.archived === true ? manager.archiveWorkspace(params.workspaceId, mutate) : mutate())
+            companionService.catalogueChanged()
+            return updated
           } finally {
             finish()
           }
@@ -487,6 +493,7 @@ async function start(): Promise<void> {
           rows: numberValue(params, 'rows')
         }
         const created = await manager.create(createParams)
+        companionService.catalogueChanged()
         void companionService.sessionsChanged().catch(() => undefined)
         return created
       }
@@ -525,8 +532,10 @@ async function start(): Promise<void> {
             }
             return manager.sessionWithCurrentProcessState(await database.updateSession(update))
           }
-          return await (typeof update.archived === 'boolean' || typeof update.workspaceId === 'string'
+          const updated = await (typeof update.archived === 'boolean' || typeof update.workspaceId === 'string'
             ? manager.updateSessionAvailability(update.sessionId, update, mutate) : mutate())
+          companionService.catalogueChanged()
+          return updated
         } finally {
           finish()
         }
@@ -717,6 +726,21 @@ async function start(): Promise<void> {
           typeof params.viewEpoch === 'string' ? params.viewEpoch : undefined
         )
       case METHOD_REGISTRY.fileReferenceRead: {
+        if ((params.sessionId !== undefined) === (params.workspaceId !== undefined)) {
+          throw new HostControlError(ERROR_CODES.invalidArgument, 'Choose exactly one source session or workspace')
+        }
+        if (params.workspaceId !== undefined) {
+          const workspaceId = stringValue(params, 'workspaceId')
+          const workspace = (await database.listWorkspaces(true)).find(record => record.workspaceId === workspaceId && record.archivedAt === null)
+          if (!workspace) throw new HostControlError(ERROR_CODES.notFound, 'The source workspace is unavailable')
+          const result = await readFileReference({ workspaceId, reference: params.reference,
+            baseDirectory: params.baseDirectory, launchDirectory: workspace.defaultCwd ?? '/' })
+          const current = (await database.listWorkspaces(true)).find(record => record.workspaceId === workspaceId)
+          if (!current || current.archivedAt !== null || current.revision !== workspace.revision) {
+            throw new HostControlError(ERROR_CODES.revisionConflict, 'The source workspace changed; open the pin again')
+          }
+          return result
+        }
         const sessionId = stringValue(params, 'sessionId')
         const session = await findStoredSession(database, sessionId)
         if (!session) throw new HostControlError(ERROR_CODES.notFound, 'The source session no longer exists')

@@ -13,7 +13,7 @@ function session(sessionId: string, workspaceId: string, cwd: string, archivedAt
     archivedAt, lastProcess: null }
 }
 function workspace(workspaceId: string, archivedAt: string | null = null): WorkspaceRecord {
-  return { workspaceId, name: `Workspace ${workspaceId}`, defaultCwd: null,
+  return { workspaceId, name: `Workspace ${workspaceId}`, defaultCwd: null, pinnedFilePaths: [],
     position: 0, marker: 'none', archivedAt, revision: 1 }
 }
 

@@ -470,9 +470,9 @@ describe('session presentation', () => {
       expect(row.match(/class="primary"/gu)).toHaveLength(1)
       expect(row).not.toContain('ghost')
     }
-    expect(markup).toContain('<p class="seen">Not seen yet · needs your response · <span class="provenance">from bmn ask</span></p>')
-    expect(markup).toContain('needs your response · <span class="provenance">from Claude PermissionRequest</span>')
-    expect(markup).toContain('informational update · <span class="provenance">from the terminal (OSC 9)</span>')
+    expect(markup).toContain('<p class="seen">Unseen · awaiting answer · <span class="provenance">from bmn ask</span></p>')
+    expect(markup).toContain('awaiting answer · <span class="provenance">from Claude PermissionRequest</span>')
+    expect(markup).toContain('update · <span class="provenance">from the terminal (OSC 9)</span>')
     // The top line keeps workspace › session · kind · age, with no source squeezed into it.
     expect([...markup.matchAll(/<div class="where">(.*?)<\/div>/gu)].every((match) => !match[1]!.includes('provenance'))).toBe(true)
   })

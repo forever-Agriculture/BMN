@@ -1341,6 +1341,26 @@ input[type='radio'] {
   font-family: var(--font-mono);
 }
 
+.terminal-search-bottom { top: auto; bottom: 8px; }
+.preferences-jump {
+  position: sticky;
+  top: -12px;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  background: var(--raised);
+}
+.preferences-jump select { flex: 1; min-width: 0; }
+.preferences-section h3 { scroll-margin-top: 56px; }
+.workspace-pins-dialog code { overflow-wrap: anywhere; }
+.workspace-pins-dialog li { margin-block: 10px; }
+.workspace-pins-dialog form { display: flex; flex-wrap: wrap; gap: 8px; }
+.workspace-pins-dialog form label { flex: 1; min-width: 0; }
+.workspace-pins-dialog input { width: 100%; box-sizing: border-box; }
+
 @container pane (max-width: 520px) {
   .terminal-search input {
     min-width: 72px;

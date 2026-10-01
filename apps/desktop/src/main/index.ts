@@ -505,6 +505,9 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
       request: async <Result,>(method: Parameters<PtyHostClient['request']>[0], params: object) => {
         if (selfTestTaps) await selfTestTaps.workspaceRequest(method, params)
         const result = await requireHostClient().request<Result>(method, params)
+        if (selfTestTaps && method === METHOD_REGISTRY.sessionList) {
+          return selfTestTaps.rendererState({ sessions: result as SessionRecord[], templates: [] }).sessions as Result
+        }
         if (method === METHOD_REGISTRY.sessionUpdate) {
           const record = result as SessionRecord
           sessionRecords.set(record.sessionId, record)

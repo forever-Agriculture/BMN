@@ -30,9 +30,9 @@ export async function copyAttentionAnswer(
 ): Promise<void> {
   if (!text.trim()) throw new Error('Choose an answer or enter your own.')
   const current = (await bridge.listAttention()).find((record) => record.requestId === request.requestId)
-  if (!current || current.state !== 'open' || current.kind !== 'question' ||
+  if (!current || current.state !== 'open' || !(current.kind === 'question' || current.kind === 'permission' && current.manualChoices) ||
       current.revision !== request.revision || current.incarnationId !== request.incarnationId ||
-      current.prompt?.type !== 'questions') {
+      !(current.manualChoices || current.prompt?.type === 'questions')) {
     throw new Error('This question changed. Open the current card before copying.')
   }
   await bridge.writeClipboardText(text)
