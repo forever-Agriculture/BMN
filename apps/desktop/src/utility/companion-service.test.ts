@@ -203,6 +203,16 @@ describe('foreground question lifecycle ownership', () => {
     expect(writes).toHaveLength(0)
   })
 
+  it('still invalidates an async card when its own prompt is reported again', async () => {
+    const first = await ask(a)
+    const epoch = service.answerEpoch(first.requestId)!
+    const repeated = await ask(a)
+    expect([repeated.requestId, repeated.revision]).toEqual([first.requestId, first.revision])
+    await expect(service.answerAttention({ requestId: first.requestId, revision: first.revision, epoch,
+      incarnationId: 'incarnation-1', answer: { type: 'choices', choices: [0] } })).resolves.toMatchObject({ state: 'refused', reason: 'changed' })
+    expect(writes).toHaveLength(0)
+  })
+
   it('refuses stale and ambiguous cards without any PTY bytes', async () => {
     const old = await ask(a)
     const epoch = service.answerEpoch(old.requestId)!
@@ -1137,6 +1147,43 @@ describe('Telegram attention notifications', () => {
     }
   })
 
+  it('delivers a real connector callback after unrelated Codex tools complete', async () => {
+    const bot = await startFakeBotApi(424242, 424242)
+    const options = service['options']
+    await service.close()
+    service = new CompanionService({ ...options, telegramApiOrigin: bot.origin })
+    try {
+      COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', {
+        enabled: true, allowedChatId: 424242, allowedUserId: 424242, notifyOn: 'attention', autoSubmitReplies: false
+      }, now)
+      await service.sessionsChanged()
+      await service.route(METHOD_REGISTRY.telegramConfigure, { token: '123456789:SYNTHETIC_test_token_not_real' })
+      const producer = { agentCli: 'codex' as const, conversationReference: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }
+      const opened = await service['openAttention']({
+        sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'codex:question', kind: 'question',
+        title: 'Synthetic queued callback', origin: 'hook:codex:PreToolUse', producer,
+        prompt: { type: 'questions', harness: 'codex', shape: 'async-choice', requestRef: null, toolUseId: 'synthetic-call',
+          questions: [{ id: null, header: null, text: 'Synthetic queued callback?', multiSelect: false,
+            options: [{ label: 'Continue', description: null }, { label: 'Wait', description: null }] }] }
+      })
+      bot.tapOn('Synthetic queued callback', [0])
+      await service['cards'].page(opened)
+      await service['closeAttentionByKey']('s1', 'codex:permission', 'answered', 'Tool completed',
+        'hook:codex:PostToolUse', undefined, producer).catch(() => {})
+      await service['closeAttentionByKey']('s1', 'codex:turn', 'withdrawn', null,
+        'hook:codex:PostToolUse', undefined, producer).catch(() => {})
+      await vi.waitFor(() => expect(writes).toHaveLength(1), { timeout: 2000, interval: 20 })
+      expect(writes[0]!.sessionId).toBe('s1')
+      expect(new TextDecoder().decode(writes[0]!.bytes)).toBe('\x1b[200~Synthetic queued callback?\nContinue\x1b[201~\r')
+      expect(COMPANION_OPERATIONS.listDrafts(database)).toContainEqual(expect.objectContaining({ requestId: opened.requestId, state: 'submitted' }))
+      await vi.waitFor(() => expect(COMPANION_OPERATIONS.listTelegramCards(database, ['final']))
+        .toContainEqual(expect.objectContaining({ requestId: opened.requestId })), { timeout: 2000, interval: 20 })
+      expect(bot.calls.some(call => call.method === 'sendMessage' && String(call.body.text).includes('Nothing was sent'))).toBe(false)
+    } finally {
+      await service.close(); await bot.close()
+    }
+  })
+
   it('binds each notification to the process incarnation live when it was sent', async () => {
     service['telegram'] = {
       sendMessage: async () => ({ messageId: 77 })
@@ -1449,6 +1496,91 @@ describe('Telegram attention notifications', () => {
     // Recreate the transient request claim; the durable submission still prevents replay.
     service['answers'].closed(record); service['answers'].track(record)
     await expect(service.answerAttention({ ...request, epoch: service.answerEpoch(record.requestId)! })).resolves.toMatchObject({ state: 'refused' })
+    expect(writes).toHaveLength(1)
+  })
+
+  it.each(['tool-completion', 'turn-finished'] as const)('keeps a paged Codex async answer usable after same-producer %s', async event => {
+    await service.sessionsChanged()
+    const producer = { agentCli: 'codex' as const, conversationReference: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }
+    const opened = await service['openAttention']({
+      sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'codex:question', kind: 'question', title: 'Synthetic choice',
+      origin: 'hook:codex:PreToolUse', producer,
+      prompt: { type: 'questions', harness: 'codex', shape: 'async-choice', requestRef: null, toolUseId: 'synthetic-call',
+        questions: [{ id: null, header: null, text: 'Synthetic choice?', multiSelect: false,
+          options: [{ label: 'Continue', description: null }, { label: 'Wait', description: null }] }] }
+    })
+    // Telegram binds its buttons before later tools/Stop report other slots in this same conversation.
+    const request = { requestId: opened.requestId, revision: opened.revision, epoch: service.answerEpoch(opened.requestId)!,
+      incarnationId: 'incarnation-1', answer: { type: 'choices' as const, choices: [0] } }
+    if (event === 'tool-completion') {
+      await service['closeAttentionByKey']('s1', 'codex:permission', 'answered', 'Tool completed',
+        'hook:codex:PostToolUse', undefined, producer).catch(() => {})
+      await service['closeAttentionByKey']('s1', 'codex:turn', 'withdrawn', null,
+        'hook:codex:PostToolUse', undefined, producer).catch(() => {})
+    } else {
+      await service['closeAttentionByKey']('s1', 'codex:permission', 'withdrawn', null,
+        'hook:codex:Stop', undefined, producer).catch(() => {})
+      await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'codex:turn',
+        kind: 'notice', title: 'Synthetic turn finished', origin: 'hook:codex:Stop', producer })
+    }
+    expect(COMPANION_OPERATIONS.getAttention(database, opened.requestId)).toMatchObject({ state: 'open', revision: opened.revision })
+    await expect(service.answerAttention(request)).resolves.toMatchObject({ state: 'submitted' })
+    expect(writes).toHaveLength(1)
+    expect(new TextDecoder().decode(writes[0]!.bytes)).toBe('\x1b[200~Synthetic choice?\nContinue\x1b[201~\r')
+    await expect(service.answerAttention(request)).resolves.toMatchObject({ state: 'refused' })
+    expect(writes).toHaveLength(1)
+  })
+
+  it.each(['completed', 'pending', 'pending-at-entry'] as const)('refuses async input across a %s native-blocker mutation and permits a safe retry', async mode => {
+    await service.sessionsChanged()
+    const producer = { agentCli: 'codex' as const, conversationReference: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }
+    const opened = await service['openAttention']({
+      sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'codex:question', kind: 'question', title: 'Synthetic queued question',
+      origin: 'hook:codex:PreToolUse', producer,
+      prompt: { type: 'questions', harness: 'codex', shape: 'async-choice', requestRef: null, toolUseId: 'synthetic-call',
+        questions: [{ id: null, header: null, text: 'Synthetic queued question?', multiSelect: false,
+          options: [{ label: 'Continue', description: null }, { label: 'Wait', description: null }] }] }
+    })
+    const request = { requestId: opened.requestId, revision: opened.revision, epoch: service.answerEpoch(opened.requestId)!,
+      incarnationId: 'incarnation-1', answer: { type: 'choices' as const, choices: [0] } }
+    let releaseBoundary!: () => void, reachedBoundary!: () => void, releaseMutation!: () => void, reachedMutation!: () => void
+    const captured = new Promise<void>(resolve => { reachedBoundary = resolve })
+    const boundaryHold = new Promise<void>(resolve => { releaseBoundary = resolve })
+    const mutationStarted = new Promise<void>(resolve => { reachedMutation = resolve })
+    const mutationHold = new Promise<void>(resolve => { releaseMutation = resolve })
+    const worker = service['options'].database
+    const original = worker.companion.bind(worker) as (...args: unknown[]) => Promise<unknown>
+    const spy = vi.spyOn(worker, 'companion').mockImplementation((async (...args: unknown[]) => {
+      if (args[0] === 'openAttention' && (args[1] as { requestKey?: string }).requestKey === 'codex:permission' && mode !== 'completed') {
+        reachedMutation(); await mutationHold
+      }
+      const result = await original(...args)
+      if (args[0] === 'telegramMessageBoundary' && mode !== 'pending-at-entry') { reachedBoundary(); await boundaryHold }
+      return result
+    }) as typeof worker.companion)
+    const startBlocker = () => service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'codex:permission',
+      kind: 'permission', title: 'Synthetic native permission', origin: 'hook:codex:PermissionRequest', producer })
+    let blocker: Promise<AttentionRecord>, outcome
+    if (mode === 'pending-at-entry') {
+      blocker = startBlocker(); await mutationStarted
+      try { outcome = await service.answerAttention(request) } finally { releaseMutation(); await blocker }
+    } else {
+      const pending = service.answerAttention(request); await captured
+      blocker = startBlocker()
+      if (mode === 'completed') await blocker
+      else await mutationStarted
+      releaseBoundary()
+      try { outcome = await pending } finally { releaseMutation(); await blocker }
+    }
+    spy.mockRestore()
+    expect(outcome).toMatchObject({ state: 'refused', reason: 'changed' })
+    expect(writes).toHaveLength(0)
+    expect(COMPANION_OPERATIONS.listDrafts(database)).toContainEqual(expect.objectContaining({ requestId: opened.requestId, state: 'draft' }))
+    await service['closeAttentionByKey']('s1', 'codex:permission', 'answered', 'Synthetic native dialog completed',
+      'hook:codex:PostToolUse', undefined, producer)
+    await expect(service.answerAttention(request)).resolves.toMatchObject({ state: 'submitted' })
+    expect(writes).toHaveLength(1)
+    await expect(service.answerAttention(request)).resolves.toMatchObject({ state: 'refused' })
     expect(writes).toHaveLength(1)
   })
 

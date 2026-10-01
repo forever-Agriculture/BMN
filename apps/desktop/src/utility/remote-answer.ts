@@ -280,6 +280,7 @@ function freshQuestionOnScreen(
 }
 
 interface Tracked {
+  requestKey: string
   sessionId: string
   incarnationId: string | null
   prompt: AttentionPrompt
@@ -351,9 +352,13 @@ export class RemoteAnswers {
    * A hook in this session opened, resolved or withdrew a request. Called before the store is touched, so
    * a card sent for the dialog as it was cannot answer whatever the agent reported next (decision 3).
    */
-  hookReported(sessionId: string): void {
+  hookReported(sessionId: string, requestKey?: string): void {
     for (const entry of this.tracked.values()) {
-      if (entry.sessionId === sessionId) entry.epoch += 1
+      if (entry.sessionId !== sessionId) continue
+      // Queued questions remain open while other tools run or the turn stops. Their
+      // ordinary-message route has no screen dialog that those other slots can replace.
+      if (answerRoute(entry.prompt) === 'codex-message' && requestKey !== undefined && entry.requestKey !== requestKey) continue
+      entry.epoch += 1
     }
   }
 
@@ -366,6 +371,7 @@ export class RemoteAnswers {
       current.prompt = prompt
     } else {
       this.tracked.set(record.requestId, {
+        requestKey: record.requestKey,
         sessionId: record.sessionId,
         incarnationId: record.incarnationId,
         prompt,

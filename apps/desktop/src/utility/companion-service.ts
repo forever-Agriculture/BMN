@@ -796,7 +796,7 @@ export class CompanionService {
         if (origin !== null && !isAttentionOrigin(origin)) invalid('The request origin is invalid')
         const requestId = text(params, 'requestId')
         const held = await database.companion('getAttention', requestId)
-        this.answers.hookReported(held.sessionId)
+        this.answers.hookReported(held.sessionId, held.requestKey)
         const record = await this.withAttentionChange(held.sessionId, () => database.companion(
           'closeAttention',
           {
@@ -1137,7 +1137,7 @@ export class CompanionService {
       throw new HostControlError(ERROR_CODES.revisionConflict, 'Foreground producer not confirmed for this harness')
     }
     // Before the store is touched: a card sent for the dialog as it was must not answer what comes next.
-    this.answers.hookReported(p.sessionId)
+    this.answers.hookReported(p.sessionId, p.requestKey)
     const record = await this.options.database.companion('openAttention', {
       sessionId: p.sessionId,
       incarnationId: p.incarnationId,
@@ -1263,7 +1263,7 @@ export class CompanionService {
 
   private closeAttentionByKey(...args: Parameters<CompanionService['closeAttentionByKeyOnce']>): Promise<AttentionRecord> {
     // Invalidate native claims before even the attribution read can yield.
-    this.answers.hookReported(args[0])
+    this.answers.hookReported(args[0], args[1])
     return this.withAttentionChange(args[0], () => this.closeAttentionByKeyOnce(...args))
   }
 
@@ -1420,6 +1420,9 @@ export class CompanionService {
     if (!(attention.kind === 'question' || attention.kind === 'permission' && attention.manualChoices) || hasDisallowedHandoffControl(text) ||
       new TextEncoder().encode(text).byteLength > HANDOFF_PAYLOAD_BYTES) return refused('unsupported')
     const database = this.options.database
+    // Earlier unrelated hooks may leave a queued card valid, but mutations during
+    // this delivery must still invalidate a stale final-boundary snapshot.
+    const attentionGeneration = this.attentionChanges.get(attention.sessionId)?.generation ?? 0
     const availabilityEpoch = this.fileReferenceAvailabilityEpoch
     const { record } = await database.companion('createDraft', {
       draftId: randomUUID(), sessionId: attention.sessionId, origin: 'telegram',
@@ -1441,6 +1444,8 @@ export class CompanionService {
         const policyOff = attention.manualChoices && (attention.kind === 'permission' && !settings.telegram.answerPermissions || automatic && !settings.telegram.autoSubmitReplies)
         const reason = !latest || latest.state !== 'open' || this.requestExpired(latest) ? 'gone' :
           latest.revision !== request.revision || !current() || !available ||
+            (this.attentionChanges.get(attention.sessionId)?.generation ?? 0) !== attentionGeneration ||
+            (this.attentionChanges.get(attention.sessionId)?.pending ?? 0) > 0 ||
             this.fileReferenceAvailabilityEpoch !== availabilityEpoch || this.fileReferenceAvailabilityChanges > 0 ? 'changed' : nativeDialog || policyOff ? 'unsupported' : null
         if (reason) {
           await database.companion('updateDraft', draft.draftId, 'draft', 'Nothing submitted; card changed or a native dialog is open', this.iso())
