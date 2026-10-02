@@ -9,7 +9,10 @@ Electron 44.3.0 uses Chromium 152.0.7977.78, whose network sandbox grants its
 `Shared Dictionary`. BMN recognizes that capability only inside those exact
 subtrees of the resolved data root. Config, state, runtime, database and other
 application files retain the strict policy. Windows roots that alias or overlap
-the data root are refused to prevent ambiguous policy selection.
+the data root are refused to prevent ambiguous policy selection. All requested
+paths are compared using the same Windows .NET full-path normalization, including
+8.3 aliases and trailing separators, before any root is created. Duplicate
+requested roots remain visible to that preflight.
 
 The capability SID is
 `S-1-15-3-1024-395641907-2340533657-1796656376-1949871151-3167452726-3934347287-2361051074-3061173417`.

@@ -33,7 +33,8 @@ describe('private application directories', () => {
     expect(exe).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
     expect(args).toContain('-NoProfile')
     expect(args).toContain('-NonInteractive')
-    expect(options).toMatchObject({ input: JSON.stringify({ paths: [path] }), timeout: 15_000, windowsHide: true })
+    expect(options).toMatchObject({ timeout: 15_000, windowsHide: true })
+    expect(JSON.parse(options!.input as string)).toMatchObject({ paths: [path] })
     expect(Buffer.from(args!.at(-1)!, 'base64').toString('utf16le')).not.toContain(path)
   })
   it.each([

@@ -1,6 +1,6 @@
 // Real Windows ACL regressions; the Linux mode test is in private-directory.test.ts.
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -36,8 +36,41 @@ const networkCapability = 'S-1-15-3-1024-395641907-2340533657-1796656376-1949871
 function addCapability(path: string, rights = 'Modify, Synchronize', inheritance = 'None', identity = networkCapability): void {
   powershell(path, `$acl=$item.GetAccessControl(); $identity=New-Object System.Security.Principal.SecurityIdentifier('${identity}'); $rule=New-Object System.Security.AccessControl.FileSystemAccessRule($identity,'${rights}','${inheritance}','None','Allow'); $acl.AddAccessRule($rule); $item.SetAccessControl($acl)`)
 }
+function aliases(path: string): { short: string; long: string } {
+  const long = powershell(path, '$item.FullName')
+  const short = powershell(path, `Add-Type 'using System; using System.Text; using System.Runtime.InteropServices; public static class ShortPath { [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern uint GetShortPathName(string path, StringBuilder output, uint size); }'; $buffer=New-Object System.Text.StringBuilder(32768); $length=[ShortPath]::GetShortPathName($item.FullName,$buffer,32768); if ($length -eq 0 -or $length -ge 32768) { throw 'Short path unavailable' }; $buffer.ToString()`)
+  expect(short.toLowerCase(), 'native fixture requires a real 8.3 alias').not.toBe(long.toLowerCase())
+  return { short, long }
+}
 
 describe.skipIf(process.platform !== 'win32')('native Windows private roots', () => {
+  it('uses one canonical path for Chromium scope and rejects alias overlaps before creation', { timeout: 120_000 }, () => {
+    const parent = fixture()
+    const root = join(parent, 'private storage')
+    ensurePrivateDirectories([root])
+    const { short, long } = aliases(root)
+    mkdirSync(join(root, 'Cache'))
+    addCapability(join(root, 'Cache'))
+    expect(() => ensurePrivateDirectories([short], 'win32', long)).not.toThrow()
+    expect(() => ensurePrivateDirectories([long + '\\'], 'win32', short)).not.toThrow()
+    expect(() => ensurePrivateDirectories([short])).toThrow(/could not secure/)
+    const before = powershell(root, sddl)
+    const untouched = join(parent, 'must-not-be-created')
+    const missing = join(long, 'missing-child')
+    for (const [requested, data] of [
+      [[untouched, short, long], long],
+      [[untouched, short.toUpperCase() + '\\', long], long],
+      [[untouched, short, missing], short],
+      [[untouched, long, join(short, 'missing-child')], missing]
+    ] as const) {
+      expect(() => ensurePrivateDirectories(requested, 'win32', data)).toThrow(/could not secure|distinct|overlap/)
+      expect(existsSync(untouched)).toBe(false)
+      expect(existsSync(missing)).toBe(false)
+      expect(powershell(root, sddl)).toBe(before)
+    }
+    expect(() => ensurePrivateDirectories([join(short, 'new-leaf')], 'win32', join(long, 'new-leaf'))).not.toThrow()
+    expect(() => ensurePrivateDirectories([short, root + '-sibling'], 'win32', long)).not.toThrow()
+  })
   it('accepts only scoped network capability access while retaining the strict default', { timeout: 60_000 }, () => {
     const root = join(fixture(), 'private')
     ensurePrivateDirectories([root])

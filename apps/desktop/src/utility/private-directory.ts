@@ -39,8 +39,31 @@ function Assert-SafeAncestors($directory) {
     }
   }
 }
-foreach ($path in $paths) {
-  $directory = New-Object System.IO.DirectoryInfo($path)
+function Get-DirectoryKey($directory) {
+  $key = $directory.FullName
+  if ($key.Length -gt [System.IO.Path]::GetPathRoot($key).Length) { $key = $key.TrimEnd([System.IO.Path]::DirectorySeparatorChar) }
+  return $key
+}
+# DirectoryInfo expands existing 8.3 ancestors. Compare all roots using that same
+# representation, before any creation, while retaining duplicate requested entries.
+$directories = @($paths | ForEach-Object { New-Object System.IO.DirectoryInfo($_) })
+$canonicalDataRoot = if ($chromiumDataRoot) { Get-DirectoryKey (New-Object System.IO.DirectoryInfo($chromiumDataRoot)) } else { $null }
+$protectedKeys = @($request.protectedRoots | ForEach-Object { Get-DirectoryKey (New-Object System.IO.DirectoryInfo($_)) })
+$dataMatches = 0
+foreach ($directory in $directories) {
+  Assert-SafeAncestors $directory
+  $key = Get-DirectoryKey $directory
+  if ($null -eq $directory.Parent -or $protectedKeys -contains $key) { throw 'BMN roots must be dedicated application directories' }
+  if ($canonicalDataRoot) {
+    if ($key.Equals($canonicalDataRoot, [System.StringComparison]::OrdinalIgnoreCase)) { $dataMatches++ }
+    else {
+      $separator = [System.IO.Path]::DirectorySeparatorChar
+      if ($key.StartsWith($canonicalDataRoot + $separator, [System.StringComparison]::OrdinalIgnoreCase) -or $canonicalDataRoot.StartsWith($key + $separator, [System.StringComparison]::OrdinalIgnoreCase)) { throw 'BMN roots must not overlap Chromium storage' }
+    }
+  }
+}
+if ($canonicalDataRoot -and $dataMatches -ne 1) { throw 'BMN Chromium storage must be a distinct application root' }
+foreach ($directory in $directories) {
   Assert-SafeAncestors $directory
   if (-not $directory.Exists) {
     $acl = New-Object System.Security.AccessControl.DirectorySecurity
@@ -68,7 +91,7 @@ foreach ($path in $paths) {
     $userRules = @($rules | Where-Object { $_.IdentityReference.Value -eq $sid.Value })
     if ($userRules.Count -ne 1 -or $userRules[0].AccessControlType -ne 'Allow' -or $userRules[0].FileSystemRights -ne 'FullControl' -or $userRules[0].PropagationFlags -ne 'None') { throw 'BMN storage ACL verification failed' }
     $chromiumItem = $false
-    if ($chromiumDataRoot -and $directory.FullName.Equals($chromiumDataRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    if ($canonicalDataRoot -and (Get-DirectoryKey $directory).Equals($canonicalDataRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
       foreach ($name in @('Cache', 'Network', 'Shared Dictionary')) {
         $prefix = [System.IO.Path]::Combine($directory.FullName, $name)
         if ($item.FullName.Equals($prefix, [System.StringComparison]::OrdinalIgnoreCase) -or $item.FullName.StartsWith($prefix + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) { $chromiumItem = $true }
@@ -117,7 +140,7 @@ export function ensurePrivateDirectories(
         throw new Error('BMN Windows data folders must not overlap the Chromium data folder')
       }
     }
-    if (matches !== 1) throw new Error('BMN Windows Chromium data folder must be a distinct application root')
+    if (matches > 1) throw new Error('BMN Windows Chromium data folder must be a distinct application root')
   }
   for (const root of roots) {
     const normalized = win32.resolve(root).toLowerCase()
@@ -132,7 +155,11 @@ export function ensurePrivateDirectories(
   const result = spawnSync(win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), [
     '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand',
     Buffer.from(WINDOWS_PRIVATE_DIRECTORY, 'utf16le').toString('base64')
-  ], { input: JSON.stringify({ paths: [...new Set(roots)], chromiumDataRoot: chromiumDataRoot && win32.resolve(chromiumDataRoot) }), encoding: 'utf8', timeout: 15_000, maxBuffer: 64 * 1024, windowsHide: true })
+  ], { input: JSON.stringify({
+    paths: chromiumDataRoot ? roots : [...new Set(roots)],
+    chromiumDataRoot: chromiumDataRoot && win32.resolve(chromiumDataRoot),
+    protectedRoots: [homedir(), process.env.LOCALAPPDATA, systemRoot].filter(Boolean)
+  }), encoding: 'utf8', timeout: 15_000, maxBuffer: 64 * 1024, windowsHide: true })
   if (result.error || result.status !== 0 || result.stdout !== 'BMN_PRIVATE_ROOTS_OK') {
     // Do not expose shell diagnostics, which may contain environment or path data.
     throw new Error('BMN could not secure its Windows data folders. Use new dedicated folders on an ACL-capable local drive, or existing private BMN folders without unverified links; Windows PowerShell must be available.')
