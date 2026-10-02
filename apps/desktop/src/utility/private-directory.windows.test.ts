@@ -1,15 +1,19 @@
 // Real Windows ACL regressions; the Linux mode test is in private-directory.test.ts.
 import { spawnSync } from 'node:child_process'
-import * as childProcess from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ensurePrivateDirectories } from './private-directory'
 
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>()
+  return { ...actual, spawnSync: vi.fn(actual.spawnSync) }
+})
+
 const temporary: string[] = []
 afterEach(() => {
-  vi.restoreAllMocks()
+  vi.clearAllMocks()
   for (const root of temporary.splice(0)) rmSync(root, { recursive: true, force: true })
 })
 function fixture() {
@@ -69,7 +73,8 @@ describe.skipIf(process.platform !== 'win32')('native Windows private roots', ()
     const root = join(fixture(), 'wide')
     ensurePrivateDirectories([root])
     for (let index = 0; index < 10_000; index++) writeFileSync(join(root, `${index}.txt`), '')
-    const spawn = vi.spyOn(childProcess, 'spawnSync')
+    const spawn = vi.mocked(spawnSync)
+    spawn.mockClear()
     const started = performance.now()
     expect(() => ensurePrivateDirectories([root])).toThrow(/could not secure/)
     const elapsedMs = Math.round(performance.now() - started)

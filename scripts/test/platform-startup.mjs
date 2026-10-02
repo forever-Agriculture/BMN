@@ -54,8 +54,17 @@ const receipt = await withTemporaryRoot(temporaryRootContracts.electronDevelopme
         stage = 'getControlInfo'
         return { workspaceId: workspace.workspaceId, control: await window.aiTerminal.getControlInfo() }
       } catch (error) {
+        // Include the retained host-loss notice; a later IPC failure only says "unavailable".
+        const startup = await new Promise((resolve) => {
+          const timer = setTimeout(() => { unsubscribe(); resolve({ unavailable: true }) }, 1000)
+          const unsubscribe = window.aiTerminal.onStartup((value) => {
+            clearTimeout(timer)
+            unsubscribe()
+            resolve(value.ok ? { ok: true } : value)
+          })
+        })
         // IPC errors may be plain objects; Playwright otherwise reports only "Object".
-        throw new Error(JSON.stringify({ stage, code: error?.code,
+        throw new Error(JSON.stringify({ stage, code: error?.code, startup,
           message: String(error?.message ?? error).slice(0, 1000) }), { cause: error })
       }
     })
