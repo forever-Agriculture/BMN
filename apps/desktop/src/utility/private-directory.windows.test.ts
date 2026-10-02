@@ -32,8 +32,40 @@ function powershell(path: string, operation: string): string {
 }
 const broaden = `$acl=$item.GetAccessControl(); $acl.SetAccessRuleProtection($true,$true); $everyone=New-Object System.Security.Principal.SecurityIdentifier('S-1-1-0'); $rule=New-Object System.Security.AccessControl.FileSystemAccessRule($everyone,'ReadAndExecute','Allow'); $acl.AddAccessRule($rule); $item.SetAccessControl($acl)`
 const sddl = `$item.GetAccessControl().Sddl`
+const networkCapability = 'S-1-15-3-1024-395641907-2340533657-1796656376-1949871151-3167452726-3934347287-2361051074-3061173417'
+function addCapability(path: string, rights = 'Modify, Synchronize', inheritance = 'None', identity = networkCapability): void {
+  powershell(path, `$acl=$item.GetAccessControl(); $identity=New-Object System.Security.Principal.SecurityIdentifier('${identity}'); $rule=New-Object System.Security.AccessControl.FileSystemAccessRule($identity,'${rights}','${inheritance}','None','Allow'); $acl.AddAccessRule($rule); $item.SetAccessControl($acl)`)
+}
 
 describe.skipIf(process.platform !== 'win32')('native Windows private roots', () => {
+  it('accepts only scoped network capability access while retaining the strict default', { timeout: 60_000 }, () => {
+    const root = join(fixture(), 'private')
+    ensurePrivateDirectories([root])
+    const cache = join(root, 'Cache')
+    mkdirSync(cache)
+    addCapability(cache)
+    const before = powershell(cache, sddl)
+    expect(() => ensurePrivateDirectories([root])).toThrow(/could not secure/)
+    expect(() => ensurePrivateDirectories([root], 'win32', root)).not.toThrow()
+    expect(powershell(cache, sddl)).toBe(before)
+  })
+  it.each([
+    { path: 'Cache', rights: 'FullControl', inheritance: 'None', identity: networkCapability },
+    { path: 'Cache', rights: 'Modify, Synchronize', inheritance: 'ObjectInherit', identity: networkCapability },
+    { path: 'Cache', rights: 'Modify, Synchronize', inheritance: 'None', identity: 'S-1-1-0' },
+    { path: 'CacheSibling', rights: 'Modify, Synchronize', inheritance: 'None', identity: networkCapability },
+    { path: 'credentials', rights: 'Modify, Synchronize', inheritance: 'None', identity: networkCapability },
+    { path: '', rights: 'Modify, Synchronize', inheritance: 'None', identity: networkCapability }
+  ])('refuses unexpected capability ACLs without mutation: $path/$rights/$inheritance/$identity', { timeout: 60_000 }, ({ path, rights, inheritance, identity }) => {
+    const root = join(fixture(), 'private')
+    ensurePrivateDirectories([root])
+    const target = join(root, path)
+    if (path) mkdirSync(target)
+    addCapability(target, rights, inheritance, identity)
+    const before = powershell(target, sddl)
+    expect(() => ensurePrivateDirectories([root], 'win32', root)).toThrow(/could not secure/)
+    expect(powershell(target, sddl)).toBe(before)
+  })
   it('creates private roots and accepts inherited files on restart', { timeout: 60_000 }, () => {
     const root = join(fixture(), 'new 数据')
     ensurePrivateDirectories([root])

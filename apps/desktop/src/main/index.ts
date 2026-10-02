@@ -1036,8 +1036,9 @@ if (selfTest) {
 ensureDevelopmentRoots()
 app.on('will-quit', cleanupDevelopmentRoot)
 process.once('exit', cleanupDevelopmentRoot)
-const instanceDataRoot = resolveApplicationRoots().data
-ensurePrivateDirectories([instanceDataRoot])
+const instanceRoots = resolveApplicationRoots()
+const instanceDataRoot = instanceRoots.data
+ensurePrivateDirectories(Object.values(instanceRoots), process.platform, instanceDataRoot)
 const primaryInstance = acquireRootScopedSingleInstance(app, instanceDataRoot, () =>
   focusExistingWindow(applicationWindow)
 )

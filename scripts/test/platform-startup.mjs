@@ -3,9 +3,8 @@
 // Intentionally creates no terminal: native shell lifecycle belongs to Story 53.2.
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import childProcess from 'node:child_process'
 import { once } from 'node:events'
-import { createRequire, syncBuiltinESMExports } from 'node:module'
+import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
@@ -25,7 +24,6 @@ const wayland = display && process.env.XDG_RUNTIME_DIR && !isAbsolute(display)
 const receipt = await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roots }) => {
   const env = {
     ...process.env,
-    BMN_ROOT_DIAGNOSTIC: '1',
     BMN_CONFIG_HOME: join(roots.config, 'bmn'), BMN_DATA_HOME: join(roots.data, 'bmn'),
     BMN_STATE_HOME: join(roots.state, 'bmn'), BMN_RUNTIME_HOME: join(roots.runtime, 'bmn'),
     XDG_CONFIG_HOME: roots.config, XDG_DATA_HOME: roots.data, XDG_STATE_HOME: roots.state,
@@ -118,28 +116,6 @@ const receipt = await withTemporaryRoot(temporaryRootContracts.electronDevelopme
     return { platformStartup: 'passed', platform: process.platform, arch: process.arch,
       binary: binary ?? 'development', nativeModules, chromiumSandbox: true, persistence: true, singleInstance: true, hardening,
       control: state.control, versions: await application.evaluate(() => process.versions) }
-  } catch (error) {
-    if (process.platform === 'win32') {
-      // Temporary synthetic-profile diagnostic: reproduce the storage guard while Chromium is live.
-      const original = childProcess.spawnSync
-      childProcess.spawnSync = (executable, arguments_, options) => {
-        const args = [...arguments_]
-        const script = Buffer.from(args.at(-1), 'base64').toString('utf16le')
-        const instrumented = `trap { [Console]::Error.WriteLine('BMN_ROOT_PROBE root=' + $path + ' item=' + $item.FullName); throw };\n${script}`
-        args[args.length - 1] = Buffer.from(instrumented, 'utf16le').toString('base64')
-        const result = original(executable, args, options)
-        console.error(JSON.stringify({ windowsRootDiagnostic: true, status: result.status,
-          errorCode: result.error?.code, stderr: String(result.stderr ?? '').slice(-8000) }))
-        return result
-      }
-      syncBuiltinESMExports()
-      try {
-        const { ensurePrivateDirectories } = await import('../../apps/desktop/src/utility/private-directory.ts')
-        ensurePrivateDirectories([env.BMN_CONFIG_HOME, env.BMN_DATA_HOME, env.BMN_STATE_HOME, env.BMN_RUNTIME_HOME])
-      } catch { /* The original startup error remains the test failure. */ }
-      finally { childProcess.spawnSync = original; syncBuiltinESMExports() }
-    }
-    throw error
   } finally { await application.close() }
 })
 console.log(JSON.stringify(receipt))

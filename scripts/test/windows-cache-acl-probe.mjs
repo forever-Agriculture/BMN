@@ -1,4 +1,4 @@
-// Temporary synthetic native Chromium ACL probe; no native module rebuild or owner profile.
+// Native regression: sandboxed Chromium cache ACLs and strict durable-data policy.
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
@@ -22,7 +22,6 @@ app.whenReady().then(async () => {
 }).catch(() => app.exit(1));\n`)
   const env = { ...process.env }
   delete env.ELECTRON_RUN_AS_NODE
-  delete env.BMN_ROOT_DIAGNOSTIC
   const electron = spawnSync(process.env.BMN_PROBE_ELECTRON, [fixture, root], { env, encoding: 'utf8', timeout: 30_000 })
   assert.equal(electron.error, undefined)
   assert.equal(electron.status, 0, electron.stderr)
@@ -45,9 +44,14 @@ ConvertTo-Json -InputObject $results -Depth 6 -Compress`
   ], { input: JSON.stringify(root), encoding: 'utf8', timeout: 15_000 })
   assert.equal(acl.error, undefined)
   assert.equal(acl.status, 0, acl.stderr)
-  let guard = 'passed'
-  try { ensurePrivateDirectories([root]) } catch (error) { guard = error.message }
+  assert.throws(() => ensurePrivateDirectories([root]), /could not secure/, 'strict durable-data policy must reject Chromium capability grants')
+  ensurePrivateDirectories([root], process.platform, root)
+  const second = spawnSync(process.env.BMN_PROBE_ELECTRON, [fixture, root], { env, encoding: 'utf8', timeout: 30_000 })
+  assert.equal(second.error, undefined)
+  assert.equal(second.status, 0, second.stderr)
+  ensurePrivateDirectories([root], process.platform, root)
+  const guard = 'passed-after-Chromium-and-restart'
   mkdirSync('test-results', { recursive: true })
-  writeFileSync('test-results/windows-cache-acl.json', JSON.stringify({ diagnosticOnly: true, guard, entries: JSON.parse(acl.stdout) }, null, 2))
-  console.log(JSON.stringify({ diagnosticOnly: true, guard }))
+  writeFileSync('test-results/windows-cache-acl.json', JSON.stringify({ chromiumAclRegression: true, guard, entries: JSON.parse(acl.stdout) }, null, 2))
+  console.log(JSON.stringify({ chromiumAclRegression: true, guard }))
 } finally { rmSync(parent, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }) }

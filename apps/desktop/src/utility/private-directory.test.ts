@@ -33,8 +33,18 @@ describe('private application directories', () => {
     expect(exe).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
     expect(args).toContain('-NoProfile')
     expect(args).toContain('-NonInteractive')
-    expect(options).toMatchObject({ input: JSON.stringify([path]), timeout: 15_000, windowsHide: true })
+    expect(options).toMatchObject({ input: JSON.stringify({ paths: [path] }), timeout: 15_000, windowsHide: true })
     expect(Buffer.from(args!.at(-1)!, 'base64').toString('utf16le')).not.toContain(path)
+  })
+  it.each([
+    ['C:\\profile', 'C:\\profile'],
+    ['C:\\profile', 'C:\\profile\\Cache'],
+    ['C:\\profile', 'C:\\'],
+    ['C:\\profile', 'c:\\PROFILE\\config']
+  ])('refuses Chromium policy on aliased or overlapping application roots: %j', (...roots) => {
+    vi.stubEnv('SystemRoot', 'C:\\Windows')
+    expect(() => ensurePrivateDirectories(roots, 'win32', roots[0])).toThrow(/distinct|overlap/)
+    expect(spawnSync).not.toHaveBeenCalled()
   })
   it.each([
     { status: 1, stdout: 'BMN_PRIVATE_ROOTS_OK' },

@@ -72,5 +72,5 @@ export function resolveApplicationRoots(
 }
 
 export async function ensureApplicationRoots(roots: ApplicationRoots): Promise<void> {
-  ensurePrivateDirectories(Object.values(roots))
+  ensurePrivateDirectories(Object.values(roots), process.platform, roots.data)
 }

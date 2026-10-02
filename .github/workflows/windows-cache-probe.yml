@@ -1,9 +1,10 @@
-name: Windows Chromium ACL diagnostic
+name: Windows Chromium storage regression
 on:
   pull_request:
     paths:
       - .github/workflows/windows-cache-probe.yml
       - scripts/test/windows-cache-acl-probe.mjs
+      - apps/desktop/src/utility/private-directory.ts
 permissions:
   contents: read
 jobs:
@@ -24,7 +25,7 @@ jobs:
           node (Join-Path $probeDir 'node_modules/electron/install.js')
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "BMN_PROBE_ELECTRON=$(Join-Path $probeDir 'node_modules/electron/dist/electron.exe')" >> $env:GITHUB_ENV
-      - name: Inspect synthetic Chromium cache ACL
+      - name: Verify synthetic Chromium storage and restart
         run: node scripts/test/windows-cache-acl-probe.mjs
       - uses: actions/upload-artifact@v4
         if: always()

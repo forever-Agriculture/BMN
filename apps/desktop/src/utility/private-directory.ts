@@ -8,8 +8,13 @@ import { homedir } from 'node:os'
 const WINDOWS_PRIVATE_DIRECTORY = `
 $ErrorActionPreference = 'Stop'
 [Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false)
-$paths = ConvertFrom-Json ([Console]::In.ReadToEnd())
+$request = ConvertFrom-Json ([Console]::In.ReadToEnd())
+$paths = $request.paths
+$chromiumDataRoot = $request.chromiumDataRoot
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+# Electron 44 / Chromium lpacContentNetworkService. This is a restricted-token
+# capability, never an owner or ordinary user. See docs/windows-storage-security.md.
+$networkCapability = 'S-1-15-3-1024-395641907-2340533657-1796656376-1949871151-3167452726-3934347287-2361051074-3061173417'
 $trustedPrincipals = @($sid.Value, 'S-1-5-18', 'S-1-5-32-544')
 try {
   $installer = New-Object System.Security.Principal.NTAccount('NT SERVICE', 'TrustedInstaller')
@@ -60,9 +65,24 @@ foreach ($path in $paths) {
     $security = $item.GetAccessControl()
     Assert-SafeOwner $security
     $rules = @($security.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
-    if ($rules.Count -ne 1 -or $rules[0].IdentityReference.Value -ne $sid.Value -or $rules[0].AccessControlType -ne 'Allow' -or $rules[0].FileSystemRights -ne 'FullControl' -or $rules[0].PropagationFlags -ne 'None') { throw 'BMN storage ACL verification failed' }
+    $userRules = @($rules | Where-Object { $_.IdentityReference.Value -eq $sid.Value })
+    if ($userRules.Count -ne 1 -or $userRules[0].AccessControlType -ne 'Allow' -or $userRules[0].FileSystemRights -ne 'FullControl' -or $userRules[0].PropagationFlags -ne 'None') { throw 'BMN storage ACL verification failed' }
+    $chromiumItem = $false
+    if ($chromiumDataRoot -and $directory.FullName.Equals($chromiumDataRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+      foreach ($name in @('Cache', 'Network', 'Shared Dictionary')) {
+        $prefix = [System.IO.Path]::Combine($directory.FullName, $name)
+        if ($item.FullName.Equals($prefix, [System.StringComparison]::OrdinalIgnoreCase) -or $item.FullName.StartsWith($prefix + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) { $chromiumItem = $true }
+      }
+    }
+    foreach ($rule in $rules) {
+      if ($rule.IdentityReference.Value -eq $sid.Value) { continue }
+      if (-not $chromiumItem -or $rule.IdentityReference.Value -ne $networkCapability -or $rule.AccessControlType -ne 'Allow') { throw 'BMN storage ACL verification failed' }
+      $direct = [int]$rule.FileSystemRights -eq 1245631 -and $rule.InheritanceFlags -eq 'None' -and $rule.PropagationFlags -eq 'None'
+      $template = $item -is [System.IO.DirectoryInfo] -and [int]$rule.FileSystemRights -eq -536805376 -and $rule.InheritanceFlags -eq 'ContainerInherit, ObjectInherit' -and $rule.PropagationFlags -eq 'InheritOnly'
+      if (-not $direct -and -not $template) { throw 'BMN Chromium storage ACL verification failed' }
+    }
     if ($item -is [System.IO.DirectoryInfo]) {
-      if ($rules[0].InheritanceFlags -ne 'ContainerInherit, ObjectInherit') { throw 'BMN storage ACL does not protect new children' }
+      if ($userRules[0].InheritanceFlags -ne 'ContainerInherit, ObjectInherit') { throw 'BMN storage ACL does not protect new children' }
       $entries = $item.EnumerateFileSystemInfos().GetEnumerator()
       try {
         while ($entries.MoveNext()) {
@@ -77,13 +97,27 @@ foreach ($path in $paths) {
 [Console]::Out.Write('BMN_PRIVATE_ROOTS_OK')
 `
 
-export function ensurePrivateDirectories(roots: readonly string[], platform: NodeJS.Platform = process.platform): void {
+export function ensurePrivateDirectories(
+  roots: readonly string[], platform: NodeJS.Platform = process.platform, chromiumDataRoot?: string
+): void {
   if (platform !== 'win32') {
     for (const root of roots) {
       mkdirSync(root, { recursive: true, mode: 0o700 })
       chmodSync(root, 0o700)
     }
     return
+  }
+  if (chromiumDataRoot) {
+    const data = win32.resolve(chromiumDataRoot).toLowerCase()
+    let matches = 0
+    for (const root of roots) {
+      const candidate = win32.resolve(root).toLowerCase()
+      if (candidate === data) matches++
+      else if (candidate.startsWith(data.endsWith('\\') ? data : data + '\\') || data.startsWith(candidate.endsWith('\\') ? candidate : candidate + '\\')) {
+        throw new Error('BMN Windows data folders must not overlap the Chromium data folder')
+      }
+    }
+    if (matches !== 1) throw new Error('BMN Windows Chromium data folder must be a distinct application root')
   }
   for (const root of roots) {
     const normalized = win32.resolve(root).toLowerCase()
@@ -98,11 +132,8 @@ export function ensurePrivateDirectories(roots: readonly string[], platform: Nod
   const result = spawnSync(win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), [
     '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand',
     Buffer.from(WINDOWS_PRIVATE_DIRECTORY, 'utf16le').toString('base64')
-  ], { input: JSON.stringify([...new Set(roots)]), encoding: 'utf8', timeout: 15_000, maxBuffer: 64 * 1024, windowsHide: true })
+  ], { input: JSON.stringify({ paths: [...new Set(roots)], chromiumDataRoot: chromiumDataRoot && win32.resolve(chromiumDataRoot) }), encoding: 'utf8', timeout: 15_000, maxBuffer: 64 * 1024, windowsHide: true })
   if (result.error || result.status !== 0 || result.stdout !== 'BMN_PRIVATE_ROOTS_OK') {
-    // Temporary CI probe: enabled only by the isolated synthetic startup harness.
-    if (process.env.BMN_ROOT_DIAGNOSTIC === '1') console.error(JSON.stringify({ rootProbe: true,
-      status: result.status, errorCode: (result.error as NodeJS.ErrnoException | undefined)?.code, stderr: String(result.stderr ?? '').slice(-8000) }))
     // Do not expose shell diagnostics, which may contain environment or path data.
     throw new Error('BMN could not secure its Windows data folders. Use new dedicated folders on an ACL-capable local drive, or existing private BMN folders without unverified links; Windows PowerShell must be available.')
   }

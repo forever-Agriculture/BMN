@@ -154,3 +154,17 @@ ownership for repair, never a waiver or a confirmed diagnosis of every failure.
 | `apps/desktop/src/utility/session-manager.test.ts` | 40 | 53.2 |
 | `apps/desktop/src/utility/telegram-card-keeper.test.ts` | 1 | 53.9 |
 | `apps/desktop/src/utility/terminal-graphics.test.ts` | 1 | 53.7 |
+
+### Additional native security evidence
+
+[Run 37062572504](https://github.com/forever-Agriculture/BMN/actions/runs/37062572504)
+on `26b1206` passed all five native ACL tests: new-root/restart, shared-root refusal,
+broad-child refusal, root-junction refusal without changing the target ACL, and
+entry-limit refusal. The 10,000-child fixture reached the explicit entry limit in
+629 ms without timing out. This does not measure memory or prove foreign-owner or
+cross-account denial. The real application still loses its utility host because
+that process's folder-security check fails; full startup remains unverified.
+
+The `fa91090` inventory also exposed a timeout in
+`apps/desktop/src/utility/file-reference-search.test.ts`, owned by 53.3. Its cause
+is unconfirmed and it has not been waived.

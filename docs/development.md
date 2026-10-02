@@ -201,7 +201,9 @@ Development uses disposable roots unless all four BMN overrides are supplied.
 Before writing state, Windows uses the built-in Windows PowerShell to create new roots with
 an owner-SID-only protected inheritable directory DACL and validate existing roots
 and descendants without changing their ACLs; a failure stops
-startup. Windows mode bits alone are never considered permission evidence.
+startup. Only the data root's Chromium network/cache subtrees recognize the exact
+pinned sandbox capability ACLs, as described in [Windows storage security](windows-storage-security.md).
+Application roots must not alias or overlap the data root. Windows mode bits alone are never considered permission evidence.
 Existing roots that do not already have the private BMN ACL, root/ancestor
 junctions and unverified links inside stored data are refused. This initial check
 is bounded at 10,000 entries and 15 seconds; larger stores remain an open Windows
