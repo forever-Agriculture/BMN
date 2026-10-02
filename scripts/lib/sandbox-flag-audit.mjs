@@ -156,7 +156,7 @@ export async function scanForSandboxDisablingFlags(repoRoot) {
       throw error
     }
     for (const rule of findSandboxDisablingText(content)) {
-      findings.push({ file: relative(repoRoot, file), rule })
+      findings.push({ file: relative(repoRoot, file).replaceAll('\\', '/'), rule })
     }
   }
   return findings

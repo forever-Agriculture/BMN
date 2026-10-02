@@ -13,8 +13,11 @@ const results = []
 let mode = 'inherited'
 childProcess.spawnSync = (executable, args, options) => {
   const env = { ...process.env }
-  if (mode === 'without-psmodulepath') {
-    for (const name of Object.keys(env)) if (name.toLowerCase() === 'psmodulepath') delete env[name]
+  if (mode === 'refresh-after-create') {
+    args = [...args]
+    const script = Buffer.from(args.at(-1), 'base64').toString('utf16le')
+    assert.equal(script.split('$directory.Create($acl)').length, 2)
+    args[args.length - 1] = Buffer.from(script.replace('$directory.Create($acl)', '$directory.Create($acl); $directory.Refresh()'), 'utf16le').toString('base64')
   }
   const start = performance.now()
   const result = originalSpawn(executable, args, { ...options, env })
@@ -26,7 +29,7 @@ childProcess.spawnSync = (executable, args, options) => {
 syncBuiltinESMExports()
 const { ensurePrivateDirectories } = await import('../../apps/desktop/src/utility/private-directory.ts')
 try {
-  for (mode of ['inherited', 'without-psmodulepath']) {
+  for (mode of ['inherited', 'refresh-after-create']) {
     const parent = mkdtempSync(join(tmpdir(), 'bmn-root-probe-'))
     try {
       ensurePrivateDirectories([join(parent, 'data 数据')])
