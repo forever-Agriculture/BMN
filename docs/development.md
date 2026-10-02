@@ -1,8 +1,34 @@
 # Development
 
+## Planned Linux and Windows contribution policy
+
+[Epic 53: Full Windows Support](epic-53-windows-support.md) defines the port and its
+acceptance gates. Windows support is planned, not currently verified. During the
+port, newly merged features join its parity checklist. Once the epic is accepted,
+every feature and fix must work on both Linux and Windows before it is complete.
+Use one shared codebase and short pull-request branches; isolate OS differences at
+their boundaries. Linux and native Windows CI checks must pass, with affected
+manual workflows checked on the relevant machine and WSL checks for WSL changes.
+Missing platform evidence stays UNVERIFIED and blocks completion. Documentation-only
+changes need documentation checks, not unrelated application tests.
+
+For shared logic and renderer flows, execution in real Electron on native Windows
+CI counts as Windows evidence. Changes to OS boundaries or device/desktop behavior
+also need the affected flow checked on the supported Windows setup; see the epic's
+evidence table. Reuse unchanged passing evidence instead of repeating unrelated
+manual checks. The shared parity checklist and pull requests carry collaborative
+progress; the maintainer's local BMAD tracker mirrors accepted results.
+
+The implementation team owns development, testing and repair on Linux and Windows.
+The Windows collaborator supplies an independent final verification of Windows
+quality; this supplements, rather than replaces, the team's Windows checks.
+Each pull request names its platform impact and records the checks actually run.
+
 ## Prerequisites
 
-- Linux x64. Development happens on Ubuntu 24.04.
+- Linux x64. The previously documented setup is Ubuntu 24.04; the owner's current
+  machine reports Ubuntu 26.04.1 LTS. Epic 53.1 must record the tested Linux baseline;
+  observing the OS upgrade alone does not verify compatibility.
 - Node.js 24 (`engines` allows `>=24 <25`).
 - pnpm 12.3.4. `corepack enable` provides the version pinned in `package.json`.
 - `node-gyp` on `PATH` (`npm install -g node-gyp`). pnpm compiles `better-sqlite3` with it during
@@ -143,3 +169,41 @@ string for the stroke icon set in `icons.tsx` (stroke 1.4, round caps, no fill):
   says so when it recovers.
 - Start again runs a fresh process; use Resume to reopen a Claude Code or Codex conversation.
 - A model placed by hand in a custom Model folder is accepted by size without a checksum check.
+
+## Windows port development (Story 53.1, not yet accepted)
+
+The target desktop is Windows 11 x64, standard user, without WSL. Install Node
+24.14.0, pnpm 12.3.4, Python and Visual Studio 2022 Build Tools with Desktop C++,
+the Windows SDK and the matching MSVC Spectre-mitigated libraries required by
+node-pty. Run `pnpm install --frozen-lockfile`; postinstall rebuilds node-pty and
+better-sqlite3 for pinned Electron 44.3.0. Then run `pnpm run lint`,
+`pnpm run typecheck`, `pnpm run test:unit`, `pnpm run build` and
+`node scripts/test/platform-startup.mjs`. Keep full test failures in the
+[parity inventory](epic-53-parity.md); this setup is still UNVERIFIED on Windows.
+
+`pnpm run package:unpacked` creates the internal `apps/desktop/release/win-unpacked/BMN.exe`.
+Run `node scripts/test/platform-startup.mjs --binary apps/desktop/release/win-unpacked/BMN.exe`
+and `pnpm exec vitest run scripts/tests/packaged-native-modules.test.mjs` to check
+that candidate. Build on the target OS: native ABI filtering uses the host platform.
+This is unsigned development output, without an installer or a full-parity claim.
+Windows voice resources and native CLI launchers are still pending their stories.
+The existing full Linux `pnpm run package` continues to build voice resources.
+Never package over a running packaged app.
+
+Windows persistent defaults are `%LOCALAPPDATA%\BMN\config`, `data`, `state` and
+`runtime` (fallback: the account's `AppData\Local\BMN`). All are local to the
+account, including config; no roaming database is introduced. Per-root precedence
+is `BMN_*_HOME`, then `AITERM_*_HOME`, then the Windows default. XDG variables affect
+Linux only. Explicit override values are exact paths, without an appended `bmn`.
+Development uses disposable roots unless all four BMN overrides are supplied.
+
+Before writing state, Windows uses the built-in Windows PowerShell to create new roots with
+an owner-SID-only protected inheritable directory DACL and validate existing roots
+and descendants without changing their ACLs; a failure stops
+startup. Windows mode bits alone are never considered permission evidence.
+Existing roots that do not already have the private BMN ACL, root/ancestor
+junctions and unverified links inside stored data are refused. This initial check
+is bounded at 10,000 entries and 15 seconds; larger stores remain an open Windows
+acceptance boundary, not a full-parity claim.
+Native denial from a second standard account and override-path security remain
+required acceptance checks. See Microsoft's [DirectorySecurity API](https://learn.microsoft.com/en-us/dotnet/api/system.security.accesscontrol.directorysecurity?view=netframework-4.8.1).

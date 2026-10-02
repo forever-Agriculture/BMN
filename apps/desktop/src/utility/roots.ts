@@ -1,8 +1,8 @@
 // MODULE: roots.ts - XDG config, data, state and runtime roots; an existing legacy installation keeps its ai-terminal roots in place
 import { existsSync } from 'node:fs'
-import { chmod, mkdir } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
+import { ensurePrivateDirectories } from './private-directory'
 
 export interface ApplicationRoots {
   config: string
@@ -44,8 +44,19 @@ function persistentRootDirectory(dataBase: string): string {
 
 export function resolveApplicationRoots(
   environment: RootEnvironment = process.env,
-  fallbacks: RootFallbacks = defaultRootFallbacks()
+  fallbacks: RootFallbacks = defaultRootFallbacks(),
+  platform: NodeJS.Platform = process.platform
 ): ApplicationRoots {
+  if (platform === 'win32') {
+    const local = environment.LOCALAPPDATA || win32.join(fallbacks.homeDirectory, 'AppData', 'Local')
+    const base = win32.join(local, 'BMN')
+    return {
+      config: environment.BMN_CONFIG_HOME ?? environment.AITERM_CONFIG_HOME ?? win32.join(base, 'config'),
+      data: environment.BMN_DATA_HOME ?? environment.AITERM_DATA_HOME ?? win32.join(base, 'data'),
+      state: environment.BMN_STATE_HOME ?? environment.AITERM_STATE_HOME ?? win32.join(base, 'state'),
+      runtime: environment.BMN_RUNTIME_HOME ?? environment.AITERM_RUNTIME_HOME ?? win32.join(base, 'runtime')
+    }
+  }
   const configBase = environment.XDG_CONFIG_HOME ?? join(fallbacks.homeDirectory, '.config')
   const dataBase = environment.XDG_DATA_HOME ?? join(fallbacks.homeDirectory, '.local', 'share')
   const stateBase = environment.XDG_STATE_HOME ?? join(fallbacks.homeDirectory, '.local', 'state')
@@ -61,10 +72,5 @@ export function resolveApplicationRoots(
 }
 
 export async function ensureApplicationRoots(roots: ApplicationRoots): Promise<void> {
-  await Promise.all(
-    Object.values(roots).map(async (root) => {
-      await mkdir(root, { recursive: true, mode: 0o700 })
-      await chmod(root, 0o700)
-    })
-  )
+  ensurePrivateDirectories(Object.values(roots))
 }

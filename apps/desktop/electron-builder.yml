@@ -8,7 +8,7 @@ files:
   - '!node_modules/node-pty/build/Release/obj.target/**/*'
   # Keep exclusions in this file set: a separate linux.files exclusion creates a
   # catch-all matcher that includes old releases when packaging into staging.
-  - '!node_modules/better-sqlite3/prebuilds/!(linux-${arch}).node'
+  - '!node_modules/better-sqlite3/prebuilds/!(${platform}-${arch}).node'
 asar: true
 asarUnpack:
   - node_modules/node-pty/build/Release/pty.node
@@ -16,15 +16,7 @@ asarUnpack:
 extraResources:
   - from: resources/terminfo/x/xterm-sixel-256color
     to: terminfo/x/xterm-sixel-256color
-  - from: resources/whisper
-    to: whisper
   # The bmn CLI that sessions find on PATH: a launcher plus the script it runs on the bundled runtime.
-  - from: resources/cli/bmn
-    to: bin/bmn
-  - from: bin/codex
-    to: bin/codex
-  - from: bin/bmn-bashrc
-    to: bin/bmn-bashrc
   - from: bin/bmn
     to: bin/bmn.mjs
   # bmn.mjs imports it by relative path; the utility process bundles its own copy.
@@ -37,9 +29,32 @@ npmRebuild: false
 # better-sqlite3 loads prebuilds/<platform>-<arch>.node, which is where @electron/rebuild puts its
 # from-source build; every other prebuild it ships is dead weight, so the target keeps only its own.
 linux:
+  extraResources:
+    - from: resources/whisper
+      to: whisper
+    - from: resources/cli/bmn
+      to: bin/bmn
+    - from: bin/codex
+      to: bin/codex
+    - from: bin/bmn-bashrc
+      to: bin/bmn-bashrc
   target:
     - dir
   executableName: bmn
   asarUnpack:
     - node_modules/better-sqlite3/prebuilds/linux-*.node
     - node_modules/node-pty/bin/linux-*/node-pty.node
+# Story 53.1 internal unpacked artifact; voice/CLI launchers arrive in 53.8/53.4.
+# Native-host builds only: ${platform} deliberately names the host ABI.
+win:
+  target:
+    - dir
+  executableName: BMN
+  signAndEditExecutable: false
+  asarUnpack:
+    - node_modules/better-sqlite3/prebuilds/win32-*.node
+    - node_modules/node-pty/bin/win32-*/node-pty.node
+    - node_modules/node-pty/build/Release/*.node
+    - node_modules/node-pty/build/Release/*.dll
+    - node_modules/node-pty/build/Release/*.exe
+    - node_modules/node-pty/build/Release/conpty/**

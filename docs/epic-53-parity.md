@@ -1,0 +1,91 @@
+# Epic 53 parity and evidence
+
+The Windows product must be as good as Linux in capability, reliability, security
+and usability. The implementation team owns tests and repairs on both systems.
+The Windows collaborator independently verifies final quality. Native Windows and
+WSL are separate evidence columns; Linux tests or cross-compilation cannot fill them.
+
+Baseline: `e20a21d93593512a7acc8d181acb33a3e2acf03c`. This includes the latest
+Telegram delivery diagnostics as well as the Epic 54/55 source changes. Existing
+Epic 50/54 installed/provider acceptance remains separate and unfinished.
+
+| Capability / owning story | Implementation owner | Linux candidate | Native Windows | WSL |
+| --- | --- | --- | --- | --- |
+| Build, data roots, database, restart, single instance, unpacked startup — 53.1 | Implementation team | Build/startup PASS; packaged smoke UNVERIFIED | UNVERIFIED | UNVERIFIED |
+| PowerShell/cmd launch, input, stop, process identity, crash cleanup, ConPTY feasibility — 53.2 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
+| Files, path links, attachments, backups, directory permissions — 53.3 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
+| CLI, transport, caller/session authority — 53.4 | Implementation team | UNVERIFIED | Not implemented | UNVERIFIED |
+| Named distributions, bridge, path mapping, terminfo — 53.5 | Implementation team | UNVERIFIED | UNVERIFIED | Not implemented |
+| Claude/Codex/OpenCode/Cursor hooks, history, usage, compaction, resume — 53.6 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
+| Terminal images, clipboard, IME/AltGr, scaling, panes, themes, keyboard access — 53.7 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
+| Microphone, local voice engine, cancellation, addressed paste — 53.8 | Implementation team | UNVERIFIED | Not implemented | UNVERIFIED |
+| Notifications, attention, Telegram replies and delivery diagnostics — 53.9 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
+| Per-session development port discovery and navigation — 53.10 | Implementation team | UNVERIFIED | Not implemented | UNVERIFIED |
+| Per-user install, source updates, rollback, uninstall — 53.11 | Implementation team | UNVERIFIED | Not implemented | UNVERIFIED |
+| Full CI, required merge gates, contributor rules — 53.12 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
+| Full feature-guide reconciliation and installed-app acceptance — 53.13 | Team + independent Windows verifier | UNVERIFIED | UNVERIFIED | UNVERIFIED |
+
+## Story 53.1 checks
+
+`.github/workflows/platform-build.yml` runs pinned install/rebuild, lint, typecheck,
+the full unit/integration inventory, build and real Electron startup on Linux and
+native Windows. Windows additionally builds and starts the internal unpacked app.
+The full unit suite remains a failing gate until every platform failure is resolved;
+it is not skipped on Windows. No CI run or native Windows result is recorded yet.
+
+`scripts/test/platform-startup.mjs` checks the sandboxed UI, workspace and settings
+persistence after restart, and second-launch activation with synthetic isolated data.
+It intentionally creates no terminal; PTY feature and lifecycle proof belongs to
+53.2. SQLite is exercised through the application's worker. Loading node-pty at
+startup alone does not establish a functioning Windows PTY.
+
+Evidence artifacts must name the exact candidate commit, OS, shell, Node, pnpm,
+Electron and WSL distribution versions. CI uploads `platform-evidence-<os>` with
+its environment and full unit JSON plus startup receipts. Add the accessible run
+URL here after execution; local evidence is not a substitute for shared evidence.
+
+Observed local environment: Ubuntu 26.04.1 LTS, Linux 7.0.0-34-generic x64,
+Node 24.14.0, pnpm 12.3.4, Electron pin 44.3.0. This is an environment observation;
+check results are recorded separately. CI's Ubuntu 24.04 and Windows Server 2025
+runners do not replace final Windows 11 standard-user/device checks.
+
+## Unit/integration fixture ownership
+
+After each native Windows inventory run, attach its raw `unit.json`, assign each
+failure below, and retain every unassigned failure under 53.1 until triaged.
+No failing file has been silently declared portable or waived.
+
+| Failure boundary | Owning story |
+| --- | --- |
+| Build/native loading/roots/startup or unclassified failure | 53.1 |
+| Bash launch, POSIX signals, `/proc` process identity, PTY lifecycle | 53.2 |
+| POSIX permissions, symlink/junction behavior, paths, file operations | 53.3 |
+| Unix sockets, CLI/shebang/launcher behavior | 53.4 |
+| WSL environment/bridge/distribution mapping | 53.5 |
+| Agent configuration/history/hook executables | 53.6 |
+| Terminal/clipboard/scaling/input | 53.7 |
+| whisper, microphone, voice binaries | 53.8 |
+| Notifications/Telegram | 53.9 |
+| `/proc` port scanning and process attribution | 53.10 |
+| systemd, desktop entries, packaging/install/update | 53.11 |
+
+Before acceptance, expand the capability rows against every current feature-guide
+entry and newly merged epic contract. These initial rows do not claim complete
+final feature-by-feature coverage.
+
+## Current local evidence (not acceptance)
+
+The Ubuntu 26.04.1 candidate passed typecheck, lint and build. The broad unit run
+passed 2,825 tests with one packaging-command assertion failure; the corrected
+assertion and affected script/root tests subsequently passed. The new platform
+startup smoke passed with `chromiumSandbox: true`, native addon loading, isolated
+workspace/settings persistence and second-instance activation. The existing Linux
+Electron self-test passed (79 receipt fields, graceful shutdown). Local receipts
+are retained in the run's ignored `.dev-auto/evidence/`; shareable CI receipts and
+Linux packaged/native Windows results are still required before 53.1 acceptance.
+
+The first startup probe used Playwright's sandbox-disabling default and does not
+count as sandbox evidence. The corrected probe explicitly enables Chromium's
+sandbox and rejects disabling launch arguments. Older unrelated Playwright fixtures
+also require a separate sandbox audit; their prior sandbox claims are not adopted
+as this port's acceptance evidence.

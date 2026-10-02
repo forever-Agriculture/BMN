@@ -1,6 +1,6 @@
 // MODULE: index.ts - Electron main process: windows, bridge IPC and host lifecycle; `--self-test` loads ./self-test
-import { chmodSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
+import { ensurePrivateDirectories } from '../utility/private-directory'
 import { join, resolve } from 'node:path'
 import {
   ERROR_CODES,
@@ -1037,8 +1037,7 @@ ensureDevelopmentRoots()
 app.on('will-quit', cleanupDevelopmentRoot)
 process.once('exit', cleanupDevelopmentRoot)
 const instanceDataRoot = resolveApplicationRoots().data
-mkdirSync(instanceDataRoot, { recursive: true, mode: 0o700 })
-chmodSync(instanceDataRoot, 0o700)
+ensurePrivateDirectories([instanceDataRoot])
 const primaryInstance = acquireRootScopedSingleInstance(app, instanceDataRoot, () =>
   focusExistingWindow(applicationWindow)
 )

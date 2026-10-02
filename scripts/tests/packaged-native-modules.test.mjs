@@ -5,7 +5,7 @@ import { createRequire } from 'node:module'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { packagedApp, packagedNativeModules } from '../lib/packaged-app.mjs'
+import { packagedApp, packagedNativeModules, packagedNativeSidecars } from '../lib/packaged-app.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const { archive } = packagedApp(repoRoot)
@@ -15,7 +15,7 @@ async function nativeFiles(root, current = root) {
   for (const entry of await readdir(current, { withFileTypes: true })) {
     const path = join(current, entry.name)
     if (entry.isDirectory()) files.push(...(await nativeFiles(root, path)))
-    else if (entry.isFile() && entry.name.endsWith('.node')) files.push(`/${relative(root, path)}`)
+    else if (entry.isFile() && entry.name.endsWith('.node')) files.push(`/${relative(root, path).split('\\').join('/')}`)
   }
   return files.sort()
 }
@@ -30,6 +30,7 @@ describe.skipIf(!existsSync(archive))(
       const appBuilderRequire = createRequire(builderRequire.resolve('app-builder-lib'))
       const { listPackage } = appBuilderRequire('@electron/asar')
       const nativeEntries = listPackage(archive, { isPack: false })
+        .map((entry) => entry.replaceAll('\\', '/'))
         .filter((entry) => entry.endsWith('.node'))
         .sort()
 
@@ -40,6 +41,9 @@ describe.skipIf(!existsSync(archive))(
       )
       for (const entry of nativeEntries) {
         expect((await stat(resolve(`${archive}.unpacked`, entry.slice(1)))).isFile()).toBe(true)
+      }
+      for (const entry of packagedNativeSidecars()) {
+        expect((await stat(resolve(`${archive}.unpacked`, entry.slice(1)))).size).toBeGreaterThan(0)
       }
       await expect(nativeFiles(`${archive}.unpacked`)).resolves.toEqual(nativeEntries)
     })

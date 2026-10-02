@@ -637,7 +637,9 @@ export class CompanionService {
     await this.retainedHooks.load()
     await this.files.reconcileStaging().catch(() => [])
     await this.reconcileArtifacts()
-    try {
+    if (process.platform === 'win32') {
+      this.controlDetail = 'Local agent control is not yet available in this Windows build'
+    } else try {
       await writeOwnerToken(dirname(this.socketPath), this.auth.ownerToken)
       await this.control.listen()
       this.controlListening = true
