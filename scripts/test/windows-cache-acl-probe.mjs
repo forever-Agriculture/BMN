@@ -17,7 +17,7 @@ childProcess.spawnSync = (executable, args, options) => {
     const script = Buffer.from(args.at(-1), 'base64').toString('utf16le')
     if (script.includes('BMN_PRIVATE_ROOTS_OK')) {
       args = [...args]
-      args[args.length - 1] = Buffer.from(`trap { [Console]::Error.WriteLine('SYNTHETIC_ACL_ITEM=' + $item.FullName); throw };\n${script}`, 'utf16le').toString('base64')
+      args[args.length - 1] = Buffer.from(`trap { [Console]::Error.WriteLine((ConvertTo-Json -Compress -Depth 4 @{ syntheticItem=$item.FullName; error=$_.Exception.Message; location=$_.InvocationInfo.PositionMessage; data=$chromiumDataRoot; directory=$directory.FullName; scoped=$chromiumItem; direct=$direct; template=$template; rules=@($rules | ForEach-Object { @{ sid=$_.IdentityReference.Value; mask=[int]$_.FileSystemRights; inheritance=$_.InheritanceFlags.ToString(); propagation=$_.PropagationFlags.ToString() } }) })); exit 1 };\n${script}`, 'utf16le').toString('base64')
     }
   }
   const result = originalSpawnSync(executable, args, options)
