@@ -26,7 +26,7 @@ export const INITIAL_SESSION_FORM: SessionLaunchForm = Object.freeze({
   terminalGraphics: null
 })
 
-export type LaunchAgentId = 'terminal' | 'claude' | 'codex' | 'opencode'
+export type LaunchAgentId = 'terminal' | 'claude' | 'codex' | 'opencode' | 'cursor'
 
 export interface LaunchAgent {
   id: LaunchAgentId
@@ -44,7 +44,8 @@ export const LAUNCH_AGENTS: ReadonlyArray<LaunchAgent> = [
   { id: 'terminal', label: 'Terminal', name: 'Shell', command: null },
   { id: 'claude', label: 'Claude Code', name: 'Claude', command: 'claude' },
   { id: 'codex', label: 'Codex', name: 'Codex', command: 'codex' },
-  { id: 'opencode', label: 'OpenCode', name: 'OpenCode', command: 'opencode' }
+  { id: 'opencode', label: 'OpenCode', name: 'OpenCode', command: 'opencode' },
+  { id: 'cursor', label: 'Cursor', name: 'Cursor', command: 'cursor-agent' }
 ]
 
 function agentArgv(agent: LaunchAgent): string[] {

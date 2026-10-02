@@ -1784,7 +1784,7 @@ function App(): React.JSX.Element {
       {notice ? <div className="feedback-notice brief"
         onFocus={() => setNoticeFocused(true)}
         onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setNoticeFocused(false) }}>
-        <span>{notice}</span>
+        <span title={notice}>{notice}</span>
         {archiveUndo ? <button type="button" onClick={() => void undoArchive()}>Undo</button> : null}
       </div> : null}
       <div className={`workspace-body${panel ? ' with-panel' : ''}${focusMode ? ' focus-mode' : ''}`}>

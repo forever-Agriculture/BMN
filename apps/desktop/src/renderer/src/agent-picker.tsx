@@ -48,7 +48,7 @@ export function AgentPicker(props: {
             }}
           >
             <span className="agent-name">{option.label}</span>
-            <span className="agent-hint">{option.hint}</span>
+            <span className="agent-hint">{option.disabledReason ?? option.hint}</span>
           </button>
         )
       })}

@@ -167,7 +167,15 @@ writeFileSync(base+'.result',JSON.stringify({key:command.key,status:r.status,err
     for (let i = 0; i < 12; i++) await emit(i % 2 ? 'south' : 'north', `manual-${i}`, ['ask', `manual-${i}`, `Synthetic decision ${i}`, '--choices-json', choices])
     await emit('north', 'native', ['hook', 'codex'], JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'functions.request_user_input_async', tool_use_id: 'synthetic-native',
       tool_input: { questions: [{ title: 'Synthetic native choice', options: ['First', 'Second'] }] } }))
+    // Produce a fresh real confirmation, then prove it leaves the response actions readable.
+    await openPalette(); await search.fill('edit launch'); await search.press('Enter')
+    await page.getByRole('button', { name: 'Save session', exact: true }).click()
+    await page.locator('.feedback-notice.brief').waitFor()
     await page.locator('.needs-you-button').click()
+    const toast = await page.locator('.feedback-notice.brief').boundingBox()
+    const popover = await page.locator('.needs-you-popover').boundingBox()
+    assert.ok(toast.x + toast.width <= popover.x || toast.y >= popover.y + popover.height ||
+      toast.y + toast.height <= popover.y, 'Confirmation covers response actions')
     const nav = page.locator('.needs-you-popover button[data-response-navigation]')
     await page.waitForFunction(() => document.querySelectorAll('button[data-response-navigation]').length === 13)
     await nav.nth(4).focus()

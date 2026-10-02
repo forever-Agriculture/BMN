@@ -30,7 +30,7 @@ keyboard focus and remain available to the keyboard and screen readers.
 A session is one command in one working directory: a shell, Claude Code, Codex, OpenCode, or
 anything else installed. **New session…** opens the launcher beside the terminal:
 
-- **Terminal, Claude Code, Codex, OpenCode** — one click picks what runs. An agent starts inside an
+- **Terminal, Claude Code, Codex, OpenCode, Cursor** — one click picks what runs. An agent starts inside an
   interactive bash (`bash -ic 'claude; exec bash -i'`), so your shell stays open when the agent
   exits. Saved templates appear as further cards; a template whose command is missing is marked
   unavailable and cannot be picked.

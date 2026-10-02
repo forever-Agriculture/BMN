@@ -104,6 +104,16 @@ describe('launch template application', () => {
 })
 
 describe('launch agents', () => {
+  it('offers Cursor and preserves its launch when reopening the form', () => {
+    const form = applyLaunchAgent({ ...INITIAL_SESSION_FORM, cwd: '/work', terminalGraphics: 'sixel' }, 'cursor')
+    expect(form).toMatchObject({ name: 'Cursor', executable: '/bin/bash', cwd: '/work', terminalGraphics: 'sixel' })
+    const params = sessionCreateParams('workspace-1', form, { cols: 80, rows: 24 })
+    expect(params.argv).toEqual(['-ic', 'cursor-agent; exec bash -i'])
+    expect(launchAgentOf(form)).toBe('cursor')
+    expect(applyLaunchAgent({ ...form, name: 'My review' }, 'cursor').name).toBe('My review')
+    expect(applyLaunchAgent(form, 'codex').name).toBe('Codex')
+  })
+
   it('runs an agent inside an interactive shell that survives the agent exiting', () => {
     const form = applyLaunchAgent({ ...INITIAL_SESSION_FORM, cwd: '/work' }, 'claude')
     expect(form).toMatchObject({ name: 'Claude', executable: '/bin/bash', cwd: '/work' })

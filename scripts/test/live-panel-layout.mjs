@@ -99,6 +99,13 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       await openEdit()
       await page.getByRole('textbox', { name: 'Session name', exact: true }).fill('Unsaved edit')
       await check(before, `${layout} edit open and type`, width, height)
+      const brief = page.locator('.feedback-notice.brief')
+      if (await brief.count()) {
+        const toast = await brief.boundingBox()
+        const drawer = await page.locator('.session-launcher').boundingBox()
+        assert.ok(toast.x + toast.width <= drawer.x || toast.y >= drawer.y + drawer.height ||
+          toast.y + toast.height <= drawer.y, 'Confirmation overlaps the launch drawer')
+      }
       await page.screenshot({ path: join(evidence, `${layout}-edit-open-${width}.png`) })
       await page.getByRole('button', { name: 'Close edit session', exact: true }).or(page.getByRole('button', { name: 'Close new session', exact: true })).click()
       await check(before, `${layout} edit close`, width, height)
@@ -124,6 +131,13 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       await page.locator('dialog[open] input').fill('New session')
       await page.getByRole('option').filter({ has: page.locator('.label', { hasText: /^New session…$/ }) }).click()
       await check(before, `${layout} new session open`, width, height)
+      const cursor = page.getByRole('radio', { name: 'Cursor cursor-agent', exact: true })
+      await cursor.click()
+      assert.equal(await cursor.getAttribute('aria-checked'), 'true')
+      assert.equal(await page.getByRole('textbox', { name: 'Session name', exact: true }).inputValue(), 'Cursor')
+      assert.ok((await page.locator('.advanced summary code').innerText()).includes('cursor-agent; exec bash -i'))
+      if (layout === 'normal') await page.screenshot({ path: join(evidence, `cursor-picker-${width}.png`) })
+      await check(before, `${layout} Cursor launch choice`, width, height)
       await page.getByRole('button', { name: 'Close new session', exact: true }).click()
       await check(before, `${layout} new session close`, width, height)
       await openEdit()

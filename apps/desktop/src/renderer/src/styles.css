@@ -359,6 +359,9 @@ input[type='radio'] {
 /* ---------- Shell ---------- */
 
 .shell-window {
+  --side-panel-width: min(340px, 90vw);
+  /* Three 18px lines + 16px padding/border, 44px bottom offset and 8px clearance. */
+  --brief-reserve: 122px;
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -481,6 +484,7 @@ input[type='radio'] {
   bottom: 44px;
   left: 50%;
   z-index: 30;
+  width: max-content;
   max-width: min(560px, calc(100vw - 32px));
   transform: translateX(-50%);
   border: 1px solid var(--hairline);
@@ -490,7 +494,27 @@ input[type='radio'] {
 }
 
 .feedback-notice.brief button {
+  flex-shrink: 0;
   pointer-events: auto;
+}
+
+.feedback-notice.brief > span {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  line-height: 18px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  pointer-events: auto;
+}
+
+/* Keep Undo fixed through outside-pointer dismissal. Only overlays reserve space; terminals never refit. */
+.shell-window:has(> .feedback-notice.brief) .workspace-body.with-panel > .side-panel {
+  bottom: var(--brief-reserve);
+}
+
+.shell-window:has(> .feedback-notice.brief) .needs-you-popover {
+  max-height: max(0px, calc(100vh - 40px - var(--brief-reserve)));
 }
 
 .feedback-notice span {
@@ -517,7 +541,7 @@ input[type='radio'] {
   right: 0;
   bottom: 0;
   z-index: 20;
-  width: min(340px, 90vw);
+  width: var(--side-panel-width);
   box-shadow: -12px 0 32px rgb(0 0 0 / 35%);
 }
 
@@ -1897,6 +1921,10 @@ input[type='radio'] {
   gap: 6px;
 }
 
+.agent-picker [data-option='terminal'] {
+  grid-column: 1 / -1;
+}
+
 .agent-picker [role='radio'] {
   position: relative;
   display: flex;
@@ -1957,6 +1985,11 @@ input[type='radio'] {
   font: 11px/1.4 var(--font-mono);
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.agent-picker :disabled .agent-hint {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* Advanced: the resolved command stays on the summary line, so nothing is hidden. Preferences keeps its longer
@@ -2677,7 +2710,7 @@ input[type='radio'] {
 .needs-you-popover {
   position: absolute;
   top: 40px;
-  right: 44px;
+  right: clamp(12px, calc(100vw - 432px), 44px);
   z-index: 30;
   display: flex;
   flex-direction: column;
