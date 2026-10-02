@@ -44,6 +44,8 @@ foreach ($path in $paths) {
     $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')
     $acl.AddAccessRule($rule)
     $directory.Create($acl)
+    # Exists cached the missing state; reload before inspecting attributes and ancestry.
+    $directory.Refresh()
   }
   Assert-SafeAncestors $directory
   # Existing directories are validated, never repaired or adopted by changing ACLs.

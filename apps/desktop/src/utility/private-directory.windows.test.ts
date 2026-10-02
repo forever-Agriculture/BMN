@@ -14,7 +14,7 @@ function fixture() {
   return root
 }
 function powershell(path: string, operation: string): string {
-  const script = `$ErrorActionPreference='Stop'; [Console]::InputEncoding=New-Object System.Text.UTF8Encoding($false); $path=ConvertFrom-Json ([Console]::In.ReadToEnd()); ${operation}`
+  const script = `$ErrorActionPreference='Stop'; [Console]::InputEncoding=New-Object System.Text.UTF8Encoding($false); $path=ConvertFrom-Json ([Console]::In.ReadToEnd()); $item=if ([System.IO.Directory]::Exists($path)) { New-Object System.IO.DirectoryInfo($path) } else { New-Object System.IO.FileInfo($path) }; ${operation}`
   const result = spawnSync(join(process.env.SystemRoot!, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), [
     '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')
   ], { input: JSON.stringify(path), encoding: 'utf8', timeout: 15_000, windowsHide: true })
@@ -22,8 +22,8 @@ function powershell(path: string, operation: string): string {
   expect(result.status, result.stderr).toBe(0)
   return result.stdout.trim()
 }
-const broaden = `$acl=Get-Acl -LiteralPath $path; $acl.SetAccessRuleProtection($true,$true); $everyone=New-Object System.Security.Principal.SecurityIdentifier('S-1-1-0'); $rule=New-Object System.Security.AccessControl.FileSystemAccessRule($everyone,'ReadAndExecute','Allow'); $acl.AddAccessRule($rule); Set-Acl -LiteralPath $path -AclObject $acl`
-const sddl = `(Get-Acl -LiteralPath $path).Sddl`
+const broaden = `$acl=$item.GetAccessControl(); $acl.SetAccessRuleProtection($true,$true); $everyone=New-Object System.Security.Principal.SecurityIdentifier('S-1-1-0'); $rule=New-Object System.Security.AccessControl.FileSystemAccessRule($everyone,'ReadAndExecute','Allow'); $acl.AddAccessRule($rule); $item.SetAccessControl($acl)`
+const sddl = `$item.GetAccessControl().Sddl`
 
 describe.skipIf(process.platform !== 'win32')('native Windows private roots', () => {
   it('creates private roots and accepts inherited files on restart', { timeout: 60_000 }, () => {
