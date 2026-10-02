@@ -263,3 +263,7 @@ excluded from agent control responses and copied backups.
 Source and isolated connector/real-PTY tests are separate evidence from configured
 CLI-producer continuation, installed-release and live-phone acceptance. The latter
 remain pending in this run; the original withdrawal incident cause is UNCONFIRMED.
+
+See [investigation notes](telegram-investigations.md) for the remaining phone/native
+checks, demonstrated regressions and harness pitfalls to retain when investigating
+another refusal.

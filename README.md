@@ -112,6 +112,7 @@ first.
 - [Agent control](docs/agent-control.md): the `bmn` command and its local API
 - [Voice dictation](docs/voice.md): engine, models, speed and privacy
 - [Telegram](docs/telegram.md): connecting your own bot
+- [Telegram investigation notes](docs/telegram-investigations.md): open questions, regression checks and test pitfalls
 - [Development](docs/development.md): building, testing, packaging and troubleshooting
 
 ## Install from source
