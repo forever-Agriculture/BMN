@@ -100,6 +100,9 @@ export function ensurePrivateDirectories(roots: readonly string[], platform: Nod
     Buffer.from(WINDOWS_PRIVATE_DIRECTORY, 'utf16le').toString('base64')
   ], { input: JSON.stringify([...new Set(roots)]), encoding: 'utf8', timeout: 15_000, maxBuffer: 64 * 1024, windowsHide: true })
   if (result.error || result.status !== 0 || result.stdout !== 'BMN_PRIVATE_ROOTS_OK') {
+    // Temporary CI probe: enabled only by the isolated synthetic startup harness.
+    if (process.env.BMN_ROOT_DIAGNOSTIC === '1') console.error(JSON.stringify({ rootProbe: true,
+      status: result.status, errorCode: result.error?.code, stderr: String(result.stderr ?? '').slice(-8000) }))
     // Do not expose shell diagnostics, which may contain environment or path data.
     throw new Error('BMN could not secure its Windows data folders. Use new dedicated folders on an ACL-capable local drive, or existing private BMN folders without unverified links; Windows PowerShell must be available.')
   }
