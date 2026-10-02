@@ -1,13 +1,17 @@
 // Real Windows ACL regressions; the Linux mode test is in private-directory.test.ts.
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import * as childProcess from 'node:child_process'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ensurePrivateDirectories } from './private-directory'
 
 const temporary: string[] = []
-afterEach(() => { for (const root of temporary.splice(0)) rmSync(root, { recursive: true, force: true }) })
+afterEach(() => {
+  vi.restoreAllMocks()
+  for (const root of temporary.splice(0)) rmSync(root, { recursive: true, force: true })
+})
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'bmn-windows-acl-'))
   temporary.push(root)
@@ -50,5 +54,30 @@ describe.skipIf(process.platform !== 'win32')('native Windows private roots', ()
     const before = powershell(child, sddl)
     expect(() => ensurePrivateDirectories([root])).toThrow(/could not secure/)
     expect(powershell(child, sddl)).toBe(before)
+  })
+  it('refuses a root junction without changing its target ACL', { timeout: 60_000 }, () => {
+    const parent = fixture()
+    const target = join(parent, 'private')
+    const link = join(parent, 'junction')
+    ensurePrivateDirectories([target])
+    symlinkSync(target, link, 'junction')
+    const before = powershell(target, sddl)
+    expect(() => ensurePrivateDirectories([link])).toThrow(/could not secure/)
+    expect(powershell(target, sddl)).toBe(before)
+  })
+  it('refuses a wide directory at the entry limit without timing out', { timeout: 60_000 }, () => {
+    const root = join(fixture(), 'wide')
+    ensurePrivateDirectories([root])
+    for (let index = 0; index < 10_000; index++) writeFileSync(join(root, `${index}.txt`), '')
+    const spawn = vi.spyOn(childProcess, 'spawnSync')
+    const started = performance.now()
+    expect(() => ensurePrivateDirectories([root])).toThrow(/could not secure/)
+    const elapsedMs = Math.round(performance.now() - started)
+    const result = spawn.mock.results[0]!.value as ReturnType<typeof spawnSync>
+    expect(result.error).toBeUndefined()
+    expect(result.status).toBe(1)
+    expect(String(result.stderr)).toContain('exceeded its entry limit')
+    expect(elapsedMs).toBeLessThan(15_000)
+    console.info(JSON.stringify({ windowsRootEntryLimit: 'passed', entries: 10_000, elapsedMs }))
   })
 })

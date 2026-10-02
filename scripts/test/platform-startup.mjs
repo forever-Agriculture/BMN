@@ -44,10 +44,20 @@ const receipt = await withTemporaryRoot(temporaryRootContracts.electronDevelopme
       try { return (await window.aiTerminal.listWorkspaces()).length > 0 } catch { return false }
     }, null, { timeout: 30_000 })
     const state = await page.evaluate(async () => {
-      const workspace = await window.aiTerminal.createWorkspace({ name: 'Windows parity fixture 数据' })
-      const settings = await window.aiTerminal.getSettings()
-      await window.aiTerminal.putSettings('appearance', { ...settings.appearance, colorMode: 'brown' })
-      return { workspaceId: workspace.workspaceId, control: await window.aiTerminal.getControlInfo() }
+      let stage = 'createWorkspace'
+      try {
+        const workspace = await window.aiTerminal.createWorkspace({ name: 'Windows parity fixture 数据' })
+        stage = 'getSettings'
+        const settings = await window.aiTerminal.getSettings()
+        stage = 'putSettings'
+        await window.aiTerminal.putSettings('appearance', { ...settings.appearance, colorMode: 'brown' })
+        stage = 'getControlInfo'
+        return { workspaceId: workspace.workspaceId, control: await window.aiTerminal.getControlInfo() }
+      } catch (error) {
+        // IPC errors may be plain objects; Playwright otherwise reports only "Object".
+        throw new Error(JSON.stringify({ stage, code: error?.code,
+          message: String(error?.message ?? error).slice(0, 1000) }), { cause: error })
+      }
     })
     if (process.platform === 'win32') {
       assert.equal(state.control.listening, false)

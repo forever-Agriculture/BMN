@@ -11,7 +11,7 @@ Epic 50/54 installed/provider acceptance remains separate and unfinished.
 
 | Capability / owning story | Implementation owner | Linux candidate | Native Windows | WSL |
 | --- | --- | --- | --- | --- |
-| Build, data roots, database, restart, single instance, unpacked startup — 53.1 | Implementation team | Build/startup PASS; packaged smoke UNVERIFIED | UNVERIFIED | UNVERIFIED |
+| Build, data roots, database, restart, single instance, unpacked startup — 53.1 | Implementation team | Build/startup/package PASS on Ubuntu CI | Install/build/package PASS; startup repair under test | UNVERIFIED |
 | PowerShell/cmd launch, input, stop, process identity, crash cleanup, ConPTY feasibility — 53.2 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
 | Files, path links, attachments, backups, directory permissions — 53.3 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
 | CLI, transport, caller/session authority — 53.4 | Implementation team | UNVERIFIED | Not implemented | UNVERIFIED |
@@ -31,7 +31,7 @@ Epic 50/54 installed/provider acceptance remains separate and unfinished.
 the full unit/integration inventory, build and real Electron startup on Linux and
 native Windows. Windows additionally builds and starts the internal unpacked app.
 The full unit suite remains a failing gate until every platform failure is resolved;
-it is not skipped on Windows. No CI run or native Windows result is recorded yet.
+it is not skipped on Windows. Native runner results are recorded below.
 
 `scripts/test/platform-startup.mjs` checks the sandboxed UI, workspace and settings
 persistence after restart, and second-launch activation with synthetic isolated data.
@@ -82,10 +82,75 @@ startup smoke passed with `chromiumSandbox: true`, native addon loading, isolate
 workspace/settings persistence and second-instance activation. The existing Linux
 Electron self-test passed (79 receipt fields, graceful shutdown). Local receipts
 are retained in the run's ignored `.dev-auto/evidence/`; shareable CI receipts and
-Linux packaged/native Windows results are still required before 53.1 acceptance.
+the candidate native Windows checks and Windows 11 acceptance remain required.
 
 The first startup probe used Playwright's sandbox-disabling default and does not
 count as sandbox evidence. The corrected probe explicitly enables Chromium's
 sandbox and rejects disabling launch arguments. Older unrelated Playwright fixtures
 also require a separate sandbox audit; their prior sandbox claims are not adopted
 as this port's acceptance evidence.
+
+## Native CI evidence
+
+[Initial run 37057811322](https://github.com/forever-Agriculture/BMN/actions/runs/37057811322)
+tested `7bfa647` on Ubuntu 24.04 x64 and Windows Server 2025 Datacenter x64,
+with Node 24.14.0, pnpm 12.3.4 and Electron 44.3.0. Linux passed the full
+inventory, build, sandboxed startup, package and packaged smoke. Windows passed
+installation/native rebuild, lint, typecheck, build and unpacked packaging;
+startup failed and packaged startup timed out. Its inventory recorded 2,007 passed,
+630 failed and 8 skipped assertions; one additional suite failed during import.
+
+[Native diagnostic 37060375331](https://github.com/forever-Agriculture/BMN/actions/runs/37060375331)
+compared the original helper with a single metadata refresh after creating the
+private directory: original failed with a false link refusal, refreshed passed.
+`fa91090` applies that fix without relaxing owner, ACL, link or size checks.
+The inherited PowerShell module path was separately ruled out as the production
+cause. Native test fixture ACL access now uses .NET APIs to avoid the observed
+PowerShell cmdlet-module load failure. Temporary probes were removed.
+
+[Candidate run 37060628420](https://github.com/forever-Agriculture/BMN/actions/runs/37060628420)
+tested `fa91090`: Linux passed all gates. Windows root/ACL, Linux-root fixtures
+and sandbox-audit tests passed; inventory is now 2,014 passed, 623 failed and 9
+skipped. Both development and unpacked apps reach the UI/database, then fail
+during workspace/settings/control setup with an opaque IPC error. Stage-specific
+diagnostics are being added; startup acceptance remains open. Windows Server CI does not establish
+Windows 11 standard-user, cross-user denial or desktop/device acceptance.
+
+The first inventory below is retained even when individual fixtures are repaired.
+Numbers count failed assertions, not all assertions in the file. The companion
+suite's zero means an import failure in its synthetic `/proc` port fixture
+(`process.getuid`); its other assertions did not execute. Story assignment is
+ownership for repair, never a waiver or a confirmed diagnosis of every failure.
+
+| Failed file | Failed assertions | Owning story |
+| --- | ---: | --- |
+| `scripts/lib/disposable-provider-env.test.mjs` | 2 | 53.2 |
+| `scripts/tests/desktop-launcher.test.mjs` | 14 | 53.11 |
+| `scripts/tests/sandbox-flag-audit.test.mjs` | 1 | 53.1 |
+| `scripts/tests/staged-build.test.mjs` | 1 | 53.11 |
+| `apps/desktop/src/main/file-reference-ipc.test.ts` | 3 | 53.3 |
+| `apps/desktop/src/main/voice-engine.test.ts` | 7 | 53.8 |
+| `apps/desktop/src/utility/agent-history-adapters.test.ts` | 8 | 53.6 |
+| `apps/desktop/src/utility/agent-history-claude.test.ts` | 4 | 53.6 |
+| `apps/desktop/src/utility/agent-history.test.ts` | 8 | 53.6 |
+| `apps/desktop/src/utility/artifact-files.test.ts` | 13 | 53.3 |
+| `apps/desktop/src/utility/codex-launch.test.ts` | 1 | 53.6 |
+| `apps/desktop/src/utility/companion-service.test.ts` | 0 | 53.10 |
+| `apps/desktop/src/utility/control-auth.test.ts` | 1 | 53.4 |
+| `apps/desktop/src/utility/control-cli.test.ts` | 294 | 53.4 |
+| `apps/desktop/src/utility/control-server.test.ts` | 175 | 53.4 |
+| `apps/desktop/src/utility/conversation-binding.test.ts` | 3 | 53.6 |
+| `apps/desktop/src/utility/database-companion-store.test.ts` | 2 | 53.3 |
+| `apps/desktop/src/utility/database-workspace-store.test.ts` | 2 | 53.3 |
+| `apps/desktop/src/utility/file-reference-reader.test.ts` | 3 | 53.3 |
+| `apps/desktop/src/utility/hook-configuration-check.test.ts` | 2 | 53.6 |
+| `apps/desktop/src/utility/hook-event-history.test.ts` | 2 | 53.6 |
+| `apps/desktop/src/utility/private-directory.windows.test.ts` | 3 | 53.1 |
+| `apps/desktop/src/utility/remote-answer.test.ts` | 17 | 53.9 |
+| `apps/desktop/src/utility/reported-resume.test.ts` | 2 | 53.6 |
+| `apps/desktop/src/utility/repository-identity.test.ts` | 4 | 53.3 |
+| `apps/desktop/src/utility/roots.test.ts` | 4 | 53.1 |
+| `apps/desktop/src/utility/screen-mirror.test.ts` | 12 | 53.7 |
+| `apps/desktop/src/utility/session-manager.test.ts` | 40 | 53.2 |
+| `apps/desktop/src/utility/telegram-card-keeper.test.ts` | 1 | 53.9 |
+| `apps/desktop/src/utility/terminal-graphics.test.ts` | 1 | 53.7 |

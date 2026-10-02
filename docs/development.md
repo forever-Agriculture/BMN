@@ -179,7 +179,8 @@ node-pty. Run `pnpm install --frozen-lockfile`; postinstall rebuilds node-pty an
 better-sqlite3 for pinned Electron 44.3.0. Then run `pnpm run lint`,
 `pnpm run typecheck`, `pnpm run test:unit`, `pnpm run build` and
 `node scripts/test/platform-startup.mjs`. Keep full test failures in the
-[parity inventory](epic-53-parity.md); this setup is still UNVERIFIED on Windows.
+[parity inventory](epic-53-parity.md); Windows Server CI and Windows 11 acceptance
+are tracked separately there.
 
 `pnpm run package:unpacked` creates the internal `apps/desktop/release/win-unpacked/BMN.exe`.
 Run `node scripts/test/platform-startup.mjs --binary apps/desktop/release/win-unpacked/BMN.exe`
@@ -207,3 +208,24 @@ is bounded at 10,000 entries and 15 seconds; larger stores remain an open Window
 acceptance boundary, not a full-parity claim.
 Native denial from a second standard account and override-path security remain
 required acceptance checks. See Microsoft's [DirectorySecurity API](https://learn.microsoft.com/en-us/dotnet/api/system.security.accesscontrol.directorysecurity?view=netframework-4.8.1).
+
+
+### Windows 11 acceptance record
+
+Use a standard account on native Windows 11, a clean checkout of the PR candidate,
+and the disposable startup scripts above. Do not use an elevated terminal or WSL
+as a substitute. Record `git rev-parse HEAD`, `winver`, `$PSVersionTable`,
+`node --version`, `pnpm --version`, and whether WSL is installed. Save the command
+exit codes and startup JSON receipts alongside the exact CI run link in the PR.
+Run both development and unpacked startup: each must verify sandbox settings,
+native addon loading, workspace/settings persistence, and second-instance activation.
+The visible unavailable local-control status is expected until Story 53.4.
+
+Run `pnpm exec vitest run apps/desktop/src/utility/private-directory.windows.test.ts`
+for real private-root creation/restart and unchanged-ACL refusal checks. Additional
+security acceptance must exercise a second standard account unable to read/write
+synthetic BMN state, rejection of foreign-owned or replaceable paths, junctions,
+and bounded wide-directory validation. Use disposable test directories and synthetic
+files only; never relax a real profile's permissions to make a check pass. Record
+unrun checks as UNVERIFIED. These checks supplement the team's CI; the collaborator's
+final full-product check remains separate from Story 53.1's development bootstrap.
