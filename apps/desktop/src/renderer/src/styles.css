@@ -505,29 +505,13 @@ input[type='radio'] {
   min-height: 0;
 }
 
-.workspace-body.with-panel {
-  grid-template-columns: 232px minmax(0, 1fr) minmax(300px, 340px);
-}
-
 .workspace-body.focus-mode {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.workspace-body.focus-mode.with-panel {
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 340px);
-}
-
-/* Files is a drawer over the live view. Shrinking and re-expanding an inline TUI reflows its
-   already printed history; opening a file must not change the program's terminal dimensions. */
-.workspace-body.with-files {
-  grid-template-columns: 232px minmax(0, 1fr);
-}
-
-.workspace-body.focus-mode.with-files {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.workspace-body.with-files > .files-side-panel {
+/* Utility drawers cover the live view. Resizing an inline TUI can permanently reflow old
+   output; inspecting files or launch settings must preserve the program's terminal grid. */
+.workspace-body.with-panel > .side-panel {
   position: absolute;
   top: 44px;
   right: 0;
@@ -1368,7 +1352,7 @@ input[type='radio'] {
 }
 
 /* Too narrow for one row of controls: the bar still floats, with the input on its own row above them. */
-@container pane (max-width: 300px) {
+@container pane (max-width: 420px) {
   .terminal-search {
     flex-wrap: wrap;
   }
@@ -3117,22 +3101,6 @@ input[type='radio'] {
   clip-path: inset(50%);
 }
 
-@media (max-width: 1100px) {
-  .workspace-body.with-panel {
-    grid-template-columns: 232px minmax(0, 1fr);
-  }
-
-  .workspace-body.with-panel > .side-panel {
-    position: absolute;
-    top: 44px;
-    right: 0;
-    bottom: 0;
-    z-index: 20;
-    width: min(340px, 90vw);
-    box-shadow: -12px 0 32px rgb(0 0 0 / 35%);
-  }
-}
-
 @media (max-width: 800px) {
   .motto {
     display: none;
@@ -3142,9 +3110,7 @@ input[type='radio'] {
     width: auto;
   }
 
-  .workspace-body,
-  .workspace-body.with-panel,
-  .workspace-body.with-files {
+  .workspace-body {
     grid-template-columns: 64px minmax(0, 1fr);
   }
 

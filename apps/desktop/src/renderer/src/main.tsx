@@ -248,6 +248,7 @@ function App(): React.JSX.Element {
   const [historyPending, setHistoryPending] = useState(false)
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null)
   const [panel, setPanel] = useState<SidePanel>(null)
+  const sessionNameInput = useRef<HTMLInputElement>(null)
   const [requestedHandoffDraftId, setRequestedHandoffDraftId] = useState<string | null>(null)
   const [requestedHandoffReviewDraft, setRequestedHandoffReviewDraft] = useState<InputDraftRecord | null>(null)
   const [focusMode, setFocusMode] = useState(false)
@@ -317,6 +318,13 @@ function App(): React.JSX.Element {
     workspaceSelection.current = { id: activeWorkspaceId, generation: workspaceSelection.current.generation + 1 }
   }
   const activeWorkspace = workspaces.find((item) => item.workspaceId === activeWorkspaceId)
+  useEffect(() => {
+    if (tree.showArchived || !activeWorkspace || activeWorkspace.archivedAt === null) return
+    const next = visibleWorkspaces(workspaces, false)[0]?.workspaceId ?? null
+    setTree((current) => current.selectedWorkspaceId === activeWorkspace.workspaceId
+      ? { ...current, selectedWorkspaceId: next } : current)
+    setPanel(null)
+  }, [workspaces, activeWorkspace, tree.showArchived])
   useEffect(() => {
     if (dialog?.kind === 'workspace-results' && dialog.openedFromWorkspaceId !== activeWorkspaceId) setDialog(null)
     if (dialog?.kind === 'workspace-pins' && (dialog.openedFromWorkspaceId !== activeWorkspaceId ||
@@ -708,6 +716,13 @@ function App(): React.JSX.Element {
     if (panel !== 'details') setNewSessionSplit(false)
   }, [panel])
 
+  useEffect(() => {
+    if (panel !== 'new') return
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    sessionNameInput.current?.focus({ preventScroll: true })
+    return () => { if (opener?.isConnected) opener.focus({ preventScroll: true }) }
+  }, [panel, editingSessionId])
+
   const selectedSessionName = sessions.find((session) => session.sessionId === selectedSessionId)?.name ?? null
   useEffect(() => window.aiTerminal.reportSelectedSession(selectedSessionId), [selectedSessionId])
   useEffect(() => {
@@ -759,6 +774,13 @@ function App(): React.JSX.Element {
 
   const workspaceName = (workspaceId: string): string =>
     workspaces.find((item) => item.workspaceId === workspaceId)?.name ?? 'Unknown workspace'
+  const sessionLaunchDisabledReason = (session: SessionRecord): string | undefined => {
+    if (session.archivedAt !== null) return 'Restore this session before starting.'
+    const workspace = workspaces.find(item => item.workspaceId === session.workspaceId)
+    if (!workspace) return 'The workspace is unavailable.'
+    if (workspace.archivedAt !== null) return 'Restore this workspace before starting.'
+    return session.launchDisabledReason
+  }
   const place = (sessionId: string): { workspace: string; session: string } => {
     const record = sessions.find((session) => session.sessionId === sessionId)
     return { workspace: record ? workspaceName(record.workspaceId) : 'Unknown workspace', session: record?.name ?? 'Removed session' }
@@ -840,6 +862,7 @@ function App(): React.JSX.Element {
   }
 
   const beginNewSession = (workspace: WorkspaceRecord | undefined, split = false): void => {
+    if (workspace && workspace.archivedAt !== null) { brief('Restore this workspace before creating sessions.'); return }
     if (workspace && workspace.workspaceId !== activeWorkspaceId) {
       setTree((current) => selectTreeWorkspace(current, workspace.workspaceId))
     }
@@ -1346,7 +1369,7 @@ function App(): React.JSX.Element {
     'separator',
     live[session.sessionId]
       ? { label: 'Stop session…', danger: true, onSelect: () => setDialog({ kind: 'stop', session }) }
-      : { label: 'Start again', disabled: !!session.launchDisabledReason, title: session.launchDisabledReason ?? undefined, onSelect: () => relaunchSession(session) },
+      : { label: 'Start again', disabled: !!sessionLaunchDisabledReason(session), title: sessionLaunchDisabledReason(session), onSelect: () => relaunchSession(session) },
     live[session.sessionId]
       ? { label: 'Archive session', disabled: true, title: 'Stop the session before archiving it', onSelect: () => undefined }
       : { label: 'Archive session', onSelect: () => void archiveSession(session, true).catch(error => brief(failureDetail(error, 'Session archive failed'))) }
@@ -1389,7 +1412,7 @@ function App(): React.JSX.Element {
           setLayoutOrientation(state, state.split.orientation === 'stacked' ? 'side-by-side' : 'stacked', allSessionIds))
       }
     },
-    { label: 'New session in this workspace', onSelect: () => beginNewSession(activeWorkspace) },
+    { label: 'New session in this workspace', disabled: !activeWorkspace || activeWorkspace.archivedAt !== null, onSelect: () => beginNewSession(activeWorkspace) },
     { label: 'Edit launch settings', onSelect: () => beginSessionEdit(session) },
     'separator',
     { label: 'Stop session…', danger: true, onSelect: () => setDialog({ kind: 'stop', session }) }
@@ -1398,7 +1421,7 @@ function App(): React.JSX.Element {
   const workspaceMenuEntries = (workspace: WorkspaceRecord, index: number, ordered: readonly WorkspaceRecord[]): MenuEntry[] => [
     { label: 'Pinned files…', disabled: workspace.archivedAt !== null,
       onSelect: () => setDialog({ kind: 'workspace-pins', workspaceId: workspace.workspaceId, openedFromWorkspaceId: activeWorkspaceId }) },
-    { label: 'New session here', onSelect: () => beginNewSession(workspace) },
+    { label: 'New session here', disabled: workspace.archivedAt !== null, onSelect: () => beginNewSession(workspace) },
     { label: 'Review results…', onSelect: () =>
       setDialog({ kind: 'workspace-results', workspace, openedFromWorkspaceId: activeWorkspaceId }) },
     { label: 'Save a launch set…', disabled: workspace.archivedAt !== null,
@@ -1475,7 +1498,7 @@ function App(): React.JSX.Element {
       }),
       command('next-attention', 'Go to next request needing you', nextNeedingYou, { shortcut: SHORTCUT_LABELS['attention-next'], context: `${unresolved.length} waiting` }),
       command('new-workspace', 'New workspace…', () => setDialog({ kind: 'new-workspace' })),
-      command('new-session', 'New session…', () => beginNewSession(activeWorkspace), { disabled: !activeWorkspace, context: activeWorkspace?.name }),
+      command('new-session', 'New session…', () => beginNewSession(activeWorkspace), { disabled: !activeWorkspace || activeWorkspace.archivedAt !== null, context: activeWorkspace?.name }),
       command('save-launch-set', 'Save a launch set…', () => activeWorkspace && setDialog({ kind: 'launch-sets', workspace: activeWorkspace, initialMode: 'manage' }),
         { disabled: !activeWorkspace || activeWorkspace.archivedAt !== null, context: activeWorkspace?.name }),
       command('launch-set', 'Launch set…', () => activeWorkspace && setDialog({ kind: 'launch-sets', workspace: activeWorkspace, initialMode: 'launch' }),
@@ -1542,6 +1565,7 @@ function App(): React.JSX.Element {
   const bindingPresentation = conversationBindingPresentation(binding)
   const identity = IDENTITY_PRESENTATION[settings.appearance.identity]
   const selectedRecord = sessions.find((session) => session.sessionId === selectedSessionId)
+  const selectedLaunchDisabledReason = selectedRecord ? sessionLaunchDisabledReason(selectedRecord) : undefined
   const canResume = resumeAvailable(binding, selectedRecord, selectedRecord ? live[selectedRecord.sessionId]?.incarnationId : undefined)
   const selectedReportedResume = selectedRecord?.reportedResume ? reportedResumeLine(selectedRecord.reportedResume) : null
   const detailsRepository = useRepositoryIdentity(
@@ -1739,7 +1763,7 @@ function App(): React.JSX.Element {
         <span>{notice}</span>
         {archiveUndo ? <button type="button" onClick={() => void undoArchive()}>Undo</button> : null}
       </div> : null}
-      <div className={`workspace-body${panel ? ' with-panel' : ''}${panel === 'files' ? ' with-files' : ''}${focusMode ? ' focus-mode' : ''}`}>
+      <div className={`workspace-body${panel ? ' with-panel' : ''}${focusMode ? ' focus-mode' : ''}`}>
         {focusMode ? null : (
           <aside className="workspace-sidebar" aria-label="Workspaces and sessions">
             <nav className="workspace-tree">
@@ -1957,11 +1981,11 @@ function App(): React.JSX.Element {
               <ProgressStrip progress={selectedProgress} onOpen={() => openProgressDetail(selectedRecord, selectedProgress)} />
               <div className="actions">
                 {canResume ? (
-                  <button type="button" className="primary" disabled={!!selectedRecord.launchDisabledReason} title={selectedRecord.launchDisabledReason}
+                  <button type="button" className="primary" disabled={!!selectedLaunchDisabledReason} title={selectedLaunchDisabledReason}
                     onClick={() => confirmResume(selectedRecord)}>Resume</button>
                 ) : null}
                 <button type="button" className={canResume ? undefined : 'primary'}
-                  disabled={!!selectedRecord.launchDisabledReason} title={selectedRecord.launchDisabledReason ?? 'Run the saved command again in a new process'}
+                  disabled={!!selectedLaunchDisabledReason} title={selectedLaunchDisabledReason ?? 'Run the saved command again in a new process'}
                   onClick={() => relaunchSession(selectedRecord)}>Start again</button>
                 <button type="button" onClick={() => {
                   void loadSavedOutputPresentation(() => window.aiTerminal.getSavedOutput(selectedRecord.sessionId))
@@ -1993,7 +2017,7 @@ function App(): React.JSX.Element {
                 <>
                   <h1>Add a session.</h1>
                   <p>Start an agent or shell in {activeWorkspace.name} with an installed command and a working directory.</p>
-                  <div className="actions"><button type="button" className="primary" onClick={() => beginNewSession(activeWorkspace)}>New session</button></div>
+                  <div className="actions"><button type="button" className="primary" disabled={activeWorkspace.archivedAt !== null} onClick={() => beginNewSession(activeWorkspace)}>New session</button></div>
                 </>
               ) : (
                 <>
@@ -2074,11 +2098,11 @@ function App(): React.JSX.Element {
                     </p>
                   ) : null}
                   <div className="actions">
-                    {canResume ? <button type="button" className="primary" onClick={() => confirmResume(selectedRecord)} disabled={!!selectedRecord.launchDisabledReason}
-                      title={selectedRecord.launchDisabledReason}>Resume</button> : null}
+                    {canResume ? <button type="button" className="primary" onClick={() => confirmResume(selectedRecord)} disabled={!!selectedLaunchDisabledReason}
+                      title={selectedLaunchDisabledReason}>Resume</button> : null}
                     {!live[selectedRecord.sessionId] ? (
-                      <button type="button" disabled={!!selectedRecord.launchDisabledReason}
-                        title={selectedRecord.launchDisabledReason ?? 'Run the saved command again in a new process'}
+                      <button type="button" disabled={!!selectedLaunchDisabledReason}
+                        title={selectedLaunchDisabledReason ?? 'Run the saved command again in a new process'}
                         onClick={() => relaunchSession(selectedRecord)}>Start again</button>
                     ) : null}
                     {live[selectedRecord.sessionId] ? (
@@ -2148,7 +2172,7 @@ function App(): React.JSX.Element {
           <aside className="session-launcher side-panel" aria-label={editingSessionId ? 'Edit session' : 'New session'}>
             <div className="panel-heading">
               <span className="eyebrow">{editingSessionId ? 'Edit session' : `New ${newSessionSplit ? 'split ' : ''}session`}</span>
-              <button type="button" className="icon-button" aria-label="Close new session" onClick={() => {
+              <button type="button" className="icon-button" aria-label={editingSessionId ? 'Close edit session' : 'Close new session'} onClick={() => {
                 setEditingSessionId(undefined)
                 setFormError(undefined)
                 setPanel(null)
@@ -2214,7 +2238,7 @@ function App(): React.JSX.Element {
                 : `in ${activeWorkspace?.name ?? 'workspace'}`}</h2>
               {!editingSessionId ? <AgentPicker options={pickerOptions} selectedId={selectedPickerId} onPick={pickLaunchOption} /> : null}
               <label className="field">Name
-                  <input aria-label="Session name" value={sessionForm.name} onChange={(event) => {
+                  <input ref={sessionNameInput} aria-label="Session name" value={sessionForm.name} onChange={(event) => {
                     const name = event.target.value
                     setSessionForm((current) => ({ ...current, name }))
                   }} />
@@ -2305,6 +2329,7 @@ function App(): React.JSX.Element {
                   {editingSessionId ? <button type="button" className="ghost" onClick={() => {
                     setEditingSessionId(undefined)
                     setFormError(undefined)
+                    setPanel(null)
                   }}>Cancel edit</button> : null}
               </div>
             </form>

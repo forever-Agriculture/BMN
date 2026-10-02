@@ -958,7 +958,89 @@ describe('agent-prepared handoffs', () => {
   })
 })
 
+describe('legacy draft delivery guard', () => {
+  const draft = (artifactId: string | null = null) => COMPANION_OPERATIONS.createDraft(database, {
+    draftId: 'guarded-legacy', sessionId: 's1', origin: 'telegram', originKey: 'telegram:guarded',
+    requestId: null, text: 'reply with context', artifactId, state: 'draft', detail: null
+  }, now).record
+
+  it('pastes legacy draft text and attachment together before submitting', async () => {
+    const artifact = await storePublishedArtifact('legacy-attachment')
+    const record = draft(artifact.artifactId)
+    await service.route(METHOD_REGISTRY.draftSend, { draftId: record.draftId, submit: true })
+    expect(writes).toHaveLength(1)
+    const payload = new TextDecoder().decode(writes[0]!.bytes)
+    expect(payload).toContain('reply with context')
+    expect(payload).toContain('legacy-attachment.txt')
+    expect(payload.endsWith('\u001b[201~\r')).toBe(true)
+  })
+
+  it('does not replay a legacy draft after a write that may have succeeded, including host reconstruction', async () => {
+    const record = draft()
+    service['options'].manager.writeToSession = (sessionId, bytes) => {
+      writes.push({ sessionId, bytes })
+      throw new Error('Synthetic write may have succeeded')
+    }
+    await expect(service.route(METHOD_REGISTRY.draftSend, { draftId: record.draftId, submit: true })).rejects.toThrow()
+    expect(COMPANION_OPERATIONS.getDraft(database, record.draftId)).toMatchObject({ state: 'uncertain' })
+    const restarted = new CompanionService(service['options'])
+    await expect(restarted.route(METHOD_REGISTRY.draftSend, { draftId: record.draftId, submit: true })).rejects.toThrow(/uncertain/i)
+    expect(writes).toHaveLength(1)
+  })
+
+  it('keeps a legacy draft uncertain after receipt failure and requires a separate explicit retry', async () => {
+    const record = draft()
+    const worker = service['options'].database as { companion: (name: string, ...args: unknown[]) => Promise<unknown> }
+    const actual = worker.companion.bind(worker)
+    const spy = vi.spyOn(worker, 'companion').mockImplementation(async (name, ...args) => {
+      if (name === 'updateDraft' && args[1] === 'submitted') throw new Error('Synthetic receipt failure')
+      return actual(name, ...args)
+    })
+    await expect(service.route(METHOD_REGISTRY.draftSend, { draftId: record.draftId, submit: true })).rejects.toThrow()
+    spy.mockRestore()
+    expect(COMPANION_OPERATIONS.getDraft(database, record.draftId).state).toBe('uncertain')
+    await expect(service.route(METHOD_REGISTRY.draftSend, { draftId: record.draftId, submit: true })).rejects.toThrow(/uncertain/i)
+    expect(writes).toHaveLength(1)
+    const retry = await service.route(METHOD_REGISTRY.draftRetry, { draftId: record.draftId }) as import('@bmn/protocol').InputDraftRecord
+    expect(retry).toMatchObject({ state: 'draft', text: record.text, artifactId: record.artifactId })
+    expect(retry.draftId).not.toBe(record.draftId)
+    await service.route(METHOD_REGISTRY.draftSend, { draftId: retry.draftId, submit: false })
+    expect(writes).toHaveLength(2)
+    expect(COMPANION_OPERATIONS.getDraft(database, record.draftId).state).toBe('uncertain')
+  })
+
+  it('rejects a legacy draft destination restart during the durable claim without writing', async () => {
+    const record = draft()
+    const worker = service['options'].database as { companion: (name: string, ...args: unknown[]) => Promise<unknown> }
+    const actual = worker.companion.bind(worker)
+    vi.spyOn(worker, 'companion').mockImplementation(async (name, ...args) => {
+      const result = await actual(name, ...args)
+      if (name === 'claimInputDraft') liveIncarnations.set('s1', 'replacement-incarnation')
+      return result
+    })
+    await expect(service.route(METHOD_REGISTRY.draftSend, { draftId: record.draftId, submit: true })).rejects.toThrow(/changed/)
+    expect(writes).toEqual([])
+    expect(COMPANION_OPERATIONS.getDraft(database, record.draftId).state).toBe('draft')
+  })
+})
+
 describe('backup', () => {
+  it('keeps two exports at the same timestamp independent and preserves the first snapshot', async () => {
+    const parent = join(root, 'backups')
+    const first = await exportBackup(parent)
+    const originalManifest = await readFile(join(first.directory, 'manifest.json'), 'utf8')
+    const originalDatabase = await readFile(join(first.directory, 'state.sqlite3'))
+    await storePublishedArtifact('second-backup-only')
+    const second = await exportBackup(parent)
+    expect(second.directory).not.toBe(first.directory)
+    expect(await readFile(join(first.directory, 'manifest.json'), 'utf8')).toBe(originalManifest)
+    expect(await readFile(join(first.directory, 'state.sqlite3'))).toEqual(originalDatabase)
+    expect(first.manifest.artifacts).toHaveLength(0)
+    expect(second.manifest.artifacts).toHaveLength(1)
+    expect(await verifyBackup(first.directory)).toMatchObject({ ok: true, checked: 1 })
+    expect(await verifyBackup(second.directory)).toMatchObject({ ok: true, checked: 2 })
+  })
+
   it('exports every ready artifact, not only the newest 1,000', async () => {
     const records = await storeArtifacts(1001)
     const { manifest, directory } = await exportBackup(join(root, 'backups'))

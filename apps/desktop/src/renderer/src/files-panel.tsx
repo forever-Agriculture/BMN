@@ -654,23 +654,37 @@ export function FilesPanel(props: {
               const typeKey = `draft-type:${draft.draftId}`
               const sendKey = `draft-send:${draft.draftId}`
               const discardKey = `draft-discard:${draft.draftId}`
-              const busy = isPending(typeKey) || isPending(sendKey) || isPending(discardKey)
+              const retryKey = `draft-retry:${draft.draftId}`
+              const busy = isPending(typeKey) || isPending(sendKey) || isPending(discardKey) || isPending(retryKey)
               return (
                 <li key={draft.draftId} className="files-draft">
                   <p className="files-draft-meta">{draft.origin} · {formatClock(draft.createdAt)} · {draft.state}</p>
                   <pre className="files-draft-text">{draft.text ?? ''}</pre>
                   {artifact && <p className="files-draft-artifact">Attached: {artifact.originalName}</p>}
+                  {draft.state === 'uncertain' ? <p>Input may already have reached this session. Check its terminal before creating a retry.</p> : null}
                   <div className="files-draft-actions">
-                    <button type="button" disabled={!props.sessionLive || busy} onClick={() => {
+                    <button type="button" disabled={draft.state !== 'draft' || !props.sessionLive || busy} onClick={() => {
                       void run(typeKey, async () => {
-                        await window.aiTerminal.sendDraft(draft.draftId, false)
+                        await window.aiTerminal.sendDraft(draft.draftId, false, {
+                          ...(props.sessionIncarnationId ? { expectedIncarnationId: props.sessionIncarnationId } : {}),
+                          expectedUpdatedAt: draft.updatedAt
+                        })
                       }, 'Could not type the draft into the session')
                     }}>{isPending(typeKey) ? 'Typing…' : 'Type into session'}</button>
-                    <button type="button" disabled={!props.sessionLive || busy} onClick={() => {
+                    <button type="button" disabled={draft.state !== 'draft' || !props.sessionLive || busy} onClick={() => {
                       void run(sendKey, async () => {
-                        await window.aiTerminal.sendDraft(draft.draftId, true)
+                        await window.aiTerminal.sendDraft(draft.draftId, true, {
+                          ...(props.sessionIncarnationId ? { expectedIncarnationId: props.sessionIncarnationId } : {}),
+                          expectedUpdatedAt: draft.updatedAt
+                        })
                       }, 'Could not send the draft')
                     }}>{isPending(sendKey) ? 'Sending…' : 'Send with Enter'}</button>
+                    {draft.state === 'uncertain' ? <button type="button" disabled={busy} onClick={() => {
+                      void run(retryKey, async () => {
+                        await window.aiTerminal.retryHandoffDraft(draft.draftId)
+                        await props.onRefreshDrafts()
+                      }, 'Could not create a retry draft')
+                    }}>{isPending(retryKey) ? 'Creating retry…' : 'Create retry draft'}</button> : null}
                     <button type="button" disabled={busy} onClick={() => {
                       void run(discardKey, async () => {
                         await window.aiTerminal.discardDraft(draft.draftId)

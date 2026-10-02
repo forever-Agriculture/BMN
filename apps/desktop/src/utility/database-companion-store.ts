@@ -858,6 +858,29 @@ export function claimHandoffDraft(
   return { record: getDraft(database, draftId), claimed: true }
 }
 
+/** Persist a legacy input attempt before crossing the non-transactional PTY boundary. */
+export function claimInputDraft(
+  database: DatabaseConnection,
+  draftId: string,
+  expectedUpdatedAt: string,
+  attemptedIncarnationId: string,
+  now: string
+): { record: InputDraftRecord; claimed: boolean } {
+  const current = getDraft(database, draftId)
+  if (current.origin === 'handoff') invalid('A handoff must use its guarded paste')
+  if (current.state !== 'draft') return { record: current, claimed: false }
+  if (current.updatedAt !== expectedUpdatedAt) {
+    throw new WorkspaceStoreError(ERROR_CODES.revisionConflict, 'The draft changed before sending')
+  }
+  const updated = database.prepare(
+    `UPDATE input_draft
+     SET state = 'uncertain', detail = 'Input delivery pending; inspect the terminal before retrying',
+       attempted_incarnation_id = ?, updated_at = ?
+     WHERE draft_id = ? AND state = 'draft' AND updated_at = ?`
+  ).run(attemptedIncarnationId, monotonicDraftTime(current.updatedAt, now), draftId, expectedUpdatedAt)
+  return { record: getDraft(database, draftId), claimed: updated.changes === 1 }
+}
+
 export function finishHandoffDraft(
   database: DatabaseConnection,
   draftId: string,
@@ -1388,6 +1411,7 @@ export const COMPANION_OPERATIONS = Object.freeze({
   updateDraft,
   updateHandoffDraft,
   claimHandoffDraft,
+  claimInputDraft,
   finishHandoffDraft,
   prepareAgentHandoff,
   listAgentHandoffs,

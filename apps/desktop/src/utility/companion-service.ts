@@ -1,7 +1,7 @@
 // MODULE: companion-service.ts - host-side artifacts, attention, progress, drafts, settings, control socket, Telegram and backup
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { appendFile, chmod, copyFile, lstat, mkdir, readFile, rename, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises'
+import { appendFile, chmod, copyFile, lstat, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, join, relative } from 'node:path'
 import {
@@ -2258,6 +2258,15 @@ export class CompanionService {
   private async retryHandoffDraft(draftId: string): Promise<InputDraftRecord> {
     return this.withDraft(draftId, async () => {
       const draft = await this.options.database.companion('getDraft', draftId)
+      if (draft.origin !== 'handoff' && draft.state === 'uncertain') {
+        const { record } = await this.options.database.companion('createDraft', {
+          draftId: randomUUID(), sessionId: draft.sessionId, origin: draft.origin, originKey: null,
+          requestId: null, text: draft.text, artifactId: draft.artifactId,
+          state: 'draft', detail: `Retry of ${draft.draftId}; check the terminal for an earlier delivery`
+        }, this.iso())
+        this.emit('drafts', draft.sessionId)
+        return record
+      }
       if (draft.origin !== 'handoff' || draft.state !== 'uncertain' || !draft.sourceSessionId || !draft.text) {
         invalid('Only an uncertain handoff can be copied for an explicit retry')
       }
@@ -2340,18 +2349,40 @@ export class CompanionService {
       if (draft.preparedBy === 'agent' && draft.sourceSessionId) this.emit('attention', draft.sourceSessionId)
       return record
     }
-    if (draft.state !== 'draft' && draft.state !== 'uncertain') invalid('Only an unsent draft can be sent')
-    if (
-      expectedIncarnationId &&
-      this.options.manager.liveIncarnationId(draft.sessionId) !== expectedIncarnationId
-    ) {
+    if (draft.state === 'uncertain') {
+      throw new HostControlError(ERROR_CODES.revisionConflict,
+        'Input delivery is uncertain; inspect the terminal and create a separate retry draft')
+    }
+    if (draft.state !== 'draft') invalid('Only an unsent draft can be sent')
+    const availabilityEpoch = this.fileReferenceAvailabilityEpoch
+    const incarnation = expectedIncarnationId ?? this.options.manager.liveIncarnationId(draft.sessionId)
+    if (!incarnation) throw new HostControlError(ERROR_CODES.notFound, 'The target session has no live process')
+    await this.availableFileReferenceTarget(draft.sessionId, incarnation)
+    const artifact = draft.artifactId ? await this.readyArtifact(draft.artifactId) : null
+    const path = artifact ? await this.prepareArtifactLink(artifact) : null
+    const payload = [draft.text, path ? `${this.quotePath(path)} ` : null].filter(Boolean).join('\n')
+    if (!payload) invalid('The draft is empty')
+    if (new TextEncoder().encode(payload).byteLength > HANDOFF_PAYLOAD_BYTES) invalid('The draft must be at most 64 KiB')
+    const claim = await database.companion('claimInputDraft', draftId, expectedUpdatedAt ?? draft.updatedAt, incarnation, this.iso())
+    if (!claim.claimed) {
       throw new HostControlError(
-        ERROR_CODES.revisionConflict,
-        'The destination process changed before input was sent'
+        ERROR_CODES.revisionConflict, 'The draft was already sent or its delivery is uncertain'
       )
     }
-    if (draft.text) this.options.manager.writeToSession(draft.sessionId, bracketedPaste(draft.text, submit))
-    if (draft.artifactId) await this.deliver(draft.artifactId, draft.sessionId)
+    this.emit('drafts', draft.sessionId)
+    try {
+      await this.availableFileReferenceTarget(draft.sessionId, incarnation)
+      this.ensureFileReferenceAvailabilityUnchanged(availabilityEpoch)
+      if (this.options.manager.liveIncarnationId(draft.sessionId) !== incarnation) {
+        throw new HostControlError(ERROR_CODES.revisionConflict, 'The destination process changed before input was sent')
+      }
+    } catch (error) {
+      await database.companion('updateDraft', draftId, 'draft', 'Nothing sent; review the destination before retrying', this.iso())
+      this.emit('drafts', draft.sessionId)
+      throw error
+    }
+    // Text and its attachment reach the same incarnation in one write; Enter follows the whole payload.
+    this.options.manager.writeToSession(draft.sessionId, bracketedPaste(payload, submit))
     const record = await database.companion('updateDraft', draftId, submit ? 'submitted' : 'accepted', null, this.iso())
     this.emit('drafts', draft.sessionId)
     return record
@@ -2360,7 +2391,8 @@ export class CompanionService {
   private async exportBackup(parent: string): Promise<{ directory: string; manifest: BackupManifest }> {
     if (!isAbsolute(parent)) invalid('The backup location must be an absolute path')
     const createdAt = this.iso()
-    const directory = join(parent, `bmn-backup-${createdAt.replaceAll(':', '-').replace(/\..*$/, '')}`)
+    await mkdir(parent, { recursive: true, mode: 0o700 })
+    const directory = await mkdtemp(join(parent, `bmn-backup-${createdAt.replaceAll(':', '-')}-`))
     await mkdir(join(directory, 'artifacts'), { recursive: true, mode: 0o700 })
     const databaseFile = join(directory, 'state.sqlite3')
     await this.options.database.backupInto(databaseFile)

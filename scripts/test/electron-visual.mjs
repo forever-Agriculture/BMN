@@ -1291,7 +1291,7 @@ const evidence = await withTemporaryRoot(
         await page.fill('.command-palette input', query)
         await page.waitForFunction((text) =>
           document.querySelector('.command-palette input')?.value === text, query)
-        return page.evaluate(() => [...document.querySelectorAll('.palette-results [role="option"]')]
+        return page.evaluate(() => [...document.querySelectorAll('.palette-results [role="option"][data-group="Sessions"]')]
           .map((option) => option.textContent?.trim() ?? ''))
       }
       // AC3: the palette session row carries the mark as well as the word.
@@ -1299,7 +1299,7 @@ const evidence = await withTemporaryRoot(
         await page.fill('.command-palette input', query)
         await page.waitForFunction((text) =>
           document.querySelector('.command-palette input')?.value === text, query)
-        return page.evaluate(() => [...document.querySelectorAll('.palette-results [role="option"]')]
+        return page.evaluate(() => [...document.querySelectorAll('.palette-results [role="option"][data-group="Sessions"]')]
           .map((option) => {
             const mark = option.querySelector('.status-dot')
             return {
@@ -1874,7 +1874,7 @@ const evidence = await withTemporaryRoot(
           const group = [...document.querySelectorAll('.workspace-group')]
             .find((candidate) => candidate.getAttribute('aria-label') === name)
           if (!group) throw new Error(`workspace group unavailable: ${name}`)
-          if (group.querySelectorAll('.session-row').length === 0) {
+          if (group.querySelector('.workspace-row > button:first-child')?.getAttribute('aria-expanded') !== 'true') {
             const button = group.querySelector('.workspace-row > button:first-child')
             if (!(button instanceof HTMLElement)) throw new Error(`workspace toggle unavailable: ${name}`)
             button.click()
@@ -1882,7 +1882,7 @@ const evidence = await withTemporaryRoot(
         }, workspaceName)
         await page.waitForFunction((name) => [...document.querySelectorAll('.workspace-group')]
           .find((candidate) => candidate.getAttribute('aria-label') === name)
-          ?.querySelectorAll('.session-row').length > 0, workspaceName)
+          ?.querySelector('.workspace-row > button:first-child')?.getAttribute('aria-expanded') === 'true', workspaceName)
       }
 
       await ensureWorkspaceExpanded(glanceFixture.workspaceName)
@@ -2053,9 +2053,13 @@ const evidence = await withTemporaryRoot(
         if (!(button instanceof HTMLElement)) throw new Error(`workspace toggle unavailable: ${name}`)
         button.click()
       }, glanceFixture.workspaceName)
-      await page.waitForFunction((name) => [...document.querySelectorAll('.workspace-group')]
-        .find((candidate) => candidate.getAttribute('aria-label') === name)
-        ?.querySelectorAll('.session-row').length === 0, glanceFixture.workspaceName)
+      await page.waitForFunction((name) => {
+        const group = [...document.querySelectorAll('.workspace-group')]
+          .find((candidate) => candidate.getAttribute('aria-label') === name)
+        const rows = group?.querySelectorAll('.session-row')
+        return group?.querySelector('.workspace-row > button:first-child')?.getAttribute('aria-expanded') === 'false' &&
+          rows?.length === 1 && rows[0].querySelector('button[data-session-id]')?.getAttribute('aria-current') === 'true'
+      }, glanceFixture.workspaceName)
       await settleTerminalLayout(page)
       for (const identity of glanceIdentities) await captureGlancePair(identity, 'collapsed')
       const collapsedGlance = await readGlanceState()
