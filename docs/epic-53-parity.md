@@ -11,7 +11,7 @@ Epic 50/54 installed/provider acceptance remains separate and unfinished.
 
 | Capability / owning story | Implementation owner | Linux candidate | Native Windows | WSL |
 | --- | --- | --- | --- | --- |
-| Build, data roots, database, restart, single instance, unpacked startup — 53.1 | Implementation team | Build/startup/package PASS on Ubuntu CI | Install/build/package PASS; startup repair under test | UNVERIFIED |
+| Build, data roots, database, restart, single instance, unpacked startup — 53.1 | Implementation team | Build/startup/package PASS on Ubuntu CI | Install/build/package and one packaged startup PASS; development/restart blocked | UNVERIFIED |
 | PowerShell/cmd launch, input, stop, process identity, crash cleanup, ConPTY feasibility — 53.2 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
 | Files, path links, attachments, backups, directory permissions — 53.3 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
 | CLI, transport, caller/session authority — 53.4 | Implementation team | UNVERIFIED | Not implemented | UNVERIFIED |
@@ -168,3 +168,41 @@ that process's folder-security check fails; full startup remains unverified.
 The `fa91090` inventory also exposed a timeout in
 `apps/desktop/src/utility/file-reference-search.test.ts`, owned by 53.3. Its cause
 is unconfirmed and it has not been waived.
+
+### Resume evidence: Chromium ACLs and path aliases
+
+[Full candidate run 37069696565](https://github.com/forever-Agriculture/BMN/actions/runs/37069696565)
+tested production `67bdf69`. Linux passed all gates, including 2,832 unit tests,
+startup, packaging and packaged smoke. Windows passed install/native rebuild,
+lint, typecheck, build, unpacked packaging and one complete packaged startup
+(persistence, second-instance activation, sandbox and native module checks).
+Windows development startup failed. Its unit inventory recorded 2,027 passed,
+624 failed and 9 skipped; 29 files failed. The Windows-specific storage suite
+passed 12 tests and failed the new missing-leaf alias test. These are individual
+results; Windows startup reliability and Story 53.1 are not accepted.
+
+Two Story 53.1 defects remain:
+
+- Existing 8.3/long-path selection and overlap rejection now pass, but creating a
+  missing leaf through a short-path ancestor with a long-path data designation
+  still fails (`private-directory.windows.test.ts`, the `new-leaf` assertion).
+  Its exact normalization failure needs further evidence; it is not waived.
+- [Synthetic restart diagnostic 37070042296](https://github.com/forever-Agriculture/BMN/actions/runs/37070042296)
+  runs the same production source with diagnostic-only harness changes in
+  `b603d35`. Verification passes after the first Electron launch and fails after
+  restart: Chromium's `Preferences` file has two current-user FullControl ACEs,
+  while the guard requires exactly one. No foreign principal or extra right is
+  present in that captured failure. The passing packaged sample above does not
+  override this reproducible failure.
+
+The original Chromium capability mismatch is documented in
+[Windows storage security](windows-storage-security.md). The narrow policy keeps
+unknown identities/rights, shared roots, links and unsafe owners rejected.
+Source rechecks found no additional defect, but native evidence leaves the two
+failures above unresolved. The dev-auto consultant/final repair allowance is
+exhausted; this boundary is BLOCKED pending an explicit next design decision.
+No merge or deployment has occurred. Stories 53.2–53.13 remain backlog.
+
+Windows 11 standard-user acceptance, foreign-owner refusal, ordinary and
+capability-bearing cross-account denial, and wide-tree memory measurements remain
+UNVERIFIED. WSL and later capabilities retain their separate gates.
