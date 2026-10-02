@@ -30,13 +30,14 @@ app.whenReady().then(async () => {
 $path=ConvertFrom-Json ([Console]::In.ReadToEnd());
 $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value;
 $root=New-Object System.IO.DirectoryInfo($path);
-$items=@($root)+@($root.EnumerateFileSystemInfos());
+$items=@($root)+@($root.EnumerateFileSystemInfos('*', [System.IO.SearchOption]::AllDirectories));
+if ($items.Count -gt 1000) { throw 'Synthetic probe entry bound exceeded' }
 $results=@(foreach ($item in $items) {
  $acl=$item.GetAccessControl();
  $rules=@(foreach ($rule in $acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier])) {
-  @{sid=if ($rule.IdentityReference.Value -eq $sid) {'CURRENT_USER'} else {$rule.IdentityReference.Value}; rights=$rule.FileSystemRights.ToString(); type=$rule.AccessControlType.ToString(); inherited=$rule.IsInherited; inheritance=$rule.InheritanceFlags.ToString(); propagation=$rule.PropagationFlags.ToString()}
+  @{sid=if ($rule.IdentityReference.Value -eq $sid) {'CURRENT_USER'} else {$rule.IdentityReference.Value}; rights=$rule.FileSystemRights.ToString(); mask=[int]$rule.FileSystemRights; type=$rule.AccessControlType.ToString(); inherited=$rule.IsInherited; inheritance=$rule.InheritanceFlags.ToString(); propagation=$rule.PropagationFlags.ToString()}
  });
- @{name=$item.Name; owner=if ($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -eq $sid) {'CURRENT_USER'} else {$acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value}; protected=$acl.AreAccessRulesProtected; rules=$rules}
+ @{name=$item.FullName.Substring($root.FullName.Length); directory=($item -is [System.IO.DirectoryInfo]); owner=if ($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -eq $sid) {'CURRENT_USER'} else {$acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value}; protected=$acl.AreAccessRulesProtected; rules=$rules}
 });
 ConvertTo-Json -InputObject $results -Depth 6 -Compress`
   const acl = spawnSync(join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), [
