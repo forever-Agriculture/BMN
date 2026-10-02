@@ -1,14 +1,27 @@
 import { describe, expect, it } from 'vitest'
 import { filterCommands, matchingPaletteFileSearch, paletteFileSearchRootLabel, paletteSelectionIndex, type PaletteCommand, type PaletteFileSearchSnapshot } from './command-palette'
 
-describe('literal before Commands-only subsequence search', () => {
+describe('literal before label subsequence search', () => {
   const row = (id: string, label: string, group: PaletteCommand['group'] = 'Commands', extra: Partial<PaletteCommand> = {}): PaletteCommand => ({ id, label, group, run: () => {}, ...extra })
   const commands = [row('session', 'Go to next request needing you', 'Sessions'),
     row('fuzzy-a', 'Go to next request needing you'), row('literal', 'nxt req'), row('fuzzy-b', 'Next requests'),
     row('disabled', 'nxt req', 'Commands', { disabled: true }), row('file', 'Go to next request needing you', 'Files')]
-  it('puts literals first, preserving ties and excluding fuzzy non-command rows', () => {
-    expect(filterCommands(commands, 'nxt req').map(row => row.id)).toEqual(['literal', 'fuzzy-a', 'fuzzy-b'])
-    expect(filterCommands(commands, ' NXT   REQ ').map(row => row.id)).toEqual(['literal', 'fuzzy-a', 'fuzzy-b'])
+  it('puts literals first within groups, preserving ties and excluding fuzzy file rows', () => {
+    expect(filterCommands(commands, 'nxt req').map(row => row.id)).toEqual(['session', 'literal', 'fuzzy-a', 'fuzzy-b'])
+    expect(filterCommands(commands, ' NXT   REQ ').map(row => row.id)).toEqual(['session', 'literal', 'fuzzy-a', 'fuzzy-b'])
+  })
+  it('finds abbreviated sessions/workspaces and keeps literal BMN rows ahead of incidental labels', () => {
+    const list = [row('incidental', 'Big Mountain Notes', 'Sessions'), row('exact', 'BMN', 'Sessions'),
+      row('qa-a', 'Q-Automations', 'Sessions', { context: 'North · running' }),
+      row('qa-b', 'Q-Automations', 'Sessions', { context: 'South · stopped' }),
+      row('disabled', 'BMN', 'Sessions', { disabled: true }),
+      row('ws-incidental', 'Big Mountain Notes', 'Workspaces'), row('ws-exact', 'BMN', 'Workspaces'),
+      row('ws-qa', 'Q-Automations', 'Workspaces')]
+    expect(filterCommands(list, 'bmn').map(row => row.id)).toEqual(['exact', 'incidental', 'ws-exact', 'ws-incidental'])
+    expect(filterCommands(list, 'qat').map(row => row.id)).toEqual(['qa-a', 'qa-b', 'ws-qa'])
+    expect(filterCommands(list, 'automations south stopped').map(row => row.id)).toEqual(['qa-b'])
+    expect(filterCommands(list, 'qz')).toEqual([])
+    expect(filterCommands(list, '').map(row => row.id)).toEqual(list.filter(row => !row.disabled).map(row => row.id))
   })
   it('preserves ordinary literal context/group matches and the existing group order', () => {
     const list = [row('session', 'Alpha', 'Sessions', { context: 'workspace north' }), row('workspace', 'north', 'Workspaces'), row('command', 'Open north'), row('file', 'north', 'Files')]

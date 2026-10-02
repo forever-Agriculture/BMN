@@ -43,7 +43,7 @@ export function matchingPaletteFileSearch(
     snapshot.sessionId === address.sessionId && snapshot.rootLabel === address.rootLabel ? snapshot.value : null
 }
 
-/** Each word must be literal, or (Commands labels only) an ordered subsequence. No scores. */
+/** Literal matches precede label subsequences within each group. Files stay literal. */
 export function filterCommands(commands: readonly PaletteCommand[], query: string): PaletteCommand[] {
   const words = query.toLocaleLowerCase().split(/\s+/).filter(Boolean)
   const literal = (command: PaletteCommand): boolean => {
@@ -60,11 +60,16 @@ export function filterCommands(commands: readonly PaletteCommand[], query: strin
     return true
   }
   const matched = commands.filter(command => !command.disabled && (literal(command) ||
-    command.group === 'Commands' && words.every(word => subsequence(word, command.label.toLocaleLowerCase()))))
-  const commandRows = matched.filter(command => command.group === 'Commands')
-  const ordered = [...commandRows.filter(literal), ...commandRows.filter(command => !literal(command))]
-  let index = 0
-  return matched.map(command => command.group === 'Commands' ? ordered[index++]! : command)
+    command.group !== 'Files' && words.every(word => subsequence(word, command.label.toLocaleLowerCase()))))
+  const ordered = new Map<PaletteCommand['group'], { rows: PaletteCommand[]; index: number }>()
+  for (const group of ['Sessions', 'Workspaces', 'Commands'] as const) {
+    const rows = matched.filter(command => command.group === group)
+    ordered.set(group, { rows: [...rows.filter(literal), ...rows.filter(command => !literal(command))], index: 0 })
+  }
+  return matched.map(command => {
+    const group = ordered.get(command.group)
+    return group ? group.rows[group.index++]! : command
+  })
 }
 
 /** Async rows cannot replace a surviving selected command. Missing selections fall back to row one. */
@@ -162,7 +167,6 @@ export function CommandPalette(props: {
           setQuery(event.target.value)
           setFileResult(null)
           setFileError(false)
-          setActiveId(null)
         }}
         onKeyDown={(event) => {
           if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {

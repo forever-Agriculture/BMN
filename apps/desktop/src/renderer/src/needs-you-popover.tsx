@@ -122,6 +122,7 @@ export function NeedsYouPopover(props: {
   const onClose = useRef(props.onClose)
   onClose.current = props.onClose
   const { responses, updates } = openAttentionGroups(props.requests)
+  const previousResponses = useRef<string[]>([])
   const openCount = responses.length + updates.length
   const recent = props.requests
     .filter((request) => request.state !== 'open')
@@ -141,12 +142,19 @@ export function NeedsYouPopover(props: {
   }, [])
 
   useLayoutEffect(() => {
+    const previous = previousResponses.current
+    const current = responses.map(request => `${request.requestId}:${request.revision}`)
+    previousResponses.current = current
     const focused = focusedRequest.current
     if (!focused || props.requests.some(request => request.state === 'open' &&
       request.requestId === focused.id && request.revision === focused.revision)) return
     // Keep focus elsewhere if the owner moved it while this action was pending.
     if (document.activeElement !== document.body && document.activeElement !== document.documentElement) return
-    const next = element.current?.querySelector<HTMLButtonElement>('.attention-group .attention-item button.primary')
+    const index = previous.indexOf(`${focused.id}:${focused.revision}`)
+    const nextKey = [...previous.slice(index + 1), ...previous.slice(0, Math.max(0, index)).reverse()]
+      .find(key => current.includes(key)) ?? current[0]
+    const next = Array.from(element.current?.querySelectorAll<HTMLButtonElement>('button[data-response-navigation]') ?? [])
+      .find(button => button.dataset.responseNavigation === nextKey)
     focusedRequest.current = null
     const target = next ?? props.anchor
     target?.focus()
@@ -170,7 +178,7 @@ export function NeedsYouPopover(props: {
     const destination = request.kind === 'handoff' ? props.handoffDestination?.(request) : null
     return (
       <article
-        key={request.requestId}
+        key={`${request.requestId}:${request.revision}`}
         data-request-id={request.requestId}
         data-request-revision={request.revision}
         className={`attention-item ${actionable ? 'request' : 'update'}`}
@@ -213,7 +221,19 @@ export function NeedsYouPopover(props: {
           <span className="provenance">{attentionProvenance(request)}</span>
         </p>
         <div className="actions">
-          <button type="button" className="primary" onClick={() => props.onOpenSession(request.sessionId, request)}>
+          <button type="button" className="primary"
+            data-response-navigation={actionable ? `${request.requestId}:${request.revision}` : undefined}
+            onKeyDown={(event) => {
+              if (!actionable || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return
+              event.preventDefault()
+              event.stopPropagation()
+              const buttons = Array.from(element.current?.querySelectorAll<HTMLButtonElement>('button[data-response-navigation]') ?? [])
+              const index = buttons.indexOf(event.currentTarget)
+              const next = buttons[Math.max(0, Math.min(buttons.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))]
+              next?.focus()
+              next?.scrollIntoView({ block: 'nearest' })
+            }}
+            onClick={() => props.onOpenSession(request.sessionId, request)}>
             {request.kind === 'handoff' ? 'Open handoff' : actionable ? 'Open session' : 'Open update'}
           </button>
           <button type="button" onClick={() => props.onAcknowledge(request)} title="Clear this reminder; keep the task or draft.">

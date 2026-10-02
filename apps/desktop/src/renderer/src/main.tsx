@@ -875,8 +875,21 @@ function App(): React.JSX.Element {
     setPanel('new')
   }
 
+  /** Inspect an existing pane in place, including panes owned by another workspace. */
+  const selectSessionForPanel = (session: SessionRecord): void => {
+    const workspaceId = activeWorkspaceRef.current
+    const current = workspaceId ? writer.layouts()[workspaceId] : undefined
+    if (workspaceId && current?.split.panes.some(pane => pane.sessionId === session.sessionId)) {
+      if (current.selectedSessionId !== session.sessionId) {
+        writer.apply(workspaceId, state => selectLayoutSession(state, session.sessionId, sessionsRef.current.map(record => record.sessionId)))
+      }
+    } else {
+      applyTreeSessionAction(selectTreeSession(sessionsRef.current, session.sessionId))
+    }
+  }
+
   const beginSessionEdit = (session: SessionRecord): void => {
-    applyTreeSessionAction(selectTreeSession(sessions, session.sessionId))
+    selectSessionForPanel(session)
     setEditingSessionId(session.sessionId)
     setNewSessionSplit(false)
     setPickedTemplateId('')
@@ -1356,12 +1369,12 @@ function App(): React.JSX.Element {
   }
 
   const sessionMenuEntries = (session: SessionRecord, index: number, siblings: readonly SessionRecord[]): MenuEntry[] => session.archivedAt ? [
-    { label: 'Session details', onSelect: () => { applyTreeSessionAction(selectTreeSession(sessions, session.sessionId)); setPanel('details') } },
+    { label: 'Session details', onSelect: () => { selectSessionForPanel(session); setPanel('details') } },
     'separator',
     { label: 'Restore session', onSelect: () => void archiveSession(session, false).catch(fail('Session restore failed')) }
   ] : [
     { label: 'Split beside', onSelect: () => splitBeside(session), shortcut: SHORTCUT_LABELS['split-toggle'] },
-    { label: 'Session details', onSelect: () => { applyTreeSessionAction(selectTreeSession(sessions, session.sessionId)); setPanel('details') } },
+    { label: 'Session details', onSelect: () => { selectSessionForPanel(session); setPanel('details') } },
     { label: 'Hook events…', onSelect: () => setDialog({ kind: 'hook-events', session }) },
     { label: 'Edit launch settings', onSelect: () => beginSessionEdit(session) },
     { label: 'Move up', disabled: index === 0, onSelect: () => void moveSession(siblings, index, -1).catch(fail('Session move failed')) },
@@ -1389,7 +1402,7 @@ function App(): React.JSX.Element {
   }
 
   const paneMenuEntries = (session: SessionRecord): MenuEntry[] => [
-    { label: 'Session details', onSelect: () => setPanel('details') },
+    { label: 'Session details', onSelect: () => { selectSessionForPanel(session); setPanel('details') } },
     // xterm consumes Tab inside the terminal, so the More menu is the keyboard route to the detail.
     {
       label: 'Progress details',
@@ -1509,6 +1522,17 @@ function App(): React.JSX.Element {
       command('search', 'Search terminal output', () => runCommand('search'), { shortcut: SHORTCUT_LABELS.search, disabled: !selectedSessionId || !live[selectedSessionId] }),
       command('files', panel === 'files' ? 'Close files' : 'Show files', () => setPanel(panel === 'files' ? null : 'files')),
       command('details', 'Session details', () => setPanel('details'), { disabled: !selectedRecord }),
+      command(`edit-launch-${selectedRecord?.sessionId ?? 'none'}`, 'Edit launch settings', () => {
+        const current = sessionsRef.current.find(session => session.sessionId === selectedRecord?.sessionId &&
+          session.workspaceId === selectedRecord.workspaceId && session.archivedAt === null)
+        const workspace = current && workspacesRef.current.find(item => item.workspaceId === current.workspaceId && item.archivedAt === null)
+        if (!current || !workspace) { brief('That session is unavailable.'); return }
+        beginSessionEdit(current)
+      }, {
+        disabled: !selectedRecord || selectedRecord.archivedAt !== null ||
+          !shown.some(workspace => workspace.workspaceId === selectedRecord.workspaceId),
+        context: selectedRecord ? `${workspaces.find(workspace => workspace.workspaceId === selectedRecord.workspaceId)?.name ?? ''} › ${selectedRecord.name}` : undefined
+      }),
       command('plan-use', 'Plan use…', () => setDialog({ kind: 'plan-use' })),
       command('file-reference', 'Open file reference…', () => openFileReference(
         selectedRecord?.sessionId ?? null,

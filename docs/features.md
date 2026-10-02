@@ -39,7 +39,9 @@ anything else installed. **New session…** opens the launcher beside the termin
   close prompt can remember your answer) and terminal images. The summary line always shows the
   exact command that will run. Arguments use shell quoting, so `'a b'` stays one argument.
 
-Edit launch settings later from the session's or pane's menu. Sessions can be moved up and down, and
+Edit launch settings later from the session's or pane's menu, or search **Edit launch settings**
+in the command palette for the selected pane. This edits the next launch, preserving the running
+process and split layout. Sessions can be moved up and down, and
 archived once stopped; **Restore session** brings an archived one back.
 
 **Launch sets** in a workspace menu or the palette save 1–8 ordered command definitions. You can
@@ -192,8 +194,12 @@ keeps.
 "withdrawn by Claude Stop", "resolved by typing", "expired". A request stays open until you answer
 it, the agent withdraws it or it expires. Typing, pasting or dictating into a session also resolves
 its open prompts and notices, the way answering in the terminal does. Typing does not close review
-or handoff requests. The popover offers **Open session**, **Acknowledge**, and
+or handoff requests. The popover offers **Open session**, **Dismiss**, and
 **Mark answered** once you have dealt with it in the terminal.
+
+On a response card's **Open session** or **Open handoff** button, Up/Down moves to the previous/next
+response card and scrolls it into view. Browsing sends nothing. Arrow keys in answer controls keep
+their normal behavior; incoming requests leave your focus in place.
 
 When desktop notifications are enabled, BMN shows one for a new request unless you are already
 looking at that session.
@@ -285,9 +291,10 @@ stops, restarts or is archived, choose it again. A path the reference grammar ca
 cannot be sent.
 
 In the command palette (`Ctrl+Shift+P`), typing a query also searches filenames and paths in a
-labelled **Files** group. **Commands** additionally accepts label abbreviations such as `nxt req`,
-with ordinary literal matches first and stable order inside each partition. Sessions, workspaces
-and files still use literal words; nothing runs until Enter or a click.
+labelled **Files** group. **Commands**, **Sessions** and **Workspaces** also accept label
+abbreviations such as `nxt req` or `qat` for Q-Automations. Ordinary literal matches come first
+within each group, keeping their existing order and context matching. The highlighted row stays
+selected as you type if it still matches. Files use literal words; nothing runs until Enter or a click.
 Filename traversal excludes `.git` and `node_modules` by name, and descendant directories named
 `dist`, `build`, `out`, `coverage`, `.next` and `.cache`. A selected root with one of those names is
 still searched, as are regular files with the six generated names. Genuine source folders with
