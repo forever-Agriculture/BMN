@@ -36,6 +36,7 @@ import {
   type RenderedCard
 } from './telegram-cards'
 import { TelegramConnectorError, type CardMessageOptions, type InboundReply, type InboundTap } from './telegram-connector'
+import { observeTelegramDelivery, type TelegramDeliveryObserver } from './telegram-delivery'
 
 export interface CardConnector {
   sendMessage(text: string, options?: CardMessageOptions): Promise<{ messageId: number }>
@@ -71,6 +72,7 @@ export interface CardKeeperDependencies {
   /** Waits before each retry of a card's final edit that Telegram did not take; about ten seconds to five minutes. */
   retryMs?: readonly number[]
   token?: () => string
+  observeDelivery?: TelegramDeliveryObserver
 }
 
 type TapAction =
@@ -187,9 +189,17 @@ export class TelegramCardKeeper {
   private async pageCurrent(record: AttentionRecord): Promise<boolean> {
     if (this.disposed) return true
     const current = await this.deps.getAttention(record.requestId)
-    if (!current || current.state !== 'open' || current.seenAt !== null || current.revision !== record.revision) return true
+    if (!current || current.state !== 'open' || current.seenAt !== null || current.revision !== record.revision) {
+      observeTelegramDelivery(this.deps.observeDelivery, record,
+        !current ? 'request-unavailable' : current.state !== 'open' ? 'request-closed'
+          : current.seenAt !== null ? 'request-seen' : 'request-revised')
+      return true
+    }
     const connector = this.deps.connector()
-    if (!connector) return false
+    if (!connector) {
+      observeTelegramDelivery(this.deps.observeDelivery, record, 'connector-unavailable')
+      return false
+    }
     const existing = this.cardFor(record.requestId)
     if (existing) {
       if (existing.state === 'buttons' || existing.state === 'open') {
@@ -206,13 +216,18 @@ export class TelegramCardKeeper {
     const composed = await this.compose(record, START, null, binding.epoch)
     let format: TelegramCardData['format'] = 'html'
     let messageId: number
+    observeTelegramDelivery(this.deps.observeDelivery, record, 'send-started')
     try {
       messageId = (await connector.sendMessage(composed.rendered.text, {
         html: true,
         keyboard: composed.rendered.keyboard
       })).messageId
     } catch (error) {
-      if (!isFormattingRefusal(error)) return true
+      if (!isFormattingRefusal(error)) {
+        observeTelegramDelivery(this.deps.observeDelivery, record, 'send-uncertain')
+        return true
+      }
+      observeTelegramDelivery(this.deps.observeDelivery, record, 'format-fallback')
       // Telegram refused the formatting: the owner still gets the words, answered at the laptop.
       format = 'plain'
       const fallback = plainFallback(composed.rendered.text, composed.state === 'buttons')
@@ -220,9 +235,11 @@ export class TelegramCardKeeper {
         messageId = (await connector.sendMessage(record.manualChoices ? plainText(composed.rendered.text) : fallback,
           record.manualChoices ? { keyboard: composed.rendered.keyboard } : undefined)).messageId
       } catch {
+        observeTelegramDelivery(this.deps.observeDelivery, record, 'fallback-failed')
         return true
       }
     }
+    observeTelegramDelivery(this.deps.observeDelivery, record, 'send-confirmed')
     const state = format === 'plain' && !record.manualChoices ? 'open' : composed.state
     const card: LiveCard = {
       messageId,
@@ -255,7 +272,7 @@ export class TelegramCardKeeper {
       revision: record.revision,
       state,
       card: { base: card.base, format }
-    }).catch(() => undefined)
+    }).catch(() => { observeTelegramDelivery(this.deps.observeDelivery, record, 'mapping-write-failed') })
     // The request may have closed while the card was on its way.
     await this.enqueue(card, () => this.refreshCard(card))
     return true

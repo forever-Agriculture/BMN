@@ -71,6 +71,7 @@ import { codexRolloutPath } from './conversation-binding'
 import { readCodexUsage } from './codex-usage'
 import { searchFileReferences } from './file-reference-search'
 import { PAGE_AFTER_MS, createAttentionPager } from './attention-pager'
+import { observeTelegramDelivery, type TelegramDeliveryEvent } from './telegram-delivery'
 import { RemoteAnswers, answerRoute, type AnswerOutcome, type AnswerRequest, type PluginAnswer } from './remote-answer'
 import { observeRepeat, REPEAT_NOTICE_AT, type RepeatState, type RepeatSegment } from './repeat-watch'
 import { TelegramCardKeeper } from './telegram-card-keeper'
@@ -265,6 +266,7 @@ export class CompanionService {
   readonly socketPath: string
   /** Where a refused agent request and its reason are written, for the owner to read. */
   readonly refusalLogPath: string
+  private readonly telegramDeliveryLogPath: string
   private readonly files: ArtifactFileStore
   private readonly control: ControlServer
   private readonly knownSessions = new Map<string, SessionRecord>()
@@ -387,6 +389,7 @@ export class CompanionService {
   /** Each bounded log has its own serialized append queue. */
   private repeatWrites: Promise<void> = Promise.resolve()
   private refusalWrites: Promise<void> = Promise.resolve()
+  private telegramDeliveryWrites: Promise<void> = Promise.resolve()
 
   constructor(private readonly options: CompanionServiceOptions) {
     this.retainedHooks = new HookEventHistory({ root: options.roots.state,
@@ -402,7 +405,7 @@ export class CompanionService {
       changed: () => this.emit('ports', null)
     })
     this.pager = createAttentionPager({
-      current: (requestId) => this.options.database.companion('getAttention', requestId).catch(() => null),
+      current: (requestId) => this.attentionForDelivery(requestId),
       send: (record) => this.cards.page(record),
       schedule: (callback, ms) => {
         const timer = setTimeout(callback, ms)
@@ -411,6 +414,7 @@ export class CompanionService {
       },
       ownerAway: () => this.ownerAway,
       now: () => this.now().getTime(),
+      observeDelivery: (event) => this.logTelegramDelivery(event),
       ...(options.pageAfterMs !== undefined
         ? { pageAfterMs: { ...PAGE_AFTER_MS, question: options.pageAfterMs, permission: options.pageAfterMs } }
         : {})
@@ -442,7 +446,7 @@ export class CompanionService {
     })
     this.cards = new TelegramCardKeeper({
       connector: () => this.telegram && this.telegramHealth?.state === 'polling' ? this.telegram : undefined,
-      getAttention: (requestId) => options.database.companion('getAttention', requestId).catch(() => null),
+      getAttention: (requestId) => this.attentionForDelivery(requestId),
       header: (sessionId, record) => {
         const origin = this.hookOrigins.get(sessionId)
         const live = origin !== undefined && origin.incarnationId === options.manager.liveIncarnationId(sessionId)
@@ -471,11 +475,13 @@ export class CompanionService {
         message: (messageId, sessionId, requestId, incarnationId) =>
           options.database.companion('putTelegramMessage', messageId, sessionId, requestId, incarnationId, this.iso())
       },
-      home: homedir()
+      home: homedir(),
+      observeDelivery: (event) => this.logTelegramDelivery(event)
     })
     this.answers.onLateOutcome((requestId, outcome) => this.cards.lateOutcome(requestId, outcome))
     this.socketPath = join(options.roots.runtime, 'control', 'control.sock')
     this.refusalLogPath = join(options.roots.state, 'refused-requests.log')
+    this.telegramDeliveryLogPath = join(options.roots.state, 'telegram-delivery.log')
     this.files = new ArtifactFileStore({
       root: join(options.roots.data, 'artifacts', 'originals'),
       stagingRoot: join(options.roots.state, 'artifact-staging'),
@@ -571,6 +577,27 @@ export class CompanionService {
    */
   private async appendRefusal(line: string): Promise<void> {
     return this.appendBoundedLog(this.refusalLogPath, line)
+  }
+
+  /** A bounded, owner-only paging timeline, separate from message text and agent-readable control responses. */
+  private logTelegramDelivery(event: TelegramDeliveryEvent): void {
+    try {
+      const line = `${JSON.stringify({ at: this.iso(), ...event })}\n`
+      this.telegramDeliveryWrites = this.telegramDeliveryWrites
+        .then(() => this.appendBoundedLog(this.telegramDeliveryLogPath, line))
+        .catch(() => undefined)
+    } catch { /* Best-effort diagnostics must not change delivery or shutdown. */ }
+  }
+
+  private async attentionForDelivery(requestId: string): Promise<AttentionRecord | null> {
+    try {
+      return await this.options.database.companion('getAttention', requestId)
+    } catch (error) {
+      if (!(typeof error === 'object' && error !== null && 'code' in error && error.code === ERROR_CODES.notFound)) {
+        this.logTelegramDelivery({ requestId, phase: 'request-read-failed' })
+      }
+      return null
+    }
   }
 
   private async appendBoundedLog(path: string, line: string): Promise<void> {
@@ -1154,6 +1181,7 @@ export class CompanionService {
     this.answers.track(record)
     this.emit('attention', p.sessionId)
     if (!p.phoneNotified) this.pager.opened(record)
+    else observeTelegramDelivery((event) => this.logTelegramDelivery(event), record, 'already-notified-elsewhere')
     return record
   }
 

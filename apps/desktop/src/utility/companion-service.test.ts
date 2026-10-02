@@ -469,7 +469,10 @@ describe('file search address', () => {
   })
 })
 
-afterEach(() => {
+afterEach(async () => {
+  service['pager'].close()
+  service['cards'].dispose()
+  await service['telegramDeliveryWrites']
   database.close()
   rmSync(root, { recursive: true, force: true })
 })
@@ -1980,6 +1983,71 @@ describe('conversation route in list and snapshot', () => {
         conversation: { status: 'bound', captureRoute: 'hook-session-start' }
       }
     ])
+  })
+})
+
+describe('Telegram delivery diagnostic storage', () => {
+  it('records an explicitly skipped page without scheduling it', async () => {
+    const record = await service['openAttention']({
+      sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'synthetic-notice',
+      kind: 'notice', title: 'PRIVATE-TITLE', phoneNotified: true
+    })
+    await service['telegramDeliveryWrites']
+    const events = (await readFile(join(root, 'state/telegram-delivery.log'), 'utf8')).trim().split('\n').map(line => JSON.parse(line))
+    expect(events).toEqual([
+      { at: now, requestId: record.requestId, sessionId: 's1', incarnationId: 'incarnation-1',
+        revision: 1, kind: 'notice', phase: 'already-notified-elsewhere' }
+    ])
+  })
+
+  it.each([false, true])('distinguishes a failed read from a missing record (missing=%s)', async missing => {
+    const record = await service['openAttention']({
+      sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'synthetic-notice', kind: 'notice', title: 'PRIVATE-TITLE'
+    })
+    const error = missing ? Object.assign(new Error('PRIVATE-MISSING'), { code: ERROR_CODES.notFound }) : new Error('PRIVATE-READ-ERROR')
+    vi.spyOn(service['options'].database, 'companion').mockRejectedValue(error)
+    expect(await service['cards'].page(record)).toBe(true)
+    await service['telegramDeliveryWrites']
+    const content = await readFile(join(root, 'state/telegram-delivery.log'), 'utf8')
+    const events = content.trim().split('\n').map(line => JSON.parse(line))
+    expect(events.filter(event => event.phase === 'request-read-failed')).toEqual(missing ? [] : [
+      { at: now, requestId: record.requestId, phase: 'request-read-failed' }
+    ])
+    expect(content).not.toContain('PRIVATE-')
+  })
+
+  it('records the real pager and card-keeper decisions without card contents', async () => {
+    const record = await service['openAttention']({
+      sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'synthetic-notice',
+      kind: 'notice', title: 'PRIVATE-TITLE', body: 'PRIVATE-BODY'
+    })
+    await service['cards'].page(record)
+    await service['telegramDeliveryWrites']
+    service['pager'].close()
+    const path = join(root, 'state/telegram-delivery.log')
+    const content = await readFile(path, 'utf8')
+    const events = content.trim().split('\n').map(line => JSON.parse(line))
+    expect(events).toEqual([
+      { at: now, requestId: record.requestId, sessionId: 's1', incarnationId: 'incarnation-1',
+        revision: 1, kind: 'notice', phase: 'scheduled', away: null, delayMs: 60_000 },
+      { at: now, requestId: record.requestId, sessionId: 's1', incarnationId: 'incarnation-1',
+        revision: 1, kind: 'notice', phase: 'connector-unavailable' }
+    ])
+    expect(content).not.toContain('PRIVATE-')
+    if (process.platform !== 'win32') expect(statSync(path).mode & 0o777).toBe(0o600)
+  })
+
+  it('bounds the diagnostic file and preserves complete newest records', async () => {
+    const path = join(root, 'state/telegram-delivery.log')
+    await mkdir(join(root, 'state'), { recursive: true })
+    await writeFile(path, `${JSON.stringify({ old: 'x'.repeat(100) })}\n`.repeat(2500), { mode: 0o600 })
+    service['logTelegramDelivery']({ requestId: 'synthetic-notice', sessionId: 's1', incarnationId: null,
+      revision: 1, kind: 'notice', phase: 'send-uncertain' })
+    await service['telegramDeliveryWrites']
+    const content = await readFile(path, 'utf8')
+    expect(Buffer.byteLength(content)).toBeLessThanOrEqual(256 * 1024)
+    const events = content.trim().split('\n').map(line => JSON.parse(line))
+    expect(events.at(-1)).toMatchObject({ requestId: 'synthetic-notice', phase: 'send-uncertain' })
   })
 })
 

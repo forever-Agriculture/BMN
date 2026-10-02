@@ -1,5 +1,6 @@
 // MODULE: attention-pager.ts - sends an attention request to the owner's phone only when the owner is away and it waited unseen
 import type { AttentionKind, AttentionRecord } from '@bmn/protocol'
+import { observeTelegramDelivery, type TelegramDeliveryObserver } from './telegram-delivery'
 
 /** How long a request may wait for the owner in the app before it is also sent away from the desk. */
 export const PAGE_AFTER_MS: Readonly<Record<AttentionKind, number>> = Object.freeze({
@@ -24,6 +25,7 @@ export interface AttentionPagerOptions {
   now(): number
   pageAfterMs?: Readonly<Record<AttentionKind, number>>
   leftWithinMs?: number
+  observeDelivery?: TelegramDeliveryObserver
 }
 
 /**
@@ -58,15 +60,22 @@ export function createAttentionPager(options: AttentionPagerOptions): {
     try {
       const current = await options.current(record.requestId).catch(() => null)
       if (closed || !current || current.state !== 'open' || current.seenAt !== null || current.revision !== record.revision) {
+        observeTelegramDelivery(options.observeDelivery, record,
+          closed || !current ? 'request-unavailable' : current.state !== 'open' ? 'request-closed'
+            : current.seenAt !== null ? 'request-seen' : 'request-revised')
         handled.add(key)
         return
       }
       // Departure made this revision eligible already; reconnects must not reset or expire that eligibility.
       if (options.ownerAway() === false) {
+        observeTelegramDelivery(options.observeDelivery, record, 'held-at-desk', { away: false })
         unsent.set(key, current)
         return
       }
-      const consumed = await options.send(current).catch(() => true)
+      const consumed = await options.send(current).catch(() => {
+        observeTelegramDelivery(options.observeDelivery, record, 'page-error')
+        return true
+      })
       if (consumed === false && !closed) {
         unsent.set(key, current)
         retry = started !== availability
@@ -80,6 +89,7 @@ export function createAttentionPager(options: AttentionPagerOptions): {
   const forgetStale = (): void => {
     for (const [key, waiting] of atDesk) {
       if (options.now() - waiting.openedAt <= leftWithinMs) continue
+      observeTelegramDelivery(options.observeDelivery, waiting.record, 'departure-window-expired')
       atDesk.delete(key)
       handled.add(key)
     }
@@ -91,10 +101,18 @@ export function createAttentionPager(options: AttentionPagerOptions): {
         return
       }
       const openedAt = options.now()
+      observeTelegramDelivery(options.observeDelivery, record, 'scheduled', {
+        away: options.ownerAway(), delayMs: pageAfterMs[record.kind]
+      })
       pending.set(key, options.schedule(() => {
         pending.delete(key)
         forgetStale()
-        if (options.ownerAway() === false) atDesk.set(key, { record, openedAt })
+        const away = options.ownerAway()
+        observeTelegramDelivery(options.observeDelivery, record, 'timer-fired', { away, elapsedMs: options.now() - openedAt })
+        if (away === false) {
+          observeTelegramDelivery(options.observeDelivery, record, 'held-at-desk', { away })
+          atDesk.set(key, { record, openedAt })
+        }
         else void page(key, record)
       }, pageAfterMs[record.kind]))
     },
