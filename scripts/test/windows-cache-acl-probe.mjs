@@ -1,6 +1,8 @@
 // Native regression: sandboxed Chromium cache ACLs and strict durable-data policy.
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
+import childProcess from 'node:child_process'
+import { syncBuiltinESMExports } from 'node:module'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -8,6 +10,21 @@ import { ensurePrivateDirectories } from '../../apps/desktop/src/utility/private
 
 assert.equal(process.platform, 'win32')
 assert.ok(process.env.BMN_PROBE_ELECTRON)
+// Only this disposable synthetic fixture may expose PowerShell failure details.
+const originalSpawnSync = childProcess.spawnSync
+childProcess.spawnSync = (executable, args, options) => {
+  if (args.includes('-EncodedCommand')) {
+    const script = Buffer.from(args.at(-1), 'base64').toString('utf16le')
+    if (script.includes('BMN_PRIVATE_ROOTS_OK')) {
+      args = [...args]
+      args[args.length - 1] = Buffer.from(`trap { [Console]::Error.WriteLine('SYNTHETIC_ACL_ITEM=' + $item.FullName); throw };\n${script}`, 'utf16le').toString('base64')
+    }
+  }
+  const result = originalSpawnSync(executable, args, options)
+  if (result.status !== 0) console.error(JSON.stringify({ syntheticAclFailure: true, status: result.status, stderr: result.stderr, error: result.error?.code }))
+  return result
+}
+syncBuiltinESMExports()
 const parent = mkdtempSync(join(tmpdir(), 'bmn-cache-acl-'))
 try {
   const root = join(parent, 'private')
