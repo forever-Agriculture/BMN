@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { BoundConversationBinding } from '@bmn/protocol'
+import { splitWindowsArgv } from '@bmn/protocol'
 import {
   agentCli,
   conversationReferenceExists,
@@ -25,6 +26,13 @@ import {
   prepareConversationLaunch,
   type ClaudeSessionIdCapability
 } from './conversation-binding'
+
+it('shows Windows launch arguments with their original backslashes and boundaries', () => {
+  const executable = 'C:\\Program Files\\agent.exe'
+  const argv = ['C:\\work\\', 'space value', '%PATH%', '^&', 'literal"quote']
+  const shown = shownCommand(executable, argv, 'win32')
+  expect(splitWindowsArgv(shown)).toEqual([executable, ...argv])
+})
 
 const conversationId = '11111111-1111-4111-8111-111111111111'
 const capturedAt = '2026-09-12T12:00:00.000Z'

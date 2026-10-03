@@ -1,6 +1,6 @@
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { METHOD_REGISTRY, type ProtocolMethod } from '@bmn/protocol'
 import { prepareConversationLaunch } from '../utility/conversation-binding'
@@ -21,7 +21,7 @@ afterEach(async () => {
 async function executableFixture(): Promise<{ root: string; executable: string }> {
   const root = await mkdtemp(join(tmpdir(), 'bmn-launch-spec-test-'))
   roots.add(root)
-  const executable = join(root, 'codex')
+  const executable = join(root, process.platform === 'win32' ? 'codex.exe' : 'codex')
   await writeFile(executable, '#!/bin/sh\n', 'utf8')
   await chmod(executable, 0o700)
   return { root, executable }
@@ -67,7 +67,7 @@ describe('application launch specification', () => {
       method: METHOD_REGISTRY.sessionCreate,
       params: {
         workspaceId: '00000000-0000-4000-8000-000000000001',
-        name: 'codex'
+        name: basename(executable)
       }
     })
     expect(created.binding).toMatchObject({

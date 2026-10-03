@@ -1,6 +1,7 @@
 import { access, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
+import { quoteWindowsArgv } from '@bmn/protocol'
 import type {
   AgentCli,
   BoundConversationBinding,
@@ -773,7 +774,8 @@ function shownArgument(argument: string): string {
 }
 
 /** One readable line for a launch, with every argument's own boundaries still visible. */
-export function shownCommand(executable: string, argv: readonly string[]): string {
+export function shownCommand(executable: string, argv: readonly string[], platform: NodeJS.Platform = process.platform): string {
+  if (platform === 'win32') return quoteWindowsArgv([executable, ...argv])
   return [executable, ...argv].map(shownArgument).join(' ')
 }
 

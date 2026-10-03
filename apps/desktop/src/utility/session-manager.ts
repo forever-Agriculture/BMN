@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { access, stat } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { homedir } from 'node:os'
-import { join, resolve, win32 } from 'node:path'
+import { join, posix, win32 } from 'node:path'
 import { kill as signalProcessByPid } from 'node:process'
 import {
   ERROR_CODES,
@@ -511,7 +511,7 @@ function bytesFromPty(data: string | Uint8Array): Uint8Array {
 export function resolveHomeDirectory(path: string, home: string = homedir(), platform: NodeJS.Platform = process.platform): string {
   if (platform === 'win32' && (path === '~' || /^~[\\/]/.test(path))) return win32.resolve(home, path.slice(2))
   if (path !== '~' && !path.startsWith('~/')) return path
-  return resolve(join(home, path.slice(1)))
+  return posix.resolve(posix.join(home, path.slice(1)))
 }
 
 export async function validateLaunch(params: PtyLaunchParams, environment: Readonly<Record<string, string | undefined>> = process.env): Promise<void> {
