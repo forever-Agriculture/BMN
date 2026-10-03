@@ -83,6 +83,41 @@ function workerWrite(path, expected, next, gate) {
   return { worker, result, exited }
 }
 try {
+  // Diagnostic only: independently vary retained stage and reservation handles.
+  // Do not mutate the product or interpret matrix completion as acceptance.
+  const productSource = readFileSync(new URL('../../apps/desktop/bin/safe-config-write.mjs', import.meta.url), 'utf8')
+  const helperStart = productSource.indexOf('function EnsureNativeHelpers {')
+  const helperEnd = productSource.indexOf("\ntry {\n if($request.mode", helperStart)
+  assert.ok(helperStart > 0 && helperEnd > helperStart)
+  const helper = productSource.slice(helperStart, helperEnd)
+  const matrix = `$ErrorActionPreference='Stop';[Console]::InputEncoding=New-Object Text.UTF8Encoding($false);$r=ConvertFrom-Json ([Console]::In.ReadToEnd());
+${helper}
+EnsureNativeHelpers
+$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User;$results=@()
+foreach($stageHeld in @($false,$true)) {foreach($backupHeld in @($false,$true)) {
+ $directory=[IO.Path]::Combine($r.root,('matrix-'+$stageHeld+'-'+$backupHeld));[IO.Directory]::CreateDirectory($directory)|Out-Null
+ $target=[IO.Path]::Combine($directory,'target.json');$stage=[IO.Path]::Combine($directory,'stage.tmp');$backup=[IO.Path]::Combine($directory,'backup.json')
+ [IO.File]::WriteAllText($target,'BEFORE');$original=[IO.File]::GetAccessControl($target);$original.SetOwner($sid);[IO.File]::SetAccessControl($target,$original)
+ $private=New-Object Security.AccessControl.FileSecurity;$private.SetOwner($sid);$private.SetAccessRuleProtection($true,$false);$private.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl','Allow')))
+ foreach($path in @($stage,$backup)) {$f=New-Object IO.FileStream($path,[IO.FileMode]::CreateNew,[Security.AccessControl.FileSystemRights]'Write,ReadPermissions,ReadAttributes',[IO.FileShare]::None,4096,[IO.FileOptions]::WriteThrough,$private);try {if($path -eq $stage){$bytes=[Text.Encoding]::UTF8.GetBytes('AFTER');$f.Write($bytes,0,$bytes.Length);$f.Flush($true)}}finally{$f.Dispose()}}
+ $held=$null;$staged=$null;$reserved=$null;$operation='original-open';$errorCode=$null;$exceptionType=$null;$published=$false
+ try {
+  $held=New-Object IO.FileStream($target,[IO.FileMode]::Open,[Security.AccessControl.FileSystemRights]'Read,ReadPermissions',([IO.FileShare]::Read -bor [IO.FileShare]::Delete),4096,[IO.FileOptions]::None)
+  if($stageHeld){$operation='stage-metadata';$staged=[BMNConfigIdentity]::Metadata($stage)}
+  if($backupHeld){$operation='backup-metadata';$reserved=[BMNConfigIdentity]::Metadata($backup)}
+  $operation='replace';[IO.File]::Replace($stage,$target,$backup,$false);$published=$true
+ } catch {$e=$_.Exception;for($i=0;$i -lt 8 -and $e.InnerException;$i++){$e=$e.InnerException};$errorCode=if($e -is [ComponentModel.Win32Exception]){$e.NativeErrorCode}else{$e.HResult -band 65535};$exceptionType=$e.GetType().FullName}
+ finally {foreach($handle in @($reserved,$staged,$held)){if($null -ne $handle){$handle.Dispose()}}}
+ $results+=@{stageHeld=$stageHeld;backupHeld=$backupHeld;operation=$operation;errno=$errorCode;exceptionType=$exceptionType;published=$published;target=if([IO.File]::Exists($target)){[IO.File]::ReadAllText($target)}else{$null};backup=if([IO.File]::Exists($backup)){[IO.File]::ReadAllText($backup)}else{$null};stageExists=[IO.File]::Exists($stage)}
+}}
+[Console]::Out.Write((ConvertTo-Json -Compress -Depth 5 @($results)));`
+  const encoded = Buffer.from(matrix, 'utf16le').toString('base64')
+  assert.ok(encoded.length < 32000, 'Diagnostic fixed program must fit native command limits')
+  const varied = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
+    { input: JSON.stringify({ root }), encoding: 'utf8', timeout: 30000, windowsHide: true })
+  assert.equal(varied.status, 0, 'Native four-case metadata-handle matrix must execute')
+  receipts.retainedHandleMatrix = JSON.parse(varied.stdout)
+  assert.equal(receipts.retainedHandleMatrix.length, 4)
   // Raw native measurement keeps inherited-ACL diagnosis separate from product gates.
   const inherited = join(root, 'inherited.json'), staged = join(root, 'inherited.stage'), backup = join(root, 'inherited.backup')
   writeFileSync(inherited, 'BEFORE')
