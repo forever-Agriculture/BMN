@@ -1,6 +1,6 @@
 // MODULE: control-cli.test.ts - the bmn CLI drives a real control server with truthful output and exit codes
 import { execFile } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { createServer } from 'node:net'
 import { existsSync } from 'node:fs'
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
@@ -14,6 +14,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ControlAuth, writeOwnerToken } from './control-auth'
 import { ERROR_CODES, HANDOFF_OUTLINE } from '@bmn/protocol'
 import { ControlError, ControlServer, MemoryReceiptStore, type ControlHandlers } from './control-server'
+
+import { ownWindowsFixtureFile } from './windows-fixture-owner.test-support'
+
+// Native ACL subprocesses can exceed the default 5s; each CLI child retains its 15s bound.
+if (process.platform === 'win32') vi.setConfig({ testTimeout: 30_000 })
+const rawEndpoint = (root: string, name: string) => process.platform === 'win32'
+  ? `\\\\.\\pipe\\bmn-control-${randomUUID()}` : join(root, name)
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
 const AGENT_CONTROL_DOC = fileURLToPath(new URL('../../../../docs/agent-control.md', import.meta.url))
@@ -453,13 +460,13 @@ describe('long text from standard input (Story 35.1)', () => {
   ])('refuses %j over its limit or not UTF-8 before opening the socket', async (args, input, message) => {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'aitcli-')))
     createdRoots.add(root)
-    const socketPath = join(root, 'count.sock')
+    const socketPath = rawEndpoint(root, 'count.sock')
     let connections = 0
     const counter = createServer((socket) => {
       connections += 1
       socket.destroy()
     })
-    await new Promise<void>((resolve) => counter.listen(socketPath, resolve))
+    await new Promise<void>((resolve, reject) => { counter.once('error', reject); counter.listen(socketPath, resolve) })
     try {
       const refused = await runCli(args, { env: { BMN_CONTROL_SOCKET: socketPath, BMN_TOKEN: 'unused' }, input })
       expect(refused).toEqual({ code: 2, stdout: '', stderr: `bmn: ${message}\nRun "bmn help" for usage.\n` })
@@ -1482,6 +1489,7 @@ async function hookFileFixture(contents?: unknown, name = 'settings.json'): Prom
   const path = join(root, name)
   if (contents !== undefined) {
     await writeFile(path, typeof contents === 'string' ? contents : `${JSON.stringify(contents, null, 2)}\n`)
+    ownWindowsFixtureFile(root, path)
   }
   return path
 }
@@ -3257,7 +3265,7 @@ describe('OpenCode hooks', () => {
     const fixture = await cliFixture()
     const malformed = 'ses_zzzzzzzzzzzzhVbLiXJ8YHJQjV'
     const methods: string[] = []
-    const socketPath = join(fixture.root, 'raw-hook.sock')
+    const socketPath = rawEndpoint(fixture.root, 'raw-hook.sock')
     const rawServer = createServer((socket) => {
       socket.setEncoding('utf8')
       let buffer = ''

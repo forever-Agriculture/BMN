@@ -7,12 +7,17 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { CLAUDE_KEEP_FOREVER_DAYS } from '@bmn/protocol'
 import { claudeTargetDays, readClaudeFolder, writeClaudeFolder } from './agent-history-claude'
 
+import { ownWindowsFixtureFile } from './windows-fixture-owner.test-support'
+
 const roots: string[] = []
 
 async function folder(settings?: string): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'bmn-claude-folder-'))
   roots.push(root)
-  if (settings !== undefined) await writeFile(join(root, 'settings.json'), settings)
+  if (settings !== undefined) {
+    await writeFile(join(root, 'settings.json'), settings)
+    ownWindowsFixtureFile(root, join(root, 'settings.json'))
+  }
   return root
 }
 

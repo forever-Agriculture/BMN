@@ -1,7 +1,7 @@
 // MODULE: windows-config-writer.mjs - synthetic native ACL, sharing and replacement race acceptance
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { once } from 'node:events'
@@ -395,8 +395,25 @@ catch(e){parentPort.postMessage({...info,ok:false,code:e.code,reason:e.message==
   process.exitCode = 1
 } finally {
   for (const child of children) child.kill() // Retained native child handle; never PID lookup/kill.
+  // Restore only this fixture's tree, using directory security for directories.
+  // Include nested matrix files and the root; never suppress restoration failure.
+  try {
+    const restore = path => {
+      const info = lstatSync(path)
+      assert.equal(info.isSymbolicLink(), false, 'Synthetic cleanup refuses unexpected links')
+      const directory = info.isDirectory()
+      chmodSync(path, directory ? 0o700 : 0o600)
+      acl(path, { protect: true, directory, phase: 'fixture-cleanup' })
+      if (directory) for (const name of readdirSync(path)) restore(join(path, name))
+    }
+    restore(root)
+    rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    receipts.cleanup = { removed: !existsSync(root) }
+    assert.equal(receipts.cleanup.removed, true)
+  } catch (error) {
+    receipts.cleanup = { removed: false, code: error.code ?? null, message: error.message }
+    receipts.status = 'FAIL'; process.exitCode = 1
+  }
   mkdirSync('test-results', { recursive: true }); writeFileSync('test-results/windows-config-writer.json', JSON.stringify(receipts, null, 2))
-  for (const name of readdirSync(root)) { try { acl(join(root, name), { protect: true }) } catch { /* Synthetic cleanup still attempts removal. */ } }
-  rmSync(root, { recursive: true, force: true })
 }
 console.log(JSON.stringify(receipts))

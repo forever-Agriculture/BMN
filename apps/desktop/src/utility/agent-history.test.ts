@@ -18,6 +18,10 @@ import {
   type HistoryCandidate
 } from './agent-history'
 
+import { ownWindowsFixtureFile } from './windows-fixture-owner.test-support'
+
+if (process.platform === 'win32') vi.setConfig({ testTimeout: 30_000 })
+
 const NOW = new Date('2026-09-28T12:00:00.000Z')
 const roots: string[] = []
 
@@ -71,6 +75,7 @@ async function fixture(options: {
   await mkdir(join(home, '.claude'))
   if (options.claudeSettings !== null) {
     await writeFile(join(home, '.claude', 'settings.json'), options.claudeSettings ?? '{ "model": "opus" }')
+    ownWindowsFixtureFile(home, join(home, '.claude', 'settings.json'))
   }
   let settings: AgentHistorySettings = { ...DEFAULT_APP_SETTINGS.agentHistory, claudeConfigDirs: [], ...options.settings }
   let state: AgentHistoryState = emptyHistoryState()

@@ -259,7 +259,7 @@ $rules=@($file.GetAccessRules($true,$true,[System.Security.Principal.SecurityIde
       const result = spawnSync(join(process.env.SystemRoot!, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
         ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
         { input: JSON.stringify(recording), encoding: 'utf8', timeout: 15000, windowsHide: true })
-      expect(result.status).toBe(0)
+      expect(result.status, `Synthetic WAV ACL inspection failed: ${result.stderr.slice(0, 2000)}`).toBe(0)
       const acl = JSON.parse(result.stdout) as { protected: boolean; user: string; owner: string; rules: unknown[] }
       expect(acl.protected).toBe(true)
       expect(acl.owner).toBe(acl.user)
