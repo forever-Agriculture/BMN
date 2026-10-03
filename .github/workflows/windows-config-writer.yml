@@ -1,0 +1,27 @@
+name: Windows config writer safety
+on:
+  pull_request:
+    paths:
+      - .github/workflows/windows-config-writer.yml
+      - apps/desktop/bin/safe-config-write.mjs
+      - scripts/test/windows-config-writer.mjs
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  config:
+    runs-on: windows-2025
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+      - name: Exercise synthetic ACL, sharing and replacement races
+        run: node scripts/test/windows-config-writer.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-config-writer
+          path: test-results/
+          retention-days: 14

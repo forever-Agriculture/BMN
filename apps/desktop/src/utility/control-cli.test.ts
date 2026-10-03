@@ -2681,6 +2681,7 @@ describe('bmn hooks install', () => {
     const real = await hookFileFixture({ hooks: {} }, 'real-settings.json')
     const link = join(dirname(real), 'settings.json')
     await chmod(real, 0o640)
+    const originalMode = (await stat(real)).mode & 0o777
     await symlink(real, link)
 
     const install = await runHooks(['install', '--yes', 'claude', '--file', link])
@@ -2688,7 +2689,7 @@ describe('bmn hooks install', () => {
     expect(install.code).toBe(0)
     expect((await lstat(link)).isSymbolicLink()).toBe(true)
     expect(Object.keys(JSON.parse(await readFile(real, 'utf8')).hooks)).toEqual(CLAUDE_EVENTS)
-    expect((await stat(real)).mode & 0o777).toBe(0o640)
+    expect((await stat(real)).mode & 0o777).toBe(originalMode)
   })
 
   it('writes through a symlinked parent to the file the kernel would, not one of the same name', async () => {
@@ -2697,7 +2698,7 @@ describe('bmn hooks install', () => {
     // and overwrite whatever is there.
     const root = dirname(await hookFileFixture({ hooks: {} }, 'unused.json'))
     await mkdir(join(root, 'real', 'nested'), { recursive: true })
-    await symlink(join('real', 'nested'), join(root, 'alias'))
+    await symlink(join('real', 'nested'), join(root, 'alias'), 'dir')
     await symlink(join('..', 'target.json'), join(root, 'real', 'nested', 'settings.json'))
     await writeFile(join(root, 'target.json'), 'SENTINEL: nothing to do with any harness\n')
     await writeFile(join(root, 'real', 'target.json'), '{"real":"target"}\n')
@@ -2717,13 +2718,19 @@ describe('bmn hooks install', () => {
     // that has nothing to do with any harness. Node's own realpathSync collapses it as text.
     const root = dirname(await hookFileFixture({ hooks: {} }, 'unused.json'))
     await mkdir(join(root, 'real', 'nested'), { recursive: true })
-    await symlink(join('real', 'nested'), join(root, 'branch'))
+    await symlink(join('real', 'nested'), join(root, 'branch'), 'dir')
     await symlink('branch/../target.json', join(root, 'settings.json'))
     await writeFile(join(root, 'target.json'), 'SENTINEL: nothing to do with any harness\n')
     await writeFile(join(root, 'real', 'target.json'), '{"real":true}\n')
 
     const install = await runHooks(['install', '--yes', 'claude', '--file', join(root, 'settings.json')])
 
+    if (process.platform === 'win32') {
+      expect(install.code).toBe(1)
+      expect(await readFile(join(root, 'target.json'), 'utf8')).toBe('SENTINEL: nothing to do with any harness\n')
+      expect(await readFile(join(root, 'real', 'target.json'), 'utf8')).toBe('{"real":true}\n')
+      return
+    }
     expect(install.code).toBe(0)
     expect(await readFile(join(root, 'target.json'), 'utf8')).toBe('SENTINEL: nothing to do with any harness\n')
     const written = JSON.parse(await readFile(join(root, 'real', 'target.json'), 'utf8'))
@@ -2741,7 +2748,7 @@ describe('bmn hooks install', () => {
     const install = await runHooks(['install', '--yes', 'claude', '--file', join(root, 'settings.json')])
 
     expect(install.code).toBe(1)
-    expect(install.stderr).toContain('which does not exist; resolve it by hand')
+    expect(install.stderr).toContain(process.platform === 'win32' ? 'not valid JSON' : 'which does not exist; resolve it by hand')
     expect(await readFile(join(root, 'target.json'), 'utf8')).toBe('SENTINEL\n')
     expect(await backupsOf(join(root, 'settings.json'))).toEqual([])
   })
@@ -2754,10 +2761,16 @@ describe('bmn hooks install', () => {
     await mkdir(join(root, 'cfg', 'claude'), { recursive: true })
     await writeFile(join(root, 'cfg', 'settings.json'), '{"hooks":{}}\n')
     await writeFile(join(root, 'settings.json'), 'SENTINEL\n')
-    await symlink(join(root, 'cfg', 'claude'), join(root, 'x'))
+    await symlink(join(root, 'cfg', 'claude'), join(root, 'x'), 'dir')
 
     const install = await runHooks(['install', '--yes', 'claude', '--file', `${join(root, 'x')}/../settings.json`])
 
+    if (process.platform === 'win32') {
+      expect(install.code).toBe(1)
+      expect(await readFile(join(root, 'settings.json'), 'utf8')).toBe('SENTINEL\n')
+      expect(await readFile(join(root, 'cfg', 'settings.json'), 'utf8')).toBe('{"hooks":{}}\n')
+      return
+    }
     expect(install.code).toBe(0)
     // The kernel reads `x/..` as `cfg`, so the hooks belong in cfg/settings.json...
     expect(Object.keys(JSON.parse(await readFile(join(root, 'cfg', 'settings.json'), 'utf8')).hooks))
@@ -2773,10 +2786,16 @@ describe('bmn hooks install', () => {
     await mkdir(join(root, 'cfg', 'claude'), { recursive: true })
     await writeFile(join(root, 'cfg', 'settings.json'), '{"hooks":{}}\n')
     await writeFile(join(root, 'settings.json'), 'SENTINEL\n')
-    await symlink(join(root, 'cfg', 'claude'), join(root, 'x'))
+    await symlink(join(root, 'cfg', 'claude'), join(root, 'x'), 'dir')
 
     const install = await runHooks(['install', '--yes', 'claude'], { CLAUDE_CONFIG_DIR: `${join(root, 'x')}/..` })
 
+    if (process.platform === 'win32') {
+      expect(install.code).toBe(1)
+      expect(await readFile(join(root, 'settings.json'), 'utf8')).toBe('SENTINEL\n')
+      expect(await readFile(join(root, 'cfg', 'settings.json'), 'utf8')).toBe('{"hooks":{}}\n')
+      return
+    }
     expect(install.code).toBe(0)
     expect(Object.keys(JSON.parse(await readFile(join(root, 'cfg', 'settings.json'), 'utf8')).hooks))
       .toEqual(CLAUDE_EVENTS)
@@ -2790,7 +2809,7 @@ describe('bmn hooks install', () => {
     const install = await runHooks(['install', '--yes', 'claude', '--file', `${join(root, 'none')}/../settings.json`])
 
     expect(install.code).toBe(1)
-    expect(install.stderr).toContain('which does not exist; resolve it by hand')
+    expect(install.stderr).toContain(process.platform === 'win32' ? 'not valid JSON' : 'which does not exist; resolve it by hand')
     expect(await readFile(join(root, 'settings.json'), 'utf8')).toBe('SENTINEL\n')
   })
 

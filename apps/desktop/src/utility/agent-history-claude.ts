@@ -4,9 +4,11 @@ import {
   ConfigWriteError,
   currentText,
   jsonIndent,
+  linkTarget,
   rewrittenNumbers,
   writeConfigSafely
 } from './safe-config-write'
+import { writeConfigInWorker } from './config-write-worker'
 
 export type ClaudeFolderRead =
   | { ok: true; currentDays: number | null; text: string | null }
@@ -58,8 +60,15 @@ export function readClaudeFolder(folder: string): ClaudeFolderRead {
  * its indent, a copy of the old file is kept beside it, and a file that changed since it was read is
  * left alone. `days` below 1 is refused here, because Claude reads 0 as "keep no history".
  */
-export function writeClaudeFolder(folder: string, days: number, beforeCommit?: () => void): ClaudeFolderWrite {
+type ClaudeFolderEdit = { ok: true; path: string; expectedTarget: string; text: string | null; next: string } | { ok: false; failure: string }
+
+function prepareClaudeFolderWrite(folder: string, days: number): ClaudeFolderEdit {
   if (!Number.isInteger(days) || days < 1) throw new RangeError(`cleanupPeriodDays must be a whole number of days from 1, not ${days}`)
+  const path = claudeSettingsPath(folder)
+  let expectedTarget: string
+  try { expectedTarget = linkTarget(path) } catch {
+    return { ok: false, failure: 'cannot resolve settings.json target; left untouched' }
+  }
   const read = readClaudeFolder(folder)
   if (!read.ok) return read
   const data = read.text === null ? {} : JSON.parse(read.text) as Record<string, unknown>
@@ -68,14 +77,31 @@ export function writeClaudeFolder(folder: string, days: number, beforeCommit?: (
   }
   const indent = read.text === null ? 2 : jsonIndent(read.text)
   const next = `${JSON.stringify({ ...data, cleanupPeriodDays: days }, null, indent)}\n`
-  try {
-    const { backup } = writeConfigSafely(claudeSettingsPath(folder), read.text, next,
-      beforeCommit === undefined ? {} : { beforeCommit })
-    return { ok: true, backup }
-  } catch (error) {
-    if (error instanceof ConfigWriteError && error.code === 'REVISION_CONFLICT') {
-      return { ok: false, failure: 'settings.json changed while BMN was writing; left untouched' }
-    }
-    return { ok: false, failure: `cannot write settings.json (${(error as NodeJS.ErrnoException).code ?? 'error'})` }
+  return { ok: true, path, expectedTarget, text: read.text, next }
+}
+
+function writeFailure(error: unknown): ClaudeFolderWrite {
+  if (error instanceof ConfigWriteError && error.code === 'REVISION_CONFLICT') {
+    return { ok: false, failure: 'settings.json changed while BMN was writing; left untouched' }
   }
+  return { ok: false, failure: `cannot confirm settings.json write (${(error as NodeJS.ErrnoException).code ?? 'error'}); inspect retained backup/staged files` }
+}
+
+export function writeClaudeFolder(folder: string, days: number, beforeCommit?: () => void): ClaudeFolderWrite {
+  const edit = prepareClaudeFolderWrite(folder, days)
+  if (!edit.ok) return edit
+  try {
+    const { backup } = writeConfigSafely(edit.path, edit.text, edit.next, { ...(beforeCommit === undefined ? {} : { beforeCommit }), expectedTarget: edit.expectedTarget })
+    return { ok: true, backup }
+  } catch (error) { return writeFailure(error) }
+}
+
+/** Native ACL/replacement work runs away from the terminal service's event loop. */
+export async function writeClaudeFolderAsync(folder: string, days: number, modulePath: string): Promise<ClaudeFolderWrite> {
+  const edit = prepareClaudeFolderWrite(folder, days)
+  if (!edit.ok) return edit
+  try {
+    const { backup } = await writeConfigInWorker(modulePath, edit)
+    return { ok: true, backup }
+  } catch (error) { return writeFailure(error) }
 }

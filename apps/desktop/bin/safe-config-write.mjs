@@ -1,8 +1,10 @@
 // MODULE: safe-config-write.mjs - backup, revision check and atomic write for agent config files, shared by bin/bmn and the utility process
-import { chmodSync, copyFileSync, mkdirSync, readFileSync, readlinkSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
-import { basename, dirname, isAbsolute, join } from 'node:path'
+import { spawnSync } from 'node:child_process'
+import { createHash, randomUUID } from 'node:crypto'
+import { chmodSync, constants, copyFileSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { basename, dirname, isAbsolute, join, win32 } from 'node:path'
 
-/** A refusal with a stable code such as REVISION_CONFLICT; nothing was written when it is thrown. */
+/** A stable failure code. Unconfirmed native replacement retains backup/staged data for recovery. */
 export class ConfigWriteError extends Error {
   constructor(code, message) {
     super(message)
@@ -17,6 +19,12 @@ const CliError = ConfigWriteError
  * reach `linkTarget` intact or it is answered from where a link was written, not where it points.
  */
 export function absoluteUncollapsed(path) {
+  if (process.platform === 'win32') {
+    if (/^[a-z]:[^\\/]/i.test(path) || /^[a-z]:$/i.test(path) || /^[\\/](?![\\/])/.test(path)) {
+      throw new CliError('AMBIGUOUS_PATH', 'Use a fully qualified drive/UNC path or an ordinary relative config path')
+    }
+    return win32.isAbsolute(path) ? path : `${process.cwd()}\\${path}`
+  }
   return isAbsolute(path) ? path : `${process.cwd()}/${path}`
 }
 
@@ -34,6 +42,7 @@ export function absoluteUncollapsed(path) {
 const MAX_LINK_HOPS = 10
 
 export function linkTarget(path) {
+  if (process.platform === 'win32') return windowsLinkTarget(path)
   // Resolved the way the kernel resolves a path: one component at a time, following each symlink as
   // it is met, so `..` after a symlink steps back from where the link landed and not from where it
   // was written. Neither `resolve()` nor `realpathSync()` can be used here - both collapse `..` as
@@ -77,9 +86,189 @@ export function linkTarget(path) {
   return out === '' ? '/' : out
 }
 
-export function writeAtomically(path, text, verify) {
+function windowsLinkTarget(path) {
+  let pendingPath = absoluteUncollapsed(path)
+  let hops = 0
+  for (;;) {
+    // Native ordinary Windows reads normalize dotdot before traversing links.
+    // Device namespaces have different semantics and are refused for config writes.
+    if (/^[\\/]{2}[?.][\\/]/.test(pendingPath)) throw new CliError('UNRESOLVED_LINK', 'Device namespaces are not supported for config writes')
+    pendingPath = win32.normalize(pendingPath)
+    const root = win32.parse(pendingPath).root
+    if (!root || !win32.isAbsolute(pendingPath)) throw new CliError('UNRESOLVED_LINK', 'Config path has no fully qualified Windows root')
+    const parts = pendingPath.slice(root.length).split('\\').filter(Boolean)
+    if (parts.length > 512 || parts.some(part => /[:<>"|?*]/.test(part) || /[. ]$/.test(part) ||
+      /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(part))) {
+      throw new CliError('UNRESOLVED_LINK', 'Config path contains an unsupported Windows component')
+    }
+    let out = realpathSync.native(root)
+    let restart = false
+    for (let index = 0; index < parts.length; index++) {
+      const next = win32.join(out, parts[index])
+      let item
+      try { item = lstatSync(next) } catch (error) {
+        if (error.code !== 'ENOENT') throw error
+        return win32.join(out, ...parts.slice(index))
+      }
+      if (item.isSymbolicLink()) {
+        if (++hops > MAX_LINK_HOPS) throw new CliError('TOO_MANY_LINKS', `${path} passes through more than ${MAX_LINK_HOPS} symlinks; resolve it by hand`)
+        const link = readlinkSync(next)
+        pendingPath = win32.join(absoluteUncollapsed(win32.isAbsolute(link) ? link : `${out}\\${link}`), ...parts.slice(index + 1))
+        restart = true
+        break
+      }
+      if (index + 1 < parts.length && !item.isDirectory()) throw new CliError('UNRESOLVED_LINK', 'Config path traverses a non-directory component')
+      out = realpathSync.native(next)
+    }
+    if (!restart) return out
+  }
+}
+
+// Fixed source, JSON stdin: neither paths nor settings become PowerShell code.
+// FileSecurity protects the staged file at creation, before any settings bytes.
+const WINDOWS_CONFIG_WRITE = `
+$ErrorActionPreference='Stop'
+[Console]::InputEncoding=New-Object System.Text.UTF8Encoding($false)
+$request=ConvertFrom-Json ([Console]::In.ReadToEnd())
+$created=$false; $published=$false; $backupReserved=$false; $failureCode='IO_ERROR'; $stream=$null; $originalStream=$null; $backupStream=$null
+function Fingerprint($acl) {
+ $rules=@($acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]) | ForEach-Object {
+  [ordered]@{sid=$_.IdentityReference.Value;rights=[int]$_.FileSystemRights;type=[int]$_.AccessControlType;inheritance=[int]$_.InheritanceFlags;propagation=[int]$_.PropagationFlags;inherited=$_.IsInherited}
+ })
+ $text=ConvertTo-Json -Compress -Depth 5 ([ordered]@{owner=$acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value;protected=$acl.AreAccessRulesProtected;rules=$rules})
+ $hash=[System.Security.Cryptography.SHA256]::Create()
+ try { return ([BitConverter]::ToString($hash.ComputeHash([Text.Encoding]::UTF8.GetBytes($text)))).Replace('-','').ToLowerInvariant() } finally { $hash.Dispose() }
+}
+function StreamHash($file) {
+ $file.Position=0
+ $hash=[System.Security.Cryptography.SHA256]::Create()
+ try { return ([BitConverter]::ToString($hash.ComputeHash($file))).Replace('-','').ToLowerInvariant() } finally { $hash.Dispose() }
+}
+function OpenOriginal($path) {
+ return (New-Object System.IO.FileStream($path,[IO.FileMode]::Open,[System.Security.AccessControl.FileSystemRights]'Read, ReadPermissions',([IO.FileShare]::Read -bor [IO.FileShare]::Delete),4096,[IO.FileOptions]::None))
+}
+function PrivateSecurity($sid) {
+ $acl=New-Object System.Security.AccessControl.FileSecurity
+ $acl.SetOwner($sid);$acl.SetAccessRuleProtection($true,$false)
+ $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($sid,'FullControl','Allow')))
+ return $acl
+}
+try {
+ if($request.mode -eq 'prepare') {
+  $exists=[IO.File]::Exists($request.target)
+  if($exists -ne $request.existed) { $failureCode='REVISION_CONFLICT';throw 'Original changed before staging' }
+  $original=$null
+  $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User
+  if($exists) {
+   $originalStream=OpenOriginal $request.target
+   if((StreamHash $originalStream) -ne $request.expectedHash) { $failureCode='REVISION_CONFLICT';throw 'Original changed before staging' }
+   $originalAcl=$originalStream.GetAccessControl()
+   if($originalAcl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value) { $failureCode='FOREIGN_OWNER';throw 'Original has another owner' }
+   $original=Fingerprint $originalAcl
+  }
+  # The staged owner and protected DACL are current-user-only before bytes.
+  # Never adopt foreign-owned originals or acquire privileges.
+  $acl=PrivateSecurity $sid
+  $expected=Fingerprint $acl
+  $stream=New-Object System.IO.FileStream($request.temporary,[IO.FileMode]::CreateNew,[System.Security.AccessControl.FileSystemRights]'Write, ReadPermissions',[IO.FileShare]::None,4096,[IO.FileOptions]::WriteThrough,$acl)
+  $created=$true
+  if((Fingerprint ($stream.GetAccessControl())) -ne $expected) { $failureCode='ACCESS_CONTROL_UNCONFIRMED';throw 'Staged permissions differ' }
+  $bytes=[Text.Encoding]::UTF8.GetBytes($request.text)
+  $stream.Write($bytes,0,$bytes.Length);$stream.Flush($true);$stream.Dispose();$stream=$null
+  [Console]::Out.Write((ConvertTo-Json -Compress @{ok=$true;existed=$exists;originalDacl=$original;stagedDacl=$expected}))
+ } elseif($request.mode -eq 'commit') {
+  if((Fingerprint ([IO.File]::GetAccessControl($request.temporary))) -ne $request.stagedDacl) { $failureCode='ACCESS_CONTROL_UNCONFIRMED';throw 'Staged permissions changed' }
+  if($request.existed) {
+   $originalStream=OpenOriginal $request.target
+   if((StreamHash $originalStream) -ne $request.expectedHash -or
+      (Fingerprint ($originalStream.GetAccessControl())) -ne $request.originalDacl) { $failureCode='REVISION_CONFLICT';throw 'Original changed' }
+   # Reserve our UUID backup exclusively with private permissions before replacement.
+   $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User
+   $reservation=New-Object System.IO.FileStream($request.backup,[IO.FileMode]::CreateNew,[System.Security.AccessControl.FileSystemRights]'Write, ReadPermissions',[IO.FileShare]::None,4096,[IO.FileOptions]::WriteThrough,(PrivateSecurity $sid))
+   $backupReserved=$true;$reservation.Dispose()
+   # Retained original handle denies in-place writers. Delete sharing permits Replace,
+   # so namespace writers are detected from displaced backup; this is not atomic CAS.
+   # Synthetic handshake exercises the otherwise narrow namespace race in tests.
+   if($request.testGate) {
+    [IO.File]::WriteAllText(($request.testGate+'.waiting'),'')
+    $deadline=[DateTime]::UtcNow.AddSeconds(10)
+    while(-not [IO.File]::Exists($request.testGate)) {
+     if([DateTime]::UtcNow -gt $deadline) { throw 'Test handshake expired' }
+     [Threading.Thread]::Sleep(10)
+    }
+   }
+   [IO.File]::Replace($request.temporary,$request.target,$request.backup,$false)
+   $published=$true
+   $backupStream=OpenOriginal $request.backup
+   if((StreamHash $backupStream) -ne $request.expectedHash -or
+      (Fingerprint ($backupStream.GetAccessControl())) -ne $request.originalDacl) { $failureCode='REVISION_CONFLICT';throw 'Concurrent replacement displaced different data' }
+   if((Fingerprint ([IO.File]::GetAccessControl($request.target))) -ne $request.originalDacl) { $failureCode='ACCESS_CONTROL_UNCONFIRMED';throw 'Replacement permissions differ' }
+  } else {
+   if([IO.File]::Exists($request.target)) { $failureCode='REVISION_CONFLICT';throw 'A file appeared' }
+   [IO.File]::Move($request.temporary,$request.target)
+   $published=$true
+   if((Fingerprint ([IO.File]::GetAccessControl($request.target))) -ne $request.stagedDacl) { $failureCode='ACCESS_CONTROL_UNCONFIRMED';throw 'New file permissions differ' }
+  }
+  [Console]::Out.Write('{"ok":true}')
+ } else { throw 'Unknown operation' }
+} catch {
+ $errno=$_.Exception.HResult -band 65535
+ $recovery=$published -or ($request.mode -eq 'commit' -and $errno -in @(1175,1176,1177))
+ [Console]::Out.Write((ConvertTo-Json -Compress @{ok=$false;code=$failureCode;errno=$errno;created=$created;recoveryRequired=$recovery;published=$published}))
+ exit 1
+} finally {
+ if($null -ne $stream) {$stream.Dispose()}
+ if($null -ne $backupStream) {$backupStream.Dispose()}
+ if($null -ne $originalStream) {$originalStream.Dispose()}
+ if($backupReserved -and -not $published -and -not $recovery) { try { [IO.File]::Delete($request.backup) } catch {} }
+}
+`
+
+function windowsConfigOperation(request) {
+  const systemRoot = process.env.SystemRoot
+  if (!systemRoot || !win32.isAbsolute(systemRoot)) throw new CliError('IO_ERROR', 'Windows SystemRoot is unavailable')
+  const child = spawnSync(win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+    ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(WINDOWS_CONFIG_WRITE, 'utf16le').toString('base64')],
+    { input: JSON.stringify(request), encoding: 'utf8', timeout: 15000, maxBuffer: 64 * 1024, windowsHide: true })
+  let result
+  try { result = JSON.parse(child.stdout) } catch { /* Never expose diagnostics or settings bytes. */ }
+  if (child.error || child.status !== 0 || result?.ok !== true) {
+    const recoveryRequired = request.mode === 'commit' && (result?.recoveryRequired === true || !result)
+    const code = recoveryRequired ? 'RECOVERY_REQUIRED' : result?.code === 'REVISION_CONFLICT' ? 'REVISION_CONFLICT' : 'IO_ERROR'
+    const error = new CliError(code, code === 'REVISION_CONFLICT' ? 'Config changed before Windows replacement; it was not replaced' : 'Windows could not confirm the config operation; inspect the original and any retained backup/staged file')
+    error.created = result?.created === true
+    error.recoveryRequired = recoveryRequired
+    throw error
+  }
+  return result
+}
+
+export function writeAtomically(path, text, verify, backup = null) {
   const target = linkTarget(path)
-  const temporary = join(dirname(target), `.${basename(target)}.bmn-${process.pid}.tmp`)
+  const temporary = join(dirname(target), `.${basename(target)}.bmn-${randomUUID()}.tmp`)
+  if (process.platform === 'win32') {
+    let prepared = false
+    let recoveryRequired = false
+    try {
+      mkdirSync(dirname(target), { recursive: true })
+      const originalHash = currentText(target) === null ? null : createHash('sha256').update(readFileSync(target)).digest('hex')
+      const stage = windowsConfigOperation({ mode: 'prepare', target, temporary, text, existed: originalHash !== null, expectedHash: originalHash })
+      prepared = true
+      verify?.(target)
+      if (linkTarget(path) !== target) throw new CliError('REVISION_CONFLICT', 'Config changed target before Windows replacement')
+      windowsConfigOperation({ mode: 'commit', target, temporary, backup: backup ?? backupPath(target), expectedHash: originalHash,
+        testGate: process.env.NODE_ENV === 'test' ? process.env.BMN_CONFIG_WRITE_TEST_GATE : undefined, ...stage })
+    } catch (error) {
+      prepared ||= error.created === true
+      recoveryRequired = error.recoveryRequired === true
+      throw error
+    } finally {
+      if (prepared && !recoveryRequired) {
+        try { unlinkSync(temporary) } catch { /* Already committed or removed. */ }
+      }
+    }
+    return target
+  }
   try {
     // A fresh machine has no ~/.codex yet, and that is the machine this command is for.
     mkdirSync(dirname(target), { recursive: true })
@@ -180,21 +369,26 @@ export function jsonIndent(text) {
  * backup and again with the replacement staged, so the window for another writer is one rename.
  * `beforeCommit` is a test seam that runs between the two checks.
  */
-export function writeConfigSafely(path, expectedText, nextText, { beforeCommit, now = () => new Date() } = {}) {
+export function writeConfigSafely(path, expectedText, nextText, { beforeCommit, now = () => new Date(), expectedTarget } = {}) {
+  const originalTarget = expectedTarget ?? linkTarget(path)
   const unchanged = () => {
-    if (currentText(path) !== expectedText) {
+    if (linkTarget(path) !== originalTarget || currentText(path) !== expectedText) {
       throw new ConfigWriteError('REVISION_CONFLICT', `${path} changed while BMN was reading it; nothing was written`)
     }
   }
   unchanged()
   let backup = null
   if (expectedText !== null) {
-    backup = `${path}.bmn-backup-${now().toISOString()}`
-    copyFileSync(path, backup)
+    backup = backupPath(process.platform === 'win32' ? originalTarget : path, now())
+    if (process.platform !== 'win32') copyFileSync(path, backup, constants.COPYFILE_EXCL)
   }
   const target = writeAtomically(path, nextText, () => {
     beforeCommit?.()
     unchanged()
-  })
+  }, backup)
   return { target, backup }
+}
+
+function backupPath(path, now = new Date()) {
+  return `${path}.bmn-backup-${now.toISOString().replaceAll(':', '-')}-${randomUUID()}`
 }

@@ -16,7 +16,8 @@ import {
   claudeSettingsPath,
   claudeTargetDays,
   readClaudeFolder,
-  writeClaudeFolder
+  writeClaudeFolder,
+  type ClaudeFolderWrite
 } from './agent-history-claude'
 
 export const DAY_MS = 86_400_000
@@ -119,6 +120,7 @@ export interface AgentHistoryOptions {
   writeState(next: AgentHistoryState): Promise<void>
   /** Conversation references bound to a running BMN incarnation. */
   liveConversationIds(): Promise<ReadonlySet<string>>
+  writeClaudeFolder?(folder: string, days: number): Promise<ClaudeFolderWrite>
   commandLines?(): string
   now?(): Date
   log?(line: string): void
@@ -278,15 +280,15 @@ export class AgentHistory {
         const applied = state.applied[path]
         const read = readClaudeFolder(path)
         if (applied === undefined || !read.ok || read.currentDays !== applied.days) continue
-        this.writeFolder(path, claudeTargetDays(keepDays), state)
+        await this.writeFolder(path, claudeTargetDays(keepDays), state)
       }
       await this.options.writeState(state)
       this.options.changed?.()
     })
   }
 
-  private writeFolder(path: string, days: number, state: AgentHistoryState): void {
-    const result = writeClaudeFolder(path, days)
+  private async writeFolder(path: string, days: number, state: AgentHistoryState): Promise<void> {
+    const result = await (this.options.writeClaudeFolder?.(path, days) ?? writeClaudeFolder(path, days))
     if (result.ok) {
       state.applied[path] = { days, at: this.now().toISOString() }
       delete state.failures[path]
@@ -310,7 +312,7 @@ export class AgentHistory {
           delete state.failures[path]
           continue
         }
-        this.writeFolder(path, target, state)
+        await this.writeFolder(path, target, state)
       }
       await this.options.writeState(state)
       this.options.changed?.()

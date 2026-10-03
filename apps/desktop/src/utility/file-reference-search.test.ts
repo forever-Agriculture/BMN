@@ -27,12 +27,15 @@ describe('searchFileReferences', () => {
   it('finds source after generated entries would exhaust the original default cap', async () => {
     const root = await fixture()
     await mkdir(join(root, 'build')); await mkdir(join(root, 'src'))
-    // The assertion concerns enumeration, so create the same 20,010 independent
-    // files in bounded batches rather than serializing every filesystem round trip.
-    for (let i = 0; i < 20_010; i += 32) {
-      await Promise.all(Array.from({ length: Math.min(32, 20_010 - i) }, (_, offset) =>
-        writeFile(join(root, 'build', `generated-${i + offset}.js`), '')))
-    }
+    // This regression concerns the traversal budget. Model the 20,010 generated
+    // directory entries from a real native Dirent; physical tree cost is measured
+    // separately, so filesystem setup cannot consume the search assertion's deadline.
+    const generated = join(root, 'build')
+    await writeFile(join(generated, 'generated-0.js'), '')
+    const generatedHandle = await opendir(generated)
+    const generatedEntry = await generatedHandle.read()
+    await generatedHandle.close()
+    expect(generatedEntry).not.toBeNull()
     await writeFile(join(root, 'src', 'target-source.ts'), '')
     // Fix only the root's enumeration order so the regression cannot pass by visiting src first.
     const rootHandle = await opendir(root)
@@ -40,9 +43,17 @@ describe('searchFileReferences', () => {
     for await (const entry of rootHandle) entries.push(entry)
     entries.sort((a, b) => a.name.localeCompare(b.name))
     const { opendir: openDirectory } = await vi.importActual<typeof filesystem>('node:fs/promises')
-    vi.mocked(filesystem.opendir).mockImplementation(async (...args) => args[0] === root
-      ? { async *[Symbol.asyncIterator]() { yield* entries } } as Awaited<ReturnType<typeof opendir>>
-      : openDirectory(...args))
+    vi.mocked(filesystem.opendir).mockImplementation(async (...args) => {
+      if (args[0] === root) return { async *[Symbol.asyncIterator]() { yield* entries } } as Awaited<ReturnType<typeof opendir>>
+      if (args[0] === generated) return {
+        async *[Symbol.asyncIterator]() {
+          for (let i = 0; i < 20_010; i++) {
+            yield Object.assign(Object.create(Object.getPrototypeOf(generatedEntry)), generatedEntry, { name: `generated-${i}.js` }) as Dirent
+          }
+        }
+      } as Awaited<ReturnType<typeof opendir>>
+      return openDirectory(...args)
+    })
     const found = await searchFileReferences(root, 'target-source.ts', new AbortController().signal)
     expect(found.files.map(row => row.path)).toEqual([join(root, 'src', 'target-source.ts')])
     expect(found.scanned).toBe(3)

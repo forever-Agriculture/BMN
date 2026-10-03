@@ -5,13 +5,13 @@ export declare class ConfigWriteError extends Error {
 }
 export declare function absoluteUncollapsed(path: string): string
 export declare function linkTarget(path: string): string
-export declare function writeAtomically(path: string, text: string, verify?: (target: string) => void): string
+export declare function writeAtomically(path: string, text: string, verify?: (target: string) => void, backup?: string | null): string
 export declare function currentText(path: string): string | null
 export declare function writeConfigSafely(
   path: string,
   expectedText: string | null,
   nextText: string,
-  options?: { beforeCommit?: () => void; now?: () => Date }
+  options?: { beforeCommit?: () => void; now?: () => Date; expectedTarget?: string }
 ): { target: string; backup: string | null }
 export declare function rewrittenNumbers(text: string): string[]
 export declare function jsonIndent(text: string): number | '\t'

@@ -58,6 +58,7 @@ import {
   type UsageAgent,
   type UsageReading
 } from '@bmn/protocol'
+import { writeClaudeFolderAsync } from './agent-history-claude'
 import { ArtifactFileError, ArtifactFileStore, type InstalledOriginal } from './artifact-files'
 import { ControlAuth, writeOwnerToken, type ControlScope } from './control-auth'
 import { HookEventHistory } from './hook-event-history'
@@ -423,6 +424,8 @@ export class CompanionService {
     this.history = new AgentHistory({
       home: options.home ?? homedir(),
       adapters: options.historyAdapters ?? [],
+      ...(process.platform === 'win32' ? { writeClaudeFolder: (folder: string, days: number) =>
+        writeClaudeFolderAsync(folder, days, join(dirname(options.cliScriptPath ?? options.cliPath), 'safe-config-write.mjs')) } : {}),
       readSettings: async () => (await options.database.companion('getSettings')).agentHistory,
       writeSettings: async (next) => {
         await options.database.companion('putSettingsSection', 'agentHistory', next, this.iso())
