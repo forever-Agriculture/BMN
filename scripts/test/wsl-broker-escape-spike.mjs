@@ -44,7 +44,46 @@ try:
  user(['systemctl','--user','stop',sibling])
  assert select.select([held[1]],[],[],10)[0],'Scoped sibling cleanup must signal retained handle'
  namespace=user(['/usr/bin/unshare','--user','--map-root-user','--mount','--pid','--fork','--mount-proc','/usr/bin/python3','-c','import os,json;print(json.dumps({"uid":os.getuid(),"pidNamespace":os.readlink("/proc/self/ns/pid")}))'],check=False)
- print(json.dumps({'uid':uid,'bootId':pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip(),'pidNamespace':os.readlink('/proc/self/ns/pid'),'retainedPidfds':len(held),'parentUnit':parent,'siblingUnit':sibling,'invocations':invocations,'cgroups':groups,'parentExited':True,'siblingEscaped':escaped,'siblingCleanupConfirmed':True,'ordinaryUserNamespace':{'exit':namespace.returncode,'stdout':namespace.stdout.strip(),'stderr':namespace.stderr.strip()[:1000]},'strictGuestOwnership':'REFUSED' if escaped else 'INCONCLUSIVE'}))
+ # A separate PID/user/network namespace is not a filesystem-socket sandbox.
+ # Measure a synthetic same-user broker in the home directory, outside /run.
+ broker=prefix+'-socket.service';socketpath=root/'outside.sock';ready=root/'socket-ready.json';childready=root/'socket-child.json'
+ server=root/'socket-broker.py'
+ server.write_text('''import os,pathlib,socket,sys,json,subprocess,time
+root=pathlib.Path(sys.argv[1]);sock=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);sock.bind(str(root/'outside.sock'));os.chmod(root/'outside.sock',0o600);sock.listen(1)
+def record(path):
+ path.write_text(json.dumps({'pid':os.getpid(),'ticks':pathlib.Path('/proc/self/stat').read_text().rpartition(') ')[2].split()[19],'pidNamespace':os.readlink('/proc/self/ns/pid')}))
+record(root/'socket-ready.json')
+connection,_=sock.accept()
+with connection:
+ if connection.recv(16)==b'launch':
+  code="import os,pathlib,json,time;root=pathlib.Path("+repr(str(root))+ ");(root/'socket-child.json').write_text(json.dumps({'pid':os.getpid(),'ticks':pathlib.Path('/proc/self/stat').read_text().rpartition(') ')[2].split()[19],'pidNamespace':os.readlink('/proc/self/ns/pid')}));time.sleep(60)"
+  subprocess.Popen([sys.executable,'-c',code],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True)
+  connection.sendall(b'started')
+while True: time.sleep(1)
+''')
+ brokerHeld=[];namespaceBroker={'result':'INCONCLUSIVE'}
+ try:
+  user(['systemd-run','--user','--unit='+broker,'--property=Delegate=no','--property=KillMode=control-group','--property=TimeoutStopSec=5','/usr/bin/python3',str(server),str(root)])
+  deadline=time.monotonic()+15
+  while not ready.exists() and time.monotonic()<deadline: time.sleep(.05)
+  serveridentity=json.loads(ready.read_text());brokerHeld.append(os.pidfd_open(serveridentity['pid']));assert identity(serveridentity['pid'])==serveridentity['ticks']
+  client="import os,socket,json;s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);s.settimeout(5);s.connect("+repr(str(socketpath))+");s.sendall(b'launch');assert s.recv(16)==b'started';print(json.dumps({'uid':os.getuid(),'pidNamespace':os.readlink('/proc/self/ns/pid')}))"
+  isolated=user(['/usr/bin/unshare','--user','--map-root-user','--mount','--pid','--fork','--mount-proc','--ipc','--net','/usr/bin/python3','-c',client],check=False)
+  namespaceBroker={'exit':isolated.returncode,'stdout':isolated.stdout.strip(),'stderr':isolated.stderr.strip()[:1000],'result':'INCONCLUSIVE'}
+  if isolated.returncode==0:
+   deadline=time.monotonic()+15
+   while not childready.exists() and time.monotonic()<deadline: time.sleep(.05)
+   childidentity=json.loads(childready.read_text());brokerHeld.append(os.pidfd_open(childidentity['pid']));assert identity(childidentity['pid'])==childidentity['ticks']
+   caller=json.loads(isolated.stdout);assert caller['pidNamespace']!=childidentity['pidNamespace']==serveridentity['pidNamespace']
+   survived=not bool(select.select([brokerHeld[1]],[],[],.5)[0])
+   namespaceBroker.update({'caller':caller,'child':childidentity,'outsideUnit':broker,'retainedPidfds':len(brokerHeld),'survivedNamespaceExit':survived,'result':'REFUSED' if survived else 'INCONCLUSIVE'})
+ finally:
+  user(['systemctl','--user','stop',broker],check=False)
+  assert not brokerHeld or len(select.select(brokerHeld,[],[],10)[0])==len(brokerHeld),'Synthetic socket broker and child must exit during scoped cleanup'
+  namespaceBroker['cleanupConfirmed']=True
+  for fd in brokerHeld: os.close(fd)
+
+ print(json.dumps({'uid':uid,'bootId':pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip(),'pidNamespace':os.readlink('/proc/self/ns/pid'),'retainedPidfds':len(held),'parentUnit':parent,'siblingUnit':sibling,'invocations':invocations,'cgroups':groups,'parentExited':True,'siblingEscaped':escaped,'siblingCleanupConfirmed':True,'ordinaryUserNamespace':{'exit':namespace.returncode,'stdout':namespace.stdout.strip(),'stderr':namespace.stderr.strip()[:1000]},'namespaceSocketBroker':namespaceBroker,'strictGuestOwnership':'REFUSED' if escaped else 'INCONCLUSIVE'}))
 finally:
  for unit in [parent,sibling]: user(['systemctl','--user','stop',unit],check=False)
  for fd in held: os.close(fd)

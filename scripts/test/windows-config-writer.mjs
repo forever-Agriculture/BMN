@@ -85,7 +85,7 @@ function workerWrite(path, expected, next, gate) {
 try {
   // Diagnostic only: independently vary retained stage and reservation handles.
   // Do not mutate the product or interpret matrix completion as acceptance.
-  const productSource = readFileSync(new URL('../../apps/desktop/bin/safe-config-write.mjs', import.meta.url), 'utf8')
+  const productSource = readFileSync(new URL('../../apps/desktop/bin/safe-config-write.mjs', import.meta.url), 'utf8').replaceAll('\r\n', '\n')
   const helperStart = productSource.indexOf('function EnsureNativeHelpers {')
   const helperEnd = productSource.indexOf("\ntry {\n if($request.mode", helperStart)
   assert.ok(helperStart > 0 && helperEnd > helperStart)
