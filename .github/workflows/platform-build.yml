@@ -64,11 +64,7 @@ jobs:
         run: node scripts/test/windows-hook-diagnostic.mjs
       - name: Unit and integration inventory
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        shell: bash
-        run: |
-          set +e
-          pnpm run test:unit --reporter=default --reporter=json --outputFile.json=test-results/unit.json
-          echo $? > test-results/unit-exit-code
+        run: node scripts/test/run-unit-inventory.mjs
       - name: Unit regression gate
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: node scripts/test/unit-inventory-gate.mjs

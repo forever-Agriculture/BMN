@@ -96,7 +96,7 @@ EnsureNativeHelpers
 $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User;$results=@()
 foreach($stageHeld in @($false,$true)) {foreach($backupMode in @('absent','retained','disposed')) {
  $backupHeld=$backupMode -ne 'absent'
- $directory=[IO.Path]::Combine($r.root,('matrix-'+$stageHeld+'-'+$backupHeld));[IO.Directory]::CreateDirectory($directory)|Out-Null
+ $directory=[IO.Path]::Combine($r.root,('matrix-'+$stageHeld+'-'+$backupMode));[IO.Directory]::CreateDirectory($directory)|Out-Null
  $target=[IO.Path]::Combine($directory,'target.json');$stage=[IO.Path]::Combine($directory,'stage.tmp');$backup=[IO.Path]::Combine($directory,'backup.json')
  [IO.File]::WriteAllText($target,'BEFORE');$original=[IO.File]::GetAccessControl($target);$original.SetOwner($sid);[IO.File]::SetAccessControl($target,$original)
  $private=New-Object Security.AccessControl.FileSecurity;$private.SetOwner($sid);$private.SetAccessRuleProtection($true,$false);$private.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl','Allow')))
