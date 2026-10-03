@@ -57,7 +57,7 @@ describe('staged desktop update', () => {
     const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
     const profile = readFileSync(join(repoRoot, 'scripts/sandbox/bmn-electron'), 'utf8')
     const staged = buildFolders(join(repoRoot, 'apps/desktop/release/linux-unpacked')).next
-      .replace(repoRoot, '@REPO_ROOT@')
+      .replace(repoRoot, '@REPO_ROOT@').replaceAll('\\', '/')
     expect(profile).toMatch(new RegExp(`profile bmn-electron-packaged-next "${staged}/bmn" flags=\\(unconfined\\) \\{\\s+userns,`, 'u'))
   })
 

@@ -122,6 +122,26 @@ try {[IO.File]::Replace($r.stage,$r.path,$r.backup,$false)}finally{$held.Dispose
     assert.equal(names.length, 1); assert.equal(readFileSync(join(root, names[0]), 'utf8'), 'BEFORE')
     receipts.inheritedProductRed = { baselineCommit, nativePhase: failure.nativePhase, published: true, before, after: acl(path), backup: acl(join(root, names[0])) }
   })
+  await check('RED oversized fixed program fails native launch before changing the target', async () => {
+    const commit = 'be4ed316c6bd46fe89b216ccb1cb2d62e31d9044'
+    const response = await fetch(`https://raw.githubusercontent.com/forever-Agriculture/BMN/${commit}/apps/desktop/bin/safe-config-write.mjs`, { signal: AbortSignal.timeout(30000) })
+    assert.equal(response.ok, true)
+    const source = await response.text(); assert.ok(Buffer.byteLength(source) < 64 * 1024)
+    assert.equal(createHash('sha256').update(source).digest('hex'), '51c8b8217cf47b5fa473e99927a4c044281e585977c65c160be9e1998d397e4d')
+    const observer = '    error.nativeExceptionType = result?.exceptionType'
+    assert.equal(source.split(observer).length, 2)
+    const modulePath = join(root, 'oversized-baseline.mjs')
+    writeFileSync(modulePath, source.replace(observer, observer + '\n    error.nativeLaunchError = child.error?.code'))
+    const { writeConfigSafely: oversizedWrite } = await import(pathToFileURL(modulePath).href)
+    const path = file('oversized.json', 'BEFORE'), before = acl(path), names = readdirSync(root).sort()
+    let failure
+    try { oversizedWrite(path, 'BEFORE', 'OURS') } catch (error) { failure = error }
+    assert.equal(failure?.code, 'IO_ERROR'); assert.equal(typeof failure?.nativeLaunchError, 'string')
+    assert.equal(failure?.nativeOperation, undefined)
+    assert.equal(readFileSync(path, 'utf8'), 'BEFORE'); assert.deepEqual(acl(path), before)
+    assert.deepEqual(readdirSync(root).sort(), names)
+    receipts.commandLimitRed = { commit, launchError: failure.nativeLaunchError, unchanged: true }
+  })
   await check('GREEN inherited original and backup keep exact owner/ACE flags/protection', () => {
     const path = join(root, 'green-inherited.json'); writeFileSync(path, 'BEFORE')
     const before = acl(path, { ownerOnly: true })
@@ -299,7 +319,7 @@ try {[IO.File]::Replace($r.stage,$r.path,$r.backup,$false)}finally{$held.Dispose
   })
   receipts.status = 'PASS'
 } catch (error) {
-  receipts.status = 'FAIL'; receipts.failure = { name: error.name, code: error.code ?? null, message: error.message, operation: error.nativeOperation ?? null, errno: error.nativeErrorCode ?? null, exceptionType: error.nativeExceptionType ?? null }
+  receipts.status = 'FAIL'; receipts.failure = { name: error.name, code: error.code ?? null, message: error.message, operation: error.nativeOperation ?? null, errno: error.nativeErrorCode ?? null, exceptionType: error.nativeExceptionType ?? null, launchError: error.nativeLaunchError ?? null }
   process.exitCode = 1
 } finally {
   for (const child of children) child.kill() // Retained native child handle; never PID lookup/kill.

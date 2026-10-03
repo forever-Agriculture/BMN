@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -9,7 +9,7 @@ const roots: string[] = []
 const now = () => new Date('2026-09-24T10:00:00.000Z')
 
 function fixture(): string {
-  const directory = mkdtempSync(join(tmpdir(), 'bmn-repository-identity-'))
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'bmn-repository-identity-')))
   roots.push(directory)
   return directory
 }
@@ -25,6 +25,54 @@ function init(directory: string): void {
 function commit(directory: string): void {
   git(directory, '-c', 'user.name=BMN Test', '-c', 'user.email=bmn@example.invalid',
     'commit', '--allow-empty', '-qm', 'fixture')
+}
+
+// Real subprocess fixtures exercise bounded reads on both operating systems.
+function syntheticGit(root: string, symbolicRef = 'main', verifyHead = '0'.repeat(40), location = 'valid'): string {
+  const executable = join(root, process.platform === 'win32' ? 'synthetic-git.exe' : 'synthetic-git')
+  if (process.platform === 'win32') {
+    if (!existsSync(executable)) {
+      const source = `using System;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Threading;
+public class SyntheticGit {
+ static int Reply(string value) {
+  if(value.StartsWith(":exit:")) return int.Parse(value.Substring(6));
+  if(value.StartsWith(":sleep:")) {Thread.Sleep(int.Parse(value.Substring(7)));return 0;}
+  Console.WriteLine(value);return 0;
+ }
+ public static int Main(string[] args) {
+  Console.OutputEncoding=new UTF8Encoding(false);
+  var config=File.ReadAllLines(Path.ChangeExtension(Environment.GetCommandLineArgs()[0],"fixture"));
+  if(args.Contains("--is-inside-work-tree")) return Reply(config[3]=="valid"?"true\\n"+config[0]+"\\n"+Path.Combine(config[0],".git")+"\\n"+Path.Combine(config[0],".git"):(config[3].StartsWith(":")?config[3]:"unexpected"));
+  if(args.Contains("symbolic-ref")) return Reply(config[1]);
+  if(args.Contains("check-ref-format")) return Reply("main");
+  if(args.Contains("--verify")) return Reply(config[2]);
+  return 99;
+ }
+}`
+      const script = `$ErrorActionPreference='Stop';[Console]::InputEncoding=New-Object System.Text.UTF8Encoding($false);$r=ConvertFrom-Json ([Console]::In.ReadToEnd());Add-Type -TypeDefinition $r.source -OutputAssembly $r.executable -OutputType ConsoleApplication`
+      execFileSync(join(process.env.SystemRoot!, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+        ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+        { input: JSON.stringify({ source, executable }), encoding: 'utf8', timeout: 15000, windowsHide: true })
+    }
+    writeFileSync(join(root, 'synthetic-git.fixture'), [root, symbolicRef, verifyHead, location].join('\n'))
+  } else {
+    const reply = (value: string): string => value.startsWith(':exit:') ? `exit ${value.slice(6)}` :
+      value.startsWith(':sleep:') ? `sleep ${Number(value.slice(7)) / 1000}` : `printf '%s\\n' '${value}'`
+    writeFileSync(executable, `#!/bin/sh
+case "$*" in
+ *--is-inside-work-tree*) ${reply(location === 'valid' ? `true\n${root}\n${root}/.git\n${root}/.git` : location.startsWith(':') ? location : 'unexpected')} ;;
+ *symbolic-ref*) ${reply(symbolicRef)} ;;
+ *check-ref-format*) ${reply('main')} ;;
+ *--verify*) ${reply(verifyHead)} ;;
+ *) exit 99 ;;
+esac
+`, { mode: 0o755 })
+  }
+  return executable
 }
 
 afterEach(() => {
@@ -98,7 +146,7 @@ describe('read-only repository identity', () => {
     })
   })
 
-  it('ends slow and malformed Git reads as unavailable without trusting inherited Git overrides', async () => {
+  it('ends slow and malformed Git reads as unavailable without trusting inherited Git overrides', { timeout: 20000 }, async () => {
     const root = fixture()
     init(root)
     commit(root)
@@ -110,42 +158,32 @@ describe('read-only repository identity', () => {
       if (oldGitDir === undefined) delete process.env.GIT_DIR
       else process.env.GIT_DIR = oldGitDir
     }
-    const slow = join(root, 'slow-git')
-    writeFileSync(slow, '#!/bin/sh\nsleep 2\n', { mode: 0o755 })
-    chmodSync(slow, 0o755)
+    const slow = syntheticGit(root, 'main', '0'.repeat(40), ':sleep:2000')
+    // Sleep at the first query: no known HEAD may be inferred from a timeout.
     expect(await inspectRepositoryIdentity(root, { now, gitExecutable: slow, timeoutMs: 25 }))
       .toMatchObject({ state: 'unavailable', reason: 'Git inspection timed out' })
-    const malformed = join(root, 'malformed-git')
-    writeFileSync(malformed, '#!/bin/sh\necho unexpected\n', { mode: 0o755 })
-    chmodSync(malformed, 0o755)
+    const malformed = syntheticGit(root, 'main', '0'.repeat(40), 'malformed')
     expect(await inspectRepositoryIdentity(root, { now, gitExecutable: malformed }))
       .toMatchObject({ state: 'unavailable', reason: 'Git returned an invalid repository identity' })
   })
 
-  it('does not report a known HEAD when a later Git query times out, fails, or returns malformed data', async () => {
+  it('does not report a known HEAD when a later Git query times out, fails, or returns malformed data', { timeout: 20000 }, async () => {
     const root = fixture()
     for (const [name, symbolicRef, verifyHead] of ([
-      ['head-timeout', 'printf "main\\n"', 'sleep 2'],
-      ['head-failure', 'printf "main\\n"', 'exit 128'],
-      ['head-malformed', 'printf "main\\n"', 'printf "not-an-oid\\n"'],
-      ['head-41-branch', 'printf "main\\n"', `printf '${'0'.repeat(41)}\\n'`],
-      ['head-41-detached', 'exit 1', `printf '${'0'.repeat(41)}\\n'`],
-      ['symbolic-failure', 'exit 128', 'printf "0123456789012345678901234567890123456789\\n"'],
-      ['branch-malformed', 'printf "bad branch\\n"', 'printf "0123456789012345678901234567890123456789\\n"']
+      ['head-timeout', 'main', ':sleep:2000'],
+      ['head-failure', 'main', ':exit:128'],
+      ['head-malformed', 'main', 'not-an-oid'],
+      ['head-41-branch', 'main', '0'.repeat(41)],
+      ['head-41-detached', ':exit:1', '0'.repeat(41)],
+      ['symbolic-failure', ':exit:128', '0'.repeat(40)],
+      ['branch-malformed', 'bad branch', '0'.repeat(40)]
     ] as const)) {
-      const executable = join(root, name)
-      writeFileSync(executable, `#!/bin/sh
-case "$*" in
-  *--is-inside-work-tree*) printf 'true\\n${root}\\n${root}/.git\\n${root}/.git\\n' ;;
-  *symbolic-ref*) ${symbolicRef} ;;
-  *check-ref-format*) printf 'main\\n' ;;
-  *--verify*) ${verifyHead} ;;
-  *) exit 99 ;;
-esac
-`, { mode: 0o755 })
-      chmodSync(executable, 0o755)
-      const identity = await inspectRepositoryIdentity(root, { now, gitExecutable: executable, timeoutMs: 25 })
-      expect(identity, name).toMatchObject({ state: 'unavailable' })
+      const executable = syntheticGit(root, symbolicRef, verifyHead)
+      const identity = await inspectRepositoryIdentity(root, { now, gitExecutable: executable, timeoutMs: process.platform === 'win32' ? 1000 : 25 })
+      expect(identity, name).toMatchObject({ state: 'unavailable', reason: name === 'head-timeout' ?
+        'Git inspection timed out' : name === 'symbolic-failure' || name === 'head-failure' ?
+          'Git could not read HEAD' : name === 'branch-malformed' ?
+            'Git returned an invalid branch name' : 'Git returned an invalid HEAD' })
     }
   })
 })

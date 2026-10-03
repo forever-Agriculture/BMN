@@ -1,5 +1,6 @@
 // MODULE: safe-config-write.mjs - backup, revision check and atomic write for agent config files, shared by bin/bmn and the utility process
 import { spawnSync } from 'node:child_process'
+import { gzipSync } from 'node:zlib'
 import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, constants, copyFileSync, fchmodSync, fstatSync, lstatSync, openSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, win32 } from 'node:path'
@@ -357,11 +358,15 @@ try {
 }
 `
 
+// CreateProcess limits the entire command line to 32,767 UTF-16 characters.
+// Compress only our fixed program; paths/settings remain JSON on stdin, never code.
+const WINDOWS_CONFIG_COMMAND = Buffer.from(`$memory=[IO.MemoryStream]::new([Convert]::FromBase64String('${gzipSync(Buffer.from(WINDOWS_CONFIG_WRITE, 'utf8')).toString('base64')}'));$gzip=[IO.Compression.GZipStream]::new($memory,[IO.Compression.CompressionMode]::Decompress);$reader=[IO.StreamReader]::new($gzip,[Text.Encoding]::UTF8);try {$source=$reader.ReadToEnd()} finally {$reader.Dispose()}; & ([ScriptBlock]::Create($source))`, 'utf16le').toString('base64')
+
 function windowsConfigOperation(request) {
   const systemRoot = process.env.SystemRoot
   if (!systemRoot || !win32.isAbsolute(systemRoot)) throw new CliError('IO_ERROR', 'Windows SystemRoot is unavailable')
   const child = spawnSync(win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
-    ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(WINDOWS_CONFIG_WRITE, 'utf16le').toString('base64')],
+    ['-NoProfile', '-NonInteractive', '-EncodedCommand', WINDOWS_CONFIG_COMMAND],
     { input: JSON.stringify(request), encoding: 'utf8', timeout: 15000, maxBuffer: 64 * 1024, windowsHide: true })
   let result
   try { result = JSON.parse(child.stdout) } catch { /* Never expose diagnostics or settings bytes. */ }
@@ -374,6 +379,7 @@ function windowsConfigOperation(request) {
     error.nativeOperation = result?.operation
     error.nativeErrorCode = result?.errno
     error.nativeExceptionType = result?.exceptionType
+    error.nativeLaunchError = child.error?.code
     error.recoveryRequired = recoveryRequired
     throw error
   }
