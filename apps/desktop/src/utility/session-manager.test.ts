@@ -2786,6 +2786,43 @@ describe('shell session lifecycle', () => {
     expect(store.interrupted.has(created.incarnationId)).toBe(false)
   })
 
+  it('uses retained Windows ownership when PID identity lookup fails', async () => {
+    const { pty, store, cwd } = await fixture()
+    Object.assign(pty, { processOwnership: 'windows-job', processStartIdentity: 'windows-filetime:12345' })
+    const identify = vi.fn(async () => { throw new Error('PID lookup denied') })
+    const signalProcess = vi.fn(() => true)
+    const manager = new SessionManager({
+      store, spawnPty: () => pty, processStartIdentity: identify, signalProcess,
+      sendTerminalMessage: () => undefined, stopGraceMs: 1, stopKillWaitMs: 1
+    })
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION,
+      cwd, executable: process.execPath, argv: [], cols: 80, rows: 24
+    })
+    await manager.stop(created)
+    expect(pty.killed).toBe(true)
+    expect(identify).not.toHaveBeenCalled()
+    expect(signalProcess).not.toHaveBeenCalled()
+    expect(store.exited.has(created.incarnationId)).toBe(true)
+  })
+
+  it('keeps unconfirmed Windows job termination interrupted without PID fallback', async () => {
+    const { store, cwd } = await fixture()
+    const pty = new NonExitingFakePty()
+    Object.assign(pty, { processOwnership: 'windows-job', processStartIdentity: 'windows-filetime:12345' })
+    const signalProcess = vi.fn(() => true)
+    const manager = new SessionManager({
+      store, spawnPty: () => pty, processStartIdentity: async () => 'windows-filetime:12345', signalProcess,
+      sendTerminalMessage: () => undefined, stopGraceMs: 1, stopKillWaitMs: 1
+    })
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION,
+      cwd, executable: process.execPath, argv: [], cols: 80, rows: 24
+    })
+    await expect(manager.stop(created)).rejects.toThrow(/stop outcome is unknown/)
+    expect(pty.killCalls).toBe(1)
+    expect(signalProcess).not.toHaveBeenCalled()
+    expect(store.interrupted.get(created.incarnationId)).toMatch(/owned Windows process tree.*not confirmed/i)
+  })
+
   it('records an explicit interrupted outcome when SIGKILL cannot be reaped', async () => {
     const { pty, store, sent, cwd } = await fixture()
     pty.kill = () => {

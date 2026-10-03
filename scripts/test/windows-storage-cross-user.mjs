@@ -18,7 +18,9 @@ try {
   const script = `$ErrorActionPreference='Stop'; $stage='module';
 trap { [Console]::Error.WriteLine('BMN_SECURITY_TEST_STAGE='+$stage+' HRESULT='+$_.Exception.HResult); exit 1 };
 $paths=ConvertFrom-Json ([Console]::In.ReadToEnd());
+$stage='import-module';
 Import-Module "$env:SystemRoot\\System32\\WindowsPowerShell\\v1.0\\Modules\\Microsoft.PowerShell.LocalAccounts\\Microsoft.PowerShell.LocalAccounts.psd1";
+$stage='compile-fixture';
 Add-Type @'
 using System;
 using System.IO;
@@ -42,6 +44,7 @@ public static class CrossUser {
  }
 }
 '@
+$stage='public-control';
 $public=New-Object System.IO.FileInfo($paths.publicFile);
 $acl=$public.GetAccessControl();
 $everyone=New-Object System.Security.Principal.SecurityIdentifier('S-1-1-0');

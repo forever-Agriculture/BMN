@@ -4,6 +4,7 @@ on:
     paths:
       - .github/workflows/windows-pty-feasibility.yml
       - scripts/test/windows-pty-feasibility.mjs
+      - scripts/test/windows-pty-ownership.mjs
       - patches/**
 permissions:
   contents: read
@@ -26,6 +27,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Measure built-in and bundled ConPTY
         run: node scripts/test/windows-pty-feasibility.mjs
+      - name: Verify owned native process trees
+        run: node scripts/test/windows-pty-ownership.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -105,6 +105,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  node-pty@1.1.0: 6895841c9fb681b5c6761ef906ba8a195af57ef7f84f236b0ad18ef6ce47b29b
+
 importers:
 
   .:
@@ -162,7 +165,7 @@ importers:
         version: 13.0.3
       node-pty:
         specifier: 1.1.0
-        version: 1.1.0
+        version: 1.1.0(patch_hash=6895841c9fb681b5c6761ef906ba8a195af57ef7f84f236b0ad18ef6ce47b29b)
       react:
         specifier: 19.2.8
         version: 19.2.8
@@ -4421,7 +4424,7 @@ snapshots:
 
   node-int64@0.4.0: {}
 
-  node-pty@1.1.0:
+  node-pty@1.1.0(patch_hash=6895841c9fb681b5c6761ef906ba8a195af57ef7f84f236b0ad18ef6ce47b29b):
     dependencies:
       node-addon-api: 7.1.1
 

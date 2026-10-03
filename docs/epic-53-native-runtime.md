@@ -28,9 +28,34 @@ route. An Electron/node-pty/ConPTY update must rerun this matrix.
 
 ## Process ownership
 
-Implementation pending. The pinned addon retains the shell process handle but
-has no Job Object. The Windows adapter must acquire tree ownership before the
-child can run, retain creation-time identity and terminate only the owned tree.
-Abrupt utility-host death must close the owning job and stop children/grandchildren.
-Source review or a database interrupted label does not establish this behavior;
-standard-user/native runtime checks are required.
+The maintained `patches/node-pty@1.1.0.patch` adds an unnamed, non-inheritable
+Job Object with kill-on-last-handle-close and atomic `PROC_THREAD_ATTRIBUTE_JOB_LIST`
+assignment at process creation. The utility owns the job; ordinary descendants
+inherit it. Stop terminates that job without enumerating or reopening PIDs. A
+retained shell handle supplies its creation FILETIME and actual exit code; the
+waiter confirms the job has no active processes before publishing success.
+Errors retain the existing interrupted/exit-unconfirmed semantics.
+
+The Windows addon accepts only bundled ConPTY and reports a patch capability
+version. Its two native pipes have protected current-user DACLs, random names,
+first-instance protection and remote-client rejection. Output reaches JavaScript
+through a private worker MessagePort with one outstanding 64 KiB chunk and stream
+backpressure; the former third named relay pipe is removed. Console closure runs
+off the JS thread while output drains. The pinned DLL exports
+`ConptyClosePseudoConsole`, but not the timeout variant declared by its header;
+no nonexistent API is assumed.
+
+These mechanisms are implemented, with native compilation and runtime acceptance
+pending. `scripts/test/windows-pty-ownership.mjs` checks root/child/grandchild
+termination using retained observer handles for natural exit, Stop and host crash,
+plus silent/immediate shells and an unrelated live sentinel. Further acceptance
+includes cmd/PowerShell, pipe denial, creation failures, overhead and race stress.
+Local manager regressions failed against the original adapter and pass with the
+owned-job adapter; the affected 282-test Linux/manager suite passed.
+
+Jobs contain ordinary descendants, not work deliberately delegated through
+services, elevation brokers or scheduled tasks. No elevated helper or service is
+required. Atomic assignment requires Windows 10 or newer and fails closed if an
+enclosing job prevents it. See Microsoft's
+[process creation attributes](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute)
+and [Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects).

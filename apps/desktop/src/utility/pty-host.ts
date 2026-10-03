@@ -77,6 +77,8 @@ interface NodePtyModule {
       rows: number
       env: Record<string, string | undefined>
       encoding: null
+      useConpty?: boolean
+      useConptyDll?: boolean
     }
   ): PtyLike
 }
@@ -288,7 +290,8 @@ async function start(): Promise<void> {
       nodePty.spawn!(executable, [...argv], {
         ...options,
         env: { ...options.env },
-        encoding: null
+        encoding: null,
+        ...(process.platform === 'win32' ? { useConpty: true, useConptyDll: true } : {})
       }),
     sendTerminalMessage: (message) => terminalPort?.postMessage(message),
     conversationReferenceExists: (binding) => conversationReferenceExists(binding, agentHome()),

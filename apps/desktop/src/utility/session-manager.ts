@@ -153,6 +153,9 @@ function bashSessionArgv(
 }
 
 export interface PtyLike {
+  readonly processOwnership?: 'windows-job'
+  readonly processStartIdentity?: string
+  onLifecycleError?(listener: (reason: string) => void): Disposable
   readonly pid: number
   readonly cols: number
   readonly rows: number
@@ -331,6 +334,7 @@ interface LiveSession extends SessionIdentity {
   ownership: Pick<SessionRecord, 'workspaceId' | 'name'>
   dataSubscription?: Disposable
   exitSubscription?: Disposable
+  lifecycleSubscription?: Disposable | undefined
   cwd: string
   executable: string
   captureStartedAt: string
@@ -1512,9 +1516,13 @@ export class SessionManager {
     this.sessions.set(sessionId, live)
     live.dataSubscription = pty.onData((data) => this.onPtyData(live, bytesFromPty(data)))
     live.exitSubscription = pty.onExit((exit) => void this.onPtyExit(live, exit))
+    live.lifecycleSubscription = pty.onLifecycleError?.((reason) => void this.markInterrupted(live, reason))
 
     try {
-      live.processStartIdentity = await this.identifyProcess(pty.pid)
+      live.processStartIdentity = pty.processOwnership === 'windows-job'
+        ? pty.processStartIdentity ?? ''
+        : await this.identifyProcess(pty.pid)
+      if (!live.processStartIdentity) throw new Error('Retained process creation identity is unavailable')
       await createRecord({
         sessionId,
         incarnationId,
@@ -1851,6 +1859,11 @@ export class SessionManager {
       if (session.attachmentId) this.revokeAttachment(session)
       session.dataSubscription?.dispose()
       session.exitSubscription?.dispose()
+      session.lifecycleSubscription?.dispose()
+      if (session.pty.processOwnership === 'windows-job') {
+        session.pty.kill()
+        continue
+      }
       try {
         this.signalProcess(-session.pty.pid, 'SIGKILL')
       } catch {
@@ -2364,6 +2377,18 @@ export class SessionManager {
 
   private async performTeardownSession(session: LiveSession): Promise<string | undefined> {
     if (session.exited) return undefined
+    if (session.pty.processOwnership === 'windows-job') {
+      try {
+        // The retained native job, not a PID lookup, is termination authority.
+        session.pty.kill()
+      } catch {
+        // A request is not an exit confirmation. Keep the bounded waiter authoritative.
+      }
+      if (await this.waitForExit(session, this.stopGraceMs + this.stopKillWaitMs)) return undefined
+      const reason = 'Exit of the owned Windows process tree was not confirmed'
+      await this.markInterrupted(session, reason)
+      return reason
+    }
     const identityMatches = async (): Promise<boolean> => {
       try {
         return session.processStartIdentity.length > 0 &&
@@ -2467,6 +2492,7 @@ export class SessionManager {
   private async onPtyExit(session: LiveSession, exit: IncarnationExit): Promise<void> {
     if (session.exited) return session.exitComplete
     session.exited = true
+    session.lifecycleSubscription?.dispose()
     // The program is gone; its modes go with it, so nothing stale can reach a later view.
     session.decsetModes.clear()
     session.mirror?.dispose()
