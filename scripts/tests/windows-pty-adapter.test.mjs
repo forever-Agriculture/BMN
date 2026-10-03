@@ -29,3 +29,9 @@ it('quotes an argument containing literal enclosing quotes and spaces as one val
   const { argsToCommandLine } = adapter()
   expect(argsToCommandLine('node.exe', ['"a b"'])).toBe('node.exe "\\"a b\\""')
 })
+
+it('quotes the executable path when the raw argument tail is empty', () => {
+  const { argsToCommandLine } = adapter()
+  expect(argsToCommandLine('C:\\Program Files\\PowerShell\\7\\pwsh.exe', ''))
+    .toBe('"C:\\Program Files\\PowerShell\\7\\pwsh.exe"')
+})

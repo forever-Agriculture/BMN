@@ -250,7 +250,7 @@ index 1be15ca..bf6e593 100644
 -//# sourceMappingURL=windowsConoutConnection.js.map
 \ No newline at end of file
 diff --git a/lib/windowsPtyAgent.js b/lib/windowsPtyAgent.js
-index a358ffb..edcc6ce 100644
+index a358ffb..40610af 100644
 --- a/lib/windowsPtyAgent.js
 +++ b/lib/windowsPtyAgent.js
 @@ -1,251 +1,116 @@
@@ -609,9 +609,12 @@ index a358ffb..edcc6ce 100644
  exports.WindowsPtyAgent = WindowsPtyAgent;
  // Convert argc/argv into a Win32 command-line following the escaping convention
  // documented on MSDN (e.g. see CommandLineToArgvW documentation). Copied from
-@@ -255,30 +120,24 @@ function argsToCommandLine(file, args) {
+@@ -253,32 +118,26 @@ exports.WindowsPtyAgent = WindowsPtyAgent;
+ function argsToCommandLine(file, args) {
+     if (isCommandLine(args)) {
          if (args.length === 0) {
-             return file;
+-            return file;
++            return argsToCommandLine(file, []);
          }
 -        return argsToCommandLine(file, []) + " " + args;
 +        return `${argsToCommandLine(file, [])} ${args}`;
@@ -2077,7 +2080,7 @@ index fa2d62d..373d931 100644
    }
  }
 diff --git a/src/windowsPtyAgent.ts b/src/windowsPtyAgent.ts
-index d705444..bd9cc9a 100644
+index d705444..a81b918 100644
 --- a/src/windowsPtyAgent.ts
 +++ b/src/windowsPtyAgent.ts
 @@ -1,252 +1,77 @@
@@ -2392,6 +2395,15 @@ index d705444..bd9cc9a 100644
  }
  
  // Convert argc/argv into a Win32 command-line following the escaping convention
+@@ -255,7 +80,7 @@ export class WindowsPtyAgent {
+ export function argsToCommandLine(file: string, args: ArgvOrCommandLine): string {
+   if (isCommandLine(args)) {
+     if (args.length === 0) {
+-      return file;
++      return argsToCommandLine(file, []);
+     }
+     return `${argsToCommandLine(file, [])} ${args}`;
+   }
 @@ -267,15 +92,8 @@ export function argsToCommandLine(file: string, args: ArgvOrCommandLine): string
        result += ' ';
      }

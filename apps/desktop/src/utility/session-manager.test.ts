@@ -581,6 +581,11 @@ async function flowFixture(
 }
 
 describe('shell session lifecycle', () => {
+  it('removes private environment aliases on Windows and emits one effective PATH', () => {
+    expect(buildShellEnvironment({ Path: 'first', PATH: 'second', bmn_token: 'synthetic-secret', electron_run_as_node: '1', SystemRoot: 'C:\\Windows' }, 'win32'))
+      .toEqual({ PATH: 'second', SystemRoot: 'C:\\Windows', TERM: 'xterm-256color', COLORTERM: 'truecolor' })
+  })
+
   it('builds a user shell environment without Electron, Chromium, or app-internal launch variables', () => {
     expect(
       buildShellEnvironment({
@@ -690,6 +695,18 @@ describe('shell session lifecycle', () => {
       BMN_CONTROL_SOCKET: '/new/socket', BMN_SESSION_ID: 'new-session', BMN_TOKEN: 'new-token',
       AITERM_CONTROL_SOCKET: '/new/socket', AITERM_SESSION_ID: 'new-session', AITERM_TOKEN: 'new-token'
     })
+  })
+
+  it.skipIf(process.platform !== 'win32')('validates Windows launches against the companion session PATH', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bmn-session-path-'))
+    createdRoots.add(root)
+    await writeFile(join(root, 'synthetic-path-tool.exe'), 'synthetic executable fixture; PTY is mocked')
+    const manager = new SessionManager({
+      store: new FakeStore(), spawnPty: () => new FakePty(), sendTerminalMessage: () => undefined,
+      environment: { PATH: '', PATHEXT: '.EXE' }, sessionPath: () => root,
+      sessionEnvironment: () => ({ PATH: root })
+    })
+    await expect(manager.validateLaunch({ cwd: root, executable: 'synthetic-path-tool', argv: [], cols: 80, rows: 24 })).resolves.toBeUndefined()
   })
 
   it('keeps direct Codex hooks in this session unless the owner selected a remote server', () => {

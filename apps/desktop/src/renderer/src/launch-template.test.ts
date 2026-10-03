@@ -185,3 +185,39 @@ describe('argument quoting', () => {
     expect(launchAgentOf(form)).toBe('codex')
   })
 })
+
+describe('Windows argument field', () => {
+  it('keeps unquoted path backslashes and literal shell metacharacters', () => {
+    expect(splitArgv(String.raw`C:\work\file.txt %PATH% ^& !name!`, 'win32'))
+      .toEqual([String.raw`C:\work\file.txt`, '%PATH%', '^&', '!name!'])
+  })
+
+  it('round-trips quoted spaces, literal quotes, empty values and trailing slashes', () => {
+    const argv = ['C:\\with space\\', '"a b"', '', '雪', String.raw`a\"b`, '%PATH%', '^&']
+    expect(splitArgv(quoteArgv(argv, 'win32'), 'win32')).toEqual(argv)
+    expect(quoteArgv(['space value'], 'win32')).toBe('"space value"')
+  })
+})
+
+describe('Windows launch choices', () => {
+  it('keeps a native command prompt after an agent exits', () => {
+    const form = applyLaunchAgent(INITIAL_SESSION_FORM, 'codex', [], 'win32')
+    expect(form.executable).toBe('cmd.exe')
+    expect(splitArgv(form.argv, 'win32')).toEqual(['/d', '/v:off', '/s', '/k', 'codex'])
+    expect(launchAgentOf(form, 'win32')).toBe('codex')
+    expect(applyLaunchAgent(form, 'terminal', [], 'win32').executable).toBe('powershell.exe')
+  })
+
+  it('persists explicit batch text as a command processor launch and reopens that mode', () => {
+    const batchCommand = '"C:\\my scripts\\build.cmd" %NAME% & echo finished'
+    const params = sessionCreateParams('w', { ...INITIAL_SESSION_FORM, batchCommand }, { cols: 80, rows: 24 })
+    expect(params.executable).toBe('cmd.exe')
+    expect(params.argv).toEqual(['/d', '/v:off', '/s', '/c', batchCommand])
+    const session = { ...params, backgroundChoice: null, terminalGraphics: null, sessionId: 's', revision: 1, position: 0, createdAt: '', archivedAt: null, lastProcess: null }
+    const reopened = sessionLaunchForm(session, 'win32')
+    expect(reopened.batchCommand).toBe(batchCommand)
+    expect(sessionUpdateParams(session, reopened).argv).toEqual(params.argv)
+    expect(launchAgentOf(reopened, 'win32')).toBeNull()
+    expect(applyLaunchAgent(reopened, 'codex', [], 'win32').batchCommand).toBeUndefined()
+  })
+})

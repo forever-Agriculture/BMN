@@ -149,6 +149,7 @@ export interface CreatedSession {
 }
 
 export interface AiTerminalBridge {
+  readonly platform?: string
   security: { sandboxed: boolean; contextIsolated: boolean }
   versions: { chrome: string; electron: string }
   onStartup(listener: (startup: ApplicationStartup) => void): () => void

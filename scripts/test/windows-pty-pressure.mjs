@@ -43,6 +43,13 @@ const options={cwd:root,env:{...process.env},cols:80,rows:24,useConpty:true,useC
   try{await waitFor(()=>exit||error);assert.equal(error,undefined);assert.equal(exit.exitCode,47);rows.push({mode:'immediate',iteration:i,elapsedMs:Date.now()-started,exit})}
   finally{if(!exit)terminal.kill()}
  }
+ // Native startup failures must unwind their pipes/workers and leave subsequent
+ // launches usable. The external controller also bounds the host's final exit.
+ for(let i=0;i<4;i++){
+  assert.throws(()=>pty.spawn(root+'/missing-program.exe',[],options),/Create atomically owned terminal process/);
+  assert.throws(()=>pty.spawn(node,[],{...options,cwd:root+'/missing-directory'}),/Create atomically owned terminal process/);
+  rows.push({mode:'failed-start',iteration:i,missingProgram:true,missingDirectory:true});
+ }
  fs.writeFileSync(root+'/receipt.json',JSON.stringify(rows));
 })().catch(error=>{console.error(error);process.exitCode=1});
 `)
@@ -55,6 +62,6 @@ const options={cwd:root,env:{...process.env},cols:80,rows:24,useConpty:true,useC
   writeFileSync(join(repo, 'test-results/windows-pty-pressure.json'), JSON.stringify(receipt, null, 2))
   assert.equal(result.error, undefined)
   assert.equal(result.status, 0, result.stderr)
-  assert.equal(receipt.observations.length, 10)
+  assert.equal(receipt.observations.length, 14)
   console.log('PASS native output pressure, paused Stop and immediate-exit races')
 } finally { rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }) }

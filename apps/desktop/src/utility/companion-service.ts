@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { appendFile, chmod, copyFile, lstat, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
-import { basename, dirname, extname, isAbsolute, join, relative } from 'node:path'
+import { basename, delimiter, dirname, extname, isAbsolute, join, relative } from 'node:path'
 import {
   ERROR_CODES,
   exactAbsoluteFileReference,
@@ -613,7 +613,7 @@ export class CompanionService {
 
   /** The PATH every session's processes see: BMN's CLI first, then BMN's own PATH. */
   sessionPath(): string {
-    return [dirname(this.options.cliPath), process.env.PATH ?? '/usr/bin:/bin'].join(':')
+    return [dirname(this.options.cliPath), process.env.PATH ?? (process.platform === 'win32' ? '' : '/usr/bin:/bin')].filter(Boolean).join(delimiter)
   }
 
   /** Environment for one incarnation: its scoped control credential and the CLI on PATH. */

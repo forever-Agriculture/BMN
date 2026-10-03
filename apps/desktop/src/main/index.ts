@@ -539,7 +539,7 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
       throw new MainIpcError(ERROR_CODES.invalidArgument, 'Launch directories are invalid')
     }
     return directories.map((directory: string) => resolve(
-      directory === '~' || directory.startsWith('~/')
+      directory === '~' || directory.startsWith('~/') || (process.platform === 'win32' && directory.startsWith('~\\'))
         ? join(homedir(), directory.slice(1)) : directory
     ))
   })

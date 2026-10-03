@@ -247,10 +247,10 @@ export function applyCapturedLaunchEnvironment(
 }
 
 export function agentCli(executable: string): AgentCli {
-  const command = basename(executable).toLowerCase()
-  if (command === 'claude' || command === 'claude.exe') return 'claude'
-  if (command === 'codex' || command === 'codex.exe') return 'codex'
-  if (command === 'opencode' || command === 'opencode.exe') return 'opencode'
+  const command = basename(executable.replaceAll('\\', '/')).toLowerCase().replace(/\.(exe|cmd|bat)$/, '')
+  if (command === 'claude') return 'claude'
+  if (command === 'codex') return 'codex'
+  if (command === 'opencode') return 'opencode'
   // Cursor also installs the same program as `agent`, a name too generic to claim.
   if (command === 'cursor-agent') return 'cursor'
   return 'other'

@@ -16,14 +16,15 @@ try {
   writeFileSync(fixture, `const fs=require('node:fs'),cp=require('node:child_process'),path=require('node:path');
 const [dir,role,...args]=process.argv.slice(2);
 fs.writeFileSync(path.join(dir,role+'.json'),JSON.stringify({pid:process.pid,args}));
+if(role==='root')cp.spawn(process.env.BMN_FIXTURE_GUI,[path.join(dir,'gui.json')],{stdio:'ignore',detached:true});
 if(role!=='grandchild') cp.spawn(process.execPath,[__filename,dir,role==='root'?'child':'grandchild'],{stdio:'ignore',detached:true});
 setInterval(()=>{if(role==='root'&&fs.existsSync(path.join(dir,'natural')))process.exit(47)},20);
 `)
   writeFileSync(host, `const fs=require('node:fs'),path=require('node:path');
 const pty=require(${JSON.stringify(requireApp.resolve('node-pty'))});
-const [dir,node,fixture,mode]=process.argv.slice(2);
+const [dir,node,fixture,mode,gui]=process.argv.slice(2);
 const args=mode==='silent'?['-e','setInterval(()=>{},1000)']:mode==='immediate'?['-e','process.exit(47)']:[fixture,dir,'root','space value','雪','%PATH%','^&','quote"value','"a b"','C:\\\\with space\\\\'];
-const terminal=pty.spawn(node,args,{cwd:dir,env:{...process.env},useConpty:true,useConptyDll:true});
+const terminal=pty.spawn(node,args,{cwd:dir,env:{...process.env,BMN_FIXTURE_GUI:gui},useConpty:true,useConptyDll:true});
 fs.writeFileSync(path.join(dir,'host.json'),JSON.stringify({pid:process.pid,root:terminal.pid,identity:terminal.processStartIdentity,queried:mode==='immediate'?null:pty.queryProcessStartIdentity(terminal.pid)}));
 terminal.onData(()=>{});
 terminal.onLifecycleError(error=>fs.writeFileSync(path.join(dir,'error.json'),JSON.stringify({error})));
@@ -58,6 +59,23 @@ public static class OwnedFixture {
  [DllImport("kernel32.dll",SetLastError=true)] public static extern bool TerminateProcess(IntPtr process,uint code);
 }
 '@
+Add-Type -ReferencedAssemblies System.Windows.Forms,System.Drawing -OutputAssembly $config.gui -OutputType WindowsApplication -TypeDefinition @'
+using System;
+using System.IO;
+using System.Diagnostics;
+using System.Windows.Forms;
+public static class SyntheticGui {
+ [STAThread] public static void Main(string[] args) {
+  using(var form=new Form {Text="BMN synthetic owned window",Width=160,Height=100}) {
+   form.Shown+=(sender,eventArgs)=> {
+    File.WriteAllText(args[0]+".tmp",Process.GetCurrentProcess().Id.ToString());
+    File.Move(args[0]+".tmp",args[0]);
+   };
+   Application.Run(form);
+  }
+ }
+}
+'@
 function StartFixture($exe,$arguments) {
  $start=New-Object System.Diagnostics.ProcessStartInfo;
  $start.FileName=$exe; $start.Arguments=$arguments; $start.UseShellExecute=$false; $start.CreateNoWindow=$true;
@@ -79,7 +97,7 @@ foreach($mode in @('natural','stop','crash','silent','immediate')) {
  $hostProcess=$null; $sentinel=$null; $observed=@(); $started=[DateTime]::UtcNow;
  try {
   $sentinel=StartFixture $config.node '-e "setInterval(()=>{},1000)"';
-  $arguments='"'+$config.host+'" "'+$dir+'" "'+$config.node+'" "'+$config.fixture+'" '+$mode;
+  $arguments='"'+$config.host+'" "'+$dir+'" "'+$config.node+'" "'+$config.fixture+'" '+$mode+' "'+$config.gui+'"';
   $hostProcess=StartFixture $config.electron $arguments;
   $record=WaitFile (Join-Path $dir 'host.json') $hostProcess;
   if($record.identity -notmatch '^windows-filetime:[0-9]+$' -or ($mode -ne 'immediate' -and $record.identity -ne $record.queried)) { throw 'Creation identity mismatch' };
@@ -94,6 +112,9 @@ foreach($mode in @('natural','stop','crash','silent','immediate')) {
    if($consoleHandles -eq 0) { throw 'OpenConsole observer was not established' };
   }
   if($mode -in @('natural','stop','crash')) {
+   $guiPid=WaitFile (Join-Path $dir 'gui.json') $hostProcess;
+   $p=[Diagnostics.Process]::GetProcessById($guiPid); $null=$p.Handle; $observed+=,$p;
+   if($p.MainWindowHandle -eq [IntPtr]::Zero) { throw 'Synthetic GUI window was not shown' };
    foreach($role in @('child','grandchild')) {
     $r=WaitFile (Join-Path $dir ($role+'.json')) $hostProcess;
     $p=[Diagnostics.Process]::GetProcessById($r.pid); $null=$p.Handle; $observed+=,$p;
@@ -115,7 +136,7 @@ foreach($mode in @('natural','stop','crash','silent','immediate')) {
    $expectedCode=1; if($mode -in @('natural','immediate')) { $expectedCode=47 };
    if($exit.exitCode -ne $expectedCode) { throw 'Incorrect root exit status' };
   }
-  $results+=@{mode=$mode;passed=$true;retainedProcessHandles=$observed.Count;openConsoleHandles=$consoleHandles;sentinelAlive=$true;exit=$exit;elapsedMs=([DateTime]::UtcNow-$started).TotalMilliseconds};
+  $results+=@{mode=$mode;passed=$true;retainedProcessHandles=$observed.Count;openConsoleHandles=$consoleHandles;guiWindowVerified=($mode -in @('natural','stop','crash'));sentinelAlive=$true;exit=$exit;elapsedMs=([DateTime]::UtcNow-$started).TotalMilliseconds};
  } finally {
   # Only retained handles of this fixture's processes can be terminated here.
   foreach($p in @($hostProcess,$sentinel)+$observed) {
@@ -131,7 +152,7 @@ $results | ConvertTo-Json -Depth 8 -Compress;
     writeFileSync(file, `function publish(file,data){fs.writeFileSync(file+'.tmp',data);fs.renameSync(file+'.tmp',file)}\n${source}`)
   }
   const result = spawnSync(join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(controller, 'utf16le').toString('base64')], {
-    input: JSON.stringify({ root, host, fixture, node: process.execPath, electron: requireApp('electron') }), encoding: 'utf8', timeout: 120000, windowsHide: true
+    input: JSON.stringify({ root, host, fixture, gui: join(root, 'synthetic-gui.exe'), node: process.execPath, electron: requireApp('electron') }), encoding: 'utf8', timeout: 120000, windowsHide: true
   })
   mkdirSync(join(repo, 'test-results'), { recursive: true })
   const receipt = { status: result.status, error: result.error?.message, stdout: result.stdout, stderr: result.stderr }
