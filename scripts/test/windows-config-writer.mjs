@@ -94,7 +94,8 @@ try {
 ${helper}
 EnsureNativeHelpers
 $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User;$results=@()
-foreach($stageHeld in @($false,$true)) {foreach($backupHeld in @($false,$true)) {
+foreach($stageHeld in @($false,$true)) {foreach($backupMode in @('absent','retained','disposed')) {
+ $backupHeld=$backupMode -ne 'absent'
  $directory=[IO.Path]::Combine($r.root,('matrix-'+$stageHeld+'-'+$backupHeld));[IO.Directory]::CreateDirectory($directory)|Out-Null
  $target=[IO.Path]::Combine($directory,'target.json');$stage=[IO.Path]::Combine($directory,'stage.tmp');$backup=[IO.Path]::Combine($directory,'backup.json')
  [IO.File]::WriteAllText($target,'BEFORE');$original=[IO.File]::GetAccessControl($target);$original.SetOwner($sid);[IO.File]::SetAccessControl($target,$original)
@@ -105,19 +106,23 @@ foreach($stageHeld in @($false,$true)) {foreach($backupHeld in @($false,$true)) 
   $held=New-Object IO.FileStream($target,[IO.FileMode]::Open,[Security.AccessControl.FileSystemRights]'Read,ReadPermissions',([IO.FileShare]::Read -bor [IO.FileShare]::Delete),4096,[IO.FileOptions]::None)
   if($stageHeld){$operation='stage-metadata';$staged=[BMNConfigIdentity]::Metadata($stage)}
   if($backupHeld){$operation='backup-metadata';$reserved=[BMNConfigIdentity]::Metadata($backup)}
+  if($backupMode -eq 'disposed'){$operation='backup-check-dispose';$reservationId=[BMNConfigIdentity]::Read($reserved);if(-not $reservationId){throw 'Unconfirmed identity'};$reserved.Dispose();$reserved=$null}
   $operation='replace';[IO.File]::Replace($stage,$target,$backup,$false);$published=$true
  } catch {$e=$_.Exception;for($i=0;$i -lt 8 -and $e.InnerException;$i++){$e=$e.InnerException};$errorCode=if($e -is [ComponentModel.Win32Exception]){$e.NativeErrorCode}else{$e.HResult -band 65535};$exceptionType=$e.GetType().FullName}
  finally {foreach($handle in @($reserved,$staged,$held)){if($null -ne $handle){$handle.Dispose()}}}
- $results+=@{stageHeld=$stageHeld;backupHeld=$backupHeld;operation=$operation;errno=$errorCode;exceptionType=$exceptionType;published=$published;target=if([IO.File]::Exists($target)){[IO.File]::ReadAllText($target)}else{$null};backup=if([IO.File]::Exists($backup)){[IO.File]::ReadAllText($backup)}else{$null};stageExists=[IO.File]::Exists($stage)}
+ $results+=@{stageHeld=$stageHeld;backupHeld=$backupHeld;backupMode=$backupMode;operation=$operation;errno=$errorCode;exceptionType=$exceptionType;published=$published;target=if([IO.File]::Exists($target)){[IO.File]::ReadAllText($target)}else{$null};backup=if([IO.File]::Exists($backup)){[IO.File]::ReadAllText($backup)}else{$null};stageExists=[IO.File]::Exists($stage)}
 }}
 [Console]::Out.Write((ConvertTo-Json -Compress -Depth 5 @($results)));`
   const encoded = Buffer.from(matrix, 'utf16le').toString('base64')
   assert.ok(encoded.length < 32000, 'Diagnostic fixed program must fit native command limits')
   const varied = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
     { input: JSON.stringify({ root }), encoding: 'utf8', timeout: 30000, windowsHide: true })
-  assert.equal(varied.status, 0, 'Native four-case metadata-handle matrix must execute')
+  assert.equal(varied.status, 0, 'Native six-case metadata-handle matrix must execute')
   receipts.retainedHandleMatrix = JSON.parse(varied.stdout)
-  assert.equal(receipts.retainedHandleMatrix.length, 4)
+  assert.equal(receipts.retainedHandleMatrix.length, 6)
+  for (const result of receipts.retainedHandleMatrix.filter(row => row.backupMode === 'disposed')) {
+    assert.equal(result.published, true); assert.equal(result.target, 'AFTER'); assert.equal(result.backup, 'BEFORE')
+  }
   // Raw native measurement keeps inherited-ACL diagnosis separate from product gates.
   const inherited = join(root, 'inherited.json'), staged = join(root, 'inherited.stage'), backup = join(root, 'inherited.backup')
   writeFileSync(inherited, 'BEFORE')

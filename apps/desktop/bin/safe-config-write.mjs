@@ -203,7 +203,8 @@ public static class BMNConfigIdentity {
   if((info.flags & (0x400u|0x10u|0x40u))!=0) throw new System.IO.IOException("Staging is not a regular file");
  }
  public static SafeFileHandle Metadata(string path) {
-  // Metadata access never conflicts with ReplaceFile's exclusive data-access open.
+  // Metadata-only staging access permits the measured ReplaceFile open.
+  // A held backup-destination handle is incompatible with replacement.
   var file=CreateFileW(path,0x60080u,7,IntPtr.Zero,3,0x200080u,IntPtr.Zero);
   if(file.IsInvalid) { file.Dispose(); throw Error(); }
   try { Regular(file); return file; } catch { file.Dispose(); throw; }
@@ -304,6 +305,9 @@ try {
    }
    $operation='backup-identity';$reservedBackupHandle=[BMNConfigIdentity]::Metadata($request.backup)
    if([BMNConfigIdentity]::Read($reservedBackupHandle) -ne $backupIdentity) { $failureCode='REVISION_CONFLICT';throw 'Backup reservation changed' }
+   # Replace cannot remove an open backup destination, even with metadata-only access.
+   # Check immediately before closing; this is not an atomic namespace/CAS lock.
+   $reservedBackupHandle.Dispose();$reservedBackupHandle=$null
    $operation='replace'
    [IO.File]::Replace($request.temporary,$request.target,$request.backup,$false)
    $published=$true
