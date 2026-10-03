@@ -4,6 +4,7 @@ on:
     paths:
       - .github/workflows/windows-cache-probe.yml
       - scripts/test/windows-cache-acl-probe.mjs
+      - scripts/test/windows-missing-root-probe.mjs
       - apps/desktop/src/utility/private-directory.ts
 permissions:
   contents: read
@@ -16,6 +17,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24.14.0
+      - name: Diagnose missing-root aliases in Windows PowerShell 5.1
+        run: node scripts/test/windows-missing-root-probe.mjs
       - name: Install pinned Electron only
         shell: pwsh
         run: |

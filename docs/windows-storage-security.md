@@ -27,8 +27,10 @@ The recognized additional Allow ACEs are precisely the observed Chromium forms:
 | File or directory itself | `0x001301bf` (Modify, Synchronize) | None | None |
 | Directory descendants template | `0xe0010000` (generic read/write/execute, delete) | ContainerInherit, ObjectInherit | InheritOnly |
 
-Each item still requires exactly one current-user FullControl ACE; directories
-must inherit that protection to children. Every other identity/mask/flag combination
+Each item requires effective current-user FullControl. Duplicate or supplemental
+owner Allow entries are accepted; owner Deny entries are refused. Directories
+also require an owner FullControl entry inherited by files and directories without
+NoPropagateInherit; direct and inherited access may be separate entries. Every other identity/mask/flag combination
 is refused. Enumeration remains bounded to 10,000 items and 15 seconds.
 
 Sources: Electron's [pinned dependencies](https://github.com/electron/electron/blob/v44.3.0/DEPS),

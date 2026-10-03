@@ -42,8 +42,68 @@ function aliases(path: string): { short: string; long: string } {
   expect(short.toLowerCase(), 'native fixture requires a real 8.3 alias').not.toBe(long.toLowerCase())
   return { short, long }
 }
+// Native APIs preserve deliberately duplicate ACEs that AddAccessRule may merge.
+function setRawAcl(path: string, descriptor: string, protectedAcl = true): void {
+  powershell(path, `Add-Type @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+public static class RawAcl {
+  [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  static extern bool ConvertStringSecurityDescriptorToSecurityDescriptorW(string text, uint revision, out IntPtr descriptor, out uint size);
+  [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  static extern bool SetFileSecurityW(string path, uint information, IntPtr descriptor);
+  [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr memory);
+  public static void Set(string path, string text, bool protect) {
+    IntPtr sd; uint size;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(text, 1, out sd, out size)) throw new Win32Exception();
+    try { if (!SetFileSecurityW(path, protect ? 0x80000004u : 0x20000004u, sd)) throw new Win32Exception(); }
+    finally { LocalFree(sd); }
+  }
+}
+'@
+$sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value;
+[RawAcl]::Set($path,'${descriptor}'.Replace('OWNER',$sid),$${protectedAcl})`)
+}
 
 describe.skipIf(process.platform !== 'win32')('native Windows private roots', () => {
+  it.each([
+    { name: 'duplicate explicit file owner entries', directory: false, acl: 'D:P(A;;FA;;;OWNER)(A;;FA;;;OWNER)', protectedAcl: true },
+    { name: 'explicit plus inherited owner entry', directory: false, acl: 'D:(A;;FA;;;OWNER)(A;ID;FA;;;OWNER)', protectedAcl: false },
+    { name: 'split direct and inheritable owner rights', directory: true, acl: 'D:P(A;;FA;;;OWNER)(A;OICIIO;FA;;;OWNER)', protectedAcl: true },
+    { name: 'additional owner read rights', directory: false, acl: 'D:P(A;;FA;;;OWNER)(A;;FR;;;OWNER)', protectedAcl: true }
+  ])('accepts equivalent private owner ACLs: $name', { timeout: 60_000 }, ({ directory, acl, protectedAcl }) => {
+    const root = join(fixture(), 'private')
+    ensurePrivateDirectories([root])
+    const target = join(root, 'synthetic')
+    if (directory) mkdirSync(target)
+    else writeFileSync(target, 'synthetic')
+    setRawAcl(target, acl, protectedAcl)
+    const count = powershell(target, '@($item.GetAccessControl().GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier])).Count')
+    expect(Number(count), 'fixture must retain multiple owner ACEs').toBeGreaterThanOrEqual(2)
+    const before = powershell(target, sddl)
+    expect(() => ensurePrivateDirectories([root])).not.toThrow()
+    expect(powershell(target, sddl)).toBe(before)
+  })
+  it.each([
+    { name: 'duplicate owner plus Everyone', directory: false, acl: 'D:P(A;;FA;;;OWNER)(A;;FA;;;OWNER)(A;;FR;;;WD)' },
+    { name: 'owner write denied', directory: false, acl: 'D:P(D;;WD;;;OWNER)(A;;FA;;;OWNER)' },
+    { name: 'owner read only', directory: false, acl: 'D:P(A;;FR;;;OWNER)' },
+    { name: 'directory without owner inheritance', directory: true, acl: 'D:P(A;;FA;;;OWNER)' },
+    { name: 'directory inheritance stops after one generation', directory: true, acl: 'D:P(A;OICINP;FA;;;OWNER)' },
+    { name: 'SYSTEM descendant access', directory: false, acl: 'D:P(A;;FA;;;OWNER)(A;;FR;;;SY)' },
+    { name: 'misplaced capability with duplicate owner', directory: false, acl: `D:P(A;;FA;;;OWNER)(A;;FA;;;OWNER)(A;;0x1301bf;;;${networkCapability})` }
+  ])('refuses unsafe or unusable effective ACLs: $name', { timeout: 60_000 }, ({ directory, acl }) => {
+    const root = join(fixture(), 'private')
+    ensurePrivateDirectories([root])
+    const target = join(root, 'synthetic')
+    if (directory) mkdirSync(target)
+    else writeFileSync(target, 'synthetic')
+    setRawAcl(target, acl)
+    const before = powershell(target, sddl)
+    expect(() => ensurePrivateDirectories([root], 'win32', root)).toThrow(/could not secure/)
+    expect(powershell(target, sddl)).toBe(before)
+  })
   it('uses one canonical path for Chromium scope and rejects alias overlaps before creation', { timeout: 120_000 }, () => {
     const parent = fixture()
     const root = join(parent, 'private storage')

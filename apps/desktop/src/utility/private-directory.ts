@@ -89,7 +89,18 @@ foreach ($directory in $directories) {
     Assert-SafeOwner $security
     $rules = @($security.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))
     $userRules = @($rules | Where-Object { $_.IdentityReference.Value -eq $sid.Value })
-    if ($userRules.Count -ne 1 -or $userRules[0].AccessControlType -ne 'Allow' -or $userRules[0].FileSystemRights -ne 'FullControl' -or $userRules[0].PropagationFlags -ne 'None') { throw 'BMN storage ACL verification failed' }
+    # Explicit/inherited duplicate owner ACEs do not expose storage to another SID.
+    # Require effective full access, rather than one particular ACL representation.
+    $ownerAccess = $false
+    $ownerInheritance = $false
+    foreach ($userRule in $userRules) {
+      if ($userRule.AccessControlType -ne 'Allow') { throw 'BMN owner access is denied' }
+      if ($userRule.FileSystemRights -eq 'FullControl') {
+        if (($userRule.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) -eq 0) { $ownerAccess = $true }
+        if ($userRule.InheritanceFlags -eq 'ContainerInherit, ObjectInherit' -and ($userRule.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::NoPropagateInherit) -eq 0) { $ownerInheritance = $true }
+      }
+    }
+    if (-not $ownerAccess) { throw 'BMN storage ACL verification failed' }
     $chromiumItem = $false
     if ($canonicalDataRoot -and (Get-DirectoryKey $directory).Equals($canonicalDataRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
       foreach ($name in @('Cache', 'Network', 'Shared Dictionary')) {
@@ -105,7 +116,7 @@ foreach ($directory in $directories) {
       if (-not $direct -and -not $template) { throw 'BMN Chromium storage ACL verification failed' }
     }
     if ($item -is [System.IO.DirectoryInfo]) {
-      if ($userRules[0].InheritanceFlags -ne 'ContainerInherit, ObjectInherit') { throw 'BMN storage ACL does not protect new children' }
+      if (-not $ownerInheritance) { throw 'BMN storage ACL does not protect new children' }
       $entries = $item.EnumerateFileSystemInfos().GetEnumerator()
       try {
         while ($entries.MoveNext()) {
