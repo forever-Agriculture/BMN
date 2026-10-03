@@ -5,6 +5,9 @@ on:
       - .github/workflows/windows-pty-feasibility.yml
       - scripts/test/windows-pty-feasibility.mjs
       - scripts/test/windows-pty-ownership.mjs
+      - scripts/test/windows-pty-pressure.mjs
+      - scripts/test/windows-pty-pipes.mjs
+      - scripts/test/windows-storage-cross-user.mjs
       - patches/**
 permissions:
   contents: read
@@ -31,6 +34,12 @@ jobs:
       - name: Verify owned native process trees
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: node scripts/test/windows-pty-ownership.mjs
+      - name: Verify output pressure and exit races
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: node scripts/test/windows-pty-pressure.mjs
+      - name: Verify private native pipes across accounts
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: node scripts/test/windows-pty-pipes.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

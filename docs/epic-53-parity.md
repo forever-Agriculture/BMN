@@ -11,8 +11,8 @@ Epic 50/54 installed/provider acceptance remains separate and unfinished.
 
 | Capability / owning story | Implementation owner | Linux candidate | Native Windows | WSL |
 | --- | --- | --- | --- | --- |
-| Build, data roots, database, restart, single instance, unpacked startup — 53.1 | Implementation team | Build/startup/package PASS on Ubuntu CI | Install/build/package and one packaged startup PASS; development/restart blocked | UNVERIFIED |
-| PowerShell/cmd launch, input, stop, process identity, crash cleanup, ConPTY feasibility — 53.2 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
+| Build, data roots, database, restart, single instance, unpacked startup — 53.1 | Implementation team | Build/startup/package PASS on Ubuntu CI | Install/build/package/startup/restart/ACL PASS on Server 2025; Windows 11 manual acceptance UNVERIFIED | UNVERIFIED |
+| PowerShell/cmd launch, input, stop, process identity, crash cleanup, ConPTY feasibility — 53.2 | Implementation team | Affected tests and sandboxed startup PASS | Bundled byte fidelity and owned-tree cleanup PASS; app shell/UI checks pending | UNVERIFIED |
 | Files, path links, attachments, backups, directory permissions — 53.3 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
 | CLI, transport, caller/session authority — 53.4 | Implementation team | UNVERIFIED | Not implemented | UNVERIFIED |
 | Named distributions, bridge, path mapping, terminfo — 53.5 | Implementation team | UNVERIFIED | UNVERIFIED | Not implemented |
@@ -206,3 +206,29 @@ No merge or deployment has occurred. Stories 53.2–53.13 remain backlog.
 Windows 11 standard-user acceptance, foreign-owner refusal, ordinary and
 capability-bearing cross-account denial, and wide-tree memory measurements remain
 UNVERIFIED. WSL and later capabilities retain their separate gates.
+
+## Current native terminal and storage evidence
+
+[Run 37113576528, attempt 2](https://github.com/forever-Agriculture/BMN/actions/runs/37113576528)
+passed on `33deab2`, Windows Server 2025 Datacenter x64, Electron 44.3.0
+(embedded Node 24.20.0), host Node 24.14.0 and pnpm 12.3.4. The maintained
+addon compiled and supplied real terminal stdin/stdout. Exact Sixel, OSC 52/9/777/99,
+mouse and bracketed-paste sequences, repaint, resize, Ctrl+C and exit zero passed.
+Owned root/child/grandchild/OpenConsole cleanup passed for normal exit, Stop and
+host crash; silent and immediate-exit checks passed. The unrelated sentinel survived
+all cases. The first attempt stopped during a Node-header download with ECONNRESET;
+its unchanged rerun is the passing evidence.
+
+[Storage run 37111187296](https://github.com/forever-Agriculture/BMN/actions/runs/37111187296)
+on `6cb7a46` passed Chromium restart and alias checks plus a true separate ordinary
+account fixture: public read succeeded while private read/write/delete were denied;
+the generated account was removed. Full platform run
+[37112142206](https://github.com/forever-Agriculture/BMN/actions/runs/37112142206)
+on `9305898` passed Linux gates and Windows development/packaged startup. Windows
+unit inventory remained failing: 2,044 passed and 622 failed. Later-story failures
+remain required work, not waived acceptance.
+
+The owner explicitly deferred unavailable Windows 11 laptop, WSL/device manual
+checks until the collaborator tests the release. They remain **UNVERIFIED**.
+All feasible local/native CI checks and known reproduced failures still require
+resolution. No full-parity release or Epic 53 completion is claimed here.
