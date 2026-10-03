@@ -637,16 +637,14 @@ export class CompanionService {
     await this.retainedHooks.load()
     await this.files.reconcileStaging().catch(() => [])
     await this.reconcileArtifacts()
-    if (process.platform === 'win32') {
-      this.controlDetail = 'Local agent control is not yet available in this Windows build'
-    } else try {
+    try {
       await writeOwnerToken(dirname(this.socketPath), this.auth.ownerToken)
       await this.control.listen()
       this.controlListening = true
       this.controlDetail = 'Agents and the bmn CLI can reach this app'
     } catch (error) {
       // The kernel caps a Unix socket path and reports only EINVAL, so name the real cause.
-      const tooLong = Buffer.byteLength(this.socketPath) > MAX_SOCKET_PATH_BYTES
+      const tooLong = process.platform !== 'win32' && Buffer.byteLength(this.socketPath) > MAX_SOCKET_PATH_BYTES
       this.controlDetail = tooLong
         ? `The control socket is unavailable: its path is longer than ${MAX_SOCKET_PATH_BYTES} bytes (${this.socketPath}); use a shorter runtime directory`
         : `The control socket is unavailable: ${error instanceof Error ? error.message.slice(0, 200) : 'unknown error'}`

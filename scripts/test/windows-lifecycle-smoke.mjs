@@ -97,11 +97,12 @@ setInterval(()=>{if(role==='root')publish('heartbeat.json',Date.now())},100);
     const lingering = () => {
       try {
         return JSON.parse(execFileSync(join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoProfile', '-NonInteractive', '-Command',
-          `ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains('${root.replaceAll("'", "''")}') } | ForEach-Object { @{pid=$_.ProcessId;parent=$_.ParentProcessId;name=$_.Name;type=([regex]::Match($_.CommandLine,'--type=([a-z-]+)').Groups[1].Value)} })`],
+          `ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains('${root.replaceAll("'", "''")}') } | ForEach-Object { @{pid=$_.ProcessId;parent=$_.ParentProcessId;parentAlive=($null -ne (Get-Process -Id $_.ParentProcessId -ErrorAction SilentlyContinue));name=$_.Name;type=([regex]::Match($_.CommandLine,'--type=([a-z-]+)').Groups[1].Value);service=([regex]::Match($_.CommandLine,'--utility-sub-type=([A-Za-z.]+)').Groups[1].Value)} })`],
           { encoding: 'utf8', windowsHide: true }) || '[]')
       } catch (error) { return [{ queryError: String(error.message).split('\n')[0] }] }
     }
     const relaunchAttempts = []
+    let killedMainPid
     const verifyRestart = async (session, { forcedExit = false } = {}) => {
       for (let attempt = 1; ; attempt += 1) {
         try { await open(); break } catch (error) {
@@ -182,14 +183,15 @@ setInterval(()=>{if(role==='root')publish('heartbeat.json',Date.now())},100);
         const cleanup = await observer.finish()
         // Restart this isolated main process after its utility was forcibly lost.
         // The retained observer has already confirmed that the entire tree exited.
+        killedMainPid = app.process().pid
         const exited = exitedApp(); app.process().kill(); await exited
         const killedAt = Date.now()
         const recoveredState = await verifyRestart(crashed, { forcedExit: true })
         observations.push({ mode: 'utility-crash-restart', ...cleanup, recoveredState, automaticRestart: false,
-          refusedRelaunches: relaunchAttempts.map(entry => ({ ...entry, afterKillMs: entry.at - killedAt })) })
+          killedMainPid, refusedRelaunches: relaunchAttempts.map(entry => ({ ...entry, afterKillMs: entry.at - killedAt })) })
       } finally { await observer.abort() }
     } catch (error) {
-      if (relaunchAttempts.length) observations.push({ mode: 'refused-relaunches', relaunchAttempts })
+      if (relaunchAttempts.length) observations.push({ mode: 'refused-relaunches', killedMainPid, relaunchAttempts })
       await page?.screenshot({ path: join(output, 'windows-lifecycle-failure.png') }).catch(() => {})
       throw error
     } finally {

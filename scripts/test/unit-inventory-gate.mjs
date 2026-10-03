@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 // Epic 53 unit/integration regression gate.
 //
 // The full suite always runs on both operating systems. Failures that a port story

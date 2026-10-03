@@ -31,4 +31,9 @@ if (process.platform === 'win32') {
   execFileSync(process.execPath, [join(ptyRoot, 'scripts', 'post-install.js')], { stdio: 'inherit', timeout: 60_000 })
 }
 
+if (process.platform === 'win32') {
+  const { buildWindowsCli } = await import('./windows-cli.mjs')
+  console.log(`built ${buildWindowsCli()}`)
+}
+
 console.log(`rebuilt node-pty and better-sqlite3 for Electron ${electronVersion}`)

@@ -1,6 +1,6 @@
 // MODULE: control-server.ts - authenticated newline-delimited JSON-RPC control socket for agents and the owner CLI
-import { createHash } from 'node:crypto'
-import { chmod, lstat, mkdir, unlink } from 'node:fs/promises'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { chmod, lstat, mkdir, open, readFile, rename, unlink } from 'node:fs/promises'
 import { createConnection, createServer, type Server, type Socket } from 'node:net'
 import { dirname, isAbsolute } from 'node:path'
 import {
@@ -192,13 +192,48 @@ export class MemoryReceiptStore implements ReceiptStore {
 }
 
 export interface ControlServerOptions {
-  /** Parent dir created 0700; socket chmod 0600; a stale socket file is removed only if connecting to it fails. */
+  /**
+   * Parent dir created 0700; socket chmod 0600; a stale socket file is removed only if connecting to it fails.
+   * On Windows this path is a private endpoint file naming the current control pipe (see listenOnWindowsPipe).
+   */
   socketPath: string
   auth: ControlAuth
   handlers: ControlHandlers
   receipts: ReceiptStore
   now?: () => Date
+  /** Windows only: replaces the pipe's DACL with a protected current-user-only DACL and reads it back. */
+  restrictPipe?: (name: string) => Promise<{ user: string; dacl: string }>
+  /** How long a connection may stay unauthenticated before it is closed. */
+  authDeadlineMs?: number
 }
+
+/** A fresh unguessable name per server lifetime; tokens are per lifetime too, so a stale name carries nothing usable. */
+export const CONTROL_PIPE_PATTERN = /^\\\\\.\\pipe\\bmn-control-[0-9a-f]{32}$/
+const MAX_ENDPOINT_FILE_BYTES = 256
+
+/** The applied DACL must grant access to the current user only, protected from inheritance. */
+export function isUserOnlyPipeDacl(applied: { user: string; dacl: string }): boolean {
+  if (!/^S-1-[0-9-]+$/.test(applied.user)) return false
+  return applied.dacl === `D:P(A;;FA;;;${applied.user})` || applied.dacl === `D:P(A;;GA;;;${applied.user})`
+}
+
+/** What a client connects to: the socket itself, or on Windows the pipe a private endpoint file names. */
+export async function resolveControlEndpoint(path: string, platform: NodeJS.Platform = process.platform): Promise<string> {
+  if (platform !== 'win32' || CONTROL_PIPE_PATTERN.test(path)) return path
+  const text = (await readFile(path, 'utf8')).slice(0, MAX_ENDPOINT_FILE_BYTES).trim()
+  if (!CONTROL_PIPE_PATTERN.test(text)) throw new Error('The control endpoint file does not name a BMN control pipe')
+  return text
+}
+
+async function restrictPipeNatively(name: string): Promise<{ user: string; dacl: string }> {
+  const { restrictControlPipe } = (await import('node-pty')) as unknown as {
+    restrictControlPipe(name: string): { user: string; dacl: string }
+  }
+  return restrictControlPipe(name)
+}
+
+/** An unauthenticated connection is closed after this long, so idle or read-only openers cannot pile up. */
+const AUTH_DEADLINE_MS = 10_000
 
 type Params = Record<string, unknown>
 type RequestId = string | number | null
@@ -514,6 +549,17 @@ function socketAcceptsConnections(socketPath: string): Promise<boolean> {
   })
 }
 
+/** A previous endpoint file is live only while its pipe still accepts connections; anything else is replaced. */
+async function windowsEndpointIsLive(path: string): Promise<boolean> {
+  let previous: string
+  try {
+    previous = await resolveControlEndpoint(path, 'win32')
+  } catch {
+    return false
+  }
+  return socketAcceptsConnections(previous)
+}
+
 async function removeStaleSocket(socketPath: string): Promise<void> {
   let stats
   try {
@@ -535,6 +581,8 @@ async function removeStaleSocket(socketPath: string): Promise<void> {
 
 export class ControlServer {
   private server: Server | undefined
+  /** What clients connect to once listening: the socket path, or the restricted Windows pipe. */
+  endpoint: string | undefined
   private readonly connections = new Set<Connection>()
   /** When each caller last had a dropped origin recorded, so a bad parameter cannot flood the log. */
   private readonly originRefusals = new Map<string, number>()
@@ -547,6 +595,7 @@ export class ControlServer {
 
   async listen(): Promise<void> {
     if (this.server) throw new Error('Control server is already listening')
+    if (process.platform === 'win32') return this.listenOnWindowsPipe()
     const { socketPath } = this.options
     const directory = dirname(socketPath)
     await mkdir(directory, { recursive: true, mode: 0o700 })
@@ -567,6 +616,45 @@ export class ControlServer {
       await this.close()
       throw error
     }
+    this.endpoint = socketPath
+  }
+
+  /**
+   * Windows: Node creates the pipe with FIRST_PIPE_INSTANCE, so an existing name fails instead of being shared.
+   * Readiness waits until the DACL is replaced and verified as current-user-only; only then is the endpoint file
+   * written into the private control directory. Sessions run inside jobs owned by this process and die with it.
+   */
+  private async listenOnWindowsPipe(): Promise<void> {
+    const { socketPath } = this.options
+    await mkdir(dirname(socketPath), { recursive: true })
+    if (await windowsEndpointIsLive(socketPath)) throw new Error('Control socket is already in use by a live server')
+    const pipeName = `\\\\.\\pipe\\bmn-control-${randomBytes(16).toString('hex')}`
+    const server = createServer((socket) => this.accept(socket))
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(pipeName, () => {
+        server.off('error', reject)
+        resolve()
+      })
+    })
+    this.server = server
+    try {
+      const applied = await (this.options.restrictPipe ?? restrictPipeNatively)(pipeName)
+      if (!isUserOnlyPipeDacl(applied)) throw new Error(`Control pipe access was not restricted to this user (${applied.dacl})`)
+      const temporary = `${socketPath}.${randomUUID()}.tmp`
+      const handle = await open(temporary, 'wx', 0o600)
+      try {
+        await handle.writeFile(`${pipeName}\n`, 'utf8')
+        await handle.sync()
+      } finally {
+        await handle.close()
+      }
+      await rename(temporary, socketPath)
+    } catch (error) {
+      await this.close()
+      throw error
+    }
+    this.endpoint = pipeName
   }
 
   /** Node unlinks the socket path when a listening pipe server closes. */
@@ -574,6 +662,13 @@ export class ControlServer {
     const server = this.server
     if (!server) return
     this.server = undefined
+    const endpoint = this.endpoint
+    this.endpoint = undefined
+    if (process.platform === 'win32' && endpoint !== undefined) {
+      // Remove the endpoint file only while it still names this server's pipe.
+      const named = await resolveControlEndpoint(this.options.socketPath, 'win32').catch(() => undefined)
+      if (named === endpoint) await unlink(this.options.socketPath).catch(() => undefined)
+    }
     for (const connection of this.connections) {
       connection.closing = true
       connection.socket.destroy()
@@ -593,6 +688,14 @@ export class ControlServer {
       queue: Promise.resolve()
     }
     this.connections.add(connection)
+    const deadline = setTimeout(() => {
+      if (connection.scope === null) {
+        connection.closing = true
+        socket.destroy()
+      }
+    }, this.options.authDeadlineMs ?? AUTH_DEADLINE_MS)
+    deadline.unref()
+    socket.once('close', () => clearTimeout(deadline))
     socket.on('data', (chunk: Buffer) => this.receive(connection, chunk))
     socket.on('error', () => socket.destroy())
     socket.on('close', () => {

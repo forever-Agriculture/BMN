@@ -334,11 +334,19 @@ function hostEnvironment(repoRoot: string): NodeJS.ProcessEnv {
 
 /** The JavaScript the CLI runs; the packaged `bmn` is a shell launcher for it that node cannot load. */
 function bmnCliScript(): string {
-  return app.isPackaged ? join(process.resourcesPath, 'bin', 'bmn.mjs') : bmnCliPath()
+  return app.isPackaged ? join(process.resourcesPath, 'bin', 'bmn.mjs') : join(app.getAppPath(), 'bin', 'bmn')
 }
 
-/** Sessions get this file's directory on PATH; packaged builds carry a launcher for it under resources/bin. */
+/**
+ * Sessions get this file's directory on PATH; packaged builds carry a launcher for it under resources/bin.
+ * Windows uses the native bmn.exe launcher (scripts/build/windows-cli.mjs), never the Unix shell launcher.
+ */
 function bmnCliPath(): string {
+  if (process.platform === 'win32') {
+    return app.isPackaged
+      ? join(process.resourcesPath, 'bin', 'bmn.exe')
+      : join(app.getAppPath(), 'native-out', 'windows-cli', 'bmn.exe')
+  }
   return app.isPackaged
     ? join(process.resourcesPath, 'bin', 'bmn')
     : join(app.getAppPath(), 'bin', 'bmn')

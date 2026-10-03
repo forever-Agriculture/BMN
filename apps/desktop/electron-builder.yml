@@ -44,9 +44,13 @@ linux:
   asarUnpack:
     - node_modules/better-sqlite3/prebuilds/linux-*.node
     - node_modules/node-pty/bin/linux-*/node-pty.node
-# Story 53.1 internal unpacked artifact; voice/CLI launchers arrive in 53.8/53.4.
+# Story 53.1 internal unpacked artifact; voice arrives in 53.8.
 # Native-host builds only: ${platform} deliberately names the host ABI.
 win:
+  # The native bmn launcher (scripts/build/windows-cli.mjs); no Unix shell launchers.
+  extraResources:
+    - from: native-out/windows-cli/bmn.exe
+      to: bin/bmn.exe
   target:
     - dir
   executableName: BMN

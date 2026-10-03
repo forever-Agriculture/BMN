@@ -12,10 +12,10 @@ index 5f63978..a32d857 100644
          },
          {
 diff --git a/lib/index.js b/lib/index.js
-index 1527069..2fc743e 100644
+index 1527069..761aaab 100644
 --- a/lib/index.js
 +++ b/lib/index.js
-@@ -5,9 +5,14 @@
+@@ -5,9 +5,15 @@
   * Copyright (c) 2018, Microsoft Corporation (MIT License).
   */
  Object.defineProperty(exports, "__esModule", { value: true });
@@ -28,12 +28,13 @@ index 1527069..2fc743e 100644
 +exports.createTerminal = createTerminal;
 +exports.open = open;
 +exports.queryProcessStartIdentity = queryProcessStartIdentity;
++exports.restrictControlPipe = restrictControlPipe;
 +const utils_1 = require("./utils");
 +let terminalCtor;
  if (process.platform === 'win32') {
      terminalCtor = require('./windowsTerminal').WindowsTerminal;
  }
-@@ -29,24 +34,28 @@ else {
+@@ -29,24 +35,37 @@ else {
  function spawn(file, args, opt) {
      return new terminalCtor(file, args, opt);
  }
@@ -68,6 +69,15 @@ index 1527069..2fc743e 100644
 +    if (binding.bmnOwnershipVersion !== 1)
 +        throw new Error('BMN owned ConPTY addon missing');
 +    return binding.queryProcessStartIdentity(pid);
++}
++/** BMN: restrict a listening control pipe to the current user; returns the applied DACL. */
++function restrictControlPipe(name) {
++    if (process.platform !== 'win32')
++        throw new Error('Windows control pipes only');
++    const binding = (0, utils_1.loadNativeModule)('conpty').module;
++    if (binding.bmnControlTransportVersion !== 1)
++        throw new Error('BMN control transport addon missing');
++    return binding.restrictControlPipe(name);
 +}
 diff --git a/lib/windowsConoutConnection.js b/lib/windowsConoutConnection.js
 index 1be15ca..bf6e593 100644
@@ -1008,10 +1018,10 @@ index 0451e2c..4e63c73 100644
 \ No newline at end of file
 +socket.connect(worker_threads_1.workerData.conoutPipeName, () => port.postMessage({ type: 'ready' }));
 diff --git a/src/index.ts b/src/index.ts
-index 8a7e950..a30bf23 100644
+index 8a7e950..8dcc46f 100644
 --- a/src/index.ts
 +++ b/src/index.ts
-@@ -50,3 +50,11 @@ export function open(options: IPtyOpenOptions): ITerminal {
+@@ -50,3 +50,19 @@ export function open(options: IPtyOpenOptions): ITerminal {
   * could be removed at any time.
   */
  export const native = (process.platform !== 'win32' ? loadNativeModule('pty').module : null);
@@ -1023,16 +1033,26 @@ index 8a7e950..a30bf23 100644
 +  if (binding.bmnOwnershipVersion !== 1) throw new Error('BMN owned ConPTY addon missing');
 +  return binding.queryProcessStartIdentity(pid);
 +}
++
++/** BMN: restrict a listening control pipe to the current user; returns the applied DACL. */
++export function restrictControlPipe(name: string): { user: string; dacl: string } {
++  if (process.platform !== 'win32') throw new Error('Windows control pipes only');
++  const binding: IConptyNative = loadNativeModule('conpty').module;
++  if (binding.bmnControlTransportVersion !== 1) throw new Error('BMN control transport addon missing');
++  return binding.restrictControlPipe(name);
++}
 diff --git a/src/native.d.ts b/src/native.d.ts
-index c53e086..9b0c6cb 100644
+index c53e086..9ca71f6 100644
 --- a/src/native.d.ts
 +++ b/src/native.d.ts
-@@ -3,8 +3,10 @@
+@@ -3,8 +3,12 @@
   */
  
  interface IConptyNative {
 +  bmnOwnershipVersion: number;
 +  queryProcessStartIdentity(pid: number): string;
++  bmnControlTransportVersion: number;
++  restrictControlPipe(name: string): { user: string; dacl: string };
    startProcess(file: string, cols: number, rows: number, debug: boolean, pipeName: string, conptyInheritCursor: boolean, useConptyDll: boolean): IConptyProcess;
 -  connect(ptyId: number, commandLine: string, cwd: string, env: string[], useConptyDll: boolean, onExitCallback: (exitCode: number) => void): { pid: number };
 +  connect(ptyId: number, commandLine: string, cwd: string, env: string[], useConptyDll: boolean, onExitCallback: (result: { exitCode: number; treeEmpty: true } | { error: string }) => void): { pid: number; startIdentity: string };
@@ -1040,10 +1060,10 @@ index c53e086..9b0c6cb 100644
    clear(ptyId: number, useConptyDll: boolean): void;
    kill(ptyId: number, useConptyDll: boolean): void;
 diff --git a/src/win/conpty.cc b/src/win/conpty.cc
-index 7b286d3..f85cb6d 100644
+index 7b286d3..a44cdd6 100644
 --- a/src/win/conpty.cc
 +++ b/src/win/conpty.cc
-@@ -2,582 +2,388 @@
+@@ -2,582 +2,447 @@
   * Copyright (c) 2013-2015, Christopher Jeffrey, Peter Sunde (MIT License)
   * Copyright (c) 2016, Daniel Imms (MIT License).
   * Copyright (c) 2018, Microsoft Corporation (MIT License).
@@ -1065,6 +1085,7 @@ index 7b286d3..f85cb6d 100644
 +#include <Windows.h>
 +#include <Shlwapi.h>
 +#include <sddl.h>
++#include <aclapi.h>
 +#include <algorithm>
 +#include <atomic>
 +#include <memory>
@@ -1234,8 +1255,22 @@ index 7b286d3..f85cb6d 100644
 +  std::lock_guard<std::mutex> lock(state->mutex);
 +  auto it = state->sessions.find(id);
 +  return it == state->sessions.end() ? nullptr : it->second;
++}
++static Napi::Error failure(Napi::Env env, const char* operation, DWORD code = GetLastError()) {
++  return Napi::Error::New(env, std::string(operation) + " (Windows error " + std::to_string(code) + ")");
++}
++static void check(Napi::Env env, BOOL result, const char* operation) {
++  if (!result) throw failure(env, operation);
++}
++static std::string identity(Napi::Env env, HANDLE process) {
++  FILETIME created{}, exited{}, kernel{}, user{};
++  check(env, GetProcessTimes(process, &created, &exited, &kernel, &user), "GetProcessTimes");
++  ULARGE_INTEGER value{};
++  value.LowPart = created.dwLowDateTime;
++  value.HighPart = created.dwHighDateTime;
++  return "windows-filetime:" + std::to_string(value.QuadPart);
  }
--
+ 
 -// Returns a new server named pipe.  It has not yet been connected.
 -bool createDataServerPipe(bool write,
 -                          std::wstring kind,
@@ -1263,19 +1298,21 @@ index 7b286d3..f85cb6d 100644
 -      &sa);
 -
 -  return *hServer != INVALID_HANDLE_VALUE;
-+static Napi::Error failure(Napi::Env env, const char* operation, DWORD code = GetLastError()) {
-+  return Napi::Error::New(env, std::string(operation) + " (Windows error " + std::to_string(code) + ")");
++static std::wstring currentUserSid(Napi::Env env) {
++  Handle token;
++  check(env, OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token.value), "OpenProcessToken");
++  DWORD size = 0;
++  GetTokenInformation(token.value, TokenUser, nullptr, 0, &size);
++  std::vector<BYTE> data(size);
++  check(env, GetTokenInformation(token.value, TokenUser, data.data(), size, &size), "GetTokenInformation");
++  LPWSTR rawSid = nullptr;
++  check(env, ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER*>(data.data())->User.Sid, &rawSid), "ConvertSidToStringSid");
++  std::wstring sid(rawSid);
++  LocalFree(rawSid);
++  return sid;
 +}
-+static void check(Napi::Env env, BOOL result, const char* operation) {
-+  if (!result) throw failure(env, operation);
-+}
-+static std::string identity(Napi::Env env, HANDLE process) {
-+  FILETIME created{}, exited{}, kernel{}, user{};
-+  check(env, GetProcessTimes(process, &created, &exited, &kernel, &user), "GetProcessTimes");
-+  ULARGE_INTEGER value{};
-+  value.LowPart = created.dwLowDateTime;
-+  value.HighPart = created.dwHighDateTime;
-+  return "windows-filetime:" + std::to_string(value.QuadPart);
++static std::wstring userOnlySddl(Napi::Env env) {
++  return L"D:P(A;;GA;;;" + currentUserSid(env) + L")";
  }
  
 -HANDLE LoadConptyDll(const Napi::CallbackInfo& info,
@@ -1304,16 +1341,7 @@ index 7b286d3..f85cb6d 100644
 +// Protected user-only DACL, applied at creation. No relay pipe, remote clients,
 +// inherited handles or predictable pipe namespace shared with other accounts.
 +static HANDLE createPipe(Napi::Env env, const std::wstring& name) {
-+  Handle token;
-+  check(env, OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token.value), "OpenProcessToken");
-+  DWORD size = 0;
-+  GetTokenInformation(token.value, TokenUser, nullptr, 0, &size);
-+  std::vector<BYTE> data(size);
-+  check(env, GetTokenInformation(token.value, TokenUser, data.data(), size, &size), "GetTokenInformation");
-+  LPWSTR rawSid = nullptr;
-+  check(env, ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER*>(data.data())->User.Sid, &rawSid), "ConvertSidToStringSid");
-+  std::wstring sddl = L"D:P(A;;GA;;;" + std::wstring(rawSid) + L")";
-+  LocalFree(rawSid);
++  std::wstring sddl = userOnlySddl(env);
 +  PSECURITY_DESCRIPTOR descriptor = nullptr;
 +  check(env, ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr), "Pipe security descriptor");
 +  SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), descriptor, FALSE};
@@ -1893,8 +1921,54 @@ index 7b286d3..f85cb6d 100644
 -      !info[0].IsNumber() ||
 -      !info[1].IsBoolean()) {
 -    throw Napi::Error::New(env, "Usage: pty.kill(id, useConptyDll)");
--  }
--
++// BMN control transport. Node creates the listening pipe with FIRST_PIPE_INSTANCE
++// and default security, which lets other accounts open it for reading. Replace that
++// DACL with the protected user-only DACL through a short-lived client handle and
++// read it back. The descriptor belongs to the pipe, so every later instance libuv
++// creates shares it. The caller reports readiness only after verifying the result.
++static Napi::Value restrictControlPipe(const Napi::CallbackInfo& info) {
++  Napi::Env env = info.Env();
++  if (info.Length() != 1 || !info[0].IsString()) throw Napi::Error::New(env, "Control pipe name required");
++  std::wstring name = path_util::to_wstring(info[0].As<Napi::String>());
++  const std::wstring prefix = L"\\\\.\\pipe\\bmn-control-";
++  if (name.rfind(prefix, 0) != 0 || name.size() > 256) throw Napi::Error::New(env, "Not a BMN control pipe name");
++  Handle pipe;
++  for (int attempt = 0; !pipe.value; attempt++) {
++    HANDLE opened = CreateFileW(name.c_str(), READ_CONTROL | WRITE_DAC, 0, nullptr, OPEN_EXISTING,
++      SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
++    if (opened != INVALID_HANDLE_VALUE) { pipe.reset(opened); break; }
++    DWORD error = GetLastError();
++    if (error != ERROR_PIPE_BUSY || attempt > 0) throw failure(env, "Open control pipe", error);
++    if (!WaitNamedPipeW(name.c_str(), 5000)) throw failure(env, "Wait for control pipe");
+   }
++  std::wstring sid = currentUserSid(env);
++  std::wstring sddl = L"D:P(A;;GA;;;" + sid + L")";
++  PSECURITY_DESCRIPTOR descriptor = nullptr;
++  check(env, ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr), "Control pipe security descriptor");
++  BOOL present = FALSE, defaulted = FALSE;
++  PACL dacl = nullptr;
++  DWORD status = GetSecurityDescriptorDacl(descriptor, &present, &dacl, &defaulted) && present
++    ? SetSecurityInfo(pipe.value, SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
++        nullptr, nullptr, dacl, nullptr)
++    : ERROR_INVALID_SECURITY_DESCR;
++  LocalFree(descriptor);
++  if (status != ERROR_SUCCESS) throw failure(env, "Restrict control pipe", status);
++  PSECURITY_DESCRIPTOR applied = nullptr;
++  status = GetSecurityInfo(pipe.value, SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, nullptr, nullptr, &applied);
++  if (status != ERROR_SUCCESS) throw failure(env, "Read control pipe security", status);
++  LPWSTR text = nullptr;
++  BOOL described = ConvertSecurityDescriptorToStringSecurityDescriptorW(applied, SDDL_REVISION_1, DACL_SECURITY_INFORMATION, &text, nullptr);
++  DWORD describeError = GetLastError();
++  LocalFree(applied);
++  if (!described) throw failure(env, "Describe control pipe security", describeError);
++  std::wstring appliedSddl(text);
++  LocalFree(text);
++  Napi::Object result = Napi::Object::New(env);
++  result.Set("user", path_util::wstring_to_string(sid));
++  result.Set("dacl", path_util::wstring_to_string(appliedSddl));
++  return result;
++}
+ 
 -  int id = info[0].As<Napi::Number>().Int32Value();
 -  const bool useConptyDll = info[1].As<Napi::Boolean>().Value();
 -
@@ -1952,6 +2026,8 @@ index 7b286d3..f85cb6d 100644
 +  exports.Set("kill", Napi::Function::New(env, kill, "kill", state));
 +  exports.Set("queryProcessStartIdentity", Napi::Function::New(env, queryIdentity, "queryIdentity", state));
 +  exports.Set("bmnOwnershipVersion", 1);
++  exports.Set("restrictControlPipe", Napi::Function::New(env, restrictControlPipe, "restrictControlPipe"));
++  exports.Set("bmnControlTransportVersion", 1);
    return exports;
 -};
 -
@@ -2602,19 +2678,21 @@ index 79a4148..703ef71 100644
  });
 +socket.connect(workerData.conoutPipeName, () => port.postMessage({ type: 'ready' }));
 diff --git a/typings/node-pty.d.ts b/typings/node-pty.d.ts
-index 6f050ff..6962f09 100644
+index 6f050ff..58f820a 100644
 --- a/typings/node-pty.d.ts
 +++ b/typings/node-pty.d.ts
-@@ -15,6 +15,8 @@ declare module 'node-pty' {
+@@ -15,6 +15,10 @@ declare module 'node-pty' {
     * @see Parsing C++ Comamnd-Line Arguments https://msdn.microsoft.com/en-us/library/17w5ykft.aspx
     * @see GetCommandLine https://msdn.microsoft.com/en-us/library/windows/desktop/ms683156.aspx
     */
 +  export function queryProcessStartIdentity(pid: number): string;
++  /** BMN: replace a listening control pipe's DACL with a protected current-user-only DACL and read it back. */
++  export function restrictControlPipe(name: string): { user: string; dacl: string };
 +
    export function spawn(file: string, args: string[] | string, options: IPtyForkOptions | IWindowsPtyForkOptions): IPty;
  
    export interface IBasePtyForkOptions {
-@@ -114,6 +116,10 @@ declare module 'node-pty' {
+@@ -114,6 +118,10 @@ declare module 'node-pty' {
     * An interface representing a pseudoterminal, on Windows this is emulated via the winpty library.
     */
    export interface IPty {
