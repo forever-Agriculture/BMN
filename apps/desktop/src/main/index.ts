@@ -81,7 +81,7 @@ import {
 import { installFileReferenceIpcHandlers } from './file-reference-ipc'
 import { createPresenceMonitor, readMutterIdleMs } from './presence-monitor'
 import { installVoiceIpcHandlers } from './voice-ipc'
-import { transcribeRecording } from './voice-engine'
+import { transcribeRecording, WHISPER_ENGINE_FILE } from './voice-engine'
 import {
   attachCreatedSession,
   createExplicitLaunchSession,
@@ -482,8 +482,8 @@ function requireKnownSession(event: IpcMainInvokeEvent, sessionId: unknown): str
 /** Built by `pnpm run voice:build`; packaged builds carry it under resources/whisper. */
 function whisperBinaryPath(): string {
   return app.isPackaged
-    ? join(process.resourcesPath, 'whisper', 'whisper-cli')
-    : join(app.getAppPath(), 'resources', 'whisper', 'whisper-cli')
+    ? join(process.resourcesPath, 'whisper', WHISPER_ENGINE_FILE)
+    : join(app.getAppPath(), 'resources', 'whisper', WHISPER_ENGINE_FILE)
 }
 
 /** Only the app window may use the microphone, and only for dictation; every other web permission is refused. */

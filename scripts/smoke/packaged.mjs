@@ -47,15 +47,16 @@ if (!existsSync(packagedTerminfo)) throw new Error(`packaged Sixel terminfo is m
 if (!existsSync(join(packagedResources, 'self-test/remote-answers/claude/ask-single.pre-tool-use.json'))) {
   throw new Error(`packaged self-test fixtures are missing: ${join(packagedResources, 'self-test/remote-answers')}`)
 }
-const packagedWhisper = join(packagedResources, 'whisper/whisper-cli')
-if (!existsSync(packagedWhisper) || (statSync(packagedWhisper).mode & 0o111) === 0) {
+const suffix = process.platform === 'win32' ? '.exe' : ''
+const packagedWhisper = join(packagedResources, 'whisper', 'whisper-cli' + suffix)
+if (!existsSync(packagedWhisper) || (process.platform !== 'win32' && (statSync(packagedWhisper).mode & 0o111) === 0)) {
   throw new Error(`packaged voice engine is missing or not executable: ${packagedWhisper}`)
 }
 if (spawnSync(packagedWhisper, ['--help'], { stdio: 'ignore' }).status !== 0) {
   throw new Error(`packaged voice engine does not run: ${packagedWhisper}`)
 }
 // Dictation first asks the speech detector whether a recording holds speech; one second of silence must hold none.
-const packagedDetector = join(packagedResources, 'whisper/whisper-vad-speech-segments')
+const packagedDetector = join(packagedResources, 'whisper', 'whisper-vad-speech-segments' + suffix)
 const silenceFolder = mkdtempSync(join(tmpdir(), 'bmn-smoke-voice-'))
 try {
   const silence = Buffer.alloc(44 + 32_000)

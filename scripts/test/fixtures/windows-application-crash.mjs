@@ -3,10 +3,12 @@ import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire, Module } from 'node:module'
 import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { fixtureArguments } from '../../lib/fixture-arguments.mjs'
 import { setTimeout as delay } from 'node:timers/promises'
 import { app, BrowserWindow } from 'electron'
 
-const [repo, root, node, fixture, report, mode] = process.argv.slice(2)
+const [repo, root, node, fixture, report, mode] = fixtureArguments(process.argv, fileURLToPath(import.meta.url))
 assert.equal(process.platform, 'win32')
 assert.ok(['protected', 'without-backstop'].includes(mode))
 const desktop = join(repo, 'apps/desktop')

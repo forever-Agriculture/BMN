@@ -1,9 +1,10 @@
 // MODULE: voice-engine.ts - local Whisper dictation: pinned models, verified download, WAV checks and whisper-cli runs
 import { spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdir, mkdtemp, open, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { availableParallelism, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { ensurePrivateDirectories } from '../utility/private-directory'
 import { vocabularyPrompt, type VoiceLanguage, type VoiceModelId } from '@bmn/protocol'
 
 export interface VoiceModel {
@@ -168,7 +169,8 @@ export function whisperArguments(options: {
 }
 
 /** whisper.cpp's stock speech-segment tool and the Silero VAD model it reads, built beside whisper-cli by `pnpm run voice:build`. */
-export const SPEECH_DETECTOR_FILE = 'whisper-vad-speech-segments'
+export const WHISPER_ENGINE_FILE = process.platform === 'win32' ? 'whisper-cli.exe' : 'whisper-cli'
+export const SPEECH_DETECTOR_FILE = process.platform === 'win32' ? 'whisper-vad-speech-segments.exe' : 'whisper-vad-speech-segments'
 export const SPEECH_MODEL_FILE = 'ggml-silero-v6.2.0.bin'
 
 /**
@@ -290,7 +292,14 @@ export async function transcribeRecording(options: {
   spawnProcess?: typeof spawn | undefined
 }): Promise<string> {
   const { durationSeconds } = validateWav(options.wav)
-  const folder = await mkdtemp(join(options.temporaryRoot ?? tmpdir(), 'bmn-voice-'))
+  const temporaryRoot = options.temporaryRoot ?? tmpdir()
+  let folder: string
+  if (process.platform === 'win32') {
+    // Create with a protected owner-only DACL, before writing any microphone bytes.
+    // chmod/mkdtemp alone inherit the surrounding Windows ACL and prove no privacy.
+    folder = join(temporaryRoot, `bmn-voice-${randomUUID()}`)
+    ensurePrivateDirectories([folder])
+  } else folder = await mkdtemp(join(temporaryRoot, 'bmn-voice-'))
   try {
     const wavPath = join(folder, 'recording.wav')
     await writeFile(wavPath, options.wav, { mode: 0o600 })

@@ -38,6 +38,12 @@ jobs:
       - name: Install and rebuild native Electron modules
         id: install
         run: pnpm install --frozen-lockfile
+      - name: Build portable local voice engines
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: node scripts/voice/build-whisper.mjs --portable
+      - name: Verify portable voice engines on public audio fixtures
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: node scripts/test/voice-engine-smoke.mjs
       - name: Lint
         run: pnpm run lint
       - name: Typecheck
@@ -53,6 +59,9 @@ jobs:
       # The full suite runs on both OSes. Failures still owned by a port story are
       # listed in docs/epic-53-known-failures.json and stay open (never waived or
       # skipped); the gate fails on any other failure, so regressions stay red.
+      - name: Capture synthetic native hook boundary diagnostics
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && runner.os == 'Windows' }}
+        run: node scripts/test/windows-hook-diagnostic.mjs
       - name: Unit and integration inventory
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         shell: bash
@@ -92,6 +101,8 @@ jobs:
         shell: pwsh
         run: |
           node scripts/test/platform-startup.mjs --binary apps/desktop/release/win-unpacked/BMN.exe > test-results/packaged-startup.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/test/voice-engine-smoke.mjs --resources apps/desktop/release/win-unpacked/resources
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           pnpm exec vitest run scripts/tests/packaged-native-modules.test.mjs
           exit $LASTEXITCODE

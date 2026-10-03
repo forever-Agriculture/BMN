@@ -4,6 +4,7 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
+import { readFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -68,10 +69,22 @@ const receipt = await withTemporaryRoot(temporaryRootContracts.electronDevelopme
           message: String(error?.message ?? error).slice(0, 1000) }), { cause: error })
       }
     })
-    if (process.platform === 'win32') {
-      assert.equal(state.control.listening, false)
-      assert.match(state.control.detail, /not yet available/)
-    } else assert.equal(state.control.listening, true)
+    assert.equal(state.control.listening, true, 'The selected control transport must be ready')
+    // Read only this disposable app's credential and never include it in receipts.
+    const ownerToken = (await readFile(join(dirname(state.control.socketPath), 'owner.token'), 'utf8')).trim()
+    const cli = spawn(state.control.cliPath, ['snapshot', '--json'], {
+      cwd: repoRoot, env: { ...env, BMN_CONTROL_SOCKET: state.control.socketPath, BMN_TOKEN: ownerToken },
+      stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true
+    })
+    let cliOutput = ''
+    cli.stdout.on('data', data => { cliOutput += data })
+    const cliTimer = setTimeout(() => { if (cli.exitCode === null) cli.kill() }, 15000)
+    try {
+      const [code] = await once(cli, 'close')
+      assert.equal(code, 0, 'The real bmn launcher could not query its isolated app')
+      assert.ok(Array.isArray(JSON.parse(cliOutput).sessions), 'Control snapshot must retain its JSON contract')
+    } finally { clearTimeout(cliTimer) }
+    const controlCli = { realLauncher: true, status: 0, snapshot: true }
     const nativeModules = await application.evaluate(({ app }) => {
       const builtin = process.mainModule.require.bind(process.mainModule)
       const require = builtin('node:module').createRequire(builtin('node:path').join(app.getAppPath(), 'package.json'))
@@ -115,7 +128,7 @@ const receipt = await withTemporaryRoot(temporaryRootContracts.electronDevelopme
     await page.getByText('Windows parity fixture 数据', { exact: true }).first().waitFor()
     return { platformStartup: 'passed', platform: process.platform, arch: process.arch,
       binary: binary ?? 'development', nativeModules, chromiumSandbox: true, persistence: true, singleInstance: true, hardening,
-      control: state.control, versions: await application.evaluate(() => process.versions) }
+      control: state.control, controlCli, versions: await application.evaluate(() => process.versions) }
   } finally { await application.close() }
 })
 console.log(JSON.stringify(receipt))

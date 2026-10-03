@@ -1,12 +1,14 @@
+import { spawn, spawnSync, type SpawnOptions } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { encodeWav, mixToMono } from '../renderer/src/voice-wav'
 import {
+  WHISPER_ENGINE_FILE,
   SPEECH_DETECTOR_FILE,
   SPEECH_MODEL_FILE,
   SPEECH_THRESHOLD,
@@ -15,10 +17,10 @@ import {
   downloadModel,
   engineFiles,
   modelInstalled,
-  runWhisper,
+  runWhisper as runWhisperEngine,
   speechDetectionArguments,
   speechSegmentsFromOutput,
-  transcribeRecording,
+  transcribeRecording as transcribeRecordingEngine,
   transcriptFromOutput,
   validateWav,
   voiceModel,
@@ -28,8 +30,18 @@ import {
 } from './voice-engine'
 
 let folder: string
+const fixtures = new Set<string>()
+// Run the stand-ins through an actual portable Node child, without a Unix shebang.
+const fixtureSpawn = ((binary: string, args: readonly string[], options: SpawnOptions) =>
+  spawn(fixtures.has(binary) ? process.execPath : binary,
+    fixtures.has(binary) ? [binary, ...args] : args, options)) as typeof spawn
+const runWhisper = (options: Parameters<typeof runWhisperEngine>[0]) =>
+  runWhisperEngine({ ...options, spawnProcess: fixtureSpawn })
+const transcribeRecording = (options: Parameters<typeof transcribeRecordingEngine>[0]) =>
+  transcribeRecordingEngine({ ...options, spawnProcess: fixtureSpawn })
 
 beforeEach(async () => {
+  fixtures.clear()
   folder = await mkdtemp(join(tmpdir(), 'voice-engine-test-'))
 })
 
@@ -57,14 +69,14 @@ function bodyResponse(chunks: Uint8Array[], status = 200): Response {
 }
 
 async function fakeBinary(script: string, name = 'whisper-cli'): Promise<string> {
-  const path = join(folder, name)
-  await writeFile(path, `#!/bin/sh\n${script}\n`)
-  await chmod(path, 0o755)
+  const path = join(folder, name + '.cjs')
+  await writeFile(path, script)
+  fixtures.add(path)
   return path
 }
 
 /** A stand-in for whisper.cpp's speech-segment tool that reports the given output. */
-async function speechDetector(script = 'echo; echo "Detected 1 speech segments:"'): Promise<{ binary: string; modelPath: string }> {
+async function speechDetector(script = 'console.log("Detected 1 speech segments:")'): Promise<{ binary: string; modelPath: string }> {
   return { binary: await fakeBinary(script, SPEECH_DETECTOR_FILE), modelPath: '/vad.bin' }
 }
 
@@ -112,7 +124,7 @@ describe('whisper-cli invocation', () => {
   })
 
   it('blanks the vocabulary out of a surfaced engine error', async () => {
-    const echoing = await fakeBinary('echo "bad prompt: $*" >&2; exit 2')
+    const echoing = await fakeBinary('console.error("bad prompt: " + process.argv.slice(2).join(" ")); process.exit(2)')
     const vocabulary = ['SecretProject', 'dev-auto']
     const wav = encodeWav(new Float32Array(16_000), 16_000)
     const failure = await transcribeRecording({ binary: echoing, modelPath: '/m.bin', speechDetector: await speechDetector(), language: 'en', wav, vocabulary, temporaryRoot: folder })
@@ -140,7 +152,7 @@ describe('whisper-cli invocation', () => {
   })
 
   it('passes the recording-sized audio context to the engine', async () => {
-    const binary = await fakeBinary('echo "$@"')
+    const binary = await fakeBinary('console.log(process.argv.slice(2).join(" "))')
     const wav = encodeWav(new Float32Array(16_000 * 3), 16_000)
     const output = await transcribeRecording({ binary, modelPath: '/m.bin', speechDetector: await speechDetector(), language: 'auto', wav, temporaryRoot: folder })
     expect(output).toMatch(/ -ac 256$/)
@@ -152,11 +164,11 @@ describe('whisper-cli invocation', () => {
   })
 
   it('returns the transcript from a successful run and reports failures', async () => {
-    const binary = await fakeBinary('echo " ask not"; echo "what your country can do"')
+    const binary = await fakeBinary('console.log(" ask not\\nwhat your country can do")')
     await expect(runWhisper({ binary, args: [] })).resolves.toBe('ask not what your country can do')
-    const failing = await fakeBinary('echo "error: failed to open model" >&2; exit 3')
+    const failing = await fakeBinary('console.error("error: failed to open model"); process.exit(3)')
     await expect(runWhisper({ binary: failing, args: [] })).rejects.toThrow('Voice engine failed (exit 3): error: failed to open model')
-    const slow = await fakeBinary('sleep 5')
+    const slow = await fakeBinary('setTimeout(() => {}, 5000)')
     await expect(runWhisper({ binary: slow, args: [], timeoutMs: 100 })).rejects.toThrow(/too long/)
     await expect(runWhisper({ binary: join(folder, 'missing'), args: [] })).rejects.toThrow(/could not start/)
   })
@@ -164,14 +176,14 @@ describe('whisper-cli invocation', () => {
   it('removes the temporary recording after transcription, even when the engine fails', async () => {
     const audioRoot = join(folder, 'audio')
     await mkdir(audioRoot)
-    // `stat` has no portable flags, so Node reports the mode the recording was written with.
-    const printMode = `${JSON.stringify(process.execPath)} -p '(require("fs").statSync(process.argv[1]).mode & 0o777).toString(8)'`
-    const binary = await fakeBinary(`test -f "$4" && ${printMode} "$4" && echo transcribed`)
+    const binary = await fakeBinary(`const fs=require('node:fs'); const args=process.argv.slice(2);
+      const wav=args[args.indexOf('-f')+1]; if (!fs.existsSync(wav)) process.exit(1);
+      console.log((fs.statSync(wav).mode & 0o777).toString(8) + ' transcribed')`)
     const wav = encodeWav(new Float32Array(1_600), 16_000)
     const detector = await speechDetector()
     await expect(transcribeRecording({ binary, modelPath: '/m.bin', speechDetector: detector, language: 'auto', wav, temporaryRoot: audioRoot }))
-      .resolves.toBe('600 transcribed')
-    const failing = await fakeBinary('exit 1')
+      .resolves.toBe(process.platform === 'win32' ? '666 transcribed' : '600 transcribed')
+    const failing = await fakeBinary('process.exit(1)')
     await expect(transcribeRecording({ binary: failing, modelPath: '/m.bin', speechDetector: detector, language: 'auto', wav, temporaryRoot: audioRoot }))
       .rejects.toThrow(/Voice engine failed/)
     expect(await readdir(audioRoot)).toEqual([])
@@ -182,10 +194,11 @@ describe('speech check before transcription', () => {
   const wav = encodeWav(new Float32Array(16_000), 16_000)
 
   it('finds the detector and its model beside whisper-cli and asks for any speech at all', () => {
-    expect(engineFiles('/engine/whisper-cli')).toEqual({
-      whisper: '/engine/whisper-cli',
-      speechDetector: `/engine/${SPEECH_DETECTOR_FILE}`,
-      speechModel: `/engine/${SPEECH_MODEL_FILE}`
+    const binary = join(folder, WHISPER_ENGINE_FILE)
+    expect(engineFiles(binary)).toEqual({
+      whisper: binary,
+      speechDetector: join(folder, SPEECH_DETECTOR_FILE),
+      speechModel: join(folder, SPEECH_MODEL_FILE)
     })
     expect(speechDetectionArguments({ modelPath: '/vad.bin', wavPath: '/r.wav', threads: 6 })).toEqual([
       '-f', '/r.wav', '-vm', '/vad.bin', '-vt', '0.3', '-vspd', '0', '-t', '6', '-np'
@@ -204,33 +217,64 @@ describe('speech check before transcription', () => {
 
   it('does not run Whisper on a recording without speech, so neither silence nor an echoed vocabulary is pasted', async () => {
     const whisperRan = join(folder, 'whisper-ran')
-    const binary = await fakeBinary(`touch ${JSON.stringify(whisperRan)}; echo "BMN, dev-auto"`)
+    const binary = await fakeBinary(`require('node:fs').writeFileSync(${JSON.stringify(whisperRan)}, ''); console.log('BMN, dev-auto')`)
     const detectorArgs = join(folder, 'detector-args')
-    const silent = await speechDetector(`echo "$@" > ${JSON.stringify(detectorArgs)}; echo "Detected 0 speech segments:"`)
+    const silent = await speechDetector(`require('node:fs').writeFileSync(${JSON.stringify(detectorArgs)}, JSON.stringify(process.argv.slice(2))); console.log('Detected 0 speech segments:')`)
     const options = { binary, modelPath: '/m.bin', language: 'uk' as const, wav, vocabulary: ['BMN', 'dev-auto'], temporaryRoot: folder }
     await expect(transcribeRecording({ ...options, speechDetector: silent })).resolves.toBe('')
     expect(existsSync(whisperRan)).toBe(false)
-    expect(await readFile(detectorArgs, 'utf8')).toMatch(/^-f \S+\/recording\.wav -vm \/vad\.bin -vt 0\.3 -vspd 0 -t \d+ -np\n$/)
+    const args = JSON.parse(await readFile(detectorArgs, 'utf8')) as string[]
+    expect(args).toEqual(['-f', expect.stringMatching(/[\\/]recording\.wav$/), '-vm', '/vad.bin', '-vt', '0.3', '-vspd', '0', '-t', expect.stringMatching(/^\d+$/), '-np'])
 
-    await expect(transcribeRecording({ ...options, speechDetector: await speechDetector('echo "Detected 2 speech segments:"') }))
+    await expect(transcribeRecording({ ...options, speechDetector: await speechDetector('console.log("Detected 2 speech segments:")') }))
       .resolves.toBe('BMN, dev-auto')
     expect(existsSync(whisperRan)).toBe(true)
   })
 
   it('reports a failed or unreadable speech check instead of transcribing', async () => {
     const whisperRan = join(folder, 'whisper-ran')
-    const binary = await fakeBinary(`touch ${JSON.stringify(whisperRan)}; echo text`)
+    const binary = await fakeBinary(`require('node:fs').writeFileSync(${JSON.stringify(whisperRan)}, ''); console.log('text')`)
     const options = { binary, modelPath: '/m.bin', language: 'en' as const, wav, temporaryRoot: folder }
-    await expect(transcribeRecording({ ...options, speechDetector: await speechDetector('echo "error: failed to read audio" >&2; exit 2') }))
+    await expect(transcribeRecording({ ...options, speechDetector: await speechDetector('console.error("error: failed to read audio"); process.exit(2)') }))
       .rejects.toThrow('Voice engine failed (exit 2): error: failed to read audio')
-    await expect(transcribeRecording({ ...options, speechDetector: await speechDetector('echo usage') }))
+    await expect(transcribeRecording({ ...options, speechDetector: await speechDetector('console.log("usage")') }))
       .rejects.toThrow('Speech detection gave no result')
     expect(existsSync(whisperRan)).toBe(false)
     expect((await readdir(folder)).filter((name) => name.startsWith('bmn-voice-'))).toEqual([])
   })
 
+  it.runIf(process.platform === 'win32')('writes microphone bytes only inside a verified private Windows recording folder', async () => {
+    const binary = await fakeBinary('console.log("synthetic transcript")')
+    const detector = await speechDetector()
+    let inspected = 0
+    const inspectRecording = ((executable: string, args: readonly string[], options: SpawnOptions) => {
+      const recording = args[args.indexOf('-f') + 1]!
+      const script = `$ErrorActionPreference='Stop';
+$path=ConvertFrom-Json ([Console]::In.ReadToEnd());
+$user=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value;
+$directory=Get-Acl -LiteralPath ([System.IO.Path]::GetDirectoryName($path));
+$file=Get-Acl -LiteralPath $path;
+$rules=@($file.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]));
+[Console]::Out.Write((@{protected=$directory.AreAccessRulesProtected;user=$user;owner=$directory.GetOwner([System.Security.Principal.SecurityIdentifier]).Value;rules=@($rules | ForEach-Object { @{sid=$_.IdentityReference.Value;allow=($_.AccessControlType -eq 'Allow');full=($_.FileSystemRights -eq 'FullControl')} })} | ConvertTo-Json -Compress -Depth 4));`
+      const result = spawnSync(join(process.env.SystemRoot!, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+        ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+        { input: JSON.stringify(recording), encoding: 'utf8', timeout: 15000, windowsHide: true })
+      expect(result.status).toBe(0)
+      const acl = JSON.parse(result.stdout) as { protected: boolean; user: string; owner: string; rules: unknown[] }
+      expect(acl.protected).toBe(true)
+      expect(acl.owner).toBe(acl.user)
+      expect(acl.rules).toEqual([{ sid: acl.user, allow: true, full: true }])
+      inspected++
+      return fixtureSpawn(executable, args, options)
+    }) as typeof spawn
+    await expect(transcribeRecordingEngine({ binary, modelPath: '/m.bin', speechDetector: detector,
+      language: 'en', wav, temporaryRoot: folder, spawnProcess: inspectRecording })).resolves.toBe('synthetic transcript')
+    expect(inspected).toBe(2)
+    expect((await readdir(folder)).filter(name => name.startsWith('bmn-voice-'))).toEqual([])
+  }, 30000)
+
   // The real detector and model exist after `pnpm run voice:build`; whisper.cpp's JFK sample sits in its source cache.
-  const engine = engineFiles(fileURLToPath(new URL('../../resources/whisper/whisper-cli', import.meta.url)))
+  const engine = engineFiles(fileURLToPath(new URL(`../../resources/whisper/${WHISPER_ENGINE_FILE}`, import.meta.url)))
   const jfk = fileURLToPath(new URL('../../../../node_modules/.cache/whisper.cpp/whisper.cpp-1.9.4/samples/jfk.wav', import.meta.url))
   // Runs the real speech detector three times on one thread: its worker threads spin-wait on each other, so with
   // several threads a loaded machine (load average 16-21, 2026-09-28) stretched 89 ms past 30 s. Measured on one
