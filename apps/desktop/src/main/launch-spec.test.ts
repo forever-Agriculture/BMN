@@ -21,7 +21,7 @@ afterEach(async () => {
 async function executableFixture(): Promise<{ root: string; executable: string }> {
   const root = await mkdtemp(join(tmpdir(), 'bmn-launch-spec-test-'))
   roots.add(root)
-  const executable = join(root, process.platform === 'win32' ? 'codex.exe' : 'codex')
+  const executable = join(root, process.platform === 'win32' ? 'codex.EXE' : 'codex')
   await writeFile(executable, '#!/bin/sh\n', 'utf8')
   await chmod(executable, 0o700)
   return { root, executable }

@@ -229,9 +229,14 @@ static int broker(const fs::path& executable, const fs::path& base, const std::w
     bool environmentMatches = localLength > 0 && localLength < 32768 &&
       CompareStringOrdinal(environmentLocal, -1, local.c_str(), -1, TRUE) == CSTR_EQUAL;
     auto elevated = tokenInfo(token.value, TokenElevation);
+    auto integrity = tokenInfo(token.value, TokenIntegrityLevel);
+    auto integritySid = reinterpret_cast<TOKEN_MANDATORY_LABEL*>(integrity.data())->Label.Sid;
+    const DWORD integrityRid = *GetSidSubAuthority(integritySid, *GetSidSubAuthorityCount(integritySid) - 1);
     profileFacts = "{\"localFileProbeError\":" + std::to_string(fileError) + ",\"registryProbeError\":" + std::to_string(registryError)
       + ",\"environmentLocalMatchesProfile\":" + (environmentMatches ? "true" : "false")
+      + ",\"integrityRid\":" + std::to_string(integrityRid)
       + ",\"elevated\":" + (reinterpret_cast<TOKEN_ELEVATION*>(elevated.data())->TokenIsElevated ? "true" : "false") + "}";
+    if (integrityRid != SECURITY_MANDATORY_MEDIUM_RID) throw Failure{ERROR_BAD_TOKEN_TYPE};
     stage = "create-appcontainer";
     checkHr(CreateAppContainerProfile(moniker.c_str(), moniker.c_str(), L"BMN synthetic capability acceptance", nullptr, 0, &package));
     created = true;
@@ -295,7 +300,10 @@ static int supervisor(const fs::path& executable, const fs::path& base) {
     checkCode(NetLocalGroupAddMembers(nullptr, group, 3, reinterpret_cast<LPBYTE>(&member), 1));
     stage = "prepare-fixtures";
     acl(base, L"D:P(A;OICI;FA;;;" + owner + L")(A;;GRGX;;;" + user + L")(A;;GRGX;;;S-1-15-2-1)");
-    acl(base / L"public", L"D:P(A;OICI;FA;;;" + owner + L")(A;OICI;FA;;;" + user + L")(A;OICI;GRGX;;;S-1-15-2-1)", true);
+    // Keep the executable at medium integrity. A low label inherited by the image
+    // would lower the ordinary broker too, preventing it from creating its profile.
+    // Only receiver result/control locations get low labels below.
+    acl(base / L"public", L"D:P(A;OICI;FA;;;" + owner + L")(A;OICI;FA;;;" + user + L")(A;OICI;GRGX;;;S-1-15-2-1)");
     fs::create_directory(base / L"public/results");
     fs::create_directory(base / L"private/Cache");
     acl(base / L"private/Cache", L"D:P(A;OICI;FA;;;" + owner + L")(A;;0x1301bf;;;" + capability + L")(A;OICIIO;0xe0010000;;;" + capability + L")");

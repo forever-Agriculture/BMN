@@ -60,6 +60,10 @@ jobs:
       - name: Windows native shell and launch UI
         if: ${{ !cancelled() && steps.install.outcome == 'success' && runner.os == 'Windows' }}
         run: node scripts/test/windows-launch-smoke.mjs > test-results/windows-launch.json
+      - name: Windows app lifecycle and crash cleanup
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && runner.os == 'Windows' }}
+        timeout-minutes: 5
+        run: node scripts/test/windows-lifecycle-smoke.mjs > test-results/windows-lifecycle.json
       - name: Linux package and packaged smoke
         if: ${{ !cancelled() && steps.install.outcome == 'success' && runner.os == 'Linux' }}
         run: |

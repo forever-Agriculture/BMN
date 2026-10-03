@@ -18,7 +18,7 @@ async function folder(): Promise<string> {
 
 async function program(directory: string, name: string, mode = 0o755): Promise<string> {
   await mkdir(directory, { recursive: true })
-  const path = join(directory, name + (process.platform === 'win32' ? mode === 0o644 ? '.txt' : '.exe' : ''))
+  const path = join(directory, name + (process.platform === 'win32' ? mode === 0o644 ? '.txt' : '.EXE' : ''))
   await writeFile(path, '#!/bin/sh\nexit 0\n')
   await chmod(path, mode)
   return path
@@ -34,7 +34,7 @@ describe('finding a reported program on PATH', () => {
 
   it('never searches a relative entry, a directory by that name or a file that cannot run', async () => {
     const root = await folder()
-    await mkdir(join(root, 'dir-entry', process.platform === 'win32' ? 'my-agent.exe' : 'my-agent'), { recursive: true })
+    await mkdir(join(root, 'dir-entry', process.platform === 'win32' ? 'my-agent.EXE' : 'my-agent'), { recursive: true })
     await program(join(root, 'not-executable'), 'my-agent', 0o644)
     const runnable = await program(join(root, 'runnable'), 'my-agent')
     expect(findProgramOnPath('my-agent', ['', '.', 'relative', join(root, 'dir-entry'), join(root, 'not-executable')].join(delimiter))).toBeNull()
