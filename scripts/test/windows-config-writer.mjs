@@ -1,7 +1,7 @@
 // MODULE: windows-config-writer.mjs - synthetic native ACL, sharing and replacement race acceptance
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { once } from 'node:events'
@@ -22,6 +22,7 @@ $ErrorActionPreference='Stop'
 $r=ConvertFrom-Json ([Console]::In.ReadToEnd())
 $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User
 $phase='setup';try {
+if($r.replaceWith) {$phase='replace-racing-target';[IO.File]::Replace($r.replaceWith,$r.path,$r.displaced,$false)}
 if($r.ownerOnly) {$a=[IO.File]::GetAccessControl($r.path);$a.SetOwner($sid);[IO.File]::SetAccessControl($r.path,$a)}
 if($r.protect) {
  $acl=if($r.directory) {New-Object Security.AccessControl.DirectorySecurity} else {New-Object Security.AccessControl.FileSecurity}
@@ -181,6 +182,21 @@ try {[IO.File]::Replace($r.stage,$r.path,$r.backup,$false)}finally{$held.Dispose
     assert.equal(readFileSync(path, 'utf8'), 'BEFORE'); assert.deepEqual(acl(path), before)
     assert.deepEqual(readdirSync(root).sort(), names)
     receipts.commandLimitRed = { commit, launchError: failure.nativeLaunchError, unchanged: true }
+  })
+  await check('RED original worker loses mixed-case SystemRoot with uppercase environment', async () => {
+    const path = file('worker-environment-red.json', 'BEFORE')
+    const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => name.toLowerCase() !== 'systemroot'))
+    env.SYSTEMROOT = process.env.SystemRoot
+    const worker = new Worker(`const {parentPort,workerData:d}=require('node:worker_threads');
+(async()=>{const info={keys:Object.keys(process.env).filter(name=>name.toLowerCase()==='systemroot'),exactPresent:typeof process.env.SystemRoot==='string'};
+try{const {writeConfigSafely}=await import(d.moduleUrl);writeConfigSafely(d.path,'BEFORE','OURS');parentPort.postMessage({...info,ok:true})}
+catch(e){parentPort.postMessage({...info,ok:false,code:e.code,reason:e.message==='Windows SystemRoot is unavailable'?'MISSING_SYSTEMROOT':'OTHER'})}})();`,
+      { eval: true, env, workerData: { moduleUrl: pathToFileURL(baselineModule).href, path } })
+    const exited = once(worker, 'exit'), message = once(worker, 'message')
+    const [result] = await message; assert.equal(await exited, 0)
+    assert.deepEqual(result, { keys: ['SYSTEMROOT'], exactPresent: false, ok: false, code: 'IO_ERROR', reason: 'MISSING_SYSTEMROOT' })
+    assert.equal(readFileSync(path, 'utf8'), 'BEFORE')
+    receipts.uppercaseWorkerRed = result
   })
   await check('GREEN inherited original and backup keep exact owner/ACE flags/protection', () => {
     const path = join(root, 'green-inherited.json'); writeFileSync(path, 'BEFORE')
@@ -350,7 +366,12 @@ try {[IO.File]::Replace($r.stage,$r.path,$r.backup,$false)}finally{$held.Dispose
     const pending = workerWrite(path, 'BEFORE', 'OURS', gate)
     try {
       await waitFor(`${gate}.waiting`)
-      renameSync(substitute, path); writeFileSync(gate, '')
+      // MoveFileEx/Node rename cannot overwrite this held original on Windows.
+      // A second File.Replace is the native namespace writer the contract must detect.
+      const displaced = join(root, 'racing-original.json')
+      acl(path, { replaceWith: substitute, displaced, phase: 'namespace-race' })
+      assert.equal(readFileSync(displaced, 'utf8'), 'BEFORE')
+      assert.equal(readFileSync(path, 'utf8'), 'THEIRS'); writeFileSync(gate, '')
       assert.deepEqual(await pending.result, { ok: false, code: 'RECOVERY_REQUIRED', recoveryRequired: true })
       assert.equal(readFileSync(path, 'utf8'), 'OURS')
       const backups = readdirSync(root).filter(name => name.startsWith('rename.json.bmn-backup-'))
