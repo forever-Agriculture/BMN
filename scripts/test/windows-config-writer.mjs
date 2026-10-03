@@ -5,6 +5,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSy
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { once } from 'node:events'
+import { createHash } from 'node:crypto'
+import { pathToFileURL } from 'node:url'
 import { Worker } from 'node:worker_threads'
 import { writeAtomically, writeConfigSafely } from '../../apps/desktop/bin/safe-config-write.mjs'
 
@@ -19,6 +21,8 @@ $ErrorActionPreference='Stop'
 [Console]::InputEncoding=New-Object System.Text.UTF8Encoding($false)
 $r=ConvertFrom-Json ([Console]::In.ReadToEnd())
 $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User
+$phase='setup';try {
+if($r.ownerOnly) {$a=[IO.File]::GetAccessControl($r.path);$a.SetOwner($sid);[IO.File]::SetAccessControl($r.path,$a)}
 if($r.protect) {
  $acl=if($r.directory) {New-Object Security.AccessControl.DirectorySecurity} else {New-Object Security.AccessControl.FileSecurity}
  $owner=if($r.foreign) { New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544') } else {$sid}
@@ -26,19 +30,25 @@ if($r.protect) {
  $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl','Allow')))
  if($r.denyDelete) {$acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,'Delete','Deny')))}
  if($r.denyChildDelete) {$acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,'DeleteSubdirectoriesAndFiles','Deny')))}
+ $phase='set-access-control'
  if($r.directory) {[IO.Directory]::SetAccessControl($r.path,$acl)} else {[IO.File]::SetAccessControl($r.path,$acl)}
 }
+$phase='readback'
 $acl=if($r.directory) {[IO.Directory]::GetAccessControl($r.path)} else {[IO.File]::GetAccessControl($r.path)}
 $rules=@($acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]) | ForEach-Object {
- @{sid=$_.IdentityReference.Value;rights=[int]$_.FileSystemRights;type=[int]$_.AccessControlType;inherited=$_.IsInherited}
+ @{sid=$_.IdentityReference.Value;rights=[int]$_.FileSystemRights;type=[int]$_.AccessControlType;inherited=$_.IsInherited;inheritance=[int]$_.InheritanceFlags;propagation=[int]$_.PropagationFlags}
 })
 [Console]::Out.Write((ConvertTo-Json -Compress -Depth 5 @{user=$sid.Value;owner=$acl.GetOwner([Security.Principal.SecurityIdentifier]).Value;protected=$acl.AreAccessRulesProtected;rules=$rules}))
+} catch {$e=$_.Exception;for($i=0;$i -lt 8 -and $e.InnerException;$i++){$e=$e.InnerException};[Console]::Out.Write((ConvertTo-Json -Compress @{ok=$false;operation=$phase;exceptionType=$e.GetType().FullName;hresult=$e.HResult}));exit 1}
 `
 function acl(path, options = {}) {
   const child = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(aclSource, 'utf16le').toString('base64')],
     { input: JSON.stringify({ path, ...options }), encoding: 'utf8', timeout: 15000, windowsHide: true })
-  assert.equal(child.status, 0, 'Synthetic ACL fixture failed')
-  return JSON.parse(child.stdout)
+  let result
+  try { result = JSON.parse(child.stdout) } catch { /* Preserve only stable synthetic metadata below. */ }
+  if (child.status !== 0) receipts.fixtureFailure = { fixturePhase: options.phase ?? 'read', ...result }
+  assert.equal(child.status, 0, `Synthetic ACL fixture failed (${options.phase ?? 'read'})`)
+  return result
 }
 function file(name, text) {
   const path = join(root, name); writeFileSync(path, text)
@@ -87,6 +97,38 @@ try {[IO.File]::Replace($r.stage,$r.path,$r.backup,$false)}finally{$held.Dispose
     { input: JSON.stringify({ path: inherited, stage: staged, backup }), encoding: 'utf8', timeout: 15000, windowsHide: true })
   assert.equal(measured.status, 0, 'Raw inherited-ACL measurement must execute')
   receipts.inheritedReplacement = JSON.parse(measured.stdout)
+  const baselineCommit = 'ea4e3a778e262b8ef8b56a8f9ad821b496c01035'
+  const response = await fetch(`https://raw.githubusercontent.com/forever-Agriculture/BMN/${baselineCommit}/apps/desktop/bin/safe-config-write.mjs`, { signal: AbortSignal.timeout(30000) })
+  assert.equal(response.ok, true, 'Pinned public task baseline must be readable')
+  const baselineSource = await response.text()
+  assert.ok(Buffer.byteLength(baselineSource) < 64 * 1024)
+  assert.equal(createHash('sha256').update(baselineSource).digest('hex'), '70c6db7b563652924718af80f4b87b9992d48ed8a354af52f45523ff54168047')
+  const marker = 'error.created = result?.created === true'
+  assert.equal(baselineSource.split(marker).length, 2)
+  const baselineModule = join(root, 'baseline-writer.mjs')
+  // Observer-only metadata addition; native source and failure behavior stay original.
+  writeFileSync(baselineModule, baselineSource.replace(marker, marker + '; error.nativePhase = result?.code; error.published = result?.published'))
+  const { writeConfigSafely: baselineWrite } = await import(pathToFileURL(baselineModule).href)
+  await check('RED original product rejects inherited ACL after publication', () => {
+    const path = join(root, 'baseline-inherited.json'); writeFileSync(path, 'BEFORE')
+    const before = acl(path, { ownerOnly: true })
+    let failure
+    try { baselineWrite(path, 'BEFORE', 'AFTER') } catch (error) { failure = error }
+    assert.equal(failure?.code, 'RECOVERY_REQUIRED')
+    assert.equal(failure?.nativePhase, 'ACCESS_CONTROL_UNCONFIRMED'); assert.equal(failure?.published, true)
+    assert.equal(readFileSync(path, 'utf8'), 'AFTER')
+    const names = readdirSync(root).filter(name => name.startsWith('baseline-inherited.json.bmn-backup-'))
+    assert.equal(names.length, 1); assert.equal(readFileSync(join(root, names[0]), 'utf8'), 'BEFORE')
+    receipts.inheritedProductRed = { baselineCommit, nativePhase: failure.nativePhase, published: true, before, after: acl(path), backup: acl(join(root, names[0])) }
+  })
+  await check('GREEN inherited original and backup keep exact owner/ACE flags/protection', () => {
+    const path = join(root, 'green-inherited.json'); writeFileSync(path, 'BEFORE')
+    const before = acl(path, { ownerOnly: true })
+    const result = writeConfigSafely(path, 'BEFORE', 'AFTER')
+    assert.equal(readFileSync(path, 'utf8'), 'AFTER'); assert.equal(readFileSync(result.backup, 'utf8'), 'BEFORE')
+    assert.deepEqual(acl(path), before); assert.deepEqual(acl(result.backup), before)
+    receipts.inheritedProductGreen = { before, after: acl(path), backup: acl(result.backup) }
+  })
   await check('protected original and backup preserve owner/DACL with Unicode', () => {
     const path = file('existing.json', 'BEFORE 雪'), before = acl(path)
     const result = writeConfigSafely(path, 'BEFORE 雪', 'AFTER 雪')
@@ -101,7 +143,7 @@ try {[IO.File]::Replace($r.stage,$r.path,$r.backup,$false)}finally{$held.Dispose
       const names = temps(); assert.equal(names.length, 1)
       const security = acl(join(root, names[0]))
       assert.equal(security.owner, security.user); assert.equal(security.protected, true)
-      assert.deepEqual(security.rules, [{ sid: security.user, rights: 2032127, type: 0, inherited: false }])
+      assert.deepEqual(security.rules, [{ sid: security.user, rights: 2032127, type: 0, inherited: false, inheritance: 0, propagation: 0 }])
     } })
   })
   await check('new file is private and has no backup', () => {
@@ -109,7 +151,7 @@ try {[IO.File]::Replace($r.stage,$r.path,$r.backup,$false)}finally{$held.Dispose
     assert.equal(result.backup, null)
     const security = acl(path)
     assert.equal(security.owner, security.user); assert.equal(security.protected, true)
-    assert.deepEqual(security.rules, [{ sid: security.user, rights: 2032127, type: 0, inherited: false }])
+    assert.deepEqual(security.rules, [{ sid: security.user, rights: 2032127, type: 0, inherited: false, inheritance: 0, propagation: 0 }])
   })
   await check('foreign-owned original refused before staging', () => {
     const path = file('foreign.json', 'FOREIGN'); acl(path, { protect: true, foreign: true })
@@ -121,11 +163,24 @@ try {[IO.File]::Replace($r.stage,$r.path,$r.backup,$false)}finally{$held.Dispose
   await check('denied replacement preserves data/ACL and cleans owned stage', () => {
     const directory = join(root, 'denied'); mkdirSync(directory)
     const path = join(directory, 'settings.json'); writeFileSync(path, 'BEFORE')
-    acl(directory, { directory: true, protect: true, denyChildDelete: true })
-    acl(path, { protect: true, denyDelete: true })
+    receipts.denialDiagnostic = [{ phase: 'initial-parent', security: acl(directory, { directory: true }) }, { phase: 'initial-child', security: acl(path) }]
+    // Explicitly protect the child before removing parent inheritance.
+    acl(path, { protect: true, denyDelete: true, phase: 'protect-child' })
+    receipts.denialDiagnostic.push({ phase: 'protected-child', security: acl(path) })
+    acl(directory, { directory: true, protect: true, denyChildDelete: true, phase: 'protect-parent' })
+    receipts.denialDiagnostic.push({ phase: 'protected-parent', security: acl(directory, { directory: true }) }, { phase: 'child-after-parent', security: acl(path) })
     const before = acl(path)
+    let prepared = false
     try {
-      assert.throws(() => writeConfigSafely(path, 'BEFORE', 'OURS'))
+      let failure
+      try { writeConfigSafely(path, 'BEFORE', 'OURS', { beforeCommit: () => { prepared = true } }) } catch (error) { failure = error }
+      assert.equal(prepared, true, 'Preparation must succeed before the denied publication')
+      assert.equal(failure?.nativeOperation, 'commit:replace')
+      assert.equal(failure?.nativeErrorCode, 5, 'Replace must report access denied')
+      receipts.denialFailure = { operation: failure.nativeOperation, errno: failure.nativeErrorCode, exceptionType: failure.nativeExceptionType }
+      assert.equal(before.rules.some(rule => rule.sid === before.user && rule.type === 1 && (rule.rights & 65536) !== 0), true)
+      const parent = acl(directory, { directory: true })
+      assert.equal(parent.rules.some(rule => rule.sid === parent.user && rule.type === 1 && (rule.rights & 64) !== 0), true)
       assert.equal(readFileSync(path, 'utf8'), 'BEFORE'); assert.deepEqual(acl(path), before)
       assert.deepEqual(readdirSync(directory), ['settings.json'])
     } finally { acl(path, { protect: true }); acl(directory, { directory: true, protect: true }) }
@@ -150,6 +205,22 @@ try {[IO.File]::Replace($r.stage,$r.path,$r.backup,$false)}finally{$held.Dispose
     const path = join(root, 'prepare-failure.json')
     assert.throws(() => writeAtomically(path, undefined))
     assert.equal(existsSync(path), false); assert.deepEqual(temps(), [])
+  })
+  await check('postpublication repair failure retains recovery bytes and backup', () => {
+    const path = file('repair-failure.json', 'BEFORE')
+    const oldMode = process.env.NODE_ENV, oldFailure = process.env.BMN_CONFIG_WRITE_TEST_REPAIR_FAILURE
+    process.env.NODE_ENV = 'test'; process.env.BMN_CONFIG_WRITE_TEST_REPAIR_FAILURE = '1'
+    try {
+      let failure
+      try { writeConfigSafely(path, 'BEFORE', 'OURS') } catch (error) { failure = error }
+      assert.equal(failure?.code, 'RECOVERY_REQUIRED'); assert.equal(failure?.recoveryRequired, true)
+      assert.equal(readFileSync(path, 'utf8'), 'OURS')
+      const names = readdirSync(root).filter(name => name.startsWith('repair-failure.json.bmn-backup-'))
+      assert.equal(names.length, 1); assert.equal(readFileSync(join(root, names[0]), 'utf8'), 'BEFORE')
+    } finally {
+      if (oldMode === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = oldMode
+      if (oldFailure === undefined) delete process.env.BMN_CONFIG_WRITE_TEST_REPAIR_FAILURE; else process.env.BMN_CONFIG_WRITE_TEST_REPAIR_FAILURE = oldFailure
+    }
   })
   await check('retained original handle rejects a racing in-place writer', async () => {
     const path = file('inplace.json', 'BEFORE'), gate = join(root, 'inplace.release')

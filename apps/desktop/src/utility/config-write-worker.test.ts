@@ -55,3 +55,10 @@ it('reports worker startup failure without exposing settings data', async () => 
   await expect(writeConfigInWorker(join(root, 'absent.mjs'), { path, text: null, next: 'PRIVATE_SYNTHETIC', expectedTarget: path }))
     .rejects.toMatchObject({ code: 'IO_ERROR', message: 'Config write could not be confirmed' })
 }, 15000)
+
+it('preserves postpublication recovery status without transferring raw diagnostics', async () => {
+  const root = await fixture(), modulePath = join(root, 'recovery.mjs'), path = join(root, 'settings.json')
+  await writeFile(modulePath, `export function writeConfigSafely() { const e=new Error('PRIVATE_SYNTHETIC_DIAGNOSTIC'); e.code='RECOVERY_REQUIRED'; throw e; }`)
+  await expect(writeConfigInWorker(modulePath, { path, text: null, next: 'PRIVATE_SYNTHETIC', expectedTarget: path }))
+    .rejects.toMatchObject({ code: 'RECOVERY_REQUIRED', message: 'Config write could not be confirmed' })
+}, 15000)

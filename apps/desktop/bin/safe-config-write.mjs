@@ -130,7 +130,7 @@ const WINDOWS_CONFIG_WRITE = `
 $ErrorActionPreference='Stop'
 [Console]::InputEncoding=New-Object System.Text.UTF8Encoding($false)
 $request=ConvertFrom-Json ([Console]::In.ReadToEnd())
-$created=$false; $published=$false; $backupReserved=$false; $failureCode='IO_ERROR'; $stream=$null; $originalStream=$null; $backupStream=$null
+$created=$false; $published=$false; $backupReserved=$false; $failureCode='IO_ERROR'; $operation='start'; $stream=$null; $originalStream=$null; $backupStream=$null; $stagedStream=$null; $publishedStream=$null
 function Fingerprint($acl) {
  $rules=@($acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]) | ForEach-Object {
   [ordered]@{sid=$_.IdentityReference.Value;rights=[int]$_.FileSystemRights;type=[int]$_.AccessControlType;inheritance=[int]$_.InheritanceFlags;propagation=[int]$_.PropagationFlags;inherited=$_.IsInherited}
@@ -155,11 +155,13 @@ function PrivateSecurity($sid) {
 }
 try {
  if($request.mode -eq 'prepare') {
+  $operation='original-exists'
   $exists=[IO.File]::Exists($request.target)
   if($exists -ne $request.existed) { $failureCode='REVISION_CONFLICT';throw 'Original changed before staging' }
   $original=$null
   $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User
   if($exists) {
+   $operation='original-open'
    $originalStream=OpenOriginal $request.target
    if((StreamHash $originalStream) -ne $request.expectedHash) { $failureCode='REVISION_CONFLICT';throw 'Original changed before staging' }
    $originalAcl=$originalStream.GetAccessControl()
@@ -170,6 +172,7 @@ try {
   # Never adopt foreign-owned originals or acquire privileges.
   $acl=PrivateSecurity $sid
   $expected=Fingerprint $acl
+  $operation='stage-create'
   $stream=New-Object System.IO.FileStream($request.temporary,[IO.FileMode]::CreateNew,[System.Security.AccessControl.FileSystemRights]'Write, ReadPermissions',[IO.FileShare]::None,4096,[IO.FileOptions]::WriteThrough,$acl)
   $created=$true
   if((Fingerprint ($stream.GetAccessControl())) -ne $expected) { $failureCode='ACCESS_CONTROL_UNCONFIRMED';throw 'Staged permissions differ' }
@@ -177,13 +180,37 @@ try {
   $stream.Write($bytes,0,$bytes.Length);$stream.Flush($true);$stream.Dispose();$stream=$null
   [Console]::Out.Write((ConvertTo-Json -Compress @{ok=$true;existed=$exists;originalDacl=$original;stagedDacl=$expected}))
  } elseif($request.mode -eq 'commit') {
-  if((Fingerprint ([IO.File]::GetAccessControl($request.temporary))) -ne $request.stagedDacl) { $failureCode='ACCESS_CONTROL_UNCONFIRMED';throw 'Staged permissions changed' }
+  # Identity uses volume + 128-bit file ID, supporting NTFS/ReFS without PID/path guesses.
+  $operation='identity-type'
+  Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+public static class BMNConfigIdentity {
+ [StructLayout(LayoutKind.Sequential)] struct IdInfo { public ulong volume, low, high; }
+ [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetFileInformationByHandleEx(SafeFileHandle file,int kind,out IdInfo info,uint size);
+ public static string Read(SafeFileHandle file) {
+  IdInfo info;
+  if(!GetFileInformationByHandleEx(file,18,out info,24)) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+  if(info.low==0 && info.high==0) throw new System.IO.IOException("File identity unavailable");
+  return info.volume.ToString("x16")+":"+info.high.ToString("x16")+info.low.ToString("x16");
+ }
+}
+'@
+  $operation='stage-open'
+  $stagedStream=New-Object System.IO.FileStream($request.temporary,[IO.FileMode]::Open,[System.Security.AccessControl.FileSystemRights]'Read, ReadPermissions, ChangePermissions',([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete),4096,[IO.FileOptions]::None)
+  $operation='stage-identity'
+  $stagedIdentity=[BMNConfigIdentity]::Read($stagedStream.SafeFileHandle)
+  if((Fingerprint ($stagedStream.GetAccessControl())) -ne $request.stagedDacl) { $failureCode='ACCESS_CONTROL_UNCONFIRMED';throw 'Staged permissions changed' }
   if($request.existed) {
+   $operation='original-open'
    $originalStream=OpenOriginal $request.target
+   $originalAcl=$originalStream.GetAccessControl()
    if((StreamHash $originalStream) -ne $request.expectedHash -or
-      (Fingerprint ($originalStream.GetAccessControl())) -ne $request.originalDacl) { $failureCode='REVISION_CONFLICT';throw 'Original changed' }
+      (Fingerprint $originalAcl) -ne $request.originalDacl) { $failureCode='REVISION_CONFLICT';throw 'Original changed' }
    # Reserve our UUID backup exclusively with private permissions before replacement.
    $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User
+   $operation='backup-reserve'
    $reservation=New-Object System.IO.FileStream($request.backup,[IO.FileMode]::CreateNew,[System.Security.AccessControl.FileSystemRights]'Write, ReadPermissions',[IO.FileShare]::None,4096,[IO.FileOptions]::WriteThrough,(PrivateSecurity $sid))
    $backupReserved=$true;$reservation.Dispose()
    # Retained original handle denies in-place writers. Delete sharing permits Replace,
@@ -197,27 +224,50 @@ try {
      [Threading.Thread]::Sleep(10)
     }
    }
+   $operation='replace'
    [IO.File]::Replace($request.temporary,$request.target,$request.backup,$false)
    $published=$true
+   $operation='backup-open'
    $backupStream=OpenOriginal $request.backup
+   $operation='backup-verify'
    if((StreamHash $backupStream) -ne $request.expectedHash -or
       (Fingerprint ($backupStream.GetAccessControl())) -ne $request.originalDacl) { $failureCode='REVISION_CONFLICT';throw 'Concurrent replacement displaced different data' }
-   if((Fingerprint ([IO.File]::GetAccessControl($request.target))) -ne $request.originalDacl) { $failureCode='ACCESS_CONTROL_UNCONFIRMED';throw 'Replacement permissions differ' }
+   # Replace can add explicit copies of inherited ACEs. Restore Access only through
+   # the retained staged-object handle, never repair an owner or a retargeted path.
+   $failureCode='ACCESS_CONTROL_UNCONFIRMED'
+   if($request.testRepairFailure) { throw 'Synthetic postpublication repair failure' }
+   $operation='access-restore'
+   $restore=New-Object System.Security.AccessControl.FileSecurity
+   $restore.SetSecurityDescriptorBinaryForm($originalAcl.GetSecurityDescriptorBinaryForm(),[System.Security.AccessControl.AccessControlSections]::Access)
+   $stagedStream.SetAccessControl($restore)
+   $operation='published-open'
+   $publishedStream=OpenOriginal $request.target
+   if([BMNConfigIdentity]::Read($publishedStream.SafeFileHandle) -ne $stagedIdentity -or
+      (Fingerprint ($stagedStream.GetAccessControl())) -ne $request.originalDacl -or
+      (Fingerprint ($publishedStream.GetAccessControl())) -ne $request.originalDacl) { throw 'Replacement identity or permissions differ' }
   } else {
    if([IO.File]::Exists($request.target)) { $failureCode='REVISION_CONFLICT';throw 'A file appeared' }
+   $operation='move'
    [IO.File]::Move($request.temporary,$request.target)
    $published=$true
-   if((Fingerprint ([IO.File]::GetAccessControl($request.target))) -ne $request.stagedDacl) { $failureCode='ACCESS_CONTROL_UNCONFIRMED';throw 'New file permissions differ' }
+   $operation='published-open'
+   $publishedStream=OpenOriginal $request.target
+   if([BMNConfigIdentity]::Read($publishedStream.SafeFileHandle) -ne $stagedIdentity -or
+      (Fingerprint ($publishedStream.GetAccessControl())) -ne $request.stagedDacl) { $failureCode='ACCESS_CONTROL_UNCONFIRMED';throw 'New file identity or permissions differ' }
   }
   [Console]::Out.Write('{"ok":true}')
  } else { throw 'Unknown operation' }
 } catch {
- $errno=$_.Exception.HResult -band 65535
+ $exception=$_.Exception
+ for($depth=0;$depth -lt 8 -and $null -ne $exception.InnerException;$depth++) {$exception=$exception.InnerException}
+ $errno=if($exception -is [System.ComponentModel.Win32Exception]) {$exception.NativeErrorCode} else {$exception.HResult -band 65535}
  $recovery=$published -or ($request.mode -eq 'commit' -and $errno -in @(1175,1176,1177))
- [Console]::Out.Write((ConvertTo-Json -Compress @{ok=$false;code=$failureCode;errno=$errno;created=$created;recoveryRequired=$recovery;published=$published}))
+ [Console]::Out.Write((ConvertTo-Json -Compress @{ok=$false;code=$failureCode;errno=$errno;created=$created;recoveryRequired=$recovery;published=$published;operation=($request.mode+':'+$operation);exceptionType=$exception.GetType().FullName}))
  exit 1
 } finally {
  if($null -ne $stream) {$stream.Dispose()}
+ if($null -ne $publishedStream) {$publishedStream.Dispose()}
+ if($null -ne $stagedStream) {$stagedStream.Dispose()}
  if($null -ne $backupStream) {$backupStream.Dispose()}
  if($null -ne $originalStream) {$originalStream.Dispose()}
  if($backupReserved -and -not $published -and -not $recovery) { try { [IO.File]::Delete($request.backup) } catch {} }
@@ -237,6 +287,9 @@ function windowsConfigOperation(request) {
     const code = recoveryRequired ? 'RECOVERY_REQUIRED' : result?.code === 'REVISION_CONFLICT' ? 'REVISION_CONFLICT' : 'IO_ERROR'
     const error = new CliError(code, code === 'REVISION_CONFLICT' ? 'Config changed before Windows replacement; it was not replaced' : 'Windows could not confirm the config operation; inspect the original and any retained backup/staged file')
     error.created = result?.created === true
+    error.nativeOperation = result?.operation
+    error.nativeErrorCode = result?.errno
+    error.nativeExceptionType = result?.exceptionType
     error.recoveryRequired = recoveryRequired
     throw error
   }
@@ -248,6 +301,7 @@ export function writeAtomically(path, text, verify, backup = null) {
   const temporary = join(dirname(target), `.${basename(target)}.bmn-${randomUUID()}.tmp`)
   if (process.platform === 'win32') {
     let prepared = false
+    let committed = false
     let recoveryRequired = false
     try {
       mkdirSync(dirname(target), { recursive: true })
@@ -257,13 +311,15 @@ export function writeAtomically(path, text, verify, backup = null) {
       verify?.(target)
       if (linkTarget(path) !== target) throw new CliError('REVISION_CONFLICT', 'Config changed target before Windows replacement')
       windowsConfigOperation({ mode: 'commit', target, temporary, backup: backup ?? backupPath(target), expectedHash: originalHash,
-        testGate: process.env.NODE_ENV === 'test' ? process.env.BMN_CONFIG_WRITE_TEST_GATE : undefined, ...stage })
+        testGate: process.env.NODE_ENV === 'test' ? process.env.BMN_CONFIG_WRITE_TEST_GATE : undefined,
+        testRepairFailure: process.env.NODE_ENV === 'test' && process.env.BMN_CONFIG_WRITE_TEST_REPAIR_FAILURE === '1', ...stage })
+      committed = true
     } catch (error) {
       prepared ||= error.created === true
       recoveryRequired = error.recoveryRequired === true
       throw error
     } finally {
-      if (prepared && !recoveryRequired) {
+      if (prepared && !committed && !recoveryRequired) {
         try { unlinkSync(temporary) } catch { /* Already committed or removed. */ }
       }
     }

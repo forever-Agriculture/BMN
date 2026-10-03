@@ -1,12 +1,12 @@
 // MODULE: agent-history-adapters.test.ts - Codex and OpenCode history adapters against fixture databases and recording stand-in binaries
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, link, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { codexHistoryAdapter } from './agent-history-codex'
 import { openCodeHistoryAdapter } from './agent-history-opencode'
-import { agentCommandEnvironment, failureLine, findOnPath, type OpenReadOnly } from './agent-history-store'
+import { agentCommandEnvironment, failureLine, findOnPath, runAgentCommand, type OpenReadOnly } from './agent-history-store'
 
 const testRequire = createRequire(import.meta.url)
 const BetterSqlite3 = testRequire('better-sqlite3') as new (path: string, options?: { readonly?: boolean; fileMustExist?: boolean }) =>
@@ -27,13 +27,25 @@ const DAY = 86_400_000
 async function fakeBinary(bin: string, name: string, code = 0, output = ''): Promise<string> {
   await mkdir(bin, { recursive: true })
   const log = join(bin, `${name}.log`)
+  if (process.platform === 'win32') {
+    const shim = await readFile(new URL('./fixtures/npm-node.cmd', import.meta.url), 'utf8')
+    await writeFile(join(bin, `${name}.cmd`), shim.replace('..\\package\\entry.js', `${name}.mjs`))
+    await writeFile(join(bin, `${name}.mjs`), `import { appendFileSync } from 'node:fs';
+appendFileSync(${JSON.stringify(log)}, process.cwd()+'|'+process.argv.slice(2).join(' ')+'\\n');
+appendFileSync(${JSON.stringify(log+'.argv')}, JSON.stringify(process.argv.slice(2))+'\\n');
+console.error(${JSON.stringify(output)});process.exit(${code});`)
+    try { await link(process.execPath, join(bin, 'node.exe')) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') await copyFile(process.execPath, join(bin, 'node.exe'))
+    }
+    return log
+  }
   await writeFile(join(bin, name), `#!/bin/sh\nprintf '%s|%s\\n' "$PWD" "$*" >> ${JSON.stringify(log)}\nprintf '%s\\n' ${JSON.stringify(output)} >&2\nexit ${code}\n`)
   await chmod(join(bin, name), 0o755)
   return log
 }
 
 async function root(): Promise<string> {
-  const path = await mkdtemp(join(tmpdir(), 'bmn-history-adapter-'))
+  const path = await realpath(await mkdtemp(join(tmpdir(), 'bmn-history-adapter-')))
   roots.push(path)
   return path
 }
@@ -159,11 +171,26 @@ describe('OpenCode history adapter', () => {
 })
 
 describe('history adapter helpers', () => {
+  it.skipIf(process.platform !== 'win32')('passes literal npm argv without expansion and refuses modified batch wrappers', async () => {
+    const home = await root(), bin = join(home, 'my tools')
+    const log = await fakeBinary(bin, 'codex')
+    const env = { Path: bin, Pathext: '.CMD;.EXE' }
+    const binary = findOnPath('codex', undefined, env)
+    expect(binary).toBe(join(bin, 'codex.CMD'))
+    const args = ['delete', 'space value', 'a"b', 'tail\\', '%HOME%', 'a&b', '!VALUE!', '雪']
+    expect(await runAgentCommand(binary!, args, { cwd: home, env })).toMatchObject({ code: 0 })
+    expect(JSON.parse((await readFile(`${log}.argv`, 'utf8')).trim())).toEqual(args)
+    const shim = await readFile(binary!, 'utf8')
+    await writeFile(binary!, shim.replace('SETLOCAL', 'SETLOCAL\r\necho modified'))
+    expect(await runAgentCommand(binary!, ['MUST_NOT_RUN'], { cwd: home, env })).toMatchObject({ code: null })
+    expect((await readFile(`${log}.argv`, 'utf8')).trim().split('\n')).toHaveLength(1)
+  })
+
   it('finds executables on PATH, strips BMN variables and picks the error line', async () => {
     const home = await root()
     const bin = join(home, 'bin')
     await fakeBinary(bin, 'codex')
-    expect(findOnPath('codex', `/nowhere::${bin}`)).toBe(join(bin, 'codex'))
+    expect(findOnPath('codex', `/nowhere${delimiter}${delimiter}${bin}`)).toBe(join(bin, process.platform === 'win32' ? 'codex.CMD' : 'codex'))
     expect(findOnPath('missing', bin)).toBeNull()
     expect(agentCommandEnvironment({ PATH: '/bin', BMN_TOKEN: 'x', AITERM_CONTROL_SOCKET: 'y', HOME: '/h' }))
       .toEqual({ PATH: '/bin', HOME: '/h' })

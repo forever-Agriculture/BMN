@@ -20,7 +20,7 @@ const { parentPort, workerData } = require('node:worker_threads');
   const result = writeConfigSafely(e.path, e.text, e.next, { expectedTarget: e.expectedTarget });
   parentPort.postMessage({ ok: true, result });
  } catch (error) {
-  parentPort.postMessage({ ok: false, code: error.code === 'REVISION_CONFLICT' ? 'REVISION_CONFLICT' : 'IO_ERROR' });
+  parentPort.postMessage({ ok: false, code: ['REVISION_CONFLICT','RECOVERY_REQUIRED'].includes(error.code) ? error.code : 'IO_ERROR' });
  }
 })();`
 
@@ -31,7 +31,7 @@ export function writeConfigInWorker(modulePath: string, edit: ConfigEdit): Promi
     worker.once('message', (message) => {
       received = true
       if (message?.ok === true) resolve(message.result)
-      else reject(new ConfigWriteError(message?.code === 'REVISION_CONFLICT' ? 'REVISION_CONFLICT' : 'IO_ERROR', 'Config write could not be confirmed'))
+      else reject(new ConfigWriteError(['REVISION_CONFLICT', 'RECOVERY_REQUIRED'].includes(message?.code) ? message.code : 'IO_ERROR', 'Config write could not be confirmed'))
     })
     worker.once('error', () => reject(new ConfigWriteError('IO_ERROR', 'Config worker failed; inspect original and retained backup/staged files')))
     worker.once('exit', () => {

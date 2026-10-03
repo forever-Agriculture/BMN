@@ -103,9 +103,9 @@ export function windowsPtyArgumentTail(executable: string, argv: readonly string
   return quoteWindowsArgv(argv)
 }
 
-export function prepareWindowsPtyLaunch(executable: string, argv: readonly string[], cwd: string, environment: Environment): {
+export function prepareWindowsExecutableLaunch(executable: string, argv: readonly string[], cwd: string, environment: Environment): {
   executable: string
-  arguments: string
+  argv: string[]
 } {
   let file = findWindowsExecutable(executable, cwd, environment)
   if (!file) throw new Error('The Windows program is not available on the session PATH: ' + executable)
@@ -124,5 +124,13 @@ export function prepareWindowsPtyLaunch(executable: string, argv: readonly strin
     file = node
     args = [entry, ...args]
   }
-  return { executable: file, arguments: windowsPtyArgumentTail(file, args) }
+  return { executable: file, argv: args }
+}
+
+export function prepareWindowsPtyLaunch(executable: string, argv: readonly string[], cwd: string, environment: Environment): {
+  executable: string
+  arguments: string
+} {
+  const launch = prepareWindowsExecutableLaunch(executable, argv, cwd, environment)
+  return { executable: launch.executable, arguments: windowsPtyArgumentTail(launch.executable, launch.argv) }
 }

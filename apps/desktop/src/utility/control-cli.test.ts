@@ -1203,9 +1203,9 @@ describe('bmn hook provenance and the hook event log', () => {
 
   // Story 31.1: the Claude config folder rides along, resolved the way `hooks install` resolves it.
   it.each([
-    ['an absolute folder', '/srv/agents/glm-config', undefined, '/srv/agents/glm-config'],
-    ['a relative folder, against the working directory', 'conf/glm', 'cwd', '<cwd>/conf/glm'],
-    ['a folder with .. kept as written', '/srv/agents/../glm', undefined, '/srv/agents/../glm'],
+    ['an absolute folder', process.platform === 'win32' ? 'C:\\srv\\agents\\glm-config' : '/srv/agents/glm-config', undefined, process.platform === 'win32' ? 'C:\\srv\\agents\\glm-config' : '/srv/agents/glm-config'],
+    ['a relative folder, against the working directory', 'conf/glm', 'cwd', process.platform === 'win32' ? '<cwd>\\conf/glm' : '<cwd>/conf/glm'],
+    ['a folder with .. kept as written', process.platform === 'win32' ? 'C:\\srv\\agents\\..\\glm' : '/srv/agents/../glm', undefined, process.platform === 'win32' ? 'C:\\srv\\agents\\..\\glm' : '/srv/agents/../glm'],
     ['no variable, the home folder', undefined, undefined, '<home>/.claude']
   ])('sends claudeConfigDir for %s', async (_label, variable, cwd, expected) => {
     const fixture = await cliFixture()

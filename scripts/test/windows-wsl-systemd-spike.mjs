@@ -123,7 +123,7 @@ finally:
   receipt.guest = JSON.parse(owned.stdout); receipt.measuredGuestOwnership = true
   receipt.rawSupervisorDeath = await measureRawSupervisor({ executable, distribution, uid, guest })
   receipt.guestBrokerIsolation = measureGuestBrokerEscape({ distribution, uid, guest })
-  receipt.reason = 'Ordinary-user nondelegated systemd services contain detached trees through Stop/root crash. Raw supervisor EOF/host-crash measured separately; Windows GUI interop still requires measurement before implementation.'
+  receipt.reason = 'Direct detached guest-tree and raw host EOF/death cleanup pass. Same-user service broker escape is measured separately; the unisolated strict design is refused when it escapes. Enforced broker/interop isolation remains required before product implementation.'
 } catch (error) { receipt.reason = String(error.message).slice(0, 1000) }
 finally {
   if (importAttempted) {
