@@ -1037,10 +1037,10 @@ index c53e086..9b0c6cb 100644
    clear(ptyId: number, useConptyDll: boolean): void;
    kill(ptyId: number, useConptyDll: boolean): void;
 diff --git a/src/win/conpty.cc b/src/win/conpty.cc
-index 7b286d3..9082467 100644
+index 7b286d3..f85cb6d 100644
 --- a/src/win/conpty.cc
 +++ b/src/win/conpty.cc
-@@ -2,582 +2,385 @@
+@@ -2,582 +2,388 @@
   * Copyright (c) 2013-2015, Christopher Jeffrey, Peter Sunde (MIT License)
   * Copyright (c) 2016, Daniel Imms (MIT License).
   * Copyright (c) 2018, Microsoft Corporation (MIT License).
@@ -1712,6 +1712,9 @@ index 7b286d3..9082467 100644
 +    environment += L'\0'; if (!pairs.Length()) environment += L'\0';
 +    STARTUPINFOEXW startup{};
 +    startup.StartupInfo.cb = sizeof(startup);
++    // Do not inherit the utility host's pipe handles as terminal stdio. ConPTY
++    // supplies the console handles when this flag and null std handles are set.
++    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
 +    startup.lpAttributeList = attributes.list;
 +    PROCESS_INFORMATION child{};
 +    check(env, CreateProcessW(nullptr, mutableCommand.data(), nullptr, nullptr, FALSE,

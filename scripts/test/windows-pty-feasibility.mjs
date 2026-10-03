@@ -28,6 +28,7 @@ process.on('uncaughtException',error=>{fs.writeFileSync(trace,JSON.stringify({st
 process.on('exit',code=>{if(!fs.existsSync(trace))fs.writeFileSync(trace,JSON.stringify({stage:'exit',code}))});
 fs.writeFileSync(trace,JSON.stringify({stage:'entered',stdinTTY:process.stdin.isTTY,stdoutTTY:process.stdout.isTTY}));
 const sequences=${JSON.stringify(sequences)};
+if(!process.stdin.isTTY||!process.stdout.isTTY)throw new Error('ConPTY standard handles are not terminal handles');
 process.stdin.setRawMode(true); process.stdin.resume();
 process.stdout.on('resize',()=>process.stdout.write('BMN_RESIZE:'+process.stdout.columns+'x'+process.stdout.rows+'\\r\\n'));
 process.stdin.on('data',data=>{ process.stdout.write('BMN_INPUT_HEX:'+data.toString('hex')+'\\r\\n'); if(data.includes(3)){process.stdout.write('BMN_CTRL_C\\r\\n');process.exit(0);} });
