@@ -27,7 +27,12 @@ describe('searchFileReferences', () => {
   it('finds source after generated entries would exhaust the original default cap', async () => {
     const root = await fixture()
     await mkdir(join(root, 'build')); await mkdir(join(root, 'src'))
-    for (let i = 0; i < 20_010; i++) await writeFile(join(root, 'build', `generated-${i}.js`), '')
+    // The assertion concerns enumeration, so create the same 20,010 independent
+    // files in bounded batches rather than serializing every filesystem round trip.
+    for (let i = 0; i < 20_010; i += 32) {
+      await Promise.all(Array.from({ length: Math.min(32, 20_010 - i) }, (_, offset) =>
+        writeFile(join(root, 'build', `generated-${i + offset}.js`), '')))
+    }
     await writeFile(join(root, 'src', 'target-source.ts'), '')
     // Fix only the root's enumeration order so the regression cannot pass by visiting src first.
     const rootHandle = await opendir(root)

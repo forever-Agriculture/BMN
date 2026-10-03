@@ -291,7 +291,17 @@ setInterval(()=>{if(role==='root')publish('heartbeat.json',Date.now())},100);
         for (const workspace of await window.aiTerminal.listWorkspaces())
           for (const session of await window.aiTerminal.listSessions(workspace.workspaceId)) await window.aiTerminal.stopSession(session.sessionId).catch(() => {})
       }).catch(() => {})
-      if (app?.process().exitCode === null) await app.close()
+      if (app?.process().exitCode === null) {
+        // Playwright's Windows process is a cmd wrapper. Observe the actual final
+        // Electron tree before closing, rather than treating wrapper exit as cleanup.
+        const finalTree = await electronTree()
+        const finalObserver = await windowsExitObserver(finalTree.entries)
+        try {
+          await app.close()
+          observations.push({ mode: 'final-app-close', ...await finalObserver.finish() })
+        } finally { await finalObserver.abort() }
+      }
+      observations.push({ mode: 'post-close-root-users', processes: lingering() })
     }
   })
   console.log(JSON.stringify({ passed: true, observations }))

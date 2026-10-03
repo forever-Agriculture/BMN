@@ -57,7 +57,7 @@ function runCommand(
       executable,
       args,
       {
-        env: { ...env, ...options.env }, ...(options.cwd === undefined ? {} : { cwd: options.cwd }), timeout: 15_000,
+        env: { ...env, ...options.env, ...(process.platform === 'win32' && options.env?.HOME ? { USERPROFILE: options.env.HOME } : {}) }, ...(options.cwd === undefined ? {} : { cwd: options.cwd }), timeout: 15_000,
         ...(options.verbatim ? { windowsVerbatimArguments: true } : {})
       },
       (error, stdout, stderr) => {
@@ -470,7 +470,13 @@ describe('long text from standard input (Story 35.1)', () => {
   })
 
   it('ships the CLI executable, since sessions find it on PATH (Astra recheck)', async () => {
-    expect((await stat(CLI)).mode & 0o111).not.toBe(0)
+    if (process.platform === 'win32') {
+      const launcher = fileURLToPath(new URL('../../native-out/windows-cli/bmn.exe', import.meta.url))
+      expect((await stat(launcher)).isFile()).toBe(true)
+      expect((await runCommand(launcher, ['help'])).code).toBe(0)
+    } else {
+      expect((await stat(CLI)).mode & 0o111).not.toBe(0)
+    }
   })
 
   it('accepts input exactly at the limit, counted in the app\'s own unit', async () => {
@@ -614,7 +620,7 @@ describe('bmn help agents', () => {
 
   it('holds the CLI outline, the form outline and the documented one to one text (Story 35.2)', async () => {
     const [outline, documentation] = await Promise.all([runCli(['handoff', '--outline']), readFile(AGENT_CONTROL_DOC, 'utf8')])
-    const fenced = /`bmn handoff --outline` prints[\s\S]*?```text\n([\s\S]*?)```/.exec(documentation)
+    const fenced = /`bmn handoff --outline` prints[\s\S]*?```text\n([\s\S]*?)```/.exec(documentation.replace(/\r\n/g, '\n'))
 
     expect(outline.stdout).toBe(`${HANDOFF_OUTLINE}\n`)
     expect(fenced?.[1]).toBe(`${HANDOFF_OUTLINE}\n`)
@@ -629,14 +635,14 @@ describe('bmn help agents', () => {
       runCli(['help', 'agents']),
       readFile(AGENT_CONTROL_DOC, 'utf8')
     ])
-    const fenced = /## A brief for agents[\s\S]*?```text\n([\s\S]*?)```/.exec(documentation)
+    const fenced = /## A brief for agents[\s\S]*?```text\n([\s\S]*?)```/.exec(documentation.replace(/\r\n/g, '\n'))
 
     expect(fenced?.[1]).toBe(brief.stdout)
   })
 
   it('keeps the documented command block identical to what `bmn help` prints (Story 38.3)', async () => {
     const [usage, documentation] = await Promise.all([runCli(['help']), readFile(AGENT_CONTROL_DOC, 'utf8')])
-    const block = /<!-- BEGIN `bmn help` [^\n]*-->\n```text\n([\s\S]*?)```\n<!-- END `bmn help` -->/.exec(documentation)
+    const block = /<!-- BEGIN `bmn help` [^\n]*-->\n```text\n([\s\S]*?)```\n<!-- END `bmn help` -->/.exec(documentation.replace(/\r\n/g, '\n'))
 
     expect(usage.code).toBe(0)
     expect(block?.[1], 'docs/agent-control.md differs from `bmn help`; regenerate it with `pnpm run docs:bmn-help`')

@@ -6,6 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { open, rename, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { measureRawSupervisor } from './wsl-raw-supervisor-spike.mjs'
 
 assert.equal(process.platform, 'win32')
 assert.equal(process.env.GITHUB_ACTIONS, 'true')
@@ -119,7 +120,8 @@ finally:
   const owned = guest(['/usr/bin/python3', '-c', probe], { timeout: 90000 })
   assert.equal(owned.exit, 0, 'Detached guest trees must exit after scoped Stop and root crash')
   receipt.guest = JSON.parse(owned.stdout); receipt.measuredGuestOwnership = true
-  receipt.reason = 'Ordinary-user nondelegated systemd services contain detached trees through Stop/root crash. Raw supervisor death and Windows GUI interop still require measurement before implementation.'
+  receipt.rawSupervisorDeath = await measureRawSupervisor({ executable, distribution, uid, guest })
+  receipt.reason = 'Ordinary-user nondelegated systemd services contain detached trees through Stop/root crash. Raw supervisor EOF/host-crash measured separately; Windows GUI interop still requires measurement before implementation.'
 } catch (error) { receipt.reason = String(error.message).slice(0, 1000) }
 finally {
   if (importAttempted) {

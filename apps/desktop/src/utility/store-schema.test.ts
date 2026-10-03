@@ -71,6 +71,9 @@ describe('owned database schema', () => {
     const firstAppliedAt = '2026-09-12T10:00:00.000Z'
     const migratedAt = '2026-09-13T10:00:00.000Z'
     try {
+      // Seed one persisted legacy fixture transaction; production migrations below
+      // still run unchanged, outside this transaction, with their real durability.
+      database.exec('BEGIN')
       for (const migration of DATABASE_MIGRATIONS.slice(0, 2)) {
         database.exec(migration.sql)
         database
@@ -177,6 +180,7 @@ describe('owned database schema', () => {
         .prepare('SELECT * FROM conversation_binding ORDER BY session_id')
         .all()
 
+      database.exec('COMMIT')
       const initialized = initializeDatabase(database, migratedAt)
 
       expect(initialized.interruptedIncarnations).toBe(2)

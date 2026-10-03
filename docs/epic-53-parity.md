@@ -281,3 +281,22 @@ hook diagnosis delivered Stop RPCs with both fake and missing `/proc`; real serv
 validation subsequently identified a POSIX-only Claude configuration-path check.
 The next candidate uses native absolute-path validation, retaining relative-path
 rejection and agent/session authority. No whole-story acceptance is claimed.
+
+[Platform run 37137313541](https://github.com/forever-Agriculture/BMN/actions/runs/37137313541)
+tested `b973be9`: native drive/UNC configuration-directory RPC validation passed,
+and Windows units improved to 2,775 passed, 126 failed, 12 skipped. Thirty fully
+passing keys were removed; two new fixture timeouts remain failures until repaired.
+Main-crash and utility-crash restart checks passed, but final fixture-directory
+removal failed; full lifecycle acceptance remains open. Playwright's Windows
+`cmd.exe` wrapper had PID 6404 while the actual Electron main had PID 6436.
+The next fixture retains final Electron process handles before Close rather than
+using wrapper exit as cleanup evidence.
+
+[WSL ownership run 37137313568](https://github.com/forever-Agriculture/BMN/actions/runs/37137313568)
+imported the pinned Canonical Ubuntu 24.04.4 image as a fresh WSL2 registration.
+With systemd and ordinary UID 1000, Stop and root SIGKILL each ended all three
+detached processes, verified with retained Linux pidfds and start ticks. The
+registration was removed. Native host crash/stdio EOF and Windows GUI interop
+remain separate, unverified design gates. The next probe measures raw host loss,
+and measures configuration symlink/dotdot resolution and copy/write/rename ACL
+behavior using synthetic files only. No product WSL adapter exists yet.
