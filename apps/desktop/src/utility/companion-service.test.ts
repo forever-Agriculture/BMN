@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import {
   AGENT_ATTENTION_ORIGINS,
   DEFAULT_APP_SETTINGS,
@@ -240,7 +240,8 @@ describe('artifact delivery destination', () => {
     database.prepare('UPDATE session SET archived_at = NULL WHERE session_id = ?').run('s2')
     const result = await service.route(METHOD_REGISTRY.artifactDeliver, request) as { path: string }
     expect(writes).toHaveLength(1)
-    expect(new TextDecoder().decode(writes[0]!.bytes)).toBe(`\u001b[200~${result.path} \u001b[201~`)
+    const pathText = process.platform === 'win32' ? `'${result.path}'` : result.path
+    expect(new TextDecoder().decode(writes[0]!.bytes)).toBe(`\u001b[200~${pathText} \u001b[201~`)
     expect(readFileSync(artifact.storedPath, 'utf8')).toBe('original')
   })
 
@@ -308,7 +309,7 @@ describe('artifact delivery destination', () => {
 describe('file reference paste', () => {
   const request = {
     requestId: 'paste-one', sessionId: 's2', expectedIncarnationId: 'incarnation-2',
-    sourcePath: '/synthetic/notes and [plans]:v2.ts', line: 42, column: 7
+    sourcePath: resolve('/synthetic', process.platform === 'win32' ? 'notes and [plans]-v2.ts' : 'notes and [plans]:v2.ts'), line: 42, column: 7
   }
 
   it('claims concurrent duplicate clicks and writes the exact unstamped reference once without Enter', async () => {
@@ -322,7 +323,7 @@ describe('file reference paste', () => {
     })
     expect(writes).toHaveLength(1)
     const bytes = new TextDecoder().decode(writes[0]!.bytes)
-    expect(bytes).toBe(`\u001b[200~"/synthetic/notes and [plans]:v2.ts":42:7\u001b[201~`)
+    expect(bytes).toBe(`\u001b[200~"${request.sourcePath}":42:7\u001b[201~`)
     expect(bytes).not.toContain('[BMN handoff')
     const receipt = await workerLike(database).companion('getReceipt', 'file-reference-paste:paste-one')
     expect(receipt).toMatchObject({ state: 'done', result: first })
@@ -382,7 +383,7 @@ describe('file reference paste', () => {
   })
 
   it('treats a staged receipt from an interrupted host as uncertain and never replays the write', async () => {
-    const payload = '"/synthetic/notes and [plans]:v2.ts":42:7'
+    const payload = `"${request.sourcePath}":42:7`
     const paramsHash = createHash('sha256')
       .update(JSON.stringify([request.sessionId, request.expectedIncarnationId, payload])).digest('hex')
     await workerLike(database).companion('putReceipt', {
@@ -400,7 +401,9 @@ describe('file reference paste', () => {
   })
 
   it('rejects grammar failures and malformed positions before any PTY write', async () => {
-    for (const sourcePath of ['/synthetic/$HOME.ts', '/synthetic/a`b.ts', '/synthetic/a\\b.ts', '/synthetic/a*.ts', '/synthetic/a\'"b.ts']) {
+    const invalidPaths = ['/synthetic/$HOME.ts', '/synthetic/a`b.ts', '/synthetic/a*.ts', '/synthetic/a\'"b.ts',
+      process.platform === 'win32' ? 'C:\\synthetic\\a.ts:stream' : '/synthetic/a\\b.ts']
+    for (const sourcePath of invalidPaths) {
       await expect(service.route(METHOD_REGISTRY.fileReferencePaste, { ...request, requestId: sourcePath, sourcePath }))
         .rejects.toMatchObject({ code: ERROR_CODES.invalidArgument })
     }
@@ -1745,9 +1748,13 @@ describe('Telegram attention notifications', () => {
   it('round-trips Telegram choice, Other and card replies through the connector into a real PTY', async () => {
     const bot = await startFakeBotApi(424242, 424242)
     const receiver = join(root, 'receiver.txt')
-    const pty = (testRequire('node-pty') as typeof import('node-pty')).spawn(process.execPath, ['-e',
-      `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(receiver)},'');process.stdin.setRawMode(true);process.stdin.on('data',b=>fs.appendFileSync(${JSON.stringify(receiver)},b));process.stdout.write('READY');setInterval(()=>{},1000)`
-    ], { name: 'xterm-256color', cols: 100, rows: 30, cwd: root, env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } })
+    const receiverScript = join(root, 'receiver.cjs')
+    writeFileSync(receiverScript,
+      `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(receiver)},'');process.stdin.setRawMode(true);process.stdin.on('data',b=>fs.appendFileSync(${JSON.stringify(receiver)},b));process.stdout.write('READY');setInterval(()=>{},1000)`)
+    const pty = (testRequire('node-pty') as typeof import('node-pty')).spawn(process.execPath, [receiverScript], {
+      name: 'xterm-256color', cols: 100, rows: 30, cwd: root,
+      env: { ...process.env }, useConpty: true, useConptyDll: process.platform === 'win32'
+    })
     let output = ''
     pty.onData(text => { output += text })
     const options = service['options']
@@ -2068,7 +2075,7 @@ describe('refused agent requests', () => {
       `${now} conversation.observe refused for the owner: conversationReference must be a UUID`,
       ''
     ].join('\n'))
-    expect(statSync(service.refusalLogPath).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') expect(statSync(service.refusalLogPath).mode & 0o777).toBe(0o600)
   })
 
   it('keeps a refusal on one line, whatever the caller put in the parameter name', async () => {
@@ -3099,7 +3106,7 @@ describe('repeat watch notices and calibration', () => {
     expect(Buffer.byteLength(content)).toBeLessThanOrEqual(128 * 1024)
     expect(content.trim().split('\n').every((line) => typeof JSON.parse(line) === 'object')).toBe(true)
     expect(JSON.parse(content.trim().split('\n').at(-1)!)).toMatchObject({ maxRepeat: 3 })
-    expect(statSync(path).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') expect(statSync(path).mode & 0o777).toBe(0o600)
     await calls(2)
     database.prepare("DELETE FROM session WHERE session_id = 's1'").run()
     await service.sessionsChanged()

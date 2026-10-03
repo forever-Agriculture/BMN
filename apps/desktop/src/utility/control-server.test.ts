@@ -1327,7 +1327,7 @@ describe('control server socket lifecycle', () => {
     expect(named).toMatch(CONTROL_PIPE_PATTERN)
     expect(fixture.server.endpoint).toBe(named)
     const { restrictControlPipe } = (await import('node-pty')) as unknown as {
-      restrictControlPipe(name: string): { user: string; dacl: string }
+      restrictControlPipe(name: string): { user: string; dacl: string; verifiedCurrentUserOnly: boolean }
     }
     expect(isUserOnlyPipeDacl(restrictControlPipe(named))).toBe(true)
 
@@ -1391,9 +1391,16 @@ describe('control server socket lifecycle', () => {
 describe('control endpoint helpers', () => {
   const user = 'S-1-5-21-111-222-333-1001'
 
+  it('accepts normalized SID aliases only after native structural verification', () => {
+    const normalized = { user: 'S-1-5-21-111-222-333-500', dacl: 'D:P(A;;FA;;;LA)' }
+    expect(isUserOnlyPipeDacl({ ...normalized, verifiedCurrentUserOnly: true })).toBe(true)
+    expect(isUserOnlyPipeDacl({ ...normalized, verifiedCurrentUserOnly: false })).toBe(false)
+    expect(isUserOnlyPipeDacl(normalized)).toBe(false)
+  })
+
   it('accepts only a protected DACL that grants the current user alone', () => {
-    expect(isUserOnlyPipeDacl({ user, dacl: `D:P(A;;FA;;;${user})` })).toBe(true)
-    expect(isUserOnlyPipeDacl({ user, dacl: `D:P(A;;GA;;;${user})` })).toBe(true)
+    expect(isUserOnlyPipeDacl({ user, dacl: `D:P(A;;FA;;;${user})`, verifiedCurrentUserOnly: true })).toBe(true)
+    expect(isUserOnlyPipeDacl({ user, dacl: `D:P(A;;GA;;;${user})`, verifiedCurrentUserOnly: true })).toBe(true)
     // Unprotected, an extra Everyone read entry, another user, or a malformed SID all fail.
     expect(isUserOnlyPipeDacl({ user, dacl: `D:(A;;FA;;;${user})` })).toBe(false)
     expect(isUserOnlyPipeDacl({ user, dacl: `D:P(A;;FA;;;${user})(A;;FR;;;WD)` })).toBe(false)

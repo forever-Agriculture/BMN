@@ -211,7 +211,8 @@ async function sha256File(path: string): Promise<{ sha256: string; byteLength: n
 }
 
 function backupArtifactFile(artifact: ArtifactRecord): string {
-  return join('artifacts', artifact.sha256.slice(0, 2), artifact.artifactId)
+  // Manifest names are portable relative paths, independent of the writer OS.
+  return `artifacts/${artifact.sha256.slice(0, 2)}/${artifact.artifactId}`
 }
 
 function isBackupManifestEntry(value: unknown): value is BackupManifestEntry {

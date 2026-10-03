@@ -3,9 +3,12 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 
-export async function windowsExitObserver(entries, killIndex = -1) {
+export async function windowsExitObserver(entries, killIndex = -1, beforeKill = []) {
   assert.equal(process.platform, 'win32')
   assert.ok(entries.length && entries.every(entry => Number.isInteger(entry.pid) && entry.pid > 0 && Number.isFinite(entry.creationTime)))
+  const validIndex = index => Number.isInteger(index) && index >= 0 && index < entries.length
+  assert.ok(killIndex === -1 || validIndex(killIndex))
+  assert.ok(beforeKill.every(step => validIndex(step.killIndex) && step.waitIndices.every(validIndex)))
   const script = `$ErrorActionPreference='Stop';
 Add-Type 'using System; using System.Runtime.InteropServices; public static class HeldProcess { [DllImport("kernel32.dll",SetLastError=true)] public static extern bool TerminateProcess(IntPtr process,uint code); }';
 $config=ConvertFrom-Json ([Console]::In.ReadLine()); $held=@();
@@ -20,6 +23,11 @@ try {
  }
  [Console]::Out.WriteLine('READY');
  if([Console]::In.ReadLine() -ne 'go') { throw 'Observation aborted' };
+ foreach($step in $config.beforeKill) {
+  if($null -eq $config.entries[$step.killIndex].creationTime) { throw 'Termination requires creation identity' };
+  if(![HeldProcess]::TerminateProcess($held[$step.killIndex].Handle,77)) { throw 'Synthetic utility crash failed' };
+  foreach($index in $step.waitIndices) { if(!$held[$index].WaitForExit(15000)) { throw 'Owned process survived utility crash' } };
+ }
  if($config.killIndex -ge 0) {
   if($null -eq $config.entries[$config.killIndex].creationTime) { throw 'Termination requires creation identity' };
   if(![HeldProcess]::TerminateProcess($held[$config.killIndex].Handle,77)) { throw 'Synthetic host crash failed' };
@@ -50,7 +58,7 @@ try {
   })
   // Failure can arrive before the caller begins the lifecycle action.
   void done.catch(() => {})
-  child.stdin.write(JSON.stringify({ entries, killIndex }) + '\n')
+  child.stdin.write(JSON.stringify({ entries, killIndex, beforeKill }) + '\n')
   await ready
   clearTimeout(timer)
   return {

@@ -10,7 +10,11 @@ assert.equal(process.env.GITHUB_ACTIONS, 'true', 'Synthetic account creation is 
 const parent = mkdtempSync(join(tmpdir(), 'bmn-cross-user-'))
 const pipeFlag = process.argv.indexOf('--pipes')
 const pipes = pipeFlag < 0 ? [] : JSON.parse(readFileSync(process.argv[pipeFlag + 1], 'utf8'))
-assert.ok(Array.isArray(pipes) && pipes.every(pipe => typeof pipe === 'string' && pipe.startsWith('\\\\.\\pipe\\bmn-conpty-')))
+const kindFlag = process.argv.indexOf('--pipe-kind')
+const pipeKind = kindFlag < 0 ? 'pty' : process.argv[kindFlag + 1]
+assert.ok(['pty', 'control'].includes(pipeKind))
+const pipePrefix = pipeKind === 'control' ? '\\\\.\\pipe\\bmn-control-' : '\\\\.\\pipe\\bmn-conpty-'
+assert.ok(Array.isArray(pipes) && pipes.every(pipe => typeof pipe === 'string' && pipe.startsWith(pipePrefix)))
 try {
   const root = join(parent, 'private')
   ensurePrivateDirectories([root])
@@ -152,6 +156,6 @@ $stage='impersonated-access';
   assert.throws(() => ensurePrivateDirectories([root]), /could not secure/)
   assert.equal(readFileSync(movedForeignFile, 'utf8'), 'synthetic-foreign-owned')
   mkdirSync('test-results', { recursive: true })
-  writeFileSync(`test-results/${pipes.length ? 'windows-pty-pipes' : 'windows-storage-cross-user'}.json`, JSON.stringify({ crossAccount: 'passed', positiveReadControl: true, readDenied: true, writeDenied: true, deleteDenied: true, foreignOwnerRefused: true, foreignDataPreserved: true, accountRemoved: true, privatePipesDenied: pipes.length, ownerPipePositiveControl: pipes.length > 0, capabilityBearingToken: 'UNVERIFIED' }))
+  writeFileSync(`test-results/${pipes.length ? `windows-${pipeKind}-pipes` : 'windows-storage-cross-user'}.json`, JSON.stringify({ crossAccount: 'passed', positiveReadControl: true, readDenied: true, writeDenied: true, deleteDenied: true, foreignOwnerRefused: true, foreignDataPreserved: true, accountRemoved: true, privatePipesDenied: pipes.length, ownerPipePositiveControl: pipes.length > 0, capabilityBearingToken: 'UNVERIFIED' }))
   console.log('PASS native ordinary-account read/write/delete denial; synthetic account removed')
 } finally { rmSync(parent, { recursive: true, force: true }) }

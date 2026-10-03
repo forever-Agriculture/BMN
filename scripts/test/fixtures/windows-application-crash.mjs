@@ -47,18 +47,23 @@ void (async () => {
       executable: node, argv: [fixture, directory], cols: 80, rows: 24, backgroundChoice: 'stop'
     })
     const native = createRequire(join(desktop, 'package.json'))('node-pty')
-    const identities = new Map(app.getAppMetrics().map(({ pid, creationTime }) => [pid, { pid, creationTime }]))
+    const metrics = app.getAppMetrics()
+    const hosts = metrics.filter(metric => metric.name === 'pty-host' || metric.serviceName === 'pty-host')
+    assert.equal(hosts.length, 1, 'Observe the actual utility host')
+    const terminalPids = []
+    const identities = new Map(metrics.map(({ pid, creationTime }) => [pid, { pid, creationTime }]))
     for (const role of ['root', 'child', 'grandchild']) {
       const { pid } = await waitFor(() => JSON.parse(readFileSync(join(directory, role + '.json'), 'utf8')))
       const identity = native.queryProcessStartIdentity(pid)
       assert.match(identity, /^windows-filetime:[0-9]+$/)
+      terminalPids.push(pid)
       identities.set(pid, { pid, creationTime: Number(BigInt(identity.slice('windows-filetime:'.length)) / 10000n) - 11644473600000 })
     }
     const entries = [...identities.values()]
     assert.ok(entries.some(entry => entry.pid === process.pid))
     assert.ok(entries.length >= 6, 'Retain main, Electron descendants and the terminal tree')
     const temporary = report + '.tmp'
-    writeFileSync(temporary, JSON.stringify({ ready: true, mode, mainPid: process.pid, entries }))
+    writeFileSync(temporary, JSON.stringify({ ready: true, mode, mainPid: process.pid, utilityPid: hosts[0].pid, terminalPids, entries }))
     const { renameSync } = await import('node:fs')
     renameSync(temporary, report)
     // The parent retains creation-checked handles before deliberately killing main.

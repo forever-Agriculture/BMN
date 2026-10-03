@@ -202,7 +202,7 @@ export interface ControlServerOptions {
   receipts: ReceiptStore
   now?: () => Date
   /** Windows only: replaces the pipe's DACL with a protected current-user-only DACL and reads it back. */
-  restrictPipe?: (name: string) => Promise<{ user: string; dacl: string }>
+  restrictPipe?: (name: string) => Promise<PipeSecurityResult>
   /** How long a connection may stay unauthenticated before it is closed. */
   authDeadlineMs?: number
 }
@@ -211,10 +211,16 @@ export interface ControlServerOptions {
 export const CONTROL_PIPE_PATTERN = /^\\\\\.\\pipe\\bmn-control-[0-9a-f]{32}$/
 const MAX_ENDPOINT_FILE_BYTES = 256
 
-/** The applied DACL must grant access to the current user only, protected from inheritance. */
-export function isUserOnlyPipeDacl(applied: { user: string; dacl: string }): boolean {
-  if (!/^S-1-[0-9-]+$/.test(applied.user)) return false
-  return applied.dacl === `D:P(A;;FA;;;${applied.user})` || applied.dacl === `D:P(A;;GA;;;${applied.user})`
+interface PipeSecurityResult {
+  user: string
+  dacl: string
+  /** Set only after the native readback compares the actual SID/ACE/mask/protection. */
+  verifiedCurrentUserOnly?: boolean
+}
+
+/** SDDL aliases are diagnostic text; the native descriptor is the security proof. */
+export function isUserOnlyPipeDacl(applied: PipeSecurityResult): boolean {
+  return /^S-1-[0-9-]+$/.test(applied.user) && applied.verifiedCurrentUserOnly === true
 }
 
 /** What a client connects to: the socket itself, or on Windows the pipe a private endpoint file names. */
@@ -225,9 +231,9 @@ export async function resolveControlEndpoint(path: string, platform: NodeJS.Plat
   return text
 }
 
-async function restrictPipeNatively(name: string): Promise<{ user: string; dacl: string }> {
+async function restrictPipeNatively(name: string): Promise<PipeSecurityResult> {
   const { restrictControlPipe } = (await import('node-pty')) as unknown as {
-    restrictControlPipe(name: string): { user: string; dacl: string }
+    restrictControlPipe(name: string): PipeSecurityResult
   }
   return restrictControlPipe(name)
 }

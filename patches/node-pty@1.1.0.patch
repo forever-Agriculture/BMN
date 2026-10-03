@@ -12,7 +12,7 @@ index 5f63978..a32d857 100644
          },
          {
 diff --git a/lib/index.js b/lib/index.js
-index 1527069..7b76c58 100644
+index 1527069..fea6b2e 100644
 --- a/lib/index.js
 +++ b/lib/index.js
 @@ -5,9 +5,16 @@
@@ -76,7 +76,7 @@ index 1527069..7b76c58 100644
 +    if (process.platform !== 'win32')
 +        throw new Error('Windows control pipes only');
 +    const binding = (0, utils_1.loadNativeModule)('conpty').module;
-+    if (binding.bmnControlTransportVersion !== 1)
++    if (binding.bmnControlTransportVersion !== 2)
 +        throw new Error('BMN control transport addon missing');
 +    return binding.restrictControlPipe(name);
 +}
@@ -1029,7 +1029,7 @@ index 0451e2c..4e63c73 100644
 \ No newline at end of file
 +socket.connect(worker_threads_1.workerData.conoutPipeName, () => port.postMessage({ type: 'ready' }));
 diff --git a/src/index.ts b/src/index.ts
-index 8a7e950..142cfc7 100644
+index 8a7e950..7c9e9bb 100644
 --- a/src/index.ts
 +++ b/src/index.ts
 @@ -50,3 +50,27 @@ export function open(options: IPtyOpenOptions): ITerminal {
@@ -1046,10 +1046,10 @@ index 8a7e950..142cfc7 100644
 +}
 +
 +/** BMN: restrict a listening control pipe to the current user; returns the applied DACL. */
-+export function restrictControlPipe(name: string): { user: string; dacl: string } {
++export function restrictControlPipe(name: string): { user: string; dacl: string; verifiedCurrentUserOnly: true } {
 +  if (process.platform !== 'win32') throw new Error('Windows control pipes only');
 +  const binding: IConptyNative = loadNativeModule('conpty').module;
-+  if (binding.bmnControlTransportVersion !== 1) throw new Error('BMN control transport addon missing');
++  if (binding.bmnControlTransportVersion !== 2) throw new Error('BMN control transport addon missing');
 +  return binding.restrictControlPipe(name);
 +}
 +
@@ -1061,7 +1061,7 @@ index 8a7e950..142cfc7 100644
 +  binding.protectApplicationLifetime();
 +}
 diff --git a/src/native.d.ts b/src/native.d.ts
-index c53e086..dd31f5f 100644
+index c53e086..2acf306 100644
 --- a/src/native.d.ts
 +++ b/src/native.d.ts
 @@ -3,8 +3,14 @@
@@ -1071,7 +1071,7 @@ index c53e086..dd31f5f 100644
 +  bmnOwnershipVersion: number;
 +  queryProcessStartIdentity(pid: number): string;
 +  bmnControlTransportVersion: number;
-+  restrictControlPipe(name: string): { user: string; dacl: string };
++  restrictControlPipe(name: string): { user: string; dacl: string; verifiedCurrentUserOnly: true };
 +  bmnApplicationLifetimeVersion?: number;
 +  protectApplicationLifetime(): void;
    startProcess(file: string, cols: number, rows: number, debug: boolean, pipeName: string, conptyInheritCursor: boolean, useConptyDll: boolean): IConptyProcess;
@@ -1081,10 +1081,10 @@ index c53e086..dd31f5f 100644
    clear(ptyId: number, useConptyDll: boolean): void;
    kill(ptyId: number, useConptyDll: boolean): void;
 diff --git a/src/win/conpty.cc b/src/win/conpty.cc
-index 7b286d3..23787db 100644
+index 7b286d3..2ee1c24 100644
 --- a/src/win/conpty.cc
 +++ b/src/win/conpty.cc
-@@ -2,582 +2,471 @@
+@@ -2,582 +2,504 @@
   * Copyright (c) 2013-2015, Christopher Jeffrey, Peter Sunde (MIT License)
   * Copyright (c) 2016, Daniel Imms (MIT License).
   * Copyright (c) 2018, Microsoft Corporation (MIT License).
@@ -1109,6 +1109,7 @@ index 7b286d3..23787db 100644
 +#include <aclapi.h>
 +#include <algorithm>
 +#include <atomic>
++#include <cstddef>
 +#include <memory>
 +#include <mutex>
  #include <sstream>
@@ -1942,7 +1943,26 @@ index 7b286d3..23787db 100644
 -      !info[0].IsNumber() ||
 -      !info[1].IsBoolean()) {
 -    throw Napi::Error::New(env, "Usage: pty.kill(id, useConptyDll)");
--  }
++// BMN control transport. Node creates the listening pipe with FIRST_PIPE_INSTANCE
++// and default security, which lets other accounts open it for reading. Replace that
++// DACL with the protected user-only DACL through a short-lived client handle and
++// read it back. The descriptor belongs to the pipe, so every later instance libuv
++// creates shares it. The caller reports readiness only after verifying the result.
++static Napi::Value restrictControlPipe(const Napi::CallbackInfo& info) {
++  Napi::Env env = info.Env();
++  if (info.Length() != 1 || !info[0].IsString()) throw Napi::Error::New(env, "Control pipe name required");
++  std::wstring name = path_util::to_wstring(info[0].As<Napi::String>());
++  const std::wstring prefix = L"\\\\.\\pipe\\bmn-control-";
++  if (name.rfind(prefix, 0) != 0 || name.size() > 256) throw Napi::Error::New(env, "Not a BMN control pipe name");
++  Handle pipe;
++  for (int attempt = 0; !pipe.value; attempt++) {
++    HANDLE opened = CreateFileW(name.c_str(), READ_CONTROL | WRITE_DAC, 0, nullptr, OPEN_EXISTING,
++      SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
++    if (opened != INVALID_HANDLE_VALUE) { pipe.reset(opened); break; }
++    DWORD error = GetLastError();
++    if (error != ERROR_PIPE_BUSY || attempt > 0) throw failure(env, "Open control pipe", error);
++    if (!WaitNamedPipeW(name.c_str(), 5000)) throw failure(env, "Wait for control pipe");
+   }
 -
 -  int id = info[0].As<Napi::Number>().Int32Value();
 -  const bool useConptyDll = info[1].As<Napi::Boolean>().Value();
@@ -1964,27 +1984,6 @@ index 7b286d3..23787db 100644
 -    }
 -    if (useConptyDll) {
 -      TerminateProcess(handle->hShell, 1);
--    }
-+// BMN control transport. Node creates the listening pipe with FIRST_PIPE_INSTANCE
-+// and default security, which lets other accounts open it for reading. Replace that
-+// DACL with the protected user-only DACL through a short-lived client handle and
-+// read it back. The descriptor belongs to the pipe, so every later instance libuv
-+// creates shares it. The caller reports readiness only after verifying the result.
-+static Napi::Value restrictControlPipe(const Napi::CallbackInfo& info) {
-+  Napi::Env env = info.Env();
-+  if (info.Length() != 1 || !info[0].IsString()) throw Napi::Error::New(env, "Control pipe name required");
-+  std::wstring name = path_util::to_wstring(info[0].As<Napi::String>());
-+  const std::wstring prefix = L"\\\\.\\pipe\\bmn-control-";
-+  if (name.rfind(prefix, 0) != 0 || name.size() > 256) throw Napi::Error::New(env, "Not a BMN control pipe name");
-+  Handle pipe;
-+  for (int attempt = 0; !pipe.value; attempt++) {
-+    HANDLE opened = CreateFileW(name.c_str(), READ_CONTROL | WRITE_DAC, 0, nullptr, OPEN_EXISTING,
-+      SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
-+    if (opened != INVALID_HANDLE_VALUE) { pipe.reset(opened); break; }
-+    DWORD error = GetLastError();
-+    if (error != ERROR_PIPE_BUSY || attempt > 0) throw failure(env, "Open control pipe", error);
-+    if (!WaitNamedPipeW(name.c_str(), 5000)) throw failure(env, "Wait for control pipe");
-   }
 +  std::wstring sid = currentUserSid(env);
 +  std::wstring sddl = L"D:P(A;;GA;;;" + sid + L")";
 +  PSECURITY_DESCRIPTOR descriptor = nullptr;
@@ -2000,6 +1999,37 @@ index 7b286d3..23787db 100644
 +  PSECURITY_DESCRIPTOR applied = nullptr;
 +  status = GetSecurityInfo(pipe.value, SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, nullptr, nullptr, &applied);
 +  if (status != ERROR_SUCCESS) throw failure(env, "Read control pipe security", status);
++  // Compare binary SIDs and mapped access rights, not SDDL text. Windows can
++  // render the same SID as LA and GENERIC_ALL as FILE_ALL_ACCESS.
++  SECURITY_DESCRIPTOR_CONTROL control = 0;
++  DWORD revision = 0;
++  BOOL appliedPresent = FALSE, appliedDefaulted = FALSE;
++  PACL appliedDacl = nullptr;
++  PSID expectedSid = nullptr;
++  bool ownerOnly = ConvertStringSidToSidW(sid.c_str(), &expectedSid) &&
++    GetSecurityDescriptorControl(applied, &control, &revision) && (control & SE_DACL_PROTECTED) &&
++    GetSecurityDescriptorDacl(applied, &appliedPresent, &appliedDacl, &appliedDefaulted) &&
++    appliedPresent && appliedDacl && IsValidAcl(appliedDacl) && appliedDacl->AceCount == 1;
++  void* rawAce = nullptr;
++  if (ownerOnly) ownerOnly = GetAce(appliedDacl, 0, &rawAce) != FALSE;
++  if (ownerOnly) {
++    auto ace = static_cast<ACCESS_ALLOWED_ACE*>(rawAce);
++    ownerOnly = ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE && ace->Header.AceFlags == 0 &&
++      ace->Header.AceSize >= offsetof(ACCESS_ALLOWED_ACE, SidStart) + 8 && IsValidSid(&ace->SidStart) &&
++      GetLengthSid(&ace->SidStart) <= ace->Header.AceSize - offsetof(ACCESS_ALLOWED_ACE, SidStart) &&
++      EqualSid(&ace->SidStart, expectedSid);
++    if (ownerOnly) {
++      GENERIC_MAPPING mapping{FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_GENERIC_EXECUTE, FILE_ALL_ACCESS};
++      DWORD mask = ace->Mask;
++      MapGenericMask(&mask, &mapping);
++      ownerOnly = mask == FILE_ALL_ACCESS;
+     }
+   }
++  if (expectedSid) LocalFree(expectedSid);
++  if (!ownerOnly) {
++    LocalFree(applied);
++    throw Napi::Error::New(env, "Applied control pipe DACL is not protected current-user-only");
++  }
 +  LPWSTR text = nullptr;
 +  BOOL described = ConvertSecurityDescriptorToStringSecurityDescriptorW(applied, SDDL_REVISION_1, DACL_SECURITY_INFORMATION, &text, nullptr);
 +  DWORD describeError = GetLastError();
@@ -2010,6 +2040,7 @@ index 7b286d3..23787db 100644
 +  Napi::Object result = Napi::Object::New(env);
 +  result.Set("user", path_util::wstring_to_string(sid));
 +  result.Set("dacl", path_util::wstring_to_string(appliedSddl));
++  result.Set("verifiedCurrentUserOnly", true);
 +  return result;
 +}
  
@@ -2069,7 +2100,7 @@ index 7b286d3..23787db 100644
 +  exports.Set("queryProcessStartIdentity", Napi::Function::New(env, queryIdentity, "queryIdentity", state));
 +  exports.Set("bmnOwnershipVersion", 1);
 +  exports.Set("restrictControlPipe", Napi::Function::New(env, restrictControlPipe, "restrictControlPipe"));
-+  exports.Set("bmnControlTransportVersion", 1);
++  exports.Set("bmnControlTransportVersion", 2);
 +  exports.Set("protectApplicationLifetime", Napi::Function::New(env, protectApplicationLifetime, "protectApplicationLifetime"));
 +  exports.Set("bmnApplicationLifetimeVersion", 1);
    return exports;
@@ -2722,7 +2753,7 @@ index 79a4148..703ef71 100644
  });
 +socket.connect(workerData.conoutPipeName, () => port.postMessage({ type: 'ready' }));
 diff --git a/typings/node-pty.d.ts b/typings/node-pty.d.ts
-index 6f050ff..196f18b 100644
+index 6f050ff..e27fa2b 100644
 --- a/typings/node-pty.d.ts
 +++ b/typings/node-pty.d.ts
 @@ -15,6 +15,12 @@ declare module 'node-pty' {
@@ -2731,7 +2762,7 @@ index 6f050ff..196f18b 100644
     */
 +  export function queryProcessStartIdentity(pid: number): string;
 +  /** BMN: replace a listening control pipe's DACL with a protected current-user-only DACL and read it back. */
-+  export function restrictControlPipe(name: string): { user: string; dacl: string };
++  export function restrictControlPipe(name: string): { user: string; dacl: string; verifiedCurrentUserOnly: true };
 +  /** Process-lifetime backstop; no JavaScript disposer. */
 +  export function protectApplicationLifetime(): void;
 +

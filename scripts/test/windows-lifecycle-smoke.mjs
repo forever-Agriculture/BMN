@@ -55,29 +55,47 @@ if(role!=='grandchild')cp.spawn(process.execPath,[__filename,dir,role==='root'?'
 if(role==='root')process.stdout.write('BMN_LIFECYCLE_READY\\r\\n');
 setInterval(()=>{if(role==='root')publish('heartbeat.json',Date.now())},100);
 `)
-    // A direct launch separates app lifetime from debugger attachment. The
-    // no-backstop control must fail this exact retained-handle cleanup fence.
-    for (const mode of ['without-backstop', 'protected']) {
-      const probeRoot = join(root, mode)
+    // Measure the original utility-loss -> main-death sequence with the debugger
+    // attached, alongside a protected direct launch. No missing RED is called proof.
+    for (const { mode, directLaunch } of [
+      { mode: 'protected', directLaunch: true },
+      { mode: 'without-backstop', directLaunch: false },
+      { mode: 'protected', directLaunch: false }
+    ]) {
+      const probeRoot = join(root, `${mode}-${directLaunch ? 'direct' : 'debugger'}`)
       mkdirSync(probeRoot)
-      const report = join(output, `windows-application-crash-${mode}.json`)
+      const report = join(output, `windows-application-crash-${mode}-${directLaunch ? 'direct' : 'debugger'}.json`)
       const probeEnv = { ...env,
         BMN_CONFIG_HOME: join(probeRoot, 'config'), BMN_DATA_HOME: join(probeRoot, 'data'),
         BMN_STATE_HOME: join(probeRoot, 'state'), BMN_RUNTIME_HOME: join(probeRoot, 'runtime') }
-      const probe = spawn(options.executablePath, [join(repo, 'scripts/test/fixtures/windows-application-crash.mjs'),
-        repo, probeRoot, process.execPath, fixture, report, mode, '--bmn-test-mode'], { cwd: repo, env: probeEnv, stdio: 'inherit' })
+      const probeArgs = [join(repo, 'scripts/test/fixtures/windows-application-crash.mjs'),
+        repo, probeRoot, process.execPath, fixture, report, mode, '--bmn-test-mode']
+      const debugApp = directLaunch ? null : await _electron.launch({ ...options, args: probeArgs, env: probeEnv })
+      const probe = debugApp?.process() ?? spawn(options.executablePath, probeArgs, { cwd: repo, env: probeEnv, stdio: 'inherit' })
       let held
       const probeTimer = setTimeout(() => { if (probe.exitCode === null) probe.kill() }, 60000)
       try {
         const ready = await waitFor(() => JSON.parse(readFileSync(report, 'utf8')), 'Direct crash probe did not become ready')
         assert.equal(ready.ready, true, ready.error)
         const mainIndex = ready.entries.findIndex(entry => entry.pid === ready.mainPid)
-        held = await windowsExitObserver(ready.entries, mainIndex)
+        const utilityIndex = ready.entries.findIndex(entry => entry.pid === ready.utilityPid)
+        assert.ok(mainIndex >= 0 && utilityIndex >= 0)
+        const beforeKill = directLaunch ? [] : [{ killIndex: utilityIndex,
+          waitIndices: ready.entries.flatMap((entry, index) =>
+            entry.pid === ready.utilityPid || ready.terminalPids.includes(entry.pid) ? [index] : []) }]
+        held = await windowsExitObserver(ready.entries, mainIndex, beforeKill)
         if (mode === 'without-backstop') {
-          await assert.rejects(held.finish(), /Owned process survived lifecycle action/)
-          observations.push({ mode: 'application-lifetime-fence-RED', directLaunch: true, failedOnMissingBackstop: true })
+          let missingBackstopObserved = false
+          try { await held.finish() } catch (error) {
+            assert.match(String(error), /Owned process survived lifecycle action/)
+            missingBackstopObserved = true
+          }
+          observations.push({ mode: 'application-lifetime-baseline', directLaunch,
+            utilityFirst: true, missingBackstopObserved,
+            regressionProof: missingBackstopObserved ? 'RED' : 'INCONCLUSIVE' })
         } else {
-          observations.push({ mode: 'application-lifetime-fence-GREEN', directLaunch: true, ...await held.finish() })
+          observations.push({ mode: 'application-lifetime-protected', directLaunch,
+            utilityFirst: !directLaunch, ...await held.finish() })
         }
       } finally {
         clearTimeout(probeTimer)
