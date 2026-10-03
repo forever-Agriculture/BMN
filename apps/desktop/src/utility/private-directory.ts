@@ -40,19 +40,32 @@ function Assert-SafeAncestors($directory) {
   }
 }
 function Get-DirectoryKey($directory) {
-  $key = $directory.FullName
+  # .NET Framework only expands the final existing component. A missing leaf can
+  # therefore retain an 8.3 parent name; normalize the existing ancestor first.
+  $cursor = New-Object System.IO.DirectoryInfo($directory.FullName)
+  $missing = New-Object 'System.Collections.Generic.Stack[string]'
+  while (-not $cursor.Exists) {
+    $missing.Push($cursor.Name)
+    $cursor = $cursor.Parent
+    if ($null -eq $cursor) { throw 'BMN root has no accessible existing ancestor' }
+  }
+  $existing = New-Object System.IO.DirectoryInfo($cursor.FullName)
+  $key = $existing.FullName
+  while ($missing.Count -gt 0) { $key = [System.IO.Path]::Combine($key, $missing.Pop()) }
   if ($key.Length -gt [System.IO.Path]::GetPathRoot($key).Length) { $key = $key.TrimEnd([System.IO.Path]::DirectorySeparatorChar) }
   return $key
 }
 # DirectoryInfo expands existing 8.3 ancestors. Compare all roots using that same
 # representation, before any creation, while retaining duplicate requested entries.
 $directories = @($paths | ForEach-Object { New-Object System.IO.DirectoryInfo($_) })
+$keys = @($directories | ForEach-Object { Get-DirectoryKey $_ })
 $canonicalDataRoot = if ($chromiumDataRoot) { Get-DirectoryKey (New-Object System.IO.DirectoryInfo($chromiumDataRoot)) } else { $null }
 $protectedKeys = @($request.protectedRoots | ForEach-Object { Get-DirectoryKey (New-Object System.IO.DirectoryInfo($_)) })
 $dataMatches = 0
-foreach ($directory in $directories) {
+for ($rootIndex = 0; $rootIndex -lt $directories.Count; $rootIndex++) {
+  $directory = $directories[$rootIndex]
   Assert-SafeAncestors $directory
-  $key = Get-DirectoryKey $directory
+  $key = $keys[$rootIndex]
   if ($null -eq $directory.Parent -or $protectedKeys -contains $key) { throw 'BMN roots must be dedicated application directories' }
   if ($canonicalDataRoot) {
     if ($key.Equals($canonicalDataRoot, [System.StringComparison]::OrdinalIgnoreCase)) { $dataMatches++ }
@@ -63,7 +76,8 @@ foreach ($directory in $directories) {
   }
 }
 if ($canonicalDataRoot -and $dataMatches -ne 1) { throw 'BMN Chromium storage must be a distinct application root' }
-foreach ($directory in $directories) {
+for ($rootIndex = 0; $rootIndex -lt $directories.Count; $rootIndex++) {
+  $directory = New-Object System.IO.DirectoryInfo($keys[$rootIndex])
   Assert-SafeAncestors $directory
   if (-not $directory.Exists) {
     $acl = New-Object System.Security.AccessControl.DirectorySecurity
@@ -102,7 +116,7 @@ foreach ($directory in $directories) {
     }
     if (-not $ownerAccess) { throw 'BMN storage ACL verification failed' }
     $chromiumItem = $false
-    if ($canonicalDataRoot -and (Get-DirectoryKey $directory).Equals($canonicalDataRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    if ($canonicalDataRoot -and $keys[$rootIndex].Equals($canonicalDataRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
       foreach ($name in @('Cache', 'Network', 'Shared Dictionary')) {
         $prefix = [System.IO.Path]::Combine($directory.FullName, $name)
         if ($item.FullName.Equals($prefix, [System.StringComparison]::OrdinalIgnoreCase) -or $item.FullName.StartsWith($prefix + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) { $chromiumItem = $true }

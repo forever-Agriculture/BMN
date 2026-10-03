@@ -129,6 +129,8 @@ describe.skipIf(process.platform !== 'win32')('native Windows private roots', ()
       expect(powershell(root, sddl)).toBe(before)
     }
     expect(() => ensurePrivateDirectories([join(short, 'new-leaf')], 'win32', join(long, 'new-leaf'))).not.toThrow()
+    expect(() => ensurePrivateDirectories([join(short, 'missing-parent', 'nested-leaf')], 'win32', join(long, 'missing-parent', 'nested-leaf'))).not.toThrow()
+    expect(() => ensurePrivateDirectories([join(long, 'reverse-parent', 'nested-leaf')], 'win32', join(short, 'reverse-parent', 'nested-leaf'))).not.toThrow()
     expect(() => ensurePrivateDirectories([short, root + '-sibling'], 'win32', long)).not.toThrow()
   })
   it('accepts only scoped network capability access while retaining the strict default', { timeout: 60_000 }, () => {

@@ -11,7 +11,9 @@ subtrees of the resolved data root. Config, state, runtime, database and other
 application files retain the strict policy. Windows roots that alias or overlap
 the data root are refused to prevent ambiguous policy selection. All requested
 paths are compared using the same Windows .NET full-path normalization, including
-8.3 aliases and trailing separators, before any root is created. Duplicate
+8.3 aliases and trailing separators, before any root is created. Missing paths are
+resolved from the nearest existing ancestor plus their missing components, so .NET
+Framework cannot retain an unexpanded parent alias. Creation uses those same keys. Duplicate
 requested roots remain visible to that preflight.
 
 The capability SID is

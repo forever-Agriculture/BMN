@@ -47,6 +47,22 @@ must be accessible to both maintainers; retain synthetic results, never credenti
 or private session content. Neither publishing a release nor sending test messages
 is authorized merely by this planning document.
 
+## Delivery acceptance update (owner, 2026-10-03)
+
+Implement the full epic and run every feasible check on the development machine,
+in native Windows/Linux CI, and in available local emulation. The owner directs
+release after those checks. The Windows collaborator verifies the released build
+on his Windows laptop and may repair issues found there.
+
+This explicitly defers unavailable Windows 11, device and WSL acceptance to
+post-release verification. Record each such check as **UNVERIFIED** in the parity
+checklist and release notes; do not substitute Windows Server or WSL evidence for
+native Windows 11. Missing access alone no longer blocks release. Known reproduced
+failures still require repair, and this update does not remove promised features,
+security requirements, the ConPTY feasibility gate, or authorization requirements
+for paid infrastructure, phone/provider tests or owner-profile changes. This owner
+update takes precedence over the earlier pre-release manual-evidence timing below.
+
 ## Requirements and coverage
 
 | Requirement | User outcome | Stories |

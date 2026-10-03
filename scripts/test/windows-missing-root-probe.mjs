@@ -34,4 +34,5 @@ $rows=@(foreach ($value in @($short,$long,[System.IO.Path]::Combine($short,'new-
   mkdirSync('test-results', { recursive: true })
   writeFileSync('test-results/windows-missing-root.json', JSON.stringify({ metadata, outcome, guard }, null, 2))
   console.log(JSON.stringify({ windowsMissingRoot: outcome }))
+  assert.equal(outcome, 'PASS', 'missing-leaf short/long aliases must identify the same root')
 } finally { rmSync(parent, { recursive: true, force: true }) }
