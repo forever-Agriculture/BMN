@@ -2430,7 +2430,7 @@ function App(): React.JSX.Element {
                 openFileReference(null, path, true)
                 return
               }
-              const reference = exactAbsoluteFileReference(path, null, null)
+              const reference = exactAbsoluteFileReference(path, null, null, window.aiTerminal.platform === 'win32' ? 'win32' : 'posix')
               if (!reference) {
                 brief('This filename cannot be represented as a file reference.')
                 return
@@ -2492,7 +2492,7 @@ function App(): React.JSX.Element {
           onUpdated={updated => setWorkspaces(current => current.map(item => item.workspaceId === updated.workspaceId && item.revision <= updated.revision ? updated : item))}
           onOpen={path => {
             const current = workspacesRef.current.find(item => item.workspaceId === workspace.workspaceId && item.archivedAt === null)
-            const reference = exactAbsoluteFileReference(path, null, null)
+            const reference = exactAbsoluteFileReference(path, null, null, window.aiTerminal.platform === 'win32' ? 'win32' : 'posix')
             if (!current || !reference) { brief('This pin is unavailable. Reopen Pinned files.'); return }
             setDialog({ kind: 'file-reference', request: { workspaceId: current.workspaceId, sessionName: '', workspaceName: current.name,
               launchDirectory: current.defaultCwd ?? '/', reference, openNow: true, openedFromWorkspaceId: activeWorkspaceId } })

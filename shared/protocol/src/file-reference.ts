@@ -20,6 +20,7 @@ export type FileReferenceParse = { ok: true; reference: FileReference } | { ok: 
  * `terminal` is text found in output, where anything ambiguous stays plain text.
  */
 export type FileReferenceMode = 'typed' | 'terminal'
+export type FileReferencePathStyle = 'posix' | 'win32'
 
 export interface FileReferenceMatch {
   /** Offsets into the searched text; `end` is exclusive. */
@@ -122,10 +123,10 @@ export interface FileReferenceSearchResult {
 }
 
 /** A formatted reference may be sent only when the existing parser reads it back exactly. */
-export function exactAbsoluteFileReference(path: string, line: number | null, column: number | null): string | null {
-  if (!path.startsWith('/')) return null
+export function exactAbsoluteFileReference(path: string, line: number | null, column: number | null, style: FileReferencePathStyle = 'posix'): string | null {
+  if (!path.startsWith('/') && !(style === 'win32' && windowsAbsolutePath(path))) return null
   const text = formatFileReference(path, line, column)
-  const parsed = parseFileReference(text)
+  const parsed = parseFileReference(text, 'typed', style)
   if (!parsed.ok || parsed.reference.path !== path || parsed.reference.line !== line || parsed.reference.column !== column) return null
   return text
 }
@@ -168,8 +169,20 @@ const SUFFIX = /^(.+?):(\d+)(?::(\d+))?$/s
 const EXTENSION = /^[^/]*[^/.][^/]*\.[\p{L}\p{N}_-]*\p{L}[\p{L}\p{N}_-]*$/u
 const LETTER = /\p{L}/u
 
+/** Extended filesystem paths retain their original bytes; only validation drops the namespace. */
+function windowsPathBody(path: string): string {
+  if (/^\\\\\?\\[A-Za-z]:\\/u.test(path)) return path.slice(4)
+  if (/^\\\\\?\\UNC\\[^\\]+\\[^\\]+\\/iu.test(path)) return '\\\\' + path.slice(8)
+  return path
+}
+
+function windowsAbsolutePath(path: string): boolean {
+  const body = windowsPathBody(path)
+  return /^[A-Za-z]:[\\/]/u.test(body) || /^\\\\[^\\/.?]+\\[^\\/]+(?:\\|$)/u.test(body)
+}
+
 /** Parses a reference entered on purpose or found in output; nothing here reads the filesystem. */
-export function parseFileReference(input: string, mode: FileReferenceMode = 'typed'): FileReferenceParse {
+export function parseFileReference(input: string, mode: FileReferenceMode = 'typed', style: FileReferencePathStyle = 'posix'): FileReferenceParse {
   const text = input.trim()
   if (text.length === 0) return failure('Enter a file reference.')
   if (text.length > FILE_REFERENCE_MAX_LENGTH) return failure('That reference is too long to be a file path.')
@@ -203,36 +216,42 @@ export function parseFileReference(input: string, mode: FileReferenceMode = 'typ
     line = position.value.line
     column = position.value.column
   }
-  const problem = pathProblem(path, mode, quote !== null)
+  const problem = pathProblem(path, mode, quote !== null, style)
   return problem ? failure(problem) : { ok: true, reference: { path, line, column } }
 }
 
 /** Why a path is not accepted as a reference, or null. */
-function pathProblem(path: string, mode: FileReferenceMode, quoted: boolean): string | null {
+function pathProblem(path: string, mode: FileReferenceMode, quoted: boolean, style: FileReferencePathStyle): string | null {
   if (path.length === 0) return 'Enter a file path.'
-  if (SCHEME.test(path)) return 'URLs and other schemes are not supported; enter a local path.'
+  const windows = style === 'win32'
+  const body = windows ? windowsPathBody(path) : path
+  const drive = windows && /^[A-Za-z]:[\\/]/u.test(body)
+  if (SCHEME.test(body) && !drive) return 'URLs and other schemes are not supported; enter a local path.'
+  if (windows && /^\\\\[?.]\\/u.test(path) && body === path) return 'Device paths are not file references.'
+  if (windows && (drive ? body.slice(2) : body).includes(':')) return 'Alternate data streams are not file references.'
   if (path.startsWith('~')) return '~ is not expanded; enter the full path.'
   if (path.includes('$')) return 'Shell variables are not expanded; enter the full path.'
   if (path.includes('`')) return 'Command substitution is not allowed in a file reference.'
-  if (/[*?]/.test(path)) return 'Wildcards are not expanded; enter one file path.'
-  if (path.includes('\\')) return 'Backslash escapes are not interpreted; put a path with spaces in quotes.'
-  if (!quoted && path.includes(':')) return 'A colon is only accepted before a line number; quote a path that contains one.'
-  if (path.endsWith('/') || path === '.' || path === '..' || path.endsWith('/.') || path.endsWith('/..')) {
+  if (/[*?]/.test(body)) return 'Wildcards are not expanded; enter one file path.'
+  if (!windows && path.includes('\\')) return 'Backslash escapes are not interpreted; put a path with spaces in quotes.'
+  if (!windows && !quoted && path.includes(':')) return 'A colon is only accepted before a line number; quote a path that contains one.'
+  const grammarPath = windows ? body.replaceAll('\\', '/') : path
+  if (grammarPath.endsWith('/') || grammarPath === '.' || grammarPath === '..' || grammarPath.endsWith('/.') || grammarPath.endsWith('/..')) {
     return 'That names a folder; enter a file.'
   }
   if (!LETTER.test(path) && !/\p{N}/u.test(path)) return 'Enter a file path.'
-  const segments = path.split('/')
+  const segments = grammarPath.split('/')
   const last = segments.at(-1) ?? ''
-  const explicit = path.startsWith('/') || path.startsWith('./') || path.startsWith('../')
+  const explicit = grammarPath.startsWith('/') || grammarPath.startsWith('./') || grammarPath.startsWith('../') || drive
   if (mode === 'terminal') {
     if (/\s/.test(path) && !quoted) return 'Unquoted spaces are ambiguous.'
     if (!LETTER.test(path)) return 'No letters in the path.'
     // One slash between plain words ("and/or", "I/O") is prose more often than a path.
     if (!explicit && !EXTENSION.test(last) && segments.length < 3) return 'Ambiguous relative path.'
-    if (!path.includes('/') && !simpleFileName(last)) return 'A bare word is not a file name.'
+    if (!grammarPath.includes('/') && !simpleFileName(last)) return 'A bare word is not a file name.'
     return null
   }
-  if (!explicit && !path.includes('/') && !EXTENSION.test(last)) {
+  if (!explicit && !grammarPath.includes('/') && !EXTENSION.test(last)) {
     return 'Add ./ before a file name without an extension.'
   }
   return null
@@ -264,6 +283,7 @@ function failure(reason: string): { ok: false; reason: string } {
 
 /** Characters a printed path is made of; anything else ends it. */
 const PATH_RUN = /[\p{L}\p{M}\p{N}_./~@+:-]+/gu
+const WINDOWS_PATH_RUN = /[\p{L}\p{M}\p{N}_./\\~@+:-]+/gu
 const QUOTED_RUN = /(["'])([^"'\n]+?)\1(?::\d+(?::\d+)?)?/g
 /** A path may follow these directly; after anything else ($HOME/x, a\b) the text is not a plain path. */
 const OPENING = /[\s([{<"'`=,;]/u
@@ -274,7 +294,7 @@ const TRAILING = /[.,;:!?]+$/
  * Finds conservative file references in one logical line of terminal output. Candidates that could be
  * prose, a URL, an expansion or part of a longer token stay plain text; nothing is guessed.
  */
-export function findFileReferences(text: string): FileReferenceMatch[] {
+export function findFileReferences(text: string, style: FileReferencePathStyle = 'posix'): FileReferenceMatch[] {
   const matches: FileReferenceMatch[] = []
   const taken: Array<[number, number]> = []
   const accept = (start: number, raw: string): void => {
@@ -282,13 +302,13 @@ export function findFileReferences(text: string): FileReferenceMatch[] {
     const before = start === 0 ? ' ' : text[start - 1]!
     const after = end >= text.length ? ' ' : text[end]!
     if (!OPENING.test(before) || !CLOSING.test(after)) return
-    const parsed = parseFileReference(raw, 'terminal')
+    const parsed = parseFileReference(raw, 'terminal', style)
     if (!parsed.ok) return
     taken.push([start, end])
     matches.push({ start, end, text: raw, reference: parsed.reference })
   }
   for (const found of text.matchAll(QUOTED_RUN)) accept(found.index, found[0])
-  for (const found of text.matchAll(PATH_RUN)) {
+  for (const found of text.matchAll(style === 'win32' ? WINDOWS_PATH_RUN : PATH_RUN)) {
     const trimmed = found[0].replace(TRAILING, '')
     const start = found.index
     if (trimmed.length === 0 || taken.some(([from, to]) => start < to && start + trimmed.length > from)) continue

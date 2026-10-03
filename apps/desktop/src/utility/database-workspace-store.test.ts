@@ -2,7 +2,7 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import {
   ERROR_CODES,
   WORKSPACE_MARKERS,
@@ -1020,7 +1020,7 @@ describe('bounded explicit workspace pins', () => {
       expect(old.pinnedFilePaths).toEqual([])
       const pinned = updateWorkspace(database, { workspaceId: old.workspaceId, expectedRevision: old.revision,
         pinnedFilePaths: ['docs/SPEC.md', '/different/AGENTS.md'] }, now)
-      expect(pinned.pinnedFilePaths).toEqual(['/project/docs/SPEC.md', '/different/AGENTS.md'])
+      expect(pinned.pinnedFilePaths).toEqual([resolve('/project', 'docs/SPEC.md'), resolve('/different/AGENTS.md')])
       const renamed = updateWorkspace(database, { workspaceId: old.workspaceId, expectedRevision: pinned.revision, name: 'Renamed', defaultCwd: '/changed' }, now)
       expect(renamed.pinnedFilePaths).toEqual(pinned.pinnedFilePaths)
       expect(() => updateWorkspace(database, { workspaceId: old.workspaceId, expectedRevision: pinned.revision, pinnedFilePaths: [] }, now)).toThrow()
@@ -1040,7 +1040,7 @@ describe('bounded explicit workspace pins', () => {
       expect(() => update(['relative.md'])).toThrow()
       expect(() => update(Array.from({ length: 9 }, (_, index) => `/file-${index}`))).toThrow()
       expect(() => update(['/' + 'p'.repeat(4096)])).toThrow()
-      expect(update(['/absolute.md']).pinnedFilePaths).toEqual(['/absolute.md'])
+      expect(update(['/absolute.md']).pinnedFilePaths).toEqual([resolve('/absolute.md')])
     } finally { database.close() }
   })
 })

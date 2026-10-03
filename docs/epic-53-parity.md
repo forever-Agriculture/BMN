@@ -12,9 +12,9 @@ Epic 50/54 installed/provider acceptance remains separate and unfinished.
 | Capability / owning story | Implementation owner | Linux candidate | Native Windows | WSL |
 | --- | --- | --- | --- | --- |
 | Build, data roots, database, restart, single instance, unpacked startup — 53.1 | Implementation team | Build/startup/package PASS on Ubuntu CI | Install/build/package/startup/restart/ACL PASS on Server 2025; Windows 11 manual acceptance UNVERIFIED | UNVERIFIED |
-| PowerShell/cmd launch, input, stop, process identity, crash cleanup, ConPTY feasibility — 53.2 | Implementation team | Affected tests and sandboxed startup PASS | Bundled byte fidelity and owned-tree cleanup PASS; app shell/UI checks pending | UNVERIFIED |
+| PowerShell/cmd launch, input, stop, process identity, crash cleanup, ConPTY feasibility — 53.2 | Implementation team | Affected tests and sandboxed startup PASS | Bundled bytes, terminal jobs and shell/UI PASS; main-owned Electron lifetime candidate and direct/no-backstop crash fences await native CI | UNVERIFIED |
 | Files, path links, attachments, backups, directory permissions — 53.3 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
-| CLI, transport, caller/session authority — 53.4 | Implementation team | UNVERIFIED | Not implemented | UNVERIFIED |
+| CLI, transport, caller/session authority — 53.4 | Implementation team | 178 server/498 CLI affected checks PASS on 629dc91 | User-only named pipe and native bmn.exe launcher implemented; native compile/security/argv tests pending | UNVERIFIED |
 | Named distributions, bridge, path mapping, terminfo — 53.5 | Implementation team | UNVERIFIED | UNVERIFIED | Not implemented |
 | Claude/Codex/OpenCode/Cursor hooks, history, usage, compaction, resume — 53.6 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
 | Terminal images, clipboard, IME/AltGr, scaling, panes, themes, keyboard access — 53.7 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
@@ -201,7 +201,11 @@ unknown identities/rights, shared roots, links and unsafe owners rejected.
 Source rechecks found no additional defect, but native evidence leaves the two
 failures above unresolved. The dev-auto consultant/final repair allowance is
 exhausted; this boundary is BLOCKED pending an explicit next design decision.
-No merge or deployment has occurred. Stories 53.2–53.13 remain backlog.
+No merge or deployment has occurred. Stories 53.2–53.4 are in progress;
+53.5–53.13 remain unfinished. Native Windows job nesting and retained Electron
+child cleanup are unverified until the new crash fences run. Windows file-path
+grammar, pins and directory-flush portability have local regression evidence;
+this does not establish native file or Explorer acceptance.
 
 Windows 11 standard-user acceptance, foreign-owner refusal, ordinary and
 capability-bearing cross-account denial, and wide-tree memory measurements remain

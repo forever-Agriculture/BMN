@@ -104,7 +104,8 @@ export function FileReferenceDialog(props: {
   const throughSymlink = result?.canonicalPath && result.canonicalPath !== result.resolvedPath ? result.resolvedPath : null
   const preview = snapshot ? previewLines(snapshot) : null
   const sendPayload = snapshot
-    ? exactAbsoluteFileReference(snapshot.canonicalPath, snapshot.line, snapshot.column)
+    ? exactAbsoluteFileReference(snapshot.canonicalPath, snapshot.line, snapshot.column,
+      window.aiTerminal.platform === 'win32' ? 'win32' : 'posix')
     : null
 
   const send = (): void => {

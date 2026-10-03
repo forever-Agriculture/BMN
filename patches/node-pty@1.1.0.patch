@@ -12,10 +12,10 @@ index 5f63978..a32d857 100644
          },
          {
 diff --git a/lib/index.js b/lib/index.js
-index 1527069..761aaab 100644
+index 1527069..7b76c58 100644
 --- a/lib/index.js
 +++ b/lib/index.js
-@@ -5,9 +5,15 @@
+@@ -5,9 +5,16 @@
   * Copyright (c) 2018, Microsoft Corporation (MIT License).
   */
  Object.defineProperty(exports, "__esModule", { value: true });
@@ -29,12 +29,13 @@ index 1527069..761aaab 100644
 +exports.open = open;
 +exports.queryProcessStartIdentity = queryProcessStartIdentity;
 +exports.restrictControlPipe = restrictControlPipe;
++exports.protectApplicationLifetime = protectApplicationLifetime;
 +const utils_1 = require("./utils");
 +let terminalCtor;
  if (process.platform === 'win32') {
      terminalCtor = require('./windowsTerminal').WindowsTerminal;
  }
-@@ -29,24 +35,37 @@ else {
+@@ -29,24 +36,47 @@ else {
  function spawn(file, args, opt) {
      return new terminalCtor(file, args, opt);
  }
@@ -78,6 +79,16 @@ index 1527069..761aaab 100644
 +    if (binding.bmnControlTransportVersion !== 1)
 +        throw new Error('BMN control transport addon missing');
 +    return binding.restrictControlPipe(name);
++}
++
++/** BMN: process-lifetime ownership; deliberately has no JS cleanup/dispose operation. */
++function protectApplicationLifetime() {
++    if (process.platform !== 'win32')
++        throw new Error('Windows application lifetime only');
++    const binding = (0, utils_1.loadNativeModule)('conpty').module;
++    if (binding.bmnApplicationLifetimeVersion !== 1)
++        throw new Error('BMN application lifetime addon missing');
++    binding.protectApplicationLifetime();
 +}
 diff --git a/lib/windowsConoutConnection.js b/lib/windowsConoutConnection.js
 index 1be15ca..bf6e593 100644
@@ -1018,10 +1029,10 @@ index 0451e2c..4e63c73 100644
 \ No newline at end of file
 +socket.connect(worker_threads_1.workerData.conoutPipeName, () => port.postMessage({ type: 'ready' }));
 diff --git a/src/index.ts b/src/index.ts
-index 8a7e950..8dcc46f 100644
+index 8a7e950..142cfc7 100644
 --- a/src/index.ts
 +++ b/src/index.ts
-@@ -50,3 +50,19 @@ export function open(options: IPtyOpenOptions): ITerminal {
+@@ -50,3 +50,27 @@ export function open(options: IPtyOpenOptions): ITerminal {
   * could be removed at any time.
   */
  export const native = (process.platform !== 'win32' ? loadNativeModule('pty').module : null);
@@ -1041,11 +1052,19 @@ index 8a7e950..8dcc46f 100644
 +  if (binding.bmnControlTransportVersion !== 1) throw new Error('BMN control transport addon missing');
 +  return binding.restrictControlPipe(name);
 +}
++
++/** BMN: process-lifetime ownership; deliberately has no JS cleanup/dispose operation. */
++export function protectApplicationLifetime(): void {
++  if (process.platform !== 'win32') throw new Error('Windows application lifetime only');
++  const binding: IConptyNative = loadNativeModule('conpty').module;
++  if (binding.bmnApplicationLifetimeVersion !== 1) throw new Error('BMN application lifetime addon missing');
++  binding.protectApplicationLifetime();
++}
 diff --git a/src/native.d.ts b/src/native.d.ts
-index c53e086..9ca71f6 100644
+index c53e086..dd31f5f 100644
 --- a/src/native.d.ts
 +++ b/src/native.d.ts
-@@ -3,8 +3,12 @@
+@@ -3,8 +3,14 @@
   */
  
  interface IConptyNative {
@@ -1053,6 +1072,8 @@ index c53e086..9ca71f6 100644
 +  queryProcessStartIdentity(pid: number): string;
 +  bmnControlTransportVersion: number;
 +  restrictControlPipe(name: string): { user: string; dacl: string };
++  bmnApplicationLifetimeVersion?: number;
++  protectApplicationLifetime(): void;
    startProcess(file: string, cols: number, rows: number, debug: boolean, pipeName: string, conptyInheritCursor: boolean, useConptyDll: boolean): IConptyProcess;
 -  connect(ptyId: number, commandLine: string, cwd: string, env: string[], useConptyDll: boolean, onExitCallback: (exitCode: number) => void): { pid: number };
 +  connect(ptyId: number, commandLine: string, cwd: string, env: string[], useConptyDll: boolean, onExitCallback: (result: { exitCode: number; treeEmpty: true } | { error: string }) => void): { pid: number; startIdentity: string };
@@ -1060,10 +1081,10 @@ index c53e086..9ca71f6 100644
    clear(ptyId: number, useConptyDll: boolean): void;
    kill(ptyId: number, useConptyDll: boolean): void;
 diff --git a/src/win/conpty.cc b/src/win/conpty.cc
-index 7b286d3..a44cdd6 100644
+index 7b286d3..23787db 100644
 --- a/src/win/conpty.cc
 +++ b/src/win/conpty.cc
-@@ -2,582 +2,447 @@
+@@ -2,582 +2,471 @@
   * Copyright (c) 2013-2015, Christopher Jeffrey, Peter Sunde (MIT License)
   * Copyright (c) 2016, Daniel Imms (MIT License).
   * Copyright (c) 2018, Microsoft Corporation (MIT License).
@@ -1621,19 +1642,6 @@ index 7b286d3..a44cdd6 100644
 -      !info[4].IsBoolean() ||
 -      !info[5].IsFunction()) {
 -    throw Napi::Error::New(env, "Usage: pty.connect(id, cmdline, cwd, env, useConptyDll, exitCallback)");
--  }
--
--  const int id = info[0].As<Napi::Number>().Int32Value();
--  const std::wstring cmdline(path_util::to_wstring(info[1].As<Napi::String>()));
--  const std::wstring cwd(path_util::to_wstring(info[2].As<Napi::String>()));
--  const Napi::Array envValues = info[3].As<Napi::Array>();
--  const bool useConptyDll = info[4].As<Napi::Boolean>().Value();
--  Napi::Function exitCallback = info[5].As<Napi::Function>();
--
--  // Fetch pty handle from ID and start process
--  pty_baton* handle = get_pty_baton(id);
--  if (!handle) {
--    throw Napi::Error::New(env, "Invalid pty handle");
 +struct Attributes {
 +  std::vector<BYTE> bytes;
 +  PPROC_THREAD_ATTRIBUTE_LIST list = nullptr;
@@ -1648,6 +1656,19 @@ index 7b286d3..a44cdd6 100644
    }
 +};
  
+-  const int id = info[0].As<Napi::Number>().Int32Value();
+-  const std::wstring cmdline(path_util::to_wstring(info[1].As<Napi::String>()));
+-  const std::wstring cwd(path_util::to_wstring(info[2].As<Napi::String>()));
+-  const Napi::Array envValues = info[3].As<Napi::Array>();
+-  const bool useConptyDll = info[4].As<Napi::Boolean>().Value();
+-  Napi::Function exitCallback = info[5].As<Napi::Function>();
+-
+-  // Fetch pty handle from ID and start process
+-  pty_baton* handle = get_pty_baton(id);
+-  if (!handle) {
+-    throw Napi::Error::New(env, "Invalid pty handle");
+-  }
+-
 -  // Prepare command line
 -  std::unique_ptr<wchar_t[]> mutableCommandline = std::make_unique<wchar_t[]>(cmdline.length() + 1);
 -  HRESULT hr = StringCchCopyW(mutableCommandline.get(), cmdline.length() + 1, cmdline.c_str());
@@ -1921,6 +1942,29 @@ index 7b286d3..a44cdd6 100644
 -      !info[0].IsNumber() ||
 -      !info[1].IsBoolean()) {
 -    throw Napi::Error::New(env, "Usage: pty.kill(id, useConptyDll)");
+-  }
+-
+-  int id = info[0].As<Napi::Number>().Int32Value();
+-  const bool useConptyDll = info[1].As<Napi::Boolean>().Value();
+-
+-  const pty_baton* handle = get_pty_baton(id);
+-
+-  if (handle != nullptr) {
+-    HANDLE hLibrary = LoadConptyDll(info, useConptyDll);
+-    bool fLoadedDll = hLibrary != nullptr;
+-    if (fLoadedDll)
+-    {
+-      PFNCLOSEPSEUDOCONSOLE const pfnClosePseudoConsole = (PFNCLOSEPSEUDOCONSOLE)GetProcAddress(
+-        (HMODULE)hLibrary,
+-        useConptyDll ? "ConptyClosePseudoConsole" : "ClosePseudoConsole");
+-      if (pfnClosePseudoConsole)
+-      {
+-        pfnClosePseudoConsole(handle->hpc);
+-      }
+-    }
+-    if (useConptyDll) {
+-      TerminateProcess(handle->hShell, 1);
+-    }
 +// BMN control transport. Node creates the listening pipe with FIRST_PIPE_INSTANCE
 +// and default security, which lets other accounts open it for reading. Replace that
 +// DACL with the protected user-only DACL through a short-lived client handle and
@@ -1969,54 +2013,52 @@ index 7b286d3..a44cdd6 100644
 +  return result;
 +}
  
--  int id = info[0].As<Napi::Number>().Int32Value();
--  const bool useConptyDll = info[1].As<Napi::Boolean>().Value();
--
--  const pty_baton* handle = get_pty_baton(id);
--
--  if (handle != nullptr) {
--    HANDLE hLibrary = LoadConptyDll(info, useConptyDll);
--    bool fLoadedDll = hLibrary != nullptr;
--    if (fLoadedDll)
-+Napi::Object init(Napi::Env env, Napi::Object exports) {
-+  auto state = new RegistryRef(std::make_shared<Registry>());
-+  env.AddCleanupHook([](RegistryRef* ref) {
-+    std::vector<std::shared_ptr<Session>> sessions;
-     {
--      PFNCLOSEPSEUDOCONSOLE const pfnClosePseudoConsole = (PFNCLOSEPSEUDOCONSOLE)GetProcAddress(
--        (HMODULE)hLibrary,
--        useConptyDll ? "ConptyClosePseudoConsole" : "ClosePseudoConsole");
--      if (pfnClosePseudoConsole)
--      {
--        pfnClosePseudoConsole(handle->hpc);
--      }
-+      std::lock_guard<std::mutex> lock((*ref)->mutex);
-+      (*ref)->closing = true;
-+      for (auto& entry : (*ref)->sessions) sessions.push_back(entry.second);
-     }
--    if (useConptyDll) {
--      TerminateProcess(handle->hShell, 1);
-+    for (auto& session : sessions) {
-+      std::lock_guard<std::mutex> lock(session->mutex);
-+      if (session->job.value) TerminateJobObject(session->job.value, 1);
-+      session->job.reset(); // Kernel kill-on-close is independent of TerminateJobObject success.
-+      SetEvent(session->cancel.value); // Environment teardown must not join an infinite waiter.
-     }
--  }
--
--  return env.Undefined();
--}
--
++// One handle belongs to the calling process, never to a JS environment or terminal registry.
++// After assignment, closing it would terminate main itself. The OS closes it at process death.
++static std::mutex applicationLifetimeMutex;
++static HANDLE applicationLifetimeJob = nullptr;
++
++static Napi::Value protectApplicationLifetime(const Napi::CallbackInfo& info) {
++  Napi::Env env = info.Env();
++  if (info.Length() != 0) throw Napi::Error::New(env, "Application lifetime protection takes no arguments");
++  std::lock_guard<std::mutex> lock(applicationLifetimeMutex);
++  if (applicationLifetimeJob) return env.Undefined();
++  Handle job(CreateJobObjectW(nullptr, nullptr));
++  check(env, job.value != nullptr, "Create application lifetime job");
++  check(env, SetHandleInformation(job.value, HANDLE_FLAG_INHERIT, 0), "Protect application job handle");
++  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
++  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
++  check(env, SetInformationJobObject(job.value, JobObjectExtendedLimitInformation, &limits, sizeof(limits)), "Set application lifetime limits");
++  check(env, AssignProcessToJobObject(job.value, GetCurrentProcess()), "Assign application lifetime job");
++  applicationLifetimeJob = job.value;
++  job.value = nullptr; // Transfer immediately: no disposer/finalizer can kill main during normal shutdown.
+   return env.Undefined();
+ }
+ 
 -/**
 -* Init
 -*/
 -
--Napi::Object init(Napi::Env env, Napi::Object exports) {
+ Napi::Object init(Napi::Env env, Napi::Object exports) {
 -  exports.Set("startProcess", Napi::Function::New(env, PtyStartProcess));
 -  exports.Set("connect", Napi::Function::New(env, PtyConnect));
 -  exports.Set("resize", Napi::Function::New(env, PtyResize));
 -  exports.Set("clear", Napi::Function::New(env, PtyClear));
 -  exports.Set("kill", Napi::Function::New(env, PtyKill));
++  auto state = new RegistryRef(std::make_shared<Registry>());
++  env.AddCleanupHook([](RegistryRef* ref) {
++    std::vector<std::shared_ptr<Session>> sessions;
++    {
++      std::lock_guard<std::mutex> lock((*ref)->mutex);
++      (*ref)->closing = true;
++      for (auto& entry : (*ref)->sessions) sessions.push_back(entry.second);
++    }
++    for (auto& session : sessions) {
++      std::lock_guard<std::mutex> lock(session->mutex);
++      if (session->job.value) TerminateJobObject(session->job.value, 1);
++      session->job.reset(); // Kernel kill-on-close is independent of TerminateJobObject success.
++      SetEvent(session->cancel.value); // Environment teardown must not join an infinite waiter.
++    }
 +    delete ref;
 +  }, state);
 +  exports.Set("startProcess", Napi::Function::New(env, start, "start", state));
@@ -2028,6 +2070,8 @@ index 7b286d3..a44cdd6 100644
 +  exports.Set("bmnOwnershipVersion", 1);
 +  exports.Set("restrictControlPipe", Napi::Function::New(env, restrictControlPipe, "restrictControlPipe"));
 +  exports.Set("bmnControlTransportVersion", 1);
++  exports.Set("protectApplicationLifetime", Napi::Function::New(env, protectApplicationLifetime, "protectApplicationLifetime"));
++  exports.Set("bmnApplicationLifetimeVersion", 1);
    return exports;
 -};
 -
@@ -2678,21 +2722,23 @@ index 79a4148..703ef71 100644
  });
 +socket.connect(workerData.conoutPipeName, () => port.postMessage({ type: 'ready' }));
 diff --git a/typings/node-pty.d.ts b/typings/node-pty.d.ts
-index 6f050ff..58f820a 100644
+index 6f050ff..196f18b 100644
 --- a/typings/node-pty.d.ts
 +++ b/typings/node-pty.d.ts
-@@ -15,6 +15,10 @@ declare module 'node-pty' {
+@@ -15,6 +15,12 @@ declare module 'node-pty' {
     * @see Parsing C++ Comamnd-Line Arguments https://msdn.microsoft.com/en-us/library/17w5ykft.aspx
     * @see GetCommandLine https://msdn.microsoft.com/en-us/library/windows/desktop/ms683156.aspx
     */
 +  export function queryProcessStartIdentity(pid: number): string;
 +  /** BMN: replace a listening control pipe's DACL with a protected current-user-only DACL and read it back. */
 +  export function restrictControlPipe(name: string): { user: string; dacl: string };
++  /** Process-lifetime backstop; no JavaScript disposer. */
++  export function protectApplicationLifetime(): void;
 +
    export function spawn(file: string, args: string[] | string, options: IPtyForkOptions | IWindowsPtyForkOptions): IPty;
  
    export interface IBasePtyForkOptions {
-@@ -114,6 +118,10 @@ declare module 'node-pty' {
+@@ -114,6 +120,10 @@ declare module 'node-pty' {
     * An interface representing a pseudoterminal, on Windows this is emulated via the winpty library.
     */
    export interface IPty {

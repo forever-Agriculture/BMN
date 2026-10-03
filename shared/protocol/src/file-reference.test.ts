@@ -11,6 +11,7 @@ import {
   stripFormatCharacters,
   type FileReference
 } from './file-reference'
+import { isPinnedFilePaths } from './workspace'
 
 function parsed(input: string, mode: 'typed' | 'terminal' = 'typed'): FileReference {
   const result = parseFileReference(input, mode)
@@ -29,6 +30,38 @@ function linked(text: string): string[] {
 }
 
 describe('parseFileReference', () => {
+  it('preserves native Windows drive, UNC and relative references with positions', () => {
+    for (const path of ['C:\\项目\\file.ts', 'D:/My Notes/file.ts', '\\\\server\\share\\file.ts',
+      '\\\\?\\C:\\long\\file.ts', '\\\\?\\UNC\\server\\share\\file.ts', 'src\\file.ts']) {
+      expect(parseFileReference(`${path}:12:4`, 'typed', 'win32')).toEqual({
+        ok: true, reference: { path, line: 12, column: 4 }
+      })
+    }
+    expect(exactAbsoluteFileReference('C:\\My Notes\\file.ts', 12, 4, 'win32'))
+      .toBe('"C:\\My Notes\\file.ts":12:4')
+    expect(exactAbsoluteFileReference('src\\file.ts', null, null, 'win32')).toBeNull()
+    expect(findFileReferences('at C:\\项目\\file.ts:12:4 and "D:\\My Notes\\other.ts":2', 'win32')
+      .map(match => match.reference)).toEqual([
+      { path: 'C:\\项目\\file.ts', line: 12, column: 4 },
+      { path: 'D:\\My Notes\\other.ts', line: 2, column: null }
+    ])
+  })
+
+  it('refuses Windows drive-relative paths, devices, ADS and shell expansion', () => {
+    for (const path of ['C:file.ts', '\\\\.\\pipe\\private', 'C:\\file.ts:stream', '$HOME\\file.ts', 'C:\\*.ts']) {
+      expect(parseFileReference(path, 'typed', 'win32').ok).toBe(false)
+    }
+    expect(parseFileReference('src\\file.ts').ok).toBe(false)
+    expect(findFileReferences('https://site.invalid/src/file.ts C:file.ts', 'win32')).toEqual([])
+  })
+
+  it('validates absolute Windows pin references without inventing a drive for relative ones', () => {
+    expect(isPinnedFilePaths(['C:\\项目\\AGENTS.md', '\\\\server\\share\\file.md'], true)).toBe(true)
+    expect(isPinnedFilePaths(['C:file.md'], true)).toBe(false)
+    expect(isPinnedFilePaths(['src\\file.md'], true)).toBe(false)
+    expect(isPinnedFilePaths(['C:\\file.md', 'C:\\file.md'], true)).toBe(false)
+  })
+
   it('accepts the supported forms with separate line and column metadata', () => {
     expect(parsed('src/parser.ts:42:7')).toEqual({ path: 'src/parser.ts', line: 42, column: 7 })
     expect(parsed('/home/me/project/a.ts:3')).toEqual({ path: '/home/me/project/a.ts', line: 3, column: null })

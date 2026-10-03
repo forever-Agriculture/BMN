@@ -57,6 +57,7 @@ import {
 } from './host-loss'
 import { resolveApplicationRoots } from '../utility/roots'
 import { acquireRootScopedSingleInstance, focusExistingWindow } from './single-instance'
+import { protectWindowsApplicationLifetime } from './windows-application-lifetime'
 import { trackAllowedSender } from './allowed-senders'
 import { createDevelopmentRoot } from './development-root'
 import { installSavedOutputIpcHandler } from './saved-output-ipc'
@@ -1047,6 +1048,7 @@ process.once('exit', cleanupDevelopmentRoot)
 const instanceRoots = resolveApplicationRoots()
 const instanceDataRoot = instanceRoots.data
 ensurePrivateDirectories(Object.values(instanceRoots), process.platform, instanceDataRoot)
+protectWindowsApplicationLifetime()
 const primaryInstance = acquireRootScopedSingleInstance(app, instanceDataRoot, () =>
   focusExistingWindow(applicationWindow)
 )

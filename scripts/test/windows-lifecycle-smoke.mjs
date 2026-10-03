@@ -55,6 +55,36 @@ if(role!=='grandchild')cp.spawn(process.execPath,[__filename,dir,role==='root'?'
 if(role==='root')process.stdout.write('BMN_LIFECYCLE_READY\\r\\n');
 setInterval(()=>{if(role==='root')publish('heartbeat.json',Date.now())},100);
 `)
+    // A direct launch separates app lifetime from debugger attachment. The
+    // no-backstop control must fail this exact retained-handle cleanup fence.
+    for (const mode of ['without-backstop', 'protected']) {
+      const probeRoot = join(root, mode)
+      mkdirSync(probeRoot)
+      const report = join(output, `windows-application-crash-${mode}.json`)
+      const probeEnv = { ...env,
+        BMN_CONFIG_HOME: join(probeRoot, 'config'), BMN_DATA_HOME: join(probeRoot, 'data'),
+        BMN_STATE_HOME: join(probeRoot, 'state'), BMN_RUNTIME_HOME: join(probeRoot, 'runtime') }
+      const probe = spawn(options.executablePath, [join(repo, 'scripts/test/fixtures/windows-application-crash.mjs'),
+        repo, probeRoot, process.execPath, fixture, report, mode, '--bmn-test-mode'], { cwd: repo, env: probeEnv, stdio: 'inherit' })
+      let held
+      const probeTimer = setTimeout(() => { if (probe.exitCode === null) probe.kill() }, 60000)
+      try {
+        const ready = await waitFor(() => JSON.parse(readFileSync(report, 'utf8')), 'Direct crash probe did not become ready')
+        assert.equal(ready.ready, true, ready.error)
+        const mainIndex = ready.entries.findIndex(entry => entry.pid === ready.mainPid)
+        held = await windowsExitObserver(ready.entries, mainIndex)
+        if (mode === 'without-backstop') {
+          await assert.rejects(held.finish(), /Owned process survived lifecycle action/)
+          observations.push({ mode: 'application-lifetime-fence-RED', directLaunch: true, failedOnMissingBackstop: true })
+        } else {
+          observations.push({ mode: 'application-lifetime-fence-GREEN', directLaunch: true, ...await held.finish() })
+        }
+      } finally {
+        clearTimeout(probeTimer)
+        await held?.abort()
+        if (probe.exitCode === null) probe.kill()
+      }
+    }
     const start = async (name, backgroundChoice) => {
       const directory = join(root, name); mkdirSync(directory)
       const workspace = (await page.evaluate(() => window.aiTerminal.listWorkspaces()))[0]
@@ -103,6 +133,10 @@ setInterval(()=>{if(role==='root')publish('heartbeat.json',Date.now())},100);
     }
     const relaunchAttempts = []
     let killedMainPid
+    // These are processes reported by this synthetic app, retained before termination.
+    // Parent PIDs and text matches remain diagnostics, never termination authority.
+    const electronTree = () => app.evaluate(({ app }) => app.getAppMetrics()
+      .map(({ pid, creationTime }) => ({ pid, creationTime })))
     const verifyRestart = async (session, { forcedExit = false } = {}) => {
       for (let attempt = 1; ; attempt += 1) {
         try { await open(); break } catch (error) {
@@ -174,6 +208,26 @@ setInterval(()=>{if(role==='root')publish('heartbeat.json',Date.now())},100);
           recoveredState: await verifyRestart(asked), automaticRestart: false })
       } finally { await observer.abort() }
 
+      const mainCrashed = await start('main-crash', 'stop')
+      const beforeMainCrash = await electronTree()
+      const mainIndex = beforeMainCrash.findIndex(entry => entry.pid === app.process().pid)
+      assert.ok(mainIndex >= 0, 'The process tree must include main')
+      assert.ok(beforeMainCrash.length >= 3, 'Observe main and Electron descendants')
+      const unrelated = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' })
+      observer = await windowsExitObserver([...beforeMainCrash, ...mainCrashed.entries], mainIndex)
+      try {
+        const exited = exitedApp()
+        const cleanup = await observer.finish()
+        await exited
+        assert.equal(unrelated.exitCode, null, 'Application crash affected an unrelated process')
+        observations.push({ mode: 'main-crash-restart', ...cleanup,
+          electronProcesses: beforeMainCrash.length,
+          recoveredState: await verifyRestart(mainCrashed), automaticRestart: false })
+      } finally {
+        await observer.abort()
+        if (unrelated.exitCode === null) unrelated.kill()
+      }
+
       const crashed = await start('host-crash', 'stop')
       const host = await app.evaluate(({ app }) => app.getAppMetrics().filter(metric => metric.name === 'pty-host' || metric.serviceName === 'pty-host')
         .map(({ pid, creationTime }) => ({ pid, creationTime })))
@@ -184,11 +238,19 @@ setInterval(()=>{if(role==='root')publish('heartbeat.json',Date.now())},100);
         // Restart this isolated main process after its utility was forcibly lost.
         // The retained observer has already confirmed that the entire tree exited.
         killedMainPid = app.process().pid
-        const exited = exitedApp(); app.process().kill(); await exited
+        const remainingElectron = (await electronTree()).filter(entry => !host.some(killed => killed.pid === entry.pid))
+        const mainIndex = remainingElectron.findIndex(entry => entry.pid === killedMainPid)
+        assert.ok(mainIndex >= 0, 'Observe main after utility loss')
+        const remainingObserver = await windowsExitObserver(remainingElectron, mainIndex)
+        const exited = exitedApp()
+        let electronCleanup
+        try { electronCleanup = await remainingObserver.finish(); await exited }
+        finally { await remainingObserver.abort() }
         const killedAt = Date.now()
         const recoveredState = await verifyRestart(crashed, { forcedExit: true })
         observations.push({ mode: 'utility-crash-restart', ...cleanup, recoveredState, automaticRestart: false,
-          killedMainPid, refusedRelaunches: relaunchAttempts.map(entry => ({ ...entry, afterKillMs: entry.at - killedAt })) })
+          killedMainPid, electronCleanup,
+          refusedRelaunches: relaunchAttempts.map(entry => ({ ...entry, afterKillMs: entry.at - killedAt })) })
       } finally { await observer.abort() }
     } catch (error) {
       if (relaunchAttempts.length) observations.push({ mode: 'refused-relaunches', killedMainPid, relaunchAttempts })

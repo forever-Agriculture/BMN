@@ -313,6 +313,7 @@ export function SessionTerminal(props: {
       paste: () => onPaste.current()
     })
     const fileLinks = createFileReferenceLinkProvider({
+      pathStyle: window.aiTerminal.platform === 'win32' ? 'win32' : 'posix',
       buffer: () => terminal.buffer.active,
       enabled: () => terminal.modes.mouseTrackingMode === 'none',
       hasSelection: () => terminal.hasSelection(),

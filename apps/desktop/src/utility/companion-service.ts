@@ -2009,7 +2009,8 @@ export class CompanionService {
     }
     const payload = delivery.ownedArtifactPath
       ? `${this.quotePath(delivery.ownedArtifactPath)} `
-      : exactAbsoluteFileReference(sourcePath, line as number | null, column as number | null)
+      : exactAbsoluteFileReference(sourcePath, line as number | null, column as number | null,
+        process.platform === 'win32' ? 'win32' : 'posix')
     if (!payload) invalid('This path cannot be sent as an exact file reference')
     const fingerprint = JSON.stringify([sessionId, expectedIncarnationId, payload])
     const paramsHash = createHash('sha256').update(fingerprint).digest('hex')
