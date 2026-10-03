@@ -18,8 +18,6 @@ try {
   const script = `$ErrorActionPreference='Stop'; $stage='module';
 trap { [Console]::Error.WriteLine('BMN_SECURITY_TEST_STAGE='+$stage+' HRESULT='+$_.Exception.HResult); exit 1 };
 $paths=ConvertFrom-Json ([Console]::In.ReadToEnd());
-$stage='import-module';
-Import-Module "$env:SystemRoot\\System32\\WindowsPowerShell\\v1.0\\Modules\\Microsoft.PowerShell.LocalAccounts\\Microsoft.PowerShell.LocalAccounts.psd1";
 $stage='compile-fixture';
 Add-Type @'
 using System;
@@ -28,11 +26,34 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 public static class CrossUser {
+ [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] struct UserInfo {
+  public string name; public string password; public uint passwordAge; public uint privilege;
+  public string home; public string comment; public uint flags; public string script;
+ }
+ [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] struct MemberInfo { public string name; }
+ [DllImport("netapi32.dll",CharSet=CharSet.Unicode)] static extern uint NetUserAdd(string server,uint level,ref UserInfo info,out uint parameter);
+ [DllImport("netapi32.dll",CharSet=CharSet.Unicode)] static extern uint NetUserDel(string server,string user);
+ [DllImport("netapi32.dll",CharSet=CharSet.Unicode)] static extern uint NetLocalGroupAddMembers(string server,string group,uint level,ref MemberInfo info,uint count);
+ public static void Create(string name,string password) {
+  var info=new UserInfo {name=name,password=password,privilege=1,flags=0x201}; uint parameter;
+  uint status=NetUserAdd(null,1,ref info,out parameter);
+  if(status!=0) throw new Win32Exception((int)status);
+ }
+ public static void JoinUsers(string name) {
+  string group=new SecurityIdentifier("S-1-5-32-545").Translate(typeof(NTAccount)).Value;
+  group=group.Substring(group.LastIndexOf((char)92)+1);
+  var member=new MemberInfo {name=Environment.MachineName+(char)92+name};
+  uint status=NetLocalGroupAddMembers(null,group,3,ref member,1);
+  if(status!=0) throw new Win32Exception((int)status);
+ }
+ public static void Delete(string name) {
+  uint status=NetUserDel(null,name); if(status!=0) throw new Win32Exception((int)status);
+ }
  [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool LogonUser(string user,string domain,string password,int kind,int provider,out IntPtr token);
  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
  public static void Verify(string user,string password,string publicPath,string privatePath) {
   IntPtr token;
-  if(!LogonUser(user,".",password,2,0,out token)) throw new Win32Exception();
+  if(!LogonUser(user,".",password,3,0,out token)) throw new Win32Exception();
   try { using(var context=WindowsIdentity.Impersonate(token)) {
    if(File.ReadAllText(publicPath)!="synthetic-public") throw new Exception("Positive control failed");
    bool read=false,write=false,delete=false;
@@ -55,14 +76,14 @@ $password=[Guid]::NewGuid().ToString('N')+'aA9!';
 $created=$false;
 try {
 $stage='create-account';
- $user=New-LocalUser -Name $name -Password (ConvertTo-SecureString $password -AsPlainText -Force) -AccountNeverExpires;
+ [CrossUser]::Create($name,$password);
  $created=$true;
 $stage='group-membership';
- Add-LocalGroupMember -SID 'S-1-5-32-545' -Member $user;
+ [CrossUser]::JoinUsers($name);
 $stage='impersonated-access';
  [CrossUser]::Verify($name,$password,$paths.publicFile,$paths.privateFile);
  [Console]::Out.Write('BMN_CROSS_ACCOUNT_DENIED');
-} finally { if($created) { Remove-LocalUser -Name $name }; $password=$null }
+} finally { if($created) { [CrossUser]::Delete($name) }; $password=$null }
 `
   const result = spawnSync(join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
     input: JSON.stringify({ publicFile, privateFile }), encoding: 'utf8', timeout: 60000, windowsHide: true

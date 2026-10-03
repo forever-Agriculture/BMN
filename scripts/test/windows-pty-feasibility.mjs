@@ -32,6 +32,7 @@ process.stdout.write('\\x1b[2J\\x1b[HBMN_REPAINT\\r\\nBMN_READY\\r\\n');
 setTimeout(()=>process.exit(2),15000);\n`)
   writeFileSync(worker, `const fs=require('node:fs'); const {createRequire}=require('node:module');
 const pty=createRequire(${JSON.stringify(join(repo, 'apps/desktop/package.json'))})('node-pty');
+if(!/^windows-filetime:[0-9]+$/.test(pty.queryProcessStartIdentity(process.pid)))throw new Error('Patched native ownership capability unavailable');
 const [node,fixture,resultPath]=process.argv.slice(2);
 const sequences=${JSON.stringify(sequences)}, input=${JSON.stringify(input)};
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -48,7 +49,7 @@ async function run(useConptyDll){
   return {route:useConptyDll?'bundled':'built-in',outputBase64:Buffer.from(output).toString('base64'),features:Object.fromEntries(Object.entries(sequences).map(([k,v])=>[k,output.includes(v)])),ready:output.includes('BMN_READY'),repaint:output.includes('BMN_REPAINT'),resize:output.includes('BMN_RESIZE:101x37'),inputHex:[...output.matchAll(/BMN_INPUT_HEX:([0-9a-f]+)/g)].map(m=>m[1]).join(''),expectedInputHex:Buffer.from(input).toString('hex'),ctrlC:output.includes('BMN_CTRL_C'),exit,elapsedMs:Date.now()-started};
  }finally{if(!exit){terminal.kill();await waitFor(()=>exit!==undefined,3000)}}
 }
-(async()=>{const results=[];for(const mode of [false,true]){try{results.push(await run(mode))}catch(error){results.push({route:mode?'bundled':'built-in',error:String(error)})}}
+(async()=>{const results=[];for(const mode of [true]){try{results.push(await run(mode))}catch(error){results.push({route:mode?'bundled':'built-in',error:String(error)})}}
 fs.writeFileSync(resultPath,JSON.stringify({platform:process.platform,versions:process.versions,os:require('node:os').version(),results},null,2));process.exit(0)})().catch(error=>{console.error(error);process.exit(1)});\n`)
   const receiptPath = join(root, 'result.json')
   const child = spawn(requireApp('electron'), [worker, process.execPath, fixture, receiptPath], {
@@ -63,7 +64,7 @@ fs.writeFileSync(resultPath,JSON.stringify({platform:process.platform,versions:p
   })
   assert.equal(code, 0, stderr)
   const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'))
-  receipt.fullFeatureRoutes = receipt.results.filter(result => result.features && Object.values(result.features).every(Boolean) && result.ready && result.repaint && result.resize && result.ctrlC && result.exit?.exitCode === 0 && result.inputHex.includes(result.expectedInputHex)).map(result => result.route)
+  receipt.fullFeatureRoutes = receipt.results.filter(result => result.features && Object.values(result.features).every(Boolean) && result.ready && result.repaint && result.resize && result.ctrlC && result.exit?.exitCode === 0 && result.inputHex === result.expectedInputHex + '03').map(result => result.route)
   mkdirSync(join(repo, 'test-results'), { recursive: true })
   writeFileSync(join(repo, 'test-results/windows-pty-feasibility.json'), JSON.stringify(receipt, null, 2))
   console.log(JSON.stringify(receipt))

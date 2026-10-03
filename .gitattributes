@@ -1,0 +1,2 @@
+# Pnpm patches are byte-sensitive, including their lockfile hashes.
+patches/*.patch -text

@@ -35,8 +35,26 @@ setTimeout(()=>{terminal.kill();process.exitCode=3},20000).unref();
   // never opens a PID later to decide which process to kill or calls taskkill.
   const controller = `$ErrorActionPreference='Stop'; $config=ConvertFrom-Json ([Console]::In.ReadToEnd());
 Add-Type @'
-using System; using System.Runtime.InteropServices;
+using System; using System.Runtime.InteropServices; using System.Collections.Generic;
 public static class OwnedFixture {
+ [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] struct ProcessEntry {
+  public uint size,usage,pid; public UIntPtr heap; public uint module,threads,parent; public int priority; public uint flags;
+  [MarshalAs(UnmanagedType.ByValTStr,SizeConst=260)] public string executable;
+ }
+ [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr CreateToolhelp32Snapshot(uint flags,uint pid);
+ [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool Process32FirstW(IntPtr snapshot,ref ProcessEntry entry);
+ [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern bool Process32NextW(IntPtr snapshot,ref ProcessEntry entry);
+ [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+ public static int[] ConsoleChildren(uint parent) {
+  IntPtr snapshot=CreateToolhelp32Snapshot(2,0);
+  if(snapshot==new IntPtr(-1)) throw new System.ComponentModel.Win32Exception();
+  try {
+   var ids=new List<int>(); var entry=new ProcessEntry {size=(uint)Marshal.SizeOf(typeof(ProcessEntry))};
+   if(!Process32FirstW(snapshot,ref entry)) throw new System.ComponentModel.Win32Exception();
+   do { if(entry.parent==parent && string.Equals(entry.executable,"OpenConsole.exe",StringComparison.OrdinalIgnoreCase)) ids.Add((int)entry.pid); } while(Process32NextW(snapshot,ref entry));
+   return ids.ToArray();
+  } finally { CloseHandle(snapshot); }
+ }
  [DllImport("kernel32.dll",SetLastError=true)] public static extern bool TerminateProcess(IntPtr process,uint code);
 }
 '@
@@ -53,7 +71,7 @@ function WaitFile($file,$hostProcess) {
   if([DateTime]::UtcNow -gt $end) { throw 'Fixture readiness timeout' }; Start-Sleep -Milliseconds 25;
  }
  # Atomic writes below prevent partial JSON reads.
- return Get-Content -LiteralPath $file -Raw | ConvertFrom-Json;
+ return [IO.File]::ReadAllText($file) | ConvertFrom-Json;
 }
 $results=@();
 foreach($mode in @('natural','stop','crash','silent','immediate')) {
@@ -68,12 +86,19 @@ foreach($mode in @('natural','stop','crash','silent','immediate')) {
   if($mode -ne 'immediate') {
    $p=[Diagnostics.Process]::GetProcessById($record.root); $null=$p.Handle; $observed+=,$p;
   }
+  $consoleHandles=0;
+  if($mode -ne 'immediate') {
+   foreach($consolePid in [OwnedFixture]::ConsoleChildren($hostProcess.Id)) {
+    $p=[Diagnostics.Process]::GetProcessById($consolePid); $null=$p.Handle; $observed+=,$p; $consoleHandles++;
+   }
+   if($consoleHandles -eq 0) { throw 'OpenConsole observer was not established' };
+  }
   if($mode -in @('natural','stop','crash')) {
    foreach($role in @('child','grandchild')) {
     $r=WaitFile (Join-Path $dir ($role+'.json')) $hostProcess;
     $p=[Diagnostics.Process]::GetProcessById($r.pid); $null=$p.Handle; $observed+=,$p;
    }
-   $r=Get-Content -LiteralPath (Join-Path $dir 'root.json') -Raw | ConvertFrom-Json;
+   $r=[IO.File]::ReadAllText((Join-Path $dir 'root.json')) | ConvertFrom-Json;
    $expected=@('space value','雪','%PATH%','^&','quote"value','C:\\with space\\');
    if(($r.args | ConvertTo-Json -Compress) -ne ($expected | ConvertTo-Json -Compress)) { throw 'Argument round-trip mismatch' };
   }
@@ -86,11 +111,11 @@ foreach($mode in @('natural','stop','crash','silent','immediate')) {
   if($sentinel.HasExited) { throw 'Unrelated sentinel was terminated' };
   $exit=$null;
   if($mode -ne 'crash') {
-   $exit=Get-Content -LiteralPath (Join-Path $dir 'exit.json') -Raw | ConvertFrom-Json;
+   $exit=[IO.File]::ReadAllText((Join-Path $dir 'exit.json')) | ConvertFrom-Json;
    $expectedCode=1; if($mode -in @('natural','immediate')) { $expectedCode=47 };
    if($exit.exitCode -ne $expectedCode) { throw 'Incorrect root exit status' };
   }
-  $results+=@{mode=$mode;passed=$true;retainedProcessHandles=$observed.Count;sentinelAlive=$true;exit=$exit;elapsedMs=([DateTime]::UtcNow-$started).TotalMilliseconds};
+  $results+=@{mode=$mode;passed=$true;retainedProcessHandles=$observed.Count;openConsoleHandles=$consoleHandles;sentinelAlive=$true;exit=$exit;elapsedMs=([DateTime]::UtcNow-$started).TotalMilliseconds};
  } finally {
   # Only retained handles of this fixture's processes can be terminated here.
   foreach($p in @($hostProcess,$sentinel)+$observed) {

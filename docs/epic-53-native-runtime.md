@@ -59,3 +59,9 @@ required. Atomic assignment requires Windows 10 or newer and fails closed if an
 enclosing job prevents it. See Microsoft's
 [process creation attributes](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-updateprocthreadattribute)
 and [Job Objects](https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects).
+
+The owner explicitly chose strict ownership of **all** launched processes after
+being warned that newly launched GUI apps (including a fresh editor/browser) can
+be terminated on terminal exit, with possible unsaved-work loss. Normal exit,
+Stop and host crash therefore close the whole owned tree. An already-running
+external application reached through its own broker remains outside that tree.

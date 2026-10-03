@@ -36,36 +36,37 @@ jobs:
           sed "s|@REPO_ROOT@|$PWD|g" scripts/sandbox/bmn-electron | sudo tee /etc/apparmor.d/bmn-electron >/dev/null
           sudo apparmor_parser -r /etc/apparmor.d/bmn-electron
       - name: Install and rebuild native Electron modules
+        id: install
         run: pnpm install --frozen-lockfile
       - name: Lint
         run: pnpm run lint
       - name: Typecheck
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm run typecheck
       # Full inventory remains a failing gate while Windows fixture failures exist.
       # Do not convert it into a Windows-wide skip or claim the port is accepted.
       - name: Unit and integration inventory
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm run test:unit --reporter=default --reporter=json --outputFile.json=test-results/unit.json
       - name: Build
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm run build
       - name: Linux startup
-        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && runner.os == 'Linux' }}
         run: xvfb-run -a node scripts/test/platform-startup.mjs > test-results/startup.json
       - name: Windows startup
-        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && runner.os == 'Windows' }}
         run: node scripts/test/platform-startup.mjs > test-results/startup.json
       - name: Linux package and packaged smoke
-        if: ${{ !cancelled() && runner.os == 'Linux' }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && runner.os == 'Linux' }}
         run: |
           pnpm run package
           xvfb-run -a pnpm run smoke:packaged > test-results/packaged-smoke.json
       - name: Windows internal unpacked build
-        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && runner.os == 'Windows' }}
         run: pnpm run package:unpacked
       - name: Windows packaged startup and native selection
-        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && runner.os == 'Windows' }}
         shell: pwsh
         run: |
           node scripts/test/platform-startup.mjs --binary apps/desktop/release/win-unpacked/BMN.exe > test-results/packaged-startup.json
