@@ -21,6 +21,7 @@ jobs:
       - name: Measure native config paths and ACL preservation
         run: node scripts/test/config-path-spike.mjs
       - name: Measure disposable ordinary-user systemd ownership
+        if: ${{ !cancelled() }}
         run: node scripts/test/windows-wsl-systemd-spike.mjs
       - uses: actions/upload-artifact@v4
         if: always()

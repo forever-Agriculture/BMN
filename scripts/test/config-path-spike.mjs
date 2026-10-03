@@ -32,7 +32,7 @@ if($request.action -eq 'protect') {
  $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($sid,'FullControl','Allow')));
  [System.IO.File]::SetAccessControl($request.paths[0],$acl);
 };
-$result=@($request.paths | ForEach-Object { (Get-Acl -LiteralPath $_).GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Access) });
+$result=@($request.paths | ForEach-Object { ([System.IO.File]::GetAccessControl($_)).GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Access) });
 [Console]::Out.Write((ConvertTo-Json -Compress -InputObject $result));`
   const child = spawnSync(join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
     ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
