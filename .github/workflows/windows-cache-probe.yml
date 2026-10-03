@@ -6,6 +6,7 @@ on:
       - scripts/test/windows-cache-acl-probe.mjs
       - scripts/test/windows-missing-root-probe.mjs
       - scripts/test/windows-storage-cross-user.mjs
+      - scripts/test/windows-storage-scale.mjs
       - apps/desktop/src/utility/private-directory.ts
 permissions:
   contents: read
@@ -22,6 +23,8 @@ jobs:
         run: node scripts/test/windows-missing-root-probe.mjs
       - name: Verify ordinary-account storage denial
         run: node scripts/test/windows-storage-cross-user.mjs
+      - name: Measure accepted private storage trees and replacements
+        run: node scripts/test/windows-storage-scale.mjs
       - name: Install pinned Electron only
         shell: pwsh
         run: |
