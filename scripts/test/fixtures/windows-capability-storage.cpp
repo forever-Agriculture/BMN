@@ -38,6 +38,14 @@ static std::wstring sidText(PSID sid) {
   check(ConvertSidToStringSidW(sid, &value));
   std::wstring result(value); LocalFree(value); return result;
 }
+static std::string ascii(const std::wstring& text) {
+  std::string out;
+  for (wchar_t value : text) {
+    if (value > 127) throw Failure{ERROR_INVALID_DATA};
+    out += static_cast<char>(value);
+  }
+  return out;
+}
 static std::vector<BYTE> tokenInfo(HANDLE token, TOKEN_INFORMATION_CLASS kind) {
   DWORD size = 0; GetTokenInformation(token, kind, nullptr, 0, &size);
   std::vector<BYTE> buffer(size);
@@ -195,7 +203,35 @@ static int broker(const fs::path& executable, const fs::path& base, const std::w
   checkCode(accessFile(base / L"public/ordinary-control.txt", false));
   checkCode(accessFile(base / L"public/ordinary-control.txt", true));
   PSID package = nullptr; bool created = false; DWORD error = 0; bool passed = true;
+  std::string profileFacts = "null";
   try {
+    stage = "broker-profile";
+    Handle token; check(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token.value));
+    DWORD length = 0; GetUserProfileDirectoryW(token.value, nullptr, &length);
+    std::vector<wchar_t> profile(length); check(GetUserProfileDirectoryW(token.value, profile.data(), &length));
+    const fs::path local = fs::path(profile.data()) / L"AppData" / L"Local";
+    const fs::path probePath = local / (L"bmn-probe-" + moniker + L".tmp");
+    DWORD fileError = 0;
+    { Handle probe(CreateFileW(probePath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+        FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr));
+      if (probe.value == INVALID_HANDLE_VALUE) fileError = GetLastError(); }
+    HKEY current = nullptr, probeKey = nullptr;
+    LSTATUS registryError = RegOpenCurrentUser(KEY_READ | KEY_WRITE, &current);
+    if (registryError == ERROR_SUCCESS) {
+      const auto key = L"Software\\BMNCapabilityProbe\\" + moniker;
+      DWORD disposition = 0;
+      registryError = RegCreateKeyExW(current, key.c_str(), 0, nullptr, 0, KEY_READ | KEY_WRITE, nullptr, &probeKey, &disposition);
+      if (registryError == ERROR_SUCCESS) { RegCloseKey(probeKey); if (disposition == REG_CREATED_NEW_KEY) RegDeleteKeyW(current, key.c_str()); }
+      RegCloseKey(current);
+    }
+    wchar_t environmentLocal[32768]{};
+    const DWORD localLength = GetEnvironmentVariableW(L"LOCALAPPDATA", environmentLocal, 32768);
+    bool environmentMatches = localLength > 0 && localLength < 32768 &&
+      CompareStringOrdinal(environmentLocal, -1, local.c_str(), -1, TRUE) == CSTR_EQUAL;
+    auto elevated = tokenInfo(token.value, TokenElevation);
+    profileFacts = "{\"localFileProbeError\":" + std::to_string(fileError) + ",\"registryProbeError\":" + std::to_string(registryError)
+      + ",\"environmentLocalMatchesProfile\":" + (environmentMatches ? "true" : "false")
+      + ",\"elevated\":" + (reinterpret_cast<TOKEN_ELEVATION*>(elevated.data())->TokenIsElevated ? "true" : "false") + "}";
     stage = "create-appcontainer";
     checkHr(CreateAppContainerProfile(moniker.c_str(), moniker.c_str(), L"BMN synthetic capability acceptance", nullptr, 0, &package));
     created = true;
@@ -219,7 +255,7 @@ static int broker(const fs::path& executable, const fs::path& base, const std::w
         EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW, nullptr, (base / L"public").c_str(), &startup.StartupInfo, &child));
       Handle process(child.hProcess), thread(child.hThread);
       if (!AssignProcessToJobObject(job.value, process.value)) {
-        const DWORD error = GetLastError(); TerminateProcess(process.value, 99); WaitForSingleObject(process.value, 5000); throw Failure{error};
+        const DWORD assignError = GetLastError(); TerminateProcess(process.value, 99); WaitForSingleObject(process.value, 5000); throw Failure{assignError};
       }
       check(ResumeThread(thread.value) != static_cast<DWORD>(-1));
       passed = finish(process, job, 20000) == 0 && passed;
@@ -229,7 +265,8 @@ static int broker(const fs::path& executable, const fs::path& base, const std::w
   const char* failedStage = stage;
   HRESULT removed = created ? DeleteAppContainerProfile(moniker.c_str()) : S_OK;
   if (package) FreeSid(package);
-  publish(base / L"public/broker.json", "{\"error\":" + std::to_string(error) + ",\"stage\":\"" + failedStage + "\",\"appContainerRemoved\":" + (SUCCEEDED(removed) ? "true" : "false") + "}");
+  publish(base / L"public/broker.json", "{\"error\":" + std::to_string(error) + ",\"stage\":\"" + failedStage
+    + "\",\"profile\":" + profileFacts + ",\"appContainerRemoved\":" + (SUCCEEDED(removed) ? "true" : "false") + "}");
   return error == 0 && SUCCEEDED(removed) && passed ? 0 : 1;
 }
 
@@ -243,12 +280,12 @@ static int supervisor(const fs::path& executable, const fs::path& base) {
     USER_INFO_1 info{}; info.usri1_name = const_cast<LPWSTR>(name.c_str()); info.usri1_password = const_cast<LPWSTR>(password.c_str());
     info.usri1_priv = USER_PRIV_USER; info.usri1_flags = UF_SCRIPT | UF_NORMAL_ACCOUNT | UF_DONT_EXPIRE_PASSWD;
     DWORD parameter = 0; checkCode(NetUserAdd(nullptr, 1, reinterpret_cast<LPBYTE>(&info), &parameter)); created = true;
-    publish(base / L"generated-account.txt", std::string(name.begin(), name.end()) + "\n");
+    publish(base / L"generated-account.txt", ascii(name) + "\n");
     DWORD sidSize = 0, domainSize = 0; SID_NAME_USE use;
     LookupAccountNameW(nullptr, name.c_str(), nullptr, &sidSize, nullptr, &domainSize, &use);
     std::vector<BYTE> sid(sidSize); std::vector<wchar_t> domain(domainSize);
     check(LookupAccountNameW(nullptr, name.c_str(), sid.data(), &sidSize, domain.data(), &domainSize, &use)); user = sidText(sid.data());
-    publish(base / L"generated-account.txt", std::string(name.begin(), name.end()) + "\n" + std::string(user.begin(), user.end()) + "\n");
+    publish(base / L"generated-account.txt", ascii(name) + "\n" + ascii(user) + "\n");
     LocalMemory usersSid; check(ConvertStringSidToSidW(L"S-1-5-32-545", &usersSid.value));
     wchar_t group[256], groupDomain[256]; DWORD groupSize = 256, groupDomainSize = 256;
     check(LookupAccountSidW(nullptr, usersSid.value, group, &groupSize, groupDomain, &groupDomainSize, &use));
@@ -284,7 +321,7 @@ static int supervisor(const fs::path& executable, const fs::path& base) {
       CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT, nullptr, (base / L"public").c_str(), &startup, &child));
     Handle process(child.hProcess), thread(child.hThread);
     if (!AssignProcessToJobObject(job.value, process.value)) {
-      const DWORD error = GetLastError(); TerminateProcess(process.value, 99); WaitForSingleObject(process.value, 5000); throw Failure{error};
+      const DWORD assignError = GetLastError(); TerminateProcess(process.value, 99); WaitForSingleObject(process.value, 5000); throw Failure{assignError};
     }
     check(ResumeThread(thread.value) != static_cast<DWORD>(-1));
     brokerExit = static_cast<int>(finish(process, job, 60000));

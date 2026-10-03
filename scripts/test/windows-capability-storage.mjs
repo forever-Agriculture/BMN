@@ -90,8 +90,15 @@ try {
   if (!receiptWritten && existsSync(join(root, 'result.json'))) {
     writeFileSync(join(output, 'windows-capability-storage.json'), readFileSync(join(root, 'result.json')))
   }
-  if (existsSync(join(root, 'generated-account.txt'))) {
+  let cleanupConfirmed = false
+  try {
+    const supervisor = JSON.parse(readFileSync(join(root, 'result.json'), 'utf8'))
+    cleanupConfirmed = supervisor.accountRemoved === true && supervisor.userProfileRemoved === true
+  } catch { /* An interrupted supervisor requires the independent rescue. */ }
+  if (!cleanupConfirmed && existsSync(join(root, 'generated-account.txt'))) {
     const rescue = spawnSync(executable, ['--cleanup', root], { encoding: 'utf8', timeout: 20000, windowsHide: true })
+    writeFileSync(join(output, 'windows-capability-cleanup.json'), JSON.stringify({ attempted: true, status: rescue.status,
+      error: rescue.error?.code, diagnostic: rescue.stderr }))
     assert.equal(rescue.error, undefined, 'Synthetic capability cleanup did not finish')
     assert.equal(rescue.status, 0, 'Synthetic capability account/profile cleanup failed')
   }
