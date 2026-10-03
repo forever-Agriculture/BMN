@@ -7,6 +7,7 @@ import { open, rename, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { measureRawSupervisor } from './wsl-raw-supervisor-spike.mjs'
+import { measureGuestBrokerEscape } from './wsl-broker-escape-spike.mjs'
 
 assert.equal(process.platform, 'win32')
 assert.equal(process.env.GITHUB_ACTIONS, 'true')
@@ -121,6 +122,7 @@ finally:
   assert.equal(owned.exit, 0, 'Detached guest trees must exit after scoped Stop and root crash')
   receipt.guest = JSON.parse(owned.stdout); receipt.measuredGuestOwnership = true
   receipt.rawSupervisorDeath = await measureRawSupervisor({ executable, distribution, uid, guest })
+  receipt.guestBrokerIsolation = measureGuestBrokerEscape({ distribution, uid, guest })
   receipt.reason = 'Ordinary-user nondelegated systemd services contain detached trees through Stop/root crash. Raw supervisor EOF/host-crash measured separately; Windows GUI interop still requires measurement before implementation.'
 } catch (error) { receipt.reason = String(error.message).slice(0, 1000) }
 finally {

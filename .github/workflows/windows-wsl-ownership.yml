@@ -5,6 +5,7 @@ on:
       - .github/workflows/windows-wsl-ownership.yml
       - scripts/test/windows-wsl-systemd-spike.mjs
       - scripts/test/wsl-raw-supervisor-spike.mjs
+      - scripts/test/wsl-broker-escape-spike.mjs
       - scripts/test/config-path-spike.mjs
   workflow_dispatch:
 permissions:

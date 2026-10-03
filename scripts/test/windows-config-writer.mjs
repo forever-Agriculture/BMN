@@ -20,14 +20,15 @@ $ErrorActionPreference='Stop'
 $r=ConvertFrom-Json ([Console]::In.ReadToEnd())
 $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User
 if($r.protect) {
- $acl=New-Object Security.AccessControl.FileSecurity
+ $acl=if($r.directory) {New-Object Security.AccessControl.DirectorySecurity} else {New-Object Security.AccessControl.FileSecurity}
  $owner=if($r.foreign) { New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544') } else {$sid}
  $acl.SetOwner($owner);$acl.SetAccessRuleProtection($true,$false)
  $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl','Allow')))
  if($r.denyDelete) {$acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,'Delete','Deny')))}
- [IO.File]::SetAccessControl($r.path,$acl)
+ if($r.denyChildDelete) {$acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,'DeleteSubdirectoriesAndFiles','Deny')))}
+ if($r.directory) {[IO.Directory]::SetAccessControl($r.path,$acl)} else {[IO.File]::SetAccessControl($r.path,$acl)}
 }
-$acl=[IO.File]::GetAccessControl($r.path)
+$acl=if($r.directory) {[IO.Directory]::GetAccessControl($r.path)} else {[IO.File]::GetAccessControl($r.path)}
 $rules=@($acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]) | ForEach-Object {
  @{sid=$_.IdentityReference.Value;rights=[int]$_.FileSystemRights;type=[int]$_.AccessControlType;inherited=$_.IsInherited}
 })
@@ -71,6 +72,21 @@ function workerWrite(path, expected, next, gate) {
   return { worker, result, exited }
 }
 try {
+  // Raw native measurement keeps inherited-ACL diagnosis separate from product gates.
+  const inherited = join(root, 'inherited.json'), staged = join(root, 'inherited.stage'), backup = join(root, 'inherited.backup')
+  writeFileSync(inherited, 'BEFORE')
+  const measure = `$ErrorActionPreference='Stop';$r=ConvertFrom-Json ([Console]::In.ReadToEnd());$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User;
+function Describe($path) {$a=[IO.File]::GetAccessControl($path);return @{owner=$a.GetOwner([Security.Principal.SecurityIdentifier]).Value;protected=$a.AreAccessRulesProtected;sddl=$a.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]'Owner,Access')}}
+$a=[IO.File]::GetAccessControl($r.path);$a.SetOwner($sid);[IO.File]::SetAccessControl($r.path,$a);$before=Describe $r.path;
+$private=New-Object Security.AccessControl.FileSecurity;$private.SetOwner($sid);$private.SetAccessRuleProtection($true,$false);$private.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl','Allow')));
+$f=New-Object IO.FileStream($r.stage,[IO.FileMode]::CreateNew,[Security.AccessControl.FileSystemRights]'Write,ReadPermissions',[IO.FileShare]::None,4096,[IO.FileOptions]::WriteThrough,$private);$bytes=[Text.Encoding]::UTF8.GetBytes('AFTER');$f.Write($bytes,0,$bytes.Length);$f.Flush($true);$f.Dispose();
+$held=New-Object IO.FileStream($r.path,[IO.FileMode]::Open,[Security.AccessControl.FileSystemRights]'Read,ReadPermissions',([IO.FileShare]::Read -bor [IO.FileShare]::Delete),4096,[IO.FileOptions]::None);
+try {[IO.File]::Replace($r.stage,$r.path,$r.backup,$false)}finally{$held.Dispose()};
+[Console]::Out.Write((ConvertTo-Json -Depth 5 -Compress @{before=$before;after=(Describe $r.path);backup=(Describe $r.backup)}));`
+  const measured = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(measure, 'utf16le').toString('base64')],
+    { input: JSON.stringify({ path: inherited, stage: staged, backup }), encoding: 'utf8', timeout: 15000, windowsHide: true })
+  assert.equal(measured.status, 0, 'Raw inherited-ACL measurement must execute')
+  receipts.inheritedReplacement = JSON.parse(measured.stdout)
   await check('protected original and backup preserve owner/DACL with Unicode', () => {
     const path = file('existing.json', 'BEFORE 雪'), before = acl(path)
     const result = writeConfigSafely(path, 'BEFORE 雪', 'AFTER 雪')
@@ -103,11 +119,16 @@ try {
     acl(path, { protect: true })
   })
   await check('denied replacement preserves data/ACL and cleans owned stage', () => {
-    const path = file('denied.json', 'BEFORE'); acl(path, { protect: true, denyDelete: true })
+    const directory = join(root, 'denied'); mkdirSync(directory)
+    const path = join(directory, 'settings.json'); writeFileSync(path, 'BEFORE')
+    acl(directory, { directory: true, protect: true, denyChildDelete: true })
+    acl(path, { protect: true, denyDelete: true })
     const before = acl(path)
-    assert.throws(() => writeConfigSafely(path, 'BEFORE', 'OURS'))
-    assert.equal(readFileSync(path, 'utf8'), 'BEFORE'); assert.deepEqual(acl(path), before); assert.deepEqual(temps(), [])
-    acl(path, { protect: true })
+    try {
+      assert.throws(() => writeConfigSafely(path, 'BEFORE', 'OURS'))
+      assert.equal(readFileSync(path, 'utf8'), 'BEFORE'); assert.deepEqual(acl(path), before)
+      assert.deepEqual(readdirSync(directory), ['settings.json'])
+    } finally { acl(path, { protect: true }); acl(directory, { directory: true, protect: true }) }
   })
   await check('existing write handle refuses publication without truncation', async () => {
     const path = file('sharing.json', 'BEFORE')
