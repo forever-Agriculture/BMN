@@ -5,6 +5,7 @@ on:
       - .github/workflows/windows-cache-probe.yml
       - scripts/test/windows-cache-acl-probe.mjs
       - scripts/test/windows-missing-root-probe.mjs
+      - scripts/test/windows-storage-cross-user.mjs
       - apps/desktop/src/utility/private-directory.ts
 permissions:
   contents: read
@@ -19,6 +20,8 @@ jobs:
           node-version: 24.14.0
       - name: Diagnose missing-root aliases in Windows PowerShell 5.1
         run: node scripts/test/windows-missing-root-probe.mjs
+      - name: Verify ordinary-account storage denial
+        run: node scripts/test/windows-storage-cross-user.mjs
       - name: Install pinned Electron only
         shell: pwsh
         run: |

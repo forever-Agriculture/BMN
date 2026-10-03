@@ -68,11 +68,11 @@ $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value;
 
 describe.skipIf(process.platform !== 'win32')('native Windows private roots', () => {
   it.each([
-    { name: 'duplicate explicit file owner entries', directory: false, acl: 'D:P(A;;FA;;;OWNER)(A;;FA;;;OWNER)', protectedAcl: true },
-    { name: 'explicit plus inherited owner entry', directory: false, acl: 'D:(A;;FA;;;OWNER)(A;ID;FA;;;OWNER)', protectedAcl: false },
-    { name: 'split direct and inheritable owner rights', directory: true, acl: 'D:P(A;;FA;;;OWNER)(A;OICIIO;FA;;;OWNER)', protectedAcl: true },
-    { name: 'additional owner read rights', directory: false, acl: 'D:P(A;;FA;;;OWNER)(A;;FR;;;OWNER)', protectedAcl: true }
-  ])('accepts equivalent private owner ACLs: $name', { timeout: 60_000 }, ({ directory, acl, protectedAcl }) => {
+    { name: 'OS-normalized duplicate explicit owner entries', minimumEntries: 1, directory: false, acl: 'D:P(A;;FA;;;OWNER)(A;;FA;;;OWNER)', protectedAcl: true },
+    { name: 'explicit plus inherited owner entry', minimumEntries: 2, directory: false, acl: 'D:(A;;FA;;;OWNER)(A;ID;FA;;;OWNER)', protectedAcl: false },
+    { name: 'OS-normalized split owner rights', minimumEntries: 1, directory: true, acl: 'D:P(A;;FA;;;OWNER)(A;OICIIO;FA;;;OWNER)', protectedAcl: true },
+    { name: 'OS-normalized supplemental owner rights', minimumEntries: 1, directory: false, acl: 'D:P(A;;FA;;;OWNER)(A;;FR;;;OWNER)', protectedAcl: true }
+  ])('accepts equivalent private owner ACLs: $name', { timeout: 60_000 }, ({ directory, acl, protectedAcl, minimumEntries }) => {
     const root = join(fixture(), 'private')
     ensurePrivateDirectories([root])
     const target = join(root, 'synthetic')
@@ -80,7 +80,7 @@ describe.skipIf(process.platform !== 'win32')('native Windows private roots', ()
     else writeFileSync(target, 'synthetic')
     setRawAcl(target, acl, protectedAcl)
     const count = powershell(target, '@($item.GetAccessControl().GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier])).Count')
-    expect(Number(count), 'fixture must retain multiple owner ACEs').toBeGreaterThanOrEqual(2)
+    expect(Number(count), 'explicit plus inherited fixture must retain distinct ACEs').toBeGreaterThanOrEqual(minimumEntries)
     const before = powershell(target, sddl)
     expect(() => ensurePrivateDirectories([root])).not.toThrow()
     expect(powershell(target, sddl)).toBe(before)
