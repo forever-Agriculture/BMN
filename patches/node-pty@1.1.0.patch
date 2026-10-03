@@ -250,7 +250,7 @@ index 1be15ca..bf6e593 100644
 -//# sourceMappingURL=windowsConoutConnection.js.map
 \ No newline at end of file
 diff --git a/lib/windowsPtyAgent.js b/lib/windowsPtyAgent.js
-index a358ffb..7ac842d 100644
+index a358ffb..edcc6ce 100644
 --- a/lib/windowsPtyAgent.js
 +++ b/lib/windowsPtyAgent.js
 @@ -1,251 +1,116 @@
@@ -459,6 +459,7 @@ index a358ffb..7ac842d 100644
 -                }
 -                catch (e) {
 -                    // Ignore if process cannot be found (kill ESRCH error)
+-                }
 +})();
 +Object.defineProperty(exports, "__esModule", { value: true });
 +exports.WindowsPtyAgent = void 0;
@@ -504,23 +505,8 @@ index a358ffb..7ac842d 100644
 +            this._worker.onError(error => {
 +                this._onLifecycleError.fire(error);
 +                this.kill();
-+            });
-+            this.inSocket = new net_1.Socket({ fd: fs.openSync(term.conin, 'w'), readable: false, writable: true });
-+            // A closed stdin can precede a normal process exit. It is not lifecycle evidence.
-+            this.inSocket.on('error', () => { });
-+            const child = native.connect(this.pty, argsToCommandLine(file, args), path.resolve(cwd), env, true, result => {
-+                if ('error' in result) {
-+                    this._onLifecycleError.fire(result.error);
-+                    this._worker.dispose();
-+                    return;
-                 }
-+                this.exitCode = result.exitCode;
-+                this.inSocket.destroy();
-+                this._finishExit();
              });
-+            this.innerPid = child.pid;
-+            this.processStartIdentity = child.startIdentity;
-         }
+-        }
 -    };
 -    WindowsPtyAgent.prototype._getConsoleProcessList = function () {
 -        var _this = this;
@@ -529,7 +515,19 @@ index a358ffb..7ac842d 100644
 -            agent.on('message', function (message) {
 -                clearTimeout(timeout);
 -                resolve(message.consoleProcessList);
--            });
++            this.inSocket = new net_1.Socket({ fd: fs.openSync(term.conin, 'w'), readable: false, writable: true });
++            // A closed stdin can precede a normal process exit. It is not lifecycle evidence.
++            this.inSocket.on('error', () => { });
++            const child = native.connect(this.pty, argsToCommandLine(file, args), path.resolve(cwd), env, true, result => {
++                if ('error' in result) {
++                    this._onLifecycleError.fire(result.error);
++                    this._worker.dispose();
++                    return;
++                }
++                this.exitCode = result.exitCode;
++                this.inSocket.destroy();
++                this._finishExit();
+             });
 -            var timeout = setTimeout(function () {
 -                // Something went wrong, just send back the shell PID
 -                agent.kill();
@@ -553,11 +551,8 @@ index a358ffb..7ac842d 100644
 -        var buildNumber = 0;
 -        if (osVersion && osVersion.length === 4) {
 -            buildNumber = parseInt(osVersion[3]);
-+        catch (error) {
-+            native.kill(this.pty, true);
-+            (_a = this._worker) === null || _a === void 0 ? void 0 : _a.dispose();
-+            (_b = this.inSocket) === null || _b === void 0 ? void 0 : _b.destroy();
-+            throw error;
++            this.innerPid = child.pid;
++            this.processStartIdentity = child.startIdentity;
          }
 -        return buildNumber;
 -    };
@@ -573,7 +568,12 @@ index a358ffb..7ac842d 100644
 -        if (!this._useConptyDll) {
 -            this._flushDataAndCleanUp();
 -            this._outSocket.on('data', function () { return _this._flushDataAndCleanUp(); });
--        }
++        catch (error) {
++            native.kill(this.pty, true);
++            (_a = this._worker) === null || _a === void 0 ? void 0 : _a.dispose();
++            (_b = this.inSocket) === null || _b === void 0 ? void 0 : _b.destroy();
++            throw error;
+         }
 -    };
 -    WindowsPtyAgent.prototype._flushDataAndCleanUp = function () {
 -        var _this = this;
@@ -609,7 +609,7 @@ index a358ffb..7ac842d 100644
  exports.WindowsPtyAgent = WindowsPtyAgent;
  // Convert argc/argv into a Win32 command-line following the escaping convention
  // documented on MSDN (e.g. see CommandLineToArgvW documentation). Copied from
-@@ -255,20 +120,20 @@ function argsToCommandLine(file, args) {
+@@ -255,30 +120,24 @@ function argsToCommandLine(file, args) {
          if (args.length === 0) {
              return file;
          }
@@ -627,18 +627,17 @@ index a358ffb..7ac842d 100644
              result += ' ';
          }
 -        var arg = argv[argIndex];
-+        const arg = argv[argIndex];
-         // if it is empty or it contains whitespace and is not already quoted
+-        // if it is empty or it contains whitespace and is not already quoted
 -        var hasLopsidedEnclosingQuote = xOr((arg[0] !== '"'), (arg[arg.length - 1] !== '"'));
 -        var hasNoEnclosingQuotes = ((arg[0] !== '"') && (arg[arg.length - 1] !== '"'));
 -        var quote = arg === '' ||
-+        const hasLopsidedEnclosingQuote = xOr((arg[0] !== '"'), (arg[arg.length - 1] !== '"'));
-+        const hasNoEnclosingQuotes = ((arg[0] !== '"') && (arg[arg.length - 1] !== '"'));
-+        const quote = arg === '' ||
-             (arg.indexOf(' ') !== -1 ||
-                 arg.indexOf('\t') !== -1) &&
-                 ((arg.length > 1) &&
-@@ -276,9 +141,9 @@ function argsToCommandLine(file, args) {
+-            (arg.indexOf(' ') !== -1 ||
+-                arg.indexOf('\t') !== -1) &&
+-                ((arg.length > 1) &&
+-                    (hasLopsidedEnclosingQuote || hasNoEnclosingQuotes));
++        const arg = argv[argIndex];
++        // argv values are literal data, including enclosing quote characters.
++        const quote = arg === '' || /[\s"]/.test(arg);
          if (quote) {
              result += '\"';
          }
@@ -651,7 +650,7 @@ index a358ffb..7ac842d 100644
              if (p === '\\') {
                  bsCount++;
              }
-@@ -303,13 +168,12 @@ function argsToCommandLine(file, args) {
+@@ -303,18 +162,13 @@ function argsToCommandLine(file, args) {
      }
      return result;
  }
@@ -667,10 +666,10 @@ index a358ffb..7ac842d 100644
          result += text;
      }
      return result;
-@@ -317,4 +181,3 @@ function repeatText(text, count) {
- function xOr(arg1, arg2) {
-     return ((arg1 && !arg2) || (!arg1 && arg2));
  }
+-function xOr(arg1, arg2) {
+-    return ((arg1 && !arg2) || (!arg1 && arg2));
+-}
 -//# sourceMappingURL=windowsPtyAgent.js.map
 \ No newline at end of file
 diff --git a/lib/windowsTerminal.js b/lib/windowsTerminal.js
@@ -1038,7 +1037,7 @@ index c53e086..9b0c6cb 100644
    clear(ptyId: number, useConptyDll: boolean): void;
    kill(ptyId: number, useConptyDll: boolean): void;
 diff --git a/src/win/conpty.cc b/src/win/conpty.cc
-index 7b286d3..5f03ebe 100644
+index 7b286d3..9082467 100644
 --- a/src/win/conpty.cc
 +++ b/src/win/conpty.cc
 @@ -2,582 +2,385 @@
@@ -1633,7 +1632,7 @@ index 7b286d3..5f03ebe 100644
 -    for(uint32_t i = 0; i < envValues.Length(); i++) {
 -      envBlock += path_util::to_wstring(envValues.Get(i).As<Napi::String>());
 -      envBlock += L'\0';
-+static Napi::Value connect(const Napi::CallbackInfo& info) {
++static Napi::Value connectOwnedProcess(const Napi::CallbackInfo& info) {
 +  auto env = info.Env();
 +  if (info.Length() != 6 || !info[0].IsNumber() || !info[1].IsString() || !info[2].IsString() || !info[3].IsArray() || !info[5].IsFunction())
 +    throw Napi::Error::New(env, "Invalid ConPTY connect arguments");
@@ -1941,7 +1940,7 @@ index 7b286d3..5f03ebe 100644
 +    delete ref;
 +  }, state);
 +  exports.Set("startProcess", Napi::Function::New(env, start, "start", state));
-+  exports.Set("connect", Napi::Function::New(env, connect, "connect", state));
++  exports.Set("connect", Napi::Function::New(env, connectOwnedProcess, "connect", state));
 +  exports.Set("resize", Napi::Function::New(env, resize, "resize", state));
 +  exports.Set("clear", Napi::Function::New(env, clear, "clear", state));
 +  exports.Set("kill", Napi::Function::New(env, kill, "kill", state));
@@ -2075,7 +2074,7 @@ index fa2d62d..373d931 100644
    }
  }
 diff --git a/src/windowsPtyAgent.ts b/src/windowsPtyAgent.ts
-index d705444..520986e 100644
+index d705444..bd9cc9a 100644
 --- a/src/windowsPtyAgent.ts
 +++ b/src/windowsPtyAgent.ts
 @@ -1,252 +1,77 @@
@@ -2325,17 +2324,10 @@ index d705444..520986e 100644
 -  public get exitCode(): number | undefined {
 -    if (this._useConpty) {
 -      return this._exitCode;
-+      this.innerPid = child.pid;
-+      this.processStartIdentity = child.startIdentity;
-+    } catch (error) {
-+      native.kill(this.pty, true);
-+      this._worker?.dispose();
-+      this.inSocket?.destroy();
-+      throw error;
-     }
+-    }
 -    const winptyExitCode = (this._ptyNative as IWinptyNative).getExitCode(this._innerPid);
 -    return winptyExitCode === -1 ? undefined : winptyExitCode;
-   }
+-  }
 -
 -  private _getWindowsBuildNumber(): number {
 -    const osVersion = (/(\d+)\.(\d+)\.(\d+)/g).exec(os.release());
@@ -2358,8 +2350,15 @@ index d705444..520986e 100644
 -    if (!this._useConptyDll) {
 -      this._flushDataAndCleanUp();
 -      this._outSocket.on('data', () => this._flushDataAndCleanUp());
--    }
--  }
++      this.innerPid = child.pid;
++      this.processStartIdentity = child.startIdentity;
++    } catch (error) {
++      native.kill(this.pty, true);
++      this._worker?.dispose();
++      this.inSocket?.destroy();
++      throw error;
+     }
+   }
 -
 -  private _flushDataAndCleanUp(): void {
 -    if (this._useConptyDll) {
@@ -2390,6 +2389,31 @@ index d705444..520986e 100644
  }
  
  // Convert argc/argv into a Win32 command-line following the escaping convention
+@@ -267,15 +92,8 @@ export function argsToCommandLine(file: string, args: ArgvOrCommandLine): string
+       result += ' ';
+     }
+     const arg = argv[argIndex];
+-    // if it is empty or it contains whitespace and is not already quoted
+-    const hasLopsidedEnclosingQuote = xOr((arg[0] !== '"'), (arg[arg.length - 1] !== '"'));
+-    const hasNoEnclosingQuotes = ((arg[0] !== '"') && (arg[arg.length - 1] !== '"'));
+-    const quote =
+-      arg === '' ||
+-      (arg.indexOf(' ') !== -1 ||
+-      arg.indexOf('\t') !== -1) &&
+-      ((arg.length > 1) &&
+-      (hasLopsidedEnclosingQuote || hasNoEnclosingQuotes));
++    // argv values are literal data, including enclosing quote characters.
++    const quote = arg === '' || /[\s"]/.test(arg);
+     if (quote) {
+       result += '\"';
+     }
+@@ -316,6 +134,3 @@ function repeatText(text: string, count: number): string {
+   return result;
+ }
+ 
+-function xOr(arg1: boolean, arg2: boolean): boolean {
+-  return ((arg1 && !arg2) || (!arg1 && arg2));
+-}
 diff --git a/src/windowsTerminal.ts b/src/windowsTerminal.ts
 index 13f6c6d..41727c1 100644
 --- a/src/windowsTerminal.ts

@@ -22,7 +22,7 @@ setInterval(()=>{if(role==='root'&&fs.existsSync(path.join(dir,'natural')))proce
   writeFileSync(host, `const fs=require('node:fs'),path=require('node:path');
 const pty=require(${JSON.stringify(requireApp.resolve('node-pty'))});
 const [dir,node,fixture,mode]=process.argv.slice(2);
-const args=mode==='silent'?['-e','setInterval(()=>{},1000)']:mode==='immediate'?['-e','process.exit(47)']:[fixture,dir,'root','space value','雪','%PATH%','^&','quote"value','C:\\\\with space\\\\'];
+const args=mode==='silent'?['-e','setInterval(()=>{},1000)']:mode==='immediate'?['-e','process.exit(47)']:[fixture,dir,'root','space value','雪','%PATH%','^&','quote"value','"a b"','C:\\\\with space\\\\'];
 const terminal=pty.spawn(node,args,{cwd:dir,env:{...process.env},useConpty:true,useConptyDll:true});
 fs.writeFileSync(path.join(dir,'host.json'),JSON.stringify({pid:process.pid,root:terminal.pid,identity:terminal.processStartIdentity,queried:mode==='immediate'?null:pty.queryProcessStartIdentity(terminal.pid)}));
 terminal.onData(()=>{});
@@ -99,7 +99,7 @@ foreach($mode in @('natural','stop','crash','silent','immediate')) {
     $p=[Diagnostics.Process]::GetProcessById($r.pid); $null=$p.Handle; $observed+=,$p;
    }
    $r=[IO.File]::ReadAllText((Join-Path $dir 'root.json')) | ConvertFrom-Json;
-   $expected=@('space value','雪','%PATH%','^&','quote"value','C:\\with space\\');
+   $expected=@('space value','雪','%PATH%','^&','quote"value','"a b"','C:\\with space\\');
    if(($r.args | ConvertTo-Json -Compress) -ne ($expected | ConvertTo-Json -Compress)) { throw 'Argument round-trip mismatch' };
   }
   if($mode -eq 'crash') {
