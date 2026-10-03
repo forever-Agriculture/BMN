@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, chmodSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { disposableProviderEnvironment } from './disposable-provider-env.mjs'
 
@@ -22,7 +22,7 @@ describe('disposable provider trial environment', () => {
     expect(() => disposableProviderEnvironment('/tmp/runtime', undefined)).toThrow(/UNVERIFIED/)
     expect(() => disposableProviderEnvironment('/tmp/runtime', '/tmp/bmn-cross-harness-profiles-missing'))
       .toThrow(/does not exist/)
-    expect(() => disposableProviderEnvironment('/tmp/runtime', process.env.HOME)).toThrow(/disposable \/tmp/)
+    expect(() => disposableProviderEnvironment('/tmp/runtime', homedir())).toThrow(/disposable \/tmp/)
   })
 
   it('uses private disposable profiles and drops inherited credentials and owner roots', () => {

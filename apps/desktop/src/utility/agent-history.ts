@@ -1,6 +1,6 @@
 // MODULE: agent-history.ts - one history limit for every agent: Claude folders, the pruning runner and its schedule (Stories 31.1, 31.2)
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
-import { basename } from 'node:path'
+import { basename, win32 } from 'node:path'
 import {
   MAX_CLAUDE_CONFIG_DIRS,
   MAX_DELETIONS_PER_RUN,
@@ -146,8 +146,22 @@ export class AgentHistory {
     this.options = options
   }
 
+  private folderKey(folder: string): string {
+    if (process.platform !== 'win32') return folder
+    const normalized = win32.normalize(folder)
+    const root = win32.parse(normalized).root
+    return (normalized.length > root.length ? normalized.replace(/\\+$/u, '') : normalized).toLowerCase()
+  }
+
   private get homeFolder(): string {
-    return `${this.options.home}/.claude`
+    return process.platform === 'win32' ? win32.join(this.options.home, '.claude') : `${this.options.home}/.claude`
+  }
+
+  private displayFolder(folder: string): string {
+    if (process.platform !== 'win32') return folder.startsWith(`${this.options.home}/`) ? `~${folder.slice(this.options.home.length)}` : folder
+    const home = win32.normalize(this.options.home).replace(/\\+$/u, '')
+    const normalized = win32.normalize(folder)
+    return normalized.toLowerCase().startsWith(`${home.toLowerCase()}\\`) ? `~${normalized.slice(home.length)}` : folder
   }
 
   private now(): Date {
@@ -162,17 +176,22 @@ export class AgentHistory {
   }
 
   private folders(settings: AgentHistorySettings): string[] {
-    return [...new Set([this.homeFolder, ...settings.claudeConfigDirs])]
+    const seen = new Set<string>()
+    return [this.homeFolder, ...settings.claudeConfigDirs].filter(folder => {
+      const key = this.folderKey(folder)
+      if (seen.has(key)) return false
+      seen.add(key); return true
+    })
   }
 
   /** A Claude hook reported where its settings live; only folders with a settings.json are remembered. */
   async learnClaudeFolder(folder: string): Promise<void> {
-    if (folder === this.homeFolder) return
+    if (this.folderKey(folder) === this.folderKey(this.homeFolder)) return
     await this.exclusive(async () => {
       const settings = await this.options.readSettings()
-      if (settings.claudeConfigDirs.includes(folder)) return
+      if (settings.claudeConfigDirs.some(dir => this.folderKey(dir) === this.folderKey(folder))) return
       if (!existsSync(claudeSettingsPath(folder))) return
-      const learned = [...settings.claudeConfigDirs.filter((dir) => dir !== this.homeFolder), folder]
+      const learned = [...settings.claudeConfigDirs.filter((dir) => this.folderKey(dir) !== this.folderKey(this.homeFolder)), folder]
       await this.options.writeSettings({ ...settings, claudeConfigDirs: learned.slice(-MAX_CLAUDE_CONFIG_DIRS) })
       this.options.changed?.()
     })
@@ -189,7 +208,7 @@ export class AgentHistory {
       return {
         path,
         name: path === this.homeFolder ? 'Claude Code' : basename(path) === '.claude-glm' ? 'GLM' : 'Claude',
-        displayPath: path.startsWith(`${this.options.home}/`) ? `~${path.slice(this.options.home.length)}` : path,
+        displayPath: this.displayFolder(path),
         currentDays: read.ok ? read.currentDays : null,
         targetDays: target,
         // A folder the owner has not confirmed since BMN learned it waits for Start cleanup, even when it holds the value.

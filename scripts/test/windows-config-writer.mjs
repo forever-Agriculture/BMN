@@ -193,10 +193,21 @@ try{const {writeConfigSafely}=await import(d.moduleUrl);writeConfigSafely(d.path
 catch(e){parentPort.postMessage({...info,ok:false,code:e.code,reason:e.message==='Windows SystemRoot is unavailable'?'MISSING_SYSTEMROOT':'OTHER'})}})();`,
       { eval: true, env, workerData: { moduleUrl: pathToFileURL(baselineModule).href, path } })
     const exited = once(worker, 'exit'), message = once(worker, 'message')
-    const [result] = await message; assert.equal(await exited, 0)
+    const [result] = await message; receipts.uppercaseWorkerRed = result; assert.equal((await exited)[0], 0)
     assert.deepEqual(result, { keys: ['SYSTEMROOT'], exactPresent: false, ok: false, code: 'IO_ERROR', reason: 'MISSING_SYSTEMROOT' })
     assert.equal(readFileSync(path, 'utf8'), 'BEFORE')
-    receipts.uppercaseWorkerRed = result
+  })
+  await check('GREEN current writer accepts uppercase SystemRoot in a native worker', async () => {
+    const path = file('worker-environment-green.json', 'BEFORE')
+    const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => name.toLowerCase() !== 'systemroot'))
+    env.SYSTEMROOT = process.env.SystemRoot
+    const worker = new Worker(workerSource, { eval: true, env, workerData: {
+      moduleUrl: new URL('../../apps/desktop/bin/safe-config-write.mjs', import.meta.url).href, path, expected: 'BEFORE', next: 'OURS' } })
+    const exited = once(worker, 'exit'), message = once(worker, 'message')
+    const [result] = await message; assert.equal((await exited)[0], 0)
+    assert.equal(result.ok, true); assert.equal(readFileSync(path, 'utf8'), 'OURS')
+    assert.equal(readFileSync(result.result.backup, 'utf8'), 'BEFORE')
+    receipts.uppercaseWorkerGreen = { published: true, backupPreserved: true }
   })
   await check('GREEN inherited original and backup keep exact owner/ACE flags/protection', () => {
     const path = join(root, 'green-inherited.json'); writeFileSync(path, 'BEFORE')

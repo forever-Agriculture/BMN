@@ -4,6 +4,7 @@ import { gzipSync } from 'node:zlib'
 import { createHash, randomUUID } from 'node:crypto'
 import { closeSync, constants, copyFileSync, fchmodSync, fstatSync, lstatSync, openSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, win32 } from 'node:path'
+import { windowsEnvironmentValue } from './windows-env.mjs'
 
 /** A stable failure code. Unconfirmed native replacement retains backup/staged data for recovery. */
 export class ConfigWriteError extends Error {
@@ -367,7 +368,7 @@ try {
 const WINDOWS_CONFIG_COMMAND = Buffer.from(`$memory=[IO.MemoryStream]::new([Convert]::FromBase64String('${gzipSync(Buffer.from(WINDOWS_CONFIG_WRITE, 'utf8')).toString('base64')}'));$gzip=[IO.Compression.GZipStream]::new($memory,[IO.Compression.CompressionMode]::Decompress);$reader=[IO.StreamReader]::new($gzip,[Text.Encoding]::UTF8);try {$source=$reader.ReadToEnd()} finally {$reader.Dispose()}; & ([ScriptBlock]::Create($source))`, 'utf16le').toString('base64')
 
 function windowsConfigOperation(request) {
-  const systemRoot = process.env.SystemRoot
+  const systemRoot = windowsEnvironmentValue(process.env, 'SystemRoot')
   if (!systemRoot || !win32.isAbsolute(systemRoot)) throw new CliError('IO_ERROR', 'Windows SystemRoot is unavailable')
   const child = spawnSync(win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
     ['-NoProfile', '-NonInteractive', '-EncodedCommand', WINDOWS_CONFIG_COMMAND],

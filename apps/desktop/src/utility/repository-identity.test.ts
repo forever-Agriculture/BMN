@@ -9,7 +9,7 @@ const roots: string[] = []
 const now = () => new Date('2026-09-24T10:00:00.000Z')
 
 function fixture(): string {
-  const directory = realpathSync(mkdtempSync(join(tmpdir(), 'bmn-repository-identity-')))
+  const directory = realpathSync.native(mkdtempSync(join(tmpdir(), 'bmn-repository-identity-')))
   roots.push(directory)
   return directory
 }

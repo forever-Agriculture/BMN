@@ -95,6 +95,19 @@ async function fixture(options: {
 }
 
 describe('agent history limit', () => {
+  it.skipIf(process.platform !== 'win32')('treats Windows casing, separators and trailing separators as one config folder', async () => {
+    const f = await fixture()
+    const homeFolder = join(f.home, '.claude')
+    await f.history.learnClaudeFolder(homeFolder.toUpperCase().replaceAll('\\', '/') + '/')
+    expect(f.settings().claudeConfigDirs).toEqual([])
+    const sibling = join(f.home, 'profile', '.claude')
+    await mkdir(sibling, { recursive: true }); await writeFile(join(sibling, 'settings.json'), '{}')
+    await f.history.learnClaudeFolder(sibling)
+    await f.history.learnClaudeFolder(sibling.toUpperCase().replaceAll('\\', '/') + '/')
+    expect(f.settings().claudeConfigDirs).toEqual([sibling])
+    expect((await f.history.status()).claude.map(row => row.path)).toEqual([homeFolder, sibling])
+  })
+
   it('orders limits with Never longest', () => {
     expect(isShorterLimit(10, 30)).toBe(true)
     expect(isShorterLimit(90, null)).toBe(true)

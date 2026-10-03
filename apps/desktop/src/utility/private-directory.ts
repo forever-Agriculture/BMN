@@ -1,6 +1,7 @@
 // Windows mode bits do not restrict other users. Apply and read back a protected DACL
 // before opening BMN state. Paths are data passed through stdin, never PowerShell code.
 import { spawnSync } from 'node:child_process'
+import { windowsEnvironmentValue } from '../../bin/windows-env.mjs'
 import { chmodSync, mkdirSync } from 'node:fs'
 import { win32 } from 'node:path'
 import { homedir } from 'node:os'
@@ -169,13 +170,13 @@ export function ensurePrivateDirectories(
   }
   for (const root of roots) {
     const normalized = win32.resolve(root).toLowerCase()
-    const protectedRoots = [win32.parse(root).root, homedir(), process.env.LOCALAPPDATA, process.env.SystemRoot]
+    const protectedRoots = [win32.parse(root).root, homedir(), windowsEnvironmentValue(process.env, 'LOCALAPPDATA'), windowsEnvironmentValue(process.env, 'SystemRoot')]
       .filter((path): path is string => !!path).map((path) => win32.resolve(path).toLowerCase())
     if (!win32.isAbsolute(root) || protectedRoots.includes(normalized)) {
       throw new Error('BMN Windows data roots must be dedicated absolute application directories')
     }
   }
-  const systemRoot = process.env.SystemRoot
+  const systemRoot = windowsEnvironmentValue(process.env, 'SystemRoot')
   if (!systemRoot || !win32.isAbsolute(systemRoot)) throw new Error('Windows SystemRoot is unavailable')
   const result = spawnSync(win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), [
     '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand',

@@ -1,7 +1,8 @@
 // Native CI entrypoint: preserve child exit evidence even when no test report is produced.
-import { spawn } from 'node:child_process'
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { tmpdir } from 'node:os'
 
 const root = resolve(import.meta.dirname, '../..')
 const output = join(root, 'test-results')
@@ -28,6 +29,21 @@ async function run(role, arguments_, cwd) {
   })
 }
 save()
+if (process.platform === 'win32' && process.env.GITHUB_ACTIONS === 'true') {
+  // Observe fresh fixture ownership; never repair or adopt an existing path.
+  const directory = mkdtempSync(join(tmpdir(), 'bmn-unit-owner-probe-'))
+  try {
+    const path = join(directory, 'synthetic.txt'); writeFileSync(path, 'synthetic')
+    const source = `$ErrorActionPreference='Stop';[Console]::InputEncoding=New-Object Text.UTF8Encoding($false);$r=ConvertFrom-Json ([Console]::In.ReadToEnd());$owner=[IO.File]::GetAccessControl($r.path).GetOwner([Security.Principal.SecurityIdentifier]).Value;$user=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;[Console]::Out.Write((ConvertTo-Json -Compress @{ownerMatchesUser=($owner -eq $user);ownerIsAdministrators=($owner -eq 'S-1-5-32-544')}))`
+    const child = spawnSync(join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+      ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(source, 'utf16le').toString('base64')],
+      { input: JSON.stringify({ path }), encoding: 'utf8', timeout: 15000, windowsHide: true })
+    receipt.windowsFixture = { systemRootKeys: Object.keys(process.env).filter(name => name.toLowerCase() === 'systemroot'),
+      homePresent: typeof process.env.HOME === 'string', exitCode: child.status, launchError: child.error?.code ?? null }
+    if (child.status === 0) receipt.windowsFixture.ownership = JSON.parse(child.stdout)
+    save()
+  } finally { rmSync(directory, { recursive: true, force: true }) }
+}
 let status = await run('protocol-build', [join(root, 'shared/protocol/node_modules/typescript/bin/tsc'), '-b'], join(root, 'shared/protocol'))
 if (status === 0) status = await run('vitest', [join(root, 'node_modules/vitest/vitest.mjs'), 'run', '--maxWorkers=50%',
   '--exclude', '.claude/**', '--exclude', '.dev-auto/**', '--reporter=default', '--reporter=json',

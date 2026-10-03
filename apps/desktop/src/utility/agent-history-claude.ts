@@ -1,4 +1,5 @@
 // MODULE: agent-history-claude.ts - reads and writes cleanupPeriodDays in Claude-family settings.json files (Story 31.1)
+import { win32 } from 'node:path'
 import { CLAUDE_KEEP_FOREVER_DAYS, type AgentHistoryKeepDays } from '@bmn/protocol'
 import {
   ConfigWriteError,
@@ -19,7 +20,7 @@ export type ClaudeFolderWrite =
   | { ok: false; failure: string }
 
 export function claudeSettingsPath(folder: string): string {
-  return `${folder}/settings.json`
+  return process.platform === 'win32' ? win32.join(folder, 'settings.json') : `${folder}/settings.json`
 }
 
 /** The number BMN writes for a limit: the days themselves, or a century for Never. Never 0. */

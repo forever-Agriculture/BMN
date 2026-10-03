@@ -24,6 +24,8 @@ extraResources:
   # bmn.mjs imports it by relative path; the utility process bundles its own copy.
   - from: bin/safe-config-write.mjs
     to: bin/safe-config-write.mjs
+  - from: bin/windows-env.mjs
+    to: bin/windows-env.mjs
   # The --self-test stand-in agents draw these recorded dialogs; the packaged smoke runs that phase too.
   - from: src/utility/test-fixtures/remote-answers
     to: self-test/remote-answers
