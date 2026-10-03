@@ -5,6 +5,9 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSyn
 import { availableParallelism } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { engineBuildConfig } from './engine-build-config.mjs'
+
+const config = engineBuildConfig({ portable: process.argv.includes('--portable') })
 
 const WHISPER_VERSION = '1.9.4'
 const SOURCE_URL = `https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v${WHISPER_VERSION}.tar.gz`
@@ -17,7 +20,7 @@ const output = join(repository, 'apps/desktop/resources/whisper')
 const cache = join(repository, 'node_modules/.cache/whisper.cpp')
 const tarball = join(cache, `whisper.cpp-${WHISPER_VERSION}.tar.gz`)
 const source = join(cache, `whisper.cpp-${WHISPER_VERSION}`)
-const build = join(source, 'build')
+const build = join(source, `build-${process.platform}-${config.baseline}`)
 
 // Upstream applies audio_ctx only after language detection, so with "Detect automatically" every dictation first
 // encoded a full 30-second window: 3.6 s of a 3-second phrase on a 6-core CPU, against 1.2 s with the language set.
@@ -44,7 +47,7 @@ const SPEECH_MODEL = {
   file: 'ggml-silero-v6.2.0.bin',
   sha256: '2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987'
 }
-const stamp = `whisper.cpp ${WHISPER_VERSION} ${SOURCE_SHA256}${PATCHES.map((patch) => ` +${patch.id}`).join('')} +${SPEECH_DETECTOR} +${SPEECH_MODEL.file}\n`
+const stamp = `whisper.cpp ${WHISPER_VERSION} ${SOURCE_SHA256}${PATCHES.map((patch) => ` +${patch.id}`).join('')} +${SPEECH_DETECTOR} +${SPEECH_MODEL.file} ${process.platform} ${config.baseline} runtime-v1\n`
 
 function readText(path) {
   try {
@@ -96,8 +99,8 @@ async function sourceTarball() {
   renameSync(`${tarball}.part`, tarball)
 }
 
-const binary = join(output, 'whisper-cli')
-const detector = join(output, SPEECH_DETECTOR)
+const binary = join(output, 'whisper-cli' + config.suffix)
+const detector = join(output, SPEECH_DETECTOR + config.suffix)
 const speechModel = join(output, SPEECH_MODEL.file)
 if (!process.argv.includes('--force') && [binary, detector, speechModel].every(existsSync) && readText(join(output, 'VERSION')) === stamp) {
   console.log(`whisper.cpp ${WHISPER_VERSION} is already built at ${binary}`)
@@ -116,7 +119,8 @@ const configuredFor = /^CMAKE_CACHEFILE_DIR:INTERNAL=(.*)$/mu.exec(readText(join
 if (configuredFor !== undefined && configuredFor !== build) rmSync(build, { recursive: true, force: true })
 
 const { command, prefix } = cmake()
-// GGML_NATIVE tunes the engine for this computer's CPU; the build is for this machine, not for distribution.
+// Packaging requests --portable; local voice:build may explicitly retain host tuning.
+// Upstream options are pinned in whisper.cpp 1.9.4 ggml/CMakeLists.txt.
 run(command, [
   ...prefix,
   '-S', source,
@@ -126,7 +130,9 @@ run(command, [
   '-DWHISPER_BUILD_TESTS=OFF',
   '-DWHISPER_BUILD_SERVER=OFF',
   '-DWHISPER_SDL2=OFF',
-  '-DGGML_NATIVE=ON'
+  ...config.cmakeOptions,
+  `-DCMAKE_RUNTIME_OUTPUT_DIRECTORY=${join(build, 'bin')}`,
+  `-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE=${join(build, 'bin')}`
 ])
 run(command, [...prefix, '--build', build, '--config', 'Release', '--target', 'whisper-cli', SPEECH_DETECTOR, '-j', String(availableParallelism())])
 
@@ -137,7 +143,7 @@ if (createHash('sha256').update(modelBytes).digest('hex') !== SPEECH_MODEL.sha25
 
 // A detector that never hears speech would silently disable dictation, so prove it on speech and on silence.
 function speechSegments(wav) {
-  const result = spawnSync(join(build, 'bin', SPEECH_DETECTOR), ['-f', wav, '-vm', join(source, SPEECH_MODEL.source), '-vt', '0.3', '-vspd', '0', '-np'], { encoding: 'utf8' })
+  const result = spawnSync(join(build, 'bin', SPEECH_DETECTOR + config.suffix), ['-f', wav, '-vm', join(source, SPEECH_MODEL.source), '-vt', '0.3', '-vspd', '0', '-np'], { encoding: 'utf8' })
   const match = /Detected (\d+) speech segments/u.exec(result.stdout ?? '')
   if (result.status !== 0 || !match) throw new Error(`built ${SPEECH_DETECTOR} gave no result for ${wav}`)
   return Number(match[1])
@@ -153,7 +159,7 @@ if (speechSegments(join(source, 'samples', 'jfk.wav')) === 0 || speechSegments(j
 
 mkdirSync(output, { recursive: true })
 for (const [name, target] of [['whisper-cli', binary], [SPEECH_DETECTOR, detector]]) {
-  const built = join(build, 'bin', name)
+  const built = join(build, 'bin', name + config.suffix)
   if (!commandWorks(built, ['--help'])) throw new Error(`built ${name} does not run: ${built}`)
   copyFileSync(built, `${target}.part`)
   chmodSync(`${target}.part`, 0o755)

@@ -1,0 +1,114 @@
+name: Linux and Windows build
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  platform:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.3.4
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+      - name: Record environment
+        shell: bash
+        run: |
+          mkdir -p test-results
+          node -e "console.log(JSON.stringify({platform:process.platform,arch:process.arch,versions:process.versions,os:require('node:os').version()}))" > test-results/environment.json
+      - name: Install native build prerequisite on disposable runner
+        run: npm install --global node-gyp@12.1.0
+      - name: Linux sandbox namespace permission
+        if: runner.os == 'Linux'
+        run: |
+          sed "s|@REPO_ROOT@|$PWD|g" scripts/sandbox/bmn-electron | sudo tee /etc/apparmor.d/bmn-electron >/dev/null
+          sudo apparmor_parser -r /etc/apparmor.d/bmn-electron
+      - name: Install and rebuild native Electron modules
+        id: install
+        run: pnpm install --frozen-lockfile
+      - name: Build portable local voice engines
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: node scripts/voice/build-whisper.mjs --portable
+      - name: Verify portable voice engines on public audio fixtures
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: node scripts/test/voice-engine-smoke.mjs
+      - name: Lint
+        run: pnpm run lint
+      - name: Typecheck
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm run typecheck
+      - name: Discover WSL capabilities without installing or starting distributions
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && runner.os == 'Windows' }}
+        run: node scripts/test/windows-wsl-capabilities.mjs
+      - name: Measure a disposable WSL2 VM before guest implementation
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && runner.os == 'Windows' }}
+        timeout-minutes: 5
+        run: node scripts/test/windows-wsl-vm-spike.mjs
+      # The full suite runs on both OSes. Failures still owned by a port story are
+      # listed in docs/epic-53-known-failures.json and stay open (never waived or
+      # skipped); the gate fails on any other failure, so regressions stay red.
+      - name: Capture synthetic native hook boundary diagnostics
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && runner.os == 'Windows' }}
+        run: node scripts/test/windows-hook-diagnostic.mjs
+      - name: Unit and integration inventory
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        shell: bash
+        run: |
+          set +e
+          pnpm run test:unit --reporter=default --reporter=json --outputFile.json=test-results/unit.json
+          echo $? > test-results/unit-exit-code
+      - name: Unit regression gate
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: node scripts/test/unit-inventory-gate.mjs
+      - name: Build
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: pnpm run build
+      - name: Linux startup
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && runner.os == 'Linux' }}
+        run: xvfb-run -a node scripts/test/platform-startup.mjs > test-results/startup.json
+      - name: Windows startup
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && runner.os == 'Windows' }}
+        run: node scripts/test/platform-startup.mjs > test-results/startup.json
+      - name: Windows native shell and launch UI
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && runner.os == 'Windows' }}
+        run: node scripts/test/windows-launch-smoke.mjs > test-results/windows-launch.json
+      - name: Windows app lifecycle and crash cleanup
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && runner.os == 'Windows' }}
+        timeout-minutes: 5
+        run: node scripts/test/windows-lifecycle-smoke.mjs > test-results/windows-lifecycle.json
+      - name: Linux package and packaged smoke
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && runner.os == 'Linux' }}
+        run: |
+          pnpm run package
+          xvfb-run -a pnpm run smoke:packaged > test-results/packaged-smoke.json
+      - name: Windows internal unpacked build
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && runner.os == 'Windows' }}
+        run: pnpm run package:unpacked
+      - name: Windows packaged startup and native selection
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          node scripts/test/platform-startup.mjs --binary apps/desktop/release/win-unpacked/BMN.exe > test-results/packaged-startup.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/test/voice-engine-smoke.mjs --resources apps/desktop/release/win-unpacked/resources
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm exec vitest run scripts/tests/packaged-native-modules.test.mjs
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: platform-evidence-${{ matrix.os }}
+          path: test-results/
+          retention-days: 14

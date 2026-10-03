@@ -39,6 +39,7 @@ import {
   PtyHostRemoteError
 } from '../pty-host-client'
 import {
+  WHISPER_ENGINE_FILE,
   SPEECH_DETECTOR_FILE,
   SPEECH_MODEL_FILE,
   VOICE_MODELS
@@ -930,7 +931,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     writeFixtureInput(session, 'EXISTING-HANDOFF-PREFIX ')
     // Dictation needs an engine and an installed model to start; both are stand-ins, and transcription is synthetic.
     mkdirSync(join(taps.voiceFolder(), 'models'), { recursive: true })
-    writeFileSync(join(taps.voiceFolder(), 'whisper-cli'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    writeFileSync(join(taps.voiceFolder(), WHISPER_ENGINE_FILE), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
     writeFileSync(join(taps.voiceFolder(), SPEECH_DETECTOR_FILE), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
     writeFileSync(join(taps.voiceFolder(), SPEECH_MODEL_FILE), '')
     writeFileSync(join(taps.voiceFolder(), 'models', VOICE_MODELS[0]!.file), '')

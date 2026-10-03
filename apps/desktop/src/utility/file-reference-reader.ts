@@ -80,7 +80,7 @@ export async function readFileReference(
   options: FileReferenceReaderOptions = {}
 ): Promise<FileReferenceReadResult> {
   if (typeof request.reference !== 'string') invalid('The file reference must be text')
-  const parsed = parseFileReference(request.reference)
+  const parsed = parseFileReference(request.reference, 'typed', process.platform === 'win32' ? 'win32' : 'posix')
   if (!parsed.ok) invalid(parsed.reason)
   const { path, line, column } = parsed.reference
   const chosen = chosenBase(request.baseDirectory)

@@ -1,8 +1,9 @@
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import type { BoundConversationBinding } from '@bmn/protocol'
+import { splitWindowsArgv } from '@bmn/protocol'
 import {
   agentCli,
   conversationReferenceExists,
@@ -26,12 +27,19 @@ import {
   type ClaudeSessionIdCapability
 } from './conversation-binding'
 
+it('shows Windows launch arguments with their original backslashes and boundaries', () => {
+  const executable = 'C:\\Program Files\\agent.exe'
+  const argv = ['C:\\work\\', 'space value', '%PATH%', '^&', 'literal"quote']
+  const shown = shownCommand(executable, argv, 'win32')
+  expect(splitWindowsArgv(shown)).toEqual([executable, ...argv])
+})
+
 const conversationId = '11111111-1111-4111-8111-111111111111'
 const capturedAt = '2026-09-12T12:00:00.000Z'
 const claudeHelp = readFileSync(
   new URL('./test-fixtures/claude-2.1.270-help.txt', import.meta.url),
   'utf8'
-)
+).replaceAll('\r\n', '\n')
 const claudeGrammar = parseClaudeHelpOptionGrammar(claudeHelp)!
 const supportedCapability = async (): Promise<ClaudeSessionIdCapability> => ({
   supported: true,
@@ -693,7 +701,7 @@ describe('OpenCode 1.18.31 conversation binding', () => {
     const argv = ['project', '--model', 'provider/model', '--agent=build', '--port', '4096', '--hostname=localhost', '--prompt', 'private prompt', '--continue', '--fork', '--session', reference]
     const observed = bindingFromObservation({ agentCli: 'opencode', conversationReference: reference, source: 'startup' }, { ...bound, launchContext: { ...context, argv } }, capturedAt)
     const launch = buildNativeResumeLaunch(observed)
-    expect(launch.cwd).toBe('/repo/project')
+    expect(launch.cwd).toBe(resolve('/repo', 'project'))
     expect(launch.argv).toEqual(['--session', reference, '--model', 'provider/model', '--agent=build', '--port', '4096', '--hostname=localhost'])
     expect(observed.detail).toContain('Reported by OpenCode at session start')
     expect(observed.detail).toContain(`Resume runs: ${shownCommand(launch.executable, launch.argv)}`)
@@ -706,7 +714,7 @@ describe('OpenCode 1.18.31 conversation binding', () => {
     expect(opencodeResumeArguments(['--model', '--fork', '--agent=', '--unknown', 'value', '/project'])).toEqual({
       carried: [], droppedOptions: ['--model', '--fork', '--agent', '--unknown'], droppedPositionals: 1, projectPath: '/project'
     })
-    expect(buildNativeResumeLaunch({ ...bound, launchContext: { ...context, argv: ['--', '/other'] } }).cwd).toBe('/other')
+    expect(buildNativeResumeLaunch({ ...bound, launchContext: { ...context, argv: ['--', '/other'] } }).cwd).toBe(resolve('/other'))
     expect(opencodeResumeArguments(['--mini', '--no-replay', '--mdns', '--replay-limit', '20', '/project']))
       .toEqual({ carried: [], droppedOptions: ['--mini', '--no-replay', '--mdns', '--replay-limit'],
         droppedPositionals: 0, projectPath: '/project' })

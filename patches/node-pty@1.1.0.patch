@@ -1,0 +1,2782 @@
+diff --git a/binding.gyp b/binding.gyp
+index 5f63978..a32d857 100644
+--- a/binding.gyp
++++ b/binding.gyp
+@@ -39,7 +39,7 @@
+             'src/win/path_util.cc'
+           ],
+           'libraries': [
+-            '-lshlwapi'
++            '-lshlwapi', '-ladvapi32'
+           ],
+         },
+         {
+diff --git a/lib/index.js b/lib/index.js
+index 1527069..fea6b2e 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -5,9 +5,16 @@
+  * Copyright (c) 2018, Microsoft Corporation (MIT License).
+  */
+ Object.defineProperty(exports, "__esModule", { value: true });
+-exports.native = exports.open = exports.createTerminal = exports.fork = exports.spawn = void 0;
+-var utils_1 = require("./utils");
+-var terminalCtor;
++exports.native = void 0;
++exports.spawn = spawn;
++exports.fork = fork;
++exports.createTerminal = createTerminal;
++exports.open = open;
++exports.queryProcessStartIdentity = queryProcessStartIdentity;
++exports.restrictControlPipe = restrictControlPipe;
++exports.protectApplicationLifetime = protectApplicationLifetime;
++const utils_1 = require("./utils");
++let terminalCtor;
+ if (process.platform === 'win32') {
+     terminalCtor = require('./windowsTerminal').WindowsTerminal;
+ }
+@@ -29,24 +36,47 @@ else {
+ function spawn(file, args, opt) {
+     return new terminalCtor(file, args, opt);
+ }
+-exports.spawn = spawn;
+ /** @deprecated */
+ function fork(file, args, opt) {
+     return new terminalCtor(file, args, opt);
+ }
+-exports.fork = fork;
+ /** @deprecated */
+ function createTerminal(file, args, opt) {
+     return new terminalCtor(file, args, opt);
+ }
+-exports.createTerminal = createTerminal;
+ function open(options) {
+     return terminalCtor.open(options);
+ }
+-exports.open = open;
+ /**
+  * Expose the native API when not Windows, note that this is not public API and
+  * could be removed at any time.
+  */
+-exports.native = (process.platform !== 'win32' ? utils_1.loadNativeModule('pty').module : null);
+-//# sourceMappingURL=index.js.map
+\ No newline at end of file
++exports.native = (process.platform !== 'win32' ? (0, utils_1.loadNativeModule)('pty').module : null);
++/** BMN: observational identity only, never authority to terminate a PID. */
++function queryProcessStartIdentity(pid) {
++    if (process.platform !== 'win32')
++        throw new Error('Windows process identity only');
++    const binding = (0, utils_1.loadNativeModule)('conpty').module;
++    if (binding.bmnOwnershipVersion !== 1)
++        throw new Error('BMN owned ConPTY addon missing');
++    return binding.queryProcessStartIdentity(pid);
++}
++/** BMN: restrict a listening control pipe to the current user; returns the applied DACL. */
++function restrictControlPipe(name) {
++    if (process.platform !== 'win32')
++        throw new Error('Windows control pipes only');
++    const binding = (0, utils_1.loadNativeModule)('conpty').module;
++    if (binding.bmnControlTransportVersion !== 2)
++        throw new Error('BMN control transport addon missing');
++    return binding.restrictControlPipe(name);
++}
++
++/** BMN: process-lifetime ownership; deliberately has no JS cleanup/dispose operation. */
++function protectApplicationLifetime() {
++    if (process.platform !== 'win32')
++        throw new Error('Windows application lifetime only');
++    const binding = (0, utils_1.loadNativeModule)('conpty').module;
++    if (binding.bmnApplicationLifetimeVersion !== 1)
++        throw new Error('BMN application lifetime addon missing');
++    binding.protectApplicationLifetime();
++}
+diff --git a/lib/windowsConoutConnection.js b/lib/windowsConoutConnection.js
+index 1be15ca..bf6e593 100644
+--- a/lib/windowsConoutConnection.js
++++ b/lib/windowsConoutConnection.js
+@@ -1,125 +1,59 @@
+ "use strict";
+-/**
+- * Copyright (c) 2020, Microsoft Corporation (MIT License).
+- */
+-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+-    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+-    return new (P || (P = Promise))(function (resolve, reject) {
+-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+-        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+-        step((generator = generator.apply(thisArg, _arguments || [])).next());
+-    });
+-};
+-var __generator = (this && this.__generator) || function (thisArg, body) {
+-    var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g;
+-    return g = { next: verb(0), "throw": verb(1), "return": verb(2) }, typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
+-    function verb(n) { return function (v) { return step([n, v]); }; }
+-    function step(op) {
+-        if (f) throw new TypeError("Generator is already executing.");
+-        while (_) try {
+-            if (f = 1, y && (t = op[0] & 2 ? y["return"] : op[0] ? y["throw"] || ((t = y["return"]) && t.call(y), 0) : y.next) && !(t = t.call(y, op[1])).done) return t;
+-            if (y = 0, t) op = [op[0] & 2, t.value];
+-            switch (op[0]) {
+-                case 0: case 1: t = op; break;
+-                case 4: _.label++; return { value: op[1], done: false };
+-                case 5: _.label++; y = op[1]; op = [0]; continue;
+-                case 7: op = _.ops.pop(); _.trys.pop(); continue;
+-                default:
+-                    if (!(t = _.trys, t = t.length > 0 && t[t.length - 1]) && (op[0] === 6 || op[0] === 2)) { _ = 0; continue; }
+-                    if (op[0] === 3 && (!t || (op[1] > t[0] && op[1] < t[3]))) { _.label = op[1]; break; }
+-                    if (op[0] === 6 && _.label < t[1]) { _.label = t[1]; t = op; break; }
+-                    if (t && _.label < t[2]) { _.label = t[2]; _.ops.push(op); break; }
+-                    if (t[2]) _.ops.pop();
+-                    _.trys.pop(); continue;
+-            }
+-            op = body.call(thisArg, _);
+-        } catch (e) { op = [6, e]; y = 0; } finally { f = t = 0; }
+-        if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
+-    }
+-};
+ Object.defineProperty(exports, "__esModule", { value: true });
+ exports.ConoutConnection = void 0;
+-var worker_threads_1 = require("worker_threads");
+-var conout_1 = require("./shared/conout");
+-var path_1 = require("path");
+-var eventEmitter2_1 = require("./eventEmitter2");
+-/**
+- * The amount of time to wait for additional data after the conpty shell process has exited before
+- * shutting down the worker and sockets. The timer will be reset if a new data event comes in after
+- * the timer has started.
++/** Copyright (c) 2020, Microsoft Corporation (MIT License).
++ * BMN: bounded private worker transport; no extra named relay pipe.
+  */
+-var FLUSH_DATA_INTERVAL = 1000;
+-/**
+- * Connects to and manages the lifecycle of the conout socket. This socket must be drained on
+- * another thread in order to avoid deadlocks where Conpty waits for the out socket to drain
+- * when `ClosePseudoConsole` is called. This happens when data is being written to the terminal when
+- * the pty is closed.
+- *
+- * See also:
+- * - https://github.com/microsoft/node-pty/issues/375
+- * - https://github.com/microsoft/vscode/issues/76548
+- * - https://github.com/microsoft/terminal/issues/1810
+- * - https://docs.microsoft.com/en-us/windows/console/closepseudoconsole
+- */
+-var ConoutConnection = /** @class */ (function () {
+-    function ConoutConnection(_conoutPipeName, _useConptyDll) {
+-        var _this = this;
+-        this._conoutPipeName = _conoutPipeName;
+-        this._useConptyDll = _useConptyDll;
+-        this._isDisposed = false;
++const worker_threads_1 = require("worker_threads");
++const path_1 = require("path");
++const eventEmitter2_1 = require("./eventEmitter2");
++class ConoutConnection {
++    get onReady() { return this._onReady.event; }
++    get onError() { return this._onError.event; }
++    constructor(conoutPipeName) {
++        this._disposed = false;
++        this._ended = false;
+         this._onReady = new eventEmitter2_1.EventEmitter2();
+-        var workerData = {
+-            conoutPipeName: _conoutPipeName
+-        };
+-        var scriptPath = __dirname.replace('node_modules.asar', 'node_modules.asar.unpacked');
+-        this._worker = new worker_threads_1.Worker(path_1.join(scriptPath, 'worker/conoutSocketWorker.js'), { workerData: workerData });
+-        this._worker.on('message', function (message) {
+-            switch (message) {
+-                case 1 /* READY */:
+-                    _this._onReady.fire();
+-                    return;
+-                default:
+-                    console.warn('Unexpected ConoutWorkerMessage', message);
++        this._onError = new eventEmitter2_1.EventEmitter2();
++        const scriptPath = __dirname.replace('node_modules.asar', 'node_modules.asar.unpacked');
++        this._worker = new worker_threads_1.Worker((0, path_1.join)(scriptPath, 'worker/conoutSocketWorker.js'), { workerData: { conoutPipeName } });
++        this._worker.on('message', message => {
++            var _a;
++            if (message.type === 'ready')
++                this._onReady.fire();
++            else if (message.type === 'data' && this._socket) {
++                // Only one <=64KiB chunk may be in flight. Acknowledge after stream
++                // backpressure clears, so pausing BMN also pauses the native pipe reader.
++                const acknowledge = () => { if (!this._disposed)
++                    this._worker.postMessage('read'); };
++                if (this._socket.write(Buffer.from(message.data)))
++                    acknowledge();
++                else
++                    this._socket.once('drain', acknowledge);
++            }
++            else if (message.type === 'end') {
++                this._ended = true;
++                (_a = this._socket) === null || _a === void 0 ? void 0 : _a.end();
+             }
++            else if (message.type === 'error')
++                this._onError.fire('ConPTY output read failed: ' + message.code);
+         });
++        this._worker.on('error', () => this._onError.fire('ConPTY output worker failed'));
++        this._worker.on('exit', () => {
++            if (!this._disposed && !this._ended)
++                this._onError.fire('ConPTY output worker exited before EOF');
++        });
++    }
++    connectSocket(socket) {
++        this._socket = socket;
++        socket.emit('ready_datapipe');
++        this._worker.postMessage('read');
+     }
+-    Object.defineProperty(ConoutConnection.prototype, "onReady", {
+-        get: function () { return this._onReady.event; },
+-        enumerable: false,
+-        configurable: true
+-    });
+-    ConoutConnection.prototype.dispose = function () {
+-        if (!this._useConptyDll && this._isDisposed) {
++    dispose() {
++        if (this._disposed)
+             return;
+-        }
+-        this._isDisposed = true;
+-        // Drain all data from the socket before closing
+-        this._drainDataAndClose();
+-    };
+-    ConoutConnection.prototype.connectSocket = function (socket) {
+-        socket.connect(conout_1.getWorkerPipeName(this._conoutPipeName));
+-    };
+-    ConoutConnection.prototype._drainDataAndClose = function () {
+-        var _this = this;
+-        if (this._drainTimeout) {
+-            clearTimeout(this._drainTimeout);
+-        }
+-        this._drainTimeout = setTimeout(function () { return _this._destroySocket(); }, FLUSH_DATA_INTERVAL);
+-    };
+-    ConoutConnection.prototype._destroySocket = function () {
+-        return __awaiter(this, void 0, void 0, function () {
+-            return __generator(this, function (_a) {
+-                switch (_a.label) {
+-                    case 0: return [4 /*yield*/, this._worker.terminate()];
+-                    case 1:
+-                        _a.sent();
+-                        return [2 /*return*/];
+-                }
+-            });
+-        });
+-    };
+-    return ConoutConnection;
+-}());
++        this._disposed = true;
++        void this._worker.terminate();
++    }
++}
+ exports.ConoutConnection = ConoutConnection;
+-//# sourceMappingURL=windowsConoutConnection.js.map
+\ No newline at end of file
+diff --git a/lib/windowsPtyAgent.js b/lib/windowsPtyAgent.js
+index a358ffb..40610af 100644
+--- a/lib/windowsPtyAgent.js
++++ b/lib/windowsPtyAgent.js
+@@ -1,251 +1,116 @@
+ "use strict";
+-/**
+- * Copyright (c) 2012-2015, Christopher Jeffrey, Peter Sunde (MIT License)
+- * Copyright (c) 2016, Daniel Imms (MIT License).
+- * Copyright (c) 2018, Microsoft Corporation (MIT License).
+- */
+-Object.defineProperty(exports, "__esModule", { value: true });
+-exports.argsToCommandLine = exports.WindowsPtyAgent = void 0;
+-var fs = require("fs");
+-var os = require("os");
+-var path = require("path");
+-var child_process_1 = require("child_process");
+-var net_1 = require("net");
+-var windowsConoutConnection_1 = require("./windowsConoutConnection");
+-var utils_1 = require("./utils");
+-var conptyNative;
+-var winptyNative;
+-/**
+- * The amount of time to wait for additional data after the conpty shell process has exited before
+- * shutting down the socket. The timer will be reset if a new data event comes in after the timer
+- * has started.
+- */
+-var FLUSH_DATA_INTERVAL = 1000;
+-/**
+- * This agent sits between the WindowsTerminal class and provides a common interface for both conpty
+- * and winpty.
+- */
+-var WindowsPtyAgent = /** @class */ (function () {
+-    function WindowsPtyAgent(file, args, env, cwd, cols, rows, debug, _useConpty, _useConptyDll, conptyInheritCursor) {
+-        var _this = this;
+-        if (_useConptyDll === void 0) { _useConptyDll = false; }
+-        if (conptyInheritCursor === void 0) { conptyInheritCursor = false; }
+-        this._useConpty = _useConpty;
+-        this._useConptyDll = _useConptyDll;
+-        this._pid = 0;
+-        this._innerPid = 0;
+-        if (this._useConpty === undefined || this._useConpty === true) {
+-            this._useConpty = this._getWindowsBuildNumber() >= 18309;
+-        }
+-        if (this._useConpty) {
+-            if (!conptyNative) {
+-                conptyNative = utils_1.loadNativeModule('conpty').module;
+-            }
+-        }
+-        else {
+-            if (!winptyNative) {
+-                winptyNative = utils_1.loadNativeModule('pty').module;
+-            }
+-        }
+-        this._ptyNative = this._useConpty ? conptyNative : winptyNative;
+-        // Sanitize input variable.
+-        cwd = path.resolve(cwd);
+-        // Compose command line
+-        var commandLine = argsToCommandLine(file, args);
+-        // Open pty session.
+-        var term;
+-        if (this._useConpty) {
+-            term = this._ptyNative.startProcess(file, cols, rows, debug, this._generatePipeName(), conptyInheritCursor, this._useConptyDll);
+-        }
+-        else {
+-            term = this._ptyNative.startProcess(file, commandLine, env, cwd, cols, rows, debug);
+-            this._pid = term.pid;
+-            this._innerPid = term.innerPid;
+-        }
+-        // Not available on windows.
+-        this._fd = term.fd;
+-        // Generated incremental number that has no real purpose besides  using it
+-        // as a terminal id.
+-        this._pty = term.pty;
+-        // Create terminal pipe IPC channel and forward to a local unix socket.
+-        this._outSocket = new net_1.Socket();
+-        this._outSocket.setEncoding('utf8');
+-        // The conout socket must be ready out on another thread to avoid deadlocks
+-        this._conoutSocketWorker = new windowsConoutConnection_1.ConoutConnection(term.conout, this._useConptyDll);
+-        this._conoutSocketWorker.onReady(function () {
+-            _this._conoutSocketWorker.connectSocket(_this._outSocket);
+-        });
+-        this._outSocket.on('connect', function () {
+-            _this._outSocket.emit('ready_datapipe');
+-        });
+-        var inSocketFD = fs.openSync(term.conin, 'w');
+-        this._inSocket = new net_1.Socket({
+-            fd: inSocketFD,
+-            readable: false,
+-            writable: true
+-        });
+-        this._inSocket.setEncoding('utf8');
+-        if (this._useConpty) {
+-            var connect = this._ptyNative.connect(this._pty, commandLine, cwd, env, this._useConptyDll, function (c) { return _this._$onProcessExit(c); });
+-            this._innerPid = connect.pid;
+-        }
++var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
++    if (k2 === undefined) k2 = k;
++    var desc = Object.getOwnPropertyDescriptor(m, k);
++    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
++      desc = { enumerable: true, get: function() { return m[k]; } };
+     }
+-    Object.defineProperty(WindowsPtyAgent.prototype, "inSocket", {
+-        get: function () { return this._inSocket; },
+-        enumerable: false,
+-        configurable: true
+-    });
+-    Object.defineProperty(WindowsPtyAgent.prototype, "outSocket", {
+-        get: function () { return this._outSocket; },
+-        enumerable: false,
+-        configurable: true
+-    });
+-    Object.defineProperty(WindowsPtyAgent.prototype, "fd", {
+-        get: function () { return this._fd; },
+-        enumerable: false,
+-        configurable: true
+-    });
+-    Object.defineProperty(WindowsPtyAgent.prototype, "innerPid", {
+-        get: function () { return this._innerPid; },
+-        enumerable: false,
+-        configurable: true
+-    });
+-    Object.defineProperty(WindowsPtyAgent.prototype, "pty", {
+-        get: function () { return this._pty; },
+-        enumerable: false,
+-        configurable: true
+-    });
+-    WindowsPtyAgent.prototype.resize = function (cols, rows) {
+-        if (this._useConpty) {
+-            if (this._exitCode !== undefined) {
+-                throw new Error('Cannot resize a pty that has already exited');
+-            }
+-            this._ptyNative.resize(this._pty, cols, rows, this._useConptyDll);
+-            return;
+-        }
+-        this._ptyNative.resize(this._pid, cols, rows);
++    Object.defineProperty(o, k2, desc);
++}) : (function(o, m, k, k2) {
++    if (k2 === undefined) k2 = k;
++    o[k2] = m[k];
++}));
++var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
++    Object.defineProperty(o, "default", { enumerable: true, value: v });
++}) : function(o, v) {
++    o["default"] = v;
++});
++var __importStar = (this && this.__importStar) || (function () {
++    var ownKeys = function(o) {
++        ownKeys = Object.getOwnPropertyNames || function (o) {
++            var ar = [];
++            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
++            return ar;
++        };
++        return ownKeys(o);
+     };
+-    WindowsPtyAgent.prototype.clear = function () {
+-        if (this._useConpty) {
+-            this._ptyNative.clear(this._pty, this._useConptyDll);
+-        }
++    return function (mod) {
++        if (mod && mod.__esModule) return mod;
++        var result = {};
++        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
++        __setModuleDefault(result, mod);
++        return result;
+     };
+-    WindowsPtyAgent.prototype.kill = function () {
+-        var _this = this;
+-        // Tell the agent to kill the pty, this releases handles to the process
+-        if (this._useConpty) {
+-            if (!this._useConptyDll) {
+-                this._inSocket.readable = false;
+-                this._outSocket.readable = false;
+-                this._getConsoleProcessList().then(function (consoleProcessList) {
+-                    consoleProcessList.forEach(function (pid) {
+-                        try {
+-                            process.kill(pid);
+-                        }
+-                        catch (e) {
+-                            // Ignore if process cannot be found (kill ESRCH error)
+-                        }
+-                    });
+-                });
+-                this._ptyNative.kill(this._pty, this._useConptyDll);
+-                this._conoutSocketWorker.dispose();
+-            }
+-            else {
+-                // Close the input write handle to signal the end of session.
+-                this._inSocket.destroy();
+-                this._ptyNative.kill(this._pty, this._useConptyDll);
+-                this._outSocket.on('data', function () {
+-                    _this._conoutSocketWorker.dispose();
+-                });
+-            }
+-        }
+-        else {
+-            // Because pty.kill closes the handle, it will kill most processes by itself.
+-            // Process IDs can be reused as soon as all handles to them are
+-            // dropped, so we want to immediately kill the entire console process list.
+-            // If we do not force kill all processes here, node servers in particular
+-            // seem to become detached and remain running (see
+-            // Microsoft/vscode#26807).
+-            var processList = this._ptyNative.getProcessList(this._pid);
+-            this._ptyNative.kill(this._pid, this._innerPid);
+-            processList.forEach(function (pid) {
+-                try {
+-                    process.kill(pid);
+-                }
+-                catch (e) {
+-                    // Ignore if process cannot be found (kill ESRCH error)
+-                }
++})();
++Object.defineProperty(exports, "__esModule", { value: true });
++exports.WindowsPtyAgent = void 0;
++exports.argsToCommandLine = argsToCommandLine;
++/** Copyright (c) 2012-2015, Christopher Jeffrey, Peter Sunde (MIT License).
++ * Copyright (c) 2016, Daniel Imms (MIT License).
++ * Copyright (c) 2018, Microsoft Corporation (MIT License).
++ * BMN: bundled ConPTY only, with atomic job ownership and confirmed exit.
++ */
++const fs = __importStar(require("fs"));
++const path = __importStar(require("path"));
++const crypto_1 = require("crypto");
++const net_1 = require("net");
++const stream_1 = require("stream");
++const windowsConoutConnection_1 = require("./windowsConoutConnection");
++const utils_1 = require("./utils");
++const eventEmitter2_1 = require("./eventEmitter2");
++let native;
++class WindowsPtyAgent {
++    get onExit() { return this._onExit.event; }
++    get onLifecycleError() { return this._onLifecycleError.event; }
++    constructor(file, args, env, cwd, cols, rows, debug, useConpty, useConptyDll, inheritCursor = false) {
++        var _a, _b;
++        this.outSocket = new stream_1.PassThrough({ highWaterMark: 64 * 1024 });
++        this.fd = -1;
++        this._outputEnded = false;
++        this._exitEmitted = false;
++        this._onExit = new eventEmitter2_1.EventEmitter2();
++        this._onLifecycleError = new eventEmitter2_1.EventEmitter2();
++        if (useConpty === false || useConptyDll === false)
++            throw new Error('BMN requires bundled ConPTY');
++        if (!native)
++            native = (0, utils_1.loadNativeModule)('conpty').module;
++        if (native.bmnOwnershipVersion !== 1)
++            throw new Error('BMN owned ConPTY addon missing; rebuild native dependencies');
++        const term = native.startProcess(file, cols, rows, debug, 'bmn-conpty-' + (0, crypto_1.randomBytes)(24).toString('hex'), inheritCursor, true);
++        this.pty = term.pty;
++        try {
++            this.outSocket.setEncoding('utf8');
++            this.outSocket.on('end', () => { this._outputEnded = true; this._finishExit(); });
++            this._worker = new windowsConoutConnection_1.ConoutConnection(term.conout);
++            this._worker.onReady(() => this._worker.connectSocket(this.outSocket));
++            this._worker.onError(error => {
++                this._onLifecycleError.fire(error);
++                this.kill();
+             });
+-        }
+-    };
+-    WindowsPtyAgent.prototype._getConsoleProcessList = function () {
+-        var _this = this;
+-        return new Promise(function (resolve) {
+-            var agent = child_process_1.fork(path.join(__dirname, 'conpty_console_list_agent'), [_this._innerPid.toString()]);
+-            agent.on('message', function (message) {
+-                clearTimeout(timeout);
+-                resolve(message.consoleProcessList);
++            this.inSocket = new net_1.Socket({ fd: fs.openSync(term.conin, 'w'), readable: false, writable: true });
++            // A closed stdin can precede a normal process exit. It is not lifecycle evidence.
++            this.inSocket.on('error', () => { });
++            const child = native.connect(this.pty, argsToCommandLine(file, args), path.resolve(cwd), env, true, result => {
++                if ('error' in result) {
++                    this._onLifecycleError.fire(result.error);
++                    this._worker.dispose();
++                    return;
++                }
++                this.exitCode = result.exitCode;
++                this.inSocket.destroy();
++                this._finishExit();
+             });
+-            var timeout = setTimeout(function () {
+-                // Something went wrong, just send back the shell PID
+-                agent.kill();
+-                resolve([_this._innerPid]);
+-            }, 5000);
+-        });
+-    };
+-    Object.defineProperty(WindowsPtyAgent.prototype, "exitCode", {
+-        get: function () {
+-            if (this._useConpty) {
+-                return this._exitCode;
+-            }
+-            var winptyExitCode = this._ptyNative.getExitCode(this._innerPid);
+-            return winptyExitCode === -1 ? undefined : winptyExitCode;
+-        },
+-        enumerable: false,
+-        configurable: true
+-    });
+-    WindowsPtyAgent.prototype._getWindowsBuildNumber = function () {
+-        var osVersion = (/(\d+)\.(\d+)\.(\d+)/g).exec(os.release());
+-        var buildNumber = 0;
+-        if (osVersion && osVersion.length === 4) {
+-            buildNumber = parseInt(osVersion[3]);
++            this.innerPid = child.pid;
++            this.processStartIdentity = child.startIdentity;
+         }
+-        return buildNumber;
+-    };
+-    WindowsPtyAgent.prototype._generatePipeName = function () {
+-        return "conpty-" + Math.random() * 10000000;
+-    };
+-    /**
+-     * Triggered from the native side when a contpy process exits.
+-     */
+-    WindowsPtyAgent.prototype._$onProcessExit = function (exitCode) {
+-        var _this = this;
+-        this._exitCode = exitCode;
+-        if (!this._useConptyDll) {
+-            this._flushDataAndCleanUp();
+-            this._outSocket.on('data', function () { return _this._flushDataAndCleanUp(); });
++        catch (error) {
++            native.kill(this.pty, true);
++            (_a = this._worker) === null || _a === void 0 ? void 0 : _a.dispose();
++            (_b = this.inSocket) === null || _b === void 0 ? void 0 : _b.destroy();
++            throw error;
+         }
+-    };
+-    WindowsPtyAgent.prototype._flushDataAndCleanUp = function () {
+-        var _this = this;
+-        if (this._useConptyDll) {
+-            return;
+-        }
+-        if (this._closeTimeout) {
+-            clearTimeout(this._closeTimeout);
+-        }
+-        this._closeTimeout = setTimeout(function () { return _this._cleanUpProcess(); }, FLUSH_DATA_INTERVAL);
+-    };
+-    WindowsPtyAgent.prototype._cleanUpProcess = function () {
+-        if (this._useConptyDll) {
++    }
++    _finishExit() {
++        if (!this._outputEnded || this.exitCode === undefined || this._exitEmitted)
+             return;
+-        }
+-        this._inSocket.readable = false;
+-        this._outSocket.readable = false;
+-        this._outSocket.destroy();
+-    };
+-    return WindowsPtyAgent;
+-}());
++        this._exitEmitted = true;
++        this._onExit.fire(this.exitCode);
++        this._worker.dispose();
++    }
++    resize(cols, rows) { native.resize(this.pty, cols, rows, true); }
++    clear() { native.clear(this.pty, true); }
++    kill() { native.kill(this.pty, true); }
++}
+ exports.WindowsPtyAgent = WindowsPtyAgent;
+ // Convert argc/argv into a Win32 command-line following the escaping convention
+ // documented on MSDN (e.g. see CommandLineToArgvW documentation). Copied from
+@@ -253,32 +118,26 @@ exports.WindowsPtyAgent = WindowsPtyAgent;
+ function argsToCommandLine(file, args) {
+     if (isCommandLine(args)) {
+         if (args.length === 0) {
+-            return file;
++            return argsToCommandLine(file, []);
+         }
+-        return argsToCommandLine(file, []) + " " + args;
++        return `${argsToCommandLine(file, [])} ${args}`;
+     }
+-    var argv = [file];
++    const argv = [file];
+     Array.prototype.push.apply(argv, args);
+-    var result = '';
+-    for (var argIndex = 0; argIndex < argv.length; argIndex++) {
++    let result = '';
++    for (let argIndex = 0; argIndex < argv.length; argIndex++) {
+         if (argIndex > 0) {
+             result += ' ';
+         }
+-        var arg = argv[argIndex];
+-        // if it is empty or it contains whitespace and is not already quoted
+-        var hasLopsidedEnclosingQuote = xOr((arg[0] !== '"'), (arg[arg.length - 1] !== '"'));
+-        var hasNoEnclosingQuotes = ((arg[0] !== '"') && (arg[arg.length - 1] !== '"'));
+-        var quote = arg === '' ||
+-            (arg.indexOf(' ') !== -1 ||
+-                arg.indexOf('\t') !== -1) &&
+-                ((arg.length > 1) &&
+-                    (hasLopsidedEnclosingQuote || hasNoEnclosingQuotes));
++        const arg = argv[argIndex];
++        // argv values are literal data, including enclosing quote characters.
++        const quote = arg === '' || /[\s"]/.test(arg);
+         if (quote) {
+             result += '\"';
+         }
+-        var bsCount = 0;
+-        for (var i = 0; i < arg.length; i++) {
+-            var p = arg[i];
++        let bsCount = 0;
++        for (let i = 0; i < arg.length; i++) {
++            const p = arg[i];
+             if (p === '\\') {
+                 bsCount++;
+             }
+@@ -303,18 +162,13 @@ function argsToCommandLine(file, args) {
+     }
+     return result;
+ }
+-exports.argsToCommandLine = argsToCommandLine;
+ function isCommandLine(args) {
+     return typeof args === 'string';
+ }
+ function repeatText(text, count) {
+-    var result = '';
+-    for (var i = 0; i < count; i++) {
++    let result = '';
++    for (let i = 0; i < count; i++) {
+         result += text;
+     }
+     return result;
+ }
+-function xOr(arg1, arg2) {
+-    return ((arg1 && !arg2) || (!arg1 && arg2));
+-}
+-//# sourceMappingURL=windowsPtyAgent.js.map
+\ No newline at end of file
+diff --git a/lib/windowsTerminal.js b/lib/windowsTerminal.js
+index 3c38f89..d80dd68 100644
+--- a/lib/windowsTerminal.js
++++ b/lib/windowsTerminal.js
+@@ -4,31 +4,22 @@
+  * Copyright (c) 2016, Daniel Imms (MIT License).
+  * Copyright (c) 2018, Microsoft Corporation (MIT License).
+  */
+-var __extends = (this && this.__extends) || (function () {
+-    var extendStatics = function (d, b) {
+-        extendStatics = Object.setPrototypeOf ||
+-            ({ __proto__: [] } instanceof Array && function (d, b) { d.__proto__ = b; }) ||
+-            function (d, b) { for (var p in b) if (b.hasOwnProperty(p)) d[p] = b[p]; };
+-        return extendStatics(d, b);
+-    };
+-    return function (d, b) {
+-        extendStatics(d, b);
+-        function __() { this.constructor = d; }
+-        d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
+-    };
+-})();
+ Object.defineProperty(exports, "__esModule", { value: true });
+ exports.WindowsTerminal = void 0;
+-var terminal_1 = require("./terminal");
+-var windowsPtyAgent_1 = require("./windowsPtyAgent");
+-var utils_1 = require("./utils");
+-var DEFAULT_FILE = 'cmd.exe';
+-var DEFAULT_NAME = 'Windows Shell';
+-var WindowsTerminal = /** @class */ (function (_super) {
+-    __extends(WindowsTerminal, _super);
+-    function WindowsTerminal(file, args, opt) {
+-        var _this = _super.call(this, opt) || this;
+-        _this._checkType('args', args, 'string', true);
++const eventEmitter2_1 = require("./eventEmitter2");
++const terminal_1 = require("./terminal");
++const windowsPtyAgent_1 = require("./windowsPtyAgent");
++const utils_1 = require("./utils");
++const DEFAULT_FILE = 'cmd.exe';
++const DEFAULT_NAME = 'Windows Shell';
++class WindowsTerminal extends terminal_1.Terminal {
++    get onLifecycleError() { return this._onLifecycleError.event; }
++    get processStartIdentity() { return this._agent.processStartIdentity; }
++    constructor(file, args, opt) {
++        super(opt);
++        this._onLifecycleError = new eventEmitter2_1.EventEmitter2();
++        this.processOwnership = 'windows-job';
++        this._checkType('args', args, 'string', true);
+         // Initialize arguments
+         args = args || [];
+         file = file || DEFAULT_FILE;
+@@ -37,125 +28,72 @@ var WindowsTerminal = /** @class */ (function (_super) {
+         if (opt.encoding) {
+             console.warn('Setting encoding on Windows is not supported');
+         }
+-        var env = utils_1.assign({}, opt.env);
+-        _this._cols = opt.cols || terminal_1.DEFAULT_COLS;
+-        _this._rows = opt.rows || terminal_1.DEFAULT_ROWS;
+-        var cwd = opt.cwd || process.cwd();
+-        var name = opt.name || env.TERM || DEFAULT_NAME;
+-        var parsedEnv = _this._parseEnv(env);
++        const env = (0, utils_1.assign)({}, opt.env);
++        this._cols = opt.cols || terminal_1.DEFAULT_COLS;
++        this._rows = opt.rows || terminal_1.DEFAULT_ROWS;
++        const cwd = opt.cwd || process.cwd();
++        const name = opt.name || env.TERM || DEFAULT_NAME;
++        const parsedEnv = this._parseEnv(env);
+         // If the terminal is ready
+-        _this._isReady = false;
++        this._isReady = false;
+         // Functions that need to run after `ready` event is emitted.
+-        _this._deferreds = [];
++        this._deferreds = [];
+         // Create new termal.
+-        _this._agent = new windowsPtyAgent_1.WindowsPtyAgent(file, args, parsedEnv, cwd, _this._cols, _this._rows, false, opt.useConpty, opt.useConptyDll, opt.conptyInheritCursor);
+-        _this._socket = _this._agent.outSocket;
++        this._agent = new windowsPtyAgent_1.WindowsPtyAgent(file, args, parsedEnv, cwd, this._cols, this._rows, false, opt.useConpty, opt.useConptyDll, opt.conptyInheritCursor);
++        this._socket = this._agent.outSocket;
+         // Not available until `ready` event emitted.
+-        _this._pid = _this._agent.innerPid;
+-        _this._fd = _this._agent.fd;
+-        _this._pty = _this._agent.pty;
+-        // The forked windows terminal is not available until `ready` event is
+-        // emitted.
+-        _this._socket.on('ready_datapipe', function () {
+-            // Run deferreds and set ready state once the first data event is received.
+-            _this._socket.once('data', function () {
+-                // Wait until the first data event is fired then we can run deferreds.
+-                if (!_this._isReady) {
+-                    // Terminal is now ready and we can avoid having to defer method
+-                    // calls.
+-                    _this._isReady = true;
+-                    // Execute all deferred methods
+-                    _this._deferreds.forEach(function (fn) {
+-                        // NB! In order to ensure that `this` has all its references
+-                        // updated any variable that need to be available in `this` before
+-                        // the deferred is run has to be declared above this forEach
+-                        // statement.
+-                        fn.run();
+-                    });
+-                    // Reset
+-                    _this._deferreds = [];
+-                }
+-            });
+-            // Shutdown if `error` event is emitted.
+-            _this._socket.on('error', function (err) {
+-                // Close terminal session.
+-                _this._close();
+-                // EIO, happens when someone closes our child process: the only process
+-                // in the terminal.
+-                // node < 0.6.14: errno 5
+-                // node >= 0.6.14: read EIO
+-                if (err.code) {
+-                    if (~err.code.indexOf('errno 5') || ~err.code.indexOf('EIO'))
+-                        return;
+-                }
+-                // Throw anything else.
+-                if (_this.listeners('error').length < 2) {
+-                    throw err;
+-                }
+-            });
+-            // Cleanup after the socket is closed.
+-            _this._socket.on('close', function () {
+-                _this.emit('exit', _this._agent.exitCode);
+-                _this._close();
+-            });
+-        });
+-        _this._file = file;
+-        _this._name = name;
+-        _this._readable = true;
+-        _this._writable = true;
+-        _this._forwardEvents();
+-        return _this;
++        this._pid = this._agent.innerPid;
++        this._fd = this._agent.fd;
++        this._pty = this._agent.pty;
++        // Native connect owns the process before returning. Silence is not unreadiness.
++        this._isReady = true;
++        this._agent.onExit(code => { this.emit('exit', code); this._close(); });
++        this._agent.onLifecycleError(error => this._onLifecycleError.fire(error));
++        this._file = file;
++        this._name = name;
++        this._readable = true;
++        this._writable = true;
++        this._forwardEvents();
+     }
+-    WindowsTerminal.prototype._write = function (data) {
++    _write(data) {
+         this._defer(this._doWrite, data);
+-    };
+-    WindowsTerminal.prototype._doWrite = function (data) {
++    }
++    _doWrite(data) {
+         this._agent.inSocket.write(data);
+-    };
++    }
+     /**
+      * openpty
+      */
+-    WindowsTerminal.open = function (options) {
++    static open(options) {
+         throw new Error('open() not supported on windows, use Fork() instead.');
+-    };
++    }
+     /**
+      * TTY
+      */
+-    WindowsTerminal.prototype.resize = function (cols, rows) {
+-        var _this = this;
++    resize(cols, rows) {
+         if (cols <= 0 || rows <= 0 || isNaN(cols) || isNaN(rows) || cols === Infinity || rows === Infinity) {
+             throw new Error('resizing must be done using positive cols and rows');
+         }
+-        this._deferNoArgs(function () {
+-            _this._agent.resize(cols, rows);
+-            _this._cols = cols;
+-            _this._rows = rows;
+-        });
+-    };
+-    WindowsTerminal.prototype.clear = function () {
+-        var _this = this;
+-        this._deferNoArgs(function () {
+-            _this._agent.clear();
+-        });
+-    };
+-    WindowsTerminal.prototype.destroy = function () {
+-        var _this = this;
+-        this._deferNoArgs(function () {
+-            _this.kill();
++        this._deferNoArgs(() => {
++            this._agent.resize(cols, rows);
++            this._cols = cols;
++            this._rows = rows;
+         });
+-    };
+-    WindowsTerminal.prototype.kill = function (signal) {
+-        var _this = this;
+-        this._deferNoArgs(function () {
+-            if (signal) {
+-                throw new Error('Signals not supported on windows.');
+-            }
+-            _this._close();
+-            _this._agent.kill();
++    }
++    clear() {
++        this._deferNoArgs(() => {
++            this._agent.clear();
+         });
+-    };
+-    WindowsTerminal.prototype._deferNoArgs = function (deferredFn) {
+-        var _this = this;
++    }
++    destroy() { this.kill(); }
++    kill(signal) {
++        if (signal)
++            throw new Error('Signals not supported on windows.');
++        this._agent.kill();
++        // Drain saved output even if the caller had paused rendering before Stop.
++        this.resume();
++    }
++    _deferNoArgs(deferredFn) {
+         // If the terminal is ready, execute.
+         if (this._isReady) {
+             deferredFn.call(this);
+@@ -163,11 +101,10 @@ var WindowsTerminal = /** @class */ (function (_super) {
+         }
+         // Queue until terminal is ready.
+         this._deferreds.push({
+-            run: function () { return deferredFn.call(_this); }
++            run: () => deferredFn.call(this)
+         });
+-    };
+-    WindowsTerminal.prototype._defer = function (deferredFn, arg) {
+-        var _this = this;
++    }
++    _defer(deferredFn, arg) {
+         // If the terminal is ready, execute.
+         if (this._isReady) {
+             deferredFn.call(this, arg);
+@@ -175,25 +112,11 @@ var WindowsTerminal = /** @class */ (function (_super) {
+         }
+         // Queue until terminal is ready.
+         this._deferreds.push({
+-            run: function () { return deferredFn.call(_this, arg); }
++            run: () => deferredFn.call(this, arg)
+         });
+-    };
+-    Object.defineProperty(WindowsTerminal.prototype, "process", {
+-        get: function () { return this._name; },
+-        enumerable: false,
+-        configurable: true
+-    });
+-    Object.defineProperty(WindowsTerminal.prototype, "master", {
+-        get: function () { throw new Error('master is not supported on Windows'); },
+-        enumerable: false,
+-        configurable: true
+-    });
+-    Object.defineProperty(WindowsTerminal.prototype, "slave", {
+-        get: function () { throw new Error('slave is not supported on Windows'); },
+-        enumerable: false,
+-        configurable: true
+-    });
+-    return WindowsTerminal;
+-}(terminal_1.Terminal));
++    }
++    get process() { return this._name; }
++    get master() { throw new Error('master is not supported on Windows'); }
++    get slave() { throw new Error('slave is not supported on Windows'); }
++}
+ exports.WindowsTerminal = WindowsTerminal;
+-//# sourceMappingURL=windowsTerminal.js.map
+\ No newline at end of file
+diff --git a/lib/worker/conoutSocketWorker.js b/lib/worker/conoutSocketWorker.js
+index 0451e2c..4e63c73 100644
+--- a/lib/worker/conoutSocketWorker.js
++++ b/lib/worker/conoutSocketWorker.js
+@@ -1,22 +1,37 @@
+ "use strict";
+-/**
+- * Copyright (c) 2020, Microsoft Corporation (MIT License).
+- */
+ Object.defineProperty(exports, "__esModule", { value: true });
+-var worker_threads_1 = require("worker_threads");
+-var net_1 = require("net");
+-var conout_1 = require("../shared/conout");
+-var conoutPipeName = worker_threads_1.workerData.conoutPipeName;
+-var conoutSocket = new net_1.Socket();
+-conoutSocket.setEncoding('utf8');
+-conoutSocket.connect(conoutPipeName, function () {
+-    var server = net_1.createServer(function (workerSocket) {
+-        conoutSocket.pipe(workerSocket);
+-    });
+-    server.listen(conout_1.getWorkerPipeName(conoutPipeName));
+-    if (!worker_threads_1.parentPort) {
+-        throw new Error('worker_threads parentPort is null');
++/** Copyright (c) 2020, Microsoft Corporation (MIT License).
++ * BMN: private MessagePort with one-chunk credits, never a public relay pipe.
++ */
++const worker_threads_1 = require("worker_threads");
++const net_1 = require("net");
++if (!worker_threads_1.parentPort)
++    throw new Error('Missing ConPTY parent port');
++const port = worker_threads_1.parentPort;
++const socket = new net_1.Socket();
++let credit = false;
++let ended = false;
++function read() {
++    if (!credit)
++        return;
++    const chunk = socket.read(Math.min(socket.readableLength, 64 * 1024) || undefined);
++    if (chunk) {
++        credit = false;
++        port.postMessage({ type: 'data', data: chunk });
++    }
++    else if (ended) {
++        port.postMessage({ type: 'end' });
++        port.close();
+     }
+-    worker_threads_1.parentPort.postMessage(1 /* READY */);
++}
++port.on('message', message => { if (message === 'read') {
++    credit = true;
++    read();
++} });
++socket.on('readable', read);
++socket.on('end', () => { ended = true; read(); });
++socket.on('error', (error) => {
++    port.postMessage({ type: 'error', code: error.code || 'UNKNOWN' });
++    port.close();
+ });
+-//# sourceMappingURL=conoutSocketWorker.js.map
+\ No newline at end of file
++socket.connect(worker_threads_1.workerData.conoutPipeName, () => port.postMessage({ type: 'ready' }));
+diff --git a/src/index.ts b/src/index.ts
+index 8a7e950..7c9e9bb 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -50,3 +50,27 @@ export function open(options: IPtyOpenOptions): ITerminal {
+  * could be removed at any time.
+  */
+ export const native = (process.platform !== 'win32' ? loadNativeModule('pty').module : null);
++
++/** BMN: observational identity only, never authority to terminate a PID. */
++export function queryProcessStartIdentity(pid: number): string {
++  if (process.platform !== 'win32') throw new Error('Windows process identity only');
++  const binding: IConptyNative = loadNativeModule('conpty').module;
++  if (binding.bmnOwnershipVersion !== 1) throw new Error('BMN owned ConPTY addon missing');
++  return binding.queryProcessStartIdentity(pid);
++}
++
++/** BMN: restrict a listening control pipe to the current user; returns the applied DACL. */
++export function restrictControlPipe(name: string): { user: string; dacl: string; verifiedCurrentUserOnly: true } {
++  if (process.platform !== 'win32') throw new Error('Windows control pipes only');
++  const binding: IConptyNative = loadNativeModule('conpty').module;
++  if (binding.bmnControlTransportVersion !== 2) throw new Error('BMN control transport addon missing');
++  return binding.restrictControlPipe(name);
++}
++
++/** BMN: process-lifetime ownership; deliberately has no JS cleanup/dispose operation. */
++export function protectApplicationLifetime(): void {
++  if (process.platform !== 'win32') throw new Error('Windows application lifetime only');
++  const binding: IConptyNative = loadNativeModule('conpty').module;
++  if (binding.bmnApplicationLifetimeVersion !== 1) throw new Error('BMN application lifetime addon missing');
++  binding.protectApplicationLifetime();
++}
+diff --git a/src/native.d.ts b/src/native.d.ts
+index c53e086..2acf306 100644
+--- a/src/native.d.ts
++++ b/src/native.d.ts
+@@ -3,8 +3,14 @@
+  */
+ 
+ interface IConptyNative {
++  bmnOwnershipVersion: number;
++  queryProcessStartIdentity(pid: number): string;
++  bmnControlTransportVersion: number;
++  restrictControlPipe(name: string): { user: string; dacl: string; verifiedCurrentUserOnly: true };
++  bmnApplicationLifetimeVersion?: number;
++  protectApplicationLifetime(): void;
+   startProcess(file: string, cols: number, rows: number, debug: boolean, pipeName: string, conptyInheritCursor: boolean, useConptyDll: boolean): IConptyProcess;
+-  connect(ptyId: number, commandLine: string, cwd: string, env: string[], useConptyDll: boolean, onExitCallback: (exitCode: number) => void): { pid: number };
++  connect(ptyId: number, commandLine: string, cwd: string, env: string[], useConptyDll: boolean, onExitCallback: (result: { exitCode: number; treeEmpty: true } | { error: string }) => void): { pid: number; startIdentity: string };
+   resize(ptyId: number, cols: number, rows: number, useConptyDll: boolean): void;
+   clear(ptyId: number, useConptyDll: boolean): void;
+   kill(ptyId: number, useConptyDll: boolean): void;
+diff --git a/src/win/conpty.cc b/src/win/conpty.cc
+index 7b286d3..2ee1c24 100644
+--- a/src/win/conpty.cc
++++ b/src/win/conpty.cc
+@@ -2,582 +2,504 @@
+  * Copyright (c) 2013-2015, Christopher Jeffrey, Peter Sunde (MIT License)
+  * Copyright (c) 2016, Daniel Imms (MIT License).
+  * Copyright (c) 2018, Microsoft Corporation (MIT License).
+- *
+- * pty.cc:
+- *   This file is responsible for starting processes
+- *   with pseudo-terminal file descriptors.
++ * BMN: Windows 10+ owned ConPTY sessions. No PID-based termination.
+  */
+-
+-#define _WIN32_WINNT 0x600
+-
++#define _WIN32_WINNT 0x0A00
+ #define NODE_ADDON_API_DISABLE_DEPRECATED
+-#include <node_api.h>
+-#include <assert.h>
+-#include <Shlwapi.h> // PathCombine, PathIsRelative
++#include <napi.h>
++#include <Windows.h>
++#include <Shlwapi.h>
++#include <sddl.h>
++#include <aclapi.h>
++#include <algorithm>
++#include <atomic>
++#include <cstddef>
++#include <memory>
++#include <mutex>
+ #include <sstream>
+-#include <iostream>
+-#include <string>
+ #include <thread>
++#include <unordered_map>
+ #include <vector>
+-#include <Windows.h>
+-#include <strsafe.h>
+ #include "path_util.h"
+ #include "conpty.h"
+ 
+-// Taken from the RS5 Windows SDK, but redefined here in case we're targeting <= 17134
+-#ifndef PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE
+-#define PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE \
+-  ProcThreadAttributeValue(22, FALSE, TRUE, FALSE)
+-
+-typedef VOID* HPCON;
+-typedef HRESULT (__stdcall *PFNCREATEPSEUDOCONSOLE)(COORD c, HANDLE hIn, HANDLE hOut, DWORD dwFlags, HPCON* phpcon);
+-typedef HRESULT (__stdcall *PFNRESIZEPSEUDOCONSOLE)(HPCON hpc, COORD newSize);
+-typedef HRESULT (__stdcall *PFNCLEARPSEUDOCONSOLE)(HPCON hpc);
+-typedef void (__stdcall *PFNCLOSEPSEUDOCONSOLE)(HPCON hpc);
+-typedef void (__stdcall *PFNRELEASEPSEUDOCONSOLE)(HPCON hpc);
+-
+-#endif
+-
+-struct pty_baton {
+-  int id;
+-  HANDLE hIn;
+-  HANDLE hOut;
+-  HPCON hpc;
+-
+-  HANDLE hShell;
+-
+-  pty_baton(int _id, HANDLE _hIn, HANDLE _hOut, HPCON _hpc) : id(_id), hIn(_hIn), hOut(_hOut), hpc(_hpc) {};
+-};
+-
+-static std::vector<std::unique_ptr<pty_baton>> ptyHandles;
+-static volatile LONG ptyCounter;
+-
+-static pty_baton* get_pty_baton(int id) {
+-  auto it = std::find_if(ptyHandles.begin(), ptyHandles.end(), [id](const auto& ptyHandle) {
+-    return ptyHandle->id == id;
+-  });
+-  if (it != ptyHandles.end()) {
+-    return it->get();
++using CreateConsole = HRESULT (WINAPI *)(COORD, HANDLE, HANDLE, DWORD, HPCON*);
++using ResizeConsole = HRESULT (WINAPI *)(HPCON, COORD);
++using ClearConsole = HRESULT (WINAPI *)(HPCON);
++using ReleaseConsole = HRESULT (WINAPI *)(HPCON);
++using CloseConsole = VOID (WINAPI *)(HPCON);
++
++struct Handle {
++  HANDLE value = nullptr;
++  Handle() = default;
++  explicit Handle(HANDLE h) : value(h) {}
++  Handle(const Handle&) = delete;
++  Handle& operator=(const Handle&) = delete;
++  ~Handle() { reset(); }
++  void reset(HANDLE h = nullptr) {
++    if (value && value != INVALID_HANDLE_VALUE) CloseHandle(value);
++    value = h;
+   }
+-  return nullptr;
+-}
++};
+ 
+-static bool remove_pty_baton(int id) {
+-  auto it = std::remove_if(ptyHandles.begin(), ptyHandles.end(), [id](const auto& ptyHandle) {
+-    return ptyHandle->id == id;
+-  });
+-  if (it != ptyHandles.end()) {
+-    ptyHandles.erase(it);
+-    return true;
++struct Session {
++  std::mutex mutex;
++  Handle input, output, process, job, cancel;
++  HMODULE library = nullptr;
++  HPCON console = nullptr;
++  CreateConsole create = nullptr;
++  ResizeConsole resize = nullptr;
++  ClearConsole clear = nullptr;
++  ReleaseConsole release = nullptr;
++  CloseConsole close = nullptr;
++  bool connected = false;
++  bool closing = false;
++  ~Session() {
++    // Startup failures also close the owning job before releasing the console.
++    job.reset();
++    if (console && close) close(console);
++    if (library) FreeLibrary(library);
+   }
+-  return false;
+-}
+-
+-struct ExitEvent {
+-  int exit_code = 0;
+ };
+ 
+-void SetupExitCallback(Napi::Env env, Napi::Function cb, pty_baton* baton) {
+-  std::thread *th = new std::thread;
+-  // Don't use Napi::AsyncWorker which is limited by UV_THREADPOOL_SIZE.
+-  auto tsfn = Napi::ThreadSafeFunction::New(
+-      env,
+-      cb,                           // JavaScript function called asynchronously
+-      "SetupExitCallback_resource", // Name
+-      0,                            // Unlimited queue
+-      1,                            // Only one thread will use this initially
+-      [th](Napi::Env) {   // Finalizer used to clean threads up
+-        th->join();
+-        delete th;
+-      });
+-  *th = std::thread([tsfn = std::move(tsfn), baton] {
+-    auto callback = [](Napi::Env env, Napi::Function cb, ExitEvent *exit_event) {
+-      cb.Call({Napi::Number::New(env, exit_event->exit_code)});
+-      delete exit_event;
+-    };
+-
+-    ExitEvent *exit_event = new ExitEvent;
+-    // Wait for process to complete.
+-    WaitForSingleObject(baton->hShell, INFINITE);
+-    // Get process exit code.
+-    GetExitCodeProcess(baton->hShell, (LPDWORD)(&exit_event->exit_code));
+-    // Clean up handles
+-    CloseHandle(baton->hShell);
+-    assert(remove_pty_baton(baton->id));
+-
+-    auto status = tsfn.BlockingCall(exit_event, callback); // In main thread
+-    switch (status) {
+-      case napi_closing:
+-        break;
+-
+-      case napi_queue_full:
+-        Napi::Error::Fatal("SetupExitCallback", "Queue was full");
+-
+-      case napi_ok:
+-        if (tsfn.Release() != napi_ok) {
+-          Napi::Error::Fatal("SetupExitCallback", "ThreadSafeFunction.Release() failed");
+-        }
+-        break;
++struct Registry {
++  std::mutex mutex;
++  std::unordered_map<int, std::shared_ptr<Session>> sessions;
++  int nextId = 0;
++  bool closing = false;
++};
++using RegistryRef = std::shared_ptr<Registry>;
+ 
+-      default:
+-        Napi::Error::Fatal("SetupExitCallback", "ThreadSafeFunction.BlockingCall() failed");
+-    }
+-  });
++static RegistryRef registry(const Napi::CallbackInfo& info) {
++  return *static_cast<RegistryRef*>(info.Data());
+ }
+-
+-Napi::Error errorWithCode(const Napi::CallbackInfo& info, const char* text) {
+-  std::stringstream errorText;
+-  errorText << text;
+-  errorText << ", error code: " << GetLastError();
+-  return Napi::Error::New(info.Env(), errorText.str());
++static std::shared_ptr<Session> lookup(const Napi::CallbackInfo& info, int id) {
++  auto state = registry(info);
++  std::lock_guard<std::mutex> lock(state->mutex);
++  auto it = state->sessions.find(id);
++  return it == state->sessions.end() ? nullptr : it->second;
++}
++static Napi::Error failure(Napi::Env env, const char* operation, DWORD code = GetLastError()) {
++  return Napi::Error::New(env, std::string(operation) + " (Windows error " + std::to_string(code) + ")");
++}
++static void check(Napi::Env env, BOOL result, const char* operation) {
++  if (!result) throw failure(env, operation);
++}
++static std::string identity(Napi::Env env, HANDLE process) {
++  FILETIME created{}, exited{}, kernel{}, user{};
++  check(env, GetProcessTimes(process, &created, &exited, &kernel, &user), "GetProcessTimes");
++  ULARGE_INTEGER value{};
++  value.LowPart = created.dwLowDateTime;
++  value.HighPart = created.dwHighDateTime;
++  return "windows-filetime:" + std::to_string(value.QuadPart);
+ }
+ 
+-// Returns a new server named pipe.  It has not yet been connected.
+-bool createDataServerPipe(bool write,
+-                          std::wstring kind,
+-                          HANDLE* hServer,
+-                          std::wstring &name,
+-                          const std::wstring &pipeName)
+-{
+-  *hServer = INVALID_HANDLE_VALUE;
+-
+-  name = L"\\\\.\\pipe\\" + pipeName + L"-" + kind;
+-
+-  const DWORD winOpenMode =  PIPE_ACCESS_INBOUND | PIPE_ACCESS_OUTBOUND | FILE_FLAG_FIRST_PIPE_INSTANCE/*  | FILE_FLAG_OVERLAPPED */;
+-
+-  SECURITY_ATTRIBUTES sa = {};
+-  sa.nLength = sizeof(sa);
+-
+-  *hServer = CreateNamedPipeW(
+-      name.c_str(),
+-      /*dwOpenMode=*/winOpenMode,
+-      /*dwPipeMode=*/PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+-      /*nMaxInstances=*/1,
+-      /*nOutBufferSize=*/128 * 1024,
+-      /*nInBufferSize=*/128 * 1024,
+-      /*nDefaultTimeOut=*/30000,
+-      &sa);
+-
+-  return *hServer != INVALID_HANDLE_VALUE;
++static std::wstring currentUserSid(Napi::Env env) {
++  Handle token;
++  check(env, OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token.value), "OpenProcessToken");
++  DWORD size = 0;
++  GetTokenInformation(token.value, TokenUser, nullptr, 0, &size);
++  std::vector<BYTE> data(size);
++  check(env, GetTokenInformation(token.value, TokenUser, data.data(), size, &size), "GetTokenInformation");
++  LPWSTR rawSid = nullptr;
++  check(env, ConvertSidToStringSidW(reinterpret_cast<TOKEN_USER*>(data.data())->User.Sid, &rawSid), "ConvertSidToStringSid");
++  std::wstring sid(rawSid);
++  LocalFree(rawSid);
++  return sid;
++}
++static std::wstring userOnlySddl(Napi::Env env) {
++  return L"D:P(A;;GA;;;" + currentUserSid(env) + L")";
+ }
+ 
+-HANDLE LoadConptyDll(const Napi::CallbackInfo& info,
+-                     const bool useConptyDll)
+-{
+-  if (!useConptyDll) {
+-    return LoadLibraryExW(L"kernel32.dll", 0, 0);
+-  }
+-  wchar_t currentDir[MAX_PATH];
+-  HMODULE hModule = GetModuleHandleA("conpty.node");
+-  if (hModule == NULL) {
+-    throw errorWithCode(info, "Failed to get conpty.node module handle");
+-  }
+-  DWORD result = GetModuleFileNameW(hModule, currentDir, MAX_PATH);
+-  if (result == 0) {
+-    throw errorWithCode(info, "Failed to get conpty.node module file name");
+-  }
+-  PathRemoveFileSpecW(currentDir);
+-  wchar_t conptyDllPath[MAX_PATH];
+-  PathCombineW(conptyDllPath, currentDir, L"conpty\\conpty.dll");
+-  if (!path_util::file_exists(conptyDllPath)) {
+-    std::wstring errorMessage = L"Cannot find conpty.dll at " + std::wstring(conptyDllPath);
+-    std::string errorMessageStr = path_util::wstring_to_string(errorMessage);
+-    throw errorWithCode(info, errorMessageStr.c_str());
+-  }
++// Protected user-only DACL, applied at creation. No relay pipe, remote clients,
++// inherited handles or predictable pipe namespace shared with other accounts.
++static HANDLE createPipe(Napi::Env env, const std::wstring& name) {
++  std::wstring sddl = userOnlySddl(env);
++  PSECURITY_DESCRIPTOR descriptor = nullptr;
++  check(env, ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr), "Pipe security descriptor");
++  SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), descriptor, FALSE};
++  HANDLE pipe = CreateNamedPipeW(name.c_str(), PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
++    PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
++    1, 128 * 1024, 128 * 1024, 30000, &security);
++  DWORD error = GetLastError();
++  LocalFree(descriptor);
++  if (pipe == INVALID_HANDLE_VALUE) throw failure(env, "CreateNamedPipe", error);
++  return pipe;
++}
+ 
+-  return LoadLibraryW(conptyDllPath);
++static void loadConsole(Napi::Env env, Session& session) {
++  HMODULE addon = nullptr;
++  check(env, GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++    reinterpret_cast<LPCWSTR>(&loadConsole), &addon), "Locate ConPTY addon");
++  std::vector<wchar_t> path(32768);
++  DWORD length = GetModuleFileNameW(addon, path.data(), static_cast<DWORD>(path.size()));
++  if (!length || length >= path.size()) throw failure(env, "Locate ConPTY directory");
++  std::wstring dll(path.data(), length);
++  dll.erase(dll.find_last_of(L"\\/") + 1);
++  dll += L"conpty\\conpty.dll";
++  session.library = LoadLibraryExW(dll.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
++  if (!session.library) throw failure(env, "Load bundled ConPTY");
++  session.create = reinterpret_cast<CreateConsole>(GetProcAddress(session.library, "ConptyCreatePseudoConsole"));
++  session.resize = reinterpret_cast<ResizeConsole>(GetProcAddress(session.library, "ConptyResizePseudoConsole"));
++  session.clear = reinterpret_cast<ClearConsole>(GetProcAddress(session.library, "ConptyClearPseudoConsole"));
++  session.release = reinterpret_cast<ReleaseConsole>(GetProcAddress(session.library, "ConptyReleasePseudoConsole"));
++  session.close = reinterpret_cast<CloseConsole>(GetProcAddress(session.library, "ConptyClosePseudoConsole"));
++  if (!session.create || !session.resize || !session.clear || !session.release || !session.close)
++    throw failure(env, "Bundled ConPTY API unavailable", ERROR_PROC_NOT_FOUND);
+ }
+ 
+-HRESULT CreateNamedPipesAndPseudoConsole(const Napi::CallbackInfo& info,
+-                                         COORD size,
+-                                         DWORD dwFlags,
+-                                         HANDLE *phInput,
+-                                         HANDLE *phOutput,
+-                                         HPCON* phPC,
+-                                         std::wstring& inName,
+-                                         std::wstring& outName,
+-                                         const std::wstring& pipeName,
+-                                         const bool useConptyDll)
+-{
+-  HANDLE hLibrary = LoadConptyDll(info, useConptyDll);
+-  DWORD error = GetLastError();
+-  bool fLoadedDll = hLibrary != nullptr;
+-  if (fLoadedDll)
+-  {
+-    PFNCREATEPSEUDOCONSOLE const pfnCreate = (PFNCREATEPSEUDOCONSOLE)GetProcAddress(
+-        (HMODULE)hLibrary,
+-        useConptyDll ? "ConptyCreatePseudoConsole" : "CreatePseudoConsole");
+-    if (pfnCreate)
+-    {
+-      if (phPC == NULL || phInput == NULL || phOutput == NULL)
++struct ExitEvent {
++  DWORD code = 0;
++  DWORD error = 0;
++};
++
++static void watchExit(Napi::Env env, Napi::Function callback, RegistryRef state, int id, std::shared_ptr<Session> session) {
++  auto thread = new std::thread;
++  auto tsfn = Napi::ThreadSafeFunction::New(env, callback, "BMN owned ConPTY exit", 1, 1,
++    [thread](Napi::Env) { if (thread->joinable()) thread->join(); delete thread; });
++  try {
++    *thread = std::thread([tsfn, state, id, session] {
++      auto result = new ExitEvent;
++      HANDLE waitHandles[] = {session->process.value, session->cancel.value};
++      DWORD waited = WaitForMultipleObjects(2, waitHandles, FALSE, INFINITE);
++      if (waited != WAIT_OBJECT_0) result->error = waited == WAIT_FAILED ? GetLastError() : ERROR_OPERATION_ABORTED;
++      else if (!GetExitCodeProcess(session->process.value, &result->code)) result->error = GetLastError();
+       {
+-        return E_INVALIDARG;
++        std::lock_guard<std::mutex> lock(session->mutex);
++        session->closing = true;
++        if (session->job.value && !TerminateJobObject(session->job.value, 1) && !result->error) result->error = GetLastError();
+       }
+-
+-      bool success = createDataServerPipe(true, L"in", phInput, inName, pipeName);
+-      if (!success)
++      // No idle polling. After root termination, confirm all owned descendants are gone.
++      const ULONGLONG deadline = GetTickCount64() + 5000;
++      for (;;) {
++        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting{};
++        {
++          std::lock_guard<std::mutex> lock(session->mutex);
++          if (!session->job.value || !QueryInformationJobObject(session->job.value, JobObjectBasicAccountingInformation,
++              &accounting, sizeof(accounting), nullptr)) {
++            if (!result->error) result->error = ERROR_INVALID_HANDLE;
++            break;
++          }
++        }
++        if (accounting.ActiveProcesses == 0) break;
++        if (GetTickCount64() >= deadline) { if (!result->error) result->error = WAIT_TIMEOUT; break; }
++        Sleep(10);
++      }
++      HPCON console;
+       {
+-        return HRESULT_FROM_WIN32(GetLastError());
++        std::lock_guard<std::mutex> lock(session->mutex);
++        console = session->console;
++        session->console = nullptr;
++        session->job.reset();
+       }
+-      success = createDataServerPipe(false, L"out", phOutput, outName, pipeName);
+-      if (!success)
++      // Close off the JS thread; the output worker drains (or closes on environment exit).
++      if (console) session->close(console);
+       {
+-        return HRESULT_FROM_WIN32(GetLastError());
++        std::lock_guard<std::mutex> lock(state->mutex);
++        state->sessions.erase(id);
+       }
+-      return pfnCreate(size, *phInput, *phOutput, dwFlags, phPC);
+-    }
+-    else
+-    {
+-      // Failed to find CreatePseudoConsole in kernel32. This is likely because
+-      //    the user is not running a build of Windows that supports that API.
+-      //    We should fall back to winpty in this case.
+-      return HRESULT_FROM_WIN32(GetLastError());
+-    }
+-  } else {
+-    throw errorWithCode(info, "Failed to load conpty.dll");
++      bool closing;
++      { std::lock_guard<std::mutex> lock(state->mutex); closing = state->closing; }
++      if (closing) { delete result; tsfn.Release(); return; }
++      napi_status status = tsfn.BlockingCall(result, [](Napi::Env callbackEnv, Napi::Function cb, ExitEvent* event) {
++        if (callbackEnv && cb) {
++          auto value = Napi::Object::New(callbackEnv);
++          if (event->error) value.Set("error", "Owned process exit unconfirmed (Windows error " + std::to_string(event->error) + ")");
++          else { value.Set("exitCode", Napi::Number::New(callbackEnv, event->code)); value.Set("treeEmpty", true); }
++          cb.Call({value});
++        }
++        delete event;
++      });
++      if (status != napi_ok) delete result;
++      tsfn.Release();
++    });
++  } catch (...) {
++    tsfn.Abort();
++    throw;
+   }
+-
+-  // Failed to find  kernel32. This is realy unlikely - honestly no idea how
+-  //    this is even possible to hit. But if it does happen, fall back to winpty.
+-  return HRESULT_FROM_WIN32(GetLastError());
+ }
+ 
+-static Napi::Value PtyStartProcess(const Napi::CallbackInfo& info) {
+-  Napi::Env env(info.Env());
+-  Napi::HandleScope scope(env);
+-
+-  Napi::Object marshal;
+-  std::wstring inName, outName;
+-  BOOL fSuccess = FALSE;
+-  std::unique_ptr<wchar_t[]> mutableCommandline;
+-  PROCESS_INFORMATION _piClient{};
+-
+-  if (info.Length() != 7 ||
+-      !info[0].IsString() ||
+-      !info[1].IsNumber() ||
+-      !info[2].IsNumber() ||
+-      !info[3].IsBoolean() ||
+-      !info[4].IsString() ||
+-      !info[5].IsBoolean() ||
+-      !info[6].IsBoolean()) {
+-    throw Napi::Error::New(env, "Usage: pty.startProcess(file, cols, rows, debug, pipeName, inheritCursor, useConptyDll)");
+-  }
+-
+-  const std::wstring filename(path_util::to_wstring(info[0].As<Napi::String>()));
+-  const SHORT cols = static_cast<SHORT>(info[1].As<Napi::Number>().Uint32Value());
+-  const SHORT rows = static_cast<SHORT>(info[2].As<Napi::Number>().Uint32Value());
+-  const bool debug = info[3].As<Napi::Boolean>().Value();
+-  const std::wstring pipeName(path_util::to_wstring(info[4].As<Napi::String>()));
+-  const bool inheritCursor = info[5].As<Napi::Boolean>().Value();
+-  const bool useConptyDll = info[6].As<Napi::Boolean>().Value();
+-
+-  // use environment 'Path' variable to determine location of
+-  // the relative path that we have recieved (e.g cmd.exe)
+-  std::wstring shellpath;
+-  if (::PathIsRelativeW(filename.c_str())) {
+-    shellpath = path_util::get_shell_path(filename.c_str());
+-  } else {
+-    shellpath = filename;
+-  }
+-
+-  if (shellpath.empty() || !path_util::file_exists(shellpath)) {
+-    std::string why;
+-    why += "File not found: ";
+-    why += path_util::wstring_to_string(shellpath);
+-    throw Napi::Error::New(env, why);
+-  }
+-
+-  HANDLE hIn, hOut;
+-  HPCON hpc;
+-  HRESULT hr = CreateNamedPipesAndPseudoConsole(info, {cols, rows}, inheritCursor ? 1/*PSEUDOCONSOLE_INHERIT_CURSOR*/ : 0, &hIn, &hOut, &hpc, inName, outName, pipeName, useConptyDll);
+-
+-  // Restore default handling of ctrl+c
+-  SetConsoleCtrlHandler(NULL, FALSE);
+-
+-  // Set return values
+-  marshal = Napi::Object::New(env);
+-
+-  if (SUCCEEDED(hr)) {
+-    // We were able to instantiate a conpty
+-    const int ptyId = InterlockedIncrement(&ptyCounter);
+-    marshal.Set("pty", Napi::Number::New(env, ptyId));
+-    ptyHandles.emplace_back(
+-        std::make_unique<pty_baton>(ptyId, hIn, hOut, hpc));
+-  } else {
+-    throw Napi::Error::New(env, "Cannot launch conpty");
+-  }
+-
+-  std::string inNameStr = path_util::wstring_to_string(inName);
+-  if (inNameStr.empty()) {
+-    throw Napi::Error::New(env, "Failed to initialize conpty conin");
+-  }
+-  std::string outNameStr = path_util::wstring_to_string(outName);
+-  if (outNameStr.empty()) {
+-    throw Napi::Error::New(env, "Failed to initialize conpty conout");
++static Napi::Value start(const Napi::CallbackInfo& info) {
++  auto env = info.Env();
++  if (info.Length() != 7 || !info[0].IsString() || !info[1].IsNumber() || !info[2].IsNumber() ||
++      !info[4].IsString() || !info[5].IsBoolean() || !info[6].IsBoolean() || !info[6].As<Napi::Boolean>().Value())
++    throw Napi::Error::New(env, "BMN requires bundled ConPTY");
++  auto session = std::make_shared<Session>();
++  session->cancel.reset(CreateEventW(nullptr, TRUE, FALSE, nullptr));
++  if (!session->cancel.value) throw failure(env, "Create lifecycle cancellation event");
++  loadConsole(env, *session);
++  auto pipe = path_util::to_wstring(info[4].As<Napi::String>());
++  auto input = L"\\\\.\\pipe\\" + pipe + L"-in";
++  auto output = L"\\\\.\\pipe\\" + pipe + L"-out";
++  session->input.reset(createPipe(env, input));
++  session->output.reset(createPipe(env, output));
++  COORD size{static_cast<SHORT>(info[1].As<Napi::Number>().Int32Value()), static_cast<SHORT>(info[2].As<Napi::Number>().Int32Value())};
++  HRESULT result = session->create(size, session->input.value, session->output.value,
++    info[5].As<Napi::Boolean>().Value() ? 1 : 0, &session->console);
++  if (FAILED(result)) throw failure(env, "Create bundled pseudoconsole", result);
++  auto state = registry(info);
++  int id;
++  {
++    std::lock_guard<std::mutex> lock(state->mutex);
++    if (state->closing || state->nextId == INT_MAX) throw Napi::Error::New(env, "ConPTY registry unavailable");
++    id = ++state->nextId;
++    state->sessions.emplace(id, session);
+   }
+-
+-  marshal.Set("fd", Napi::Number::New(env, -1));
+-  marshal.Set("conin", Napi::String::New(env, inNameStr));
+-  marshal.Set("conout", Napi::String::New(env, outNameStr));
+-  return marshal;
++  auto value = Napi::Object::New(env);
++  value.Set("pty", id); value.Set("fd", -1);
++  value.Set("conin", path_util::wstring_to_string(input));
++  value.Set("conout", path_util::wstring_to_string(output));
++  return value;
+ }
+ 
+-static Napi::Value PtyConnect(const Napi::CallbackInfo& info) {
+-  Napi::Env env(info.Env());
+-  Napi::HandleScope scope(env);
+-
+-  // If we're working with conpty's we need to call ConnectNamedPipe here AFTER
+-  //    the Socket has attempted to connect to the other end, then actually
+-  //    spawn the process here.
+-
+-  std::stringstream errorText;
+-  BOOL fSuccess = FALSE;
+-
+-  if (info.Length() != 6 ||
+-      !info[0].IsNumber() ||
+-      !info[1].IsString() ||
+-      !info[2].IsString() ||
+-      !info[3].IsArray() ||
+-      !info[4].IsBoolean() ||
+-      !info[5].IsFunction()) {
+-    throw Napi::Error::New(env, "Usage: pty.connect(id, cmdline, cwd, env, useConptyDll, exitCallback)");
++struct Attributes {
++  std::vector<BYTE> bytes;
++  PPROC_THREAD_ATTRIBUTE_LIST list = nullptr;
++  ~Attributes() { if (list) DeleteProcThreadAttributeList(list); }
++  explicit Attributes(Napi::Env env) {
++    SIZE_T size = 0;
++    InitializeProcThreadAttributeList(nullptr, 2, 0, &size);
++    bytes.resize(size);
++    auto candidate = reinterpret_cast<PPROC_THREAD_ATTRIBUTE_LIST>(bytes.data());
++    check(env, InitializeProcThreadAttributeList(candidate, 2, 0, &size), "Initialize process attributes");
++    list = candidate;
+   }
++};
+ 
+-  const int id = info[0].As<Napi::Number>().Int32Value();
+-  const std::wstring cmdline(path_util::to_wstring(info[1].As<Napi::String>()));
+-  const std::wstring cwd(path_util::to_wstring(info[2].As<Napi::String>()));
+-  const Napi::Array envValues = info[3].As<Napi::Array>();
+-  const bool useConptyDll = info[4].As<Napi::Boolean>().Value();
+-  Napi::Function exitCallback = info[5].As<Napi::Function>();
+-
+-  // Fetch pty handle from ID and start process
+-  pty_baton* handle = get_pty_baton(id);
+-  if (!handle) {
+-    throw Napi::Error::New(env, "Invalid pty handle");
+-  }
+-
+-  // Prepare command line
+-  std::unique_ptr<wchar_t[]> mutableCommandline = std::make_unique<wchar_t[]>(cmdline.length() + 1);
+-  HRESULT hr = StringCchCopyW(mutableCommandline.get(), cmdline.length() + 1, cmdline.c_str());
+-
+-  // Prepare cwd
+-  std::unique_ptr<wchar_t[]> mutableCwd = std::make_unique<wchar_t[]>(cwd.length() + 1);
+-  hr = StringCchCopyW(mutableCwd.get(), cwd.length() + 1, cwd.c_str());
+-
+-  // Prepare environment
+-  std::wstring envStr;
+-  if (!envValues.IsEmpty()) {
+-    std::wstring envBlock;
+-    for(uint32_t i = 0; i < envValues.Length(); i++) {
+-      envBlock += path_util::to_wstring(envValues.Get(i).As<Napi::String>());
+-      envBlock += L'\0';
++static Napi::Value connectOwnedProcess(const Napi::CallbackInfo& info) {
++  auto env = info.Env();
++  if (info.Length() != 6 || !info[0].IsNumber() || !info[1].IsString() || !info[2].IsString() || !info[3].IsArray() || !info[5].IsFunction())
++    throw Napi::Error::New(env, "Invalid ConPTY connect arguments");
++  int id = info[0].As<Napi::Number>().Int32Value();
++  auto session = lookup(info, id);
++  if (!session || session->connected) throw Napi::Error::New(env, "Invalid or connected ConPTY session");
++  try {
++    for (auto pipe : {session->input.value, session->output.value}) {
++      if (!ConnectNamedPipe(pipe, nullptr) && GetLastError() != ERROR_PIPE_CONNECTED) throw failure(env, "Connect terminal pipe");
+     }
+-    envBlock += L'\0';
+-    envStr = std::move(envBlock);
+-  }
+-  std::vector<wchar_t> envV(envStr.cbegin(), envStr.cend());
+-  LPWSTR envArg = envV.empty() ? nullptr : envV.data();
+-
+-  ConnectNamedPipe(handle->hIn, nullptr);
+-  ConnectNamedPipe(handle->hOut, nullptr);
+-
+-  // Attach the pseudoconsole to the client application we're creating
+-  STARTUPINFOEXW siEx{0};
+-  siEx.StartupInfo.cb = sizeof(STARTUPINFOEXW);
+-  siEx.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+-  siEx.StartupInfo.hStdError = nullptr;
+-  siEx.StartupInfo.hStdInput = nullptr;
+-  siEx.StartupInfo.hStdOutput = nullptr;
+-
+-  SIZE_T size = 0;
+-  InitializeProcThreadAttributeList(NULL, 1, 0, &size);
+-  BYTE *attrList = new BYTE[size];
+-  siEx.lpAttributeList = reinterpret_cast<PPROC_THREAD_ATTRIBUTE_LIST>(attrList);
+-
+-  fSuccess = InitializeProcThreadAttributeList(siEx.lpAttributeList, 1, 0, &size);
+-  if (!fSuccess) {
+-    throw errorWithCode(info, "InitializeProcThreadAttributeList failed");
+-  }
+-  fSuccess = UpdateProcThreadAttribute(siEx.lpAttributeList,
+-                                       0,
+-                                       PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+-                                       handle->hpc,
+-                                       sizeof(HPCON),
+-                                       NULL,
+-                                       NULL);
+-  if (!fSuccess) {
+-    throw errorWithCode(info, "UpdateProcThreadAttribute failed");
+-  }
+-
+-  PROCESS_INFORMATION piClient{};
+-  fSuccess = !!CreateProcessW(
+-      nullptr,
+-      mutableCommandline.get(),
+-      nullptr,                      // lpProcessAttributes
+-      nullptr,                      // lpThreadAttributes
+-      false,                        // bInheritHandles VERY IMPORTANT that this is false
+-      EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT, // dwCreationFlags
+-      envArg,                       // lpEnvironment
+-      mutableCwd.get(),             // lpCurrentDirectory
+-      &siEx.StartupInfo,            // lpStartupInfo
+-      &piClient                     // lpProcessInformation
+-  );
+-  if (!fSuccess) {
+-    throw errorWithCode(info, "Cannot create process");
++    session->job.reset(CreateJobObjectW(nullptr, nullptr));
++    if (!session->job.value) throw failure(env, "Create owned job");
++    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
++    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
++    check(env, SetInformationJobObject(session->job.value, JobObjectExtendedLimitInformation, &limits, sizeof(limits)), "Set owned job limits");
++    Attributes attributes(env);
++    check(env, UpdateProcThreadAttribute(attributes.list, 0, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, session->console, sizeof(HPCON), nullptr, nullptr), "Set pseudoconsole attribute");
++    check(env, UpdateProcThreadAttribute(attributes.list, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST, &session->job.value, sizeof(HANDLE), nullptr, nullptr), "Set atomic job ownership");
++    std::wstring command = path_util::to_wstring(info[1].As<Napi::String>());
++    std::vector<wchar_t> mutableCommand(command.begin(), command.end()); mutableCommand.push_back(0);
++    std::wstring cwd = path_util::to_wstring(info[2].As<Napi::String>());
++    std::wstring environment;
++    auto pairs = info[3].As<Napi::Array>();
++    for (uint32_t i = 0; i < pairs.Length(); ++i) { environment += path_util::to_wstring(pairs.Get(i).As<Napi::String>()); environment += L'\0'; }
++    environment += L'\0'; if (!pairs.Length()) environment += L'\0';
++    STARTUPINFOEXW startup{};
++    startup.StartupInfo.cb = sizeof(startup);
++    // Do not inherit the utility host's pipe handles as terminal stdio. ConPTY
++    // supplies the console handles when this flag and null std handles are set.
++    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
++    startup.lpAttributeList = attributes.list;
++    PROCESS_INFORMATION child{};
++    check(env, CreateProcessW(nullptr, mutableCommand.data(), nullptr, nullptr, FALSE,
++      EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED,
++      &environment[0], cwd.c_str(), &startup.StartupInfo, &child), "Create atomically owned terminal process");
++    session->process.reset(child.hProcess);
++    Handle thread(child.hThread);
++    std::string created = identity(env, child.hProcess);
++    HRESULT released = session->release(session->console);
++    if (FAILED(released)) throw failure(env, "Release ConPTY reference", released);
++    session->input.reset(); session->output.reset();
++    if (ResumeThread(thread.value) == static_cast<DWORD>(-1)) throw failure(env, "Resume owned terminal process");
++    session->connected = true;
++    watchExit(env, info[5].As<Napi::Function>(), registry(info), id, session);
++    auto value = Napi::Object::New(env);
++    value.Set("pid", child.dwProcessId); value.Set("startIdentity", created);
++    return value;
++  } catch (...) {
++    session->job.reset();
++    auto state = registry(info);
++    std::lock_guard<std::mutex> lock(state->mutex);
++    state->sessions.erase(id);
++    throw;
+   }
++}
+ 
+-  HANDLE hLibrary = LoadConptyDll(info, useConptyDll);
+-  bool fLoadedDll = hLibrary != nullptr;
+-  if (useConptyDll && fLoadedDll)
+-  {
+-    PFNRELEASEPSEUDOCONSOLE const pfnReleasePseudoConsole = (PFNRELEASEPSEUDOCONSOLE)GetProcAddress(
+-      (HMODULE)hLibrary, "ConptyReleasePseudoConsole");
+-    if (pfnReleasePseudoConsole)
+-    {
+-      pfnReleasePseudoConsole(handle->hpc);
++static Napi::Value resize(const Napi::CallbackInfo& info) {
++  auto session = lookup(info, info[0].As<Napi::Number>().Int32Value());
++  if (session) {
++    std::lock_guard<std::mutex> lock(session->mutex);
++    if (!session->closing && session->console) {
++      COORD size{static_cast<SHORT>(info[1].As<Napi::Number>().Int32Value()), static_cast<SHORT>(info[2].As<Napi::Number>().Int32Value())};
++      HRESULT result = session->resize(session->console, size);
++      if (FAILED(result)) throw failure(info.Env(), "Resize pseudoconsole", result);
+     }
+   }
+-
+-  // Update handle
+-  handle->hShell = piClient.hProcess;
+-
+-  // Close the thread handle to avoid resource leak
+-  CloseHandle(piClient.hThread);
+-  // Close the input read and output write handle of the pseudoconsole
+-  CloseHandle(handle->hIn);
+-  CloseHandle(handle->hOut);
+-
+-  SetupExitCallback(env, exitCallback, handle);
+-
+-  // Return
+-  auto marshal = Napi::Object::New(env);
+-  marshal.Set("pid", Napi::Number::New(env, piClient.dwProcessId));
+-  return marshal;
++  return info.Env().Undefined();
+ }
+-
+-static Napi::Value PtyResize(const Napi::CallbackInfo& info) {
+-  Napi::Env env(info.Env());
+-  Napi::HandleScope scope(env);
+-
+-  if (info.Length() != 4 ||
+-      !info[0].IsNumber() ||
+-      !info[1].IsNumber() ||
+-      !info[2].IsNumber() ||
+-      !info[3].IsBoolean()) {
+-    throw Napi::Error::New(env, "Usage: pty.resize(id, cols, rows, useConptyDll)");
+-  }
+-
+-  int id = info[0].As<Napi::Number>().Int32Value();
+-  SHORT cols = static_cast<SHORT>(info[1].As<Napi::Number>().Uint32Value());
+-  SHORT rows = static_cast<SHORT>(info[2].As<Napi::Number>().Uint32Value());
+-  const bool useConptyDll = info[3].As<Napi::Boolean>().Value();
+-
+-  const pty_baton* handle = get_pty_baton(id);
+-
+-  if (handle != nullptr) {
+-    HANDLE hLibrary = LoadConptyDll(info, useConptyDll);
+-    bool fLoadedDll = hLibrary != nullptr;
+-    if (fLoadedDll)
+-    {
+-      PFNRESIZEPSEUDOCONSOLE const pfnResizePseudoConsole = (PFNRESIZEPSEUDOCONSOLE)GetProcAddress(
+-        (HMODULE)hLibrary,
+-        useConptyDll ? "ConptyResizePseudoConsole" : "ResizePseudoConsole");
+-      if (pfnResizePseudoConsole)
+-      {
+-        COORD size = {cols, rows};
+-        pfnResizePseudoConsole(handle->hpc, size);
+-      }
++static Napi::Value clear(const Napi::CallbackInfo& info) {
++  auto session = lookup(info, info[0].As<Napi::Number>().Int32Value());
++  if (session) {
++    std::lock_guard<std::mutex> lock(session->mutex);
++    if (!session->closing && session->console) {
++      HRESULT result = session->clear(session->console);
++      if (FAILED(result)) throw failure(info.Env(), "Clear pseudoconsole", result);
+     }
+   }
+-
+-  return env.Undefined();
++  return info.Env().Undefined();
+ }
+-
+-static Napi::Value PtyClear(const Napi::CallbackInfo& info) {
+-  Napi::Env env(info.Env());
+-  Napi::HandleScope scope(env);
+-
+-  if (info.Length() != 2 ||
+-      !info[0].IsNumber() ||
+-      !info[1].IsBoolean()) {
+-    throw Napi::Error::New(env, "Usage: pty.clear(id, useConptyDll)");
+-  }
+-
++static Napi::Value kill(const Napi::CallbackInfo& info) {
+   int id = info[0].As<Napi::Number>().Int32Value();
+-  const bool useConptyDll = info[1].As<Napi::Boolean>().Value();
+-
+-  // This API is only supported for conpty.dll as it was introduced in a later version of Windows.
+-  // We could hook it up to point at >= a version of Windows only, but the future is conpty.dll
+-  // anyway.
+-  if (!useConptyDll) {
+-    return env.Undefined();
+-  }
+-
+-  const pty_baton* handle = get_pty_baton(id);
+-
+-  if (handle != nullptr) {
+-    HANDLE hLibrary = LoadConptyDll(info, useConptyDll);
+-    bool fLoadedDll = hLibrary != nullptr;
+-    if (fLoadedDll)
+-    {
+-      PFNCLEARPSEUDOCONSOLE const pfnClearPseudoConsole = (PFNCLEARPSEUDOCONSOLE)GetProcAddress((HMODULE)hLibrary, "ConptyClearPseudoConsole");
+-      if (pfnClearPseudoConsole)
+-      {
+-        pfnClearPseudoConsole(handle->hpc);
+-      }
++  auto session = lookup(info, id);
++  if (session) {
++    std::lock_guard<std::mutex> lock(session->mutex);
++    if (session->job.value) check(info.Env(), TerminateJobObject(session->job.value, 1), "Terminate owned terminal tree");
++    // Constructor failure can abandon a console before connect created a process.
++    if (!session->connected) {
++      auto state = registry(info);
++      std::lock_guard<std::mutex> stateLock(state->mutex);
++      state->sessions.erase(id);
+     }
+   }
+-
+-  return env.Undefined();
++  return info.Env().Undefined();
++}
++static Napi::Value queryIdentity(const Napi::CallbackInfo& info) {
++  if (info.Length() != 1 || !info[0].IsNumber()) throw Napi::Error::New(info.Env(), "Process ID required");
++  double pid = info[0].As<Napi::Number>().DoubleValue();
++  if (pid < 1 || pid > MAXDWORD || pid != static_cast<DWORD>(pid)) throw Napi::Error::New(info.Env(), "Invalid process ID");
++  Handle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid)));
++  if (!process.value) throw failure(info.Env(), "Query process identity");
++  return Napi::String::New(info.Env(), identity(info.Env(), process.value));
+ }
+ 
+-static Napi::Value PtyKill(const Napi::CallbackInfo& info) {
+-  Napi::Env env(info.Env());
+-  Napi::HandleScope scope(env);
+-
+-  if (info.Length() != 2 ||
+-      !info[0].IsNumber() ||
+-      !info[1].IsBoolean()) {
+-    throw Napi::Error::New(env, "Usage: pty.kill(id, useConptyDll)");
++// BMN control transport. Node creates the listening pipe with FIRST_PIPE_INSTANCE
++// and default security, which lets other accounts open it for reading. Replace that
++// DACL with the protected user-only DACL through a short-lived client handle and
++// read it back. The descriptor belongs to the pipe, so every later instance libuv
++// creates shares it. The caller reports readiness only after verifying the result.
++static Napi::Value restrictControlPipe(const Napi::CallbackInfo& info) {
++  Napi::Env env = info.Env();
++  if (info.Length() != 1 || !info[0].IsString()) throw Napi::Error::New(env, "Control pipe name required");
++  std::wstring name = path_util::to_wstring(info[0].As<Napi::String>());
++  const std::wstring prefix = L"\\\\.\\pipe\\bmn-control-";
++  if (name.rfind(prefix, 0) != 0 || name.size() > 256) throw Napi::Error::New(env, "Not a BMN control pipe name");
++  Handle pipe;
++  for (int attempt = 0; !pipe.value; attempt++) {
++    HANDLE opened = CreateFileW(name.c_str(), READ_CONTROL | WRITE_DAC, 0, nullptr, OPEN_EXISTING,
++      SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
++    if (opened != INVALID_HANDLE_VALUE) { pipe.reset(opened); break; }
++    DWORD error = GetLastError();
++    if (error != ERROR_PIPE_BUSY || attempt > 0) throw failure(env, "Open control pipe", error);
++    if (!WaitNamedPipeW(name.c_str(), 5000)) throw failure(env, "Wait for control pipe");
+   }
+-
+-  int id = info[0].As<Napi::Number>().Int32Value();
+-  const bool useConptyDll = info[1].As<Napi::Boolean>().Value();
+-
+-  const pty_baton* handle = get_pty_baton(id);
+-
+-  if (handle != nullptr) {
+-    HANDLE hLibrary = LoadConptyDll(info, useConptyDll);
+-    bool fLoadedDll = hLibrary != nullptr;
+-    if (fLoadedDll)
+-    {
+-      PFNCLOSEPSEUDOCONSOLE const pfnClosePseudoConsole = (PFNCLOSEPSEUDOCONSOLE)GetProcAddress(
+-        (HMODULE)hLibrary,
+-        useConptyDll ? "ConptyClosePseudoConsole" : "ClosePseudoConsole");
+-      if (pfnClosePseudoConsole)
+-      {
+-        pfnClosePseudoConsole(handle->hpc);
+-      }
+-    }
+-    if (useConptyDll) {
+-      TerminateProcess(handle->hShell, 1);
++  std::wstring sid = currentUserSid(env);
++  std::wstring sddl = L"D:P(A;;GA;;;" + sid + L")";
++  PSECURITY_DESCRIPTOR descriptor = nullptr;
++  check(env, ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr), "Control pipe security descriptor");
++  BOOL present = FALSE, defaulted = FALSE;
++  PACL dacl = nullptr;
++  DWORD status = GetSecurityDescriptorDacl(descriptor, &present, &dacl, &defaulted) && present
++    ? SetSecurityInfo(pipe.value, SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
++        nullptr, nullptr, dacl, nullptr)
++    : ERROR_INVALID_SECURITY_DESCR;
++  LocalFree(descriptor);
++  if (status != ERROR_SUCCESS) throw failure(env, "Restrict control pipe", status);
++  PSECURITY_DESCRIPTOR applied = nullptr;
++  status = GetSecurityInfo(pipe.value, SE_KERNEL_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr, nullptr, nullptr, &applied);
++  if (status != ERROR_SUCCESS) throw failure(env, "Read control pipe security", status);
++  // Compare binary SIDs and mapped access rights, not SDDL text. Windows can
++  // render the same SID as LA and GENERIC_ALL as FILE_ALL_ACCESS.
++  SECURITY_DESCRIPTOR_CONTROL control = 0;
++  DWORD revision = 0;
++  BOOL appliedPresent = FALSE, appliedDefaulted = FALSE;
++  PACL appliedDacl = nullptr;
++  PSID expectedSid = nullptr;
++  bool ownerOnly = ConvertStringSidToSidW(sid.c_str(), &expectedSid) &&
++    GetSecurityDescriptorControl(applied, &control, &revision) && (control & SE_DACL_PROTECTED) &&
++    GetSecurityDescriptorDacl(applied, &appliedPresent, &appliedDacl, &appliedDefaulted) &&
++    appliedPresent && appliedDacl && IsValidAcl(appliedDacl) && appliedDacl->AceCount == 1;
++  void* rawAce = nullptr;
++  if (ownerOnly) ownerOnly = GetAce(appliedDacl, 0, &rawAce) != FALSE;
++  if (ownerOnly) {
++    auto ace = static_cast<ACCESS_ALLOWED_ACE*>(rawAce);
++    ownerOnly = ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE && ace->Header.AceFlags == 0 &&
++      ace->Header.AceSize >= offsetof(ACCESS_ALLOWED_ACE, SidStart) + 8 && IsValidSid(&ace->SidStart) &&
++      GetLengthSid(&ace->SidStart) <= ace->Header.AceSize - offsetof(ACCESS_ALLOWED_ACE, SidStart) &&
++      EqualSid(&ace->SidStart, expectedSid);
++    if (ownerOnly) {
++      GENERIC_MAPPING mapping{FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_GENERIC_EXECUTE, FILE_ALL_ACCESS};
++      DWORD mask = ace->Mask;
++      MapGenericMask(&mask, &mapping);
++      ownerOnly = mask == FILE_ALL_ACCESS;
+     }
+   }
++  if (expectedSid) LocalFree(expectedSid);
++  if (!ownerOnly) {
++    LocalFree(applied);
++    throw Napi::Error::New(env, "Applied control pipe DACL is not protected current-user-only");
++  }
++  LPWSTR text = nullptr;
++  BOOL described = ConvertSecurityDescriptorToStringSecurityDescriptorW(applied, SDDL_REVISION_1, DACL_SECURITY_INFORMATION, &text, nullptr);
++  DWORD describeError = GetLastError();
++  LocalFree(applied);
++  if (!described) throw failure(env, "Describe control pipe security", describeError);
++  std::wstring appliedSddl(text);
++  LocalFree(text);
++  Napi::Object result = Napi::Object::New(env);
++  result.Set("user", path_util::wstring_to_string(sid));
++  result.Set("dacl", path_util::wstring_to_string(appliedSddl));
++  result.Set("verifiedCurrentUserOnly", true);
++  return result;
++}
+ 
++// One handle belongs to the calling process, never to a JS environment or terminal registry.
++// After assignment, closing it would terminate main itself. The OS closes it at process death.
++static std::mutex applicationLifetimeMutex;
++static HANDLE applicationLifetimeJob = nullptr;
++
++static Napi::Value protectApplicationLifetime(const Napi::CallbackInfo& info) {
++  Napi::Env env = info.Env();
++  if (info.Length() != 0) throw Napi::Error::New(env, "Application lifetime protection takes no arguments");
++  std::lock_guard<std::mutex> lock(applicationLifetimeMutex);
++  if (applicationLifetimeJob) return env.Undefined();
++  Handle job(CreateJobObjectW(nullptr, nullptr));
++  check(env, job.value != nullptr, "Create application lifetime job");
++  check(env, SetHandleInformation(job.value, HANDLE_FLAG_INHERIT, 0), "Protect application job handle");
++  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
++  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
++  check(env, SetInformationJobObject(job.value, JobObjectExtendedLimitInformation, &limits, sizeof(limits)), "Set application lifetime limits");
++  check(env, AssignProcessToJobObject(job.value, GetCurrentProcess()), "Assign application lifetime job");
++  applicationLifetimeJob = job.value;
++  job.value = nullptr; // Transfer immediately: no disposer/finalizer can kill main during normal shutdown.
+   return env.Undefined();
+ }
+ 
+-/**
+-* Init
+-*/
+-
+ Napi::Object init(Napi::Env env, Napi::Object exports) {
+-  exports.Set("startProcess", Napi::Function::New(env, PtyStartProcess));
+-  exports.Set("connect", Napi::Function::New(env, PtyConnect));
+-  exports.Set("resize", Napi::Function::New(env, PtyResize));
+-  exports.Set("clear", Napi::Function::New(env, PtyClear));
+-  exports.Set("kill", Napi::Function::New(env, PtyKill));
++  auto state = new RegistryRef(std::make_shared<Registry>());
++  env.AddCleanupHook([](RegistryRef* ref) {
++    std::vector<std::shared_ptr<Session>> sessions;
++    {
++      std::lock_guard<std::mutex> lock((*ref)->mutex);
++      (*ref)->closing = true;
++      for (auto& entry : (*ref)->sessions) sessions.push_back(entry.second);
++    }
++    for (auto& session : sessions) {
++      std::lock_guard<std::mutex> lock(session->mutex);
++      if (session->job.value) TerminateJobObject(session->job.value, 1);
++      session->job.reset(); // Kernel kill-on-close is independent of TerminateJobObject success.
++      SetEvent(session->cancel.value); // Environment teardown must not join an infinite waiter.
++    }
++    delete ref;
++  }, state);
++  exports.Set("startProcess", Napi::Function::New(env, start, "start", state));
++  exports.Set("connect", Napi::Function::New(env, connectOwnedProcess, "connect", state));
++  exports.Set("resize", Napi::Function::New(env, resize, "resize", state));
++  exports.Set("clear", Napi::Function::New(env, clear, "clear", state));
++  exports.Set("kill", Napi::Function::New(env, kill, "kill", state));
++  exports.Set("queryProcessStartIdentity", Napi::Function::New(env, queryIdentity, "queryIdentity", state));
++  exports.Set("bmnOwnershipVersion", 1);
++  exports.Set("restrictControlPipe", Napi::Function::New(env, restrictControlPipe, "restrictControlPipe"));
++  exports.Set("bmnControlTransportVersion", 2);
++  exports.Set("protectApplicationLifetime", Napi::Function::New(env, protectApplicationLifetime, "protectApplicationLifetime"));
++  exports.Set("bmnApplicationLifetimeVersion", 1);
+   return exports;
+-};
+-
++}
+ NODE_API_MODULE(NODE_GYP_MODULE_NAME, init);
+diff --git a/src/windowsConoutConnection.ts b/src/windowsConoutConnection.ts
+index fa2d62d..373d931 100644
+--- a/src/windowsConoutConnection.ts
++++ b/src/windowsConoutConnection.ts
+@@ -1,82 +1,51 @@
+-/**
+- * Copyright (c) 2020, Microsoft Corporation (MIT License).
++/** Copyright (c) 2020, Microsoft Corporation (MIT License).
++ * BMN: bounded private worker transport; no extra named relay pipe.
+  */
+-
+ import { Worker } from 'worker_threads';
+-import { Socket } from 'net';
+-import { IDisposable } from './types';
+-import { IWorkerData, ConoutWorkerMessage, getWorkerPipeName } from './shared/conout';
++import { PassThrough } from 'stream';
+ import { join } from 'path';
++import { IDisposable } from './types';
+ import { IEvent, EventEmitter2 } from './eventEmitter2';
+ 
+-/**
+- * The amount of time to wait for additional data after the conpty shell process has exited before
+- * shutting down the worker and sockets. The timer will be reset if a new data event comes in after
+- * the timer has started.
+- */
+-const FLUSH_DATA_INTERVAL = 1000;
+-
+-/**
+- * Connects to and manages the lifecycle of the conout socket. This socket must be drained on
+- * another thread in order to avoid deadlocks where Conpty waits for the out socket to drain
+- * when `ClosePseudoConsole` is called. This happens when data is being written to the terminal when
+- * the pty is closed.
+- *
+- * See also:
+- * - https://github.com/microsoft/node-pty/issues/375
+- * - https://github.com/microsoft/vscode/issues/76548
+- * - https://github.com/microsoft/terminal/issues/1810
+- * - https://docs.microsoft.com/en-us/windows/console/closepseudoconsole
+- */
+ export class ConoutConnection implements IDisposable {
+   private _worker: Worker;
+-  private _drainTimeout: NodeJS.Timeout | undefined;
+-  private _isDisposed: boolean = false;
+-
++  private _socket: PassThrough | undefined;
++  private _disposed = false;
++  private _ended = false;
+   private _onReady = new EventEmitter2<void>();
+   public get onReady(): IEvent<void> { return this._onReady.event; }
++  private _onError = new EventEmitter2<string>();
++  public get onError(): IEvent<string> { return this._onError.event; }
+ 
+-  constructor(
+-    private _conoutPipeName: string,
+-    private _useConptyDll: boolean
+-  ) {
+-    const workerData: IWorkerData = {
+-      conoutPipeName: _conoutPipeName
+-    };
++  constructor(conoutPipeName: string) {
+     const scriptPath = __dirname.replace('node_modules.asar', 'node_modules.asar.unpacked');
+-    this._worker = new Worker(join(scriptPath, 'worker/conoutSocketWorker.js'), { workerData });
+-    this._worker.on('message', (message: ConoutWorkerMessage) => {
+-      switch (message) {
+-        case ConoutWorkerMessage.READY:
+-          this._onReady.fire();
+-          return;
+-        default:
+-          console.warn('Unexpected ConoutWorkerMessage', message);
+-      }
++    this._worker = new Worker(join(scriptPath, 'worker/conoutSocketWorker.js'), { workerData: { conoutPipeName } });
++    this._worker.on('message', message => {
++      if (message.type === 'ready') this._onReady.fire();
++      else if (message.type === 'data' && this._socket) {
++        // Only one <=64KiB chunk may be in flight. Acknowledge after stream
++        // backpressure clears, so pausing BMN also pauses the native pipe reader.
++        const acknowledge = () => { if (!this._disposed) this._worker.postMessage('read'); };
++        if (this._socket.write(Buffer.from(message.data))) acknowledge();
++        else this._socket.once('drain', acknowledge);
++      } else if (message.type === 'end') {
++        this._ended = true;
++        this._socket?.end();
++      } else if (message.type === 'error') this._onError.fire('ConPTY output read failed: ' + message.code);
++    });
++    this._worker.on('error', () => this._onError.fire('ConPTY output worker failed'));
++    this._worker.on('exit', () => {
++      if (!this._disposed && !this._ended) this._onError.fire('ConPTY output worker exited before EOF');
+     });
+   }
+-
+-  dispose(): void {
+-    if (!this._useConptyDll && this._isDisposed) {
+-      return;
+-    }
+-    this._isDisposed = true;
+-    // Drain all data from the socket before closing
+-    this._drainDataAndClose();
+-  }
+-
+-  connectSocket(socket: Socket): void {
+-    socket.connect(getWorkerPipeName(this._conoutPipeName));
+-  }
+-
+-  private _drainDataAndClose(): void {
+-    if (this._drainTimeout) {
+-      clearTimeout(this._drainTimeout);
+-    }
+-    this._drainTimeout = setTimeout(() => this._destroySocket(), FLUSH_DATA_INTERVAL);
++  connectSocket(socket: PassThrough): void {
++    this._socket = socket;
++    socket.emit('ready_datapipe');
++    this._worker.postMessage('read');
+   }
+-
+-  private async _destroySocket(): Promise<void> {
+-    await this._worker.terminate();
++  dispose(): void {
++    if (this._disposed) return;
++    this._disposed = true;
++    void this._worker.terminate();
+   }
+ }
+diff --git a/src/windowsPtyAgent.ts b/src/windowsPtyAgent.ts
+index d705444..a81b918 100644
+--- a/src/windowsPtyAgent.ts
++++ b/src/windowsPtyAgent.ts
+@@ -1,252 +1,77 @@
+-/**
+- * Copyright (c) 2012-2015, Christopher Jeffrey, Peter Sunde (MIT License)
++/** Copyright (c) 2012-2015, Christopher Jeffrey, Peter Sunde (MIT License).
+  * Copyright (c) 2016, Daniel Imms (MIT License).
+  * Copyright (c) 2018, Microsoft Corporation (MIT License).
++ * BMN: bundled ConPTY only, with atomic job ownership and confirmed exit.
+  */
+-
+ import * as fs from 'fs';
+-import * as os from 'os';
+ import * as path from 'path';
+-import { fork } from 'child_process';
++import { randomBytes } from 'crypto';
+ import { Socket } from 'net';
++import { PassThrough } from 'stream';
+ import { ArgvOrCommandLine } from './types';
+ import { ConoutConnection } from './windowsConoutConnection';
+ import { loadNativeModule } from './utils';
+-
+-let conptyNative: IConptyNative;
+-let winptyNative: IWinptyNative;
+-
+-/**
+- * The amount of time to wait for additional data after the conpty shell process has exited before
+- * shutting down the socket. The timer will be reset if a new data event comes in after the timer
+- * has started.
+- */
+-const FLUSH_DATA_INTERVAL = 1000;
+-
+-/**
+- * This agent sits between the WindowsTerminal class and provides a common interface for both conpty
+- * and winpty.
+- */
++import { EventEmitter2 } from './eventEmitter2';
++let native: IConptyNative;
+ export class WindowsPtyAgent {
+-  private _inSocket: Socket;
+-  private _outSocket: Socket;
+-  private _pid: number = 0;
+-  private _innerPid: number = 0;
+-  private _closeTimeout: NodeJS.Timer | undefined;
+-  private _exitCode: number | undefined;
+-  private _conoutSocketWorker: ConoutConnection;
+-
+-  private _fd: any;
+-  private _pty: number;
+-  private _ptyNative: IConptyNative | IWinptyNative;
+-
+-  public get inSocket(): Socket { return this._inSocket; }
+-  public get outSocket(): Socket { return this._outSocket; }
+-  public get fd(): any { return this._fd; }
+-  public get innerPid(): number { return this._innerPid; }
+-  public get pty(): number { return this._pty; }
+-
+-  constructor(
+-    file: string,
+-    args: ArgvOrCommandLine,
+-    env: string[],
+-    cwd: string,
+-    cols: number,
+-    rows: number,
+-    debug: boolean,
+-    private _useConpty: boolean | undefined,
+-    private _useConptyDll: boolean = false,
+-    conptyInheritCursor: boolean = false
+-  ) {
+-    if (this._useConpty === undefined || this._useConpty === true) {
+-      this._useConpty = this._getWindowsBuildNumber() >= 18309;
+-    }
+-    if (this._useConpty) {
+-      if (!conptyNative) {
+-        conptyNative = loadNativeModule('conpty').module;
+-      }
+-    } else {
+-      if (!winptyNative) {
+-        winptyNative = loadNativeModule('pty').module;
+-      }
+-    }
+-    this._ptyNative = this._useConpty ? conptyNative : winptyNative;
+-
+-    // Sanitize input variable.
+-    cwd = path.resolve(cwd);
+-
+-    // Compose command line
+-    const commandLine = argsToCommandLine(file, args);
+-
+-    // Open pty session.
+-    let term: IConptyProcess | IWinptyProcess;
+-    if (this._useConpty) {
+-      term = (this._ptyNative as IConptyNative).startProcess(file, cols, rows, debug, this._generatePipeName(), conptyInheritCursor, this._useConptyDll);
+-    } else {
+-      term = (this._ptyNative as IWinptyNative).startProcess(file, commandLine, env, cwd, cols, rows, debug);
+-      this._pid = (term as IWinptyProcess).pid;
+-      this._innerPid = (term as IWinptyProcess).innerPid;
+-    }
+-
+-    // Not available on windows.
+-    this._fd = term.fd;
+-
+-    // Generated incremental number that has no real purpose besides  using it
+-    // as a terminal id.
+-    this._pty = term.pty;
+-
+-    // Create terminal pipe IPC channel and forward to a local unix socket.
+-    this._outSocket = new Socket();
+-    this._outSocket.setEncoding('utf8');
+-    // The conout socket must be ready out on another thread to avoid deadlocks
+-    this._conoutSocketWorker = new ConoutConnection(term.conout, this._useConptyDll);
+-    this._conoutSocketWorker.onReady(() => {
+-      this._conoutSocketWorker.connectSocket(this._outSocket);
+-    });
+-    this._outSocket.on('connect', () => {
+-      this._outSocket.emit('ready_datapipe');
+-    });
+-
+-    const inSocketFD = fs.openSync(term.conin, 'w');
+-    this._inSocket = new Socket({
+-      fd: inSocketFD,
+-      readable: false,
+-      writable: true
+-    });
+-    this._inSocket.setEncoding('utf8');
+-
+-    if (this._useConpty) {
+-      const connect = (this._ptyNative as IConptyNative).connect(this._pty, commandLine, cwd, env, this._useConptyDll, c => this._$onProcessExit(c));
+-      this._innerPid = connect.pid;
+-    }
+-  }
+-
+-  public resize(cols: number, rows: number): void {
+-    if (this._useConpty) {
+-      if (this._exitCode !== undefined) {
+-        throw new Error('Cannot resize a pty that has already exited');
+-      }
+-      (this._ptyNative as IConptyNative).resize(this._pty, cols, rows, this._useConptyDll);
+-      return;
+-    }
+-    (this._ptyNative as IWinptyNative).resize(this._pid, cols, rows);
+-  }
+-
+-  public clear(): void {
+-    if (this._useConpty) {
+-      (this._ptyNative as IConptyNative).clear(this._pty, this._useConptyDll);
+-    }
+-  }
+-
+-  public kill(): void {
+-    // Tell the agent to kill the pty, this releases handles to the process
+-    if (this._useConpty) {
+-      if (!this._useConptyDll) {
+-        this._inSocket.readable = false;
+-        this._outSocket.readable = false;
+-        this._getConsoleProcessList().then(consoleProcessList => {
+-          consoleProcessList.forEach((pid: number) => {
+-            try {
+-              process.kill(pid);
+-            } catch (e) {
+-              // Ignore if process cannot be found (kill ESRCH error)
+-            }
+-          });
+-        });
+-        (this._ptyNative as IConptyNative).kill(this._pty, this._useConptyDll);
+-        this._conoutSocketWorker.dispose();
+-      } else {
+-        // Close the input write handle to signal the end of session.
+-        this._inSocket.destroy();
+-        (this._ptyNative as IConptyNative).kill(this._pty, this._useConptyDll);
+-        this._outSocket.on('data', () => {
+-          this._conoutSocketWorker.dispose();
+-        });
+-      }
+-    } else {
+-      // Because pty.kill closes the handle, it will kill most processes by itself.
+-      // Process IDs can be reused as soon as all handles to them are
+-      // dropped, so we want to immediately kill the entire console process list.
+-      // If we do not force kill all processes here, node servers in particular
+-      // seem to become detached and remain running (see
+-      // Microsoft/vscode#26807).
+-      const processList: number[] = (this._ptyNative as IWinptyNative).getProcessList(this._pid);
+-      (this._ptyNative as IWinptyNative).kill(this._pid, this._innerPid);
+-      processList.forEach(pid => {
+-        try {
+-          process.kill(pid);
+-        } catch (e) {
+-          // Ignore if process cannot be found (kill ESRCH error)
+-        }
++  public inSocket!: Socket;
++  public outSocket = new PassThrough({ highWaterMark: 64 * 1024 });
++  public innerPid: number;
++  public processStartIdentity: string;
++  public fd = -1;
++  public pty: number;
++  public exitCode: number | undefined;
++  private _outputEnded = false;
++  private _exitEmitted = false;
++  private _worker!: ConoutConnection;
++  private _onExit = new EventEmitter2<number>();
++  public get onExit() { return this._onExit.event; }
++  private _onLifecycleError = new EventEmitter2<string>();
++  public get onLifecycleError() { return this._onLifecycleError.event; }
++  constructor(file: string, args: ArgvOrCommandLine, env: string[], cwd: string,
++    cols: number, rows: number, debug: boolean, useConpty?: boolean,
++    useConptyDll?: boolean, inheritCursor = false) {
++    if (useConpty === false || useConptyDll === false) throw new Error('BMN requires bundled ConPTY');
++    if (!native) native = loadNativeModule('conpty').module;
++    if (native.bmnOwnershipVersion !== 1) throw new Error('BMN owned ConPTY addon missing; rebuild native dependencies');
++    const term = native.startProcess(file, cols, rows, debug, 'bmn-conpty-' + randomBytes(24).toString('hex'), inheritCursor, true);
++    this.pty = term.pty;
++    try {
++      this.outSocket.setEncoding('utf8');
++      this.outSocket.on('end', () => { this._outputEnded = true; this._finishExit(); });
++      this._worker = new ConoutConnection(term.conout);
++      this._worker.onReady(() => this._worker.connectSocket(this.outSocket));
++      this._worker.onError(error => {
++        this._onLifecycleError.fire(error);
++        this.kill();
+       });
+-    }
+-  }
+-
+-  private _getConsoleProcessList(): Promise<number[]> {
+-    return new Promise<number[]>(resolve => {
+-      const agent = fork(path.join(__dirname, 'conpty_console_list_agent'), [ this._innerPid.toString() ]);
+-      agent.on('message', message => {
+-        clearTimeout(timeout);
+-        resolve(message.consoleProcessList);
++      this.inSocket = new Socket({ fd: fs.openSync(term.conin, 'w'), readable: false, writable: true });
++      // A closed stdin can precede a normal process exit. It is not lifecycle evidence.
++      this.inSocket.on('error', () => {});
++      const child = native.connect(this.pty, argsToCommandLine(file, args), path.resolve(cwd), env, true, result => {
++        if ('error' in result) { this._onLifecycleError.fire(result.error); this._worker.dispose(); return; }
++        this.exitCode = result.exitCode;
++        this.inSocket.destroy();
++        this._finishExit();
+       });
+-      const timeout = setTimeout(() => {
+-        // Something went wrong, just send back the shell PID
+-        agent.kill();
+-        resolve([ this._innerPid ]);
+-      }, 5000);
+-    });
+-  }
+-
+-  public get exitCode(): number | undefined {
+-    if (this._useConpty) {
+-      return this._exitCode;
+-    }
+-    const winptyExitCode = (this._ptyNative as IWinptyNative).getExitCode(this._innerPid);
+-    return winptyExitCode === -1 ? undefined : winptyExitCode;
+-  }
+-
+-  private _getWindowsBuildNumber(): number {
+-    const osVersion = (/(\d+)\.(\d+)\.(\d+)/g).exec(os.release());
+-    let buildNumber: number = 0;
+-    if (osVersion && osVersion.length === 4) {
+-      buildNumber = parseInt(osVersion[3]);
+-    }
+-    return buildNumber;
+-  }
+-
+-  private _generatePipeName(): string {
+-    return `conpty-${Math.random() * 10000000}`;
+-  }
+-
+-  /**
+-   * Triggered from the native side when a contpy process exits.
+-   */
+-  private _$onProcessExit(exitCode: number): void {
+-    this._exitCode = exitCode;
+-    if (!this._useConptyDll) {
+-      this._flushDataAndCleanUp();
+-      this._outSocket.on('data', () => this._flushDataAndCleanUp());
++      this.innerPid = child.pid;
++      this.processStartIdentity = child.startIdentity;
++    } catch (error) {
++      native.kill(this.pty, true);
++      this._worker?.dispose();
++      this.inSocket?.destroy();
++      throw error;
+     }
+   }
+-
+-  private _flushDataAndCleanUp(): void {
+-    if (this._useConptyDll) {
+-      return;
+-    }
+-    if (this._closeTimeout) {
+-      clearTimeout(this._closeTimeout);
+-    }
+-    this._closeTimeout = setTimeout(() => this._cleanUpProcess(), FLUSH_DATA_INTERVAL);
+-  }
+-
+-  private _cleanUpProcess(): void {
+-    if (this._useConptyDll) {
+-      return;
+-    }
+-    this._inSocket.readable = false;
+-    this._outSocket.readable = false;
+-    this._outSocket.destroy();
++  private _finishExit(): void {
++    if (!this._outputEnded || this.exitCode === undefined || this._exitEmitted) return;
++    this._exitEmitted = true;
++    this._onExit.fire(this.exitCode);
++    this._worker.dispose();
+   }
++  public resize(cols: number, rows: number): void { native.resize(this.pty, cols, rows, true); }
++  public clear(): void { native.clear(this.pty, true); }
++  public kill(): void { native.kill(this.pty, true); }
+ }
+ 
+ // Convert argc/argv into a Win32 command-line following the escaping convention
+@@ -255,7 +80,7 @@ export class WindowsPtyAgent {
+ export function argsToCommandLine(file: string, args: ArgvOrCommandLine): string {
+   if (isCommandLine(args)) {
+     if (args.length === 0) {
+-      return file;
++      return argsToCommandLine(file, []);
+     }
+     return `${argsToCommandLine(file, [])} ${args}`;
+   }
+@@ -267,15 +92,8 @@ export function argsToCommandLine(file: string, args: ArgvOrCommandLine): string
+       result += ' ';
+     }
+     const arg = argv[argIndex];
+-    // if it is empty or it contains whitespace and is not already quoted
+-    const hasLopsidedEnclosingQuote = xOr((arg[0] !== '"'), (arg[arg.length - 1] !== '"'));
+-    const hasNoEnclosingQuotes = ((arg[0] !== '"') && (arg[arg.length - 1] !== '"'));
+-    const quote =
+-      arg === '' ||
+-      (arg.indexOf(' ') !== -1 ||
+-      arg.indexOf('\t') !== -1) &&
+-      ((arg.length > 1) &&
+-      (hasLopsidedEnclosingQuote || hasNoEnclosingQuotes));
++    // argv values are literal data, including enclosing quote characters.
++    const quote = arg === '' || /[\s"]/.test(arg);
+     if (quote) {
+       result += '\"';
+     }
+@@ -316,6 +134,3 @@ function repeatText(text: string, count: number): string {
+   return result;
+ }
+ 
+-function xOr(arg1: boolean, arg2: boolean): boolean {
+-  return ((arg1 && !arg2) || (!arg1 && arg2));
+-}
+diff --git a/src/windowsTerminal.ts b/src/windowsTerminal.ts
+index 13f6c6d..41727c1 100644
+--- a/src/windowsTerminal.ts
++++ b/src/windowsTerminal.ts
+@@ -5,6 +5,7 @@
+  */
+ 
+ import { Socket } from 'net';
++import { EventEmitter2 } from './eventEmitter2';
+ import { Terminal, DEFAULT_COLS, DEFAULT_ROWS } from './terminal';
+ import { WindowsPtyAgent } from './windowsPtyAgent';
+ import { IPtyOpenOptions, IWindowsPtyForkOptions } from './interfaces';
+@@ -18,6 +19,10 @@ export class WindowsTerminal extends Terminal {
+   private _isReady: boolean;
+   private _deferreds: { run: () => void }[];
+   private _agent: WindowsPtyAgent;
++  private _onLifecycleError = new EventEmitter2<string>();
++  public get onLifecycleError() { return this._onLifecycleError.event; }
++  public readonly processOwnership = 'windows-job' as const;
++  public get processStartIdentity(): string { return this._agent.processStartIdentity; }
+ 
+   constructor(file?: string, args?: ArgvOrCommandLine, opt?: IWindowsPtyForkOptions) {
+     super(opt);
+@@ -49,65 +54,17 @@ export class WindowsTerminal extends Terminal {
+ 
+     // Create new termal.
+     this._agent = new WindowsPtyAgent(file, args, parsedEnv, cwd, this._cols, this._rows, false, opt.useConpty, opt.useConptyDll, opt.conptyInheritCursor);
+-    this._socket = this._agent.outSocket;
++    this._socket = this._agent.outSocket as unknown as Socket;
+ 
+     // Not available until `ready` event emitted.
+     this._pid = this._agent.innerPid;
+     this._fd = this._agent.fd;
+     this._pty = this._agent.pty;
+ 
+-    // The forked windows terminal is not available until `ready` event is
+-    // emitted.
+-    this._socket.on('ready_datapipe', () => {
+-
+-      // Run deferreds and set ready state once the first data event is received.
+-      this._socket.once('data', () => {
+-        // Wait until the first data event is fired then we can run deferreds.
+-        if (!this._isReady) {
+-          // Terminal is now ready and we can avoid having to defer method
+-          // calls.
+-          this._isReady = true;
+-
+-          // Execute all deferred methods
+-          this._deferreds.forEach(fn => {
+-            // NB! In order to ensure that `this` has all its references
+-            // updated any variable that need to be available in `this` before
+-            // the deferred is run has to be declared above this forEach
+-            // statement.
+-            fn.run();
+-          });
+-
+-          // Reset
+-          this._deferreds = [];
+-        }
+-      });
+-
+-      // Shutdown if `error` event is emitted.
+-      this._socket.on('error', err => {
+-        // Close terminal session.
+-        this._close();
+-
+-        // EIO, happens when someone closes our child process: the only process
+-        // in the terminal.
+-        // node < 0.6.14: errno 5
+-        // node >= 0.6.14: read EIO
+-        if ((<any>err).code) {
+-          if (~(<any>err).code.indexOf('errno 5') || ~(<any>err).code.indexOf('EIO')) return;
+-        }
+-
+-        // Throw anything else.
+-        if (this.listeners('error').length < 2) {
+-          throw err;
+-        }
+-      });
+-
+-      // Cleanup after the socket is closed.
+-      this._socket.on('close', () => {
+-        this.emit('exit', this._agent.exitCode);
+-        this._close();
+-      });
+-
+-    });
++    // Native connect owns the process before returning. Silence is not unreadiness.
++    this._isReady = true;
++    this._agent.onExit(code => { this.emit('exit', code); this._close(); });
++    this._agent.onLifecycleError(error => this._onLifecycleError.fire(error));
+ 
+     this._file = file;
+     this._name = name;
+@@ -155,20 +112,13 @@ export class WindowsTerminal extends Terminal {
+     });
+   }
+ 
+-  public destroy(): void {
+-    this._deferNoArgs(() => {
+-      this.kill();
+-    });
+-  }
++  public destroy(): void { this.kill(); }
+ 
+   public kill(signal?: string): void {
+-    this._deferNoArgs(() => {
+-      if (signal) {
+-        throw new Error('Signals not supported on windows.');
+-      }
+-      this._close();
+-      this._agent.kill();
+-    });
++    if (signal) throw new Error('Signals not supported on windows.');
++    this._agent.kill();
++    // Drain saved output even if the caller had paused rendering before Stop.
++    this.resume();
+   }
+ 
+   private _deferNoArgs<A>(deferredFn: () => void): void {
+diff --git a/src/worker/conoutSocketWorker.ts b/src/worker/conoutSocketWorker.ts
+index 79a4148..703ef71 100644
+--- a/src/worker/conoutSocketWorker.ts
++++ b/src/worker/conoutSocketWorker.ts
+@@ -1,22 +1,29 @@
+-/**
+- * Copyright (c) 2020, Microsoft Corporation (MIT License).
++/** Copyright (c) 2020, Microsoft Corporation (MIT License).
++ * BMN: private MessagePort with one-chunk credits, never a public relay pipe.
+  */
+-
+ import { parentPort, workerData } from 'worker_threads';
+-import { Socket, createServer } from 'net';
+-import { ConoutWorkerMessage, IWorkerData, getWorkerPipeName } from '../shared/conout';
+-
+-const { conoutPipeName } = (workerData as IWorkerData);
+-
+-const conoutSocket = new Socket();
+-conoutSocket.setEncoding('utf8');
+-conoutSocket.connect(conoutPipeName, () => {
+-  const server = createServer(workerSocket => {
+-    conoutSocket.pipe(workerSocket);
+-  });
+-  server.listen(getWorkerPipeName(conoutPipeName));
+-  if (!parentPort) {
+-    throw new Error('worker_threads parentPort is null');
++import { Socket } from 'net';
++if (!parentPort) throw new Error('Missing ConPTY parent port');
++const port = parentPort;
++const socket = new Socket();
++let credit = false;
++let ended = false;
++function read(): void {
++  if (!credit) return;
++  const chunk: Buffer | null = socket.read(Math.min(socket.readableLength, 64 * 1024) || undefined);
++  if (chunk) {
++    credit = false;
++    port.postMessage({ type: 'data', data: chunk });
++  } else if (ended) {
++    port.postMessage({ type: 'end' });
++    port.close();
+   }
+-  parentPort.postMessage(ConoutWorkerMessage.READY);
++}
++port.on('message', message => { if (message === 'read') { credit = true; read(); } });
++socket.on('readable', read);
++socket.on('end', () => { ended = true; read(); });
++socket.on('error', (error: NodeJS.ErrnoException) => {
++  port.postMessage({ type: 'error', code: error.code || 'UNKNOWN' });
++  port.close();
+ });
++socket.connect(workerData.conoutPipeName, () => port.postMessage({ type: 'ready' }));
+diff --git a/typings/node-pty.d.ts b/typings/node-pty.d.ts
+index 6f050ff..e27fa2b 100644
+--- a/typings/node-pty.d.ts
++++ b/typings/node-pty.d.ts
+@@ -15,6 +15,12 @@ declare module 'node-pty' {
+    * @see Parsing C++ Comamnd-Line Arguments https://msdn.microsoft.com/en-us/library/17w5ykft.aspx
+    * @see GetCommandLine https://msdn.microsoft.com/en-us/library/windows/desktop/ms683156.aspx
+    */
++  export function queryProcessStartIdentity(pid: number): string;
++  /** BMN: replace a listening control pipe's DACL with a protected current-user-only DACL and read it back. */
++  export function restrictControlPipe(name: string): { user: string; dacl: string; verifiedCurrentUserOnly: true };
++  /** Process-lifetime backstop; no JavaScript disposer. */
++  export function protectApplicationLifetime(): void;
++
+   export function spawn(file: string, args: string[] | string, options: IPtyForkOptions | IWindowsPtyForkOptions): IPty;
+ 
+   export interface IBasePtyForkOptions {
+@@ -114,6 +120,10 @@ declare module 'node-pty' {
+    * An interface representing a pseudoterminal, on Windows this is emulated via the winpty library.
+    */
+   export interface IPty {
++    /** BMN Windows extension; Linux uses its existing process identity adapter. */
++    readonly processOwnership?: 'windows-job';
++    readonly processStartIdentity?: string;
++    readonly onLifecycleError?: IEvent<string>;
+     /**
+      * The process ID of the outer process.
+      */

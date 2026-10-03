@@ -127,6 +127,10 @@ async function ensurePrivateDirectory(path: string): Promise<void> {
 }
 
 async function syncDirectory(path: string): Promise<void> {
+  // Node's read-only directory handles cannot be fsynced on Windows. The staged file is
+  // flushed before installation; retaining directory fsync here makes every
+  // successful native import fail with EPERM after its bytes are installed.
+  if (process.platform === 'win32') return
   const handle = await open(path, constants.O_RDONLY)
   try {
     await handle.sync()

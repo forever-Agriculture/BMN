@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { access, stat } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, posix, win32 } from 'node:path'
 import { kill as signalProcessByPid } from 'node:process'
 import {
   ERROR_CODES,
@@ -59,6 +59,7 @@ import {
   type WorkspaceRecord
 } from '@bmn/protocol'
 import { processStartIdentity } from './process-start-identity'
+import { findWindowsExecutable, windowsEnvironment } from './windows-launch'
 import {
   newestInterruptionCohort,
   resumableStopCause,
@@ -153,6 +154,9 @@ function bashSessionArgv(
 }
 
 export interface PtyLike {
+  readonly processOwnership?: 'windows-job'
+  readonly processStartIdentity?: string
+  onLifecycleError?(listener: (reason: string) => void): Disposable
   readonly pid: number
   readonly cols: number
   readonly rows: number
@@ -331,6 +335,7 @@ interface LiveSession extends SessionIdentity {
   ownership: Pick<SessionRecord, 'workspaceId' | 'name'>
   dataSubscription?: Disposable
   exitSubscription?: Disposable
+  lifecycleSubscription?: Disposable | undefined
   cwd: string
   executable: string
   captureStartedAt: string
@@ -428,13 +433,15 @@ const SHELL_ENVIRONMENT_PRIVATE_KEYS = new Set([
 ])
 
 export function buildShellEnvironment(
-  environment: Readonly<Record<string, string | undefined>>
+  environment: Readonly<Record<string, string | undefined>>,
+  platform: NodeJS.Platform = process.platform
 ): Record<string, string | undefined> {
   const shellEnvironment: Record<string, string | undefined> = {}
   for (const [key, value] of Object.entries(environment)) {
+    const checkedKey = platform === 'win32' ? key.toUpperCase() : key
     if (
-      SHELL_ENVIRONMENT_PRIVATE_KEYS.has(key) ||
-      SHELL_ENVIRONMENT_PRIVATE_PREFIXES.some((prefix) => key.startsWith(prefix))
+      SHELL_ENVIRONMENT_PRIVATE_KEYS.has(checkedKey) ||
+      SHELL_ENVIRONMENT_PRIVATE_PREFIXES.some((prefix) => checkedKey.startsWith(prefix))
     ) {
       continue
     }
@@ -443,7 +450,7 @@ export function buildShellEnvironment(
   shellEnvironment.TERM = 'xterm-256color'
   // xterm renders 24-bit color; without this Claude Code and Codex quantize their colors to the 256-color palette.
   shellEnvironment.COLORTERM = 'truecolor'
-  return shellEnvironment
+  return platform === 'win32' ? windowsEnvironment(shellEnvironment) : shellEnvironment
 }
 
 export class HostControlError extends Error {
@@ -501,12 +508,13 @@ function bytesFromPty(data: string | Uint8Array): Uint8Array {
 }
 
 /** Expands a leading ~ or ~/ the way a shell would, so a folder typed as ~/code/app launches; other paths are unchanged. */
-export function resolveHomeDirectory(path: string, home: string = homedir()): string {
+export function resolveHomeDirectory(path: string, home: string = homedir(), platform: NodeJS.Platform = process.platform): string {
+  if (platform === 'win32' && (path === '~' || /^~[\\/]/.test(path))) return win32.resolve(home, path.slice(2))
   if (path !== '~' && !path.startsWith('~/')) return path
-  return resolve(join(home, path.slice(1)))
+  return posix.resolve(posix.join(home, path.slice(1)))
 }
 
-export async function validateLaunch(params: PtyLaunchParams): Promise<void> {
+export async function validateLaunch(params: PtyLaunchParams, environment: Readonly<Record<string, string | undefined>> = process.env): Promise<void> {
   let cwdInfo
   try {
     cwdInfo = await stat(params.cwd)
@@ -524,9 +532,10 @@ export async function validateLaunch(params: PtyLaunchParams): Promise<void> {
   }
 
   try {
-    const executableInfo = await stat(params.executable)
+    const executable = process.platform === 'win32' ? findWindowsExecutable(params.executable, params.cwd, environment) ?? params.executable : params.executable
+    const executableInfo = await stat(executable)
     if (!executableInfo.isFile()) throw new Error('not a file')
-    await access(params.executable, constants.X_OK)
+    await access(executable, process.platform === 'win32' ? constants.F_OK : constants.X_OK)
   } catch {
     throw new HostControlError(
       ERROR_CODES.invalidArgument,
@@ -633,7 +642,7 @@ export class SessionManager {
     if (!params.workspaceId || !params.name.trim() || params.name.length > 120) {
       throw new HostControlError(ERROR_CODES.invalidArgument, 'Session workspace and name are invalid')
     }
-    await validateLaunch(params)
+    await this.validateLaunch(params)
     const sessionId = randomUUID()
     const captureStartedAt = new Date().toISOString()
     const prepared = await prepareConversationLaunch(
@@ -998,7 +1007,7 @@ export class SessionManager {
         rows: params.rows,
         terminalGraphics: stored.terminalGraphics
       }
-      await validateLaunch(launchParams)
+      await this.validateLaunch(launchParams)
       const live = await this.startIncarnation(
         params.sessionId,
         launchParams,
@@ -1246,7 +1255,7 @@ export class SessionManager {
         rows: params.rows,
         terminalGraphics: stored.terminalGraphics
       }
-      await validateLaunch(launchParams)
+      await this.validateLaunch(launchParams)
       const live = await this.startIncarnation(
         params.sessionId,
         launchParams,
@@ -1402,7 +1411,7 @@ export class SessionManager {
       rows: params.rows,
       terminalGraphics: stored.terminalGraphics
     }
-    await validateLaunch(launchParams)
+    await this.validateLaunch(launchParams, resumeEnvironment)
     const startedAt = new Date().toISOString()
     const live = await this.startIncarnation(
       params.sessionId,
@@ -1512,9 +1521,13 @@ export class SessionManager {
     this.sessions.set(sessionId, live)
     live.dataSubscription = pty.onData((data) => this.onPtyData(live, bytesFromPty(data)))
     live.exitSubscription = pty.onExit((exit) => void this.onPtyExit(live, exit))
+    live.lifecycleSubscription = pty.onLifecycleError?.((reason) => void this.markInterrupted(live, reason))
 
     try {
-      live.processStartIdentity = await this.identifyProcess(pty.pid)
+      live.processStartIdentity = pty.processOwnership === 'windows-job'
+        ? pty.processStartIdentity ?? ''
+        : await this.identifyProcess(pty.pid)
+      if (!live.processStartIdentity) throw new Error('Retained process creation identity is unavailable')
       await createRecord({
         sessionId,
         incarnationId,
@@ -1545,6 +1558,12 @@ export class SessionManager {
     return live
   }
 
+  /** The companion's PATH is available before an incarnation receives credentials. */
+  async validateLaunch(params: PtyLaunchParams, environment = this.environment): Promise<void> {
+    await validateLaunch(params, process.platform === 'win32'
+      ? windowsEnvironment(environment, { PATH: this.sessionPath() }) : environment)
+  }
+
   spawnValidatedPty(
     params: PtyLaunchParams,
     environment: Readonly<Record<string, string | undefined>> = this.environment,
@@ -1556,13 +1575,14 @@ export class SessionManager {
         ...terminalGraphicsEnvironment(params.terminalGraphics ?? null, environment, this.terminfoAsset),
         ...(identity ? this.sessionEnvironment?.(identity) : undefined)
       }
+      const childEnvironment = process.platform === 'win32' ? windowsEnvironment(env) : env
       const argv = identity === undefined ? params.argv
         : bashSessionArgv(params.executable, codexSessionArgv(params.executable, params.argv, env), env)
       return this.spawnPty(params.executable, argv, {
         cwd: params.cwd,
         cols: params.cols,
         rows: params.rows,
-        env
+        env: childEnvironment
       })
     } catch (error) {
       throw new HostControlError(
@@ -1851,6 +1871,11 @@ export class SessionManager {
       if (session.attachmentId) this.revokeAttachment(session)
       session.dataSubscription?.dispose()
       session.exitSubscription?.dispose()
+      session.lifecycleSubscription?.dispose()
+      if (session.pty.processOwnership === 'windows-job') {
+        session.pty.kill()
+        continue
+      }
       try {
         this.signalProcess(-session.pty.pid, 'SIGKILL')
       } catch {
@@ -2364,6 +2389,18 @@ export class SessionManager {
 
   private async performTeardownSession(session: LiveSession): Promise<string | undefined> {
     if (session.exited) return undefined
+    if (session.pty.processOwnership === 'windows-job') {
+      try {
+        // The retained native job, not a PID lookup, is termination authority.
+        session.pty.kill()
+      } catch {
+        // A request is not an exit confirmation. Keep the bounded waiter authoritative.
+      }
+      if (await this.waitForExit(session, this.stopGraceMs + this.stopKillWaitMs)) return undefined
+      const reason = 'Exit of the owned Windows process tree was not confirmed'
+      await this.markInterrupted(session, reason)
+      return reason
+    }
     const identityMatches = async (): Promise<boolean> => {
       try {
         return session.processStartIdentity.length > 0 &&
@@ -2467,6 +2504,7 @@ export class SessionManager {
   private async onPtyExit(session: LiveSession, exit: IncarnationExit): Promise<void> {
     if (session.exited) return session.exitComplete
     session.exited = true
+    session.lifecycleSubscription?.dispose()
     // The program is gone; its modes go with it, so nothing stale can reach a later view.
     session.decsetModes.clear()
     session.mirror?.dispose()

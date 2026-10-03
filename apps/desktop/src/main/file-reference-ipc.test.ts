@@ -1,11 +1,14 @@
 // MODULE: file-reference-ipc.test.ts - sender checks and argument bounds on the file-reference renderer channels
 import { METHOD_REGISTRY } from '@bmn/protocol'
+import { resolve } from 'node:path'
 import type { IpcMainInvokeEvent } from 'electron'
 import { describe, expect, it } from 'vitest'
 import { installFileReferenceIpcHandlers, type FileReferenceIpcActions } from './file-reference-ipc'
 
 type Handler = (event: IpcMainInvokeEvent, params?: unknown) => unknown
 
+const fixtureProject = resolve('/home/me/project')
+const fixtureFile = resolve(fixtureProject, 'src/a.ts')
 const allowed = { allowed: true, sender: { id: 1 } } as unknown as IpcMainInvokeEvent
 const otherWindow = { allowed: true, sender: { id: 2 } } as unknown as IpcMainInvokeEvent
 const stranger = { allowed: false, sender: { id: 3 } } as unknown as IpcMainInvokeEvent
@@ -22,12 +25,12 @@ function install(overrides: Partial<FileReferenceIpcActions> = {}): {
     client: () => ({
       request: async <Result,>(method: string, params: object) => {
         requests.push({ method, params })
-        return { status: 'ready', canonicalPath: '/home/me/project/src/a.ts' } as Result
+        return { status: 'ready', canonicalPath: fixtureFile } as Result
       }
     }),
     senderIsAllowed: (event) => (event as unknown as { allowed: boolean }).allowed,
     ownerFocused: () => true,
-    chooseFolder: async () => '/home/me/project',
+    chooseFolder: async () => fixtureProject,
     showInFolder: (path) => shown.push(path),
     ...overrides
   })
@@ -75,7 +78,7 @@ describe('file-reference IPC', () => {
   })
 
   it('returns the chosen folder or null when the picker is cancelled', async () => {
-    expect(await install().handlers.get('aiterm:file-reference:choose-base')!(allowed)).toBe('/home/me/project')
+    expect(await install().handlers.get('aiterm:file-reference:choose-base')!(allowed)).toBe(fixtureProject)
     const cancelled = install({ chooseFolder: async () => null })
     expect(await cancelled.handlers.get('aiterm:file-reference:choose-base')!(allowed)).toBeNull()
     expect((await failure(() => cancelled.handlers.get('aiterm:file-reference:choose-base')!(stranger))).code).toBe('UNAUTHORIZED')
@@ -84,15 +87,15 @@ describe('file-reference IPC', () => {
   it('reveals only a file this window was shown, given as an absolute normalized path', async () => {
     const { handlers, shown } = install()
     const show = handlers.get('aiterm:file-reference:show')!
-    expect((await failure(() => show(allowed, { path: '/home/me/project/src/a.ts' }))).code).toBe('INVALID_ARGUMENT')
+    expect((await failure(() => show(allowed, { path: fixtureFile }))).code).toBe('INVALID_ARGUMENT')
     await handlers.get('aiterm:file-reference:read')!(allowed, { sessionId: 's', reference: 'src/a.ts' })
-    expect(await show(allowed, { path: '/home/me/project/src/a.ts' })).toEqual({ shown: true })
-    expect((await failure(() => show(otherWindow, { path: '/home/me/project/src/a.ts' }))).code).toBe('INVALID_ARGUMENT')
+    expect(await show(allowed, { path: fixtureFile })).toEqual({ shown: true })
+    expect((await failure(() => show(otherWindow, { path: fixtureFile }))).code).toBe('INVALID_ARGUMENT')
     for (const path of ['src/a.ts', '/home/me/../etc/passwd', '/home/me/a\u0007.ts', '', 42]) {
       expect((await failure(() => show(allowed, { path }))).code).toBe('INVALID_ARGUMENT')
     }
     expect((await failure(() => show(stranger, { path: '/home/me/a.ts' }))).code).toBe('UNAUTHORIZED')
-    expect(shown).toEqual(['/home/me/project/src/a.ts'])
+    expect(shown).toEqual([fixtureFile])
   })
 
   it('pastes only from a focused owner window after that window previewed the exact file', async () => {
@@ -100,7 +103,7 @@ describe('file-reference IPC', () => {
     const paste = handlers.get('aiterm:file-reference:paste')!
     const request = {
       requestId: 'one', sessionId: 'target', expectedIncarnationId: 'run-1',
-      sourcePath: '/home/me/project/src/a.ts', line: 7, column: null
+      sourcePath: fixtureFile, line: 7, column: null
     }
     expect((await failure(() => paste(allowed, request))).code).toBe('INVALID_ARGUMENT')
     await handlers.get('aiterm:file-reference:read')!(allowed, { sessionId: 'source', reference: 'src/a.ts' })
@@ -142,6 +145,6 @@ it('addresses workspace previews exclusively through the owner window and retain
   expect(requests[0]!.params).toEqual({ workspaceId: 'workspace-1', reference: '/project/AGENTS.md', baseDirectory: null })
   expect((await failure(() => read(allowed, { workspaceId: 'w', sessionId: 's', reference: '/x' }))).code).toBe('INVALID_ARGUMENT')
   expect((await failure(() => read(stranger, { workspaceId: 'w', reference: '/x' }))).code).toBe('UNAUTHORIZED')
-  await handlers.get('aiterm:file-reference:show')!(allowed, { path: '/home/me/project/src/a.ts' })
-  expect(shown).toEqual(['/home/me/project/src/a.ts'])
+  await handlers.get('aiterm:file-reference:show')!(allowed, { path: fixtureFile })
+  expect(shown).toEqual([fixtureFile])
 })

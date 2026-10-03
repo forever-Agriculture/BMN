@@ -790,7 +790,7 @@ export function PreferencesDialog(props: {
               </div>
               <div className="preferences-row-control">
                 <code className="preferences-mono preferences-path" title={controlInfo.socketPath}><bdi>{controlInfo.socketPath}</bdi></code>
-                <button type="button" disabled={copying === 'socket'} onClick={() => void copyText('socket', controlInfo.socketPath)}>
+                <button type="button" disabled={!controlInfo.listening || copying === 'socket'} onClick={() => void copyText('socket', controlInfo.socketPath)}>
                   Copy
                 </button>
               </div>
@@ -801,7 +801,7 @@ export function PreferencesDialog(props: {
               </div>
               <div className="preferences-row-control">
                 <code className="preferences-mono preferences-path" title={controlInfo.cliPath}><bdi>{controlInfo.cliPath}</bdi></code>
-                <button type="button" disabled={copying === 'cli'} onClick={() => void copyText('cli', controlInfo.cliPath)}>
+                <button type="button" disabled={!controlInfo.listening || copying === 'cli'} onClick={() => void copyText('cli', controlInfo.cliPath)}>
                   Copy
                 </button>
               </div>

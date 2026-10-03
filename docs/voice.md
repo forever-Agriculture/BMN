@@ -24,6 +24,14 @@ programs that need a held Space.
    `apps/desktop/resources/whisper/`, next to the Silero speech model from the same archive (also
    pinned by SHA-256). It needs `cmake`; if `cmake` is not installed it uses a pinned CMake through
    [uv](https://docs.astral.sh/uv/).
+   Windows names both programs with `.exe` and needs Visual Studio C++ build tools.
+   Windows builds request a static MSVC runtime and disable OpenMP; the native smoke
+   inspects actual PE imports and rejects unpackaged compiler/engine DLL dependencies. Packages always request `--portable`: x64/SSE2,
+   with host tuning, SSE4.2, AVX, FMA, F16C, BMI2 and AMX disabled. Linux development
+   builds may keep local tuning; `node scripts/voice/build-whisper.mjs --portable`
+   selects the same distribution baseline. Build caches and the installed VERSION
+   stamp separate the OS, architecture and baseline. Cross-CPU/native device
+   acceptance remains recorded in the Epic 53 evidence.
 2. Open **Preferences → Voice** and download a model. Download also selects it.
 
 | Model | Download | Notes |

@@ -37,6 +37,14 @@ function runCli(
   args: string[],
   options: { env?: Record<string, string>; cwd?: string; input?: string | Buffer | undefined } = {}
 ): Promise<CliResult> {
+  return runCommand(process.execPath, [CLI, ...args], options)
+}
+
+function runCommand(
+  executable: string,
+  args: string[],
+  options: { env?: Record<string, string>; cwd?: string; input?: string | Buffer | undefined; verbatim?: boolean } = {}
+): Promise<CliResult> {
   const env: NodeJS.ProcessEnv = { ...process.env }
   for (const key of Object.keys(env)) {
     // The lead's own harness pointers must not decide a hook test: base URLs and config homes are
@@ -46,9 +54,12 @@ function runCli(
   }
   return new Promise((resolve) => {
     const child = execFile(
-      process.execPath,
-      [CLI, ...args],
-      { env: { ...env, ...options.env }, ...(options.cwd === undefined ? {} : { cwd: options.cwd }), timeout: 15_000 },
+      executable,
+      args,
+      {
+        env: { ...env, ...options.env }, ...(options.cwd === undefined ? {} : { cwd: options.cwd }), timeout: 15_000,
+        ...(options.verbatim ? { windowsVerbatimArguments: true } : {})
+      },
       (error, stdout, stderr) => {
         const code = error === null ? 0 : typeof error.code === 'number' ? error.code : null
         resolve({ code, stdout, stderr })
@@ -4079,4 +4090,63 @@ it.each(['\u00ad', '\u061c', '\u2060'])('refuses a format-bearing manual option 
   const result = await runCli(['ask', 'format-choice', 'Synthetic', '--choices-json', JSON.stringify(options)], { env: fixture.sessionEnv })
   expect(result.code).toBe(2)
   expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
+})
+
+// Story 53.4: the native launcher sessions find on PATH. Built by scripts/build/windows-cli.mjs during install.
+describe.runIf(process.platform === 'win32')('native Windows bmn launcher', () => {
+  const launcher = fileURLToPath(new URL('../../native-out/windows-cli/bmn.exe', import.meta.url))
+  const system = process.env.SystemRoot ?? 'C:\\Windows'
+  const awkward = [
+    'he said "hi" and \\"escaped\\"',
+    '100% ^caret & amp | pipe <in >out %PATH% !bang!',
+    'C:\\Users\\Ålesia\\dir with space\\',
+    'trailing backslashes\\\\',
+    '日本語 ✓ — emoji 🙂',
+    '  spaced  '
+  ]
+
+  it('gives the CLI exactly the arguments, output and exit code the script gets when run directly', async () => {
+    const fixture = await cliFixture()
+    for (const detail of awkward) {
+      const args = ['progress', 'running', 'Fidelity', '--detail', detail, '--json']
+      const direct = await runCli(args, { env: fixture.sessionEnv })
+      const native = await runCommand(launcher, args, { env: fixture.sessionEnv })
+      expect(native).toEqual(direct)
+    }
+    const details = fixture.handlers.reportProgress.mock.calls.map(([call]) => call.detail)
+    expect(details).toEqual(awkward.flatMap((detail) => [detail, detail]))
+
+    const refused = await runCommand(launcher, ['list'], { env: { ...fixture.sessionEnv, BMN_TOKEN: 's1.x.y.0' } })
+    expect(refused).toEqual(await runCli(['list'], { env: { ...fixture.sessionEnv, BMN_TOKEN: 's1.x.y.0' } }))
+    expect(refused.code).not.toBe(0)
+  })
+
+  it('passes multiline standard input through unchanged', async () => {
+    const fixture = await cliFixture()
+    const text = 'first line\r\nsecond "quoted" & 100%\nthird ✓\n'
+
+    const native = await runCommand(launcher, ['send', '--text-file', '-'], { env: fixture.sessionEnv, input: text })
+    const direct = await runCli(['send', '--text-file', '-'], { env: fixture.sessionEnv, input: text })
+
+    expect(native).toEqual(direct)
+    const sent = fixture.handlers.submitInput.mock.calls.map(([call]) => call.text)
+    expect(sent).toHaveLength(2)
+    expect(sent[0]).toBe(sent[1])
+  })
+
+  it('is reached by name from Command Prompt and PowerShell with quoted metacharacters intact', async () => {
+    const fixture = await cliFixture()
+    const env = { ...fixture.sessionEnv, PATH: `${dirname(launcher)};${process.env.PATH ?? ''}` }
+    const cmd = await runCommand(join(system, 'System32', 'cmd.exe'),
+      ['/d', '/s', '/c', '"bmn progress running Prompt --detail "a & b ^ c | d 100%""'], { env, verbatim: true })
+    const powershell = await runCommand(join(system, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+      ['-NoProfile', '-NonInteractive', '-Command', "bmn progress running Shell --detail 'a & b ^ c | d 100% $x'; exit $LASTEXITCODE"], { env })
+
+    expect(cmd).toMatchObject({ code: 0, stderr: '' })
+    expect(powershell).toMatchObject({ code: 0, stderr: '' })
+    expect(fixture.handlers.reportProgress.mock.calls.map(([call]) => [call.label, call.detail])).toEqual([
+      ['Prompt', 'a & b ^ c | d 100%'],
+      ['Shell', 'a & b ^ c | d 100% $x']
+    ])
+  })
 })

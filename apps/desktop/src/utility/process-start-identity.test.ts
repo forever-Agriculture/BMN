@@ -50,8 +50,8 @@ describe.skipIf(!onLinux)('process start identity', () => {
 
 describe('process start identity platform selection', () => {
   it('refuses a platform with no way to read a process start time', async () => {
-    await expect(processStartIdentityFor('win32')(1)).rejects.toThrow(
-      'process start identity is unsupported on win32'
+    await expect(processStartIdentityFor('unsupported-os')(1)).rejects.toThrow(
+      'process start identity is unsupported on unsupported-os'
     )
   })
 })

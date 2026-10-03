@@ -450,10 +450,25 @@ function remoteError(error) {
   return new CliError(code, message)
 }
 
+const CONTROL_PIPE = /^\\\\\.\\pipe\\bmn-control-[0-9a-f]{32}$/
+
+/** On Windows the control path is a private file naming the app's current pipe; elsewhere it is the socket. */
+function controlEndpoint(socketPath) {
+  if (process.platform !== 'win32' || CONTROL_PIPE.test(socketPath)) return socketPath
+  let text
+  try {
+    text = readFileSync(socketPath, 'utf8').slice(0, 256).trim()
+  } catch (error) {
+    throw new CliError('IO_ERROR', `cannot reach control socket ${socketPath} (${error.code ?? 'read failed'})`)
+  }
+  if (!CONTROL_PIPE.test(text)) throw new CliError('IO_ERROR', `control endpoint ${socketPath} does not name a BMN control pipe`)
+  return text
+}
+
 /** One connection per invocation: auth, then each request in order, close. A request's remote error does not stop the rest. */
 function callEach(socketPath, token, requests, timeoutMs = TIMEOUT_MS) {
   return new Promise((resolveCall, rejectCall) => {
-    const socket = createConnection(socketPath)
+    const socket = createConnection(controlEndpoint(socketPath))
     const outcomes = []
     let buffer = ''
     let settled = false

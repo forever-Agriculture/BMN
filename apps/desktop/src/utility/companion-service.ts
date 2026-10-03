@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { appendFile, chmod, copyFile, lstat, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
-import { basename, dirname, extname, isAbsolute, join, relative } from 'node:path'
+import { basename, delimiter, dirname, extname, isAbsolute, join, relative } from 'node:path'
 import {
   ERROR_CODES,
   exactAbsoluteFileReference,
@@ -211,7 +211,8 @@ async function sha256File(path: string): Promise<{ sha256: string; byteLength: n
 }
 
 function backupArtifactFile(artifact: ArtifactRecord): string {
-  return join('artifacts', artifact.sha256.slice(0, 2), artifact.artifactId)
+  // Manifest names are portable relative paths, independent of the writer OS.
+  return `artifacts/${artifact.sha256.slice(0, 2)}/${artifact.artifactId}`
 }
 
 function isBackupManifestEntry(value: unknown): value is BackupManifestEntry {
@@ -613,7 +614,7 @@ export class CompanionService {
 
   /** The PATH every session's processes see: BMN's CLI first, then BMN's own PATH. */
   sessionPath(): string {
-    return [dirname(this.options.cliPath), process.env.PATH ?? '/usr/bin:/bin'].join(':')
+    return [dirname(this.options.cliPath), process.env.PATH ?? (process.platform === 'win32' ? '' : '/usr/bin:/bin')].filter(Boolean).join(delimiter)
   }
 
   /** Environment for one incarnation: its scoped control credential and the CLI on PATH. */
@@ -644,7 +645,7 @@ export class CompanionService {
       this.controlDetail = 'Agents and the bmn CLI can reach this app'
     } catch (error) {
       // The kernel caps a Unix socket path and reports only EINVAL, so name the real cause.
-      const tooLong = Buffer.byteLength(this.socketPath) > MAX_SOCKET_PATH_BYTES
+      const tooLong = process.platform !== 'win32' && Buffer.byteLength(this.socketPath) > MAX_SOCKET_PATH_BYTES
       this.controlDetail = tooLong
         ? `The control socket is unavailable: its path is longer than ${MAX_SOCKET_PATH_BYTES} bytes (${this.socketPath}); use a shorter runtime directory`
         : `The control socket is unavailable: ${error instanceof Error ? error.message.slice(0, 200) : 'unknown error'}`
@@ -2009,7 +2010,8 @@ export class CompanionService {
     }
     const payload = delivery.ownedArtifactPath
       ? `${this.quotePath(delivery.ownedArtifactPath)} `
-      : exactAbsoluteFileReference(sourcePath, line as number | null, column as number | null)
+      : exactAbsoluteFileReference(sourcePath, line as number | null, column as number | null,
+        process.platform === 'win32' ? 'win32' : 'posix')
     if (!payload) invalid('This path cannot be sent as an exact file reference')
     const fingerprint = JSON.stringify([sessionId, expectedIncarnationId, payload])
     const paramsHash = createHash('sha256').update(fingerprint).digest('hex')

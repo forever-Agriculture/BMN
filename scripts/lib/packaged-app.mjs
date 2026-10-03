@@ -2,11 +2,12 @@
 import { join } from 'node:path'
 
 /** electron-builder names the Linux executable from `linux.executableName`. */
-const LINUX_EXECUTABLE = 'bmn'
+const EXECUTABLES = { linux: 'bmn', win32: 'BMN.exe' }
 
 /** electron-builder appends the architecture to the folder unless the target is the default x64. */
 function unpackedDirectory(platform, arch) {
   if (platform === 'linux') return arch === 'x64' ? 'linux-unpacked' : `linux-${arch}-unpacked`
+  if (platform === 'win32') return arch === 'x64' ? 'win-unpacked' : `win-${arch}-unpacked`
   throw new Error(`BMN has no packaged build for ${platform}`)
 }
 
@@ -15,11 +16,12 @@ function unpackedDirectory(platform, arch) {
  * the live build `pnpm run package` writes; an update passes its staging or previous folder.
  */
 export function packagedApp(repoRoot, { platform = process.platform, arch = process.arch, root } = {}) {
-  root ??= join(repoRoot, 'apps/desktop/release', unpackedDirectory(platform, arch))
+  const folder = unpackedDirectory(platform, arch)
+  root ??= join(repoRoot, 'apps/desktop/release', folder)
   const resources = join(root, 'resources')
   return {
     root,
-    binary: join(root, LINUX_EXECUTABLE),
+    binary: join(root, EXECUTABLES[platform]),
     resources,
     archive: join(resources, 'app.asar')
   }
@@ -34,6 +36,20 @@ export function packagedNativeModules(platform = process.platform, arch = proces
   return [
     `/node_modules/better-sqlite3/prebuilds/${prebuild}.node`,
     new RegExp(`^/node_modules/node-pty/bin/${prebuild}-\\d+/node-pty\\.node$`, 'u'),
+    ...(platform === 'win32' ? [
+      '/node_modules/node-pty/build/Release/conpty.node',
+      '/node_modules/node-pty/build/Release/conpty_console_list.node'
+    ] : []),
     '/node_modules/node-pty/build/Release/pty.node'
   ]
+}
+
+/** Windows node-pty runtime sidecars, restored after its native rebuild. */
+export function packagedNativeSidecars(platform = process.platform) {
+  return platform === 'win32' ? [
+    '/node_modules/node-pty/build/Release/conpty/conpty.dll',
+    '/node_modules/node-pty/build/Release/conpty/OpenConsole.exe',
+    '/node_modules/node-pty/build/Release/winpty.dll',
+    '/node_modules/node-pty/build/Release/winpty-agent.exe'
+  ] : []
 }

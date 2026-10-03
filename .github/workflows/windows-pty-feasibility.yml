@@ -1,0 +1,52 @@
+name: Windows PTY feasibility
+on:
+  pull_request:
+    paths:
+      - .github/workflows/windows-pty-feasibility.yml
+      - scripts/test/windows-pty-feasibility.mjs
+      - scripts/test/windows-pty-ownership.mjs
+      - scripts/test/windows-pty-pressure.mjs
+      - scripts/test/windows-pty-pipes.mjs
+      - scripts/test/windows-control-pipes.mjs
+      - scripts/test/windows-storage-cross-user.mjs
+      - patches/**
+permissions:
+  contents: read
+jobs:
+  feasibility:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.3.4
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+      - name: Install native prerequisite on disposable runner
+        run: npm install --global node-gyp@12.1.0
+      - name: Install pinned native dependencies
+        id: install
+        run: pnpm install --frozen-lockfile
+      - name: Measure built-in and bundled ConPTY
+        run: node scripts/test/windows-pty-feasibility.mjs
+      - name: Verify owned native process trees
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: node scripts/test/windows-pty-ownership.mjs
+      - name: Verify output pressure and exit races
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: node scripts/test/windows-pty-pressure.mjs
+      - name: Verify private native pipes across accounts
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: node scripts/test/windows-pty-pipes.mjs
+      - name: Verify restricted control pipe across accounts
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: node scripts/test/windows-control-pipes.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-pty-feasibility
+          path: test-results/
+          retention-days: 14

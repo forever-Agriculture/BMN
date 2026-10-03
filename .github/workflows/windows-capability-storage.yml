@@ -1,0 +1,27 @@
+name: Windows capability storage acceptance
+on:
+  pull_request:
+    paths:
+      - .github/workflows/windows-capability-storage.yml
+      - scripts/test/windows-capability-storage.mjs
+      - scripts/test/fixtures/windows-capability-storage.cpp
+      - apps/desktop/src/utility/private-directory.ts
+permissions:
+  contents: read
+jobs:
+  capability:
+    runs-on: windows-2025
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+      - name: Verify actual second-user AppContainer access
+        run: node scripts/test/windows-capability-storage.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-capability-storage
+          path: test-results/
+          retention-days: 14

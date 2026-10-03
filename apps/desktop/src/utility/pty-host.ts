@@ -59,24 +59,27 @@ import {
   SessionManager,
   findStoredSession,
   resolveHomeDirectory,
-  validateLaunch,
   type CreateSessionParams,
   type PtyLike,
   type SessionIdentity
 } from './session-manager'
+
+import { prepareWindowsPtyLaunch } from './windows-launch'
 
 type NativeModuleName = 'node-pty' | 'better-sqlite3'
 
 interface NodePtyModule {
   spawn(
     executable: string,
-    argv: string[],
+    argv: string[] | string,
     options: {
       cwd: string
       cols: number
       rows: number
       env: Record<string, string | undefined>
       encoding: null
+      useConpty?: boolean
+      useConptyDll?: boolean
     }
   ): PtyLike
 }
@@ -284,12 +287,15 @@ async function start(): Promise<void> {
     ...(terminfoAsset ? { terminfoAsset } : {}),
     store: database,
     savedOutputStore,
-    spawnPty: (executable, argv, options) =>
-      nodePty.spawn!(executable, [...argv], {
+    spawnPty: (executable, argv, options) => {
+      const native = process.platform === 'win32' ? prepareWindowsPtyLaunch(executable, argv, options.cwd, options.env) : undefined
+      return nodePty.spawn!(native?.executable ?? executable, native?.arguments ?? [...argv], {
         ...options,
         env: { ...options.env },
-        encoding: null
-      }),
+        encoding: null,
+        ...(process.platform === 'win32' ? { useConpty: true, useConptyDll: true } : {})
+      })
+    },
     sendTerminalMessage: (message) => terminalPort?.postMessage(message),
     conversationReferenceExists: (binding) => conversationReferenceExists(binding, agentHome()),
     conversationBeingDeleted: (binding) => companionHolder.current?.historyDeleting(binding.conversationReference) ?? false,
@@ -328,7 +334,7 @@ async function start(): Promise<void> {
   const launchSets = new LaunchSetCoordinator({
     getSet: (workspaceId, setId) => database.getLaunchSet(workspaceId, setId),
     listWorkspaces: () => database.listWorkspaces(),
-    validate: validateLaunch,
+    validate: (params) => manager.validateLaunch(params),
     create: async (params) => {
       const identity = await manager.create(params)
       if (process.argv.includes('--self-test-host') &&
@@ -522,7 +528,7 @@ async function start(): Promise<void> {
             if ('cwd' in update || 'executable' in update || 'argv' in update) {
               const current = await findStoredSession(database, update.sessionId)
               if (!current) throw new HostControlError(ERROR_CODES.notFound, 'The session was not found')
-              await validateLaunch({
+              await manager.validateLaunch({
                 cwd: update.cwd ?? current.cwd,
                 executable: update.executable ?? current.executable,
                 argv: update.argv ?? current.argv,

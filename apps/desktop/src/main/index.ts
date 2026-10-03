@@ -1,6 +1,6 @@
 // MODULE: index.ts - Electron main process: windows, bridge IPC and host lifecycle; `--self-test` loads ./self-test
-import { chmodSync, mkdirSync } from 'node:fs'
 import { homedir } from 'node:os'
+import { ensurePrivateDirectories } from '../utility/private-directory'
 import { join, resolve } from 'node:path'
 import {
   ERROR_CODES,
@@ -57,6 +57,7 @@ import {
 } from './host-loss'
 import { resolveApplicationRoots } from '../utility/roots'
 import { acquireRootScopedSingleInstance, focusExistingWindow } from './single-instance'
+import { protectWindowsApplicationLifetime } from './windows-application-lifetime'
 import { trackAllowedSender } from './allowed-senders'
 import { createDevelopmentRoot } from './development-root'
 import { installSavedOutputIpcHandler } from './saved-output-ipc'
@@ -80,7 +81,7 @@ import {
 import { installFileReferenceIpcHandlers } from './file-reference-ipc'
 import { createPresenceMonitor, readMutterIdleMs } from './presence-monitor'
 import { installVoiceIpcHandlers } from './voice-ipc'
-import { transcribeRecording } from './voice-engine'
+import { transcribeRecording, WHISPER_ENGINE_FILE } from './voice-engine'
 import {
   attachCreatedSession,
   createExplicitLaunchSession,
@@ -334,11 +335,19 @@ function hostEnvironment(repoRoot: string): NodeJS.ProcessEnv {
 
 /** The JavaScript the CLI runs; the packaged `bmn` is a shell launcher for it that node cannot load. */
 function bmnCliScript(): string {
-  return app.isPackaged ? join(process.resourcesPath, 'bin', 'bmn.mjs') : bmnCliPath()
+  return app.isPackaged ? join(process.resourcesPath, 'bin', 'bmn.mjs') : join(app.getAppPath(), 'bin', 'bmn')
 }
 
-/** Sessions get this file's directory on PATH; packaged builds carry a launcher for it under resources/bin. */
+/**
+ * Sessions get this file's directory on PATH; packaged builds carry a launcher for it under resources/bin.
+ * Windows uses the native bmn.exe launcher (scripts/build/windows-cli.mjs), never the Unix shell launcher.
+ */
 function bmnCliPath(): string {
+  if (process.platform === 'win32') {
+    return app.isPackaged
+      ? join(process.resourcesPath, 'bin', 'bmn.exe')
+      : join(app.getAppPath(), 'native-out', 'windows-cli', 'bmn.exe')
+  }
   return app.isPackaged
     ? join(process.resourcesPath, 'bin', 'bmn')
     : join(app.getAppPath(), 'bin', 'bmn')
@@ -473,8 +482,8 @@ function requireKnownSession(event: IpcMainInvokeEvent, sessionId: unknown): str
 /** Built by `pnpm run voice:build`; packaged builds carry it under resources/whisper. */
 function whisperBinaryPath(): string {
   return app.isPackaged
-    ? join(process.resourcesPath, 'whisper', 'whisper-cli')
-    : join(app.getAppPath(), 'resources', 'whisper', 'whisper-cli')
+    ? join(process.resourcesPath, 'whisper', WHISPER_ENGINE_FILE)
+    : join(app.getAppPath(), 'resources', 'whisper', WHISPER_ENGINE_FILE)
 }
 
 /** Only the app window may use the microphone, and only for dictation; every other web permission is refused. */
@@ -539,7 +548,7 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
       throw new MainIpcError(ERROR_CODES.invalidArgument, 'Launch directories are invalid')
     }
     return directories.map((directory: string) => resolve(
-      directory === '~' || directory.startsWith('~/')
+      directory === '~' || directory.startsWith('~/') || (process.platform === 'win32' && directory.startsWith('~\\'))
         ? join(homedir(), directory.slice(1)) : directory
     ))
   })
@@ -1036,9 +1045,10 @@ if (selfTest) {
 ensureDevelopmentRoots()
 app.on('will-quit', cleanupDevelopmentRoot)
 process.once('exit', cleanupDevelopmentRoot)
-const instanceDataRoot = resolveApplicationRoots().data
-mkdirSync(instanceDataRoot, { recursive: true, mode: 0o700 })
-chmodSync(instanceDataRoot, 0o700)
+const instanceRoots = resolveApplicationRoots()
+const instanceDataRoot = instanceRoots.data
+ensurePrivateDirectories(Object.values(instanceRoots), process.platform, instanceDataRoot)
+protectWindowsApplicationLifetime()
 const primaryInstance = acquireRootScopedSingleInstance(app, instanceDataRoot, () =>
   focusExistingWindow(applicationWindow)
 )

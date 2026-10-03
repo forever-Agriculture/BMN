@@ -314,6 +314,7 @@ ipcRenderer.on('aiterm:presence', (_event, message: unknown) => {
 })
 
 contextBridge.exposeInMainWorld('aiTerminal', {
+  platform: process.platform,
   security: {
     sandboxed: process.sandboxed === true,
     contextIsolated: process.contextIsolated === true

@@ -360,7 +360,11 @@ export function updateWorkspace(
     if (current.archivedAt !== null) invalid('Archived workspace pins cannot be changed')
     pins = params.pinnedFilePaths.map(path => {
       if (!isAbsolute(path) && (!current.defaultCwd || !isAbsolute(current.defaultCwd))) invalid('Choose an absolute path; this workspace has no default folder')
-      return isAbsolute(path) ? normalize(path) : resolve(current.defaultCwd!, path)
+      // A Windows root-relative path has no drive. Resolve it once against this
+      // workspace, so a later drive/CWD change cannot silently retarget the pin.
+      return isAbsolute(path)
+        ? process.platform === 'win32' ? resolve(current.defaultCwd ?? process.cwd(), path) : normalize(path)
+        : resolve(current.defaultCwd!, path)
     })
     if (!isPinnedFilePaths(pins, true)) invalid('Use at most eight unique absolute paths of up to 4096 characters')
   }

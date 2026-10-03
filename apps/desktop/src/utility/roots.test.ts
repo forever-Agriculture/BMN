@@ -62,12 +62,12 @@ describe('utility application roots', () => {
     expect(roots.data).toBe('/legacy/data-override')
   })
 
-  it('uses BMN XDG roots for a fresh install and creates them with mode 0700', async () => {
+  it('uses BMN XDG roots for a fresh Linux install', async () => {
     const { root, environment } = await testEnvironment()
     const roots = resolveApplicationRoots(environment, {
       homeDirectory: '/owner',
       runtimeFallback: '/tmp/fallback'
-    })
+    }, 'linux')
 
     expect(roots).toEqual({
       config: join(root, 'xdg-config', 'bmn'),
@@ -75,6 +75,14 @@ describe('utility application roots', () => {
       state: join(root, 'xdg-state', 'bmn'),
       runtime: join(root, 'xdg-runtime', 'bmn')
     })
+  })
+
+  it.runIf(process.platform === 'linux')('creates Linux application roots with mode 0700', async () => {
+    const { environment } = await testEnvironment()
+    const roots = resolveApplicationRoots(environment, {
+      homeDirectory: '/owner',
+      runtimeFallback: '/tmp/fallback'
+    }, 'linux')
     await ensureApplicationRoots(roots)
     for (const applicationRoot of Object.values(roots)) {
       expect((await stat(applicationRoot)).mode & 0o777).toBe(0o700)
@@ -94,7 +102,7 @@ describe('utility application roots', () => {
     const roots = resolveApplicationRoots(environment, {
       homeDirectory: '/owner',
       runtimeFallback: '/tmp/fallback'
-    })
+    }, 'linux')
 
     expect(roots).toEqual({
       ...legacyRoots,
@@ -119,7 +127,7 @@ describe('utility application roots', () => {
     expect(resolveApplicationRoots(environment, {
       homeDirectory: '/owner',
       runtimeFallback: '/tmp/fallback'
-    })).toEqual({
+    }, 'linux')).toEqual({
       config: join(root, 'xdg-config', 'ai-terminal'),
       data: legacyData,
       state: join(root, 'xdg-state', 'ai-terminal'),
@@ -141,6 +149,6 @@ describe('utility application roots', () => {
     expect(resolveApplicationRoots(environment, {
       homeDirectory: '/owner',
       runtimeFallback: '/tmp/fallback'
-    }).data).toBe(join(root, 'xdg-data', 'bmn'))
+    }, 'linux').data).toBe(join(root, 'xdg-data', 'bmn'))
   })
 })

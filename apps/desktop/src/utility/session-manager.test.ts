@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Terminal } from '@xterm/headless'
@@ -108,7 +108,7 @@ function validCapture(overrides: Partial<SavedOutputCapture> = {}): SavedOutputC
 const claudeHelp = readFileSync(
   new URL('./test-fixtures/claude-2.1.270-help.txt', import.meta.url),
   'utf8'
-)
+).replaceAll('\r\n', '\n')
 
 function terminalOutput(sent: TerminalPortMessage[], attachmentId: string): Uint8Array {
   const chunks = sent.flatMap((message) =>
@@ -581,6 +581,11 @@ async function flowFixture(
 }
 
 describe('shell session lifecycle', () => {
+  it('removes private environment aliases on Windows and emits one effective PATH', () => {
+    expect(buildShellEnvironment({ Path: 'first', PATH: 'second', bmn_token: 'synthetic-secret', electron_run_as_node: '1', SystemRoot: 'C:\\Windows' }, 'win32'))
+      .toEqual({ PATH: 'second', SystemRoot: 'C:\\Windows', TERM: 'xterm-256color', COLORTERM: 'truecolor' })
+  })
+
   it('builds a user shell environment without Electron, Chromium, or app-internal launch variables', () => {
     expect(
       buildShellEnvironment({
@@ -692,6 +697,18 @@ describe('shell session lifecycle', () => {
     })
   })
 
+  it.skipIf(process.platform !== 'win32')('validates Windows launches against the companion session PATH', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bmn-session-path-'))
+    createdRoots.add(root)
+    await writeFile(join(root, 'synthetic-path-tool.exe'), 'synthetic executable fixture; PTY is mocked')
+    const manager = new SessionManager({
+      store: new FakeStore(), spawnPty: () => new FakePty(), sendTerminalMessage: () => undefined,
+      environment: { PATH: '', PATHEXT: '.EXE' }, sessionPath: () => root,
+      sessionEnvironment: () => ({ PATH: root })
+    })
+    await expect(manager.validateLaunch({ cwd: root, executable: 'synthetic-path-tool', argv: [], cols: 80, rows: 24 })).resolves.toBeUndefined()
+  })
+
   it('keeps direct Codex hooks in this session unless the owner selected a remote server', () => {
     const launches: Array<{ executable: string; argv: readonly string[] }> = []
     const manager = new SessionManager({
@@ -731,7 +748,7 @@ describe('shell session lifecycle', () => {
     ])
   })
 
-  it('keeps the BMN Codex wrapper first after an interactive Bash startup changes PATH', async () => {
+  it.skipIf(process.platform === 'win32')('keeps the BMN Codex wrapper first after an interactive Bash startup changes PATH', async () => {
     const root = await mkdtemp(join(tmpdir(), 'bmn-bash-path-'))
     try {
       const competingBin = join(root, 'real-bin')
@@ -905,13 +922,17 @@ describe('shell session lifecycle', () => {
     await vi.waitFor(() => expect(manager.liveLaunchDirectory(created.sessionId)).toBeUndefined())
   })
 
-  it('expands only a leading ~ or ~/ in a launch directory', () => {
-    expect(resolveHomeDirectory('~', '/home/owner')).toBe('/home/owner')
-    expect(resolveHomeDirectory('~/', '/home/owner')).toBe('/home/owner')
-    expect(resolveHomeDirectory('~/code/Piche_Projects/app', '/home/owner')).toBe('/home/owner/code/Piche_Projects/app')
-    expect(resolveHomeDirectory('~other/code', '/home/owner')).toBe('~other/code')
-    expect(resolveHomeDirectory('/srv/~/code', '/home/owner')).toBe('/srv/~/code')
-    expect(resolveHomeDirectory('', '/home/owner')).toBe('')
+  it('expands only a leading home marker using the selected platform grammar', () => {
+    expect(resolveHomeDirectory('~', '/home/owner', 'linux')).toBe('/home/owner')
+    expect(resolveHomeDirectory('~/', '/home/owner', 'linux')).toBe('/home/owner')
+    expect(resolveHomeDirectory('~/code/Piche_Projects/app', '/home/owner', 'linux')).toBe('/home/owner/code/Piche_Projects/app')
+    expect(resolveHomeDirectory('~other/code', '/home/owner', 'linux')).toBe('~other/code')
+    expect(resolveHomeDirectory('/srv/~/code', '/home/owner', 'linux')).toBe('/srv/~/code')
+    expect(resolveHomeDirectory('', '/home/owner', 'linux')).toBe('')
+    expect(resolveHomeDirectory('~\\code\\app', 'C:\\Users\\owner', 'win32')).toBe('C:\\Users\\owner\\code\\app')
+    expect(resolveHomeDirectory('~/code/app', 'C:\\Users\\owner', 'win32')).toBe('C:\\Users\\owner\\code\\app')
+    expect(resolveHomeDirectory('~', 'C:\\Users\\owner', 'win32')).toBe('C:\\Users\\owner')
+    expect(resolveHomeDirectory('~other\\code', 'C:\\Users\\owner', 'win32')).toBe('~other\\code')
   })
 
   it('persists the supplied workspace and session name when creating a session', async () => {
@@ -1214,7 +1235,7 @@ describe('shell session lifecycle', () => {
         stopKillWaitMs: 1,
         sendTerminalMessage: () => undefined
       })
-      const created = await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable: '/bin/sh', argv: [], cols: 80, rows: 24 })
+      const created = await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath, argv: [], cols: 80, rows: 24 })
       await expect(manager.stop(created, 'explicit')).rejects.toMatchObject({ code: ERROR_CODES.ioError })
 
       await expect(manager.relaunch({ sessionId: created.sessionId, cols: 80, rows: 24 }))
@@ -2752,7 +2773,8 @@ describe('shell session lifecycle', () => {
     expect(manager.sessionWithCurrentProcessState(exitedRow)).toBe(exitedRow)
   })
 
-  it('escalates a SIGHUP-ignoring shell and records the PTY-reported signal', async () => {
+  // Windows Stop uses owned jobs; windows-pty-ownership.mjs exercises its native path.
+  it.skipIf(process.platform === 'win32')('escalates a SIGHUP-ignoring shell and records the PTY-reported signal', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'bmn-session-test-'))
     createdRoots.add(cwd)
     const store = new FakeStore()
@@ -2784,6 +2806,43 @@ describe('shell session lifecycle', () => {
 
     expect(store.exited.get(created.incarnationId)?.signal).toBe(9)
     expect(store.interrupted.has(created.incarnationId)).toBe(false)
+  })
+
+  it('uses retained Windows ownership when PID identity lookup fails', async () => {
+    const { pty, store, cwd } = await fixture()
+    Object.assign(pty, { processOwnership: 'windows-job', processStartIdentity: 'windows-filetime:12345' })
+    const identify = vi.fn(async () => { throw new Error('PID lookup denied') })
+    const signalProcess = vi.fn(() => true)
+    const manager = new SessionManager({
+      store, spawnPty: () => pty, processStartIdentity: identify, signalProcess,
+      sendTerminalMessage: () => undefined, stopGraceMs: 1, stopKillWaitMs: 1
+    })
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION,
+      cwd, executable: process.execPath, argv: [], cols: 80, rows: 24
+    })
+    await manager.stop(created)
+    expect(pty.killed).toBe(true)
+    expect(identify).not.toHaveBeenCalled()
+    expect(signalProcess).not.toHaveBeenCalled()
+    expect(store.exited.has(created.incarnationId)).toBe(true)
+  })
+
+  it('keeps unconfirmed Windows job termination interrupted without PID fallback', async () => {
+    const { store, cwd } = await fixture()
+    const pty = new NonExitingFakePty()
+    Object.assign(pty, { processOwnership: 'windows-job', processStartIdentity: 'windows-filetime:12345' })
+    const signalProcess = vi.fn(() => true)
+    const manager = new SessionManager({
+      store, spawnPty: () => pty, processStartIdentity: async () => 'windows-filetime:12345', signalProcess,
+      sendTerminalMessage: () => undefined, stopGraceMs: 1, stopKillWaitMs: 1
+    })
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION,
+      cwd, executable: process.execPath, argv: [], cols: 80, rows: 24
+    })
+    await expect(manager.stop(created)).rejects.toThrow(/stop outcome is unknown/)
+    expect(pty.killCalls).toBe(1)
+    expect(signalProcess).not.toHaveBeenCalled()
+    expect(store.interrupted.get(created.incarnationId)).toMatch(/owned Windows process tree.*not confirmed/i)
   })
 
   it('records an explicit interrupted outcome when SIGKILL cannot be reaped', async () => {
@@ -5555,7 +5614,7 @@ describe('a command a program in the session reports to resume it (Epic 43)', ()
     createdRoots.add(cwd)
     const bin = join(cwd, 'bin')
     await mkdir(bin)
-    const program = join(bin, 'my-agent')
+    const program = join(bin, process.platform === 'win32' ? 'my-agent.EXE' : 'my-agent')
     await writeFile(program, '#!/bin/sh\n')
     await chmod(program, 0o700)
     let executable = process.execPath
@@ -5580,7 +5639,7 @@ describe('a command a program in the session reports to resume it (Epic 43)', ()
       },
       processStartIdentity: async (pid) => `linux-proc-start:${pid}`,
       conversationReferenceExists: async () => true,
-      sessionPath: () => `/bmn-test-missing-folder:${bin}`,
+      sessionPath: () => [join(cwd, 'missing-folder'), bin].join(delimiter),
       sendTerminalMessage: () => undefined
     })
     const manager = build()
@@ -5684,7 +5743,7 @@ describe('a command a program in the session reports to resume it (Epic 43)', ()
   it('keeps a report that arrives before the process\'s record is written (Epic 43 review)', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'bmn-reported-early-'))
     createdRoots.add(cwd)
-    const program = join(cwd, 'my-agent')
+    const program = join(cwd, process.platform === 'win32' ? 'my-agent.EXE' : 'my-agent')
     await writeFile(program, '#!/bin/sh\n')
     await chmod(program, 0o700)
     const database = new BetterSqlite3(':memory:')
@@ -5944,7 +6003,7 @@ describe('workspace admission and archive ordering (47.1)', () => {
       processStartIdentity: async () => 'synthetic:47', sendTerminalMessage: () => undefined,
       stopGraceMs: 0, stopKillWaitMs: 0, signalProcess: () => true })
     return { ...f, manager, pty, spawn,
-      launch: { ...DEFAULT_SESSION_CREATION, cwd: f.cwd, executable: '/bin/sh', argv: [], cols: 80, rows: 24 } }
+      launch: { ...DEFAULT_SESSION_CREATION, cwd: f.cwd, executable: process.execPath, argv: [], cols: 80, rows: 24 } }
   }
   it('refuses a live workspace and session with names, changing no records or process input', async () => {
     const f = await guardedFixture(); const created = await f.manager.create(f.launch)
@@ -6064,7 +6123,7 @@ describe('workspace admission and archive ordering (47.1)', () => {
       const manager = new SessionManager({ store, spawnPty: () => f.pty,
         processStartIdentity: async () => 'synthetic:47', sendTerminalMessage: () => undefined })
       const created = await manager.create({ workspaceId: source.workspaceId, name: 'Original',
-        cwd: f.cwd, executable: '/bin/sh', argv: [], cols: 80, rows: 24 })
+        cwd: f.cwd, executable: process.execPath, argv: [], cols: 80, rows: 24 })
       const stored = listSessions(database, source.workspaceId)[0]!
       await manager.updateSessionAvailability(created.sessionId, { workspaceId: destination.workspaceId }, async () =>
         updateSession(database, { sessionId: created.sessionId, expectedRevision: stored.revision,
