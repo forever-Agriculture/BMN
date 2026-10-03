@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { once } from 'node:events'
+import { spawn } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -102,13 +103,17 @@ setInterval(()=>{if(role==='root')publish('heartbeat.json',Date.now())},100);
       return record.lastProcess.state
     }
     try {
+      // Playwright's CDP session asserts on late responses after a forced crash.
+      // Exercise crash/recovery in the actual main process with no debugger attached.
+      const crashReport = join(output, 'windows-renderer-crash.json')
+      const crash = spawn(options.executablePath, [join(repo, 'scripts/test/fixtures/windows-renderer-crash.mjs'),
+        repo, root, process.execPath, fixture, crashReport, '--bmn-test-mode'], { cwd: repo, env, stdio: 'inherit' })
+      const crashTimer = setTimeout(() => crash.kill(), 90000)
+      try { assert.equal((await once(crash, 'exit'))[0], 0, 'Renderer crash fixture failed') }
+      finally { clearTimeout(crashTimer) }
+      observations.push(JSON.parse(readFileSync(crashReport, 'utf8')))
       await open()
-      const kept = await start('renderer-and-hide', 'hide')
-      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer())
-      await waitFor(async () => {
-        const records = await page.evaluate(id => window.aiTerminal.listSessions(id), kept.session.workspaceId)
-        return records.some(record => record.sessionId === kept.session.sessionId)
-      }, 'Renderer did not recover')
+      const kept = await start('keep-running-close', 'hide')
       await unchanged(kept)
       await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close())
       await waitFor(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMinimized()), 'Keep-running Close did not minimize')
@@ -118,7 +123,7 @@ setInterval(()=>{if(role==='root')publish('heartbeat.json',Date.now())},100);
       let observer = await windowsExitObserver(kept.entries)
       try {
         await page.evaluate(id => window.aiTerminal.stopSession(id), kept.session.sessionId)
-        observations.push({ mode: 'renderer-crash-and-keep-running-close', incarnationPreserved: true, ...await observer.finish() })
+        observations.push({ mode: 'keep-running-close', incarnationPreserved: true, ...await observer.finish() })
       } finally { await observer.abort() }
 
       const closed = await start('close-stop', 'stop')

@@ -44,6 +44,17 @@ The exact recursive masks were recorded by the synthetic
 Implementation is not acceptance. The native regression exercises real sandboxed
 Electron followed by strict and Chromium-aware verification and restart. Separate
 negative fixtures must reject broadened permissions and misplaced capabilities
-without mutation. Native second-account denial, including a capability-bearing
-process, and Windows 11 standard-user validation remain UNVERIFIED until their
-candidate-linked receipts are recorded in the parity checklist.
+without mutation. Native second-account denial passed for ordinary tokens and
+for actual capability-bearing AppContainers in
+[run 37118862309](https://github.com/forever-Agriculture/BMN/actions/runs/37118862309)
+on candidate `7fd12e8`, Windows Server 2025. The fixture verified the guest user,
+AppContainer/package identity, capability and low integrity level inside each
+receiver. Its capability-bearing positive control allowed read/write; a receiver
+without the capability was denied that control. Both receivers received
+`ERROR_ACCESS_DENIED` for strict storage, the accepted Chromium Cache fixture and
+a low-integrity diagnostic copy with the same leaf ACL. Private content hashes
+remained unchanged; generated account, user profile and AppContainer profile were
+removed. The ordinary broker ran at medium integrity without elevation.
+
+These are native Server 2025 results. Windows 11 laptop validation remains
+**UNVERIFIED**, explicitly deferred by the owner to the release collaborator.

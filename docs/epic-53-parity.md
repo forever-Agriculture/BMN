@@ -232,3 +232,20 @@ The owner explicitly deferred unavailable Windows 11 laptop, WSL/device manual
 checks until the collaborator tests the release. They remain **UNVERIFIED**.
 All feasible local/native CI checks and known reproduced failures still require
 resolution. No full-parity release or Epic 53 completion is claimed here.
+
+[Capability isolation run 37118862309](https://github.com/forever-Agriculture/BMN/actions/runs/37118862309)
+on `7fd12e8` passed real second-user AppContainer access with the exact Chromium
+network capability. The ordinary broker was medium integrity (RID 8192), and both
+AppContainer receivers were low integrity (RID 4096). A capability-bearing positive
+control allowed read/write; removing the capability denied it. Strict storage,
+accepted Cache storage and an accessible low-integrity diagnostic copy denied both
+read and write with Windows error 5. All private hashes were unchanged and all
+generated account/profile resources were removed. This closes the feasible native
+storage gate for 53.1; the owner-deferred Windows 11 check remains UNVERIFIED.
+
+[Launch and fixture run 37116830591](https://github.com/forever-Agriculture/BMN/actions/runs/37116830591)
+on `ee59eb4` retained passing Linux gates and Windows launch UI, native shell/argv,
+packaged startup and native selection. Windows unit inventory improved to 2,096
+passed, 589 failed and 11 skipped. Two new skips are specifically the Linux Bash
+wrapper and SIGHUP semantics, with their Windows owned-job/native-agent-prompt
+counterparts exercised separately. Remaining failures retain their story ownership.
