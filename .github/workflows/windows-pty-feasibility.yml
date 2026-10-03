@@ -24,10 +24,12 @@ jobs:
       - name: Install native prerequisite on disposable runner
         run: npm install --global node-gyp@12.1.0
       - name: Install pinned native dependencies
+        id: install
         run: pnpm install --frozen-lockfile
       - name: Measure built-in and bundled ConPTY
         run: node scripts/test/windows-pty-feasibility.mjs
       - name: Verify owned native process trees
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: node scripts/test/windows-pty-ownership.mjs
       - uses: actions/upload-artifact@v4
         if: always()

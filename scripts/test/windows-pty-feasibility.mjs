@@ -23,7 +23,11 @@ try {
     bracketedPaste: '\x1b[?2004h'
   }
   const input = '\x1b[<0;4;5M\x1b[<0;4;5m\x1b[200~synthetic paste\x1b[201~'
-  writeFileSync(fixture, `const sequences=${JSON.stringify(sequences)};
+  writeFileSync(fixture, `const fs=require('node:fs'); const trace=${JSON.stringify(join(root, 'child-trace.json'))};
+process.on('uncaughtException',error=>{fs.writeFileSync(trace,JSON.stringify({stage:'error',name:error.name,code:error.code,message:error.message}));process.exit(1)});
+process.on('exit',code=>{if(!fs.existsSync(trace))fs.writeFileSync(trace,JSON.stringify({stage:'exit',code}))});
+fs.writeFileSync(trace,JSON.stringify({stage:'entered',stdinTTY:process.stdin.isTTY,stdoutTTY:process.stdout.isTTY}));
+const sequences=${JSON.stringify(sequences)};
 process.stdin.setRawMode(true); process.stdin.resume();
 process.stdout.on('resize',()=>process.stdout.write('BMN_RESIZE:'+process.stdout.columns+'x'+process.stdout.rows+'\\r\\n'));
 process.stdin.on('data',data=>{ process.stdout.write('BMN_INPUT_HEX:'+data.toString('hex')+'\\r\\n'); if(data.includes(3)){process.stdout.write('BMN_CTRL_C\\r\\n');process.exit(0);} });
@@ -64,6 +68,8 @@ fs.writeFileSync(resultPath,JSON.stringify({platform:process.platform,versions:p
   })
   assert.equal(code, 0, stderr)
   const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'))
+  receipt.hostStderr = stderr
+  try { receipt.childTrace = JSON.parse(readFileSync(join(root, 'child-trace.json'), 'utf8')) } catch { receipt.childTrace = null }
   receipt.fullFeatureRoutes = receipt.results.filter(result => result.features && Object.values(result.features).every(Boolean) && result.ready && result.repaint && result.resize && result.ctrlC && result.exit?.exitCode === 0 && result.inputHex === result.expectedInputHex + '03').map(result => result.route)
   mkdirSync(join(repo, 'test-results'), { recursive: true })
   writeFileSync(join(repo, 'test-results/windows-pty-feasibility.json'), JSON.stringify(receipt, null, 2))
