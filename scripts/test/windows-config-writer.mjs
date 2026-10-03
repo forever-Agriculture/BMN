@@ -247,7 +247,7 @@ try {[IO.File]::Replace($r.stage,$r.path,$r.backup,$false)}finally{$held.Dispose
   })
   receipts.status = 'PASS'
 } catch (error) {
-  receipts.status = 'FAIL'; receipts.failure = { name: error.name, code: error.code ?? null, message: error.message }
+  receipts.status = 'FAIL'; receipts.failure = { name: error.name, code: error.code ?? null, message: error.message, operation: error.nativeOperation ?? null, errno: error.nativeErrorCode ?? null, exceptionType: error.nativeExceptionType ?? null }
   process.exitCode = 1
 } finally {
   for (const child of children) child.kill() // Retained native child handle; never PID lookup/kill.
