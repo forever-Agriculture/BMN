@@ -1201,7 +1201,7 @@ export class ControlServer {
         const model = readText(params, 'model', RULES.model)
         // Where a Claude session's settings live (Story 31.1). An old CLI sends none and still passes.
         const claudeConfigDir = readText(params, 'claudeConfigDir', RULES.path)
-        if (claudeConfigDir !== undefined && (agent !== 'claude' || !claudeConfigDir.startsWith('/'))) {
+        if (claudeConfigDir !== undefined && (agent !== 'claude' || !isAbsolute(claudeConfigDir))) {
           throw invalid('claudeConfigDir must be an absolute path from a Claude hook')
         }
         const effects = requireEffects(params, 'effects')

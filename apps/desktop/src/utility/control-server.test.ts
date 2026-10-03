@@ -190,6 +190,22 @@ async function leaveStaleSocket(path: string): Promise<void> {
 }
 
 describe('control server authentication', () => {
+  it.each(['C:\\Users\\fixture 数据\\.claude', '\\\\server\\share\\.claude', 'C:relative\\.claude', 'relative/.claude'])(
+    'validates a Claude hook config directory with native path rules: %s', async (claudeConfigDir) => {
+      const fixture = await serverFixture()
+      const client = await authenticated(fixture, sessionToken(fixture))
+      const response = await client.request('hook.observe', { agent: 'claude', event: 'Stop', effects: [], claudeConfigDir })
+      const valid = process.platform === 'win32' && (claudeConfigDir.startsWith('C:\\') || claudeConfigDir.startsWith('\\\\'))
+      if (valid) {
+        expect(response.error).toBeUndefined()
+        expect(fixture.handlers.observeHookEvent).toHaveBeenCalledWith(expect.objectContaining({ claudeConfigDir }))
+      } else {
+        expectError(response, ERROR_CODES.invalidArgument)
+        expect(fixture.handlers.observeHookEvent).not.toHaveBeenCalled()
+      }
+    }
+  )
+
   it('requires auth as the first request and closes the connection otherwise', async () => {
     const fixture = await serverFixture()
     const client = await TestClient.connect(fixture.socketPath)

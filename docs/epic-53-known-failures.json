@@ -1,17 +1,10 @@
 {
   "description": "Epic 53 failing tests still owned by a port story. Open failures are not waived: the gate in scripts/test/unit-inventory-gate.mjs fails on any unlisted failure, and each story removes its entries as it repairs them.",
-  "source": "native Windows run37131146987 at0f01094 (Windows Server2025,Node24.14.0); remove only individually observed passing assertions",
+  "source": "native Windows run37134340385 atcd39f825 (Windows Server2025,Node24.14.0); remove only individually observed passing assertions",
   "minimumTests": 2650,
   "platforms": {
     "linux": {},
     "win32": {
-      "apps/desktop/src/main/voice-engine.test.ts > speech check before transcription does not run Whisper on a recording without speech, so neither silence nor an echoed vocabulary is pasted": "53.8",
-      "apps/desktop/src/main/voice-engine.test.ts > speech check before transcription finds the detector and its model beside whisper-cli and asks for any speech at all": "53.8",
-      "apps/desktop/src/main/voice-engine.test.ts > speech check before transcription reports a failed or unreadable speech check instead of transcribing": "53.8",
-      "apps/desktop/src/main/voice-engine.test.ts > whisper-cli invocation blanks the vocabulary out of a surfaced engine error": "53.8",
-      "apps/desktop/src/main/voice-engine.test.ts > whisper-cli invocation passes the recording-sized audio context to the engine": "53.8",
-      "apps/desktop/src/main/voice-engine.test.ts > whisper-cli invocation removes the temporary recording after transcription, even when the engine fails": "53.8",
-      "apps/desktop/src/main/voice-engine.test.ts > whisper-cli invocation returns the transcript from a successful run and reports failures": "53.8",
       "apps/desktop/src/utility/agent-history-adapters.test.ts > Codex history adapter follows CODEX_HOME": "53.6",
       "apps/desktop/src/utility/agent-history-adapters.test.ts > Codex history adapter is not recognised when the table lacks its columns, and absent without the binary or the store": "53.6",
       "apps/desktop/src/utility/agent-history-adapters.test.ts > Codex history adapter reads every thread read-only, by last activity, archived or not": "53.6",
@@ -136,7 +129,6 @@
       "apps/desktop/src/utility/database-companion-store.test.ts > companion store loads a voice row stored before the vocabulary existed with an empty vocabulary and its other fields intact": "53.3",
       "apps/desktop/src/utility/file-reference-reader.test.ts > readFileReference explains missing files, folders, devices, pipes and a missing launch directory": "53.3",
       "apps/desktop/src/utility/file-reference-reader.test.ts > readFileReference reports a change when the shown path stops naming the file that was read": "53.3",
-      "apps/desktop/src/utility/file-reference-search.test.ts > searchFileReferences finds source after generated entries would exhaust the original default cap": "53.3",
       "apps/desktop/src/utility/hook-configuration-check.test.ts > runHookConfigurationCheck reads an unreadable file as its state, without the operating system reason": "53.6",
       "apps/desktop/src/utility/hook-configuration-check.test.ts > runHookConfigurationCheck reports every harness with a checked time, wired entries and missing entries": "53.6",
       "apps/desktop/src/utility/hook-event-history.test.ts > bounded retained hook metadata refuses oversize files and links before reading unbounded bytes": "53.6",

@@ -153,8 +153,17 @@ setInterval(()=>{if(role==='root')publish('heartbeat.json',Date.now())},100);
     let killedMainPid
     // These are processes reported by this synthetic app, retained before termination.
     // Parent PIDs and text matches remain diagnostics, never termination authority.
-    const electronTree = () => app.evaluate(({ app }) => app.getAppMetrics()
-      .map(({ pid, creationTime }) => ({ pid, creationTime })))
+    const electronTree = () => app.evaluate(({ app }) => {
+      const builtin = process.mainModule.require.bind(process.mainModule)
+      const require = builtin('node:module').createRequire(builtin('node:path').join(app.getAppPath(), 'package.json'))
+      const identity = require('node-pty').queryProcessStartIdentity(process.pid)
+      if (!/^windows-filetime:[0-9]+$/.test(identity)) throw new Error('Main process creation identity unavailable')
+      const entries = new Map(app.getAppMetrics().map(({ pid, creationTime }) => [pid, { pid, creationTime }]))
+      const metricsIncludedMain = entries.has(process.pid)
+      entries.set(process.pid, { pid: process.pid,
+        creationTime: Number(BigInt(identity.slice('windows-filetime:'.length)) / 10000n) - 11644473600000 })
+      return { mainPid: process.pid, metricsIncludedMain, entries: [...entries.values()] }
+    })
     const verifyRestart = async (session, { forcedExit = false } = {}) => {
       for (let attempt = 1; ; attempt += 1) {
         try { await open(); break } catch (error) {
@@ -227,8 +236,10 @@ setInterval(()=>{if(role==='root')publish('heartbeat.json',Date.now())},100);
       } finally { await observer.abort() }
 
       const mainCrashed = await start('main-crash', 'stop')
-      const beforeMainCrash = await electronTree()
-      const mainIndex = beforeMainCrash.findIndex(entry => entry.pid === app.process().pid)
+      const mainTree = await electronTree()
+      const beforeMainCrash = mainTree.entries
+      observations.push({ mode: 'main-process-identity', launchedPid: app.process().pid, mainPid: mainTree.mainPid, metricsIncludedMain: mainTree.metricsIncludedMain, entries: beforeMainCrash })
+      const mainIndex = beforeMainCrash.findIndex(entry => entry.pid === mainTree.mainPid)
       assert.ok(mainIndex >= 0, 'The process tree must include main')
       assert.ok(beforeMainCrash.length >= 3, 'Observe main and Electron descendants')
       const unrelated = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { stdio: 'ignore' })
@@ -255,8 +266,9 @@ setInterval(()=>{if(role==='root')publish('heartbeat.json',Date.now())},100);
         const cleanup = await observer.finish()
         // Restart this isolated main process after its utility was forcibly lost.
         // The retained observer has already confirmed that the entire tree exited.
-        killedMainPid = app.process().pid
-        const remainingElectron = (await electronTree()).filter(entry => !host.some(killed => killed.pid === entry.pid))
+        const remainingTree = await electronTree()
+        killedMainPid = remainingTree.mainPid
+        const remainingElectron = remainingTree.entries.filter(entry => !host.some(killed => killed.pid === entry.pid))
         const mainIndex = remainingElectron.findIndex(entry => entry.pid === killedMainPid)
         assert.ok(mainIndex >= 0, 'Observe main after utility loss')
         const remainingObserver = await windowsExitObserver(remainingElectron, mainIndex)

@@ -12,13 +12,13 @@ Epic 50/54 installed/provider acceptance remains separate and unfinished.
 | Capability / owning story | Implementation owner | Linux candidate | Native Windows | WSL |
 | --- | --- | --- | --- | --- |
 | Build, data roots, database, restart, single instance, unpacked startup — 53.1 | Implementation team | Build/startup/package PASS on Ubuntu CI | Install/build/package/startup/restart/ACL PASS on Server 2025; Windows 11 manual acceptance UNVERIFIED | UNVERIFIED |
-| PowerShell/cmd launch, input, stop, process identity, crash cleanup, ConPTY feasibility — 53.2 | Implementation team | Affected tests and sandboxed startup PASS | Bundled bytes, terminal jobs and shell/UI PASS; main-owned Electron lifetime candidate and direct/no-backstop crash fences await native CI | UNVERIFIED |
+| PowerShell/cmd launch, input, stop, process identity, crash cleanup, ConPTY feasibility — 53.2 | Implementation team | Affected tests and sandboxed startup PASS | Bundled bytes/trees/GUI/pressure, shell/UI and direct/debugger main-job crash cleanup PASS; full lifecycle relaunch gate remains open | UNVERIFIED |
 | Files, path links, attachments, backups, directory permissions — 53.3 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
-| CLI, transport, caller/session authority — 53.4 | Implementation team | 178 server/498 CLI affected checks PASS on 629dc91 | User-only named pipe and native bmn.exe launcher implemented; native compile/security/argv tests pending | UNVERIFIED |
-| Named distributions, bridge, path mapping, terminfo — 53.5 | Implementation team | UNVERIFIED | UNVERIFIED | Not implemented |
+| CLI, transport, caller/session authority — 53.4 | Implementation team | 178 server/498 CLI affected checks PASS on 629dc91 | Native bmn.exe startup/argv/stdin and restricted control pipe owner/cross-account denial PASS; hook/config acceptance remains open | UNVERIFIED |
+| Named distributions, bridge, path mapping, terminfo — 53.5 | Implementation team | UNVERIFIED | Disposable WSL2 Alpine VM boot/cleanup PASS | Ubuntu systemd/interop ownership measurement pending; bridge not implemented |
 | Claude/Codex/OpenCode/Cursor hooks, history, usage, compaction, resume — 53.6 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
 | Terminal images, clipboard, IME/AltGr, scaling, panes, themes, keyboard access — 53.7 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
-| Microphone, local voice engine, cancellation, addressed paste — 53.8 | Implementation team | UNVERIFIED | Not implemented | UNVERIFIED |
+| Microphone, local voice engine, cancellation, addressed paste — 53.8 | Implementation team | Portable speech/silence/transcription PASS | Portable/packaged engines, PE imports and private WAV ACL PASS; microphone/UI/other CPU UNVERIFIED | UNVERIFIED |
 | Notifications, attention, Telegram replies and delivery diagnostics — 53.9 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
 | Per-session development port discovery and navigation — 53.10 | Implementation team | UNVERIFIED | Not implemented | UNVERIFIED |
 | Per-user install, source updates, rollback, uninstall — 53.11 | Implementation team | UNVERIFIED | Not implemented | UNVERIFIED |
@@ -253,3 +253,31 @@ packaged startup and native selection. Windows unit inventory improved to 2,096
 passed, 589 failed and 11 skipped. Two new skips are specifically the Linux Bash
 wrapper and SIGHUP semantics, with their Windows owned-job/native-agent-prompt
 counterparts exercised separately. Remaining failures retain their story ownership.
+
+## Native voice and crash measurements (2026-10-03)
+
+[Platform run 37134340385](https://github.com/forever-Agriculture/BMN/actions/runs/37134340385)
+tested `cd39f825` on the recorded Windows Server 2025/Ubuntu 24.04 stacks. Linux
+passed its full suite, startup and packaged checks. Windows passed portable and
+packaged speech/silence/transcription using only public audio; both executable PE
+imports contain only ADVAPI32/KERNEL32, and the actual temporary recording ACL
+test passed. Development and packaged startup each exercised the real `bmn snapshot`
+launcher. Other CPU hardware, real microphones and the complete voice UI flow
+remain UNVERIFIED.
+
+Native protected direct and debugger-attached utility-then-main crash probes each
+confirmed eight retained process handles exited. The baseline without the main job
+also cleaned naturally, so original-defect reproduction remains INCONCLUSIVE.
+Renderer recovery, Close/Keep-running, Close/Stop/restart and Ask/Cancel/Quit/restart
+passed; the later main PID lookup assertion prevented completing the lifecycle gate.
+The candidate fixture now obtains the actual main PID and native creation identity
+inside Electron, recording launcher and metrics identities separately.
+
+[PTY run 37134340356](https://github.com/forever-Agriculture/BMN/actions/runs/37134340356)
+passed all native tree/GUI/pressure/race and cross-account private-pipe checks.
+The full Windows unit inventory remains failing: 2,730 passed, 167 failed, 12 skipped.
+Eight newly observed passing keys were removed from the failure inventory. Synthetic
+hook diagnosis delivered Stop RPCs with both fake and missing `/proc`; real server
+validation subsequently identified a POSIX-only Claude configuration-path check.
+The next candidate uses native absolute-path validation, retaining relative-path
+rejection and agent/session authority. No whole-story acceptance is claimed.
