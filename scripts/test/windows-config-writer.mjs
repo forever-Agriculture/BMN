@@ -30,6 +30,7 @@ if($r.protect) {
  $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,'FullControl','Allow')))
  if($r.denyDelete) {$acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,'Delete','Deny')))}
  if($r.denyChildDelete) {$acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule($sid,'DeleteSubdirectoriesAndFiles','Deny')))}
+ if($r.unsafeParent) {$acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-545')),'DeleteSubdirectoriesAndFiles','Allow')))}
  $phase='set-access-control'
  if($r.directory) {[IO.Directory]::SetAccessControl($r.path,$acl)} else {[IO.File]::SetAccessControl($r.path,$acl)}
 }
@@ -129,6 +130,23 @@ try {[IO.File]::Replace($r.stage,$r.path,$r.backup,$false)}finally{$held.Dispose
     assert.deepEqual(acl(path), before); assert.deepEqual(acl(result.backup), before)
     receipts.inheritedProductGreen = { before, after: acl(path), backup: acl(result.backup) }
   })
+  await check('refuses a parent with ordinary-account namespace mutation without changing permissions', () => {
+    const directory = join(root, 'unsafe-parent'); mkdirSync(directory)
+    const path = join(directory, 'settings.json'); writeFileSync(path, 'BEFORE')
+    acl(path, { protect: true }); acl(directory, { directory: true, protect: true, unsafeParent: true })
+    try {
+      // The immutable baseline accepted this unsafe namespace; candidate must refuse.
+      const baseline = baselineWrite(path, 'BEFORE', 'AFTER')
+      assert.equal(readFileSync(path, 'utf8'), 'AFTER'); assert.equal(readFileSync(baseline.backup, 'utf8'), 'BEFORE')
+      writeFileSync(path, 'BEFORE')
+      const before = acl(path), parent = acl(directory, { directory: true }), names = readdirSync(directory).sort()
+      let failure
+      try { writeConfigSafely(path, 'BEFORE', 'OURS') } catch (error) { failure = error }
+      assert.equal(failure?.nativeOperation, 'prepare:ancestors')
+      assert.equal(readFileSync(path, 'utf8'), 'BEFORE'); assert.deepEqual(acl(path), before)
+      assert.deepEqual(acl(directory, { directory: true }), parent); assert.deepEqual(readdirSync(directory).sort(), names)
+    } finally { acl(directory, { directory: true, protect: true }) }
+  })
   await check('protected original and backup preserve owner/DACL with Unicode', () => {
     const path = file('existing.json', 'BEFORE 雪'), before = acl(path)
     const result = writeConfigSafely(path, 'BEFORE 雪', 'AFTER 雪')
@@ -206,6 +224,26 @@ try {[IO.File]::Replace($r.stage,$r.path,$r.backup,$false)}finally{$held.Dispose
     assert.throws(() => writeAtomically(path, undefined))
     assert.equal(existsSync(path), false); assert.deepEqual(temps(), [])
   })
+  await check('denied owned-stage cleanup retains private recovery data', () => {
+    const directory = join(root, 'cleanup-denied'); mkdirSync(directory)
+    const path = join(directory, 'settings.json'); writeFileSync(path, 'BEFORE'); acl(path, { protect: true })
+    let stage, failure
+    try {
+      try { writeConfigSafely(path, 'BEFORE', 'OURS', { beforeCommit: () => {
+        stage = join(directory, readdirSync(directory).find(name => name.endsWith('.tmp')))
+        acl(stage, { protect: true, denyDelete: true })
+        acl(directory, { directory: true, protect: true, denyChildDelete: true })
+        throw new Error('Synthetic refusal')
+      } }) } catch (error) { failure = error }
+      assert.equal(failure?.code, 'RECOVERY_REQUIRED')
+      assert.equal(failure?.nativeOperation, 'cleanup:owned-stage-cleanup')
+      assert.equal(failure?.nativeErrorCode, 5)
+      assert.equal(readFileSync(path, 'utf8'), 'BEFORE'); assert.equal(readFileSync(stage, 'utf8'), 'OURS')
+    } finally {
+      if (stage) acl(stage, { protect: true })
+      acl(directory, { directory: true, protect: true })
+    }
+  })
   await check('postpublication repair failure retains recovery bytes and backup', () => {
     const path = file('repair-failure.json', 'BEFORE')
     const oldMode = process.env.NODE_ENV, oldFailure = process.env.BMN_CONFIG_WRITE_TEST_REPAIR_FAILURE
@@ -231,6 +269,20 @@ try {[IO.File]::Replace($r.stage,$r.path,$r.backup,$false)}finally{$held.Dispose
       writeFileSync(gate, '')
       assert.equal((await pending.result).ok, true)
       assert.equal(readFileSync(path, 'utf8'), 'OURS')
+    } finally { writeFileSync(gate, ''); await pending.exited }
+  })
+  await check('backup reservation substitution preserves the unrelated replacement', async () => {
+    const path = file('backup-substitution.json', 'BEFORE'), gate = join(root, 'backup-substitution.release')
+    const pending = workerWrite(path, 'BEFORE', 'OURS', gate)
+    try {
+      await waitFor(`${gate}.waiting`)
+      const names = readdirSync(root).filter(name => name.startsWith('backup-substitution.json.bmn-backup-'))
+      assert.equal(names.length, 1)
+      const replacement = join(root, names[0]); rmSync(replacement); writeFileSync(replacement, 'UNRELATED')
+      writeFileSync(gate, '')
+      assert.deepEqual(await pending.result, { ok: false, code: 'REVISION_CONFLICT', recoveryRequired: false })
+      assert.equal(readFileSync(path, 'utf8'), 'BEFORE'); assert.equal(readFileSync(replacement, 'utf8'), 'UNRELATED')
+      assert.deepEqual(temps(), [])
     } finally { writeFileSync(gate, ''); await pending.exited }
   })
   await check('namespace race retains displaced edit and reports recovery without rollback', async () => {

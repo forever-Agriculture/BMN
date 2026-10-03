@@ -86,6 +86,52 @@ describe('shared config writer', () => {
     expect(lstatSync(path).isSymbolicLink()).toBe(true)
   }, 15000)
 
+  it('does not delete an unrelated replacement of its staged file after a refusal', () => {
+    const root = fixture(), path = join(root, 'settings.json')
+    writeFileSync(path, 'BEFORE')
+    if (process.platform === 'win32') windowsAcl(path, true)
+    let replacement
+    expect(() => writeConfigSafely(path, 'BEFORE', 'OURS', { beforeCommit: () => {
+      const staged = readdirSync(root).filter(name => name.endsWith('.tmp'))
+      expect(staged).toHaveLength(1)
+      replacement = join(root, staged[0])
+      unlinkSync(replacement); writeFileSync(replacement, 'UNRELATED')
+      throw new Error('Synthetic refusal')
+    } })).toThrow()
+    expect(readFileSync(path, 'utf8')).toBe('BEFORE')
+    expect(readFileSync(replacement, 'utf8')).toBe('UNRELATED')
+  }, 15000)
+
+  it('refuses to publish an unrelated staged object even without a callback exception', () => {
+    const root = fixture(), path = join(root, 'settings.json')
+    writeFileSync(path, 'BEFORE')
+    if (process.platform === 'win32') windowsAcl(path, true)
+    let replacement
+    expect(() => writeConfigSafely(path, 'BEFORE', 'OURS', { beforeCommit: () => {
+      const staged = readdirSync(root).filter(name => name.endsWith('.tmp'))
+      expect(staged).toHaveLength(1)
+      replacement = join(root, staged[0])
+      unlinkSync(replacement); writeFileSync(replacement, 'UNRELATED')
+    } })).toThrow()
+    expect(readFileSync(path, 'utf8')).toBe('BEFORE')
+    expect(readFileSync(replacement, 'utf8')).toBe('UNRELATED')
+  }, 15000)
+
+  it('retains a replacement stage symlink and never deletes its destination', () => {
+    const root = fixture(), path = join(root, 'settings.json'), foreign = join(root, 'foreign.json')
+    writeFileSync(path, 'BEFORE'); writeFileSync(foreign, 'UNRELATED')
+    if (process.platform === 'win32') windowsAcl(path, true)
+    let replacement
+    expect(() => writeConfigSafely(path, 'BEFORE', 'OURS', { beforeCommit: () => {
+      replacement = join(root, readdirSync(root).find(name => name.endsWith('.tmp')))
+      unlinkSync(replacement); symlinkSync(foreign, replacement, 'file')
+      throw new Error('Synthetic refusal')
+    } })).toThrow()
+    expect(lstatSync(replacement).isSymbolicLink()).toBe(true)
+    expect(readFileSync(foreign, 'utf8')).toBe('UNRELATED')
+    expect(readFileSync(path, 'utf8')).toBe('BEFORE')
+  }, 15000)
+
   it('binds a write to the target captured before reading even when contents match', () => {
     const root = fixture(), first = join(root, 'first.json'), second = join(root, 'second.json'), path = join(root, 'settings.json')
     writeFileSync(first, 'SAME'); writeFileSync(second, 'SAME'); symlinkSync(first, path, 'file')
