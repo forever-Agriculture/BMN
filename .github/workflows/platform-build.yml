@@ -43,6 +43,9 @@ jobs:
       - name: Typecheck
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: pnpm run typecheck
+      - name: Discover WSL capabilities without installing or starting distributions
+        if: ${{ !cancelled() && steps.install.outcome == 'success' && runner.os == 'Windows' }}
+        run: node scripts/test/windows-wsl-capabilities.mjs
       # The full suite runs on both OSes. Failures still owned by a port story are
       # listed in docs/epic-53-known-failures.json and stay open (never waived or
       # skipped); the gate fails on any other failure, so regressions stay red.

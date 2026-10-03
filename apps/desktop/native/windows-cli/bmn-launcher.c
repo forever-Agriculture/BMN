@@ -10,8 +10,12 @@
 // development build places bmn.runtime next to this program: two UTF-8 lines naming
 // the runtime and the script by absolute path.
 #define WIN32_LEAN_AND_MEAN
+#ifndef UNICODE
 #define UNICODE
+#endif
+#ifndef _UNICODE
 #define _UNICODE
+#endif
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
