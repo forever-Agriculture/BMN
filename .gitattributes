@@ -1,2 +1,6 @@
 # Pnpm patches are byte-sensitive, including their lockfile hashes.
 patches/*.patch -text
+# Recorded terminal screens and harness payloads are byte-exact fixtures; a Windows
+# autocrlf checkout must not add carriage returns to them.
+apps/desktop/src/utility/test-fixtures/**/*.txt -text
+apps/desktop/src/utility/test-fixtures/**/*.json -text

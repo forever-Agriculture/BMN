@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { once } from 'node:events'
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -93,8 +93,23 @@ setInterval(()=>{if(role==='root')publish('heartbeat.json',Date.now())},100);
       await heartbeat(session)
     }
     const exitedApp = () => once(app.process(), 'exit', { signal: AbortSignal.timeout(30000) })
-    const verifyRestart = async session => {
-      await open()
+    // Processes still referencing this isolated root, recorded when a relaunch is refused.
+    const lingering = () => {
+      try {
+        return JSON.parse(execFileSync(join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoProfile', '-NonInteractive', '-Command',
+          `ConvertTo-Json -Compress -InputObject @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains('${root.replaceAll("'", "''")}') } | ForEach-Object { @{pid=$_.ProcessId;parent=$_.ParentProcessId;name=$_.Name;type=([regex]::Match($_.CommandLine,'--type=([a-z-]+)').Groups[1].Value)} })`],
+          { encoding: 'utf8', windowsHide: true }) || '[]')
+      } catch (error) { return [{ queryError: String(error.message).split('\n')[0] }] }
+    }
+    const relaunchAttempts = []
+    const verifyRestart = async (session, { forcedExit = false } = {}) => {
+      for (let attempt = 1; ; attempt += 1) {
+        try { await open(); break } catch (error) {
+          if (!forcedExit || attempt >= 15) throw error
+          relaunchAttempts.push({ attempt, at: Date.now(), error: String(error.message).split('\n')[0].slice(0, 200), lingering: lingering() })
+          await delay(1000)
+        }
+      }
       const records = await page.evaluate(id => window.aiTerminal.listSessions(id), session.session.workspaceId)
       const record = records.find(record => record.sessionId === session.session.sessionId)
       assert.equal(record.lastProcess.state, 'interrupted')
@@ -168,10 +183,13 @@ setInterval(()=>{if(role==='root')publish('heartbeat.json',Date.now())},100);
         // Restart this isolated main process after its utility was forcibly lost.
         // The retained observer has already confirmed that the entire tree exited.
         const exited = exitedApp(); app.process().kill(); await exited
-        observations.push({ mode: 'utility-crash-restart', ...cleanup,
-          recoveredState: await verifyRestart(crashed), automaticRestart: false })
+        const killedAt = Date.now()
+        const recoveredState = await verifyRestart(crashed, { forcedExit: true })
+        observations.push({ mode: 'utility-crash-restart', ...cleanup, recoveredState, automaticRestart: false,
+          refusedRelaunches: relaunchAttempts.map(entry => ({ ...entry, afterKillMs: entry.at - killedAt })) })
       } finally { await observer.abort() }
     } catch (error) {
+      if (relaunchAttempts.length) observations.push({ mode: 'refused-relaunches', relaunchAttempts })
       await page?.screenshot({ path: join(output, 'windows-lifecycle-failure.png') }).catch(() => {})
       throw error
     } finally {
