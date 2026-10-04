@@ -139,13 +139,33 @@ try {
 process.on('uncaughtException',error=>{fs.writeFileSync(trace,JSON.stringify({stage:'error',name:error.name,code:error.code,message:error.message}));process.exit(1)});
 fs.writeFileSync(trace,JSON.stringify({stage:'entered',stdinTTY:process.stdin.isTTY,stdoutTTY:process.stdout.isTTY}));
 const frame=${JSON.stringify(frame)};
-process.stdin.setRawMode(true);process.stdin.resume();process.stdin.on('data',()=>process.stdout.write('BMN_GRAPHICS_INPUT_OK\\r\\n'));
-process.stdout.write(frame+'BMN_GRAPHICS_NATIVE_READY\\r\\n');setInterval(()=>{},1000);`)
-      const graphics = await launch('Native graphics fixture', process.execPath, [graphicsFixture])
+process.stdin.setRawMode(true);process.stdin.resume();let emitted=false;
+process.stdin.on('data',()=>{if(!emitted){emitted=true;process.stdout.write(frame+'BMN_GRAPHICS_NATIVE_READY\\r\\n')}
+else process.stdout.write('BMN_GRAPHICS_INPUT_OK\\r\\n')});setInterval(()=>{},1000);`)
+      // The real creation form adopts the returned attachment into the renderer.
+      // Direct IPC creation only records it in preload for a future subscription.
+      await page.keyboard.press('Control+Shift+P')
+      await page.locator('dialog[open] input').fill('New session')
+      await page.getByRole('option').filter({ has: page.locator('.label', { hasText: /^New session…$/ }) }).click()
+      await page.getByRole('textbox', { name: 'Session name', exact: true }).fill('Native graphics fixture')
+      await page.getByRole('textbox', { name: 'Working directory', exact: true }).fill(cwd)
+      await page.locator('.advanced summary').click()
+      await page.getByLabel('Launch type', { exact: true }).selectOption('program')
+      await page.getByRole('textbox', { name: 'Executable', exact: true }).fill(process.execPath)
+      await page.getByRole('textbox', { name: 'Arguments', exact: true }).fill(JSON.stringify([graphicsFixture]))
+      await page.getByRole('button', { name: 'Create session', exact: true }).click()
+      await page.waitForFunction(async workspaceId =>
+        (await window.aiTerminal.listSessions(workspaceId)).some(session => session.name === 'Native graphics fixture'), workspace.workspaceId)
+      const graphics = { session: await page.evaluate(async workspaceId =>
+        (await window.aiTerminal.listSessions(workspaceId)).find(session => session.name === 'Native graphics fixture'), workspace.workspaceId) }
       const graphicsId = graphics.session.sessionId
-      // Activation addresses the utility attachment; the sidebar selects and
-      // mounts the actual renderer view which this graphics acceptance measures.
       await page.locator(`.session-row button[data-session-id="${graphicsId}"]`).click()
+      await page.waitForFunction(id => {
+        try { return !!window.__aitermTest?.snapshot(id) } catch { return false }
+      }, graphicsId)
+      await page.locator(`.session-terminal[data-session-id="${graphicsId}"] .terminal-surface`).click()
+      // Produce the image only after a real pane and keyboard input are connected.
+      await page.keyboard.type('g')
       try { await page.waitForFunction(id => {
         try {
           const snapshot = window.__aitermTest.snapshot(id)

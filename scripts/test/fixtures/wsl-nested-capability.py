@@ -6,6 +6,14 @@ libc=helper.LIBC
 def probe(uid):
     result={'uid':uid,'profileComplete':False}
     try:
+        # The UID drop resets dumpability and makes proc mapping files root-owned.
+        # Enable only this synthetic leased UID's own proc-file access; the
+        # separate UID/private namespaces and outside-process syscall denials stay.
+        result['dumpableBefore']=libc.prctl(3,0,0,0,0)
+        result['mappingOwnerBefore']=pathlib.Path('/proc/self/uid_map').stat().st_uid
+        helper.checked(libc.prctl(4,1,0,0,0))
+        result['mappingOwnerAfter']=pathlib.Path('/proc/self/uid_map').stat().st_uid
+        assert result['mappingOwnerAfter']==uid,result
         ctypes.set_errno(0)
         code=libc.unshare(0x10000000|0x00020000|0x40000000|0x08000000|0x04000000)
         if code:

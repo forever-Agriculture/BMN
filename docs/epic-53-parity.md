@@ -115,6 +115,28 @@ GREEN regression that constructs all four candidates without running namespaces.
 Native nested sandbox acceptance remains UNVERIFIED; the production helper policy
 is unchanged, and the disposable distribution was removed.
 
+[Follow-up 37223295411](https://github.com/forever-Agriculture/BMN/actions/runs/37223295411)
+passed Core commands and explicit Utility module import under three controlled
+environments. Automatic `ConvertFrom-Json` discovery timed out in each; disabling
+autoload failed promptly, and the full helper trace stopped at its JSON conversion.
+An explicit-import/full-helper comparison is prepared; no additional product fix
+has been inferred from the import-only control.
+
+[WSL follow-up 37223295371](https://github.com/forever-Agriculture/BMN/actions/runs/37223295371)
+reached the kernel after the CRLF repair: only amended-filter plus `pivot_root`
+created the nested user namespace. It then failed opening `/proc/self/setgroups`.
+The next synthetic probe measures proc ownership and dumpability before enabling
+its own mapping-file access; the production helper remains unchanged.
+
+[Run 37222257544](https://github.com/forever-Agriculture/BMN/actions/runs/37222257544)
+was superseded and cancelled during packaging. Its collected Windows startup,
+persistence, single-instance, real CLI and lifecycle receipts passed; its inventory
+recorded 3,026 passed, 31 failed and 12 skipped tests. The graphics producer was
+live, but direct IPC creation had not adopted its attachment into the renderer;
+the captured screen showed a session summary instead of a terminal. The fixture
+now uses the actual creation form and waits for keyboard input before emitting an
+image. Native graphics acceptance remains UNVERIFIED.
+
 [Initial run 37057811322](https://github.com/forever-Agriculture/BMN/actions/runs/37057811322)
 tested `7bfa647` on Ubuntu 24.04 x64 and Windows Server 2025 Datacenter x64,
 with Node 24.14.0, pnpm 12.3.4 and Electron 44.3.0. Linux passed the full
