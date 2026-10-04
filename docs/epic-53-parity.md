@@ -23,7 +23,7 @@ Epic 50/54 installed/provider acceptance remains separate and unfinished.
 | Per-session development port discovery and navigation — 53.10 | Implementation team | 498 affected tests PASS, one skip; scanner timeout original RED/current GREEN | Owned-job TCP scanner implemented and focused-reviewed; owned Edge IPv4/IPv6 navigation gate prepared; MSVC/runtime/UI/browser UNVERIFIED | UNVERIFIED |
 | Per-user install, source updates, rollback, uninstall — 53.11 | Implementation team | Affected source tests/type/bundle PASS; Linux development startup PASS | Offline installer, versioned transaction, leases, snapshot, queue and uninstall implemented in source; native compiler/kernel/install acceptance UNVERIFIED | UNVERIFIED |
 | Full CI, required merge gates, contributor rules — 53.12 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
-| Full feature-guide reconciliation and installed-app acceptance — 53.13 | Team + independent Windows verifier | UNVERIFIED | UNVERIFIED | UNVERIFIED |
+| Full feature-guide reconciliation and installed-app acceptance — 53.13 | Team + independent Windows verifier | 71-scenario coverage draft; installed acceptance UNVERIFIED | Final integration/installed acceptance UNVERIFIED | Final integration/installed acceptance UNVERIFIED |
 
 ## Story 53.1 checks
 
@@ -69,9 +69,11 @@ No failing file has been silently declared portable or waived.
 | `/proc` port scanning and process attribution | 53.10 |
 | systemd, desktop entries, packaging/install/update | 53.11 |
 
-Before acceptance, expand the capability rows against every current feature-guide
-entry and newly merged epic contract. These initial rows do not claim complete
-final feature-by-feature coverage.
+The [feature coverage checklist](epic-53-feature-coverage.md) expands these rows
+into 71 scenarios against the current feature guide, README and merged Epic 50–55
+contracts. Each names its owning story and a test or measurement starting point.
+Installed-flow results remain UNVERIFIED; reconcile newly merged features again
+against the final integration commit before acceptance.
 
 ## Current local evidence (not acceptance)
 
@@ -357,7 +359,7 @@ gate checks that full scan while kernel lock handles are held; it has not run.
 Queued/waiting starts forward to the selected running GUI. Otherwise, an owned
 asynchronous notice explains the wait; dismissing it leaves the update running.
 
-Local evidence: the consolidated worker repair has 74 affected passing tests,
+Local evidence: the consolidated worker repair has 100 affected passing tests,
 typecheck, lint and worker bundling. The original reviewed resolver fails the
 bounded two-worker queue/lease regression; the repair passes with one activation
 and all simulated leases released. Original image guards, uninstall rechecks and
@@ -365,7 +367,9 @@ renamed-GUI selection tests fail on their respective defects and pass after repa
 These tests use synthetic process observations and ordinary temporary files.
 The three earlier installer findings are closed; the former shortcut compatibility
 finding was rejected against Git history because that format was never shipped.
-The consequential worker repair is under focused recheck; full-epic review is unrun.
+The focused Astra source recheck closed the consequential worker repair and found
+no new material defect. The attempted Luna recheck timed out without a verdict;
+its partial output does not count as acceptance. Full-epic review is unrun.
 The pinned NSIS compiler's prior Linux syntax/resource check and real Linux startup
 evidence are retained for unchanged behavior.
 
@@ -392,7 +396,7 @@ project and proc-alias reads and prevented that launch request.
 | Target UID 200000, peer UID 1000 | Denied | Denied | Not launched |
 
 This measures the Linux UID/filesystem/proc boundary only. It does **not** verify
-WSL2, user/mount/network namespaces, provider egress, authenticated `bmn` relay,
+WSL2, user/mount/network namespaces, general egress, authenticated `bmn` relay,
 mediated project import/export, device/FD/syscall restrictions, WSLg/native interop,
 two-distribution identity, ports or terminfo. `ProfileComplete` remains false.
 A trusted root helper inside the selected WSL distribution could provision an
@@ -427,10 +431,19 @@ The root observer required `SYS_PTRACE`; session effective, permitted, inheritab
 and ambient capabilities are explicitly cleared. The fixture removes its scratch
 files and confirms termination of its own outside actors separately.
 
+An Opus design consultation identified a missing adversarial EOF case: the session
+can ignore stdin entirely. That fifth lifecycle failed against the original
+helper: retained descendants survived after host EOF. The controller now polls
+stdin hangup and its retained init pidfd without reading terminal input; the same
+five-mode local fixture passes, with all three processes terminated and unrelated
+sentinels alive. Callback failure still exits 70. The receipt gate requires the
+explicit nonreading-EOF mode; 13 parser/receipt checks pass. A focused source review
+of this new repair is pending. Actual WSL/ConPTY hangup delivery remains UNVERIFIED.
+
 This is a helper prototype with a trusted measurement callback, not a production
 launch protocol. Native WSL measurement is routed through the existing freshly
 imported distribution gate and remains **UNVERIFIED**. Persistent project mediation,
-provider-only egress, scoped BMN relay, PTY/terminfo and native host lifecycle remain
+mediated general egress, scoped BMN relay, PTY/terminfo and native host lifecycle remain
 open; `ProfileComplete` is still false.
 
 The callback failure regression exits 70 inside the fork without unwinding into
@@ -441,6 +454,20 @@ than a missing result that the outer gate could accept. The receipt tests also
 parse the exact Python launch text: the indentation regression fails against
 `f00ddad`, and the repaired twelve checks pass. These are local synthetic/runtime
 and parser results, not native WSL acceptance.
+
+The remaining capability design must preserve agent sandboxes, ordinary Internet
+and package-manager access, private durable projects, scoped `bmn` calls and ports.
+The current filter denies user/mount namespaces used by nested agent/browser
+sandboxes; disabling those sandboxes would violate the owner boundary. A safe
+nested-namespace policy still needs measurement. Persistent workspace ownership
+must prevent a later UID lessee from accessing another project's stored files;
+private storage, namespace mapping and crash-safe import/export are unimplemented.
+A writable tree shared with outside watchers would recreate the measured broker
+escape. Mediated egress must account for host addresses, DNS/redirects, IPv4/IPv6
+and Windows NAT/mirrored routing; a provider-only allowlist does not preserve
+general shell/build use. The bridge must carry protocol separately from terminal
+bytes and bind authority at the native host without copying its owner token.
+These are unresolved implementation/design gates, not delivered capabilities.
 
 ## Native outside-broker discriminator (candidate)
 
