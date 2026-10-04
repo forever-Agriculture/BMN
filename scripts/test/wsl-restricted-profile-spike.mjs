@@ -73,3 +73,38 @@ export function measureRootRestrictedGuestProfile({ distribution, guest }) {
     return { result: 'FAIL', receiptValidationFailed: true, profileComplete: false }
   }
 }
+
+// Distinguish the kernel's chroot precondition from the guest's seccomp policy.
+// Candidate root/filter variants are confined to this synthetic fixture; the
+// product helper is unchanged and this does not establish agent sandbox parity.
+export function measureNestedGuestNamespaces({ distribution, guest }) {
+  assert.equal(process.platform, 'win32')
+  assert.equal(process.env.GITHUB_ACTIONS, 'true')
+  assert.match(distribution, /^BMN-Epic53-Systemd-[0-9a-f-]+$/)
+  try {
+    const helper = readFileSync(new URL('../lib/wsl-root-session.py', import.meta.url), 'utf8')
+    const fixture = readFileSync(new URL('./fixtures/wsl-nested-capability.py', import.meta.url), 'utf8')
+    const result = guest(['/usr/bin/python3', '-c',
+      'import sys,json,types; p=json.loads(sys.stdin.read()); m=types.ModuleType("bmn_root_session"); exec(compile(p["helper"],"bmn-root-helper.py","exec"),m.__dict__); sys.modules[m.__name__]=m; exec(compile(p["fixture"],"bmn-nested-kernel.py","exec"),{"ROOT_HELPER_SOURCE":p["helper"]})'],
+    { input: JSON.stringify({ helper, fixture }), timeout: 65000 })
+    if (result.exit !== 0) return { result: 'FAIL', exit: result.exit, stderr: result.stderr ?? '', detail: result.stdout, profileComplete: false }
+    const receipt = JSON.parse(result.stdout)
+    assert.equal(receipt.profileComplete, false)
+    assert.equal(receipt.rows.length, 4)
+    assert.equal(new Set(receipt.rows.map(row => `${row.amendedFilter}/${row.pivotRoot}`)).size, 4)
+    for (const row of receipt.rows) {
+      assert.equal(typeof row.amendedFilter, 'boolean'); assert.equal(typeof row.pivotRoot, 'boolean')
+      assert.equal(row.outsideBrokerPositiveControl, true)
+      if (row.amendedFilter && row.pivotRoot) {
+        assert.equal(row.status, 'PASS_KERNEL_PROBE_ONLY')
+        for (const field of ['outsideUidMapDenied', 'privateMountWrite', 'outsideSyscallsDenied', 'outsideBrokerDenied', 'noNewPrivileges', 'oldRootDetached']) assert.equal(row[field], true)
+        assert.ok([1, 13, 22].includes(row.readOnlyRemountDenied))
+      } else {
+        assert.equal(row.status, 'UNAVAILABLE'); assert.equal(row.errno, 1)
+      }
+    }
+    return { ...receipt, wsl2: 'PASS_KERNEL_DISCRIMINATOR_ONLY' }
+  } catch {
+    return { result: 'FAIL', receiptValidationFailed: true, profileComplete: false }
+  }
+}

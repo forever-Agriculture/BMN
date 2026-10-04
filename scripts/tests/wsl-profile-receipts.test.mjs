@@ -1,7 +1,7 @@
 // Shared receipt logic under simulated platform guards; no WSL/root process runs.
 import { execFileSync } from 'node:child_process'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { measureRestrictedGuestProfile, measureRootRestrictedGuestProfile } from '../test/wsl-restricted-profile-spike.mjs'
+import { measureRestrictedGuestProfile, measureRootRestrictedGuestProfile, measureNestedGuestNamespaces } from '../test/wsl-restricted-profile-spike.mjs'
 
 const platform = Object.getOwnPropertyDescriptor(process, 'platform')
 const distribution = 'BMN-Epic53-Systemd-00000000-0000-0000-0000-000000000000'
@@ -67,4 +67,39 @@ it.each([4, 5])('refuses a root receipt with only %i lifecycle measurements', co
   receipt.lifecycle = receipt.lifecycle.slice(0, count)
   expect(measureRootRestrictedGuestProfile({ distribution, guest: () => ({ exit: 0, stdout: JSON.stringify(receipt) }) }))
     .toMatchObject({ result: 'FAIL', receiptValidationFailed: true, profileComplete: false })
+})
+
+function nestedReceipt() {
+  return { profileComplete: false, rows: [[false, false], [true, false], [false, true], [true, true]].map(([amendedFilter, pivotRoot]) => ({
+    amendedFilter, pivotRoot, outsideBrokerPositiveControl: true,
+    ...(amendedFilter && pivotRoot ? { status: 'PASS_KERNEL_PROBE_ONLY', outsideUidMapDenied: true,
+      privateMountWrite: true, outsideSyscallsDenied: true, outsideBrokerDenied: true,
+      noNewPrivileges: true, oldRootDetached: true, readOnlyRemountDenied: 1 }
+      : { status: 'UNAVAILABLE', errno: 1 })
+  })) }
+}
+
+describe('nested kernel discriminator receipts', () => {
+  it('keeps a valid four-cell kernel measurement separate from full profile acceptance', () => {
+    const receipt = nestedReceipt()
+    expect(measureNestedGuestNamespaces({ distribution, guest: () => ({ exit: 0, stdout: JSON.stringify(receipt) }) }))
+      .toMatchObject({ ...receipt, wsl2: 'PASS_KERNEL_DISCRIMINATOR_ONLY' })
+  })
+  it.each(['duplicate-cell', 'no-kernel-positive', 'broker-control-refused', 'old-root-retained', 'multi-uid-allowed', 'writable-tool-mount', 'full-profile-claim'])('refuses %s', defect => {
+    const receipt = nestedReceipt(), positive = receipt.rows[3]
+    if (defect === 'duplicate-cell') receipt.rows[3] = receipt.rows[0]
+    if (defect === 'no-kernel-positive') positive.status = 'UNAVAILABLE'
+    if (defect === 'broker-control-refused') positive.outsideBrokerPositiveControl = false
+    if (defect === 'old-root-retained') positive.oldRootDetached = false
+    if (defect === 'multi-uid-allowed') positive.outsideUidMapDenied = false
+    if (defect === 'writable-tool-mount') positive.readOnlyRemountDenied = 0
+    if (defect === 'full-profile-claim') receipt.profileComplete = true
+    expect(measureNestedGuestNamespaces({ distribution, guest: () => ({ exit: 0, stdout: JSON.stringify(receipt) }) }))
+      .toMatchObject({ result: 'FAIL', profileComplete: false })
+  })
+  it('does not accept missing or malformed output from a zero-exit guest', () => {
+    for (const guest of [() => undefined, () => ({ exit: 0, stdout: '{}' }), () => { throw new Error('synthetic guest failure') }]) {
+      expect(measureNestedGuestNamespaces({ distribution, guest })).toMatchObject({ result: 'FAIL', profileComplete: false })
+    }
+  })
 })
