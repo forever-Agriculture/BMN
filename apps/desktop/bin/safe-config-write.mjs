@@ -257,11 +257,15 @@ try {
   $original=$null
   $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User
   if($exists) {
-   $operation='original-open'
+   $operation='original-stream-open'
    $originalStream=OpenOriginal $request.target
+   $operation='original-hash'
    if((StreamHash $originalStream) -ne $request.expectedHash) { $failureCode='REVISION_CONFLICT';throw 'Original changed before staging' }
+   $operation='original-acl'
    $originalAcl=$originalStream.GetAccessControl()
+   $operation='original-owner'
    if($originalAcl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value) { $failureCode='FOREIGN_OWNER';throw 'Original has another owner' }
+   $operation='original-fingerprint'
    $original=Fingerprint $originalAcl
   }
   # The staged owner and protected DACL are current-user-only before bytes.
@@ -285,9 +289,11 @@ try {
   if($stagedIdentity -ne $request.stagedIdentity) { $failureCode='REVISION_CONFLICT';throw 'Staged object changed' }
   if((Fingerprint ([BMNConfigIdentity]::Security($stagedHandle))) -ne $request.stagedDacl) { $failureCode='ACCESS_CONTROL_UNCONFIRMED';throw 'Staged permissions changed' }
   if($request.existed) {
-   $operation='original-open'
+   $operation='original-stream-open'
    $originalStream=OpenOriginal $request.target
+   $operation='original-acl'
    $originalAcl=$originalStream.GetAccessControl()
+   $operation='original-hash-and-fingerprint'
    if((StreamHash $originalStream) -ne $request.expectedHash -or
       (Fingerprint $originalAcl) -ne $request.originalDacl) { $failureCode='REVISION_CONFLICT';throw 'Original changed' }
    # Reserve our UUID backup exclusively with private permissions before replacement.
@@ -351,8 +357,12 @@ try {
  $exception=$_.Exception
  for($depth=0;$depth -lt 8 -and $null -ne $exception.InnerException;$depth++) {$exception=$exception.InnerException}
  $errno=if($exception -is [System.ComponentModel.Win32Exception]) {$exception.NativeErrorCode} else {$exception.HResult -band 65535}
+ # Error identifiers are a fixed diagnostic vocabulary, never exception text,
+ # setting bytes, paths or identities. Unknown identifiers remain unclassified.
+ $identifier=([string]$_.FullyQualifiedErrorId).Split(',')[0]
+ if($identifier -cnotin @('MethodNotFound','MethodInvocationException','InvokeMethodOnNull','PropertyNotFoundStrict','RuntimeException','ArgumentException','UnauthorizedAccessException')) {$identifier='other'}
  $recovery=$published -or ($request.mode -eq 'commit' -and $errno -in @(1175,1176,1177))
- [Console]::Out.Write((ConvertTo-Json -Compress @{ok=$false;code=$failureCode;errno=$errno;created=$created;stagedIdentity=$stagedIdentity;recoveryRequired=$recovery;published=$published;operation=($request.mode+':'+$operation);exceptionType=$exception.GetType().FullName}))
+ [Console]::Out.Write((ConvertTo-Json -Compress @{ok=$false;code=$failureCode;errno=$errno;created=$created;stagedIdentity=$stagedIdentity;recoveryRequired=$recovery;published=$published;operation=($request.mode+':'+$operation);exceptionType=$exception.GetType().FullName;errorIdentifier=$identifier}))
  exit 1
 } finally {
  if($null -ne $stream) {$stream.Dispose()}
@@ -386,6 +396,7 @@ function windowsConfigOperation(request) {
     error.nativeOperation = result?.operation
     error.nativeErrorCode = result?.errno
     error.nativeExceptionType = result?.exceptionType
+    error.nativeErrorIdentifier = result?.errorIdentifier
     error.nativeLaunchError = child.error?.code
     error.recoveryRequired = recoveryRequired
     throw error

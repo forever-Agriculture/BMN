@@ -5,10 +5,17 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { inspectWindowsReleaseData } from '../lib/windows-release-data.mjs'
+import { nativeTimings } from './native-timings.test-support.mjs'
 
 const requireApp = createRequire(new URL('../../apps/desktop/package.json', import.meta.url))
 const Database = requireApp('better-sqlite3'), roots = []
-afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+const pendingDiagnostics = []
+afterEach(() => {
+  const traces = pendingDiagnostics.splice(0)
+  for (const trace of traces) trace.mark('cleanup:begin')
+  try { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) }
+  finally { for (const trace of traces) { trace.mark('cleanup:end'); trace.report() } }
+})
 function fixture(version) {
   const root = mkdtempSync(join(tmpdir(), 'bmn-release-data-')); roots.push(root)
   const databasePath = join(root, 'state.sqlite3'), snapshotPath = join(root, 'before-migration.sqlite3')
@@ -20,10 +27,31 @@ function fixture(version) {
 }
 describe('release data compatibility and snapshot', () => {
   it('checks a matching schema read-only without producing a snapshot', async () => {
-    const f = fixture(23), before = readFileSync(f.databasePath)
-    expect(await inspectWindowsReleaseData(f)).toEqual({ schemaVersion: 23 })
-    expect(readFileSync(f.databasePath)).toEqual(before); expect(existsSync(f.snapshotPath)).toBe(false)
-  })
+    const trace = nativeTimings('matching-schema')
+    try {
+      const f = trace.measure('fixture', () => fixture(23)), before = trace.measure('before-bytes', () => readFileSync(f.databasePath))
+      f.Database = function (...args) {
+        const database = trace.measure('database-open', () => new Database(...args))
+        const prepare = database.prepare.bind(database), close = database.close.bind(database)
+        database.prepare = (...query) => {
+          const statement = trace.measure('query-prepare', () => prepare(...query))
+          for (const name of ['get', 'all']) {
+            const execute = statement[name].bind(statement)
+            statement[name] = (...values) => trace.measure(`query-${name}`, () => execute(...values))
+          }
+          return statement
+        }
+        database.close = () => trace.measure('database-close', close)
+        return database
+      }
+      trace.mark('inspect:begin')
+      expect(await inspectWindowsReleaseData(f)).toEqual({ schemaVersion: 23 })
+      trace.mark('inspect:end')
+      expect(readFileSync(f.databasePath)).toEqual(before); expect(existsSync(f.snapshotPath)).toBe(false)
+      trace.mark('assertions:end')
+    } finally { pendingDiagnostics.push(trace) }
+    // Observation budget only: retains a receipt when the original 5s is exceeded.
+  }, process.platform === 'win32' ? 30000 : 5000)
   it('makes and verifies a consistent private recovery file before a newer migration', async () => {
     const f = fixture(22), before = readFileSync(f.databasePath), result = await inspectWindowsReleaseData(f)
     expect(result).toEqual({ schemaVersion: 22, snapshot: { id: f.snapshotId, verified: true,

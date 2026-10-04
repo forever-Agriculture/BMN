@@ -64,9 +64,13 @@ foreach($module in @('Microsoft.PowerShell.Utility','Microsoft.PowerShell.Manage
 };$PSModuleAutoLoadingPreference='None';
 function CheckCommand($name,$source,$type='Cmdlet') {
  $command=Get-Command -Name $name -ErrorAction Stop;
+ $base=if($command.Module){$command.Module.ModuleBase}else{$null};
+ $expected=[IO.Path]::Combine($PSHOME,'Modules',$source);
+ $category=if(!$base){'absent'}elseif($base.Equals($PSHOME,[StringComparison]::OrdinalIgnoreCase)){'PSHOME'}elseif($base.Equals($expected,[StringComparison]::OrdinalIgnoreCase)){'expected-module-folder'}else{'unexpected'};
+ $assembly=if($command.ImplementingType){$command.ImplementingType.Assembly.Location}else{$null};
+ [Console]::Error.WriteLine((ConvertTo-Json -Compress @{stage='command-provenance';name=$name;source=$command.Source;commandType=$command.CommandType.ToString();moduleBase=$base;moduleBaseCategory=$category;moduleType=if($command.Module){$command.Module.ModuleType.ToString()}else{$null};implementingAssembly=$assembly;version=$PSVersionTable.PSVersion.ToString();is64Bit=[Environment]::Is64BitProcess}));
  if($command.Source -cne $source -or $command.CommandType -ne $type){throw ('Unexpected fixture command: '+$name)};
  if($source -ne 'Microsoft.PowerShell.Core') {
-  $expected=[IO.Path]::Combine($PSHOME,'Modules',$source);
   if(!$command.Module.ModuleBase.Equals($expected,[StringComparison]::OrdinalIgnoreCase)){throw ('Unexpected fixture module path: '+$name)};
  }
 }

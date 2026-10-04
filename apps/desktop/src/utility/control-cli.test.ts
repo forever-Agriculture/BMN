@@ -18,6 +18,7 @@ import { ControlError, ControlServer, MemoryReceiptStore, type ControlHandlers }
 import { ownWindowsFixtureFile } from './windows-fixture-owner.test-support'
 import { denyWindowsFixtureFileReads } from './windows-fixture-io.test-support'
 import { windowsEnvironmentValue } from '../../bin/windows-env.mjs'
+import { instrumentCliConnection } from './cli-connection-diagnostic.test-support'
 
 // Native ACL subprocesses can exceed the default 5s; each CLI child retains its 15s bound.
 if (process.platform === 'win32') vi.setConfig({ testTimeout: 30_000 })
@@ -2781,7 +2782,7 @@ try {
  report.status='PASS';
 } catch(error) {
  report.status='REFUSED';
- for(const key of ['code','nativeOperation','nativeErrorCode','nativeExceptionType','nativeLaunchError','recoveryRequired','created']) {
+ for(const key of ['code','nativeOperation','nativeErrorCode','nativeExceptionType','nativeErrorIdentifier','nativeLaunchError','recoveryRequired','created']) {
   if(['string','number','boolean'].includes(typeof error[key])) report[key]=error[key];
  }
 }
@@ -3381,8 +3382,30 @@ describe('OpenCode hooks', () => {
       const observed = await runCli(['hook', 'opencode'], { env, trace: track, input: JSON.stringify({
         hook_event_name: 'session.created', sessionID: malformed, info: { id: malformed }
       }) })
-      expect(observed, JSON.stringify({ methods, trace })).toEqual(QUIET)
-      expect(methods).toEqual(['auth', 'hook.observe'])
+      const originalMethods = [...methods], originalTrace = [...trace]
+      const connectionMatrix: unknown[] = []
+      {
+        const source = await readFile(CLI, 'utf8')
+        for (const listenersFirst of [false, true]) {
+          const copy = join(fixture.root, `instrumented-${listenersFirst ? 'listeners-first' : 'original'}.mjs`)
+          await writeFile(copy, instrumentCliConnection(source, new URL('../../bin/safe-config-write.mjs', import.meta.url).href, listenersFirst))
+          for (const [referenceKind, reference] of [['malformed', malformed], ['valid', OPENCODE_SESSION]] as const) {
+            methods.length = 0
+            const sample = await runCommand(process.execPath, [copy, 'hook', 'opencode'], { env, input: JSON.stringify({
+              hook_event_name: 'session.created', sessionID: reference, info: { id: reference }
+            }) })
+            const phases = sample.stderr.split(/\r?\n/).filter(line => line.startsWith('[BMN_SYNTHETIC_CLIENT]'))
+              .slice(0, 100).map(line => JSON.parse(line.slice('[BMN_SYNTHETIC_CLIENT]'.length)) as unknown)
+            connectionMatrix.push({ construction: listenersFirst ? 'listeners-first' : 'original', runtime: 'Node',
+              referenceKind, code: sample.code, stdoutBytes: Buffer.byteLength(sample.stdout), phases, methods: [...methods] })
+          }
+        }
+        connectionMatrix.push({ runtime: 'Bun', result: 'UNVERIFIED', reason: 'Actual pinned Bun runs in the separately owned native CLI gate' })
+      }
+      if (process.platform === 'win32') console.log(JSON.stringify({ nativeDiagnostic: 'hook-connection', originalTrace, connectionMatrix }))
+      expect(observed, JSON.stringify({ methods: originalMethods, trace: originalTrace, connectionMatrix })).toEqual(QUIET)
+      // Diagnostic matrix methods must not replace the original invocation's proof.
+      expect(originalMethods).toEqual(['auth', 'hook.observe'])
 
       methods.length = 0
       expect(await runCli(['hook', 'opencode'], { env, input: JSON.stringify({
@@ -3396,7 +3419,7 @@ describe('OpenCode hooks', () => {
         rawServer.close(() => { clearTimeout(timer); resolve() })
       })
     }
-  })
+  }, process.platform === 'win32' ? 90000 : 5000)
 
   it.each([['session.created', 'startup'], ['tui.session.select', 'resume']])('captures %s with the OpenCode reference', async (event, source) => {
     const fixture = await cliFixture()

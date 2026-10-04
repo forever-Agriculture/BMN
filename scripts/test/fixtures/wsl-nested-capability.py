@@ -1,5 +1,5 @@
 """Synthetic capability spike only; no production helper edit or owner files."""
-import ctypes,errno,json,os,pathlib,select,shutil,signal,socket,stat,subprocess,tempfile,time
+import ctypes,errno,json,os,pathlib,select,shutil,signal,socket,stat,struct,subprocess,tempfile,time
 import types
 import bmn_root_session as helper
 libc=helper.LIBC
@@ -55,6 +55,51 @@ def probe_bwrap(uid):
         assert not mode & (stat.S_ISUID|stat.S_ISGID),'Non-setuid sandbox required'
         helper.checked(libc.prctl(4,1,0,0,0))
         assert pathlib.Path('/proc/self/uid_map').stat().st_uid==uid
+        # The root controller created this NETNS before dropping the UID and
+        # installing the synthetic filter. No inherited network/namespace FD
+        # may reach the payload, including a socket to the outside broker.
+        assert os.readlink('/proc/self/ns/net')!=outside_network_namespace
+        assert pathlib.Path('/proc/self/ns/net').stat().st_uid==0
+        descriptors={}
+        for name in os.listdir('/proc/self/fd'):
+            try:descriptors[name]=os.readlink('/proc/self/fd/'+name)
+            except FileNotFoundError:pass  # The enumeration's own closed FD.
+        assert set(descriptors)=={'0','1','2'},descriptors
+        assert all(not target.startswith(('socket:','net:','user:')) for target in descriptors.values())
+        result.update(privateNetworkNamespace=True,rootOwnedNetworkNamespace=True,inheritedDescriptorsIsolated=True)
+        # Open only after isolation. RTM_GETLINK corroborates the empty topology;
+        # it is not a claim that subsequent rtnetlink messages are loopback-only.
+        with socket.socket(socket.AF_NETLINK,socket.SOCK_RAW,0) as route:
+            route.settimeout(1);route.bind((0,0))
+            route.send(struct.pack('IHHII',32,18,0x301,1,0)+struct.pack('BBHiII',0,0,0,0,0,0))
+            links=[];finished=False
+            for _ in range(16):
+                data=route.recv(65536);offset=0
+                while offset<len(data):
+                    length,kind,flags,sequence,pid=struct.unpack_from('IHHII',data,offset)
+                    assert length>=16 and offset+length<=len(data) and sequence==1
+                    if kind==3:finished=True
+                    elif kind==16:
+                        position=offset+32
+                        while position<offset+length:
+                            size,attribute=struct.unpack_from('HH',data,position)
+                            assert size>=4 and position+size<=offset+length
+                            if attribute==3:links.append(data[position+4:position+size].rstrip(b'\0').decode('ascii'))
+                            position+=(size+3)&~3
+                    else:raise AssertionError(('Unexpected route reply',kind))
+                    offset+=(length+3)&~3
+                if finished:break
+            assert finished and links==['lo'],links
+        for protocol in [9,15,16]:  # AUDIT, KOBJECT_UEVENT, GENERIC.
+            try:
+                channel=socket.socket(socket.AF_NETLINK,socket.SOCK_RAW,protocol)
+            except PermissionError as error:assert error.errno==errno.EPERM
+            else:channel.close();raise AssertionError(('Other netlink protocol allowed',protocol))
+        for kind in [socket.SOCK_DGRAM,socket.SOCK_STREAM]:
+            try:channel=socket.socket(socket.AF_NETLINK,kind,0)
+            except PermissionError as error:assert error.errno==errno.EPERM
+            else:channel.close();raise AssertionError(('Other netlink socket type allowed',kind))
+        result.update(routeSocketCreatedAfterIsolation=True,onlyLoopbackPresent=True,otherNetlinkProtocolsDenied=True,otherNetlinkTypesDenied=True)
         code="""import ctypes,errno,json,os,pathlib,socket
 status=pathlib.Path('/proc/self/status').read_text()
 assert 'NoNewPrivs:\\t1' in status
@@ -94,10 +139,11 @@ print(json.dumps({'nestedUid':os.getuid(),'singleUidMap':True,'noNewPrivileges':
 
 
 def measure_case(entry=probe):
-    global helper,libc,outside_address
+    global helper,libc,outside_address,outside_network_namespace
     root=pathlib.Path(tempfile.mkdtemp(prefix='bmn-nested-capability-'));os.chmod(root,0o700)
     runtime=root/'runtime';runtime.mkdir(mode=0o700)
     outside_address='\0bmn-nested-'+str(os.getpid())
+    outside_network_namespace=os.readlink('/proc/self/ns/net')
     outside=socket.socket(socket.AF_UNIX);outside.bind(outside_address);outside.listen()
     with socket.socket(socket.AF_UNIX) as positive:
         positive.connect(outside_address)
@@ -154,6 +200,22 @@ def candidate_source(original, nested, pivot):
                 (0x06, 0, 0, denied), (0x06, 0, 0, allow)])
 """
         source=source.replace(old,policy+old)
+        # Owner-approved exception for this disposable experiment only. Kernel
+        # socket arguments are int values: compare their low 32 bits. Permit
+        # only socket(AF_NETLINK, SOCK_RAW [+ CLOEXEC/NONBLOCK], protocol=0),
+        # never socketpair or another family/type/protocol. Architecture guards
+        # above still reject compat socketcall and x32 before these offsets.
+        old='                (0x15, 1, 0, 41), (0x15, 0, 5, 53), (0x20, 0, 0, 16),\n'
+        assert source.count(old)==1
+        route="""                (0x15, 0, 12, 41), (0x20, 0, 0, 16),
+                (0x15, 0, 10, 16), (0x20, 0, 0, 24),
+                (0x15, 4, 0, 3), (0x15, 3, 0, 3 | 0x80000),
+                (0x15, 2, 0, 3 | 0x800), (0x15, 1, 0, 3 | 0x80800),
+                (0x06, 0, 0, denied), (0x20, 0, 0, 32),
+                (0x15, 1, 0, 0), (0x06, 0, 0, denied),
+                (0x06, 0, 0, allow), (0x20, 0, 0, 0),
+"""
+        source=source.replace(old,route+old)
     if pivot:
         old='    os.chroot(directory)\n'
         assert source.count(old)==1

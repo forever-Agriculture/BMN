@@ -1,13 +1,18 @@
 // MODULE: file-reference-reader.test.ts - bounded read-only snapshots of referenced files and their refusals
 import { spawnSync } from 'node:child_process'
-import { appendFile, mkdir, mkdtemp, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { appendFile, mkdir, mkdtemp, open, realpath, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FileReferenceReadResult, FileReferenceSnapshot, FileReferenceUnavailable } from '@bmn/protocol'
 import { readFileReference, type FileReferenceReadRequest } from './file-reference-reader'
 import { HostControlError } from './session-manager'
 import { replaceWindowsFixtureFile } from './windows-fixture-io.test-support'
+import { readFileReference as originalReadFileReference } from '../../../../scripts/test/fixtures/file-reference-reader-baseline.mjs'
+
+vi.mock('node:fs/promises', { spy: true })
 
 let root: string
 let launch: string
@@ -20,6 +25,9 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  vi.mocked(realpath).mockReset()
+  vi.mocked(stat).mockReset()
+  vi.mocked(open).mockReset()
   await rm(root, { recursive: true, force: true })
 })
 
@@ -162,6 +170,11 @@ describe('readFileReference', () => {
     if (replacementFailure) throw replacementFailure
     expect(replaced).toMatchObject({ reason: 'changed', canonicalPath: path })
 
+    // Windows refuses this physical-parent rename while the child handle is
+    // open (native EPERM, replacement incomplete). Its live ancestor-path swap
+    // uses the directory-junction discriminator below instead.
+    if (process.platform === 'win32') return
+
     // A folder on the path becomes a symlink to another tree holding the same name.
     await mkdir(join(root, 'elsewhere', 'src'), { recursive: true })
     await writeFile(join(root, 'elsewhere', 'src', 'parser.ts'), 'elsewhere\n')
@@ -187,6 +200,55 @@ describe('readFileReference', () => {
       message: swapped.message, replacementComplete: swapStage === 'replacement-complete',
       canonicalPathEqual: swapped.canonicalPath === path,
       sameFileIdentity: afterSwap ? beforeSwap.dev === afterSwap.dev && beforeSwap.ino === afterSwap.ino : null })).toBe('changed')
+  })
+
+  it('detects a retargeted directory link while the original physical file remains open, original RED/current GREEN', async () => {
+    const baseline = readFileSync(new URL('../../../../scripts/test/fixtures/file-reference-reader-baseline.mjs', import.meta.url), 'utf8').replaceAll('\r\n', '\n')
+    expect(createHash('sha256').update(baseline).digest('hex')).toBe('7ae3b5bc518feaf23d9a3631e92b298d4bf2a5aa4624801127b4032213d16438')
+    const alias = join(launch, 'linked-src'), first = join(launch, 'src'), second = join(root, 'second-src')
+    await mkdir(second)
+    await writeFile(join(second, 'parser.ts'), 'second physical tree\n')
+    const originalBytes = await readFile(join(first, 'parser.ts'), 'utf8')
+    const linkKind = process.platform === 'win32' ? 'junction' : 'dir'
+    for (const [name, read] of [['original', originalReadFileReference], ['current', readFileReference]] as const) {
+      await symlink(first, alias, linkKind)
+      let completed = false
+      const observed = await read(request('linked-src/parser.ts'), { afterCheck: async () => {
+        // Remove only our directory link; both physical trees stay intact.
+        await rm(alias, { recursive: true })
+        await symlink(second, alias, linkKind)
+        expect(await realpath(join(alias, 'parser.ts'))).toBe(join(second, 'parser.ts'))
+        completed = true
+      } })
+      expect(completed, `${name}: native directory-link replacement must complete`).toBe(true)
+      expect(await readFile(join(first, 'parser.ts'), 'utf8')).toBe(originalBytes)
+      if (name === 'original') expect(observed).toMatchObject({ status: 'ready', content: originalBytes })
+      else expect(observed).toMatchObject({ status: 'unavailable', reason: 'changed', canonicalPath: join(first, 'parser.ts') })
+      await rm(alias, { recursive: true })
+    }
+  })
+
+  it.each(['realpath', 'stat'] as const)('reports unreadable when final %s metadata is inaccessible, original RED/current GREEN', async (operation) => {
+    const error = Object.assign(new Error('synthetic inaccessible metadata'), { code: 'EACCES' })
+    for (const [name, read] of [['original', originalReadFileReference], ['current', readFileReference]] as const) {
+      const observed = await read(request('src/parser.ts'), { afterCheck: async () => {
+        if (operation === 'realpath') vi.mocked(realpath).mockRejectedValueOnce(error)
+        else vi.mocked(stat).mockRejectedValueOnce(error)
+      } })
+      expect(observed).toMatchObject({ status: 'unavailable', reason: name === 'original' ? 'changed' : 'unreadable' })
+    }
+  })
+
+  it('keeps an unchanged file unreadable when its actual open-handle read fails', async () => {
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+    for (const read of [originalReadFileReference, readFileReference]) {
+      vi.mocked(open).mockImplementationOnce(async (...args) => {
+        const handle = await actual.open(...args)
+        vi.spyOn(handle, 'read').mockRejectedValueOnce(Object.assign(new Error('synthetic read denial'), { code: 'EACCES' }))
+        return handle
+      })
+      expect(await read(request('src/parser.ts'))).toMatchObject({ status: 'unavailable', reason: 'unreadable' })
+    }
   })
 
   it('rejects malformed references and folders before touching the filesystem', async () => {

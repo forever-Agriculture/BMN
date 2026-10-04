@@ -107,6 +107,8 @@ export function measureNestedGuestNamespaces({ distribution, guest }) {
     assert.equal(receipt.sandbox.exit, 0)
     assert.match(receipt.sandbox.version, /^bubblewrap \d+\.\d+\.\d+/u)
     assert.equal(receipt.sandbox.profileComplete, false)
+    for (const field of ['privateNetworkNamespace', 'rootOwnedNetworkNamespace', 'inheritedDescriptorsIsolated',
+      'routeSocketCreatedAfterIsolation', 'onlyLoopbackPresent', 'otherNetlinkProtocolsDenied', 'otherNetlinkTypesDenied']) assert.equal(receipt.sandbox[field], true)
     for (const field of ['singleUidMap', 'noNewPrivileges', 'capabilitiesDropped', 'outsideUidMapDenied',
       'outsideSyscallsDenied', 'outsideBrokerDenied', 'privateWorkspaceWrite', 'oldRootDetached']) assert.equal(receipt.sandbox.proof[field], true)
     assert.equal(receipt.sandbox.proof.nestedUid, 0)

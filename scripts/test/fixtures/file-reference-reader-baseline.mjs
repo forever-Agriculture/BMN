@@ -1,6 +1,7 @@
+// Immutable original 111b522 reader, TS types erased and relative dependency relocated for the regression discriminator.
 // MODULE: file-reference-reader.ts - reads one owner-addressed local text file as a bounded, read-only snapshot
-import { constants, type Stats } from 'node:fs'
-import { open, realpath, stat, type FileHandle } from 'node:fs/promises'
+import { constants,            } from 'node:fs'
+import { open, realpath, stat,                 } from 'node:fs/promises'
 import { isAbsolute, normalize, resolve } from 'node:path'
 import {
   ERROR_CODES,
@@ -9,38 +10,38 @@ import {
   fileReferenceLines,
   hasControlOrFormatCharacter,
   parseFileReference,
-  type FileReferenceBase,
-  type FileReferenceReadResult,
-  type FileReferenceTarget,
-  type FileReferenceUnavailableReason
-} from '@bmn/protocol'
-import { HostControlError } from './session-manager'
+                         
+                               
+                           
+                                     
+} from '../../../shared/protocol/src/index.ts'
+import { HostControlError } from '../../../apps/desktop/src/utility/session-manager.ts'
 
-export interface FileReferenceReadRequest {
-  sessionId?: string
-  workspaceId?: string
-  reference: unknown
-  baseDirectory: unknown
-  /** Where the session's process was started, from the host; never the shell's current directory. */
-  launchDirectory: string
-}
+                                           
+                    
+                      
+                    
+                        
+                                                                                                     
+                         
+ 
 
-export interface FileReferenceReaderOptions {
-  maxBytes?: number
-  now?: () => Date
-  /** Test seam: runs after the file is opened and checked, before its bytes are read. */
-  afterCheck?: () => Promise<void>
-}
+                                             
+                   
+                  
+                                                                                         
+                                  
+ 
 
-function invalid(message: string): never {
+function invalid(message        )        {
   throw new HostControlError(ERROR_CODES.invalidArgument, message)
 }
 
-function errorCode(error: unknown): string | undefined {
+function errorCode(error         )                     {
   return error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : undefined
 }
 
-function chosenBase(value: unknown): string | null {
+function chosenBase(value         )                {
   if (value === undefined || value === null) return null
   if (typeof value !== 'string' || value.length === 0 || value.length > FILE_REFERENCE_MAX_LENGTH || hasControlOrFormatCharacter(value)) {
     invalid('The chosen folder is not a valid path')
@@ -49,24 +50,19 @@ function chosenBase(value: unknown): string | null {
   return normalize(value)
 }
 
-function sizeLabel(bytes: number): string {
+function sizeLabel(bytes        )         {
   return bytes >= 1024 * 1024 ? `${bytes / (1024 * 1024)} MiB` : `${Math.round(bytes / 1024)} KiB`
 }
 
-/** Metadata permission/I/O errors cannot confirm a change; let the caller
- * report unreadable. A disappeared name does confirm identity loss. */
-async function namesSameFile(path: string, stats: Stats, canonicalPath = path): Promise<boolean> {
-  const missing = (error: unknown): null => {
-    if (['ENOENT', 'ENOTDIR', 'ELOOP'].includes(errorCode(error) ?? '')) return null
-    throw error
-  }
-  const resolved = await realpath(path).catch(missing)
-  if (resolved !== canonicalPath) return false
-  const named = await stat(path).catch(missing)
+/** True when `path` still resolves to itself and names the same file as the open handle's `stats`. */
+async function namesSameFile(path        , stats       )                   {
+  const resolved = await realpath(path).catch(() => null)
+  if (resolved !== path) return false
+  const named = await stat(path).catch(() => null)
   return named !== null && named.dev === stats.dev && named.ino === stats.ino
 }
 
-function kindOf(stats: Stats): string {
+function kindOf(stats       )         {
   if (stats.isDirectory()) return 'a folder'
   if (stats.isFIFO()) return 'a pipe'
   if (stats.isSocket()) return 'a socket'
@@ -81,20 +77,20 @@ function kindOf(stats: Stats): string {
  * read the canonical path must still name that same file, or the result says the file changed.
  */
 export async function readFileReference(
-  request: FileReferenceReadRequest,
-  options: FileReferenceReaderOptions = {}
-): Promise<FileReferenceReadResult> {
+  request                          ,
+  options                             = {}
+)                                   {
   if (typeof request.reference !== 'string') invalid('The file reference must be text')
   const parsed = parseFileReference(request.reference, 'typed', process.platform === 'win32' ? 'win32' : 'posix')
   if (!parsed.ok) invalid(parsed.reason)
   const { path, line, column } = parsed.reference
   const chosen = chosenBase(request.baseDirectory)
-  const base: FileReferenceBase | null = isAbsolute(path)
+  const base                           = isAbsolute(path)
     ? null
     : chosen
       ? { kind: 'chosen-directory', path: chosen }
       : { kind: 'launch-directory', path: request.launchDirectory }
-  const target: FileReferenceTarget = {
+  const target                      = {
     sessionId: request.sessionId ?? null,
     ...(request.workspaceId ? { workspaceId: request.workspaceId } : {}),
     reference: request.reference.trim(),
@@ -104,10 +100,10 @@ export async function readFileReference(
     resolvedPath: base ? resolve(base.path, path) : normalize(path)
   }
   const unavailable = (
-    reason: FileReferenceUnavailableReason,
-    message: string,
-    canonicalPath: string | null = null
-  ): FileReferenceReadResult => ({ ...target, status: 'unavailable', reason, message, canonicalPath })
+    reason                                ,
+    message        ,
+    canonicalPath                = null
+  )                          => ({ ...target, status: 'unavailable', reason, message, canonicalPath })
 
   if (base) {
     const baseStats = await stat(base.path).catch(() => undefined)
@@ -115,7 +111,7 @@ export async function readFileReference(
       return unavailable('missing', `${base.kind === 'launch-directory' ? 'The launch directory' : 'The chosen folder'} no longer exists.`)
     }
   }
-  let canonicalPath: string
+  let canonicalPath        
   try {
     canonicalPath = await realpath(target.resolvedPath)
   } catch (error) {
@@ -125,7 +121,7 @@ export async function readFileReference(
     return unavailable('missing', 'No file exists at this path.')
   }
   const maxBytes = options.maxBytes ?? FILE_REFERENCE_MAX_BYTES
-  let handle: FileHandle
+  let handle            
   try {
     handle = await open(canonicalPath, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW)
   } catch (error) {
@@ -152,8 +148,7 @@ export async function readFileReference(
       length += bytesRead
     }
     // A folder on the path swapped for a symlink, or the file replaced, would make the shown path describe other bytes.
-    if (!(await namesSameFile(canonicalPath, stats)) ||
-      (target.resolvedPath !== canonicalPath && !(await namesSameFile(target.resolvedPath, stats, canonicalPath)))) {
+    if (!(await namesSameFile(canonicalPath, stats))) {
       return unavailable('changed', 'The file changed while it was being read; refresh to read it again.', canonicalPath)
     }
     if (length > maxBytes) {
@@ -161,7 +156,7 @@ export async function readFileReference(
     }
     const bytes = buffer.subarray(0, length)
     if (bytes.includes(0)) return unavailable('binary', 'This file holds binary data; only text files are shown.', canonicalPath)
-    let content: string
+    let content        
     try {
       content = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
     } catch {

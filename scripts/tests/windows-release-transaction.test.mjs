@@ -4,9 +4,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { activateWindowsRelease, readWindowsInstallation, releaseDirectory } from '../lib/windows-release-transaction.mjs'
+import { nativeTimings } from './native-timings.test-support.mjs'
 
 const roots = []
-afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
+const pendingDiagnostics = []
+afterEach(() => {
+  const traces = pendingDiagnostics.splice(0)
+  for (const trace of traces) trace.mark('cleanup:begin')
+  try { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) }
+  finally { for (const trace of traces) { trace.mark('cleanup:end'); trace.report() } }
+})
 const hash = value => createHash('sha256').update(value).digest('hex')
 const release = (label, schemaVersion = 23) => ({ commit: hash(label).slice(0, 40), payloadSha256: hash(label), schemaVersion })
 
@@ -35,13 +42,31 @@ function fixture() {
 
 describe('Windows versioned release activation', () => {
   it('refuses source drift inside the lease immediately before selecting a candidate', async () => {
-    const f = fixture(); await activateWindowsRelease(f.options)
-    const before = readFileSync(join(f.root, 'installation.json'))
-    await expect(activateWindowsRelease({ ...f.update('new'), beforeActivate: async () => { throw new Error('queued source changed') } }))
-      .rejects.toThrow('queued source changed')
-    expect(readFileSync(join(f.root, 'installation.json'))).toEqual(before)
-    expect(f.journal()).toMatchObject({ phase: 'failed', activated: false })
-  })
+    const trace = nativeTimings('selection-source-drift')
+    const measured = options => {
+      const value = { ...options, checkpoint: async phase => trace.mark(`journal-committed:${phase}`) }
+      for (const name of ['withLease', 'waitForExit', 'stage', 'validate', 'smoke', 'inspectData', 'refreshMetadata', 'beforeActivate']) {
+        if (!options[name]) continue
+        value[name] = async (...args) => {
+          trace.mark(`${name}:begin`)
+          try { return await options[name](...args) } finally { trace.mark(`${name}:end`) }
+        }
+      }
+      return value
+    }
+    try {
+      const f = trace.measure('fixture', fixture); await activateWindowsRelease(measured(f.options))
+      trace.mark('first-install:end')
+      const before = readFileSync(join(f.root, 'installation.json'))
+      await expect(activateWindowsRelease(measured({ ...f.update('new'), beforeActivate: async () => { throw new Error('queued source changed') } })))
+        .rejects.toThrow('queued source changed')
+      trace.mark('refusal:end')
+      expect(readFileSync(join(f.root, 'installation.json'))).toEqual(before)
+      expect(f.journal()).toMatchObject({ phase: 'failed', activated: false })
+      trace.mark('assertions:end')
+    } finally { pendingDiagnostics.push(trace) }
+    // Diagnostic observation budget; finite stage timings precede any attribution.
+  }, process.platform === 'win32' ? 30000 : 5000)
   it('prepares a first-install parent before the native lease opens its file', async () => {
     const f = fixture(), options = { ...f.options, root: join(f.root, 'first install') }
     options.withLease = async operation => {
