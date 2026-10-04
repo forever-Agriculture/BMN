@@ -30,9 +30,9 @@ const native=requireApp('node-pty/lib/utils').loadNativeModule('conpty').module;
 assert.equal(native.bmnInstallLeaseVersion,1);
 const lock=${JSON.stringify(join(root, 'run.lock'))},output=${JSON.stringify(output)};
 if(process.argv.includes('--hold')){global.lease=native.acquireInstallLease(lock,false);process.stdout.write('READY\\n');setInterval(()=>{},1000)}
-else{const nativeProcessTrace=[];
+else{const nativeProcessTrace=[];let lastNativeCall;
  const cp=require('node:child_process'),originalSpawnSync=cp.spawnSync;
- cp.spawnSync=(exe,args,options)=>{const started=Date.now();
+ cp.spawnSync=(exe,args,options)=>{const started=Date.now();lastNativeCall={exe,args,options};
   const result=originalSpawnSync(exe,args,options);
   nativeProcessTrace.push({elapsedMs:Date.now()-started,argumentBytes:args.reduce((n,arg)=>n+Buffer.byteLength(arg,'utf16le'),0),status:result.status,signal:result.signal,
    launchError:result.error?.code??null,stdout:String(result.stdout??'').slice(-4096),stderr:String(result.stderr??'').slice(-4096)});return result};
@@ -78,8 +78,8 @@ else{const nativeProcessTrace=[];
 })().catch(async error=>{
  const receipt={status:'FAIL',name:error.name,message:error.message,nativeProcessTrace};
  try{const diagnostic=await import(${JSON.stringify(new URL('./windows-powershell-boundary.mjs', import.meta.url).href)});
-  receipt.powerShellBoundary=diagnostic.measurePowerShellBoundary({env:process.env,plainNode:${JSON.stringify(process.execPath)},spawnSync:originalSpawnSync,
-   referenceArgumentBytes:Math.max(0,...nativeProcessTrace.map(row=>row.argumentBytes)),githubActions:true})}
+  receipt.powerShellBoundary=diagnostic.measurePowerShellBoundary({env:process.env,spawnSync:originalSpawnSync,
+   referenceCall:lastNativeCall,githubActions:true})}
  catch(diagnosticError){receipt.diagnosticError={name:diagnosticError.name,message:diagnosticError.message}}
  fs.writeFileSync(output,JSON.stringify(receipt));process.exitCode=1})}
 `)
@@ -88,7 +88,7 @@ else{const nativeProcessTrace=[];
   child.stdout.resume()
   const exit = new Promise((resolve, reject) => { child.once('exit', resolve); child.once('error', reject) })
   // Existing provisioning stays bounded at 15s; a failed gate runs at most
-  // seven diagnostic cells (8s each, one Node wrapper 9.5s) before exiting FAIL.
+  // three 8s controls and one captured 15s helper replay before exiting FAIL.
   const timer = setTimeout(() => child.kill('SIGKILL'), 90000)
   const code = await exit.finally(() => clearTimeout(timer))
   const receipt = existsSync(output) ? JSON.parse(readFileSync(output, 'utf8')) : { status: 'FAIL', message: stderr.slice(-4000) }

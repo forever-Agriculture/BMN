@@ -1,9 +1,9 @@
-// Diagnostic only: seven bounded cells with synthetic stdin and a disposable profile.
+// Diagnostic only: constructor/setter controls and a trusted-module full-helper probe.
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import { windowsEnvironmentValue } from '../../apps/desktop/bin/windows-env.mjs'
 
-export function measurePowerShellBoundary({ env, plainNode, spawnSync, referenceArgumentBytes, githubActions }) {
+export function measurePowerShellBoundary({ env, spawnSync, referenceCall, githubActions }) {
   assert.equal(process.platform, 'win32')
   assert.equal(githubActions, true, 'Disposable native runner required')
   const powershell = join(windowsEnvironmentValue(env, 'SystemRoot'), 'System32/WindowsPowerShell/v1.0/powershell.exe')
@@ -12,31 +12,28 @@ export function measurePowerShellBoundary({ env, plainNode, spawnSync, reference
   const read = "$value=[Console]::In.ReadToEnd();[Console]::Error.WriteLine('READ_DONE');[Console]::Out.Write($value);\n"
   const input = '{"synthetic":"stdin"}'
   const cells = [
-    ['startup', start],
-    ['error-preference', start + "$ErrorActionPreference='Stop';[Console]::Error.WriteLine('B');"],
-    ['input-encoding', start + setter + "[Console]::Error.WriteLine('C');"],
-    ['pipe-eof', start + read],
-    ['redirected-encoding-guard', start + 'if(-not [Console]::IsInputRedirected){' + setter + '}\n' + read],
-    ['plain-node-input-encoding', start + setter + "[Console]::Error.WriteLine('C');"],
-    ['long-argv-startup', start + '#' + 'x'.repeat(Math.ceil(referenceArgumentBytes * 3 / 16))]
+    ['new-object-only', start + "$encoder=New-Object System.Text.UTF8Encoding($false);[Console]::Error.WriteLine('C');"],
+    ['static-input-encoding', start + '[Console]::InputEncoding=[System.Text.UTF8Encoding]::new($false);\n' + read],
+    ['trusted-modules-input-encoding', start + setter + read],
+    ['trusted-modules-full-helper', null]
   ]
   return cells.map(([name, script]) => {
-    const args = ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')]
+    const fullHelper = name === 'trusted-modules-full-helper'
+    assert.ok(!fullHelper || referenceCall?.exe === powershell, 'Only the captured synthetic helper can be replayed')
+    const args = fullHelper ? referenceCall.args
+      : ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')]
     assert.ok(args.join(' ').length + powershell.length + 100 < 32767, 'Diagnostic exceeds native command length')
     const started = Date.now()
-    const options = { env, input, encoding: 'utf8', timeout: 8000, maxBuffer: 4096, windowsHide: true }
-    let result
-    if (name === 'plain-node-input-encoding') {
-      const nodeEnv = { ...env }; delete nodeEnv.ELECTRON_RUN_AS_NODE
-      const program = "const r=require('node:child_process').spawnSync(process.argv[1],JSON.parse(process.argv[2]),{env:process.env,input:process.argv[3],encoding:'utf8',timeout:8000,maxBuffer:4096,windowsHide:true});console.log(JSON.stringify({status:r.status,signal:r.signal,error:r.error?.code,stdout:r.stdout,stderr:r.stderr}))"
-      const outer = spawnSync(plainNode, ['-e', program, powershell, JSON.stringify(args), input],
-        { env: nodeEnv, encoding: 'utf8', timeout: 9500, maxBuffer: 8192, windowsHide: true })
-      try { result = JSON.parse(outer.stdout) }
-      catch { result = { status: outer.status, signal: outer.signal, error: outer.error?.code, stderr: outer.stderr } }
-    } else {
-      const raw = spawnSync(powershell, args, options)
-      result = { status: raw.status, signal: raw.signal, error: raw.error?.code, stdout: raw.stdout, stderr: raw.stderr }
+    const childEnv = { ...env }
+    if (name.startsWith('trusted-modules-')) {
+      // Probe only the OS module directory; no owner module/config path is copied.
+      for (const key of Object.keys(childEnv)) if (key.toUpperCase() === 'PSMODULEPATH') delete childEnv[key]
+      childEnv.PSModulePath = join(windowsEnvironmentValue(env, 'SystemRoot'), 'System32/WindowsPowerShell/v1.0/Modules')
     }
+    const options = fullHelper ? { ...referenceCall.options, env: childEnv }
+      : { env: childEnv, input, encoding: 'utf8', timeout: 8000, maxBuffer: 4096, windowsHide: true }
+    const raw = spawnSync(powershell, args, options)
+    const result = { status: raw.status, signal: raw.signal, error: raw.error?.code, stdout: raw.stdout, stderr: raw.stderr }
     return { name, elapsedMs: Date.now() - started, argumentChars: args.join(' ').length,
       ...result, stdout: String(result.stdout ?? '').slice(-4096), stderr: String(result.stderr ?? '').slice(-4096) }
   })
