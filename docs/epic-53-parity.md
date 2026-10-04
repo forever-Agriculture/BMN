@@ -20,7 +20,7 @@ Epic 50/54 installed/provider acceptance remains separate and unfinished.
 | Terminal images, clipboard, IME/AltGr, scaling, panes, themes, keyboard access — 53.7 | Implementation team | UNVERIFIED | Actual creation form, renderer Sixel image, resize and continued input PASS; complete input/clipboard/scaling/pane acceptance open | UNVERIFIED |
 | Microphone, local voice engine, cancellation, addressed paste — 53.8 | Implementation team | Portable speech/silence/transcription PASS | Portable/packaged engines and PE imports PASS; prior WAV ACL PASS, latest private-WAV inspector fails without OS cause (diagnostic pending); microphone/UI/other CPU UNVERIFIED | UNVERIFIED |
 | Notifications, attention, Telegram replies and delivery diagnostics — 53.9 | Implementation team | UNVERIFIED | Shortcut seven ownership checks PASS; toast activation and complete reply matrix UNVERIFIED | UNVERIFIED |
-| Per-session development port discovery and navigation — 53.10 | Implementation team | 498 affected tests PASS, one skip; scanner timeout original RED/current GREEN | Owned-job TCP scanner implemented and focused-reviewed; owned Edge IPv4/IPv6 navigation gate prepared; MSVC/runtime/UI/browser UNVERIFIED | UNVERIFIED |
+| Per-session development port discovery and navigation — 53.10 | Implementation team | 498 affected tests PASS, one skip; scanner timeout original RED/current GREEN | Owned-job TCP attribution, two-session isolation, real Edge IPv4/IPv6 navigation and input/Stop six checks PASS run37230888519; renderer chips and complete story acceptance UNVERIFIED | UNVERIFIED |
 | Per-user install, source updates, rollback, uninstall — 53.11 | Implementation team | Affected source tests/type/bundle PASS; Linux development startup PASS | Offline installer, versioned transaction, leases, snapshot, queue and uninstall implemented in source; native compiler/kernel/install acceptance UNVERIFIED | UNVERIFIED |
 | Full CI, required merge gates, contributor rules — 53.12 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
 | Full feature-guide reconciliation and installed-app acceptance — 53.13 | Team + independent Windows verifier | 71-scenario coverage draft; installed acceptance UNVERIFIED | Final integration/installed acceptance UNVERIFIED | Final integration/installed acceptance UNVERIFIED |
@@ -93,6 +93,8 @@ also require a separate sandbox audit; their prior sandbox claims are not adopte
 as this port's acceptance evidence.
 
 ## Native CI evidence
+
+[Native fixture run 37230888519](https://github.com/forever-Agriculture/BMN/actions/runs/37230888519) on `b70d2d8` passed six owned-port/actual Edge navigation checks, seven installer lease checks, seven shortcut checks and the isolated durable queue assertion. The CLI discriminator proved original OEM stdin decoding misaddressed the Unicode path and explicit UTF-8 preserved exact code units/file existence. Its subsequent process-ownership controller failed because `Join-Path` was unavailable with module discovery disabled. Ownership/Bun acceptance remains UNVERIFIED. The next consultant-agreed fixture method explicitly imports the trusted Management module, verifies command provenance, attempts every retained-handle cleanup and keeps an outer backstop alive through all original/fixed observations. Its native execution is pending.
 
 The next fixture candidate assigns 30 seconds only to nine named Windows source
 transactions, retaining Linux's five-second budget; the concurrent-worker fixture

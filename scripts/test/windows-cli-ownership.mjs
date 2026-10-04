@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -17,8 +17,15 @@ const powershell = join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0
 const resultFile = join(repo, 'test-results/windows-cli-ownership.json')
 const result = { status: 'FAIL', checks: [] }
 let cleanupError
+let controllerBackstop
 const run = (exe, argv, options = {}) => {
-  const r = spawnSync(exe, argv, { encoding: 'utf8', timeout: 120000, windowsHide: true, ...options })
+  // The backstop outlives every original/fixed observation. Only controller
+  // completion, failure or timeout closes it, including partially retained trees.
+  const command = controllerBackstop && exe === powershell ? controllerBackstop : exe
+  const args = command === controllerBackstop ? [exe, ...argv] : argv
+  assert.ok(command.length + args.join(' ').length + 1024 < 32767, 'Fixture command exceeds the native command-line limit')
+  const r = spawnSync(command, args, { encoding: 'utf8', timeout: 120000, windowsHide: true, ...options })
+  if (exe === powershell && r.stderr) (result.processDiagnostics ??= []).push(r.stderr)
   assert.equal(r.error, undefined, r.error?.message)
   assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`)
   return r.stdout
@@ -51,7 +58,23 @@ setInterval(()=>{if(role==='root'&&fs.existsSync(path.join(dir,'natural')))proce
   // Probe exactly the shipped decoding form before any controller creates files.
   // Code units keep diagnostic output independent of PowerShell's stdout encoding.
   const utf8Input = '[Console]::InputEncoding=[Text.UTF8Encoding]::new($false);'
-  const utility = "$ErrorActionPreference='Stop';Import-Module ([IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1'));$PSModuleAutoLoadingPreference='None';"
+  const utility = `$ErrorActionPreference='Stop';
+foreach($module in @('Microsoft.PowerShell.Utility','Microsoft.PowerShell.Management')) {
+ Import-Module ([IO.Path]::Combine($PSHOME,'Modules',$module,$module+'.psd1'));
+};$PSModuleAutoLoadingPreference='None';
+function CheckCommand($name,$source,$type='Cmdlet') {
+ $command=Get-Command -Name $name -ErrorAction Stop;
+ if($command.Source -cne $source -or $command.CommandType -ne $type){throw ('Unexpected fixture command: '+$name)};
+ if($source -ne 'Microsoft.PowerShell.Core') {
+  $expected=[IO.Path]::Combine($PSHOME,'Modules',$source);
+  if(!$command.Module.ModuleBase.Equals($expected,[StringComparison]::OrdinalIgnoreCase)){throw ('Unexpected fixture module path: '+$name)};
+ }
+}
+foreach($name in @('Import-Module','Get-Command','Get-Module','ForEach-Object')) {CheckCommand $name 'Microsoft.PowerShell.Core'};
+foreach($name in @('Start-Sleep','Add-Type','ConvertFrom-Json','ConvertTo-Json')) {CheckCommand $name 'Microsoft.PowerShell.Utility'};
+CheckCommand 'Join-Path' 'Microsoft.PowerShell.Management';
+[Console]::Error.WriteLine((ConvertTo-Json -Compress @{version=$PSVersionTable.PSVersion.ToString();is64Bit=[Environment]::Is64BitProcess;modules=@(Get-Module|ForEach-Object{@{name=$_.Name;version=$_.Version.ToString();path=$_.ModuleBase}})}));
+`
   const rootCodeUnits = Array.from({ length: root.length }, (_, index) => root.charCodeAt(index))
   const configInput = values => JSON.stringify({ root, rootCodeUnits, ...values })
   const decoded = prefix => JSON.parse(run(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(prefix + utility + `$config=ConvertFrom-Json ([Console]::In.ReadToEnd());[Console]::Out.Write((ConvertTo-Json -Compress @{rootCodeUnits=@($config.root.ToCharArray()|ForEach-Object{[int]$_});launcherExists=[IO.File]::Exists([IO.Path]::Combine($config.root,'original','bmn.exe'));encoding=[Console]::InputEncoding.WebName}))`, 'utf16le').toString('base64')], { input: configInput({}) }))
@@ -74,9 +97,25 @@ function ReadReady($file,$launcher) {
  while(![IO.File]::Exists($file)) { if($launcher.HasExited){throw 'Launcher exited before ready'};if([DateTime]::UtcNow -gt $end){throw 'Readiness timeout'};Start-Sleep -Milliseconds 20 };
  return ConvertFrom-Json ([IO.File]::ReadAllText($file));
 }
+function CleanupProcesses($processes,$primaryError) {
+ $errors=[Collections.Generic.List[string]]::new();
+ foreach($p in $processes) {if($null -ne $p) {
+  try {
+   if(!$p.HasExited) {
+    if(![OwnedCliFixture]::TerminateProcess($p.Handle,99)){throw 'Retained fixture termination failed'};
+    if(!$p.WaitForExit(5000)){throw 'Retained fixture cleanup timeout'};
+   }
+  } catch {$errors.Add($_.Exception.Message)}
+  finally {try {$p.Dispose()} catch {$errors.Add($_.Exception.Message)}}
+ }}
+ if($errors.Count -gt 0) {
+  [Console]::Error.WriteLine((ConvertTo-Json -Compress @{cleanupErrors=@($errors.ToArray())}));
+  if(!$primaryError){throw 'Fixture cleanup incomplete'};
+ }
+}
 $rows=@();
 foreach($version in @('original','fixed')) {foreach($mode in @('natural','terminate')) {
- $dir=Join-Path $config.root ($version+'-'+$mode);$null=[IO.Directory]::CreateDirectory($dir);$held=@();$launcher=$null;$sentinel=$null;
+ $dir=Join-Path $config.root ($version+'-'+$mode);$null=[IO.Directory]::CreateDirectory($dir);$held=@();$launcher=$null;$sentinel=$null;$primaryError=$null;
  try {
   $start=[Diagnostics.ProcessStartInfo]::new();$start.UseShellExecute=$false;$start.CreateNoWindow=$true;
   $start.FileName=$config.node;$start.Arguments='-e "setInterval(()=>{},1000)"';$sentinel=[Diagnostics.Process]::Start($start);$null=$sentinel.Handle;
@@ -96,12 +135,10 @@ foreach($version in @('original','fixed')) {foreach($mode in @('natural','termin
   if($version -eq 'fixed' -and !$allExited){throw 'Owned runtime tree survived'};
   if($version -eq 'original' -and $allExited){throw 'Original defect was not reproduced'};
   $rows+=@{version=$version;mode=$mode;retainedHandles=$held.Count;allExited=$allExited;sentinelAlive=$true;launcherExit=$launcher.ExitCode};
- } finally {
-  foreach($p in @($launcher,$sentinel)+$held){if($null -ne $p){if(!$p.HasExited){if(![OwnedCliFixture]::TerminateProcess($p.Handle,99)){throw 'Fixture cleanup failed'};if(!$p.WaitForExit(5000)){throw 'Fixture cleanup timeout'}};$p.Dispose()}}
- }
+ } catch {$primaryError=$_;throw} finally {CleanupProcesses (@($launcher,$sentinel)+$held) $primaryError}
 }}
 foreach($boundary in @('created','resumed')) {
- $dir=Join-Path $config.root ('fault-'+$boundary);$null=[IO.Directory]::CreateDirectory($dir);$launcher=$null;$runtime=$null;
+ $dir=Join-Path $config.root ('fault-'+$boundary);$null=[IO.Directory]::CreateDirectory($dir);$launcher=$null;$runtime=$null;$primaryError=$null;
  try {
   $start=[Diagnostics.ProcessStartInfo]::new();$start.UseShellExecute=$false;$start.CreateNoWindow=$true;
   $start.FileName=Join-Path $config.root 'faults/bmn.exe';$start.EnvironmentVariables['BMN_FIXTURE_DIR']=$dir;
@@ -112,14 +149,55 @@ foreach($boundary in @('created','resumed')) {
   if(![OwnedCliFixture]::TerminateProcess($launcher.Handle,77)){throw 'Boundary launcher termination failed'};
   if(!$launcher.WaitForExit(8000) -or !$runtime.WaitForExit(8000)){throw 'Creation boundary leaked suspended/resumed runtime'};
   $rows+=@{mode=$boundary;version='fault';retainedHandles=1;allExited=$true};
- } finally {foreach($p in @($launcher,$runtime)){if($null -ne $p){if(!$p.HasExited){$null=[OwnedCliFixture]::TerminateProcess($p.Handle,99);if(!$p.WaitForExit(5000)){throw 'Creation fixture cleanup timeout'}};$p.Dispose()}}}
+ } catch {$primaryError=$_;throw} finally {CleanupProcesses (@($launcher,$runtime)) $primaryError}
 }
 $rows|ConvertTo-Json -Depth 5 -Compress;
 `
+  // A distinct outer lifetime protects even the baseline's deliberately leaked
+  // descendants when a controller aborts before retaining all their handles.
+  const fallback = join(root, 'fallback'); mkdirSync(fallback)
+  const driver = join(fallback, 'driver.cjs')
+  writeFileSync(driver, `const cp=require('node:child_process');
+if(process.argv[2]==='--self-test') {
+ cp.spawn(process.execPath,[process.argv[3]],{stdio:'ignore',env:{...process.env,BMN_FIXTURE_DIR:process.argv[4]}});
+ setInterval(()=>{},1000);
+} else {
+ const child=cp.spawnSync(process.argv[2],process.argv.slice(3),{stdio:'inherit',windowsHide:true});
+ process.exit(child.error||child.signal?1:child.status??1);
+}
+`)
+  copyFileSync(join(root, 'fixed/bmn.exe'), join(fallback, 'bmn.exe'))
+  writeFileSync(join(fallback, 'bmn.runtime'), `${process.execPath}\r\n${driver}\r\n`)
+  controllerBackstop = join(fallback, 'bmn.exe')
+  const fallbackProof = controller.slice(0, controller.indexOf('$rows=@();')) + `
+$held=@();$outer=$null;$sentinel=$null;$primaryError=$null;
+try {
+ $start=[Diagnostics.ProcessStartInfo]::new();$start.UseShellExecute=$false;$start.CreateNoWindow=$true;
+ $start.FileName=$config.node;$start.Arguments='-e "setInterval(()=>{},1000)"';$sentinel=[Diagnostics.Process]::Start($start);$null=$sentinel.Handle;
+ $start.FileName=$config.backstop;$start.Arguments='--self-test "'+$config.fixture+'" "'+$config.directory+'"';
+ $outer=[Diagnostics.Process]::Start($start);$null=$outer.Handle;
+ foreach($role in @('root','child','grandchild')) {
+  $row=ReadReady (Join-Path $config.directory ($role+'.json')) $outer;
+  $p=[Diagnostics.Process]::GetProcessById($row.pid);$null=$p.Handle;$held+=,$p;
+ }
+ if(![OwnedCliFixture]::TerminateProcess($outer.Handle,77)){throw 'Backstop controller termination failed'};
+ if(!$outer.WaitForExit(5000)){throw 'Backstop launcher remained live'};
+ foreach($p in $held){if(!$p.WaitForExit(5000)){throw 'Backstop leaked a retained descendant'}};
+ if($sentinel.HasExited){throw 'Backstop terminated unrelated sentinel'};
+ [Console]::Out.Write((ConvertTo-Json -Compress @{retainedHandles=$held.Count;allExited=$true;sentinelAlive=$true}));
+} catch {$primaryError=$_;throw} finally {CleanupProcesses (@($outer,$sentinel)+$held) $primaryError}
+`
+  const proofDirectory = join(root, 'fallback-proof'); mkdirSync(proofDirectory)
+  const fallbackRows = JSON.parse(run(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(fallbackProof, 'utf16le').toString('base64')], {
+    input: configInput({ node: process.execPath, backstop: join(fallback, 'bmn.exe'), fixture, directory: proofDirectory })
+  }))
+  assert.deepEqual(fallbackRows, { retainedHandles: 3, allExited: true, sentinelAlive: true })
+  result.checks.push({ name: 'controller termination backstop cleans retained descendants and preserves unrelated sentinel', ...fallbackRows })
   const rows = JSON.parse(run(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(controller, 'utf16le').toString('base64')], {
     input: configInput({ node: process.execPath })
   }))
   assert.equal(rows.length, 6)
+  assert.ok(rows.every(row => row.retainedHandles === (row.version === 'fault' ? 1 : 3)))
   result.checks.push({ name: 'retained-handle cleanup baseline RED/fixed GREEN', rows })
   // Download one pinned public OpenCode binary into this disposable fixture only.
   const url = 'https://github.com/anomalyco/opencode/releases/download/v1.18.32/opencode-windows-x64-baseline.zip'
@@ -128,8 +206,10 @@ $rows|ConvertTo-Json -Depth 5 -Compress;
   const archive = Buffer.from(await response.arrayBuffer())
   const sha256 = createHash('sha256').update(archive).digest('hex')
   assert.equal(sha256, 'cd852831bd094c2df2eb379eb98bed7a63db7f823a7caf277c732cdac33cbdb6')
+  const archiveModule = "Import-Module ([IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Archive/Microsoft.PowerShell.Archive.psd1'));CheckCommand 'Expand-Archive' 'Microsoft.PowerShell.Archive' 'Function';"
+  run(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(utf8Input + utility + archiveModule, 'utf16le').toString('base64')])
   const zip = join(root, 'opencode.zip'), unpacked = join(root, 'opencode'); writeFileSync(zip, archive)
-  const expand = readConfig + "Import-Module ([IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Archive/Microsoft.PowerShell.Archive.psd1'));Expand-Archive -LiteralPath $config.archive -DestinationPath $config.destination"
+  const expand = readConfig + archiveModule + 'Expand-Archive -LiteralPath $config.archive -DestinationPath $config.destination'
   run(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(expand, 'utf16le').toString('base64')], {
     input: configInput({ archive: zip, destination: unpacked })
   })
@@ -215,7 +295,7 @@ terminal.onExit(exit=>{clearTimeout(timer);clearInterval(stop);publish('exit.jso
   const combinedController = controller.slice(0, controller.indexOf('$rows=@();')) + `
 $rows=@();
 foreach($mode in @('timeout','overflow','launcher-crash','stop')) {
- $dir=Join-Path $config.root ('combined-'+$mode);$null=[IO.Directory]::CreateDirectory($dir);$hostProcess=$null;$held=@();$launcher=$null;
+ $dir=Join-Path $config.root ('combined-'+$mode);$null=[IO.Directory]::CreateDirectory($dir);$hostProcess=$null;$held=@();$launcher=$null;$primaryError=$null;
  try {
   $start=[Diagnostics.ProcessStartInfo]::new();$start.UseShellExecute=$false;$start.CreateNoWindow=$true;$start.FileName=$config.electron;
   $start.Arguments='"'+$config.host+'" "'+$dir+'" '+$mode;$start.EnvironmentVariables['ELECTRON_RUN_AS_NODE']='1';
@@ -234,7 +314,7 @@ foreach($mode in @('timeout','overflow','launcher-crash','stop')) {
   if($exit.watchdog -or [IO.File]::Exists((Join-Path $dir 'lifecycle-error.json'))){throw 'Safety watchdog/lifecycle failure is not success'};
   if($mode -ne 'stop'){$component=ReadReady (Join-Path $dir 'component.json') $hostProcess;if(!$component.emptyOutput -or $exit.exitCode -ne 0){throw 'Combined helper did not settle truthfully'}};
   $rows+=@{mode=$mode;retainedHandles=$held.Count;allExited=$true;watchdog=$false;outerExit=$exit.exitCode};
- } finally {foreach($p in @($hostProcess)+$held){if($null -ne $p){if(!$p.HasExited){$null=[OwnedCliFixture]::TerminateProcess($p.Handle,99);if(!$p.WaitForExit(5000)){throw 'Combined fixture cleanup timeout'}};$p.Dispose()}}}
+ } catch {$primaryError=$_;throw} finally {CleanupProcesses (@($hostProcess)+$held) $primaryError}
 }
 $rows|ConvertTo-Json -Depth 5 -Compress;
 `
