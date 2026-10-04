@@ -1,4 +1,5 @@
 // Shared receipt logic under simulated platform guards; no WSL/root process runs.
+import { execFileSync } from 'node:child_process'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { measureRestrictedGuestProfile, measureRootRestrictedGuestProfile } from '../test/wsl-restricted-profile-spike.mjs'
 
@@ -36,6 +37,21 @@ describe.each(routes)('%s receipt gate', (_name, measure, valid) => {
     const receipt = valid(); receipt.lifecycle[0].allExited = false
     expect(measure({ distribution, uid: 1000, guest: () => ({ exit: 0, stdout: JSON.stringify(receipt) }) }))
       .toMatchObject({ result: 'FAIL', receiptValidationFailed: true, profileComplete: false })
+  })
+  it('sends syntactically valid Python to the guest', () => {
+    const receipt = valid(), scripts = []
+    const guest = args => {
+      if (args[0].endsWith('python3')) scripts.push(args[2])
+      return { exit: 0, stdout: JSON.stringify(receipt) }
+    }
+    expect(measure({ distribution, uid: 1000, guest })).toMatchObject(receipt)
+    // Parse outside the guest's fail-normalization boundary, after restoring
+    // the actual host platform for Node's child-process implementation.
+    Object.defineProperty(process, 'platform', platform)
+    try {
+      for (const source of scripts) execFileSync(platform.value === 'win32' ? 'python' : 'python3',
+        ['-c', 'import ast,sys; ast.parse(sys.argv[1])', source], { encoding: 'utf8', timeout: 5000 })
+    } finally { Object.defineProperty(process, 'platform', { ...platform, value: 'win32' }) }
   })
   it('retains a valid scoped measurement with profileComplete false', () => {
     const receipt = valid()

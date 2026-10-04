@@ -14,15 +14,16 @@ export function measureRestrictedGuestProfile({ distribution, uid, guest }) {
     if (prerequisites.exit !== 0) return { result: 'INCONCLUSIVE', prerequisiteExit: prerequisites.exit, profileComplete: false }
     const source = readFileSync(new URL('./fixtures/wsl-restricted-profile.py', import.meta.url), 'utf8')
     const result = guest(['/usr/bin/python3', '-c', `import os,pathlib,subprocess,sys,tempfile,shutil,json
-  root=pathlib.Path(tempfile.mkdtemp(prefix='bmn-restricted-runner-'))
-  try:
-   os.chmod(root,0o755);script=root/'probe.py';script.write_text(sys.stdin.read());os.chmod(script,0o444)
-   run=subprocess.run(['runuser','-u','bmnfixture','--','env','-i','PATH=/usr/bin:/bin','BMN_SYNTHETIC_PLATFORM=native-wsl2','/usr/bin/python3',str(script)],capture_output=True,text=True,timeout=65,cwd='/')
-   if run.returncode!=0:print(json.dumps({'result':'FAIL','exit':run.returncode,'stderr':run.stderr[:4000],'profileComplete':False}));sys.exit(1)
-   receipt=json.loads(run.stdout);receipt['uid']=${uid};receipt['kernel']=os.uname().release
-   print(json.dumps(receipt))
-  finally:shutil.rmtree(root)
-  `], { input: source, timeout: 80000 })
+root=pathlib.Path(tempfile.mkdtemp(prefix='bmn-restricted-runner-'))
+try:
+ os.chmod(root,0o755);script=root/'probe.py';script.write_text(sys.stdin.read());os.chmod(script,0o444)
+ run=subprocess.run(['runuser','-u','bmnfixture','--','env','-i','PATH=/usr/bin:/bin','BMN_SYNTHETIC_PLATFORM=native-wsl2','/usr/bin/python3',str(script)],capture_output=True,text=True,timeout=65,cwd='/')
+ if run.returncode!=0:print(json.dumps({'result':'FAIL','exit':run.returncode,'stderr':run.stderr[:4000],'profileComplete':False}));sys.exit(1)
+ receipt=json.loads(run.stdout);receipt['uid']=${uid};receipt['kernel']=os.uname().release
+ print(json.dumps(receipt))
+finally:shutil.rmtree(root)
+
+`], { input: source, timeout: 80000 })
     if (result.exit !== 0) return { result: 'FAIL', exit: result.exit, stderr: result.stderr ?? '', detail: result.stdout, profileComplete: false }
     const receipt = JSON.parse(result.stdout)
     assert.equal(receipt.socketBroker[0].survivedCallerExit, true, 'The outside broker must be ready and reproduce the baseline escape')
