@@ -33,7 +33,7 @@ it.each(['branch', 'status', 'originHead', 'head'])('refuses %s drift before bui
   await expect(runWindowsSourceUpdate(f.path, f.callbacks)).rejects.toThrow()
   expect(f.callbacks.buildSnapshot).not.toHaveBeenCalled(); expect(f.callbacks.activate).not.toHaveBeenCalled()
   expect(readWindowsSourceUpdate(f.path).phase).toBe('failed')
-})
+}, transactionTimeout)
 it('refuses drift during a build without touching the selected installation', async () => {
   const f = fixture(); queueWindowsSourceUpdate(f.path, f.options)
   f.callbacks.buildSnapshot.mockImplementation(async () => { f.sourceState.status = ' M changed'; return { commit } })

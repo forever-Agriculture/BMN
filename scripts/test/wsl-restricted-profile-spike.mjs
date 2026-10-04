@@ -103,7 +103,14 @@ export function measureNestedGuestNamespaces({ distribution, guest }) {
         assert.equal(row.status, 'UNAVAILABLE'); assert.equal(row.errno, 1)
       }
     }
-    return { ...receipt, wsl2: 'PASS_KERNEL_DISCRIMINATOR_ONLY' }
+    assert.equal(receipt.sandbox.status, 'PASS_REAL_BWRAP_ONLY')
+    assert.equal(receipt.sandbox.exit, 0)
+    assert.match(receipt.sandbox.version, /^bubblewrap \d+\.\d+\.\d+/u)
+    assert.equal(receipt.sandbox.profileComplete, false)
+    for (const field of ['singleUidMap', 'noNewPrivileges', 'capabilitiesDropped', 'outsideUidMapDenied',
+      'outsideSyscallsDenied', 'outsideBrokerDenied', 'privateWorkspaceWrite', 'oldRootDetached']) assert.equal(receipt.sandbox.proof[field], true)
+    assert.equal(receipt.sandbox.proof.nestedUid, 0)
+    return { ...receipt, wsl2: 'PASS_KERNEL_AND_REAL_BWRAP_ONLY' }
   } catch {
     return { result: 'FAIL', receiptValidationFailed: true, profileComplete: false }
   }

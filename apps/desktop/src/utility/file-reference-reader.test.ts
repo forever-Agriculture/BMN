@@ -1,6 +1,6 @@
 // MODULE: file-reference-reader.test.ts - bounded read-only snapshots of referenced files and their refusals
 import { spawnSync } from 'node:child_process'
-import { appendFile, mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -165,13 +165,28 @@ describe('readFileReference', () => {
     // A folder on the path becomes a symlink to another tree holding the same name.
     await mkdir(join(root, 'elsewhere', 'src'), { recursive: true })
     await writeFile(join(root, 'elsewhere', 'src', 'parser.ts'), 'elsewhere\n')
+    const beforeSwap = await stat(path)
+    let swapStage = 'callback-not-run', swapFailure: { code?: string; syscall?: string; name: string } | undefined
     const swapped = refused(await readFileReference(request('src/parser.ts'), {
       afterCheck: async () => {
-        await rename(join(launch, 'src'), join(launch, 'src-old'))
-        await symlink(join(root, 'elsewhere', 'src'), join(launch, 'src'))
+        try {
+          swapStage = 'folder-rename'
+          await rename(join(launch, 'src'), join(launch, 'src-old'))
+          swapStage = 'symlink-create'
+          await symlink(join(root, 'elsewhere', 'src'), join(launch, 'src'))
+          swapStage = 'replacement-complete'
+        } catch (error) {
+          const native = error as NodeJS.ErrnoException
+          swapFailure = { ...(native.code ? { code: native.code } : {}), ...(native.syscall ? { syscall: native.syscall } : {}), name: native.name }
+          throw error
+        }
       }
     }))
-    expect(swapped.reason).toBe('changed')
+    const afterSwap = await stat(path).catch(() => undefined)
+    expect(swapped.reason, JSON.stringify({ stage: swapStage, failure: swapFailure,
+      message: swapped.message, replacementComplete: swapStage === 'replacement-complete',
+      canonicalPathEqual: swapped.canonicalPath === path,
+      sameFileIdentity: afterSwap ? beforeSwap.dev === afterSwap.dev && beforeSwap.ino === afterSwap.ino : null })).toBe('changed')
   })
 
   it('rejects malformed references and folders before touching the filesystem', async () => {

@@ -94,10 +94,12 @@ as this port's acceptance evidence.
 
 ## Native CI evidence
 
+[Full b70 inventory](https://github.com/forever-Agriculture/BMN/actions/runs/37230888388) passed Linux 3,037 assertions with 36 skips; Windows passed 3,042 with 19 failures and 12 skips. Native build/startup/packaging passed. Failures remain owned and unfinished: fourteen Linux launcher fixtures require evidenced Windows equivalents, two source-drift transaction deadlines, two hook cases, and the reader's second folder-swap fixture. Its first native File.Replace assertion passed. The next candidate records bounded stage/identity and pipe/child metadata before any unproved product repair.
+
 [Native fixture run 37230888519](https://github.com/forever-Agriculture/BMN/actions/runs/37230888519) on `b70d2d8` passed six owned-port/actual Edge navigation checks, seven installer lease checks, seven shortcut checks and the isolated durable queue assertion. The CLI discriminator proved original OEM stdin decoding misaddressed the Unicode path and explicit UTF-8 preserved exact code units/file existence. Its subsequent process-ownership controller failed because `Join-Path` was unavailable with module discovery disabled. Ownership/Bun acceptance remains UNVERIFIED. The next consultant-agreed fixture method explicitly imports the trusted Management module, verifies command provenance, attempts every retained-handle cleanup and keeps an outer backstop alive through all original/fixed observations. Its native execution is pending.
 
-The next fixture candidate assigns 30 seconds only to nine named Windows source
-transactions, retaining Linux's five-second budget; the concurrent-worker fixture
+The next fixture candidate assigns 30 seconds only to thirteen named Windows source
+transactions, including the four source-drift cases, retaining Linux's five-second budget; the concurrent-worker fixture
 has a 30-second Windows watchdog, cancelled after completion. The native CLI gate
 compares original and explicit UTF-8 stdin decoding by code units before writing,
 and refuses to proceed unless the original failure and corrected path both reproduce.
@@ -586,6 +588,8 @@ than a missing result that the outer gate could accept. The receipt tests also
 parse the exact Python launch text: the indentation regression fails against
 `f00ddad`, and the repaired twelve checks pass. These are local synthetic/runtime
 and parser results, not native WSL acceptance.
+
+The next synthetic kernel candidate adds actual non-setuid bubblewrap execution in the restricted helper, verifies a single leased UID mapping, distinct namespaces, no new privileges, zero final capabilities, private project writes and outside-broker/syscall denial. Its narrowed filter rejects cgroup/time namespaces and parent/ptrace clone flags while permitting the measured descendant sandbox namespaces. The exact compiled filter fails the original flag guards and passes the current guards; 32 receipt checks pass locally, including rejection of kernel-only or incomplete sandbox proof. Actual WSL execution remains UNVERIFIED, and the production helper is unchanged. A bubblewrap result alone will not establish agent, egress, durable project, bridge or lifecycle parity.
 
 The remaining capability design must preserve agent sandboxes, ordinary Internet
 and package-manager access, private durable projects, scoped `bmn` calls and ports.

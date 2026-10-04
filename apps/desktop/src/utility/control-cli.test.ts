@@ -1,7 +1,7 @@
 // MODULE: control-cli.test.ts - the bmn CLI drives a real control server with truthful output and exit codes
 import { execFile } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { createServer } from 'node:net'
+import { createServer, type Socket } from 'node:net'
 import { existsSync } from 'node:fs'
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { stripTypeScriptTypes } from 'node:module'
@@ -60,10 +60,11 @@ interface CliResult {
   stdout: string
   stderr: string
 }
+type CliTrace = (stage: string, metadata?: Record<string, string | number | boolean | null>) => void
 
 function runCli(
   args: string[],
-  options: { env?: Record<string, string>; cwd?: string; input?: string | Buffer | undefined } = {}
+  options: { env?: Record<string, string>; cwd?: string; input?: string | Buffer | undefined; trace?: CliTrace } = {}
 ): Promise<CliResult> {
   return runCommand(process.execPath, [CLI, ...args], options)
 }
@@ -71,7 +72,7 @@ function runCli(
 function runCommand(
   executable: string,
   args: string[],
-  options: { env?: Record<string, string>; cwd?: string; input?: string | Buffer | undefined; verbatim?: boolean } = {}
+  options: { env?: Record<string, string>; cwd?: string; input?: string | Buffer | undefined; verbatim?: boolean; trace?: CliTrace } = {}
 ): Promise<CliResult> {
   const env: NodeJS.ProcessEnv = { ...process.env }
   for (const key of Object.keys(env)) {
@@ -90,9 +91,18 @@ function runCommand(
       },
       (error, stdout, stderr) => {
         const code = error === null ? 0 : typeof error.code === 'number' ? error.code : null
+        options.trace?.('child-callback', { code, errorCode: error?.code ?? null,
+          signal: error?.signal ?? null, killed: error?.killed ?? false })
         resolve({ code, stdout, stderr })
       }
     )
+    if (options.trace) {
+      child.on('spawn', () => options.trace?.('child-spawn'))
+      child.on('error', error => options.trace?.('child-error', { code: (error as NodeJS.ErrnoException).code ?? null }))
+      child.on('exit', (code, signal) => options.trace?.('child-exit', { code, signal }))
+      child.on('close', (code, signal) => options.trace?.('child-close', { code, signal }))
+      child.stdin?.on('finish', () => options.trace?.('stdin-finish'))
+    }
     child.stdin?.end(options.input ?? '')
   })
 }
@@ -2752,9 +2762,38 @@ describe('bmn hooks install', () => {
     await writeFile(join(root, 'target.json'), 'SENTINEL: nothing to do with any harness\n')
     await writeFile(join(root, 'real', 'target.json'), '{"real":"target"}\n')
 
+    let nativeDiagnostic: unknown
+    if (process.platform === 'win32') {
+      const probeRoot = join(root, 'native-write-probe')
+      const helper = new URL('../../bin/safe-config-write.mjs', import.meta.url).href
+      const script = `import {existsSync,mkdirSync,symlinkSync,writeFileSync,readFileSync,realpathSync} from 'node:fs';
+import {join} from 'node:path';import {linkTarget,writeConfigSafely} from ${JSON.stringify(helper)};
+const root=process.argv[1],report={stage:'prepare',status:'UNVERIFIED'};
+try {
+ mkdirSync(join(root,'real','nested'),{recursive:true});
+ symlinkSync(join('real','nested'),join(root,'alias'),'dir');
+ symlinkSync(join('..','target.json'),join(root,'real','nested','settings.json'));
+ writeFileSync(join(root,'target.json'),'synthetic unrelated sentinel');
+ const expected='{"real":"target"}\\n',target=join(root,'real','target.json');writeFileSync(target,expected);
+ const selected=join(root,'alias','settings.json');
+ report.resolutionEqual=linkTarget(selected)===realpathSync.native(target);
+ report.stage='write-config-safely';writeConfigSafely(selected,expected,'{"real":"target","syntheticProbe":true}\\n');
+ report.status='PASS';
+} catch(error) {
+ report.status='REFUSED';
+ for(const key of ['code','nativeOperation','nativeErrorCode','nativeExceptionType','nativeLaunchError','recoveryRequired','created']) {
+  if(['string','number','boolean'].includes(typeof error[key])) report[key]=error[key];
+ }
+}
+report.sentinelPreserved=existsSync(join(root,'target.json'))&&readFileSync(join(root,'target.json'),'utf8')==='synthetic unrelated sentinel';
+console.log(JSON.stringify(report));`
+      const probe = await runCommand(process.execPath, ['--input-type=module', '-e', script, probeRoot])
+      try { nativeDiagnostic = { exit: probe.code, ...JSON.parse(probe.stdout) } }
+      catch { nativeDiagnostic = { exit: probe.code, malformedReceipt: true, stderrBytes: Buffer.byteLength(probe.stderr) } }
+    }
     const install = await runHooks(['install', '--yes', 'claude', '--file', join(root, 'alias', 'settings.json')])
 
-    expect(install.code, install.stderr).toBe(0)
+    expect(install.code, JSON.stringify({ stderr: install.stderr, nativeDiagnostic })).toBe(0)
     expect(await readFile(join(root, 'target.json'), 'utf8')).toBe('SENTINEL: nothing to do with any harness\n')
     const written = JSON.parse(await readFile(join(root, 'real', 'target.json'), 'utf8'))
     expect(written.real).toBe('target')
@@ -3306,18 +3345,27 @@ describe('OpenCode hooks', () => {
     const fixture = await cliFixture()
     const malformed = 'ses_zzzzzzzzzzzzhVbLiXJ8YHJQjV'
     const methods: string[] = []
+    const sockets = new Set<Socket>(), started = Date.now()
+    const trace: { stage: string; elapsedMs: number; metadata?: Record<string, string | number | boolean | null> }[] = []
+    const track: CliTrace = (stage, metadata) => { if (trace.length < 100) trace.push({ stage, elapsedMs: Date.now() - started, ...(metadata ? { metadata } : {}) }) }
     const socketPath = rawEndpoint(fixture.root, 'raw-hook.sock')
     const rawServer = createServer((socket) => {
+      sockets.add(socket); track('server-connection')
+      socket.on('end', () => track('socket-end'))
+      socket.on('error', error => track('socket-error', { code: (error as NodeJS.ErrnoException).code ?? null }))
+      socket.on('close', () => { sockets.delete(socket); track('socket-close') })
       socket.setEncoding('utf8')
       let buffer = ''
       socket.on('data', (chunk: string) => {
+        track('server-data', { bytes: Buffer.byteLength(chunk), newlines: chunk.split('\n').length - 1 })
         buffer += chunk
         let newline = buffer.indexOf('\n')
         while (newline !== -1) {
           const message = JSON.parse(buffer.slice(0, newline)) as { id: number; method: string }
           buffer = buffer.slice(newline + 1)
           methods.push(message.method)
-          socket.write(`${JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { recorded: true } })}\n`)
+          track('complete-method', { method: ['auth', 'conversation.observe', 'hook.observe'].includes(message.method) ? message.method : 'other' })
+          socket.write(`${JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { recorded: true } })}\n`, () => track('reply-written'))
           newline = buffer.indexOf('\n')
         }
       })
@@ -3326,13 +3374,14 @@ describe('OpenCode hooks', () => {
       rawServer.once('error', reject)
       rawServer.listen(socketPath, resolve)
     })
+    track('listen-ready')
     try {
       const proc = await procTree(fixture.root, OPENCODE_FOREGROUND)
       const env = { ...fixture.sessionEnv, BMN_CONTROL_SOCKET: socketPath, BMN_PROC_ROOT: proc }
-      const observed = await runCli(['hook', 'opencode'], { env, input: JSON.stringify({
+      const observed = await runCli(['hook', 'opencode'], { env, trace: track, input: JSON.stringify({
         hook_event_name: 'session.created', sessionID: malformed, info: { id: malformed }
       }) })
-      expect(observed, JSON.stringify({ methods })).toEqual(QUIET)
+      expect(observed, JSON.stringify({ methods, trace })).toEqual(QUIET)
       expect(methods).toEqual(['auth', 'hook.observe'])
 
       methods.length = 0
@@ -3341,7 +3390,11 @@ describe('OpenCode hooks', () => {
       }) })).toEqual(QUIET)
       expect(methods).toEqual(['auth', 'conversation.observe', 'hook.observe'])
     } finally {
-      await new Promise<void>((resolve) => rawServer.close(() => resolve()))
+      for (const socket of sockets) socket.destroy()
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Synthetic raw pipe cleanup timeout')), 2000)
+        rawServer.close(() => { clearTimeout(timer); resolve() })
+      })
     }
   })
 

@@ -1,5 +1,5 @@
 """Synthetic capability spike only; no production helper edit or owner files."""
-import ctypes,errno,json,os,pathlib,select,shutil,signal,socket,tempfile,time
+import ctypes,errno,json,os,pathlib,select,shutil,signal,socket,stat,subprocess,tempfile,time
 import types
 import bmn_root_session as helper
 libc=helper.LIBC
@@ -46,7 +46,54 @@ def probe(uid):
     except BaseException as error:result.update(status='FAIL',error=type(error).__name__,message=str(error))
     print(json.dumps(result),flush=True)
 
-def measure_case():
+def probe_bwrap(uid):
+    """Real offline sandbox execution, still not an agent/product adapter."""
+    result={'status':'FAIL','profileComplete':False,'outerUid':uid}
+    try:
+        binary=pathlib.Path('/usr/bin/bwrap')
+        mode=binary.stat().st_mode
+        assert not mode & (stat.S_ISUID|stat.S_ISGID),'Non-setuid sandbox required'
+        helper.checked(libc.prctl(4,1,0,0,0))
+        assert pathlib.Path('/proc/self/uid_map').stat().st_uid==uid
+        code="""import ctypes,errno,json,os,pathlib,socket
+status=pathlib.Path('/proc/self/status').read_text()
+assert 'NoNewPrivs:\\t1' in status
+for name in ['CapEff','CapPrm','CapInh','CapAmb']:assert name+':\\t0000000000000000' in status
+assert os.getuid()==0 and os.getgid()==0
+uidmap=pathlib.Path('/proc/self/uid_map').read_text().split()
+assert uidmap==['0',str(OUTER_UID),'1'],uidmap
+assert not pathlib.Path('/.old-root').exists()
+pathlib.Path('/workspace/bwrap-proof').write_text('nested synthetic project')
+libc=ctypes.CDLL(None,use_errno=True)
+for number,args in [(101,[0,-1,0,0]),(308,[-1,0]),(438,[-1,-1,0]),(103,[10,0,0])]:
+ ctypes.set_errno(0);value=libc.syscall(number,*args)
+ assert value==-1 and ctypes.get_errno()==(errno.EACCES if number==103 else errno.EPERM)
+try:pathlib.Path('/proc/self/uid_map').write_text('0 0 4096\\n');raise AssertionError('Outside UID mapping accepted')
+except PermissionError:pass
+with socket.socket(socket.AF_UNIX) as channel:
+ try:channel.connect(OUTSIDE_ADDRESS);raise AssertionError('Outside abstract broker reachable')
+ except ConnectionRefusedError:pass
+print(json.dumps({'nestedUid':os.getuid(),'singleUidMap':True,'noNewPrivileges':True,'capabilitiesDropped':True,'outsideUidMapDenied':True,'outsideSyscallsDenied':True,'outsideBrokerDenied':True,'privateWorkspaceWrite':True,'oldRootDetached':True,'namespaces':{name:os.readlink('/proc/self/ns/'+name) for name in ['user','mnt','pid','net','ipc','uts']}}))
+""".replace('OUTER_UID',str(uid)).replace('OUTSIDE_ADDRESS',repr(outside_address))
+        before={name:os.readlink('/proc/self/ns/'+name) for name in ['user','mnt','pid','net','ipc','uts']}
+        argv=[str(binary),'--unshare-user','--unshare-pid','--unshare-net','--unshare-ipc','--unshare-uts',
+              '--uid','0','--gid','0','--die-with-parent','--new-session','--cap-drop','ALL',
+              '--ro-bind','/usr','/usr','--ro-bind','/bin','/bin','--ro-bind','/lib','/lib',
+              '--ro-bind','/lib64','/lib64','--ro-bind','/etc','/etc','--proc','/proc','--dev','/dev',
+              '--tmpfs','/tmp','--dir','/home','--bind','/workspace','/workspace','--chdir','/workspace',
+              '/usr/bin/python3','-c',code]
+        run=subprocess.run(argv,capture_output=True,text=True,timeout=8)
+        result.update(exit=run.returncode,stderr=run.stderr[:4000],version=subprocess.check_output([str(binary),'--version'],text=True).strip())
+        if run.returncode==0:
+            proof=json.loads(run.stdout)
+            assert all(proof['namespaces'][name]!=before[name] for name in before)
+            assert pathlib.Path('/workspace/bwrap-proof').read_text()=='nested synthetic project'
+            result.update(status='PASS_REAL_BWRAP_ONLY',proof=proof)
+    except BaseException as error:result.update(error=type(error).__name__,message=str(error))
+    print(json.dumps(result),flush=True)
+
+
+def measure_case(entry=probe):
     global helper,libc,outside_address
     root=pathlib.Path(tempfile.mkdtemp(prefix='bmn-nested-capability-'));os.chmod(root,0o700)
     runtime=root/'runtime';runtime.mkdir(mode=0o700)
@@ -59,7 +106,7 @@ def measure_case():
     if child==0:
         os.close(write_in);os.close(read_out);os.dup2(read_in,0);os.dup2(write_out,1)
         directory=root/'session';directory.mkdir()
-        helper.run_session(directory,os.open(runtime,os.O_RDONLY|os.O_DIRECTORY),probe)
+        helper.run_session(directory,os.open(runtime,os.O_RDONLY|os.O_DIRECTORY),entry)
     os.close(read_in);os.close(write_out)
     controller=os.pidfd_open(child)
     output=b'';deadline=time.monotonic()+15;done=False
@@ -96,7 +143,17 @@ def candidate_source(original, nested, pivot):
         source=source.replace(old,'    blocked = [n for n in blocked if n not in {105, 106, 113, 114, 117, 119, 122, 123, 165, 166, 155, 272}]\n'+old)
         old='NAMESPACES | 0x10000000 | 0x02000000 | 0x00000080'
         assert source.count(old)==1
-        source=source.replace(old,'0x00000080')
+        source=source.replace(old,'0x02000000 | 0x00000080 | 0x00008000 | 0x00002000')
+        # Descendants may create their own sandbox namespaces, not enter an
+        # existing namespace, add cgroup/time authority or change parentage.
+        old="    # clone3's pointer flags are opaque to classic BPF. ENOSYS permits ordinary\n"
+        assert source.count(old)==1
+        policy="""    allowed_unshare = NAMESPACES | 0x10000000 | 0x200 | 0x400 | 0x40000
+    ops.extend([(0x15, 0, 4, 272), (0x20, 0, 0, 16),
+                (0x45, 0, 1, (~allowed_unshare) & 0xffffffff),
+                (0x06, 0, 0, denied), (0x06, 0, 0, allow)])
+"""
+        source=source.replace(old,policy+old)
     if pivot:
         old='    os.chroot(directory)\n'
         assert source.count(old)==1
@@ -116,4 +173,5 @@ for nested,pivot in [(False,False),(True,False),(False,True),(True,True)]:
     else:
         assert row['status']=='UNAVAILABLE' and row['errno']==errno.EPERM,row
     rows.append(row)
-print(json.dumps({'scope':'synthetic chroot/pivot versus seccomp kernel discriminator','profileComplete':False,'rows':rows}))
+sandbox=measure_case(probe_bwrap)
+print(json.dumps({'scope':'synthetic chroot/pivot versus seccomp kernel discriminator plus real nested bwrap','profileComplete':False,'rows':rows,'sandbox':sandbox}))
