@@ -465,10 +465,12 @@ catch(e){parentPort.postMessage({...info,ok:false,code:e.code,reason:e.message==
       const info = lstatSync(path)
       assert.equal(info.isSymbolicLink(), false, 'Synthetic cleanup refuses unexpected links')
       const directory = info.isDirectory()
+      // Protect children before removing their parent's inheritable allow rules.
+      // Parent-first restoration turned inherited unrelated files into empty DACLs.
+      if (directory) for (const name of readdirSync(path)) restore(join(path, name))
       // Restore the synthetic caller's write-attributes right before clearing readonly.
       acl(path, { protect: true, directory, phase: 'fixture-cleanup' })
       chmodSync(path, directory ? 0o700 : 0o600)
-      if (directory) for (const name of readdirSync(path)) restore(join(path, name))
     }
     restore(root)
     rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })

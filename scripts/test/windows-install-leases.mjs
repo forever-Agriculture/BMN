@@ -30,7 +30,13 @@ const native=requireApp('node-pty/lib/utils').loadNativeModule('conpty').module;
 assert.equal(native.bmnInstallLeaseVersion,1);
 const lock=${JSON.stringify(join(root, 'run.lock'))},output=${JSON.stringify(output)};
 if(process.argv.includes('--hold')){global.lease=native.acquireInstallLease(lock,false);process.stdout.write('READY\\n');setInterval(()=>{},1000)}
-else{(async()=>{
+else{const nativeProcessTrace=[];
+ const cp=require('node:child_process'),originalSpawnSync=cp.spawnSync;
+ cp.spawnSync=(exe,args,options)=>{const result=originalSpawnSync(exe,args,options);
+  nativeProcessTrace.push({argumentBytes:args.reduce((n,arg)=>n+Buffer.byteLength(arg,'utf16le'),0),status:result.status,signal:result.signal,
+   launchError:result.error?.code??null,stdout:String(result.stdout??'').slice(-4096),stderr:String(result.stderr??'').slice(-4096)});return result};
+ require('node:module').syncBuiltinESMExports();
+ (async()=>{
  const checks=[],children=[];let shared,exclusive;
  const privateDirectories=await import(${JSON.stringify(new URL('../../apps/desktop/src/utility/private-directory.ts', import.meta.url).href)});
  const busy=fn=>assert.throws(fn,e=>e.windowsError===32);
@@ -66,9 +72,9 @@ else{(async()=>{
    check('full ACL scan remains available while private kernel lock handles are held',()=>privateDirectories.ensurePrivateDirectories([protectedRoot],'win32'));
   } finally {dataLease?.close();rootLease?.close();}
 
-  fs.writeFileSync(output,JSON.stringify({status:'PASS',platform:process.platform,checks}));
+  fs.writeFileSync(output,JSON.stringify({status:'PASS',platform:process.platform,checks,nativeProcessTrace}));
  }finally{shared?.close();exclusive?.close();for(const child of children)if(child.exitCode===null&&child.signalCode===null){child.kill('SIGKILL');await new Promise(resolve=>child.once('exit',resolve))}}
-})().catch(error=>{fs.writeFileSync(output,JSON.stringify({status:'FAIL',name:error.name,message:error.message}));process.exitCode=1})}
+})().catch(error=>{fs.writeFileSync(output,JSON.stringify({status:'FAIL',name:error.name,message:error.message,nativeProcessTrace}));process.exitCode=1})}
 `)
   const child = spawn(requireApp('electron'), [worker], { env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
   let stderr = ''; child.stderr.on('data', part => { stderr += part })
