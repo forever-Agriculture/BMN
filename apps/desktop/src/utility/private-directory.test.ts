@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { ensurePrivateDirectories } from './private-directory'
+import { ensurePrivateDirectories, provisionPrivateDirectories } from './private-directory'
 
 vi.mock('node:child_process', () => ({ spawnSync: vi.fn() }))
 afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks() })
@@ -56,4 +56,13 @@ describe('private application directories', () => {
     vi.mocked(spawnSync).mockReturnValue(result as unknown as ReturnType<typeof spawnSync>)
     expect(() => ensurePrivateDirectories(['C:\\isolated'], 'win32')).toThrow(/could not secure/)
   })
+})
+
+it('limits installer root provisioning while keeping full inspection as the default', () => {
+  vi.stubEnv('SystemRoot', 'C:\\Windows')
+  vi.mocked(spawnSync).mockReturnValue({ status: 0, stdout: 'BMN_PRIVATE_ROOTS_OK' } as ReturnType<typeof spawnSync>)
+  provisionPrivateDirectories(['C:\\dedicated'], 'win32')
+  expect(JSON.parse(vi.mocked(spawnSync).mock.calls.at(-1)![2]!.input as string).rootOnly).toBe(true)
+  ensurePrivateDirectories(['C:\\dedicated'], 'win32')
+  expect(JSON.parse(vi.mocked(spawnSync).mock.calls.at(-1)![2]!.input as string).rootOnly).toBe(false)
 })

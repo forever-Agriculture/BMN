@@ -17,7 +17,7 @@ const iconSource = join(repoRoot, 'apps/desktop/resources/icons')
 const dataHome = process.env.XDG_DATA_HOME || join(homedir(), '.local/share')
 const pin = process.argv.includes('--pin')
 
-if (!existsSync(binary)) {
+if (process.platform !== 'win32' && !existsSync(binary)) {
   console.error(`No packaged app at ${binary}. Run pnpm run package first.`)
   process.exit(1)
 }
@@ -91,4 +91,7 @@ function installDesktopEntry() {
   console.log('Pinned BMN to the dock.')
 }
 
-installDesktopEntry()
+if (process.platform === 'win32') {
+  await (await import('./windows-update-desktop.mjs')).installWindowsDesktop(repoRoot)
+  if (pin) console.log('BMN is installed in the Start menu. Use Windows Pin to taskbar to pin it.')
+} else installDesktopEntry()

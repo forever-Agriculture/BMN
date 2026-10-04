@@ -132,6 +132,9 @@ for ($rootIndex = 0; $rootIndex -lt $directories.Count; $rootIndex++) {
     }
     if ($item -is [System.IO.DirectoryInfo]) {
       if (-not $ownerInheritance) { throw 'BMN storage ACL does not protect new children' }
+      # Provision/check roots before locking; full subtree inspection follows
+      # only under the install/data leases, after supported writers exit.
+      if ($request.rootOnly) { continue }
       $entries = $item.EnumerateFileSystemInfos().GetEnumerator()
       try {
         while ($entries.MoveNext()) {
@@ -146,8 +149,25 @@ for ($rootIndex = 0; $rootIndex -lt $directories.Count; $rootIndex++) {
 [Console]::Out.Write('BMN_PRIVATE_ROOTS_OK')
 `
 
+/** Full security inspection remains the default for every existing caller. */
 export function ensurePrivateDirectories(
   roots: readonly string[], platform: NodeJS.Platform = process.platform, chromiumDataRoot?: string
+): void {
+  securePrivateDirectories(roots, platform, chromiumDataRoot, false)
+}
+
+/** Root provisioning only: the installer must inspect the complete subtree after
+ * acquiring its native installation/data leases and observing all writers exit.
+ * This operation cannot authorize reading or mutating uninspected descendants.
+ */
+export function provisionPrivateDirectories(
+  roots: readonly string[], platform: NodeJS.Platform = process.platform, chromiumDataRoot?: string
+): void {
+  securePrivateDirectories(roots, platform, chromiumDataRoot, true)
+}
+
+function securePrivateDirectories(
+  roots: readonly string[], platform: NodeJS.Platform, chromiumDataRoot: string | undefined, rootOnly: boolean
 ): void {
   if (platform !== 'win32') {
     for (const root of roots) {
@@ -183,6 +203,7 @@ export function ensurePrivateDirectories(
     Buffer.from(WINDOWS_PRIVATE_DIRECTORY, 'utf16le').toString('base64')
   ], { input: JSON.stringify({
     paths: chromiumDataRoot ? roots : [...new Set(roots)],
+    rootOnly,
     chromiumDataRoot: chromiumDataRoot && win32.resolve(chromiumDataRoot),
     protectedRoots: [homedir(), process.env.LOCALAPPDATA, systemRoot].filter(Boolean)
   }), encoding: 'utf8', timeout: 15_000, maxBuffer: 64 * 1024, windowsHide: true })

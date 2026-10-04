@@ -34,6 +34,8 @@ if (process.platform === 'win32') {
 if (process.platform === 'win32') {
   const { buildWindowsCli } = await import('./windows-cli.mjs')
   console.log(`built ${buildWindowsCli()}`)
+  const { buildWindowsInstallTools } = await import('./windows-install-tools.mjs')
+  console.log(`built ${await buildWindowsInstallTools()}`)
 }
 
 console.log(`rebuilt node-pty and better-sqlite3 for Electron ${electronVersion}`)

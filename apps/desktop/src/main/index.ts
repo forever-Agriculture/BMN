@@ -58,6 +58,7 @@ import {
 import { resolveApplicationRoots } from '../utility/roots'
 import { acquireRootScopedSingleInstance, focusExistingWindow } from './single-instance'
 import { protectWindowsApplicationLifetime } from './windows-application-lifetime'
+import { retainWindowsDataLease, retainWindowsInstalledRelease } from './windows-installed-release'
 import { trackAllowedSender } from './allowed-senders'
 import { createDevelopmentRoot } from './development-root'
 import { installSavedOutputIpcHandler } from './saved-output-ipc'
@@ -1044,12 +1045,18 @@ if (selfTest) {
   app.commandLine.appendSwitch('use-fake-device-for-media-stream')
   app.commandLine.appendSwitch('use-fake-ui-for-media-stream')
 }
+const installedReleaseLease = retainWindowsInstalledRelease(app.getPath('exe'))
+// The closure retains the native handle until process exit, including all
+// utility shutdown and saved-output work. Kernel death releases it on a crash.
+process.once('exit', () => installedReleaseLease?.close())
 ensureDevelopmentRoots()
 app.on('will-quit', cleanupDevelopmentRoot)
 process.once('exit', cleanupDevelopmentRoot)
 const instanceRoots = resolveApplicationRoots()
 const instanceDataRoot = instanceRoots.data
 ensurePrivateDirectories(Object.values(instanceRoots), process.platform, instanceDataRoot)
+const dataUpdateLease = retainWindowsDataLease(instanceDataRoot)
+process.once('exit', () => dataUpdateLease?.close())
 protectWindowsApplicationLifetime()
 const primaryInstance = acquireRootScopedSingleInstance(app, instanceDataRoot, () =>
   focusExistingWindow(applicationWindow)
