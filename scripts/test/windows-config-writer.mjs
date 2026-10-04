@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
 import { once } from 'node:events'
 import { createHash } from 'node:crypto'
 import { pathToFileURL } from 'node:url'
@@ -16,6 +16,44 @@ const root = mkdtempSync(join(tmpdir(), 'bmn-config-native-'))
 const powershell = join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe')
 const receipts = { defaultOwner: null, checks: [] }
 const children = new Set()
+// Read-only diagnostics for this disposable fixture. Do not change ownership,
+// enable privileges, or infer a cleanup repair from an undifferentiated error 5.
+const cleanupDiagnosticSource = `
+$ErrorActionPreference='Stop'
+$r=ConvertFrom-Json ([Console]::In.ReadToEnd())
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class CleanupAccess {
+ [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+ public static extern IntPtr CreateFileW(string p,uint a,uint s,IntPtr sec,uint c,uint f,IntPtr t);
+ [DllImport("kernel32.dll", SetLastError=true)] public static extern bool CloseHandle(IntPtr h);
+ [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern uint GetFileAttributesW(string p);
+ [DllImport("kernel32.dll", SetLastError=true)] public static extern bool GetFileInformationByHandle(IntPtr h,out Info i);
+ [StructLayout(LayoutKind.Sequential)] public struct Info {public uint attrs,cl,ch,al,ah,wl,wh,volume,sizeh,sizel,links,indexh,indexl;}
+}
+'@
+$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$attrs=[CleanupAccess]::GetFileAttributesW($r.path);$attrError=[Runtime.InteropServices.Marshal]::GetLastWin32Error()
+$probes=@();$identity=$null
+foreach($entry in @(@('READ_ATTRIBUTES',128),@('WRITE_DAC',262144),@('WRITE_OWNER',524288),@('WRITE_ATTRIBUTES',256),@('DELETE',65536))) {
+ $h=[CleanupAccess]::CreateFileW($r.path,[uint32]$entry[1],7,[IntPtr]::Zero,3,33554432,[IntPtr]::Zero)
+ $error=[Runtime.InteropServices.Marshal]::GetLastWin32Error();$ok=$h -ne [IntPtr](-1)
+ try {
+  $probes+=@{access=$entry[0];mask=$entry[1];opened=$ok;error=if($ok){0}else{$error}}
+  if($ok -and $entry[0] -eq 'READ_ATTRIBUTES') {
+   $info=New-Object CleanupAccess+Info
+   if([CleanupAccess]::GetFileInformationByHandle($h,[ref]$info)) {$identity=@{volume=$info.volume;indexHigh=$info.indexh;indexLow=$info.indexl}}
+  }
+ } finally {if($ok){[void][CleanupAccess]::CloseHandle($h)}}
+}
+$security=$null
+try {
+ $a=if($r.directory){[IO.Directory]::GetAccessControl($r.path)}else{[IO.File]::GetAccessControl($r.path)}
+ $security=@{owner=$a.GetOwner([Security.Principal.SecurityIdentifier]).Value;sddl=$a.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access -bor [Security.AccessControl.AccessControlSections]::Owner)}
+} catch {$security=@{readable=$false;hresult=$_.Exception.HResult}}
+[Console]::Out.Write((ConvertTo-Json -Compress -Depth 6 @{sid=$sid;attributes=$attrs;attributeError=if($attrs -eq [uint32]::MaxValue){$attrError}else{0};readonly=($attrs -band 1) -ne 0;identity=$identity;security=$security;probes=$probes}))
+`
 const aclSource = `
 $ErrorActionPreference='Stop'
 [Console]::InputEncoding=New-Object System.Text.UTF8Encoding($false)
@@ -48,7 +86,16 @@ function acl(path, options = {}) {
     { input: JSON.stringify({ path, ...options }), encoding: 'utf8', timeout: 15000, windowsHide: true })
   let result
   try { result = JSON.parse(child.stdout) } catch { /* Preserve only stable synthetic metadata below. */ }
-  if (child.status !== 0) receipts.fixtureFailure = { fixturePhase: options.phase ?? 'read', ...result }
+  if (child.status !== 0) {
+    receipts.fixtureFailure = { fixturePhase: options.phase ?? 'read', relativePath: relative(root, path) || '.', directory: options.directory === true, ...result }
+    if (options.phase === 'fixture-cleanup') {
+      const diagnostic = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(cleanupDiagnosticSource, 'utf16le').toString('base64')],
+        { input: JSON.stringify({ path, directory: options.directory === true }), encoding: 'utf8', timeout: 15000, windowsHide: true })
+      let metadata
+      try { metadata = JSON.parse(diagnostic.stdout) } catch { /* No raw paths/errors in receipts. */ }
+      receipts.fixtureFailure.accessDiagnostic = { exitCode: diagnostic.status, launchError: diagnostic.error?.code ?? null, metadata: metadata ?? null }
+    }
+  }
   assert.equal(child.status, 0, `Synthetic ACL fixture failed (${options.phase ?? 'read'})`)
   return result
 }
