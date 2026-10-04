@@ -20,7 +20,10 @@ const children = new Set()
 // enable privileges, or infer a cleanup repair from an undifferentiated error 5.
 const cleanupDiagnosticSource = `
 $ErrorActionPreference='Stop'
+$probePhase='read-request'
+try {
 $r=ConvertFrom-Json ([Console]::In.ReadToEnd())
+$probePhase='compile-helper'
 Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -34,13 +37,15 @@ public static class CleanupAccess {
 }
 '@
 $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$probePhase='read-attributes'
 $attrs=[CleanupAccess]::GetFileAttributesW($r.path);$attrError=[Runtime.InteropServices.Marshal]::GetLastWin32Error()
 $probes=@();$identity=$null
 foreach($entry in @(@('READ_ATTRIBUTES',128),@('WRITE_DAC',262144),@('WRITE_OWNER',524288),@('WRITE_ATTRIBUTES',256),@('DELETE',65536))) {
+ $probePhase='open-'+$entry[0]
  $h=[CleanupAccess]::CreateFileW($r.path,[uint32]$entry[1],7,[IntPtr]::Zero,3,33554432,[IntPtr]::Zero)
- $error=[Runtime.InteropServices.Marshal]::GetLastWin32Error();$ok=$h -ne [IntPtr](-1)
+ $nativeProbeError=[Runtime.InteropServices.Marshal]::GetLastWin32Error();$ok=$h -ne [IntPtr](-1)
  try {
-  $probes+=@{access=$entry[0];mask=$entry[1];opened=$ok;error=if($ok){0}else{$error}}
+  $probes+=@{access=$entry[0];mask=$entry[1];opened=$ok;error=if($ok){0}else{$nativeProbeError}}
   if($ok -and $entry[0] -eq 'READ_ATTRIBUTES') {
    $info=New-Object CleanupAccess+Info
    if([CleanupAccess]::GetFileInformationByHandle($h,[ref]$info)) {$identity=@{volume=$info.volume;indexHigh=$info.indexh;indexLow=$info.indexl}}
@@ -48,11 +53,19 @@ foreach($entry in @(@('READ_ATTRIBUTES',128),@('WRITE_DAC',262144),@('WRITE_OWNE
  } finally {if($ok){[void][CleanupAccess]::CloseHandle($h)}}
 }
 $security=$null
+$probePhase='read-security'
 try {
  $a=if($r.directory){[IO.Directory]::GetAccessControl($r.path)}else{[IO.File]::GetAccessControl($r.path)}
  $security=@{owner=$a.GetOwner([Security.Principal.SecurityIdentifier]).Value;sddl=$a.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Access -bor [Security.AccessControl.AccessControlSections]::Owner)}
 } catch {$security=@{readable=$false;hresult=$_.Exception.HResult}}
-[Console]::Out.Write((ConvertTo-Json -Compress -Depth 6 @{sid=$sid;attributes=$attrs;attributeError=if($attrs -eq [uint32]::MaxValue){$attrError}else{0};readonly=($attrs -band 1) -ne 0;identity=$identity;security=$security;probes=$probes}))
+$probePhase='emit-receipt'
+[Console]::Out.Write((ConvertTo-Json -Compress -Depth 6 @{sid=$sid;attributes=$attrs;attributeError=if($attrs -eq [uint32]::MaxValue){$attrError}else{0};readonly=($attrs -band 1) -ne 0;identity=$identity;security=$security;probes=$probes;errorVariableOptions=(Get-Variable Error).Options.ToString()}))
+} catch {
+ $nativeException=$_.Exception
+ for($i=0;$i -lt 8 -and $nativeException.InnerException;$i++) {$nativeException=$nativeException.InnerException}
+ [Console]::Out.Write((ConvertTo-Json -Compress @{diagnosticFailed=$true;phase=$probePhase;exceptionType=$nativeException.GetType().FullName;hresult=$nativeException.HResult;scriptLine=$_.InvocationInfo.ScriptLineNumber}))
+ exit 1
+}
 `
 const aclSource = `
 $ErrorActionPreference='Stop'
