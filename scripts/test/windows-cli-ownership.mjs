@@ -33,7 +33,7 @@ publish(role+'.json',{pid:process.pid});
 if(role!=='grandchild')cp.spawn(process.execPath,[__filename,role==='root'?'child':'grandchild'],{stdio:'ignore',detached:true});
 setInterval(()=>{if(role==='root'&&fs.existsSync(path.join(dir,'natural')))process.exit(17)},20);
 `)
-  const previous = readFileSync(new URL('./fixtures/windows-cli-launcher-baseline.c', import.meta.url), 'utf8')
+  const previous = readFileSync(new URL('./fixtures/windows-cli-launcher-baseline.c', import.meta.url), 'utf8').replaceAll('\r\n', '\n')
   assert.equal(createHash('sha256').update(previous).digest('hex'), '6839f21f6a8bd79f55393ff3a4f1bd3a40ba5a1b2cd8f35db557b412631e2f40')
   result.baseline = { commit: 'a332ac00e5e7bf743fc389c61a8d997a2ea85217', sha256: '6839f21f6a8bd79f55393ff3a4f1bd3a40ba5a1b2cd8f35db557b412631e2f40' }
   const oldSource = join(root, 'original.c'); writeFileSync(oldSource, previous)

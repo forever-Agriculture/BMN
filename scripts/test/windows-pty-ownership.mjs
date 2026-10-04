@@ -166,4 +166,7 @@ $results | ConvertTo-Json -Depth 8 -Compress;
 } finally { rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }) }
 
 // The existing ownership CI entrypoint also exercises launcher/Bun containment.
+await import('./windows-install-leases.mjs')
+await import('./windows-install-shortcut.mjs')
 await import('./windows-cli-ownership.mjs')
+await import('./windows-session-ports.mjs')

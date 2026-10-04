@@ -2478,7 +2478,7 @@ describe('bmn hooks install', () => {
     const accepted = ttyHooks(['install', 'codex', '--file', path], 'stdout')
     await accepted.waitFor('Install these hooks? [y/N] ')
     accepted.write('yes\r')
-    expect(await accepted.finish).toBe(0)
+    expect(await accepted.finish, accepted.output()).toBe(0)
     expect((await runHooks(['check', 'codex', '--file', path])).code).toBe(0)
 
     const other = await hookFileFixture({}, 'hooks.json')
@@ -2501,7 +2501,7 @@ describe('bmn hooks install', () => {
       await tty.waitFor('Install these hooks? [y/N] ')
       expect(await readFile(path, 'utf8')).toBe(before)
       tty.write(answer)
-      expect(await tty.finish).toBe(answer === 'yes\r' ? 0 : 1)
+      expect(await tty.finish, tty.output()).toBe(answer === 'yes\r' ? 0 : 1)
       if (answer === 'yes\r') {
         expect((await runHooks(['check', 'codex', '--file', path])).code).toBe(0)
         expect((await backupsOf(path)).length).toBe(1)
@@ -2605,7 +2605,12 @@ describe('bmn hooks install', () => {
     const before = await readFile(path, 'utf8')
     const child = spawnPty(process.execPath, [CLI, 'hooks', 'install', 'codex', '--file', path], {
       name: 'xterm-256color', cols: 80, rows: 24, cwd: process.cwd(),
-      env: { PATH: process.env.PATH ?? '', HOME: dirname(path) }
+      env: { ...Object.fromEntries(['SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'ComSpec'].flatMap(key => {
+        const value = windowsEnvironmentValue(process.env, key)
+        return process.platform === 'win32' && value ? [[key, value]] : []
+      })), PATH: process.env.PATH ?? '', HOME: dirname(path),
+      ...(process.platform === 'win32' ? { USERPROFILE: dirname(path) } : {}) },
+      ...(process.platform === 'win32' ? { useConpty: true, useConptyDll: true } : {})
     })
     let output = ''
     const finished = new Promise<number>((resolve) => child.onExit(({ exitCode }) => resolve(exitCode)))
@@ -4068,17 +4073,17 @@ describe('bmn statusline (Story 37.2)', () => {
       const stdin = input(LIMITS)
       const root = await realpath(await mkdtemp(join(tmpdir(), 'aitcat-')))
       createdRoots.add(root)
-      // A full disk, played by a `cat` that stops after 40 bytes when it writes into the temporary folder.
-      await mkdir(join(root, 'shim'))
-      await writeFile(join(root, 'shim', 'cat'), `#!/bin/sh
+      // A shell function intercepts the same command on POSIX and Git for Windows,
+      // where native cat.exe lookup can bypass an extensionless PATH script.
+      const partialCat = `cat() {
 if [ ! -f ${shellQuote(shellPath(join(root, 'copied')))} ]; then
   : > ${shellQuote(shellPath(join(root, 'copied')))}
-  head -c 40; echo 'cat: write error: No space left on device' >&2; exit 1
+  head -c 40; echo 'cat: write error: No space left on device' >&2; return 1
 fi
-exec /bin/cat "$@"
-`, { mode: 0o755 })
+/bin/cat "$@"
+}`
       await mkdir(join(root, 'tmp'))
-      const result = await runLine(command, stdin, { ...fixture.sessionEnv, TMPDIR: shellPath(join(root, 'tmp')) }, join(root, 'shim'))
+      const result = await runLine(`${partialCat}\n${command}`, stdin, { ...fixture.sessionEnv, TMPDIR: shellPath(join(root, 'tmp')) })
 
       expect(result).toMatchObject({ code: 4, stdout: '40\n', stderr: "it's the owner's\n" })
       expect(await readdir(join(root, 'tmp'))).toEqual([])

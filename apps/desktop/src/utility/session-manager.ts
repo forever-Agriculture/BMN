@@ -444,6 +444,7 @@ export function buildShellEnvironment(
     const checkedKey = platform === 'win32' ? key.toUpperCase() : key
     if (
       SHELL_ENVIRONMENT_PRIVATE_KEYS.has(checkedKey) ||
+      (platform === 'win32' && checkedKey === 'TERMINFO_DIRS') ||
       SHELL_ENVIRONMENT_PRIVATE_PREFIXES.some((prefix) => checkedKey.startsWith(prefix))
     ) {
       continue

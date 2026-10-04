@@ -129,23 +129,36 @@ try {
       // A native Node producer must cross ConPTY and decode in the actual pane.
       // Keep the saved text separate from the image layer; no direct renderer injection.
       const graphicsFixture = join(cwd, 'graphics-producer.cjs')
+      const graphicsTrace = join(cwd, 'graphics-trace.json')
       const frame = `\x1bP9;1;0q"1;1;60;75#1;2;100;0;0#1${Array(13).fill('!60~').join('-')}\x1b\\`
-      writeFileSync(graphicsFixture, `const frame=${JSON.stringify(frame)};
+      writeFileSync(graphicsFixture, `const fs=require('node:fs');const trace=${JSON.stringify(graphicsTrace)};
+process.on('uncaughtException',error=>{fs.writeFileSync(trace,JSON.stringify({stage:'error',name:error.name,code:error.code,message:error.message}));process.exit(1)});
+fs.writeFileSync(trace,JSON.stringify({stage:'entered',stdinTTY:process.stdin.isTTY,stdoutTTY:process.stdout.isTTY}));
+const frame=${JSON.stringify(frame)};
 process.stdin.setRawMode(true);process.stdin.resume();process.stdin.on('data',()=>process.stdout.write('BMN_GRAPHICS_INPUT_OK\\r\\n'));
 process.stdout.write(frame+'BMN_GRAPHICS_NATIVE_READY\\r\\n');setInterval(()=>{},1000);`)
       const graphics = await launch('Native graphics fixture', process.execPath, [graphicsFixture])
       const graphicsId = graphics.session.sessionId
-      await page.evaluate(id => window.aiTerminal.activateTerminal(id), graphicsId)
-      await page.waitForFunction(id => {
+      // Activation addresses the utility attachment; the sidebar selects and
+      // mounts the actual renderer view which this graphics acceptance measures.
+      await page.locator(`.session-row button[data-session-id="${graphicsId}"]`).click()
+      try { await page.waitForFunction(id => {
         try {
           const snapshot = window.__aitermTest.snapshot(id)
           return snapshot.imageStorageMB > 0 && snapshot.imageLayerPresent &&
             snapshot.bufferLines.some(line => line.includes('BMN_GRAPHICS_NATIVE_READY'))
         } catch { return false }
-      }, graphicsId)
+      }, graphicsId) } catch (error) {
+        let producer
+        try { producer = JSON.parse(readFileSync(graphicsTrace, 'utf8')) } catch { producer = { stage: 'not-entered' } }
+        observations.push({ nativeGraphicsFailure: true, producer,
+          snapshots: await page.evaluate(() => window.__aitermTest.snapshots()).catch(() => null) })
+        throw error
+      }
       const beforeResize = await page.evaluate(id => window.__aitermTest.snapshot(id), graphicsId)
       await page.evaluate(id => window.aiTerminal.resizeTerminal(id, 101, 37), graphicsId)
-      await send(graphics, 'synthetic input')
+      await page.locator(`.session-terminal[data-session-id="${graphicsId}"] .terminal-surface`).click()
+      await page.keyboard.type('synthetic input')
       await page.waitForFunction(id => {
         const snapshot = window.__aitermTest.snapshot(id)
         return snapshot.imageStorageMB > 0 && snapshot.imageLayerPresent &&

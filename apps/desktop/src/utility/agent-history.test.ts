@@ -1,5 +1,5 @@
 // MODULE: agent-history.test.ts - the history limit: confirmation rules, Claude folder policy, the pruning runner and its schedule
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -471,7 +471,8 @@ describe('Cursor in the history section (Story 31.3 AC3)', () => {
     roots.push(home)
     const bin = join(home, 'bin')
     await mkdir(bin)
-    await writeFile(join(bin, 'cursor-agent'), '#!/bin/sh\n', { mode: 0o755 })
+    if (process.platform === 'win32') await copyFile(process.execPath, join(bin, 'cursor-agent.exe'))
+    else await writeFile(join(bin, 'cursor-agent'), '#!/bin/sh\n', { mode: 0o755 })
     const cursor = cursorHistoryAdapter({ home, env: { PATH: bin } })
     const remove = vi.spyOn(cursor, 'remove')
     const codex = fakeAdapter('codex', [{ id: 'old', updatedAt: daysAgo(40) }])

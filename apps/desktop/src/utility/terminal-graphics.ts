@@ -41,10 +41,19 @@ export function terminfoDirectories(
 }
 
 /** A missing, altered or unresolvable entry never permits a Sixel TERM claim. */
-export function sixelTerminfoReady(asset: TerminfoAsset): boolean {
+export function sixelTerminfoReady(asset: TerminfoAsset, platform: NodeJS.Platform = process.platform): boolean {
   try {
     const target = join(asset.directory, 'x', SIXEL_TERM)
-    if (!readFileSync(target).equals(readFileSync(asset.source))) return false
+    const entry = readFileSync(target)
+    if (!entry.equals(readFileSync(asset.source))) return false
+    if (platform === 'win32') {
+      // Native Windows programs do not use the Linux ncurses search path. Check
+      // the packaged compiled identity; WSL must resolve its own installed entry.
+      if (entry.length < 12 || ![0x011a, 0x021e].includes(entry.readUInt16LE(0))) return false
+      const namesLength = entry.readUInt16LE(2)
+      if (namesLength < 2 || 12 + namesLength > entry.length || entry[11 + namesLength] !== 0) return false
+      return entry.subarray(12, 11 + namesLength).toString('utf8').split('|').includes(SIXEL_TERM)
+    }
     const probe = spawnSync('infocmp', ['-A', asset.directory, SIXEL_TERM], {
       encoding: 'utf8', timeout: 1500, maxBuffer: 128 * 1024,
       env: { ...process.env, TERMINFO: undefined, TERMINFO_DIRS: `${asset.directory}:` }
@@ -58,11 +67,13 @@ export function sixelTerminfoReady(asset: TerminfoAsset): boolean {
 export function terminalGraphicsEnvironment(
   choice: TerminalGraphicsChoice,
   environment: Readonly<Record<string, string | undefined>>,
-  asset?: TerminfoAsset
+  asset?: TerminfoAsset,
+  platform: NodeJS.Platform = process.platform
 ): Record<string, string> {
-  if (effectiveTerminalGraphics(choice) !== 'sixel' || !asset || !sixelTerminfoReady(asset)) {
+  if (effectiveTerminalGraphics(choice) !== 'sixel' || !asset || !sixelTerminfoReady(asset, platform)) {
     return { TERM: STANDARD_TERM }
   }
+  if (platform === 'win32') return { TERM: SIXEL_TERM }
   return {
     TERM: SIXEL_TERM,
     TERMINFO_DIRS: terminfoDirectories(asset.directory, environment)

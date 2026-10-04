@@ -148,13 +148,17 @@ describe('readFileReference', () => {
   it('reports a change when the shown path stops naming the file that was read', async () => {
     const path = join(launch, 'src', 'parser.ts')
     await writeFile(join(launch, 'replacement.ts'), 'other bytes\n')
+    let replacementFailure: unknown
     const replaced = refused(await readFileReference(request('src/parser.ts'), {
       afterCheck: async () => {
         const replacement = join(launch, 'replacement.ts')
-        if (process.platform === 'win32') replaceWindowsFixtureFile(root, replacement, path)
-        else await rename(replacement, path)
+        try {
+          if (process.platform === 'win32') replaceWindowsFixtureFile(root, replacement, path)
+          else await rename(replacement, path)
+        } catch (error) { replacementFailure = error; throw error }
       }
     }))
+    expect(replacementFailure, 'The replacement fixture itself must execute before reader behavior is asserted').toBeUndefined()
     expect(replaced).toMatchObject({ reason: 'changed', canonicalPath: path })
 
     // A folder on the path becomes a symlink to another tree holding the same name.

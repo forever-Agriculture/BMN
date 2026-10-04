@@ -62,7 +62,7 @@ except OSError as e:print(json.dumps({'deniedErrno':e.errno,'namespace':os.readl
  treecode='''import os,pathlib,json,subprocess,sys,time
 nonce,role=sys.argv[1:]
 if role!='grandchild':subprocess.Popen([sys.executable,'-c',__import__('os').environ['BMN_SYNTHETIC_TREE_CODE'],nonce,'child' if role=='root' else 'grandchild'],stdin=subprocess.DEVNULL,start_new_session=True)
-row={'role':role,'ticks':pathlib.Path('/proc/self/stat').read_text().rpartition(') ')[2].split()[19],'namespace':os.readlink('/proc/self/ns/pid')}
+row={'role':role,'pid':os.getpid(),'ticks':pathlib.Path('/proc/self/stat').read_text().rpartition(') ')[2].split()[19],'namespace':os.readlink('/proc/self/ns/pid')}
 os.write(1,(json.dumps(row)+'\\n').encode())
 if role=='root':sys.stdin.readline()
 else:time.sleep(30)
@@ -87,11 +87,17 @@ else:time.sleep(30)
       argv=(path/'cmdline').read_bytes().split(b'\0')
       if argv[-3:-1]!=[nonce.encode(),row['role'].encode()]:continue
       if os.readlink(path/'ns/pid')!=row['namespace']:continue
+      status=(path/'status').read_text().splitlines()
+      inner=int(next(line for line in status if line.startswith('NSpid:')).split()[-1])
+      if inner!=row['pid']:continue
       pid=int(path.name);before=identity(pid);fd=os.pidfd_open(pid)
       if before['ticks']!=row['ticks'] or identity(pid)!=before:os.close(fd);continue
       matched.append(fd)
      except (FileNotFoundError,PermissionError,ProcessLookupError):continue
-    assert len(matched)==1,(mode,row,len(matched));held.extend(matched)
+    if len(matched)!=1:
+     for fd in matched:os.close(fd)
+     raise AssertionError((mode,row,len(matched)))
+    held.extend(matched)
    if mode=='natural':tree.stdin.write(b'exit\n');tree.stdin.flush()
    elif mode=='stop':tree.terminate()
    else:tree.kill()

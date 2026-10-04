@@ -27,7 +27,7 @@ $a=if([IO.Directory]::Exists($r.path)){[IO.Directory]::GetAccessControl($r.path)
   const result = spawnSync(join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
     ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(source, 'utf16le').toString('base64')],
     { input: JSON.stringify({ path, mode, ...options }), encoding: 'utf8', timeout: 15000, windowsHide: true })
-  assert.equal(result.status, 0, 'Synthetic native filesystem operation must execute')
+  assert.equal(result.status, 0, `Synthetic native filesystem operation must execute: ${(result.error as NodeJS.ErrnoException | undefined)?.code ?? result.stderr}`)
   return JSON.parse(result.stdout) as Record<string, boolean>
 }
 
