@@ -15,13 +15,13 @@ Epic 50/54 installed/provider acceptance remains separate and unfinished.
 | PowerShell/cmd launch, input, stop, process identity, crash cleanup, ConPTY feasibility — 53.2 | Implementation team | Affected tests and sandboxed startup PASS | Bundled bytes/trees/GUI/pressure, shell/UI and direct/debugger main-job crash cleanup PASS; twelve lifecycle observations including final Close/relaunch PASS; full story acceptance remains open | UNVERIFIED |
 | Files, path links, attachments, backups, directory permissions — 53.3 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
 | CLI, transport, caller/session authority — 53.4 | Implementation team | 178 server/498 CLI affected checks PASS on 629dc91 | Native bmn.exe startup/argv/stdin and restricted control pipe owner/cross-account denial PASS; hook/config acceptance remains open | UNVERIFIED |
-| Named distributions, bridge, path mapping, terminfo — 53.5 | Implementation team | UNVERIFIED | Disposable WSL2 Alpine VM boot/cleanup PASS | Ubuntu raw Stop/EOF/root/native-host crash cleanup PASS; systemd sibling and filesystem socket brokers escape measured containment; strict profile decision pending, bridge not implemented |
+| Named distributions, bridge, path mapping, terminfo — 53.5 | Implementation team | Restricted prototype and separate-UID alias fence measured; full profile UNVERIFIED | Disposable WSL2 Alpine VM boot/cleanup PASS | Strict restricted profile and per-session guest-root helper approved; complete measurement remains open; bridge not implemented |
 | Claude/Codex/OpenCode/Cursor hooks, history, usage, compaction, resume — 53.6 | Implementation team | Hook/config fixtures: 68 passed, one native-only skip; retained history/Companion: 204 passed, replacement and hardlink regressions original RED/current GREEN | Latest native failures remain open; revised ACL/home/history fixtures UNVERIFIED | UNVERIFIED |
 | Terminal images, clipboard, IME/AltGr, scaling, panes, themes, keyboard access — 53.7 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
 | Microphone, local voice engine, cancellation, addressed paste — 53.8 | Implementation team | Portable speech/silence/transcription PASS | Portable/packaged engines and PE imports PASS; prior WAV ACL PASS, latest private-WAV inspector fails without OS cause (diagnostic pending); microphone/UI/other CPU UNVERIFIED | UNVERIFIED |
 | Notifications, attention, Telegram replies and delivery diagnostics — 53.9 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
 | Per-session development port discovery and navigation — 53.10 | Implementation team | 498 affected tests PASS, one skip; scanner timeout original RED/current GREEN | Owned-job TCP scanner implemented and focused-reviewed; owned Edge IPv4/IPv6 navigation gate prepared; MSVC/runtime/UI/browser UNVERIFIED | UNVERIFIED |
-| Per-user install, source updates, rollback, uninstall — 53.11 | Implementation team | UNVERIFIED | Not implemented | UNVERIFIED |
+| Per-user install, source updates, rollback, uninstall — 53.11 | Implementation team | Affected source tests/type/bundle PASS; Linux development startup PASS | Offline installer, versioned transaction, leases, snapshot, queue and uninstall implemented in source; native compiler/kernel/install acceptance UNVERIFIED | UNVERIFIED |
 | Full CI, required merge gates, contributor rules — 53.12 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
 | Full feature-guide reconciliation and installed-app acceptance — 53.13 | Team + independent Windows verifier | UNVERIFIED | UNVERIFIED | UNVERIFIED |
 
@@ -318,3 +318,137 @@ Native Sixel ConPTY-to-renderer and owned TCP listener gates are prepared but ha
 `d25700a` uses native absolute voice model paths in the stored-row and normalization fixtures. All 46 Linux database tests and typecheck/lint passed. Native fixtures remain UNVERIFIED.
 
 The TCP gate now opens an isolated Edge profile inside a retained Windows session job and navigates to both sessions' IPv4/IPv6 root, child and grandchild listeners. Edge and all other fixture jobs must confirm exit at cleanup. [The Windows 2025 runner image](https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-Readme.md#browsers-and-drivers) provides Edge; no browser installation, owner profile or sandbox-disable flag is used. The new gate has only syntax/lint validation locally and remains **UNVERIFIED** until native CI runs. This does not verify clicking a BMN port chip or default-browser activation.
+
+## Installer and source-update candidate (2026-10-04)
+
+The current source adds an offline per-user NSIS installer, a stable launcher,
+immutable version directories, native shared startup/exclusive updater leases,
+and a durable transaction journal. Validation and self-test use fresh profiles;
+activation preserves the old payload. Older code refuses an unknown data schema
+before initialization writes, and a newer migration requires a verified SQLite
+backup. A failed metadata refresh reports the actually selected commit and retries
+metadata instead of reapplying migrations. There is no automatic data rollback.
+
+The existing `install:desktop` and `update:desktop` commands have Windows adapters.
+A contributor update queues the exact clean `main == origin/main` commit, resumes
+from the installed launcher, builds a separate detached worktree, and checks source
+identity again immediately before activation. A failed queue allows the retained
+selected app to open; retry is explicit. Uninstall offers retention by default or
+explicit deletion of **all contents of the displayed data folder**, including
+user-created files there. It retains configuration, the empty lock and the offline
+recovery runtime; projects outside the folder are not enumerated. Native shortcuts
+set and read back `dev.bmn.desktop` and the launcher target.
+
+The retained bootstrap now delegates to the selected version's runtime/worker,
+so an offline runtime upgrade does not leave later source updates using the old
+runtime. A short shared lease covers validation and worker creation, then releases
+before the worker needs its exclusive update lease. Both launcher branches use an
+ordinary byte-equal `BMN-worker.exe` copy. Payload sealing covers both images;
+GUI startup rejects the worker image, and the worker entry rejects the GUI image.
+The existing exit observer continues waiting for `BMN.exe` GUI/utility processes.
+Actual Windows PE size and renamed-runtime execution remain UNVERIFIED.
+
+Uninstall takes the request lease before installation/data leases, sets queued work
+aside and removes selection. Resume rechecks both request and selection after
+acquiring the same lease; it cannot reactivate an uninstalled root. Live mapped
+worker versions are retained. Private roots are provisioned first, then the complete
+security scan runs under both mutation leases after GUI/utility exit. A new native
+gate checks that full scan while kernel lock handles are held; it has not run.
+Queued/waiting starts forward to the selected running GUI. Otherwise, an owned
+asynchronous notice explains the wait; dismissing it leaves the update running.
+
+Local evidence: the consolidated worker repair has 74 affected passing tests,
+typecheck, lint and worker bundling. The original reviewed resolver fails the
+bounded two-worker queue/lease regression; the repair passes with one activation
+and all simulated leases released. Original image guards, uninstall rechecks and
+renamed-GUI selection tests fail on their respective defects and pass after repair.
+These tests use synthetic process observations and ordinary temporary files.
+The three earlier installer findings are closed; the former shortcut compatibility
+finding was rejected against Git history because that format was never shipped.
+The consequential worker repair is under focused recheck; full-epic review is unrun.
+The pinned NSIS compiler's prior Linux syntax/resource check and real Linux startup
+evidence are retained for unchanged behavior.
+
+Native MSVC compilation, standard-user kernel locking, copied-worker/ASAR/module
+loading, concurrent launches, offline install/upgrade/uninstall/reinstall,
+crash/locked-file recovery, actual wait/focus UI, installed shortcut/toast activation,
+contributor execution and Windows 11 acceptance remain **UNVERIFIED**. Scratch
+worktrees may remain while native modules are mapped; their recorded locations
+support recovery. No installed-app or Epic 53 completion is claimed.
+
+## Restricted WSL profile: UID boundary measurement (2026-10-04)
+
+The owner approved strict cleanup with an explicit restricted capability profile.
+That choice does not make the current prototype complete. A local disposable
+Docker fixture, with no network, host mounts or owner configuration changes,
+reproduced an ordinary same-UID peer reading a private project through
+`/proc/<pid>/root` and requesting a broker-created process. That process survived
+the session target's exit. Giving the target a separate numeric UID denied both
+project and proc-alias reads and prevented that launch request.
+
+| Local fixture | Private project read | Proc-root alias read | Outside actor after target exit |
+| --- | --- | --- | --- |
+| Target UID 1000, peer UID 1000 | Allowed | Allowed | Survived |
+| Target UID 200000, peer UID 1000 | Denied | Denied | Not launched |
+
+This measures the Linux UID/filesystem/proc boundary only. It does **not** verify
+WSL2, user/mount/network namespaces, provider egress, authenticated `bmn` relay,
+mediated project import/export, device/FD/syscall restrictions, WSLg/native interop,
+two-distribution identity, ports or terminfo. `ProfileComplete` remains false.
+A trusted root helper inside the selected WSL distribution could provision an
+isolated per-session numeric UID and private filesystem without permanent Linux
+user records or global distro changes. The owner authorized this per-session helper
+through `wsl.exe --user root` only in the selected distribution. That approval excludes
+permanent users, distro/global configuration changes, Windows elevation, credential
+copies and tests on owner profiles. No WSL product adapter is implemented.
+
+The extracted [guest-root helper prototype](../scripts/lib/wsl-root-session.py)
+now creates root-owned PID/mount/network/IPC/UTS namespaces, a private filesystem
+and an unprivileged numeric session UID. Runtime kernel leases serialize UID
+allocation across root callers, refuse occupied account/process identities, and
+reclaim stale slots only after exit. They create no Linux user records.
+Allocation also scans each thread's real/effective/saved/filesystem UID rather
+than only its process leader. A live worker-thread fsUID reproduces the original
+allocation failure and is refused by the repaired helper. The syscall filter
+explicitly denies kernel-global `syslog`; its size-only probe returned EACCES.
+The unfiltered control was denied by the outer container policy, so that control
+is INCONCLUSIVE; no kernel log contents were read.
+
+
+The [synthetic measurement](../scripts/test/fixtures/wsl-root-profile.py), on
+Linux kernel `7.0.0-34-generic` in a disposable Python 3.12 Debian container,
+exercised ready filesystem/abstract Unix, TCP and file-watcher brokers. All four
+positive controls launched outside actors; the restricted session launched none.
+Peer UID 1000 could not read its private project through a proc-root alias.
+Natural exit, Stop, supervisor crash and stdin EOF each terminated three retained
+session processes while the unrelated broker/actors remained alive. Actual i386
+and x32 entrypoints were rejected; private socketpair IPC and threads worked.
+The root observer required `SYS_PTRACE`; session effective, permitted, inheritable
+and ambient capabilities are explicitly cleared. The fixture removes its scratch
+files and confirms termination of its own outside actors separately.
+
+This is a helper prototype with a trusted measurement callback, not a production
+launch protocol. Native WSL measurement is routed through the existing freshly
+imported distribution gate and remains **UNVERIFIED**. Persistent project mediation,
+provider-only egress, scoped BMN relay, PTY/terminfo and native host lifecycle remain
+open; `ProfileComplete` is still false.
+
+The callback failure regression exits 70 inside the fork without unwinding into
+the root caller's cleanup. It failed on the original helper and passed with the
+repair; the four lifecycle measurements above remained passing. Guest invocation,
+malformed output and assertion failures now produce explicit FAIL receipts rather
+than a missing result that the outer gate could accept. The receipt tests also
+parse the exact Python launch text: the indentation regression fails against
+`f00ddad`, and the repaired twelve checks pass. These are local synthetic/runtime
+and parser results, not native WSL acceptance.
+
+## Native outside-broker discriminator (candidate)
+
+The new [WMI gate](../scripts/test/windows-broker-ownership.mjs) requires a
+disposable native runner and medium-integrity token. It creates a ready same-user
+WMI positive control, retains process handles, launches a direct ConPTY child and
+a WMI-requested child, then exercises Stop. A surviving broker child makes strict
+ownership FAIL; a refused or owned WMI route establishes that route only. Unrelated
+control survival and fixture cleanup are checked separately. Its syntax/lint checks
+passed; native execution is **UNVERIFIED**, and it is not currently routed into CI.
+The owner’s all-launched-process requirement remains unchanged.

@@ -83,9 +83,9 @@ All commands run from the repository root.
 | `pnpm run test:electron` | Build, run the real Electron app in self-test mode, then check that a normal start loads no self-test code |
 | `pnpm run test:run` | Unit tests, then the Electron self-test |
 | `pnpm run voice:build` | Build the pinned whisper.cpp engine (`node scripts/voice/build-whisper.mjs --force` rebuilds) |
-| `pnpm run package` | Voice engine, app build and an unpacked Linux build in `apps/desktop/release` |
+| `pnpm run package` | Voice engine, app build and native unpacked output in `apps/desktop/release`; the Windows candidate also builds an unsigned offline installer |
 | `pnpm run smoke:packaged [--root FOLDER]` | Start the packaged build (or the one in `FOLDER`) against a temporary data folder and check it |
-| `pnpm run install:desktop [-- --pin]` | Install the launcher and icons, `--pin` adds it to the GNOME dock |
+| `pnpm run install:desktop [-- --pin]` | Install the platform launcher and icons; Linux `--pin` adds it to the GNOME dock, Windows creates a Start menu shortcut |
 | `pnpm run update:desktop` | Queue a clean pushed `main` build; wait for BMN to exit, package into `linux-unpacked.next`, smoke-test it, swap it into `linux-unpacked` (the replaced build stays as `linux-unpacked.prev` until the next update), install and notify. A failed check leaves the live build as it was; a desktop start during the update waits for it |
 
 `make test`, `make lint`, `make typecheck` and `make build` wrap the same commands.
@@ -186,10 +186,116 @@ are tracked separately there.
 Run `node scripts/test/platform-startup.mjs --binary apps/desktop/release/win-unpacked/BMN.exe`
 and `pnpm exec vitest run scripts/tests/packaged-native-modules.test.mjs` to check
 that candidate. Build on the target OS: native ABI filtering uses the host platform.
-This is unsigned development output, without an installer or a full-parity claim.
+This remains development output without a full-parity claim. The new packaging
+hooks also prepare an unsigned offline installer; its native compilation and
+installed behavior are still UNVERIFIED.
 Portable voice engines and the native `bmn.exe` launcher are included. Native CI verifies engine speech/silence/transcription and launcher startup/argv/stdin; microphone, hook/resume and complete desktop acceptance remain unfinished.
 The existing full Linux `pnpm run package` continues to build voice resources.
 Never package over a running packaged app.
+
+The native broker discriminator is `node scripts/test/windows-broker-ownership.mjs`
+on a disposable GitHub Actions Windows runner. It uses a synthetic WMI positive
+control, an owned ConPTY direct child, and retained process handles before Stop.
+A surviving WMI-created child makes the gate fail and leaves strict native process
+ownership unresolved; a WMI-only pass does not establish all broker routes. The
+fixture bounds its own lifetime and removes its own processes/files. Native
+execution of this new discriminator is **UNVERIFIED**.
+
+### Windows installation and queued source updates (candidate)
+
+These routes are implemented in source but have not passed native installed-app
+acceptance. Use a disposable Windows account/profile for validation and record the
+exact commit and results in the [parity checklist](epic-53-parity.md). The existing
+Linux systemd/desktop route is unchanged.
+
+The Windows build includes the native launchers, CLI, voice engines, terminfo,
+SQLite/ConPTY modules and offline worker. It includes an ordinary, byte-equal
+`BMN-worker.exe` copy, sealed alongside `BMN.exe`. The worker image runs Node code
+and refuses GUI startup; the GUI image refuses the installed-worker entry. This
+keeps updater workers separate from GUI/utility processes during exit checks. The
+extra installed PE size is not yet measured on Windows. Packaging emits
+`apps/desktop/release/BMN-<commit>-setup.exe` beside `win-unpacked`. The installer
+uses the included Electron runtime; an end user needs neither Node/pnpm/compiler
+nor WSL to install and run the native app. The installer makes no network update
+check and installs per-user under `%LOCALAPPDATA%\Programs\BMN`.
+
+For contributors with the pinned toolchain:
+
+```powershell
+pnpm install --frozen-lockfile
+pnpm run build
+# Close any packaged BMN before packaging.
+pnpm run package
+pnpm run install:desktop
+```
+
+`install:desktop` validates and smoke-tests the build with temporary profiles,
+waits for BMN to exit, selects its versioned payload and creates a Start menu
+shortcut. Windows taskbar pinning uses the normal Windows UI. The shortcut's
+application identity is `dev.bmn.desktop`; its target and identity are read back.
+The new native helper still needs compiler/runtime verification.
+
+After installation, `pnpm run update:desktop` requires a clean `main` matching
+`origin/main`. It records that exact commit and the current Node/pnpm locations.
+Close BMN, then open the installed Start menu shortcut to resume the queued work.
+A start while the selected GUI is running and the queue is waiting forwards to
+that instance. During queued work, an owned information window explains the wait;
+dismissing it keeps the update running. The notice closes when the work finishes.
+The launcher builds a detached Git worktree, validates and smoke-tests the candidate,
+checks source identity again immediately before selection, and displays a completion
+notice. A reboot or closed terminal retains the request; there is no login task or
+service registration. Do not move/remove the source checkout or its Node/pnpm tools
+while the request is pending. Uninstall takes the same request lease, sets queued
+work aside and removes selection; a waiting worker cannot reinstall from that stale
+request. A failed request permits the selected app to open;
+rerun `update:desktop` to explicitly retry the same commit. A different unfinished
+request needs explicit recovery rather than replacement.
+
+Payloads stay in immutable `versions` directories, selected by `installation.json`.
+`update.json` records incomplete activation and metadata repair. A metadata failure
+can occur after the new version was selected; the installer reports the actual
+selected commit, and retry repairs metadata without repeating migration. Previous
+payloads and verified recovery snapshots are retained. Do not launch an old version
+directly against current data or automatically restore an old snapshot: that can
+discard subsequent changes. Unknown/newer data schemas refuse initialization.
+For a runtime ABI change, use the new offline installer; the queued source route
+refuses loading native SQLite modules with a mismatched Electron runtime.
+The retained bootstrap holds a shared installation lease through selection,
+validation and worker creation, then releases it before waiting for the worker.
+This fences creation against uninstall without blocking the worker's exclusive
+update lease. It resolves the current version, then runs that
+version's included runtime and worker. A later source update uses the new runtime
+after an offline upgrade; the old bootstrap never loads the new version's native
+modules. Invalid selection permits pinned uninstall recovery and refuses source
+updates or GUI launch. The manifest/selection format and native lease version are
+compatibility contracts for this resolver. Native multi-launcher and runtime-change
+acceptance remain UNVERIFIED.
+
+
+The source request is under `requests/source-update.json` in the installation root.
+It records scratch worktree locations for recovery; mapped Windows native DLLs may
+delay removal until BMN exits. Inspect that state and the selected commit before
+manually repairing a failed update. Keep recovery payloads/snapshots until their
+replacement has been verified.
+
+Windows Settings' registered Uninstall action offers data retention by default.
+Its optional deletion names the exact data folder and covers **all its contents**,
+including files placed there by the user. Project files outside that folder are
+preserved. Configuration, the empty lock and the offline recovery runtime remain
+for reinstall. A versioned engine currently executing the uninstall also remains
+inactive because Windows may keep its executable/DLLs mapped. Other observed live
+worker versions are retained for the same reason. The installation
+selection is removed, so this retained version cannot open application data. This
+does not claim removal of every BMN file. Custom data/config
+overrides are separate and are not silently discovered or deleted.
+
+The generated BMN installer and native helpers are unsigned. Hashes in the payload
+manifest detect corruption; they do not establish the publisher's identity. Verify
+the release commit and installer hash through a trusted maintainer channel. Windows
+may display a trust prompt; do not disable Defender, SmartScreen or other security
+controls. Signing purchases and public release publication require separate approval.
+Native Windows install/upgrade/failure/uninstall/reinstall, kernel leases, shortcut
+activation and source-update execution remain UNVERIFIED in this candidate.
 
 Windows persistent defaults are `%LOCALAPPDATA%\BMN\config`, `data`, `state` and
 `runtime` (fallback: the account's `AppData\Local\BMN`). All are local to the
