@@ -102,6 +102,7 @@ describe('Claude history folders', () => {
     const dotfiles = join(root, 'dotfiles')
     await mkdir(dotfiles)
     await writeFile(join(dotfiles, 'claude-settings.json'), '{ "model": "opus" }')
+    ownWindowsFixtureFile(root, join(dotfiles, 'claude-settings.json'))
     await symlink(join(dotfiles, 'claude-settings.json'), join(root, 'settings.json'))
 
     expect(writeClaudeFolder(root, 30)).toMatchObject({ ok: true })

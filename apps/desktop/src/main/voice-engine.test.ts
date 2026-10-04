@@ -252,8 +252,8 @@ describe('speech check before transcription', () => {
       const script = `$ErrorActionPreference='Stop';
 $path=ConvertFrom-Json ([Console]::In.ReadToEnd());
 $user=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value;
-$directory=Get-Acl -LiteralPath ([System.IO.Path]::GetDirectoryName($path));
-$file=Get-Acl -LiteralPath $path;
+$directory=[System.IO.Directory]::GetAccessControl([System.IO.Path]::GetDirectoryName($path));
+$file=[System.IO.File]::GetAccessControl($path);
 $rules=@($file.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]));
 [Console]::Out.Write((@{protected=$directory.AreAccessRulesProtected;user=$user;owner=$directory.GetOwner([System.Security.Principal.SecurityIdentifier]).Value;rules=@($rules | ForEach-Object { @{sid=$_.IdentityReference.Value;allow=($_.AccessControlType -eq 'Allow');full=($_.FileSystemRights -eq 'FullControl')} })} | ConvertTo-Json -Compress -Depth 4));`
       const result = spawnSync(join(process.env.SystemRoot!, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),

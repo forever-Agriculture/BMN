@@ -164,3 +164,6 @@ $results | ConvertTo-Json -Depth 8 -Compress;
   assert.ok(rows.every(row => row.passed))
   console.log('PASS owned native tree cleanup: natural exit, Stop, host crash, silent and immediate shells')
 } finally { rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }) }
+
+// The existing ownership CI entrypoint also exercises launcher/Bun containment.
+await import('./windows-cli-ownership.mjs')

@@ -1,18 +1,24 @@
 import { randomUUID } from 'node:crypto'
-import { mkdtemp, readFile, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { link, mkdtemp, open, readFile, readdir, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { HookEventRecord } from '@bmn/protocol'
+import { ensurePrivateDirectories } from './private-directory'
+import { windowsFixtureAllowsOnlyCurrentUser } from './windows-fixture-io.test-support'
 import { boundedHookHistory, HookEventHistory, HOOK_HISTORY_FILE, HOOK_HISTORY_MAX_BYTES, retainedHookEvent } from './hook-event-history'
+
+if (process.platform === 'win32') vi.setConfig({ testTimeout: 30_000 })
 
 const roots: string[] = []
 afterEach(async () => { vi.useRealTimers(); await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true }))) })
 const sid = randomUUID(), incarnationId = randomUUID()
 const row = (index = 0, sessionId = sid): HookEventRecord => ({ sessionId, incarnationId, agent: 'claude', event: 'PostToolUse',
   source: null, toolName: 'Bash', repeat: 1, effects: [], observedAt: new Date(Date.UTC(2026, 9, 1) + index).toISOString() })
-async function fixture(options: { replace?: typeof rename } = {}) {
-  const root = await mkdtemp(join(tmpdir(), 'bmn-hook-history-')); roots.push(root)
+async function fixture(options: { replace?: typeof rename; openFile?: typeof open } = {}) {
+  const base = await mkdtemp(join(tmpdir(), 'bmn-hook-history-')); roots.push(base)
+  const root = process.platform === 'win32' ? join(base, 'private-state') : base
+  if (process.platform === 'win32') ensurePrivateDirectories([root])
   const live: HookEventRecord[] = [], known = new Set<string>([sid])
   const history = new HookEventHistory({ root, sessionExists: id => known.has(id), live: () => live, ...options })
   const path = join(root, HOOK_HISTORY_FILE)
@@ -43,7 +49,11 @@ describe('bounded retained hook metadata', () => {
   })
   it('writes 0700/0600 atomically and loads history separately without adding current rows', async () => {
     const f = await fixture(); await f.history.load(); f.live.push(row()); f.history.markDirty(); await f.history.flush()
-    expect((await stat(f.root)).mode & 0o777).toBe(0o700); expect((await stat(f.path)).mode & 0o777).toBe(0o600)
+    if (process.platform === 'win32') {
+      expect(windowsFixtureAllowsOnlyCurrentUser(f.root, f.path)).toBe(true)
+    } else {
+      expect((await stat(f.root)).mode & 0o777).toBe(0o700); expect((await stat(f.path)).mode & 0o777).toBe(0o600)
+    }
     expect(await readdir(f.root)).toEqual([HOOK_HISTORY_FILE])
     expect(f.history.history(sid)).toEqual([])
     const next = new HookEventHistory({ root: f.root, sessionExists: id => f.known.has(id), live: () => [row(1)] })
@@ -71,6 +81,33 @@ describe('bounded retained hook metadata', () => {
     expect(f.history.unavailable).toBe(true); await f.history.close()
     const link = await fixture(); await symlink(f.path, link.path); await link.history.load()
     expect(link.history.unavailable).toBe(true); expect(link.history.history(sid)).toEqual([]); await link.history.close()
+  })
+  it('refuses a different ordinary file installed between pathname check and open', async () => {
+    const f = await fixture({ openFile: async (path, flags, mode) => {
+      const replacement = join(root, 'replacement.json')
+      await writeFile(replacement, JSON.stringify({ version: 1, rows: [row(1)] }))
+      if (process.platform === 'win32') {
+        const { replaceWindowsFixtureFile } = await import('./windows-fixture-io.test-support')
+        replaceWindowsFixtureFile(root, replacement, String(path))
+      } else await rename(replacement, path)
+      return open(path, flags, mode)
+    } })
+    const root = f.root
+    await writeFile(f.path, JSON.stringify({ version: 1, rows: [row()] }))
+    await f.history.load()
+    expect(f.history.unavailable).toBe(true)
+    expect(f.history.history(sid)).toEqual([])
+    await f.history.close()
+  })
+  it('refuses hardlinked history without reading or changing its other name', async () => {
+    const f = await fixture()
+    const target = join(f.root, 'other.json')
+    const original = JSON.stringify({ version: 1, rows: [row()] })
+    await writeFile(target, original); await link(target, f.path)
+    await f.history.load()
+    expect(f.history.unavailable).toBe(true); expect(f.history.history(sid)).toEqual([])
+    await f.history.close()
+    expect(await readFile(target, 'utf8')).toBe(original)
   })
   it('evicts earlier-run rows without ever turning current events into history', async () => {
     const f = await fixture(); await writeFile(f.path, JSON.stringify({ version: 1, rows: Array.from({ length: 30 }, (_, i) => row(i)) }))

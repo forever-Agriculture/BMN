@@ -3,8 +3,9 @@
 // Story 53.4. Sessions find bmn.exe on PATH. It forwards its own command-line tail to
 // the runtime byte for byte, so the CLI's argv is exactly what this program's C runtime
 // would have parsed: no shell, batch file or re-quoting sits in between. The child
-// inherits the console, standard handles and job; this process ignores Ctrl+C and
-// returns the child's exit code once it exits.
+// inherits the console and standard handles inside a launcher-owned nested job.
+// This process ignores Ctrl+C, confirms cleanup, and returns the child's exit code.
+// Killing/crashing the launcher closes its sole job handle and ends its runtime tree.
 //
 // Layout: a packaged build runs <exe dir>\..\..\BMN.exe with <exe dir>\bmn.mjs. A
 // development build places bmn.runtime next to this program: two UTF-8 lines naming
@@ -15,6 +16,9 @@
 #endif
 #ifndef _UNICODE
 #define _UNICODE
+#endif
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0A00
 #endif
 #include <windows.h>
 #include <stdio.h>
@@ -81,6 +85,44 @@ static BOOL WINAPI waitForChild(DWORD event) {
   return event == CTRL_C_EVENT || event == CTRL_BREAK_EVENT;
 }
 
+// Query job membership rather than signaling reusable PIDs. Closing the sole handle
+// remains the fallback if termination or confirmation fails.
+static BOOL endRuntimeTree(HANDLE job, DWORD exitCode) {
+  if (!TerminateJobObject(job, exitCode)) return FALSE;
+  ULONGLONG deadline = GetTickCount64() + 5000;
+  for (;;) {
+    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting;
+    ZeroMemory(&accounting, sizeof(accounting));
+    if (!QueryInformationJobObject(job, JobObjectBasicAccountingInformation, &accounting, sizeof(accounting), NULL)) return FALSE;
+    if (accounting.ActiveProcesses == 0) return TRUE;
+    if (GetTickCount64() >= deadline) { SetLastError(ERROR_TIMEOUT); return FALSE; }
+    Sleep(10);
+  }
+}
+
+// Compiled only by the disposable native ownership gate. Production builds expose
+// no environment-controlled pause. The observer retains the suspended/resumed
+// runtime handle before killing this launcher at the requested creation boundary.
+#ifdef BMN_CLI_OWNERSHIP_TEST
+static BOOL testCreationGate(const wchar_t* boundary, DWORD pid) {
+  wchar_t selected[32], record[MAX_LONG_PATH], partial[MAX_LONG_PATH];
+  DWORD size = GetEnvironmentVariableW(L"BMN_CLI_TEST_BOUNDARY", selected, 32);
+  if (!size || size >= 32 || wcscmp(selected, boundary)) return TRUE;
+  size = GetEnvironmentVariableW(L"BMN_CLI_TEST_RECORD", record, MAX_LONG_PATH);
+  if (!size || size >= MAX_LONG_PATH) return FALSE;
+  if (swprintf(partial, MAX_LONG_PATH, L"%ls.tmp", record) < 0) return FALSE;
+  HANDLE file = CreateFileW(partial, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+  if (file == INVALID_HANDLE_VALUE) return FALSE;
+  char text[32]; int length = snprintf(text, sizeof(text), "%lu", (unsigned long)pid);
+  DWORD written = 0;
+  BOOL ok = length > 0 && WriteFile(file, text, (DWORD)length, &written, NULL) && written == (DWORD)length;
+  CloseHandle(file);
+  if (!ok || !MoveFileExW(partial, record, MOVEFILE_WRITE_THROUGH)) return FALSE;
+  Sleep(10000); // External observer must terminate the launcher before this expires.
+  SetLastError(ERROR_TIMEOUT); return FALSE;
+}
+#endif
+
 int wmain(void) {
   wchar_t self[MAX_LONG_PATH];
   DWORD length = GetModuleFileNameW(NULL, self, MAX_LONG_PATH);
@@ -120,22 +162,71 @@ int wmain(void) {
   // routine, unlike SetConsoleCtrlHandler(NULL, TRUE), is not inherited by the child.
   SetConsoleCtrlHandler(waitForChild, TRUE);
 
-  STARTUPINFOW startup;
+  HANDLE job = CreateJobObjectW(NULL, NULL);
+  if (!job) return fail(L"cannot own the BMN runtime", GetLastError());
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
+  ZeroMemory(&limits, sizeof(limits));
+  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+  if (!SetHandleInformation(job, HANDLE_FLAG_INHERIT, 0) ||
+      !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits))) {
+    DWORD error = GetLastError(); CloseHandle(job);
+    return fail(L"cannot protect runtime ownership", error);
+  }
+  SIZE_T attributeBytes = 0;
+  InitializeProcThreadAttributeList(NULL, 1, 0, &attributeBytes);
+  LPPROC_THREAD_ATTRIBUTE_LIST attributes = (LPPROC_THREAD_ATTRIBUTE_LIST)HeapAlloc(GetProcessHeap(), 0, attributeBytes);
+  if (!attributes) { CloseHandle(job); return fail(L"out of memory", ERROR_OUTOFMEMORY); }
+  if (!InitializeProcThreadAttributeList(attributes, 1, 0, &attributeBytes)) {
+    DWORD error = GetLastError(); HeapFree(GetProcessHeap(), 0, attributes); CloseHandle(job);
+    return fail(L"cannot initialize runtime ownership", error);
+  }
+  if (!UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST, &job, sizeof(job), NULL, NULL)) {
+    DWORD error = GetLastError(); DeleteProcThreadAttributeList(attributes);
+    HeapFree(GetProcessHeap(), 0, attributes); CloseHandle(job);
+    return fail(L"cannot set atomic runtime ownership", error);
+  }
+  STARTUPINFOEXW startup;
   ZeroMemory(&startup, sizeof(startup));
-  startup.cb = sizeof(startup);
-  startup.dwFlags = STARTF_USESTDHANDLES;
-  startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-  startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-  startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+  startup.StartupInfo.cb = sizeof(startup);
+  startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+  startup.StartupInfo.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+  startup.StartupInfo.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+  startup.StartupInfo.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+  startup.lpAttributeList = attributes;
   PROCESS_INFORMATION child;
   ZeroMemory(&child, sizeof(child));
-  if (!CreateProcessW(runtime, commandLine, NULL, NULL, TRUE, 0, NULL, NULL, &startup, &child)) {
-    return fail(L"cannot start the BMN runtime", GetLastError());
+  BOOL created = CreateProcessW(runtime, commandLine, NULL, NULL, TRUE,
+    EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED, NULL, NULL, &startup.StartupInfo, &child);
+  DWORD launchError = GetLastError();
+  DeleteProcThreadAttributeList(attributes); HeapFree(GetProcessHeap(), 0, attributes);
+  if (!created) { CloseHandle(job); return fail(L"cannot start the owned BMN runtime", launchError); }
+#ifdef BMN_CLI_OWNERSHIP_TEST
+  if (!testCreationGate(L"created", child.dwProcessId)) {
+    endRuntimeTree(job, 1); CloseHandle(child.hThread); CloseHandle(child.hProcess); CloseHandle(job);
+    return fail(L"creation test boundary was not observed", GetLastError());
   }
+#endif
+  if (ResumeThread(child.hThread) == (DWORD)-1) {
+    DWORD error = GetLastError(); endRuntimeTree(job, 1);
+    CloseHandle(child.hThread); CloseHandle(child.hProcess); CloseHandle(job);
+    return fail(L"cannot resume the BMN runtime", error);
+  }
+#ifdef BMN_CLI_OWNERSHIP_TEST
+  if (!testCreationGate(L"resumed", child.dwProcessId)) {
+    endRuntimeTree(job, 1); CloseHandle(child.hThread); CloseHandle(child.hProcess); CloseHandle(job);
+    return fail(L"resume test boundary was not observed", GetLastError());
+  }
+#endif
   CloseHandle(child.hThread);
-  WaitForSingleObject(child.hProcess, INFINITE);
+  DWORD waited = WaitForSingleObject(child.hProcess, INFINITE);
   DWORD exitCode = 1;
-  if (!GetExitCodeProcess(child.hProcess, &exitCode)) exitCode = 1;
-  CloseHandle(child.hProcess);
+  BOOL exited = waited == WAIT_OBJECT_0 && GetExitCodeProcess(child.hProcess, &exitCode);
+  DWORD waitError = GetLastError();
+  BOOL ended = endRuntimeTree(job, exitCode);
+  DWORD cleanupError = GetLastError();
+  CloseHandle(child.hProcess); CloseHandle(job);
+  free(commandLine);
+  if (!exited) return fail(L"cannot confirm runtime exit", waitError);
+  if (!ended) return fail(L"cannot confirm runtime tree cleanup", cleanupError);
   return (int)exitCode;
 }

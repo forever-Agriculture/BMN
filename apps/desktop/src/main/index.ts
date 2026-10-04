@@ -1037,6 +1037,8 @@ function actionableStartupFailure(error: unknown): StartupFailure {
 
 const selfTest = process.argv.includes('--self-test')
 const rendererTestMode = process.argv.includes('--bmn-test-mode')
+// Must match the installer/Start Menu shortcut appId before any Windows toast.
+if (process.platform === 'win32') app.setAppUserModelId('dev.bmn.desktop')
 if (selfTest) {
   // The dictation flow records from Chromium's fake microphone, so the real recorder path runs without hardware.
   app.commandLine.appendSwitch('use-fake-device-for-media-stream')

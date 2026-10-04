@@ -126,6 +126,36 @@ try {
       await stop(agent)
       observations.push({ agentExitedPromptUsable: true })
 
+      // A native Node producer must cross ConPTY and decode in the actual pane.
+      // Keep the saved text separate from the image layer; no direct renderer injection.
+      const graphicsFixture = join(cwd, 'graphics-producer.cjs')
+      const frame = `\x1bP9;1;0q"1;1;60;75#1;2;100;0;0#1${Array(13).fill('!60~').join('-')}\x1b\\`
+      writeFileSync(graphicsFixture, `const frame=${JSON.stringify(frame)};
+process.stdin.setRawMode(true);process.stdin.resume();process.stdin.on('data',()=>process.stdout.write('BMN_GRAPHICS_INPUT_OK\\r\\n'));
+process.stdout.write(frame+'BMN_GRAPHICS_NATIVE_READY\\r\\n');setInterval(()=>{},1000);`)
+      const graphics = await launch('Native graphics fixture', process.execPath, [graphicsFixture])
+      const graphicsId = graphics.session.sessionId
+      await page.evaluate(id => window.aiTerminal.activateTerminal(id), graphicsId)
+      await page.waitForFunction(id => {
+        try {
+          const snapshot = window.__aitermTest.snapshot(id)
+          return snapshot.imageStorageMB > 0 && snapshot.imageLayerPresent &&
+            snapshot.bufferLines.some(line => line.includes('BMN_GRAPHICS_NATIVE_READY'))
+        } catch { return false }
+      }, graphicsId)
+      const beforeResize = await page.evaluate(id => window.__aitermTest.snapshot(id), graphicsId)
+      await page.evaluate(id => window.aiTerminal.resizeTerminal(id, 101, 37), graphicsId)
+      await send(graphics, 'synthetic input')
+      await page.waitForFunction(id => {
+        const snapshot = window.__aitermTest.snapshot(id)
+        return snapshot.imageStorageMB > 0 && snapshot.imageLayerPresent &&
+          snapshot.bufferLines.some(line => line.includes('BMN_GRAPHICS_INPUT_OK'))
+      }, graphicsId)
+      await page.screenshot({ path: join(evidence, 'windows-native-sixel.png') })
+      observations.push({ nativeSixelThroughPty: true, imageStorageMB: beforeResize.imageStorageMB,
+        imageAfterResize: true, inputAfterGraphics: true })
+      await stop(graphics)
+
       // Drive the actual launch form, then reopen its saved settings.
       await page.keyboard.press('Control+Shift+P')
       await page.locator('dialog[open] input').fill('New session')

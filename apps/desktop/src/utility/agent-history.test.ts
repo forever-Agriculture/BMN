@@ -107,6 +107,7 @@ describe('agent history limit', () => {
     expect(f.settings().claudeConfigDirs).toEqual([])
     const sibling = join(f.home, 'profile', '.claude')
     await mkdir(sibling, { recursive: true }); await writeFile(join(sibling, 'settings.json'), '{}')
+    ownWindowsFixtureFile(f.home, join(sibling, 'settings.json'))
     await f.history.learnClaudeFolder(sibling)
     await f.history.learnClaudeFolder(sibling.toUpperCase().replaceAll('\\', '/') + '/')
     expect(f.settings().claudeConfigDirs).toEqual([sibling])
@@ -183,6 +184,7 @@ describe('agent history limit', () => {
     const glm = join(f.home, '.claude-glm')
     await mkdir(glm)
     await writeFile(join(glm, 'settings.json'), '{ "cleanupPeriodDays": 30 }')
+    ownWindowsFixtureFile(f.home, join(glm, 'settings.json'))
     await f.history.confirm()
     expect(await f.claudeDays()).toBe(30)
 
@@ -191,6 +193,7 @@ describe('agent history limit', () => {
     const drifted = join(f.home, 'drifted')
     await mkdir(drifted)
     await writeFile(join(drifted, 'settings.json'), '{ "cleanupPeriodDays": 5 }')
+    ownWindowsFixtureFile(f.home, join(drifted, 'settings.json'))
     await f.history.learnClaudeFolder(drifted)
     await f.history.confirm()
     expect(await f.claudeDays(drifted)).toBe(30)
@@ -199,6 +202,7 @@ describe('agent history limit', () => {
     const newer = join(f.home, 'newer')
     await mkdir(newer)
     await writeFile(join(newer, 'settings.json'), '{ "cleanupPeriodDays": 5 }')
+    ownWindowsFixtureFile(f.home, join(newer, 'settings.json'))
     await f.history.learnClaudeFolder(newer)
 
     await f.history.setKeepDays(90)
@@ -223,6 +227,7 @@ describe('agent history limit', () => {
     const glm = join(f.home, '.claude-glm')
     await mkdir(glm)
     await writeFile(join(glm, 'settings.json'), '{ "cleanupPeriodDays": 30 }')
+    ownWindowsFixtureFile(f.home, join(glm, 'settings.json'))
     await f.history.learnClaudeFolder(glm)
 
     const before = await f.history.status()
@@ -249,6 +254,7 @@ describe('agent history limit', () => {
       const folder = join(f.home, `config-${index}`)
       await mkdir(folder)
       await writeFile(join(folder, 'settings.json'), '{}')
+      ownWindowsFixtureFile(f.home, join(folder, 'settings.json'))
       folders.push(folder)
       await f.history.learnClaudeFolder(folder)
     }

@@ -247,3 +247,41 @@ describe('the kept result', () => {
     expect({ scans, most }).toEqual({ scans: expected, most: 1 })
   })
 })
+
+
+describe('native job port incarnations', () => {
+  function ownedWatch() {
+    const state = { incarnation: 'one' as string | undefined, live: ['a'], answer: async () => new Map([['a', [port(5173)]]]), changes: 0 }
+    const watch = new PortWatch({ scan: () => state.answer(), knownSessionIds: () => new Set(['a']),
+      liveSessionIds: () => state.live, currentIncarnation: () => state.incarnation, changed: () => { state.changes++ } })
+    return { state, watch }
+  }
+  it('removes stopped native server links immediately even when no session remains to poll', async () => {
+    const { state, watch } = ownedWatch()
+    await watch.scanNow(); expect(watch.list()).toHaveLength(1)
+    state.incarnation = undefined; state.live = []
+    expect(watch.list()).toEqual([])
+    watch.sessionsChanged(); expect(watch.list()).toEqual([]); expect(state.changes).toBe(2)
+  })
+  it('refuses an old incarnation and accepts a newly verified identical PID/port result', async () => {
+    const { state, watch } = ownedWatch()
+    await watch.scanNow(); state.incarnation = 'two'
+    expect(watch.list()).toEqual([])
+    await watch.scanNow()
+    expect(watch.list()).toEqual([{ sessionId: 'a', stopped: false, ports: [port(5173)] }])
+    expect(state.changes).toBe(2)
+  })
+  it('discards a result when the incarnation changes before the complete scan returns', async () => {
+    const { state, watch } = ownedWatch()
+    let finish!: (rows: Map<string, ListeningPort[]>) => void
+    state.answer = () => new Promise(resolve => { finish = resolve })
+    const pending = watch.scanNow(); state.incarnation = 'two'; finish(new Map([['a', [port(5173)]]]))
+    await pending; expect(watch.list()).toEqual([])
+  })
+  it('clears native links on unknown scan ownership instead of retaining a previous reading', async () => {
+    const { state, watch } = ownedWatch()
+    await watch.scanNow()
+    state.answer = async () => { throw Error('Unavailable') }
+    await watch.scanNow(); expect(watch.list()).toEqual([])
+  })
+})

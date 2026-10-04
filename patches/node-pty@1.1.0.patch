@@ -1,5 +1,5 @@
 diff --git a/binding.gyp b/binding.gyp
-index 5f63978..a32d857 100644
+index 5f63978..cf4ab1b 100644
 --- a/binding.gyp
 +++ b/binding.gyp
 @@ -39,7 +39,7 @@
@@ -7,7 +7,7 @@ index 5f63978..a32d857 100644
            ],
            'libraries': [
 -            '-lshlwapi'
-+            '-lshlwapi', '-ladvapi32'
++            '-lshlwapi', '-ladvapi32', '-liphlpapi', '-lws2_32'
            ],
          },
          {
@@ -271,10 +271,10 @@ index 1be15ca..bf6e593 100644
 -//# sourceMappingURL=windowsConoutConnection.js.map
 \ No newline at end of file
 diff --git a/lib/windowsPtyAgent.js b/lib/windowsPtyAgent.js
-index a358ffb..40610af 100644
+index a358ffb..6a18896 100644
 --- a/lib/windowsPtyAgent.js
 +++ b/lib/windowsPtyAgent.js
-@@ -1,251 +1,116 @@
+@@ -1,251 +1,128 @@
  "use strict";
 -/**
 - * Copyright (c) 2012-2015, Christopher Jeffrey, Peter Sunde (MIT License)
@@ -572,9 +572,7 @@ index a358ffb..40610af 100644
 -        var buildNumber = 0;
 -        if (osVersion && osVersion.length === 4) {
 -            buildNumber = parseInt(osVersion[3]);
-+            this.innerPid = child.pid;
-+            this.processStartIdentity = child.startIdentity;
-         }
+-        }
 -        return buildNumber;
 -    };
 -    WindowsPtyAgent.prototype._generatePipeName = function () {
@@ -589,21 +587,23 @@ index a358ffb..40610af 100644
 -        if (!this._useConptyDll) {
 -            this._flushDataAndCleanUp();
 -            this._outSocket.on('data', function () { return _this._flushDataAndCleanUp(); });
+-        }
+-    };
+-    WindowsPtyAgent.prototype._flushDataAndCleanUp = function () {
+-        var _this = this;
+-        if (this._useConptyDll) {
+-            return;
++            this.innerPid = child.pid;
++            this.processStartIdentity = child.startIdentity;
+         }
+-        if (this._closeTimeout) {
+-            clearTimeout(this._closeTimeout);
 +        catch (error) {
 +            native.kill(this.pty, true);
 +            (_a = this._worker) === null || _a === void 0 ? void 0 : _a.dispose();
 +            (_b = this.inSocket) === null || _b === void 0 ? void 0 : _b.destroy();
 +            throw error;
          }
--    };
--    WindowsPtyAgent.prototype._flushDataAndCleanUp = function () {
--        var _this = this;
--        if (this._useConptyDll) {
--            return;
--        }
--        if (this._closeTimeout) {
--            clearTimeout(this._closeTimeout);
--        }
 -        this._closeTimeout = setTimeout(function () { return _this._cleanUpProcess(); }, FLUSH_DATA_INTERVAL);
 -    };
 -    WindowsPtyAgent.prototype._cleanUpProcess = function () {
@@ -623,6 +623,18 @@ index a358ffb..40610af 100644
 +        this._onExit.fire(this.exitCode);
 +        this._worker.dispose();
 +    }
++    queryListeningPorts() {
++        if (native.bmnPortsVersion !== 1)
++            return Promise.reject(new Error('BMN owned port scanner missing'));
++        return new Promise((resolve, reject) => native.queryOwnedPorts(this.pty, (error, ports) => {
++            if (error)
++                reject(error);
++            else if (!ports)
++                reject(new Error('Owned port scan has no result'));
++            else
++                resolve(ports);
++        }));
++    }
 +    resize(cols, rows) { native.resize(this.pty, cols, rows, true); }
 +    clear() { native.clear(this.pty, true); }
 +    kill() { native.kill(this.pty, true); }
@@ -630,7 +642,7 @@ index a358ffb..40610af 100644
  exports.WindowsPtyAgent = WindowsPtyAgent;
  // Convert argc/argv into a Win32 command-line following the escaping convention
  // documented on MSDN (e.g. see CommandLineToArgvW documentation). Copied from
-@@ -253,32 +118,26 @@ exports.WindowsPtyAgent = WindowsPtyAgent;
+@@ -253,32 +130,26 @@ exports.WindowsPtyAgent = WindowsPtyAgent;
  function argsToCommandLine(file, args) {
      if (isCommandLine(args)) {
          if (args.length === 0) {
@@ -674,7 +686,7 @@ index a358ffb..40610af 100644
              if (p === '\\') {
                  bsCount++;
              }
-@@ -303,18 +162,13 @@ function argsToCommandLine(file, args) {
+@@ -303,18 +174,13 @@ function argsToCommandLine(file, args) {
      }
      return result;
  }
@@ -697,10 +709,10 @@ index a358ffb..40610af 100644
 -//# sourceMappingURL=windowsPtyAgent.js.map
 \ No newline at end of file
 diff --git a/lib/windowsTerminal.js b/lib/windowsTerminal.js
-index 3c38f89..d80dd68 100644
+index 3c38f89..e928e6c 100644
 --- a/lib/windowsTerminal.js
 +++ b/lib/windowsTerminal.js
-@@ -4,31 +4,22 @@
+@@ -4,31 +4,23 @@
   * Copyright (c) 2016, Daniel Imms (MIT License).
   * Copyright (c) 2018, Microsoft Corporation (MIT License).
   */
@@ -738,6 +750,7 @@ index 3c38f89..d80dd68 100644
 +class WindowsTerminal extends terminal_1.Terminal {
 +    get onLifecycleError() { return this._onLifecycleError.event; }
 +    get processStartIdentity() { return this._agent.processStartIdentity; }
++    queryListeningPorts() { return this._agent.queryListeningPorts(); }
 +    constructor(file, args, opt) {
 +        super(opt);
 +        this._onLifecycleError = new eventEmitter2_1.EventEmitter2();
@@ -746,7 +759,7 @@ index 3c38f89..d80dd68 100644
          // Initialize arguments
          args = args || [];
          file = file || DEFAULT_FILE;
-@@ -37,125 +28,72 @@ var WindowsTerminal = /** @class */ (function (_super) {
+@@ -37,125 +29,72 @@ var WindowsTerminal = /** @class */ (function (_super) {
          if (opt.encoding) {
              console.warn('Setting encoding on Windows is not supported');
          }
@@ -919,7 +932,7 @@ index 3c38f89..d80dd68 100644
          // If the terminal is ready, execute.
          if (this._isReady) {
              deferredFn.call(this);
-@@ -163,11 +101,10 @@ var WindowsTerminal = /** @class */ (function (_super) {
+@@ -163,11 +102,10 @@ var WindowsTerminal = /** @class */ (function (_super) {
          }
          // Queue until terminal is ready.
          this._deferreds.push({
@@ -934,7 +947,7 @@ index 3c38f89..d80dd68 100644
          // If the terminal is ready, execute.
          if (this._isReady) {
              deferredFn.call(this, arg);
-@@ -175,25 +112,11 @@ var WindowsTerminal = /** @class */ (function (_super) {
+@@ -175,25 +113,11 @@ var WindowsTerminal = /** @class */ (function (_super) {
          }
          // Queue until terminal is ready.
          this._deferreds.push({
@@ -1061,14 +1074,16 @@ index 8a7e950..7c9e9bb 100644
 +  binding.protectApplicationLifetime();
 +}
 diff --git a/src/native.d.ts b/src/native.d.ts
-index c53e086..2acf306 100644
+index c53e086..680c0d5 100644
 --- a/src/native.d.ts
 +++ b/src/native.d.ts
-@@ -3,8 +3,14 @@
+@@ -3,8 +3,16 @@
   */
  
  interface IConptyNative {
 +  bmnOwnershipVersion: number;
++  bmnPortsVersion?: number;
++  queryOwnedPorts(ptyId: number, callback: (error: Error | null, ports?: Array<{ port: number; address: string; pid: number; command: string | null }>) => void): void;
 +  queryProcessStartIdentity(pid: number): string;
 +  bmnControlTransportVersion: number;
 +  restrictControlPipe(name: string): { user: string; dacl: string; verifiedCurrentUserOnly: true };
@@ -1081,10 +1096,10 @@ index c53e086..2acf306 100644
    clear(ptyId: number, useConptyDll: boolean): void;
    kill(ptyId: number, useConptyDll: boolean): void;
 diff --git a/src/win/conpty.cc b/src/win/conpty.cc
-index 7b286d3..2ee1c24 100644
+index 7b286d3..71dfdf2 100644
 --- a/src/win/conpty.cc
 +++ b/src/win/conpty.cc
-@@ -2,582 +2,504 @@
+@@ -2,582 +2,704 @@
   * Copyright (c) 2013-2015, Christopher Jeffrey, Peter Sunde (MIT License)
   * Copyright (c) 2016, Daniel Imms (MIT License).
   * Copyright (c) 2018, Microsoft Corporation (MIT License).
@@ -1102,6 +1117,12 @@ index 7b286d3..2ee1c24 100644
 -#include <node_api.h>
 -#include <assert.h>
 -#include <Shlwapi.h> // PathCombine, PathIsRelative
++#define NOMINMAX
++#include <winsock2.h>
++#include <ws2tcpip.h>
++#include <iphlpapi.h>
++#include <limits>
++#include <cmath>
 +#include <napi.h>
 +#include <Windows.h>
 +#include <Shlwapi.h>
@@ -1167,6 +1188,7 @@ index 7b286d3..2ee1c24 100644
 +  HANDLE value = nullptr;
 +  Handle() = default;
 +  explicit Handle(HANDLE h) : value(h) {}
++  Handle(Handle&& other) noexcept : value(other.value) { other.value = nullptr; }
 +  Handle(const Handle&) = delete;
 +  Handle& operator=(const Handle&) = delete;
 +  ~Handle() { reset(); }
@@ -1842,9 +1864,20 @@ index 7b286d3..2ee1c24 100644
 -      !info[2].IsNumber() ||
 -      !info[3].IsBoolean()) {
 -    throw Napi::Error::New(env, "Usage: pty.resize(id, cols, rows, useConptyDll)");
--  }
++static Napi::Value clear(const Napi::CallbackInfo& info) {
++  auto session = lookup(info, info[0].As<Napi::Number>().Int32Value());
++  if (session) {
++    std::lock_guard<std::mutex> lock(session->mutex);
++    if (!session->closing && session->console) {
++      HRESULT result = session->clear(session->console);
++      if (FAILED(result)) throw failure(info.Env(), "Clear pseudoconsole", result);
++    }
+   }
 -
--  int id = info[0].As<Napi::Number>().Int32Value();
++  return info.Env().Undefined();
++}
++static Napi::Value kill(const Napi::CallbackInfo& info) {
+   int id = info[0].As<Napi::Number>().Int32Value();
 -  SHORT cols = static_cast<SHORT>(info[1].As<Napi::Number>().Uint32Value());
 -  SHORT rows = static_cast<SHORT>(info[2].As<Napi::Number>().Uint32Value());
 -  const bool useConptyDll = info[3].As<Napi::Boolean>().Value();
@@ -1864,13 +1897,15 @@ index 7b286d3..2ee1c24 100644
 -        COORD size = {cols, rows};
 -        pfnResizePseudoConsole(handle->hpc, size);
 -      }
-+static Napi::Value clear(const Napi::CallbackInfo& info) {
-+  auto session = lookup(info, info[0].As<Napi::Number>().Int32Value());
++  auto session = lookup(info, id);
 +  if (session) {
 +    std::lock_guard<std::mutex> lock(session->mutex);
-+    if (!session->closing && session->console) {
-+      HRESULT result = session->clear(session->console);
-+      if (FAILED(result)) throw failure(info.Env(), "Clear pseudoconsole", result);
++    if (session->job.value) check(info.Env(), TerminateJobObject(session->job.value, 1), "Terminate owned terminal tree");
++    // Constructor failure can abandon a console before connect created a process.
++    if (!session->connected) {
++      auto state = registry(info);
++      std::lock_guard<std::mutex> stateLock(state->mutex);
++      state->sessions.erase(id);
      }
    }
 -
@@ -1886,10 +1921,46 @@ index 7b286d3..2ee1c24 100644
 -      !info[0].IsNumber() ||
 -      !info[1].IsBoolean()) {
 -    throw Napi::Error::New(env, "Usage: pty.clear(id, useConptyDll)");
--  }
++// Story53.10: observational TCP ownership only. No PID signals or process mutation.
++// Required headers: winsock2.h before Windows.h, ws2tcpip.h, iphlpapi.h, limits.
++// Required libraries: iphlpapi, ws2_32. Handle must support noexcept move.
++struct OwnedPortProcess {
++  Handle process;
++  FILETIME created{};
++  std::string command;
++  explicit OwnedPortProcess(HANDLE value) : process(value) {}
++};
++struct OwnedPort {
++  DWORD pid;
++  unsigned short port;
++  std::string address, command;
++};
++static std::atomic<unsigned> portQueries{0};
++static bool stillLive(HANDLE process, const FILETIME& created) {
++  if (WaitForSingleObject(process, 0) != WAIT_TIMEOUT) return false;
++  FILETIME now{}, exited{}, kernel{}, user{};
++  return GetProcessTimes(process, &now, &exited, &kernel, &user) &&
++    now.dwLowDateTime == created.dwLowDateTime && now.dwHighDateTime == created.dwHighDateTime;
++}
++static bool stillOwned(HANDLE process, HANDLE job, const FILETIME& created) {
++  BOOL member = FALSE;
++  return IsProcessInJob(process, job, &member) && member && stillLive(process, created);
++}
++class OwnedPortsWorker : public Napi::AsyncWorker {
++  std::shared_ptr<Session> session;
++  Handle job;
++  ULONGLONG deadline;
++  std::vector<OwnedPort> ports;
++  static constexpr DWORD MAX_PROCESSES = 1024;
++  static constexpr DWORD MAX_TABLE_BYTES = 4 * 1024 * 1024;
++  static constexpr DWORD MAX_ROWS = 32768;
++  static constexpr size_t MAX_PORTS = 512;
++  bool expired() {
++    if (GetTickCount64() <= deadline) return false;
++    SetError("Owned port scan exceeded its time bound"); return true;
+   }
 -
-+static Napi::Value kill(const Napi::CallbackInfo& info) {
-   int id = info[0].As<Napi::Number>().Int32Value();
+-  int id = info[0].As<Napi::Number>().Int32Value();
 -  const bool useConptyDll = info[1].As<Napi::Boolean>().Value();
 -
 -  // This API is only supported for conpty.dll as it was introduced in a later version of Windows.
@@ -1897,7 +1968,27 @@ index 7b286d3..2ee1c24 100644
 -  // anyway.
 -  if (!useConptyDll) {
 -    return env.Undefined();
--  }
++  bool table(ULONG family, std::vector<BYTE>& bytes) {
++    DWORD size = 0;
++    DWORD code = GetExtendedTcpTable(nullptr, &size, FALSE, family, TCP_TABLE_OWNER_PID_LISTENER, 0);
++    if (code != ERROR_INSUFFICIENT_BUFFER) {
++      SetError("TCP listener table size is unavailable"); return false;
++    }
++    for (int attempt = 0; attempt < 2; ++attempt) {
++      if (expired()) return false;
++      if (size < sizeof(DWORD) || size > MAX_TABLE_BYTES) {
++        SetError("TCP listener table exceeded its byte bound"); return false;
++      }
++      bytes.resize(size);
++      code = GetExtendedTcpTable(bytes.data(), &size, FALSE, family, TCP_TABLE_OWNER_PID_LISTENER, 0);
++      if (code == NO_ERROR) {
++        if (size < sizeof(DWORD) || size > bytes.size()) { SetError("TCP table returned an invalid size"); return false; }
++        bytes.resize(size); return true;
++      }
++      if (code != ERROR_INSUFFICIENT_BUFFER) break;
++    }
++    SetError("TCP listener table changed or is unavailable"); return false;
+   }
 -
 -  const pty_baton* handle = get_pty_baton(id);
 -
@@ -1905,27 +1996,146 @@ index 7b286d3..2ee1c24 100644
 -    HANDLE hLibrary = LoadConptyDll(info, useConptyDll);
 -    bool fLoadedDll = hLibrary != nullptr;
 -    if (fLoadedDll)
--    {
++  bool append(DWORD pid, DWORD rawPort, ULONG family, const void* rawAddress, DWORD scope,
++      const std::unordered_map<DWORD, std::unique_ptr<OwnedPortProcess>>& owned) {
++    auto found = owned.find(pid);
++    if (found == owned.end() || !stillLive(found->second->process.value, found->second->created)) return true;
++    const unsigned short port = ntohs(static_cast<unsigned short>(rawPort));
++    if (!port) return true;
++    char address[INET6_ADDRSTRLEN]{};
++    if (!InetNtopA(static_cast<INT>(family), const_cast<void*>(rawAddress), address, sizeof(address))) return true;
++    std::string printed(address);
++    if (family == AF_INET6 && scope) printed += "%" + std::to_string(scope);
++    if (ports.size() >= MAX_PORTS) { SetError("Owned port results exceeded their entry bound"); return false; }
++    ports.push_back({pid, port, printed, found->second->command}); return true;
++  }
++public:
++  OwnedPortsWorker(const Napi::Function& callback, std::shared_ptr<Session> ownedSession)
++    : Napi::AsyncWorker(callback), session(std::move(ownedSession)), deadline(GetTickCount64() + 500) {}
++  ~OwnedPortsWorker() override { portQueries.fetch_sub(1); }
++  void Execute() override {
++    if (expired()) return;
++    // Queued work retains no extra job handle. Close the query handle on every
++    // return, including failed snapshots, before handing a result to the JS loop.
++    struct CloseQuery { Handle& handle; ~CloseQuery() { handle.reset(); } } closeQuery{job};
+     {
 -      PFNCLEARPSEUDOCONSOLE const pfnClearPseudoConsole = (PFNCLEARPSEUDOCONSOLE)GetProcAddress((HMODULE)hLibrary, "ConptyClearPseudoConsole");
 -      if (pfnClearPseudoConsole)
 -      {
 -        pfnClearPseudoConsole(handle->hpc);
--      }
-+  auto session = lookup(info, id);
-+  if (session) {
-+    std::lock_guard<std::mutex> lock(session->mutex);
-+    if (session->job.value) check(info.Env(), TerminateJobObject(session->job.value, 1), "Terminate owned terminal tree");
-+    // Constructor failure can abandon a console before connect created a process.
-+    if (!session->connected) {
-+      auto state = registry(info);
-+      std::lock_guard<std::mutex> stateLock(state->mutex);
-+      state->sessions.erase(id);
++      std::lock_guard<std::mutex> lock(session->mutex);
++      if (!session->connected || !session->job.value || session->closing) {
++        SetError("Owned terminal is closing"); return;
++      }
++      if (!DuplicateHandle(GetCurrentProcess(), session->job.value, GetCurrentProcess(), &job.value, JOB_OBJECT_QUERY, FALSE, 0)) {
++        SetError("Owned job query handle is unavailable"); return;
++      }
++    }
++    // Capture owned live process handles BEFORE reading PID-bearing TCP tables.
++    // Recheck creation identity and liveness AFTER each row: an exited
++    // process is rejected even if its PID has since been reused.
++    const DWORD listBytes = static_cast<DWORD>(offsetof(JOBOBJECT_BASIC_PROCESS_ID_LIST, ProcessIdList) + MAX_PROCESSES * sizeof(ULONG_PTR));
++    std::vector<ULONG_PTR> storage((listBytes + sizeof(ULONG_PTR) - 1) / sizeof(ULONG_PTR));
++    auto* list = reinterpret_cast<JOBOBJECT_BASIC_PROCESS_ID_LIST*>(storage.data());
++    if (!QueryInformationJobObject(job.value, JobObjectBasicProcessIdList, list, listBytes, nullptr) ||
++        list->NumberOfAssignedProcesses > MAX_PROCESSES || list->NumberOfProcessIdsInList > MAX_PROCESSES ||
++        list->NumberOfAssignedProcesses != list->NumberOfProcessIdsInList) {
++      SetError("Owned process snapshot changed or exceeded its bound"); return;
++    }
++    std::unordered_map<DWORD, std::unique_ptr<OwnedPortProcess>> owned;
++    for (DWORD index = 0; index < list->NumberOfProcessIdsInList; ++index) {
++      if (expired()) return;
++      const ULONG_PTR rawPid = list->ProcessIdList[index];
++      if (!rawPid || rawPid > MAXDWORD) continue;
++      const DWORD pid = static_cast<DWORD>(rawPid);
++      auto process = std::make_unique<OwnedPortProcess>(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid));
++      if (!process->process.value) continue;
++      FILETIME exited{}, kernel{}, user{};
++      if (!GetProcessTimes(process->process.value, &process->created, &exited, &kernel, &user) ||
++          !stillOwned(process->process.value, job.value, process->created)) continue;
++      owned.emplace(pid, std::move(process));
++    }
++    // Windows job membership cannot be broken for a retained live process.
++    // https://learn.microsoft.com/en-us/windows/win32/procthread/job-objects
++    // Release the job before image/TCP reads so their latency cannot delay its
++    // last-handle fallback. Retained process handles plus liveness reject reuse.
++    job.reset();
++    for (auto& entry : owned) {
++      if (expired()) return;
++      auto& process = entry.second;
++      std::vector<wchar_t> image(32768); DWORD length = static_cast<DWORD>(image.size());
++      if (QueryFullProcessImageNameW(process->process.value, 0, image.data(), &length)) {
++        std::wstring path(image.data(), length); const auto separator = path.find_last_of(L"\\/");
++        process->command = path_util::wstring_to_string(path.substr(separator == std::wstring::npos ? 0 : separator + 1));
+       }
      }
++    std::vector<BYTE> bytes;
++    if (!table(AF_INET, bytes)) return;
++    const auto* ipv4 = reinterpret_cast<const MIB_TCPTABLE_OWNER_PID*>(bytes.data());
++    const size_t ipv4Offset = offsetof(MIB_TCPTABLE_OWNER_PID, table);
++    if (bytes.size() < ipv4Offset || ipv4->dwNumEntries > MAX_ROWS ||
++        ipv4->dwNumEntries > (bytes.size() - ipv4Offset) / sizeof(MIB_TCPROW_OWNER_PID)) {
++      SetError("IPv4 listener table is malformed or exceeded its row bound"); return;
++    }
++    for (DWORD index = 0; index < ipv4->dwNumEntries; ++index) {
++      if (expired()) return;
++      const auto& row = ipv4->table[index];
++      if (row.dwState == MIB_TCP_STATE_LISTEN && !append(row.dwOwningPid, row.dwLocalPort, AF_INET, &row.dwLocalAddr, 0, owned)) return;
++    }
++    if (!table(AF_INET6, bytes)) return;
++    const auto* ipv6 = reinterpret_cast<const MIB_TCP6TABLE_OWNER_PID*>(bytes.data());
++    const size_t ipv6Offset = offsetof(MIB_TCP6TABLE_OWNER_PID, table);
++    if (bytes.size() < ipv6Offset || ipv6->dwNumEntries > MAX_ROWS ||
++        ipv6->dwNumEntries > (bytes.size() - ipv6Offset) / sizeof(MIB_TCP6ROW_OWNER_PID)) {
++      SetError("IPv6 listener table is malformed or exceeded its row bound"); return;
++    }
++    for (DWORD index = 0; index < ipv6->dwNumEntries; ++index) {
++      if (expired()) return;
++      const auto& row = ipv6->table[index];
++      if (row.dwState == MIB_TCP_STATE_LISTEN && !append(row.dwOwningPid, row.dwLocalPort, AF_INET6, row.ucLocalAddr, row.dwLocalScopeId, owned)) return;
++    }
++    if (expired()) return;
++    // Hold every process identity through the final validation, then close on worker return.
++    ports.erase(std::remove_if(ports.begin(), ports.end(), [&](const OwnedPort& port) {
++      auto found = owned.find(port.pid);
++      return found == owned.end() || !stillLive(found->second->process.value, found->second->created);
++    }), ports.end());
    }
 -
--  return env.Undefined();
-+  return info.Env().Undefined();
-+}
++  void OnOK() override {
++    Napi::Env env = Env(); Napi::Array result = Napi::Array::New(env, ports.size());
++    for (size_t index = 0; index < ports.size(); ++index) {
++      const auto& port = ports[index]; Napi::Object row = Napi::Object::New(env);
++      row.Set("pid", port.pid); row.Set("port", port.port); row.Set("address", port.address);
++      row.Set("command", port.command.empty() ? env.Null() : Napi::String::New(env, port.command));
++      result.Set(static_cast<uint32_t>(index), row);
++    }
++    Callback().Call({env.Null(), result});
++  }
++};
++static Napi::Value queryOwnedPorts(const Napi::CallbackInfo& info) {
++  Napi::Env env = info.Env();
++  if (info.Length() != 2 || !info[0].IsNumber() || !info[1].IsFunction()) throw Napi::Error::New(env, "Owned terminal and callback required");
++  const double id = info[0].As<Napi::Number>().DoubleValue();
++  if (!std::isfinite(id) || id < 0 || id > std::numeric_limits<int>::max() || id != static_cast<int>(id)) throw Napi::Error::New(env, "Invalid owned terminal ID");
++  auto session = lookup(info, static_cast<int>(id));
++  if (!session) throw Napi::Error::New(env, "Owned terminal is no longer available");
++  {
++    std::lock_guard<std::mutex> lock(session->mutex);
++    if (!session->connected || !session->job.value || session->closing) throw Napi::Error::New(env, "Owned terminal is closing");
++  }
++  if (portQueries.fetch_add(1) >= 2) { portQueries.fetch_sub(1); throw Napi::Error::New(env, "Owned port scan concurrency bound"); }
++  std::unique_ptr<OwnedPortsWorker> worker;
++  try {
++    worker.reset(new OwnedPortsWorker(info[1].As<Napi::Function>(), session));
++    worker->Queue(); worker.release();
++  } catch (...) { if (!worker) portQueries.fetch_sub(1); throw; }
+   return env.Undefined();
+ }
+ 
+-static Napi::Value PtyKill(const Napi::CallbackInfo& info) {
+-  Napi::Env env(info.Env());
+-  Napi::HandleScope scope(env);
 +static Napi::Value queryIdentity(const Napi::CallbackInfo& info) {
 +  if (info.Length() != 1 || !info[0].IsNumber()) throw Napi::Error::New(info.Env(), "Process ID required");
 +  double pid = info[0].As<Napi::Number>().DoubleValue();
@@ -1933,12 +2143,8 @@ index 7b286d3..2ee1c24 100644
 +  Handle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid)));
 +  if (!process.value) throw failure(info.Env(), "Query process identity");
 +  return Napi::String::New(info.Env(), identity(info.Env(), process.value));
- }
++}
  
--static Napi::Value PtyKill(const Napi::CallbackInfo& info) {
--  Napi::Env env(info.Env());
--  Napi::HandleScope scope(env);
--
 -  if (info.Length() != 2 ||
 -      !info[0].IsNumber() ||
 -      !info[1].IsBoolean()) {
@@ -2087,7 +2293,7 @@ index 7b286d3..2ee1c24 100644
 +    for (auto& session : sessions) {
 +      std::lock_guard<std::mutex> lock(session->mutex);
 +      if (session->job.value) TerminateJobObject(session->job.value, 1);
-+      session->job.reset(); // Kernel kill-on-close is independent of TerminateJobObject success.
++      session->job.reset(); // Last-handle close kills even if termination fails; an active port snapshot releases its query handle first.
 +      SetEvent(session->cancel.value); // Environment teardown must not join an infinite waiter.
 +    }
 +    delete ref;
@@ -2099,6 +2305,8 @@ index 7b286d3..2ee1c24 100644
 +  exports.Set("kill", Napi::Function::New(env, kill, "kill", state));
 +  exports.Set("queryProcessStartIdentity", Napi::Function::New(env, queryIdentity, "queryIdentity", state));
 +  exports.Set("bmnOwnershipVersion", 1);
++  exports.Set("queryOwnedPorts", Napi::Function::New(env, queryOwnedPorts, "queryOwnedPorts", state));
++  exports.Set("bmnPortsVersion", 1);
 +  exports.Set("restrictControlPipe", Napi::Function::New(env, restrictControlPipe, "restrictControlPipe"));
 +  exports.Set("bmnControlTransportVersion", 2);
 +  exports.Set("protectApplicationLifetime", Napi::Function::New(env, protectApplicationLifetime, "protectApplicationLifetime"));
@@ -2231,10 +2439,10 @@ index fa2d62d..373d931 100644
    }
  }
 diff --git a/src/windowsPtyAgent.ts b/src/windowsPtyAgent.ts
-index d705444..a81b918 100644
+index d705444..71ac6c4 100644
 --- a/src/windowsPtyAgent.ts
 +++ b/src/windowsPtyAgent.ts
-@@ -1,252 +1,77 @@
+@@ -1,252 +1,83 @@
 -/**
 - * Copyright (c) 2012-2015, Christopher Jeffrey, Peter Sunde (MIT License)
 +/** Copyright (c) 2012-2015, Christopher Jeffrey, Peter Sunde (MIT License).
@@ -2481,10 +2689,17 @@ index d705444..a81b918 100644
 -  public get exitCode(): number | undefined {
 -    if (this._useConpty) {
 -      return this._exitCode;
--    }
++      this.innerPid = child.pid;
++      this.processStartIdentity = child.startIdentity;
++    } catch (error) {
++      native.kill(this.pty, true);
++      this._worker?.dispose();
++      this.inSocket?.destroy();
++      throw error;
+     }
 -    const winptyExitCode = (this._ptyNative as IWinptyNative).getExitCode(this._innerPid);
 -    return winptyExitCode === -1 ? undefined : winptyExitCode;
--  }
+   }
 -
 -  private _getWindowsBuildNumber(): number {
 -    const osVersion = (/(\d+)\.(\d+)\.(\d+)/g).exec(os.release());
@@ -2507,14 +2722,12 @@ index d705444..a81b918 100644
 -    if (!this._useConptyDll) {
 -      this._flushDataAndCleanUp();
 -      this._outSocket.on('data', () => this._flushDataAndCleanUp());
-+      this.innerPid = child.pid;
-+      this.processStartIdentity = child.startIdentity;
-+    } catch (error) {
-+      native.kill(this.pty, true);
-+      this._worker?.dispose();
-+      this.inSocket?.destroy();
-+      throw error;
-     }
+-    }
++  private _finishExit(): void {
++    if (!this._outputEnded || this.exitCode === undefined || this._exitEmitted) return;
++    this._exitEmitted = true;
++    this._onExit.fire(this.exitCode);
++    this._worker.dispose();
    }
 -
 -  private _flushDataAndCleanUp(): void {
@@ -2534,11 +2747,11 @@ index d705444..a81b918 100644
 -    this._inSocket.readable = false;
 -    this._outSocket.readable = false;
 -    this._outSocket.destroy();
-+  private _finishExit(): void {
-+    if (!this._outputEnded || this.exitCode === undefined || this._exitEmitted) return;
-+    this._exitEmitted = true;
-+    this._onExit.fire(this.exitCode);
-+    this._worker.dispose();
++  public queryListeningPorts(): Promise<Array<{ port: number; address: string; pid: number; command: string | null }>> {
++    if (native.bmnPortsVersion !== 1) return Promise.reject(new Error('BMN owned port scanner missing'));
++    return new Promise((resolve, reject) => native.queryOwnedPorts(this.pty, (error, ports) => {
++      if (error) reject(error); else if (!ports) reject(new Error('Owned port scan has no result')); else resolve(ports);
++    }));
    }
 +  public resize(cols: number, rows: number): void { native.resize(this.pty, cols, rows, true); }
 +  public clear(): void { native.clear(this.pty, true); }
@@ -2546,7 +2759,7 @@ index d705444..a81b918 100644
  }
  
  // Convert argc/argv into a Win32 command-line following the escaping convention
-@@ -255,7 +80,7 @@ export class WindowsPtyAgent {
+@@ -255,7 +86,7 @@ export class WindowsPtyAgent {
  export function argsToCommandLine(file: string, args: ArgvOrCommandLine): string {
    if (isCommandLine(args)) {
      if (args.length === 0) {
@@ -2555,7 +2768,7 @@ index d705444..a81b918 100644
      }
      return `${argsToCommandLine(file, [])} ${args}`;
    }
-@@ -267,15 +92,8 @@ export function argsToCommandLine(file: string, args: ArgvOrCommandLine): string
+@@ -267,15 +98,8 @@ export function argsToCommandLine(file: string, args: ArgvOrCommandLine): string
        result += ' ';
      }
      const arg = argv[argIndex];
@@ -2573,7 +2786,7 @@ index d705444..a81b918 100644
      if (quote) {
        result += '\"';
      }
-@@ -316,6 +134,3 @@ function repeatText(text: string, count: number): string {
+@@ -316,6 +140,3 @@ function repeatText(text: string, count: number): string {
    return result;
  }
  
@@ -2581,7 +2794,7 @@ index d705444..a81b918 100644
 -  return ((arg1 && !arg2) || (!arg1 && arg2));
 -}
 diff --git a/src/windowsTerminal.ts b/src/windowsTerminal.ts
-index 13f6c6d..41727c1 100644
+index 13f6c6d..071fdff 100644
 --- a/src/windowsTerminal.ts
 +++ b/src/windowsTerminal.ts
 @@ -5,6 +5,7 @@
@@ -2592,7 +2805,7 @@ index 13f6c6d..41727c1 100644
  import { Terminal, DEFAULT_COLS, DEFAULT_ROWS } from './terminal';
  import { WindowsPtyAgent } from './windowsPtyAgent';
  import { IPtyOpenOptions, IWindowsPtyForkOptions } from './interfaces';
-@@ -18,6 +19,10 @@ export class WindowsTerminal extends Terminal {
+@@ -18,6 +19,11 @@ export class WindowsTerminal extends Terminal {
    private _isReady: boolean;
    private _deferreds: { run: () => void }[];
    private _agent: WindowsPtyAgent;
@@ -2600,10 +2813,11 @@ index 13f6c6d..41727c1 100644
 +  public get onLifecycleError() { return this._onLifecycleError.event; }
 +  public readonly processOwnership = 'windows-job' as const;
 +  public get processStartIdentity(): string { return this._agent.processStartIdentity; }
++  public queryListeningPorts(): Promise<Array<{ port: number; address: string; pid: number; command: string | null }>> { return this._agent.queryListeningPorts(); }
  
    constructor(file?: string, args?: ArgvOrCommandLine, opt?: IWindowsPtyForkOptions) {
      super(opt);
-@@ -49,65 +54,17 @@ export class WindowsTerminal extends Terminal {
+@@ -49,65 +55,17 @@ export class WindowsTerminal extends Terminal {
  
      // Create new termal.
      this._agent = new WindowsPtyAgent(file, args, parsedEnv, cwd, this._cols, this._rows, false, opt.useConpty, opt.useConptyDll, opt.conptyInheritCursor);
@@ -2674,7 +2888,7 @@ index 13f6c6d..41727c1 100644
  
      this._file = file;
      this._name = name;
-@@ -155,20 +112,13 @@ export class WindowsTerminal extends Terminal {
+@@ -155,20 +113,13 @@ export class WindowsTerminal extends Terminal {
      });
    }
  
@@ -2753,7 +2967,7 @@ index 79a4148..703ef71 100644
  });
 +socket.connect(workerData.conoutPipeName, () => port.postMessage({ type: 'ready' }));
 diff --git a/typings/node-pty.d.ts b/typings/node-pty.d.ts
-index 6f050ff..e27fa2b 100644
+index 6f050ff..4b36b5c 100644
 --- a/typings/node-pty.d.ts
 +++ b/typings/node-pty.d.ts
 @@ -15,6 +15,12 @@ declare module 'node-pty' {
@@ -2769,12 +2983,13 @@ index 6f050ff..e27fa2b 100644
    export function spawn(file: string, args: string[] | string, options: IPtyForkOptions | IWindowsPtyForkOptions): IPty;
  
    export interface IBasePtyForkOptions {
-@@ -114,6 +120,10 @@ declare module 'node-pty' {
+@@ -114,6 +120,11 @@ declare module 'node-pty' {
     * An interface representing a pseudoterminal, on Windows this is emulated via the winpty library.
     */
    export interface IPty {
 +    /** BMN Windows extension; Linux uses its existing process identity adapter. */
 +    readonly processOwnership?: 'windows-job';
++    queryListeningPorts?(): Promise<Array<{ port: number; address: string; pid: number; command: string | null }>>;
 +    readonly processStartIdentity?: string;
 +    readonly onLifecycleError?: IEvent<string>;
      /**

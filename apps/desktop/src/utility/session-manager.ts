@@ -16,6 +16,7 @@ import {
   lifecycleStopDetail,
   lifecycleStopSource,
   type BackgroundChoice,
+  type ListeningPort,
   type BoundConversationBinding,
   type ConversationBindingState,
   type ConversationObservation,
@@ -59,6 +60,7 @@ import {
   type WorkspaceRecord
 } from '@bmn/protocol'
 import { processStartIdentity } from './process-start-identity'
+import { scanOwnedWindowsSessionPorts } from './windows-session-ports'
 import { findWindowsExecutable, windowsEnvironment } from './windows-launch'
 import {
   newestInterruptionCohort,
@@ -156,6 +158,7 @@ function bashSessionArgv(
 export interface PtyLike {
   readonly processOwnership?: 'windows-job'
   readonly processStartIdentity?: string
+  queryListeningPorts?(): Promise<readonly ListeningPort[]>
   onLifecycleError?(listener: (reason: string) => void): Disposable
   readonly pid: number
   readonly cols: number
@@ -1782,6 +1785,11 @@ export class SessionManager {
   /** Sessions whose process this host holds live now. */
   liveSessionIds(): string[] {
     return [...this.sessions].filter(([, live]) => !live.exited).map(([sessionId]) => sessionId)
+  }
+
+  /** Attribute native listeners only through each live retained Windows job. */
+  scanWindowsSessionPorts(ids: ReadonlySet<string>): Promise<Map<string, ListeningPort[]>> {
+    return scanOwnedWindowsSessionPorts(ids, id => this.sessions.get(id))
   }
 
   /** The incarnation the host currently holds live for a session, if any. */

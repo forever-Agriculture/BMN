@@ -366,9 +366,12 @@ catch(e){parentPort.postMessage({...info,ok:false,code:e.code,reason:e.message==
       const names = readdirSync(root).filter(name => name.startsWith('backup-substitution.json.bmn-backup-'))
       assert.equal(names.length, 1)
       const replacement = join(root, names[0]); rmSync(replacement); writeFileSync(replacement, 'UNRELATED')
+      const replacementSecurity = acl(replacement, { phase: 'replacement-before-worker' })
       writeFileSync(gate, '')
       assert.deepEqual(await pending.result, { ok: false, code: 'REVISION_CONFLICT', recoveryRequired: false })
       assert.equal(readFileSync(path, 'utf8'), 'BEFORE'); assert.equal(readFileSync(replacement, 'utf8'), 'UNRELATED')
+      receipts.unrelatedBackupSecurity = acl(replacement, { phase: 'replacement-after-worker' })
+      assert.deepEqual(receipts.unrelatedBackupSecurity, replacementSecurity)
       assert.deepEqual(temps(), [])
     } finally { writeFileSync(gate, ''); await pending.exited }
   })
@@ -402,8 +405,9 @@ catch(e){parentPort.postMessage({...info,ok:false,code:e.code,reason:e.message==
       const info = lstatSync(path)
       assert.equal(info.isSymbolicLink(), false, 'Synthetic cleanup refuses unexpected links')
       const directory = info.isDirectory()
-      chmodSync(path, directory ? 0o700 : 0o600)
+      // Restore the synthetic caller's write-attributes right before clearing readonly.
       acl(path, { protect: true, directory, phase: 'fixture-cleanup' })
+      chmodSync(path, directory ? 0o700 : 0o600)
       if (directory) for (const name of readdirSync(path)) restore(join(path, name))
     }
     restore(root)

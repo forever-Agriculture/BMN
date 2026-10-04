@@ -3568,7 +3568,7 @@ describe('session ports (Story 41.1)', () => {
   const listed = (target: CompanionService) => target.route(METHOD_REGISTRY.portsList, {}) as Promise<SessionPorts[]>
 
   it('lists what a scan attributed, marks a stopped session, and forgets a deleted one', async () => {
-    const scanning = new CompanionService({ ...service['options'], proc })
+    const scanning = new CompanionService({ ...service['options'], proc, procUid: uid })
     await scanning.sessionsChanged()
     await expect(listed(scanning)).resolves.toEqual([])
     await (scanning as unknown as { ports: { scanNow(): Promise<void> } }).ports.scanNow()

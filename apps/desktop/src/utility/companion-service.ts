@@ -148,6 +148,8 @@ export interface CompanionServiceOptions {
   now?: () => Date
   /** Where port scans read /proc; tests hand it a fixture tree. */
   proc?: ProcReader
+  /** UID of an explicitly injected synthetic /proc reader. */
+  procUid?: number
 }
 
 function invalid(message: string): never {
@@ -398,12 +400,16 @@ export class CompanionService {
       sessionExists: sessionId => this.knownSessions.has(sessionId), live: () => this.liveHookEvents() })
     this.now = options.now ?? (() => new Date())
     const proc = options.proc ?? procReader
-    const uid = process.getuid?.() ?? -1
+    const uid = options.procUid ?? (process.getuid?.() ?? -1)
     const scanMemory = createScanMemory()
     this.ports = new PortWatch({
-      scan: (sessionIds) => scanSessionPorts(proc, sessionIds, uid, scanMemory),
+      scan: (sessionIds) => process.platform === 'win32' && !options.proc
+        ? options.manager.scanWindowsSessionPorts(sessionIds)
+        : scanSessionPorts(proc, sessionIds, uid, scanMemory),
       knownSessionIds: () => new Set(this.knownSessions.keys()),
       liveSessionIds: () => options.manager.liveSessionIds(),
+      ...(process.platform === 'win32' && !options.proc
+        ? { currentIncarnation: (id: string) => options.manager.liveIncarnationId(id) } : {}),
       changed: () => this.emit('ports', null)
     })
     this.pager = createAttentionPager({

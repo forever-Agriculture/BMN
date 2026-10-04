@@ -12,15 +12,15 @@ Epic 50/54 installed/provider acceptance remains separate and unfinished.
 | Capability / owning story | Implementation owner | Linux candidate | Native Windows | WSL |
 | --- | --- | --- | --- | --- |
 | Build, data roots, database, restart, single instance, unpacked startup — 53.1 | Implementation team | Build/startup/package PASS on Ubuntu CI | Install/build/package/startup/restart/ACL PASS on Server 2025; Windows 11 manual acceptance UNVERIFIED | UNVERIFIED |
-| PowerShell/cmd launch, input, stop, process identity, crash cleanup, ConPTY feasibility — 53.2 | Implementation team | Affected tests and sandboxed startup PASS | Bundled bytes/trees/GUI/pressure, shell/UI and direct/debugger main-job crash cleanup PASS; full lifecycle relaunch gate remains open | UNVERIFIED |
+| PowerShell/cmd launch, input, stop, process identity, crash cleanup, ConPTY feasibility — 53.2 | Implementation team | Affected tests and sandboxed startup PASS | Bundled bytes/trees/GUI/pressure, shell/UI and direct/debugger main-job crash cleanup PASS; twelve lifecycle observations including final Close/relaunch PASS; full story acceptance remains open | UNVERIFIED |
 | Files, path links, attachments, backups, directory permissions — 53.3 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
 | CLI, transport, caller/session authority — 53.4 | Implementation team | 178 server/498 CLI affected checks PASS on 629dc91 | Native bmn.exe startup/argv/stdin and restricted control pipe owner/cross-account denial PASS; hook/config acceptance remains open | UNVERIFIED |
-| Named distributions, bridge, path mapping, terminfo — 53.5 | Implementation team | UNVERIFIED | Disposable WSL2 Alpine VM boot/cleanup PASS | Ubuntu systemd/interop ownership measurement pending; bridge not implemented |
-| Claude/Codex/OpenCode/Cursor hooks, history, usage, compaction, resume — 53.6 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
+| Named distributions, bridge, path mapping, terminfo — 53.5 | Implementation team | UNVERIFIED | Disposable WSL2 Alpine VM boot/cleanup PASS | Ubuntu raw Stop/EOF/root/native-host crash cleanup PASS; systemd sibling and filesystem socket brokers escape measured containment; strict profile decision pending, bridge not implemented |
+| Claude/Codex/OpenCode/Cursor hooks, history, usage, compaction, resume — 53.6 | Implementation team | Hook/config fixtures: 68 passed, one native-only skip; retained history/Companion: 204 passed, replacement and hardlink regressions original RED/current GREEN | Latest native failures remain open; revised ACL/home/history fixtures UNVERIFIED | UNVERIFIED |
 | Terminal images, clipboard, IME/AltGr, scaling, panes, themes, keyboard access — 53.7 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
-| Microphone, local voice engine, cancellation, addressed paste — 53.8 | Implementation team | Portable speech/silence/transcription PASS | Portable/packaged engines, PE imports and private WAV ACL PASS; microphone/UI/other CPU UNVERIFIED | UNVERIFIED |
+| Microphone, local voice engine, cancellation, addressed paste — 53.8 | Implementation team | Portable speech/silence/transcription PASS | Portable/packaged engines and PE imports PASS; prior WAV ACL PASS, latest private-WAV inspector fails without OS cause (diagnostic pending); microphone/UI/other CPU UNVERIFIED | UNVERIFIED |
 | Notifications, attention, Telegram replies and delivery diagnostics — 53.9 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
-| Per-session development port discovery and navigation — 53.10 | Implementation team | UNVERIFIED | Not implemented | UNVERIFIED |
+| Per-session development port discovery and navigation — 53.10 | Implementation team | 498 affected tests PASS, one skip; scanner timeout original RED/current GREEN | Owned-job TCP scanner implemented and focused-reviewed; owned Edge IPv4/IPv6 navigation gate prepared; MSVC/runtime/UI/browser UNVERIFIED | UNVERIFIED |
 | Per-user install, source updates, rollback, uninstall — 53.11 | Implementation team | UNVERIFIED | Not implemented | UNVERIFIED |
 | Full CI, required merge gates, contributor rules — 53.12 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
 | Full feature-guide reconciliation and installed-app acceptance — 53.13 | Team + independent Windows verifier | UNVERIFIED | UNVERIFIED | UNVERIFIED |
@@ -300,3 +300,21 @@ registration was removed. Native host crash/stdio EOF and Windows GUI interop
 remain separate, unverified design gates. The next probe measures raw host loss,
 and measures configuration symlink/dotdot resolution and copy/write/rename ACL
 behavior using synthetic files only. No product WSL adapter exists yet.
+
+## Latest complete native inventory (cb9f8f28)
+
+[Run 37161061556](https://github.com/forever-Agriculture/BMN/actions/runs/37161061556) completed the full Windows inventory: 2,826 passed, 93 failed and 12 skipped out of 2,931. Seven failed keys are unowned and remain gate failures; they were not added to the allowed inventory. Fifteen previously listed keys passed in every parameter case and were removed. The failure list now contains 84 open keys; keys and assertion counts can differ when a parameterized test shares a name.
+
+The same run passed Linux checks, native startup/shell/launch UI, and unpacked packaged startup/native selection. [Config run 37161061581](https://github.com/forever-Agriculture/BMN/actions/runs/37161061581) passed all 18 writer safety assertions, including original/fixed uppercase SystemRoot and namespace replacement races, then failed removing its synthetic fixture directory. The fixture cleanup repair is not yet natively verified.
+
+Native Sixel ConPTY-to-renderer and owned TCP listener gates are prepared but have not run on their new candidate. Windows 11/device acceptance remains UNVERIFIED under the owner's release amendment; available native CI failures still block release.
+
+## Local repair candidate after cb9f8f28 (native checks pending)
+
+`19923b4` redirects hook-check HOME/USERPROFILE into a fresh synthetic fixture and uses a native read-deny DACL with readback/restoration instead of Unix chmod. Learned Claude history fixture files receive only the elevated CI owner setup. Linux: 68 passed, one native-only skip; typecheck/lint passed.
+
+`459916f` checks retained hook history pathname/handle identity before reading and refuses links, hardlinks and replaced files. Both new guards fail against the original implementation (two failures, 15 passed) and pass with the repair; 204 affected history/Companion tests, the CLI read-denial case, typecheck and lint passed. Windows state files inherit the existing secured state root; native inheritance and these repaired flows remain UNVERIFIED.
+
+`d25700a` uses native absolute voice model paths in the stored-row and normalization fixtures. All 46 Linux database tests and typecheck/lint passed. Native fixtures remain UNVERIFIED.
+
+The TCP gate now opens an isolated Edge profile inside a retained Windows session job and navigates to both sessions' IPv4/IPv6 root, child and grandchild listeners. Edge and all other fixture jobs must confirm exit at cleanup. [The Windows 2025 runner image](https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-Readme.md#browsers-and-drivers) provides Edge; no browser installation, owner profile or sandbox-disable flag is used. The new gate has only syntax/lint validation locally and remains **UNVERIFIED** until native CI runs. This does not verify clicking a BMN port chip or default-browser activation.

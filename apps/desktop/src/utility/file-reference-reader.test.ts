@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { FileReferenceReadResult, FileReferenceSnapshot, FileReferenceUnavailable } from '@bmn/protocol'
 import { readFileReference, type FileReferenceReadRequest } from './file-reference-reader'
 import { HostControlError } from './session-manager'
+import { replaceWindowsFixtureFile } from './windows-fixture-io.test-support'
 
 let root: string
 let launch: string
@@ -96,9 +97,16 @@ describe('readFileReference', () => {
   it('explains missing files, folders, devices, pipes and a missing launch directory', async () => {
     expect(refused(await readFileReference(request('src/absent.ts'))).reason).toBe('missing')
     expect(refused(await readFileReference(request('./src'))).reason).toBe('not-a-file')
-    const device = refused(await readFileReference(request('/dev/null')))
-    expect(device).toMatchObject({ reason: 'not-a-file', canonicalPath: '/dev/null' })
-    expect(device.message).toMatch(/device/)
+    if (process.platform === 'win32') {
+      // Windows device/pipe namespaces are refused by the typed path boundary.
+      for (const path of ['\\\\.\\NUL', '\\\\.\\pipe\\bmn-file-reference-fixture']) {
+        expect((await rejection(readFileReference(request(path)))).code).toBe('INVALID_ARGUMENT')
+      }
+    } else {
+      const device = refused(await readFileReference(request('/dev/null')))
+      expect(device).toMatchObject({ reason: 'not-a-file', canonicalPath: '/dev/null' })
+      expect(device.message).toMatch(/device/)
+    }
     const loop = join(launch, 'loop.txt')
     await symlink(loop, loop)
     expect(refused(await readFileReference(request('loop.txt'))).reason).toBe('missing')
@@ -141,7 +149,11 @@ describe('readFileReference', () => {
     const path = join(launch, 'src', 'parser.ts')
     await writeFile(join(launch, 'replacement.ts'), 'other bytes\n')
     const replaced = refused(await readFileReference(request('src/parser.ts'), {
-      afterCheck: () => rename(join(launch, 'replacement.ts'), path)
+      afterCheck: async () => {
+        const replacement = join(launch, 'replacement.ts')
+        if (process.platform === 'win32') replaceWindowsFixtureFile(root, replacement, path)
+        else await rename(replacement, path)
+      }
     }))
     expect(replaced).toMatchObject({ reason: 'changed', canonicalPath: path })
 

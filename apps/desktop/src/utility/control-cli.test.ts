@@ -7,7 +7,7 @@ import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, sy
 import { stripTypeScriptTypes } from 'node:module'
 import { runInNewContext } from 'node:vm'
 import { homedir, tmpdir } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn as spawnPty } from 'node-pty'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -16,11 +16,32 @@ import { ERROR_CODES, HANDOFF_OUTLINE } from '@bmn/protocol'
 import { ControlError, ControlServer, MemoryReceiptStore, type ControlHandlers } from './control-server'
 
 import { ownWindowsFixtureFile } from './windows-fixture-owner.test-support'
+import { denyWindowsFixtureFileReads } from './windows-fixture-io.test-support'
+import { windowsEnvironmentValue } from '../../bin/windows-env.mjs'
 
 // Native ACL subprocesses can exceed the default 5s; each CLI child retains its 15s bound.
 if (process.platform === 'win32') vi.setConfig({ testTimeout: 30_000 })
 const rawEndpoint = (root: string, name: string) => process.platform === 'win32'
   ? `\\\\.\\pipe\\bmn-control-${randomUUID()}` : join(root, name)
+
+// These cases exercise the Bash route used by native Claude when Git for Windows is installed.
+function fixtureShell(name: 'sh' | 'bash'): string {
+  if (process.platform !== 'win32') return `/bin/${name}`
+  const programFiles = windowsEnvironmentValue(process.env, 'ProgramFiles')
+  if (!programFiles) throw new Error('Native shell fixture requires ProgramFiles')
+  const path = join(programFiles, 'Git', 'bin', `${name}.exe`)
+  if (!existsSync(path)) throw new Error('Native Claude shell fixture requires Git for Windows')
+  return path
+}
+const shellPath = (path: string): string => process.platform === 'win32' ? path.replaceAll('\\', '/') : path
+const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\"'\"'")}'`
+function fixtureSearchPath(first: readonly string[], inherited: string): string {
+  if (process.platform !== 'win32') return [...first, inherited].filter(Boolean).join(':')
+  // MSYS converts a Windows PATH on startup; mixed C:/drive and colon lists are ambiguous.
+  const programFiles = windowsEnvironmentValue(process.env, 'ProgramFiles')
+  if (!programFiles) throw new Error('Native shell fixture requires ProgramFiles')
+  return [...first, join(programFiles, 'Git', 'usr', 'bin'), join(programFiles, 'Git', 'bin')].join(';')
+}
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
 const AGENT_CONTROL_DOC = fileURLToPath(new URL('../../../../docs/agent-control.md', import.meta.url))
@@ -1535,9 +1556,19 @@ function ttyHooks(args: string[], pipe: 'none' | 'stdin' | 'stdout' | 'stderr' =
       ? `child.${pipe}.on('data', part => process.stdout.write(part));` : ''}
     child.on('exit', code => { process.exitCode = code ?? 1 });`
   const command = pipe === 'none' ? [CLI, 'hooks', ...args] : ['-e', wrapper, CLI, 'hooks', ...args]
+  const fileIndex = args.indexOf('--file')
+  const fixtureHome = fileIndex >= 0 ? dirname(args[fileIndex + 1]!) : tmpdir()
+  const essentials = process.platform === 'win32' ? Object.fromEntries(
+    ['SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'ComSpec'].flatMap(key => {
+      const value = windowsEnvironmentValue(process.env, key)
+      return value ? [[key, value]] : []
+    })
+  ) : {}
   const child = spawnPty(process.execPath, command, {
     name: 'xterm-256color', cols: 100, rows: 32, cwd: process.cwd(),
-    env: { PATH: process.env.PATH ?? '', HOME: tmpdir() }
+    env: { ...essentials, PATH: process.env.PATH ?? '', HOME: fixtureHome,
+      ...(process.platform === 'win32' ? { USERPROFILE: fixtureHome } : {}) },
+    ...(process.platform === 'win32' ? { useConpty: true, useConptyDll: true } : {})
   })
   let output = ''
   const waiting = new Set<{ text: string; resolve: () => void }>()
@@ -1573,15 +1604,20 @@ describe('bmn hooks check', () => {
 
   it('reports a file it cannot read as unreadable, and installs nothing over it', async () => {
     const path = await hookFileFixture({ hooks: {} })
-    await chmod(path, 0o000)
+    if (process.platform === 'win32') denyWindowsFixtureFileReads(dirname(path), path, true)
+    else await chmod(path, 0o000)
 
-    const check = await runHooks(['check', 'claude', '--file', path])
-    const install = await runHooks(['install', '--yes', 'claude', '--file', path])
-    await chmod(path, 0o600)
-
-    expect(check.code).toBe(1)
-    expect(check.stdout).toContain('EACCES')
-    expect(install.code).toBe(1)
+    try {
+      await expect(readFile(path)).rejects.toThrow()
+      const check = await runHooks(['check', 'claude', '--file', path])
+      const install = await runHooks(['install', '--yes', 'claude', '--file', path])
+      expect(check.code).toBe(1)
+      expect(check.stdout).toMatch(/EACCES|EPERM/)
+      expect(install.code).toBe(1)
+    } finally {
+      if (process.platform === 'win32') denyWindowsFixtureFileReads(dirname(path), path, false)
+      else await chmod(path, 0o600)
+    }
     // Somebody's configuration BMN could not read is never something to overwrite.
     expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ hooks: {} })
     expect(await backupsOf(path)).toEqual([])
@@ -2299,7 +2335,7 @@ it('ends every Codex report with the limit of what it checked', async () => {
       join(bin, 'bmn'),
       ['#!/bin/sh', '[ "$#" -eq 2 ] || exit 0', '[ "$1" = hook ] && [ "$2" = claude ] || exit 0',
         'event=$(cat)', 'case "$event" in', '  \'{\'*) ;;', '  *) exit 0 ;;', 'esac',
-        `echo yes >> ${ran}`, 'exit 0', ''].join('\n'),
+        `echo yes >> ${shellQuote(shellPath(ran))}`, 'exit 0', ''].join('\n'),
       { mode: 0o755 }
     )
     const EVENT = '{"hook_event_name":"Stop"}'
@@ -2315,8 +2351,8 @@ it('ends every Codex report with the limit of what it checked', async () => {
     for (const command of accepted) {
       await rm(ran, { force: true })
       const failure = await new Promise<string | null>((resolve) => {
-        const child = execFile('/bin/bash', ['-c', `${command}\nwait`], {
-          env: { PATH: `${bin}:${process.env.PATH ?? ''}`, BMN_CONTROL_SOCKET: '/x', AITERM_CONTROL_SOCKET: '/x' },
+        const child = execFile(fixtureShell('bash'), ['-c', `${command}\nwait`], {
+          env: { PATH: fixtureSearchPath([bin], process.env.PATH ?? ''), BMN_CONTROL_SOCKET: '/x', AITERM_CONTROL_SOCKET: '/x' },
           cwd: root, timeout: 10_000
         }, (error) => {
           if (error === null) return resolve(null)
@@ -2391,8 +2427,8 @@ it('ends every Codex report with the limit of what it checked', async () => {
     // Both agents, each at its own default path, and the moved Codex directory is the one consulted.
     const report = JSON.parse(result.stdout)
     expect(report.agents.map((agent: { agent: string }) => agent.agent)).toEqual(['claude', 'codex', 'opencode', 'cursor'])
-    expect(report.agents[0].file).toBe(join(home.root, '.claude', 'settings.json'))
-    expect(report.agents[1].file).toBe(join(codexHome, 'hooks.json'))
+    expect(normalize(report.agents[0].file)).toBe(join(home.root, '.claude', 'settings.json'))
+    expect(normalize(report.agents[1].file)).toBe(join(codexHome, 'hooks.json'))
     expect(report.agents[0].events.find((row: { event: string }) => row.event === 'Stop').state).toBe('wired')
     expect(report.agents[1].events.every((row: { state: string }) => row.state === 'missing')).toBe(true)
     expect(result.code).toBe(1)
@@ -2403,11 +2439,11 @@ it('ends every Codex report with the limit of what it checked', async () => {
     const codexHome = join(home.root, 'moved-codex')
     const env = { HOME: home.root, CODEX_HOME: codexHome }
 
-    const install = await runHooks(['install', '--yes', 'codex'], env)
+    const install = await runHooks(['install', '--yes', 'codex', '--json'], env)
     const check = await runHooks(['check', 'codex'], env)
 
     expect(install.code).toBe(0)
-    expect(install.stdout).toContain(join(codexHome, 'hooks.json'))
+    expect(normalize(JSON.parse(install.stdout).file)).toBe(join(codexHome, 'hooks.json'))
     expect(Object.keys(JSON.parse(await readFile(join(codexHome, 'hooks.json'), 'utf8')).hooks))
       .toEqual(expect.arrayContaining(CODEX_EVENTS))
     expect(check.code).toBe(0)
@@ -3047,7 +3083,7 @@ describe('OpenCode hooks', () => {
       }
       return result
     }
-    const create = runInNewContext(`${javascript}; BMNPlugin`, { process: { env } })
+    const create = runInNewContext(`${javascript}; BMNPlugin`, { AbortController, clearTimeout, process: { env } })
     const plugin = await create({ $: shell })
     const root = { type: 'session.created', properties: { sessionID: OPENCODE_SESSION } }
     await plugin.event({ event: root })
@@ -3091,7 +3127,7 @@ describe('OpenCode hooks', () => {
       posts.push({ url: request.url, body: JSON.parse(await request.text()) })
       return { ok: status < 300, status }
     }
-    const create = runInNewContext(`${javascript}; BMNPlugin`, {
+    const create = runInNewContext(`${javascript}; BMNPlugin`, { AbortController, clearTimeout,
       process: { env: { BMN_CONTROL_SOCKET: '/fixture/socket' } }, URL, Request, setTimeout, Buffer
     })
     const plugin = await create({
@@ -3154,12 +3190,12 @@ describe('OpenCode hooks', () => {
           const quote = (value: unknown): string => `'${String(value).replaceAll("'", "'\"'\"'")}'`
           const command = strings.reduce((text, part, index) => text + part + (index < values.length
             ? (Array.isArray(values[index]) ? values[index].map(quote).join(' ') : quote(values[index])) : ''), '')
-          child = execFile('/bin/sh', ['-c', command], { env }, () => resolve())
+          child = execFile(fixtureShell('sh'), ['-c', command], { env }, () => resolve())
         })
       }
       return result
     }
-    const create = runInNewContext(`${javascript}; BMNPlugin`, { process: { env: { BMN_CONTROL_SOCKET: '/fixture/socket' } } })
+    const create = runInNewContext(`${javascript}; BMNPlugin`, { AbortController, clearTimeout, process: { env: { BMN_CONTROL_SOCKET: '/fixture/socket' } } })
     const plugin = await create({ $: shell })
     const started = Date.now()
     const safety = setTimeout(() => {
@@ -3350,13 +3386,13 @@ describe('OpenCode hooks', () => {
     const config = join(fixture.root, 'opencode')
     const env = { OPENCODE_CONFIG_DIR: config }
     const first = JSON.parse((await runHooks(['check', 'opencode', '--json'], env)).stdout)
-    expect(first.agents[0].file).toBe(join(config, 'plugins', 'bmn.ts'))
+    expect(normalize(first.agents[0].file)).toBe(join(config, 'plugins', 'bmn.ts'))
     const fresh = JSON.parse((await runHooks(['install', '--yes', 'opencode', '--json'], env)).stdout)
-    expect(fresh.file).toBe(join(config, 'plugins', 'bmn.ts'))
+    expect(normalize(fresh.file)).toBe(join(config, 'plugins', 'bmn.ts'))
     expect(await readFile(fresh.file, 'utf8')).toContain('export const BMNPlugin')
     await mkdir(join(config, 'plugin'), { recursive: true })
     const installed = JSON.parse((await runHooks(['install', '--yes', 'opencode', '--json'], env)).stdout)
-    expect(installed.file).toBe(join(config, 'plugin', 'bmn.ts'))
+    expect(normalize(installed.file)).toBe(join(config, 'plugin', 'bmn.ts'))
   })
 })
 
@@ -3808,7 +3844,7 @@ describe('Cursor hooks (Epic 31.3)', () => {
 
     const report = JSON.parse(result.stdout)
     expect(report.agents.map((agent: { agent: string }) => agent.agent)).toEqual(['claude', 'codex', 'opencode', 'cursor'])
-    expect(report.agents[3].file).toBe(join(home.root, '.cursor', 'hooks.json'))
+    expect(normalize(report.agents[3].file)).toBe(join(home.root, '.cursor', 'hooks.json'))
   })
 
   it('drives bmn hook cursor with every event check expects, and each one reaches the app', async () => {
@@ -3929,7 +3965,8 @@ describe('bmn statusline (Story 37.2)', () => {
   it('finds Claude\'s settings the way hooks install does when no file is named', async () => {
     const path = await hookFileFixture(settings)
     const check = await runStatusLine(['check', '--json'], { CLAUDE_CONFIG_DIR: dirname(path) })
-    expect(JSON.parse(check.stdout)).toEqual({ file: path, state: 'unwrapped' })
+    const report = JSON.parse(check.stdout)
+    expect({ ...report, file: normalize(report.file) }).toEqual({ file: path, state: 'unwrapped' })
   })
 
   it.each([
@@ -3976,11 +4013,11 @@ describe('bmn statusline (Story 37.2)', () => {
       const root = await realpath(await mkdtemp(join(tmpdir(), 'aitline-')))
       createdRoots.add(root)
       await mkdir(join(root, 'bin'))
-      await writeFile(join(root, 'bin', 'bmn'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} "$@"\n`, { mode: 0o755 })
+      await writeFile(join(root, 'bin', 'bmn'), `#!/bin/sh\nexec ${shellQuote(shellPath(process.execPath))} ${shellQuote(shellPath(CLI))} "$@"\n`, { mode: 0o755 })
       const clean = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BMN_') && !key.startsWith('AITERM_')))
       return new Promise<CliResult & { tmp: string }>((resolve) => {
-        const child = execFile('/bin/sh', ['-c', command], {
-          env: { ...clean, PATH: `${pathFirst}${join(root, 'bin')}:${process.env.PATH ?? ''}`, TMPDIR: root, ...env }, timeout: 15_000
+        const child = execFile(fixtureShell('sh'), ['-c', command], {
+          env: { ...clean, PATH: fixtureSearchPath([pathFirst, join(root, 'bin')].filter(Boolean), process.env.PATH ?? ''), TMPDIR: shellPath(root), ...env }, timeout: 15_000
         }, (error, stdout, stderr) => {
           resolve({ code: error === null ? 0 : typeof error.code === 'number' ? error.code : null, stdout, stderr, tmp: root })
         })
@@ -4034,11 +4071,14 @@ describe('bmn statusline (Story 37.2)', () => {
       // A full disk, played by a `cat` that stops after 40 bytes when it writes into the temporary folder.
       await mkdir(join(root, 'shim'))
       await writeFile(join(root, 'shim', 'cat'), `#!/bin/sh
-case "$(readlink /proc/$$/fd/1)" in ${root}/tmp/*) head -c 40; echo 'cat: write error: No space left on device' >&2; exit 1 ;; esac
+if [ ! -f ${shellQuote(shellPath(join(root, 'copied')))} ]; then
+  : > ${shellQuote(shellPath(join(root, 'copied')))}
+  head -c 40; echo 'cat: write error: No space left on device' >&2; exit 1
+fi
 exec /bin/cat "$@"
 `, { mode: 0o755 })
       await mkdir(join(root, 'tmp'))
-      const result = await runLine(command, stdin, { ...fixture.sessionEnv, TMPDIR: join(root, 'tmp') }, `${join(root, 'shim')}:`)
+      const result = await runLine(command, stdin, { ...fixture.sessionEnv, TMPDIR: shellPath(join(root, 'tmp')) }, join(root, 'shim'))
 
       expect(result).toMatchObject({ code: 4, stdout: '40\n', stderr: "it's the owner's\n" })
       expect(await readdir(join(root, 'tmp'))).toEqual([])
@@ -4052,7 +4092,7 @@ exec /bin/cat "$@"
       const stdin = input(LIMITS)
       const clean = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BMN_')))
       const result = await new Promise<CliResult>((resolve) => {
-        const child = execFile('/bin/sh', ['-c', command], { env: { ...clean, PATH: '/usr/bin:/bin', ...fixture.sessionEnv } },
+        const child = execFile(fixtureShell('sh'), ['-c', command], { env: { ...clean, PATH: process.platform === 'win32' ? fixtureSearchPath([], '') : '/usr/bin:/bin', ...fixture.sessionEnv } },
           (error, stdout, stderr) => resolve({ code: error === null ? 0 : typeof error.code === 'number' ? error.code : null, stdout, stderr }))
         child.stdin?.end(stdin)
       })

@@ -3,8 +3,12 @@ import { createHmac, randomBytes } from 'node:crypto'
 import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ControlAuth, writeOwnerToken } from './control-auth'
+import { ensurePrivateDirectories } from './private-directory'
+import { windowsFixtureAllowsOnlyCurrentUser } from './windows-fixture-io.test-support'
+
+if (process.platform === 'win32') vi.setConfig({ testTimeout: 30_000 })
 
 const createdRoots = new Set<string>()
 
@@ -87,7 +91,10 @@ describe('control auth', () => {
 
   it('writes the owner token atomically with private file and directory modes', async () => {
     const root = await temporaryRoot()
-    const directory = join(root, 'control')
+    // Production creates control storage beneath the already secured runtime root.
+    const state = join(root, 'private-runtime')
+    if (process.platform === 'win32') ensurePrivateDirectories([state])
+    const directory = join(state, 'control')
     const auth = new ControlAuth()
 
     const path = await writeOwnerToken(directory, auth.ownerToken)
@@ -95,8 +102,13 @@ describe('control auth', () => {
 
     expect(path).toBe(join(directory, 'owner.token'))
     expect((await readFile(path, 'utf8')).trim()).toBe(auth.ownerToken)
-    expect((await stat(path)).mode & 0o777).toBe(0o600)
-    expect((await stat(directory)).mode & 0o777).toBe(0o700)
+    if (process.platform === 'win32') {
+      expect(windowsFixtureAllowsOnlyCurrentUser(root, path)).toBe(true)
+      expect(windowsFixtureAllowsOnlyCurrentUser(root, directory)).toBe(true)
+    } else {
+      expect((await stat(path)).mode & 0o777).toBe(0o600)
+      expect((await stat(directory)).mode & 0o777).toBe(0o700)
+    }
     expect(await readdir(directory)).toEqual(['owner.token'])
   })
 })

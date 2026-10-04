@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { measureRawSupervisor } from './wsl-raw-supervisor-spike.mjs'
 import { measureGuestBrokerEscape } from './wsl-broker-escape-spike.mjs'
+import { measureRestrictedGuestProfile } from './wsl-restricted-profile-spike.mjs'
 
 assert.equal(process.platform, 'win32')
 assert.equal(process.env.GITHUB_ACTIONS, 'true')
@@ -123,6 +124,8 @@ finally:
   receipt.guest = JSON.parse(owned.stdout); receipt.measuredGuestOwnership = true
   receipt.rawSupervisorDeath = await measureRawSupervisor({ executable, distribution, uid, guest })
   receipt.guestBrokerIsolation = measureGuestBrokerEscape({ distribution, uid, guest })
+  receipt.restrictedProfile = measureRestrictedGuestProfile({ distribution, uid, guest })
+  assert.notEqual(receipt.restrictedProfile.result, 'FAIL', 'Restricted guest measurement failed')
   receipt.reason = 'Direct detached guest-tree and raw host EOF/death cleanup pass. Same-user service broker escape is measured separately; the unisolated strict design is refused when it escapes. Enforced broker/interop isolation remains required before product implementation.'
 } catch (error) { receipt.reason = String(error.message).slice(0, 1000) }
 finally {
@@ -137,3 +140,4 @@ finally {
 }
 console.log(JSON.stringify(receipt))
 assert.notEqual(receipt.registrationRemoved, false, 'Disposable registration must be removed')
+assert.notEqual(receipt.restrictedProfile?.result, 'FAIL', 'Restricted-profile measurement failed; inspect retained receipt')

@@ -187,7 +187,7 @@ Run `node scripts/test/platform-startup.mjs --binary apps/desktop/release/win-un
 and `pnpm exec vitest run scripts/tests/packaged-native-modules.test.mjs` to check
 that candidate. Build on the target OS: native ABI filtering uses the host platform.
 This is unsigned development output, without an installer or a full-parity claim.
-Windows voice resources and native CLI launchers are still pending their stories.
+Portable voice engines and the native `bmn.exe` launcher are included. Native CI verifies engine speech/silence/transcription and launcher startup/argv/stdin; microphone, hook/resume and complete desktop acceptance remain unfinished.
 The existing full Linux `pnpm run package` continues to build voice resources.
 Never package over a running packaged app.
 

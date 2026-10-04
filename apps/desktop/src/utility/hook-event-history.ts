@@ -1,7 +1,7 @@
 // A bounded metadata snapshot, separate from live hook observations. No payloads or replay.
 import { randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
-import { chmod, mkdir, open, rename, unlink, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, open, rename, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { HOOK_EVENT_AGENTS, HOOK_EVENT_EFFECTS, HOOK_EVENT_LOG_LIMIT, type HookEventRecord } from '@bmn/protocol'
 
@@ -92,6 +92,8 @@ export class HookEventHistory {
     live(): Iterable<HookEventRecord>
     /** A controlled filesystem replacement seam for failure/interleaving tests. */
     replace?: typeof rename
+    /** A controlled open seam for filesystem replacement tests. */
+    openFile?: typeof open
   }) {}
 
   async load(): Promise<void> {
@@ -99,10 +101,16 @@ export class HookEventHistory {
     this.loaded = true
     let handle: Awaited<ReturnType<typeof open>> | undefined
     try {
-      // NOFOLLOW plus fstat and a size+one-byte read keep even a replaced/growing file bounded.
-      handle = await open(join(this.options.root, HOOK_HISTORY_FILE), constants.O_RDONLY | constants.O_NOFOLLOW)
+      // Windows ignores NOFOLLOW: establish an ordinary pathname and compare the opened identity before reading.
+      const path = join(this.options.root, HOOK_HISTORY_FILE)
+      const before = await lstat(path)
+      if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > HOOK_HISTORY_MAX_BYTES) {
+        throw new Error('Invalid history file')
+      }
+      handle = await (this.options.openFile ?? open)(path, constants.O_RDONLY | constants.O_NOFOLLOW)
       const stat = await handle.stat()
-      if (!stat.isFile() || stat.size > HOOK_HISTORY_MAX_BYTES) throw new Error('Invalid history size')
+      if (!stat.isFile() || stat.dev !== before.dev || stat.ino !== before.ino || stat.nlink !== 1 ||
+        stat.size > HOOK_HISTORY_MAX_BYTES) throw new Error('History changed while opening')
       const bytes = Buffer.alloc(stat.size + 1)
       let read = 0
       while (read < bytes.length) {
@@ -110,7 +118,11 @@ export class HookEventHistory {
         if (part.bytesRead === 0) break
         read += part.bytesRead
       }
-      if (read !== stat.size) throw new Error('History changed during read')
+      const after = await lstat(path)
+      if (read !== stat.size || !after.isFile() || after.isSymbolicLink() || after.nlink !== 1 ||
+        after.dev !== stat.dev || after.ino !== stat.ino || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) {
+        throw new Error('History changed during read')
+      }
       const snapshot: unknown = JSON.parse(bytes.subarray(0, read).toString('utf8'))
       if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) throw new Error('Invalid snapshot')
       const saved = snapshot as { version?: unknown; rows?: unknown }
@@ -176,7 +188,8 @@ export class HookEventHistory {
         const bytes = JSON.stringify({ version: 1, rows })
         if (Buffer.byteLength(bytes) > HOOK_HISTORY_MAX_BYTES) throw new Error('History exceeds byte cap')
         await mkdir(this.options.root, { recursive: true, mode: 0o700 })
-        await chmod(this.options.root, 0o700)
+        // The Windows state root is secured before the utility starts; new files inherit its owner-only DACL.
+        if (process.platform !== 'win32') await chmod(this.options.root, 0o700)
         await writeFile(temporary, bytes, { mode: 0o600, flag: 'wx' })
         await (this.options.replace ?? rename)(temporary, join(this.options.root, HOOK_HISTORY_FILE))
       } catch {
