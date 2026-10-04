@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -20,6 +20,28 @@ afterEach(async () => {
 })
 
 describe('owned database schema', () => {
+  it('refuses a newer data schema before changing journal mode, data or interruption labels', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bmn-future-schema-'))
+    createdRoots.add(root)
+    const path = join(root, 'data.sqlite')
+    const setup = new BetterSqlite3(path)
+    initializeDatabase(setup)
+    setup.prepare('INSERT INTO schema_migration(version, applied_at) VALUES (?, ?)')
+      .run(DATABASE_MIGRATIONS.at(-1)!.version + 1, 'synthetic-future')
+    setup.exec("CREATE TABLE future_owned(value TEXT); INSERT INTO future_owned VALUES ('must remain')")
+    setup.pragma('journal_mode = DELETE')
+    setup.close()
+    const before = await readFile(path)
+    const database = new BetterSqlite3(path)
+    try {
+      expect(() => initializeDatabase(database)).toThrow('unsupported data schema')
+      expect(database.prepare('PRAGMA journal_mode').get()).toEqual({ journal_mode: 'delete' })
+      expect(database.prepare('SELECT value FROM future_owned').get()).toEqual({ value: 'must remain' })
+      expect(database.prepare('SELECT MAX(version) AS version FROM schema_migration').get())
+        .toEqual({ version: DATABASE_MIGRATIONS.at(-1)!.version + 1 })
+    } finally { database.close() }
+    expect(await readFile(path)).toEqual(before)
+  })
   it('contains the twenty-three ordered migrations and only the owned tables', () => {
     expect(DATABASE_MIGRATIONS.map((migration) => migration.version))
       .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23])
