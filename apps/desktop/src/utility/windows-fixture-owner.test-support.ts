@@ -14,7 +14,7 @@ export function ownWindowsFixtureFile(root: string, path: string): void {
   assert.ok(info.isFile() && !info.isSymbolicLink() && info.nlink === 1, 'Fixture must be one ordinary synthetic file')
   const systemRoot = windowsEnvironmentValue(process.env, 'SystemRoot')
   assert.ok(systemRoot)
-  const source = `$ErrorActionPreference='Stop';[Console]::InputEncoding=New-Object Text.UTF8Encoding($false);$path=ConvertFrom-Json ([Console]::In.ReadToEnd());$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User;$acl=[IO.File]::GetAccessControl($path);$acl.SetOwner($sid);[IO.File]::SetAccessControl($path,$acl);[Console]::Out.Write(([IO.File]::GetAccessControl($path).GetOwner([Security.Principal.SecurityIdentifier]).Value -eq $sid.Value))`
+  const source = `$ErrorActionPreference='Stop';[Console]::InputEncoding=[Text.UTF8Encoding]::new($false);$path=ConvertFrom-Json ([Console]::In.ReadToEnd());$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User;$acl=[IO.File]::GetAccessControl($path);$acl.SetOwner($sid);[IO.File]::SetAccessControl($path,$acl);[Console]::Out.Write(([IO.File]::GetAccessControl($path).GetOwner([Security.Principal.SecurityIdentifier]).Value -eq $sid.Value))`
   const result = spawnSync(join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
     ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(source, 'utf16le').toString('base64')],
     { input: JSON.stringify(path), encoding: 'utf8', timeout: 15000, windowsHide: true })

@@ -130,7 +130,7 @@ function windowsLinkTarget(path) {
 // FileSecurity protects the staged file at creation, before any settings bytes.
 const WINDOWS_CONFIG_WRITE = `
 $ErrorActionPreference='Stop'
-[Console]::InputEncoding=New-Object System.Text.UTF8Encoding($false)
+[Console]::InputEncoding=[System.Text.UTF8Encoding]::new($false)
 $request=ConvertFrom-Json ([Console]::In.ReadToEnd())
 $created=$false; $published=$false; $backupReserved=$false; $failureCode='IO_ERROR'; $operation='start'; $stream=$null; $originalStream=$null; $backupStream=$null; $stagedHandle=$null; $publishedStream=$null; $stagedIdentity=$null; $backupIdentity=$null; $reservedBackupHandle=$null
 function Fingerprint($acl) {
@@ -147,19 +147,19 @@ function StreamHash($file) {
  try { return ([BitConverter]::ToString($hash.ComputeHash($file))).Replace('-','').ToLowerInvariant() } finally { $hash.Dispose() }
 }
 function OpenOriginal($path) {
- return (New-Object System.IO.FileStream($path,[IO.FileMode]::Open,[System.Security.AccessControl.FileSystemRights]'Read, ReadPermissions',([IO.FileShare]::Read -bor [IO.FileShare]::Delete),4096,[IO.FileOptions]::None))
+ return ([System.IO.FileStream]::new($path,[IO.FileMode]::Open,[System.Security.AccessControl.FileSystemRights]'Read, ReadPermissions',([IO.FileShare]::Read -bor [IO.FileShare]::Delete),4096,[IO.FileOptions]::None))
 }
 function PrivateSecurity($sid) {
- $acl=New-Object System.Security.AccessControl.FileSecurity
+ $acl=[System.Security.AccessControl.FileSecurity]::new()
  $acl.SetOwner($sid);$acl.SetAccessRuleProtection($true,$false)
- $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($sid,'FullControl','Allow')))
+ $acl.AddAccessRule(([System.Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','Allow')))
  return $acl
 }
 function AssertSafeAncestors($target) {
  $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User
  $trusted=@($sid.Value,'S-1-5-18','S-1-5-32-544')
- try {$trusted+= (New-Object System.Security.Principal.NTAccount('NT SERVICE','TrustedInstaller')).Translate([System.Security.Principal.SecurityIdentifier]).Value} catch {}
- $directory=New-Object System.IO.DirectoryInfo([IO.Path]::GetDirectoryName($target))
+ try {$trusted+= ([System.Security.Principal.NTAccount]::new('NT SERVICE','TrustedInstaller')).Translate([System.Security.Principal.SecurityIdentifier]).Value} catch {}
+ $directory=[System.IO.DirectoryInfo]::new([IO.Path]::GetDirectoryName($target))
  for($parent=$directory;$null -ne $parent;$parent=$parent.Parent) {
   if(-not $parent.Exists -or ($parent.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Unconfirmed config ancestor' }
   $security=$parent.GetAccessControl()
@@ -268,7 +268,7 @@ try {
   $expected=Fingerprint $acl
   $operation='metadata-helper';EnsureNativeHelpers
   $operation='stage-create'
-  $stream=New-Object System.IO.FileStream($request.temporary,[IO.FileMode]::CreateNew,[System.Security.AccessControl.FileSystemRights]'Write, ReadPermissions, ReadAttributes',[IO.FileShare]::None,4096,[IO.FileOptions]::WriteThrough,$acl)
+  $stream=[System.IO.FileStream]::new($request.temporary,[IO.FileMode]::CreateNew,[System.Security.AccessControl.FileSystemRights]'Write, ReadPermissions, ReadAttributes',[IO.FileShare]::None,4096,[IO.FileOptions]::WriteThrough,$acl)
   $created=$true
   $stagedIdentity=[BMNConfigIdentity]::Read($stream.SafeFileHandle)
   if((Fingerprint ($stream.GetAccessControl())) -ne $expected) { $failureCode='ACCESS_CONTROL_UNCONFIRMED';throw 'Staged permissions differ' }
@@ -291,7 +291,7 @@ try {
    # Reserve our UUID backup exclusively with private permissions before replacement.
    $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User
    $operation='backup-reserve'
-   $reservation=New-Object System.IO.FileStream($request.backup,[IO.FileMode]::CreateNew,[System.Security.AccessControl.FileSystemRights]'Write, ReadPermissions, ReadAttributes',[IO.FileShare]::None,4096,[IO.FileOptions]::WriteThrough,(PrivateSecurity $sid))
+   $reservation=[System.IO.FileStream]::new($request.backup,[IO.FileMode]::CreateNew,[System.Security.AccessControl.FileSystemRights]'Write, ReadPermissions, ReadAttributes',[IO.FileShare]::None,4096,[IO.FileOptions]::WriteThrough,(PrivateSecurity $sid))
    $backupReserved=$true;$backupIdentity=[BMNConfigIdentity]::Read($reservation.SafeFileHandle);$reservation.Dispose()
    # Retained original handle denies in-place writers. Delete sharing permits Replace,
    # so namespace writers are detected from displaced backup; this is not atomic CAS.

@@ -8,7 +8,7 @@ import { homedir } from 'node:os'
 
 const WINDOWS_PRIVATE_DIRECTORY = `
 $ErrorActionPreference = 'Stop'
-[Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false)
+[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
 $request = ConvertFrom-Json ([Console]::In.ReadToEnd())
 $paths = $request.paths
 $chromiumDataRoot = $request.chromiumDataRoot
@@ -18,7 +18,7 @@ $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
 $networkCapability = 'S-1-15-3-1024-395641907-2340533657-1796656376-1949871151-3167452726-3934347287-2361051074-3061173417'
 $trustedPrincipals = @($sid.Value, 'S-1-5-18', 'S-1-5-32-544')
 try {
-  $installer = New-Object System.Security.Principal.NTAccount('NT SERVICE', 'TrustedInstaller')
+  $installer = [System.Security.Principal.NTAccount]::new('NT SERVICE', 'TrustedInstaller')
   $trustedPrincipals += $installer.Translate([System.Security.Principal.SecurityIdentifier]).Value
 } catch { }
 function Assert-SafeOwner($security) {
@@ -43,14 +43,14 @@ function Assert-SafeAncestors($directory) {
 function Get-DirectoryKey($directory) {
   # .NET Framework only expands the final existing component. A missing leaf can
   # therefore retain an 8.3 parent name; normalize the existing ancestor first.
-  $cursor = New-Object System.IO.DirectoryInfo($directory.FullName)
-  $missing = New-Object 'System.Collections.Generic.Stack[string]'
+  $cursor = [System.IO.DirectoryInfo]::new($directory.FullName)
+  $missing = [System.Collections.Generic.Stack[string]]::new()
   while (-not $cursor.Exists) {
     $missing.Push($cursor.Name)
     $cursor = $cursor.Parent
     if ($null -eq $cursor) { throw 'BMN root has no accessible existing ancestor' }
   }
-  $existing = New-Object System.IO.DirectoryInfo($cursor.FullName)
+  $existing = [System.IO.DirectoryInfo]::new($cursor.FullName)
   $key = $existing.FullName
   while ($missing.Count -gt 0) { $key = [System.IO.Path]::Combine($key, $missing.Pop()) }
   if ($key.Length -gt [System.IO.Path]::GetPathRoot($key).Length) { $key = $key.TrimEnd([System.IO.Path]::DirectorySeparatorChar) }
@@ -58,10 +58,10 @@ function Get-DirectoryKey($directory) {
 }
 # DirectoryInfo expands existing 8.3 ancestors. Compare all roots using that same
 # representation, before any creation, while retaining duplicate requested entries.
-$directories = @($paths | ForEach-Object { New-Object System.IO.DirectoryInfo($_) })
+$directories = @($paths | ForEach-Object { [System.IO.DirectoryInfo]::new($_) })
 $keys = @($directories | ForEach-Object { Get-DirectoryKey $_ })
-$canonicalDataRoot = if ($chromiumDataRoot) { Get-DirectoryKey (New-Object System.IO.DirectoryInfo($chromiumDataRoot)) } else { $null }
-$protectedKeys = @($request.protectedRoots | ForEach-Object { Get-DirectoryKey (New-Object System.IO.DirectoryInfo($_)) })
+$canonicalDataRoot = if ($chromiumDataRoot) { Get-DirectoryKey ([System.IO.DirectoryInfo]::new($chromiumDataRoot)) } else { $null }
+$protectedKeys = @($request.protectedRoots | ForEach-Object { Get-DirectoryKey ([System.IO.DirectoryInfo]::new($_)) })
 $dataMatches = 0
 for ($rootIndex = 0; $rootIndex -lt $directories.Count; $rootIndex++) {
   $directory = $directories[$rootIndex]
@@ -78,13 +78,13 @@ for ($rootIndex = 0; $rootIndex -lt $directories.Count; $rootIndex++) {
 }
 if ($canonicalDataRoot -and $dataMatches -ne 1) { throw 'BMN Chromium storage must be a distinct application root' }
 for ($rootIndex = 0; $rootIndex -lt $directories.Count; $rootIndex++) {
-  $directory = New-Object System.IO.DirectoryInfo($keys[$rootIndex])
+  $directory = [System.IO.DirectoryInfo]::new($keys[$rootIndex])
   Assert-SafeAncestors $directory
   if (-not $directory.Exists) {
-    $acl = New-Object System.Security.AccessControl.DirectorySecurity
+    $acl = [System.Security.AccessControl.DirectorySecurity]::new()
     $acl.SetOwner($sid)
     $acl.SetAccessRuleProtection($true, $false)
-    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')
+    $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow')
     $acl.AddAccessRule($rule)
     $directory.Create($acl)
     # Exists cached the missing state; reload before inspecting attributes and ancestry.
@@ -94,7 +94,7 @@ for ($rootIndex = 0; $rootIndex -lt $directories.Count; $rootIndex++) {
   # Existing directories are validated, never repaired or adopted by changing ACLs.
   $actual = $directory.GetAccessControl()
   if ($actual.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value -or -not $actual.AreAccessRulesProtected) { throw 'BMN root is not private storage owned by this account' }
-  $pending = New-Object 'System.Collections.Generic.Queue[System.IO.FileSystemInfo]'
+  $pending = [System.Collections.Generic.Queue[System.IO.FileSystemInfo]]::new()
   $pending.Enqueue($directory)
   $discovered = 1
   while ($pending.Count -gt 0) {
