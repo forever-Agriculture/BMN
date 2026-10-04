@@ -56,14 +56,15 @@ async function fixture(spawn: (argv: string[], options: SpawnOptions) => ReturnT
   const env = { BMN_CONTROL_SOCKET: 'synthetic-endpoint', BMN_TOKEN: 'synthetic-token' }
   const create = runInNewContext(`${javascript}; BMNPlugin`, {
     process: { platform, env }, Bun: { spawn: spawnCall }, Buffer, ReadableStream, Response,
-    URL, Request, AbortController, clearTimeout,
+    URL, Request, Headers, AbortController, clearTimeout,
     setTimeout: (callback: () => void, milliseconds: number) => { timers.push(milliseconds); return setTimeout(callback, milliseconds) }
   })
   const posts: Request[] = []
+  let clientHeaders: Record<string, string> | Headers | undefined
   let reply: (request: Request) => Promise<{ ok: boolean; status: number }> = async () => ({ ok: true, status: 200 })
   const plugin = await create({ $: shell, serverUrl: new URL('http://127.0.0.1:4096/'), directory: '/synthetic',
-    client: { _client: { getConfig: () => ({ fetch: async (request: Request) => { posts.push(request); return reply(request) } }) } } })
-  return { plugin, spawn: spawnCall, shell, env, posts, timers, setReply: (next: typeof reply) => { reply = next } }
+    client: { _client: { getConfig: () => ({ headers: clientHeaders, fetch: async (request: Request) => { posts.push(request); return reply(request) } }) } } })
+  return { plugin, spawn: spawnCall, shell, env, posts, timers, setReply: (next: typeof reply) => { reply = next }, setClientHeaders: (headers: typeof clientHeaders) => { clientHeaders = headers } }
 }
 async function turns(check: () => boolean): Promise<void> {
   for (let i = 0; i < 100 && !check(); i++) await Promise.resolve()
@@ -148,6 +149,33 @@ describe('native OpenCode plugin deadlines', () => {
     expect(f.timers).toContain(35000); expect(f.timers).toContain(10000)
     expect(f.posts).toHaveLength(1); expect(await f.posts[0]!.json()).toEqual({ reply: 'once' })
     expect(f.shell).not.toHaveBeenCalled()
+  })
+  it.each(['record', 'Headers'])('keeps the own server client authentication from %s on a reply', async form => {
+    let picked = false
+    const f = await fixture(argv => {
+      if (argv.includes('--reported')) return completed('{"answers":[]}')
+      if (argv.includes('--wait')) {
+        if (picked) return completed('', 1)
+        picked = true
+        return completed(JSON.stringify({ answers: [{ requestRef: 'que_auth', kind: 'question', answers: [['synthetic']] }] }))
+      }
+      return completed()
+    })
+    const headers = { Authorization: 'Basic synthetic-fixture-only', 'x-fixture': 'kept', 'content-type': 'wrong/type' }
+    f.setClientHeaders(form === 'Headers' ? new Headers(headers) : headers)
+    f.setReply(async () => {
+      await f.plugin.event(event('question.replied', { sessionID, requestID: 'que_auth' }))
+      return { ok: false, status: 404 }
+    })
+    await f.plugin.event(event('session.created', { sessionID }))
+    await f.plugin.event(event('question.asked', { sessionID, id: 'que_auth' }))
+    await turns(() => f.spawn.mock.calls.some(([argv]) => argv.includes('--reported')))
+    expect(f.posts).toHaveLength(1)
+    expect(f.posts[0]!.headers.get('authorization')).toBe('Basic synthetic-fixture-only')
+    expect(f.posts[0]!.headers.get('x-fixture')).toBe('kept')
+    expect(f.posts[0]!.headers.get('content-type')).toBe('application/json')
+    expect(f.posts[0]!.redirect).toBe('error')
+    expect(f.spawn.mock.calls.map(([argv]) => argv)).toContainEqual(['bmn.exe', 'answer', 'take', '--wait', '0', '--reported', 'que_auth=failed', '--json'])
   })
   it.each(['win32', 'linux'])('aborts a hanging reply on %s and never acknowledges or repeats its late success', async platform => {
     vi.useFakeTimers()

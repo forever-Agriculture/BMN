@@ -618,14 +618,17 @@ export const BMNPlugin: Plugin = async (input) => {
     const url = new URL(\`\${route}/\${encodeURIComponent(answer.requestRef)}/reply\`, input.serverUrl)
     url.searchParams.set("directory", input.directory)
     const body = route === "question" ? { answers: answer.answers } : { reply: reject ? "reject" : "once" }
-    const fetcher = (input.client as any)?._client?.getConfig?.().fetch ?? fetch
+    const clientConfig = (input.client as any)?._client?.getConfig?.()
+    const fetcher = clientConfig?.fetch ?? fetch
+    const headers = new Headers(clientConfig?.headers)
+    headers.set("content-type", "application/json")
     // A lost connection or a server error may still have applied the reply, so only an accepted reply or a
     // refused request (4xx: nothing was applied) is reported.
     const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       const response = await Promise.race([
-        fetcher(new Request(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), signal: controller.signal })),
+        fetcher(new Request(url, { method: "POST", headers, redirect: "error", body: JSON.stringify(body), signal: controller.signal })),
         new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error("BMN reply timed out")) }, 10000) })
       ])
       if (response.ok) reports.push(\`\${answer.requestRef}=ok\`)

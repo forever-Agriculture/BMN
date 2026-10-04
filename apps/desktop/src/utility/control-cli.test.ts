@@ -3083,7 +3083,7 @@ describe('OpenCode hooks', () => {
       }
       return result
     }
-    const create = runInNewContext(`${javascript}; BMNPlugin`, { AbortController, clearTimeout, process: { env } })
+    const create = runInNewContext(`${javascript}; BMNPlugin`, { Headers, AbortController, clearTimeout, process: { env } })
     const plugin = await create({ $: shell })
     const root = { type: 'session.created', properties: { sessionID: OPENCODE_SESSION } }
     await plugin.event({ event: root })
@@ -3127,7 +3127,7 @@ describe('OpenCode hooks', () => {
       posts.push({ url: request.url, body: JSON.parse(await request.text()) })
       return { ok: status < 300, status }
     }
-    const create = runInNewContext(`${javascript}; BMNPlugin`, { AbortController, clearTimeout,
+    const create = runInNewContext(`${javascript}; BMNPlugin`, { Headers, AbortController, clearTimeout,
       process: { env: { BMN_CONTROL_SOCKET: '/fixture/socket' } }, URL, Request, setTimeout, Buffer
     })
     const plugin = await create({
@@ -3195,7 +3195,7 @@ describe('OpenCode hooks', () => {
       }
       return result
     }
-    const create = runInNewContext(`${javascript}; BMNPlugin`, { AbortController, clearTimeout, process: { env: { BMN_CONTROL_SOCKET: '/fixture/socket' } } })
+    const create = runInNewContext(`${javascript}; BMNPlugin`, { Headers, AbortController, clearTimeout, process: { env: { BMN_CONTROL_SOCKET: '/fixture/socket' } } })
     const plugin = await create({ $: shell })
     const started = Date.now()
     const safety = setTimeout(() => {
