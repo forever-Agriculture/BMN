@@ -248,8 +248,23 @@ def run_session(directory, runtime_directory_fd, entry):
     os.close(parent_handle)
     handle = os.pidfd_open(init)
     def stop(_signal, _frame):
-        signal.pidfd_send_signal(handle, signal.SIGKILL)
+        try:
+            signal.pidfd_send_signal(handle, signal.SIGKILL)
+        except ProcessLookupError:
+            pass  # The retained init may have exited naturally at the same time.
     signal.signal(signal.SIGTERM, stop)
+    # Host disconnect must end the namespace even when the payload never reads
+    # stdin. Observe hangup without consuming any of the terminal's input bytes.
+    events = select.poll()
+    events.register(handle, select.POLLIN)
+    events.register(0, select.POLLHUP | select.POLLERR)
+    while True:
+        ready = dict(events.poll())
+        if handle in ready:
+            break
+        if ready.get(0, 0) & (select.POLLHUP | select.POLLERR | select.POLLNVAL):
+            stop(None, None)
+            break
     _, status = os.waitpid(init, 0)
     os.close(handle)
     os._exit(os.waitstatus_to_exitcode(status) & 255)

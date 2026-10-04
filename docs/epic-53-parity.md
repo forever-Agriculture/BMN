@@ -436,9 +436,12 @@ can ignore stdin entirely. That fifth lifecycle failed against the original
 helper: retained descendants survived after host EOF. The controller now polls
 stdin hangup and its retained init pidfd without reading terminal input; the same
 five-mode local fixture passes, with all three processes terminated and unrelated
-sentinels alive. Callback failure still exits 70. The receipt gate requires the
-explicit nonreading-EOF mode; 13 parser/receipt checks pass. A focused source review
-of this new repair is pending. Actual WSL/ConPTY hangup delivery remains UNVERIFIED.
+sentinels alive. Callback failure still exits 70. The focused Luna source review
+found no material defect in the repair. A sixth mode repeats the original failure
+and repaired cleanup through a dedicated raw Linux PTY, with byte-identical Sixel
+output. The receipt gate requires both nonreading-EOF modes; 14 parser/receipt
+checks pass. This measures terminal bytes, not xterm rendering or a WSL PTY relay.
+Actual WSL/ConPTY hangup delivery remains UNVERIFIED.
 
 This is a helper prototype with a trusted measurement callback, not a production
 launch protocol. Native WSL measurement is routed through the existing freshly

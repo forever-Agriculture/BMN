@@ -11,6 +11,7 @@ import json
 import mmap
 import os
 import pathlib
+import pty
 import select
 import signal
 import shutil
@@ -20,6 +21,7 @@ import sys
 import tempfile
 import threading
 import time
+import tty
 
 import bmn_root_session
 LIBC = bmn_root_session.LIBC
@@ -29,6 +31,7 @@ os.chmod(ROOT, 0o700)
 OUTSIDE_DIRECTORY = pathlib.Path('/tmp/outside-watch')
 OUTSIDE_ABSTRACT = '\0bmn-synthetic-outside-broker'
 OUTSIDE_PORT = None
+SIXEL_FRAME = b'\x1bP9;1;0q"1;1;1;6#1;2;100;0;0#1~\x1b\\'
 
 
 def process_row(role):
@@ -113,6 +116,9 @@ def session_program(nonce, role):
     row = process_row(role)
     if role == 'root':
         row['outsideBrokersDenied'] = denied_brokers
+        if nonce == 'nonreading-tty-eof':
+            assert os.isatty(0) and os.isatty(1), 'Dedicated terminal FD positive control required'
+            os.write(1, SIXEL_FRAME)
     os.write(1, (json.dumps(row) + '\n').encode())
     if role != 'grandchild':
         pid = os.fork()
@@ -120,7 +126,7 @@ def session_program(nonce, role):
             os.setsid()
             session_program(nonce, 'child' if role == 'root' else 'grandchild')
             os._exit(0)
-    if role == 'root':
+    if role == 'root' and not nonce.startswith('nonreading-'):
         os.read(0, 1)
     else:
         time.sleep(60)
@@ -304,9 +310,11 @@ def measure_callback_failure(runtime_fd):
     directory = ROOT / 'callback-failure'
     directory.mkdir()
     read_output, write_output = os.pipe()
+    read_input, write_input = os.pipe()
     supervisor = os.fork()
     if supervisor == 0:
         os.close(read_output); os.dup2(write_output, 1)
+        os.dup2(read_input, 0)
         def failure(_uid):
             raise RuntimeError('Synthetic session callback failure')
         try:
@@ -316,6 +324,7 @@ def measure_callback_failure(runtime_fd):
             os._exit(90)
         os._exit(91)
     os.close(write_output)
+    os.close(read_input)
     handle = os.pidfd_open(supervisor)
     try:
         assert select.select([handle], [], [], 8)[0], 'Failing session did not exit'
@@ -327,7 +336,7 @@ def measure_callback_failure(runtime_fd):
     finally:
         if supervisor is not None:
             signal.pidfd_send_signal(handle, signal.SIGKILL); os.waitpid(supervisor, 0)
-        os.close(handle); os.close(read_output)
+        os.close(handle); os.close(read_output); os.close(write_input)
 
 
 def main():
@@ -369,11 +378,16 @@ def main():
     actor_handles = [os.pidfd_open(row['pid']) for row in actor_records]
     receipts = []
     try:
-      for mode in ['natural', 'stop', 'supervisor-crash', 'stdin-eof']:
+      for mode in ['natural', 'stop', 'supervisor-crash', 'stdin-eof', 'nonreading-stdin-eof', 'nonreading-tty-eof']:
         directory = ROOT / mode
         directory.mkdir()
-        read_input, write_input = os.pipe()
-        read_output, write_output = os.pipe()
+        if mode == 'nonreading-tty-eof':
+            write_input, read_input = pty.openpty()
+            tty.setraw(read_input)
+            read_output, write_output = os.dup(write_input), os.dup(read_input)
+        else:
+            read_input, write_input = os.pipe()
+            read_output, write_output = os.pipe()
         supervisor = os.fork()
         if supervisor == 0:
             os.dup2(read_input, 0); os.dup2(write_output, 1)
@@ -394,6 +408,9 @@ def main():
                     if not data:
                         break
                     buffer += data
+            if mode == 'nonreading-tty-eof':
+                assert buffer.startswith(SIXEL_FRAME), 'Raw terminal must preserve exact Sixel bytes'
+                buffer = buffer[len(SIXEL_FRAME):]
             rows = [json.loads(line) for line in buffer.splitlines()]
             assert len(rows) == 3, (mode, buffer, os.waitid(os.P_PID, supervisor, os.WEXITED | os.WNOHANG | os.WNOWAIT))
             assert all(row['uid'] == SESSION_UID for row in rows)
@@ -411,6 +428,8 @@ def main():
                 os.kill(supervisor, signal.SIGKILL)
             else:
                 os.close(write_input); write_input = -1
+                if mode == 'nonreading-tty-eof':
+                    os.close(read_output); read_output = -1
             pending = list(held); deadline = time.monotonic() + 8
             while pending and time.monotonic() < deadline:
                 ready = select.select(pending, [], [], max(0, deadline-time.monotonic()))[0]
@@ -422,6 +441,7 @@ def main():
             assert len(list(OUTSIDE_DIRECTORY.glob('actor-*.json'))) == 4, 'Restricted request created outside actor'
             assert not select.select([broker_fd, *actor_handles], [], [], 0)[0], 'Unrelated outside sentinel terminated'
             receipts.append({'mode': mode, 'uid': SESSION_UID, 'retainedPidfds': len(held), 'allExited': True,
+                             'rawPtySixelBytesPreserved': mode == 'nonreading-tty-eof',
                              'peer': peer, 'outsideActorsCreated': 0, 'unrelatedSentinelsAlive': True,
                              'outsideBrokersDenied': next(row for row in rows if row['role'] == 'root')['outsideBrokersDenied']})
         finally:
@@ -433,7 +453,8 @@ def main():
                 os.close(fd)
             if write_input != -1:
                 os.close(write_input)
-            os.close(read_output)
+            if read_output != -1:
+                os.close(read_output)
     finally:
         for fd in [broker_fd, *actor_handles]:
             if not select.select([fd], [], [], 0)[0]: signal.pidfd_send_signal(fd, signal.SIGKILL)
@@ -452,7 +473,7 @@ def main():
                       'callbackFailure': callback_receipt,
                       'syslogSizeProbe': syslog_receipt,
                       'i386PositiveControl': True, 'i386AndX32Denied': True,
-                      'remaining': ['durable project import/export', 'owned provider egress', 'scoped bmn relay',
+                      'remaining': ['durable project import/export', 'mediated general egress', 'scoped bmn relay',
                                     'PTY/terminfo', 'actual WSL/native-host lifecycle']}), flush=True)
 
 

@@ -55,7 +55,9 @@ export function measureRootRestrictedGuestProfile({ distribution, guest }) {
     assert.equal(receipt.outsideBrokerPositiveControls, 4, 'Every outside broker must be ready and capable of launching')
     assert.equal(receipt.i386PositiveControl, true)
     assert.equal(receipt.i386AndX32Denied, true)
-    assert.equal(receipt.lifecycle.length, 4)
+    assert.equal(receipt.lifecycle.length, 6)
+    assert.ok(receipt.lifecycle.some(row => row.mode === 'nonreading-stdin-eof'), 'Host EOF must clean up a payload that never reads stdin')
+    assert.ok(receipt.lifecycle.some(row => row.mode === 'nonreading-tty-eof' && row.rawPtySixelBytesPreserved === true), 'Dedicated terminal hangup and raw bytes must be measured')
     assert.ok(receipt.lifecycle.every(row => row.retainedPidfds === 3 && row.allExited && row.peer.procAliasDenied &&
       row.outsideActorsCreated === 0 && row.unrelatedSentinelsAlive && row.outsideBrokersDenied.length === 3))
     assert.equal(receipt.syntheticFilesRemoved, true)

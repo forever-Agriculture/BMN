@@ -20,7 +20,9 @@ const routes = [
   ['ordinary profile', measureRestrictedGuestProfile, () => ({ socketBroker: [{ survivedCallerExit: true }, { deniedErrno: 1 }],
     lifecycle: rows(3), profileComplete: false })],
   ['root profile', measureRootRestrictedGuestProfile, () => ({ outsideBrokerPositiveControls: 4,
-    i386PositiveControl: true, i386AndX32Denied: true, lifecycle: rows(4), syntheticFilesRemoved: true,
+    i386PositiveControl: true, i386AndX32Denied: true, lifecycle: [...rows(4),
+      { ...rows(1)[0], mode: 'nonreading-stdin-eof' },
+      { ...rows(1)[0], mode: 'nonreading-tty-eof', rawPtySixelBytesPreserved: true }], syntheticFilesRemoved: true,
     callbackFailure: { exit: 70, callerCleanupUnwound: false }, uidLeases: { workerThreadFsUidNotReused: true }, syslogSizeProbe: { contentsRead: false, filteredPolicyErrno: 13 }, profileComplete: false })]
 ]
 describe.each(routes)('%s receipt gate', (_name, measure, valid) => {
@@ -58,4 +60,11 @@ describe.each(routes)('%s receipt gate', (_name, measure, valid) => {
     expect(measure({ distribution, uid: 1000, guest: () => ({ exit: 0, stdout: JSON.stringify(receipt) }) }))
       .toMatchObject(receipt)
   })
+})
+
+it.each([4, 5])('refuses a root receipt with only %i lifecycle measurements', count => {
+  const receipt = routes[1][2]()
+  receipt.lifecycle = receipt.lifecycle.slice(0, count)
+  expect(measureRootRestrictedGuestProfile({ distribution, guest: () => ({ exit: 0, stdout: JSON.stringify(receipt) }) }))
+    .toMatchObject({ result: 'FAIL', receiptValidationFailed: true, profileComplete: false })
 })
