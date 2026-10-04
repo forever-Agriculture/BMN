@@ -15,6 +15,14 @@
 using Microsoft::WRL::ComPtr;
 static const wchar_t* appId = L"dev.bmn.desktop";
 static const wchar_t* verificationFailure = L"Windows API";
+static HRESULT longPath(const wchar_t* source, wchar_t* destination, DWORD capacity) {
+  const DWORD length = GetLongPathNameW(source, destination, capacity);
+  if (!length) {
+    const DWORD error = GetLastError();
+    return error ? HRESULT_FROM_WIN32(error) : E_FAIL;
+  }
+  return length >= capacity ? HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER) : S_OK;
+}
 static HRESULT writeShortcut(const wchar_t* target, const wchar_t* directory, const wchar_t* path) {
   ComPtr<IShellLinkW> link;
   HRESULT status = CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link));
@@ -42,7 +50,15 @@ static HRESULT verifyShortcut(const wchar_t* target, const wchar_t* path) {
   if (FAILED(status = link.As(&file)) || FAILED(status = file->Load(path, STGM_READ))) return status;
   wchar_t actual[32768];
   if (FAILED(status = link->GetPath(actual, 32768, nullptr, SLGP_RAWPATH))) return status;
-  if (CompareStringOrdinal(actual, -1, target, -1, TRUE) != CSTR_EQUAL) {
+  // Shell links expand existing 8.3 ancestors on readback. Compare both long
+  // names, preserving path identity rather than accepting another hardlink.
+  wchar_t actualLong[32768], targetLong[32768];
+  if (FAILED(status = longPath(actual, actualLong, 32768)) ||
+      FAILED(status = longPath(target, targetLong, 32768))) {
+    verificationFailure = L"target path normalization failed";
+    return status;
+  }
+  if (CompareStringOrdinal(actualLong, -1, targetLong, -1, TRUE) != CSTR_EQUAL) {
     verificationFailure = L"target path mismatch";
     return E_FAIL;
   }

@@ -171,6 +171,24 @@ cover eventual session records, hung evaluation and surfaced errors. The same
 asynchronous wait pattern is repaired in Epic 53 startup and lifecycle fixtures.
 Native renderer graphics acceptance is still UNVERIFIED.
 
+[Shortcut discriminator 37226566813](https://github.com/forever-Agriculture/BMN/actions/runs/37226566813)
+found the correct AppID and empty arguments, but the Shell expanded `RUNNER~1`
+to `runneradmin` while the verifier compared the literal input. The repair compares
+both targets using [GetLongPathNameW](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getlongpathnamew),
+fails closed on conversion errors, and preserves exact path and AppID ownership
+checks. The native gate adds a distinct-hardlink-path refusal alongside the
+foreign, missing/conflicting AppID, malformed and directory refusals. Compile and
+repaired native acceptance are pending.
+
+[Inventory 37225334978](https://github.com/forever-Agriculture/BMN/actions/runs/37225334978)
+passed Linux's 3,034 tests with 36 skips; Windows recorded 3,029 passed, 29 failed,
+12 skipped. Source-update cases still exceeded their five-second fixture deadlines
+(observed failed-test durations 6.4–20.6 seconds). One existing durable queue case
+will run separately with a diagnostic deadline and exact assertion-count check;
+inventory deadlines and product timeouts remain unchanged pending that measurement.
+The reader fixture now preserves its native replacement error directly in the
+unit report instead of replacing it with an opaque outer assertion.
+
 [Initial run 37057811322](https://github.com/forever-Agriculture/BMN/actions/runs/37057811322)
 tested `7bfa647` on Ubuntu 24.04 x64 and Windows Server 2025 Datacenter x64,
 with Node 24.14.0, pnpm 12.3.4 and Electron 44.3.0. Linux passed the full

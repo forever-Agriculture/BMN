@@ -158,7 +158,8 @@ describe('readFileReference', () => {
         } catch (error) { replacementFailure = error; throw error }
       }
     }))
-    expect(replacementFailure, 'The replacement fixture itself must execute before reader behavior is asserted').toBeUndefined()
+    // Preserve the native fixture's actual error in the unit JSON receipt.
+    if (replacementFailure) throw replacementFailure
     expect(replaced).toMatchObject({ reason: 'changed', canonicalPath: path })
 
     // A folder on the path becomes a symlink to another tree holding the same name.

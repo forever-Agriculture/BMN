@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -72,16 +72,22 @@ try {
     $folder=(New-Object -ComObject Shell.Application).NameSpace($env:BMN_SHORTCUT_DIRECTORY);
     $item=$folder.ParseName([IO.Path]::GetFileName($env:BMN_SHORTCUT_FIXTURE));
     if($null -eq $item){throw 'Shortcut shell item missing'};
-    @{target=$link.TargetPath; directory=$link.WorkingDirectory; arguments=$link.Arguments;
+    @{target=$link.TargetPath; directory=([IO.DirectoryInfo]::new($link.WorkingDirectory)).FullName; arguments=$link.Arguments;
+      expectedTarget=([IO.FileInfo]::new($env:BMN_SHORTCUT_TARGET)).FullName;
+      expectedDirectory=([IO.DirectoryInfo]::new($env:BMN_SHORTCUT_DIRECTORY)).FullName;
       appId=$item.ExtendedProperty('System.AppUserModel.ID')} | ConvertTo-Json -Compress;`, supported))
-  assert.equal(identity.target.toLowerCase(), target.toLowerCase())
-  assert.equal(identity.directory.toLowerCase(), root.toLowerCase())
+  assert.equal(identity.target.toLowerCase(), identity.expectedTarget.toLowerCase())
+  assert.equal(identity.directory.toLowerCase(), identity.expectedDirectory.toLowerCase())
   assert.equal(identity.arguments, '')
   assert.equal(identity.appId, 'dev.bmn.desktop')
   checks.push({ name: 'supported creation and refresh retain target, directory, empty arguments and AppID', status: 'PASS' })
   const foreign = join(root, 'foreign.lnk'), other = join(root, 'Other.exe')
   writeFileSync(other, 'synthetic foreign target')
   succeeds(foreign, other); refuses('foreign target is refused unchanged', foreign)
+  const hardlinkTarget = join(root, 'Other-name.exe'), hardlinkShortcut = join(root, 'hardlink-target.lnk')
+  linkSync(target, hardlinkTarget)
+  succeeds(hardlinkShortcut, hardlinkTarget)
+  refuses('another hardlink pathname is refused unchanged', hardlinkShortcut)
   const conflict = join(root, 'conflicting-id.lnk')
   const bytes = readFileSync(supported), needle = Buffer.from('dev.bmn.desktop', 'utf16le')
   const offset = bytes.indexOf(needle)
