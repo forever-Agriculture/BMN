@@ -80,7 +80,8 @@ def measure_case():
 
 
 def candidate_source(original, nested, pivot):
-    source=original
+    # Git's native Windows checkout may supply CRLF through the JSON packet.
+    source=original.replace('\r\n','\n')
     if nested:
         old='    for number in blocked:\n'
         assert source.count(old)==1

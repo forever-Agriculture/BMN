@@ -94,6 +94,27 @@ as this port's acceptance evidence.
 
 ## Native CI evidence
 
+[Native packaging run 37215902456](https://github.com/forever-Agriculture/BMN/actions/runs/37215902456)
+verified the repaired hook paths and generated-output lint boundary, unpacked and
+offline NSIS packaging, and packaged startup. Actual installed update/uninstall
+transactions remain UNVERIFIED.
+
+[PowerShell diagnostic 37218918822](https://github.com/forever-Agriculture/BMN/actions/runs/37218918822)
+isolated a `New-Object` constructor hang under the synthetic lease worker's minimal
+environment: direct .NET construction with the same input-encoding setter and
+stdin completed in 205 ms. Commit `3ededb0` replaces typed constructors at 48
+sites. [Follow-up 37222257505](https://github.com/forever-Agriculture/BMN/actions/runs/37222257505)
+still timed out during complete private-directory provisioning; the constructor
+control does not establish full lease/ACL acceptance. Further diagnosis remains open.
+
+[WSL measurement 37222257506](https://github.com/forever-Agriculture/BMN/actions/runs/37222257506)
+retained all six root-helper cleanup and broker/UID/ABI checks. Its new nested
+namespace experiment failed a source-match assertion before reaching the kernel:
+the Windows checkout supplied CRLF. The fixture repair has an original-RED/current-
+GREEN regression that constructs all four candidates without running namespaces.
+Native nested sandbox acceptance remains UNVERIFIED; the production helper policy
+is unchanged, and the disposable distribution was removed.
+
 [Initial run 37057811322](https://github.com/forever-Agriculture/BMN/actions/runs/37057811322)
 tested `7bfa647` on Ubuntu 24.04 x64 and Windows Server 2025 Datacenter x64,
 with Node 24.14.0, pnpm 12.3.4 and Electron 44.3.0. Linux passed the full

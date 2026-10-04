@@ -19,6 +19,15 @@ const env = Object.fromEntries(['SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'ComSpec'
   const value = windowsEnvironmentValue(process.env, key)
   return value ? [[key, value]] : []
 }))
+const standardEnvironment = Object.fromEntries([
+  'SystemDrive', 'ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432', 'ProgramData',
+  'ALLUSERSPROFILE', 'PATHEXT', 'PROCESSOR_ARCHITECTURE', 'NUMBER_OF_PROCESSORS',
+  'OS', 'USERNAME', 'COMPUTERNAME', 'PUBLIC', 'CommonProgramFiles',
+  'CommonProgramFiles(x86)', 'CommonProgramW6432'
+].flatMap(key => {
+  const value = windowsEnvironmentValue(process.env, key)
+  return value ? [[key, value]] : []
+}))
 env.ELECTRON_RUN_AS_NODE = '1'
 env.HOME = root; env.USERPROFILE = root
 env.APPDATA = join(root, 'config'); env.LOCALAPPDATA = join(root, 'data')
@@ -79,7 +88,7 @@ else{const nativeProcessTrace=[];let lastNativeCall;
  const receipt={status:'FAIL',name:error.name,message:error.message,nativeProcessTrace};
  try{const diagnostic=await import(${JSON.stringify(new URL('./windows-powershell-boundary.mjs', import.meta.url).href)});
   receipt.powerShellBoundary=diagnostic.measurePowerShellBoundary({env:process.env,spawnSync:originalSpawnSync,
-   referenceCall:lastNativeCall,githubActions:true})}
+   referenceCall:lastNativeCall,standardEnvironment:${JSON.stringify(standardEnvironment)},githubActions:true})}
  catch(diagnosticError){receipt.diagnosticError={name:diagnosticError.name,message:diagnosticError.message}}
  fs.writeFileSync(output,JSON.stringify(receipt));process.exitCode=1})}
 `)
@@ -88,7 +97,7 @@ else{const nativeProcessTrace=[];let lastNativeCall;
   child.stdout.resume()
   const exit = new Promise((resolve, reject) => { child.once('exit', resolve); child.once('error', reject) })
   // Existing provisioning stays bounded at 15s; a failed gate runs at most
-  // three 8s controls and one captured 15s helper replay before exiting FAIL.
+  // twelve 3.5s Core/Utility controls and one 15s marked helper replay.
   const timer = setTimeout(() => child.kill('SIGKILL'), 90000)
   const code = await exit.finally(() => clearTimeout(timer))
   const receipt = existsSync(output) ? JSON.parse(readFileSync(output, 'utf8')) : { status: 'FAIL', message: stderr.slice(-4000) }

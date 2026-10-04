@@ -1,10 +1,32 @@
 // Shared receipt logic under simulated platform guards; no WSL/root process runs.
 import { execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { measureRestrictedGuestProfile, measureRootRestrictedGuestProfile, measureNestedGuestNamespaces } from '../test/wsl-restricted-profile-spike.mjs'
 
 const platform = Object.getOwnPropertyDescriptor(process, 'platform')
 const distribution = 'BMN-Epic53-Systemd-00000000-0000-0000-0000-000000000000'
+it('builds all kernel candidates from a Windows CRLF checkout without executing them', () => {
+  const fixture = readFileSync(new URL('../test/fixtures/wsl-nested-capability.py', import.meta.url), 'utf8')
+  const helper = readFileSync(new URL('../lib/wsl-root-session.py', import.meta.url), 'utf8').replace(/\r?\n/g, '\r\n')
+  const script = `import ast,json,sys
+packet=json.load(sys.stdin)
+tree=ast.parse(packet['fixture'])
+function=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='candidate_source')
+scope={};exec(compile(ast.Module(body=[function],type_ignores=[]),'candidate-source-only','exec'),scope)
+for nested,pivot in [(False,False),(True,False),(False,True),(True,True)]:
+ source=scope['candidate_source'](packet['helper'],nested,pivot)
+ ast.parse(source)
+ assert ('os.chroot(directory)' not in source)==pivot
+ assert ('blocked = [n for n in blocked if' in source)==nested
+print('FOUR_CANDIDATES_OK')`
+  Object.defineProperty(process, 'platform', platform)
+  try {
+    expect(execFileSync(platform.value === 'win32' ? 'python' : 'python3', ['-c', script], {
+      input: JSON.stringify({ fixture, helper }), encoding: 'utf8', timeout: 5000
+    }).trim()).toBe('FOUR_CANDIDATES_OK')
+  } finally { Object.defineProperty(process, 'platform', { ...platform, value: 'win32' }) }
+})
 beforeEach(() => {
   Object.defineProperty(process, 'platform', { ...platform, value: 'win32' })
   vi.stubEnv('GITHUB_ACTIONS', 'true')
