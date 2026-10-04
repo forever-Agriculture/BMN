@@ -5,6 +5,9 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { queueWindowsSourceUpdate, readWindowsSourceUpdate } from '../lib/windows-source-update.mjs'
 import { resumeWindowsSourceUpdate } from '../lib/windows-source-resume.mjs'
 
+// Native durable writes invoke PowerShell; measured transactions exceeded 5s.
+const transactionTimeout = process.platform === 'win32' ? 30000 : 5000
+
 const roots = [], commit = 'a'.repeat(40)
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 function fixture() {
@@ -35,7 +38,7 @@ it('resumes through a separate request lease and verifies source again inside ac
   const bytes = readFileSync(f.path)
   await resumeWindowsSourceUpdate(f.root, f.capabilities)
   expect(readFileSync(f.path)).toEqual(bytes); expect(f.capabilities.installPayload).toHaveBeenCalledOnce()
-})
+}, transactionTimeout)
 it('rejects a runtime mismatch before data activation and leaves failed work for explicit retry', async () => {
   const f = fixture(); f.capabilities.runtimeVersion = '45.0.0'
   const result = await resumeWindowsSourceUpdate(f.root, f.capabilities)
@@ -43,19 +46,19 @@ it('rejects a runtime mismatch before data activation and leaves failed work for
   await resumeWindowsSourceUpdate(f.root, f.capabilities)
   expect(f.capabilities.buildSnapshot).toHaveBeenCalledOnce()
   expect(queueWindowsSourceUpdate(f.path, f.identity).phase).toBe('queued')
-})
+}, transactionTimeout)
 it('does not block opening the selected app because a failure notice is unavailable', async () => {
   const f = fixture(); f.capabilities.installPayload.mockRejectedValue(new Error('synthetic metadata failure'))
   f.capabilities.notify.mockRejectedValue(new Error('synthetic unavailable desktop'))
   expect((await resumeWindowsSourceUpdate(f.root, f.capabilities)).phase).toBe('failed')
   expect(readWindowsSourceUpdate(f.path).phase).toBe('failed'); expect(f.close).toHaveBeenCalledOnce()
-})
+}, transactionTimeout)
 it('does not call a completed installation failed when its completion notice is unavailable', async () => {
   const f = fixture(); f.capabilities.notify.mockRejectedValue(new Error('synthetic unavailable desktop'))
   const result = await resumeWindowsSourceUpdate(f.root, f.capabilities)
   expect(result.phase).toBe('complete'); expect(result.notice).toBe('unavailable')
   expect(f.capabilities.notify).toHaveBeenCalledOnce(); expect(f.capabilities.installPayload).toHaveBeenCalledOnce()
-})
+}, transactionTimeout)
 it('does not load native code or provision anything when no update is queued', async () => {
   const f = fixture(); rmSync(f.path)
   expect(await resumeWindowsSourceUpdate(f.root, f.capabilities)).toBeNull()

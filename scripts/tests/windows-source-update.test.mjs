@@ -4,6 +4,9 @@ import { tmpdir } from 'node:os'
 import { afterEach, expect, it, vi } from 'vitest'
 import { queueWindowsSourceUpdate, readWindowsSourceUpdate, runWindowsSourceUpdate } from '../lib/windows-source-update.mjs'
 
+// Native durable writes invoke PowerShell; measured transactions exceeded 5s.
+const transactionTimeout = process.platform === 'win32' ? 30000 : 5000
+
 const roots = [], commit = 'a'.repeat(40)
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 function fixture() {
@@ -23,7 +26,7 @@ it('deduplicates durable requests and resumes exactly their intended clean commi
   expect(phases).toEqual(['waiting', 'building', 'validating', 'activating', 'complete'])
   await runWindowsSourceUpdate(f.path, f.callbacks)
   expect(f.callbacks.activate).toHaveBeenCalledOnce(); expect(f.callbacks.notify).toHaveBeenCalledOnce()
-})
+}, transactionTimeout)
 it.each(['branch', 'status', 'originHead', 'head'])('refuses %s drift before build or activation', async field => {
   const f = fixture(); queueWindowsSourceUpdate(f.path, f.options)
   f.sourceState[field] = field === 'status' ? ' M synthetic-file' : 'b'.repeat(40)
@@ -36,7 +39,7 @@ it('refuses drift during a build without touching the selected installation', as
   f.callbacks.buildSnapshot.mockImplementation(async () => { f.sourceState.status = ' M changed'; return { commit } })
   await expect(runWindowsSourceUpdate(f.path, f.callbacks)).rejects.toThrow('not clean')
   expect(f.callbacks.activate).not.toHaveBeenCalled()
-})
+}, transactionTimeout)
 it('retains failed work durably and retries it without replacing another request', async () => {
   const f = fixture(); queueWindowsSourceUpdate(f.path, f.options)
   f.callbacks.validate.mockRejectedValueOnce(new Error('synthetic smoke failure'))
@@ -46,7 +49,7 @@ it('retains failed work durably and retries it without replacing another request
   expect(readFileSync(f.path)).toEqual(before)
   await runWindowsSourceUpdate(f.path, f.callbacks)
   expect(readWindowsSourceUpdate(f.path).phase).toBe('complete'); expect(f.callbacks.activate).toHaveBeenCalledOnce()
-})
+}, transactionTimeout)
 it('preserves completed selection if a completion notice cannot display', async () => {
   const f = fixture(); queueWindowsSourceUpdate(f.path, f.options)
   f.callbacks.notify.mockRejectedValueOnce(new Error('no notification UI'))
@@ -54,4 +57,4 @@ it('preserves completed selection if a completion notice cannot display', async 
   expect(readWindowsSourceUpdate(f.path).phase).toBe('complete')
   await runWindowsSourceUpdate(f.path, f.callbacks)
   expect(f.callbacks.activate).toHaveBeenCalledOnce()
-})
+}, transactionTimeout)

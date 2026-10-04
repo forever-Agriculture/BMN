@@ -2754,7 +2754,7 @@ describe('bmn hooks install', () => {
 
     const install = await runHooks(['install', '--yes', 'claude', '--file', join(root, 'alias', 'settings.json')])
 
-    expect(install.code).toBe(0)
+    expect(install.code, install.stderr).toBe(0)
     expect(await readFile(join(root, 'target.json'), 'utf8')).toBe('SENTINEL: nothing to do with any harness\n')
     const written = JSON.parse(await readFile(join(root, 'real', 'target.json'), 'utf8'))
     expect(written.real).toBe('target')
@@ -3329,9 +3329,10 @@ describe('OpenCode hooks', () => {
     try {
       const proc = await procTree(fixture.root, OPENCODE_FOREGROUND)
       const env = { ...fixture.sessionEnv, BMN_CONTROL_SOCKET: socketPath, BMN_PROC_ROOT: proc }
-      expect(await runCli(['hook', 'opencode'], { env, input: JSON.stringify({
+      const observed = await runCli(['hook', 'opencode'], { env, input: JSON.stringify({
         hook_event_name: 'session.created', sessionID: malformed, info: { id: malformed }
-      }) })).toEqual(QUIET)
+      }) })
+      expect(observed, JSON.stringify({ methods })).toEqual(QUIET)
       expect(methods).toEqual(['auth', 'hook.observe'])
 
       methods.length = 0

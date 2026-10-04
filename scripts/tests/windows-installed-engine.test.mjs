@@ -11,6 +11,9 @@ import { resumeWindowsSourceUpdate } from '../lib/windows-source-resume.mjs'
 
 const delegateWindowsInstalledEngine = (entry, argv, options = {}) => delegateInstalledEngine(entry, argv,
   { native: { acquireInstallLease: () => ({ close() {} }) }, ...options })
+// Native durable writes invoke PowerShell; measured transactions exceeded 5s.
+const transactionTimeout = process.platform === 'win32' ? 30000 : 5000
+
 const roots = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 async function fixture() {
@@ -81,7 +84,7 @@ it('uses the delegated runtime identity for a source update after an offline run
     expect(exe).toBe(join(f.target, 'BMN-worker.exe')); return child
   } })
   expect(result.exitCode).toBe(0); expect(installPayload).toHaveBeenCalledOnce()
-})
+}, transactionTimeout)
 
 it('requires the worker image even for worker-shaped argv and canonicalizes short names', () => {
   const options = { platform: 'win32', canonicalExecutable: value => value }

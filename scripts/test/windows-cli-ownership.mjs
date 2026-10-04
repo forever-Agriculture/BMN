@@ -48,7 +48,21 @@ setInterval(()=>{if(role==='root'&&fs.existsSync(path.join(dir,'natural')))proce
     join(repo, 'apps/desktop/native/windows-cli/bmn-launcher.c'), `/Fe:${join(faults, 'bmn.exe')}`,
     `/Fo:${join(faults, 'launcher.obj')}`, '/link', '/SUBSYSTEM:CONSOLE'], { cwd: faults, env })
   writeFileSync(join(faults, 'bmn.runtime'), `${process.execPath}\r\n${fixture}\r\n`)
-  const controller = `$ErrorActionPreference='Stop';$config=ConvertFrom-Json ([Console]::In.ReadToEnd());
+  // Probe exactly the shipped decoding form before any controller creates files.
+  // Code units keep diagnostic output independent of PowerShell's stdout encoding.
+  const utf8Input = '[Console]::InputEncoding=[Text.UTF8Encoding]::new($false);'
+  const utility = "$ErrorActionPreference='Stop';Import-Module ([IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1'));$PSModuleAutoLoadingPreference='None';"
+  const rootCodeUnits = Array.from({ length: root.length }, (_, index) => root.charCodeAt(index))
+  const configInput = values => JSON.stringify({ root, rootCodeUnits, ...values })
+  const decoded = prefix => JSON.parse(run(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(prefix + utility + `$config=ConvertFrom-Json ([Console]::In.ReadToEnd());[Console]::Out.Write((ConvertTo-Json -Compress @{rootCodeUnits=@($config.root.ToCharArray()|ForEach-Object{[int]$_});launcherExists=[IO.File]::Exists([IO.Path]::Combine($config.root,'original','bmn.exe'));encoding=[Console]::InputEncoding.WebName}))`, 'utf16le').toString('base64')], { input: configInput({}) }))
+  const originalInput = decoded(''), fixedInput = decoded(utf8Input)
+  result.checks.push({ name: 'Unicode stdin decoding original RED/fixed GREEN', original: originalInput, fixed: fixedInput })
+  assert.notDeepEqual(originalInput.rootCodeUnits, rootCodeUnits, 'Original decoding hypothesis must reproduce before proceeding')
+  assert.equal(originalInput.launcherExists, false)
+  assert.deepEqual(fixedInput.rootCodeUnits, rootCodeUnits)
+  assert.equal(fixedInput.launcherExists, true)
+  const readConfig = utf8Input + utility + `$config=ConvertFrom-Json ([Console]::In.ReadToEnd());if([string]::Join(',',([int[]]@($config.root.ToCharArray()|ForEach-Object{[int]$_}))) -cne [string]::Join(',',([int[]]$config.rootCodeUnits))){throw 'Fixture root Unicode decoding mismatch'};`
+  const controller = readConfig + `
 Add-Type @'
 using System;using System.Runtime.InteropServices;
 public static class OwnedCliFixture {
@@ -64,9 +78,10 @@ $rows=@();
 foreach($version in @('original','fixed')) {foreach($mode in @('natural','terminate')) {
  $dir=Join-Path $config.root ($version+'-'+$mode);$null=[IO.Directory]::CreateDirectory($dir);$held=@();$launcher=$null;$sentinel=$null;
  try {
-  $start=New-Object Diagnostics.ProcessStartInfo;$start.UseShellExecute=$false;$start.CreateNoWindow=$true;
+  $start=[Diagnostics.ProcessStartInfo]::new();$start.UseShellExecute=$false;$start.CreateNoWindow=$true;
   $start.FileName=$config.node;$start.Arguments='-e "setInterval(()=>{},1000)"';$sentinel=[Diagnostics.Process]::Start($start);$null=$sentinel.Handle;
   $start.FileName=Join-Path (Join-Path $config.root $version) 'bmn.exe';$start.Arguments='';$start.EnvironmentVariables['BMN_FIXTURE_DIR']=$dir;
+  if(![IO.File]::Exists($start.FileName)){throw ('Fixture executable missing before Start: '+$start.FileName)};
   $launcher=[Diagnostics.Process]::Start($start);$null=$launcher.Handle;
   foreach($role in @('root','child','grandchild')) {
    $record=ReadReady (Join-Path $dir ($role+'.json')) $launcher;
@@ -88,9 +103,10 @@ foreach($version in @('original','fixed')) {foreach($mode in @('natural','termin
 foreach($boundary in @('created','resumed')) {
  $dir=Join-Path $config.root ('fault-'+$boundary);$null=[IO.Directory]::CreateDirectory($dir);$launcher=$null;$runtime=$null;
  try {
-  $start=New-Object Diagnostics.ProcessStartInfo;$start.UseShellExecute=$false;$start.CreateNoWindow=$true;
+  $start=[Diagnostics.ProcessStartInfo]::new();$start.UseShellExecute=$false;$start.CreateNoWindow=$true;
   $start.FileName=Join-Path $config.root 'faults/bmn.exe';$start.EnvironmentVariables['BMN_FIXTURE_DIR']=$dir;
   $start.EnvironmentVariables['BMN_CLI_TEST_BOUNDARY']=$boundary;$record=Join-Path $dir 'creation.pid';$start.EnvironmentVariables['BMN_CLI_TEST_RECORD']=$record;
+  if(![IO.File]::Exists($start.FileName)){throw ('Fixture executable missing before Start: '+$start.FileName)};
   $launcher=[Diagnostics.Process]::Start($start);$null=$launcher.Handle;
   $runtimePid=ReadReady $record $launcher;$runtime=[Diagnostics.Process]::GetProcessById($runtimePid);$null=$runtime.Handle;
   if(![OwnedCliFixture]::TerminateProcess($launcher.Handle,77)){throw 'Boundary launcher termination failed'};
@@ -101,7 +117,7 @@ foreach($boundary in @('created','resumed')) {
 $rows|ConvertTo-Json -Depth 5 -Compress;
 `
   const rows = JSON.parse(run(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(controller, 'utf16le').toString('base64')], {
-    input: JSON.stringify({ root, node: process.execPath })
+    input: configInput({ node: process.execPath })
   }))
   assert.equal(rows.length, 6)
   result.checks.push({ name: 'retained-handle cleanup baseline RED/fixed GREEN', rows })
@@ -113,9 +129,9 @@ $rows|ConvertTo-Json -Depth 5 -Compress;
   const sha256 = createHash('sha256').update(archive).digest('hex')
   assert.equal(sha256, 'cd852831bd094c2df2eb379eb98bed7a63db7f823a7caf277c732cdac33cbdb6')
   const zip = join(root, 'opencode.zip'), unpacked = join(root, 'opencode'); writeFileSync(zip, archive)
-  const expand = "$ErrorActionPreference='Stop';$c=ConvertFrom-Json ([Console]::In.ReadToEnd());Expand-Archive -LiteralPath $c.archive -DestinationPath $c.destination"
+  const expand = readConfig + "Import-Module ([IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Archive/Microsoft.PowerShell.Archive.psd1'));Expand-Archive -LiteralPath $config.archive -DestinationPath $config.destination"
   run(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(expand, 'utf16le').toString('base64')], {
-    input: JSON.stringify({ archive: zip, destination: unpacked })
+    input: configInput({ archive: zip, destination: unpacked })
   })
   const executable = readdirSync(unpacked, { recursive: true }).find(path => String(path).endsWith('opencode.exe'))
   assert.ok(executable); const bun = join(unpacked, executable)
@@ -201,7 +217,7 @@ $rows=@();
 foreach($mode in @('timeout','overflow','launcher-crash','stop')) {
  $dir=Join-Path $config.root ('combined-'+$mode);$null=[IO.Directory]::CreateDirectory($dir);$hostProcess=$null;$held=@();$launcher=$null;
  try {
-  $start=New-Object Diagnostics.ProcessStartInfo;$start.UseShellExecute=$false;$start.CreateNoWindow=$true;$start.FileName=$config.electron;
+  $start=[Diagnostics.ProcessStartInfo]::new();$start.UseShellExecute=$false;$start.CreateNoWindow=$true;$start.FileName=$config.electron;
   $start.Arguments='"'+$config.host+'" "'+$dir+'" '+$mode;$start.EnvironmentVariables['ELECTRON_RUN_AS_NODE']='1';
   $hostProcess=[Diagnostics.Process]::Start($start);$null=$hostProcess.Handle;
   foreach($role in @('bun','launcher','root','child','grandchild')) {
@@ -223,7 +239,7 @@ foreach($mode in @('timeout','overflow','launcher-crash','stop')) {
 $rows|ConvertTo-Json -Depth 5 -Compress;
 `
   const combined = JSON.parse(run(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(combinedController, 'utf16le').toString('base64')], {
-    input: JSON.stringify({ root, host: combinedHost, electron: requireApp('electron') })
+    input: configInput({ host: combinedHost, electron: requireApp('electron') })
   }))
   assert.equal(combined.length, 4)
   assert.ok(combined.every(row => row.retainedHandles === 5 && row.allExited && !row.watchdog))

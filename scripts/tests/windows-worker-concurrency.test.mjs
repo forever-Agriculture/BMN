@@ -57,14 +57,16 @@ it('completes two concurrent installed starts without waiting on the worker bloc
     expect(JSON.parse(readFileSync(join(payload, 'bmn-release.json'), 'utf8')).electronVersion).toBe('45.0.0')
   } }
   const runs = [delegateWindowsInstalledEngine(entry, [], options), delegateWindowsInstalledEngine(entry, [], options)]
+  const watchdog = new AbortController()
   try {
-    const result = await Promise.race([Promise.all(runs), delay(1200).then(() => { throw Error('Concurrent worker process-wait cycle') })])
+    const result = await Promise.race([Promise.all(runs), delay(process.platform === 'win32' ? 30000 : 1200, undefined, { signal: watchdog.signal }).then(() => { throw Error('Concurrent worker process-wait cycle') })])
     expect(result.every(row => row.exitCode === 0)).toBe(true); expect(activations).toBe(1)
   } finally {
+    watchdog.abort()
     // Release simulated blockers so even the original-defect run leaves no
     // pending work or fixture directories after recording its bounded failure.
     processes.clear(); await Promise.allSettled(runs)
     expect([...locks.values()].every(state => !state.shared && !state.exclusive)).toBe(true)
     rmSync(root, { recursive: true, force: true })
   }
-})
+}, process.platform === 'win32' ? 35000 : 5000)

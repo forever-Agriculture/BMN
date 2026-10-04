@@ -17,9 +17,9 @@ Epic 50/54 installed/provider acceptance remains separate and unfinished.
 | CLI, transport, caller/session authority — 53.4 | Implementation team | 178 server/498 CLI affected checks PASS on 629dc91 | Native bmn.exe startup/argv/stdin and restricted control pipe owner/cross-account denial PASS; hook/config acceptance remains open | UNVERIFIED |
 | Named distributions, bridge, path mapping, terminfo — 53.5 | Implementation team | Restricted prototype and separate-UID alias fence measured; full profile UNVERIFIED | Disposable WSL2 VM boot/cleanup PASS | Root-helper six cleanup modes and broker/UID/ABI controls PASS on WSL2; full capability profile and bridge unfinished |
 | Claude/Codex/OpenCode/Cursor hooks, history, usage, compaction, resume — 53.6 | Implementation team | Hook/config fixtures: 68 passed, one native-only skip; retained history/Companion: 204 passed, replacement and hardlink regressions original RED/current GREEN | Latest native failures remain open; revised ACL/home/history fixtures UNVERIFIED | UNVERIFIED |
-| Terminal images, clipboard, IME/AltGr, scaling, panes, themes, keyboard access — 53.7 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
+| Terminal images, clipboard, IME/AltGr, scaling, panes, themes, keyboard access — 53.7 | Implementation team | UNVERIFIED | Actual creation form, renderer Sixel image, resize and continued input PASS; complete input/clipboard/scaling/pane acceptance open | UNVERIFIED |
 | Microphone, local voice engine, cancellation, addressed paste — 53.8 | Implementation team | Portable speech/silence/transcription PASS | Portable/packaged engines and PE imports PASS; prior WAV ACL PASS, latest private-WAV inspector fails without OS cause (diagnostic pending); microphone/UI/other CPU UNVERIFIED | UNVERIFIED |
-| Notifications, attention, Telegram replies and delivery diagnostics — 53.9 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
+| Notifications, attention, Telegram replies and delivery diagnostics — 53.9 | Implementation team | UNVERIFIED | Shortcut seven ownership checks PASS; toast activation and complete reply matrix UNVERIFIED | UNVERIFIED |
 | Per-session development port discovery and navigation — 53.10 | Implementation team | 498 affected tests PASS, one skip; scanner timeout original RED/current GREEN | Owned-job TCP scanner implemented and focused-reviewed; owned Edge IPv4/IPv6 navigation gate prepared; MSVC/runtime/UI/browser UNVERIFIED | UNVERIFIED |
 | Per-user install, source updates, rollback, uninstall — 53.11 | Implementation team | Affected source tests/type/bundle PASS; Linux development startup PASS | Offline installer, versioned transaction, leases, snapshot, queue and uninstall implemented in source; native compiler/kernel/install acceptance UNVERIFIED | UNVERIFIED |
 | Full CI, required merge gates, contributor rules — 53.12 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
@@ -93,6 +93,37 @@ also require a separate sandbox audit; their prior sandbox claims are not adopte
 as this port's acceptance evidence.
 
 ## Native CI evidence
+
+The next fixture candidate assigns 30 seconds only to nine named Windows source
+transactions, retaining Linux's five-second budget; the concurrent-worker fixture
+has a 30-second Windows watchdog, cancelled after completion. The native CLI gate
+compares original and explicit UTF-8 stdin decoding by code units before writing,
+and refuses to proceed unless the original failure and corrected path both reproduce.
+The reader fixture uses the documented [NullString sentinel](https://learn.microsoft.com/en-us/dotnet/api/system.management.automation.language.nullstring?view=powershellsdk-7.4.0)
+for a CLR null backup pathname. One synthetic Telegram retry case uses a controlled
+clock so thirty intended milliseconds cannot exhaust two 100-millisecond retries.
+No product deadlines, cleanup requirements or retry limits are relaxed. Native
+results remain pending; the two unexplained hook cases retain diagnostic errors.
+
+
+[Native renderer run 37226566647](https://github.com/forever-Agriculture/BMN/actions/runs/37226566647)
+passed the actual session creation form, literal Arguments field, native shell and
+npm argv/cwd/env/TTY cases, labelled batch creation/editing, and a retained Sixel
+image through ConPTY to xterm. The image remained visible after resize and the
+terminal accepted subsequent input. The screenshots and `windows-launch.json`
+corroborate the receipt. Clipboard, IME/AltGr, scaling and multipane acceptance
+remain open; this does not close story 53.7.
+
+[Lease/shortcut/queue run 37228701415](https://github.com/forever-Agriculture/BMN/actions/runs/37228701415)
+retained all seven private lease checks and passed all seven native shortcut
+checks, including refusal of a different hardlink pathname. The existing durable
+source queue case passed all assertions with a diagnostic 30-second deadline:
+7.424 seconds inside the test, 8.242 seconds including process startup. Its normal
+five-second Windows fixture deadline is below that measured passing duration.
+The workflow then failed in the Unicode CLI fixture at `Process.Start`; CLI
+ownership/Bun acceptance remains open. Product timeouts and security checks are
+unchanged. The full inventory remains a failing gate.
+
 
 [Native packaging run 37215902456](https://github.com/forever-Agriculture/BMN/actions/runs/37215902456)
 verified the repaired hook paths and generated-output lint boundary, unpacked and

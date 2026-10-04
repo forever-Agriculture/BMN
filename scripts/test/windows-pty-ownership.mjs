@@ -169,5 +169,5 @@ $results | ConvertTo-Json -Depth 8 -Compress;
 await import('./windows-install-leases.mjs')
 await import('./windows-source-queue-timing.mjs')
 await import('./windows-install-shortcut.mjs')
-await import('./windows-cli-ownership.mjs')
 await import('./windows-session-ports.mjs')
+await import('./windows-cli-ownership.mjs')

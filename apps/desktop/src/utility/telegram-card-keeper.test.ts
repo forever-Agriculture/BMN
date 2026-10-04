@@ -573,18 +573,24 @@ describe('after a restart', () => {
   })
 
   it('keeps a card whose ending Telegram did not take unfinished, retries it and never answers again (Astra A7)', async () => {
+    // Thirty real 1ms sleeps can exhaust both 100ms retries on Windows.
+    // Advance the intended elapsed time rather than depending on timer resolution.
+    vi.useFakeTimers()
     const h = setup({ retryMs: [100, 100] })
-    await h.keeper.page(h.state.record!)
-    h.connector.failEdits = true
-    await h.keeper.tap(h.tap('tok-1'))
-    await settle()
-    expect(h.answers).toHaveLength(1)
-    expect(h.updates.map((update) => update.state)).not.toContain('final')
-    h.connector.failEdits = false
-    await vi.waitFor(() => expect(h.updates.map((update) => update.state)).toContain('final'))
-    expect(h.connector.lastEdit()).toMatchObject({ id: 100, options: { keyboard: null } })
-    expect(h.connector.lastEdit()?.text).toContain('Sent: JWT')
-    expect(h.answers).toHaveLength(1)
+    try {
+      await h.keeper.page(h.state.record!)
+      h.connector.failEdits = true
+      await h.keeper.tap(h.tap('tok-1'))
+      await vi.advanceTimersByTimeAsync(30)
+      expect(h.answers).toHaveLength(1)
+      expect(h.updates.map((update) => update.state)).not.toContain('final')
+      h.connector.failEdits = false
+      await vi.advanceTimersByTimeAsync(100)
+      expect(h.updates.map((update) => update.state)).toContain('final')
+      expect(h.connector.lastEdit()).toMatchObject({ id: 100, options: { keyboard: null } })
+      expect(h.connector.lastEdit()?.text).toContain('Sent: JWT')
+      expect(h.answers).toHaveLength(1)
+    } finally { h.keeper.dispose(); vi.useRealTimers() }
   })
 
   it('gives up retrying after the last wait and leaves the stored card for the next start', async () => {
