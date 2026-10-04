@@ -130,6 +130,8 @@ function windowsLinkTarget(path) {
 // FileSecurity protects the staged file at creation, before any settings bytes.
 const WINDOWS_CONFIG_WRITE = `
 $ErrorActionPreference='Stop'
+Import-Module ([System.IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1'));
+$PSModuleAutoLoadingPreference='None'
 [Console]::InputEncoding=[System.Text.UTF8Encoding]::new($false)
 $request=ConvertFrom-Json ([Console]::In.ReadToEnd())
 $created=$false; $published=$false; $backupReserved=$false; $failureCode='IO_ERROR'; $operation='start'; $stream=$null; $originalStream=$null; $backupStream=$null; $stagedHandle=$null; $publishedStream=$null; $stagedIdentity=$null; $backupIdentity=$null; $reservedBackupHandle=$null

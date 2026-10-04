@@ -11,6 +11,7 @@ afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: 
 const fixture = () => { const root = mkdtempSync(join(tmpdir(), 'bmn-config-writer-')); roots.push(root); return root }
 const windowsAcl = (path, protect = false) => {
   const script = `$ErrorActionPreference='Stop';
+Import-Module ([System.IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1'));
 [Console]::InputEncoding=New-Object System.Text.UTF8Encoding($false);
 $request=ConvertFrom-Json ([Console]::In.ReadToEnd());
 $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User;

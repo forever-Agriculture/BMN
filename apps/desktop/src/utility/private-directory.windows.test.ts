@@ -22,7 +22,7 @@ function fixture() {
   return root
 }
 function powershell(path: string, operation: string): string {
-  const script = `$ErrorActionPreference='Stop'; [Console]::InputEncoding=New-Object System.Text.UTF8Encoding($false); $path=ConvertFrom-Json ([Console]::In.ReadToEnd()); $item=if ([System.IO.Directory]::Exists($path)) { New-Object System.IO.DirectoryInfo($path) } else { New-Object System.IO.FileInfo($path) }; ${operation}`
+  const script = `$ErrorActionPreference='Stop'; Import-Module ([System.IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1')); [Console]::InputEncoding=New-Object System.Text.UTF8Encoding($false); $path=ConvertFrom-Json ([Console]::In.ReadToEnd()); $item=if ([System.IO.Directory]::Exists($path)) { New-Object System.IO.DirectoryInfo($path) } else { New-Object System.IO.FileInfo($path) }; ${operation}`
   const result = spawnSync(join(process.env.SystemRoot!, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), [
     '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')
   ], { input: JSON.stringify(path), encoding: 'utf8', timeout: 15_000, windowsHide: true })

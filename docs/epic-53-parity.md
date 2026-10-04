@@ -137,6 +137,24 @@ the captured screen showed a session summary instead of a terminal. The fixture
 now uses the actual creation form and waits for keyboard input before emitting an
 image. Native graphics acceptance remains UNVERIFIED.
 
+[Discriminator 37224203329](https://github.com/forever-Agriculture/BMN/actions/runs/37224203329)
+reproduced the original full-helper timeout at 15 seconds, then completed the same
+request and security checks in 423 ms after explicitly importing the OS Utility
+module with automatic module loading disabled. The implemented repair applies that
+trusted import to privacy/config helpers and the corresponding installer/ACL
+fixtures. Complete native lease and updated config/installer checks remain pending.
+
+[Kernel measurement 37224203306](https://github.com/forever-Agriculture/BMN/actions/runs/37224203306)
+passed all four discriminator cells. Only amended-filter plus `pivot_root` permitted
+nested user namespaces; its single-UID mapping and private mount worked. Extra UID
+mappings, writable tool remounts, outside brokers and inspection syscalls remained
+denied, with `no_new_privs` retained and the old root detached. The synthetic probe
+measured dumpability zero and root-owned proc mapping files after the UID drop;
+enabling dumpability changed their owner to the leased UID and enabled the positive
+control. This matches the documented [proc ownership effect](https://man7.org/linux/man-pages/man7/user_namespaces.7.html).
+This is a kernel prototype result, not real agent sandbox or full WSL acceptance;
+the production helper policy is unchanged and the disposable distribution was removed.
+
 [Initial run 37057811322](https://github.com/forever-Agriculture/BMN/actions/runs/37057811322)
 tested `7bfa647` on Ubuntu 24.04 x64 and Windows Server 2025 Datacenter x64,
 with Node 24.14.0, pnpm 12.3.4 and Electron 44.3.0. Linux passed the full

@@ -10,6 +10,7 @@ export async function windowsExitObserver(entries, killIndex = -1, beforeKill = 
   assert.ok(killIndex === -1 || validIndex(killIndex))
   assert.ok(beforeKill.every(step => validIndex(step.killIndex) && step.waitIndices.every(validIndex)))
   const script = `$ErrorActionPreference='Stop';
+Import-Module ([System.IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1'));
 Add-Type 'using System; using System.Runtime.InteropServices; public static class HeldProcess { [DllImport("kernel32.dll",SetLastError=true)] public static extern bool TerminateProcess(IntPtr process,uint code); }';
 $config=ConvertFrom-Json ([Console]::In.ReadLine()); $held=@();
 try {

@@ -8,6 +8,9 @@ import { homedir } from 'node:os'
 
 const WINDOWS_PRIVATE_DIRECTORY = `
 $ErrorActionPreference = 'Stop'
+# Load the trusted OS module explicitly: automatic discovery can hang in isolated profiles.
+Import-Module ([System.IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1'));
+$PSModuleAutoLoadingPreference='None'
 [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
 $request = ConvertFrom-Json ([Console]::In.ReadToEnd())
 $paths = $request.paths

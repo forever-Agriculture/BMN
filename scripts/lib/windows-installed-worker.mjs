@@ -23,6 +23,8 @@ function systemPowerShell(environment = process.env) {
   return join(system, 'System32/WindowsPowerShell/v1.0/powershell.exe')
 }
 function powershell(script, environment = process.env) {
+  // Utility commands must not depend on auto-discovery in an isolated profile.
+  script = "$ErrorActionPreference='Stop';Import-Module ([System.IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1'));\n" + script
   const result = spawnSync(systemPowerShell(environment), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
     { env: environment, encoding: 'utf8', windowsHide: true, timeout: 30000 })
   assert.ok(!result.error && result.status === 0, 'Windows installation operation failed')
@@ -177,7 +179,7 @@ export function removeWindowsDataAfterConfirmation(dataRoot, choice) {
 }
 
 export function startWindowsInstallNotice(message, { start = spawn, executable = systemPowerShell() } = {}) {
-  const script = `$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Windows.Forms;
+  const script = `$ErrorActionPreference='Stop'; Import-Module ([System.IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1')); Add-Type -AssemblyName System.Windows.Forms;
     [void][Windows.Forms.MessageBox]::Show($env:BMN_INSTALL_NOTICE,'BMN update',[Windows.Forms.MessageBoxButtons]::OK,[Windows.Forms.MessageBoxIcon]::Information);`
   const child = start(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
     { env: { ...process.env, BMN_INSTALL_NOTICE: message }, stdio: 'ignore', windowsHide: false })

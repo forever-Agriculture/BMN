@@ -19,7 +19,7 @@ function operate(root: string, path: string, mode: 'replace' | 'directory-access
   }
   const systemRoot = windowsEnvironmentValue(process.env, 'SystemRoot')
   assert.ok(systemRoot)
-  const source = `$ErrorActionPreference='Stop';[Console]::InputEncoding=[Text.UTF8Encoding]::new($false);$r=ConvertFrom-Json ([Console]::In.ReadToEnd());$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User;
+  const source = `$ErrorActionPreference='Stop';Import-Module ([System.IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1'));$PSModuleAutoLoadingPreference='None';[Console]::InputEncoding=[Text.UTF8Encoding]::new($false);$r=ConvertFrom-Json ([Console]::In.ReadToEnd());$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User;
 if($r.mode -eq 'replace') {[IO.File]::Replace($r.source,$r.path,$null,$false)}
 if($r.mode -eq 'directory-access') {$a=[Security.AccessControl.DirectorySecurity]::new();$a.SetOwner($sid);$a.SetAccessRuleProtection($true,$false);$a.AddAccessRule(([Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','Allow')));if($r.denied){$a.AddAccessRule(([Security.AccessControl.FileSystemAccessRule]::new($sid,'CreateFiles,CreateDirectories','Deny')))};[IO.Directory]::SetAccessControl($r.path,$a)}
 if($r.mode -eq 'file-access') {$a=[Security.AccessControl.FileSecurity]::new();$a.SetOwner($sid);$a.SetAccessRuleProtection($true,$false);$a.AddAccessRule(([Security.AccessControl.FileSystemAccessRule]::new($sid,'FullControl','Allow')));if($r.denied){$a.AddAccessRule(([Security.AccessControl.FileSystemAccessRule]::new($sid,'ReadData','Deny')))};[IO.File]::SetAccessControl($r.path,$a)}
