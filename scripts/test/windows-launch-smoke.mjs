@@ -152,7 +152,13 @@ process.stdout.write(frame+'BMN_GRAPHICS_NATIVE_READY\\r\\n');setInterval(()=>{}
         let producer
         try { producer = JSON.parse(readFileSync(graphicsTrace, 'utf8')) } catch { producer = { stage: 'not-entered' } }
         observations.push({ nativeGraphicsFailure: true, producer,
-          snapshots: await page.evaluate(() => window.__aitermTest.snapshots()).catch(() => null) })
+          renderer: await page.evaluate(async ({ workspaceId, sessionId }) => {
+            let snapshots
+            try { snapshots = window.__aitermTest.snapshots() }
+            catch (error) { snapshots = { error: String(error?.message ?? error) } }
+            return { snapshots, sessions: await window.aiTerminal.listSessions(workspaceId),
+              savedOutput: await window.aiTerminal.getSavedOutput(sessionId) }
+          }, { workspaceId: workspace.workspaceId, sessionId: graphicsId }).catch(error => ({ error: error.message })) })
         throw error
       }
       const beforeResize = await page.evaluate(id => window.__aitermTest.snapshot(id), graphicsId)

@@ -32,8 +32,14 @@ const lock=${JSON.stringify(join(root, 'run.lock'))},output=${JSON.stringify(out
 if(process.argv.includes('--hold')){global.lease=native.acquireInstallLease(lock,false);process.stdout.write('READY\\n');setInterval(()=>{},1000)}
 else{const nativeProcessTrace=[];
  const cp=require('node:child_process'),originalSpawnSync=cp.spawnSync;
- cp.spawnSync=(exe,args,options)=>{const result=originalSpawnSync(exe,args,options);
-  nativeProcessTrace.push({argumentBytes:args.reduce((n,arg)=>n+Buffer.byteLength(arg,'utf16le'),0),status:result.status,signal:result.signal,
+ cp.spawnSync=(exe,args,options)=>{const started=Date.now(),encoded=args.indexOf('-EncodedCommand');
+  if(encoded!==-1){let source=Buffer.from(args[encoded+1],'base64').toString('utf16le');
+   for(const marker of ["$request = ConvertFrom-Json", "$directories = @", "for ($rootIndex = 0;", "  Assert-SafeAncestors $directory", "  if (-not $directory.Exists)", "  $actual = $directory.GetAccessControl()", "  while ($pending.Count -gt 0)"]){
+    if(!source.includes(marker))throw new Error('Private-directory phase marker changed: '+marker);
+    source=source.split(marker).join("[Console]::Error.WriteLine('"+('BMN_LEASE_PHASE '+marker).replaceAll("'","''")+"');\\n"+marker)}
+   args=[...args];args[encoded+1]=Buffer.from(source,'utf16le').toString('base64')}
+  const result=originalSpawnSync(exe,args,options);
+  nativeProcessTrace.push({elapsedMs:Date.now()-started,argumentBytes:args.reduce((n,arg)=>n+Buffer.byteLength(arg,'utf16le'),0),status:result.status,signal:result.signal,
    launchError:result.error?.code??null,stdout:String(result.stdout??'').slice(-4096),stderr:String(result.stderr??'').slice(-4096)});return result};
  require('node:module').syncBuiltinESMExports();
  (async()=>{

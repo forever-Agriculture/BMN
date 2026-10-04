@@ -15,7 +15,7 @@ Epic 50/54 installed/provider acceptance remains separate and unfinished.
 | PowerShell/cmd launch, input, stop, process identity, crash cleanup, ConPTY feasibility — 53.2 | Implementation team | Affected tests and sandboxed startup PASS | Bundled bytes/trees/GUI/pressure, shell/UI and direct/debugger main-job crash cleanup PASS; twelve lifecycle observations including final Close/relaunch PASS; full story acceptance remains open | UNVERIFIED |
 | Files, path links, attachments, backups, directory permissions — 53.3 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
 | CLI, transport, caller/session authority — 53.4 | Implementation team | 178 server/498 CLI affected checks PASS on 629dc91 | Native bmn.exe startup/argv/stdin and restricted control pipe owner/cross-account denial PASS; hook/config acceptance remains open | UNVERIFIED |
-| Named distributions, bridge, path mapping, terminfo — 53.5 | Implementation team | Restricted prototype and separate-UID alias fence measured; full profile UNVERIFIED | Disposable WSL2 Alpine VM boot/cleanup PASS | Strict restricted profile and per-session guest-root helper approved; complete measurement remains open; bridge not implemented |
+| Named distributions, bridge, path mapping, terminfo — 53.5 | Implementation team | Restricted prototype and separate-UID alias fence measured; full profile UNVERIFIED | Disposable WSL2 VM boot/cleanup PASS | Root-helper six cleanup modes and broker/UID/ABI controls PASS on WSL2; full capability profile and bridge unfinished |
 | Claude/Codex/OpenCode/Cursor hooks, history, usage, compaction, resume — 53.6 | Implementation team | Hook/config fixtures: 68 passed, one native-only skip; retained history/Companion: 204 passed, replacement and hardlink regressions original RED/current GREEN | Latest native failures remain open; revised ACL/home/history fixtures UNVERIFIED | UNVERIFIED |
 | Terminal images, clipboard, IME/AltGr, scaling, panes, themes, keyboard access — 53.7 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
 | Microphone, local voice engine, cancellation, addressed paste — 53.8 | Implementation team | Portable speech/silence/transcription PASS | Portable/packaged engines and PE imports PASS; prior WAV ACL PASS, latest private-WAV inspector fails without OS cause (diagnostic pending); microphone/UI/other CPU UNVERIFIED | UNVERIFIED |
@@ -441,11 +441,12 @@ found no material defect in the repair. A sixth mode repeats the original failur
 and repaired cleanup through a dedicated raw Linux PTY, with byte-identical Sixel
 output. The receipt gate requires both nonreading-EOF modes; 14 parser/receipt
 checks pass. This measures terminal bytes, not xterm rendering or a WSL PTY relay.
-Actual WSL/ConPTY hangup delivery remains UNVERIFIED.
+Actual WSL root-helper hangup measurements are recorded below. The production
+ConPTY-to-inner-PTY relay remains UNVERIFIED.
 
 This is a helper prototype with a trusted measurement callback, not a production
-launch protocol. Native WSL measurement is routed through the existing freshly
-imported distribution gate and remains **UNVERIFIED**. Persistent project mediation,
+launch protocol. Native WSL root-helper measurement passed through the existing
+freshly imported distribution gate. Persistent project mediation,
 mediated general egress, scoped BMN relay, PTY/terminfo and native host lifecycle remain
 open; `ProfileComplete` is still false.
 
@@ -482,3 +483,27 @@ ownership FAIL; a refused or owned WMI route establishes that route only. Unrela
 control survival and fixture cleanup are checked separately. Its syntax/lint checks
 passed; native execution is **UNVERIFIED**, and it is not currently routed into CI.
 The owner’s all-launched-process requirement remains unchanged.
+
+## Current native candidate: `9f797ff`
+
+[Platform run 37213060352](https://github.com/forever-Agriculture/BMN/actions/runs/37213060352)
+passed the Linux suite (3,024 assertions, 36 skipped), build, startup and packaged
+smoke. Windows passed 3,018 assertions with 30 failures and 12 skips. Native lint
+also included generated installer output, and packaging refused a hook outside
+its app workspace. These reproduced failures remain open; earlier packaging
+success does not verify the changed installer candidate. The shell/argv checks
+passed, but the native Sixel producer exited before a retained renderer view;
+its cause remains UNCONFIRMED. App lifecycle/crash cleanup measurements passed.
+
+[WSL run 37213060358](https://github.com/forever-Agriculture/BMN/actions/runs/37213060358)
+passed the measured root-helper profile on Linux
+`6.18.33.2-microsoft-standard-WSL2`, x86_64. Natural exit, Stop, supervisor crash,
+stdin EOF, nonreading stdin EOF and nonreading raw-PTY EOF each terminated all
+three retained processes and preserved unrelated sentinels. The raw-PTY case
+preserved exact Sixel bytes. UID reuse/thread guards, proc-root alias denial,
+filesystem/abstract/TCP broker denial, callback failure and i386/x32 denial passed.
+The unfiltered syslog positive control was allowed; the filtered request was
+denied. The fixture removed its files and unregistered its disposable distribution.
+This establishes the measured helper only: `ProfileComplete` remains false.
+The product adapter, durable projects, general egress, nested agent sandboxes,
+scoped control relay, terminfo and actual Windows-host disconnect remain unfinished.

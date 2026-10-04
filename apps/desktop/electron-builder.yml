@@ -30,8 +30,8 @@ extraResources:
   - from: src/utility/test-fixtures/remote-answers
     to: self-test/remote-answers
 npmRebuild: false
-afterPack: ../../scripts/build/windows-after-pack.mjs
-afterAllArtifactBuild: ../../scripts/build/windows-after-all-artifacts.mjs
+afterPack: ./build/windows-after-pack.mjs
+afterAllArtifactBuild: ./build/windows-after-all-artifacts.mjs
 # better-sqlite3 loads prebuilds/<platform>-<arch>.node, which is where @electron/rebuild puts its
 # from-source build; every other prebuild it ships is dead weight, so the target keeps only its own.
 linux:
