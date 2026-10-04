@@ -22,6 +22,24 @@ const invoke = (path, destination = target) => spawnSync(helper, [destination, r
 })
 function succeeds(path, destination = target) {
   const result = invoke(path, destination)
+  if (result.error || result.status !== 0) {
+    // Read only the just-created synthetic link. Keep the helper's ownership
+    // refusal intact while distinguishing Shell path normalization from AppID.
+    let actual
+    try {
+      actual = JSON.parse(shell(`$ws=New-Object -ComObject WScript.Shell; $link=$ws.CreateShortcut($env:BMN_SHORTCUT_FIXTURE);
+        $folder=(New-Object -ComObject Shell.Application).NameSpace($env:BMN_SHORTCUT_DIRECTORY);
+        $item=$folder.ParseName([IO.Path]::GetFileName($env:BMN_SHORTCUT_FIXTURE));
+        $appId=if($item){$item.ExtendedProperty('System.AppUserModel.ID')}else{$null};
+        @{target=$link.TargetPath; directory=$link.WorkingDirectory; arguments=$link.Arguments;
+          appId=$appId;
+          expectedFullName=([IO.FileInfo]::new($env:BMN_SHORTCUT_TARGET)).FullName} | ConvertTo-Json -Compress;`, path))
+    } catch (error) { actual = { diagnosticError: error.message } }
+    mkdirSync('test-results', { recursive: true })
+    writeFileSync('test-results/windows-install-shortcut.json', JSON.stringify({ status: 'FAIL',
+      expectedTarget: destination, actual, helperStatus: result.status,
+      helperError: result.error?.code, helperStderr: result.stderr }, null, 2))
+  }
   assert.ok(!result.error && result.status === 0, result.stderr)
 }
 function refuses(name, path) {
@@ -32,7 +50,7 @@ function refuses(name, path) {
 }
 const powershell = join(windowsEnvironmentValue(process.env, 'SystemRoot'), 'System32/WindowsPowerShell/v1.0/powershell.exe')
 function shell(source, path) {
-  const encoded = Buffer.from(`$ErrorActionPreference='Stop'; ${source}`, 'utf16le').toString('base64')
+  const encoded = Buffer.from(`$ErrorActionPreference='Stop'; Import-Module ([System.IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1')); ${source}`, 'utf16le').toString('base64')
   const result = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], {
     env: { ...process.env, BMN_SHORTCUT_FIXTURE: path, BMN_SHORTCUT_TARGET: target, BMN_SHORTCUT_DIRECTORY: root },
     windowsHide: true, encoding: 'utf8', timeout: 30000

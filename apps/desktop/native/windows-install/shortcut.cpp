@@ -14,6 +14,7 @@
 
 using Microsoft::WRL::ComPtr;
 static const wchar_t* appId = L"dev.bmn.desktop";
+static const wchar_t* verificationFailure = L"Windows API";
 static HRESULT writeShortcut(const wchar_t* target, const wchar_t* directory, const wchar_t* path) {
   ComPtr<IShellLinkW> link;
   HRESULT status = CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link));
@@ -41,13 +42,19 @@ static HRESULT verifyShortcut(const wchar_t* target, const wchar_t* path) {
   if (FAILED(status = link.As(&file)) || FAILED(status = file->Load(path, STGM_READ))) return status;
   wchar_t actual[32768];
   if (FAILED(status = link->GetPath(actual, 32768, nullptr, SLGP_RAWPATH))) return status;
-  if (CompareStringOrdinal(actual, -1, target, -1, TRUE) != CSTR_EQUAL) return E_FAIL;
+  if (CompareStringOrdinal(actual, -1, target, -1, TRUE) != CSTR_EQUAL) {
+    verificationFailure = L"target path mismatch";
+    return E_FAIL;
+  }
   ComPtr<IPropertyStore> properties;
   if (FAILED(status = link.As(&properties))) return status;
   PROPVARIANT value;
   PropVariantInit(&value);
   status = properties->GetValue(PKEY_AppUserModel_ID, &value);
-  if (SUCCEEDED(status) && (value.vt != VT_LPWSTR || !value.pwszVal || wcscmp(value.pwszVal, appId) != 0)) status = E_FAIL;
+  if (SUCCEEDED(status) && (value.vt != VT_LPWSTR || !value.pwszVal || wcscmp(value.pwszVal, appId) != 0)) {
+    verificationFailure = L"application identity mismatch";
+    status = E_FAIL;
+  }
   PropVariantClear(&value);
   return status;
 }
@@ -64,6 +71,6 @@ int wmain(int argc, wchar_t** argv) {
   if (SUCCEEDED(status)) status = writeShortcut(argv[1], argv[2], argv[3]);
   if (SUCCEEDED(status)) status = verifyShortcut(argv[1], argv[3]);
   CoUninitialize();
-  if (FAILED(status)) { fwprintf(stderr, L"BMN shortcut verification failed (HRESULT %08lx).\n", static_cast<unsigned long>(status)); return 1; }
+  if (FAILED(status)) { fwprintf(stderr, L"BMN shortcut verification failed: %ls (HRESULT %08lx).\n", verificationFailure, static_cast<unsigned long>(status)); return 1; }
   return 0;
 }

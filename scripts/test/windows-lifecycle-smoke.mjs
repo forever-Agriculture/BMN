@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import { _electron } from 'playwright'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
+import { waitForAsyncPagePredicate } from '../lib/async-page-predicate.mjs'
 import { windowsExitObserver } from '../lib/windows-exit-observer.mjs'
 
 assert.equal(process.platform, 'win32')
@@ -41,7 +42,7 @@ try {
     const open = async () => {
       app = await _electron.launch(options)
       page = await app.firstWindow(); page.setDefaultTimeout(20000)
-      await page.waitForFunction(async () => {
+      await waitForAsyncPagePredicate(page, async () => {
         try { return (await window.aiTerminal.listWorkspaces()).length > 0 } catch { return false }
       })
     }

@@ -155,6 +155,22 @@ control. This matches the documented [proc ownership effect](https://man7.org/li
 This is a kernel prototype result, not real agent sandbox or full WSL acceptance;
 the production helper policy is unchanged and the disposable distribution was removed.
 
+[Native lease flow 37225334942](https://github.com/forever-Agriculture/BMN/actions/runs/37225334942)
+passed all seven checks after the Utility repair, including cross-process leases,
+crash release, foreign/hardlink refusal and the complete ACL scan with locks held.
+Private-folder operations completed in 443 and 400 ms. The workflow then failed
+creating/verifying its synthetic shortcut with HRESULT `80004005`; the next
+diagnostic distinguishes target-path normalization from application identity.
+Shortcut/installed acceptance remains open.
+
+The next graphics fixture repair uses Windows argument quoting instead of JSON in
+the Arguments field and awaits resolved IPC readiness. An isolated sandboxed
+Chrome page reproduced the original Playwright waiter returning `false` after one
+call; the replacement retries and returns `true` after three. Three tests also
+cover eventual session records, hung evaluation and surfaced errors. The same
+asynchronous wait pattern is repaired in Epic 53 startup and lifecycle fixtures.
+Native renderer graphics acceptance is still UNVERIFIED.
+
 [Initial run 37057811322](https://github.com/forever-Agriculture/BMN/actions/runs/37057811322)
 tested `7bfa647` on Ubuntu 24.04 x64 and Windows Server 2025 Datacenter x64,
 with Node 24.14.0, pnpm 12.3.4 and Electron 44.3.0. Linux passed the full

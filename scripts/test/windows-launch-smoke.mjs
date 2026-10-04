@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { setTimeout as delay } from 'node:timers/promises'
 import { _electron } from 'playwright'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
+import { waitForAsyncPagePredicate } from '../lib/async-page-predicate.mjs'
 
 assert.equal(process.platform, 'win32', 'This acceptance check requires native Windows')
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -57,7 +58,7 @@ try {
     try {
       page = await app.firstWindow()
       page.setDefaultTimeout(20000)
-      await page.waitForFunction(async () => {
+      await waitForAsyncPagePredicate(page, async () => {
         try { return (await window.aiTerminal.listWorkspaces()).length > 0 } catch { return false }
       })
       assert.equal(await page.evaluate(() => window.aiTerminal.platform), 'win32')
@@ -152,11 +153,9 @@ else process.stdout.write('BMN_GRAPHICS_INPUT_OK\\r\\n')});setInterval(()=>{},10
       await page.locator('.advanced summary').click()
       await page.getByLabel('Launch type', { exact: true }).selectOption('program')
       await page.getByRole('textbox', { name: 'Executable', exact: true }).fill(process.execPath)
-      await page.getByRole('textbox', { name: 'Arguments', exact: true }).fill(JSON.stringify([graphicsFixture]))
+      await page.getByRole('textbox', { name: 'Arguments', exact: true }).fill(quote([graphicsFixture]))
       await page.getByRole('button', { name: 'Create session', exact: true }).click()
-      await page.waitForFunction(async workspaceId =>
-        (await window.aiTerminal.listSessions(workspaceId)).some(session => session.name === 'Native graphics fixture'), workspace.workspaceId)
-      const graphics = { session: await page.evaluate(async workspaceId =>
+      const graphics = { session: await waitForAsyncPagePredicate(page, async workspaceId =>
         (await window.aiTerminal.listSessions(workspaceId)).find(session => session.name === 'Native graphics fixture'), workspace.workspaceId) }
       const graphicsId = graphics.session.sessionId
       await page.locator(`.session-row button[data-session-id="${graphicsId}"]`).click()

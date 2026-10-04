@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url'
 import { _electron as electron } from 'playwright'
 import { findSandboxDisablingText } from '../lib/sandbox-flag-audit.mjs'
 import { withTemporaryRoot, temporaryRootContracts } from '../lib/temporary-root.mjs'
+import { waitForAsyncPagePredicate } from '../lib/async-page-predicate.mjs'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const appDirectory = join(repoRoot, 'apps/desktop')
@@ -41,7 +42,7 @@ const receipt = await withTemporaryRoot(temporaryRootContracts.electronDevelopme
   try {
     assert.deepEqual(findSandboxDisablingText(application.process().spawnargs.join('\n')), [], 'Chromium sandbox was disabled by the launcher')
     let page = await application.firstWindow()
-    await page.waitForFunction(async () => {
+    await waitForAsyncPagePredicate(page, async () => {
       try { return (await window.aiTerminal.listWorkspaces()).length > 0 } catch { return false }
     }, null, { timeout: 30_000 })
     const state = await page.evaluate(async () => {
@@ -121,7 +122,7 @@ const receipt = await withTemporaryRoot(temporaryRootContracts.electronDevelopme
     await application.close()
     application = await launch()
     page = await application.firstWindow()
-    await page.waitForFunction(async (id) => {
+    await waitForAsyncPagePredicate(page, async (id) => {
       try { return (await window.aiTerminal.listWorkspaces()).some((w) => w.workspaceId === id) } catch { return false }
     }, state.workspaceId, { timeout: 30_000 })
     assert.equal(await page.evaluate(async () => (await window.aiTerminal.getSettings()).appearance.colorMode), 'brown')
