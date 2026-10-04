@@ -62,7 +62,11 @@ try {
       })
       assert.equal(await page.evaluate(() => window.aiTerminal.platform), 'win32')
       const workspace = (await page.evaluate(() => window.aiTerminal.listWorkspaces()))[0]
-      const launch = async (name, executable, argv) => page.evaluate(params => window.aiTerminal.createSession(params), {
+      const launch = async (name, executable, argv) => page.evaluate(async params => {
+        try { return await window.aiTerminal.createSession(params) }
+        catch (error) { throw new Error(JSON.stringify({ phase: 'create-session', name: params.name,
+          code: error?.code, message: String(error?.message ?? error).slice(0, 1000) }), { cause: error }) }
+      }, {
         workspaceId: workspace.workspaceId, name, executable, argv, cwd, cols: 80, rows: 24
       })
       const stop = result => page.evaluate(id => window.aiTerminal.stopSession(id), result.session.sessionId)
