@@ -3,6 +3,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
+import { nativeUnitObservations } from './native-unit-observations.mjs'
 
 const root = resolve(import.meta.dirname, '../..')
 const output = join(root, 'test-results')
@@ -48,6 +49,18 @@ let status = await run('protocol-build', [join(root, 'shared/protocol/node_modul
 if (status === 0) status = await run('vitest', [join(root, 'node_modules/vitest/vitest.mjs'), 'run', '--maxWorkers=50%',
   '--exclude', '.claude/**', '--exclude', '.dev-auto/**', '--reporter=default', '--reporter=json',
   '--outputFile.json=test-results/unit.json'], root)
+// Preserve the full inventory and its exit before isolated, serial observations.
+receipt.inventoryExitCode = status; save()
+if (process.platform === 'win32' && process.env.GITHUB_ACTIONS === 'true' &&
+    receipt.children.find(row => row.role === 'protocol-build')?.exitCode === 0) {
+  for (const [index, observation] of nativeUnitObservations.entries()) {
+    const pattern = `^${observation.fullName.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}$`
+    const observed = await run(`native-observation-${index + 1}`, [join(root, 'node_modules/vitest/vitest.mjs'),
+      'run', observation.file, '-t', pattern, '--maxWorkers=1', '--exclude', '.claude/**', '--exclude', '.dev-auto/**',
+      '--reporter=default', '--reporter=json', `--outputFile.json=test-results/native-observation-${index + 1}.json`], root)
+    if (observed !== 0) status = 1
+  }
+}
 Object.assign(receipt, { completed: true, completedAt: new Date().toISOString(), exitCode: status }); save()
 writeFileSync(join(output, 'unit-exit-code'), `${status}\n`, { mode: 0o600 })
 process.exitCode = status

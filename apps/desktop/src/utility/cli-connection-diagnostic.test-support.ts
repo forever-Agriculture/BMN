@@ -1,5 +1,6 @@
 // Exact CLI copies for a synthetic native discriminator. No production caller.
 export function instrumentCliConnection(source: string, helperUrl: string, listenersFirst: boolean): string {
+  source = source.replaceAll('\r\n', '\n')
   const replace = (old: string, next: string): void => {
     if (source.split(old).length !== 2) throw new Error('CLI connection diagnostic source guard failed')
     source = source.replace(old, next)

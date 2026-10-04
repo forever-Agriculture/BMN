@@ -109,6 +109,15 @@ export function measureNestedGuestNamespaces({ distribution, guest }) {
     assert.equal(receipt.sandbox.profileComplete, false)
     for (const field of ['privateNetworkNamespace', 'rootOwnedNetworkNamespace', 'inheritedDescriptorsIsolated',
       'routeSocketCreatedAfterIsolation', 'onlyLoopbackPresent', 'otherNetlinkProtocolsDenied', 'otherNetlinkTypesDenied']) assert.equal(receipt.sandbox[field], true)
+    for (const field of ['stdioNonterminalPipesOrNullSinks', 'deviceIdentitiesVerified', 'controllingTerminalDenied',
+      'fullDeviceSemantics', 'boundedRandomRead']) assert.equal(receipt.sandbox[field], true)
+    assert.match(receipt.sandbox.executableSha256, /^[a-f0-9]{64}$/u)
+    assert.match(receipt.sandbox.payloadCodeSha256, /^[a-f0-9]{64}$/u)
+    assert.deepEqual(receipt.sandbox.argv, ['/usr/bin/bwrap', '--unshare-user', '--unshare-pid', '--unshare-net', '--unshare-ipc', '--unshare-uts',
+      '--uid', '0', '--gid', '0', '--die-with-parent', '--new-session', '--cap-drop', 'ALL',
+      '--ro-bind', '/usr', '/usr', '--ro-bind', '/bin', '/bin', '--ro-bind', '/lib', '/lib',
+      '--ro-bind', '/lib64', '/lib64', '--ro-bind', '/etc', '/etc', '--proc', '/proc', '--dev', '/dev',
+      '--tmpfs', '/tmp', '--dir', '/home', '--bind', '/workspace', '/workspace', '--chdir', '/workspace', '/usr/bin/python3', '-c'])
     for (const field of ['singleUidMap', 'noNewPrivileges', 'capabilitiesDropped', 'outsideUidMapDenied',
       'outsideSyscallsDenied', 'outsideBrokerDenied', 'privateWorkspaceWrite', 'oldRootDetached']) assert.equal(receipt.sandbox.proof[field], true)
     assert.equal(receipt.sandbox.proof.nestedUid, 0)

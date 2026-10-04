@@ -9,6 +9,7 @@
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { nativeUnitOriginalBudgets } from './native-unit-observations.mjs'
 
 export const testKey = (root, file, fullName) =>
   `${relative(root, file).split('\\').join('/')} > ${fullName}`
@@ -16,13 +17,23 @@ export const testKey = (root, file, fullName) =>
 export const evaluateInventory = ({ report, known, platform, root, vitestExit }) => {
   const listed = known.platforms?.[platform] ?? {}
   const failing = new Map()
+  const diagnosticBudgets = new Map(platform === 'win32' ? nativeUnitOriginalBudgets.map(row => [`${row.file} > ${row.fullName}`, row.originalBudgetMs]) : [])
+  const diagnosticLimits = []
   for (const file of report.testResults ?? []) {
+    for (const test of file.assertionResults ?? []) {
+      const key = testKey(root, file.name, test.fullName), budget = diagnosticBudgets.get(key)
+      if (budget !== undefined && test.status === 'passed' &&
+          (!Number.isFinite(test.duration) || test.duration > budget)) {
+        diagnosticLimits.push({ key, originalBudgetMs: budget, durationMs: test.duration ?? null })
+      }
+    }
     const failed = (file.assertionResults ?? []).filter(test => test.status === 'failed')
     for (const test of failed) failing.set(testKey(root, file.name, test.fullName), test)
     if (file.status === 'failed' && failed.length === 0) failing.set(testKey(root, file.name, '(suite)'), file)
   }
   const unexpected = [...failing.keys()].filter(key => !(key in listed)).sort()
-  const nowPassing = Object.keys(listed).filter(key => !failing.has(key)).sort()
+  const unresolvedBudgets = new Set(diagnosticLimits.map(row => row.key))
+  const nowPassing = Object.keys(listed).filter(key => !failing.has(key) && !unresolvedBudgets.has(key)).sort()
   const openByStory = {}
   for (const key of failing.keys()) {
     const story = listed[key]
@@ -33,6 +44,7 @@ export const evaluateInventory = ({ report, known, platform, root, vitestExit })
     problems.push(`ran ${report.numTotalTests ?? 0} tests, expected at least ${known.minimumTests}`)
   }
   if (unexpected.length > 0) problems.push(`${unexpected.length} failing tests are not owned by a port story`)
+  if (diagnosticLimits.length > 0) problems.push(`${diagnosticLimits.length} diagnostic observations exceeded their original deadline or lack duration evidence`)
   if (vitestExit !== 0 && failing.size === 0) problems.push(`vitest exited ${vitestExit} without a failing test`)
   return {
     platform,
@@ -43,8 +55,9 @@ export const evaluateInventory = ({ report, known, platform, root, vitestExit })
     openByStory,
     unexpected,
     nowPassing,
+    diagnosticLimits,
     problems,
-    fullSuitePassing: failing.size === 0 && vitestExit === 0
+    fullSuitePassing: failing.size === 0 && vitestExit === 0 && problems.length === 0
   }
 }
 

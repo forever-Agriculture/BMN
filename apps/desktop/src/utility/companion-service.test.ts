@@ -1,8 +1,8 @@
 // MODULE: companion-service.test.ts - backup export/verify completeness and artifact reconciliation against the real store
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
-import { createRequire } from 'node:module'
+import files, { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import filePromises, { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
@@ -44,6 +44,9 @@ import type { ScreenLike } from './remote-answer'
 import type { TelegramConnector, InboundReply } from './telegram-connector'
 import { DEFAULT_WORKSPACE_ID } from './store-schema'
 import { startFakeBotApi } from '../main/fake-bot-api'
+import { nativeTimings, type NativeTimings } from '../../../../scripts/tests/native-timings.test-support.mjs'
+
+const actualCreateReadStream = files.createReadStream, actualCopyFile = filePromises.copyFile
 
 const testRequire = createRequire(import.meta.url)
 const BetterSqlite3 = testRequire('better-sqlite3') as new (path: string, options?: { readonly?: boolean; fileMustExist?: boolean }) => DatabaseConnection
@@ -65,6 +68,25 @@ let targetAvailabilityReads: number
 let holdFinalAvailabilityResponse: (() => Promise<void>) | null
 /** Conversation bindings the store would return, by session; none unless a test sets one. */
 let bindings: Map<string, unknown>
+let backupObservation: NativeTimings | undefined
+
+async function observeBackup(name: string, originalBudgetMs: number): Promise<NativeTimings> {
+  const trace = nativeTimings(name, originalBudgetMs)
+  backupObservation = trace
+  let copies = 0, hashes = 0
+  // Transparent observers retain the exact real copies and complete hash reads.
+  vi.spyOn(filePromises, 'copyFile').mockImplementation(async (...args) => {
+    await actualCopyFile(...args)
+    if (++copies % 100 === 0) trace.mark(`copied:${copies}`)
+  })
+  vi.spyOn(files, 'createReadStream').mockImplementation((...args) => {
+    const stream = actualCreateReadStream(...args)
+    stream.once('end', () => { if (++hashes % 100 === 0) trace.mark(`hashed:${hashes}`) })
+    return stream
+  })
+  syncBuiltinESMExports()
+  return trace
+}
 
 /** Runs the real store operations the worker would, on an in-memory database. */
 function workerLike(connection: DatabaseConnection): DatabaseWorkerClient {
@@ -473,11 +495,21 @@ describe('file search address', () => {
 })
 
 afterEach(async () => {
-  service['pager'].close()
-  service['cards'].dispose()
-  await service['telegramDeliveryWrites']
-  database.close()
-  rmSync(root, { recursive: true, force: true })
+  backupObservation?.mark('cleanup:begin')
+  try {
+    service['pager'].close()
+    service['cards'].dispose()
+    await service['telegramDeliveryWrites']
+    database.close()
+    rmSync(root, { recursive: true, force: true })
+  } finally {
+    backupObservation?.mark('cleanup:end')
+    backupObservation?.report()
+    backupObservation = undefined
+    if (vi.isMockFunction(filePromises.copyFile)) vi.mocked(filePromises.copyFile).mockRestore()
+    if (vi.isMockFunction(files.createReadStream)) vi.mocked(files.createReadStream).mockRestore()
+    syncBuiltinESMExports()
+  }
 })
 
 /** Stores `count` ready originals on disk, one second apart, oldest first. */
@@ -505,6 +537,7 @@ async function storeArtifacts(count: number): Promise<ArtifactRecord[]> {
       state: 'ready',
       createdAt: new Date(Date.parse(now) + index * 1000).toISOString()
     }))
+    if ((index + 1) % 100 === 0) backupObservation?.mark(`seeded:${index + 1}`)
   }
   return records
 }
@@ -1032,27 +1065,41 @@ describe('legacy draft delivery guard', () => {
 
 describe('backup', () => {
   it('keeps two exports at the same timestamp independent and preserves the first snapshot', async () => {
+    const trace = await observeBackup('backup-same-timestamp', 5000)
     const parent = join(root, 'backups')
+    trace.mark('first-export:begin')
     const first = await exportBackup(parent)
+    trace.mark('first-export:end')
     const originalManifest = await readFile(join(first.directory, 'manifest.json'), 'utf8')
     const originalDatabase = await readFile(join(first.directory, 'state.sqlite3'))
     await storePublishedArtifact('second-backup-only')
+    trace.mark('second-export:begin')
     const second = await exportBackup(parent)
+    trace.mark('second-export:end')
     expect(second.directory).not.toBe(first.directory)
     expect(await readFile(join(first.directory, 'manifest.json'), 'utf8')).toBe(originalManifest)
     expect(await readFile(join(first.directory, 'state.sqlite3'))).toEqual(originalDatabase)
     expect(first.manifest.artifacts).toHaveLength(0)
     expect(second.manifest.artifacts).toHaveLength(1)
+    trace.mark('verify:begin')
     expect(await verifyBackup(first.directory)).toMatchObject({ ok: true, checked: 1 })
     expect(await verifyBackup(second.directory)).toMatchObject({ ok: true, checked: 2 })
-  })
+    trace.mark('verify:end')
+  }, process.platform === 'win32' ? 30000 : 5000)
 
   it('exports every ready artifact, not only the newest 1,000', async () => {
+    const trace = await observeBackup('backup-1001-artifacts', 30000)
+    trace.mark('seed:begin')
     const records = await storeArtifacts(1001)
+    trace.mark('seed:end')
+    trace.mark('export:begin')
     const { manifest, directory } = await exportBackup(join(root, 'backups'))
+    trace.mark('export:end')
     expect(manifest.artifacts.map((entry) => entry.artifactId).sort()).toEqual(records.map((record) => record.artifactId))
+    trace.mark('verify:begin')
     expect(await verifyBackup(directory)).toMatchObject({ ok: true, checked: 1002, failures: [] })
-  }, 30_000)
+    trace.mark('verify:end')
+  }, process.platform === 'win32' ? 60000 : 30000)
 
   it('explicitly excludes retained hook metadata from backups', async () => {
     await mkdir(join(root, 'state'), { recursive: true })

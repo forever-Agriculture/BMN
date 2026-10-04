@@ -1,6 +1,6 @@
 {
   "description": "Epic 53 failing tests still owned by a port story. Open failures are not waived: the gate in scripts/test/unit-inventory-gate.mjs fails on any unlisted failure, and each story removes its entries as it repairs them.",
-  "source": "Native Windows 2681c04 run37173684665; removed 31 prior inventory keys only after every parameter case was observed passing. Remaining 29 keys are unfinished; no new failures added.",
+  "source": "Native Windows 6bbbd47 run37237884419; removed the requested-path reader key after all 14 native assertions passed (one Linux-only FIFO skip). Remaining 28 previously listed keys await their own platform acceptance; reproduced unlisted failures remain gate failures.",
   "minimumTests": 2650,
   "platforms": {
     "linux": {},
@@ -15,7 +15,6 @@
       "apps/desktop/src/utility/control-cli.test.ts > bmn statusline (Story 37.2) the installed line, run as Claude runs it gives the owner's command what was copied and leaves no copy or message when the copy fails part-way": "53.4",
       "apps/desktop/src/utility/control-server.test.ts > control server socket lifecycle creates a private directory and socket and removes the socket on close": "53.4",
       "apps/desktop/src/utility/control-server.test.ts > control server socket lifecycle replaces a stale socket left by a crashed server": "53.4",
-      "apps/desktop/src/utility/file-reference-reader.test.ts > readFileReference reports a change when the shown path stops naming the file that was read": "53.3",
       "apps/desktop/src/utility/session-manager.test.ts > conversation identity reported by the harness takes Codex resume and Start again TERM from the current stored graphics choice": "53.7",
       "apps/desktop/src/utility/session-manager.test.ts > shell session lifecycle selects graphics at spawn from the saved choice, Sixel by default, then falls back if terminfo changes": "53.7",
       "apps/desktop/src/utility/telegram-card-keeper.test.ts > after a restart keeps a card whose ending Telegram did not take unfinished, retries it and never answers again (Astra A7)": "53.9",

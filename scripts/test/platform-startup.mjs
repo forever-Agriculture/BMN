@@ -132,4 +132,8 @@ const receipt = await withTemporaryRoot(temporaryRootContracts.electronDevelopme
       control: state.control, controlCli, versions: await application.evaluate(() => process.versions) }
   } finally { await application.close() }
 })
+if (binary && process.platform === 'win32' && process.env.GITHUB_ACTIONS === 'true') {
+  const { measureWindowsInstalledLauncher } = await import('./windows-installed-launcher.mjs')
+  receipt.windowsInstalledLauncher = await measureWindowsInstalledLauncher(binary)
+}
 console.log(JSON.stringify(receipt))

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { evaluateInventory } from '../test/unit-inventory-gate.mjs'
+import { nativeUnitOriginalBudgets } from '../test/native-unit-observations.mjs'
 
 const root = '/repo'
 const report = (files, total = 10) => ({
@@ -19,6 +20,23 @@ const evaluate = (files, options = {}) => evaluateInventory({
 })
 
 describe('unit inventory gate', () => {
+  it.each(nativeUnitOriginalBudgets)('keeps a passing $fullName diagnostic over its original deadline unresolved on Windows', row => {
+    const key = `${row.file} > ${row.fullName}`
+    const measured = file(row.file, [[row.fullName, 'passed']])
+    measured.assertionResults[0].duration = row.originalBudgetMs + 1
+    const input = { report: report([measured]), known: { minimumTests: 5, platforms: { win32: { [key]: '53.11' } } }, root, vitestExit: 0 }
+    const result = evaluateInventory({ ...input, platform: 'win32' })
+    expect(result.nowPassing).toEqual([])
+    expect(result.fullSuitePassing).toBe(false)
+    expect(result.diagnosticLimits).toEqual([{ key, originalBudgetMs: row.originalBudgetMs, durationMs: row.originalBudgetMs + 1 }])
+    expect(result.problems).toHaveLength(1)
+    expect(evaluateInventory({ ...input, platform: 'linux' }).fullSuitePassing).toBe(true)
+    measured.assertionResults[0].duration = row.originalBudgetMs
+    expect(evaluateInventory({ ...input, platform: 'win32' }).fullSuitePassing).toBe(true)
+    delete measured.assertionResults[0].duration
+    expect(evaluateInventory({ ...input, platform: 'win32' }).fullSuitePassing).toBe(false)
+  })
+
   it('passes the gate with only story-owned failures but never calls the suite passing', () => {
     const result = evaluate([file('a.test.ts', [['owned', 'failed'], ['fine', 'passed']])])
     expect(result.problems).toEqual([])

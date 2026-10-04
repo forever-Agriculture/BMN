@@ -1,5 +1,5 @@
 """Synthetic capability spike only; no production helper edit or owner files."""
-import ctypes,errno,json,os,pathlib,select,shutil,signal,socket,stat,struct,subprocess,tempfile,time
+import ctypes,errno,hashlib,json,os,pathlib,select,shutil,signal,socket,stat,struct,subprocess,tempfile,time
 import types
 import bmn_root_session as helper
 libc=helper.LIBC
@@ -67,6 +67,28 @@ def probe_bwrap(uid):
         assert set(descriptors)=={'0','1','2'},descriptors
         assert all(not target.startswith(('socket:','net:','user:')) for target in descriptors.values())
         result.update(privateNetworkNamespace=True,rootOwnedNetworkNamespace=True,inheritedDescriptorsIsolated=True)
+        for fd in [0,1,2]:
+            info=os.fstat(fd)
+            assert not os.isatty(fd) and (stat.S_ISFIFO(info.st_mode) or
+                stat.S_ISCHR(info.st_mode) and (os.major(info.st_rdev),os.minor(info.st_rdev))==(1,3))
+        result['stdioNonterminalPipesOrNullSinks']=True
+        for name,device in {'null':(1,3),'zero':(1,5),'full':(1,7),'random':(1,8),'urandom':(1,9),'tty':(5,0)}.items():
+            info=pathlib.Path('/dev',name).lstat()
+            assert stat.S_ISCHR(info.st_mode) and (os.major(info.st_rdev),os.minor(info.st_rdev))==device,(name,'device substitution')
+        assert os.getsid(0)==os.getpid(),'Trusted payload must detach its controlling session before UID drop'
+        try:fd=os.open('/dev/tty',os.O_RDWR|os.O_NONBLOCK|os.O_CLOEXEC)
+        except OSError as error:assert error.errno==errno.ENXIO
+        else:os.close(fd);raise AssertionError('Outside controlling terminal accessible')
+        fd=os.open('/dev/full',os.O_WRONLY|os.O_CLOEXEC)
+        try:
+            try:os.write(fd,b'x')
+            except OSError as error:assert error.errno==errno.ENOSPC
+            else:raise AssertionError('Full device did not preserve ENOSPC semantics')
+        finally:os.close(fd)
+        fd=os.open('/dev/random',os.O_RDONLY|os.O_NONBLOCK|os.O_CLOEXEC)
+        try:assert len(os.read(fd,1))==1
+        finally:os.close(fd)
+        result.update(deviceIdentitiesVerified=True,controllingTerminalDenied=True,fullDeviceSemantics=True,boundedRandomRead=True)
         # Open only after isolation. RTM_GETLINK corroborates the empty topology;
         # it is not a claim that subsequent rtnetlink messages are loopback-only.
         with socket.socket(socket.AF_NETLINK,socket.SOCK_RAW,0) as route:
@@ -127,6 +149,8 @@ print(json.dumps({'nestedUid':os.getuid(),'singleUidMap':True,'noNewPrivileges':
               '--ro-bind','/lib64','/lib64','--ro-bind','/etc','/etc','--proc','/proc','--dev','/dev',
               '--tmpfs','/tmp','--dir','/home','--bind','/workspace','/workspace','--chdir','/workspace',
               '/usr/bin/python3','-c',code]
+        result.update(executableSha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
+                      argv=argv[:-1],payloadCodeSha256=hashlib.sha256(code.encode()).hexdigest())
         run=subprocess.run(argv,capture_output=True,text=True,timeout=8)
         result.update(exit=run.returncode,stderr=run.stderr[:4000],version=subprocess.check_output([str(binary),'--version'],text=True).strip())
         if run.returncode==0:
@@ -216,6 +240,19 @@ def candidate_source(original, nested, pivot):
                 (0x06, 0, 0, allow), (0x20, 0, 0, 0),
 """
         source=source.replace(old,route+old)
+        old="    for name in ['null', 'zero', 'urandom']:\n"
+        assert source.count(old)==1
+        devices="""    device_ids = {'null':(1,3),'zero':(1,5),'full':(1,7),'random':(1,8),'urandom':(1,9),'tty':(5,0)}
+    for name, expected in device_ids.items():
+        info = pathlib.Path('/dev', name).lstat()
+        if not stat.S_ISCHR(info.st_mode) or (os.major(info.st_rdev), os.minor(info.st_rdev)) != expected:
+            raise RuntimeError('Synthetic device identity mismatch')
+    for name in device_ids:
+"""
+        source=source.replace(old,devices)
+        old='                drop_privileges(uid)\n'
+        assert source.count(old)==1
+        source=source.replace(old,'                os.setsid()\n'+old)
     if pivot:
         old='    os.chroot(directory)\n'
         assert source.count(old)==1

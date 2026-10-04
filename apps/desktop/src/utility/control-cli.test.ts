@@ -2762,13 +2762,17 @@ describe('bmn hooks install', () => {
     await symlink(join('..', 'target.json'), join(root, 'real', 'nested', 'settings.json'))
     await writeFile(join(root, 'target.json'), 'SENTINEL: nothing to do with any harness\n')
     await writeFile(join(root, 'real', 'target.json'), '{"real":"target"}\n')
+    ownWindowsFixtureFile(root, join(root, 'real', 'target.json'))
 
     let nativeDiagnostic: unknown
     if (process.platform === 'win32') {
       const probeRoot = join(root, 'native-write-probe')
       const helper = new URL('../../bin/safe-config-write.mjs', import.meta.url).href
-      const script = `import {existsSync,mkdirSync,symlinkSync,writeFileSync,readFileSync,realpathSync} from 'node:fs';
+      const ownerHelper = new URL('./windows-fixture-owner.test-support.ts', import.meta.url).href
+      const script = `import assert from 'node:assert/strict';import {spawnSync} from 'node:child_process';
+import {existsSync,mkdirSync,symlinkSync,writeFileSync,readFileSync,realpathSync} from 'node:fs';
 import {join} from 'node:path';import {linkTarget,writeConfigSafely} from ${JSON.stringify(helper)};
+import {ownWindowsFixtureFile} from ${JSON.stringify(ownerHelper)};
 const root=process.argv[1],report={stage:'prepare',status:'UNVERIFIED'};
 try {
  mkdirSync(join(root,'real','nested'),{recursive:true});
@@ -2778,7 +2782,22 @@ try {
  const expected='{"real":"target"}\\n',target=join(root,'real','target.json');writeFileSync(target,expected);
  const selected=join(root,'alias','settings.json');
  report.resolutionEqual=linkTarget(selected)===realpathSync.native(target);
+ const ownerSource="$ErrorActionPreference='Stop';Import-Module ([IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1'));$PSModuleAutoLoadingPreference='None';[Console]::InputEncoding=[Text.UTF8Encoding]::new($false);$p=ConvertFrom-Json ([Console]::In.ReadToEnd());$owner=[IO.File]::GetAccessControl($p).GetOwner([Security.Principal.SecurityIdentifier]).Value;$user=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;[Console]::Out.Write((ConvertTo-Json -Compress @{ownerMatchesUser=($owner -eq $user)}))";
+ const owner=spawnSync(join(process.env.SystemRoot,'System32/WindowsPowerShell/v1.0/powershell.exe'),['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(ownerSource,'utf16le').toString('base64')],{input:JSON.stringify(target),encoding:'utf8',timeout:15000,windowsHide:true});
+ assert.ok(!owner.error&&owner.status===0,'Fresh target owner query must complete');
+ report.originalOwnerMatchesUser=JSON.parse(owner.stdout).ownerMatchesUser;
+ if(!report.originalOwnerMatchesUser){
+  report.stage='original-owner-refusal';let refusal;
+  try{writeConfigSafely(selected,expected,'{"real":"target","syntheticProbe":true}\\n')}catch(error){refusal=error}
+  assert.ok(refusal&&refusal.nativeOperation==='prepare:original-owner'&&refusal.created===false&&refusal.recoveryRequired===false,'Original owner guard must refuse before staging');
+  assert.equal(readFileSync(target,'utf8'),expected);report.originalOwnerRefused=true;
+ }else{report.originalOwnerControl='not-applicable-already-current-owner'}
+ assert.equal(readFileSync(join(root,'target.json'),'utf8'),'synthetic unrelated sentinel','Original refusal cannot change sentinel');
+ report.stage='fresh-target-owner-setup';ownWindowsFixtureFile(root,target);
+ assert.equal(readFileSync(target,'utf8'),expected,'Ownership setup cannot change bytes');
  report.stage='write-config-safely';writeConfigSafely(selected,expected,'{"real":"target","syntheticProbe":true}\\n');
+ assert.equal(JSON.parse(readFileSync(target,'utf8')).syntheticProbe,true);
+ report.afterOwnershipSuccess=true;
  report.status='PASS';
 } catch(error) {
  report.status='REFUSED';
@@ -2795,6 +2814,8 @@ console.log(JSON.stringify(report));`
     const install = await runHooks(['install', '--yes', 'claude', '--file', join(root, 'alias', 'settings.json')])
 
     expect(install.code, JSON.stringify({ stderr: install.stderr, nativeDiagnostic })).toBe(0)
+    if (process.platform === 'win32') expect(nativeDiagnostic).toMatchObject({ exit: 0, status: 'PASS',
+      resolutionEqual: true, afterOwnershipSuccess: true, sentinelPreserved: true })
     expect(await readFile(join(root, 'target.json'), 'utf8')).toBe('SENTINEL: nothing to do with any harness\n')
     const written = JSON.parse(await readFile(join(root, 'real', 'target.json'), 'utf8'))
     expect(written.real).toBe('target')

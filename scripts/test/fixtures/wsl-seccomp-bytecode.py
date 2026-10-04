@@ -58,4 +58,33 @@ for family in [1,2,10]:
 for family in [17,40,0xffffffff]:assert decide(41,family,3,0)==denied
 assert decide(102,16,3,0,arch=0x40000003)==kill  # i386 socketcall.
 assert decide(0x40000000|41,16,3,0)==kill  # x32 socket.
+
+# Replay the actual pre-bind validator with synthetic device metadata only.
+# No mount, device open or Linux-only module runs on either test host.
+root=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='install_root')
+assignments=[node for node in root.body if isinstance(node,ast.Assign) and
+             any(isinstance(target,ast.Name) and target.id=='device_ids' for target in node.targets)]
+validators=[node for node in root.body if isinstance(node,ast.For) and isinstance(node.target,ast.Tuple) and
+            [target.id for target in node.target.elts]==['name','expected']]
+assert len(assignments)==1 and len(validators)==1,'Missing pre-bind device validator'
+validator=compile(ast.Module(body=assignments+validators,type_ignores=[]),'synthetic-device-validator','exec')
+import stat
+expected={'null':(1,3),'zero':(1,5),'full':(1,7),'random':(1,8),'urandom':(1,9),'tty':(5,0)}
+devices={name:types.SimpleNamespace(st_mode=stat.S_IFCHR|0o666,st_rdev=device) for name,device in expected.items()}
+class DevicePath:
+    def __init__(self,base,name):assert base=='/dev';self.name=name
+    def lstat(self):return devices[self.name]
+context={'pathlib':types.SimpleNamespace(Path=DevicePath),'stat':stat,
+         'os':types.SimpleNamespace(major=lambda device:device[0],minor=lambda device:device[1])}
+exec(validator,context)
+for name in expected:
+    original=devices[name]
+    for invalid in [types.SimpleNamespace(st_mode=stat.S_IFREG|0o666,st_rdev=original.st_rdev),
+                    types.SimpleNamespace(st_mode=original.st_mode,st_rdev=(99,99))]:
+        devices[name]=invalid
+        try:exec(validator,context)
+        except RuntimeError:pass
+        else:raise AssertionError(('Device substitution accepted',name))
+    devices[name]=original
+assert source.index('                os.setsid()')<source.index('                drop_privileges(uid)')
 print('NESTED_FILTER_AND_NARROW_ROUTE_OK')

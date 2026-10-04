@@ -106,6 +106,13 @@ function nestedReceipt() {
   return { profileComplete: false, sandbox: { status: 'PASS_REAL_BWRAP_ONLY', exit: 0, version: 'bubblewrap 0.8.0',
     privateNetworkNamespace: true, rootOwnedNetworkNamespace: true, inheritedDescriptorsIsolated: true,
     routeSocketCreatedAfterIsolation: true, onlyLoopbackPresent: true, otherNetlinkProtocolsDenied: true, otherNetlinkTypesDenied: true,
+    stdioNonterminalPipesOrNullSinks: true, deviceIdentitiesVerified: true, controllingTerminalDenied: true,
+    fullDeviceSemantics: true, boundedRandomRead: true, executableSha256: 'a'.repeat(64), payloadCodeSha256: 'b'.repeat(64),
+    argv: ['/usr/bin/bwrap', '--unshare-user', '--unshare-pid', '--unshare-net', '--unshare-ipc', '--unshare-uts',
+      '--uid', '0', '--gid', '0', '--die-with-parent', '--new-session', '--cap-drop', 'ALL',
+      '--ro-bind', '/usr', '/usr', '--ro-bind', '/bin', '/bin', '--ro-bind', '/lib', '/lib',
+      '--ro-bind', '/lib64', '/lib64', '--ro-bind', '/etc', '/etc', '--proc', '/proc', '--dev', '/dev',
+      '--tmpfs', '/tmp', '--dir', '/home', '--bind', '/workspace', '/workspace', '--chdir', '/workspace', '/usr/bin/python3', '-c'],
     profileComplete: false, proof: { nestedUid: 0, singleUidMap: true, noNewPrivileges: true, capabilitiesDropped: true,
       outsideUidMapDenied: true, outsideSyscallsDenied: true, outsideBrokerDenied: true, privateWorkspaceWrite: true, oldRootDetached: true } },
   rows: [[false, false], [true, false], [false, true], [true, true]].map(([amendedFilter, pivotRoot]) => ({
@@ -119,8 +126,17 @@ function nestedReceipt() {
 
 describe('nested kernel discriminator receipts', () => {
   it.each(['privateNetworkNamespace', 'rootOwnedNetworkNamespace', 'inheritedDescriptorsIsolated',
-    'routeSocketCreatedAfterIsolation', 'onlyLoopbackPresent', 'otherNetlinkProtocolsDenied', 'otherNetlinkTypesDenied'])('refuses missing %s proof for the synthetic socket exception', field => {
+    'routeSocketCreatedAfterIsolation', 'onlyLoopbackPresent', 'otherNetlinkProtocolsDenied', 'otherNetlinkTypesDenied',
+    'stdioNonterminalPipesOrNullSinks', 'deviceIdentitiesVerified', 'controllingTerminalDenied', 'fullDeviceSemantics', 'boundedRandomRead'])('refuses missing %s proof for the synthetic socket/device setup', field => {
     const receipt = nestedReceipt(); delete receipt.sandbox[field]
+    expect(measureNestedGuestNamespaces({ distribution, guest: () => ({ exit: 0, stdout: JSON.stringify(receipt) }) }))
+      .toMatchObject({ result: 'FAIL', profileComplete: false })
+  })
+  it.each(['changed-argv', 'unknown-executable', 'unknown-payload'])('refuses a sandbox %s', defect => {
+    const receipt = nestedReceipt()
+    if (defect === 'changed-argv') receipt.sandbox.argv[3] = '--share-net'
+    if (defect === 'unknown-executable') receipt.sandbox.executableSha256 = 'unverified'
+    if (defect === 'unknown-payload') delete receipt.sandbox.payloadCodeSha256
     expect(measureNestedGuestNamespaces({ distribution, guest: () => ({ exit: 0, stdout: JSON.stringify(receipt) }) }))
       .toMatchObject({ result: 'FAIL', profileComplete: false })
   })
