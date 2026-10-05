@@ -7,9 +7,15 @@
 // This process ignores Ctrl+C, confirms cleanup, and returns the child's exit code.
 // Killing/crashing the launcher closes its sole job handle and ends its runtime tree.
 //
-// Layout: a packaged build runs <exe dir>\..\..\BMN.exe with <exe dir>\bmn.mjs. A
-// development build places bmn.runtime next to this program: two UTF-8 lines naming
-// the runtime and the script by absolute path.
+// Layout: a packaged build runs <exe dir>\..\..\BMN.exe with <exe dir>\<name>.mjs, where
+// <name> is this program's own file name (bmn for bmn.exe). A development build places
+// <name>.runtime next to this program: two UTF-8 lines naming the runtime and the script
+// by absolute path.
+//
+// Built with BMN_LAUNCHER_SHARED_TREE (codex.exe), the runtime stays in the caller's own
+// job instead of a nested one, as the Linux wrapper's exec does: a daemon the command
+// starts outlives it. The runtime learns this launcher's folder from
+// BMN_LAUNCHER_DIRECTORY, so its own lookup can skip it.
 #define WIN32_LEAN_AND_MEAN
 #ifndef UNICODE
 #define UNICODE
@@ -27,8 +33,10 @@
 
 #define MAX_LONG_PATH 32768
 
+static wchar_t program[MAX_PATH] = L"bmn";
+
 static int fail(const wchar_t* what, DWORD code) {
-  fwprintf(stderr, L"bmn: %ls (Windows error %lu)\n", what, (unsigned long)code);
+  fwprintf(stderr, L"%ls: %ls (Windows error %lu)\n", program, what, (unsigned long)code);
   return 127;
 }
 
@@ -52,7 +60,7 @@ static wchar_t* readLine(char** cursor) {
 // Development sidecar; absent in packaged builds.
 static BOOL readSidecar(const wchar_t* directory, wchar_t** runtime, wchar_t** script) {
   wchar_t path[MAX_LONG_PATH];
-  if (swprintf(path, MAX_LONG_PATH, L"%ls\\bmn.runtime", directory) < 0) return FALSE;
+  if (swprintf(path, MAX_LONG_PATH, L"%ls\\%ls.runtime", directory, program) < 0) return FALSE;
   HANDLE file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
   if (file == INVALID_HANDLE_VALUE) return FALSE;
   char buffer[4 * MAX_LONG_PATH + 1];
@@ -85,6 +93,7 @@ static BOOL WINAPI waitForChild(DWORD event) {
   return event == CTRL_C_EVENT || event == CTRL_BREAK_EVENT;
 }
 
+#ifndef BMN_LAUNCHER_SHARED_TREE
 // Query job membership rather than signaling reusable PIDs. Closing the sole handle
 // remains the fallback if termination or confirmation fails.
 static BOOL endRuntimeTree(HANDLE job, DWORD exitCode) {
@@ -99,6 +108,7 @@ static BOOL endRuntimeTree(HANDLE job, DWORD exitCode) {
     Sleep(10);
   }
 }
+#endif
 
 // Compiled only by the disposable native ownership gate. Production builds expose
 // no environment-controlled pause. The observer retains the suspended/resumed
@@ -126,10 +136,16 @@ static BOOL testCreationGate(const wchar_t* boundary, DWORD pid) {
 int wmain(void) {
   wchar_t self[MAX_LONG_PATH];
   DWORD length = GetModuleFileNameW(NULL, self, MAX_LONG_PATH);
-  if (length == 0 || length >= MAX_LONG_PATH) return fail(L"cannot locate bmn.exe", GetLastError());
+  if (length == 0 || length >= MAX_LONG_PATH) return fail(L"cannot locate this program", GetLastError());
   wchar_t* slash = wcsrchr(self, L'\\');
-  if (!slash) return fail(L"cannot locate bmn.exe", ERROR_BAD_PATHNAME);
+  if (!slash) return fail(L"cannot locate this program", ERROR_BAD_PATHNAME);
   *slash = 0;
+  // The program's own name, without .exe, names its script and sidecar.
+  const wchar_t* name = slash + 1;
+  size_t nameLength = wcslen(name);
+  if (nameLength > 4 && _wcsicmp(name + nameLength - 4, L".exe") == 0) nameLength -= 4;
+  if (nameLength == 0 || nameLength >= MAX_PATH) return fail(L"cannot name this program", ERROR_BAD_PATHNAME);
+  wcsncpy_s(program, MAX_PATH, name, nameLength);
 
   wchar_t* runtime = NULL;
   wchar_t* script = NULL;
@@ -139,14 +155,19 @@ int wmain(void) {
     wchar_t candidate[MAX_LONG_PATH];
     if (swprintf(candidate, MAX_LONG_PATH, L"%ls\\..\\..\\BMN.exe", self) < 0 ||
         !GetFullPathNameW(candidate, MAX_LONG_PATH, packagedRuntime, NULL) ||
-        swprintf(packagedScript, MAX_LONG_PATH, L"%ls\\bmn.mjs", self) < 0) {
+        swprintf(packagedScript, MAX_LONG_PATH, L"%ls\\%ls.mjs", self, program) < 0) {
       return fail(L"cannot locate the BMN runtime", ERROR_BAD_PATHNAME);
     }
     runtime = packagedRuntime;
     script = packagedScript;
   }
   if (GetFileAttributesW(runtime) == INVALID_FILE_ATTRIBUTES) return fail(L"the BMN runtime is missing", GetLastError());
-  if (GetFileAttributesW(script) == INVALID_FILE_ATTRIBUTES) return fail(L"the bmn CLI script is missing", GetLastError());
+  if (GetFileAttributesW(script) == INVALID_FILE_ATTRIBUTES) {
+    DWORD error = GetLastError();
+    wchar_t what[MAX_PATH + 32];
+    swprintf(what, MAX_PATH + 32, L"the %ls CLI script is missing", program);
+    return fail(what, error);
+  }
 
   const wchar_t* tail = commandTail(GetCommandLineW());
   size_t size = wcslen(runtime) + wcslen(script) + wcslen(tail) + 8;
@@ -162,6 +183,31 @@ int wmain(void) {
   // routine, unlike SetConsoleCtrlHandler(NULL, TRUE), is not inherited by the child.
   SetConsoleCtrlHandler(waitForChild, TRUE);
 
+#ifdef BMN_LAUNCHER_SHARED_TREE
+  if (!SetEnvironmentVariableW(L"BMN_LAUNCHER_DIRECTORY", self)) return fail(L"cannot prepare the runtime", GetLastError());
+  STARTUPINFOW shared;
+  ZeroMemory(&shared, sizeof(shared));
+  shared.cb = sizeof(shared);
+  shared.dwFlags = STARTF_USESTDHANDLES;
+  shared.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+  shared.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+  shared.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+  PROCESS_INFORMATION runtimeProcess;
+  ZeroMemory(&runtimeProcess, sizeof(runtimeProcess));
+  if (!CreateProcessW(runtime, commandLine, NULL, NULL, TRUE, 0, NULL, NULL, &shared, &runtimeProcess)) {
+    DWORD error = GetLastError(); free(commandLine);
+    return fail(L"cannot start the BMN runtime", error);
+  }
+  CloseHandle(runtimeProcess.hThread);
+  DWORD sharedWait = WaitForSingleObject(runtimeProcess.hProcess, INFINITE);
+  DWORD sharedExit = 1;
+  BOOL sharedExited = sharedWait == WAIT_OBJECT_0 && GetExitCodeProcess(runtimeProcess.hProcess, &sharedExit);
+  DWORD sharedError = GetLastError();
+  CloseHandle(runtimeProcess.hProcess);
+  free(commandLine);
+  if (!sharedExited) return fail(L"cannot confirm runtime exit", sharedError);
+  return (int)sharedExit;
+#else
   HANDLE job = CreateJobObjectW(NULL, NULL);
   if (!job) return fail(L"cannot own the BMN runtime", GetLastError());
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
@@ -229,4 +275,5 @@ int wmain(void) {
   if (!exited) return fail(L"cannot confirm runtime exit", waitError);
   if (!ended) return fail(L"cannot confirm runtime tree cleanup", cleanupError);
   return (int)exitCode;
+#endif
 }

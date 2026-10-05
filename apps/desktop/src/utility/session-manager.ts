@@ -62,6 +62,7 @@ import {
 import { processStartIdentity } from './process-start-identity'
 import { scanOwnedWindowsSessionPorts } from './windows-session-ports'
 import { findWindowsExecutable, windowsEnvironment } from './windows-launch'
+import { codexWithoutSharedDaemon } from '../../bin/codex-launch.mjs'
 import {
   newestInterruptionCohort,
   resumableStopCause,
@@ -108,30 +109,13 @@ interface Disposable {
 }
 
 /** A Codex app-server daemon keeps its first client's environment, so its hooks cannot address this session. */
-const CODEX_VALUE_OPTIONS = new Set([
-  '-c', '--config', '-C', '--cd', '-m', '--model', '-p', '--profile', '-s', '--sandbox',
-  '-a', '--ask-for-approval', '--remote-auth-token-env', '--add-dir', '-i', '--image', '--local-provider',
-  '--enable', '--disable'
-])
-
 function codexSessionArgv(
   executable: string,
   argv: readonly string[],
   environment: Readonly<Record<string, string | undefined>>
 ): readonly string[] {
   if (agentCli(executable) !== 'codex' || environment.CODEX_EXEC_SERVER_URL) return argv
-  let skipValue = false
-  let command: string | null = null
-  for (const arg of argv) {
-    if (skipValue) { skipValue = false; continue }
-    // Following `--`, even flag-shaped words are prompt text.
-    if (arg === '--') break
-    if (arg === '--no-daemon' || arg === '--remote' || arg.startsWith('--remote=')) return argv
-    if (CODEX_VALUE_OPTIONS.has(arg)) { skipValue = true; continue }
-    if (!arg.startsWith('-') && command === null) command = arg
-  }
-  if (['agents', 'app-server', 'remote-control'].includes(command ?? '')) return argv
-  return ['--no-daemon', ...argv]
+  return codexWithoutSharedDaemon(argv)
 }
 
 /** Bash startup files may move a global Codex ahead of BMN's session-local launcher on PATH. */

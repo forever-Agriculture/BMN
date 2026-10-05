@@ -51,10 +51,19 @@ linux:
 # Native-host unpacked artifact; pinned portable voice engines ship on both OSes.
 # Native-host builds only: ${platform} deliberately names the host ABI.
 win:
-  # The native bmn launcher (scripts/build/windows-cli.mjs); no Unix shell launchers.
+  # The native bmn and codex launchers (scripts/build/windows-cli.mjs); no Unix shell launchers.
+  # codex.exe runs codex.mjs, which keeps Codex typed in a session off its shared daemon.
   extraResources:
     - from: native-out/windows-cli/bmn.exe
       to: bin/bmn.exe
+    - from: native-out/windows-cli/codex.exe
+      to: bin/codex.exe
+    - from: bin/codex.mjs
+      to: bin/codex.mjs
+    - from: bin/codex-launch.mjs
+      to: bin/codex-launch.mjs
+    - from: bin/windows-launch.mjs
+      to: bin/windows-launch.mjs
     - from: native-out/windows-install
       to: install
       filter:

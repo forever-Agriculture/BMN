@@ -11,9 +11,9 @@ export function useStandInLauncher(path: string | undefined): void {
 
 /**
  * Writes `source` as a Node program named `name` in `directory` and returns the path that runs it.
- * POSIX: an executable script with a shebang. Windows has no shebang: a copy of the bmn.exe launcher
- * runs the script on BMN's own runtime as Node through the bmn.runtime sidecar it reads from its own
- * folder, so a folder holds one program and no Node install is needed.
+ * POSIX: an executable script with a shebang. Windows has no shebang: a copy of the bmn.exe launcher,
+ * named for the program, runs the script on BMN's own runtime as Node through the <name>.runtime
+ * sidecar beside it, so no Node install is needed.
  */
 export function writeNodeProgram(directory: string, name: string, source: string): string {
   mkdirSync(directory, { recursive: true })
@@ -25,10 +25,10 @@ export function writeNodeProgram(directory: string, name: string, source: string
   }
   if (!windowsLauncher) throw new Error('the self-test has no bmn.exe launcher for its stand-in programs')
   const script = join(directory, `${name}.cjs`)
-  const sidecar = join(directory, 'bmn.runtime')
+  const sidecar = join(directory, `${name}.runtime`)
   const runtime = `${process.execPath}\n${script}\n`
   if (existsSync(sidecar) && readFileSync(sidecar, 'utf8') !== runtime) {
-    throw new Error(`${directory} already holds another stand-in program`)
+    throw new Error(`${directory} already holds another stand-in program named ${name}`)
   }
   writeFileSync(script, source)
   writeFileSync(sidecar, runtime)
