@@ -68,9 +68,7 @@ export function windowsInstallerSmokeEnvironment(root, inherited = process.env) 
     if (value !== undefined) environment[name] = value
   }
   environment.Path = [join(environment.SystemRoot, 'System32'), environment.SystemRoot].join(';')
-  for (const name of ['home', 'config', 'data', 'state', 'runtime', 'cache', 'claude', 'codex', 'opencode']) {
-    ensurePrivateDirectories([join(root, name)])
-  }
+  ensurePrivateDirectories(['home', 'config', 'data', 'state', 'runtime', 'cache', 'claude', 'codex', 'opencode'].map(name => join(root, name)))
   return { ...environment, HOME: join(root, 'home'), USERPROFILE: join(root, 'home'),
     APPDATA: join(root, 'config'), LOCALAPPDATA: join(root, 'data'),
     BMN_CONFIG_HOME: join(root, 'config'), BMN_DATA_HOME: join(root, 'data'),

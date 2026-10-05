@@ -7,6 +7,8 @@ import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 
 import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { observeWindowsInstallCommands } from './fixtures/windows-install-command-observer.mjs'
 import { measureInstalledCimPreflight } from './fixtures/windows-installed-cim-preflight.mjs'
+import { captureInstalledSourceBindings, installedFailureDiagnostic } from './fixtures/windows-installed-failure-diagnostic.mjs'
+import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -21,7 +23,9 @@ const requirePayload = createRequire(join(source, 'resources/app.asar/package.js
 const native = requirePayload('node-pty/lib/utils').loadNativeModule('conpty').module
 assert.equal(typeof native.protectApplicationLifetime, 'function')
 native.protectApplicationLifetime()
-const report = { status: 'FAIL', checks: [], nativeWindows: true, actualPackagedGui: true,
+const sourceRepo = fileURLToPath(new URL('../../', import.meta.url))
+const sourceBindings = captureInstalledSourceBindings(sourceRepo)
+const report = { sourceBindings, status: 'FAIL', checks: [], nativeWindows: true, actualPackagedGui: true,
   remaining: ['real-shell-shortcut-activation', '8.3-path-alias-observation', 'waiting/building-barriers', 'notice-lifecycle/dismissal/log-access',
     'failed-update-old/new/no-build', 'unavailable-notice', 'stale-failure-suppression'] }
 const children = new Set(), browsers = new Set()
@@ -174,7 +178,7 @@ async function main() {
   report.selectedCommit = descriptor.commit
 }
 try { await main() }
-catch (error) { report.error = { name: /^[A-Za-z0-9_]{1,64}$/u.test(error.name) ? error.name : 'UNKNOWN', category: error instanceof assert.AssertionError ? 'assertion' : 'operation' }; process.exitCode = 1 }
+catch (error) { report.error = installedFailureDiagnostic(error, sourceRepo, { sourceBindings }); process.exitCode = 1 }
 finally {
   processes.spawnSync = actualSpawnSync; syncBuiltinESMExports()
   report.cleanup = []

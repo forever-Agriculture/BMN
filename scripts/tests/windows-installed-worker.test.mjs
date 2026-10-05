@@ -26,8 +26,9 @@ it('smokes with fresh homes and excludes owner credentials, Node flags and BMN b
   const observer = vi.spyOn(processes, 'spawnSync').mockImplementation((...args) => {
     const input = args[2]?.input
     let name
-    try { name = basename(JSON.parse(input).paths[0]) } catch { name = 'unknown' }
-    if (!['home', 'config', 'data', 'state', 'runtime', 'cache', 'claude', 'codex', 'opencode'].includes(name)) name = 'unknown'
+    try { const paths = JSON.parse(input).paths; name = paths.length === 9 ? 'all-smoke-roots' : basename(paths[0]) }
+    catch { name = 'unknown' }
+    if (!['all-smoke-roots', 'home', 'config', 'data', 'state', 'runtime', 'cache', 'claude', 'codex', 'opencode'].includes(name)) name = 'unknown'
     return trace.measure(`provision:${++call}:${name}`, () => actualSpawn(...args))
   })
   syncBuiltinESMExports()
@@ -41,6 +42,12 @@ it('smokes with fresh homes and excludes owner credentials, Node flags and BMN b
     expect(environment.USERPROFILE).toBe(join(root, 'home'))
     for (const name of ['OPENAI_API_KEY', 'BMN_TOKEN', 'NODE_OPTIONS', 'ELECTRON_RUN_AS_NODE']) expect(environment[name]).toBeUndefined()
     expect(environment.Path).not.toContain('owner-provider-bin')
+    const roots = ['home', 'config', 'data', 'state', 'runtime', 'cache', 'claude', 'codex', 'opencode'].map(name => join(root, name))
+    expect(roots.every(path => existsSync(path))).toBe(true)
+    if (process.platform === 'win32') {
+      expect(observer).toHaveBeenCalledOnce()
+      expect(JSON.parse(observer.mock.calls[0][2].input).paths).toEqual(roots)
+    }
     trace.mark('assertions:end')
   } finally {
     try { if (root) trace.measure('cleanup', () => rmSync(root, { recursive: true, force: true })) }
