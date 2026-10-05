@@ -12,7 +12,10 @@ const source = readFileSync(new URL('../lib/windows-installed-worker.mjs', impor
 const ast = ts.createSourceFile('worker.mjs', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS)
 const prefix = "$ErrorActionPreference='Stop';Import-Module ([System.IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1'));\n"
 const actualQueries = []
+const actualPreambles = []
 function visit(node) {
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken &&
+    ts.isStringLiteral(node.left) && node.right.getText(ast) === 'script') actualPreambles.push(node.left.text)
   if (ts.isCallExpression(node) && node.expression.getText(ast) === 'powershell' && ts.isStringLiteral(node.arguments[0]) && node.arguments[0].text.includes('Get-CimInstance ')) {
     actualQueries.push(prefix + node.arguments[0].text)
   }
@@ -20,6 +23,11 @@ function visit(node) {
 }
 visit(ast)
 const argv = script => ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')]
+
+it('binds the actual production preamble to the measured trusted-import candidate', () => {
+  expect(actualPreambles).toEqual([candidateQueryPrefix])
+  expect(actualQueries).toHaveLength(3)
+})
 
 it('retains the original call and result while collecting only diagnostic protocol records', () => {
   const original = "$ErrorActionPreference='Stop';Import-Module ([System.IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1'));\nGet-CimInstance Win32_Process -Filter \"Name='BMN.exe'\" | ConvertTo-Json"

@@ -12,10 +12,10 @@ const workerPath = fileURLToPath(new URL('../../lib/windows-installed-worker.mjs
 const requireApp = createRequire(new URL('../../../apps/desktop/package.json', import.meta.url))
 const requireVite = createRequire(requireApp.resolve('vite/package.json'))
 export async function buildInstalledQueryPair(directory) {
-  const source = readFileSync(workerPath, 'utf8')
-  const expression = 'script = ' + JSON.stringify(originalQueryPrefix) + ' + script'
-  assert.equal(source.split(expression).length, 2, 'Original helper preamble changed')
-  const candidate = source.replace(expression, 'script = ' + JSON.stringify(candidateQueryPrefix) + ' + script')
+  const candidate = readFileSync(workerPath, 'utf8')
+  const expression = 'script = ' + JSON.stringify(candidateQueryPrefix) + ' + script'
+  assert.equal(candidate.split(expression).length, 2, 'Current candidate helper preamble changed')
+  const source = candidate.replace(expression, 'script = ' + JSON.stringify(originalQueryPrefix) + ' + script')
   const exports = '\nexport { observeWindowsMappedEnginePayloads };\n'
   const modules = {}, bindings = { originalSourceSha256: sha256(Buffer.from(source)), candidateSourceSha256: sha256(Buffer.from(candidate)),
     soleRelevantDelta: 'trusted-CimCmdlets-manifest-import', exportOnly: 'observeWindowsMappedEnginePayloads', modules: {} }

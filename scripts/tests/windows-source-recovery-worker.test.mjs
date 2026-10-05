@@ -2,13 +2,14 @@
 // capabilities are substituted; this is synthetic integration, not native proof.
 import { createRequire } from 'node:module'
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { expect, it, vi } from 'vitest'
 import { queueWindowsSourceUpdate, readWindowsSourceUpdate } from '../lib/windows-source-update.mjs'
 import { activateWindowsRelease, readWindowsInstallation } from '../lib/windows-release-transaction.mjs'
 import { sealWindowsReleasePayload, validateWindowsReleasePayload } from '../lib/windows-release-payload.mjs'
+import { workerOnlySubprocessRoute } from './windows-native-capability-routing.test-support.mjs'
 
 const repo = fileURLToPath(new URL('../../', import.meta.url)), commit = 'a'.repeat(40)
 const sourceState = { branch: 'main', head: commit, originHead: commit, status: '' }
@@ -57,7 +58,8 @@ async function exercise(mode, dropFlag = false) {
     const result = await esbuild.build({ stdin: { contents: "export { resumeWindowsSourceUpdate } from './scripts/lib/windows-source-resume.mjs'; export { installWindowsPayload } from './scripts/lib/windows-installed-worker.mjs';", resolveDir: repo },
       outfile: output, bundle: true, platform: 'node', target: 'node24', format: 'esm', metafile: true,
       define: { 'import.meta.url': 'undefined' }, plugins: [{ name: 'synthetic-native-capabilities', setup(build) {
-        build.onResolve({ filter: /^node:(module|child_process)$/ }, args => ({ path: args.path, namespace: 'synthetic-native' }))
+        build.onResolve({ filter: /^node:module$/ }, args => ({ path: args.path, namespace: 'synthetic-native' }))
+        build.onResolve({ filter: /^node:child_process$/ }, workerOnlySubprocessRoute(resolve(repo, 'scripts/lib/windows-installed-worker.mjs')))
         build.onLoad({ filter: /.*/, namespace: 'synthetic-native' }, args => ({ contents: args.path === 'node:module'
           ? "export const createRequire=()=>name=>{if(name==='better-sqlite3')return globalThis.__bmnRecoveryDatabase;if(name==='node-pty/lib/utils')return {loadNativeModule:()=>({module:globalThis.__bmnRecoveryNative})};throw Error('Unexpected native dependency')};"
           : "export const spawn=()=>{throw Error('Unexpected child launch')}; export const spawnSync=(_exe,args)=>{const source=Buffer.from(args.at(-1),'base64').toString('utf16le');if(!source.includes('Get-CimInstance'))throw Error('Unexpected process operation');return {status:0,stdout:JSON.stringify([process.pid]),stderr:''}};" }))
@@ -77,6 +79,10 @@ async function exercise(mode, dropFlag = false) {
     for (const name of ['windows-source-update.mjs', 'windows-source-resume.mjs', 'windows-installed-worker.mjs', 'windows-release-transaction.mjs']) {
       expect(Object.keys(result.metafile.inputs).some(path => path.endsWith('/' + name))).toBe(true)
     }
+    const workerInput = Object.entries(result.metafile.inputs).find(([path]) => path.endsWith('/windows-installed-worker.mjs'))[1]
+    const configInput = Object.entries(result.metafile.inputs).find(([path]) => path.endsWith('/safe-config-write.mjs'))[1]
+    expect(workerInput.imports.some(value => value.path === 'synthetic-native:node:child_process')).toBe(true)
+    expect(configInput.imports.some(value => value.path === 'node:child_process' && value.external)).toBe(true)
     const chain = await import(pathToFileURL(output).href)
     process.env.SystemRoot = 'C:\\Windows'
     const resumed = await chain.resumeWindowsSourceUpdate(installation, { dataRoot: join(root, 'data'), runtimeVersion: '44.3.0',

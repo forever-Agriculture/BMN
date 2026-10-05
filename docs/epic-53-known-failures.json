@@ -1,6 +1,6 @@
 {
   "description": "Epic 53 failing tests still owned by a port story. Open failures are not waived: the gate in scripts/test/unit-inventory-gate.mjs fails on any unlisted failure, and each story removes its entries as it repairs them.",
-  "source": "Native Windows ff7bb53 run37259993444: 3103 pass/14 fail/12 skipped; Linux3093/0/36skip. Real-PTY exit-before-delete retains prior nativePASS. Remaining16 keys unfinished: fourteen launcher obligations and two skipped socket cases needing complete native equivalents. No failures added or waived.",
+  "source": "Native c7cec2f run37264964376: Windows3124 pass/19 fail/12 skipped; Linux3119/0/36skip. Fourteen launcher failures remain assigned below; five NEW worker-integration fixture failures are unlisted/unwaived and must be repaired. Existing16 keys remain unchanged: fourteen launcher obligations and two skipped socket equivalents. Native token metadata/cleanup nowPASS; ownership U. No failures added or waived.",
   "minimumTests": 2650,
   "platforms": {
     "linux": {},

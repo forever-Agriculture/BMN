@@ -27,7 +27,7 @@ function systemPowerShell(environment = process.env) {
 }
 function powershell(script, environment = process.env) {
   // Utility commands must not depend on auto-discovery in an isolated profile.
-  script = "$ErrorActionPreference='Stop';Import-Module ([System.IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1'));\n" + script
+  script = "$ErrorActionPreference='Stop';Import-Module ([System.IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1'));Import-Module ([System.IO.Path]::Combine($PSHOME,'Modules/CimCmdlets/CimCmdlets.psd1'));\n" + script
   const result = spawnSync(systemPowerShell(environment), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
     { env: environment, encoding: 'utf8', windowsHide: true, timeout: 30000 })
   assert.ok(!result.error && result.status === 0, 'Windows installation operation failed')

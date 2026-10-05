@@ -7,7 +7,6 @@ import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 
 import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { observeWindowsInstallCommands } from './fixtures/windows-install-command-observer.mjs'
 import { measureInstalledCimPreflight } from './fixtures/windows-installed-cim-preflight.mjs'
-import { measureInstalledQueryPair } from './fixtures/windows-installed-query-pair.mjs'
 import { dirname, join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -57,7 +56,7 @@ const settle = async (child, timeout, message) => {
   } finally { clearTimeout(timer) }
 }
 async function main() {
-  const { installWindowsPayload, windowsInstallerSmokeEnvironment, observeWindowsSelectedApps } = await import('../lib/windows-installed-worker.mjs')
+  const { installWindowsPayload, windowsInstallerSmokeEnvironment, observeWindowsApps, observeWindowsSelectedApps } = await import('../lib/windows-installed-worker.mjs')
   const { readInstallerDescriptor } = await import('../lib/windows-release-payload.mjs')
   const { readWindowsInstallation, releaseDirectory } = await import('../lib/windows-release-transaction.mjs')
   const { ensurePrivateDirectories } = await import('../../apps/desktop/src/utility/private-directory.ts')
@@ -67,22 +66,21 @@ async function main() {
   Object.assign(process.env, windowsInstallerSmokeEnvironment(join(fixture, 'profile')))
   const root = join(fixture, 'installation'), dataRoot = join(process.env.LOCALAPPDATA, 'BMN/data')
   process.env.BMN_DATA_HOME = dataRoot
-  const queryDirectory = join(process.env.LOCALAPPDATA, 'cim-diagnostic')
-  const queryRoot = join(queryDirectory, 'selection')
-  ensurePrivateDirectories([queryDirectory, queryRoot])
-  // This read-only helper needs selection metadata to reach its actual CIM
-  // branch. The private synthetic selection is never launched or uninstalled.
-  writeFileSync(join(queryRoot, 'installation.json'), JSON.stringify({ format: 1,
-    current: readInstallerDescriptor(source), previous: null, snapshot: null }), { flag: 'wx', mode: 0o600 })
-  report.stage = 'finite-actual-helper-cim-pairs'
-  await measureInstalledQueryPair({ directory: queryDirectory, root: queryRoot, operations: report.installOperations,
-    explicitPreflight: measureInstalledCimPreflight, record: value => { report.cimPair = value } })
-  assert.equal(commandObserver.diagnosticFailures.length, 0, 'CIM diagnostic recording failed')
-  // This candidate is intentionally diagnostic-only. Even a scoped candidate
-  // pass retains original failures and cannot silently continue installer work.
-  if (report.cimPair.installerAcceptance !== 'PASS') throw new Error('CIM diagnostic collected; separate installer acceptance remains unverified')
-  /* The following production installer acceptance is retained for the next
-     agreed repair gate, after actual-helper evidence is collected. */
+  report.stage = 'actual-production-cim-query'
+  const observed = observeWindowsApps()
+  assert.ok(Array.isArray(observed) && observed.every(pid => Number.isSafeInteger(pid) && pid > 0), 'Production process observation is incomplete')
+  report.productionCimQuery = { scope: 'actual-production-worker-entrypoint', status: 'PASS', processCount: observed.length }
+  report.stage = 'independent-installed-command-metadata'
+  report.cimPreflight = measureInstalledCimPreflight(process.env)
+  assert.equal(report.cimPreflight.completed, true, 'Installed command metadata did not verify')
+  assert.equal(report.cimPreflight.environmentUnchanged, true, 'Command metadata changed its environment')
+  assert.equal(report.cimPreflight.exitCode, 0, 'Command metadata did not exit successfully')
+  assert.equal(report.cimPreflight.launchError, null, 'Command metadata subprocess failed')
+  assert.equal(report.cimPreflight.signal, null, 'Command metadata subprocess was interrupted')
+  assert.equal(report.cimPreflight.exitObserved, true, 'Command metadata subprocess exit was not observed')
+  assert.equal(commandObserver.diagnosticFailures.length, 0, 'Installer diagnostic recording failed')
+  // Historical original/pair failures stay in their immutable artifacts. This
+  // separate gate must pass the current production installer and GUI assertions.
   const descriptor = readInstallerDescriptor(source), shortcut = join(fixture, 'BMN.lnk')
   report.stage = 'install-payload'
   await installWindowsPayload({ source, root, dataRoot, descriptor, refreshMetadata: async (installed, _release, payload) => {
