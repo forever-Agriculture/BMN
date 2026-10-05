@@ -649,6 +649,10 @@ general shell/build use. The bridge must carry protocol separately from terminal
 bytes and bind authority at the native host without copying its owner token.
 These are unresolved implementation/design gates, not delivered capabilities.
 
+### Session protocol (preparatory, Linux only)
+
+The first slice of the consultant-agreed WSL plan fixes the wire format before any adapter: [WSL session protocol](wsl-session-protocol.md). Frames carry a version, a channel and a length, so terminal bytes are never read as control. The launch message is versioned and validated field by field; credentials are refused in its environment. A session state machine runs on each side, and a receipt is complete only with a matching `ready` and an `exit` whose cleanup is confirmed. The native side (`scripts/lib/wsl-session-protocol.mjs`) and the guest side (`scripts/lib/wsl-session-protocol.py`) meet the same hand-written vectors under every split of the input (`scripts/tests/wsl-session-protocol.test.mjs`): 39 launch cases, 7 frame encodings, 10 malformed streams, 16 guest and 18 native session runs. Seven deliberate defects each failed the tests: the environment allowlist off, terminal bytes parsed as control, a receipt complete without confirmed cleanup, frames dropped before a format error, a foreign nonce accepted, end of input treated as an abort while running, and `..` allowed in paths. Nothing here runs WSL, root or a relay; WSL behavior, ConPTY transport and the two-registration checks remain **UNVERIFIED**, and `profileComplete` stays false.
+
 ## Native outside-broker discriminator (candidate)
 
 The new [WMI gate](../scripts/test/windows-broker-ownership.mjs) requires a
