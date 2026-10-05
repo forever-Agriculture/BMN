@@ -54,13 +54,15 @@ function fixture({ phase = null, selected = previous, windowsAvailable = true } 
   // Unavailable windows use a missing executable; the notification helper stays real.
   const options = { start, ...(windowsAvailable ? {} : { executable: join(root, 'missing-powershell.exe') }) }
   const ui = {
-    // A first cold PowerShell window under parallel CI load exceeded the 20 s product
-    // budget (runs 37281677152, 37296438394); these tests drive the window itself, so
-    // they allow 60 s and report each start time as an observation.
+    // Under the parallel CI inventory a window took 28-46 s to show (run 37299667758),
+    // beyond the product's 20 s default. These tests drive the window itself, so they
+    // allow 90 s and report each start against the default; windows-update-ui.test.mjs
+    // covers the default budget's timeout and notification fallback.
     startProgress: async value => {
       const begun = Date.now()
-      const progress = await startWindowsUpdateProgress({ parent: windows, attemptId: value.attemptId, progressPath: join(requests, WINDOWS_UPDATE_LOG), text: windowsUpdateTexts.progress, readyTimeout: 60000, ...options })
-      console.log(JSON.stringify({ nativeDiagnostic: 'update-progress-readiness', observationOnly: true, productBudgetMs: 20000, ready: progress.ready, elapsedMs: Date.now() - begun }))
+      const progress = await startWindowsUpdateProgress({ parent: windows, attemptId: value.attemptId, progressPath: join(requests, WINDOWS_UPDATE_LOG), text: windowsUpdateTexts.progress, readyTimeout: 90000, ...options })
+      const elapsedMs = Date.now() - begun
+      console.log(JSON.stringify({ nativeDiagnostic: 'update-progress-readiness', observationOnly: true, productBudgetMs: 20000, exceededProductBudget: elapsedMs > 20000, ready: progress.ready, elapsedMs }))
       return progress
     },
     ask: checked(value => askWindowsUpdateQuestion({ parent: windows, ...value, ...options })),
@@ -83,6 +85,9 @@ function fail(f, after, withCandidate) {
   observer.enter('package'); observer.fail(windowsUpdateFailure('synthetic package failure', 'command', 1))
   f.select(after); f.finishRequest('failed', withCandidate ? { candidate } : {})
 }
+
+// Each window can take up to about 46 s to show under CI load; a test allows 60 s per window it opens in sequence.
+const windowsTimeout = count => count * 60000 + 60000
 
 describe.runIf(native)('native Windows desktop launcher', () => {
   it('starts BMN at once when no update is queued', async () => {
@@ -153,7 +158,7 @@ describe.runIf(native)('native Windows desktop launcher', () => {
     expect(log.value).not.toContain('synthetic package failure')
     expectWindow(await automateWindow({ processId: viewer.pid, title: 'BMN update log', action: 'invoke', name: 'Close' }), { acted: true })
     expect(await declined).toBe(0); expect(showLog.launches).toEqual([])
-  }, 180000)
+  }, windowsTimeout(5))
 
   it('opens nothing when the failed update left no build in place, and says so', async () => {
     const f = fixture({ phase: 'building' })
@@ -165,7 +170,7 @@ describe.runIf(native)('native Windows desktop launcher', () => {
     const viewer = await startedChild(2)
     expectWindow(await automateWindow({ processId: viewer.pid, title: 'BMN update log', action: 'invoke', name: 'Close', until: 'Close' }), { acted: true })
     expect(await result).toBe(1); expect(f.launches).toEqual([])
-  }, 120000)
+  }, windowsTimeout(3))
 
   it('says the same in the notification when the windows cannot be shown', async () => {
     const f = fixture({ phase: 'building', windowsAvailable: false })

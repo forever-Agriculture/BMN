@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, describe, expect, it } from 'vitest'
-import { askWindowsUpdateQuestion, notifyWindowsUpdate, showWindowsUpdateLog, startWindowsUpdateProgress } from '../lib/windows-update-ui.mjs'
+import { askWindowsUpdateQuestion, notifyWindowsUpdate, showWindowsUpdateLog, startWindowsUpdateProgress, systemPowerShell, windowArguments, windowEnvironment } from '../lib/windows-update-ui.mjs'
 import { WINDOWS_UPDATE_LOG, WindowsUpdateObserver } from '../lib/windows-update-progress.mjs'
 import { ensurePrivateDirectories } from '../../apps/desktop/src/utility/private-directory.ts'
 import { automateWindow } from '../test/fixtures/windows-ui-automation.mjs'
@@ -29,6 +29,16 @@ async function startedChild(index) {
   for (let tries = 0; started.length <= index; tries++) { if (tries > 600) throw new Error('Window process did not start'); await delay(50) }
   return started[index]
 }
+// These tests drive the window itself. Under the parallel CI inventory a window took 28-46 s to
+// show (run 37299667758), so they allow 90 s and report each start against the product's 20 s
+// default; the default budget's timeout and fallback have their own test below.
+async function startProgress(f, text = 'Getting the update ready…') {
+  const begun = Date.now()
+  const progress = await startWindowsUpdateProgress({ parent: f.parent, attemptId: f.attemptId, progressPath: join(f.requests, WINDOWS_UPDATE_LOG), text, start, readyTimeout: 90000 })
+  const elapsedMs = Date.now() - begun
+  console.log(JSON.stringify({ nativeDiagnostic: 'update-progress-readiness', observationOnly: true, productBudgetMs: 20000, exceededProductBudget: elapsedMs > 20000, ready: progress.ready, elapsedMs }))
+  return progress
+}
 const texts = view => view.elements.map(element => element.text)
 // The whole automation result on failure: what the window showed, not just the mismatch.
 const shown = view => JSON.stringify(view).slice(0, 4000)
@@ -37,7 +47,7 @@ const expectWindow = (view, expected) => { expect(view, shown(view)).toMatchObje
 describe.runIf(native)('native Windows update windows', () => {
   it('renders the actual update stage, then closes on the completion request and allows opening BMN', async () => {
     const f = fixture(), observer = new WindowsUpdateObserver(f.requests, f.attemptId)
-    const progress = await startWindowsUpdateProgress({ parent: f.parent, attemptId: f.attemptId, progressPath: join(f.requests, WINDOWS_UPDATE_LOG), text: 'Getting the update ready…', start })
+    const progress = await startProgress(f)
     expect(progress.ready).toBe(true)
     const pid = started[0].pid
     const first = await automateWindow({ processId: pid, title: 'BMN is updating', until: 'Getting the update ready…' })
@@ -55,7 +65,7 @@ describe.runIf(native)('native Windows update windows', () => {
 
   it.each([['invoke', "Don't wait"], ['close', undefined]])('suppresses opening when the owner dismisses the window (%s)', async (action, name) => {
     const f = fixture()
-    const progress = await startWindowsUpdateProgress({ parent: f.parent, attemptId: f.attemptId, progressPath: join(f.requests, WINDOWS_UPDATE_LOG), text: 'Getting the update ready…', start })
+    const progress = await startProgress(f)
     expectWindow(await automateWindow({ processId: started[0].pid, title: 'BMN is updating', action, name }), { acted: true })
     await exited(started[0])
     expect(await progress.finish()).toMatchObject({ ready: true, suppressed: true, acknowledged: false, autoOpenAfterSuccessfulUpdate: false })
@@ -63,9 +73,18 @@ describe.runIf(native)('native Windows update windows', () => {
 
   it('treats an unexpected exit after readiness as dismissal, never as permission to open', async () => {
     const f = fixture()
-    const progress = await startWindowsUpdateProgress({ parent: f.parent, attemptId: f.attemptId, progressPath: join(f.requests, WINDOWS_UPDATE_LOG), text: 'Getting the update ready…', start })
+    const progress = await startProgress(f)
     started[0].kill(); await exited(started[0])
     expect(await progress.finish()).toMatchObject({ ready: true, suppressed: true, autoOpenAfterSuccessfulUpdate: false })
+  }, 120000)
+
+  it('stops a window that is not ready within its budget and asks for the notification instead', async () => {
+    const f = fixture()
+    // A budget shorter than any PowerShell start exercises the product's timeout path with a real window process.
+    const progress = await startWindowsUpdateProgress({ parent: f.parent, attemptId: f.attemptId, progressPath: join(f.requests, WINDOWS_UPDATE_LOG), text: 'Getting the update ready…', start, readyTimeout: 100 })
+    expect(progress.ready).toBe(false)
+    expect(running(started[0])).toBe(false)
+    expect(await progress.finish()).toMatchObject({ ready: false, suppressed: false, unavailable: true, autoOpenAfterSuccessfulUpdate: false, notificationFallbackNeeded: true })
   }, 120000)
 
   it('reports an unavailable window instead of waiting or claiming a decision', async () => {
@@ -116,4 +135,29 @@ describe.runIf(native)('native Windows update windows', () => {
     expect(['submitted', 'unavailable']).toContain(await notifyWindowsUpdate({ title: 'BMN is updating', text: 'BMN opens when the update finishes.', start }))
     expect(started[0].spawnargs.join(' ')).not.toContain('BMN opens')
   }, 60000)
+
+  // Observation only: one sample of where a window's start time goes, with the product's flags and
+  // environment, plus a full-environment control. It locates a cost; it does not assert a budget.
+  it('records where an update window spends its start time', async () => {
+    const product = windowEnvironment({}, process.env), full = { ...process.env }
+    const winforms = 'Add-Type -AssemblyName System.Windows.Forms,System.Drawing'
+    const stages = [
+      ['bare', 'product', 'exit 0', product],
+      ['bare', 'full', 'exit 0', full],
+      ['winforms-load', 'product', `${winforms}; exit 0`, product],
+      ['winforms-load', 'full', `${winforms}; exit 0`, full],
+      ['form-shown', 'product', `${winforms}; $form=New-Object Windows.Forms.Form; $form.Add_Shown({ [Environment]::Exit(0) }); [void]$form.ShowDialog()`, product]
+    ]
+    const results = []
+    for (const [stage, environment, script, env] of stages) {
+      const begun = Date.now(), child = start(systemPowerShell(), windowArguments(`$ErrorActionPreference='Stop'\n${script}`), { env, stdio: 'ignore', windowsHide: false })
+      const outcome = await Promise.race([
+        new Promise(resolve => { child.once('error', error => resolve({ error: error.code ?? 'unknown' })); child.once('exit', code => resolve({ code })) }),
+        delay(50000).then(() => ({ timedOut: true }))])
+      if (outcome.timedOut) { child.kill(); await exited(child) }
+      results.push({ stage, environment, elapsedMs: Date.now() - begun, ...outcome })
+    }
+    console.log(JSON.stringify({ nativeDiagnostic: 'update-window-start-cost', observationOnly: true, results }))
+    expect(results).toHaveLength(stages.length)
+  }, 330000)
 })

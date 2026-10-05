@@ -125,8 +125,12 @@ function accessibilityHelper() {
   return helper
 }
 
-/** action: 'inspect' | 'invoke' (name = button) | 'close'; until = a control name that must exist first. */
-export async function automateWindow({ processId, title, action = 'inspect', name, until, timeoutMs = 20000 }) {
+/**
+ * action: 'inspect' | 'invoke' (name = button) | 'close'; until = a control name that must exist first.
+ * The search ends as soon as the window is found. Its 90 s bound covers update windows that took
+ * 28-46 s to show under the parallel CI inventory (run 37299667758); startup time is not asserted here.
+ */
+export async function automateWindow({ processId, title, action = 'inspect', name, until, timeoutMs = 90000 }) {
   const assembly = await accessibilityHelper()
   const child = spawn(powershell(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', encoded(script)],
     { env: { ...process.env, BMN_UIA_ASSEMBLY: assembly, BMN_UIA_REQUEST: JSON.stringify({ processId, title, action, name, until, timeoutMs }) }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })

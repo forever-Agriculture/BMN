@@ -123,7 +123,7 @@ export function systemPowerShell(environment = process.env) {
   return join(system, 'System32/WindowsPowerShell/v1.0/powershell.exe')
 }
 /** Only what WinForms needs, plus the window's literal data; no tokens or provider settings. */
-function windowEnvironment(data, inherited) {
+export function windowEnvironment(data, inherited) {
   const environment = {}
   for (const name of ['SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'USERNAME', 'USERDOMAIN']) {
     const value = windowsEnvironmentValue(inherited, name)
@@ -133,6 +133,10 @@ function windowEnvironment(data, inherited) {
   for (const [name, value] of Object.entries(data)) { assert.equal(typeof value, 'string'); environment[name] = value }
   return environment
 }
+
+/** The flags every update window runs with; the native start-cost probe uses the same. */
+export const windowArguments = script => ['-NoLogo', '-NoProfile', '-NonInteractive', '-STA', '-WindowStyle', 'Hidden',
+  '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')]
 
 function readDecisions(directory) {
   const events = []
@@ -151,8 +155,7 @@ function ownedWindow(script, data, { parent, prepare = () => {}, start = spawn, 
   const directory = join(parent, randomUUID())
   ensurePrivateDirectories([directory])
   prepare(directory)
-  const child = start(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-STA', '-WindowStyle', 'Hidden',
-    '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+  const child = start(executable, windowArguments(script),
   { env: windowEnvironment({ ...data, BMN_UPDATE_UI_DIRECTORY: directory }, inherited), stdio: 'ignore', windowsHide: false })
   let failed = false
   const exited = new Promise(resolve => {
