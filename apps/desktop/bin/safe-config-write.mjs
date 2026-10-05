@@ -379,6 +379,18 @@ try {
 // Compress only our fixed program; paths/settings remain JSON on stdin, never code.
 const WINDOWS_CONFIG_COMMAND = Buffer.from(`$memory=[IO.MemoryStream]::new([Convert]::FromBase64String('${gzipSync(Buffer.from(WINDOWS_CONFIG_WRITE, 'utf8')).toString('base64')}'));$gzip=[IO.Compression.GZipStream]::new($memory,[IO.Compression.CompressionMode]::Decompress);$reader=[IO.StreamReader]::new($gzip,[Text.Encoding]::UTF8);try {$source=$reader.ReadToEnd()} finally {$reader.Dispose()}; & ([ScriptBlock]::Create($source))`, 'utf16le').toString('base64')
 
+// Sharing and lock violations, and a file mapped by another process: another program holds the config open.
+const WINDOWS_LOCKED_ERRNOS = new Set([32, 33, 1224])
+
+/** What a failed Windows config operation tells the person: a locked config is named as such. */
+export function windowsConfigFailureMessage(code, errno) {
+  if (code === 'REVISION_CONFLICT') return 'Config changed before Windows replacement; it was not replaced'
+  if (code === 'IO_ERROR' && WINDOWS_LOCKED_ERRNOS.has(errno)) {
+    return 'The config file is in use or locked by another program; close it there and try again. It was not replaced'
+  }
+  return 'Windows could not confirm the config operation; inspect the original and any retained backup/staged file'
+}
+
 function windowsConfigOperation(request) {
   const systemRoot = windowsEnvironmentValue(process.env, 'SystemRoot')
   if (!systemRoot || !win32.isAbsolute(systemRoot)) throw new CliError('IO_ERROR', 'Windows SystemRoot is unavailable')
@@ -390,7 +402,7 @@ function windowsConfigOperation(request) {
   if (child.error || child.status !== 0 || result?.ok !== true) {
     const recoveryRequired = request.mode === 'cleanup' || (request.mode === 'commit' && (result?.recoveryRequired === true || !result))
     const code = recoveryRequired ? 'RECOVERY_REQUIRED' : result?.code === 'REVISION_CONFLICT' ? 'REVISION_CONFLICT' : 'IO_ERROR'
-    const error = new CliError(code, code === 'REVISION_CONFLICT' ? 'Config changed before Windows replacement; it was not replaced' : 'Windows could not confirm the config operation; inspect the original and any retained backup/staged file')
+    const error = new CliError(code, windowsConfigFailureMessage(code, result?.errno))
     error.created = result?.created === true
     error.stagedIdentity = result?.stagedIdentity
     error.nativeOperation = result?.operation

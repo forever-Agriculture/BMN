@@ -1,9 +1,10 @@
 import { spawnSync } from 'node:child_process'
-import { readFileSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { readFileSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { effectiveTerminalGraphics, type TerminalGraphicsChoice } from '@bmn/protocol'
+import { replaceFileSync } from './file-replace'
 
 export const SIXEL_TERM = 'xterm-sixel-256color'
 export const STANDARD_TERM = 'xterm-256color'
@@ -23,7 +24,7 @@ export function installBundledTerminfo(dataRoot: string, source: string): Termin
   const temporary = `${target}.${randomUUID()}.tmp`
   try {
     writeFileSync(temporary, bundled, { mode: 0o600 })
-    renameSync(temporary, target)
+    replaceFileSync(temporary, target)
     if (!readFileSync(target).equals(bundled)) throw new Error('Bundled terminfo copy did not verify')
   } catch (error) {
     try { unlinkSync(temporary) } catch { /* no partial entry to retain */ }

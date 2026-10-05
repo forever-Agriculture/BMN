@@ -17,6 +17,7 @@ import {
   type FileHandle
 } from 'node:fs/promises'
 import { basename, dirname, extname, join, resolve, sep } from 'node:path'
+import { replaceFile } from './file-replace'
 
 export const ARTIFACT_MAX_IMPORT_BYTES = 250 * 1024 * 1024
 export const ARTIFACT_QUOTA_BYTES = 10 * 1024 * 1024 * 1024
@@ -536,7 +537,7 @@ export class ArtifactFileStore {
   /** Without overwrite, a hard link publishes the file only if the name is still free. */
   private async placeFile(temporary: string, destination: string, overwrite: boolean): Promise<void> {
     if (overwrite) {
-      await rename(temporary, destination)
+      await replaceFile(temporary, destination)
       return
     }
     try {
@@ -549,7 +550,7 @@ export class ArtifactFileStore {
       if (await lstatOrUndefined(destination)) {
         throw new ArtifactFileError('destination-exists', 'destination already exists')
       }
-      await rename(temporary, destination)
+      await replaceFile(temporary, destination)
     }
   }
 }

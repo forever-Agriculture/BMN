@@ -4,7 +4,7 @@ import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { linkTarget, writeConfigSafely } from '../../apps/desktop/bin/safe-config-write.mjs'
+import { linkTarget, windowsConfigFailureMessage, writeConfigSafely } from '../../apps/desktop/bin/safe-config-write.mjs'
 
 const roots = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
@@ -169,4 +169,16 @@ describe('shared config writer', () => {
     expect(lstatSync(path).isSymbolicLink()).toBe(true)
     expect(readFileSync(target, 'utf8')).toBe('CREATED')
   }, 15000)
+})
+
+describe('Windows config write failures', () => {
+  it('names a config another program holds open, and keeps the other messages', () => {
+    for (const errno of [32, 33, 1224]) {
+      expect(windowsConfigFailureMessage('IO_ERROR', errno)).toBe(
+        'The config file is in use or locked by another program; close it there and try again. It was not replaced')
+    }
+    expect(windowsConfigFailureMessage('IO_ERROR', 5)).toMatch(/^Windows could not confirm the config operation/)
+    expect(windowsConfigFailureMessage('RECOVERY_REQUIRED', 32)).toMatch(/^Windows could not confirm the config operation/)
+    expect(windowsConfigFailureMessage('REVISION_CONFLICT', 32)).toBe('Config changed before Windows replacement; it was not replaced')
+  })
 })

@@ -1,7 +1,7 @@
 // MODULE: companion-service.ts - host-side artifacts, attention, progress, drafts, settings, control socket, Telegram and backup
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { appendFile, chmod, copyFile, lstat, mkdir, readFile, rename, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises'
+import { appendFile, chmod, copyFile, lstat, mkdir, readFile, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { basename, delimiter, dirname, extname, isAbsolute, join, relative } from 'node:path'
 import {
@@ -61,6 +61,7 @@ import {
 import { writeClaudeFolderAsync } from './agent-history-claude'
 import { ArtifactFileError, ArtifactFileStore, type InstalledOriginal } from './artifact-files'
 import { ControlAuth, writeOwnerToken, type ControlScope } from './control-auth'
+import { replaceFile } from './file-replace'
 import { HookEventHistory } from './hook-event-history'
 import { LiveProducers } from './live-producers'
 import { ControlError, ControlServer, type ReceiptRecord } from './control-server'
@@ -153,6 +154,17 @@ export interface CompanionServiceOptions {
   proc?: ProcReader
   /** UID of an explicitly injected synthetic /proc reader. */
   procUid?: number
+}
+
+/** Writes the owner-only staged copy `replaceFile` moves into place; a failed write leaves no partial copy. */
+async function writeStaged(path: string, contents: string): Promise<void> {
+  try {
+    await writeFile(path, contents, { mode: 0o600 })
+    await chmod(path, 0o600)
+  } catch (error) {
+    await rm(path, { force: true }).catch(() => undefined)
+    throw error
+  }
 }
 
 function invalid(message: string): never {
@@ -2461,8 +2473,8 @@ export class CompanionService {
       excluded: ['Telegram bot token', 'control socket credentials', 'saved terminal output', 'retained hook event history', 'live question producer bindings']
     }
     const manifestPath = join(directory, 'manifest.json')
-    await writeFile(`${manifestPath}.tmp`, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 })
-    await rename(`${manifestPath}.tmp`, manifestPath)
+    await writeStaged(`${manifestPath}.tmp`, `${JSON.stringify(manifest, null, 2)}\n`)
+    await replaceFile(`${manifestPath}.tmp`, manifestPath)
     return { directory, manifest }
   }
 
@@ -2539,9 +2551,8 @@ export class CompanionService {
       }
       await mkdir(this.options.roots.config, { recursive: true, mode: 0o700 })
       const temporary = `${this.tokenPath()}.${randomUUID()}.tmp`
-      await writeFile(temporary, `${token.trim()}\n`, { mode: 0o600 })
-      await chmod(temporary, 0o600)
-      await rename(temporary, this.tokenPath())
+      await writeStaged(temporary, `${token.trim()}\n`)
+      await replaceFile(temporary, this.tokenPath())
     }
     await this.restartTelegram()
     return this.telegramStatus()
