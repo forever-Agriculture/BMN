@@ -770,3 +770,14 @@ Windows unit coverage added alongside:
 - The process start-identity tests now run on Windows. Only there is an exited process's refusal awaited, for up to 5 s, because Windows keeps the process until its last handle closes; Linux still requires an immediate refusal.
 - The CLI's refusal of a terminal on standard input now runs through a real PTY on both systems.
 - A Windows test refuses reserved device names and the pipe and device namespaces as file references, without reading them.
+
+## Release-scope gaps (local candidate after `8d5dcff`, native checks pending)
+
+Each item below passes on Linux; its Windows test is written and runs in the next native CI round. Native results are **UNVERIFIED** until collected.
+- **Owner-only backup exports and bot token (53.3, 53.9).** Backup export creates its folder owner-only through the same protected-DACL route as BMN's data roots; Windows ACL tests cover the folder and the bot token's write-then-rename.
+- **Notification failures (53.9).** BMN follows each desktop notification's shown and failed events; Preferences says under Desktop notifications when the system refused the last one and where to turn notifications back on.
+- **Microphone loss (53.8).** Dictation stops cleanly and says so when the microphone goes away mid-recording.
+- **Locked files (53.3).** Every atomic replacement (saved output, backup manifest, bot and owner tokens, terminfo, saved artifacts) keeps the previous file whole, removes its staged copy and, for a Windows lock, says the file is in use by another program. Saved output used to leave its staged file behind (regression test RED before the fix). Config writes name Windows sharing and lock violations the same way. A Windows test holds the target open without sharing.
+- **Control endpoint (53.4).** Preferences names the Windows endpoint "Endpoint file" and the status "control pipe"; readiness is reported only once listening, and the answer never carries a token. A Windows test proves closing keeps an endpoint file another server has since written.
+- **Hook command form (53.6).** On Windows BMN writes a PowerShell entry (`if ($env:BMN_CONTROL_SOCKET -and (Get-Command bmn …)) { bmn hook <agent> }; exit 0`), with `"shell": "powershell"` on Claude Code's entries, and shows rather than counts POSIX or unpinned entries. `bmn hook` accepts the byte-order mark Cursor adds to its payload. A Windows test runs the written entry through Windows PowerShell and PowerShell 7 with a stand-in `bmn.exe`. Real hook events from each harness on Windows remain **UNVERIFIED**.
+- **Manual Windows testing.** Each "Linux and Windows build" run keeps its Windows build as the artifact `bmn-windows-x64-<commit>` (unsigned installer and unpacked folder) for 14 days.
