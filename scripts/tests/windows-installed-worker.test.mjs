@@ -6,7 +6,14 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { expect, it, vi } from 'vitest'
-import { removeWindowsInstalledPayloads, windowsMappedEnginePayloads, waitForWindowsAppsToExit, windowsInstallerSmokeEnvironment, windowsInstallerSmokeFolders } from '../lib/windows-installed-worker.mjs'
+// Payload removal is switchable so one test can hold the smoke profile the way exiting processes do.
+const removal = vi.hoisted(() => ({ fail: null }))
+vi.mock('../lib/physical-payload-fs.mjs', async (importOriginal) => {
+  const { physicalPayloadFs } = await importOriginal()
+  return { physicalPayloadFs: { ...physicalPayloadFs,
+    rmSync: (...args) => removal.fail ? removal.fail(...args) : physicalPayloadFs.rmSync(...args) } }
+})
+import { removeWindowsInstalledPayloads, smokeWindowsInstalledPayload, windowsMappedEnginePayloads, waitForWindowsAppsToExit, windowsInstallerSmokeEnvironment, windowsInstallerSmokeFolders } from '../lib/windows-installed-worker.mjs'
 import { ensurePrivateDirectories } from '../../apps/desktop/src/utility/private-directory.ts'
 import { resolveApplicationRoots } from '../../apps/desktop/src/utility/roots.ts'
 
@@ -86,6 +93,37 @@ it('gives the smoke profile shell folders that installed BMN accepts as distinct
     }
     expect(environment.LOCALAPPDATA).not.toBe(environment.APPDATA)
   } finally { restore(); rmSync(root, { recursive: true, force: true }) }
+})
+
+it('reports a failed installed smoke even when its temporary profile cannot be removed yet', async () => {
+  // Run 37312653316: the self-test failed, its exiting processes still held the profile, and the removal
+  // error replaced the smoke's verdict. Folder security and the smoke run are replaced here; removal fails.
+  const actualSpawn = processes.spawnSync
+  const removed = []
+  vi.spyOn(processes, 'spawnSync').mockImplementation((command, args, options) => {
+    if (String(command).endsWith('BMN.exe')) {
+      return { status: 1, signal: null, stdout: '\r\n', stderr: '[BMN] self-test phase: startup ready +765ms\n[BMN] session self-test failed: the animation pane never printed SCROLLED\n' }
+    }
+    return actualSpawn(command, args, options)
+  })
+  removal.fail = (path) => {
+    removed.push(path)
+    throw Object.assign(new Error('resource busy or locked'), { code: 'EBUSY' })
+  }
+  syncBuiltinESMExports()
+  const systemRoot = process.env.SystemRoot
+  if (process.platform !== 'win32') process.env.SystemRoot = 'C:\\Windows'
+  try {
+    const failure = await smokeWindowsInstalledPayload(mkdtempSync(join(tmpdir(), 'bmn-installed-root-'))).catch(error => error)
+    expect(failure.message).toBe('Installed candidate failed isolated smoke')
+    expect(failure.smokeOutcome).toMatchObject({ status: 1, cleanupErrorCode: 'EBUSY',
+      failure: 'the animation pane never printed SCROLLED', phases: ['startup ready +765ms'] })
+  } finally {
+    removal.fail = null
+    vi.restoreAllMocks(); syncBuiltinESMExports()
+    if (process.platform !== 'win32') { if (systemRoot === undefined) delete process.env.SystemRoot; else process.env.SystemRoot = systemRoot }
+    for (const path of removed) rmSync(path, { recursive: true, force: true })
+  }
 })
 
 it('retains only the mapped current engine and removes inactive payloads and staging on uninstall', () => {

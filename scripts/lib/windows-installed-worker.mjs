@@ -88,6 +88,7 @@ export async function smokeWindowsInstalledPayload(root) {
   // Existing Windows roots must already have protected ACLs. Provision a missing
   // child privately; never adopt the ordinary mkdtemp directory by changing ACLs.
   const profile = join(temporary, 'profile')
+  let failure, receipt
   try {
     ensurePrivateDirectories([profile])
     const started = Date.now()
@@ -105,11 +106,20 @@ export async function smokeWindowsInstalledPayload(root) {
         stdoutBytes: Buffer.byteLength(String(result.stdout ?? '')), stderrBytes: Buffer.byteLength(String(result.stderr ?? '')),
         phases: [...String(result.stderr ?? '').matchAll(/\[BMN\] self-test phase: ([^\r\n]*)/gu)].map(match => match[1]) } })
     }
-    const receipt = receipts.find(row => row.selfTest === 'session-roundtrip')
+    receipt = receipts.find(row => row.selfTest === 'session-roundtrip')
     // The installed build is accepted on the same receipt as a packaged one: every phase and its packaged facts.
     assert.ok(receipt && missingSelfTestPhases(receipt).length === 0 && packagedReceiptComplete(receipt, 'win32'), 'Installed smoke receipt is incomplete')
-    return receipt
-  } finally { rmSync(temporary, { recursive: true, force: true }) }
+  } catch (error) { failure = error }
+  // Processes the self-test started can hold its files briefly after BMN exits, so removal retries.
+  // A removal failure after a failed smoke is recorded on that failure and never replaces its verdict.
+  let cleanup
+  try { rmSync(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }) } catch (error) { cleanup = error }
+  if (failure) {
+    if (cleanup && failure.smokeOutcome) failure.smokeOutcome.cleanupErrorCode = cleanup.code ?? 'unknown'
+    throw failure
+  }
+  if (cleanup) throw cleanup
+  return receipt
 }
 
 export function refreshWindowsInstalledMetadata(root, release, payload = join(root, 'bootstrap')) {

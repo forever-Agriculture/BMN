@@ -87,6 +87,8 @@ export function installedSmokeOutcome(error) {
       // Only the phase's leading words: later text can carry JSON values or paths.
       stdoutBytes: integer(value.stdoutBytes), stderrBytes: integer(value.stderrBytes),
       phaseCount: Array.isArray(value.phases) ? value.phases.length : 0,
+      cleanupErrorCode: ['EBUSY', 'EPERM', 'EACCES', 'ENOTEMPTY'].includes(value.cleanupErrorCode) ? value.cleanupErrorCode
+        : value.cleanupErrorCode === undefined ? null : 'other',
       lastPhase: Array.isArray(value.phases) && typeof value.phases.at(-1) === 'string' ? /^[A-Za-z0-9 -]{0,80}/u.exec(value.phases.at(-1))[0].trim() : null }
   } catch { return { unavailable: true } }
 }
