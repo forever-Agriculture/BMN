@@ -1,4 +1,5 @@
 // MODULE: index.ts - Electron main process: windows, bridge IPC and host lifecycle; `--self-test` loads ./self-test
+import { writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { ensurePrivateDirectories } from '../utility/private-directory'
 import { join, resolve } from 'node:path'
@@ -1038,38 +1039,66 @@ function actionableStartupFailure(error: unknown): StartupFailure {
 
 const selfTest = process.argv.includes('--self-test')
 const rendererTestMode = process.argv.includes('--bmn-test-mode')
-// Must match the installer/Start Menu shortcut appId before any Windows toast.
-if (process.platform === 'win32') app.setAppUserModelId('dev.bmn.desktop')
+// A self-test names each startup step as it enters and returns, with milliseconds since process start, so a
+// run that stops before its first phase shows where. Written synchronously: the step may block or end main.
+const startupMarker = (marker: string): void => {
+  if (!selfTest) return
+  try {
+    writeSync(2, `[BMN] self-test phase: startup ${marker} +${Math.round(performance.now())}ms\n`)
+  } catch {
+    // Without stderr the self-test still reports through its exit status.
+  }
+}
+function startupStep<T>(step: string, run: () => T): T {
+  startupMarker(`${step} enter`)
+  const result = run()
+  startupMarker(`${step} return`)
+  return result
+}
+startupMarker('main module')
 if (selfTest) {
-  // The dictation flow records from Chromium's fake microphone, so the real recorder path runs without hardware.
-  app.commandLine.appendSwitch('use-fake-device-for-media-stream')
-  app.commandLine.appendSwitch('use-fake-ui-for-media-stream')
   // Without a handler Electron shows a modal error dialog and the run waits on it unseen; a self-test
   // reports the first uncaught error once and exits nonzero instead.
   let uncaughtReported = false
   process.on('uncaughtException', (error) => {
     if (uncaughtReported) return
     uncaughtReported = true
-    console.error(`[BMN] session self-test failed: uncaught main-process error: ${(error.stack ?? error.message).slice(0, 2_000)}`)
+    try {
+      writeSync(2, `[BMN] session self-test failed: uncaught main-process error: ${(error.stack ?? error.message).slice(0, 2_000)}\n`)
+    } catch {
+      // The nonzero exit still reports the failure.
+    }
     app.exit(1)
   })
 }
-const installedReleaseLease = retainWindowsInstalledRelease(app.getPath('exe'))
+// Must match the installer/Start Menu shortcut appId before any Windows toast.
+startupStep('app identity', () => {
+  if (process.platform === 'win32') app.setAppUserModelId('dev.bmn.desktop')
+})
+if (selfTest) {
+  // The dictation flow records from Chromium's fake microphone, so the real recorder path runs without hardware.
+  app.commandLine.appendSwitch('use-fake-device-for-media-stream')
+  app.commandLine.appendSwitch('use-fake-ui-for-media-stream')
+}
+const installedReleaseLease = startupStep('installed release', () => retainWindowsInstalledRelease(app.getPath('exe')))
 // The closure retains the native handle until process exit, including all
 // utility shutdown and saved-output work. Kernel death releases it on a crash.
 process.once('exit', () => installedReleaseLease?.close())
-ensureDevelopmentRoots()
+startupStep('development roots', ensureDevelopmentRoots)
 app.on('will-quit', cleanupDevelopmentRoot)
 process.once('exit', cleanupDevelopmentRoot)
-const instanceRoots = resolveApplicationRoots()
+const instanceRoots = startupStep('root resolution', () => resolveApplicationRoots())
 const instanceDataRoot = instanceRoots.data
-ensurePrivateDirectories(Object.values(instanceRoots), process.platform, instanceDataRoot)
-const dataUpdateLease = retainWindowsDataLease(instanceDataRoot)
-process.once('exit', () => dataUpdateLease?.close())
-protectWindowsApplicationLifetime()
-const primaryInstance = acquireRootScopedSingleInstance(app, instanceDataRoot, () =>
-  focusExistingWindow(applicationWindow)
+startupStep('private directories', () =>
+  ensurePrivateDirectories(Object.values(instanceRoots), process.platform, instanceDataRoot)
 )
+const dataUpdateLease = startupStep('data lease', () => retainWindowsDataLease(instanceDataRoot))
+process.once('exit', () => dataUpdateLease?.close())
+startupStep('application lifetime', protectWindowsApplicationLifetime)
+const primaryInstance = startupStep('single instance', () =>
+  acquireRootScopedSingleInstance(app, instanceDataRoot, () => focusExistingWindow(applicationWindow))
+)
+startupMarker(`single instance ${primaryInstance ? 'acquired' : 'refused'}`)
 
 function runningTargets(): RunningSessionTarget[] {
   return trackedRunningTargets(processTracking)
@@ -1261,7 +1290,9 @@ function selfTestHost(): SelfTestHost {
 }
 if (primaryInstance) autoUpdater.on('update-downloaded', () => applicationLifecycle.updateDownloaded())
 
+startupMarker('awaiting ready')
 if (primaryInstance) void app.whenReady().then(async () => {
+  startupMarker('ready')
   // The Chancel header replaces Electron's default File/Edit/View/Window bar and its stray
   // accelerators (reload, zoom, close); Quit lives in the command palette.
   Menu.setApplicationMenu(null)
