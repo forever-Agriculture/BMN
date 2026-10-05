@@ -1085,7 +1085,7 @@ describe('backup', () => {
     expect(await verifyBackup(first.directory)).toMatchObject({ ok: true, checked: 1 })
     expect(await verifyBackup(second.directory)).toMatchObject({ ok: true, checked: 2 })
     trace.mark('verify:end')
-  }, process.platform === 'win32' ? 30000 : 5000)
+  }, 5000)
 
   it('exports every ready artifact, not only the newest 1,000', async () => {
     const trace = await observeBackup('backup-1001-artifacts', 30000)
@@ -1099,7 +1099,7 @@ describe('backup', () => {
     trace.mark('verify:begin')
     expect(await verifyBackup(directory)).toMatchObject({ ok: true, checked: 1002, failures: [] })
     trace.mark('verify:end')
-  }, process.platform === 'win32' ? 60000 : 30000)
+  }, 30000)
 
   it('explicitly excludes retained hook metadata from backups', async () => {
     await mkdir(join(root, 'state'), { recursive: true })

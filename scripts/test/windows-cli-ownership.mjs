@@ -58,11 +58,14 @@ setInterval(()=>{if(role==='root'&&fs.existsSync(path.join(dir,'natural')))proce
   // Probe exactly the shipped decoding form before any controller creates files.
   // Code units keep diagnostic output independent of PowerShell's stdout encoding.
   const utf8Input = '[Console]::InputEncoding=[Text.UTF8Encoding]::new($false);'
+  const commandGuard = readFileSync(new URL('./fixtures/windows-command-provenance.ps1', import.meta.url), 'utf8')
   const utility = `$ErrorActionPreference='Stop';
 foreach($module in @('Microsoft.PowerShell.Utility','Microsoft.PowerShell.Management','Microsoft.PowerShell.Archive')) {
  Import-Module ([IO.Path]::Combine($PSHOME,'Modules',$module,$module+'.psd1'));
 };$PSModuleAutoLoadingPreference='None';
 $commandFaults=[Collections.Generic.List[string]]::new();
+$commandMetadata=[Collections.Generic.List[object]]::new();
+${commandGuard}
 function CheckCommand($name,$source,$type='Cmdlet') {
  try {$command=Get-Command -Name $name -ErrorAction Stop} catch {
   [Console]::Error.WriteLine((ConvertTo-Json -Compress @{stage='command-provenance';name=$name;missing=$true}));
@@ -74,17 +77,17 @@ function CheckCommand($name,$source,$type='Cmdlet') {
  $assembly=if($command.ImplementingType){$command.ImplementingType.Assembly.Location}else{$null};
  $identity=if($command.ImplementingType){$command.ImplementingType.Assembly.GetName()}else{$null};
  $publicKeyToken=if($identity){([BitConverter]::ToString($identity.GetPublicKeyToken())).Replace('-','').ToLowerInvariant()}else{$null};
- [Console]::Error.WriteLine((ConvertTo-Json -Compress @{stage='command-provenance';name=$name;source=$command.Source;commandType=$command.CommandType.ToString();moduleBase=$base;moduleBaseCategory=$category;moduleType=if($command.Module){$command.Module.ModuleType.ToString()}else{$null};implementingAssembly=$assembly;assemblyName=if($identity){$identity.Name}else{$null};assemblyVersion=if($identity){$identity.Version.ToString()}else{$null};assemblyPublicKeyToken=$publicKeyToken;version=$PSVersionTable.PSVersion.ToString();is64Bit=[Environment]::Is64BitProcess}));
- if($command.Source -cne $source -or $command.CommandType -ne $type){$commandFaults.Add($name+':source-or-type')};
- if($source -ne 'Microsoft.PowerShell.Core') {
-  if(!$base -or !$base.Equals($expected,[StringComparison]::OrdinalIgnoreCase)){$commandFaults.Add($name+':module-base')};
- }
+ $metadata=[pscustomobject]@{stage='command-provenance';name=$name;source=$command.Source;commandType=$command.CommandType.ToString();moduleBase=$base;moduleBaseCategory=$category;moduleType=if($command.Module){$command.Module.ModuleType.ToString()}else{$null};implementingAssembly=$assembly;assemblyName=if($identity){$identity.Name}else{$null};assemblyVersion=if($identity){$identity.Version.ToString()}else{$null};assemblyPublicKeyToken=$publicKeyToken;version=$PSVersionTable.PSVersion.ToString();is64Bit=[Environment]::Is64BitProcess};
+ $commandMetadata.Add($metadata);
+ [Console]::Error.WriteLine((ConvertTo-Json -Compress $metadata));
+ if($command.Source -cne $source -or $command.CommandType -ne $type -or !(Test-BMNCommandMetadata $metadata)){$commandFaults.Add($name+':metadata')};
 }
 foreach($name in @('Import-Module','Get-Command','Get-Module','ForEach-Object')) {CheckCommand $name 'Microsoft.PowerShell.Core'};
 foreach($name in @('Start-Sleep','Add-Type','ConvertFrom-Json','ConvertTo-Json')) {CheckCommand $name 'Microsoft.PowerShell.Utility'};
 CheckCommand 'Join-Path' 'Microsoft.PowerShell.Management';
 CheckCommand 'Expand-Archive' 'Microsoft.PowerShell.Archive' 'Function';
 if($commandFaults.Count -ne 0){throw ('Unexpected fixture command provenance: '+[string]::Join(',',$commandFaults))};
+Assert-BMNCommandControls @($commandMetadata);
 [Console]::Error.WriteLine((ConvertTo-Json -Compress @{version=$PSVersionTable.PSVersion.ToString();is64Bit=[Environment]::Is64BitProcess;modules=@(Get-Module|ForEach-Object{@{name=$_.Name;version=$_.Version.ToString();path=$_.ModuleBase}})}));
 `
   const rootCodeUnits = Array.from({ length: root.length }, (_, index) => root.charCodeAt(index))

@@ -3,7 +3,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
-import { nativeUnitObservations } from './native-unit-observations.mjs'
+import { nativeUnitObservations, nativeObservationPattern, evaluateNativeObservation } from './native-unit-observations.mjs'
 
 const root = resolve(import.meta.dirname, '../..')
 const output = join(root, 'test-results')
@@ -54,11 +54,17 @@ receipt.inventoryExitCode = status; save()
 if (process.platform === 'win32' && process.env.GITHUB_ACTIONS === 'true' &&
     receipt.children.find(row => row.role === 'protocol-build')?.exitCode === 0) {
   for (const [index, observation] of nativeUnitObservations.entries()) {
-    const pattern = `^${observation.fullName.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}$`
+    const pattern = nativeObservationPattern(observation)
     const observed = await run(`native-observation-${index + 1}`, [join(root, 'node_modules/vitest/vitest.mjs'),
       'run', observation.file, '-t', pattern, '--maxWorkers=1', '--exclude', '.claude/**', '--exclude', '.dev-auto/**',
       '--reporter=default', '--reporter=json', `--outputFile.json=test-results/native-observation-${index + 1}.json`], root)
     if (observed !== 0) status = 1
+    let selection
+    try {
+      selection = evaluateNativeObservation(JSON.parse(readFileSync(join(output, `native-observation-${index + 1}.json`), 'utf8')), observation, root)
+    } catch { selection = { accepted: false, executedExpected: false, missingOrInvalidReport: true } }
+    receipt.children.at(-1).selection = selection; save()
+    if (!selection.accepted) { status = 1; console.error(`Native observation ${index + 1} did not execute and pass the intended test within its original budget`) }
   }
 }
 Object.assign(receipt, { completed: true, completedAt: new Date().toISOString(), exitCode: status }); save()

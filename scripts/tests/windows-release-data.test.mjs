@@ -86,8 +86,7 @@ describe('release data compatibility and snapshot', () => {
     trace.mark('inspect:end')
     expect(readFileSync(f.databasePath)).toEqual(before); expect(existsSync(f.snapshotPath)).toBe(false)
     trace.mark('assertions:end')
-    // Observation budget only: retains a receipt when the original 5s is exceeded.
-  }, process.platform === 'win32' ? 30000 : 5000)
+  }, 5000)
   it('makes and verifies a consistent private recovery file before a newer migration', async () => {
     const f = fixture(22), before = readFileSync(f.databasePath), result = await inspectWindowsReleaseData(f)
     expect(result).toEqual({ schemaVersion: 22, snapshot: { id: f.snapshotId, verified: true,
@@ -96,7 +95,7 @@ describe('release data compatibility and snapshot', () => {
     try { expect(snapshot.prepare('SELECT value FROM synthetic').get()).toEqual({ value: 'preserved' }) } finally { snapshot.close() }
     expect(readFileSync(f.databasePath)).toEqual(before)
     await expect(inspectWindowsReleaseData(f)).rejects.toThrow('never overwrites')
-  }, process.platform === 'win32' ? 30000 : 5000)
+  }, 5000)
   it('refuses a newer or unrecognized schema before writing any recovery file', async () => {
     const f = fixture(24), before = readFileSync(f.databasePath)
     await expect(inspectWindowsReleaseData(f)).rejects.toThrow('newer data schema')
@@ -104,7 +103,7 @@ describe('release data compatibility and snapshot', () => {
     const database = new Database(f.databasePath); database.exec('DROP TABLE schema_migration'); database.close()
     await expect(inspectWindowsReleaseData(f)).rejects.toThrow('no recognized')
     expect(existsSync(f.snapshotPath)).toBe(false)
-  }, process.platform === 'win32' ? 30000 : 5000)
+  }, 5000)
   it('supports a provisioned snapshot subdirectory and refuses a sibling outside data', async () => {
     const f = fixture(22), snapshots = join(f.databasePath, '..', 'snapshots')
     mkdirSync(snapshots)
@@ -114,7 +113,7 @@ describe('release data compatibility and snapshot', () => {
     f.snapshotPath = join(outside, 'forbidden.sqlite3')
     await expect(inspectWindowsReleaseData(f)).rejects.toThrow('provisioned data directory')
     expect(existsSync(f.snapshotPath)).toBe(false)
-  }, process.platform === 'win32' ? 30000 : 5000)
+  }, 5000)
   it('backs up committed WAL data consistently without losing uncheckpointed records', async () => {
     const f = fixture(22), writer = new Database(f.databasePath)
     try {
@@ -127,5 +126,5 @@ describe('release data compatibility and snapshot', () => {
         .toEqual([{ value: 'preserved' }, { value: 'committed in WAL' }]) } finally { snapshot.close() }
       expect(writer.prepare('SELECT count(*) AS total FROM synthetic').get()).toEqual({ total: 2 })
     } finally { writer.close() }
-  }, process.platform === 'win32' ? 30000 : 5000)
+  }, 5000)
 })

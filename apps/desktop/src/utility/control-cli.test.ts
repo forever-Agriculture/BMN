@@ -23,7 +23,7 @@ import { instrumentCliConnection } from './cli-connection-diagnostic.test-suppor
 // Native ACL subprocesses can exceed the default 5s; each CLI child retains its 15s bound.
 if (process.platform === 'win32') vi.setConfig({ testTimeout: 30_000 })
 const rawEndpoint = (root: string, name: string) => process.platform === 'win32'
-  ? `\\\\.\\pipe\\bmn-control-${randomUUID()}` : join(root, name)
+  ? `\\\\.\\pipe\\bmn-control-${randomUUID().replaceAll('-', '')}` : join(root, name)
 
 // These cases exercise the Bash route used by native Claude when Git for Windows is installed.
 function fixtureShell(name: 'sh' | 'bash'): string {

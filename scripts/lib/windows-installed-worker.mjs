@@ -1,7 +1,8 @@
 // Bundled on Electron's Node runtime; no source checkout or external Node needed.
 import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
-import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync } from 'node:fs'
+import { physicalPayloadFs } from './physical-payload-fs.mjs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join, resolve, win32 } from 'node:path'
@@ -16,6 +17,8 @@ import { inspectWindowsReleaseData } from './windows-release-data.mjs'
 import { validateWindowsReleasePayload, readInstallerDescriptor } from './windows-release-payload.mjs'
 import { quarantineWindowsSourceUpdate } from './windows-source-update.mjs'
 import { chooseWindowsUninstallData } from './windows-uninstall-choice.mjs'
+
+const { copyFileSync, cpSync, rmSync } = physicalPayloadFs
 
 function systemPowerShell(environment = process.env) {
   const system = windowsEnvironmentValue(environment, 'SystemRoot')

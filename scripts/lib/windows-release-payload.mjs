@@ -2,9 +2,11 @@
 // Hashes detect corruption; they do not establish publisher authenticity.
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { copyFileSync, createReadStream, lstatSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { physicalPayloadFs } from './physical-payload-fs.mjs'
 import { join } from 'node:path'
 import { releaseDescriptor } from './windows-release-transaction.mjs'
+
+const { copyFileSync, createReadStream, lstatSync, readdirSync, readFileSync, writeFileSync } = physicalPayloadFs
 
 export const payloadManifestName = 'bmn-release.json'
 const hash = bytes => createHash('sha256').update(bytes).digest('hex')
