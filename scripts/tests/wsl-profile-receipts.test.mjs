@@ -5,8 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { measureRestrictedGuestProfile, measureRootRestrictedGuestProfile, measureNestedGuestNamespaces } from '../test/wsl-restricted-profile-spike.mjs'
 
 const platform = Object.getOwnPropertyDescriptor(process, 'platform')
+// A cold Python start on a busy Windows runner took over 5 s (run 37341134916); these checks only parse source.
+const PYTHON_TIMEOUT_MS = 30_000
 const distribution = 'BMN-Epic53-Systemd-00000000-0000-0000-0000-000000000000'
-it('builds all kernel candidates from a Windows CRLF checkout without executing them', () => {
+it('builds all kernel candidates from a Windows CRLF checkout without executing them', { timeout: 60_000 }, () => {
   const fixture = readFileSync(new URL('../test/fixtures/wsl-nested-capability.py', import.meta.url), 'utf8')
   const helper = readFileSync(new URL('../lib/wsl-root-session.py', import.meta.url), 'utf8').replace(/\r?\n/g, '\r\n')
   const script = `import ast,json,sys
@@ -23,18 +25,18 @@ print('FOUR_CANDIDATES_OK')`
   Object.defineProperty(process, 'platform', platform)
   try {
     expect(execFileSync(platform.value === 'win32' ? 'python' : 'python3', ['-c', script], {
-      input: JSON.stringify({ fixture, helper }), encoding: 'utf8', timeout: 5000
+      input: JSON.stringify({ fixture, helper }), encoding: 'utf8', timeout: PYTHON_TIMEOUT_MS
     }).trim()).toBe('FOUR_CANDIDATES_OK')
   } finally { Object.defineProperty(process, 'platform', { ...platform, value: 'win32' }) }
 })
-it('keeps namespace, descriptor and ABI guards while allowing only raw NETLINK_ROUTE in the synthetic bytecode', () => {
+it('keeps namespace, descriptor and ABI guards while allowing only raw NETLINK_ROUTE in the synthetic bytecode', { timeout: 60_000 }, () => {
   const fixture = readFileSync(new URL('../test/fixtures/wsl-nested-capability.py', import.meta.url), 'utf8')
   const helper = readFileSync(new URL('../lib/wsl-root-session.py', import.meta.url), 'utf8')
   const script = readFileSync(new URL('../test/fixtures/wsl-seccomp-bytecode.py', import.meta.url), 'utf8')
   Object.defineProperty(process, 'platform', platform)
   try {
     expect(execFileSync(platform.value === 'win32' ? 'python' : 'python3', ['-c', script], {
-      input: JSON.stringify({ fixture, helper }), encoding: 'utf8', timeout: 5000
+      input: JSON.stringify({ fixture, helper }), encoding: 'utf8', timeout: PYTHON_TIMEOUT_MS
     }).trim()).toBe('NESTED_FILTER_AND_NARROW_ROUTE_OK')
   } finally { Object.defineProperty(process, 'platform', { ...platform, value: 'win32' }) }
 })
@@ -73,7 +75,7 @@ describe.each(routes)('%s receipt gate', (_name, measure, valid) => {
     expect(measure({ distribution, uid: 1000, guest: () => ({ exit: 0, stdout: JSON.stringify(receipt) }) }))
       .toMatchObject({ result: 'FAIL', receiptValidationFailed: true, profileComplete: false })
   })
-  it('sends syntactically valid Python to the guest', () => {
+  it('sends syntactically valid Python to the guest', { timeout: 60_000 }, () => {
     const receipt = valid(), scripts = []
     const guest = args => {
       if (args[0].endsWith('python3')) scripts.push(args[2])
@@ -85,7 +87,7 @@ describe.each(routes)('%s receipt gate', (_name, measure, valid) => {
     Object.defineProperty(process, 'platform', platform)
     try {
       for (const source of scripts) execFileSync(platform.value === 'win32' ? 'python' : 'python3',
-        ['-c', 'import ast,sys; ast.parse(sys.argv[1])', source], { encoding: 'utf8', timeout: 5000 })
+        ['-c', 'import ast,sys; ast.parse(sys.argv[1])', source], { encoding: 'utf8', timeout: PYTHON_TIMEOUT_MS })
     } finally { Object.defineProperty(process, 'platform', { ...platform, value: 'win32' }) }
   })
   it('retains a valid scoped measurement with profileComplete false', () => {
