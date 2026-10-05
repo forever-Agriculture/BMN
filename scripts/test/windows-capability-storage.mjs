@@ -76,11 +76,13 @@ try {
   assert.deepEqual(result.after, before, 'Capability guest modified synthetic private data')
   console.log('PASS real second-user AppContainer capability isolation, controls and cleanup')
 } finally {
-  if (child && child.exitCode === null) {
+  // A killed child has signalCode set and exitCode null; both mean it has exited.
+  const running = () => child.exitCode === null && child.signalCode === null
+  if (child && running()) {
     writeFileSync(join(root, 'abort'), '')
     const deadline = Date.now() + 75000
-    while (child.exitCode === null && Date.now() < deadline) await delay(100)
-    if (child.exitCode === null) {
+    while (running() && Date.now() < deadline) await delay(100)
+    if (running()) {
       const exited = new Promise(resolve => child.once('exit', resolve))
       child.kill(); await exited
     }
