@@ -732,6 +732,12 @@ The packaged `--self-test` printed nothing for 120 s on native Windows: stderr 0
   - The lifecycle step failed because the startup markers wrapped the lifetime-protection call. The crash fixture's original-defect control removes exactly that standalone statement. The call stands alone again, and a source test guards it.
   - In the installed smoke, removing the temporary profile threw, and that error replaced the smoke's own result. What held the profile, and how the smoke itself ended, are **UNVERIFIED**. Removal now retries briefly. A removal failure after a failed smoke no longer replaces it; its error code is added to the smoke's outcome when the smoke produced one. A removal failure after a passing smoke still fails the step.
 
+## Native result for `b68ebfb`
+
+[Run 37317616196](https://github.com/forever-Agriculture/BMN/actions/runs/37317616196): five side workflows and the Linux job pass. Windows recorded 3,228 unit tests, 0 failed and 24 skipped. The new native tests pass: start identity, the CLI's refusal of a terminal on standard input, device-path refusal, and `codex.exe` end to end. The launcher sources compile under `/W4 /WX`, and the lifecycle step passes. The gate failed only at packaged startup:
+- **SCROLLED, reproduced in two runs.** The diagnostic self-test and the installed smoke show the same pane: the scroll line ran and printed through `scroll-79`. Neither `SCROLLED` nor the next PowerShell prompt appeared within 10 s; the line was accepted within 1 ms of `MAX-RATE-DONE` being seen. Output stopped mid-stream. Whether PowerShell/ConPTY never produced the rest or BMN never delivered it is **UNVERIFIED**.
+- **Installed smoke keeps its verdict.** The smoke reported the same failure and, separately, that its profile could not be removed (`EPERM`).
+
 ## Codex typed in a Windows session (53.6, local candidate)
 
 On Linux, `bin/codex` sits first on a session's PATH and adds `--no-daemon` to Codex typed in the shell. A shared Codex app-server daemon keeps the environment of the terminal that started it, so without this its hooks could carry another session's BMN credentials. Windows shipped no equivalent, so Codex typed in a Windows session's shell could join such a daemon.
