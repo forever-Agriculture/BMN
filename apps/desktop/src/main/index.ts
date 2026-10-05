@@ -551,7 +551,12 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
       return createSessionRuntime(params as SessionCreateParams, rendererTestMode)
     }
   })
-  bridgeIpc.handle('aiterm:notifications:health', () => ({ cue: notificationHealthCue(notificationHealth.current(), process.platform) }))
+  bridgeIpc.handle('aiterm:notifications:health', (event) => {
+    if (!senderIsAllowed(event)) {
+      throw new MainIpcError(ERROR_CODES.unauthorized, 'Renderer sender is not authorized')
+    }
+    return { cue: notificationHealthCue(notificationHealth.current(), process.platform) }
+  })
   bridgeIpc.handle('aiterm:launch-directory:normalize', (event, value: unknown) => {
     if (!senderIsAllowed(event)) {
       throw new MainIpcError(ERROR_CODES.unauthorized, 'Renderer sender is not authorized')
