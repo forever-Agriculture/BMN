@@ -738,6 +738,14 @@ The packaged `--self-test` printed nothing for 120 s on native Windows: stderr 0
 - **SCROLLED, reproduced in two runs.** The diagnostic self-test and the installed smoke show the same pane: the scroll line ran and printed through `scroll-79`. Neither `SCROLLED` nor the next PowerShell prompt appeared within 10 s; the line was accepted within 1 ms of `MAX-RATE-DONE` being seen. Output stopped mid-stream. Whether PowerShell/ConPTY never produced the rest or BMN never delivered it is **UNVERIFIED**.
 - **Installed smoke keeps its verdict.** The smoke reported the same failure and, separately, that its profile could not be removed (`EPERM`).
 
+## Native result for `5ea91e1`
+
+[Run 37322654021](https://github.com/forever-Agriculture/BMN/actions/runs/37322654021): five side workflows and the Linux job pass. Windows recorded 3,231 unit tests, 0 failed and 24 skipped, including both PowerShell PATH tests in Windows PowerShell 5.1. The gate failed again only at packaged startup, at SCROLLED, in both the diagnostic self-test and the installed smoke. The observation added in `5ea91e1` narrows where the output stops:
+- BMN's host received 1,971,804 bytes from the pane, and its view had processed all of them: nothing pending, in flight or paused. node-pty's output stream was neither paused nor holding unread data. The last bytes the host received were exactly `scroll-79\r\n`, with no terminal query after them.
+- No byte arrived for the next 23 s. `SCROLLED` never came late. A probe line typed into the pane was accepted but produced nothing, not even its echo.
+- So the missing output never reached BMN's host process. It stopped in PowerShell, in the bundled ConPTY (`useConptyDll`), or in node-pty's reader for ConPTY's output. Which one is **UNVERIFIED**. The pane's last lines were identical in all four runs that reached this step.
+- The installed smoke again kept its verdict and recorded `EPERM` for its profile removal. The alternate-screen and quit steps come after SCROLLED, so their Windows forms are still **UNVERIFIED** natively.
+
 ## Codex typed in a Windows session (53.6, local candidate)
 
 On Linux, `bin/codex` sits first on a session's PATH and adds `--no-daemon` to Codex typed in the shell. A shared Codex app-server daemon keeps the environment of the terminal that started it, so without this its hooks could carry another session's BMN credentials. Windows shipped no equivalent, so Codex typed in a Windows session's shell could join such a daemon.
@@ -752,7 +760,7 @@ The lookup and the rule are shared modules (`bin/windows-launch.mjs`, `bin/codex
 
 A PowerShell profile can put a global Codex ahead of BMN's folder on PATH, as a Bash startup file can. Linux restores the order after Bash startup and before each prompt (`bin/bmn-bashrc`). A plain interactive PowerShell session (`powershell` or `pwsh` with no arguments, or only `-NoLogo`) now starts with `-NoExit -Command` and an inline step that does the same: after the profiles it puts BMN's folder first again, and it wraps the owner's `prompt` function to repeat that before each prompt. The step is inline because the default execution policy refuses script files. PowerShell hides its startup banner when given a command, so these sessions open without it. Any other arguments (a command, a file, `-NoProfile`, `-NoExit`) are left exactly as given.
 
-Tests: the session argv shapes run on both systems. The step itself runs in a real PowerShell with a simulated profile and a later PATH change: locally in PowerShell 7.6.6 on Linux (GREEN; the same script without the step resolves the competing Codex), and natively in Windows PowerShell once collected (**UNVERIFIED**).
+Tests: the session argv shapes run on both systems. The step itself runs in a real PowerShell with a simulated profile and a later PATH change: locally in PowerShell 7.6.6 on Linux (GREEN; the same script without the step resolves the competing Codex), and natively in Windows PowerShell 5.1 ([run 37322654021](https://github.com/forever-Agriculture/BMN/actions/runs/37322654021), PASS).
 
 Windows unit coverage added alongside:
 - The process start-identity tests now run on Windows. Only there is an exited process's refusal awaited, for up to 5 s, because Windows keeps the process until its last handle closes; Linux still requires an immediate refusal.
