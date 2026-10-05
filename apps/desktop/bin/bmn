@@ -1299,12 +1299,29 @@ function hookFilePath(agent) {
   return `${absoluteUncollapsed(moved || `${homedir()}/${directory}`)}/${rest.join('/')}`
 }
 
+/**
+ * Which shell runs the entry BMN writes. On Windows, Codex and Cursor run hook commands through PowerShell, and
+ * Claude Code does for an entry whose `shell` is "powershell" (Git Bash otherwise, when installed); elsewhere a
+ * POSIX shell runs them. Tests choose either form on any OS.
+ */
+const HOOK_SHELL = process.env.NODE_ENV === 'test' && ['posix', 'powershell'].includes(process.env.BMN_TEST_HOOK_SHELL)
+  ? process.env.BMN_TEST_HOOK_SHELL : process.platform === 'win32' ? 'powershell' : 'posix'
+
+/** Runs `bmn hook` only inside a BMN session that has the CLI, and always succeeds, in the shell that runs it. */
 function hookEntryCommand(agent) {
-  return `[ -n "$BMN_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook ${agent}; exit 0`
+  return HOOK_SHELL === 'powershell'
+    ? `if ($env:BMN_CONTROL_SOCKET -and (Get-Command bmn -ErrorAction SilentlyContinue)) { bmn hook ${agent} }; exit 0`
+    : `[ -n "$BMN_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook ${agent}; exit 0`
+}
+
+/** Whether Claude Code would run this entry in PowerShell: the PowerShell form means nothing to Git Bash. */
+function claudeRunsInPowerShell(entry) {
+  return isObject(entry) && entry.shell === 'powershell' && entry.args === undefined
 }
 
 function hookEntry(agent) {
-  return { type: 'command', timeout: HOOK_ENTRY_TIMEOUT, command: hookEntryCommand(agent) }
+  return { type: 'command', timeout: HOOK_ENTRY_TIMEOUT, command: hookEntryCommand(agent),
+    ...(HOOK_SHELL === 'powershell' && agent === 'claude' ? { shell: 'powershell' } : {}) }
 }
 
 /**
@@ -1324,8 +1341,9 @@ function recognisedEntries(agent) {
   const documented = hookEntryCommand(agent)
   return [
     documented,
-    // The owner's own files predate Epic 13's rename, and `bmn hook` still reads the older name.
-    documented.replace('$BMN_CONTROL_SOCKET', '$AITERM_CONTROL_SOCKET'),
+    // The owner's own files predate Epic 13's rename, and `bmn hook` still reads the older name. Windows support
+    // came later, so its PowerShell form has no older wording.
+    ...(HOOK_SHELL === 'posix' ? [documented.replace('$BMN_CONTROL_SOCKET', '$AITERM_CONTROL_SOCKET')] : []),
     // The call with nothing around it, which is what someone writes who wants it to run always.
     `bmn hook ${agent}`
   ]
@@ -1337,10 +1355,14 @@ function recognisedEntries(agent) {
  * `bmn hook <agent>`. A `named` entry counts as missing - BMN will not say a command it does not
  * read works - but `check` shows it, because it is the one the owner needs to look at.
  */
-function hookEntryState(command, agent) {
+function hookEntryState(command, agent, entry = undefined) {
   // Reachable for a lenient harness, whose file is read rather than refused over a bad entry.
   if (typeof command !== 'string') return 'missing'
   const text = command.replace(SHELL_BLANKS, '')
+  // Claude Code on Windows runs the PowerShell form only when the entry says PowerShell; Git Bash cannot.
+  if (HOOK_SHELL === 'powershell' && agent === 'claude' && text === hookEntryCommand(agent) && !claudeRunsInPowerShell(entry)) {
+    return namesHook(command, agent) ? 'named' : 'missing'
+  }
   if (text === hookEntryCommand(agent)) return 'wired'
   if (recognisedEntries(agent).includes(text)) return 'older'
   // The note is for the owner to read, not a verdict, so it may look past any whitespace at all.
@@ -1401,7 +1423,7 @@ function hookEventState(listed, agent, event) {
       if (!isObject(entry) || entry.type !== 'command') continue
       // An entry the harness will not run is not an entry BMN can answer for. It still names the
       // hook, so the owner is shown it rather than left with an unexplained duplicate.
-      const recognition = hookEntryState(entry.command, agent)
+      const recognition = hookEntryState(entry.command, agent, entry)
       const runnable = runnableEntry(entry, agent)
       const read = runnable ? recognition : (namesHook(entry.command, agent) ? 'named' : 'missing')
       if (gated && read !== 'missing') {
@@ -2124,7 +2146,8 @@ async function runHook(args) {
   if (agentPid === null) return 0
   let event
   try {
-    event = JSON.parse(readFileSync(0, 'utf8'))
+    // Cursor on Windows pipes its payload through PowerShell, which puts a byte-order mark in front.
+    event = JSON.parse(readFileSync(0, 'utf8').replace(/^\uFEFF/u, ''))
   } catch {
     return 0
   }

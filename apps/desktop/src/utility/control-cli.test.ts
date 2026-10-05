@@ -63,6 +63,10 @@ interface CliResult {
 }
 type CliTrace = (stage: string, metadata?: Record<string, string | number | boolean | null>) => void
 
+/** The CLI's test-only choice of hook entry form (bin/bmn HOOK_SHELL); without it Windows writes PowerShell's. */
+const HOOK_FORM_POSIX = { NODE_ENV: 'test', BMN_TEST_HOOK_SHELL: 'posix' }
+const HOOK_FORM_POWERSHELL = { NODE_ENV: 'test', BMN_TEST_HOOK_SHELL: 'powershell' }
+
 function runCli(
   args: string[],
   options: { env?: Record<string, string>; cwd?: string; input?: string | Buffer | undefined; trace?: CliTrace } = {}
@@ -87,7 +91,8 @@ function runCommand(
       executable,
       args,
       {
-        env: { ...env, ...options.env, ...(process.platform === 'win32' && options.env?.HOME ? { USERPROFILE: options.env.HOME } : {}) }, ...(options.cwd === undefined ? {} : { cwd: options.cwd }), timeout: 15_000,
+        // Hook entries are read and written in their POSIX form on every OS unless a test asks for PowerShell's.
+        env: { ...env, ...HOOK_FORM_POSIX, ...options.env, ...(process.platform === 'win32' && options.env?.HOME ? { USERPROFILE: options.env.HOME } : {}) }, ...(options.cwd === undefined ? {} : { cwd: options.cwd }), timeout: 15_000,
         ...(options.verbatim ? { windowsVerbatimArguments: true } : {})
       },
       (error, stdout, stderr) => {
@@ -1585,7 +1590,7 @@ function ttyHooks(args: string[], pipe: 'none' | 'stdin' | 'stdout' | 'stderr' =
   ) : {}
   const child = spawnPty(process.execPath, command, {
     name: 'xterm-256color', cols: 100, rows: 32, cwd: process.cwd(),
-    env: { ...essentials, PATH: process.env.PATH ?? '', HOME: fixtureHome,
+    env: { ...essentials, ...HOOK_FORM_POSIX, PATH: process.env.PATH ?? '', HOME: fixtureHome,
       ...(process.platform === 'win32' ? { USERPROFILE: fixtureHome } : {}) },
     ...(process.platform === 'win32' ? { useConpty: true, useConptyDll: true } : {})
   })
@@ -4332,5 +4337,89 @@ describe.runIf(process.platform === 'win32')('native Windows bmn launcher', () =
       ['Prompt', 'a & b ^ c | d 100%'],
       ['Shell', 'a & b ^ c | d 100% $x']
     ])
+  })
+})
+
+const POWERSHELL_ENTRY = (agent: string): string =>
+  `if ($env:BMN_CONTROL_SOCKET -and (Get-Command bmn -ErrorAction SilentlyContinue)) { bmn hook ${agent} }; exit 0`
+type EventRow = { event: string; optional: boolean; state: string; unrecognised?: string[] }
+const states = (stdout: string): string[] =>
+  (JSON.parse(stdout).agents[0].events as EventRow[]).filter((row) => !row.optional).map((row) => row.state)
+
+describe('hook entries in PowerShell form (Story 53.6, Windows)', () => {
+  it('writes Claude\'s entry pinned to PowerShell, and check reads every event wired', async () => {
+    const path = await hookFileFixture(undefined)
+
+    const install = await runHooks(['install', '--yes', 'claude', '--file', path, '--json'], HOOK_FORM_POWERSHELL)
+    const check = await runHooks(['check', 'claude', '--file', path, '--json'], HOOK_FORM_POWERSHELL)
+
+    expect(install.code, install.stderr).toBe(0)
+    const written = JSON.parse(await readFile(path, 'utf8'))
+    for (const event of CLAUDE_EVENTS) {
+      expect(written.hooks[event]).toEqual([{ ...(event === 'PreToolUse' ? { matcher: 'AskUserQuestion' } : {}),
+        hooks: [{ type: 'command', timeout: 5, command: POWERSHELL_ENTRY('claude'), shell: 'powershell' }] }])
+    }
+    expect(states(check.stdout)).toEqual(CLAUDE_EVENTS.map(() => 'wired'))
+  })
+
+  it('does not count Claude\'s PowerShell form without "shell": Git Bash would run it; it shows it and adds a pinned one', async () => {
+    const loose = { type: 'command', timeout: 5, command: POWERSHELL_ENTRY('claude') }
+    const path = await hookFileFixture({ hooks: { Stop: [{ hooks: [loose] }] } })
+
+    const check = await runHooks(['check', 'claude', '--file', path, '--json'], HOOK_FORM_POWERSHELL)
+    const install = await runHooks(['install', '--yes', 'claude', '--file', path, '--json'], HOOK_FORM_POWERSHELL)
+
+    const stop = (JSON.parse(check.stdout).agents[0].events as EventRow[]).find((row) => row.event === 'Stop')
+    expect(stop).toMatchObject({ state: 'missing', unrecognised: [POWERSHELL_ENTRY('claude')] })
+    expect(install.code, install.stderr).toBe(0)
+    expect(JSON.parse(await readFile(path, 'utf8')).hooks.Stop).toEqual([{ hooks: [loose] },
+      { hooks: [{ ...loose, shell: 'powershell' }] }])
+  })
+
+  it.each([['codex', CODEX_EVENTS, 'hooks.json'], ['cursor', CURSOR_EVENTS, 'hooks.json']] as const)(
+    'writes %s\'s entries in PowerShell form with no shell field, read back as wired', async (agent, events, name) => {
+      const path = await hookFileFixture(undefined, name)
+
+      const install = await runHooks(['install', '--yes', agent, '--file', path, '--json'], HOOK_FORM_POWERSHELL)
+      const check = await runHooks(['check', agent, '--file', path, '--json'], HOOK_FORM_POWERSHELL)
+
+      expect(install.code, install.stderr).toBe(0)
+      const commands = JSON.stringify(JSON.parse(await readFile(path, 'utf8')))
+      expect(commands).toContain(JSON.stringify(POWERSHELL_ENTRY(agent)))
+      expect(commands).not.toContain('"shell"')
+      expect(states(check.stdout)).toEqual(events.map(() => 'wired'))
+    })
+
+  it('shows a POSIX entry on Windows rather than calling it wired: PowerShell cannot run it', async () => {
+    const path = await hookFileFixture({ hooks: { Stop: [{ hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CODEX }] }] } }, 'hooks.json')
+
+    const check = await runHooks(['check', 'codex', '--file', path, '--json'], HOOK_FORM_POWERSHELL)
+
+    expect((JSON.parse(check.stdout).agents[0].events as EventRow[]).find((row) => row.event === 'Stop'))
+      .toMatchObject({ state: 'missing', unrecognised: [DOCUMENTED_CODEX] })
+  })
+
+  it('writes the form of the OS it runs on when no test chooses one', async () => {
+    const path = await hookFileFixture(undefined, 'hooks.json')
+
+    const install = await runHooks(['install', '--yes', 'codex', '--file', path, '--json'], { BMN_TEST_HOOK_SHELL: '' })
+
+    expect(install.code, install.stderr).toBe(0)
+    expect(JSON.stringify(JSON.parse(await readFile(path, 'utf8'))))
+      .toContain(JSON.stringify(process.platform === 'win32' ? POWERSHELL_ENTRY('codex') : DOCUMENTED_CODEX))
+  })
+
+  it('reads a payload PowerShell piped with a byte-order mark in front', async () => {
+    const fixture = await cliFixture()
+    const proc = await procTree(fixture.root, HOLDS_TERMINAL)
+
+    const result = await runCli(['hook', 'claude'], {
+      env: { ...fixture.sessionEnv, BMN_PROC_ROOT: proc, CLAUDE_CONFIG_DIR: join(fixture.root, 'claude') },
+      input: `\uFEFF${JSON.stringify({ hook_event_name: 'Notification', notification_type: 'idle_prompt', message: 'Claude is waiting' })}`
+    })
+
+    expect(result).toEqual(QUIET)
+    expect(fixture.handlers.observeHookEvent).toHaveBeenCalledTimes(1)
+    expect(fixture.handlers.observeHookEvent.mock.calls[0]?.[0]).toMatchObject({ agent: 'claude', event: 'Notification' })
   })
 })

@@ -549,6 +549,21 @@ either end — is ignored; a non-breaking space or a byte-order mark picked up f
 the command as far as bash is concerned, so it is part of the command as far as `check` is concerned
 too, and such an entry reads `missing`.
 
+**On Windows** the harnesses run hook commands through PowerShell: Codex and Cursor always, Claude
+Code when the entry says `"shell": "powershell"` (otherwise Git Bash, when it is installed). So on
+Windows BMN writes, and counts as `wired`, this form instead, with `"shell": "powershell"` added to
+Claude Code's entries:
+
+```powershell
+if ($env:BMN_CONTROL_SOCKET -and (Get-Command bmn -ErrorAction SilentlyContinue)) { bmn hook claude }; exit 0
+```
+
+The bare call still reads `wired (older wording)`. A POSIX entry there is shown under its event
+rather than counted, since PowerShell cannot run it, and so is Claude Code's PowerShell form without
+`"shell": "powershell"`. `bmn hook` also accepts the byte-order mark Cursor puts in front of its
+payload on Windows. Native CI runs the written entry through Windows PowerShell and PowerShell 7
+with a stand-in `bmn`; real hook events from each harness on Windows remain UNVERIFIED.
+
 **Everything else reads as `missing`** — a wrapper, a redirection, a condition, a group, your own
 variant with one extra space, and BMN's own entry inside a group carrying a `matcher`. When such an
 entry names `bmn hook <agent>`, `check` prints it under the event, so you can see what it declined
