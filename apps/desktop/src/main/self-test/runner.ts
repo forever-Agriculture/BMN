@@ -1152,7 +1152,10 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         if (window.__aitermTest?.snapshot(${animatedId}).bufferLines.some((line) => line.includes(${JSON.stringify(marker)}))) return;
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
-      throw new Error(${JSON.stringify(`the animation pane never printed ${marker}`)});
+      // The pane's last lines show whether the command arrived, ran or is still waiting.
+      const lines = (window.__aitermTest?.snapshot(${animatedId}).bufferLines ?? []).filter((line) => line.trim())
+        .slice(-12).map((line) => line.trimEnd().slice(0, 160));
+      throw new Error(${JSON.stringify(`the animation pane never printed ${marker}: `)} + JSON.stringify(lines));
     })()`) as Promise<void>
     const quietBefore = await host.applicationWindow.webContents.executeJavaScript(`(() => {
       const hook = window.__aitermTest;
