@@ -67,10 +67,11 @@ it('reads actual ordinary source files with bounds and refuses hardlinked or ove
 })
 
 it('keeps only the bounded synthetic smoke outcome and drops unexpected names', () => {
-  const smokeOutcome = { status: 1, signal: 'SIGNAL_' + marker, errorCode: marker, durationMs: 4200,
-    receipts: ['session-roundtrip', marker, 'x'.repeat(49)], failure: 'hook card missing\u001b[31m' + 'y'.repeat(900) }
+  const smokeOutcome = { status: 1, signal: 'SIGNAL_' + marker, errorCode: marker, durationMs: 4200, stdoutBytes: 0, stderrBytes: marker,
+    receipts: ['session-roundtrip', marker, 'x'.repeat(49)], failure: 'hook card missing\u001b[31m' + 'y'.repeat(900),
+    phases: ['renderer preload integration', `agent history {"path":"C:\\${marker}"}`] }
   const result = installedSmokeOutcome({ smokeOutcome })
-  expect(result).toMatchObject({ status: 1, signal: null, errorCode: null, durationMs: 4200, receipts: ['session-roundtrip'] })
+  expect(result).toMatchObject({ status: 1, signal: null, errorCode: null, durationMs: 4200, receipts: ['session-roundtrip'], stdoutBytes: 0, stderrBytes: null, phaseCount: 2, lastPhase: 'agent history' })
   expect(result.failure).toHaveLength(800); expect(result.failure).not.toContain('\u001b')
   expect(installedSmokeOutcome(new Error('no outcome'))).toBeUndefined()
   expect(installedSmokeOutcome({ get smokeOutcome() { throw Error(marker) } })).toEqual({ unavailable: true })

@@ -83,6 +83,10 @@ export function installedSmokeOutcome(error) {
       errorCode: smokeErrors.has(value.errorCode) ? value.errorCode : null, durationMs: integer(value.durationMs),
       receipts: Array.isArray(value.receipts) ? value.receipts.filter(name => /^[a-z0-9-]{1,48}$/u.test(name)).slice(0, 32) : [],
       // eslint-disable-next-line no-control-regex
-      failure: typeof value.failure === 'string' ? value.failure.replace(/[\u0000-\u001f\u007f]/gu, ' ').slice(0, 800) : null }
+      failure: typeof value.failure === 'string' ? value.failure.replace(/[\u0000-\u001f\u007f]/gu, ' ').slice(0, 800) : null,
+      // Only the phase's leading words: later text can carry JSON values or paths.
+      stdoutBytes: integer(value.stdoutBytes), stderrBytes: integer(value.stderrBytes),
+      phaseCount: Array.isArray(value.phases) ? value.phases.length : 0,
+      lastPhase: Array.isArray(value.phases) && typeof value.phases.at(-1) === 'string' ? /^[A-Za-z0-9 -]{0,80}/u.exec(value.phases.at(-1))[0].trim() : null }
   } catch { return { unavailable: true } }
 }

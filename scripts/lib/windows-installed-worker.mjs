@@ -95,7 +95,10 @@ export async function smokeWindowsInstalledPayload(root) {
       throw Object.assign(windowsUpdateFailure('Installed candidate failed isolated smoke', 'validation', result.status ?? undefined), { smokeOutcome: {
         status: result.status, signal: result.signal, errorCode: result.error?.code, durationMs: Date.now() - started,
         receipts: receipts.map(row => row?.selfTest).filter(name => typeof name === 'string'),
-        failure: /\[BMN\] session self-test failed: ([^\r\n]*)/u.exec(String(result.stderr ?? ''))?.[1] } })
+        failure: /\[BMN\] session self-test failed: ([^\r\n]*)/u.exec(String(result.stderr ?? ''))?.[1],
+        // The self-test names each phase on stderr; the last one locates a hang.
+        stdoutBytes: Buffer.byteLength(String(result.stdout ?? '')), stderrBytes: Buffer.byteLength(String(result.stderr ?? '')),
+        phases: [...String(result.stderr ?? '').matchAll(/\[BMN\] self-test phase: ([^\r\n]*)/gu)].map(match => match[1]) } })
     }
     const receipt = receipts.find(row => row.selfTest === 'session-roundtrip')
     assert.ok(receipt?.nativeModules?.nodePty && receipt?.nativeModules?.betterSqlite3 && receipt?.graceful, 'Installed smoke receipt is incomplete')
