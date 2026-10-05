@@ -2018,6 +2018,12 @@ function statusLineCommand(argv) {
     say({ file: path, state: read.state }, `${path} ${STATUS_LINE_WORDS[read.state]}.`)
     return read.state === 'wrapped' ? 0 : 1
   }
+  // The wrapper is POSIX shell; which shell Claude Code runs a Windows status line in is not measured, so BMN
+  // writes nothing there rather than a line that might break the owner's status line. Check and uninstall still work.
+  if (action === 'install' && HOOK_SHELL === 'powershell') {
+    process.stderr.write(`bmn: the status-line wrapper is not supported on Windows yet; ${path} was left untouched\n`)
+    return 1
+  }
   const wanted = action === 'install' ? 'unwrapped' : 'wrapped'
   const done = action === 'install' ? 'wrapped' : 'unwrapped'
   if (read.state === done) {

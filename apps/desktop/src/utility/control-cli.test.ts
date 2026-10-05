@@ -4078,6 +4078,20 @@ describe('bmn statusline (Story 37.2)', () => {
     expect(await backupsOf(path)).toHaveLength(2)
   })
 
+  it('refuses to install the POSIX wrapper on Windows and leaves the file alone; check still reads it', async () => {
+    const path = await hookFileFixture(settings)
+    const original = await readFile(path, 'utf8')
+
+    const install = await runStatusLine(['install', '--file', path], HOOK_FORM_POWERSHELL)
+    const check = await runStatusLine(['check', '--file', path, '--json'], HOOK_FORM_POWERSHELL)
+
+    expect(install.code).toBe(1)
+    expect(install.stderr).toBe(`bmn: the status-line wrapper is not supported on Windows yet; ${path} was left untouched\n`)
+    expect(await readFile(path, 'utf8')).toBe(original)
+    expect(await backupsOf(path)).toHaveLength(0)
+    expect(JSON.parse(check.stdout)).toMatchObject({ state: 'unwrapped' })
+  })
+
   it('finds Claude\'s settings the way hooks install does when no file is named', async () => {
     const path = await hookFileFixture(settings)
     const check = await runStatusLine(['check', '--json'], { CLAUDE_CONFIG_DIR: dirname(path) })
