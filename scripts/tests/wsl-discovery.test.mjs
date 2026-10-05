@@ -100,13 +100,14 @@ describe('WSL discovery', () => {
     expect(LXSS_REGISTRATIONS_COMMAND).not.toMatch(/\b(Set|New|Remove|Rename|Clear|Copy|Move)-Item/iu)
   })
 
-  // Native: the command on the runner's own registry (no distributions are installed there).
+  // Native: the command on the runner's own registry, whatever it holds; the point is that Windows PowerShell 5.1 runs
+  // it and prints JSON the parser accepts.
   const powerShell = process.platform === 'win32' ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe') : null
   it.runIf(powerShell !== null && existsSync(powerShell ?? ''))('lists the registrations in Windows PowerShell as JSON the parser accepts', () => {
     const output = execFileSync(powerShell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', LXSS_REGISTRATIONS_COMMAND],
       { encoding: 'utf8', timeout: 30_000, windowsHide: true })
     const parsed = parseRegistrations(output.trim())
     expect(typeof parsed.present).toBe('boolean')
-    expect(parsed.ignored).toEqual([])
+    for (const entry of [...parsed.registrations, ...parsed.ignored]) expect(entry.id === null || typeof entry.id === 'string').toBe(true)
   }, 60_000)
 })
