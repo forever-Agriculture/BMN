@@ -132,7 +132,7 @@ import { loadSavedOutputPresentation, type SavedOutputCatalogPresentation } from
 import { createSpaceHold } from './space-hold'
 import { applyChromeTheme, COLOR_MODE_PRESENTATION, IDENTITY_PRESENTATION } from './theme'
 import { markerForWorkspace, WorkspaceIdentityMark, workspaceMarkerOptions } from './workspace-marker'
-import { startVoiceRecording, VOICE_MAX_SECONDS, VOICE_SAMPLE_RATE, type VoiceRecording } from './voice-recorder'
+import { microphoneFailure, startVoiceRecording, VOICE_MAX_SECONDS, VOICE_SAMPLE_RATE, type VoiceRecording } from './voice-recorder'
 import { modelName, voiceReadiness } from './voice-readiness'
 import { VOICE_SUGGESTION_BYTES, VOICE_SUGGESTION_ROWS, suggestVocabulary } from './voice-suggestions'
 import { createVoiceSettingsWriter } from './voice-settings-writer'
@@ -1049,7 +1049,16 @@ function App(): React.JSX.Element {
         // Queued and built from the latest settings, so the fallback never restores an older language or vocabulary.
         void voiceSettingsWriter.update((current) => ({ ...current, model })).catch(fail('Voice model was not saved'))
       }
-      voiceRecording.current = await startVoiceRecording()
+      const recording = await startVoiceRecording(() => {
+        // The microphone went away mid-recording: close it, keep nothing, and say so rather than wait on silence.
+        if (voiceRecording.current !== recording) return
+        clearTimeout(voiceTimer.current)
+        voiceRecording.current = null
+        recording.cancel()
+        updateVoice(null)
+        brief('The microphone stopped while recording (unplugged, turned off or taken by another app). Nothing was transcribed.')
+      })
+      voiceRecording.current = recording
       updateVoice({ ...capture, phase: 'recording', startedAt: Date.now(), model })
       const howToStop = trigger === 'hold' ? 'Release Space to stop.' : 'Press Speak again to stop.'
       announce(model === chosenModel
@@ -1060,8 +1069,8 @@ function App(): React.JSX.Element {
     } catch (error) {
       updateVoice(null)
       const name = error instanceof DOMException ? error.name : ''
-      if (name === 'NotAllowedError') brief('Microphone access was refused.')
-      else if (name === 'NotFoundError') brief('No microphone was found.')
+      const message = microphoneFailure(name, window.aiTerminal.platform ?? '')
+      if (message) brief(message)
       else fail('Could not start the microphone')(error)
     }
   }

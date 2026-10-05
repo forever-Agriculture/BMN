@@ -11,11 +11,43 @@ export interface VoiceRecording {
   cancel(): void
 }
 
-export async function startVoiceRecording(): Promise<VoiceRecording> {
+/**
+ * What to tell the owner when the microphone cannot be opened, by the error's DOMException name; null when the name
+ * says nothing specific (the caller then reports the error itself).
+ */
+export function microphoneFailure(name: string, platform: string): string | null {
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
+    return platform === 'win32'
+      ? 'Microphone access was refused. Allow desktop apps to use the microphone in Settings › Privacy & security › Microphone.'
+      : 'Microphone access was refused.'
+  }
+  if (name === 'NotFoundError' || name === 'OverconstrainedError') return 'No microphone was found.'
+  if (name === 'NotReadableError' || name === 'AbortError') {
+    return platform === 'win32'
+      ? 'The microphone could not be opened. Another app may be using it, or Windows may be blocking it (Settings › Privacy & security › Microphone).'
+      : 'The microphone could not be opened. Another app may be using it.'
+  }
+  return null
+}
+
+/**
+ * Starts recording. `onInterrupted` runs once if the microphone stops on its own while recording (unplugged, turned
+ * off, taken by the system or another app) or the recorder fails; never for this recording's own stop or cancel.
+ */
+export async function startVoiceRecording(onInterrupted?: () => void): Promise<VoiceRecording> {
   const stream = await navigator.mediaDevices.getUserMedia({
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
   })
+  let finished = false
+  const interrupted = (): void => {
+    if (finished) return
+    finished = true
+    onInterrupted?.()
+  }
+  // A track's `ended` fires when its source goes away, not when this code stops it.
+  for (const track of stream.getAudioTracks()) track.addEventListener('ended', interrupted, { once: true })
   const release = (): void => {
+    finished = true
     for (const track of stream.getTracks()) track.stop()
   }
   let recorder: MediaRecorder
@@ -30,10 +62,12 @@ export async function startVoiceRecording(): Promise<VoiceRecording> {
     if (event.data.size > 0) chunks.push(event.data)
   })
   const stopped = new Promise<void>((resolve) => recorder.addEventListener('stop', () => resolve(), { once: true }))
+  recorder.addEventListener('error', interrupted, { once: true })
   recorder.start(250)
 
   return {
     async stop() {
+      finished = true
       if (recorder.state !== 'inactive') recorder.stop()
       await stopped
       release()
