@@ -52,7 +52,8 @@ const GUEST_DRIVER = `
 import importlib.util, json, sys
 spec = importlib.util.spec_from_file_location('wsl_session_protocol', sys.argv[1])
 p = importlib.util.module_from_spec(spec); spec.loader.exec_module(p)
-packet = json.loads(sys.stdin.read())
+# Bytes, not text: Windows decodes a text stdin with its locale code page.
+packet = json.loads(sys.stdin.buffer.read().decode('utf-8'))
 def split(data, mode):
     if mode == 'whole': return [data]
     if mode == 'bytes': return [data[i:i + 1] for i in range(len(data))]
