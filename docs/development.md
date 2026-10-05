@@ -224,7 +224,8 @@ Windows build it made, before its packaged tests, as the artifact
 `bmn-windows-x64-<commit>` for 14 days (download from the run's page while signed
 in to GitHub). It holds the unsigned `BMN-<commit>-setup.exe` and the `win-unpacked`
 folder, whose `BMN.exe` runs without installing. It is test output, not a release:
-check the run's result and record the tested commit.
+check the run's result and record the tested commit. [Testing BMN on Windows](windows-testing.md)
+says what to try and what to report.
 
 For contributors with the pinned toolchain:
 
