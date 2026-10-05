@@ -74,6 +74,13 @@ A session's receipt is complete only with a matching `ready`, a matching `exit` 
 
 `exit.payload` is the shell's own result; the helper's failures are separate. Codes the guest can report, with the helper's process exit code for each: `UNSUPPORTED_PROFILE` 69, `INTERNAL` 70 (the prototype's existing internal-failure code), `EXEC_FAILED` 71, `STORAGE_RECOVERY` 74, `LEASE_UNAVAILABLE` 75, `PROTOCOL` 76, `AUTH` 77, `ROOT_DENIED` 78, `CLEANUP_UNCONFIRMED` 79. `WSL_MISSING` and `DISTRO_CHANGED` are found on the Windows side and never come from the guest. Any other helper exit code reads as `INTERNAL`.
 
+## Discovery and distribution-qualified paths
+
+`scripts/lib/wsl-discovery.mjs` holds the native side's pure decisions for AC1 and AC3, tested in `scripts/tests/wsl-discovery.test.mjs`:
+- **Registrations.** A fixed, read-only Windows PowerShell command lists this user's registrations from the registry (`HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss`) as JSON: identity (the key's GUID, lowercased), name, WSL version, state, base path and the default. Entries that cannot be a usable registration are listed with the reason, never dropped silently. Names that differ only in letter case are marked ambiguous, because WSL compares names without case. `wsl.exe --version` is parsed for its versions; a label it cannot find (another display language) is null, not a failure.
+- **Start and resume** use only the registration the session recorded, never the default. WSL missing (`WSL_MISSING`), a removed, renamed, replaced (same name, new identity) or ambiguous registration (`DISTRO_CHANGED`), and a WSL 1 registration (`UNSUPPORTED_PROFILE`) each fail with a message that says what to do and that Windows sessions are not affected.
+- **Paths** are qualified by registration identity, so the same Linux path in two distributions never collides. A path is confined to an authorized root lexically: another distribution, a sibling with the root's name as a prefix, and any `.` or `..` segment are refused. `\\wsl$\<name>\…` and `\\wsl.localhost\<name>\…` map to exactly one registration; an unknown or ambiguous name fails instead of guessing, and device forms are refused. Links and reparse points are resolved at open time under held handles in a later slice; this lexical step does not replace that.
+
 ## Not covered yet
 
 The bridge and file-transfer channels, credentials, durable storage, egress, terminfo and the Windows relay are later slices of the plan; each needs its own measurement, and the bridge its own review. Nothing here is native evidence: WSL, ConPTY and two-registration behaviour remain **UNVERIFIED**.
