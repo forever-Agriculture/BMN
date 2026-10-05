@@ -126,3 +126,48 @@ export function measureNestedGuestNamespaces({ distribution, guest }) {
     return { result: 'FAIL', receiptValidationFailed: true, profileComplete: false }
   }
 }
+
+// The previous kernel/device/route controls are a separate prerequisite. This
+// slice retains actual long-lived bwrap supervisors and a private inner PTY;
+// it does not verify native-host disconnect, agents or a production WSL adapter.
+export function measureNestedGuestLifecycle({ distribution, guest }) {
+  assert.equal(process.platform, 'win32')
+  assert.equal(process.env.GITHUB_ACTIONS, 'true')
+  assert.match(distribution, /^BMN-Epic53-Systemd-[0-9a-f-]+$/u)
+  try {
+    const packet = {
+      helper: readFileSync(new URL('../lib/wsl-root-session.py', import.meta.url), 'utf8'),
+      profile: readFileSync(new URL('./fixtures/wsl-root-profile.py', import.meta.url), 'utf8'),
+      capability: readFileSync(new URL('./fixtures/wsl-nested-capability.py', import.meta.url), 'utf8'),
+      fixture: readFileSync(new URL('./fixtures/wsl-nested-lifecycle.py', import.meta.url), 'utf8'),
+      terminfo: readFileSync(new URL('../../apps/desktop/resources/terminfo/source/xterm-sixel-256color.ti', import.meta.url), 'utf8')
+    }
+    const result = guest(['/usr/bin/python3', '-c',
+      'import json,sys; p=json.loads(sys.stdin.read()); exec(compile(p["fixture"],"bmn-nested-lifecycle.py","exec"),{"__name__":"__main__","ROOT_HELPER_SOURCE":p["helper"],"ROOT_PROFILE_SOURCE":p["profile"],"NESTED_CAPABILITY_SOURCE":p["capability"],"TERMINFO_SOURCE":p["terminfo"]})'],
+    { input: JSON.stringify(packet), timeout: 140000 })
+    if (result.exit !== 0) return { result: 'FAIL', exit: result.exit, stderr: result.stderr ?? '', detail: result.stdout, profileComplete: false }
+    const receipt = JSON.parse(result.stdout)
+    assert.equal(receipt.status, 'PASS_REAL_NESTED_LIFECYCLE_ONLY')
+    assert.equal(receipt.profileComplete, false)
+    assert.equal(receipt.originalHelperUnchanged, true)
+    assert.equal(receipt.outsideBrokerPositiveBeforeAfter, true)
+    assert.equal(receipt.nativeHostDisconnect, 'UNVERIFIED')
+    assert.equal(receipt.actualAgents, 'UNVERIFIED')
+    assert.match(receipt.candidateSha256, /^[a-f0-9]{64}$/u)
+    assert.equal(receipt.modes.length, 6)
+    assert.deepEqual(receipt.modes.map(row => row.mode), ['natural', 'stop', 'supervisor-crash', 'stdin-eof', 'nonreading-stdin-eof', 'nonreading-tty-eof'])
+    for (const row of receipt.modes) {
+      assert.ok(Number.isInteger(row.retainedPidfds) && row.retainedPidfds >= 8)
+      for (const field of ['allExitedBeforeFallback', 'controllerReaped', 'leaseTasksAbsent', 'activeUidNotReused',
+        'unrelatedSentinelAlive', 'sixelBytesExact', 'privateDevpts']) assert.equal(row[field], true)
+      assert.equal(row.terminfo.compileExit, 0); assert.equal(row.terminfo.lookupExit, 0)
+      assert.equal(row.terminfo.privateGuestLookup, true); assert.equal(row.terminfo.sixelCapability, true)
+      assert.match(row.terminfo.compiledSha256, /^[a-f0-9]{64}$/u)
+      assert.match(row.terminfo.sourceSha256, /^[a-f0-9]{64}$/u)
+      if (row.mode === 'nonreading-tty-eof') assert.equal(row.trigger, 'INNER-PTY-HANGUP')
+    }
+    return { ...receipt, wsl2: 'PASS_REAL_NESTED_LIFECYCLE_ONLY' }
+  } catch {
+    return { result: 'FAIL', receiptValidationFailed: true, profileComplete: false }
+  }
+}

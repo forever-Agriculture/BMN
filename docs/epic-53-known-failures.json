@@ -1,6 +1,6 @@
 {
   "description": "Epic 53 failing tests still owned by a port story. Open failures are not waived: the gate in scripts/test/unit-inventory-gate.mjs fails on any unlisted failure, and each story removes its entries as it repairs them.",
-  "source": "Native Windows 17a00a4 run37249637688: 3093 pass/15 fail/12 skipped. Physical-ASAR and smoke-environment original deadlines now pass; the new unlisted real-PTY fixture cleanup EPERM keeps the gate red. Remaining 16 keys are unfinished: fourteen launcher obligations and two skipped socket cases needing complete native equivalents. No failures added.",
+  "source": "Native Windows 6c9e65e run37254786122: 3098 pass/14 fail/12 skipped. Actual real-PTY exit-before-delete repair now passes its full assertion. Remaining16 keys unfinished: fourteen launcher obligations and two skipped socket cases needing complete native equivalents. No failures added or waived.",
   "minimumTests": 2650,
   "platforms": {
     "linux": {},

@@ -1,9 +1,9 @@
 // Read-only, separate diagnostic. It never changes the installer's module state.
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import { windowsEnvironmentValue } from '../../../apps/desktop/bin/windows-env.mjs'
+import { powerShellSourceSha256, windowsEnvironmentFingerprint } from './windows-subprocess-provenance.mjs'
 export const installedCimPreflightSource = String.raw`
 $ErrorActionPreference='Stop';$stage='manifest';$manifests=[Collections.Generic.List[object]]::new();$commands=[Collections.Generic.List[object]]::new();
 function DiagnosticPath($path){
@@ -46,6 +46,7 @@ try{
 }catch{
  $actual=$_.Exception;for($i=0;$i -lt 8 -and $actual.InnerException;$i++){$actual=$actual.InnerException};$type=$actual.GetType().Name;if($type -notmatch '^[A-Za-z0-9_]{1,64}$'){$type='UNKNOWN'};
  $code=if($actual -is [ComponentModel.Win32Exception]){$actual.NativeErrorCode}else{'null'};
+ $PSModuleAutoLoadingPreference='None';
  if(Get-Command -Name ConvertTo-Json -ListImported -ErrorAction SilentlyContinue){
   [Console]::Out.Write((ConvertTo-Json -Depth 8 -Compress @{scope='installed-cim-preflight-only';completed=$false;failureStage=$stage;exceptionType=$type;hresult=$actual.HResult;nativeErrorCode=if($code -eq 'null'){$null}else{$code};manifests=@($manifests);commands=@($commands)}));
  }else{[Console]::Out.Write('{"scope":"installed-cim-preflight-only","completed":false,"failureStage":"'+$stage+'","exceptionType":"'+$type+'","hresult":'+$actual.HResult+',"nativeErrorCode":'+$code+'}');};exit 1
@@ -54,7 +55,7 @@ try{
 export function measureInstalledCimPreflight(environment) {
   assert.equal(process.platform, 'win32'); assert.equal(environment.GITHUB_ACTIONS, 'true')
   const system = windowsEnvironmentValue(environment, 'SystemRoot'); assert.ok(system)
-  const before = createHash('sha256').update(JSON.stringify(Object.entries(environment).sort())).digest('hex')
+  const before = windowsEnvironmentFingerprint(environment)
   const started = performance.now()
   const result = spawnSync(join(system, 'System32/WindowsPowerShell/v1.0/powershell.exe'),
     ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(installedCimPreflightSource, 'utf16le').toString('base64')],
@@ -63,8 +64,9 @@ export function measureInstalledCimPreflight(environment) {
   let observed
   try { observed = JSON.parse(result.stdout); assert.equal(observed.scope, 'installed-cim-preflight-only') }
   catch { observed = { scope: 'installed-cim-preflight-only', completed: false, invalidOrMissingReceipt: true } }
-  const after = createHash('sha256').update(JSON.stringify(Object.entries(environment).sort())).digest('hex')
-  return { ...observed, environmentFingerprint: before, environmentUnchanged: before === after, stages, exitCode: result.status,
+  const after = windowsEnvironmentFingerprint(environment)
+  return { ...observed, sourceSha256: powerShellSourceSha256(installedCimPreflightSource),
+    environmentFingerprint: before, environmentUnchanged: before === after, stages, exitCode: result.status,
     signal: result.signal, launchError: result.error?.code ?? null, ownedProcessPid: result.pid, exitObserved: result.status !== null || result.signal !== null,
     elapsedMs: Math.round(performance.now() - started), stderrBytes: Buffer.byteLength(result.stderr ?? ''), productionInstallerAcceptance: 'UNVERIFIED' }
 }

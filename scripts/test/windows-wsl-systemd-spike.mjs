@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { measureRawSupervisor } from './wsl-raw-supervisor-spike.mjs'
 import { measureGuestBrokerEscape } from './wsl-broker-escape-spike.mjs'
-import { measureRestrictedGuestProfile, measureRootRestrictedGuestProfile, measureNestedGuestNamespaces } from './wsl-restricted-profile-spike.mjs'
+import { measureRestrictedGuestProfile, measureRootRestrictedGuestProfile, measureNestedGuestNamespaces, measureNestedGuestLifecycle } from './wsl-restricted-profile-spike.mjs'
 
 assert.equal(process.platform, 'win32')
 assert.equal(process.env.GITHUB_ACTIONS, 'true')
@@ -130,6 +130,8 @@ finally:
   assert.notEqual(receipt.rootRestrictedProfile.result, 'FAIL', 'Root-owned restricted guest measurement failed')
   receipt.nestedNamespaces = measureNestedGuestNamespaces({ distribution, guest })
   assert.notEqual(receipt.nestedNamespaces.result, 'FAIL', 'Nested namespace kernel discriminator failed')
+  receipt.nestedLifecycle = measureNestedGuestLifecycle({ distribution, guest })
+  assert.notEqual(receipt.nestedLifecycle.result, 'FAIL', 'Real nested sandbox/PTY lifetime measurement failed')
   receipt.reason = 'Direct detached guest-tree and raw host EOF/death cleanup pass. Same-user service broker escape is measured separately; the unisolated strict design is refused when it escapes. Enforced broker/interop isolation remains required before product implementation.'
 } catch (error) { receipt.reason = String(error.message).slice(0, 1000) }
 finally {
@@ -147,3 +149,4 @@ assert.notEqual(receipt.registrationRemoved, false, 'Disposable registration mus
 assert.notEqual(receipt.restrictedProfile?.result, 'FAIL', 'Restricted-profile measurement failed; inspect retained receipt')
 assert.notEqual(receipt.rootRestrictedProfile?.result, 'FAIL', 'Root-profile measurement failed; inspect retained receipt')
 assert.notEqual(receipt.nestedNamespaces?.result, 'FAIL', 'Nested namespace measurement failed; inspect retained receipt')
+assert.notEqual(receipt.nestedLifecycle?.result, 'FAIL', 'Real nested lifetime measurement failed; inspect retained receipt')

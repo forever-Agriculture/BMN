@@ -1,7 +1,17 @@
 // Fixture-only instrumentation. Every intercepted call still invokes the original
 // subprocess API; receipts contain categories and OS command metadata, not errors.
+import { readFileSync } from 'node:fs'
+import { installedCimPreflightSource } from './windows-installed-cim-preflight.mjs'
+import { powerShellSourceSha256, sha256, windowsEnvironmentFingerprint } from './windows-subprocess-provenance.mjs'
 const marker = 'BMN_INSTALL_DIAGNOSTIC:'
 const prefix = "$ErrorActionPreference='Stop';Import-Module ([System.IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1'));\n"
+const exactQueries = new Map([
+  ['822d6f6cece77efcb00e90a49419bd0ecc4165c5b80e0045fb9300e7eda891f2', 'observe-apps'],
+  ['32772e37c027a2572f54be17529502829c580df2faedefee41fefceadb0afff1', 'observe-selected-apps'],
+  ['e9c6d5c95d22f669af8ad8f14325fd493a96a4478bcc7d96ed8393aa41f8ef3a', 'observe-mapped-engines']
+])
+const observerSha256 = sha256(readFileSync(new URL(import.meta.url)))
+const preflightSha256 = powerShellSourceSha256(installedCimPreflightSource)
 const dependencies = String.raw`
 $__bmnStage='dependencies';
 function BMNDiagnosticPath($path) {
@@ -37,18 +47,46 @@ foreach($name in @('Import-Module','Get-Command','Get-CimInstance','Select-Objec
 };$__bmnStage='operation';[Console]::Error.WriteLine('BMN_INSTALL_DIAGNOSTIC:'+ (ConvertTo-Json -Compress @{kind='stage';stage='operation'}));
 `
 
-export function observeWindowsInstallCommands(actualSpawn, record) {
+export function observeWindowsInstallCommands(actualSpawn, record, binding = {}) {
   let sequence = 0
-  return (executable, args, options) => {
+  const failures = []
+  const fail = (id, phase, category) => {
+    if (failures.length < 32) failures.push({ id, phase, category })
+    else failures[31] = { id, phase, category: 'diagnostic-failure-overflow' }
+  }
+  const persist = (id, row) => { try { record(row) } catch { fail(id, row.phase, 'recording-failed') } }
+  const observe = (executable, args, options) => {
     if (!/[\\/]powershell\.exe$/iu.test(executable) || !Array.isArray(args) || !args.includes('-EncodedCommand')) {
       return actualSpawn(executable, args, options)
     }
     const index = args.indexOf('-EncodedCommand') + 1, original = Buffer.from(args[index], 'base64').toString('utf16le')
-    const operation = original.includes('BMN_PRIVATE_ROOTS_OK') ? 'private-directory'
-      : original.includes("Name='BMN-worker.exe'") ? 'observe-mapped-engines'
-      : original.includes("Name='BMN.exe'") ? 'observe-apps' : 'other-powershell'
+    const sourceSha256 = powerShellSourceSha256(original)
+    const directOriginal = original.startsWith(prefix) && exactQueries.has(sourceSha256)
+    const explicitPreflight = sourceSha256 === preflightSha256
+    const operation = explicitPreflight ? 'explicit-cim-preflight' : directOriginal ? exactQueries.get(sourceSha256)
+      : original.includes('BMN_PRIVATE_ROOTS_OK') ? 'private-directory' : 'other-powershell'
     const began = performance.now(), id = ++sequence
-    record({ id, operation, phase: 'begin' })
+    const environment = options?.env ?? process.env
+    let environmentFingerprint
+    try { environmentFingerprint = windowsEnvironmentFingerprint(environment) }
+    catch { fail(id, 'begin', 'ambiguous-environment'); throw new Error('Windows subprocess environment cannot be identified') }
+    let executableSha256 = null
+    try { executableSha256 = sha256(readFileSync(executable)) }
+    catch { if (process.platform === 'win32') fail(id, 'begin', 'executable-identity-unavailable') }
+    const bindingComplete = /^[a-f0-9]{40}$/u.test(binding.candidateCommit ?? '') && /^[a-f0-9]{64}$/u.test(binding.artifactSha256 ?? '')
+    const provenance = { candidateCommit: bindingComplete ? binding.candidateCommit : 'UNVERIFIED',
+      artifactSha256: bindingComplete ? binding.artifactSha256 : 'UNVERIFIED', bindingComplete,
+      observerSha256, sourceSha256, encodedArgumentSha256: sha256(Buffer.from(args[index], 'ascii')), executableSha256,
+      executablePathFingerprint: sha256(Buffer.from(executable.toLowerCase(), 'utf16le')), orderedFlags: args.slice(0, index - 1),
+      cwdFingerprint: sha256(Buffer.from(String(options?.cwd ?? process.cwd()), 'utf16le')),
+      inputBytes: options?.input === undefined ? 0 : Buffer.byteLength(options.input),
+      inputSha256: options?.input === undefined ? null : sha256(Buffer.from(options.input)),
+      shell: options?.shell ?? 'NODE_DEFAULT', stdio: options?.stdio ?? 'NODE_DEFAULT',
+      environmentFingerprint, environmentEncoding: 'UTF8-JSON-sorted-lowercase-name-string-value-pairs',
+      encoding: options?.encoding ?? 'NODE_DEFAULT', timeout: options?.timeout ?? 'NODE_DEFAULT',
+      maxBuffer: options?.maxBuffer ?? 'NODE_DEFAULT', windowsHide: options?.windowsHide ?? 'NODE_DEFAULT',
+      directOriginal, explicitPreflight }
+    persist(id, { id, operation, phase: 'begin', ...provenance })
     // The original explicit Utility import and body remain unchanged. Only the
     // worker's known prefix gains command metadata in the same private context.
     const body = original.startsWith(prefix) ? original.replace(prefix, prefix + dependencies) : original
@@ -60,17 +98,47 @@ export function observeWindowsInstallCommands(actualSpawn, record) {
  $code=if($actual -is [ComponentModel.Win32Exception]){$actual.NativeErrorCode}else{'null'};
  [Console]::Error.WriteLine('BMN_INSTALL_DIAGNOSTIC:{"kind":"failure","stage":"'+$__bmnStage+'","exceptionType":"'+$type+'","hresult":'+$actual.HResult+',"nativeErrorCode":'+$code+'}');exit 1;
 }`
-    const observedArgs = [...args]; observedArgs[index] = Buffer.from(script, 'utf16le').toString('base64')
-    let result
+    const observedArgs = directOriginal || explicitPreflight ? args : [...args]
+    if (!directOriginal && !explicitPreflight) observedArgs[index] = Buffer.from(script, 'utf16le').toString('base64')
+    let result, threw = false
     try { result = actualSpawn(executable, observedArgs, options); return result }
+    catch (error) { threw = true; throw error }
     finally {
       const metadata = []
       for (const line of String(result?.stderr ?? '').split(/\r?\n/u)) {
-        if (!line.startsWith(marker) || line.length > 8192 || metadata.length >= 16) continue
-        try { metadata.push(JSON.parse(line.slice(marker.length))) } catch { /* Non-protocol output is never persisted. */ }
+        if (!line.startsWith(marker)) continue
+        if (line.length > 8192 || metadata.length >= 16) { fail(id, 'end', 'metadata-clipped'); continue }
+        try {
+          const row = JSON.parse(line.slice(marker.length))
+          if (!['stage', 'dependency', 'dependency-failure', 'failure'].includes(row.kind)) { fail(id, 'end', 'metadata-invalid-kind'); continue }
+          // Fixed OS metadata only: paths must be trusted normalized categories.
+          const allowed = new Set(['kind', 'stage', 'name', 'matches', 'source', 'commandType', 'moduleBase', 'moduleType',
+            'moduleVersion', 'assemblyPath', 'assemblyName', 'assemblyVersion', 'assemblyPublicKeyToken', 'exceptionType', 'hresult', 'nativeErrorCode'])
+          if (Object.keys(row).some(key => !allowed.has(key)) || Object.values(row).some(value => value !== null && !['string', 'number', 'boolean'].includes(typeof value))) {
+            fail(id, 'end', 'metadata-invalid-schema'); continue
+          }
+          for (const key of ['moduleBase', 'assemblyPath']) {
+            if (typeof row[key] === 'string' && !/^(?:PSHOME|SYSTEMROOT)(?:\/[A-Za-z0-9_./-]+)?$|^OUTSIDE_TRUSTED_ROOTS$/u.test(row[key])) {
+              row[key] = 'OUTSIDE_TRUSTED_ROOTS'; fail(id, 'end', 'metadata-untrusted-path')
+            }
+          }
+          if (Object.entries(row).some(([key, value]) => typeof value === 'string' && !['moduleBase', 'assemblyPath'].includes(key) && !/^[A-Za-z0-9_.:-]{1,128}$/u.test(value))) {
+            fail(id, 'end', 'metadata-invalid-value'); continue
+          }
+          metadata.push(row)
+        } catch { fail(id, 'end', 'metadata-malformed') }
       }
-      record({ id, operation, phase: 'end', elapsedMs: Math.round(performance.now() - began), exitCode: result?.status ?? null,
-        signal: result?.signal ?? null, launchError: result?.error?.code ?? null, stderrBytes: Buffer.byteLength(result?.stderr ?? ''), metadata })
+      let environmentUnchanged = false
+      try { environmentUnchanged = windowsEnvironmentFingerprint(environment) === environmentFingerprint }
+      catch { fail(id, 'end', 'ambiguous-environment') }
+      if (!environmentUnchanged) fail(id, 'end', 'environment-changed')
+      persist(id, { id, operation, phase: 'end', ...provenance, environmentUnchanged,
+        elapsedMs: Math.round(performance.now() - began), exitCode: result?.status ?? null,
+        ownedProcessPid: result?.pid ?? null, exitObserved: result?.status !== null && result?.status !== undefined || Boolean(result?.signal),
+        spawnThrew: threw, signal: result?.signal ?? null, launchError: result?.error?.code ?? null,
+        stdoutBytes: Buffer.byteLength(result?.stdout ?? ''), stderrBytes: Buffer.byteLength(result?.stderr ?? ''), metadata })
     }
   }
+  Object.defineProperty(observe, 'diagnosticFailures', { get: () => failures.map(row => ({ ...row })) })
+  return observe
 }

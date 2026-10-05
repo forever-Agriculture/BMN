@@ -8,6 +8,7 @@ import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { observeWindowsInstallCommands } from './fixtures/windows-install-command-observer.mjs'
 import { measureInstalledCimPreflight } from './fixtures/windows-installed-cim-preflight.mjs'
 import { dirname, join } from 'node:path'
+import { createHash } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { chromium } from 'playwright'
 import { findSandboxDisablingText } from '../lib/sandbox-flag-audit.mjs'
@@ -27,12 +28,18 @@ const children = new Set(), browsers = new Set()
 const actualSpawnSync = processes.spawnSync
 report.installOperations = []
 report.stage = 'controller-ready'
-processes.spawnSync = observeWindowsInstallCommands(actualSpawnSync, row => {
-  if (report.installOperations.length < 200) report.installOperations.push(row)
-})
+const artifactBytes = readFileSync(join(source, 'bmn-release.json'))
+const commandObserver = observeWindowsInstallCommands(actualSpawnSync, row => {
+  assert.ok(report.installOperations.length < 200, 'Installer diagnostic receipt limit reached')
+  report.installOperations.push(row)
+}, { candidateCommit: JSON.parse(artifactBytes).commit, artifactSha256: createHash('sha256').update(artifactBytes).digest('hex') })
+processes.spawnSync = commandObserver
 syncBuiltinESMExports()
 const check = name => report.checks.push({ name, status: 'PASS' })
-const writeReport = () => { writeFileSync(reportPath + '.tmp', JSON.stringify(report)); renameSync(reportPath + '.tmp', reportPath) }
+const writeReport = () => {
+  report.diagnosticFailures = commandObserver.diagnosticFailures
+  writeFileSync(reportPath + '.tmp', JSON.stringify(report)); renameSync(reportPath + '.tmp', reportPath)
+}
 const waitFor = async (predicate, child, timeout = 45000) => {
   const until = Date.now() + timeout
   while (!predicate()) {
@@ -49,7 +56,7 @@ const settle = async (child, timeout, message) => {
   } finally { clearTimeout(timer) }
 }
 async function main() {
-  const { installWindowsPayload, windowsInstallerSmokeEnvironment, observeWindowsSelectedApps } = await import('../lib/windows-installed-worker.mjs')
+  const { installWindowsPayload, windowsInstallerSmokeEnvironment, observeWindowsApps, observeWindowsSelectedApps } = await import('../lib/windows-installed-worker.mjs')
   const { readInstallerDescriptor } = await import('../lib/windows-release-payload.mjs')
   const { readWindowsInstallation, releaseDirectory } = await import('../lib/windows-release-transaction.mjs')
   const { ensurePrivateDirectories } = await import('../../apps/desktop/src/utility/private-directory.ts')
@@ -59,8 +66,21 @@ async function main() {
   Object.assign(process.env, windowsInstallerSmokeEnvironment(join(fixture, 'profile')))
   const root = join(fixture, 'installation'), dataRoot = join(process.env.LOCALAPPDATA, 'BMN/data')
   process.env.BMN_DATA_HOME = dataRoot
+  // Run the exact original entry point before explicit imports can affect this
+  // private profile's module cache. Retain its failure through the separate PF.
+  report.stage = 'untouched-original-cim-query'
+  let originalCimFailure
+  try {
+    const ids = observeWindowsApps()
+    assert.ok(Array.isArray(ids) && ids.every(Number.isSafeInteger), 'Original process observation is incomplete')
+    report.originalCimQuery = { status: 'PASS', scope: 'actual-original-worker-entrypoint', processCount: ids.length }
+  } catch (error) {
+    originalCimFailure = error
+    report.originalCimQuery = { status: 'FAIL', scope: 'actual-original-worker-entrypoint', errorCategory: 'operation' }
+  }
   report.stage = 'separate-installed-cim-preflight'
   report.cimPreflight = measureInstalledCimPreflight(process.env)
+  if (originalCimFailure) throw originalCimFailure
   // The following production installer runs in its own unchanged module context.
   const descriptor = readInstallerDescriptor(source), shortcut = join(fixture, 'BMN.lnk')
   report.stage = 'install-payload'
@@ -149,6 +169,8 @@ async function main() {
   await next.page.getByText('Installed launcher fixture 数据', { exact: true }).first().waitFor()
   check('ordinary installed restart preserves actual workspace state')
   await quit(restarted, next.page, next.browser)
+  assert.equal(commandObserver.diagnosticFailures.length, 0, 'Installer diagnostics are incomplete')
+  assert.ok(report.installOperations.every(row => row.bindingComplete), 'Installer artifact binding is incomplete')
   report.status = 'PASS'
   report.selectedCommit = descriptor.commit
 }
@@ -170,6 +192,6 @@ finally {
     try { await browser.close() } catch { success = false }
     report.cleanup.push({ role: 'owned-browser-connection', success })
   }
-  if (report.cleanup.some(row => !row.success)) { report.status = 'FAIL'; process.exitCode = 1 }
+  if (report.cleanup.some(row => !row.success) || commandObserver.diagnosticFailures.length > 0) { report.status = 'FAIL'; process.exitCode = 1 }
   writeReport()
 }

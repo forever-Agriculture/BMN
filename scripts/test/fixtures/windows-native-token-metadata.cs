@@ -25,6 +25,7 @@ public static class BMNTokenMetadata {
  }
  sealed class Probe {
   public string Context="current"; public IntPtr LinkedHandle=IntPtr.Zero; public List<object> Queries=new List<object>(),Closures=new List<object>();
+  public List<object> RestrictionSamples=new List<object>(),DiagnosticFailures=new List<object>();
   public bool Query(IntPtr token,int kind,IntPtr data,uint bytes,out uint needed,string phase,out int code) {
    bool success=GetTokenInformation(token,kind,data,bytes,out needed);code=success?0:Marshal.GetLastWin32Error();
    var row=new Dictionary<string,object>();row.Add("context",Context);row.Add("class",kind);row.Add("phase",phase);row.Add("requestedBytes",bytes);row.Add("requiredBytes",needed);row.Add("success",success);row.Add("nativeErrorCode",code);Queries.Add(row);return success;
@@ -70,6 +71,24 @@ public static class BMNTokenMetadata {
  }
  static string Hash(string value) { using(var hash=SHA256.Create()) {return BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(value))).Replace("-","").ToLowerInvariant();} }
  static uint Scalar(IntPtr token,int kind,Probe probe) {using(var b=new Buffer(token,kind,probe,4)){if(b.Bytes<4)throw new InvalidOperationException("short scalar");return unchecked((uint)Marshal.ReadInt32(b.Data));}}
+ // Diagnostic only: class21 returned one byte despite its documented DWORD.
+ // Never decode a value or relax the original shape guard using these samples.
+ static void ObserveRestrictionShape(IntPtr token,Probe probe) {
+  int ordinal=0;
+  foreach(byte initializer in new byte[]{0,0xa5,0x5a}) {
+   IntPtr data=IntPtr.Zero;
+   try {
+    data=Marshal.AllocHGlobal(4);var initial=new byte[]{initializer,initializer,initializer,initializer};Marshal.Copy(initial,0,data,4);
+    uint needed;int error;bool success=probe.Query(token,21,data,4,out needed,"diagnostic-fill",out error);
+    var observed=new byte[4];Marshal.Copy(data,observed,0,4);
+    var row=new Dictionary<string,object>();row.Add("context",probe.Context);row.Add("class",21);row.Add("ordinal",ordinal++);
+    row.Add("initializer",initializer);row.Add("requestedBytes",4);row.Add("requiredBytes",needed);row.Add("success",success);row.Add("nativeErrorCode",error);row.Add("bytesHex",BitConverter.ToString(observed).Replace("-","").ToLowerInvariant());
+    probe.RestrictionSamples.Add(row);
+    if(!success || (needed!=1 && needed!=4))throw new QueryFailure(success?"diagnostic-shape":"api",probe.Context,21,"diagnostic-fill",error);
+   }catch(Exception error){probe.DiagnosticFailures.Add(probe.Failure(error));return;}
+   finally{if(data!=IntPtr.Zero)Marshal.FreeHGlobal(data);}
+  }
+ }
  static string Sid(IntPtr value){return new SecurityIdentifier(value).Value;}
  static Context Read(IntPtr token,Probe probe) {
   var context=new Context();var report=new Dictionary<string,object>();context.Report=report;
@@ -133,13 +152,19 @@ public static class BMNTokenMetadata {
     if(error.Context=="linked-lookup" && error.Kind==19 && error.Category=="api")result.Add("linkedUnavailableWin32Code",error.NativeErrorCode);
     else primaryFailure=probe.Failure(error);
    }
-  }catch(Exception error){primaryFailure=probe.Failure(error);}
+  }catch(Exception error){
+   primaryFailure=probe.Failure(error);
+   var query=error as QueryFailure;
+   if(token!=IntPtr.Zero && query!=null && query.Context=="current" && query.Kind==21 && query.Category=="buffer-policy" && query.Phase=="fill")ObserveRestrictionShape(token,probe);
+  }
   finally {
    if(linked==IntPtr.Zero)linked=probe.LinkedHandle;
    if(linked!=IntPtr.Zero)probe.Close(linked,"linked");
    if(token!=IntPtr.Zero)probe.Close(token,"current");
   }
   foreach(Dictionary<string,object> row in probe.Closures)if(!(bool)row["success"])cleanupSuccess=false;
-  result.Add("queries",probe.Queries);result.Add("handleClosures",probe.Closures);result.Add("primaryFailure",primaryFailure);result.Add("cleanupSuccess",cleanupSuccess);result.Add("completed",primaryFailure==null && cleanupSuccess);return result;
+  result.Add("queries",probe.Queries);result.Add("restrictionShapeSamples",probe.RestrictionSamples);result.Add("diagnosticFailures",probe.DiagnosticFailures);
+  if(probe.RestrictionSamples.Count!=0)result.Add("hasRestrictions","UNVERIFIED");
+  result.Add("handleClosures",probe.Closures);result.Add("primaryFailure",primaryFailure);result.Add("cleanupSuccess",cleanupSuccess);result.Add("completed",primaryFailure==null && cleanupSuccess);return result;
  }
 }
