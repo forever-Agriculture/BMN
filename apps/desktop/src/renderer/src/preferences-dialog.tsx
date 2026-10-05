@@ -52,10 +52,6 @@ const HOOK_CHECK_NAMES: Readonly<Record<HookCheckAgent, string>> = {
   claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor'
 }
 
-/**
- * Telegram's status as a list. An error is said once: in the cue while it shows, otherwise in full under Last error;
- * State then gives only its word.
- */
 /** Story 53.9: says, in the Telegram cue's form, that the system refused BMN's last desktop notification. */
 export function NotificationHealthCue(props: { cue: string | null }): React.JSX.Element | null {
   return props.cue ? (
@@ -65,6 +61,16 @@ export function NotificationHealthCue(props: { cue: string | null }): React.JSX.
     </div>
   ) : null
 }
+
+/** Story 53.4: the control endpoint's row name. On Windows the path is the private file that names the pipe. */
+export function controlEndpointLabel(transport: ControlInfo['transport'] | undefined): string {
+  return transport === 'windows-pipe' ? 'Endpoint file' : 'Socket path'
+}
+
+/**
+ * Telegram's status as a list. An error is said once: in the cue while it shows, otherwise in full under Last error;
+ * State then gives only its word.
+ */
 
 export function TelegramStatusList(props: { status: TelegramStatus; cueShown: boolean }): React.JSX.Element {
   const status = props.status
@@ -382,7 +388,7 @@ export function PreferencesDialog(props: {
     setCopyMessage(null)
     try {
       await window.aiTerminal.writeClipboardText(text)
-      setCopyMessage(kind === 'socket' ? 'Socket path copied.' : 'CLI path copied.')
+      setCopyMessage(kind === 'socket' ? `${controlEndpointLabel(controlInfo?.transport)} copied.` : 'CLI path copied.')
     } catch (error) {
       setCopyError(failureDetail(error, 'Could not copy to the clipboard'))
     } finally {
@@ -813,7 +819,7 @@ export function PreferencesDialog(props: {
           <>
             <div className="preferences-row">
               <div className="preferences-row-label">
-                <span>Socket path</span>
+                <span>{controlEndpointLabel(controlInfo.transport)}</span>
               </div>
               <div className="preferences-row-control">
                 <code className="preferences-mono preferences-path" title={controlInfo.socketPath}><bdi>{controlInfo.socketPath}</bdi></code>

@@ -2,13 +2,13 @@
 // Root ownership precedes every child; ACL proof uses actual protected storage.
 import { createRequire } from 'node:module'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdtemp, readFile, rm, lstat } from 'node:fs/promises'
+import { mkdtemp, readFile, rename, rm, lstat, writeFile } from 'node:fs/promises'
 import { createConnection } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { ControlAuth } from './control-auth'
-import { ControlServer, MemoryReceiptStore, CONTROL_PIPE_PATTERN, isUserOnlyPipeDacl, type ControlHandlers } from './control-server'
+import { ControlServer, MemoryReceiptStore, CONTROL_PIPE_PATTERN, isUserOnlyPipeDacl, resolveControlEndpoint, type ControlHandlers } from './control-server'
 import { ensurePrivateDirectories } from './private-directory'
 
 const native = process.platform === 'win32'
@@ -102,6 +102,18 @@ it.runIf(native)('verifies caller-owned control directory and endpoint ACLs, nat
   await f.server.close()
   await expect(lstat(f.socketPath)).rejects.toMatchObject({ code: 'ENOENT' })
   expect(await connectResult(endpoint)).toBe(false)
+}, 30000)
+
+it.runIf(native)('keeps an endpoint file that names another server when it closes', async () => {
+  const f = await fixture(); await f.server.listen()
+  const ours = f.server.endpoint!
+  // Another BMN server has since published its own pipe in the same endpoint file.
+  const theirs = `\\\\.\\pipe\\bmn-control-${'0123456789abcdef'.repeat(2)}`
+  await writeFile(`${f.socketPath}.other.tmp`, `${theirs}\n`, { mode: 0o600 }); await rename(`${f.socketPath}.other.tmp`, f.socketPath)
+  expect(await resolveControlEndpoint(f.socketPath)).toBe(theirs)
+  await f.server.close()
+  expect(await resolveControlEndpoint(f.socketPath)).toBe(theirs)
+  expect(await connectResult(ours)).toBe(false)
 }, 30000)
 
 it.runIf(native)('replaces the actual endpoint left by a crashed ControlServer and refuses takeover while that server is live', async () => {

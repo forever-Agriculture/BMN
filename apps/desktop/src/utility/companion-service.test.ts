@@ -3967,3 +3967,17 @@ it('preserves the correlated native OpenCode route while old supported ownership
   expect(await service.answerability(unknown)).toMatchObject({ answerable: false })
   expect(writes).toHaveLength(0)
 })
+
+describe('control info', () => {
+  it('reports readiness only once listening, names this OS\'s transport and never carries a token', async () => {
+    const before = await service.route(METHOD_REGISTRY.controlInfo, {}) as Record<string, unknown>
+    expect(before).toMatchObject({ listening: false, transport: process.platform === 'win32' ? 'windows-pipe' : 'unix-socket' })
+    expect(before.detail).toMatch(/has not started$/)
+    await service.start()
+    const after = await service.route(METHOD_REGISTRY.controlInfo, {}) as Record<string, unknown>
+    expect(after).toMatchObject({ listening: true, detail: 'Agents and the bmn CLI can reach this app' })
+    expect(Object.keys(after).sort()).toEqual(['cliPath', 'detail', 'listening', 'socketPath', 'transport'])
+    expect(JSON.stringify(after)).not.toContain(service['auth'].ownerToken)
+    await service.close()
+  })
+})

@@ -167,6 +167,9 @@ async function writeStaged(path: string, contents: string): Promise<void> {
   }
 }
 
+/** What agents and the CLI connect to on this OS, as Preferences reports it. */
+const CONTROL_ENDPOINT = process.platform === 'win32' ? 'control pipe' : 'control socket'
+
 function invalid(message: string): never {
   throw new HostControlError(ERROR_CODES.invalidArgument, message)
 }
@@ -290,7 +293,7 @@ export class CompanionService {
   private readonly control: ControlServer
   private readonly knownSessions = new Map<string, SessionRecord>()
   private controlListening = false
-  private controlDetail = 'The control socket has not started'
+  private controlDetail = `The ${CONTROL_ENDPOINT} has not started`
   private telegram: TelegramConnector | undefined
   private telegramToken: string | null = null
   private telegramHealth: ConnectorHealth | undefined
@@ -673,7 +676,7 @@ export class CompanionService {
       const tooLong = process.platform !== 'win32' && Buffer.byteLength(this.socketPath) > MAX_SOCKET_PATH_BYTES
       this.controlDetail = tooLong
         ? `The control socket is unavailable: its path is longer than ${MAX_SOCKET_PATH_BYTES} bytes (${this.socketPath}); use a shorter runtime directory`
-        : `The control socket is unavailable: ${error instanceof Error ? error.message.slice(0, 200) : 'unknown error'}`
+        : `The ${CONTROL_ENDPOINT} is unavailable: ${error instanceof Error ? error.message.slice(0, 200) : 'unknown error'}`
     }
     this.sweepTimer = setInterval(() => void this.sweepAttention(), ATTENTION_SWEEP_MS)
     this.sweepTimer.unref()
@@ -947,6 +950,7 @@ export class CompanionService {
       case METHOD_REGISTRY.controlInfo:
         return {
           socketPath: this.socketPath,
+          transport: process.platform === 'win32' ? 'windows-pipe' : 'unix-socket',
           cliPath: this.options.cliPath,
           listening: this.controlListening,
           detail: this.controlDetail
