@@ -90,8 +90,21 @@ jobs:
           pnpm run package
           xvfb-run -a pnpm run smoke:packaged > test-results/packaged-smoke.json
       - name: Windows internal unpacked build
+        id: windows_package
         if: ${{ !cancelled() && steps.install.outcome == 'success' && runner.os == 'Windows' }}
         run: pnpm run package:unpacked
+      # Kept before any packaged test runs, so manual Windows testers get the build as it was made:
+      # the unsigned offline installer and the unpacked folder. Not a release.
+      - name: Keep the Windows build for manual testing
+        if: ${{ !cancelled() && steps.windows_package.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: bmn-windows-x64-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            apps/desktop/release/BMN-*-setup.exe
+            apps/desktop/release/win-unpacked/
+          if-no-files-found: warn
+          retention-days: 14
       - name: Windows packaged startup and native selection
         if: ${{ !cancelled() && steps.install.outcome == 'success' && runner.os == 'Windows' }}
         shell: pwsh

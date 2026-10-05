@@ -219,6 +219,13 @@ uses the included Electron runtime; an end user needs neither Node/pnpm/compiler
 nor WSL to install and run the native app. The installer makes no network update
 check and installs per-user under `%LOCALAPPDATA%\Programs\BMN`.
 
+Manual testers need no toolchain: each "Linux and Windows build" CI run keeps the
+Windows build it made, before its packaged tests, as the artifact
+`bmn-windows-x64-<commit>` for 14 days (download from the run's page while signed
+in to GitHub). It holds the unsigned `BMN-<commit>-setup.exe` and the `win-unpacked`
+folder, whose `BMN.exe` runs without installing. It is test output, not a release:
+check the run's result and record the tested commit.
+
 For contributors with the pinned toolchain:
 
 ```powershell
