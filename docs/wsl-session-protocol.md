@@ -81,6 +81,13 @@ A session's receipt is complete only with a matching `ready`, a matching `exit` 
 - **Start and resume** use only the registration the session recorded, never the default. WSL missing (`WSL_MISSING`), a removed, renamed, replaced (same name, new identity) or ambiguous registration (`DISTRO_CHANGED`), and a WSL 1 registration (`UNSUPPORTED_PROFILE`) each fail with a message that says what to do and that Windows sessions are not affected.
 - **Paths** are qualified by registration identity, so the same Linux path in two distributions never collides. A path is confined to an authorized root lexically: another distribution, a sibling with the root's name as a prefix, and any `.` or `..` segment are refused. `\\wsl$\<name>\…` and `\\wsl.localhost\<name>\…` map to exactly one registration; an unknown or ambiguous name fails instead of guessing, and device forms are refused. Links and reparse points are resolved at open time under held handles in a later slice; this lexical step does not replace that.
 
+## Session authority (bridge, model only)
+
+`scripts/lib/wsl-capabilities.mjs` models the authority a WSL session's `bmn` would carry, tested in `scripts/tests/wsl-capabilities.test.mjs`. The bridge channel itself stays reserved until it is designed and reviewed.
+- Native BMN mints one credential per session incarnation, limited to listed operations within a fixed ceiling (at most what a native session's own credential may do) and to roots in the session's distribution. It keeps only the credential's digest; the secret travels once, in the private launch stream, never in argv, environment listings or logs. A new incarnation's credential replaces the old one, and Stop or disconnect revokes it at once.
+- A request is judged by the transport it arrived on: the credential must belong to that channel's session and incarnation. A request has exactly the fields `secret`, `sequence`, `operation` and optionally `path`; a claimed session or distribution is refused, not ignored.
+- Sequences strictly increase; an authenticated request uses up its sequence even when it is then denied, so nothing can be replayed. A path is a path in the credential's own distribution and must lie below one of its roots.
+
 ## Network destinations (profile gate P6)
 
 `scripts/lib/wsl-egress-policy.mjs` is the session's network mediator's destination policy, tested in `scripts/tests/wsl-egress-policy.test.mjs`. The mediator resolves names itself and asks about every address it would use; it then connects only to the addresses an allowed decision lists, and a redirect or a new resolution is a new decision.
