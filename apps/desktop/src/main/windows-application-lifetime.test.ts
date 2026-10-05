@@ -1,7 +1,15 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import { protectWindowsApplicationLifetime } from './windows-application-lifetime'
 
 describe('Windows application lifetime protection', () => {
+  // The native crash fixture's original-defect control removes exactly this statement from the built main
+  // (scripts/test/fixtures/windows-application-crash.mjs); wrapping the call would leave it nothing to remove.
+  it('is called by startup as one standalone statement', () => {
+    const main = readFileSync(new URL('./index.ts', import.meta.url), 'utf8')
+    expect(main.match(/^protectWindowsApplicationLifetime\(\)$/gmu)).toHaveLength(1)
+  })
+
   it('keeps the Linux startup independent of Windows native modules', () => {
     const load = vi.fn()
     protectWindowsApplicationLifetime('linux', load)

@@ -1094,7 +1094,10 @@ startupStep('private directories', () =>
 )
 const dataUpdateLease = startupStep('data lease', () => retainWindowsDataLease(instanceDataRoot))
 process.once('exit', () => dataUpdateLease?.close())
-startupStep('application lifetime', protectWindowsApplicationLifetime)
+// A standalone statement: the lifecycle fixture's original-defect control removes exactly this call.
+startupMarker('application lifetime enter')
+protectWindowsApplicationLifetime()
+startupMarker('application lifetime return')
 const primaryInstance = startupStep('single instance', () =>
   acquireRootScopedSingleInstance(app, instanceDataRoot, () => focusExistingWindow(applicationWindow))
 )
