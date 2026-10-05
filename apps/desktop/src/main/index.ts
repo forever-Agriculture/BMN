@@ -2,6 +2,7 @@
 import { writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { ensurePrivateDirectories } from '../utility/private-directory'
+import { createNotificationHealth, notificationHealthCue } from './notification-health'
 import { join, resolve } from 'node:path'
 import {
   ERROR_CODES,
@@ -249,6 +250,8 @@ const presence = createPresenceMonitor({
     return () => clearTimeout(timer)
   }
 })
+// Story 53.9: a notification the system refused is reported in Preferences, never taken as delivered.
+const notificationHealth = createNotificationHealth()
 const appEvents = createAppEventForwarder({
   client: () => hostClient,
   targets: allowedTargets,
@@ -256,8 +259,12 @@ const appEvents = createAppEventForwarder({
     !window.isDestroyed() && window.isFocused() && selectedSessions.get(window.webContents.id) === sessionId
   ),
   notify: ({ title, body, sessionId, requestId, kind, revision }) => {
-    if (!Notification.isSupported()) return
+    if (!Notification.isSupported()) {
+      notificationHealth.unsupported()
+      return
+    }
     const notification = new Notification({ title, body, silent: false })
+    notificationHealth.watch(notification)
     notification.on('click', () => {
       void activateAttentionNotification({ sessionId, requestId, kind, revision }, {
         close: () => notification.close(),
@@ -278,8 +285,12 @@ const appEvents = createAppEventForwarder({
       selfTestTaps.appNotice(notice)
       return
     }
-    if (!Notification.isSupported()) return
+    if (!Notification.isSupported()) {
+      notificationHealth.unsupported()
+      return
+    }
     const notification = new Notification({ ...notice, silent: false })
+    notificationHealth.watch(notification)
     notification.on('click', () => {
       notification.close()
       focusExistingWindow(applicationWindow)
@@ -540,6 +551,7 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
       return createSessionRuntime(params as SessionCreateParams, rendererTestMode)
     }
   })
+  bridgeIpc.handle('aiterm:notifications:health', () => ({ cue: notificationHealthCue(notificationHealth.current(), process.platform) }))
   bridgeIpc.handle('aiterm:launch-directory:normalize', (event, value: unknown) => {
     if (!senderIsAllowed(event)) {
       throw new MainIpcError(ERROR_CODES.unauthorized, 'Renderer sender is not authorized')

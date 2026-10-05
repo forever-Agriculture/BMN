@@ -3,7 +3,7 @@ import type { TelegramStatus } from '@bmn/protocol'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { TelegramStatusList } from './preferences-dialog'
+import { NotificationHealthCue, TelegramStatusList } from './preferences-dialog'
 
 const ERROR = 'Another client is polling this bot token; stop the other client or revoke the token in BotFather'
 const status = (lastError: string | null): TelegramStatus => ({
@@ -32,5 +32,15 @@ describe('Telegram status list (Story 40.3)', () => {
   it('gives State its detail only when there is no error', () => {
     expect(render(null, false)).toContain('<dt>State</dt><dd>polling · Polling for replies</dd><dt>Token</dt>')
     expect(render(null, false)).toContain('<dt>Last error</dt><dd class="none">none</dd>')
+  })
+})
+
+describe('desktop notification cue (Story 53.9)', () => {
+  it('shows the system\'s refusal as a status cue, and nothing while notifications work', () => {
+    const cue = 'Windows did not show BMN\'s last notification. Turn on notifications for BMN in Settings › System › Notifications.'
+    const markup = renderToStaticMarkup(createElement(NotificationHealthCue, { cue }))
+    expect(markup).toContain('role="status"')
+    expect(markup).toContain('Settings › System › Notifications.')
+    expect(renderToStaticMarkup(createElement(NotificationHealthCue, { cue: null }))).toBe('')
   })
 })

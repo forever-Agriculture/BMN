@@ -56,6 +56,16 @@ const HOOK_CHECK_NAMES: Readonly<Record<HookCheckAgent, string>> = {
  * Telegram's status as a list. An error is said once: in the cue while it shows, otherwise in full under Last error;
  * State then gives only its word.
  */
+/** Story 53.9: says, in the Telegram cue's form, that the system refused BMN's last desktop notification. */
+export function NotificationHealthCue(props: { cue: string | null }): React.JSX.Element | null {
+  return props.cue ? (
+    <div className="history-confirm notification-cue" role="status">
+      <span className="status-dot needs-you" aria-hidden="true" />
+      <p>{props.cue}</p>
+    </div>
+  ) : null
+}
+
 export function TelegramStatusList(props: { status: TelegramStatus; cueShown: boolean }): React.JSX.Element {
   const status = props.status
   return (
@@ -163,6 +173,22 @@ export function PreferencesDialog(props: {
       setTerminalBusy(false)
     }
   }
+
+  // --- Desktop notifications: did the system show the last one (Story 53.9) ---
+  const [notificationCue, setNotificationCue] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    window.aiTerminal
+      .getNotificationHealth()
+      .then((health) => {
+        if (!cancelled) setNotificationCue(health.cue)
+      })
+      // Only a cue: Preferences works the same when it cannot be read.
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // --- Telegram: status ------------------------------------------------
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null)
@@ -554,6 +580,7 @@ export function PreferencesDialog(props: {
             <p className="preferences-help">When a session needs you and no BMN window is focused.</p>
           </div>
         </div>
+        <NotificationHealthCue cue={notifications.desktop ? notificationCue : null} />
         {notificationsError && (
           <p className="preferences-error" role="alert">
             {notificationsError}

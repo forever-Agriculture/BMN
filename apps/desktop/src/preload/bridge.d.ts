@@ -315,6 +315,8 @@ export interface AiTerminalBridge {
   getControlInfo(): Promise<ControlInfo>
   exportBackup(): Promise<{ directory: string; manifest: BackupManifest } | null>
   verifyBackup(directory?: string): Promise<BackupVerifyResult | null>
+  /** Story 53.9: what to tell the owner when the system refused BMN's last desktop notification, or null. */
+  getNotificationHealth(): Promise<{ cue: string | null }>
   readClipboardText(): Promise<{ text: string }>
   writeClipboardText(text: string): Promise<{ written: true }>
   /** Local Whisper dictation: engine and model availability, with progress for running downloads. */
