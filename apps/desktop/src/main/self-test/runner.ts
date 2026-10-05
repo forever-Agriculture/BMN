@@ -1169,10 +1169,19 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     await waitForAnimatedLine('CODEX-RATE-DONE', 30_000)
     await waitForAnimatedLine('MAX-RATE-DONE', 30_000)
     // Scroll the pane well past its rows: only the last frame drawn may remain in the buffer.
-    await typeIntoAnimatedPane(typedShell.windows
+    // If SCROLLED never shows, the failure also says how soon after MAX-RATE-DONE was seen the line was sent
+    // and accepted; the typing itself is unchanged.
+    const lastMarkerSeen = Date.now()
+    const scrollLine = typeIntoAnimatedPane(typedShell.windows
       ? `0..79 | ForEach-Object { "scroll-$_" }; ${printed('SCROLL', 'ED')}\r`
       : `i=0; while [ $i -lt 80 ]; do echo scroll-$i; i=$((i + 1)); done; printf '%s%s\\n' SCROLL ED\r`)
-    await waitForAnimatedLine('SCROLLED', 10_000)
+    const scrollSent = Date.now() - lastMarkerSeen
+    await scrollLine
+    const scrollAccepted = Date.now() - lastMarkerSeen
+    await waitForAnimatedLine('SCROLLED', 10_000).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error)
+      throw new Error(`${message} (line sent +${scrollSent} ms and accepted +${scrollAccepted} ms after MAX-RATE-DONE was seen)`)
+    })
     const animation = await host.applicationWindow.webContents.executeJavaScript(`(() => {
       const hook = window.__aitermTest;
       const own = hook.snapshot(${animatedId});
