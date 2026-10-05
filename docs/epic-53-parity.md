@@ -16,12 +16,12 @@ Epic 50/54 installed/provider acceptance remains separate and unfinished.
 | Files, path links, attachments, backups, directory permissions — 53.3 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
 | CLI, transport, caller/session authority — 53.4 | Implementation team | 178 server/498 CLI affected checks PASS on 629dc91 | Native bmn.exe startup/argv/stdin and restricted control pipe owner/cross-account denial PASS; hook/config acceptance remains open | UNVERIFIED |
 | Named distributions, bridge, path mapping, terminfo — 53.5 | Implementation team | Restricted prototype and separate-UID alias fence measured; full profile UNVERIFIED | Disposable WSL2 VM boot/cleanup PASS | Root-helper six cleanup modes and broker/UID/ABI controls PASS on WSL2; full capability profile and bridge unfinished |
-| Claude/Codex/OpenCode/Cursor hooks, history, usage, compaction, resume — 53.6 | Implementation team | Hook/config fixtures: 68 passed, one native-only skip; retained history/Companion: 204 passed, replacement and hardlink regressions original RED/current GREEN | Latest native failures remain open; revised ACL/home/history fixtures UNVERIFIED | UNVERIFIED |
+| Claude/Codex/OpenCode/Cursor hooks, history, usage, compaction, resume — 53.6 | Implementation team | Hook/config fixtures: 68 passed, one native-only skip; retained history/Companion: 204 passed, replacement and hardlink regressions original RED/current GREEN | Held-session command-line reader PASS natively (run 37312653316); Codex typed-shell launcher and revised ACL/home/history fixtures UNVERIFIED | UNVERIFIED |
 | Terminal images, clipboard, IME/AltGr, scaling, panes, themes, keyboard access — 53.7 | Implementation team | UNVERIFIED | Actual creation form, renderer Sixel image, resize and continued input PASS; complete input/clipboard/scaling/pane acceptance open | UNVERIFIED |
 | Microphone, local voice engine, cancellation, addressed paste — 53.8 | Implementation team | Portable speech/silence/transcription PASS | Portable/packaged engines and PE imports PASS; prior WAV ACL PASS, latest private-WAV inspector fails without OS cause (diagnostic pending); microphone/UI/other CPU UNVERIFIED | UNVERIFIED |
 | Notifications, attention, Telegram replies and delivery diagnostics — 53.9 | Implementation team | UNVERIFIED | Shortcut seven ownership checks PASS; toast activation and complete reply matrix UNVERIFIED | UNVERIFIED |
 | Per-session development port discovery and navigation — 53.10 | Implementation team | 498 affected tests PASS, one skip; scanner timeout original RED/current GREEN | Owned-job TCP attribution, two-session isolation, real Edge IPv4/IPv6 navigation and input/Stop six checks PASS run37230888519; renderer chips and complete story acceptance UNVERIFIED | UNVERIFIED |
-| Per-user install, source updates, rollback, uninstall — 53.11 | Implementation team | Affected source tests/type/bundle PASS; Linux development startup PASS | Offline installer, versioned transaction, leases, snapshot, queue and uninstall implemented in source; native compiler/kernel/install acceptance UNVERIFIED | UNVERIFIED |
+| Per-user install, source updates, rollback, uninstall — 53.11 | Implementation team | Affected source tests/type/bundle PASS; Linux development startup PASS | Offline installer, versioned transaction, leases, snapshot, queue and uninstall implemented in source; isolated-smoke startup collision fixed and update windows ready in 1–2 s natively (run 37312653316); installed smoke/self-test and install acceptance UNVERIFIED | UNVERIFIED |
 | Full CI, required merge gates, contributor rules — 53.12 | Implementation team | UNVERIFIED | UNVERIFIED | UNVERIFIED |
 | Full feature-guide reconciliation and installed-app acceptance — 53.13 | Team + independent Windows verifier | 71-scenario coverage draft; installed acceptance UNVERIFIED | Final integration/installed acceptance UNVERIFIED | Final integration/installed acceptance UNVERIFIED |
 
@@ -716,3 +716,37 @@ Native equivalents of all fourteen Linux launcher obligations are in `scripts/te
 A separate test exercises the default budget's timeout and its notification fallback with a real window process. An observation-only probe records where a window's start time goes (bare PowerShell, WinForms load and first show, product versus full environment). The product's 20 s default stays provisional; it is not verified readiness.
 
 The packaged `--self-test` printed nothing for 120 s on native Windows: stderr 0 bytes, no phase markers, no receipt. The installed smoke did the same for 300 s. The cause is **UNVERIFIED**. An observation-only adaptive diagnostic now runs once before the installed gate, with up to three 80 s runs: a minimal-environment self-test, then a full-environment self-test and a minimal-environment normal start only while the earlier runs stay silent. Each run briefly attaches the Node inspector to record main readiness, open windows, a stack sample and whether a stderr sentinel reaches the pipe.
+
+## Native startup located and repaired: `aa9cb0d`
+
+[Run 37312653316](https://github.com/forever-Agriculture/BMN/actions/runs/37312653316) on `aa9cb0d`: five side workflows PASS; the build gate failed on Windows only. Linux passed every step, including the packaged smoke with the new startup markers. The Windows unit inventory recorded 3,220 tests, 0 failed and 27 skipped.
+
+- **Silent packaged self-test: cause found and fixed.** The installed smoke's isolated profile set `LOCALAPPDATA` to `BMN_DATA_HOME`. Startup refuses a BMN root equal to `LOCALAPPDATA` before any output. With no reporter installed, Electron then waited on its hidden error dialog. The profile now has its own local and roaming folders; validation is unchanged.
+  - The diagnostic's old-layout control now ends in 2 s with that refusal at the `private directories` step.
+  - With the corrected layout, startup completes in 765 ms (every step's enter/return marker, single instance acquired, ready).
+  - A regression test runs startup's own root resolution and folder checks with Windows path rules on every platform.
+- **Update windows.** Importing PowerShell's utility module before `Add-Type` cut the window environment's WinForms load from a 50 s timeout to 79 ms. Real progress windows now report ready in 1.0–1.9 s, within the 20 s product budget.
+- **53.6.** The native held-session reader passed both of its Windows tests; the patched ConPTY addon compiled natively.
+- **First native Windows self-test.** It ran the Sixel animation in a real pane (`CODEX-RATE-DONE`, `MAX-RATE-DONE`), then failed at 35 s: "the animation pane never printed SCROLLED". The cause is **UNVERIFIED**. The next run records the pane's last lines and how soon after `MAX-RATE-DONE` was seen the next line was sent and accepted. It does not capture the raw PTY output, so the result may stay inconclusive.
+- **Gate failures in this run.**
+  - The lifecycle step failed because the startup markers wrapped the lifetime-protection call. The crash fixture's original-defect control removes exactly that standalone statement. The call stands alone again, and a source test guards it.
+  - In the installed smoke, removing the temporary profile threw, and that error replaced the smoke's own result. What held the profile, and how the smoke itself ended, are **UNVERIFIED**. Removal now retries briefly. A removal failure after a failed smoke no longer replaces it; its error code is added to the smoke's outcome when the smoke produced one. A removal failure after a passing smoke still fails the step.
+
+## Codex typed in a Windows session (53.6, local candidate)
+
+On Linux, `bin/codex` sits first on a session's PATH and adds `--no-daemon` to Codex typed in the shell. A shared Codex app-server daemon keeps the environment of the terminal that started it, so without this its hooks could carry another session's BMN credentials. Windows shipped no equivalent, so Codex typed in a Windows session's shell could join such a daemon.
+
+`codex.exe` is now built from the native `bmn` launcher source. The launcher takes its script and development sidecar names from its own file name. The `codex.exe` build keeps its runtime in the caller's job instead of a nested one, as the Linux wrapper's `exec` does: a daemon that `codex agents` or `remote-control` starts keeps running after the command returns, and the session's own job still owns the tree. It runs `bin/codex.mjs`, which:
+- finds the real Codex on PATH, skipping BMN's launcher, session and script folders however they are spelled;
+- uses the same literal lookup BMN uses for the programs it starts, so an npm `codex.cmd` shim runs as `node.exe` with its entry script and no batch interpreter;
+- applies the session manager's own `--no-daemon` rule;
+- runs Codex with the session's environment and returns its exit code.
+
+The lookup and the rule are shared modules (`bin/windows-launch.mjs`, `bin/codex-launch.mjs`). A Linux test checks the JavaScript rule against the shell wrapper over thirteen argument shapes. Windows tests cover the lookup past BMN's folder and an end-to-end run of the built `codex.exe` against a synthetic npm-installed Codex. Native results are **UNVERIFIED** until collected.
+
+Not covered: a PowerShell profile that puts a global Codex ahead of BMN's folder on PATH. Linux restores the order after Bash startup (`bin/bmn-bashrc`). PowerShell has no inherited prompt hook, so an equivalent would change every default PowerShell session's command line. This remains an open 53.6 item.
+
+Windows unit coverage added alongside:
+- The process start-identity tests now run on Windows. Only there is an exited process's refusal awaited, for up to 5 s, because Windows keeps the process until its last handle closes; Linux still requires an immediate refusal.
+- The CLI's refusal of a terminal on standard input now runs through a real PTY on both systems.
+- A Windows test refuses reserved device names and the pipe and device namespaces as file references, without reading them.
