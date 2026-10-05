@@ -1,6 +1,7 @@
 // MODULE: conpty-reader-state.test.ts - The patched ConPTY output reader's credits and its self-test state answer
-// The reader worker connects to ConPTY's output pipe by name; on Linux a Unix socket stands in for the pipe, so the
-// worker BMN ships runs unchanged here.
+// The reader worker connects to ConPTY's output pipe by name; a named pipe of the test's own (a Unix socket on Linux)
+// stands in for it, so the worker BMN ships runs unchanged.
+import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -19,7 +20,7 @@ interface Message { type: string; data?: Uint8Array; [key: string]: unknown }
 
 async function readerOnSocket(): Promise<{ worker: Worker; pipe: Socket; messages: Message[]; next(type: string): Promise<Message> }> {
   const root = mkdtempSync(join(tmpdir(), 'bmn-conpty-reader-'))
-  const path = join(root, 'conout.sock')
+  const path = process.platform === 'win32' ? `\\\\.\\pipe\\bmn-conpty-reader-${randomUUID()}` : join(root, 'conout.sock')
   let accepted!: (socket: Socket) => void
   const connection = new Promise<Socket>((resolve) => { accepted = resolve })
   const server: Server = createServer((socket) => accepted(socket))
