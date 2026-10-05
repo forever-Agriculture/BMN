@@ -1178,9 +1178,21 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     const scrollSent = Date.now() - lastMarkerSeen
     await scrollLine
     const scrollAccepted = Date.now() - lastMarkerSeen
-    await waitForAnimatedLine('SCROLLED', 10_000).catch((error: unknown) => {
+    await waitForAnimatedLine('SCROLLED', 10_000).catch(async (error: unknown) => {
       const message = error instanceof Error ? error.message : String(error)
-      throw new Error(`${message} (line sent +${scrollSent} ms and accepted +${scrollAccepted} ms after MAX-RATE-DONE was seen)`)
+      // Observation only, once the failure is certain: what the shell printed as the host received it,
+      // whether the view still owes acknowledgements, whether SCROLLED arrives late, and whether the shell answers.
+      const hostOutput = async () => (await client.request<{ selfTestOutputState: unknown }>(METHOD_REGISTRY.healthGet,
+        { selfTestOutputState: { sessionId: secondSession.sessionId } }).catch(() => ({ selfTestOutputState: 'unavailable' }))).selfTestOutputState
+      const atFailure = await hostOutput()
+      const lateStart = Date.now()
+      const lateMs = await waitForAnimatedLine('SCROLLED', 20_000).then(() => Date.now() - lateStart, () => null)
+      const afterWait = await hostOutput()
+      await typeIntoAnimatedPane(typedShell.windows ? `${printed('PRO', 'BE')}\r` : "printf '%s%s\\n' PRO BE\r").catch(() => undefined)
+      const probeAnswered = await waitForAnimatedLine('PROBE', 10_000).then(() => true, () => false)
+      const afterProbe = await hostOutput()
+      throw new Error(`${message} (line sent +${scrollSent} ms and accepted +${scrollAccepted} ms after MAX-RATE-DONE was seen) ` +
+        JSON.stringify({ atFailure, lateMs, afterWait, probeAnswered, afterProbe }))
     })
     const animation = await host.applicationWindow.webContents.executeJavaScript(`(() => {
       const hook = window.__aitermTest;

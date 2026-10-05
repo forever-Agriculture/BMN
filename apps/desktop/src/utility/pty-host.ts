@@ -404,6 +404,9 @@ async function start(): Promise<void> {
       }, 0)
       return Promise.resolve({ selfTestHostLossScheduled: true })
     }
+    if (params.selfTestOutputState !== undefined) {
+      return Promise.resolve({ selfTestOutputState: manager.outputStateForSelfTest(String(record(params.selfTestOutputState).sessionId)) ?? null })
+    }
     if (params.selfTestRemoteAnswer === undefined) return undefined
     const probe = record(params.selfTestRemoteAnswer)
     return (async () => {

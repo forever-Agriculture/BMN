@@ -1046,6 +1046,20 @@ describe('shell session lifecycle', () => {
     expect(store.startingRecords).toHaveLength(1)
   })
 
+  it('reports, for the self-test only, what a session printed last and where that output stands for its view', async () => {
+    const { manager, pty, cwd } = await fixture(undefined, { consumerBytes: 8, hostBytes: 1024 })
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath, argv: [], cols: 80, rows: 24 })
+    expect(manager.outputStateForSelfTest('missing')).toBeUndefined()
+    pty.emit('scroll-79\r\nSCROLLED\x1b[0m')
+    expect(manager.outputStateForSelfTest(created.sessionId)).toMatchObject({ exited: false, outputBytes: 23, view: null,
+      tail: 'scroll-79\\x0d\\x0aSCROLLED\\x1b[0m' })
+    const attached = manager.attach(created)
+    manager.activateAttachment(attached.attachmentId)
+    // An 8-byte view credit: the rest waits here, the PTY is paused, and nothing is acknowledged yet.
+    expect(manager.outputStateForSelfTest(created.sessionId, 4)).toMatchObject({ tail: '\\x1b[0m',
+      view: { paused: true, inFlightBytes: 8, pendingBytes: 15, enqueuedBytes: 23, acknowledgedBytes: 0 } })
+  })
+
   it('buffers initial output, grants one lease, forwards bytes in order, resizes, and stops the current incarnation', async () => {
     const { manager, pty, store, sent, cwd } = await fixture()
     const created = await manager.create({ ...DEFAULT_SESSION_CREATION,

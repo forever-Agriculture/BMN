@@ -1868,6 +1868,23 @@ export class SessionManager {
     return live.mirror
   }
 
+  /**
+   * Electron self-test only (pty-host's `selfTestHealthProbe`): what the session printed last, as escaped
+   * text, and where that output stands on its way to the view. The self-test prints only synthetic output.
+   */
+  outputStateForSelfTest(sessionId: string, tailBytes = 600): Record<string, unknown> | undefined {
+    const live = this.sessions.get(sessionId)
+    if (!live) return undefined
+    const recent = live.outputTail.read()
+    let text = ''
+    for (const byte of recent.subarray(Math.max(0, recent.byteLength - tailBytes))) {
+      text += byte >= 0x20 && byte < 0x7f ? String.fromCharCode(byte) : `\\x${byte.toString(16).padStart(2, '0')}`
+    }
+    return { exited: live.exited, outputBytes: live.outputTail.pushedBytes,
+      lastOutputAgoMs: live.outputTail.lastPushAt === 0 ? null : Date.now() - live.outputTail.lastPushAt,
+      view: live.outputQueue?.flowState ?? null, tail: text }
+  }
+
   /** Stops the mirror when the agent that needed it has left the session; the tail keeps going. */
   stopScreenMirror(sessionId: string): void {
     const live = this.sessions.get(sessionId)
