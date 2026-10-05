@@ -6,6 +6,7 @@ import processes, { spawn, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { observeWindowsInstallCommands } from './fixtures/windows-install-command-observer.mjs'
+import { measureInstalledCimPreflight } from './fixtures/windows-installed-cim-preflight.mjs'
 import { dirname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { chromium } from 'playwright'
@@ -58,6 +59,9 @@ async function main() {
   Object.assign(process.env, windowsInstallerSmokeEnvironment(join(fixture, 'profile')))
   const root = join(fixture, 'installation'), dataRoot = join(process.env.LOCALAPPDATA, 'BMN/data')
   process.env.BMN_DATA_HOME = dataRoot
+  report.stage = 'separate-installed-cim-preflight'
+  report.cimPreflight = measureInstalledCimPreflight(process.env)
+  // The following production installer runs in its own unchanged module context.
   const descriptor = readInstallerDescriptor(source), shortcut = join(fixture, 'BMN.lnk')
   report.stage = 'install-payload'
   await installWindowsPayload({ source, root, dataRoot, descriptor, refreshMetadata: async (installed, _release, payload) => {

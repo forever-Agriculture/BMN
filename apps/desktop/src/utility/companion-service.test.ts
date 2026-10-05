@@ -33,6 +33,7 @@ import {
 } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CompanionService } from './companion-service'
+import { armFixturePtyExit } from './pty-exit.test-support'
 import type { DatabaseWorkerClient } from './database-client'
 import { scrubBackupProducerBindings, COMPANION_OPERATIONS, insertArtifact, listReadyArtifacts, type CompanionOperationName } from './database-companion-store'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
@@ -494,6 +495,8 @@ describe('file search address', () => {
   })
 })
 
+let realPtyObservation: ReturnType<typeof armFixturePtyExit> | undefined
+
 afterEach(async () => {
   backupObservation?.mark('cleanup:begin')
   try {
@@ -501,8 +504,16 @@ afterEach(async () => {
     service['cards'].dispose()
     await service['telegramDeliveryWrites']
     database.close()
+    if (realPtyObservation) {
+      const confirmed = realPtyObservation.hasExited()
+      console.log(JSON.stringify({ nativeDiagnostic: 'companion-real-pty-cleanup', observationOnly: true,
+        originalBudgetMs: 30000, beforeRootDeletion: true, exitConfirmed: confirmed, ...realPtyObservation.snapshot() }))
+      if (!confirmed) throw new Error('Refusing to delete the fixture root before owned PTY exit is confirmed')
+    }
     rmSync(root, { recursive: true, force: true })
   } finally {
+    if (realPtyObservation?.hasExited()) realPtyObservation.dispose()
+    realPtyObservation = undefined
     backupObservation?.mark('cleanup:end')
     backupObservation?.report()
     backupObservation = undefined
@@ -1794,40 +1805,47 @@ describe('Telegram attention notifications', () => {
 
   it('round-trips Telegram choice, Other and card replies through the connector into a real PTY', async () => {
     const bot = await startFakeBotApi(424242, 424242)
-    const receiver = join(root, 'receiver.txt')
-    const receiverScript = join(root, 'receiver.cjs')
-    writeFileSync(receiverScript,
-      `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(receiver)},'');process.stdin.setRawMode(true);process.stdin.on('data',b=>fs.appendFileSync(${JSON.stringify(receiver)},b));process.stdout.write('READY');setInterval(()=>{},1000)`)
-    const pty = (testRequire('node-pty') as typeof import('node-pty')).spawn(process.execPath, [receiverScript], {
-      name: 'xterm-256color', cols: 100, rows: 30, cwd: root,
-      env: { ...process.env }, useConpty: true, useConptyDll: process.platform === 'win32'
-    })
-    let output = ''
-    pty.onData(text => { output += text })
-    const options = service['options']
-    await service.close()
-    service = new CompanionService({ ...options, telegramApiOrigin: bot.origin, pageAfterMs: 5,
-      manager: { ...options.manager, writeToSession: (sessionId: string, bytes: Uint8Array) => {
-        expect(sessionId).toBe('s1'); writes.push({ sessionId, bytes }); pty.write(Buffer.from(bytes))
-        if (new TextDecoder().decode(bytes).includes('Uncertain custom')) throw new Error('synthetic ambiguous write')
-      } } as unknown as SessionManager })
-    const receivedReplies: InboundReply[] = []
-    const handleReply = service['handleTelegramReply'].bind(service)
-    let failOffsetSave = false, offsetFailures = 0
-    const store = service['options'].database
-    const companion = store.companion.bind(store)
-    const offsetSpy = vi.spyOn(store, 'companion').mockImplementation(async (name, ...args) => {
-      if (name === 'putRawSetting' && args[0] === 'telegram.offset' && failOffsetSave) {
-        failOffsetSave = false; offsetFailures++; throw new Error('synthetic offset persistence failure')
-      }
-      return companion(name, ...args)
-    })
-    service['handleTelegramReply'] = async reply => {
-      receivedReplies.push(reply)
-      if (reply.text === 'Custom answer') failOffsetSave = true
-      await handleReply(reply)
-    }
+    let pty: import('node-pty').IPty | undefined
+    let offsetSpy: { mockRestore(): void } | undefined
+    let primaryFailure = false
+    const cleanupErrors: string[] = []
     try {
+      const receiver = join(root, 'receiver.txt')
+      const receiverScript = join(root, 'receiver.cjs')
+      writeFileSync(receiverScript,
+        `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(receiver)},'');process.stdin.setRawMode(true);process.stdin.on('data',b=>fs.appendFileSync(${JSON.stringify(receiver)},b));process.stdout.write('READY');setInterval(()=>{},1000)`)
+      pty = (testRequire('node-pty') as typeof import('node-pty')).spawn(process.execPath, [receiverScript], {
+        name: 'xterm-256color', cols: 100, rows: 30, cwd: root,
+        env: { ...process.env }, useConpty: true, useConptyDll: process.platform === 'win32'
+      })
+      realPtyObservation = armFixturePtyExit(pty)
+      if (process.platform === 'win32') expect(pty.processStartIdentity).toMatch(/^windows-filetime:[0-9]+$/)
+      const ownedPty = pty
+      let output = ''
+      pty.onData(text => { output += text })
+      const options = service['options']
+      await service.close()
+      service = new CompanionService({ ...options, telegramApiOrigin: bot.origin, pageAfterMs: 5,
+        manager: { ...options.manager, writeToSession: (sessionId: string, bytes: Uint8Array) => {
+          expect(sessionId).toBe('s1'); writes.push({ sessionId, bytes }); ownedPty.write(Buffer.from(bytes))
+          if (new TextDecoder().decode(bytes).includes('Uncertain custom')) throw new Error('synthetic ambiguous write')
+        } } as unknown as SessionManager })
+      const receivedReplies: InboundReply[] = []
+      const handleReply = service['handleTelegramReply'].bind(service)
+      let failOffsetSave = false, offsetFailures = 0
+      const store = service['options'].database
+      const companion = store.companion.bind(store)
+      offsetSpy = vi.spyOn(store, 'companion').mockImplementation(async (name, ...args) => {
+        if (name === 'putRawSetting' && args[0] === 'telegram.offset' && failOffsetSave) {
+          failOffsetSave = false; offsetFailures++; throw new Error('synthetic offset persistence failure')
+        }
+        return companion(name, ...args)
+      })
+      service['handleTelegramReply'] = async reply => {
+        receivedReplies.push(reply)
+        if (reply.text === 'Custom answer') failOffsetSave = true
+        await handleReply(reply)
+      }
       await vi.waitFor(() => expect(output).toContain('READY'), { timeout: 5000 })
       await service.sessionsChanged()
       COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', { enabled: true, allowedChatId: 424242,
@@ -1891,9 +1909,19 @@ describe('Telegram attention notifications', () => {
       expect(writes).toHaveLength(7)
       expect(offsetFailures).toBe(1)
       expect(bot.calls.some(call => String(call.body.text).includes('Message submitted'))).toBe(true)
-    } finally {
-      offsetSpy.mockRestore(); await service.close(); pty.kill(); await bot.close()
+    } catch (error) { primaryFailure = true; throw error }
+    finally {
+      try { offsetSpy?.mockRestore() } catch { cleanupErrors.push('spy-restore') }
+      try { await service.close() } catch { cleanupErrors.push('service-close') }
+      if (pty) {
+        try { await realPtyObservation!.stop() } catch { cleanupErrors.push('pty-exit') }
+      }
+      try { await bot.close() } catch { cleanupErrors.push('fake-bot-close') }
+      if (cleanupErrors.length > 0) {
+        console.log(JSON.stringify({ nativeDiagnostic: 'companion-real-pty-cleanup-errors', primaryFailure, cleanupErrors }))
+      }
     }
+    if (cleanupErrors.length > 0) throw new Error('Owned fixture cleanup did not complete')
   }, 30000)
 
   it('keeps the reply as a draft when the process changes immediately before the write', async () => {

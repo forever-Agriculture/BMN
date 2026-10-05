@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { msvcEnvironment } from '../lib/msvc.mjs'
+import { writePrivateWindowsController, verifyPrivateWindowsController } from './fixtures/private-windows-controller.mjs'
 assert.equal(process.platform, 'win32')
 assert.equal(process.env.GITHUB_ACTIONS, 'true', 'Disposable native runner only')
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
@@ -29,6 +30,13 @@ const run = (exe, argv, options = {}) => {
   assert.equal(r.error, undefined, r.error?.message)
   assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`)
   return r.stdout
+}
+const runPowerShell = (source, options = {}) => {
+  const controller = writePrivateWindowsController(join(root, 'controllers'), source)
+  const argv = verifyPrivateWindowsController(controller)
+  ;(result.scriptControllers ??= []).push({ sourceSha256: controller.sourceSha256, sha256: controller.sha256,
+    bytes: controller.bytes, utf8Bom: true, regularSingleLink: true, privateAclVerified: true })
+  return run(powershell, argv, options)
 }
 try {
   const env = msvcEnvironment()
@@ -92,7 +100,7 @@ Assert-BMNCommandControls @($commandMetadata);
 `
   const rootCodeUnits = Array.from({ length: root.length }, (_, index) => root.charCodeAt(index))
   const configInput = values => JSON.stringify({ root, rootCodeUnits, ...values })
-  const decoded = prefix => JSON.parse(run(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(prefix + utility + `$config=ConvertFrom-Json ([Console]::In.ReadToEnd());[Console]::Out.Write((ConvertTo-Json -Compress @{rootCodeUnits=@($config.root.ToCharArray()|ForEach-Object{[int]$_});launcherExists=[IO.File]::Exists([IO.Path]::Combine($config.root,'original','bmn.exe'));encoding=[Console]::InputEncoding.WebName}))`, 'utf16le').toString('base64')], { input: configInput({}) }))
+  const decoded = prefix => JSON.parse(runPowerShell(prefix + utility + `$config=ConvertFrom-Json ([Console]::In.ReadToEnd());[Console]::Out.Write((ConvertTo-Json -Compress @{rootCodeUnits=@($config.root.ToCharArray()|ForEach-Object{[int]$_});launcherExists=[IO.File]::Exists([IO.Path]::Combine($config.root,'original','bmn.exe'));encoding=[Console]::InputEncoding.WebName}))`, { input: configInput({}) }))
   const originalInput = decoded(''), fixedInput = decoded(utf8Input)
   result.checks.push({ name: 'Unicode stdin decoding original RED/fixed GREEN', original: originalInput, fixed: fixedInput })
   assert.notDeepEqual(originalInput.rootCodeUnits, rootCodeUnits, 'Original decoding hypothesis must reproduce before proceeding')
@@ -203,12 +211,12 @@ try {
 } catch {$primaryError=$_;throw} finally {CleanupProcesses (@($outer,$sentinel)+$held) $primaryError}
 `
   const proofDirectory = join(root, 'fallback-proof'); mkdirSync(proofDirectory)
-  const fallbackRows = JSON.parse(run(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(fallbackProof, 'utf16le').toString('base64')], {
+  const fallbackRows = JSON.parse(runPowerShell(fallbackProof, {
     input: configInput({ node: process.execPath, backstop: join(fallback, 'bmn.exe'), fixture, directory: proofDirectory })
   }))
   assert.deepEqual(fallbackRows, { retainedHandles: 3, allExited: true, sentinelAlive: true })
   result.checks.push({ name: 'controller termination backstop cleans retained descendants and preserves unrelated sentinel', ...fallbackRows })
-  const rows = JSON.parse(run(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(controller, 'utf16le').toString('base64')], {
+  const rows = JSON.parse(runPowerShell(controller, {
     input: configInput({ node: process.execPath })
   }))
   assert.equal(rows.length, 6)
@@ -222,10 +230,10 @@ try {
   const sha256 = createHash('sha256').update(archive).digest('hex')
   assert.equal(sha256, 'cd852831bd094c2df2eb379eb98bed7a63db7f823a7caf277c732cdac33cbdb6')
   const archiveModule = "Import-Module ([IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Archive/Microsoft.PowerShell.Archive.psd1'));CheckCommand 'Expand-Archive' 'Microsoft.PowerShell.Archive' 'Function';"
-  run(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(utf8Input + utility + archiveModule, 'utf16le').toString('base64')])
+  runPowerShell(utf8Input + utility + archiveModule)
   const zip = join(root, 'opencode.zip'), unpacked = join(root, 'opencode'); writeFileSync(zip, archive)
   const expand = readConfig + archiveModule + 'Expand-Archive -LiteralPath $config.archive -DestinationPath $config.destination'
-  run(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(expand, 'utf16le').toString('base64')], {
+  runPowerShell(expand, {
     input: configInput({ archive: zip, destination: unpacked })
   })
   const executable = readdirSync(unpacked, { recursive: true }).find(path => String(path).endsWith('opencode.exe'))
@@ -333,7 +341,7 @@ foreach($mode in @('timeout','overflow','launcher-crash','stop')) {
 }
 $rows|ConvertTo-Json -Depth 5 -Compress;
 `
-  const combined = JSON.parse(run(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(combinedController, 'utf16le').toString('base64')], {
+  const combined = JSON.parse(runPowerShell(combinedController, {
     input: configInput({ host: combinedHost, electron: requireApp('electron') })
   }))
   assert.equal(combined.length, 4)

@@ -24,7 +24,7 @@ public static class BMNTokenMetadata {
   public QueryFailure(string category,string context,int kind,string phase,int code):base(code){Category=category;Context=context;Kind=kind;Phase=phase;}
  }
  sealed class Probe {
-  public string Context="current"; public List<object> Queries=new List<object>(),Closures=new List<object>();
+  public string Context="current"; public IntPtr LinkedHandle=IntPtr.Zero; public List<object> Queries=new List<object>(),Closures=new List<object>();
   public bool Query(IntPtr token,int kind,IntPtr data,uint bytes,out uint needed,string phase,out int code) {
    bool success=GetTokenInformation(token,kind,data,bytes,out needed);code=success?0:Marshal.GetLastWin32Error();
    var row=new Dictionary<string,object>();row.Add("context",Context);row.Add("class",kind);row.Add("phase",phase);row.Add("requestedBytes",bytes);row.Add("requiredBytes",needed);row.Add("success",success);row.Add("nativeErrorCode",code);Queries.Add(row);return success;
@@ -42,13 +42,26 @@ public static class BMNTokenMetadata {
  }
  sealed class Buffer : IDisposable {
   public IntPtr Data; public uint Bytes;
-  public Buffer(IntPtr token,int kind,Probe probe) {
-   uint needed;int error;bool first=probe.Query(token,kind,IntPtr.Zero,0,out needed,"size",out error);
-   // Retain the original algorithm until a native diagnostic identifies the failing class.
-   if(first || error!=122 || needed==0 || needed>1024*1024) throw new QueryFailure(!first && error!=122?"api":"buffer-policy",probe.Context,kind,"size",error);
-   Bytes=needed;Data=Marshal.AllocHGlobal((int)needed);
-   try {bool success=probe.Query(token,kind,Data,Bytes,out needed,"fill",out error);if(!success || needed>Bytes)throw new QueryFailure(success?"buffer-policy":"api",probe.Context,kind,"fill",error);}
-   catch {Dispose();throw;}
+  public Buffer(IntPtr token,int kind,Probe probe):this(token,kind,probe,0){}
+  public Buffer(IntPtr token,int kind,Probe probe,uint fixedBytes) {
+   bool scalar=kind==8 || kind==12 || kind==18 || kind==20 || kind==21;
+   if(fixedBytes!=0 && !((scalar && fixedBytes==4) || (kind==19 && fixedBytes==(uint)IntPtr.Size)))throw new InvalidOperationException("invalid fixed query shape");
+   uint needed;int error;
+   if(fixedBytes==0) {
+    bool first=probe.Query(token,kind,IntPtr.Zero,0,out needed,"size",out error);
+    // Keep the measured variable-size algorithm and allocation bound unchanged.
+    if(first || error!=122 || needed==0 || needed>1024*1024)throw new QueryFailure(!first && error!=122?"api":"buffer-policy",probe.Context,kind,"size",error);
+    Bytes=needed;
+   } else Bytes=fixedBytes;
+   Data=Marshal.AllocHGlobal((int)Bytes);
+   try {
+    Marshal.Copy(new byte[(int)Bytes],0,Data,(int)Bytes);
+    bool success=probe.Query(token,kind,Data,Bytes,out needed,"fill",out error);
+    // A successful linked-token query transfers this returned handle to us,
+    // even if its length receipt subsequently fails the shape check.
+    if(success && kind==19 && Bytes==(uint)IntPtr.Size)probe.LinkedHandle=Marshal.ReadIntPtr(Data);
+    if(!success || needed>Bytes || (fixedBytes!=0 && needed!=fixedBytes))throw new QueryFailure(success?"buffer-policy":"api",probe.Context,kind,"fill",error);
+   }catch{Dispose();throw;}
   }
   public void Dispose(){if(Data!=IntPtr.Zero){Marshal.FreeHGlobal(Data);Data=IntPtr.Zero;}}
  }
@@ -56,7 +69,7 @@ public static class BMNTokenMetadata {
   public string User,Logon,Authentication;public uint Session;public Dictionary<string,object> Report;
  }
  static string Hash(string value) { using(var hash=SHA256.Create()) {return BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(value))).Replace("-","").ToLowerInvariant();} }
- static uint Scalar(IntPtr token,int kind,Probe probe) {using(var b=new Buffer(token,kind,probe)){if(b.Bytes<4)throw new InvalidOperationException("short scalar");return unchecked((uint)Marshal.ReadInt32(b.Data));}}
+ static uint Scalar(IntPtr token,int kind,Probe probe) {using(var b=new Buffer(token,kind,probe,4)){if(b.Bytes<4)throw new InvalidOperationException("short scalar");return unchecked((uint)Marshal.ReadInt32(b.Data));}}
  static string Sid(IntPtr value){return new SecurityIdentifier(value).Value;}
  static Context Read(IntPtr token,Probe probe) {
   var context=new Context();var report=new Dictionary<string,object>();context.Report=report;
@@ -113,7 +126,7 @@ public static class BMNTokenMetadata {
    var current=Read(token,probe);result.Add("current",current.Report);
    try {
     probe.Context="linked-lookup";
-    using(var b=new Buffer(token,19,probe)){if(b.Bytes<(uint)IntPtr.Size)throw new InvalidOperationException("short linked token");linked=Marshal.ReadIntPtr(b.Data);if(linked==IntPtr.Zero)throw new InvalidOperationException("null linked token");}
+    using(var b=new Buffer(token,19,probe,(uint)IntPtr.Size)){if(b.Bytes<(uint)IntPtr.Size)throw new InvalidOperationException("short linked token");linked=Marshal.ReadIntPtr(b.Data);if(linked==IntPtr.Zero)throw new InvalidOperationException("null linked token");}
     probe.Context="linked";var other=Read(linked,probe);result.Add("linked",other.Report);result.Add("sameUser",current.User==other.User);result.Add("sameLogon",current.Logon!=null&&current.Logon==other.Logon);result.Add("sameAuthenticationId",current.Authentication==other.Authentication);result.Add("sameSession",current.Session==other.Session);
    }catch(QueryFailure error){
     result.Add("linkedFailure",probe.Failure(error));
@@ -122,6 +135,7 @@ public static class BMNTokenMetadata {
    }
   }catch(Exception error){primaryFailure=probe.Failure(error);}
   finally {
+   if(linked==IntPtr.Zero)linked=probe.LinkedHandle;
    if(linked!=IntPtr.Zero)probe.Close(linked,"linked");
    if(token!=IntPtr.Zero)probe.Close(token,"current");
   }

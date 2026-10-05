@@ -15,23 +15,26 @@ function BMNDiagnosticPath($path) {
 }
 foreach($name in @('Import-Module','Get-Command','Get-CimInstance','Select-Object','ConvertTo-Json')) {
  try {
-  $command=Get-Command -Name $name -ErrorAction Stop;
+  [Console]::Error.WriteLine('BMN_INSTALL_DIAGNOSTIC:'+ (ConvertTo-Json -Compress @{kind='stage';stage='resolve-command';name=$name}));
+  $matches=@(Get-Command -Name $name -ListImported -All -ErrorAction Stop);
+  foreach($command in $matches){
   $base=if($command.Module){$command.Module.ModuleBase}else{$null};
   $assembly=if($command.ImplementingType){$command.ImplementingType.Assembly}else{$null};
   $identity=if($assembly){$assembly.GetName()}else{$null};
   [Console]::Error.WriteLine('BMN_INSTALL_DIAGNOSTIC:'+(ConvertTo-Json -Compress @{
-   kind='dependency';name=$name;source=$command.Source;commandType=$command.CommandType.ToString();
+   kind='dependency';name=$name;matches=$matches.Count;source=$command.Source;commandType=$command.CommandType.ToString();
    moduleBase=(BMNDiagnosticPath $base);moduleType=if($command.Module){$command.Module.ModuleType.ToString()}else{$null};
    moduleVersion=if($command.Module){$command.Module.Version.ToString()}else{$null};
    assemblyPath=if($assembly){BMNDiagnosticPath $assembly.Location}else{$null};
    assemblyName=if($identity){$identity.Name}else{$null};assemblyVersion=if($identity){$identity.Version.ToString()}else{$null};
    assemblyPublicKeyToken=if($identity){([BitConverter]::ToString($identity.GetPublicKeyToken())).Replace('-','').ToLowerInvariant()}else{$null}
   }));
+  }
  }catch {
   $actual=$_.Exception;for($i=0;$i -lt 8 -and $actual.InnerException;$i++){$actual=$actual.InnerException};
   [Console]::Error.WriteLine('BMN_INSTALL_DIAGNOSTIC:{"kind":"dependency-failure","name":"'+$name+'","hresult":'+$actual.HResult+'}');
  }
-};$__bmnStage='operation';
+};$__bmnStage='operation';[Console]::Error.WriteLine('BMN_INSTALL_DIAGNOSTIC:'+ (ConvertTo-Json -Compress @{kind='stage';stage='operation'}));
 `
 
 export function observeWindowsInstallCommands(actualSpawn, record) {
