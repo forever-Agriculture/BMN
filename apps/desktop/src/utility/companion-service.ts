@@ -141,6 +141,8 @@ export interface CompanionServiceOptions {
   telegramApiOrigin?: string
   /** Agents whose sessions the history limit prunes (Story 31.2); none means Claude folders only. */
   historyAdapters?: readonly AgentHistoryAdapter[]
+  /** Every running command line; Windows supplies its native reader, Linux reads /proc by default. */
+  commandLines?: () => string
   /** The owner's home, where `~/.claude` lives; the self-test points it at a scratch folder. */
   home?: string
   /** How long a question or permission waits before it is paged; only the self-test host shortens it. */
@@ -430,6 +432,7 @@ export class CompanionService {
     this.history = new AgentHistory({
       home: options.home ?? homedir(),
       adapters: options.historyAdapters ?? [],
+      ...(options.commandLines ? { commandLines: options.commandLines } : {}),
       ...(process.platform === 'win32' ? { writeClaudeFolder: (folder: string, days: number) =>
         writeClaudeFolderAsync(folder, days, join(dirname(options.cliScriptPath ?? options.cliPath), 'safe-config-write.mjs')) } : {}),
       readSettings: async () => (await options.database.companion('getSettings')).agentHistory,

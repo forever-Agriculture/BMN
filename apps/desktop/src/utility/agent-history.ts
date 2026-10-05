@@ -111,6 +111,17 @@ export function runningCommandLines(procRoot = '/proc'): string {
   return lines.join('\n')
 }
 
+/**
+ * Where cleanup reads running command lines when none is supplied: /proc on Linux. Windows has no /proc;
+ * its host supplies the native reader, and without one cleanup deletes nothing rather than nothing held.
+ */
+export function defaultCommandLines(platform: NodeJS.Platform = process.platform): () => string {
+  if (platform !== 'win32') return () => runningCommandLines()
+  return () => {
+    throw new Error('running command lines are unavailable, so no session can be shown free')
+  }
+}
+
 export interface AgentHistoryOptions {
   home: string
   adapters: readonly AgentHistoryAdapter[]
@@ -272,7 +283,7 @@ export class AgentHistory {
   /** Oldest first, never a session in use: bound to a live BMN session, recent, or named on a running command line. */
   private eligible(candidates: readonly HistoryCandidate[], protectedIds: ReadonlySet<string>): HistoryCandidate[] {
     const recent = this.now().getTime() - RECENT_SESSION_MS
-    const commandLines = (this.options.commandLines ?? runningCommandLines)()
+    const commandLines = (this.options.commandLines ?? defaultCommandLines())()
     return candidates
       .filter((candidate) => !protectedIds.has(candidate.id) && candidate.updatedAt < recent &&
         !commandLines.includes(candidate.id))

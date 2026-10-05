@@ -1,5 +1,5 @@
 diff --git a/binding.gyp b/binding.gyp
-index 5f63978..cf4ab1b 100644
+index 5f63978b07ab50aaf7523219a2170ec737a6b5db..cf4ab1b8acfed17670db5447d2c5eabe28c36820 100644
 --- a/binding.gyp
 +++ b/binding.gyp
 @@ -39,7 +39,7 @@
@@ -12,10 +12,10 @@ index 5f63978..cf4ab1b 100644
          },
          {
 diff --git a/lib/index.js b/lib/index.js
-index 1527069..fea6b2e 100644
+index 1527069b2e039e006cdb6398d44b8fba38cc0ca1..188ac820aab62c2e0695569388b7ceea756072ea 100644
 --- a/lib/index.js
 +++ b/lib/index.js
-@@ -5,9 +5,16 @@
+@@ -5,9 +5,17 @@
   * Copyright (c) 2018, Microsoft Corporation (MIT License).
   */
  Object.defineProperty(exports, "__esModule", { value: true });
@@ -28,6 +28,7 @@ index 1527069..fea6b2e 100644
 +exports.createTerminal = createTerminal;
 +exports.open = open;
 +exports.queryProcessStartIdentity = queryProcessStartIdentity;
++exports.queryProcessCommandLines = queryProcessCommandLines;
 +exports.restrictControlPipe = restrictControlPipe;
 +exports.protectApplicationLifetime = protectApplicationLifetime;
 +const utils_1 = require("./utils");
@@ -35,7 +36,7 @@ index 1527069..fea6b2e 100644
  if (process.platform === 'win32') {
      terminalCtor = require('./windowsTerminal').WindowsTerminal;
  }
-@@ -29,24 +36,47 @@ else {
+@@ -29,24 +37,56 @@ else {
  function spawn(file, args, opt) {
      return new terminalCtor(file, args, opt);
  }
@@ -71,6 +72,15 @@ index 1527069..fea6b2e 100644
 +        throw new Error('BMN owned ConPTY addon missing');
 +    return binding.queryProcessStartIdentity(pid);
 +}
++/** BMN: every process command line this account may read, for agent-history protection (Windows has no /proc). */
++function queryProcessCommandLines() {
++    if (process.platform !== 'win32')
++        throw new Error('Windows process command lines only');
++    const binding = (0, utils_1.loadNativeModule)('conpty').module;
++    if (binding.bmnCommandLinesVersion !== 1)
++        throw new Error('BMN process command line addon missing');
++    return binding.queryProcessCommandLines();
++}
 +/** BMN: restrict a listening control pipe to the current user; returns the applied DACL. */
 +function restrictControlPipe(name) {
 +    if (process.platform !== 'win32')
@@ -91,7 +101,7 @@ index 1527069..fea6b2e 100644
 +    binding.protectApplicationLifetime();
 +}
 diff --git a/lib/windowsConoutConnection.js b/lib/windowsConoutConnection.js
-index 1be15ca..bf6e593 100644
+index 1be15ca061370127d2e24e943067538ab395a566..bf6e593a10a2e8eb45b5b0bff3cc047d60eedc97 100644
 --- a/lib/windowsConoutConnection.js
 +++ b/lib/windowsConoutConnection.js
 @@ -1,125 +1,59 @@
@@ -271,7 +281,7 @@ index 1be15ca..bf6e593 100644
 -//# sourceMappingURL=windowsConoutConnection.js.map
 \ No newline at end of file
 diff --git a/lib/windowsPtyAgent.js b/lib/windowsPtyAgent.js
-index a358ffb..6a18896 100644
+index a358ffb177357e177661033c1b092f9c9d0e5f5a..6a188961d682bf83f1cf6edd0aa050806f57fcc2 100644
 --- a/lib/windowsPtyAgent.js
 +++ b/lib/windowsPtyAgent.js
 @@ -1,251 +1,128 @@
@@ -709,7 +719,7 @@ index a358ffb..6a18896 100644
 -//# sourceMappingURL=windowsPtyAgent.js.map
 \ No newline at end of file
 diff --git a/lib/windowsTerminal.js b/lib/windowsTerminal.js
-index 3c38f89..e928e6c 100644
+index 3c38f89d14cece8081782a9600ebc582b7c2a62a..e928e6c493391b6faf72ba48c60b407fea5cff66 100644
 --- a/lib/windowsTerminal.js
 +++ b/lib/windowsTerminal.js
 @@ -4,31 +4,23 @@
@@ -981,7 +991,7 @@ index 3c38f89..e928e6c 100644
 -//# sourceMappingURL=windowsTerminal.js.map
 \ No newline at end of file
 diff --git a/lib/worker/conoutSocketWorker.js b/lib/worker/conoutSocketWorker.js
-index 0451e2c..4e63c73 100644
+index 0451e2c6b36df6c94a474efdce7d42c2ef2c9388..4e63c73f9ede5d21faef062278c70049c2e5d10c 100644
 --- a/lib/worker/conoutSocketWorker.js
 +++ b/lib/worker/conoutSocketWorker.js
 @@ -1,22 +1,37 @@
@@ -1042,10 +1052,10 @@ index 0451e2c..4e63c73 100644
 \ No newline at end of file
 +socket.connect(worker_threads_1.workerData.conoutPipeName, () => port.postMessage({ type: 'ready' }));
 diff --git a/src/index.ts b/src/index.ts
-index 8a7e950..7c9e9bb 100644
+index 8a7e95051ead1cbcaa7dffa010c35affcb7be10c..e0f2b8f8897cd327d08aead220d82c612eb1e4ca 100644
 --- a/src/index.ts
 +++ b/src/index.ts
-@@ -50,3 +50,27 @@ export function open(options: IPtyOpenOptions): ITerminal {
+@@ -50,3 +50,35 @@ export function open(options: IPtyOpenOptions): ITerminal {
   * could be removed at any time.
   */
  export const native = (process.platform !== 'win32' ? loadNativeModule('pty').module : null);
@@ -1056,6 +1066,14 @@ index 8a7e950..7c9e9bb 100644
 +  const binding: IConptyNative = loadNativeModule('conpty').module;
 +  if (binding.bmnOwnershipVersion !== 1) throw new Error('BMN owned ConPTY addon missing');
 +  return binding.queryProcessStartIdentity(pid);
++}
++
++/** BMN: every process command line this account may read, for agent-history protection (Windows has no /proc). */
++export function queryProcessCommandLines(): string[] {
++  if (process.platform !== 'win32') throw new Error('Windows process command lines only');
++  const binding: IConptyNative = loadNativeModule('conpty').module;
++  if (binding.bmnCommandLinesVersion !== 1) throw new Error('BMN process command line addon missing');
++  return binding.queryProcessCommandLines();
 +}
 +
 +/** BMN: restrict a listening control pipe to the current user; returns the applied DACL. */
@@ -1074,10 +1092,10 @@ index 8a7e950..7c9e9bb 100644
 +  binding.protectApplicationLifetime();
 +}
 diff --git a/src/native.d.ts b/src/native.d.ts
-index c53e086..680c0d5 100644
+index c53e086b4968d6fb0bf601ace3a813809433fedb..fec467b38081482ce1c0c092ee3ee69ca667e7ff 100644
 --- a/src/native.d.ts
 +++ b/src/native.d.ts
-@@ -3,8 +3,16 @@
+@@ -3,8 +3,18 @@
   */
  
  interface IConptyNative {
@@ -1085,6 +1103,8 @@ index c53e086..680c0d5 100644
 +  bmnPortsVersion?: number;
 +  queryOwnedPorts(ptyId: number, callback: (error: Error | null, ports?: Array<{ port: number; address: string; pid: number; command: string | null }>) => void): void;
 +  queryProcessStartIdentity(pid: number): string;
++  bmnCommandLinesVersion?: number;
++  queryProcessCommandLines(): string[];
 +  bmnControlTransportVersion: number;
 +  restrictControlPipe(name: string): { user: string; dacl: string; verifiedCurrentUserOnly: true };
 +  bmnApplicationLifetimeVersion?: number;
@@ -1096,10 +1116,10 @@ index c53e086..680c0d5 100644
    clear(ptyId: number, useConptyDll: boolean): void;
    kill(ptyId: number, useConptyDll: boolean): void;
 diff --git a/src/win/conpty.cc b/src/win/conpty.cc
-index 7b286d3..71dfdf2 100644
+index 7b286d3d644c26141df516929703aa6e129df4b2..426b66048ad8a69a122438953afe4439dfb70599 100644
 --- a/src/win/conpty.cc
 +++ b/src/win/conpty.cc
-@@ -2,582 +2,776 @@
+@@ -2,582 +2,823 @@
   * Copyright (c) 2013-2015, Christopher Jeffrey, Peter Sunde (MIT License)
   * Copyright (c) 2016, Daniel Imms (MIT License).
   * Copyright (c) 2018, Microsoft Corporation (MIT License).
@@ -1127,6 +1147,7 @@ index 7b286d3..71dfdf2 100644
 +#include <Windows.h>
 +#include <Shlwapi.h>
 +#include <sddl.h>
++#include <tlhelp32.h>
 +#include <aclapi.h>
 +#include <algorithm>
 +#include <atomic>
@@ -1572,42 +1593,6 @@ index 7b286d3..71dfdf2 100644
 -    shellpath = path_util::get_shell_path(filename.c_str());
 -  } else {
 -    shellpath = filename;
--  }
--
--  if (shellpath.empty() || !path_util::file_exists(shellpath)) {
--    std::string why;
--    why += "File not found: ";
--    why += path_util::wstring_to_string(shellpath);
--    throw Napi::Error::New(env, why);
--  }
--
--  HANDLE hIn, hOut;
--  HPCON hpc;
--  HRESULT hr = CreateNamedPipesAndPseudoConsole(info, {cols, rows}, inheritCursor ? 1/*PSEUDOCONSOLE_INHERIT_CURSOR*/ : 0, &hIn, &hOut, &hpc, inName, outName, pipeName, useConptyDll);
--
--  // Restore default handling of ctrl+c
--  SetConsoleCtrlHandler(NULL, FALSE);
--
--  // Set return values
--  marshal = Napi::Object::New(env);
--
--  if (SUCCEEDED(hr)) {
--    // We were able to instantiate a conpty
--    const int ptyId = InterlockedIncrement(&ptyCounter);
--    marshal.Set("pty", Napi::Number::New(env, ptyId));
--    ptyHandles.emplace_back(
--        std::make_unique<pty_baton>(ptyId, hIn, hOut, hpc));
--  } else {
--    throw Napi::Error::New(env, "Cannot launch conpty");
--  }
--
--  std::string inNameStr = path_util::wstring_to_string(inName);
--  if (inNameStr.empty()) {
--    throw Napi::Error::New(env, "Failed to initialize conpty conin");
--  }
--  std::string outNameStr = path_util::wstring_to_string(outName);
--  if (outNameStr.empty()) {
--    throw Napi::Error::New(env, "Failed to initialize conpty conout");
 +static Napi::Value start(const Napi::CallbackInfo& info) {
 +  auto env = info.Env();
 +  if (info.Length() != 7 || !info[0].IsString() || !info[1].IsNumber() || !info[2].IsNumber() ||
@@ -1634,37 +1619,18 @@ index 7b286d3..71dfdf2 100644
 +    id = ++state->nextId;
 +    state->sessions.emplace(id, session);
    }
--
--  marshal.Set("fd", Napi::Number::New(env, -1));
--  marshal.Set("conin", Napi::String::New(env, inNameStr));
--  marshal.Set("conout", Napi::String::New(env, outNameStr));
--  return marshal;
 +  auto value = Napi::Object::New(env);
 +  value.Set("pty", id); value.Set("fd", -1);
 +  value.Set("conin", path_util::wstring_to_string(input));
 +  value.Set("conout", path_util::wstring_to_string(output));
 +  return value;
- }
++}
  
--static Napi::Value PtyConnect(const Napi::CallbackInfo& info) {
--  Napi::Env env(info.Env());
--  Napi::HandleScope scope(env);
--
--  // If we're working with conpty's we need to call ConnectNamedPipe here AFTER
--  //    the Socket has attempted to connect to the other end, then actually
--  //    spawn the process here.
--
--  std::stringstream errorText;
--  BOOL fSuccess = FALSE;
--
--  if (info.Length() != 6 ||
--      !info[0].IsNumber() ||
--      !info[1].IsString() ||
--      !info[2].IsString() ||
--      !info[3].IsArray() ||
--      !info[4].IsBoolean() ||
--      !info[5].IsFunction()) {
--    throw Napi::Error::New(env, "Usage: pty.connect(id, cmdline, cwd, env, useConptyDll, exitCallback)");
+-  if (shellpath.empty() || !path_util::file_exists(shellpath)) {
+-    std::string why;
+-    why += "File not found: ";
+-    why += path_util::wstring_to_string(shellpath);
+-    throw Napi::Error::New(env, why);
 +struct Attributes {
 +  std::vector<BYTE> bytes;
 +  PPROC_THREAD_ATTRIBUTE_LIST list = nullptr;
@@ -1679,34 +1645,24 @@ index 7b286d3..71dfdf2 100644
    }
 +};
  
--  const int id = info[0].As<Napi::Number>().Int32Value();
--  const std::wstring cmdline(path_util::to_wstring(info[1].As<Napi::String>()));
--  const std::wstring cwd(path_util::to_wstring(info[2].As<Napi::String>()));
--  const Napi::Array envValues = info[3].As<Napi::Array>();
--  const bool useConptyDll = info[4].As<Napi::Boolean>().Value();
--  Napi::Function exitCallback = info[5].As<Napi::Function>();
+-  HANDLE hIn, hOut;
+-  HPCON hpc;
+-  HRESULT hr = CreateNamedPipesAndPseudoConsole(info, {cols, rows}, inheritCursor ? 1/*PSEUDOCONSOLE_INHERIT_CURSOR*/ : 0, &hIn, &hOut, &hpc, inName, outName, pipeName, useConptyDll);
 -
--  // Fetch pty handle from ID and start process
--  pty_baton* handle = get_pty_baton(id);
--  if (!handle) {
--    throw Napi::Error::New(env, "Invalid pty handle");
--  }
+-  // Restore default handling of ctrl+c
+-  SetConsoleCtrlHandler(NULL, FALSE);
 -
--  // Prepare command line
--  std::unique_ptr<wchar_t[]> mutableCommandline = std::make_unique<wchar_t[]>(cmdline.length() + 1);
--  HRESULT hr = StringCchCopyW(mutableCommandline.get(), cmdline.length() + 1, cmdline.c_str());
+-  // Set return values
+-  marshal = Napi::Object::New(env);
 -
--  // Prepare cwd
--  std::unique_ptr<wchar_t[]> mutableCwd = std::make_unique<wchar_t[]>(cwd.length() + 1);
--  hr = StringCchCopyW(mutableCwd.get(), cwd.length() + 1, cwd.c_str());
--
--  // Prepare environment
--  std::wstring envStr;
--  if (!envValues.IsEmpty()) {
--    std::wstring envBlock;
--    for(uint32_t i = 0; i < envValues.Length(); i++) {
--      envBlock += path_util::to_wstring(envValues.Get(i).As<Napi::String>());
--      envBlock += L'\0';
+-  if (SUCCEEDED(hr)) {
+-    // We were able to instantiate a conpty
+-    const int ptyId = InterlockedIncrement(&ptyCounter);
+-    marshal.Set("pty", Napi::Number::New(env, ptyId));
+-    ptyHandles.emplace_back(
+-        std::make_unique<pty_baton>(ptyId, hIn, hOut, hpc));
+-  } else {
+-    throw Napi::Error::New(env, "Cannot launch conpty");
 +static Napi::Value connectOwnedProcess(const Napi::CallbackInfo& info) {
 +  auto env = info.Env();
 +  if (info.Length() != 6 || !info[0].IsNumber() || !info[1].IsString() || !info[2].IsString() || !info[3].IsArray() || !info[5].IsFunction())
@@ -1717,59 +1673,7 @@ index 7b286d3..71dfdf2 100644
 +  try {
 +    for (auto pipe : {session->input.value, session->output.value}) {
 +      if (!ConnectNamedPipe(pipe, nullptr) && GetLastError() != ERROR_PIPE_CONNECTED) throw failure(env, "Connect terminal pipe");
-     }
--    envBlock += L'\0';
--    envStr = std::move(envBlock);
--  }
--  std::vector<wchar_t> envV(envStr.cbegin(), envStr.cend());
--  LPWSTR envArg = envV.empty() ? nullptr : envV.data();
--
--  ConnectNamedPipe(handle->hIn, nullptr);
--  ConnectNamedPipe(handle->hOut, nullptr);
--
--  // Attach the pseudoconsole to the client application we're creating
--  STARTUPINFOEXW siEx{0};
--  siEx.StartupInfo.cb = sizeof(STARTUPINFOEXW);
--  siEx.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
--  siEx.StartupInfo.hStdError = nullptr;
--  siEx.StartupInfo.hStdInput = nullptr;
--  siEx.StartupInfo.hStdOutput = nullptr;
--
--  SIZE_T size = 0;
--  InitializeProcThreadAttributeList(NULL, 1, 0, &size);
--  BYTE *attrList = new BYTE[size];
--  siEx.lpAttributeList = reinterpret_cast<PPROC_THREAD_ATTRIBUTE_LIST>(attrList);
--
--  fSuccess = InitializeProcThreadAttributeList(siEx.lpAttributeList, 1, 0, &size);
--  if (!fSuccess) {
--    throw errorWithCode(info, "InitializeProcThreadAttributeList failed");
--  }
--  fSuccess = UpdateProcThreadAttribute(siEx.lpAttributeList,
--                                       0,
--                                       PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
--                                       handle->hpc,
--                                       sizeof(HPCON),
--                                       NULL,
--                                       NULL);
--  if (!fSuccess) {
--    throw errorWithCode(info, "UpdateProcThreadAttribute failed");
--  }
--
--  PROCESS_INFORMATION piClient{};
--  fSuccess = !!CreateProcessW(
--      nullptr,
--      mutableCommandline.get(),
--      nullptr,                      // lpProcessAttributes
--      nullptr,                      // lpThreadAttributes
--      false,                        // bInheritHandles VERY IMPORTANT that this is false
--      EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT, // dwCreationFlags
--      envArg,                       // lpEnvironment
--      mutableCwd.get(),             // lpCurrentDirectory
--      &siEx.StartupInfo,            // lpStartupInfo
--      &piClient                     // lpProcessInformation
--  );
--  if (!fSuccess) {
--    throw errorWithCode(info, "Cannot create process");
++    }
 +    session->job.reset(CreateJobObjectW(nullptr, nullptr));
 +    if (!session->job.value) throw failure(env, "Create owned job");
 +    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits{};
@@ -1816,15 +1720,9 @@ index 7b286d3..71dfdf2 100644
    }
 +}
  
--  HANDLE hLibrary = LoadConptyDll(info, useConptyDll);
--  bool fLoadedDll = hLibrary != nullptr;
--  if (useConptyDll && fLoadedDll)
--  {
--    PFNRELEASEPSEUDOCONSOLE const pfnReleasePseudoConsole = (PFNRELEASEPSEUDOCONSOLE)GetProcAddress(
--      (HMODULE)hLibrary, "ConptyReleasePseudoConsole");
--    if (pfnReleasePseudoConsole)
--    {
--      pfnReleasePseudoConsole(handle->hpc);
+-  std::string inNameStr = path_util::wstring_to_string(inName);
+-  if (inNameStr.empty()) {
+-    throw Napi::Error::New(env, "Failed to initialize conpty conin");
 +static Napi::Value resize(const Napi::CallbackInfo& info) {
 +  auto session = lookup(info, info[0].As<Napi::Number>().Int32Value());
 +  if (session) {
@@ -1833,37 +1731,13 @@ index 7b286d3..71dfdf2 100644
 +      COORD size{static_cast<SHORT>(info[1].As<Napi::Number>().Int32Value()), static_cast<SHORT>(info[2].As<Napi::Number>().Int32Value())};
 +      HRESULT result = session->resize(session->console, size);
 +      if (FAILED(result)) throw failure(info.Env(), "Resize pseudoconsole", result);
-     }
++    }
    }
--
--  // Update handle
--  handle->hShell = piClient.hProcess;
--
--  // Close the thread handle to avoid resource leak
--  CloseHandle(piClient.hThread);
--  // Close the input read and output write handle of the pseudoconsole
--  CloseHandle(handle->hIn);
--  CloseHandle(handle->hOut);
--
--  SetupExitCallback(env, exitCallback, handle);
--
--  // Return
--  auto marshal = Napi::Object::New(env);
--  marshal.Set("pid", Napi::Number::New(env, piClient.dwProcessId));
--  return marshal;
+-  std::string outNameStr = path_util::wstring_to_string(outName);
+-  if (outNameStr.empty()) {
+-    throw Napi::Error::New(env, "Failed to initialize conpty conout");
 +  return info.Env().Undefined();
- }
--
--static Napi::Value PtyResize(const Napi::CallbackInfo& info) {
--  Napi::Env env(info.Env());
--  Napi::HandleScope scope(env);
--
--  if (info.Length() != 4 ||
--      !info[0].IsNumber() ||
--      !info[1].IsNumber() ||
--      !info[2].IsNumber() ||
--      !info[3].IsBoolean()) {
--    throw Napi::Error::New(env, "Usage: pty.resize(id, cols, rows, useConptyDll)");
++}
 +static Napi::Value clear(const Napi::CallbackInfo& info) {
 +  auto session = lookup(info, info[0].As<Napi::Number>().Int32Value());
 +  if (session) {
@@ -1874,29 +1748,34 @@ index 7b286d3..71dfdf2 100644
 +    }
    }
 -
+-  marshal.Set("fd", Napi::Number::New(env, -1));
+-  marshal.Set("conin", Napi::String::New(env, inNameStr));
+-  marshal.Set("conout", Napi::String::New(env, outNameStr));
+-  return marshal;
 +  return info.Env().Undefined();
-+}
+ }
+-
+-static Napi::Value PtyConnect(const Napi::CallbackInfo& info) {
+-  Napi::Env env(info.Env());
+-  Napi::HandleScope scope(env);
+-
+-  // If we're working with conpty's we need to call ConnectNamedPipe here AFTER
+-  //    the Socket has attempted to connect to the other end, then actually
+-  //    spawn the process here.
+-
+-  std::stringstream errorText;
+-  BOOL fSuccess = FALSE;
+-
+-  if (info.Length() != 6 ||
+-      !info[0].IsNumber() ||
+-      !info[1].IsString() ||
+-      !info[2].IsString() ||
+-      !info[3].IsArray() ||
+-      !info[4].IsBoolean() ||
+-      !info[5].IsFunction()) {
+-    throw Napi::Error::New(env, "Usage: pty.connect(id, cmdline, cwd, env, useConptyDll, exitCallback)");
 +static Napi::Value kill(const Napi::CallbackInfo& info) {
-   int id = info[0].As<Napi::Number>().Int32Value();
--  SHORT cols = static_cast<SHORT>(info[1].As<Napi::Number>().Uint32Value());
--  SHORT rows = static_cast<SHORT>(info[2].As<Napi::Number>().Uint32Value());
--  const bool useConptyDll = info[3].As<Napi::Boolean>().Value();
--
--  const pty_baton* handle = get_pty_baton(id);
--
--  if (handle != nullptr) {
--    HANDLE hLibrary = LoadConptyDll(info, useConptyDll);
--    bool fLoadedDll = hLibrary != nullptr;
--    if (fLoadedDll)
--    {
--      PFNRESIZEPSEUDOCONSOLE const pfnResizePseudoConsole = (PFNRESIZEPSEUDOCONSOLE)GetProcAddress(
--        (HMODULE)hLibrary,
--        useConptyDll ? "ConptyResizePseudoConsole" : "ResizePseudoConsole");
--      if (pfnResizePseudoConsole)
--      {
--        COORD size = {cols, rows};
--        pfnResizePseudoConsole(handle->hpc, size);
--      }
++  int id = info[0].As<Napi::Number>().Int32Value();
 +  auto session = lookup(info, id);
 +  if (session) {
 +    std::lock_guard<std::mutex> lock(session->mutex);
@@ -1906,21 +1785,22 @@ index 7b286d3..71dfdf2 100644
 +      auto state = registry(info);
 +      std::lock_guard<std::mutex> stateLock(state->mutex);
 +      state->sessions.erase(id);
-     }
++    }
    }
 -
--  return env.Undefined();
+-  const int id = info[0].As<Napi::Number>().Int32Value();
+-  const std::wstring cmdline(path_util::to_wstring(info[1].As<Napi::String>()));
+-  const std::wstring cwd(path_util::to_wstring(info[2].As<Napi::String>()));
+-  const Napi::Array envValues = info[3].As<Napi::Array>();
+-  const bool useConptyDll = info[4].As<Napi::Boolean>().Value();
+-  Napi::Function exitCallback = info[5].As<Napi::Function>();
+-
+-  // Fetch pty handle from ID and start process
+-  pty_baton* handle = get_pty_baton(id);
+-  if (!handle) {
+-    throw Napi::Error::New(env, "Invalid pty handle");
 +  return info.Env().Undefined();
- }
--
--static Napi::Value PtyClear(const Napi::CallbackInfo& info) {
--  Napi::Env env(info.Env());
--  Napi::HandleScope scope(env);
--
--  if (info.Length() != 2 ||
--      !info[0].IsNumber() ||
--      !info[1].IsBoolean()) {
--    throw Napi::Error::New(env, "Usage: pty.clear(id, useConptyDll)");
++}
 +// Story53.10: observational TCP ownership only. No PID signals or process mutation.
 +// Required headers: winsock2.h before Windows.h, ws2tcpip.h, iphlpapi.h, limits.
 +// Required libraries: iphlpapi, ws2_32. Handle must support noexcept move.
@@ -1960,20 +1840,29 @@ index 7b286d3..71dfdf2 100644
 +    SetError("Owned port scan exceeded its time bound"); return true;
    }
 -
--  int id = info[0].As<Napi::Number>().Int32Value();
--  const bool useConptyDll = info[1].As<Napi::Boolean>().Value();
+-  // Prepare command line
+-  std::unique_ptr<wchar_t[]> mutableCommandline = std::make_unique<wchar_t[]>(cmdline.length() + 1);
+-  HRESULT hr = StringCchCopyW(mutableCommandline.get(), cmdline.length() + 1, cmdline.c_str());
 -
--  // This API is only supported for conpty.dll as it was introduced in a later version of Windows.
--  // We could hook it up to point at >= a version of Windows only, but the future is conpty.dll
--  // anyway.
--  if (!useConptyDll) {
--    return env.Undefined();
+-  // Prepare cwd
+-  std::unique_ptr<wchar_t[]> mutableCwd = std::make_unique<wchar_t[]>(cwd.length() + 1);
+-  hr = StringCchCopyW(mutableCwd.get(), cwd.length() + 1, cwd.c_str());
+-
+-  // Prepare environment
+-  std::wstring envStr;
+-  if (!envValues.IsEmpty()) {
+-    std::wstring envBlock;
+-    for(uint32_t i = 0; i < envValues.Length(); i++) {
+-      envBlock += path_util::to_wstring(envValues.Get(i).As<Napi::String>());
+-      envBlock += L'\0';
 +  bool table(ULONG family, std::vector<BYTE>& bytes) {
 +    DWORD size = 0;
 +    DWORD code = GetExtendedTcpTable(nullptr, &size, FALSE, family, TCP_TABLE_OWNER_PID_LISTENER, 0);
 +    if (code != ERROR_INSUFFICIENT_BUFFER) {
 +      SetError("TCP listener table size is unavailable"); return false;
-+    }
+     }
+-    envBlock += L'\0';
+-    envStr = std::move(envBlock);
 +    for (int attempt = 0; attempt < 2; ++attempt) {
 +      if (expired()) return false;
 +      if (size < sizeof(DWORD) || size > MAX_TABLE_BYTES) {
@@ -1989,13 +1878,28 @@ index 7b286d3..71dfdf2 100644
 +    }
 +    SetError("TCP listener table changed or is unavailable"); return false;
    }
+-  std::vector<wchar_t> envV(envStr.cbegin(), envStr.cend());
+-  LPWSTR envArg = envV.empty() ? nullptr : envV.data();
 -
--  const pty_baton* handle = get_pty_baton(id);
+-  ConnectNamedPipe(handle->hIn, nullptr);
+-  ConnectNamedPipe(handle->hOut, nullptr);
 -
--  if (handle != nullptr) {
--    HANDLE hLibrary = LoadConptyDll(info, useConptyDll);
--    bool fLoadedDll = hLibrary != nullptr;
--    if (fLoadedDll)
+-  // Attach the pseudoconsole to the client application we're creating
+-  STARTUPINFOEXW siEx{0};
+-  siEx.StartupInfo.cb = sizeof(STARTUPINFOEXW);
+-  siEx.StartupInfo.dwFlags |= STARTF_USESTDHANDLES;
+-  siEx.StartupInfo.hStdError = nullptr;
+-  siEx.StartupInfo.hStdInput = nullptr;
+-  siEx.StartupInfo.hStdOutput = nullptr;
+-
+-  SIZE_T size = 0;
+-  InitializeProcThreadAttributeList(NULL, 1, 0, &size);
+-  BYTE *attrList = new BYTE[size];
+-  siEx.lpAttributeList = reinterpret_cast<PPROC_THREAD_ATTRIBUTE_LIST>(attrList);
+-
+-  fSuccess = InitializeProcThreadAttributeList(siEx.lpAttributeList, 1, 0, &size);
+-  if (!fSuccess) {
+-    throw errorWithCode(info, "InitializeProcThreadAttributeList failed");
 +  bool append(DWORD pid, DWORD rawPort, ULONG family, const void* rawAddress, DWORD scope,
 +      const std::unordered_map<DWORD, std::unique_ptr<OwnedPortProcess>>& owned) {
 +    auto found = owned.find(pid);
@@ -2008,7 +1912,16 @@ index 7b286d3..71dfdf2 100644
 +    if (family == AF_INET6 && scope) printed += "%" + std::to_string(scope);
 +    if (ports.size() >= MAX_PORTS) { SetError("Owned port results exceeded their entry bound"); return false; }
 +    ports.push_back({pid, port, printed, found->second->command}); return true;
-+  }
+   }
+-  fSuccess = UpdateProcThreadAttribute(siEx.lpAttributeList,
+-                                       0,
+-                                       PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+-                                       handle->hpc,
+-                                       sizeof(HPCON),
+-                                       NULL,
+-                                       NULL);
+-  if (!fSuccess) {
+-    throw errorWithCode(info, "UpdateProcThreadAttribute failed");
 +public:
 +  OwnedPortsWorker(const Napi::Function& callback, std::shared_ptr<Session> ownedSession)
 +    : Napi::AsyncWorker(callback), session(std::move(ownedSession)), deadline(GetTickCount64() + 500) {}
@@ -2018,11 +1931,7 @@ index 7b286d3..71dfdf2 100644
 +    // Queued work retains no extra job handle. Close the query handle on every
 +    // return, including failed snapshots, before handing a result to the JS loop.
 +    struct CloseQuery { Handle& handle; ~CloseQuery() { handle.reset(); } } closeQuery{job};
-     {
--      PFNCLEARPSEUDOCONSOLE const pfnClearPseudoConsole = (PFNCLEARPSEUDOCONSOLE)GetProcAddress((HMODULE)hLibrary, "ConptyClearPseudoConsole");
--      if (pfnClearPseudoConsole)
--      {
--        pfnClearPseudoConsole(handle->hpc);
++    {
 +      std::lock_guard<std::mutex> lock(session->mutex);
 +      if (!session->connected || !session->job.value || session->closing) {
 +        SetError("Owned terminal is closing"); return;
@@ -2067,8 +1976,8 @@ index 7b286d3..71dfdf2 100644
 +      if (QueryFullProcessImageNameW(process->process.value, 0, image.data(), &length)) {
 +        std::wstring path(image.data(), length); const auto separator = path.find_last_of(L"\\/");
 +        process->command = path_util::wstring_to_string(path.substr(separator == std::wstring::npos ? 0 : separator + 1));
-       }
-     }
++      }
++    }
 +    std::vector<BYTE> bytes;
 +    if (!table(AF_INET, bytes)) return;
 +    const auto* ipv4 = reinterpret_cast<const MIB_TCPTABLE_OWNER_PID*>(bytes.data());
@@ -2102,6 +2011,21 @@ index 7b286d3..71dfdf2 100644
 +    }), ports.end());
    }
 -
+-  PROCESS_INFORMATION piClient{};
+-  fSuccess = !!CreateProcessW(
+-      nullptr,
+-      mutableCommandline.get(),
+-      nullptr,                      // lpProcessAttributes
+-      nullptr,                      // lpThreadAttributes
+-      false,                        // bInheritHandles VERY IMPORTANT that this is false
+-      EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT, // dwCreationFlags
+-      envArg,                       // lpEnvironment
+-      mutableCwd.get(),             // lpCurrentDirectory
+-      &siEx.StartupInfo,            // lpStartupInfo
+-      &piClient                     // lpProcessInformation
+-  );
+-  if (!fSuccess) {
+-    throw errorWithCode(info, "Cannot create process");
 +  void OnOK() override {
 +    Napi::Env env = Env(); Napi::Array result = Napi::Array::New(env, ports.size());
 +    for (size_t index = 0; index < ports.size(); ++index) {
@@ -2111,7 +2035,11 @@ index 7b286d3..71dfdf2 100644
 +      result.Set(static_cast<uint32_t>(index), row);
 +    }
 +    Callback().Call({env.Null(), result});
-+  }
+   }
+-
+-  HANDLE hLibrary = LoadConptyDll(info, useConptyDll);
+-  bool fLoadedDll = hLibrary != nullptr;
+-  if (useConptyDll && fLoadedDll)
 +};
 +static Napi::Value queryOwnedPorts(const Napi::CallbackInfo& info) {
 +  Napi::Env env = info.Env();
@@ -2120,22 +2048,57 @@ index 7b286d3..71dfdf2 100644
 +  if (!std::isfinite(id) || id < 0 || id > std::numeric_limits<int>::max() || id != static_cast<int>(id)) throw Napi::Error::New(env, "Invalid owned terminal ID");
 +  auto session = lookup(info, static_cast<int>(id));
 +  if (!session) throw Napi::Error::New(env, "Owned terminal is no longer available");
-+  {
+   {
+-    PFNRELEASEPSEUDOCONSOLE const pfnReleasePseudoConsole = (PFNRELEASEPSEUDOCONSOLE)GetProcAddress(
+-      (HMODULE)hLibrary, "ConptyReleasePseudoConsole");
+-    if (pfnReleasePseudoConsole)
+-    {
+-      pfnReleasePseudoConsole(handle->hpc);
+-    }
 +    std::lock_guard<std::mutex> lock(session->mutex);
 +    if (!session->connected || !session->job.value || session->closing) throw Napi::Error::New(env, "Owned terminal is closing");
-+  }
+   }
+-
+-  // Update handle
+-  handle->hShell = piClient.hProcess;
+-
+-  // Close the thread handle to avoid resource leak
+-  CloseHandle(piClient.hThread);
+-  // Close the input read and output write handle of the pseudoconsole
+-  CloseHandle(handle->hIn);
+-  CloseHandle(handle->hOut);
+-
+-  SetupExitCallback(env, exitCallback, handle);
+-
+-  // Return
+-  auto marshal = Napi::Object::New(env);
+-  marshal.Set("pid", Napi::Number::New(env, piClient.dwProcessId));
+-  return marshal;
 +  if (portQueries.fetch_add(1) >= 2) { portQueries.fetch_sub(1); throw Napi::Error::New(env, "Owned port scan concurrency bound"); }
 +  std::unique_ptr<OwnedPortsWorker> worker;
 +  try {
 +    worker.reset(new OwnedPortsWorker(info[1].As<Napi::Function>(), session));
 +    worker->Queue(); worker.release();
 +  } catch (...) { if (!worker) portQueries.fetch_sub(1); throw; }
-   return env.Undefined();
++  return env.Undefined();
  }
  
--static Napi::Value PtyKill(const Napi::CallbackInfo& info) {
+-static Napi::Value PtyResize(const Napi::CallbackInfo& info) {
 -  Napi::Env env(info.Env());
 -  Napi::HandleScope scope(env);
+-
+-  if (info.Length() != 4 ||
+-      !info[0].IsNumber() ||
+-      !info[1].IsNumber() ||
+-      !info[2].IsNumber() ||
+-      !info[3].IsBoolean()) {
+-    throw Napi::Error::New(env, "Usage: pty.resize(id, cols, rows, useConptyDll)");
+-  }
+-
+-  int id = info[0].As<Napi::Number>().Int32Value();
+-  SHORT cols = static_cast<SHORT>(info[1].As<Napi::Number>().Uint32Value());
+-  SHORT rows = static_cast<SHORT>(info[2].As<Napi::Number>().Uint32Value());
+-  const bool useConptyDll = info[3].As<Napi::Boolean>().Value();
 +static Napi::Value queryIdentity(const Napi::CallbackInfo& info) {
 +  if (info.Length() != 1 || !info[0].IsNumber()) throw Napi::Error::New(info.Env(), "Process ID required");
 +  double pid = info[0].As<Napi::Number>().DoubleValue();
@@ -2145,10 +2108,63 @@ index 7b286d3..71dfdf2 100644
 +  return Napi::String::New(info.Env(), identity(info.Env(), process.value));
 +}
  
--  if (info.Length() != 2 ||
--      !info[0].IsNumber() ||
--      !info[1].IsBoolean()) {
--    throw Napi::Error::New(env, "Usage: pty.kill(id, useConptyDll)");
+-  const pty_baton* handle = get_pty_baton(id);
++// BMN agent-history protection. Windows has no /proc, so cleanup reads each
++// process's command line here, as Linux reads /proc/<pid>/cmdline, and leaves a
++// session named on one alone. ProcessCommandLineInformation (60) needs only
++// PROCESS_QUERY_LIMITED_INFORMATION (Windows 8.1+); a process this account may
++// not query is skipped, as an unreadable /proc entry is. Any other failure
++// throws, so the caller deletes nothing.
++struct CommandLineText { USHORT length; USHORT maximumLength; PWSTR buffer; }; // UNICODE_STRING
++static Napi::Value queryCommandLines(const Napi::CallbackInfo& info) {
++  Napi::Env env = info.Env();
++  if (info.Length() != 0) throw Napi::Error::New(env, "Process command lines take no arguments");
++  using QueryProcess = LONG (WINAPI*)(HANDLE, ULONG, PVOID, ULONG, PULONG);
++  HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
++  auto query = ntdll ? reinterpret_cast<QueryProcess>(GetProcAddress(ntdll, "NtQueryInformationProcess")) : nullptr;
++  if (!query) throw failure(env, "NtQueryInformationProcess");
++  Handle snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0));
++  if (snapshot.value == INVALID_HANDLE_VALUE) throw failure(env, "CreateToolhelp32Snapshot");
++  constexpr size_t MAX_PROCESSES = 16384;
++  constexpr ULONG COMMAND_LINE_INFORMATION = 60;
++  // A command line holds at most 32767 UTF-16 units; the text follows its descriptor.
++  std::vector<BYTE> buffer(sizeof(CommandLineText) + 65536 + 16);
++  PROCESSENTRY32W entry{};
++  entry.dwSize = sizeof(entry);
++  if (!Process32FirstW(snapshot.value, &entry)) throw failure(env, "Process32FirstW");
++  Napi::Array result = Napi::Array::New(env);
++  uint32_t count = 0;
++  size_t seen = 0;
++  do {
++    if (++seen > MAX_PROCESSES) throw Napi::Error::New(env, "Process list exceeded its bound");
++    if (entry.th32ProcessID == 0) continue;
++    Handle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ProcessID));
++    if (!process.value) continue;
++    ULONG written = 0;
++    if (query(process.value, COMMAND_LINE_INFORMATION, buffer.data(), static_cast<ULONG>(buffer.size()), &written) < 0 ||
++        written < sizeof(CommandLineText)) continue;
++    const auto* text = reinterpret_cast<const CommandLineText*>(buffer.data());
++    const BYTE* start = reinterpret_cast<const BYTE*>(text->buffer);
++    if (!start || text->length == 0 || text->length % sizeof(wchar_t) != 0 ||
++        start < buffer.data() || start + text->length > buffer.data() + buffer.size()) continue;
++    result.Set(count++, Napi::String::New(env, reinterpret_cast<const char16_t*>(text->buffer), text->length / sizeof(wchar_t)));
++  } while (Process32NextW(snapshot.value, &entry));
++  if (GetLastError() != ERROR_NO_MORE_FILES) throw failure(env, "Process32NextW");
++  return result;
++}
+ 
+-  if (handle != nullptr) {
+-    HANDLE hLibrary = LoadConptyDll(info, useConptyDll);
+-    bool fLoadedDll = hLibrary != nullptr;
+-    if (fLoadedDll)
+-    {
+-      PFNRESIZEPSEUDOCONSOLE const pfnResizePseudoConsole = (PFNRESIZEPSEUDOCONSOLE)GetProcAddress(
+-        (HMODULE)hLibrary,
+-        useConptyDll ? "ConptyResizePseudoConsole" : "ResizePseudoConsole");
+-      if (pfnResizePseudoConsole)
+-      {
+-        COORD size = {cols, rows};
+-        pfnResizePseudoConsole(handle->hpc, size);
 +// BMN control transport. Node creates the listening pipe with FIRST_PIPE_INSTANCE
 +// and default security, which lets other accounts open it for reading. Replace that
 +// DACL with the protected user-only DACL through a short-lived client handle and
@@ -2211,19 +2227,39 @@ index 7b286d3..71dfdf2 100644
 +      if (valid) {
 +        GENERIC_MAPPING mapping{FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_GENERIC_EXECUTE, FILE_ALL_ACCESS};
 +        DWORD mask = ace->Mask; MapGenericMask(&mask, &mapping); valid = mask == FILE_ALL_ACCESS;
-+      }
-+    }
+       }
+     }
 +    if (expected) LocalFree(expected);
 +    LocalFree(applied);
 +    if (!valid) throw Napi::Error::New(env, "Installation lease security is not protected current-user-only");
-+  }
+   }
+-
+-  return env.Undefined();
+-}
+-
+-static Napi::Value PtyClear(const Napi::CallbackInfo& info) {
+-  Napi::Env env(info.Env());
+-  Napi::HandleScope scope(env);
+-
+-  if (info.Length() != 2 ||
+-      !info[0].IsNumber() ||
+-      !info[1].IsBoolean()) {
+-    throw Napi::Error::New(env, "Usage: pty.clear(id, useConptyDll)");
 +  Napi::Value close(const Napi::CallbackInfo& info) { handle.reset(); return info.Env().Undefined(); }
 +  static Napi::Value acquire(const Napi::CallbackInfo& info) {
 +    auto constructor = DefineClass(info.Env(), "BMNInstallLease", {InstanceMethod("close", &InstallLease::close)});
 +    return constructor.New({info[0], info[1]});
-+  }
+   }
 +};
-+
+ 
+-  int id = info[0].As<Napi::Number>().Int32Value();
+-  const bool useConptyDll = info[1].As<Napi::Boolean>().Value();
+-
+-  // This API is only supported for conpty.dll as it was introduced in a later version of Windows.
+-  // We could hook it up to point at >= a version of Windows only, but the future is conpty.dll
+-  // anyway.
+-  if (!useConptyDll) {
+-    return env.Undefined();
 +static Napi::Value restrictControlPipe(const Napi::CallbackInfo& info) {
 +  Napi::Env env = info.Env();
 +  if (info.Length() != 1 || !info[0].IsString()) throw Napi::Error::New(env, "Control pipe name required");
@@ -2240,9 +2276,6 @@ index 7b286d3..71dfdf2 100644
 +    if (!WaitNamedPipeW(name.c_str(), 5000)) throw failure(env, "Wait for control pipe");
    }
 -
--  int id = info[0].As<Napi::Number>().Int32Value();
--  const bool useConptyDll = info[1].As<Napi::Boolean>().Value();
--
 -  const pty_baton* handle = get_pty_baton(id);
 -
 -  if (handle != nullptr) {
@@ -2250,16 +2283,11 @@ index 7b286d3..71dfdf2 100644
 -    bool fLoadedDll = hLibrary != nullptr;
 -    if (fLoadedDll)
 -    {
--      PFNCLOSEPSEUDOCONSOLE const pfnClosePseudoConsole = (PFNCLOSEPSEUDOCONSOLE)GetProcAddress(
--        (HMODULE)hLibrary,
--        useConptyDll ? "ConptyClosePseudoConsole" : "ClosePseudoConsole");
--      if (pfnClosePseudoConsole)
+-      PFNCLEARPSEUDOCONSOLE const pfnClearPseudoConsole = (PFNCLEARPSEUDOCONSOLE)GetProcAddress((HMODULE)hLibrary, "ConptyClearPseudoConsole");
+-      if (pfnClearPseudoConsole)
 -      {
--        pfnClosePseudoConsole(handle->hpc);
+-        pfnClearPseudoConsole(handle->hpc);
 -      }
--    }
--    if (useConptyDll) {
--      TerminateProcess(handle->hShell, 1);
 +  std::wstring sid = currentUserSid(env);
 +  std::wstring sddl = L"D:P(A;;GA;;;" + sid + L")";
 +  PSECURITY_DESCRIPTOR descriptor = nullptr;
@@ -2342,30 +2370,64 @@ index 7b286d3..71dfdf2 100644
    return env.Undefined();
  }
  
--/**
--* Init
--*/
+-static Napi::Value PtyKill(const Napi::CallbackInfo& info) {
+-  Napi::Env env(info.Env());
+-  Napi::HandleScope scope(env);
 -
- Napi::Object init(Napi::Env env, Napi::Object exports) {
--  exports.Set("startProcess", Napi::Function::New(env, PtyStartProcess));
--  exports.Set("connect", Napi::Function::New(env, PtyConnect));
--  exports.Set("resize", Napi::Function::New(env, PtyResize));
--  exports.Set("clear", Napi::Function::New(env, PtyClear));
--  exports.Set("kill", Napi::Function::New(env, PtyKill));
+-  if (info.Length() != 2 ||
+-      !info[0].IsNumber() ||
+-      !info[1].IsBoolean()) {
+-    throw Napi::Error::New(env, "Usage: pty.kill(id, useConptyDll)");
+-  }
+-
+-  int id = info[0].As<Napi::Number>().Int32Value();
+-  const bool useConptyDll = info[1].As<Napi::Boolean>().Value();
+-
+-  const pty_baton* handle = get_pty_baton(id);
+-
+-  if (handle != nullptr) {
+-    HANDLE hLibrary = LoadConptyDll(info, useConptyDll);
+-    bool fLoadedDll = hLibrary != nullptr;
+-    if (fLoadedDll)
++Napi::Object init(Napi::Env env, Napi::Object exports) {
 +  auto state = new RegistryRef(std::make_shared<Registry>());
 +  env.AddCleanupHook([](RegistryRef* ref) {
 +    std::vector<std::shared_ptr<Session>> sessions;
-+    {
+     {
+-      PFNCLOSEPSEUDOCONSOLE const pfnClosePseudoConsole = (PFNCLOSEPSEUDOCONSOLE)GetProcAddress(
+-        (HMODULE)hLibrary,
+-        useConptyDll ? "ConptyClosePseudoConsole" : "ClosePseudoConsole");
+-      if (pfnClosePseudoConsole)
+-      {
+-        pfnClosePseudoConsole(handle->hpc);
+-      }
 +      std::lock_guard<std::mutex> lock((*ref)->mutex);
 +      (*ref)->closing = true;
 +      for (auto& entry : (*ref)->sessions) sessions.push_back(entry.second);
-+    }
+     }
+-    if (useConptyDll) {
+-      TerminateProcess(handle->hShell, 1);
 +    for (auto& session : sessions) {
 +      std::lock_guard<std::mutex> lock(session->mutex);
 +      if (session->job.value) TerminateJobObject(session->job.value, 1);
 +      session->job.reset(); // Last-handle close kills even if termination fails; an active port snapshot releases its query handle first.
 +      SetEvent(session->cancel.value); // Environment teardown must not join an infinite waiter.
-+    }
+     }
+-  }
+-
+-  return env.Undefined();
+-}
+-
+-/**
+-* Init
+-*/
+-
+-Napi::Object init(Napi::Env env, Napi::Object exports) {
+-  exports.Set("startProcess", Napi::Function::New(env, PtyStartProcess));
+-  exports.Set("connect", Napi::Function::New(env, PtyConnect));
+-  exports.Set("resize", Napi::Function::New(env, PtyResize));
+-  exports.Set("clear", Napi::Function::New(env, PtyClear));
+-  exports.Set("kill", Napi::Function::New(env, PtyKill));
 +    delete ref;
 +  }, state);
 +  exports.Set("startProcess", Napi::Function::New(env, start, "start", state));
@@ -2383,13 +2445,15 @@ index 7b286d3..71dfdf2 100644
 +  exports.Set("bmnApplicationLifetimeVersion", 1);
 +  exports.Set("acquireInstallLease", Napi::Function::New(env, InstallLease::acquire, "acquireInstallLease"));
 +  exports.Set("bmnInstallLeaseVersion", 1);
++  exports.Set("queryProcessCommandLines", Napi::Function::New(env, queryCommandLines, "queryCommandLines"));
++  exports.Set("bmnCommandLinesVersion", 1);
    return exports;
 -};
 -
 +}
  NODE_API_MODULE(NODE_GYP_MODULE_NAME, init);
 diff --git a/src/windowsConoutConnection.ts b/src/windowsConoutConnection.ts
-index fa2d62d..373d931 100644
+index fa2d62de1b6e252b07892afb87e358fb446e7b7f..373d9314c235893bd9461f6856d51f2c188e91c7 100644
 --- a/src/windowsConoutConnection.ts
 +++ b/src/windowsConoutConnection.ts
 @@ -1,82 +1,51 @@
@@ -2511,7 +2575,7 @@ index fa2d62d..373d931 100644
    }
  }
 diff --git a/src/windowsPtyAgent.ts b/src/windowsPtyAgent.ts
-index d705444..71ac6c4 100644
+index d7054449516f0c9a62af351c2caa17331206d530..71ac6c47a6f950571da2232cafbbf2cdda99accc 100644
 --- a/src/windowsPtyAgent.ts
 +++ b/src/windowsPtyAgent.ts
 @@ -1,252 +1,83 @@
@@ -2866,7 +2930,7 @@ index d705444..71ac6c4 100644
 -  return ((arg1 && !arg2) || (!arg1 && arg2));
 -}
 diff --git a/src/windowsTerminal.ts b/src/windowsTerminal.ts
-index 13f6c6d..071fdff 100644
+index 13f6c6dbb3d7965c4699568f4704be3b6a33d947..071fdfff9ed925a23a7c9c13aa4d711bbd5c6a2f 100644
 --- a/src/windowsTerminal.ts
 +++ b/src/windowsTerminal.ts
 @@ -5,6 +5,7 @@
@@ -2987,7 +3051,7 @@ index 13f6c6d..071fdff 100644
  
    private _deferNoArgs<A>(deferredFn: () => void): void {
 diff --git a/src/worker/conoutSocketWorker.ts b/src/worker/conoutSocketWorker.ts
-index 79a4148..703ef71 100644
+index 79a4148dd6a18727c725b4980655643a04981177..703ef71f77c675806864f3b53e94ece78386f33a 100644
 --- a/src/worker/conoutSocketWorker.ts
 +++ b/src/worker/conoutSocketWorker.ts
 @@ -1,22 +1,29 @@
@@ -3039,14 +3103,16 @@ index 79a4148..703ef71 100644
  });
 +socket.connect(workerData.conoutPipeName, () => port.postMessage({ type: 'ready' }));
 diff --git a/typings/node-pty.d.ts b/typings/node-pty.d.ts
-index 6f050ff..4b36b5c 100644
+index 6f050ff1d97b8d3477be7ee95d2af516bd9517b7..95062f3759c9e727739edc2fc68954701846a6cd 100644
 --- a/typings/node-pty.d.ts
 +++ b/typings/node-pty.d.ts
-@@ -15,6 +15,12 @@ declare module 'node-pty' {
+@@ -15,6 +15,14 @@ declare module 'node-pty' {
     * @see Parsing C++ Comamnd-Line Arguments https://msdn.microsoft.com/en-us/library/17w5ykft.aspx
     * @see GetCommandLine https://msdn.microsoft.com/en-us/library/windows/desktop/ms683156.aspx
     */
 +  export function queryProcessStartIdentity(pid: number): string;
++  /** BMN: every process command line this account may read (Windows only); throws when they cannot be read. */
++  export function queryProcessCommandLines(): string[];
 +  /** BMN: replace a listening control pipe's DACL with a protected current-user-only DACL and read it back. */
 +  export function restrictControlPipe(name: string): { user: string; dacl: string; verifiedCurrentUserOnly: true };
 +  /** Process-lifetime backstop; no JavaScript disposer. */
@@ -3055,7 +3121,7 @@ index 6f050ff..4b36b5c 100644
    export function spawn(file: string, args: string[] | string, options: IPtyForkOptions | IWindowsPtyForkOptions): IPty;
  
    export interface IBasePtyForkOptions {
-@@ -114,6 +120,11 @@ declare module 'node-pty' {
+@@ -114,6 +122,11 @@ declare module 'node-pty' {
     * An interface representing a pseudoterminal, on Windows this is emulated via the winpty library.
     */
    export interface IPty {

@@ -82,6 +82,8 @@ interface NodePtyModule {
       useConptyDll?: boolean
     }
   ): PtyLike
+  /** The patched Windows addon's reader of every process command line this account may read. */
+  queryProcessCommandLines?(): string[]
 }
 
 interface TerminalPort {
@@ -321,6 +323,8 @@ async function start(): Promise<void> {
       ? { telegramApiOrigin: process.env.BMN_SELF_TEST_TELEGRAM_ORIGIN }
       : {}),
     historyAdapters: historyAdapters(),
+    // Windows has no /proc: held-session protection reads command lines through the ConPTY addon.
+    ...(process.platform === 'win32' ? { commandLines: () => nodePty.queryProcessCommandLines!().join('\n') } : {}),
     ...(process.env.BMN_SELF_TEST_HOME && process.argv.includes('--self-test-host') ? { home: process.env.BMN_SELF_TEST_HOME } : {}),
     // Electron self-test only (Story 31.4): pages sooner, so every answer shape fits the run's time.
     ...(process.argv.includes('--self-test-host') && process.env.BMN_SELF_TEST_PAGE_AFTER_MS
