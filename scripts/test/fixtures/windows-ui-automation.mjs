@@ -7,18 +7,21 @@
 // default action come from its own Active Accessibility object, the interface
 // WinForms implements for assistive technology.
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { existsSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const script = `$ErrorActionPreference='Stop'
-Import-Module ([IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1'))
-Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
-$accessibility=[Reflection.Assembly]::Load('Accessibility, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a').Location
-Add-Type -ReferencedAssemblies $accessibility -TypeDefinition @'
-using System;
+// Window text comes from WM_GETTEXT, so a literal '&' is reported as shown;
+// accessible names drop it as a mnemonic marker.
+const helperSource = `using System;
 using System.Runtime.InteropServices;
+using System.Text;
 using Accessibility;
 public static class BmnAccessible {
   [DllImport("oleacc.dll")] static extern int AccessibleObjectFromWindow(IntPtr window, uint id, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out IAccessible accessible);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessageTimeout(IntPtr window, uint message, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageTimeoutW")] static extern IntPtr SendTextMessage(IntPtr window, uint message, IntPtr wParam, StringBuilder lParam, uint flags, uint timeout, out IntPtr result);
   static IAccessible Find(IntPtr window) {
     Guid iid = typeof(IAccessible).GUID; IAccessible accessible;
     int status = AccessibleObjectFromWindow(window, 0xFFFFFFFC, ref iid, out accessible);
@@ -33,8 +36,24 @@ public static class BmnAccessible {
     return new object[] { role is int ? (int)role : -1, accessible.get_accName(0), value, state is int ? (int)state : 0 };
   }
   public static void Press(IntPtr window) { Find(window).accDoDefaultAction(0); }
+  public static string Text(IntPtr window) {
+    IntPtr length, copied;
+    if (SendMessageTimeout(window, 0x000E, IntPtr.Zero, IntPtr.Zero, 0x0002, 2000, out length) == IntPtr.Zero) return null;
+    StringBuilder buffer = new StringBuilder(length.ToInt32() + 1);
+    if (SendTextMessage(window, 0x000D, (IntPtr)buffer.Capacity, buffer, 0x0002, 2000, out copied) == IntPtr.Zero) return null;
+    return buffer.ToString();
+  }
 }
-'@
+`
+const loadAccessibility = `$accessibility=[Reflection.Assembly]::Load('Accessibility, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a').Location
+`
+const compileScript = `$ErrorActionPreference='Stop'
+${loadAccessibility}Add-Type -ReferencedAssemblies $accessibility -TypeDefinition $env:BMN_UIA_SOURCE -OutputAssembly $env:BMN_UIA_ASSEMBLY -OutputType Library
+`
+const script = `$ErrorActionPreference='Stop'
+Import-Module ([IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1'))
+Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+${loadAccessibility}Add-Type -Path $env:BMN_UIA_ASSEMBLY
 function Get-Code($exception) { while ($exception.InnerException) { $exception=$exception.InnerException }; return ('0x{0:X8}' -f $exception.HResult) }
 $request=ConvertFrom-Json $env:BMN_UIA_REQUEST
 $A=[Windows.Automation.AutomationElement]
@@ -62,12 +81,13 @@ $rows=@(foreach ($element in $window.FindAll([Windows.Automation.TreeScope]::Des
   $value=$null; $pattern=$null
   if ($element.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern,[ref]$pattern)) { $value=$pattern.Current.Value }
   $box=$element.Current.BoundingRectangle; $handle=[IntPtr][int64]$element.Current.NativeWindowHandle
-  $role=$null; $accessibleValue=$null; $accessibleError=$null
+  $role=$null; $accessibleValue=$null; $accessibleError=$null; $text=$null
   if ($handle -ne [IntPtr]::Zero) {
     try { $described=[BmnAccessible]::Describe($handle); $role=$described[0]; $accessibleValue=$described[2] } catch { $accessibleError=Get-Code $_.Exception }
+    try { $text=[BmnAccessible]::Text($handle) } catch {}
   }
   [pscustomobject]@{ type=$element.Current.ControlType.ProgrammaticName; className=$element.Current.ClassName; handle=[int64]$element.Current.NativeWindowHandle; accessibleRole=$role; accessibleError=$accessibleError
-    name=$element.Current.Name; value=$(if ($null -ne $value) { $value } else { $accessibleValue })
+    name=$element.Current.Name; text=$text; value=$(if ($null -ne $value) { $value } else { $accessibleValue })
     enabled=$element.Current.IsEnabled; focused=$element.Current.HasKeyboardFocus; width=[int]$box.Width; height=[int]$box.Height }
 })
 $frame=$window.Current.BoundingRectangle
@@ -86,11 +106,30 @@ Write-Result $result
 // Active Accessibility roles (oleacc.h ROLE_SYSTEM_*) the update windows use.
 const roles = new Map([[41, 'static text'], [42, 'editable text'], [43, 'button'], [48, 'progress bar']])
 
+const powershell = () => join(process.env.SystemRoot ?? 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe')
+const encoded = text => Buffer.from(text, 'utf16le').toString('base64')
+let helper
+/** Compiles the accessibility helper once per test process; each request only loads it. */
+function accessibilityHelper() {
+  helper ??= new Promise((resolve, reject) => {
+    const assembly = join(tmpdir(), `bmn-uia-${process.pid}-${createHash('sha256').update(helperSource).digest('hex').slice(0, 12)}.dll`)
+    if (existsSync(assembly)) { resolve(assembly); return }
+    process.once('exit', () => { try { rmSync(assembly, { force: true }) } catch { /* A loaded copy is removed with the temporary folder. */ } })
+    const child = spawn(powershell(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded(compileScript)],
+      { env: { ...process.env, BMN_UIA_SOURCE: helperSource, BMN_UIA_ASSEMBLY: assembly }, stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true })
+    let errors = ''
+    child.stderr.on('data', bytes => { errors += bytes })
+    child.once('error', reject)
+    child.once('exit', code => code === 0 && existsSync(assembly) ? resolve(assembly) : reject(new Error(`UI Automation helper did not compile (${code}): ${errors.slice(0, 2000)}`)))
+  })
+  return helper
+}
+
 /** action: 'inspect' | 'invoke' (name = button) | 'close'; until = a control name that must exist first. */
-export function automateWindow({ processId, title, action = 'inspect', name, until, timeoutMs = 20000 }) {
-  const powershell = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe')
-  const child = spawn(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
-    { env: { ...process.env, BMN_UIA_REQUEST: JSON.stringify({ processId, title, action, name, until, timeoutMs }) }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+export async function automateWindow({ processId, title, action = 'inspect', name, until, timeoutMs = 20000 }) {
+  const assembly = await accessibilityHelper()
+  const child = spawn(powershell(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', encoded(script)],
+    { env: { ...process.env, BMN_UIA_ASSEMBLY: assembly, BMN_UIA_REQUEST: JSON.stringify({ processId, title, action, name, until, timeoutMs }) }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
   let output = '', errors = ''
   child.stdout.on('data', bytes => { output += bytes })
   child.stderr.on('data', bytes => { errors += bytes })

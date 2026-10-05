@@ -133,6 +133,9 @@ const receipt = await withTemporaryRoot(temporaryRootContracts.electronDevelopme
   } finally { await application.close() }
 })
 if (binary && process.platform === 'win32' && process.env.GITHUB_ACTIONS === 'true') {
+  // Observation only: locates where the packaged self-test stops natively before the installed gate runs it.
+  const { recordWindowsPackagedSelfTest } = await import('./windows-self-test-diagnostic.mjs')
+  receipt.windowsSelfTestDiagnostic = await recordWindowsPackagedSelfTest(binary)
   const { measureWindowsInstalledLauncher } = await import('./windows-installed-launcher.mjs')
   receipt.windowsInstalledLauncher = await measureWindowsInstalledLauncher(binary)
 }

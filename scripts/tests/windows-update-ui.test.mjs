@@ -29,7 +29,10 @@ async function startedChild(index) {
   for (let tries = 0; started.length <= index; tries++) { if (tries > 600) throw new Error('Window process did not start'); await delay(50) }
   return started[index]
 }
-const names = view => view.elements.map(element => element.name)
+const texts = view => view.elements.map(element => element.text)
+// The whole automation result on failure: what the window showed, not just the mismatch.
+const shown = view => JSON.stringify(view).slice(0, 4000)
+const expectWindow = (view, expected) => { expect(view, shown(view)).toMatchObject(expected); return view }
 
 describe.runIf(native)('native Windows update windows', () => {
   it('renders the actual update stage, then closes on the completion request and allows opening BMN', async () => {
@@ -38,13 +41,13 @@ describe.runIf(native)('native Windows update windows', () => {
     expect(progress.ready).toBe(true)
     const pid = started[0].pid
     const first = await automateWindow({ processId: pid, title: 'BMN is updating', until: 'Getting the update ready…' })
-    expect(first).toMatchObject({ found: true })
+    expectWindow(first, { found: true })
     expect(first.elements).toContainEqual(expect.objectContaining({ role: 'button', name: "Don't wait", enabled: true }))
     expect(first.elements.some(element => element.role === 'progress bar')).toBe(true)
     observer.enter('package')
-    expect(await automateWindow({ processId: pid, title: 'BMN is updating', until: 'Packaging the new build. This can take several minutes.' })).toMatchObject({ found: true })
+    expectWindow(await automateWindow({ processId: pid, title: 'BMN is updating', until: 'Packaging the new build. This can take several minutes.' }), { found: true })
     observer.enter('smoke')
-    expect(await automateWindow({ processId: pid, title: 'BMN is updating', until: 'Checking the new build…' })).toMatchObject({ found: true })
+    expectWindow(await automateWindow({ processId: pid, title: 'BMN is updating', until: 'Checking the new build…' }), { found: true })
     const state = await progress.finish()
     expect(state).toMatchObject({ ready: true, acknowledged: true, suppressed: false, autoOpenAfterSuccessfulUpdate: true })
     expect(started[0].exitCode).toBe(0)
@@ -53,7 +56,7 @@ describe.runIf(native)('native Windows update windows', () => {
   it.each([['invoke', "Don't wait"], ['close', undefined]])('suppresses opening when the owner dismisses the window (%s)', async (action, name) => {
     const f = fixture()
     const progress = await startWindowsUpdateProgress({ parent: f.parent, attemptId: f.attemptId, progressPath: join(f.requests, WINDOWS_UPDATE_LOG), text: 'Getting the update ready…', start })
-    expect(await automateWindow({ processId: started[0].pid, title: 'BMN is updating', action, name })).toMatchObject({ acted: true })
+    expectWindow(await automateWindow({ processId: started[0].pid, title: 'BMN is updating', action, name }), { acted: true })
     await exited(started[0])
     expect(await progress.finish()).toMatchObject({ ready: true, suppressed: true, acknowledged: false, autoOpenAfterSuccessfulUpdate: false })
   }, 120000)
@@ -87,12 +90,13 @@ describe.runIf(native)('native Windows update windows', () => {
     const answer = askWindowsUpdateQuestion({ parent: f.parent, title: 'BMN update failed', text, buttons, start })
     const child = await startedChild(0)
     const view = await automateWindow({ processId: child.pid, title: 'BMN update failed', until: labels[0] })
-    expect(view).toMatchObject({ found: true })
-    expect(names(view)).toContain(text)
+    expectWindow(view, { found: true })
+    // Window text is what the label displays; accessible names drop '&' as a mnemonic marker.
+    expect(texts(view), shown(view)).toContain(text)
     expect(view.elements.filter(element => element.role === 'button').map(element => element.name).sort()).toEqual([...labels].sort())
     expect(view.elements.find(element => element.name === labels[0]).focused).toBe(true)
     const acted = await automateWindow({ processId: child.pid, title: 'BMN update failed', action: press ? 'invoke' : 'close', name: press ?? undefined })
-    expect(acted).toMatchObject({ acted: true })
+    expectWindow(acted, { acted: true })
     expect(await answer).toBe(decision)
   }, 120000)
 
@@ -103,7 +107,7 @@ describe.runIf(native)('native Windows update windows', () => {
     const view = await automateWindow({ processId: child.pid, title: 'BMN update log', until: 'Close' })
     const box = view.elements.find(element => element.role === 'editable text')
     expect(box.value).toBe(text)
-    expect(await automateWindow({ processId: child.pid, title: 'BMN update log', action: 'invoke', name: 'Close' })).toMatchObject({ acted: true })
+    expectWindow(await automateWindow({ processId: child.pid, title: 'BMN update log', action: 'invoke', name: 'Close' }), { acted: true })
     expect(await shown).toBe('shown')
   }, 120000)
 
