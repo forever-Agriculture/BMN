@@ -1071,6 +1071,13 @@ describe('shell session lifecycle', () => {
     // An 8-byte view credit: the rest waits here, the PTY is paused, and nothing is acknowledged yet.
     expect(manager.outputStateForSelfTest(created.sessionId, 4)).toMatchObject({ tail: '\\x1b[0m',
       view: { paused: true, inFlightBytes: 8, pendingBytes: 15, enqueuedBytes: 23, acknowledgedBytes: 0 } })
+
+    // Everything printed after a point, in the same answer, and whether the bound let all of it through.
+    expect(manager.outputStateForSelfTest(created.sessionId, 600, 11)).toMatchObject({
+      since: { fromBytes: 11, toBytes: 23, complete: true, text: 'SCROLLED\\x1b[0m' } })
+    expect(manager.outputStateForSelfTest(created.sessionId, 4, 11)).toMatchObject({
+      since: { fromBytes: 11, toBytes: 23, complete: false, textFromBytes: 19, text: '\\x1b[0m' } })
+    expect(manager.outputStateForSelfTest(created.sessionId, 600, 23)).toMatchObject({ since: { complete: true, text: '' } })
   })
 
   it('buffers initial output, grants one lease, forwards bytes in order, resizes, and stops the current incarnation', async () => {

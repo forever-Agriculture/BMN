@@ -409,7 +409,8 @@ async function start(): Promise<void> {
     if (params.selfTestOutputState !== undefined) {
       const request = record(params.selfTestOutputState)
       const tailBytes = Math.min(8192, Math.max(600, Number.isInteger(request.tailBytes) ? request.tailBytes as number : 600))
-      return Promise.resolve({ selfTestOutputState: manager.outputStateForSelfTest(String(request.sessionId), tailBytes) ?? null })
+      const sinceBytes = Number.isSafeInteger(request.sinceBytes) && (request.sinceBytes as number) >= 0 ? request.sinceBytes as number : undefined
+      return Promise.resolve({ selfTestOutputState: manager.outputStateForSelfTest(String(request.sessionId), tailBytes, sinceBytes) ?? null })
     }
     if (params.selfTestOutputNudge !== undefined) {
       return Promise.resolve({ selfTestOutputNudge: manager.nudgeOutputReaderForSelfTest(String(record(params.selfTestOutputNudge).sessionId)) ?? null })

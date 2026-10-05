@@ -1871,15 +1871,27 @@ export class SessionManager {
   /**
    * Electron self-test only (pty-host's `selfTestHealthProbe`): what the session printed last, as escaped
    * text, and where that output stands on its way to the view: node-pty's own output stream (read only,
-   * through its internal socket) and the view's queue. The self-test prints only synthetic output.
+   * through its internal socket) and the view's queue. The self-test prints only synthetic output. With
+   * `sinceBytes` (a total output count from an earlier answer), the same answer also holds everything printed
+   * after that point, up to `tailBytes`, and says whether that is all of it.
    */
-  outputStateForSelfTest(sessionId: string, tailBytes = 600): Record<string, unknown> | undefined {
+  outputStateForSelfTest(sessionId: string, tailBytes = 600, sinceBytes?: number): Record<string, unknown> | undefined {
     const live = this.sessions.get(sessionId)
     if (!live) return undefined
     const recent = live.outputTail.read()
-    let text = ''
-    for (const byte of recent.subarray(Math.max(0, recent.byteLength - tailBytes))) {
-      text += byte >= 0x20 && byte < 0x7f ? String.fromCharCode(byte) : `\\x${byte.toString(16).padStart(2, '0')}`
+    const escape = (bytes: Uint8Array): string => {
+      let escaped = ''
+      for (const byte of bytes) escaped += byte >= 0x20 && byte < 0x7f ? String.fromCharCode(byte) : `\\x${byte.toString(16).padStart(2, '0')}`
+      return escaped
+    }
+    const text = escape(recent.subarray(Math.max(0, recent.byteLength - tailBytes)))
+    let since: Record<string, unknown> | undefined
+    if (sinceBytes !== undefined) {
+      const printed = Math.max(0, live.outputTail.pushedBytes - sinceBytes)
+      const kept = Math.min(printed, recent.byteLength, tailBytes)
+      // When the bound cut it, the text starts later than `fromBytes`: at `textFromBytes`.
+      since = { fromBytes: sinceBytes, toBytes: live.outputTail.pushedBytes, complete: kept === printed,
+        textFromBytes: live.outputTail.pushedBytes - kept, text: escape(recent.subarray(recent.byteLength - kept)) }
     }
     const stream = (live.pty as unknown as { _socket?: { isPaused?(): boolean; readableLength?: number; writableLength?: number;
       writableNeedDrain?: boolean } })._socket
@@ -1887,7 +1899,7 @@ export class SessionManager {
       lastOutputAgoMs: live.outputTail.lastPushAt === 0 ? null : Date.now() - live.outputTail.lastPushAt,
       ptyStream: stream ? { paused: stream.isPaused?.() ?? null, readableBytes: stream.readableLength ?? null,
         writableBytes: stream.writableLength ?? null, awaitingDrain: stream.writableNeedDrain ?? null } : null,
-      view: live.outputQueue?.flowState ?? null, tail: text }
+      view: live.outputQueue?.flowState ?? null, tail: text, ...(since ? { since } : {}) }
   }
 
   /**

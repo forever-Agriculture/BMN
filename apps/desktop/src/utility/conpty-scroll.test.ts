@@ -1,5 +1,5 @@
 // MODULE: conpty-scroll.test.ts - the self-test's SCROLLED sequence typed straight through node-pty, recording where output stops
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -17,8 +17,10 @@ import { prepareWindowsPtyLaunch } from './windows-launch'
 // Variants change one thing each. Results are associations, not causal proof: a pass means this reduced harness
 // did not reproduce, and a failure here is not by itself the packaged defect. At 80x24 with a one-line prompt every
 // variant printed SCROLLED natively (run 37341134916: as typed, after the prompt, without images, without the
-// launcher, without replies), while the packaged pane (46x27, a prompt that wraps) held SCROLLED and its prompt
-// until the next typed line; so these variants move toward the pane's size, prompt and console host.
+// launcher, without replies). The packaged pane (46x27, a 90-character prompt that wraps) printed nothing after
+// scroll-79 for ~18 s and resumed after a typed probe line; so these variants move toward the pane's size, prompt
+// and console host. Unlike the packaged line, this one also writes two marker files around SCROLLED, which can
+// change timing; a reproduction here still needs a marker-free replay before it stands for the packaged failure.
 
 const windows = process.platform === 'win32'
 
@@ -34,25 +36,28 @@ interface Variant {
   readonly replies: boolean
   readonly cols: number
   readonly rows: number
-  /** Where the shell starts: the fixture folder (a ~70-character prompt), a deeper folder whose prompt is wider than
-   * 80 columns, or the drive root (a short prompt). */
-  readonly prompt: 'fixture' | 'wide' | 'short'
+  /** Where the shell starts, which sets the prompt's width: the fixture folder (~70 characters on the runner), a
+   * deeper folder whose prompt is exactly as wide as the packaged pane's (90 characters), or the drive root (short).
+   * A different folder is a possible confound of its own. */
+  readonly prompt: 'fixture' | 'matched' | 'short'
   /** BMN's bundled ConPTY, or the console host built into Windows. */
   readonly bundledConpty: boolean
 }
 
 const PRODUCTION: Variant = { name: 'as-self-test', launcher: true, images: true, afterPrompt: false, replies: true,
   cols: 80, rows: 24, prompt: 'fixture', bundledConpty: true }
-const PANE: Variant = { ...PRODUCTION, name: 'pane-size', cols: 46, rows: 27 }
+/** The packaged pane: 46x27 with the self-test's 90-character prompt (`PS <cwd>> `). */
+const PANE: Variant = { ...PRODUCTION, name: 'pane', cols: 46, rows: 27, prompt: 'matched' }
+const PACKAGED_PROMPT_WIDTH = 90
 // Most informative first: a variant that would start after the time budget is recorded as skipped.
 const WINDOWS_VARIANTS: readonly Variant[] = [
   PRODUCTION,
   PANE,
-  { ...PANE, name: 'pane-size-short-prompt', prompt: 'short' },
-  { ...PRODUCTION, name: 'wrapping-prompt', prompt: 'wide' },
-  { ...PANE, name: 'pane-size-inbox-conpty', bundledConpty: false },
-  { ...PANE, name: 'pane-size-after-prompt', afterPrompt: true },
-  { ...PANE, name: 'pane-size-no-images', images: false }
+  { ...PANE, name: 'pane-inbox-conpty', bundledConpty: false },
+  { ...PANE, name: 'pane-short-prompt', prompt: 'short' },
+  { ...PRODUCTION, name: 'matched-prompt-80-columns', prompt: 'matched' },
+  { ...PANE, name: 'pane-after-prompt', afterPrompt: true },
+  { ...PANE, name: 'pane-no-images', images: false }
 ]
 
 const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds))
@@ -68,10 +73,16 @@ async function until(check: () => boolean, milliseconds: number): Promise<number
   return check() ? Date.now() - started : null
 }
 
-/** Runs the sequence once; every wait is bounded and the record carries whatever was observed before a failure. */
-async function scrollSequence(variant: Variant): Promise<Record<string, unknown>> {
-  const root = mkdtempSync(join(tmpdir(), 'bmn-conpty-scroll-'))
-  const record: Record<string, unknown> = { ...variant }
+/**
+ * Runs the sequence once; every wait is bounded and the record carries whatever was observed before a failure.
+ * `save` is called as the record grows (before the run, after the observation and after cleanup), so a deadline
+ * keeps what was seen.
+ */
+async function scrollSequence(variant: Variant, save: (record: Record<string, unknown>) => void = () => {}): Promise<Record<string, unknown>> {
+  // The long form of the folder: PowerShell prints it in its prompt even where the temp variable holds an 8.3 name.
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'bmn-conpty-scroll-')))
+  const record: Record<string, unknown> = { ...variant, started: true }
+  save(record)
   const terminal = new Terminal({ cols: variant.cols, rows: variant.rows, allowProposedApi: true })
   let pty: IPty | undefined
   let exited: Promise<void> = Promise.resolve()
@@ -120,9 +131,15 @@ async function scrollSequence(variant: Variant): Promise<Record<string, unknown>
     const environment = { ...process.env, TERM: 'xterm-256color' } as Record<string, string>
     delete environment.PROMPT_COMMAND
     const size = { cols: variant.cols, rows: variant.rows }
+    // `PS <cwd>> ` is the PowerShell prompt; a matched prompt gets a fixture subfolder whose name makes it 90 wide.
+    const matchedLength = Math.max(1, PACKAGED_PROMPT_WIDTH - 5 - root.length - 1)
+    const matchedName = 'bmn-pane-prompt-'.padEnd(matchedLength, 'x').slice(0, matchedLength)
     const cwd = variant.prompt === 'short' ? (windows ? `${process.env.SystemDrive ?? 'C:'}\\` : '/')
-      : variant.prompt === 'wide' ? join(root, 'a-folder-name-long-enough-that-the-shell-prompt-wraps') : root
-    mkdirSync(cwd, { recursive: true })
+      : variant.prompt === 'matched' ? join(root, matchedName) : root
+    // Only a new fixture subfolder is ever created; the drive root is used as it is.
+    if (variant.prompt === 'matched') mkdirSync(cwd)
+    const prompt = `PS ${cwd}>`
+    record.promptWidth = prompt.length + 1
     if (windows) {
       const shell = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
       const native = prepareWindowsPtyLaunch(shell, ['-NoLogo', '-NoProfile'], cwd, environment)
@@ -142,15 +159,30 @@ async function scrollSequence(variant: Variant): Promise<Record<string, unknown>
       terminal.write(text)
     })
     if (variant.replies) terminal.onData((answer) => live.write(answer))
+    let promptSeen = ''
     const promptShown = () => {
       const buffer = terminal.buffer.active
+      const row = buffer.baseY + buffer.cursorY
       // Trailing blanks are trimmed: the animation blanked cells far to the right on the rows a prompt may land on.
-      const line = (buffer.getLine(buffer.baseY + buffer.cursorY)?.translateToString(true) ?? '').trimEnd()
-      return windows ? /^PS .*>$/u.test(line) : /\$$/u.test(line)
+      const current = (buffer.getLine(row)?.translateToString(true) ?? '').trimEnd()
+      if (!windows) return /\$$/u.test(current)
+      // A one-row prompt on the cursor's row, as before; a prompt wider than the pane fills whole rows before the
+      // cursor's, and joined without separators they hold it, whether the console host wrapped them or broke them.
+      if (/^PS .*>$/u.test(current)) return true
+      let text = current
+      for (let above = 1; above <= Math.ceil(prompt.length / variant.cols) && row - above >= 0; above++) {
+        text = (buffer.getLine(row - above)?.translateToString(false) ?? '') + text
+      }
+      promptSeen = text.trimEnd().slice(-prompt.length - 20)
+      return promptSeen.toLowerCase().endsWith(prompt.toLowerCase())
     }
 
     record.promptMs = await until(promptShown, 30_000)
-    if (record.promptMs === null) throw new Error('the shell never showed its first prompt')
+    if (record.promptMs === null) {
+      record.promptSeen = escaped(promptSeen)
+      throw new Error('the shell never showed its first prompt')
+    }
+    record.firstPromptCursor = { x: terminal.buffer.active.cursorX, y: terminal.buffer.active.cursorY }
     live.write(animationLine)
     record.codexDoneMs = await until(() => stream.includes('CODEX-RATE-DONE'), 30_000)
     record.maxDoneMs = await until(() => stream.includes('MAX-RATE-DONE'), 30_000)
@@ -165,13 +197,22 @@ async function scrollSequence(variant: Variant): Promise<Record<string, unknown>
     const scrollFrom = stream.length
     live.write(scrollLine)
     record.scrolledMs = await until(() => stream.includes('SCROLLED'), 10_000)
-    record.promptAfterScrolledMs = record.scrolledMs === null ? null : await until(promptShown, 5_000)
+    // A fresh prompt: one drawn after SCROLLED, not a match left on the screen.
+    const scrolledEnd = () => stream.indexOf('SCROLLED', scrollFrom) + 'SCROLLED'.length
+    record.promptAfterScrolledMs = record.scrolledMs === null ? null
+      : await until(() => stream.length > scrolledEnd() + 2 && promptShown(), 5_000)
     record.shellWrote = { beforeScrolled: existsSync(before), afterScrolled: existsSync(after) }
     record.bytesAtOutcome = bytes
     record.observedForMs = Date.now() - typedAt
     // What followed the last scroll line: SCROLLED and the prompt, or nothing.
     const lastScroll = stream.lastIndexOf('scroll-79')
     record.afterLastScroll = lastScroll < scrollFrom ? null : escaped(stream.slice(lastScroll, lastScroll + 1_500))
+    // The first stage after which SCROLLED was seen: the wait, the reader credit, the resize or the typed probe.
+    const stage = (name: string): void => {
+      if (record.scrolledBy === undefined && stream.slice(scrollFrom).includes('SCROLLED')) record.scrolledBy = name
+    }
+    stage('wait')
+    save(record)
 
     // The same two interventions the self-test makes once output stops; here they also run when it did not, to show
     // what a working pane answers. A read credit for node-pty's Windows ConPTY reader; then a one-column resize of the
@@ -182,22 +223,27 @@ async function scrollSequence(variant: Variant): Promise<Record<string, unknown>
     record.nudge = typeof reader?.postMessage === 'function' ? (reader.postMessage('read'), 'sent') : 'no reader'
     await sleep(2_000)
     record.bytesAfterNudge = bytes - beforeNudge
+    stage('nudge')
     const beforeResize = bytes
     terminal.resize(variant.cols + 1, variant.rows)
     live.resize(variant.cols + 1, variant.rows)
     await sleep(3_000)
     record.bytesAfterResize = bytes - beforeResize
+    stage('resize')
     if (record.scrolledMs === null) {
-      // Last, typed input, which released the packaged pane: did SCROLLED and its prompt arrive with it (held), and
-      // in which order relative to the probe's own output?
+      // Last, typed input, after which the packaged pane printed again: whether SCROLLED shows up then, and where
+      // relative to the probe's own output. A later appearance shows delayed observation, not where bytes waited.
       const probeFrom = stream.length
       live.write(windows ? "Write-Output ('PRO' + 'BE')\r" : "printf '%s%s\\n' PRO BE\r")
       record.probeMs = await until(() => stream.slice(probeFrom).includes('PROBE'), 5_000)
-      const released = stream.slice(probeFrom)
-      record.afterProbe = { scrolledAt: released.indexOf('SCROLLED'), probeAt: released.indexOf('PROBE'),
-        bytes: Buffer.byteLength(released), head: escaped(released.slice(0, 1_500)) }
+      stage('probe')
+      const afterTyped = stream.slice(probeFrom)
+      record.afterProbe = { scrolledAt: afterTyped.indexOf('SCROLLED'), probeAt: afterTyped.indexOf('PROBE'),
+        bytes: Buffer.byteLength(afterTyped), head: escaped(afterTyped.slice(0, 1_500)) }
     }
+    record.scrolledBy ??= null
     record.shellWroteAtEnd = { beforeScrolled: existsSync(before), afterScrolled: existsSync(after) }
+    save(record)
   } catch (error) {
     record.error = error instanceof Error ? error.message : String(error)
   } finally {
@@ -206,6 +252,7 @@ async function scrollSequence(variant: Variant): Promise<Record<string, unknown>
     } catch (error) {
       record.cleanupError = error instanceof Error ? error.message : String(error)
     }
+    save(record)
   }
   return record
 }
@@ -217,13 +264,22 @@ describe('a pane keeps printing after a Codex-style Sixel animation (self-test S
     mkdirSync(results, { recursive: true })
     const records: Array<Record<string, unknown>> = []
     const started = Date.now()
+    // Saved as each record grows, so a later timeout keeps what was observed.
+    const save = (): void => writeFileSync(join(results, 'windows-conpty-scroll.json'), JSON.stringify(records, null, 2))
     for (const variant of WINDOWS_VARIANTS) {
       // A variant takes about 17 s when it passes, about 35 s when SCROLLED is missing and at most ~130 s when
-      // nothing answers at all; none starts after 160 s, so the last one ends before the test's 300 s deadline.
-      if (Date.now() - started > 160_000) records.push({ ...variant, skipped: 'time budget' })
-      else records.push(await scrollSequence(variant))
-      // Saved after every variant, so a later timeout keeps what was observed.
-      writeFileSync(join(results, 'windows-conpty-scroll.json'), JSON.stringify(records, null, 2))
+      // nothing answers at all, plus setup and cleanup; none starts after 150 s, before the test's 300 s deadline.
+      if (Date.now() - started > 150_000) {
+        records.push({ ...variant, skipped: 'time budget' })
+        save()
+        continue
+      }
+      const index = records.length
+      records.push({ ...variant })
+      await scrollSequence(variant, (record) => {
+        records[index] = { ...record }
+        save()
+      })
     }
     const production = records[0]!
     expect(production.error ?? null, JSON.stringify(records)).toBeNull()
