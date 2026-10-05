@@ -1883,11 +1883,29 @@ export class SessionManager {
     }
     const stream = (live.pty as unknown as { _socket?: { isPaused?(): boolean; readableLength?: number; writableLength?: number;
       writableNeedDrain?: boolean } })._socket
-    return { exited: live.exited, outputBytes: live.outputTail.pushedBytes,
+    return { exited: live.exited, outputBytes: live.outputTail.pushedBytes, size: { cols: live.pty.cols, rows: live.pty.rows },
       lastOutputAgoMs: live.outputTail.lastPushAt === 0 ? null : Date.now() - live.outputTail.lastPushAt,
       ptyStream: stream ? { paused: stream.isPaused?.() ?? null, readableBytes: stream.readableLength ?? null,
         writableBytes: stream.writableLength ?? null, awaitingDrain: stream.writableNeedDrain ?? null } : null,
       view: live.outputQueue?.flowState ?? null, tail: text }
+  }
+
+  /**
+   * Electron self-test only, once a session's output has already stopped: one extra read credit for node-pty's
+   * Windows ConPTY output reader (a worker that reads one chunk per credit). An intervention: it bypasses the
+   * reader's one-chunk backpressure. Output after it is consistent with a reader that held output or stopped
+   * reading (or with coincident progress); none does not prove nothing reached the reader. True means the credit
+   * was posted, not that the worker took it. Undefined for an unknown session; false where the session has no such
+   * reader (POSIX).
+   */
+  nudgeOutputReaderForSelfTest(sessionId: string): boolean | undefined {
+    const live = this.sessions.get(sessionId)
+    if (!live) return undefined
+    const reader = (live.pty as unknown as { _agent?: { _worker?: { _worker?: { postMessage?(message: unknown): void } } } })
+      ._agent?._worker?._worker
+    if (typeof reader?.postMessage !== 'function') return false
+    reader.postMessage('read')
+    return true
   }
 
   /** Stops the mirror when the agent that needed it has left the session; the tail keeps going. */

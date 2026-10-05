@@ -1,3 +1,4 @@
+// MODULE: pty-host.ts - the utility process that owns sessions, the control endpoint and its terminal streams
 import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
@@ -387,8 +388,9 @@ async function start(): Promise<void> {
   }
 
   /**
-   * Electron self-test only: the two health.get requests the self-test uses to end this host abruptly
-   * (host loss) and to answer an open request at a key the way a Telegram tap will (Epic 30.2).
+   * Electron self-test only: the health.get requests the self-test uses to end this host abruptly
+   * (host loss), to answer an open request at a key the way a Telegram tap will (Epic 30.2), and to
+   * observe a pane whose output stopped (its output state, and one extra read credit for its reader).
    * Undefined for every other request and for any host not started with `--self-test-host`; the control
    * socket never reaches it.
    */
@@ -406,6 +408,9 @@ async function start(): Promise<void> {
     }
     if (params.selfTestOutputState !== undefined) {
       return Promise.resolve({ selfTestOutputState: manager.outputStateForSelfTest(String(record(params.selfTestOutputState).sessionId)) ?? null })
+    }
+    if (params.selfTestOutputNudge !== undefined) {
+      return Promise.resolve({ selfTestOutputNudge: manager.nudgeOutputReaderForSelfTest(String(record(params.selfTestOutputNudge).sessionId)) ?? null })
     }
     if (params.selfTestRemoteAnswer === undefined) return undefined
     const probe = record(params.selfTestRemoteAnswer)

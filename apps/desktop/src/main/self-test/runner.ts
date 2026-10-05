@@ -33,6 +33,7 @@ import {
   runLaunchSetRepositorySelfTest
 } from '../launch-set-repository-self-test'
 import { runCheckoutPeersSelfTest } from '../checkout-peers-self-test'
+import { codexSixelFrame, NODE_ANIMATION_SOURCE, POSIX_ANIMATION_SCRIPT } from './animation'
 import {
   closeWithinDeadline,
   drainAfterExit,
@@ -1092,51 +1093,12 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     // frame blanks the pet's rows, draws the next image there and restores the cursor.
     const animationDirectory = join(isolatedCwd, 'sixel-animation')
     mkdirSync(animationDirectory, { recursive: true })
-    const codexFrame = (seed: number): string => {
-      let body = ''
-      for (let color = 0; color < 8; color += 1) {
-        body += `#${color};2;${(color * 37 + seed * 11) % 100};${(color * 53) % 100};${(color * 71 + seed * 5) % 100}`
-      }
-      for (let row = 0; row < 13; row += 1) {
-        for (let color = 0; color < 8; color += 1) {
-          body += `#${color}`
-          for (let x = 0; x < 96; x += 1) body += String.fromCharCode(63 + ((x * 7 + row * 13 + color * 5 + seed) % 64))
-          if (color < 7) body += '$'
-        }
-        if (row < 12) body += '-'
-      }
-      return `\u001bP9;1;0q"1;1;96;75${body}\u001b\\`
-    }
-    writeFileSync(join(animationDirectory, 'frame0.six'), codexFrame(0))
-    writeFileSync(join(animationDirectory, 'frame1.six'), codexFrame(1))
+    writeFileSync(join(animationDirectory, 'frame0.six'), codexSixelFrame(0))
+    writeFileSync(join(animationDirectory, 'frame1.six'), codexSixelFrame(1))
     const posixAnimationScript = join(animationDirectory, 'animate.sh')
-    // Windows: the same frames, cursor save/restore and pacing from a Node stand-in.
-    const animationScript = typedShell.windows ? writeNodeProgram(animationDirectory, 'animate', [
-      "const { readFileSync } = require('node:fs')",
-      'const [frames, delay, label] = process.argv.slice(2)',
-      ';(async () => {',
-      '  for (let i = 0; i < Number(frames); i += 1) {',
-      "    let out = '\\u001b7'",
-      "    for (let r = 2; r <= 7; r += 1) out += '\\u001b[' + r + ';40H' + ' '.repeat(24)",
-      "    out += '\\u001b[2;40H' + readFileSync(__dirname + '/frame' + (i % 2) + '.six', 'latin1') + '\\u001b8'",
-      '    process.stdout.write(out)',
-      '    await new Promise((resolve) => setTimeout(resolve, Number(delay) * 1000))',
-      '  }',
-      "  process.stdout.write(label + '-DONE\\r\\n')",
-      '})()',
-      ''
-    ].join('\n')) : posixAnimationScript
-    if (!typedShell.windows) writeFileSync(posixAnimationScript, [
-      '#!/bin/sh',
-      'frames=$1; delay=$2; label=$3; dir=$(dirname "$0"); i=0',
-      'while [ "$i" -lt "$frames" ]; do',
-      "  printf '\\0337'",
-      "  r=2; while [ \"$r\" -le 7 ]; do printf '\\033[%d;40H%24s' \"$r\" ''; r=$((r + 1)); done",
-      "  printf '\\033[2;40H'; cat \"$dir/frame$((i % 2)).six\"; printf '\\0338'",
-      '  i=$((i + 1)); sleep "$delay"',
-      'done',
-      "printf '%s-DONE\\r\\n' \"$label\""
-    ].join('\n') + '\n', { mode: 0o700 })
+    const animationScript = typedShell.windows
+      ? writeNodeProgram(animationDirectory, 'animate', NODE_ANIMATION_SOURCE) : posixAnimationScript
+    if (!typedShell.windows) writeFileSync(posixAnimationScript, POSIX_ANIMATION_SCRIPT, { mode: 0o700 })
     const animatedRuntime = host.runtimes.get(secondSession.sessionId)
     if (!animatedRuntime) throw new Error('the animation pane runtime was unavailable')
     const animatedAttachment = animatedRuntime.attachment.attachmentId
@@ -1182,7 +1144,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       const message = error instanceof Error ? error.message : String(error)
       // Observation only, once the failure is certain: what the shell printed as the host received it, where
       // that output stands in node-pty and the view's queue, whether SCROLLED arrives late, and whether the
-      // shell answers. Every step is bounded (at most ~21 s in all), and the first record is printed at once,
+      // shell answers. Every step is bounded (at most ~34 s in all), and the first record is printed at once,
       // so an outer deadline cannot take the original failure or that record with it.
       const bounded = <T>(work: Promise<T>, milliseconds: number, late: T): Promise<T> =>
         Promise.race([work, new Promise<T>((resolve) => setTimeout(() => resolve(late), milliseconds))])
@@ -1199,8 +1161,30 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       2_000, 'no answer within 2 s')
       const probeAnswered = probeWrite === 'accepted' ? await waitForAnimatedLine('PROBE', 5_000).then(() => true, () => false) : null
       const afterProbe = await hostOutput()
+      // Then two interventions, bounded (~13 s); neither is passive and neither alone attributes a layer. One extra
+      // read credit for the Windows ConPTY output reader (it bypasses the reader's one-chunk backpressure): output
+      // after it is consistent with a reader that held output or stopped reading, or with coincident progress; none
+      // does not prove that nothing reached the reader. Then a one-column resize: output after it shows progress
+      // somewhere on the output path; none is inconclusive, since ConPTY need not redraw. The PTY and the renderer
+      // may disagree about the pane's width afterwards; the run has already failed.
+      const settle = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds))
+      const nudge = await bounded(client.request<{ selfTestOutputNudge: unknown }>(METHOD_REGISTRY.healthGet,
+        { selfTestOutputNudge: { sessionId: secondSession.sessionId } }).then((answer) => answer.selfTestOutputNudge,
+        () => 'unavailable'), 2_000, 'no answer within 2 s')
+      await settle(2_000)
+      const afterNudge = await hostOutput()
+      // The host answers null for an unknown session; that must not replace the original failure.
+      const size = afterNudge !== null && typeof afterNudge === 'object'
+        ? (afterNudge as { size?: { cols: number; rows: number } }).size : undefined
+      const resize = size ? await bounded(client.request(METHOD_REGISTRY.terminalResize, {
+        attachmentId: (host.runtimes.get(secondSession.sessionId) ?? animatedRuntime).attachment.attachmentId,
+        cols: size.cols + 1, rows: size.rows
+      }).then(() => 'accepted', (failure: unknown) => `refused: ${failure instanceof Error ? failure.message : String(failure)}`),
+      2_000, 'no answer within 2 s') : 'no size'
+      await settle(3_000)
+      const afterResize = await hostOutput()
       throw new Error(`${message} (line sent +${scrollSent} ms and accepted +${scrollAccepted} ms after MAX-RATE-DONE was seen) ` +
-        JSON.stringify({ atFailure, lateMs, afterWait, probeWrite, probeAnswered, afterProbe }))
+        JSON.stringify({ atFailure, lateMs, afterWait, probeWrite, probeAnswered, afterProbe, nudge, afterNudge, resize, afterResize }))
     })
     const animation = await host.applicationWindow.webContents.executeJavaScript(`(() => {
       const hook = window.__aitermTest;
@@ -4899,7 +4883,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     mkdirSync(join(coldDirectory, 'bin'), { recursive: true })
     const largeImage = `\u001bP9;1;0q"1;1;256;256#1;2;0;0;100#1${Array(43).fill('!256~').join('-')}\u001b\\`
     writeFileSync(join(coldDirectory, 'large.six'), largeImage)
-    writeFileSync(join(coldDirectory, 'frame.six'), codexFrame(2))
+    writeFileSync(join(coldDirectory, 'frame.six'), codexSixelFrame(2))
     // Windows: the same output from Node stand-ins (cat, date and sleep are POSIX).
     const capProgram = typedShell.windows ? writeNodeProgram(coldDirectory, 'fill-images', [
       "const image = require('node:fs').readFileSync(__dirname + '/large.six', 'latin1')",

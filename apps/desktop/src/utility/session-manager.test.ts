@@ -1046,13 +1046,26 @@ describe('shell session lifecycle', () => {
     expect(store.startingRecords).toHaveLength(1)
   })
 
+  it('gives, for the self-test only, one extra read credit to a Windows ConPTY output reader and to nothing else', async () => {
+    const { manager, pty, cwd } = await fixture()
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath, argv: [], cols: 80, rows: 24 })
+    expect(manager.nudgeOutputReaderForSelfTest('missing')).toBeUndefined()
+    // A POSIX PTY has no such reader.
+    expect(manager.nudgeOutputReaderForSelfTest(created.sessionId)).toBe(false)
+    // node-pty's Windows terminal: agent, then its output connection, then the worker thread that reads ConPTY.
+    const messages: unknown[] = []
+    Object.assign(pty, { _agent: { _worker: { _worker: { postMessage: (message: unknown) => messages.push(message) } } } })
+    expect(manager.nudgeOutputReaderForSelfTest(created.sessionId)).toBe(true)
+    expect(messages).toEqual(['read'])
+  })
+
   it('reports, for the self-test only, what a session printed last and where that output stands for its view', async () => {
     const { manager, pty, cwd } = await fixture(undefined, { consumerBytes: 8, hostBytes: 1024 })
     const created = await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath, argv: [], cols: 80, rows: 24 })
     expect(manager.outputStateForSelfTest('missing')).toBeUndefined()
     pty.emit('scroll-79\r\nSCROLLED\x1b[0m')
     expect(manager.outputStateForSelfTest(created.sessionId)).toMatchObject({ exited: false, outputBytes: 23, view: null, ptyStream: null,
-      tail: 'scroll-79\\x0d\\x0aSCROLLED\\x1b[0m' })
+      size: { cols: 80, rows: 24 }, tail: 'scroll-79\\x0d\\x0aSCROLLED\\x1b[0m' })
     const attached = manager.attach(created)
     manager.activateAttachment(attached.attachmentId)
     // An 8-byte view credit: the rest waits here, the PTY is paused, and nothing is acknowledged yet.
