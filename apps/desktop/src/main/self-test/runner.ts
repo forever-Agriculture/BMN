@@ -1269,11 +1269,26 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
 
     // The alternate screen keeps its image out of the normal buffer.
     // A known image above the prompt, so the commands typed below it overwrite no image cell.
-    await typeIntoAnimatedPane(`clear; cat '${join(animationDirectory, 'frame0.six')}'; printf '\\n%s-%s\\n' ALT BASE\r`)
+    // Windows: a Node stand-in prints the same bytes; it builds the markers, so the typed line never shows them.
+    const alternateProgram = typedShell.windows ? writeNodeProgram(animationDirectory, 'alternate', [
+      "const { readFileSync } = require('node:fs')",
+      "const frame = readFileSync(__dirname + '/frame0.six', 'latin1')",
+      "if (process.argv[2] === 'base') process.stdout.write(frame + '\\r\\n' + ['ALT', 'BASE'].join('-') + '\\r\\n')",
+      "else {",
+      "  process.stdout.write('\\u001b[?1049h' + frame + ['ALT-SCREEN', 'TEXT'].join('-'))",
+      "  setTimeout(() => process.stdout.write('\\u001b[?1049l' + ['ALT', 'DONE'].join('-') + '\\r\\n'), 1500)",
+      '}',
+      ''
+    ].join('\n')) : ''
+    await typeIntoAnimatedPane(typedShell.windows
+      ? `Clear-Host; ${ran(alternateProgram, 'base')}\r`
+      : `clear; cat '${join(animationDirectory, 'frame0.six')}'; printf '\\n%s-%s\\n' ALT BASE\r`)
     await waitForAnimatedLine('ALT-BASE', 10_000)
     const imageLinesBeforeAlternate = await host.applicationWindow.webContents.executeJavaScript(
       `window.__aitermTest.view(${animatedId}).imageCells().lines`) as number[]
-    await typeIntoAnimatedPane(`printf '\\033[?1049h'; cat '${join(animationDirectory, 'frame0.six')}'; printf '%s-%s' ALT-SCREEN TEXT; sleep 1.5; printf '\\033[?1049l'; printf '%s-%s\\n' ALT DONE\r`)
+    await typeIntoAnimatedPane(typedShell.windows
+      ? `${ran(alternateProgram, 'screen')}\r`
+      : `printf '\\033[?1049h'; cat '${join(animationDirectory, 'frame0.six')}'; printf '%s-%s' ALT-SCREEN TEXT; sleep 1.5; printf '\\033[?1049l'; printf '%s-%s\\n' ALT DONE\r`)
     // While the alternate screen is active, its own image and text are what the view shows.
     await waitForAnimatedLine('ALT-SCREEN-TEXT', 10_000)
     const duringAlternate = await host.applicationWindow.webContents.executeJavaScript(
