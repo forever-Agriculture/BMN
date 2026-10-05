@@ -214,7 +214,8 @@ describe.skipIf(process.platform !== 'win32')('native Windows private roots', ()
   })
   const identities = (path: string) => new Set(powershell(path,
     `@($item.GetAccessControl().GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]) | ForEach-Object { $_.IdentityReference.Value }) -join ','`).split(','))
-  const currentUser = () => powershell(tmpdir(), '[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value')
+  let user: string | undefined
+  const currentUser = () => user ??= powershell(tmpdir(), '[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value')
   it('creates a backup folder only this account can open inside a folder that shares its contents', { timeout: 60_000 }, async () => {
     const parent = fixture()
     // The owner's chosen folder lets Everyone read whatever is created in it.

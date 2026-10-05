@@ -267,6 +267,8 @@ export async function createPrivateDirectory(path: string, platform: NodeJS.Plat
     child.stdout.setEncoding('utf8').on('data', (chunk: string) => { if (stdout.length < 1024) stdout += chunk })
     child.on('error', reject)
     child.on('close', (status) => resolve({ status, stdout }))
+    // A shell that ends before reading its input fails through `close`, not as an unhandled pipe error.
+    child.stdin.on('error', () => undefined)
     child.stdin.end(JSON.stringify(win32.resolve(path)))
   }).catch(() => ({ status: null, stdout: '' }))
   if (output.status !== 0 || output.stdout !== 'BMN_PRIVATE_DIRECTORY_OK') {

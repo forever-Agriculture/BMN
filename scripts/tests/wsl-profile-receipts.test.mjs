@@ -5,7 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { measureRestrictedGuestProfile, measureRootRestrictedGuestProfile, measureNestedGuestNamespaces } from '../test/wsl-restricted-profile-spike.mjs'
 
 const platform = Object.getOwnPropertyDescriptor(process, 'platform')
-// A cold Python start on a busy Windows runner took over 5 s (run 37341134916); these checks only parse source.
+// A Python invocation took over 5 s on the Windows runner (run 37341134916); these checks only parse source. Each test
+// allows for every invocation it makes at this limit.
 const PYTHON_TIMEOUT_MS = 30_000
 const distribution = 'BMN-Epic53-Systemd-00000000-0000-0000-0000-000000000000'
 it('builds all kernel candidates from a Windows CRLF checkout without executing them', { timeout: 60_000 }, () => {
@@ -75,7 +76,7 @@ describe.each(routes)('%s receipt gate', (_name, measure, valid) => {
     expect(measure({ distribution, uid: 1000, guest: () => ({ exit: 0, stdout: JSON.stringify(receipt) }) }))
       .toMatchObject({ result: 'FAIL', receiptValidationFailed: true, profileComplete: false })
   })
-  it('sends syntactically valid Python to the guest', { timeout: 60_000 }, () => {
+  it('sends syntactically valid Python to the guest', { timeout: 120_000 }, () => {
     const receipt = valid(), scripts = []
     const guest = args => {
       if (args[0].endsWith('python3')) scripts.push(args[2])

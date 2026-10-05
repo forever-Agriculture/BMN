@@ -8,6 +8,8 @@ import { ProtocolError, validateLinuxPath } from './wsl-session-protocol.mjs'
  * state and base path, plus the default registration. Run by Windows PowerShell with -NoProfile; output is UTF-8.
  */
 export const LXSS_REGISTRATIONS_COMMAND = [
+  // Any error ends the listing with a failure, so a partial enumeration never reads as complete.
+  "$ErrorActionPreference = 'Stop'",
   '[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)',
   "$root = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss'",
   "if (-not (Test-Path -LiteralPath $root)) { '{\"present\":false}'; exit 0 }",

@@ -3,7 +3,7 @@
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import {
   ENVIRONMENT_ALLOWLIST, FrameDecoder, HEADER_BYTES, HELPER_EXIT_CODES, MAX_PAYLOAD, NativeSession, ProtocolError,
   encodeControl, encodeFrame, encodeResize, encodeTerminal, failureFromHelperExit, validateLaunch
@@ -104,10 +104,22 @@ out['terminal'] = [frame.hex()[:16] for frame in p.encode_terminal(big)] + [p.en
 out['exitCodes'] = {code: p.helper_exit_code(code) for code in list(p.HELPER_EXIT_CODES) + ['WSL_MISSING']}
 print(json.dumps(out))
 `
-let guestResults
-const guest = () => guestResults ??= JSON.parse(execFileSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', GUEST_DRIVER, guestModule], {
-  input: JSON.stringify({ vectors, launch: launchMessages, splits: SPLITS }), encoding: 'utf8', timeout: 60_000, maxBuffer: 64 * 1024 * 1024
-}))
+// The guest side runs once, in a bounded setup; a failure is kept too, so every test reports it without running Python
+// again.
+let guestRun
+beforeAll(() => {
+  try {
+    guestRun = { results: JSON.parse(execFileSync(process.platform === 'win32' ? 'python' : 'python3', ['-c', GUEST_DRIVER, guestModule], {
+      input: JSON.stringify({ vectors, launch: launchMessages, splits: SPLITS }), encoding: 'utf8', timeout: 60_000, maxBuffer: 64 * 1024 * 1024
+    })) }
+  } catch (error) {
+    guestRun = { error }
+  }
+}, 90_000)
+const guest = () => {
+  if (guestRun?.error) throw guestRun.error
+  return guestRun.results
+}
 
 function nativeDecode(bytes, mode) {
   const decoder = new FrameDecoder()
