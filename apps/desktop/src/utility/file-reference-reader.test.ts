@@ -131,6 +131,18 @@ describe('readFileReference', () => {
     expect(result.message).toMatch(/pipe/)
   })
 
+  // Windows has no FIFOs; its equivalents are reserved device names, which open a device in any folder, and the
+  // pipe and device namespaces. None may be shown as file text or wait for input. CON is not opened here: reading
+  // it could wait on this console.
+  it.runIf(process.platform === 'win32')('refuses Windows devices and pipe paths without reading them', async () => {
+    for (const reference of ['./NUL', './nul.txt', './COM1.log']) {
+      expect((await readFileReference(request(reference))).status, reference).toBe('unavailable')
+    }
+    for (const reference of ['\\\\.\\pipe\\bmn-file-reference', '\\\\?\\GLOBALROOT\\Device\\Null']) {
+      await expect(readFileReference(request(reference)), reference).rejects.toThrow('Device paths are not file references')
+    }
+  }, 15_000)
+
   it('refuses binary, non-UTF-8 and oversized files', async () => {
     await writeFile(join(launch, 'image.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2]))
     await writeFile(join(launch, 'latin.txt'), Buffer.from([0x63, 0x61, 0x66, 0xe9]))

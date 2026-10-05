@@ -530,19 +530,27 @@ describe('long text from standard input (Story 35.1)', () => {
     expect((await runCli(['send', '--text-file', '-'], { env, input: `${'s'.repeat(64 * 1024)}\n` })).code).toBe(0)
   })
 
-  it.skipIf(!existsSync('/usr/bin/script'))('refuses a terminal on standard input instead of waiting for typing', async () => {
+  it('refuses a terminal on standard input instead of waiting for typing', async () => {
     const fixture = await cliFixture()
-    const command = [process.execPath, CLI, 'ask', 'k', 'T', '--body-file', '-'].map((part) => `'${part}'`).join(' ')
-    // util-linux script(1) gives the CLI a real pseudo-terminal as standard input.
-    const result = await new Promise<{ code: number | null; output: string }>((resolve) => {
-      execFile('/usr/bin/script', ['-qec', command, '/dev/null'], {
-        env: { ...process.env, ...fixture.sessionEnv }, timeout: 15_000
-      }, (error, stdout) => resolve({ code: error === null ? 0 : typeof error.code === 'number' ? error.code : null, output: stdout }))
+    // A real pseudo-terminal is the CLI's standard input: a Linux PTY, or ConPTY on Windows.
+    const child = spawnPty(process.execPath, [CLI, 'ask', 'k', 'T', '--body-file', '-'], {
+      name: 'xterm-256color', cols: 120, rows: 24, cwd: process.cwd(),
+      env: Object.fromEntries(Object.entries({ ...process.env, ...fixture.sessionEnv })
+        .filter((entry): entry is [string, string] => typeof entry[1] === 'string')),
+      ...(process.platform === 'win32' ? { useConpty: true, useConptyDll: true } : {})
     })
-    expect(result.code).toBe(2)
-    expect(result.output).toContain('bmn: --body-file - needs piped input, not a terminal')
+    let output = ''
+    child.onData((part) => { output += part })
+    const code = await new Promise<number | null>((resolve) => {
+      const timeout = setTimeout(() => { child.kill(); resolve(null) }, 15_000)
+      child.onExit(({ exitCode }) => { clearTimeout(timeout); resolve(exitCode) })
+    })
+    // eslint-disable-next-line no-control-regex
+    const text = output.replace(/\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07/gu, '')
+    expect(code).toBe(2)
+    expect(text).toContain('bmn: --body-file - needs piped input, not a terminal')
     expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
-  })
+  }, 20_000)
 })
 
 describe('bmn resume-command (Story 43.1)', () => {
