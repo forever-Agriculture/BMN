@@ -2,16 +2,18 @@
 
 *Be a man: use a proper terminal.*
 
-A desktop terminal for working with coding agents on Linux. It runs your shells and your
-installed agent CLIs (Claude Code, Codex, OpenCode, or any other command) in real terminals, keeps
-them organized in workspaces, and gives the agents a small local API for sharing files, reporting
-progress and asking for your attention.
+A desktop terminal for working with coding agents on Linux, with Windows 11 in preview. It runs
+your shells and your installed agent CLIs (Claude Code, Codex, OpenCode, or any other command) in
+real terminals, keeps them organized in workspaces, and gives the agents a small local API for
+sharing files, reporting progress and asking for your attention.
 
 Everything runs on your computer. There is no account, cloud backend or telemetry.
 
 > Status: early and personal. It is built and used on Ubuntu 24.04 (x64). Other Linux distributions
-> may work; macOS and Windows are not supported. There are no distribution packages: the build is an
-> unpacked folder for the computer that made it.
+> may work; macOS is not supported. Windows 11 (x64) is a preview in testing: CI builds an unsigned
+> installer, and anything the [parity checklist](docs/epic-53-parity.md) does not list as checked is
+> unverified ([testing it by hand](docs/windows-testing.md)). There are no Linux distribution
+> packages: the Linux build is an unpacked folder for the computer that made it.
 
 New here? The [feature guide](docs/features.md) walks through the main workflows — launching
 and resuming sessions, answering agents, files, voice, Telegram, backups — and says where each
