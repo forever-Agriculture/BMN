@@ -1180,19 +1180,27 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     const scrollAccepted = Date.now() - lastMarkerSeen
     await waitForAnimatedLine('SCROLLED', 10_000).catch(async (error: unknown) => {
       const message = error instanceof Error ? error.message : String(error)
-      // Observation only, once the failure is certain: what the shell printed as the host received it,
-      // whether the view still owes acknowledgements, whether SCROLLED arrives late, and whether the shell answers.
-      const hostOutput = async () => (await client.request<{ selfTestOutputState: unknown }>(METHOD_REGISTRY.healthGet,
-        { selfTestOutputState: { sessionId: secondSession.sessionId } }).catch(() => ({ selfTestOutputState: 'unavailable' }))).selfTestOutputState
+      // Observation only, once the failure is certain: what the shell printed as the host received it, where
+      // that output stands in node-pty and the view's queue, whether SCROLLED arrives late, and whether the
+      // shell answers. Every step is bounded (at most ~21 s in all), and the first record is printed at once,
+      // so an outer deadline cannot take the original failure or that record with it.
+      const bounded = <T>(work: Promise<T>, milliseconds: number, late: T): Promise<T> =>
+        Promise.race([work, new Promise<T>((resolve) => setTimeout(() => resolve(late), milliseconds))])
+      const hostOutput = async () => bounded(client.request<{ selfTestOutputState: unknown }>(METHOD_REGISTRY.healthGet,
+        { selfTestOutputState: { sessionId: secondSession.sessionId } }).then((answer) => answer.selfTestOutputState,
+        () => 'unavailable'), 2_000, 'no answer within 2 s')
       const atFailure = await hostOutput()
+      console.error(`[BMN] self-test observation: SCROLLED missing at failure ${JSON.stringify(atFailure)}`)
       const lateStart = Date.now()
-      const lateMs = await waitForAnimatedLine('SCROLLED', 20_000).then(() => Date.now() - lateStart, () => null)
+      const lateMs = await waitForAnimatedLine('SCROLLED', 8_000).then(() => Date.now() - lateStart, () => null)
       const afterWait = await hostOutput()
-      await typeIntoAnimatedPane(typedShell.windows ? `${printed('PRO', 'BE')}\r` : "printf '%s%s\\n' PRO BE\r").catch(() => undefined)
-      const probeAnswered = await waitForAnimatedLine('PROBE', 10_000).then(() => true, () => false)
+      const probeWrite = await bounded(typeIntoAnimatedPane(typedShell.windows ? `${printed('PRO', 'BE')}\r` : "printf '%s%s\\n' PRO BE\r")
+        .then(() => 'accepted', (failure: unknown) => `refused: ${failure instanceof Error ? failure.message : String(failure)}`),
+      2_000, 'no answer within 2 s')
+      const probeAnswered = probeWrite === 'accepted' ? await waitForAnimatedLine('PROBE', 5_000).then(() => true, () => false) : null
       const afterProbe = await hostOutput()
       throw new Error(`${message} (line sent +${scrollSent} ms and accepted +${scrollAccepted} ms after MAX-RATE-DONE was seen) ` +
-        JSON.stringify({ atFailure, lateMs, afterWait, probeAnswered, afterProbe }))
+        JSON.stringify({ atFailure, lateMs, afterWait, probeWrite, probeAnswered, afterProbe }))
     })
     const animation = await host.applicationWindow.webContents.executeJavaScript(`(() => {
       const hook = window.__aitermTest;

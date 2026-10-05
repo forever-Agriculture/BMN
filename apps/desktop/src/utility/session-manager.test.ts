@@ -1051,7 +1051,7 @@ describe('shell session lifecycle', () => {
     const created = await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath, argv: [], cols: 80, rows: 24 })
     expect(manager.outputStateForSelfTest('missing')).toBeUndefined()
     pty.emit('scroll-79\r\nSCROLLED\x1b[0m')
-    expect(manager.outputStateForSelfTest(created.sessionId)).toMatchObject({ exited: false, outputBytes: 23, view: null,
+    expect(manager.outputStateForSelfTest(created.sessionId)).toMatchObject({ exited: false, outputBytes: 23, view: null, ptyStream: null,
       tail: 'scroll-79\\x0d\\x0aSCROLLED\\x1b[0m' })
     const attached = manager.attach(created)
     manager.activateAttachment(attached.attachmentId)

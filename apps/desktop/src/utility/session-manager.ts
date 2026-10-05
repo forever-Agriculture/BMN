@@ -1870,7 +1870,8 @@ export class SessionManager {
 
   /**
    * Electron self-test only (pty-host's `selfTestHealthProbe`): what the session printed last, as escaped
-   * text, and where that output stands on its way to the view. The self-test prints only synthetic output.
+   * text, and where that output stands on its way to the view: node-pty's own output stream (read only,
+   * through its internal socket) and the view's queue. The self-test prints only synthetic output.
    */
   outputStateForSelfTest(sessionId: string, tailBytes = 600): Record<string, unknown> | undefined {
     const live = this.sessions.get(sessionId)
@@ -1880,8 +1881,12 @@ export class SessionManager {
     for (const byte of recent.subarray(Math.max(0, recent.byteLength - tailBytes))) {
       text += byte >= 0x20 && byte < 0x7f ? String.fromCharCode(byte) : `\\x${byte.toString(16).padStart(2, '0')}`
     }
+    const stream = (live.pty as unknown as { _socket?: { isPaused?(): boolean; readableLength?: number; writableLength?: number;
+      writableNeedDrain?: boolean } })._socket
     return { exited: live.exited, outputBytes: live.outputTail.pushedBytes,
       lastOutputAgoMs: live.outputTail.lastPushAt === 0 ? null : Date.now() - live.outputTail.lastPushAt,
+      ptyStream: stream ? { paused: stream.isPaused?.() ?? null, readableBytes: stream.readableLength ?? null,
+        writableBytes: stream.writableLength ?? null, awaitingDrain: stream.writableNeedDrain ?? null } : null,
       view: live.outputQueue?.flowState ?? null, tail: text }
   }
 
