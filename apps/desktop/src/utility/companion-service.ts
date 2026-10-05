@@ -1,7 +1,7 @@
 // MODULE: companion-service.ts - host-side artifacts, attention, progress, drafts, settings, control socket, Telegram and backup
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { appendFile, chmod, copyFile, lstat, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises'
+import { appendFile, chmod, copyFile, lstat, mkdir, readFile, rename, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { basename, delimiter, dirname, extname, isAbsolute, join, relative } from 'node:path'
 import {
@@ -66,6 +66,7 @@ import { LiveProducers } from './live-producers'
 import { ControlError, ControlServer, type ReceiptRecord } from './control-server'
 import type { DatabaseWorkerClient } from './database-client'
 import type { ApplicationRoots } from './roots'
+import { createPrivateDirectory } from './private-directory'
 import { HostControlError, type SessionIdentity, type SessionManager } from './session-manager'
 import { runHookConfigurationCheck } from './hook-configuration-check'
 import { codexRolloutPath } from './conversation-binding'
@@ -2434,7 +2435,9 @@ export class CompanionService {
     if (!isAbsolute(parent)) invalid('The backup location must be an absolute path')
     const createdAt = this.iso()
     await mkdir(parent, { recursive: true, mode: 0o700 })
-    const directory = await mkdtemp(join(parent, `bmn-backup-${createdAt.replaceAll(':', '-')}-`))
+    // The backup holds the whole database; only this account may open it, wherever the owner puts it.
+    const directory = join(parent, `bmn-backup-${createdAt.replaceAll(':', '-')}-${randomUUID().slice(0, 8)}`)
+    await createPrivateDirectory(directory)
     await mkdir(join(directory, 'artifacts'), { recursive: true, mode: 0o700 })
     const databaseFile = join(directory, 'state.sqlite3')
     await this.options.database.backupInto(databaseFile)

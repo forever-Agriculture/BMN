@@ -1,11 +1,13 @@
-import { mkdtempSync, rmSync, statSync } from 'node:fs'
+import { EventEmitter } from 'node:events'
+import { mkdirSync, mkdtempSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { spawnSync } from 'node:child_process'
-import { ensurePrivateDirectories, provisionPrivateDirectories } from './private-directory'
+import { spawn, spawnSync } from 'node:child_process'
+import { createPrivateDirectory, ensurePrivateDirectories, provisionPrivateDirectories } from './private-directory'
 
-vi.mock('node:child_process', () => ({ spawnSync: vi.fn() }))
+vi.mock('node:child_process', () => ({ spawn: vi.fn(), spawnSync: vi.fn() }))
 afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks() })
 
 describe('private application directories', () => {
@@ -65,4 +67,63 @@ it('limits installer root provisioning while keeping full inspection as the defa
   expect(JSON.parse(vi.mocked(spawnSync).mock.calls.at(-1)![2]!.input as string).rootOnly).toBe(true)
   ensurePrivateDirectories(['C:\\dedicated'], 'win32')
   expect(JSON.parse(vi.mocked(spawnSync).mock.calls.at(-1)![2]!.input as string).rootOnly).toBe(false)
+})
+
+describe('a new private folder (backup export)', () => {
+  it.runIf(process.platform !== 'win32')('creates mode 0700 whatever the umask, and refuses an existing folder or a missing parent', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'bmn-private-folder-'))
+    const umask = process.umask(0o000)
+    try {
+      await createPrivateDirectory(join(root, 'backup'))
+      expect(statSync(join(root, 'backup')).mode & 0o777).toBe(0o700)
+      mkdirSync(join(root, 'existing'), { mode: 0o755 })
+      await expect(createPrivateDirectory(join(root, 'existing'))).rejects.toMatchObject({ code: 'EEXIST' })
+      expect(statSync(join(root, 'existing')).mode & 0o777).toBe(0o755)
+      await expect(createPrivateDirectory(join(root, 'missing', 'backup'))).rejects.toMatchObject({ code: 'ENOENT' })
+      expect(spawn).not.toHaveBeenCalled()
+    } finally {
+      process.umask(umask)
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  function fakePowerShell(stdout: string, status = 0) {
+    const input: string[] = []
+    vi.mocked(spawn).mockImplementation((() => {
+      const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stdin: new PassThrough() })
+      child.stdin.on('data', (chunk: Buffer) => input.push(chunk.toString('utf8')))
+      child.stdin.on('finish', () => { child.stdout.end(stdout); setImmediate(() => child.emit('close', status)) })
+      return child
+    }) as unknown as typeof spawn)
+    return input
+  }
+
+  it('passes the Windows path as JSON input, never as script text', async () => {
+    vi.stubEnv('SystemRoot', 'C:\\Windows')
+    const input = fakePowerShell('BMN_PRIVATE_DIRECTORY_OK')
+    const path = 'D:\\Backups\\"; Write-Output BAD; #数据'
+    await createPrivateDirectory(path, 'win32')
+    const [exe, args, options] = vi.mocked(spawn).mock.calls[0]!
+    expect(exe).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
+    expect(args).toEqual(expect.arrayContaining(['-NoProfile', '-NonInteractive']))
+    expect(options).toMatchObject({ timeout: 15_000, windowsHide: true })
+    expect(JSON.parse(input.join(''))).toBe(path)
+    expect(Buffer.from((args as string[]).at(-1)!, 'base64').toString('utf16le')).not.toContain('BAD')
+  })
+
+  it.each([
+    ['a failed check', '', 1],
+    ['an unexpected answer', 'BMN_PRIVATE_ROOTS_OK', 0]
+  ])('fails with advice, not shell output, on %s', async (_name, stdout, status) => {
+    vi.stubEnv('SystemRoot', 'C:\\Windows')
+    fakePowerShell(stdout, status)
+    await expect(createPrivateDirectory('D:\\Backups\\bmn-backup', 'win32')).rejects.toThrow(
+      'BMN could not create a private folder there. Choose a folder on a local drive that supports permissions; Windows PowerShell must be available.')
+  })
+
+  it('refuses a relative Windows path before starting PowerShell', async () => {
+    vi.stubEnv('SystemRoot', 'C:\\Windows')
+    await expect(createPrivateDirectory('Backups\\bmn-backup', 'win32')).rejects.toThrow('could not create a private folder')
+    expect(spawn).not.toHaveBeenCalled()
+  })
 })

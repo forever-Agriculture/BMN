@@ -1,10 +1,10 @@
 // Real Windows ACL regressions; the Linux mode test is in private-directory.test.ts.
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ensurePrivateDirectories } from './private-directory'
+import { createPrivateDirectory, ensurePrivateDirectories } from './private-directory'
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>()
@@ -211,5 +211,30 @@ describe.skipIf(process.platform !== 'win32')('native Windows private roots', ()
     expect(String(result.stderr)).toContain('exceeded its entry limit')
     expect(elapsedMs).toBeLessThan(15_000)
     console.info(JSON.stringify({ windowsRootEntryLimit: 'passed', entries: 10_000, elapsedMs }))
+  })
+  const identities = (path: string) => new Set(powershell(path,
+    `@($item.GetAccessControl().GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]) | ForEach-Object { $_.IdentityReference.Value }) -join ','`).split(','))
+  const currentUser = () => powershell(tmpdir(), '[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value')
+  it('creates a backup folder only this account can open inside a folder that shares its contents', { timeout: 60_000 }, async () => {
+    const parent = fixture()
+    // The owner's chosen folder lets Everyone read whatever is created in it.
+    powershell(parent, `$acl=$item.GetAccessControl(); $everyone=New-Object System.Security.Principal.SecurityIdentifier('S-1-1-0'); $rule=New-Object System.Security.AccessControl.FileSystemAccessRule($everyone,'ReadAndExecute','ContainerInherit, ObjectInherit','None','Allow'); $acl.AddAccessRule($rule); $item.SetAccessControl($acl)`)
+    mkdirSync(join(parent, 'plain'))
+    expect(identities(join(parent, 'plain')).has('S-1-1-0'), 'the fixture must expose an ordinary folder').toBe(true)
+    const folder = join(parent, 'bmn-backup 数据')
+    await createPrivateDirectory(folder)
+    mkdirSync(join(folder, 'artifacts'))
+    writeFileSync(join(folder, 'artifacts', 'state.sqlite3'), 'synthetic')
+    for (const item of [folder, join(folder, 'artifacts'), join(folder, 'artifacts', 'state.sqlite3')]) expect(identities(item), item).toEqual(new Set([currentUser()]))
+    await expect(createPrivateDirectory(folder)).rejects.toThrow('could not create a private folder')
+    await expect(createPrivateDirectory(join(parent, 'plain'))).rejects.toThrow('could not create a private folder')
+    expect(identities(join(parent, 'plain')).has('S-1-1-0')).toBe(true)
+  })
+  it('keeps a file written beside and renamed over inside a private root private (the bot token write)', { timeout: 60_000 }, () => {
+    const root = join(fixture(), 'config')
+    ensurePrivateDirectories([root])
+    writeFileSync(join(root, 'telegram-bot-token.synthetic.tmp'), 'synthetic; not a token\n', { mode: 0o600 })
+    renameSync(join(root, 'telegram-bot-token.synthetic.tmp'), join(root, 'telegram-bot-token'))
+    expect(identities(join(root, 'telegram-bot-token'))).toEqual(new Set([currentUser()]))
   })
 })

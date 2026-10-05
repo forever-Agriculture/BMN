@@ -1,8 +1,9 @@
 // Windows mode bits do not restrict other users. Apply and read back a protected DACL
 // before opening BMN state. Paths are data passed through stdin, never PowerShell code.
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { windowsEnvironmentValue } from '../../bin/windows-env.mjs'
 import { chmodSync, mkdirSync } from 'node:fs'
+import { chmod, mkdir } from 'node:fs/promises'
 import { win32 } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -213,5 +214,63 @@ function securePrivateDirectories(
   if (result.error || result.status !== 0 || result.stdout !== 'BMN_PRIVATE_ROOTS_OK') {
     // Do not expose shell diagnostics, which may contain environment or path data.
     throw new Error('BMN could not secure its Windows data folders. Use new dedicated folders on an ACL-capable local drive, or existing private BMN folders without unverified links; Windows PowerShell must be available.')
+  }
+}
+
+const WINDOWS_NEW_PRIVATE_DIRECTORY = `
+$ErrorActionPreference = 'Stop'
+Import-Module ([System.IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1'));
+$PSModuleAutoLoadingPreference='None'
+[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
+$directory = [System.IO.DirectoryInfo]::new((ConvertFrom-Json ([Console]::In.ReadToEnd())))
+if ($directory.Exists -or $null -eq $directory.Parent -or -not $directory.Parent.Exists) { throw 'Not a new folder in an existing folder' }
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$acl = [System.Security.AccessControl.DirectorySecurity]::new()
+$acl.SetOwner($sid)
+$acl.SetAccessRuleProtection($true, $false)
+$acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow'))
+$directory.Create($acl)
+# Create succeeds on a folder someone else made first, so judge what exists rather than what was asked for.
+$directory.Refresh()
+if (($directory.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'The new folder is a link' }
+$actual = $directory.GetAccessControl()
+if ($actual.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value -or -not $actual.AreAccessRulesProtected) { throw 'The new folder is not private' }
+$inherits = $false
+foreach ($rule in $actual.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) {
+  if ($rule.IdentityReference.Value -ne $sid.Value -or $rule.AccessControlType -ne 'Allow') { throw 'The new folder is not private' }
+  if ($rule.FileSystemRights -eq 'FullControl' -and $rule.InheritanceFlags -eq 'ContainerInherit, ObjectInherit' -and $rule.PropagationFlags -eq 'None') { $inherits = $true }
+}
+if (-not $inherits) { throw 'The new folder does not protect its contents' }
+[Console]::Out.Write('BMN_PRIVATE_DIRECTORY_OK')
+`
+
+/**
+ * Creates one new folder that only this account can open, for data leaving BMN's own roots (a backup in a folder the
+ * owner chose, which may grant other users access to what it holds). Linux: mode 0700. Windows: a protected ACL for
+ * this account alone, inherited by everything written inside, checked after creation. Fails if the folder already
+ * exists or its parent does not. Unlike the roots, the parent is not inspected: it is the owner's choice.
+ */
+export async function createPrivateDirectory(path: string, platform: NodeJS.Platform = process.platform): Promise<void> {
+  if (platform !== 'win32') {
+    await mkdir(path, { mode: 0o700 })
+    await chmod(path, 0o700)
+    return
+  }
+  const systemRoot = windowsEnvironmentValue(process.env, 'SystemRoot')
+  if (!systemRoot || !win32.isAbsolute(systemRoot) || !win32.isAbsolute(path)) throw new Error('BMN could not create a private folder there.')
+  const output = await new Promise<{ status: number | null; stdout: string }>((resolve, reject) => {
+    const child = spawn(win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), [
+      '-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand',
+      Buffer.from(WINDOWS_NEW_PRIVATE_DIRECTORY, 'utf16le').toString('base64')
+    ], { timeout: 15_000, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] })
+    let stdout = ''
+    child.stdout.setEncoding('utf8').on('data', (chunk: string) => { if (stdout.length < 1024) stdout += chunk })
+    child.on('error', reject)
+    child.on('close', (status) => resolve({ status, stdout }))
+    child.stdin.end(JSON.stringify(win32.resolve(path)))
+  }).catch(() => ({ status: null, stdout: '' }))
+  if (output.status !== 0 || output.stdout !== 'BMN_PRIVATE_DIRECTORY_OK') {
+    // Shell diagnostics may hold path or environment data; say what to do instead.
+    throw new Error('BMN could not create a private folder there. Choose a folder on a local drive that supports permissions; Windows PowerShell must be available.')
   }
 }
