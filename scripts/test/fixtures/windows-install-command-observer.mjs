@@ -3,14 +3,11 @@
 import { readFileSync } from 'node:fs'
 import { installedCimPreflightSource } from './windows-installed-cim-preflight.mjs'
 import { powerShellSourceSha256, sha256, windowsEnvironmentFingerprint } from './windows-subprocess-provenance.mjs'
+import { candidateQueryPrefix, exactInstalledQueries, originalQueryPrefix } from './windows-installed-query-source.mjs'
 const marker = 'BMN_INSTALL_DIAGNOSTIC:'
-const prefix = "$ErrorActionPreference='Stop';Import-Module ([System.IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1'));\n"
-const exactQueries = new Map([
-  ['822d6f6cece77efcb00e90a49419bd0ecc4165c5b80e0045fb9300e7eda891f2', 'observe-apps'],
-  ['32772e37c027a2572f54be17529502829c580df2faedefee41fefceadb0afff1', 'observe-selected-apps'],
-  ['e9c6d5c95d22f669af8ad8f14325fd493a96a4478bcc7d96ed8393aa41f8ef3a', 'observe-mapped-engines']
-])
+const prefix = originalQueryPrefix
 const observerSha256 = sha256(readFileSync(new URL(import.meta.url)))
+const queryFenceSha256 = sha256(readFileSync(new URL('./windows-installed-query-source.mjs', import.meta.url)))
 const preflightSha256 = powerShellSourceSha256(installedCimPreflightSource)
 const dependencies = String.raw`
 $__bmnStage='dependencies';
@@ -61,9 +58,12 @@ export function observeWindowsInstallCommands(actualSpawn, record, binding = {})
     }
     const index = args.indexOf('-EncodedCommand') + 1, original = Buffer.from(args[index], 'base64').toString('utf16le')
     const sourceSha256 = powerShellSourceSha256(original)
-    const directOriginal = original.startsWith(prefix) && exactQueries.has(sourceSha256)
+    const query = exactInstalledQueries.get(sourceSha256)
+    const directOriginal = original.startsWith(prefix) && query?.variant === 'original'
+    const directCandidate = original.startsWith(candidateQueryPrefix) && query?.variant === 'candidate'
+    const directQuery = directOriginal || directCandidate
     const explicitPreflight = sourceSha256 === preflightSha256
-    const operation = explicitPreflight ? 'explicit-cim-preflight' : directOriginal ? exactQueries.get(sourceSha256)
+    const operation = explicitPreflight ? 'explicit-cim-preflight' : directQuery ? query.operation
       : original.includes('BMN_PRIVATE_ROOTS_OK') ? 'private-directory' : 'other-powershell'
     const began = performance.now(), id = ++sequence
     const environment = options?.env ?? process.env
@@ -76,7 +76,7 @@ export function observeWindowsInstallCommands(actualSpawn, record, binding = {})
     const bindingComplete = /^[a-f0-9]{40}$/u.test(binding.candidateCommit ?? '') && /^[a-f0-9]{64}$/u.test(binding.artifactSha256 ?? '')
     const provenance = { candidateCommit: bindingComplete ? binding.candidateCommit : 'UNVERIFIED',
       artifactSha256: bindingComplete ? binding.artifactSha256 : 'UNVERIFIED', bindingComplete,
-      observerSha256, sourceSha256, encodedArgumentSha256: sha256(Buffer.from(args[index], 'ascii')), executableSha256,
+      observerSha256, queryFenceSha256, sourceSha256, encodedArgumentSha256: sha256(Buffer.from(args[index], 'ascii')), executableSha256,
       executablePathFingerprint: sha256(Buffer.from(executable.toLowerCase(), 'utf16le')), orderedFlags: args.slice(0, index - 1),
       cwdFingerprint: sha256(Buffer.from(String(options?.cwd ?? process.cwd()), 'utf16le')),
       inputBytes: options?.input === undefined ? 0 : Buffer.byteLength(options.input),
@@ -85,7 +85,7 @@ export function observeWindowsInstallCommands(actualSpawn, record, binding = {})
       environmentFingerprint, environmentEncoding: 'UTF8-JSON-sorted-lowercase-name-string-value-pairs',
       encoding: options?.encoding ?? 'NODE_DEFAULT', timeout: options?.timeout ?? 'NODE_DEFAULT',
       maxBuffer: options?.maxBuffer ?? 'NODE_DEFAULT', windowsHide: options?.windowsHide ?? 'NODE_DEFAULT',
-      directOriginal, explicitPreflight }
+      directOriginal, directCandidate, explicitPreflight }
     persist(id, { id, operation, phase: 'begin', ...provenance })
     // The original explicit Utility import and body remain unchanged. Only the
     // worker's known prefix gains command metadata in the same private context.
@@ -98,8 +98,8 @@ export function observeWindowsInstallCommands(actualSpawn, record, binding = {})
  $code=if($actual -is [ComponentModel.Win32Exception]){$actual.NativeErrorCode}else{'null'};
  [Console]::Error.WriteLine('BMN_INSTALL_DIAGNOSTIC:{"kind":"failure","stage":"'+$__bmnStage+'","exceptionType":"'+$type+'","hresult":'+$actual.HResult+',"nativeErrorCode":'+$code+'}');exit 1;
 }`
-    const observedArgs = directOriginal || explicitPreflight ? args : [...args]
-    if (!directOriginal && !explicitPreflight) observedArgs[index] = Buffer.from(script, 'utf16le').toString('base64')
+    const observedArgs = directQuery || explicitPreflight ? args : [...args]
+    if (!directQuery && !explicitPreflight) observedArgs[index] = Buffer.from(script, 'utf16le').toString('base64')
     let result, threw = false
     try { result = actualSpawn(executable, observedArgs, options); return result }
     catch (error) { threw = true; throw error }

@@ -8,14 +8,15 @@ import { queueWindowsSourceUpdate, readWindowsSourceUpdate, runWindowsSourceUpda
 const transactionTimeout = process.platform === 'win32' ? 30000 : 5000
 
 const roots = [], commit = 'a'.repeat(40)
+const descriptor = { commit, payloadSha256: 'b'.repeat(64), schemaVersion: 23 }
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'bmn-source-queue-')); roots.push(root)
   const path = join(root, 'queue.json'), sourceState = { branch: 'main', head: commit, originHead: commit, status: '' }
   const options = { repo: join(root, 'source'), node: process.execPath, pnpm: join(root, 'pnpm.cjs'), sourceState }
   const callbacks = { readSourceState: vi.fn(async () => ({ ...sourceState })), waitForExit: vi.fn(async () => {}),
-    buildSnapshot: vi.fn(async () => ({ commit })), validate: vi.fn(async () => {}),
-    activate: vi.fn(async () => ({ current: { commit } })), notify: vi.fn(async () => {}) }
+    buildSnapshot: vi.fn(async () => ({ ...descriptor })), validate: vi.fn(async () => {}),
+    activate: vi.fn(async () => ({ current: { ...descriptor } })), notify: vi.fn(async () => {}) }
   return { path, options, sourceState, callbacks }
 }
 it('deduplicates durable requests and resumes exactly their intended clean commit', async () => {
@@ -23,6 +24,7 @@ it('deduplicates durable requests and resumes exactly their intended clean commi
   expect(queueWindowsSourceUpdate(f.path, f.options)).toEqual(queued)
   const result = await runWindowsSourceUpdate(f.path, { ...f.callbacks, checkpoint: async phase => { phases.push(phase) } })
   expect(result.phase).toBe('complete'); expect(result.selectedCommit).toBe(commit)
+  expect(result.candidate).toEqual(descriptor)
   expect(phases).toEqual(['waiting', 'building', 'validating', 'activating', 'complete'])
   await runWindowsSourceUpdate(f.path, f.callbacks)
   expect(f.callbacks.activate).toHaveBeenCalledOnce(); expect(f.callbacks.notify).toHaveBeenCalledOnce()
@@ -36,7 +38,7 @@ it.each(['branch', 'status', 'originHead', 'head'])('refuses %s drift before bui
 }, transactionTimeout)
 it('refuses drift during a build without touching the selected installation', async () => {
   const f = fixture(); queueWindowsSourceUpdate(f.path, f.options)
-  f.callbacks.buildSnapshot.mockImplementation(async () => { f.sourceState.status = ' M changed'; return { commit } })
+  f.callbacks.buildSnapshot.mockImplementation(async () => { f.sourceState.status = ' M changed'; return { ...descriptor } })
   await expect(runWindowsSourceUpdate(f.path, f.callbacks)).rejects.toThrow('not clean')
   expect(f.callbacks.activate).not.toHaveBeenCalled()
 }, transactionTimeout)

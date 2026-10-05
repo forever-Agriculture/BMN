@@ -5,6 +5,7 @@ import { expect, it } from 'vitest'
 import { observeWindowsInstallCommands } from '../test/fixtures/windows-install-command-observer.mjs'
 import { installedCimPreflightSource } from '../test/fixtures/windows-installed-cim-preflight.mjs'
 import { windowsEnvironmentFingerprint } from '../test/fixtures/windows-subprocess-provenance.mjs'
+import { candidateQueryPrefix } from '../test/fixtures/windows-installed-query-source.mjs'
 
 const powershell = process.platform === 'win32' ? join(process.env.SystemRoot, 'System32/WindowsPowerShell/v1.0/powershell.exe') : 'C:\\Windows\\powershell.exe'
 const source = readFileSync(new URL('../lib/windows-installed-worker.mjs', import.meta.url), 'utf8')
@@ -54,6 +55,18 @@ it('passes all three exact actual worker query sources and options untouched', (
     expect(records[1]).toMatchObject({ directOriginal: true, bindingComplete: true, environmentUnchanged: true, exitObserved: true, ownedProcessPid: 42 })
     expect(records[0].sourceSha256).toMatch(/^[a-f0-9]{64}$/u)
     expect(records[0].environmentFingerprint).toBe(windowsEnvironmentFingerprint(options.env))
+  }
+})
+it('passes the sole-import candidate for all three actual query sources untouched', () => {
+  expect(actualQueries).toHaveLength(3)
+  for (const original of actualQueries) {
+    const script = original.replace(prefix, candidateQueryPrefix), args = argv(script), options = { timeout: 30000 }, rows = []
+    const result = { status: 0, stdout: '[]', stderr: '', pid: 42 }
+    const observe = observeWindowsInstallCommands((_exe, actualArgs, actualOptions) => {
+      expect(actualArgs).toBe(args); expect(actualOptions).toBe(options); return result
+    }, row => rows.push(row))
+    expect(observe(powershell, args, options)).toBe(result)
+    expect(rows[1]).toMatchObject({ directOriginal: false, directCandidate: true, phase: 'end' })
   }
 })
 it('keeps the explicit preflight separate and refuses unknown query bytes as original proof', () => {

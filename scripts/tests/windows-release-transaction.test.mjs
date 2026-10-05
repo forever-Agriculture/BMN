@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, linkSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -41,6 +41,43 @@ function fixture() {
 }
 
 describe('Windows versioned release activation', () => {
+  it.each(['missing', 'completed-mismatch', 'unsupported', 'hardlinked'])('rechecks the recovery journal under its lease: %s', async mode => {
+    const f = fixture(); await activateWindowsRelease(f.options); await activateWindowsRelease(f.update('new'))
+    const selected = readWindowsInstallation(f.root), path = join(f.root, 'update.json')
+    const metadata = vi.fn(async () => {}), inspectData = vi.fn(async () => ({ schemaVersion: 23 }))
+    let observed
+    const retry = { ...f.update('new'), requireAlreadySelected: true, inspectData, refreshMetadata: metadata,
+      withLease: async operation => {
+        if (mode === 'missing') rmSync(path)
+        if (mode === 'completed-mismatch') writeFileSync(path, JSON.stringify({ ...f.journal(), candidate: release('another') }))
+        if (mode === 'unsupported') writeFileSync(path, JSON.stringify({ ...f.journal(), phase: 'unknown' }))
+        if (mode === 'hardlinked') linkSync(path, join(f.root, 'journal-alias'))
+        observed = existsSync(path) ? readFileSync(path) : null
+        return f.options.withLease(operation)
+      } }
+    await expect(activateWindowsRelease(retry)).rejects.toThrow()
+    expect(readWindowsInstallation(f.root)).toEqual(selected)
+    expect(existsSync(path) ? readFileSync(path) : null).toEqual(observed)
+    expect(metadata).not.toHaveBeenCalled(); expect(inspectData).not.toHaveBeenCalled()
+  })
+
+  it('refuses selected-only metadata repair when another update wins the installation lease', async () => {
+    const f = fixture(); await activateWindowsRelease(f.options)
+    await activateWindowsRelease(f.update('new'))
+    const observed = readWindowsInstallation(f.root)
+    const retry = { ...f.update('new'), requireAlreadySelected: true, inspectData: vi.fn(async () => ({ schemaVersion: 23 })),
+      withLease: async operation => {
+        await activateWindowsRelease(f.update('winner'))
+        return f.options.withLease(operation)
+      } }
+    const before = f.calls.length
+    await expect(activateWindowsRelease(retry)).rejects.toThrow('Selected payload changed')
+    expect(readWindowsInstallation(f.root)).toMatchObject({ current: release('winner'), previous: observed.current })
+    expect(f.journal()).toMatchObject({ candidate: release('winner'), phase: 'complete' })
+    expect(retry.inspectData).not.toHaveBeenCalled()
+    expect(f.calls.slice(before)).toEqual(['wait', 'stage', 'validate', 'smoke', 'metadata'])
+  })
+
   it('refuses source drift inside the lease immediately before selecting a candidate', async () => {
     const trace = nativeTimings('selection-source-drift')
     const measured = options => {

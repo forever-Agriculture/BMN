@@ -42,9 +42,11 @@ public static class BMNTokenMetadata {
   }
  }
  sealed class Buffer : IDisposable {
-  public IntPtr Data; public uint Bytes;
+  public IntPtr Data; public uint Bytes,ReturnedBytes;
   public Buffer(IntPtr token,int kind,Probe probe):this(token,kind,probe,0){}
-  public Buffer(IntPtr token,int kind,Probe probe,uint fixedBytes) {
+  public Buffer(IntPtr token,int kind,Probe probe,uint fixedBytes):this(token,kind,probe,fixedBytes,0){}
+  public Buffer(IntPtr token,int kind,Probe probe,uint fixedBytes,byte initializer) {
+   if(initializer!=0 && kind!=21)throw new InvalidOperationException("initializer outside restriction query");
    bool scalar=kind==8 || kind==12 || kind==18 || kind==20 || kind==21;
    if(fixedBytes!=0 && !((scalar && fixedBytes==4) || (kind==19 && fixedBytes==(uint)IntPtr.Size)))throw new InvalidOperationException("invalid fixed query shape");
    uint needed;int error;
@@ -56,12 +58,15 @@ public static class BMNTokenMetadata {
    } else Bytes=fixedBytes;
    Data=Marshal.AllocHGlobal((int)Bytes);
    try {
-    Marshal.Copy(new byte[(int)Bytes],0,Data,(int)Bytes);
+    var initial=new byte[(int)Bytes];for(int i=0;i<initial.Length;i++)initial[i]=initializer;
+    Marshal.Copy(initial,0,Data,(int)Bytes);
     bool success=probe.Query(token,kind,Data,Bytes,out needed,"fill",out error);
     // A successful linked-token query transfers this returned handle to us,
     // even if its length receipt subsequently fails the shape check.
     if(success && kind==19 && Bytes==(uint)IntPtr.Size)probe.LinkedHandle=Marshal.ReadIntPtr(Data);
-    if(!success || needed>Bytes || (fixedBytes!=0 && needed!=fixedBytes))throw new QueryFailure(success?"buffer-policy":"api",probe.Context,kind,"fill",error);
+    bool restrictionShape=kind==21 && fixedBytes==4 && (needed==1 || needed==4);
+    if(!success || needed>Bytes || (fixedBytes!=0 && needed!=fixedBytes && !restrictionShape))throw new QueryFailure(success?"buffer-policy":"api",probe.Context,kind,"fill",error);
+    ReturnedBytes=needed;
    }catch{Dispose();throw;}
   }
   public void Dispose(){if(Data!=IntPtr.Zero){Marshal.FreeHGlobal(Data);Data=IntPtr.Zero;}}
@@ -70,9 +75,24 @@ public static class BMNTokenMetadata {
   public string User,Logon,Authentication;public uint Session;public Dictionary<string,object> Report;
  }
  static string Hash(string value) { using(var hash=SHA256.Create()) {return BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(value))).Replace("-","").ToLowerInvariant();} }
- static uint Scalar(IntPtr token,int kind,Probe probe) {using(var b=new Buffer(token,kind,probe,4)){if(b.Bytes<4)throw new InvalidOperationException("short scalar");return unchecked((uint)Marshal.ReadInt32(b.Data));}}
- // Diagnostic only: class21 returned one byte despite its documented DWORD.
- // Never decode a value or relax the original shape guard using these samples.
+ static uint Scalar(IntPtr token,int kind,Probe probe) {if(kind==21)throw new InvalidOperationException("restriction query needs its declared decoder");using(var b=new Buffer(token,kind,probe,4)){if(b.Bytes<4)throw new InvalidOperationException("short scalar");return unchecked((uint)Marshal.ReadInt32(b.Data));}}
+ static bool Restrictions(IntPtr token,Probe probe) {
+  byte[] observed=null;uint returned=0;bool value=false;
+  foreach(byte initializer in new byte[]{0,0xa5,0x5a})using(var b=new Buffer(token,21,probe,4,initializer)) {
+   var current=new byte[(int)b.ReturnedBytes];Marshal.Copy(b.Data,current,0,current.Length);
+   if(b.ReturnedBytes==1 && current[0]>1)throw new QueryFailure("buffer-policy",probe.Context,21,"restrictions-decode",0);
+   if(observed==null) {
+    observed=current;returned=b.ReturnedBytes;
+    value=returned==1?current[0]==1:Marshal.ReadInt32(b.Data)!=0;
+   }else {
+    if(returned!=b.ReturnedBytes)throw new QueryFailure("buffer-policy",probe.Context,21,"restrictions-decode",0);
+    for(int i=0;i<current.Length;i++)if(current[i]!=observed[i])throw new QueryFailure("buffer-policy",probe.Context,21,"restrictions-decode",0);
+   }
+  }
+  return value;
+ }
+ // Bounded diagnostics on a refused shape. Never feed unreported padding or
+ // these independent samples into the restriction decoder.
  static void ObserveRestrictionShape(IntPtr token,Probe probe) {
   int ordinal=0;
   foreach(byte initializer in new byte[]{0,0xa5,0x5a}) {
@@ -94,7 +114,7 @@ public static class BMNTokenMetadata {
   var context=new Context();var report=new Dictionary<string,object>();context.Report=report;
   using(var b=new Buffer(token,1,probe)){if(b.Bytes<(uint)IntPtr.Size)throw new InvalidOperationException("short user");context.User=Sid(Marshal.ReadIntPtr(b.Data));}
   context.Session=Scalar(token,12,probe);report.Add("sessionId",context.Session);report.Add("userFingerprint",Hash(context.User));
-  report.Add("tokenType",Scalar(token,8,probe));report.Add("elevationType",Scalar(token,18,probe));report.Add("elevated",Scalar(token,20,probe)!=0);report.Add("hasRestrictions",Scalar(token,21,probe)!=0);
+  report.Add("tokenType",Scalar(token,8,probe));report.Add("elevationType",Scalar(token,18,probe));report.Add("elevated",Scalar(token,20,probe)!=0);report.Add("hasRestrictions",Restrictions(token,probe));
   using(var b=new Buffer(token,25,probe)) {
    if(b.Bytes<(uint)Marshal.SizeOf(typeof(SidAttributes)))throw new InvalidOperationException("short integrity");
    var text=Sid(Marshal.ReadIntPtr(b.Data));var parts=text.Split('-');uint rid;

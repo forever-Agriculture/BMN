@@ -69,7 +69,7 @@ export function readWindowsInstallation(root) {
  * migrations during validation. Startup and updates share the adapter's native
  * lease, so another launcher cannot enter between the exit check and activation.
  */
-export async function activateWindowsRelease({ root, candidate, withLease, waitForExit, stage, validate, smoke, inspectData, refreshMetadata, checkpoint = async () => {}, beforeActivate = async () => {} }) {
+export async function activateWindowsRelease({ root, candidate, withLease, waitForExit, stage, validate, smoke, inspectData, refreshMetadata, requireAlreadySelected = false, checkpoint = async () => {}, beforeActivate = async () => {} }) {
   const release = releaseDescriptor(candidate)
   for (const fn of [withLease, waitForExit, stage, validate, smoke, inspectData, refreshMetadata]) {
     assert.equal(typeof fn, 'function', 'All native release capabilities are required')
@@ -85,6 +85,12 @@ export async function activateWindowsRelease({ root, candidate, withLease, waitF
     const journalPath = join(root, 'update.json')
     const previousState = readWindowsInstallation(root)
     const oldJournal = readJson(journalPath)
+    if (requireAlreadySelected) {
+      assert.ok(sameRelease(previousState?.current, release), 'Selected payload changed before metadata repair')
+      assert.ok(oldJournal && oldJournal.format === 1 && phases.has(oldJournal.phase), 'Selected-only repair requires its supported update journal')
+      assert.deepEqual(releaseDescriptor(oldJournal.candidate), release, 'Selected-only repair journal changed before metadata repair')
+      await beforeActivate()
+    }
     if (oldJournal !== null) {
       assert.equal(oldJournal.format, 1)
       assert.ok(phases.has(oldJournal.phase), 'Unsupported update phase')

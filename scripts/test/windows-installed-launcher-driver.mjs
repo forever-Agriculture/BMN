@@ -7,6 +7,7 @@ import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 
 import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { observeWindowsInstallCommands } from './fixtures/windows-install-command-observer.mjs'
 import { measureInstalledCimPreflight } from './fixtures/windows-installed-cim-preflight.mjs'
+import { measureInstalledQueryPair } from './fixtures/windows-installed-query-pair.mjs'
 import { dirname, join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -56,7 +57,7 @@ const settle = async (child, timeout, message) => {
   } finally { clearTimeout(timer) }
 }
 async function main() {
-  const { installWindowsPayload, windowsInstallerSmokeEnvironment, observeWindowsApps, observeWindowsSelectedApps } = await import('../lib/windows-installed-worker.mjs')
+  const { installWindowsPayload, windowsInstallerSmokeEnvironment, observeWindowsSelectedApps } = await import('../lib/windows-installed-worker.mjs')
   const { readInstallerDescriptor } = await import('../lib/windows-release-payload.mjs')
   const { readWindowsInstallation, releaseDirectory } = await import('../lib/windows-release-transaction.mjs')
   const { ensurePrivateDirectories } = await import('../../apps/desktop/src/utility/private-directory.ts')
@@ -66,22 +67,22 @@ async function main() {
   Object.assign(process.env, windowsInstallerSmokeEnvironment(join(fixture, 'profile')))
   const root = join(fixture, 'installation'), dataRoot = join(process.env.LOCALAPPDATA, 'BMN/data')
   process.env.BMN_DATA_HOME = dataRoot
-  // Run the exact original entry point before explicit imports can affect this
-  // private profile's module cache. Retain its failure through the separate PF.
-  report.stage = 'untouched-original-cim-query'
-  let originalCimFailure
-  try {
-    const ids = observeWindowsApps()
-    assert.ok(Array.isArray(ids) && ids.every(Number.isSafeInteger), 'Original process observation is incomplete')
-    report.originalCimQuery = { status: 'PASS', scope: 'actual-original-worker-entrypoint', processCount: ids.length }
-  } catch (error) {
-    originalCimFailure = error
-    report.originalCimQuery = { status: 'FAIL', scope: 'actual-original-worker-entrypoint', errorCategory: 'operation' }
-  }
-  report.stage = 'separate-installed-cim-preflight'
-  report.cimPreflight = measureInstalledCimPreflight(process.env)
-  if (originalCimFailure) throw originalCimFailure
-  // The following production installer runs in its own unchanged module context.
+  const queryDirectory = join(process.env.LOCALAPPDATA, 'cim-diagnostic')
+  const queryRoot = join(queryDirectory, 'selection')
+  ensurePrivateDirectories([queryDirectory, queryRoot])
+  // This read-only helper needs selection metadata to reach its actual CIM
+  // branch. The private synthetic selection is never launched or uninstalled.
+  writeFileSync(join(queryRoot, 'installation.json'), JSON.stringify({ format: 1,
+    current: readInstallerDescriptor(source), previous: null, snapshot: null }), { flag: 'wx', mode: 0o600 })
+  report.stage = 'finite-actual-helper-cim-pairs'
+  await measureInstalledQueryPair({ directory: queryDirectory, root: queryRoot, operations: report.installOperations,
+    explicitPreflight: measureInstalledCimPreflight, record: value => { report.cimPair = value } })
+  assert.equal(commandObserver.diagnosticFailures.length, 0, 'CIM diagnostic recording failed')
+  // This candidate is intentionally diagnostic-only. Even a scoped candidate
+  // pass retains original failures and cannot silently continue installer work.
+  if (report.cimPair.installerAcceptance !== 'PASS') throw new Error('CIM diagnostic collected; separate installer acceptance remains unverified')
+  /* The following production installer acceptance is retained for the next
+     agreed repair gate, after actual-helper evidence is collected. */
   const descriptor = readInstallerDescriptor(source), shortcut = join(fixture, 'BMN.lnk')
   report.stage = 'install-payload'
   await installWindowsPayload({ source, root, dataRoot, descriptor, refreshMetadata: async (installed, _release, payload) => {

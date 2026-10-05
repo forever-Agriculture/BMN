@@ -1,6 +1,6 @@
 // Resumed by the owned installed launcher. No broker, service or login task is
 // provisioned, and a failed request does not prevent opening the retained app.
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import assert from 'node:assert/strict'
@@ -8,7 +8,7 @@ import { ensurePrivateDirectories } from '../../apps/desktop/src/utility/private
 import { loadWindowsInstallLease, withWindowsInstallLease } from './windows-install-lease.mjs'
 import { quarantineWindowsSourceUpdate, readWindowsSourceUpdate, runWindowsSourceUpdate } from './windows-source-update.mjs'
 import { buildFrozenWindowsSource, readWindowsSourceState, removeFrozenWindowsSource } from './windows-source-build.mjs'
-import { readWindowsInstallation } from './windows-release-transaction.mjs'
+import { readWindowsInstallation, releaseDescriptor, releaseDirectory } from './windows-release-transaction.mjs'
 import { validateWindowsReleasePayload } from './windows-release-payload.mjs'
 
 export async function resumeWindowsSourceUpdate(root, { dataRoot, waitForExit, installPayload, notify,
@@ -32,6 +32,20 @@ export async function resumeWindowsSourceUpdate(root, { dataRoot, waitForExit, i
     let candidate
     try {
       return await runWindowsSourceUpdate(path, { readSourceState, waitForExit,
+        recoverActivated: async pending => {
+          if (!pending.candidate) return null
+          const expected = releaseDescriptor(pending.candidate), selected = readInstallation(root)
+          if (!selected) throw new Error('Interrupted source update has no selected installation')
+          if (JSON.stringify(releaseDescriptor(selected.current)) !== JSON.stringify(expected)) return null
+          const journalPath = join(root, 'update.json'), info = lstatSync(journalPath)
+          assert.ok(info.isFile() && !info.isSymbolicLink() && info.nlink === 1, 'Interrupted update journal is not an ordinary file')
+          const journal = JSON.parse(readFileSync(journalPath, 'utf8'))
+          assert.equal(journal.format, 1, 'Interrupted update journal is unsupported')
+          assert.deepEqual(releaseDescriptor(journal.candidate), expected, 'Selected payload belongs to another update journal')
+          // Recheck selection and this journal under the transaction lease. The
+          // retained selected payload is validated, never rebuilt or cleaned up.
+          return { ...expected, root: releaseDirectory(root, expected), metadataRepairOnly: true }
+        },
         buildSnapshot: async (identity, recordWorkspace) => {
           candidate = await buildSnapshot(identity, { onWorkspace: recordWorkspace })
           return candidate
@@ -47,7 +61,7 @@ export async function resumeWindowsSourceUpdate(root, { dataRoot, waitForExit, i
           await verifySource()
           return installPayload({ source: value.root, root, dataRoot, descriptor: value,
             // Checked inside the native transaction immediately before selection.
-            beforeActivate: verifySource })
+            beforeActivate: verifySource, requireAlreadySelected: value.metadataRepairOnly === true })
         }, notify })
     } catch (error) {
       const durable = readWindowsSourceUpdate(path)

@@ -118,7 +118,7 @@ export function refreshWindowsInstalledMetadata(root, release, payload = join(ro
     New-ItemProperty -Path $key -Name NoRepair -PropertyType DWord -Value 1 -Force | Out-Null;`, environment)
 }
 
-export async function installWindowsPayload({ source, root, dataRoot, descriptor, smoke = smokeWindowsInstalledPayload, refreshMetadata = refreshWindowsInstalledMetadata, beforeActivate = async () => {} }) {
+export async function installWindowsPayload({ source, root, dataRoot, descriptor, smoke = smokeWindowsInstalledPayload, refreshMetadata = refreshWindowsInstalledMetadata, beforeActivate = async () => {}, requireAlreadySelected = false }) {
   assert.equal(process.platform, 'win32', 'Native Windows installer required')
   root = resolve(root); dataRoot = resolve(dataRoot); source = resolve(source)
   await validateWindowsReleasePayload(source, descriptor)
@@ -128,7 +128,7 @@ export async function installWindowsPayload({ source, root, dataRoot, descriptor
   provisionPrivateDirectories([root, dataRoot], 'win32', dataRoot)
   const anchor = pathToFileURL(join(source, 'resources/app.asar/package.json'))
   const native = loadWindowsInstallLease(anchor), Database = createRequire(anchor)('better-sqlite3')
-  return activateWindowsRelease({ root, candidate: descriptor, beforeActivate,
+  return activateWindowsRelease({ root, candidate: descriptor, beforeActivate, requireAlreadySelected,
     withLease: operation => withWindowsReleaseLeases(root, dataRoot, async () => {
       await waitForWindowsAppsToExit()
       ensurePrivateDirectories([root, dataRoot], 'win32', dataRoot)

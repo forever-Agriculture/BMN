@@ -24,7 +24,7 @@ function fixture() {
     native: { acquireInstallLease: vi.fn(() => ({ close })) }, privateDirectories: vi.fn(),
     readSourceState: vi.fn(async () => ({ ...sourceState })), waitForExit: vi.fn(async () => {}),
     buildSnapshot: vi.fn(async (_identity, options) => { await options.onWorkspace({ scratch: 'synthetic-recorded-workspace' }); return candidate }),
-    validate: vi.fn(async () => {}), installPayload: vi.fn(async options => { await options.beforeActivate(); return { current: { commit } } }),
+    validate: vi.fn(async () => {}), installPayload: vi.fn(async options => { await options.beforeActivate(); return { current: options.descriptor } }),
     notify: vi.fn(async () => {}), cleanup: vi.fn() }
   return { root, path, identity, capabilities, close, candidate, sourceState }
 }
