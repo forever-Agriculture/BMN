@@ -18,7 +18,10 @@ export const nativeUnitObservations = [
     runnerName: 'backup > exports every ready artifact, not only the newest 1,000', originalBudgetMs: 30000 },
   { file: 'apps/desktop/src/utility/agent-history-claude.test.ts',
     fullName: 'Claude history folders writes through a symlinked settings file and keeps the link',
-    runnerName: 'Claude history folders > writes through a symlinked settings file and keeps the link', originalBudgetMs: 5000 }
+    runnerName: 'Claude history folders > writes through a symlinked settings file and keeps the link', originalBudgetMs: 5000 },
+  { file: 'scripts/tests/windows-installed-worker.test.mjs',
+    fullName: 'smokes with fresh homes and excludes owner credentials, Node flags and BMN bindings',
+    runnerName: 'smokes with fresh homes and excludes owner credentials, Node flags and BMN bindings', originalBudgetMs: 5000 }
 ]
 export const nativeUnitOriginalBudgets = [
   ...nativeUnitObservations,

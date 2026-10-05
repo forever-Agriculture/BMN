@@ -1,11 +1,10 @@
 {
   "description": "Epic 53 failing tests still owned by a port story. Open failures are not waived: the gate in scripts/test/unit-inventory-gate.mjs fails on any unlisted failure, and each story removes its entries as it repairs them.",
-  "source": "Native Windows c699625 run37243078764; removed 11 listed keys after every recorded parameter case passed. Remaining 17 keys are unfinished. New unlisted history timeout remains a gate failure; no new failures added.",
+  "source": "Native Windows 302159e run37247315883; removed the raw OpenCode reference key after its actual full-inventory assertion passed. Remaining 16 keys are unfinished: fourteen launcher obligations and two skipped socket cases needing native equivalents. Two new unlisted failures keep the gate red; no failures added.",
   "minimumTests": 2650,
   "platforms": {
     "linux": {},
     "win32": {
-      "apps/desktop/src/utility/control-cli.test.ts > OpenCode hooks drops an OpenCode session reference that the binding store would refuse": "53.4",
       "apps/desktop/src/utility/control-server.test.ts > control server socket lifecycle creates a private directory and socket and removes the socket on close": "53.4",
       "apps/desktop/src/utility/control-server.test.ts > control server socket lifecycle replaces a stale socket left by a crashed server": "53.4",
       "scripts/tests/desktop-launcher.test.mjs > desktop launcher after a failed update with liveBuild new, says so and opens BMN, or opens the log instead when asked": "53.11",

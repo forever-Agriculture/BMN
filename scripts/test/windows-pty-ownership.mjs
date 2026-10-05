@@ -170,5 +170,12 @@ await import('./windows-install-leases.mjs')
 await import('./windows-source-queue-timing.mjs')
 await import('./windows-install-shortcut.mjs')
 await import('./windows-session-ports.mjs')
-await import('./windows-native-token-metadata.mjs')
-await import('./windows-cli-ownership.mjs')
+// Token metadata gates later WMI measurement, while CLI evidence is independent.
+// Record both outcomes before propagating the overall failed gate.
+const independent = []
+for (const [name, module] of [['token-metadata', './windows-native-token-metadata.mjs'], ['cli-ownership', './windows-cli-ownership.mjs']]) {
+  try { await import(module); independent.push({ name, passed: true }) }
+  catch (error) { independent.push({ name, passed: false, exceptionType: /^[A-Za-z0-9_]{1,64}$/u.test(error.name) ? error.name : 'UNKNOWN' }) }
+}
+writeFileSync(join(repo, 'test-results/windows-independent-native-checks.json'), JSON.stringify(independent, null, 2))
+assert.ok(independent.every(row => row.passed), 'Independent native prerequisites failed; see their separate receipts')

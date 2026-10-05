@@ -2,9 +2,10 @@
 // Run only on the validated packaged Electron's dedicated Node image. The
 // controller job owns every child before installation or GUI launch begins.
 import assert from 'node:assert/strict'
-import { spawn, spawnSync } from 'node:child_process'
+import processes, { spawn, spawnSync } from 'node:child_process'
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
+import { createRequire, syncBuiltinESMExports } from 'node:module'
+import { observeWindowsInstallCommands } from './fixtures/windows-install-command-observer.mjs'
 import { dirname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { chromium } from 'playwright'
@@ -22,6 +23,13 @@ const report = { status: 'FAIL', checks: [], nativeWindows: true, actualPackaged
   remaining: ['real-shell-shortcut-activation', '8.3-path-alias-observation', 'waiting/building-barriers', 'notice-lifecycle/dismissal/log-access',
     'failed-update-old/new/no-build', 'unavailable-notice', 'stale-failure-suppression'] }
 const children = new Set(), browsers = new Set()
+const actualSpawnSync = processes.spawnSync
+report.installOperations = []
+report.stage = 'controller-ready'
+processes.spawnSync = observeWindowsInstallCommands(actualSpawnSync, row => {
+  if (report.installOperations.length < 200) report.installOperations.push(row)
+})
+syncBuiltinESMExports()
 const check = name => report.checks.push({ name, status: 'PASS' })
 const writeReport = () => { writeFileSync(reportPath + '.tmp', JSON.stringify(report)); renameSync(reportPath + '.tmp', reportPath) }
 const waitFor = async (predicate, child, timeout = 45000) => {
@@ -46,15 +54,18 @@ async function main() {
   const { ensurePrivateDirectories } = await import('../../apps/desktop/src/utility/private-directory.ts')
   const { queueWindowsSourceUpdate } = await import('../lib/windows-source-update.mjs')
   const { withWindowsInstallLease } = await import('../lib/windows-install-lease.mjs')
+  report.stage = 'private-smoke-environment'
   Object.assign(process.env, windowsInstallerSmokeEnvironment(join(fixture, 'profile')))
   const root = join(fixture, 'installation'), dataRoot = join(process.env.LOCALAPPDATA, 'BMN/data')
   process.env.BMN_DATA_HOME = dataRoot
   const descriptor = readInstallerDescriptor(source), shortcut = join(fixture, 'BMN.lnk')
+  report.stage = 'install-payload'
   await installWindowsPayload({ source, root, dataRoot, descriptor, refreshMetadata: async (installed, _release, payload) => {
     const result = spawnSync(join(payload, 'resources/install/BMN-shortcut.exe'), [join(installed, 'BMN-launcher.exe'), installed, shortcut],
       { encoding: 'utf8', windowsHide: true, timeout: 30000 })
     assert.ok(!result.error && result.status === 0, 'Private installed shortcut did not verify')
   } })
+  report.stage = 'selected-installed-payload'
   assert.deepEqual(readWindowsInstallation(root).current, descriptor)
   assert.ok(existsSync(shortcut))
   check('real private install, sealed selected payload, isolated smoke and native shortcut metadata')
@@ -90,6 +101,7 @@ async function main() {
     if (existsSync(portFile)) unlinkSync(portFile)
     assert.deepEqual(observeWindowsSelectedApps(root), [])
   }
+  report.stage = 'installed-gui-open'
   const first = start(), { browser, page } = await attach(first)
   const cdp = await browser.newBrowserCDPSession()
   const actual = (await cdp.send('Browser.getBrowserCommandLine')).arguments
@@ -102,6 +114,7 @@ async function main() {
   const workspace = await page.evaluate(() => window.aiTerminal.createWorkspace({ name: 'Installed launcher fixture 数据' }))
   await page.getByText('Installed launcher fixture 数据', { exact: true }).first().waitFor()
   check('stable launcher and retained worker open selected real GUI with literal argv and Chromium sandbox')
+  report.stage = 'queued-update-forward'
   const requests = join(root, 'requests'), requestPath = join(requests, 'source-update.json')
   ensurePrivateDirectories([requests])
   // This is a queued-forward case only. There is no synthetic package build or
@@ -123,8 +136,10 @@ async function main() {
   assert.ok((await page.evaluate(() => window.aiTerminal.listWorkspaces())).some(row => row.workspaceId === workspace.workspaceId))
   check('queued update forwards to the same installed GUI and preserves request bytes and selected generation')
   await withWindowsInstallLease(requests, async () => unlinkSync(requestPath), { native })
+  report.stage = 'installed-gui-quit'
   await quit(first, page, browser)
   check('real application Quit settles stable launcher and selected GUI observation')
+  report.stage = 'installed-gui-restart'
   const restarted = start(), next = await attach(restarted)
   assert.ok((await next.page.evaluate(() => window.aiTerminal.listWorkspaces())).some(row => row.workspaceId === workspace.workspaceId))
   await next.page.getByText('Installed launcher fixture 数据', { exact: true }).first().waitFor()
@@ -134,12 +149,23 @@ async function main() {
   report.selectedCommit = descriptor.commit
 }
 try { await main() }
-catch (error) { report.error = { name: error.name, message: String(error.message).slice(0, 2000) }; process.exitCode = 1 }
+catch (error) { report.error = { name: /^[A-Za-z0-9_]{1,64}$/u.test(error.name) ? error.name : 'UNKNOWN', category: error instanceof assert.AssertionError ? 'assertion' : 'operation' }; process.exitCode = 1 }
 finally {
+  processes.spawnSync = actualSpawnSync; syncBuiltinESMExports()
+  report.cleanup = []
   for (const child of children) {
-    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
-    await child.completion.catch(() => {})
+    let success = true
+    try {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+      await child.completion
+    } catch { success = false }
+    report.cleanup.push({ role: 'owned-launcher', success, exitCode: child.exitCode, signal: child.signalCode })
   }
-  for (const browser of browsers) await browser.close().catch(() => {})
+  for (const browser of browsers) {
+    let success = true
+    try { await browser.close() } catch { success = false }
+    report.cleanup.push({ role: 'owned-browser-connection', success })
+  }
+  if (report.cleanup.some(row => !row.success)) { report.status = 'FAIL'; process.exitCode = 1 }
   writeReport()
 }

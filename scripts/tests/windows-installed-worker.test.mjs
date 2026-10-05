@@ -1,4 +1,8 @@
 import { EventEmitter } from 'node:events'
+import processes from 'node:child_process'
+import { syncBuiltinESMExports } from 'node:module'
+import { basename } from 'node:path'
+import { nativeTimings } from './native-timings.test-support.mjs'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -16,16 +20,33 @@ it('refuses incomplete process observations instead of treating them as exit', a
   await expect(waitForWindowsAppsToExit({ ownPid: 10, observe: () => [10, '20'] })).rejects.toThrow('incomplete')
 })
 it('smokes with fresh homes and excludes owner credentials, Node flags and BMN bindings', () => {
-  const root = mkdtempSync(join(tmpdir(), 'bmn-installer-env-'))
+  const trace = nativeTimings('installer-smoke-environment')
+  let root, call = 0
+  const actualSpawn = processes.spawnSync
+  const observer = vi.spyOn(processes, 'spawnSync').mockImplementation((...args) => {
+    const input = args[2]?.input
+    let name
+    try { name = basename(JSON.parse(input).paths[0]) } catch { name = 'unknown' }
+    if (!['home', 'config', 'data', 'state', 'runtime', 'cache', 'claude', 'codex', 'opencode'].includes(name)) name = 'unknown'
+    return trace.measure(`provision:${++call}:${name}`, () => actualSpawn(...args))
+  })
+  syncBuiltinESMExports()
   try {
+    root = trace.measure('setup', () => mkdtempSync(join(tmpdir(), 'bmn-installer-env-')))
+    trace.mark('environment:begin')
     const environment = windowsInstallerSmokeEnvironment(root, { SystemRoot: 'C:\\Windows',
       OPENAI_API_KEY: 'synthetic-secret', BMN_TOKEN: 'synthetic-binding', NODE_OPTIONS: '--require hostile',
       ELECTRON_RUN_AS_NODE: '1', USERPROFILE: 'owner-profile', PATH: 'owner-provider-bin' })
+    trace.mark('environment:end'); trace.mark('assertions:begin')
     expect(environment.USERPROFILE).toBe(join(root, 'home'))
     for (const name of ['OPENAI_API_KEY', 'BMN_TOKEN', 'NODE_OPTIONS', 'ELECTRON_RUN_AS_NODE']) expect(environment[name]).toBeUndefined()
     expect(environment.Path).not.toContain('owner-provider-bin')
-  } finally { rmSync(root, { recursive: true, force: true }) }
-})
+    trace.mark('assertions:end')
+  } finally {
+    try { if (root) trace.measure('cleanup', () => rmSync(root, { recursive: true, force: true })) }
+    finally { observer.mockRestore(); syncBuiltinESMExports(); trace.report() }
+  }
+}, process.platform === 'win32' ? 30000 : 5000)
 
 it('retains only the mapped current engine and removes inactive payloads and staging on uninstall', () => {
   const root = mkdtempSync(join(tmpdir(), 'bmn-mapped-engine-'))
