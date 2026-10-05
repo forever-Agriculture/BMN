@@ -994,7 +994,7 @@ diff --git a/lib/worker/conoutSocketWorker.js b/lib/worker/conoutSocketWorker.js
 index 0451e2c6b36df6c94a474efdce7d42c2ef2c9388..4e63c73f9ede5d21faef062278c70049c2e5d10c 100644
 --- a/lib/worker/conoutSocketWorker.js
 +++ b/lib/worker/conoutSocketWorker.js
-@@ -1,22 +1,37 @@
+@@ -1,22 +1,53 @@
  "use strict";
 -/**
 - * Copyright (c) 2020, Microsoft Corporation (MIT License).
@@ -1024,12 +1024,17 @@ index 0451e2c6b36df6c94a474efdce7d42c2ef2c9388..4e63c73f9ede5d21faef062278c70049
 +const socket = new net_1.Socket();
 +let credit = false;
 +let ended = false;
++let reads = 0;
++let chunks = 0;
++let bytes = 0;
 +function read() {
 +    if (!credit)
 +        return;
 +    const chunk = socket.read(Math.min(socket.readableLength, 64 * 1024) || undefined);
 +    if (chunk) {
 +        credit = false;
++        chunks++;
++        bytes += chunk.length;
 +        port.postMessage({ type: 'data', data: chunk });
 +    }
 +    else if (ended) {
@@ -1038,10 +1043,21 @@ index 0451e2c6b36df6c94a474efdce7d42c2ef2c9388..4e63c73f9ede5d21faef062278c70049
      }
 -    worker_threads_1.parentPort.postMessage(1 /* READY */);
 +}
-+port.on('message', message => { if (message === 'read') {
-+    credit = true;
-+    read();
-+} });
++port.on('message', message => {
++    if (message === 'read') {
++        credit = true;
++        reads++;
++        read();
++    }
++    else if (message === 'state') {
++        // BMN self-test diagnostics only: where this reader stands. Changes nothing.
++        const handle = socket._handle;
++        const state = socket._readableState;
++        port.postMessage({ type: 'state', credit, ended, reads, chunks, bytes, bytesRead: socket.bytesRead,
++            readableLength: socket.readableLength, handleReading: handle ? handle.reading : null,
++            needReadable: state.needReadable, reading: state.reading, flowing: state.flowing, destroyed: socket.destroyed });
++    }
++});
 +socket.on('readable', read);
 +socket.on('end', () => { ended = true; read(); });
 +socket.on('error', (error) => {
@@ -3054,7 +3070,7 @@ diff --git a/src/worker/conoutSocketWorker.ts b/src/worker/conoutSocketWorker.ts
 index 79a4148dd6a18727c725b4980655643a04981177..703ef71f77c675806864f3b53e94ece78386f33a 100644
 --- a/src/worker/conoutSocketWorker.ts
 +++ b/src/worker/conoutSocketWorker.ts
-@@ -1,22 +1,29 @@
+@@ -1,22 +1,44 @@
 -/**
 - * Copyright (c) 2020, Microsoft Corporation (MIT License).
 +/** Copyright (c) 2020, Microsoft Corporation (MIT License).
@@ -3082,11 +3098,16 @@ index 79a4148dd6a18727c725b4980655643a04981177..703ef71f77c675806864f3b53e94ece7
 +const socket = new Socket();
 +let credit = false;
 +let ended = false;
++let reads = 0;
++let chunks = 0;
++let bytes = 0;
 +function read(): void {
 +  if (!credit) return;
 +  const chunk: Buffer | null = socket.read(Math.min(socket.readableLength, 64 * 1024) || undefined);
 +  if (chunk) {
 +    credit = false;
++    chunks++;
++    bytes += chunk.length;
 +    port.postMessage({ type: 'data', data: chunk });
 +  } else if (ended) {
 +    port.postMessage({ type: 'end' });
@@ -3094,7 +3115,17 @@ index 79a4148dd6a18727c725b4980655643a04981177..703ef71f77c675806864f3b53e94ece7
    }
 -  parentPort.postMessage(ConoutWorkerMessage.READY);
 +}
-+port.on('message', message => { if (message === 'read') { credit = true; read(); } });
++port.on('message', message => {
++  if (message === 'read') { credit = true; reads++; read(); }
++  else if (message === 'state') {
++    // BMN self-test diagnostics only: where this reader stands. Changes nothing.
++    const handle = (socket as unknown as { _handle?: { reading?: boolean } })._handle;
++    const state = (socket as unknown as { _readableState: { needReadable: boolean; reading: boolean; flowing: boolean | null } })._readableState;
++    port.postMessage({ type: 'state', credit, ended, reads, chunks, bytes, bytesRead: socket.bytesRead,
++      readableLength: socket.readableLength, handleReading: handle ? handle.reading : null,
++      needReadable: state.needReadable, reading: state.reading, flowing: state.flowing, destroyed: socket.destroyed });
++  }
++});
 +socket.on('readable', read);
 +socket.on('end', () => { ended = true; read(); });
 +socket.on('error', (error: NodeJS.ErrnoException) => {

@@ -8,6 +8,7 @@ import { spawn, type IPty } from 'node-pty'
 import { describe, expect, it } from 'vitest'
 import { codexSixelFrame, NODE_ANIMATION_SOURCE, POSIX_ANIMATION_SCRIPT } from '../main/self-test/animation'
 import { powerShellQuote, useStandInLauncher, writeNodeProgram } from '../main/self-test/programs'
+import { conptyReaderState, conptyReaderWorker } from './conpty-reader-state'
 import { prepareWindowsPtyLaunch } from './windows-launch'
 
 // The packaged self-test's Windows pane stops printing right after `scroll-79`: no SCROLLED, no prompt, no echo
@@ -21,6 +22,9 @@ import { prepareWindowsPtyLaunch } from './windows-launch'
 // scroll-79 for ~18 s and resumed after a typed probe line; so these variants move toward the pane's size, prompt
 // and console host. Unlike the packaged line, this one also writes two marker files around SCROLLED, which can
 // change timing; a reproduction here still needs a marker-free replay before it stands for the packaged failure.
+// Console input released the packaged pane's output, so two variants add what BMN does and this harness did not:
+// pausing the reader by view credit, and the focus reports a view sends. BMN's node-pty refuses the console host
+// built into Windows ('BMN requires bundled ConPTY'), so no variant can compare against it.
 
 const windows = process.platform === 'win32'
 
@@ -40,12 +44,14 @@ interface Variant {
    * deeper folder whose prompt is exactly as wide as the packaged pane's (90 characters), or the drive root (short).
    * A different folder is a possible confound of its own. */
   readonly prompt: 'fixture' | 'matched' | 'short'
-  /** BMN's bundled ConPTY, or the console host built into Windows. */
-  readonly bundledConpty: boolean
+  /** Pauses the PTY after every 256 KiB it prints and resumes it 20 ms later, as BMN's view credit does. */
+  readonly pausedReader: boolean
+  /** Sends focus out once the animation is typed and focus in just before the scroll line, as a view reports them. */
+  readonly focusReports: boolean
 }
 
 const PRODUCTION: Variant = { name: 'as-self-test', launcher: true, images: true, afterPrompt: false, replies: true,
-  cols: 80, rows: 24, prompt: 'fixture', bundledConpty: true }
+  cols: 80, rows: 24, prompt: 'fixture', pausedReader: false, focusReports: false }
 /** The packaged pane: 46x27 with the self-test's 90-character prompt (`PS <cwd>> `). */
 const PANE: Variant = { ...PRODUCTION, name: 'pane', cols: 46, rows: 27, prompt: 'matched' }
 const PACKAGED_PROMPT_WIDTH = 90
@@ -53,7 +59,8 @@ const PACKAGED_PROMPT_WIDTH = 90
 const WINDOWS_VARIANTS: readonly Variant[] = [
   PRODUCTION,
   PANE,
-  { ...PANE, name: 'pane-inbox-conpty', bundledConpty: false },
+  { ...PANE, name: 'pane-paused-reader', pausedReader: true },
+  { ...PANE, name: 'pane-focus-reports', focusReports: true },
   { ...PANE, name: 'pane-short-prompt', prompt: 'short' },
   { ...PRODUCTION, name: 'matched-prompt-80-columns', prompt: 'matched' },
   { ...PANE, name: 'pane-after-prompt', afterPrompt: true },
@@ -145,18 +152,28 @@ async function scrollSequence(variant: Variant, save: (record: Record<string, un
       const native = prepareWindowsPtyLaunch(shell, ['-NoLogo', '-NoProfile'], cwd, environment)
       // The session manager's own options (pty-host.ts): bundled ConPTY, raw output.
       pty = spawn(native.executable, native.arguments, { name: 'xterm-256color', ...size, cwd, env: environment,
-        encoding: null, useConpty: true, useConptyDll: variant.bundledConpty } as Parameters<typeof spawn>[2])
+        encoding: null, useConpty: true, useConptyDll: true } as Parameters<typeof spawn>[2])
     } else {
       pty = spawn('/bin/bash', ['--noprofile', '--norc'], { name: 'xterm-256color', ...size, cwd,
         env: environment, encoding: null } as Parameters<typeof spawn>[2])
     }
     const live = pty
     exited = new Promise((resolve) => live.onExit(() => resolve()))
+    let sincePause = 0
+    record.pauses = 0
     live.onData((data: string | Uint8Array) => {
       const text = typeof data === 'string' ? data : Buffer.from(data).toString('utf8')
-      bytes += typeof data === 'string' ? Buffer.byteLength(data) : data.byteLength
+      const size = typeof data === 'string' ? Buffer.byteLength(data) : data.byteLength
+      bytes += size
       stream += text
       terminal.write(text)
+      sincePause += size
+      if (variant.pausedReader && sincePause >= 256 * 1024) {
+        sincePause = 0
+        record.pauses = (record.pauses as number) + 1
+        live.pause()
+        setTimeout(() => live.resume(), 20)
+      }
     })
     if (variant.replies) terminal.onData((answer) => live.write(answer))
     let promptSeen = ''
@@ -184,6 +201,7 @@ async function scrollSequence(variant: Variant, save: (record: Record<string, un
     }
     record.firstPromptCursor = { x: terminal.buffer.active.cursorX, y: terminal.buffer.active.cursorY }
     live.write(animationLine)
+    if (variant.focusReports) live.write('\x1b[O')
     record.codexDoneMs = await until(() => stream.includes('CODEX-RATE-DONE'), 30_000)
     record.maxDoneMs = await until(() => stream.includes('MAX-RATE-DONE'), 30_000)
     if (record.maxDoneMs === null) throw new Error('the animation never finished')
@@ -193,6 +211,7 @@ async function scrollSequence(variant: Variant, save: (record: Record<string, un
       // Without its prompt this variant would only repeat the typed-ahead case.
       if (record.promptAfterAnimationMs === null) throw new Error('the prompt never returned after the animation')
     }
+    if (variant.focusReports) live.write('\x1b[I')
     const typedAt = Date.now()
     const scrollFrom = stream.length
     live.write(scrollLine)
@@ -212,15 +231,16 @@ async function scrollSequence(variant: Variant, save: (record: Record<string, un
       if (record.scrolledBy === undefined && stream.slice(scrollFrom).includes('SCROLLED')) record.scrolledBy = name
     }
     stage('wait')
+    // The reader worker's own state at the outcome (null on POSIX), the same answer the self-test records.
+    record.readerAtOutcome = await conptyReaderState(live)
     save(record)
 
     // The same two interventions the self-test makes once output stops; here they also run when it did not, to show
     // what a working pane answers. A read credit for node-pty's Windows ConPTY reader; then a one-column resize of the
     // PTY and of the terminal, as a view would. Bytes after either show progress; none is inconclusive.
-    const reader = (live as unknown as { _agent?: { _worker?: { _worker?: { postMessage?(message: unknown): void } } } })
-      ._agent?._worker?._worker
+    const reader = conptyReaderWorker(live)
     const beforeNudge = bytes
-    record.nudge = typeof reader?.postMessage === 'function' ? (reader.postMessage('read'), 'sent') : 'no reader'
+    record.nudge = reader ? (reader.postMessage('read'), 'sent') : 'no reader'
     await sleep(2_000)
     record.bytesAfterNudge = bytes - beforeNudge
     stage('nudge')
@@ -292,5 +312,6 @@ describe('a pane keeps printing after a Codex-style Sixel animation (self-test S
     expect(record.scrolledMs, JSON.stringify(record)).not.toBeNull()
     expect(record.shellWrote).toEqual({ beforeScrolled: true, afterScrolled: true })
     expect(record.nudge).toBe('no reader')
+    expect(record.readerAtOutcome).toBeNull()
   }, 60_000)
 })

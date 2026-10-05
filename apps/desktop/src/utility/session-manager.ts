@@ -76,6 +76,7 @@ import { DecsetModeTracker } from './decset-modes'
 import { Osc52Reader } from './osc52'
 import { findProgramOnPath, missingProgramReason } from './reported-resume'
 import { OutputTail, ScreenMirror } from './screen-mirror'
+import { conptyReaderState, conptyReaderWorker } from './conpty-reader-state'
 import {
   agentCli,
   applyCapturedLaunchEnvironment,
@@ -1913,11 +1914,16 @@ export class SessionManager {
   nudgeOutputReaderForSelfTest(sessionId: string): boolean | undefined {
     const live = this.sessions.get(sessionId)
     if (!live) return undefined
-    const reader = (live.pty as unknown as { _agent?: { _worker?: { _worker?: { postMessage?(message: unknown): void } } } })
-      ._agent?._worker?._worker
-    if (typeof reader?.postMessage !== 'function') return false
+    const reader = conptyReaderWorker(live.pty)
+    if (!reader) return false
     reader.postMessage('read')
     return true
+  }
+
+  /** Electron self-test only: `conptyReaderState` for a session's PTY (null on POSIX); undefined for an unknown session. */
+  readerStateForSelfTest(sessionId: string): Promise<Record<string, unknown> | null> | undefined {
+    const live = this.sessions.get(sessionId)
+    return live ? conptyReaderState(live.pty) : undefined
   }
 
   /** Stops the mirror when the agent that needed it has left the session; the tail keeps going. */

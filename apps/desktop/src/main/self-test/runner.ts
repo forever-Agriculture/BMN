@@ -1143,7 +1143,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     await waitForAnimatedLine('SCROLLED', 10_000).catch(async (error: unknown) => {
       const message = error instanceof Error ? error.message : String(error)
       // Observation only, once the failure is certain. Stages in order: what the host and the view hold now; a late
-      // wait; one extra reader credit; a one-column resize; a typed probe line. An earlier stage may already restore
+      // wait; a focus report; one extra reader credit; a one-column resize; a typed probe line. An earlier stage may already restore
       // output, so each record says only what was seen after its own stage. Everything shares one deadline (32 s),
       // each stage is printed as it completes, and a failure inside the observation is recorded beside the original
       // failure, never instead of it.
@@ -1180,10 +1180,18 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         const lateStart = Date.now()
         record('lateMs', await appeared('SCROLLED', 8_000) ? Date.now() - lateStart : null)
         record('afterWait', await hostOutput(failureBytes))
+        const settle = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, Math.max(0, Math.min(milliseconds, remaining()))))
+        // Focus out and back in, as the view reports them once ConPTY has turned focus reporting on: input the
+        // shell does not print. Output after it points at the console host holding what it had already drawn;
+        // none is inconclusive. Each host answer also holds the ConPTY reader worker's own state (`ptyReader`).
+        record('focusReport', await bounded(typeIntoAnimatedPane('\x1b[O\x1b[I')
+          .then(() => 'accepted', (failure: unknown) => `refused: ${failure instanceof Error ? failure.message : String(failure)}`),
+        2_000, 'no answer within 2 s'))
+        await settle(2_000)
+        record('afterFocusReport', await hostOutput(failureBytes))
         // One extra read credit for the Windows ConPTY output reader (it bypasses the reader's one-chunk
         // backpressure): output after it is consistent with a reader that held output or stopped reading, or with
         // coincident progress; none does not prove that nothing reached the reader.
-        const settle = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, Math.max(0, Math.min(milliseconds, remaining()))))
         record('nudge', await bounded(client.request<{ selfTestOutputNudge: unknown }>(METHOD_REGISTRY.healthGet,
           { selfTestOutputNudge: { sessionId: secondSession.sessionId } }).then((answer) => answer.selfTestOutputNudge,
           () => 'unavailable'), 2_000, 'no answer within 2 s'))
