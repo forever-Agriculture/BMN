@@ -1782,9 +1782,11 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     const lifecycleStoppedBeforeRestart = defaultSessionsAfterLifecycleStop.find(
       (record) => record.sessionId === preloadProbe.templateCreatedSession.sessionId
     )?.lastProcess
+    // Linux records the signal that ended the session; Windows ends its job, and ConPTY reports only an exit code.
+    const applicationQuitDetail = typedShell.windows ? /^application quit · exit code \d+$/u : /^application quit · signal /u
     if (
       lifecycleStoppedBeforeRestart?.state !== 'interrupted' ||
-      !lifecycleStoppedBeforeRestart.detail?.startsWith('application quit · signal ')
+      !applicationQuitDetail.test(lifecycleStoppedBeforeRestart.detail ?? '')
     ) {
       throw new Error(
         `application-quit stop was not recorded as interrupted: ${JSON.stringify(lifecycleStoppedBeforeRestart)}`
