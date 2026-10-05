@@ -1,3 +1,4 @@
+// MODULE: session-manager.ts - session records, launches and live terminal attachments in the utility process
 import { randomUUID } from 'node:crypto'
 import { access, stat } from 'node:fs/promises'
 import { constants } from 'node:fs'
@@ -137,6 +138,32 @@ function bashSessionArgv(
     if (/^-[^-]*c/.test(arg)) break
   }
   return interactive ? ['--rcfile', join(bin, 'bmn-bashrc'), ...argv] : argv
+}
+
+/**
+ * bmn-bashrc for PowerShell: after the owner's profiles, and before every prompt, BMN's CLI folder is
+ * first on PATH again. Inline, because the default execution policy refuses script files. No double
+ * quotes: Windows PowerShell joins the arguments after -Command with spaces.
+ */
+export const POWERSHELL_CLI_PATH_RESTORE = [
+  '$global:BMNCliBin = $env:BMN_CLI_BIN_DIR',
+  'function global:BMNRestoreCliPath { if ($env:PATH.Split([IO.Path]::PathSeparator)[0] -ne $global:BMNCliBin) ' +
+    '{ $env:PATH = $global:BMNCliBin + [IO.Path]::PathSeparator + $env:PATH } }',
+  'BMNRestoreCliPath',
+  '$global:BMNOwnerPrompt = $function:prompt',
+  'function global:prompt { BMNRestoreCliPath; & $global:BMNOwnerPrompt }'
+].join('; ')
+
+/** PowerShell profiles may move a global Codex ahead of BMN's session-local launcher, as Bash startup files can. */
+function powerShellSessionArgv(
+  executable: string,
+  argv: readonly string[],
+  environment: Readonly<Record<string, string | undefined>>
+): readonly string[] {
+  const bin = environment.BMN_CLI_BIN_DIR
+  if (!bin || !/^(powershell|pwsh)(\.exe)?$/i.test(win32.basename(executable))) return argv
+  // Only the plain interactive start: a command, a file, -NoProfile or -NoExit is the owner's own startup.
+  return argv.every((arg) => /^[-/]nologo$/i.test(arg)) ? [...argv, '-NoExit', '-Command', POWERSHELL_CLI_PATH_RESTORE] : argv
 }
 
 export interface PtyLike {
@@ -1565,7 +1592,8 @@ export class SessionManager {
       }
       const childEnvironment = process.platform === 'win32' ? windowsEnvironment(env) : env
       const argv = identity === undefined ? params.argv
-        : bashSessionArgv(params.executable, codexSessionArgv(params.executable, params.argv, env), env)
+        : powerShellSessionArgv(params.executable,
+          bashSessionArgv(params.executable, codexSessionArgv(params.executable, params.argv, env), env), env)
       return this.spawnPty(params.executable, argv, {
         cwd: params.cwd,
         cols: params.cols,

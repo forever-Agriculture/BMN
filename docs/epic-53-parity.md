@@ -744,7 +744,9 @@ On Linux, `bin/codex` sits first on a session's PATH and adds `--no-daemon` to C
 
 The lookup and the rule are shared modules (`bin/windows-launch.mjs`, `bin/codex-launch.mjs`). A Linux test checks the JavaScript rule against the shell wrapper over thirteen argument shapes. Windows tests cover the lookup past BMN's folder and an end-to-end run of the built `codex.exe` against a synthetic npm-installed Codex. Native results are **UNVERIFIED** until collected.
 
-Not covered: a PowerShell profile that puts a global Codex ahead of BMN's folder on PATH. Linux restores the order after Bash startup (`bin/bmn-bashrc`). PowerShell has no inherited prompt hook, so an equivalent would change every default PowerShell session's command line. This remains an open 53.6 item.
+A PowerShell profile can put a global Codex ahead of BMN's folder on PATH, as a Bash startup file can. Linux restores the order after Bash startup and before each prompt (`bin/bmn-bashrc`). A plain interactive PowerShell session (`powershell` or `pwsh` with no arguments, or only `-NoLogo`) now starts with `-NoExit -Command` and an inline step that does the same: after the profiles it puts BMN's folder first again, and it wraps the owner's `prompt` function to repeat that before each prompt. The step is inline because the default execution policy refuses script files. PowerShell hides its startup banner when given a command, so these sessions open without it. Any other arguments (a command, a file, `-NoProfile`, `-NoExit`) are left exactly as given.
+
+Tests: the session argv shapes run on both systems. The step itself runs in a real PowerShell with a simulated profile and a later PATH change: locally in PowerShell 7.6.6 on Linux (GREEN; the same script without the step resolves the competing Codex), and natively in Windows PowerShell once collected (**UNVERIFIED**).
 
 Windows unit coverage added alongside:
 - The process start-identity tests now run on Windows. Only there is an exited process's refusal awaited, for up to 5 s, because Windows keeps the process until its last handle closes; Linux still requires an immediate refusal.

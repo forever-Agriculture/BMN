@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
@@ -26,6 +26,7 @@ import {
 } from '@bmn/protocol'
 import {
   HostControlError,
+  POWERSHELL_CLI_PATH_RESTORE,
   PersistedSessionStartError,
   SessionManager,
   buildShellEnvironment,
@@ -41,6 +42,7 @@ import {
 } from './session-manager'
 import { AgentHistory, emptyHistoryState, type AgentHistoryAdapter } from './agent-history'
 import { FileSavedOutputStore } from './saved-output-store'
+import { windowsEnvironment } from './windows-launch'
 import {
   APPLICATION_INTERRUPTION_REASON,
   databaseSettings,
@@ -807,6 +809,71 @@ describe('shell session lifecycle', () => {
       await rm(root, { recursive: true, force: true })
     }
   })
+
+  it('starts a plain interactive PowerShell with the step that keeps the BMN CLI folder first on PATH', () => {
+    let launched: readonly string[] = []
+    const bmnBin = join(tmpdir(), 'bmn-bin')
+    const manager = new SessionManager({
+      store: new FakeStore(),
+      spawnPty: (_executable, argv) => {
+        launched = argv
+        return new FakePty()
+      },
+      sendTerminalMessage: () => undefined,
+      environment: { PATH: '/usr/bin' },
+      sessionEnvironment: () => ({ BMN_CONTROL_SOCKET: '/tmp/bmn-test.sock', BMN_TOKEN: 'test-token', BMN_CLI_BIN_DIR: bmnBin, PATH: bmnBin })
+    })
+    const launch = (executable: string, argv: string[]): readonly string[] => {
+      manager.spawnValidatedPty({ cwd: tmpdir(), executable, argv, cols: 80, rows: 24 }, undefined, { sessionId: 's1', incarnationId: 'i1' })
+      return launched
+    }
+    const restore = ['-NoExit', '-Command', POWERSHELL_CLI_PATH_RESTORE]
+    expect(launch('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', [])).toEqual(restore)
+    expect(launch('C:\\Program Files\\PowerShell\\7\\PWSH.EXE', ['-NoLogo'])).toEqual(['-NoLogo', ...restore])
+    expect(launch('/usr/bin/pwsh', [])).toEqual(restore)
+    // A command, a file, -NoProfile or -NoExit is the owner's own startup, left exactly as given.
+    for (const argv of [['-NoProfile'], ['-NoLogo', '-NoProfile'], ['-Command', 'codex'], ['-File', 'start.ps1'], ['-NoExit']]) {
+      expect(launch('powershell.exe', argv)).toEqual(argv)
+    }
+    expect(launch('C:\\Windows\\System32\\cmd.exe', [])).toEqual([])
+    expect(POWERSHELL_CLI_PATH_RESTORE).not.toContain('"')
+  })
+
+  // Windows runs its default shell; elsewhere a PowerShell 7 on PATH runs the same step.
+  const powerShell = process.platform === 'win32'
+    ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+    : (process.env.PATH ?? '').split(delimiter).filter(Boolean).map((folder) => join(folder, 'pwsh')).find((path) => existsSync(path))
+  it.skipIf(!powerShell)('restores the BMN CLI folder in a real PowerShell after its profile and before each prompt', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'bmn-powershell-path-'))
+    try {
+      const bmnBin = join(root, 'bmn bin')
+      const competingBin = join(root, 'real-bin')
+      const program = process.platform === 'win32' ? 'codex.cmd' : 'codex'
+      for (const folder of [bmnBin, competingBin]) {
+        await mkdir(folder)
+        await writeFile(join(folder, program), process.platform === 'win32' ? '@exit /b 0\r\n' : '#!/bin/sh\n', { mode: 0o755 })
+      }
+      const first = (folder: string): string => `$env:PATH = '${folder.replaceAll("'", "''")}' + [IO.Path]::PathSeparator + $env:PATH`
+      const codex = '(Get-Command codex -CommandType Application | Select-Object -First 1).Source'
+      const script = [
+        // The owner's profile: a global Codex first, and a prompt of its own.
+        first(competingBin), "function global:prompt { 'OWNER-PROMPT>' }",
+        POWERSHELL_CLI_PATH_RESTORE, codex,
+        // A later tool moves PATH again; the next prompt restores it and still shows the owner's prompt.
+        first(competingBin), 'prompt', codex
+      ].join('; ')
+      const result = spawnSync(powerShell!, ['-NoLogo', '-NoProfile', '-Command', script], {
+        env: windowsEnvironment(process.env, { BMN_CLI_BIN_DIR: bmnBin, PATH: `${bmnBin}${delimiter}${process.env.PATH ?? ''}` }),
+        encoding: 'utf8',
+        timeout: 60_000
+      })
+      expect(result.stderr).toBe('')
+      expect(result.status).toBe(0)
+      expect(result.stdout.trim().split(/\r?\n/u).map((line) => line.trimEnd())).toEqual([join(bmnBin, program), 'OWNER-PROMPT>', join(bmnBin, program)])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 60_000)
 
   it('selects graphics at spawn from the saved choice, Sixel by default, then falls back if terminfo changes', async () => {
     const root = await mkdtemp(join(tmpdir(), 'bmn-terminal-env-'))
