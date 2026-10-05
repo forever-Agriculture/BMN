@@ -76,4 +76,11 @@ fs.writeFileSync(resultPath,JSON.stringify({platform:process.platform,versions:p
   writeFileSync(join(repo, 'test-results/windows-pty-feasibility.json'), JSON.stringify(receipt, null, 2))
   console.log(JSON.stringify(receipt))
   assert.ok(receipt.fullFeatureRoutes.length > 0, 'No full-feature ConPTY route demonstrated; retain evidence and resolve before Story 53.3')
+  // Observation only, after this check's own assertion: what ordinary shells get through the same route.
+  try {
+    const { observeWindowsConptyShells } = await import('./windows-conpty-shell-observation.mjs')
+    console.log(JSON.stringify(await observeWindowsConptyShells()))
+  } catch (error) {
+    console.log(JSON.stringify({ nativeDiagnostic: 'conpty-shells', observationOnly: true, unavailable: true, error: String(error?.message ?? error).slice(0, 500) }))
+  }
 } finally { rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }) }

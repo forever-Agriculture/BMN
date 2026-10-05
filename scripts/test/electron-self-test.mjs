@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { isAbsolute, join, resolve } from 'node:path'
+import { missingSelfTestPhases } from '../lib/self-test-receipt.mjs'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
 
 const appDirectory = resolve('apps/desktop')
@@ -13,27 +14,6 @@ const waylandDisplay =
   originalRuntime && originalWaylandDisplay && !isAbsolute(originalWaylandDisplay)
     ? join(originalRuntime, originalWaylandDisplay)
     : originalWaylandDisplay
-
-/**
- * Receipt phases a passing run must print. Each phase checks its own facts where it produces them and
- * throws there (Story 39.3); a key missing here means a phase was skipped, which still fails the run.
- */
-const requiredPhases = [
-  'sixelPty', 'sixelRender', 'sixelAnimation', 'sixelTwoPaneAnimation', 'sixelAlternateScreen',
-  'sixelPlacement', 'sixelResize', 'sixelCapPressure', 'sixelColdView', 'shellRegression', 'sixelViewSwap',
-  'modelOrigin', 'remoteAnswers', 'telegramCards', 'fullerAnswers', 'telegramCue', 'resetModes', 'cspProbe',
-  'graphicsTerminfo', 'workspaceResults', 'crossWorkspaceResults', 'hookIntegration', 'harnessObservations',
-  'launchSetRepository', 'checkoutPeers', 'graceful', 'quietSidebarAcceptance', 'interruptedSidebarAcceptance',
-  'subagentAcceptance', 'repeatAcceptance', 'agentHandoff', 'openCodeAcceptance', 'cursorAcceptance',
-  'hiddenPaneSize', 'inactiveFollowingOutputLayoutPuts', 'inactiveFollowingOutputCaptured',
-  'stoppedStaleProgress', 'attentionTriage', 'handoffFlow', 'fileReferenceFlow', 'fileReferenceWire',
-  'voiceFlow', 'launchBackgroundChoiceRecorded', 'registeredInvokeChannels', 'templateCreatedSession',
-  'treeSelectionLayoutPut', 'rendererLaunchUnavailable', 'rendererUnavailableTemplate',
-  'rendererStoppedPanelLabel', 'rendererLiveExitLabel', 'rendererLiveExitSidebarWord', 'closePrompt',
-  'rendererInverseTextContrast', 'sessionActivity', 'progressEvidence', 'progressEvidenceSurface',
-  'requestProvenance', 'terminalNotice', 'conversationFromHook', 'resumeConfirmationShownToOwner',
-  'survivalTable', 'resumeOffer', 'terminalModes', 'applicationQuitStoppedSession'
-]
 
 const exitCode = await withTemporaryRoot(temporaryRootContracts.electronSelfTest, async ({ roots }) => {
   const child = spawn(electronBinary, [appDirectory, ...(!waylandDisplay && process.env.DISPLAY ? ['--ozone-platform=x11'] : []), '--self-test'], {
@@ -97,7 +77,7 @@ const exitCode = await withTemporaryRoot(temporaryRootContracts.electronSelfTest
         })
         .find((value) => value?.selfTest === 'session-roundtrip')
       if (!receipt || receiptSeen || receiptError) return
-      const missing = requiredPhases.filter((phase) => receipt[phase] === undefined)
+      const missing = missingSelfTestPhases(receipt)
       if (missing.length > 0) {
         receiptError = new Error(`Electron self-test receipt is missing phases: ${missing.join(', ')}`)
       } else {

@@ -6,6 +6,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { assertOwnerRootsUnchanged, fingerprintOwnerRoots } from '../lib/owner-root-guard.mjs'
 import { packagedApp } from '../lib/packaged-app.mjs'
+import { packagedReceiptComplete } from '../lib/self-test-receipt.mjs'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
@@ -118,21 +119,7 @@ await withTemporaryRoot(temporaryRootContracts.packagedSmoke, async ({ roots }) 
     )
   }
   const receipt = parseReceipt(result.stdout)
-  if (
-    receipt.electronVersion !== '44.3.0' ||
-    receipt.nativeModules?.nodePty !== true ||
-    receipt.nativeModules?.betterSqlite3 !== true ||
-    receipt.sixelPty?.beforeMB !== 0 || !(receipt.sixelPty?.afterMB > 0) ||
-    receipt.sixelPty?.layer !== true ||
-    !(receipt.sixelRender?.ownStorageMB > 0 && receipt.sixelRender?.ownLayer === true &&
-      receipt.sixelRender?.otherStorageMB === 0 && receipt.sixelRender?.otherImageUnchanged === true) ||
-    receipt.cspProbe?.evalRefused !== true || receipt.cspProbe?.wasmAllowed !== true ||
-    receipt.graphicsTerminfo?.sixelResolved !== true ||
-    receipt.graphicsTerminfo?.standardResolved !== true ||
-    receipt.graphicsTerminfo?.initialTerm !== 'xterm-sixel-256color' ||
-    receipt.graphicsTerminfo?.fallbackTerm !== 'xterm-256color' ||
-    receipt.graceful !== true
-  ) {
+  if (!packagedReceiptComplete(receipt)) {
     throw new Error(`packaged self-test receipt was incomplete: ${JSON.stringify(receipt)}`)
   }
   assertOwnerRootsUnchanged(ownerRootsBefore, ownerFingerprint(), 'during packaged smoke')

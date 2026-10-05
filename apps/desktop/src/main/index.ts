@@ -1044,6 +1044,15 @@ if (selfTest) {
   // The dictation flow records from Chromium's fake microphone, so the real recorder path runs without hardware.
   app.commandLine.appendSwitch('use-fake-device-for-media-stream')
   app.commandLine.appendSwitch('use-fake-ui-for-media-stream')
+  // Without a handler Electron shows a modal error dialog and the run waits on it unseen; a self-test
+  // reports the first uncaught error once and exits nonzero instead.
+  let uncaughtReported = false
+  process.on('uncaughtException', (error) => {
+    if (uncaughtReported) return
+    uncaughtReported = true
+    console.error(`[BMN] session self-test failed: uncaught main-process error: ${(error.stack ?? error.message).slice(0, 2_000)}`)
+    app.exit(1)
+  })
 }
 const installedReleaseLease = retainWindowsInstalledRelease(app.getPath('exe'))
 // The closure retains the native handle until process exit, including all

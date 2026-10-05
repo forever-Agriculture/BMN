@@ -44,6 +44,15 @@ export interface TerminalViewProbe {
   select(column: number, row: number, length: number): string
   selection(): string
   clearSelection(): void
+  /** The foreground of the first cell of `text` on the last logical (unwrapped) line holding it, or null when none does. */
+  textColor(text: string): TerminalTextColor | null
+}
+
+/** How xterm stored a cell's foreground: the default, a palette index or a packed 24-bit color. */
+export interface TerminalTextColor {
+  mode: 'default' | 'palette' | 'rgb'
+  color: number
+  bold: boolean
 }
 
 /** Result of the self-test probe that drives real preload methods through the contextBridge. */

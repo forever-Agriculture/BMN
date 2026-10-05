@@ -17,6 +17,7 @@ import { inspectWindowsReleaseData } from './windows-release-data.mjs'
 import { validateWindowsReleasePayload, readInstallerDescriptor } from './windows-release-payload.mjs'
 import { quarantineWindowsSourceUpdate } from './windows-source-update.mjs'
 import { chooseWindowsUninstallData } from './windows-uninstall-choice.mjs'
+import { missingSelfTestPhases, packagedReceiptComplete } from './self-test-receipt.mjs'
 import { windowsUpdateFailure } from './windows-update-progress.mjs'
 
 const { copyFileSync, cpSync, rmSync } = physicalPayloadFs
@@ -101,7 +102,8 @@ export async function smokeWindowsInstalledPayload(root) {
         phases: [...String(result.stderr ?? '').matchAll(/\[BMN\] self-test phase: ([^\r\n]*)/gu)].map(match => match[1]) } })
     }
     const receipt = receipts.find(row => row.selfTest === 'session-roundtrip')
-    assert.ok(receipt?.nativeModules?.nodePty && receipt?.nativeModules?.betterSqlite3 && receipt?.graceful, 'Installed smoke receipt is incomplete')
+    // The installed build is accepted on the same receipt as a packaged one: every phase and its packaged facts.
+    assert.ok(receipt && missingSelfTestPhases(receipt).length === 0 && packagedReceiptComplete(receipt, 'win32'), 'Installed smoke receipt is incomplete')
     return receipt
   } finally { rmSync(temporary, { recursive: true, force: true }) }
 }

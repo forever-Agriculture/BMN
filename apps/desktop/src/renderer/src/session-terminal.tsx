@@ -452,7 +452,24 @@ export function SessionTerminal(props: {
           return terminal.getSelection()
         },
         selection: () => terminal.getSelection(),
-        clearSelection: () => terminal.clearSelection()
+        clearSelection: () => terminal.clearSelection(),
+        textColor: (text) => {
+          // A long prompt can wrap the text onto the next row, so each logical line is read whole.
+          const buffer = terminal.buffer.active
+          let end = buffer.length
+          for (let start = buffer.length - 1; start >= 0; start -= 1) {
+            if (buffer.getLine(start)?.isWrapped) continue
+            let joined = ''
+            for (let row = start; row < end; row += 1) joined += buffer.getLine(row)?.translateToString(row === end - 1) ?? ''
+            const index = joined.indexOf(text)
+            const cell = index >= 0 ? buffer.getLine(start + Math.floor(index / terminal.cols))?.getCell(index % terminal.cols) : undefined
+            end = start
+            if (!cell) continue
+            return { mode: cell.isFgDefault() ? 'default' : cell.isFgPalette() ? 'palette' : 'rgb',
+              color: cell.getFgColor(), bold: cell.isBold() !== 0 }
+          }
+          return null
+        }
       },
       sixelFixture: () => new Promise((resolve) => {
         terminal.write(SIXEL_SMOKE_FRAME, () => {
