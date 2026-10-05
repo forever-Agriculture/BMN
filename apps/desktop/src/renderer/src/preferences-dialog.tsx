@@ -52,6 +52,9 @@ const HOOK_CHECK_NAMES: Readonly<Record<HookCheckAgent, string>> = {
   claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor'
 }
 
+/** How often an open Preferences rereads whether the system showed BMN's last notification. */
+const NOTIFICATION_CUE_POLL_MS = 5_000
+
 /** Story 53.9: says, in the Telegram cue's form, that the system refused BMN's last desktop notification. */
 export function NotificationHealthCue(props: { cue: string | null }): React.JSX.Element | null {
   return props.cue ? (
@@ -184,15 +187,21 @@ export function PreferencesDialog(props: {
   const [notificationCue, setNotificationCue] = useState<string | null>(null)
   useEffect(() => {
     let cancelled = false
-    window.aiTerminal
-      .getNotificationHealth()
-      .then((health) => {
-        if (!cancelled) setNotificationCue(health.cue)
-      })
-      // Only a cue: Preferences works the same when it cannot be read.
-      .catch(() => undefined)
+    const load = (): void => {
+      window.aiTerminal
+        .getNotificationHealth()
+        .then((health) => {
+          if (!cancelled) setNotificationCue(health.cue)
+        })
+        // Only a cue: Preferences works the same when it cannot be read.
+        .catch(() => undefined)
+    }
+    load()
+    // A notification can fail while Preferences stays open; the cue follows it.
+    const timer = setInterval(load, NOTIFICATION_CUE_POLL_MS)
     return () => {
       cancelled = true
+      clearInterval(timer)
     }
   }, [])
 
