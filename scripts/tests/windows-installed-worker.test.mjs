@@ -6,7 +6,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { expect, it, vi } from 'vitest'
-import { removeWindowsInstalledPayloads, windowsMappedEnginePayloads, waitForWindowsAppsToExit, windowsInstallerSmokeEnvironment } from '../lib/windows-installed-worker.mjs'
+import { removeWindowsInstalledPayloads, windowsMappedEnginePayloads, waitForWindowsAppsToExit, windowsInstallerSmokeEnvironment, windowsInstallerSmokeFolders } from '../lib/windows-installed-worker.mjs'
+import { ensurePrivateDirectories } from '../../apps/desktop/src/utility/private-directory.ts'
+import { resolveApplicationRoots } from '../../apps/desktop/src/utility/roots.ts'
 
 it('waits for utilities and for a quiet observation after a relaunch', async () => {
   const observations = [[10, 20], [10], [10, 30], [10], [10]]
@@ -25,9 +27,9 @@ it('smokes with fresh homes and excludes owner credentials, Node flags and BMN b
   const observer = vi.spyOn(processes, 'spawnSync').mockImplementation((...args) => {
     const input = args[2]?.input
     let name
-    try { const paths = JSON.parse(input).paths; name = paths.length === 9 ? 'all-smoke-roots' : basename(paths[0]) }
+    try { const paths = JSON.parse(input).paths; name = paths.length === windowsInstallerSmokeFolders.length ? 'all-smoke-roots' : basename(paths[0]) }
     catch { name = 'unknown' }
-    if (!['all-smoke-roots', 'home', 'config', 'data', 'state', 'runtime', 'cache', 'claude', 'codex', 'opencode'].includes(name)) name = 'unknown'
+    if (!['all-smoke-roots', ...windowsInstallerSmokeFolders].includes(name)) name = 'unknown'
     return trace.measure(`provision:${++call}:${name}`, () => actualSpawn(...args))
   })
   syncBuiltinESMExports()
@@ -41,7 +43,7 @@ it('smokes with fresh homes and excludes owner credentials, Node flags and BMN b
     expect(environment.USERPROFILE).toBe(join(root, 'home'))
     for (const name of ['OPENAI_API_KEY', 'BMN_TOKEN', 'NODE_OPTIONS', 'ELECTRON_RUN_AS_NODE']) expect(environment[name]).toBeUndefined()
     expect(environment.Path).not.toContain('owner-provider-bin')
-    const roots = ['home', 'config', 'data', 'state', 'runtime', 'cache', 'claude', 'codex', 'opencode'].map(name => join(root, name))
+    const roots = windowsInstallerSmokeFolders.map(name => join(root, name))
     expect(roots.every(path => existsSync(path))).toBe(true)
     if (process.platform === 'win32') {
       expect(observer).toHaveBeenCalledOnce()
@@ -53,6 +55,38 @@ it('smokes with fresh homes and excludes owner credentials, Node flags and BMN b
     finally { observer.mockRestore(); syncBuiltinESMExports(); trace.report() }
   }
 }, process.platform === 'win32' ? 30000 : 5000)
+
+it('gives the smoke profile shell folders that installed BMN accepts as distinct from its roots', () => {
+  // The installed smoke once set LOCALAPPDATA to BMN_DATA_HOME, which installed BMN's startup refuses before any
+  // self-test output. Startup's own root resolution and folder checks run here with Windows path rules; the
+  // checks stop at a withheld SystemRoot, so no PowerShell runs and only the root validation is exercised.
+  const root = mkdtempSync(join(tmpdir(), 'bmn-installer-roots-'))
+  const saved = Object.fromEntries(['LOCALAPPDATA', 'SystemRoot', 'HOME', 'USERPROFILE'].map(name => [name, process.env[name]]))
+  const restore = () => {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+  }
+  const startup = environment => {
+    const roots = resolveApplicationRoots(environment, { homeDirectory: environment.USERPROFILE, runtimeFallback: environment.TEMP ?? root }, 'win32')
+    process.env.LOCALAPPDATA = environment.LOCALAPPDATA
+    process.env.HOME = process.env.USERPROFILE = environment.USERPROFILE
+    process.env.SystemRoot = 'withheld'
+    try { ensurePrivateDirectories(Object.values(roots), 'win32', roots.data) } finally { restore() }
+  }
+  try {
+    const environment = windowsInstallerSmokeEnvironment(root, { SystemRoot: 'C:\\Windows' })
+    expect(() => startup(environment)).toThrow('Windows SystemRoot is unavailable')
+    expect(() => startup({ ...environment, LOCALAPPDATA: environment.BMN_DATA_HOME })).toThrow('dedicated absolute application directories')
+    const bmnRoots = [environment.BMN_CONFIG_HOME, environment.BMN_DATA_HOME, environment.BMN_STATE_HOME, environment.BMN_RUNTIME_HOME]
+    for (const folder of [environment.LOCALAPPDATA, environment.APPDATA]) {
+      expect(existsSync(folder)).toBe(true)
+      expect(bmnRoots).not.toContain(folder)
+    }
+    expect(environment.LOCALAPPDATA).not.toBe(environment.APPDATA)
+  } finally { restore(); rmSync(root, { recursive: true, force: true }) }
+})
 
 it('retains only the mapped current engine and removes inactive payloads and staging on uninstall', () => {
   const root = mkdtempSync(join(tmpdir(), 'bmn-mapped-engine-'))

@@ -63,6 +63,8 @@ export async function waitForWindowsAppsToExit({ ownPid = process.pid, observe =
   }
 }
 
+export const windowsInstallerSmokeFolders = ['home', 'local', 'roaming', 'config', 'data', 'state', 'runtime', 'cache', 'claude', 'codex', 'opencode']
+
 export function windowsInstallerSmokeEnvironment(root, inherited = process.env) {
   const environment = {}
   for (const name of ['SystemRoot', 'WINDIR', 'ComSpec', 'PATHEXT', 'TEMP', 'TMP']) {
@@ -70,9 +72,11 @@ export function windowsInstallerSmokeEnvironment(root, inherited = process.env) 
     if (value !== undefined) environment[name] = value
   }
   environment.Path = [join(environment.SystemRoot, 'System32'), environment.SystemRoot].join(';')
-  ensurePrivateDirectories(['home', 'config', 'data', 'state', 'runtime', 'cache', 'claude', 'codex', 'opencode'].map(name => join(root, name)))
+  ensurePrivateDirectories(windowsInstallerSmokeFolders.map(name => join(root, name)))
+  // Windows refuses an application root equal to the user's local application data
+  // (private-directory.ts), so the profile's shell folders stay apart from every BMN root.
   return { ...environment, HOME: join(root, 'home'), USERPROFILE: join(root, 'home'),
-    APPDATA: join(root, 'config'), LOCALAPPDATA: join(root, 'data'),
+    APPDATA: join(root, 'roaming'), LOCALAPPDATA: join(root, 'local'),
     BMN_CONFIG_HOME: join(root, 'config'), BMN_DATA_HOME: join(root, 'data'),
     BMN_STATE_HOME: join(root, 'state'), BMN_RUNTIME_HOME: join(root, 'runtime'),
     XDG_CONFIG_HOME: join(root, 'config'), XDG_DATA_HOME: join(root, 'data'), XDG_STATE_HOME: join(root, 'state'),
