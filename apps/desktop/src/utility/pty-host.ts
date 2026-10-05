@@ -407,7 +407,9 @@ async function start(): Promise<void> {
       return Promise.resolve({ selfTestHostLossScheduled: true })
     }
     if (params.selfTestOutputState !== undefined) {
-      return Promise.resolve({ selfTestOutputState: manager.outputStateForSelfTest(String(record(params.selfTestOutputState).sessionId)) ?? null })
+      const request = record(params.selfTestOutputState)
+      const tailBytes = Math.min(8192, Math.max(600, Number.isInteger(request.tailBytes) ? request.tailBytes as number : 600))
+      return Promise.resolve({ selfTestOutputState: manager.outputStateForSelfTest(String(request.sessionId), tailBytes) ?? null })
     }
     if (params.selfTestOutputNudge !== undefined) {
       return Promise.resolve({ selfTestOutputNudge: manager.nudgeOutputReaderForSelfTest(String(record(params.selfTestOutputNudge).sessionId)) ?? null })

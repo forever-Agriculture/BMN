@@ -15,7 +15,10 @@ import { prepareWindowsPtyLaunch } from './windows-launch'
 // sequence (Codex-rate then maximum-rate Sixel animation, the scroll line typed at once) on node-pty with a
 // headless terminal answering queries as the view does, plus two files the shell writes around SCROLLED.
 // Variants change one thing each. Results are associations, not causal proof: a pass means this reduced harness
-// did not reproduce, and a failure here is not by itself the packaged defect.
+// did not reproduce, and a failure here is not by itself the packaged defect. At 80x24 with a one-line prompt every
+// variant printed SCROLLED natively (run 37341134916: as typed, after the prompt, without images, without the
+// launcher, without replies), while the packaged pane (46x27, a prompt that wraps) held SCROLLED and its prompt
+// until the next typed line; so these variants move toward the pane's size, prompt and console host.
 
 const windows = process.platform === 'win32'
 
@@ -29,15 +32,27 @@ interface Variant {
   readonly afterPrompt: boolean
   /** The terminal answers the shell's and ConPTY's queries. */
   readonly replies: boolean
+  readonly cols: number
+  readonly rows: number
+  /** Where the shell starts: the fixture folder (a ~70-character prompt), a deeper folder whose prompt is wider than
+   * 80 columns, or the drive root (a short prompt). */
+  readonly prompt: 'fixture' | 'wide' | 'short'
+  /** BMN's bundled ConPTY, or the console host built into Windows. */
+  readonly bundledConpty: boolean
 }
 
-const PRODUCTION: Variant = { name: 'as-self-test', launcher: true, images: true, afterPrompt: false, replies: true }
+const PRODUCTION: Variant = { name: 'as-self-test', launcher: true, images: true, afterPrompt: false, replies: true,
+  cols: 80, rows: 24, prompt: 'fixture', bundledConpty: true }
+const PANE: Variant = { ...PRODUCTION, name: 'pane-size', cols: 46, rows: 27 }
+// Most informative first: a variant that would start after the time budget is recorded as skipped.
 const WINDOWS_VARIANTS: readonly Variant[] = [
   PRODUCTION,
-  { ...PRODUCTION, name: 'after-prompt', afterPrompt: true },
-  { ...PRODUCTION, name: 'no-images', images: false },
-  { ...PRODUCTION, name: 'no-launcher', launcher: false },
-  { ...PRODUCTION, name: 'no-replies', replies: false }
+  PANE,
+  { ...PANE, name: 'pane-size-short-prompt', prompt: 'short' },
+  { ...PRODUCTION, name: 'wrapping-prompt', prompt: 'wide' },
+  { ...PANE, name: 'pane-size-inbox-conpty', bundledConpty: false },
+  { ...PANE, name: 'pane-size-after-prompt', afterPrompt: true },
+  { ...PANE, name: 'pane-size-no-images', images: false }
 ]
 
 const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds))
@@ -57,7 +72,7 @@ async function until(check: () => boolean, milliseconds: number): Promise<number
 async function scrollSequence(variant: Variant): Promise<Record<string, unknown>> {
   const root = mkdtempSync(join(tmpdir(), 'bmn-conpty-scroll-'))
   const record: Record<string, unknown> = { ...variant }
-  const terminal = new Terminal({ cols: 80, rows: 24, allowProposedApi: true })
+  const terminal = new Terminal({ cols: variant.cols, rows: variant.rows, allowProposedApi: true })
   let pty: IPty | undefined
   let exited: Promise<void> = Promise.resolve()
   let stream = ''
@@ -104,14 +119,18 @@ async function scrollSequence(variant: Variant): Promise<Record<string, unknown>
 
     const environment = { ...process.env, TERM: 'xterm-256color' } as Record<string, string>
     delete environment.PROMPT_COMMAND
+    const size = { cols: variant.cols, rows: variant.rows }
+    const cwd = variant.prompt === 'short' ? (windows ? `${process.env.SystemDrive ?? 'C:'}\\` : '/')
+      : variant.prompt === 'wide' ? join(root, 'a-folder-name-long-enough-that-the-shell-prompt-wraps') : root
+    mkdirSync(cwd, { recursive: true })
     if (windows) {
       const shell = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
-      const native = prepareWindowsPtyLaunch(shell, ['-NoLogo', '-NoProfile'], root, environment)
+      const native = prepareWindowsPtyLaunch(shell, ['-NoLogo', '-NoProfile'], cwd, environment)
       // The session manager's own options (pty-host.ts): bundled ConPTY, raw output.
-      pty = spawn(native.executable, native.arguments, { name: 'xterm-256color', cols: 80, rows: 24, cwd: root, env: environment,
-        encoding: null, useConpty: true, useConptyDll: true } as Parameters<typeof spawn>[2])
+      pty = spawn(native.executable, native.arguments, { name: 'xterm-256color', ...size, cwd, env: environment,
+        encoding: null, useConpty: true, useConptyDll: variant.bundledConpty } as Parameters<typeof spawn>[2])
     } else {
-      pty = spawn('/bin/bash', ['--noprofile', '--norc'], { name: 'xterm-256color', cols: 80, rows: 24, cwd: root,
+      pty = spawn('/bin/bash', ['--noprofile', '--norc'], { name: 'xterm-256color', ...size, cwd,
         env: environment, encoding: null } as Parameters<typeof spawn>[2])
     }
     const live = pty
@@ -143,12 +162,16 @@ async function scrollSequence(variant: Variant): Promise<Record<string, unknown>
       if (record.promptAfterAnimationMs === null) throw new Error('the prompt never returned after the animation')
     }
     const typedAt = Date.now()
+    const scrollFrom = stream.length
     live.write(scrollLine)
     record.scrolledMs = await until(() => stream.includes('SCROLLED'), 10_000)
     record.promptAfterScrolledMs = record.scrolledMs === null ? null : await until(promptShown, 5_000)
     record.shellWrote = { beforeScrolled: existsSync(before), afterScrolled: existsSync(after) }
     record.bytesAtOutcome = bytes
     record.observedForMs = Date.now() - typedAt
+    // What followed the last scroll line: SCROLLED and the prompt, or nothing.
+    const lastScroll = stream.lastIndexOf('scroll-79')
+    record.afterLastScroll = lastScroll < scrollFrom ? null : escaped(stream.slice(lastScroll, lastScroll + 1_500))
 
     // The same two interventions the self-test makes once output stops; here they also run when it did not, to show
     // what a working pane answers. A read credit for node-pty's Windows ConPTY reader; then a one-column resize of the
@@ -160,10 +183,20 @@ async function scrollSequence(variant: Variant): Promise<Record<string, unknown>
     await sleep(2_000)
     record.bytesAfterNudge = bytes - beforeNudge
     const beforeResize = bytes
-    terminal.resize(81, 24)
-    live.resize(81, 24)
+    terminal.resize(variant.cols + 1, variant.rows)
+    live.resize(variant.cols + 1, variant.rows)
     await sleep(3_000)
     record.bytesAfterResize = bytes - beforeResize
+    if (record.scrolledMs === null) {
+      // Last, typed input, which released the packaged pane: did SCROLLED and its prompt arrive with it (held), and
+      // in which order relative to the probe's own output?
+      const probeFrom = stream.length
+      live.write(windows ? "Write-Output ('PRO' + 'BE')\r" : "printf '%s%s\\n' PRO BE\r")
+      record.probeMs = await until(() => stream.slice(probeFrom).includes('PROBE'), 5_000)
+      const released = stream.slice(probeFrom)
+      record.afterProbe = { scrolledAt: released.indexOf('SCROLLED'), probeAt: released.indexOf('PROBE'),
+        bytes: Buffer.byteLength(released), head: escaped(released.slice(0, 1_500)) }
+    }
     record.shellWroteAtEnd = { beforeScrolled: existsSync(before), afterScrolled: existsSync(after) }
   } catch (error) {
     record.error = error instanceof Error ? error.message : String(error)
@@ -185,8 +218,8 @@ describe('a pane keeps printing after a Codex-style Sixel animation (self-test S
     const records: Array<Record<string, unknown>> = []
     const started = Date.now()
     for (const variant of WINDOWS_VARIANTS) {
-      // A variant takes about 30 s when SCROLLED is missing and at most ~125 s when nothing answers at all; none
-      // starts after 160 s, so the last one ends before the test's 300 s deadline.
+      // A variant takes about 17 s when it passes, about 35 s when SCROLLED is missing and at most ~130 s when
+      // nothing answers at all; none starts after 160 s, so the last one ends before the test's 300 s deadline.
       if (Date.now() - started > 160_000) records.push({ ...variant, skipped: 'time budget' })
       else records.push(await scrollSequence(variant))
       // Saved after every variant, so a later timeout keeps what was observed.

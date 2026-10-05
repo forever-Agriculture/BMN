@@ -1143,30 +1143,38 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     await waitForAnimatedLine('SCROLLED', 10_000).catch(async (error: unknown) => {
       const message = error instanceof Error ? error.message : String(error)
       // Observation only, once the failure is certain: what the shell printed as the host received it, where
-      // that output stands in node-pty and the view's queue, whether SCROLLED arrives late, and whether the
-      // shell answers. Every step is bounded (at most ~34 s in all), and the first record is printed at once,
-      // so an outer deadline cannot take the original failure or that record with it.
+      // that output stands in node-pty and the view's queue, and what the view itself holds; then whether SCROLLED
+      // arrives late, after one extra reader credit, after a resize and after typed input, in that order, so each
+      // step is observed while output is still held. Every step is bounded (about 20 s when the host answers at once,
+      // at most ~46 s if nothing answers), and the first record is printed at once, so an outer deadline cannot take the original failure or that record with it.
       const bounded = <T>(work: Promise<T>, milliseconds: number, late: T): Promise<T> =>
         Promise.race([work, new Promise<T>((resolve) => setTimeout(() => resolve(late), milliseconds))])
-      const hostOutput = async () => bounded(client.request<{ selfTestOutputState: unknown }>(METHOD_REGISTRY.healthGet,
-        { selfTestOutputState: { sessionId: secondSession.sessionId } }).then((answer) => answer.selfTestOutputState,
+      const hostOutput = async (tailBytes = 600) => bounded(client.request<{ selfTestOutputState: unknown }>(METHOD_REGISTRY.healthGet,
+        { selfTestOutputState: { sessionId: secondSession.sessionId, tailBytes } }).then((answer) => answer.selfTestOutputState,
         () => 'unavailable'), 2_000, 'no answer within 2 s')
+      // The view's side: what it has put on the PTY (replies and focus reports included), whether the program
+      // asked for focus reports, and its last lines.
+      const viewState = async () => bounded(host.applicationWindow!.webContents.executeJavaScript(`(() => {
+        const snapshot = window.__aitermTest?.snapshot(${animatedId});
+        if (!snapshot) return null;
+        return { inputEvents: snapshot.inputEvents, focusReports: snapshot.modes.sendFocusMode, cols: snapshot.cols, rows: snapshot.rows,
+          lines: snapshot.bufferLines.filter((line) => line.trim()).slice(-6).map((line) => line.trimEnd().slice(0, 160)) };
+      })()`) as Promise<unknown>, 2_000, 'no answer within 2 s')
+      const outputBytes = (state: unknown): number | null =>
+        state !== null && typeof state === 'object' && typeof (state as { outputBytes?: unknown }).outputBytes === 'number'
+          ? (state as { outputBytes: number }).outputBytes : null
       const atFailure = await hostOutput()
       console.error(`[BMN] self-test observation: SCROLLED missing at failure ${JSON.stringify(atFailure)}`)
+      const viewAtFailure = await viewState()
       const lateStart = Date.now()
       const lateMs = await waitForAnimatedLine('SCROLLED', 8_000).then(() => Date.now() - lateStart, () => null)
       const afterWait = await hostOutput()
-      const probeWrite = await bounded(typeIntoAnimatedPane(typedShell.windows ? `${printed('PRO', 'BE')}\r` : "printf '%s%s\\n' PRO BE\r")
-        .then(() => 'accepted', (failure: unknown) => `refused: ${failure instanceof Error ? failure.message : String(failure)}`),
-      2_000, 'no answer within 2 s')
-      const probeAnswered = probeWrite === 'accepted' ? await waitForAnimatedLine('PROBE', 5_000).then(() => true, () => false) : null
-      const afterProbe = await hostOutput()
-      // Then two interventions, bounded (~13 s); neither is passive and neither alone attributes a layer. One extra
-      // read credit for the Windows ConPTY output reader (it bypasses the reader's one-chunk backpressure): output
-      // after it is consistent with a reader that held output or stopped reading, or with coincident progress; none
-      // does not prove that nothing reached the reader. Then a one-column resize: output after it shows progress
-      // somewhere on the output path; none is inconclusive, since ConPTY need not redraw. The PTY and the renderer
-      // may disagree about the pane's width afterwards; the run has already failed.
+      // Two interventions, neither passive and neither alone attributing a layer. One extra read credit for the
+      // Windows ConPTY output reader (it bypasses the reader's one-chunk backpressure): output after it is
+      // consistent with a reader that held output or stopped reading, or with coincident progress; none does not
+      // prove that nothing reached the reader. Then a one-column resize: output after it shows progress somewhere
+      // on the output path; none is inconclusive, since ConPTY need not redraw. The PTY and the renderer may
+      // disagree about the pane's width afterwards; the run has already failed.
       const settle = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds))
       const nudge = await bounded(client.request<{ selfTestOutputNudge: unknown }>(METHOD_REGISTRY.healthGet,
         { selfTestOutputNudge: { sessionId: secondSession.sessionId } }).then((answer) => answer.selfTestOutputNudge,
@@ -1183,8 +1191,18 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       2_000, 'no answer within 2 s') : 'no size'
       await settle(3_000)
       const afterResize = await hostOutput()
+      // Last, typed input: earlier runs showed it releases the pane. Everything printed from the failure on is
+      // kept (up to 8 KiB), so the record shows whether SCROLLED and its prompt were held rather than lost.
+      const probeWrite = await bounded(typeIntoAnimatedPane(typedShell.windows ? `${printed('PRO', 'BE')}\r` : "printf '%s%s\\n' PRO BE\r")
+        .then(() => 'accepted', (failure: unknown) => `refused: ${failure instanceof Error ? failure.message : String(failure)}`),
+      2_000, 'no answer within 2 s')
+      const probeAnswered = probeWrite === 'accepted' ? await waitForAnimatedLine('PROBE', 5_000).then(() => true, () => false) : null
+      const failureBytes = outputBytes(atFailure), probeBytes = outputBytes(await hostOutput())
+      const afterProbe = await hostOutput(failureBytes !== null && probeBytes !== null ? probeBytes - failureBytes + 64 : 8192)
+      const viewAfterProbe = await viewState()
       throw new Error(`${message} (line sent +${scrollSent} ms and accepted +${scrollAccepted} ms after MAX-RATE-DONE was seen) ` +
-        JSON.stringify({ atFailure, lateMs, afterWait, probeWrite, probeAnswered, afterProbe, nudge, afterNudge, resize, afterResize }))
+        JSON.stringify({ atFailure, viewAtFailure, lateMs, afterWait, nudge, afterNudge, resize, afterResize, probeWrite, probeAnswered,
+          afterProbe, viewAfterProbe }))
     })
     const animation = await host.applicationWindow.webContents.executeJavaScript(`(() => {
       const hook = window.__aitermTest;
