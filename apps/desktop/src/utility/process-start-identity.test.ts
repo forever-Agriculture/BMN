@@ -40,8 +40,12 @@ describe.skipIf(!expectedPrefix)('process start identity', () => {
   it('refuses a process that has exited, so a reused PID is never taken for the old one', async () => {
     const child = await sleeper()
     await child.stop()
+    if (process.platform !== 'win32') {
+      await expect(processStartIdentity(child.pid)).rejects.toThrow()
+      return
+    }
     // Windows keeps an exited process, and its PID, until the last handle closes; Node releases its own
-    // handle just after reporting the exit, so the refusal is awaited for a bounded time.
+    // handle just after reporting the exit, so there the refusal is awaited for a bounded time.
     await expect
       .poll(() => processStartIdentity(child.pid).then(() => 'answered', () => 'refused'), { timeout: 5_000 })
       .toBe('refused')

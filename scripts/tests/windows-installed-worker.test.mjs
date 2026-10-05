@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { expect, it, vi } from 'vitest'
-// Payload removal is switchable so one test can hold the smoke profile the way exiting processes do.
+// Payload removal is switchable so one test can make the smoke profile's removal fail.
 const removal = vi.hoisted(() => ({ fail: null }))
 vi.mock('../lib/physical-payload-fs.mjs', async (importOriginal) => {
   const { physicalPayloadFs } = await importOriginal()
@@ -96,13 +96,13 @@ it('gives the smoke profile shell folders that installed BMN accepts as distinct
 })
 
 it('reports a failed installed smoke even when its temporary profile cannot be removed yet', async () => {
-  // Run 37312653316: the self-test failed, its exiting processes still held the profile, and the removal
-  // error replaced the smoke's verdict. Folder security and the smoke run are replaced here; removal fails.
+  // Run 37312653316: removing the smoke profile threw, and that error replaced the smoke's own result.
+  // Folder security and the smoke run are replaced here: the run fails and the profile removal fails.
   const actualSpawn = processes.spawnSync
   const removed = []
   vi.spyOn(processes, 'spawnSync').mockImplementation((command, args, options) => {
     if (String(command).endsWith('BMN.exe')) {
-      return { status: 1, signal: null, stdout: '\r\n', stderr: '[BMN] self-test phase: startup ready +765ms\n[BMN] session self-test failed: the animation pane never printed SCROLLED\n' }
+      return { status: 1, signal: null, stdout: '\r\n', stderr: '[BMN] self-test phase: startup ready +765ms\n[BMN] session self-test failed: synthetic installed failure\n' }
     }
     return actualSpawn(command, args, options)
   })
@@ -117,7 +117,7 @@ it('reports a failed installed smoke even when its temporary profile cannot be r
     const failure = await smokeWindowsInstalledPayload(mkdtempSync(join(tmpdir(), 'bmn-installed-root-'))).catch(error => error)
     expect(failure.message).toBe('Installed candidate failed isolated smoke')
     expect(failure.smokeOutcome).toMatchObject({ status: 1, cleanupErrorCode: 'EBUSY',
-      failure: 'the animation pane never printed SCROLLED', phases: ['startup ready +765ms'] })
+      failure: 'synthetic installed failure', phases: ['startup ready +765ms'] })
   } finally {
     removal.fail = null
     vi.restoreAllMocks(); syncBuiltinESMExports()
