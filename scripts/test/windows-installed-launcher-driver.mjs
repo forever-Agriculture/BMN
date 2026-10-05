@@ -7,7 +7,7 @@ import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 
 import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { observeWindowsInstallCommands } from './fixtures/windows-install-command-observer.mjs'
 import { measureInstalledCimPreflight } from './fixtures/windows-installed-cim-preflight.mjs'
-import { captureInstalledSourceBindings, installedFailureDiagnostic } from './fixtures/windows-installed-failure-diagnostic.mjs'
+import { captureInstalledSourceBindings, installedFailureDiagnostic, installedSmokeOutcome } from './fixtures/windows-installed-failure-diagnostic.mjs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { createHash } from 'node:crypto'
@@ -178,7 +178,12 @@ async function main() {
   report.selectedCommit = descriptor.commit
 }
 try { await main() }
-catch (error) { report.error = installedFailureDiagnostic(error, sourceRepo, { sourceBindings }); process.exitCode = 1 }
+catch (error) {
+  report.error = installedFailureDiagnostic(error, sourceRepo, { sourceBindings })
+  const smoke = installedSmokeOutcome(error)
+  if (smoke) report.smokeOutcome = smoke
+  process.exitCode = 1
+}
 finally {
   processes.spawnSync = actualSpawnSync; syncBuiltinESMExports()
   report.cleanup = []

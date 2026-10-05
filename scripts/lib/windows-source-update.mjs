@@ -6,8 +6,11 @@ import { existsSync, lstatSync, readFileSync, renameSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
 import { writeConfigSafely } from '../../apps/desktop/bin/safe-config-write.mjs'
 import { releaseDescriptor } from './windows-release-transaction.mjs'
+import { windowsUpdateFailure } from './windows-update-progress.mjs'
 
 const phases = new Set(['queued', 'waiting', 'building', 'validating', 'activating', 'complete', 'failed'])
+const attempt = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/u
+const unobserved = Object.freeze({ enter() {}, finish() {}, fail() {} })
 export function windowsSourceReadiness({ branch, head, originHead, status }, intendedCommit) {
   if (branch !== 'main') return 'Source must be on main'
   if (status.trim()) return 'Source working tree is not clean'
@@ -21,6 +24,8 @@ function requestIdentity(request) {
   for (const name of ['repo', 'node', 'pnpm']) assert.ok(isAbsolute(request[name]), 'Source update needs absolute tool locations')
   if (request.candidate !== undefined) assert.equal(releaseDescriptor(request.candidate).commit, request.commit, 'Candidate belongs to another source request')
   if (request.recoveryRequired !== undefined) assert.equal(typeof request.recoveryRequired, 'boolean', 'Invalid recovery requirement')
+  // Each queue or explicit retry is a new attempt; observations bind to it.
+  if (request.attemptId !== undefined) assert.match(request.attemptId, attempt, 'Invalid source update attempt')
   return { commit: request.commit, repo: request.repo, node: request.node, pnpm: request.pnpm }
 }
 export function readWindowsSourceUpdate(path) {
@@ -49,13 +54,13 @@ function writeRequest(path, expected, value) {
 export function queueWindowsSourceUpdate(path, { repo, node, pnpm, sourceState }) {
   const readiness = windowsSourceReadiness(sourceState)
   assert.equal(readiness, null, readiness ?? undefined)
-  const request = { format: 1, phase: 'queued', commit: sourceState.head, repo, node, pnpm }
+  const request = { format: 1, attemptId: randomUUID(), phase: 'queued', commit: sourceState.head, repo, node, pnpm }
   requestIdentity(request)
   const existing = readWindowsSourceUpdate(path)
   if (existing && existing.phase !== 'complete') {
     assert.deepEqual(requestIdentity(existing), requestIdentity(request), 'Another queued source update needs explicit recovery')
     if (existing.phase === 'failed') {
-      const retry = { ...existing, phase: 'queued' }
+      const retry = { ...existing, attemptId: randomUUID(), phase: 'queued' }
       writeRequest(path, readFileSync(path, 'utf8'), retry)
       return retry
     }
@@ -66,16 +71,32 @@ export function queueWindowsSourceUpdate(path, { repo, node, pnpm, sourceState }
 }
 
 /** All use-site capabilities are mandatory; this module never packages in-place. */
-export async function runWindowsSourceUpdate(path, { readSourceState, waitForExit, buildSnapshot, validate, activate, notify, recoverActivated = async () => null, checkpoint = async () => {} }) {
+export async function runWindowsSourceUpdate(path, { readSourceState, waitForExit, buildSnapshot, validate, activate, notify, recoverActivated = async () => null, checkpoint = async () => {}, observe = () => unobserved }) {
   for (const fn of [readSourceState, waitForExit, buildSnapshot, validate, activate, notify, recoverActivated]) assert.equal(typeof fn, 'function', 'Source updater capability missing')
   let request = readWindowsSourceUpdate(path)
   assert.ok(request, 'No queued source update')
   if (request.phase === 'complete') return request
   const identity = requestIdentity(request)
+  if (request.attemptId === undefined) {
+    // Requests queued before attempt identity get one before any observation.
+    const identified = { ...request, attemptId: randomUUID() }
+    writeRequest(path, readFileSync(path, 'utf8'), identified)
+    request = identified
+  }
+  const observer = observe(request.attemptId)
+  // Observation failure is the observer's own state; it never fails the update.
+  const step = (method, value) => { try { observer[method](value) } catch { /* Progress is informational. */ } }
+  const categorized = (category, operation) => async (...values) => {
+    try { return await operation(...values) }
+    catch (error) {
+      if (error && typeof error === 'object' && error.updateCategory === undefined) { try { error.updateCategory = category } catch { /* Frozen errors stay unknown. */ } }
+      throw error
+    }
+  }
   const recoveryRequired = request.candidate !== undefined || request.recoveryRequired === true || request.phase === 'activating'
   const verifySource = async () => {
     const readiness = windowsSourceReadiness(await readSourceState(identity.repo), identity.commit)
-    assert.equal(readiness, null, readiness ?? undefined)
+    if (readiness !== null) throw windowsUpdateFailure(readiness, 'source')
   }
   const record = async (phase, extra = {}) => {
     const expected = readFileSync(path, 'utf8')
@@ -86,6 +107,7 @@ export async function runWindowsSourceUpdate(path, { readSourceState, waitForExi
     await checkpoint(phase)
   }
   try {
+    step('enter', 'prepare')
     await verifySource()
     let candidate = await recoverActivated(request)
     if (candidate) {
@@ -96,23 +118,25 @@ export async function runWindowsSourceUpdate(path, { readSourceState, waitForExi
       // authorize a same-commit rebuild of an uncertain selected artifact.
       assert.ok(!recoveryRequired,
         'Interrupted source update has no verified selected payload; explicit recovery is required')
-      await record('waiting'); await waitForExit(); await verifySource()
-      await record('building')
-      candidate = await buildSnapshot(identity, extra => record('building', extra))
+      await record('waiting'); step('enter', 'waiting'); await waitForExit(); await verifySource()
+      await record('building'); step('enter', 'snapshot')
+      candidate = await buildSnapshot(identity, extra => record('building', extra), stage => step('enter', stage))
     }
     assert.equal(candidate?.commit, identity.commit, 'Frozen build has another source identity')
     await verifySource()
-    await record('validating'); await validate(candidate); await verifySource()
-    await record('activating', { candidate: releaseDescriptor(candidate) })
-    const installed = await activate(candidate, verifySource)
+    await record('validating'); step('enter', 'validate'); await categorized('validation', validate)(candidate); await verifySource()
+    await record('activating', { candidate: releaseDescriptor(candidate) }); step('enter', 'activate')
+    const installed = await categorized('installation', activate)(candidate, verifySource, stage => step('enter', stage))
     assert.deepEqual(releaseDescriptor(installed?.current), releaseDescriptor(candidate), 'Installation selected another payload')
     await verifySource()
     // Durable completion is the notice. Its UI consumption may repeat after a
     // crash; it never repeats activation or silently loses queued work.
     await record('complete', { selectedCommit: identity.commit, completedAt: new Date().toISOString() })
+    step('finish')
     await notify(request)
     return request
   } catch (error) {
+    if (request.phase !== 'complete') step('fail', error)
     // Do not overwrite a newer request or downgrade a truthful completed state
     // because displaying its notification failed.
     if (request.phase !== 'complete' && JSON.stringify(readWindowsSourceUpdate(path)) === JSON.stringify(request)) {

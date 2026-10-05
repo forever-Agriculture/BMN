@@ -10,11 +10,13 @@ import { quarantineWindowsSourceUpdate, readWindowsSourceUpdate, runWindowsSourc
 import { buildFrozenWindowsSource, readWindowsSourceState, removeFrozenWindowsSource } from './windows-source-build.mjs'
 import { readWindowsInstallation, releaseDescriptor, releaseDirectory } from './windows-release-transaction.mjs'
 import { validateWindowsReleasePayload } from './windows-release-payload.mjs'
+import { WindowsUpdateObserver } from './windows-update-progress.mjs'
 
 export async function resumeWindowsSourceUpdate(root, { dataRoot, waitForExit, installPayload, notify,
   native, privateDirectories = ensurePrivateDirectories, readSourceState = readWindowsSourceState,
   buildSnapshot = buildFrozenWindowsSource, validate = validateWindowsReleasePayload, cleanup = removeFrozenWindowsSource,
-  runtimeVersion = process.versions.electron, engineRoot = join(root, 'bootstrap'), readInstallation = readWindowsInstallation } = {}) {
+  runtimeVersion = process.versions.electron, engineRoot = join(root, 'bootstrap'), readInstallation = readWindowsInstallation,
+  observe = attemptId => new WindowsUpdateObserver(join(root, 'requests'), attemptId) } = {}) {
   const requests = join(root, 'requests'), path = join(requests, 'source-update.json')
   if (!existsSync(path)) return null
   privateDirectories([requests])
@@ -31,7 +33,7 @@ export async function resumeWindowsSourceUpdate(root, { dataRoot, waitForExit, i
     if (['complete', 'failed'].includes(request.phase)) return request
     let candidate
     try {
-      return await runWindowsSourceUpdate(path, { readSourceState, waitForExit,
+      return await runWindowsSourceUpdate(path, { readSourceState, waitForExit, observe,
         recoverActivated: async pending => {
           if (!pending.candidate) return null
           const expected = releaseDescriptor(pending.candidate), selected = readInstallation(root)
@@ -46,8 +48,8 @@ export async function resumeWindowsSourceUpdate(root, { dataRoot, waitForExit, i
           // retained selected payload is validated, never rebuilt or cleaned up.
           return { ...expected, root: releaseDirectory(root, expected), metadataRepairOnly: true }
         },
-        buildSnapshot: async (identity, recordWorkspace) => {
-          candidate = await buildSnapshot(identity, { onWorkspace: recordWorkspace })
+        buildSnapshot: async (identity, recordWorkspace, observeStage) => {
+          candidate = await buildSnapshot(identity, { onWorkspace: recordWorkspace, observe: observeStage })
           return candidate
         },
         validate: async value => {
@@ -57,9 +59,9 @@ export async function resumeWindowsSourceUpdate(root, { dataRoot, waitForExit, i
           assert.equal(manifest.electronVersion, runtimeVersion,
             'Queued candidate needs another Electron runtime; use its offline installer to update safely')
         },
-        activate: async (value, verifySource) => {
+        activate: async (value, verifySource, observeStage) => {
           await verifySource()
-          return installPayload({ source: value.root, root, dataRoot, descriptor: value,
+          return installPayload({ source: value.root, root, dataRoot, descriptor: value, observe: observeStage,
             // Checked inside the native transaction immediately before selection.
             beforeActivate: verifySource, requireAlreadySelected: value.metadataRepairOnly === true })
         }, notify })

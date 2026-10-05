@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { expect, it } from 'vitest'
-import { installedFailureDiagnostic, captureInstalledSourceBindings } from '../test/fixtures/windows-installed-failure-diagnostic.mjs'
+import { installedFailureDiagnostic, captureInstalledSourceBindings, installedSmokeOutcome } from '../test/fixtures/windows-installed-failure-diagnostic.mjs'
 
 const marker = 'SYNTHETIC_SECRET_NEVER_RECORD', module = 'scripts/lib/windows-installed-worker.mjs'
 const repo = '/private/bmn', frame = `    at functionName(file://${repo}/${module}:147:9)`
@@ -64,4 +64,14 @@ it('reads actual ordinary source files with bounds and refuses hardlinked or ove
     rmSync(join(directory, 'linked.mjs')); writeFileSync(path, Buffer.alloc(1024*1024+1))
     expect(captureInstalledSourceBindings(root)[module]).toBeNull()
   } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+it('keeps only the bounded synthetic smoke outcome and drops unexpected names', () => {
+  const smokeOutcome = { status: 1, signal: 'SIGNAL_' + marker, errorCode: marker, durationMs: 4200,
+    receipts: ['session-roundtrip', marker, 'x'.repeat(49)], failure: 'hook card missing\u001b[31m' + 'y'.repeat(900) }
+  const result = installedSmokeOutcome({ smokeOutcome })
+  expect(result).toMatchObject({ status: 1, signal: null, errorCode: null, durationMs: 4200, receipts: ['session-roundtrip'] })
+  expect(result.failure).toHaveLength(800); expect(result.failure).not.toContain('\u001b')
+  expect(installedSmokeOutcome(new Error('no outcome'))).toBeUndefined()
+  expect(installedSmokeOutcome({ get smokeOutcome() { throw Error(marker) } })).toEqual({ unavailable: true })
 })

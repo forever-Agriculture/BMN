@@ -1,26 +1,9 @@
 {
   "description": "Epic 53 failing tests still owned by a port story. Open failures are not waived: the gate in scripts/test/unit-inventory-gate.mjs fails on any unlisted failure, and each story removes its entries as it repairs them.",
-  "source": "Native c7cec2f run37264964376: Windows3124 pass/19 fail/12 skipped; Linux3119/0/36skip. Fourteen launcher failures remain assigned below; five NEW worker-integration fixture failures are unlisted/unwaived and must be repaired. Existing16 keys remain unchanged: fourteen launcher obligations and two skipped socket equivalents. Native token metadata/cleanup nowPASS; ownership U. No failures added or waived.",
+  "source": "Native 8b9a915 run 37278665858: Windows 3147 pass/14 fail/12 skipped; Linux 3135/0/38 skipped. Both native control-endpoint equivalents passed (1131/1819 ms), so the two POSIX socket keys are removed; the POSIX cases stay Linux-only. The fourteen Linux shell-launcher obligations now have native equivalents in scripts/tests/windows-desktop-launcher.test.mjs; the POSIX launcher suite is Linux-only and its keys are removed, so any native equivalent failure is unlisted. No failures waived.",
   "minimumTests": 2650,
   "platforms": {
     "linux": {},
-    "win32": {
-      "apps/desktop/src/utility/control-server.test.ts > control server socket lifecycle creates a private directory and socket and removes the socket on close": "53.4",
-      "apps/desktop/src/utility/control-server.test.ts > control server socket lifecycle replaces a stale socket left by a crashed server": "53.4",
-      "scripts/tests/desktop-launcher.test.mjs > desktop launcher after a failed update with liveBuild new, says so and opens BMN, or opens the log instead when asked": "53.11",
-      "scripts/tests/desktop-launcher.test.mjs > desktop launcher after a failed update with liveBuild previous, says so and opens BMN, or opens the log instead when asked": "53.11",
-      "scripts/tests/desktop-launcher.test.mjs > desktop launcher after a failed update with liveBuild undefined, says so and opens BMN, or opens the log instead when asked": "53.11",
-      "scripts/tests/desktop-launcher.test.mjs > desktop launcher does not start a half-replaced build when the owner dismisses the window": "53.11",
-      "scripts/tests/desktop-launcher.test.mjs > desktop launcher falls back to a notification where zenity is not installed": "53.11",
-      "scripts/tests/desktop-launcher.test.mjs > desktop launcher forwards a start to the running BMN while the update waits for it to exit": "53.11",
-      "scripts/tests/desktop-launcher.test.mjs > desktop launcher holds a start while the update is building and BMN is closed": "53.11",
-      "scripts/tests/desktop-launcher.test.mjs > desktop launcher holds a start while the update is waiting-for-exit and BMN is closed": "53.11",
-      "scripts/tests/desktop-launcher.test.mjs > desktop launcher never reports an older failed update to a start that did not wait for one": "53.11",
-      "scripts/tests/desktop-launcher.test.mjs > desktop launcher opens nothing from the previous folder when an update stopped between its renames": "53.11",
-      "scripts/tests/desktop-launcher.test.mjs > desktop launcher opens nothing when the failed update left no build in place, and says so": "53.11",
-      "scripts/tests/desktop-launcher.test.mjs > desktop launcher says the same in the notification when zenity is not installed": "53.11",
-      "scripts/tests/desktop-launcher.test.mjs > desktop launcher shows the build step the owner is waiting on, and closes the window when the update ends": "53.11",
-      "scripts/tests/desktop-launcher.test.mjs > desktop launcher starts BMN at once when no update is queued": "53.11"
-    }
+    "win32": {}
   }
 }

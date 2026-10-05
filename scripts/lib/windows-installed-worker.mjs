@@ -17,6 +17,7 @@ import { inspectWindowsReleaseData } from './windows-release-data.mjs'
 import { validateWindowsReleasePayload, readInstallerDescriptor } from './windows-release-payload.mjs'
 import { quarantineWindowsSourceUpdate } from './windows-source-update.mjs'
 import { chooseWindowsUninstallData } from './windows-uninstall-choice.mjs'
+import { windowsUpdateFailure } from './windows-update-progress.mjs'
 
 const { copyFileSync, cpSync, rmSync } = physicalPayloadFs
 
@@ -84,10 +85,18 @@ export async function smokeWindowsInstalledPayload(root) {
   const profile = join(temporary, 'profile')
   try {
     ensurePrivateDirectories([profile])
+    const started = Date.now()
     const result = spawnSync(join(root, 'BMN.exe'), ['--self-test'], {
       env: windowsInstallerSmokeEnvironment(profile), encoding: 'utf8', timeout: 300000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 })
-    assert.ok(!result.error && result.status === 0, 'Installed candidate failed isolated smoke')
-    const receipts = result.stdout.split(/\r?\n/u).flatMap(line => { try { return [JSON.parse(line)] } catch { return [] } })
+    const receipts = String(result.stdout ?? '').split(/\r?\n/u).flatMap(line => { try { return [JSON.parse(line)] } catch { return [] } })
+    if (result.error || result.status !== 0) {
+      // The synthetic self-test's own failure line and exit status stay on the
+      // error for diagnosis; the update log records only its category and exit.
+      throw Object.assign(windowsUpdateFailure('Installed candidate failed isolated smoke', 'validation', result.status ?? undefined), { smokeOutcome: {
+        status: result.status, signal: result.signal, errorCode: result.error?.code, durationMs: Date.now() - started,
+        receipts: receipts.map(row => row?.selfTest).filter(name => typeof name === 'string'),
+        failure: /\[BMN\] session self-test failed: ([^\r\n]*)/u.exec(String(result.stderr ?? ''))?.[1] } })
+    }
     const receipt = receipts.find(row => row.selfTest === 'session-roundtrip')
     assert.ok(receipt?.nativeModules?.nodePty && receipt?.nativeModules?.betterSqlite3 && receipt?.graceful, 'Installed smoke receipt is incomplete')
     return receipt
@@ -116,7 +125,9 @@ export function refreshWindowsInstalledMetadata(root, release, payload = join(ro
     New-ItemProperty -Path $key -Name NoRepair -PropertyType DWord -Value 1 -Force | Out-Null;`, environment)
 }
 
-export async function installWindowsPayload({ source, root, dataRoot, descriptor, smoke = smokeWindowsInstalledPayload, refreshMetadata = refreshWindowsInstalledMetadata, beforeActivate = async () => {}, requireAlreadySelected = false }) {
+// Transaction phases are reported as update stages for the progress window only.
+const installStages = new Map([['validating', 'smoke'], ['checking-data', 'activate'], ['refreshing', 'metadata']])
+export async function installWindowsPayload({ source, root, dataRoot, descriptor, smoke = smokeWindowsInstalledPayload, refreshMetadata = refreshWindowsInstalledMetadata, beforeActivate = async () => {}, requireAlreadySelected = false, observe = () => {} }) {
   assert.equal(process.platform, 'win32', 'Native Windows installer required')
   root = resolve(root); dataRoot = resolve(dataRoot); source = resolve(source)
   await validateWindowsReleasePayload(source, descriptor)
@@ -127,6 +138,7 @@ export async function installWindowsPayload({ source, root, dataRoot, descriptor
   const anchor = pathToFileURL(join(source, 'resources/app.asar/package.json'))
   const native = loadWindowsInstallLease(anchor), Database = createRequire(anchor)('better-sqlite3')
   return activateWindowsRelease({ root, candidate: descriptor, beforeActivate, requireAlreadySelected,
+    checkpoint: async phase => { if (installStages.has(phase)) observe(installStages.get(phase)) },
     withLease: operation => withWindowsReleaseLeases(root, dataRoot, async () => {
       await waitForWindowsAppsToExit()
       ensurePrivateDirectories([root, dataRoot], 'win32', dataRoot)
@@ -177,23 +189,6 @@ export function removeWindowsDataAfterConfirmation(dataRoot, choice) {
   assert.ok(['retain', 'remove-all'].includes(choice), 'Data removal requires an explicit uninstall decision')
   if (choice === 'retain') return
   for (const name of readdirSync(dataRoot)) if (name !== 'update.lock') rmSync(join(dataRoot, name), { recursive: true })
-}
-
-export function startWindowsInstallNotice(message, { start = spawn, executable = systemPowerShell() } = {}) {
-  const script = `$ErrorActionPreference='Stop'; Import-Module ([System.IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1')); Add-Type -AssemblyName System.Windows.Forms;
-    [void][Windows.Forms.MessageBox]::Show($env:BMN_INSTALL_NOTICE,'BMN update',[Windows.Forms.MessageBoxButtons]::OK,[Windows.Forms.MessageBoxIcon]::Information);`
-  const child = start(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
-    { env: { ...process.env, BMN_INSTALL_NOTICE: message }, stdio: 'ignore', windowsHide: false })
-  const completion = new Promise((resolveExit, reject) => {
-    child.once('error', reject)
-    child.once('exit', (code, signal) => signal ? reject(new Error('Update notice closed with its worker')) : code === 0 ? resolveExit() : reject(new Error('Update notice unavailable')))
-  })
-  // Progress is informational. Closing it never cancels or alters queued work.
-  completion.catch(() => {})
-  return { completion, close: () => { if (child.exitCode === null && child.signalCode === null) child.kill() } }
-}
-export async function showWindowsInstallNotice(message) {
-  await startWindowsInstallNotice(message).completion
 }
 
 /** Keep the offline recovery engine; never delete its mapped executable or lock.

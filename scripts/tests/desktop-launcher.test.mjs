@@ -73,7 +73,9 @@ exit ${exit}
 `
 }
 
-describe('desktop launcher', () => {
+// The POSIX shell launcher is Linux-only; windows-desktop-launcher.test.mjs holds
+// the native Windows equivalent of each obligation below.
+describe.runIf(process.platform !== 'win32')('desktop launcher', () => {
   it('starts BMN at once when no update is queued', () => {
     const run = fixture({ phase: 'complete', activeChecks: 0, zenity: fakeZenity() })
     const result = spawnSync(run.launcher, ['--flag'], { env: run.env, encoding: 'utf8', timeout: 5_000 })

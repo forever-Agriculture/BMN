@@ -70,3 +70,19 @@ export function installedFailureDiagnostic(error, repo, { platform = process.pla
   } catch { result.diagnosticUnavailable = true }
   return result
 }
+
+const smokeSignals = new Set(['SIGTERM', 'SIGKILL', 'SIGINT', 'SIGABRT'])
+const smokeErrors = new Set(['ETIMEDOUT', 'ENOENT', 'EACCES', 'EPERM', 'ENOBUFS', 'UNKNOWN'])
+/** The synthetic isolated self-test outcome: numbers, fixed names and its own bounded failure line. */
+export function installedSmokeOutcome(error) {
+  try {
+    const value = error?.smokeOutcome
+    if (!value || typeof value !== 'object') return undefined
+    const integer = number => Number.isSafeInteger(number) ? number : null
+    return { status: integer(value.status), signal: smokeSignals.has(value.signal) ? value.signal : null,
+      errorCode: smokeErrors.has(value.errorCode) ? value.errorCode : null, durationMs: integer(value.durationMs),
+      receipts: Array.isArray(value.receipts) ? value.receipts.filter(name => /^[a-z0-9-]{1,48}$/u.test(name)).slice(0, 32) : [],
+      // eslint-disable-next-line no-control-regex
+      failure: typeof value.failure === 'string' ? value.failure.replace(/[\u0000-\u001f\u007f]/gu, ' ').slice(0, 800) : null }
+  } catch { return { unavailable: true } }
+}

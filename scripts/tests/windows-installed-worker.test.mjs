@@ -1,4 +1,3 @@
-import { EventEmitter } from 'node:events'
 import processes from 'node:child_process'
 import { syncBuiltinESMExports } from 'node:module'
 import { basename } from 'node:path'
@@ -7,7 +6,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { expect, it, vi } from 'vitest'
-import { startWindowsInstallNotice, removeWindowsInstalledPayloads, windowsMappedEnginePayloads, waitForWindowsAppsToExit, windowsInstallerSmokeEnvironment } from '../lib/windows-installed-worker.mjs'
+import { removeWindowsInstalledPayloads, windowsMappedEnginePayloads, waitForWindowsAppsToExit, windowsInstallerSmokeEnvironment } from '../lib/windows-installed-worker.mjs'
 
 it('waits for utilities and for a quiet observation after a relaunch', async () => {
   const observations = [[10, 20], [10], [10, 30], [10], [10]]
@@ -87,20 +86,3 @@ it('retains every observed mapped managed engine and ignores other installations
   } finally { rmSync(temporary, { recursive: true, force: true }) }
 })
 
-it('shows an asynchronous owned notice with no deadline and closes only its own child', async () => {
-  const child = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null, kill: vi.fn() })
-  const start = vi.fn(() => child)
-  const notice = startWindowsInstallNotice('synthetic update status', { start, executable: 'C:\\Windows\\powershell.exe' })
-  const options = start.mock.calls[0][2]
-  expect(options.env.BMN_INSTALL_NOTICE).toBe('synthetic update status')
-  expect(options.timeout).toBeUndefined(); expect(options.windowsHide).toBe(false)
-  notice.close(); expect(child.kill).toHaveBeenCalledOnce()
-  child.emit('exit', 0, null); await notice.completion
-  child.exitCode = 0; notice.close(); expect(child.kill).toHaveBeenCalledOnce()
-})
-it('propagates a failed notice child without turning its output into executable text', async () => {
-  const child = new EventEmitter()
-  const notice = startWindowsInstallNotice('literal % ^& "text"', { start: () => child, executable: 'synthetic' })
-  child.emit('error', new Error('synthetic unavailable notice'))
-  await expect(notice.completion).rejects.toThrow('unavailable notice')
-})

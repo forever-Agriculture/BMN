@@ -8,11 +8,14 @@ import { join } from 'node:path'
 import { ensurePrivateDirectories } from '../../apps/desktop/src/utility/private-directory.ts'
 import { windowsSourceReadiness } from './windows-source-update.mjs'
 import { readInstallerDescriptor, validateWindowsReleasePayload } from './windows-release-payload.mjs'
+import { windowsUpdateFailure } from './windows-update-progress.mjs'
 
 export function executeWindowsSourceCommand(command, args, cwd) {
   const result = spawnSync(command, args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 1800000,
     maxBuffer: 16 * 1024 * 1024 })
-  assert.ok(!result.error && result.status === 0, 'Windows source build command failed; previous installation is retained')
+  if (result.error || result.status !== 0) {
+    throw windowsUpdateFailure('Windows source build command failed; previous installation is retained', 'command', result.status ?? undefined)
+  }
   return result.stdout.trim()
 }
 export function readWindowsSourceState(repo, execute = executeWindowsSourceCommand) {
@@ -25,12 +28,13 @@ export async function buildFrozenWindowsSource(identity, {
   makeWorkspace = () => {
     const scratch = join(tmpdir(), `bmn-windows-source-build-${randomUUID()}`)
     ensurePrivateDirectories([scratch]); return scratch
-  }, readDescriptor = readInstallerDescriptor, validatePayload = validateWindowsReleasePayload, onWorkspace = async () => {}
+  }, readDescriptor = readInstallerDescriptor, validatePayload = validateWindowsReleasePayload, onWorkspace = async () => {},
+  observe = () => {}
 } = {}) {
   const { repo, commit, node, pnpm } = identity
   const verify = () => {
     const readiness = windowsSourceReadiness(readWindowsSourceState(repo, execute), commit)
-    assert.equal(readiness, null, readiness ?? undefined)
+    if (readiness !== null) throw windowsUpdateFailure(readiness, 'source')
   }
   verify()
   const scratch = makeWorkspace(), frozen = join(scratch, 'checkout')
@@ -39,8 +43,8 @@ export async function buildFrozenWindowsSource(identity, {
   assert.equal(execute('git', ['rev-parse', 'HEAD'], frozen), commit, 'Snapshot has the wrong source commit')
   assert.equal(execute('git', ['status', '--porcelain'], frozen), '', 'Snapshot is not clean')
   verify()
-  execute(node, [pnpm, 'install', '--frozen-lockfile'], frozen)
-  execute(node, [pnpm, 'run', 'package'], frozen)
+  observe('install'); execute(node, [pnpm, 'install', '--frozen-lockfile'], frozen)
+  observe('package'); execute(node, [pnpm, 'run', 'package'], frozen)
   assert.equal(execute('git', ['rev-parse', 'HEAD'], frozen), commit, 'Source identity changed during packaging')
   assert.equal(execute('git', ['status', '--porcelain'], frozen), '', 'Packaging changed tracked source')
   verify()

@@ -1,11 +1,15 @@
 import { fileURLToPath } from 'node:url'
-import { installWindowsPayload, launchWindowsInstalled, uninstallWindowsPayload, observeWindowsSelectedApps, startWindowsInstallNotice, showWindowsInstallNotice } from '../lib/windows-installed-worker.mjs'
+import { installWindowsPayload, launchWindowsInstalled, uninstallWindowsPayload, observeWindowsSelectedApps } from '../lib/windows-installed-worker.mjs'
 import { readInstallerDescriptor } from '../lib/windows-release-payload.mjs'
 import { windowsEnvironmentValue } from '../../apps/desktop/bin/windows-env.mjs'
 import { join } from 'node:path'
 import { windowsInstallFailureMessage, writeWindowsInstallResult } from '../lib/windows-install-result.mjs'
 import { readWindowsSourceUpdate } from '../lib/windows-source-update.mjs'
-import { windowsQueuedStartMode } from '../lib/windows-update-launch.mjs'
+import { runWindowsDesktopStart, windowsUpdateTexts } from '../lib/windows-update-launch.mjs'
+import { askWindowsUpdateQuestion, notifyWindowsUpdate, showWindowsUpdateLog, startWindowsUpdateProgress } from '../lib/windows-update-ui.mjs'
+import { WINDOWS_UPDATE_LOG, readWindowsUpdateLog, renderWindowsUpdateLog } from '../lib/windows-update-progress.mjs'
+import { readWindowsInstallation } from '../lib/windows-release-transaction.mjs'
+import { randomUUID } from 'node:crypto'
 import { resumeWindowsSourceUpdate } from '../lib/windows-source-resume.mjs'
 import { assertWindowsWorkerImage, delegateWindowsInstalledEngine } from '../lib/windows-installed-engine.mjs'
 
@@ -34,22 +38,25 @@ async function main() {
   }
   const local = windowsEnvironmentValue(process.env, 'LOCALAPPDATA')
   if (!local) throw new Error('Windows user data location is unavailable')
-  const queued = readWindowsSourceUpdate(join(root, 'requests/source-update.json'))
-  if (queued && ['queued', 'waiting'].includes(queued.phase) && windowsQueuedStartMode(queued, observeWindowsSelectedApps(root)) === 'forward') {
-    return launchWindowsInstalled(root, arguments_, { engineRoot })
-  }
-  let progress
-  if (queued && !['complete', 'failed'].includes(queued.phase)) {
-    progress = startWindowsInstallNotice('BMN is updating and will open when the update finishes. Close any running BMN to let it finish. This notice closes when the work finishes; dismissing it keeps the update running.')
-  }
-  try {
-    await resumeWindowsSourceUpdate(root, { dataRoot: join(local, 'BMN/data'), engineRoot, installPayload: installWindowsPayload,
-      waitForExit: async () => (await import('../lib/windows-installed-worker.mjs')).waitForWindowsAppsToExit(),
-      notify: async request => { progress?.close(); return showWindowsInstallNotice(request.phase === 'complete'
-        ? `BMN ${request.commit.slice(0, 12)} is installed. Open BMN to use it.`
-        : windowsInstallFailureMessage(root)) } })
-  } finally { progress?.close() }
-  return launchWindowsInstalled(root, arguments_, { engineRoot })
+  const requests = join(root, 'requests'), windows = join(requests, 'windows')
+  return runWindowsDesktopStart({
+    readRequest: () => readWindowsSourceUpdate(join(requests, 'source-update.json')),
+    readSelection: () => readWindowsInstallation(root),
+    observeSelectedApps: () => observeWindowsSelectedApps(root),
+    launch: () => launchWindowsInstalled(root, arguments_, { engineRoot }),
+    // The launcher decides after the request lease is released; the durable
+    // request and selection, not this callback, carry completion.
+    resume: () => resumeWindowsSourceUpdate(root, { dataRoot: join(local, 'BMN/data'), engineRoot, installPayload: installWindowsPayload,
+      waitForExit: async () => (await import('../lib/windows-installed-worker.mjs')).waitForWindowsAppsToExit(), notify: async () => {} }),
+    readLog: request => renderWindowsUpdateLog(readWindowsUpdateLog(requests, request?.attemptId), request?.commit),
+    ui: {
+      startProgress: request => startWindowsUpdateProgress({ parent: windows, attemptId: request.attemptId ?? randomUUID(),
+        progressPath: join(requests, WINDOWS_UPDATE_LOG), text: windowsUpdateTexts.progress }),
+      ask: options => askWindowsUpdateQuestion({ parent: windows, ...options }),
+      showLog: text => showWindowsUpdateLog({ parent: windows, text }),
+      notify: (title, text) => notifyWindowsUpdate({ title, text })
+    }
+  })
 }
 main().then(code => { process.exitCode = code ?? 0 }).catch(() => {
   // Detailed paths and inherited environment never appear in a public dialog.
