@@ -14,7 +14,11 @@ import { windowsEnvironmentValue } from '../../apps/desktop/bin/windows-env.mjs'
 import { WindowsUpdateDecisionLatch } from './windows-update-decisions.mjs'
 
 export const WINDOWS_APP_ID = 'dev.bmn.desktop'
+// Load the trusted OS module before any cmdlet: under the update windows' reduced environment PowerShell's
+// command discovery took 30 s to find Add-Type (native start-cost probe, run 37305378805).
 const prelude = `$ErrorActionPreference='Stop'
+Import-Module ([IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1'))
+$PSModuleAutoLoadingPreference='None'
 Add-Type -AssemblyName System.Windows.Forms,System.Drawing
 [Windows.Forms.Application]::EnableVisualStyles()
 $directory=$env:BMN_UPDATE_UI_DIRECTORY
@@ -41,8 +45,7 @@ function New-Button([string]$text,[int]$x,[int]$y) {
 `
 // Progress is informational: nothing it offers stops the update, and closing it
 // any way other than the parent's completion request suppresses opening BMN.
-const progressScript = prelude + `Import-Module ([IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1'))
-function Read-Progress {
+const progressScript = prelude + `function Read-Progress {
   try {
     $stream=[IO.File]::Open($env:BMN_UPDATE_PROGRESS,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]'ReadWrite, Delete')
     try {

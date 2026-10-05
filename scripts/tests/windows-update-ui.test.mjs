@@ -141,21 +141,31 @@ describe.runIf(native)('native Windows update windows', () => {
   it('records where an update window spends its start time', async () => {
     const product = windowEnvironment({}, process.env), full = { ...process.env }
     const winforms = 'Add-Type -AssemblyName System.Windows.Forms,System.Drawing'
+    // The product prelude's order, timed inside the process: module import, then Add-Type with discovery off.
+    const explicitImport = ["$watch=[Diagnostics.Stopwatch]::StartNew()",
+      "Import-Module ([IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1'))",
+      '$imported=$watch.ElapsedMilliseconds', "$PSModuleAutoLoadingPreference='None'", winforms,
+      "[Console]::Out.Write([string]::Format('{0},{1}',$imported,$watch.ElapsedMilliseconds))", 'exit 0'].join('\n')
     const stages = [
       ['bare', 'product', 'exit 0', product],
       ['bare', 'full', 'exit 0', full],
       ['winforms-load', 'product', `${winforms}; exit 0`, product],
       ['winforms-load', 'full', `${winforms}; exit 0`, full],
+      ['winforms-load', 'product-explicit-import', explicitImport, product],
       ['form-shown', 'product', `${winforms}; $form=New-Object Windows.Forms.Form; $form.Add_Shown({ [Environment]::Exit(0) }); [void]$form.ShowDialog()`, product]
     ]
     const results = []
     for (const [stage, environment, script, env] of stages) {
-      const begun = Date.now(), child = start(systemPowerShell(), windowArguments(`$ErrorActionPreference='Stop'\n${script}`), { env, stdio: 'ignore', windowsHide: false })
+      const begun = Date.now(), child = start(systemPowerShell(), windowArguments(`$ErrorActionPreference='Stop'\n${script}`), { env, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: false })
+      let output = ''
+      child.stdout.on('data', data => { output += data })
       const outcome = await Promise.race([
         new Promise(resolve => { child.once('error', error => resolve({ error: error.code ?? 'unknown' })); child.once('exit', code => resolve({ code })) }),
         delay(50000).then(() => ({ timedOut: true }))])
       if (outcome.timedOut) { child.kill(); await exited(child) }
-      results.push({ stage, environment, elapsedMs: Date.now() - begun, ...outcome })
+      const inner = /^(\d+),(\d+)$/u.exec(output.trim())
+      results.push({ stage, environment, elapsedMs: Date.now() - begun, ...outcome,
+        ...(inner ? { importMs: Number(inner[1]), importAndAddTypeMs: Number(inner[2]) } : {}) })
     }
     console.log(JSON.stringify({ nativeDiagnostic: 'update-window-start-cost', observationOnly: true, results }))
     expect(results).toHaveLength(stages.length)
