@@ -22,12 +22,10 @@ import { prepareWindowsPtyLaunch } from './windows-launch'
 // scroll-79 for ~18 s and resumed after a typed probe line; so these variants move toward the pane's size, prompt
 // and console host. Unlike the packaged line, this one also writes two marker files around SCROLLED, which can
 // change timing; a reproduction here still needs a marker-free replay before it stands for the packaged failure.
-// Console input released the packaged pane's output, so two variants add what BMN does and this harness did not:
-// pausing the reader by view credit, and the focus reports a view sends. BMN's node-pty refuses the console host
-// built into Windows ('BMN requires bundled ConPTY'), so no variant can compare against it. Run 37374000775: those two
-// and every earlier variant printed SCROLLED, and the packaged pane's reader held nothing when it stopped. So the
-// variants now replay the packaged pane's own history before the animation: created at 80x24 and resized to the
-// pane, and a raw Sixel frame the shell printed through the console. The retired variants keep their switches.
+// Attempt11 printed SCROLLED during the post-nudge window, BEFORE the typed probe; reader credit, focus and time
+// were confounded. The packaged pane also received its DA1 reply ~6 s after spawn, and its first typed command
+// arrived during ConPTY's startup wait. These variants isolate reply content/timing and startup type-ahead while
+// retaining the pane history. The harness has no Electron/IPC credit path: a pass never clears that path.
 
 const windows = process.platform === 'win32'
 
@@ -57,22 +55,27 @@ interface Variant {
   readonly rawSixel: boolean
   /** The scroll line also writes a file just before and just after SCROLLED (the packaged line does too). */
   readonly markers: boolean
+  /** Only DA1 replies change; other terminal replies keep their normal timing and content. */
+  readonly da1: 'headless' | 'exact' | 'late' | 'absent'
+  /** Type a harmless command during the initial ConPTY preamble, before the first prompt. */
+  readonly typeAhead: boolean
 }
 
 const PRODUCTION: Variant = { name: 'as-self-test', launcher: true, images: true, afterPrompt: false, replies: true,
   cols: 80, rows: 24, prompt: 'fixture', pausedReader: false, focusReports: false, resizedFrom: null, rawSixel: false,
-  markers: true }
+  markers: true, da1: 'headless', typeAhead: false }
 /** The packaged pane: 46x27 with the self-test's 90-character prompt (`PS <cwd>> `). */
 const PANE: Variant = { ...PRODUCTION, name: 'pane', cols: 46, rows: 27, prompt: 'matched' }
+const HISTORY: Variant = { ...PANE, name: 'pane-history', resizedFrom: { cols: 80, rows: 24 }, rawSixel: true }
+const PACKAGED_DA1 = '\x1b[?62;4;9;22c'
 const PACKAGED_PROMPT_WIDTH = 90
 // Most informative first: a variant that would start after the time budget is recorded as skipped.
 const WINDOWS_VARIANTS: readonly Variant[] = [
   PRODUCTION,
-  PANE,
-  { ...PANE, name: 'pane-history', resizedFrom: { cols: 80, rows: 24 }, rawSixel: true },
-  { ...PANE, name: 'pane-raw-sixel', rawSixel: true },
-  { ...PANE, name: 'pane-resized-from-80x24', resizedFrom: { cols: 80, rows: 24 } },
-  { ...PANE, name: 'pane-history-no-markers', resizedFrom: { cols: 80, rows: 24 }, rawSixel: true, markers: false }
+  { ...HISTORY, name: 'da1-immediate-exact', da1: 'exact' },
+  { ...HISTORY, name: 'da1-late-typeahead', da1: 'late', typeAhead: true },
+  { ...HISTORY, name: 'da1-late', da1: 'late' },
+  { ...HISTORY, name: 'da1-absent', da1: 'absent' }
 ]
 
 const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds))
@@ -104,8 +107,10 @@ async function scrollSequence(variant: Variant, save: (record: Record<string, un
   let exited: Promise<void> = Promise.resolve()
   let stream = ''
   let bytes = 0
+  let replyTimer: ReturnType<typeof setTimeout> | undefined
   // Records what the stream held and ends the shell; a failure here is recorded beside the observation, never instead.
   const finish = async (): Promise<void> => {
+    if (replyTimer !== undefined) clearTimeout(replyTimer)
     const queries: Record<string, number> = {}
     // eslint-disable-next-line no-control-regex
     for (const match of stream.matchAll(/\x1b\[[?>=]?[\d;]*[cn]/gu)) queries[escaped(match[0])] = (queries[escaped(match[0])] ?? 0) + 1
@@ -161,6 +166,7 @@ async function scrollSequence(variant: Variant, save: (record: Record<string, un
     if (variant.prompt === 'matched') mkdirSync(cwd)
     const prompt = `PS ${cwd}>`
     record.promptWidth = prompt.length + 1
+    const spawnedAtMs = Date.now()
     if (windows) {
       const shell = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
       const native = prepareWindowsPtyLaunch(shell, ['-NoLogo', '-NoProfile'], cwd, environment)
@@ -172,6 +178,14 @@ async function scrollSequence(variant: Variant, save: (record: Record<string, un
         env: environment, encoding: null } as Parameters<typeof spawn>[2])
     }
     const live = pty
+    record.spawnedAtMs = spawnedAtMs
+    const input: Array<{ atMs: number; elapsedMs: number; outputBytes: number; text: string }> = []
+    record.input = input
+    const write = (text: string): void => {
+      const atMs = Date.now()
+      input.push({ atMs, elapsedMs: atMs - spawnedAtMs, outputBytes: bytes, text: escaped(text) })
+      live.write(text)
+    }
     exited = new Promise((resolve) => live.onExit(() => resolve()))
     let sincePause = 0
     record.pauses = 0
@@ -180,6 +194,10 @@ async function scrollSequence(variant: Variant, save: (record: Record<string, un
       const size = typeof data === 'string' ? Buffer.byteLength(data) : data.byteLength
       bytes += size
       stream += text
+      if (variant.typeAhead && record.typeAheadWrittenMs === undefined && bytes >= 23 && stream.includes('\x1b[c')) {
+        record.typeAheadWrittenMs = Date.now() - spawnedAtMs
+        write("Write-Output ('TYPE' + 'AHEAD')\r")
+      }
       terminal.write(text)
       sincePause += size
       if (variant.pausedReader && sincePause >= 256 * 1024) {
@@ -189,7 +207,24 @@ async function scrollSequence(variant: Variant, save: (record: Record<string, un
         setTimeout(() => live.resume(), 20)
       }
     })
-    if (variant.replies) terminal.onData((answer) => live.write(answer))
+    const da1: Array<{ querySeenMs: number; headlessReply: string; replyWrittenMs?: number; reply?: string; suppressed?: boolean }> = []
+    record.da1Replies = da1
+    if (variant.replies) terminal.onData((answer) => {
+      // xterm emits a complete DA1 response in one callback. Leave every other query response untouched.
+      // eslint-disable-next-line no-control-regex
+      if (!/^\x1b\[\?[\d;]*c$/u.test(answer)) { write(answer); return }
+      const response: typeof da1[number] = { querySeenMs: Date.now() - spawnedAtMs, headlessReply: escaped(answer) }
+      da1.push(response)
+      const reply = variant.da1 === 'headless' ? answer : PACKAGED_DA1
+      const send = (): void => {
+        response.replyWrittenMs = Date.now() - spawnedAtMs
+        response.reply = escaped(reply)
+        write(reply)
+      }
+      if (variant.da1 === 'absent') response.suppressed = true
+      else if (variant.da1 === 'late') replyTimer = setTimeout(send, Math.max(0, 6_000 - (Date.now() - spawnedAtMs)))
+      else send()
+    })
     let promptSeen = ''
     const promptShown = () => {
       const buffer = terminal.buffer.active
@@ -214,6 +249,10 @@ async function scrollSequence(variant: Variant, save: (record: Record<string, un
       throw new Error('the shell never showed its first prompt')
     }
     record.firstPromptCursor = { x: terminal.buffer.active.cursorX, y: terminal.buffer.active.cursorY }
+    if (variant.typeAhead) {
+      record.typeAheadSeenMs = await until(() => stream.includes('TYPEAHEAD'), 10_000)
+      if (record.typeAheadSeenMs === null) throw new Error('the startup type-ahead command never printed its marker')
+    }
     if (variant.resizedFrom) {
       terminal.resize(variant.cols, variant.rows)
       live.resize(variant.cols, variant.rows)
@@ -221,12 +260,12 @@ async function scrollSequence(variant: Variant, save: (record: Record<string, un
     }
     if (variant.rawSixel) {
       const fixtureFrom = stream.length
-      live.write(windows ? `[Console]::Out.Write([IO.File]::ReadAllText(${powerShellQuote(rawFrame)}))\r` : `cat '${rawFrame}'\r`)
+      write(windows ? `[Console]::Out.Write([IO.File]::ReadAllText(${powerShellQuote(rawFrame)}))\r` : `cat '${rawFrame}'\r`)
       record.rawSixelMs = await until(() => stream.slice(fixtureFrom).includes('"1;1;60;75') && promptShown(), 10_000)
       if (record.rawSixelMs === null) throw new Error('the shell never printed the raw Sixel frame and a prompt after it')
     }
-    live.write(animationLine)
-    if (variant.focusReports) live.write('\x1b[O')
+    write(animationLine)
+    if (variant.focusReports) write('\x1b[O')
     record.codexDoneMs = await until(() => stream.includes('CODEX-RATE-DONE'), 30_000)
     record.maxDoneMs = await until(() => stream.includes('MAX-RATE-DONE'), 30_000)
     if (record.maxDoneMs === null) throw new Error('the animation never finished')
@@ -236,10 +275,10 @@ async function scrollSequence(variant: Variant, save: (record: Record<string, un
       // Without its prompt this variant would only repeat the typed-ahead case.
       if (record.promptAfterAnimationMs === null) throw new Error('the prompt never returned after the animation')
     }
-    if (variant.focusReports) live.write('\x1b[I')
+    if (variant.focusReports) write('\x1b[I')
     const typedAt = Date.now()
     const scrollFrom = stream.length
-    live.write(scrollLine)
+    write(scrollLine)
     record.scrolledMs = await until(() => stream.includes('SCROLLED'), 10_000)
     // A fresh prompt: one drawn after SCROLLED, not a match left on the screen.
     const scrolledEnd = () => stream.indexOf('SCROLLED', scrollFrom) + 'SCROLLED'.length
@@ -258,6 +297,7 @@ async function scrollSequence(variant: Variant, save: (record: Record<string, un
     stage('wait')
     // The reader worker's own state at the outcome (null on POSIX), the same answer the self-test records.
     record.readerAtOutcome = await conptyReaderState(live)
+    record.da1Echoed = stream.includes('62;4;9;22c')
     save(record)
 
     // The same two interventions the self-test makes once output stops; here they also run when it did not, to show
@@ -279,7 +319,7 @@ async function scrollSequence(variant: Variant, save: (record: Record<string, un
       // Last, typed input, after which the packaged pane printed again: whether SCROLLED shows up then, and where
       // relative to the probe's own output. A later appearance shows delayed observation, not where bytes waited.
       const probeFrom = stream.length
-      live.write(windows ? "Write-Output ('PRO' + 'BE')\r" : "printf '%s%s\\n' PRO BE\r")
+      write(windows ? "Write-Output ('PRO' + 'BE')\r" : "printf '%s%s\\n' PRO BE\r")
       record.probeMs = await until(() => stream.slice(probeFrom).includes('PROBE'), 5_000)
       stage('probe')
       const afterTyped = stream.slice(probeFrom)
@@ -332,7 +372,7 @@ describe('a pane keeps printing after a Codex-style Sixel animation (self-test S
   }, 300_000)
 
   it.runIf(!windows)('prints SCROLLED in bash and the shell writes past it (the sequence itself, plain and after the pane history)', async () => {
-    for (const variant of [PRODUCTION, WINDOWS_VARIANTS.find((candidate) => candidate.name === 'pane-history')!]) {
+    for (const variant of [PRODUCTION, HISTORY]) {
       const record = await scrollSequence(variant)
       expect(record.error ?? null, JSON.stringify(record)).toBeNull()
       expect(record.scrolledMs, JSON.stringify(record)).not.toBeNull()

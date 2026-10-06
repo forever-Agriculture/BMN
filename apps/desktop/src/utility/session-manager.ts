@@ -335,7 +335,7 @@ interface SessionManagerOptions {
   sessionPath?: () => string
   /** Addressed-control variables added after the private-variable filter for each process incarnation. */
   sessionEnvironment?: (identity: SessionIdentity) => Readonly<Record<string, string>>
-  /** Electron self-test host only: keep each session's last input writes for `outputStateForSelfTest`. */
+  /** Electron self-test host only: keep bounded input writes and output event times for `outputStateForSelfTest`. */
   recordInputForSelfTest?: boolean
 }
 
@@ -369,6 +369,8 @@ interface LiveSession extends SessionIdentity {
   mirror?: ScreenMirror | undefined
   /** Electron self-test host only: the last input writes, oldest first, as escaped text within SELF_TEST_INPUT_RECORD_CHARS. */
   inputRecord?: Array<{ at: number; outputBytes: number; text: string }>
+  /** Electron self-test host only: output arrival times and counts, without contents. */
+  outputRecord?: Array<{ atMs: number; outputBytes: number; chunkBytes: number }>
   undeliveredOutput: TerminalFrame[]
   undeliveredOutputState: UndeliveredOutputState
   exitComplete: Promise<void>
@@ -1522,7 +1524,7 @@ export class SessionManager {
       decsetModes: new DecsetModeTracker(),
       programCopy: new Osc52Reader(),
       outputTail: new OutputTail(),
-      ...(this.recordInput ? { inputRecord: [] } : {}),
+      ...(this.recordInput ? { inputRecord: [], outputRecord: [] } : {}),
       undeliveredOutput: [],
       undeliveredOutputState: {
         limitBytes: this.undeliveredOutputLimitBytes,
@@ -1925,8 +1927,8 @@ export class SessionManager {
         writableBytes: stream.writableLength ?? null, awaitingDrain: stream.writableNeedDrain ?? null } : null,
       view: live.outputQueue?.flowState ?? null, tail: text, ...(since ? { since } : {}),
       // What was written to the program, oldest first: when (ms before this answer), how much it had printed by then.
-      ...(live.inputRecord ? { input: live.inputRecord.map((write) => ({ agoMs: Date.now() - write.at,
-        outputBytes: write.outputBytes, text: write.text })) } : {}) }
+      ...(live.inputRecord ? { input: live.inputRecord.map((write) => ({ atMs: write.at, agoMs: Date.now() - write.at,
+        outputBytes: write.outputBytes, text: write.text })), outputEvents: live.outputRecord?.map(event => ({ ...event })) } : {}) }
   }
 
   /**
@@ -2574,6 +2576,10 @@ export class SessionManager {
     // the view is gone, because that is exactly when the next view will need it.
     session.decsetModes.read(bytes)
     session.outputTail.push(bytes)
+    if (session.outputRecord) {
+      session.outputRecord.push({ atMs: Date.now(), outputBytes: session.outputTail.pushedBytes, chunkBytes: bytes.byteLength })
+      if (session.outputRecord.length > 128) session.outputRecord.shift()
+    }
     session.mirror?.write(bytes)
     // Neither the port watch nor a clipboard write may cost the view this chunk: a failure in one stops here.
     try {

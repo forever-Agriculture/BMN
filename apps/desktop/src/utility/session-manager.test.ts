@@ -1082,6 +1082,26 @@ describe('shell session lifecycle', () => {
     expect(manager.outputStateForSelfTest(created.sessionId, 600, 23)).toMatchObject({ since: { complete: true, text: '' } })
     // Input is recorded only in a self-test host.
     expect(manager.outputStateForSelfTest(created.sessionId)).not.toHaveProperty('input')
+    expect(manager.outputStateForSelfTest(created.sessionId)).not.toHaveProperty('outputEvents')
+  })
+
+  it('records bounded output event times only in a self-test host, independently of input writes', async () => {
+    const { manager, pty, cwd } = await fixture(undefined, undefined, true)
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath, argv: [], cols: 80, rows: 24 })
+    const started = Date.now()
+    pty.emit('SCROLLED\r\n')
+    pty.emit('prompt> ')
+    const events = manager.outputStateForSelfTest(created.sessionId)?.outputEvents as Array<{ atMs: number; outputBytes: number; chunkBytes: number }>
+    expect(events).toHaveLength(2)
+    expect(events[0]).toMatchObject({ outputBytes: 10, chunkBytes: 10 })
+    expect(events[1]).toMatchObject({ outputBytes: 18, chunkBytes: 8 })
+    expect(events[0]!.atMs).toBeGreaterThanOrEqual(started)
+    expect(events[1]!.atMs).toBeGreaterThanOrEqual(events[0]!.atMs)
+    for (let i = 0; i < 140; i++) pty.emit('x')
+    const bounded = manager.outputStateForSelfTest(created.sessionId)?.outputEvents as Array<{ outputBytes: number }>
+    expect(bounded).toHaveLength(128)
+    expect(bounded.at(-1)?.outputBytes).toBe(158)
+    expect(bounded[0]!.outputBytes).toBe(31)
   })
 
   it('records, in a self-test host only, each input write in order with how much the session had printed by then', async () => {

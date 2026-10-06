@@ -750,6 +750,31 @@ The packaged `--self-test` printed nothing for 120 s on native Windows: stderr 0
 - So the missing output never reached BMN's host process. It stopped in PowerShell, in the bundled ConPTY (`useConptyDll`), or in node-pty's reader for ConPTY's output. Which one is **UNVERIFIED**. The pane's last lines were identical in all four runs that reached this step.
 - The installed smoke again kept its verdict and recorded `EPERM` for its profile removal. The alternate-screen and quit steps come after SCROLLED, so their Windows forms are still **UNVERIFIED** natively.
 
+## SCROLLED diagnosis after attempts 10 and 11
+
+[Attempt 10](https://github.com/forever-Agriculture/BMN/actions/runs/37374000775)
+and [attempt 11](https://github.com/forever-Agriculture/BMN/actions/runs/37424957512)
+passed the Linux job and five side workflows. Windows packaged startup still failed
+at SCROLLED. The new reader fixture also failed natively: first it used a Unix socket
+path, then it awaited a large pipe write before allowing the credit-gated reader to
+drain it. Those fixture repairs need native confirmation on the next candidate.
+
+Attempt 11's shell wrote the file before SCROLLED but had not written the file after
+it when the assertion failed. BMN's reader had a credit, no buffered output and equal
+read/posted/host byte counts. This does not establish the cause or exonerate the
+reader: SCROLLED and the prompt appeared during the post-nudge window, **before**
+the later typed probe, with no new console input bytes. Attempt 10 stayed silent
+through resize and resumed after the probe. The fixed observation order confounds
+elapsed time, focus reports and the extra read credit.
+
+The next diagnostic separates focus from the credit with a five-second silent wait
+and records bounded output-event timestamps in the self-test host only. The reduced
+native harness compares the pane's history with exact immediate, six-second delayed,
+delayed plus startup type-ahead, and absent DA1 capability replies. The packaged pane
+answered DA1 about six seconds after startup; the earlier harness answered immediately
+and did not record the reply content. The original SCROLLED assertion is unchanged;
+the cause, native repair and full parity remain **UNVERIFIED**.
+
 ## Codex typed in a Windows session (53.6, local candidate)
 
 On Linux, `bin/codex` sits first on a session's PATH and adds `--no-daemon` to Codex typed in the shell. A shared Codex app-server daemon keeps the environment of the terminal that started it, so without this its hooks could carry another session's BMN credentials. Windows shipped no equivalent, so Codex typed in a Windows session's shell could join such a daemon.

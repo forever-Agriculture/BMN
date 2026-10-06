@@ -1152,12 +1152,13 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       // output, so each record says only what was seen after its own stage. Everything shares one deadline (32 s),
       // each stage is printed as it completes, and a failure inside the observation is recorded beside the original
       // failure, never instead of it.
-      const observed: Record<string, unknown> = {}
+      const observed: Record<string, unknown> = { scrollTypedAtMs: lastMarkerSeen, failureAtMs: Date.now(), stageAtMs: {} }
       const deadline = Date.now() + 32_000
       const remaining = () => deadline - Date.now()
       const bounded = <T>(work: Promise<T>, milliseconds: number, late: T): Promise<T> =>
         Promise.race([work, new Promise<T>((resolve) => setTimeout(resolve, Math.max(0, Math.min(milliseconds, remaining())), late))])
       const record = (stage: string, value: unknown): void => {
+        (observed.stageAtMs as Record<string, number>)[stage] = Date.now()
         observed[stage] = value
         console.error(`[BMN] self-test observation: ${stage} ${JSON.stringify(value).slice(0, 600)}`)
       }
@@ -1184,7 +1185,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
           typeof (atFailure as { outputBytes?: unknown }).outputBytes === 'number' ? (atFailure as { outputBytes: number }).outputBytes : undefined
         record('viewAtFailure', await viewState())
         const lateStart = Date.now()
-        record('lateMs', await appeared('SCROLLED', 8_000) ? Date.now() - lateStart : null)
+        record('lateMs', await appeared('SCROLLED', 4_000) ? Date.now() - lateStart : null)
         record('afterWait', await hostOutput(failureBytes))
         const settle = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, Math.max(0, Math.min(milliseconds, remaining()))))
         // Focus out and back in, as the view reports them once ConPTY has turned focus reporting on: input the
@@ -1193,7 +1194,9 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         record('focusReport', await bounded(typeIntoAnimatedPane('\x1b[O\x1b[I')
           .then(() => 'accepted', (failure: unknown) => `refused: ${failure instanceof Error ? failure.message : String(failure)}`),
         2_000, 'no answer within 2 s'))
-        await settle(2_000)
+        // Separate focus from the extra read credit: attempt11 printed ~3 s after focus, during the old
+        // post-nudge window. A full 5 s without a nudge distinguishes those interventions.
+        await settle(5_000)
         record('afterFocusReport', await hostOutput(failureBytes))
         // One extra read credit for the Windows ConPTY output reader (it bypasses the reader's one-chunk
         // backpressure): output after it is consistent with a reader that held output or stopped reading, or with
