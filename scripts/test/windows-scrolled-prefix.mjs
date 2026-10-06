@@ -35,12 +35,21 @@ export async function recordScrolledPrefixes(binary, budgetMs = 600_000) {
       receiptCount: 0, observationCount: 0, custody: 'unconfirmed', exitObserved: false, closeObserved: false }
     record.arms.push(row); save()
     let child, observerPromise, observer, readyCount = 0, preserveProfile = false, receiptWriteFailure
+    const traceInput = event => {
+      const events = row.parentInputEvents ??= []
+      if (events.length < 16) events.push({ event, atMs: Date.now(), writable: child.stdin.writable,
+        ended: child.stdin.writableEnded, finished: child.stdin.writableFinished, destroyed: child.stdin.destroyed })
+    }
+    const kill = reason => { traceInput(`kill-${reason}`); return child.kill() }
     try {
       ensurePrivateDirectories([profile])
       child = spawn(binary, ['--self-test', `--scrolled-diagnostic=${arm}`],
         { env: windowsInstallerSmokeEnvironment(profile), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
       let stdout = '', stderr = '', lines = ''
-      child.stdin.on('error', () => {})
+      child.stdin.on('error', () => traceInput('error'))
+      child.stdin.on('finish', () => traceInput('finish'))
+      child.stdin.on('close', () => traceInput('close'))
+      traceInput('spawned')
       child.on('exit', () => { row.exitObserved = true; row.appExitedAtMs = Date.now() })
       child.on('close', () => { row.closeObserved = true; row.appClosedAtMs = Date.now() })
       child.stdout.on('data', bytes => {
@@ -50,13 +59,23 @@ export async function recordScrolledPrefixes(binary, budgetMs = 600_000) {
         lines += text
         while (lines.includes('\n')) {
           const end = lines.indexOf('\n'), line = lines.slice(0, end); lines = lines.slice(end + 1)
-          if (line.length > 128 * 1024) { row.guardError = 'INCONCLUSIVE: oversized custody line'; child.kill(); continue }
+          if (line.length > 128 * 1024) { row.guardError = 'INCONCLUSIVE: oversized custody line'; kill('oversized-line'); continue }
           let ready
           try { ready = JSON.parse(line) } catch { continue }
+          if (ready?.selfTest === 'scrolled-diagnostic-input' && ready.arm === arm) {
+            const events = row.appInputEvents ??= []
+            if (events.length < 16 && ready.diagnosticOnly === true && Number.isFinite(ready.atMs) &&
+                ['before-resume', 'after-resume', 'data', 'acknowledged', 'end', 'error', 'deadline'].includes(ready.event)) {
+              events.push({ event: ready.event, atMs: ready.atMs, descriptor: Number.isInteger(ready.descriptor) ? ready.descriptor : null,
+                isTTY: ready.isTTY === true, readable: ready.readable === true, readableEnded: ready.readableEnded === true,
+                destroyed: ready.destroyed === true, flowing: typeof ready.flowing === 'boolean' ? ready.flowing : null })
+            }
+            continue
+          }
           if (!ready || typeof ready !== 'object' || Array.isArray(ready) || ready.selfTest !== 'scrolled-diagnostic-custody') continue
           readyCount++
           const entries = diagnosticCustodyEntries(ready, child.pid, arm)
-          if (readyCount !== 1 || !entries) { row.guardError = 'INCONCLUSIVE: invalid custody receipt'; child.kill(); continue }
+          if (readyCount !== 1 || !entries) { row.guardError = 'INCONCLUSIVE: invalid custody receipt'; kill('invalid-receipt'); continue }
           row.custodyReceipt = ready
           row.custodyReceivedAtMs = Date.now()
           row.acknowledgementBudgetMs = 20_000
@@ -65,17 +84,18 @@ export async function recordScrolledPrefixes(binary, budgetMs = 600_000) {
             row.observerDiagnostic = held.diagnostic
             if (child.exitCode !== null || !child.stdin.writable) throw Object.assign(new Error('Application ended before custody acknowledgement'),
               { observerDiagnostic: { ...held.diagnostic, class: 'app-ended-before-ack' } })
-            child.stdin.end('SCROLLED-CUSTODY-READY\n')
+            traceInput('ack-end-called')
+            child.stdin.end('SCROLLED-CUSTODY-READY\n', () => traceInput('ack-end-complete'))
             row.acknowledgementWrittenAtMs = Date.now()
             row.custodyArmed = true
             return held
           }).catch(error => {
             row.observerFailure = { ...error.observerDiagnostic, message: error.message.slice(0, 200) }
-            row.guardError = 'INCONCLUSIVE: retained observer did not arm'; child.kill(); return undefined
+            row.guardError = 'INCONCLUSIVE: retained observer did not arm'; kill('observer-refused'); return undefined
           })
         }
-        if (lines.length > 128 * 1024) { row.guardError = 'INCONCLUSIVE: oversized custody line'; child.kill(); lines = '' }
-        } catch { row.guardError = 'INCONCLUSIVE: custody listener failed'; child.kill() }
+        if (lines.length > 128 * 1024) { row.guardError = 'INCONCLUSIVE: oversized custody line'; kill('oversized-buffer'); lines = '' }
+        } catch { row.guardError = 'INCONCLUSIVE: custody listener failed'; kill('listener-failure') }
       })
       child.stderr.on('data', bytes => { if (stderr.length < 2 * 1024 * 1024) stderr += bytes.toString('utf8') })
       const outcome = await new Promise(resolve => {
@@ -83,8 +103,9 @@ export async function recordScrolledPrefixes(binary, budgetMs = 600_000) {
         const finish = value => { clearTimeout(timer); clearTimeout(fallback); resolve(value) }
         const timer = setTimeout(() => {
           row.timedOut = true
-          child.kill()
+          kill('arm-timeout')
           fallback = setTimeout(() => {
+            traceInput('destroy-after-kill-timeout')
             child.stdout.destroy(); child.stderr.destroy(); child.stdin.destroy()
             finish({ termination: 'UNVERIFIED: no close event after kill' })
           }, 5_000)
@@ -117,7 +138,7 @@ export async function recordScrolledPrefixes(binary, budgetMs = 600_000) {
       preserveProfile = !!child?.pid
     } finally {
       if (child?.pid && child.exitCode === null && child.signalCode === null) {
-        child.kill()
+        kill('finally')
         await new Promise(resolve => {
           const timer = setTimeout(resolve, 5_000)
           child.once('close', () => { clearTimeout(timer); resolve() })

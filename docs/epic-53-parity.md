@@ -884,3 +884,20 @@ metadata, plus six actual owned-window disappearance observations. It changes no
 original assertion, acceptance predicate, cleanup action or deadline. Observation
 metadata cannot confirm custody or satisfy SCROLLED. Native PowerShell and HWND
 results remain **UNVERIFIED** until that separate run is collected.
+
+[Method 15 collection](https://github.com/forever-Agriculture/BMN/actions/runs/37466208302)
+at `de67499` passed Linux and five auxiliary workflows. Windows passed 3,387 unit
+assertions, failed the same focus fault control, and skipped 27. All six disappearance
+controls observed a dead owned HWND and an empty accessibility tree without an
+exception. The diagnostic observer's stage function overwrote its process-loop entry,
+so its READY and pre-open markers did not prove retained identities. The app reported
+stdin EOF before acknowledgement; that also happened in method 14, which did not have
+the new collision. Its original cause remains unconfirmed. Custody stayed unconfirmed,
+the profile was retained, and original SCROLLED was **NOTRUN**.
+
+The owner approved one consolidated diagnostic repair, focused recheck and CI run:
+isolate the diagnostic index, refuse captures of a disappeared window, exercise owned
+process identities and record bounded stdin state/events without input contents.
+Original commands, deadlines, cleanup and release conditions remain unchanged.
+Native repaired-helper, window-retention and handshake results are **UNVERIFIED**
+until that run is collected; no terminal repair or complete Windows acceptance is claimed.

@@ -11,9 +11,9 @@ export async function windowsExitObserver(entries, killIndex = -1, beforeKill = 
   assert.ok(killIndex === -1 || validIndex(killIndex))
   assert.ok(beforeKill.every(step => validIndex(step.killIndex) && step.waitIndices.every(validIndex)))
   const stage = (name, index = '-1') => diagnostic ? `Write-Stage '${name}' ${index};\n` : ''
-  const diagnosticPrelude = diagnostic ? `$stageWatch=[Diagnostics.Stopwatch]::StartNew(); $script:stage='import'; $script:entry=-1;
+  const diagnosticPrelude = diagnostic ? `$stageWatch=[Diagnostics.Stopwatch]::StartNew(); $script:observerDiagnosticStage='import'; $script:observerDiagnosticEntryIndex=-1;
 function Write-Stage([string]$name,[int]$index,[string]$hresult='none') {
- $script:stage=$name; $script:entry=$index;
+ $script:observerDiagnosticStage=$name; $script:observerDiagnosticEntryIndex=$index;
  [Console]::Out.WriteLine([string]::Format('STAGE {0} {1} {2} {3}',$name,$stageWatch.ElapsedMilliseconds,$index,$hresult));
 }
 try {
@@ -69,7 +69,7 @@ try {
 }${diagnostic ? `
 } catch {
  $exception=$_.Exception; while($exception.InnerException){$exception=$exception.InnerException};
- Write-Stage $script:stage $script:entry ('0x{0:X8}' -f $exception.HResult);
+ Write-Stage $script:observerDiagnosticStage $script:observerDiagnosticEntryIndex ('0x{0:X8}' -f $exception.HResult);
  throw;
 }` : ''}`
   const metadata = diagnostic ? { stages: [], stagesDropped: 0, timestamps: { spawnedAtMs: Date.now() }, stderrTail: '' } : undefined

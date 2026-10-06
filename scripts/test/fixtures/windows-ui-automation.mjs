@@ -93,6 +93,7 @@ if (-not $window) {
   Write-Result ([pscustomobject]@{ found=$false; titles=$titles; searchErrors=$searchErrors }); exit 0
 }
 function Capture-Window {
+if(-not [BmnAccessible]::IsWindow([IntPtr][int64]$window.Current.NativeWindowHandle)) { throw [InvalidOperationException]::new('Owned window no longer exists') }
 $rows=@(foreach ($element in $window.FindAll([Windows.Automation.TreeScope]::Descendants,[Windows.Automation.Condition]::TrueCondition)) {
   $value=$null; $pattern=$null
   if ($element.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern,[ref]$pattern)) { $value=$pattern.Current.Value }

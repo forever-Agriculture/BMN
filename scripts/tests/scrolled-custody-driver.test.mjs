@@ -35,6 +35,11 @@ vi.mock('node:child_process', () => ({ spawn: (_binary, args) => {
   setImmediate(emitReceipt)
   queueMicrotask(() => {
     if (f.mode === 'null') child.stdout.write('null\ntrue\n')
+    if (f.mode === 'input-observation') for (let index = 0; index < 24; index++) {
+      child.stdout.write(JSON.stringify({ selfTest: 'scrolled-diagnostic-input', diagnosticOnly: true, arm,
+        event: 'before-resume', atMs: index + 1, descriptor: 0, readable: true, flowing: null,
+        inputContent: 'synthetic content must not enter the receipt' }) + '\n')
+    }
     const ready = { selfTest: 'scrolled-diagnostic-custody', diagnosticOnly: true,
       arm: f.mode === 'wrong-arm' ? 'other' : arm, mainPid: f.mode === 'forged-main' ? child.pid + 1 : child.pid,
       snapshot: { listed: 1, identified: 1, entries: [{ pid: child.pid,
@@ -57,6 +62,19 @@ describe('diagnostic driver custody controls', () => {
   it('ignores null and primitive JSON noise before and after a valid custody receipt', async () => {
     f.mode = 'null'; f.abort = vi.fn()
     expect((await recordScrolledPrefixes('/synthetic/BMN.exe')).partial).toBe(false)
+  })
+  it('bounds input metadata, strips content and records the parent acknowledgement call', async () => {
+    f.mode = 'input-observation'; f.abort = vi.fn()
+    const record = await recordScrolledPrefixes('/synthetic/BMN.exe')
+    expect(record.partial).toBe(false)
+    for (const row of record.arms) {
+      expect(row.appInputEvents).toHaveLength(16)
+      expect(row.parentInputEvents).toEqual(expect.arrayContaining([
+        expect.objectContaining({ event: 'spawned', writable: true }),
+        expect.objectContaining({ event: 'ack-end-called', writable: true })
+      ]))
+      expect(JSON.stringify(row.appInputEvents)).not.toContain('synthetic content')
+    }
   })
   it.each(['descendant', 'write-failure', 'missing', 'late', 'duplicate', 'forged-main', 'wrong-arm'])('retains the profile and forbids a next arm when %s makes custody unconfirmed', async mode => {
     f.mode = mode; f.abort = vi.fn()

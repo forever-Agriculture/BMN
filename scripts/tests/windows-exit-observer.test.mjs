@@ -1,8 +1,8 @@
 import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-const fixture = vi.hoisted(() => ({ child: undefined }))
-vi.mock('node:child_process', () => ({ spawn: () => fixture.child }))
+const fixture = vi.hoisted(() => ({ child: undefined, args: undefined }))
+vi.mock('node:child_process', () => ({ spawn: (_path, args) => { fixture.args = args; return fixture.child } }))
 import { windowsExitObserver } from '../lib/windows-exit-observer.mjs'
 const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform')
 const systemRoot = process.env.SystemRoot
@@ -87,4 +87,18 @@ it('retains only bounded stage observations without accepting them as READY or e
   const rejected = expect(observer.finish()).rejects.toThrow('incomplete')
   child.stdout.write('{"passed":true,"retainedHandles":0}\n'); child.emit('close', 0)
   await rejected
+})
+
+it('keeps diagnostic function writes separate from process-loop variables in the emitted helper', async () => {
+  const child = begin(), waiting = windowsExitObserver([{ pid: 10, creationTime: 100 }], -1, [],
+    { overallWaitMs: 15000, diagnostic: true })
+  const script = Buffer.from(fixture.args.at(-1), 'base64').toString('utf16le')
+  child.stdout.write('READY\n')
+  const observer = await waiting, done = observer.finish()
+  child.stdout.write('{"passed":true,"retainedHandles":1}\n'); child.emit('close', 0)
+  await done
+  const loopVariables = new Set([...script.matchAll(/foreach\s*\(\s*\$(\w+)\s+in/giu)].map(match => match[1].toLowerCase()))
+  const stageFunction = script.slice(script.indexOf('function Write-Stage'), script.indexOf('try {'))
+  const diagnosticWrites = [...stageFunction.matchAll(/\$script:(\w+)\s*=/giu)].map(match => match[1].toLowerCase())
+  expect(diagnosticWrites.filter(name => loopVariables.has(name))).toEqual([])
 })

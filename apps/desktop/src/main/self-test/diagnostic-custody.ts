@@ -4,9 +4,16 @@ import type { Readable } from 'node:stream'
 
 export const DIAGNOSTIC_CUSTODY_ACK = 'SCROLLED-CUSTODY-READY\n'
 
-export function waitForDiagnosticCustodyAck(input: Readable, timeoutMs = 20_000): Promise<void> {
+type InputObservation = { event: string; atMs: number; readable: boolean; readableEnded: boolean; destroyed: boolean; flowing: boolean | null }
+
+export function waitForDiagnosticCustodyAck(input: Readable, timeoutMs = 20_000,
+  observe?: (observation: InputObservation) => void): Promise<void> {
   return new Promise((resolve, reject) => {
     let text = '', settled = false
+    const note = (event: string) => {
+      try { observe?.({ event, atMs: Date.now(), readable: input.readable, readableEnded: input.readableEnded,
+        destroyed: input.destroyed, flowing: input.readableFlowing }) } catch { /* Tracing never changes the barrier. */ }
+    }
     const finish = (error?: Error) => {
       if (settled) return
       settled = true
@@ -17,17 +24,20 @@ export function waitForDiagnosticCustodyAck(input: Readable, timeoutMs = 20_000)
       else resolve()
     }
     const data = (bytes: Buffer | string) => {
+      note('data')
       text += bytes.toString()
       if (text.length > 256 || !DIAGNOSTIC_CUSTODY_ACK.startsWith(text)) {
         finish(new Error('Diagnostic custody acknowledgement is invalid')); return
       }
-      if (text === DIAGNOSTIC_CUSTODY_ACK) finish()
+      if (text === DIAGNOSTIC_CUSTODY_ACK) { note('acknowledged'); finish() }
     }
-    const ended = () => finish(new Error('Diagnostic controller ended before custody was acknowledged'))
-    const failed = () => finish(new Error('Diagnostic controller input failed'))
-    const timer = setTimeout(() => finish(new Error('Diagnostic custody acknowledgement exceeded its deadline')), timeoutMs)
+    const ended = () => { note('end'); finish(new Error('Diagnostic controller ended before custody was acknowledged')) }
+    const failed = () => { note('error'); finish(new Error('Diagnostic controller input failed')) }
+    const timer = setTimeout(() => { note('deadline'); finish(new Error('Diagnostic custody acknowledgement exceeded its deadline')) }, timeoutMs)
     input.on('data', data); input.once('end', ended); input.once('error', failed)
+    note('before-resume')
     input.resume()
+    note('after-resume')
   })
 }
 
@@ -47,7 +57,11 @@ export async function armDiagnosticCustody(arm: string): Promise<DiagnosticJobSn
   console.log(JSON.stringify({ selfTest: 'scrolled-diagnostic-custody', diagnosticOnly: true,
     arm, mainPid: process.pid, snapshot,
     limits: ['job members only; outside services and WSL are not witnessed', 'late spawns need separate exit evidence'] }))
-  await waitForDiagnosticCustodyAck(process.stdin)
+  let observations = 0
+  await waitForDiagnosticCustodyAck(process.stdin, 20_000, observation => {
+    if (observations++ < 16) console.log(JSON.stringify({ selfTest: 'scrolled-diagnostic-input', diagnosticOnly: true,
+      arm, descriptor: process.stdin.fd, isTTY: process.stdin.isTTY === true, ...observation }))
+  })
   return snapshot
 }
 

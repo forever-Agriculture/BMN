@@ -37,6 +37,31 @@ describe('diagnostic custody barrier', () => {
     expect(vi.getTimerCount()).toBe(0)
     input.destroy()
   })
+
+  it('records the input boundary without recording acknowledgement content', async () => {
+    const input = new PassThrough(), observations: unknown[] = []
+    const waiting = waitForDiagnosticCustodyAck(input, 20_000, observation => observations.push(observation))
+    input.write(DIAGNOSTIC_CUSTODY_ACK)
+    await waiting
+    expect(observations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event: 'before-resume', readableEnded: false }),
+      expect.objectContaining({ event: 'data' }),
+      expect.objectContaining({ event: 'acknowledged' })
+    ]))
+    expect(JSON.stringify(observations)).not.toContain(DIAGNOSTIC_CUSTODY_ACK.trim())
+    input.destroy()
+  })
+
+  it('records observed EOF and keeps tracing failures from changing the barrier', async () => {
+    const input = new PassThrough(), events: string[] = []
+    const rejected = expect(waitForDiagnosticCustodyAck(input, 20_000, observation => {
+      events.push(observation.event)
+      throw new Error('synthetic receipt sink failure')
+    })).rejects.toThrow('ended before custody')
+    input.end(); await rejected
+    expect(events).toContain('end')
+    input.destroy()
+  })
 })
 
 const member = (pid: number, creationFileTime = String(pid)) => ({ pid, creationFileTime, creationTimeMs: pid })
