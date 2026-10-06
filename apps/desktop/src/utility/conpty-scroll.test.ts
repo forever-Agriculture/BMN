@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { Terminal } from '@xterm/headless'
 import { spawn, type IPty } from 'node-pty'
 import { describe, expect, it } from 'vitest'
-import { codexSixelFrame, NODE_ANIMATION_SOURCE, POSIX_ANIMATION_SCRIPT } from '../main/self-test/animation'
+import { codexSixelFrame, NODE_ANIMATION_SOURCE, POSIX_ANIMATION_SCRIPT, PTY_SIXEL_FIXTURE } from '../main/self-test/animation'
 import { powerShellQuote, useStandInLauncher, writeNodeProgram } from '../main/self-test/programs'
 import { conptyReaderState, conptyReaderWorker } from './conpty-reader-state'
 import { prepareWindowsPtyLaunch } from './windows-launch'
@@ -24,7 +24,10 @@ import { prepareWindowsPtyLaunch } from './windows-launch'
 // change timing; a reproduction here still needs a marker-free replay before it stands for the packaged failure.
 // Console input released the packaged pane's output, so two variants add what BMN does and this harness did not:
 // pausing the reader by view credit, and the focus reports a view sends. BMN's node-pty refuses the console host
-// built into Windows ('BMN requires bundled ConPTY'), so no variant can compare against it.
+// built into Windows ('BMN requires bundled ConPTY'), so no variant can compare against it. Run 37374000775: those two
+// and every earlier variant printed SCROLLED, and the packaged pane's reader held nothing when it stopped. So the
+// variants now replay the packaged pane's own history before the animation: created at 80x24 and resized to the
+// pane, and a raw Sixel frame the shell printed through the console. The retired variants keep their switches.
 
 const windows = process.platform === 'win32'
 
@@ -48,10 +51,17 @@ interface Variant {
   readonly pausedReader: boolean
   /** Sends focus out once the animation is typed and focus in just before the scroll line, as a view reports them. */
   readonly focusReports: boolean
+  /** Starts at this size and resizes to `cols` x `rows` after the first prompt, as the packaged pane did; or not. */
+  readonly resizedFrom: { readonly cols: number; readonly rows: number } | null
+  /** Before the animation, the shell prints the self-test's raw Sixel frame through the console (no newline). */
+  readonly rawSixel: boolean
+  /** The scroll line also writes a file just before and just after SCROLLED (the packaged line does too). */
+  readonly markers: boolean
 }
 
 const PRODUCTION: Variant = { name: 'as-self-test', launcher: true, images: true, afterPrompt: false, replies: true,
-  cols: 80, rows: 24, prompt: 'fixture', pausedReader: false, focusReports: false }
+  cols: 80, rows: 24, prompt: 'fixture', pausedReader: false, focusReports: false, resizedFrom: null, rawSixel: false,
+  markers: true }
 /** The packaged pane: 46x27 with the self-test's 90-character prompt (`PS <cwd>> `). */
 const PANE: Variant = { ...PRODUCTION, name: 'pane', cols: 46, rows: 27, prompt: 'matched' }
 const PACKAGED_PROMPT_WIDTH = 90
@@ -59,12 +69,10 @@ const PACKAGED_PROMPT_WIDTH = 90
 const WINDOWS_VARIANTS: readonly Variant[] = [
   PRODUCTION,
   PANE,
-  { ...PANE, name: 'pane-paused-reader', pausedReader: true },
-  { ...PANE, name: 'pane-focus-reports', focusReports: true },
-  { ...PANE, name: 'pane-short-prompt', prompt: 'short' },
-  { ...PRODUCTION, name: 'matched-prompt-80-columns', prompt: 'matched' },
-  { ...PANE, name: 'pane-after-prompt', afterPrompt: true },
-  { ...PANE, name: 'pane-no-images', images: false }
+  { ...PANE, name: 'pane-history', resizedFrom: { cols: 80, rows: 24 }, rawSixel: true },
+  { ...PANE, name: 'pane-raw-sixel', rawSixel: true },
+  { ...PANE, name: 'pane-resized-from-80x24', resizedFrom: { cols: 80, rows: 24 } },
+  { ...PANE, name: 'pane-history-no-markers', resizedFrom: { cols: 80, rows: 24 }, rawSixel: true, markers: false }
 ]
 
 const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds))
@@ -90,7 +98,8 @@ async function scrollSequence(variant: Variant, save: (record: Record<string, un
   const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'bmn-conpty-scroll-')))
   const record: Record<string, unknown> = { ...variant, started: true }
   save(record)
-  const terminal = new Terminal({ cols: variant.cols, rows: variant.rows, allowProposedApi: true })
+  const start = variant.resizedFrom ?? { cols: variant.cols, rows: variant.rows }
+  const terminal = new Terminal({ cols: start.cols, rows: start.rows, allowProposedApi: true })
   let pty: IPty | undefined
   let exited: Promise<void> = Promise.resolve()
   let stream = ''
@@ -113,6 +122,8 @@ async function scrollSequence(variant: Variant, save: (record: Record<string, un
   try {
     const frames = variant.images ? [codexSixelFrame(0), codexSixelFrame(1)] : ['[frame 0]', '[frame 1]']
     frames.forEach((frame, index) => writeFileSync(join(root, `frame${index}.six`), frame))
+    const rawFrame = join(root, 'sixel-pty-frame.bin')
+    writeFileSync(rawFrame, PTY_SIXEL_FIXTURE)
     const before = join(root, 'before-scrolled'), after = join(root, 'after-scrolled')
     let program: string[]
     if (!windows) {
@@ -130,14 +141,17 @@ async function scrollSequence(variant: Variant, save: (record: Record<string, un
     const animationLine = windows
       ? `Clear-Host; ${run('64', '0.12', 'CODEX-RATE')}; ${run('120', '0.016', 'MAX-RATE')}\r`
       : `clear; ${run('64', '0.12', 'CODEX-RATE')}; ${run('120', '0.016', 'MAX-RATE')}\r`
-    const scrollLine = windows
-      ? `0..79 | ForEach-Object { "scroll-$_" }; [IO.File]::WriteAllText(${powerShellQuote(before)}, 'x'); ` +
-        `Write-Output ('SCROLL' + 'ED'); [IO.File]::WriteAllText(${powerShellQuote(after)}, 'x')\r`
-      : `i=0; while [ $i -lt 80 ]; do echo scroll-$i; i=$((i + 1)); done; : > '${before}'; printf '%s%s\\n' SCROLL ED; : > '${after}'\r`
+    const scrollLine = !variant.markers
+      ? (windows ? `0..79 | ForEach-Object { "scroll-$_" }; Write-Output ('SCROLL' + 'ED')\r`
+        : `i=0; while [ $i -lt 80 ]; do echo scroll-$i; i=$((i + 1)); done; printf '%s%s\\n' SCROLL ED\r`)
+      : windows
+        ? `0..79 | ForEach-Object { "scroll-$_" }; [IO.File]::WriteAllText(${powerShellQuote(before)}, 'x'); ` +
+          `Write-Output ('SCROLL' + 'ED'); [IO.File]::WriteAllText(${powerShellQuote(after)}, 'x')\r`
+        : `i=0; while [ $i -lt 80 ]; do echo scroll-$i; i=$((i + 1)); done; : > '${before}'; printf '%s%s\\n' SCROLL ED; : > '${after}'\r`
 
     const environment = { ...process.env, TERM: 'xterm-256color' } as Record<string, string>
     delete environment.PROMPT_COMMAND
-    const size = { cols: variant.cols, rows: variant.rows }
+    const size = { cols: start.cols, rows: start.rows }
     // `PS <cwd>> ` is the PowerShell prompt; a matched prompt gets a fixture subfolder whose name makes it 90 wide.
     const matchedLength = Math.max(1, PACKAGED_PROMPT_WIDTH - 5 - root.length - 1)
     const matchedName = 'bmn-pane-prompt-'.padEnd(matchedLength, 'x').slice(0, matchedLength)
@@ -187,7 +201,7 @@ async function scrollSequence(variant: Variant, save: (record: Record<string, un
       // cursor's, and joined without separators they hold it, whether the console host wrapped them or broke them.
       if (/^PS .*>$/u.test(current)) return true
       let text = current
-      for (let above = 1; above <= Math.ceil(prompt.length / variant.cols) && row - above >= 0; above++) {
+      for (let above = 1; above <= Math.ceil(prompt.length / terminal.cols) && row - above >= 0; above++) {
         text = (buffer.getLine(row - above)?.translateToString(false) ?? '') + text
       }
       promptSeen = text.trimEnd().slice(-prompt.length - 20)
@@ -200,6 +214,17 @@ async function scrollSequence(variant: Variant, save: (record: Record<string, un
       throw new Error('the shell never showed its first prompt')
     }
     record.firstPromptCursor = { x: terminal.buffer.active.cursorX, y: terminal.buffer.active.cursorY }
+    if (variant.resizedFrom) {
+      terminal.resize(variant.cols, variant.rows)
+      live.resize(variant.cols, variant.rows)
+      await sleep(1_000)
+    }
+    if (variant.rawSixel) {
+      const fixtureFrom = stream.length
+      live.write(windows ? `[Console]::Out.Write([IO.File]::ReadAllText(${powerShellQuote(rawFrame)}))\r` : `cat '${rawFrame}'\r`)
+      record.rawSixelMs = await until(() => stream.slice(fixtureFrom).includes('"1;1;60;75') && promptShown(), 10_000)
+      if (record.rawSixelMs === null) throw new Error('the shell never printed the raw Sixel frame and a prompt after it')
+    }
     live.write(animationLine)
     if (variant.focusReports) live.write('\x1b[O')
     record.codexDoneMs = await until(() => stream.includes('CODEX-RATE-DONE'), 30_000)
@@ -306,12 +331,14 @@ describe('a pane keeps printing after a Codex-style Sixel animation (self-test S
     expect(production.scrolledMs, JSON.stringify(records)).not.toBeNull()
   }, 300_000)
 
-  it.runIf(!windows)('prints SCROLLED in bash and the shell writes past it (the sequence itself)', async () => {
-    const record = await scrollSequence(PRODUCTION)
-    expect(record.error ?? null, JSON.stringify(record)).toBeNull()
-    expect(record.scrolledMs, JSON.stringify(record)).not.toBeNull()
-    expect(record.shellWrote).toEqual({ beforeScrolled: true, afterScrolled: true })
-    expect(record.nudge).toBe('no reader')
-    expect(record.readerAtOutcome).toBeNull()
-  }, 60_000)
+  it.runIf(!windows)('prints SCROLLED in bash and the shell writes past it (the sequence itself, plain and after the pane history)', async () => {
+    for (const variant of [PRODUCTION, WINDOWS_VARIANTS.find((candidate) => candidate.name === 'pane-history')!]) {
+      const record = await scrollSequence(variant)
+      expect(record.error ?? null, JSON.stringify(record)).toBeNull()
+      expect(record.scrolledMs, JSON.stringify(record)).not.toBeNull()
+      expect(record.shellWrote).toEqual({ beforeScrolled: true, afterScrolled: true })
+      expect(record.nudge).toBe('no reader')
+      expect(record.readerAtOutcome).toBeNull()
+    }
+  }, 90_000)
 })

@@ -522,7 +522,8 @@ async function fixture(
     consumerBytes: number
     hostBytes: number
     acknowledgementDeadlineMs?: number
-  }
+  },
+  recordInputForSelfTest?: boolean
 ): Promise<{
   manager: SessionManager
   pty: FakePty
@@ -544,7 +545,8 @@ async function fixture(
     processStartIdentity: async () => 'linux-proc-start:12345',
     sendTerminalMessage: (message) => sent.push(message),
     ...(undeliveredOutputLimitBytes === undefined ? {} : { undeliveredOutputLimitBytes }),
-    ...(outputQueueLimits === undefined ? {} : { outputQueueLimits })
+    ...(outputQueueLimits === undefined ? {} : { outputQueueLimits }),
+    ...(recordInputForSelfTest === undefined ? {} : { recordInputForSelfTest })
   })
   return { manager, pty, store, savedOutputStore, sent, cwd }
 }
@@ -1078,6 +1080,29 @@ describe('shell session lifecycle', () => {
     expect(manager.outputStateForSelfTest(created.sessionId, 4, 11)).toMatchObject({
       since: { fromBytes: 11, toBytes: 23, complete: false, textFromBytes: 19, text: '\\x1b[0m' } })
     expect(manager.outputStateForSelfTest(created.sessionId, 600, 23)).toMatchObject({ since: { complete: true, text: '' } })
+    // Input is recorded only in a self-test host.
+    expect(manager.outputStateForSelfTest(created.sessionId)).not.toHaveProperty('input')
+  })
+
+  it('records, in a self-test host only, each input write in order with how much the session had printed by then', async () => {
+    const { manager, pty, cwd } = await fixture(undefined, undefined, true)
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath, argv: [], cols: 80, rows: 24 })
+    const attached = manager.attach(created)
+    manager.writeToSession(created.sessionId, new TextEncoder().encode('ls\r'))
+    pty.emit('scroll-79\r\n')
+    manager.write({ attachmentId: attached.attachmentId, bytes: new TextEncoder().encode('\x1b[I') })
+    expect(pty.writes.map((write) => Buffer.from(write).toString())).toEqual(['ls\r', '\x1b[I'])
+    const input = manager.outputStateForSelfTest(created.sessionId)?.input as Array<{ agoMs: number; outputBytes: number; text: string }>
+    expect(input.map(({ outputBytes, text }) => ({ outputBytes, text }))).toEqual([
+      { outputBytes: 0, text: 'ls\\x0d' }, { outputBytes: 11, text: '\\x1b[I' }])
+    expect(input.every((write) => write.agoMs >= 0)).toBe(true)
+
+    // Bounded: the oldest writes go first, the newest always stays.
+    for (let index = 0; index < 100; index += 1) manager.writeToSession(created.sessionId, new TextEncoder().encode(`${'x'.repeat(60)}${index}`))
+    const bounded = manager.outputStateForSelfTest(created.sessionId)?.input as Array<{ text: string }>
+    expect(bounded.reduce((total, write) => total + write.text.length, 0)).toBeLessThanOrEqual(4096)
+    expect(bounded.at(-1)?.text).toBe(`${'x'.repeat(60)}99`)
+    expect(bounded[0]?.text).not.toBe('ls\\x0d')
   })
 
   it('buffers initial output, grants one lease, forwards bytes in order, resizes, and stops the current incarnation', async () => {

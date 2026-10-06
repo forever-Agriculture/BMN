@@ -288,6 +288,7 @@ async function start(): Promise<void> {
   const companionHolder: { current?: CompanionService } = {}
   const manager = new SessionManager({
     ...(terminfoAsset ? { terminfoAsset } : {}),
+    recordInputForSelfTest: process.argv.includes('--self-test-host'),
     store: database,
     savedOutputStore,
     spawnPty: (executable, argv, options) => {

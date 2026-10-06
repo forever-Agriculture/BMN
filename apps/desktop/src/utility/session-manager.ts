@@ -335,6 +335,8 @@ interface SessionManagerOptions {
   sessionPath?: () => string
   /** Addressed-control variables added after the private-variable filter for each process incarnation. */
   sessionEnvironment?: (identity: SessionIdentity) => Readonly<Record<string, string>>
+  /** Electron self-test host only: keep each session's last input writes for `outputStateForSelfTest`. */
+  recordInputForSelfTest?: boolean
 }
 
 export interface UndeliveredOutputState {
@@ -365,6 +367,8 @@ interface LiveSession extends SessionIdentity {
   outputTail: OutputTail
   /** A headless copy of the screen, only for sessions running an agent (Epic 30). */
   mirror?: ScreenMirror | undefined
+  /** Electron self-test host only: the last input writes, oldest first, as escaped text within SELF_TEST_INPUT_RECORD_CHARS. */
+  inputRecord?: Array<{ at: number; outputBytes: number; text: string }>
   undeliveredOutput: TerminalFrame[]
   undeliveredOutputState: UndeliveredOutputState
   exitComplete: Promise<void>
@@ -396,6 +400,14 @@ interface ConversationReservation {
 }
 
 const CAPABILITY_PROBE_OUTPUT_BYTES = 256 * 1024
+const SELF_TEST_INPUT_RECORD_CHARS = 4 * 1024
+
+/** Printable ASCII as it is, every other byte as \xNN: self-test diagnostics only. */
+function escapedBytes(bytes: Uint8Array): string {
+  let escaped = ''
+  for (const byte of bytes) escaped += byte >= 0x20 && byte < 0x7f ? String.fromCharCode(byte) : `\\x${byte.toString(16).padStart(2, '0')}`
+  return escaped
+}
 const SHELL_ENVIRONMENT_PRIVATE_PREFIXES = [
   'ELECTRON_',
   'CHROME_',
@@ -587,6 +599,7 @@ export class SessionManager {
     | ((identity: SessionIdentity) => Readonly<Record<string, string>>)
     | undefined
   private readonly sessionPath: () => string
+  private readonly recordInput: boolean
   private readonly signalProcess: (pid: number, signal: NodeJS.Signals) => boolean
   private readonly stopGraceMs: number
   private readonly stopKillWaitMs: number
@@ -630,6 +643,7 @@ export class SessionManager {
     this.homeDirectory = options.homeDirectory ?? homedir()
     this.sessionEnvironment = options.sessionEnvironment
     this.sessionPath = options.sessionPath ?? (() => buildShellEnvironment(this.environment).PATH ?? '')
+    this.recordInput = options.recordInputForSelfTest === true
     this.signalProcess = options.signalProcess ?? signalProcessByPid
     this.stopGraceMs = options.stopGraceMs ?? 2_000
     this.stopKillWaitMs = options.stopKillWaitMs ?? 2_000
@@ -1508,6 +1522,7 @@ export class SessionManager {
       decsetModes: new DecsetModeTracker(),
       programCopy: new Osc52Reader(),
       outputTail: new OutputTail(),
+      ...(this.recordInput ? { inputRecord: [] } : {}),
       undeliveredOutput: [],
       undeliveredOutputState: {
         limitBytes: this.undeliveredOutputLimitBytes,
@@ -1827,6 +1842,7 @@ export class SessionManager {
     if (bytes.byteLength > MAX_TERMINAL_CHUNK_BYTES) {
       throw new HostControlError(ERROR_CODES.invalidArgument, 'Terminal input chunk exceeds 256 KiB')
     }
+    this.recordInputWrite(live, bytes)
     live.pty.write(bytes)
   }
 
@@ -1834,7 +1850,18 @@ export class SessionManager {
     if (message.bytes.byteLength > MAX_TERMINAL_CHUNK_BYTES) {
       throw new HostControlError(ERROR_CODES.invalidArgument, 'Terminal input chunk exceeds 256 KiB')
     }
-    this.byAttachment(message.attachmentId).pty.write(message.bytes)
+    const session = this.byAttachment(message.attachmentId)
+    this.recordInputWrite(session, message.bytes)
+    session.pty.write(message.bytes)
+  }
+
+  /** Self-test host only: one input write, with how much the session had printed by then; the oldest go first. */
+  private recordInputWrite(live: LiveSession, bytes: Uint8Array): void {
+    const record = live.inputRecord
+    if (!record) return
+    record.push({ at: Date.now(), outputBytes: live.outputTail.pushedBytes, text: escapedBytes(bytes) })
+    let chars = record.reduce((total, write) => total + write.text.length, 0)
+    while (record.length > 1 && chars > SELF_TEST_INPUT_RECORD_CHARS) chars -= record.shift()!.text.length
   }
 
   acknowledge(message: Pick<TerminalAckMessage, 'attachmentId' | 'streamSeq'>): void {
@@ -1880,11 +1907,7 @@ export class SessionManager {
     const live = this.sessions.get(sessionId)
     if (!live) return undefined
     const recent = live.outputTail.read()
-    const escape = (bytes: Uint8Array): string => {
-      let escaped = ''
-      for (const byte of bytes) escaped += byte >= 0x20 && byte < 0x7f ? String.fromCharCode(byte) : `\\x${byte.toString(16).padStart(2, '0')}`
-      return escaped
-    }
+    const escape = escapedBytes
     const text = escape(recent.subarray(Math.max(0, recent.byteLength - tailBytes)))
     let since: Record<string, unknown> | undefined
     if (sinceBytes !== undefined) {
@@ -1900,7 +1923,10 @@ export class SessionManager {
       lastOutputAgoMs: live.outputTail.lastPushAt === 0 ? null : Date.now() - live.outputTail.lastPushAt,
       ptyStream: stream ? { paused: stream.isPaused?.() ?? null, readableBytes: stream.readableLength ?? null,
         writableBytes: stream.writableLength ?? null, awaitingDrain: stream.writableNeedDrain ?? null } : null,
-      view: live.outputQueue?.flowState ?? null, tail: text, ...(since ? { since } : {}) }
+      view: live.outputQueue?.flowState ?? null, tail: text, ...(since ? { since } : {}),
+      // What was written to the program, oldest first: when (ms before this answer), how much it had printed by then.
+      ...(live.inputRecord ? { input: live.inputRecord.map((write) => ({ agoMs: Date.now() - write.at,
+        outputBytes: write.outputBytes, text: write.text })) } : {}) }
   }
 
   /**

@@ -33,7 +33,7 @@ import {
   runLaunchSetRepositorySelfTest
 } from '../launch-set-repository-self-test'
 import { runCheckoutPeersSelfTest } from '../checkout-peers-self-test'
-import { codexSixelFrame, NODE_ANIMATION_SOURCE, POSIX_ANIMATION_SCRIPT } from './animation'
+import { codexSixelFrame, NODE_ANIMATION_SOURCE, POSIX_ANIMATION_SCRIPT, PTY_SIXEL_FIXTURE } from './animation'
 import {
   closeWithinDeadline,
   drainAfterExit,
@@ -1014,8 +1014,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       throw new Error(`Sixel CSP did not preserve the eval boundary: ${JSON.stringify(cspProbe)}`)
     }
     const sixelPtyPath = join(isolatedCwd, 'sixel-pty-frame.bin')
-    writeFileSync(sixelPtyPath,
-      `\u001bP9;1;0q"1;1;60;75#1;2;100;0;0#1${Array(13).fill('!60~').join('-')}\u001b\\`)
+    writeFileSync(sixelPtyPath, PTY_SIXEL_FIXTURE)
     const sixelPtyBefore = await host.applicationWindow.webContents.executeJavaScript(`
       new Promise((resolve, reject) => {
         const deadline = Date.now() + 5000;
@@ -1132,11 +1131,17 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     await waitForAnimatedLine('MAX-RATE-DONE', 30_000)
     // Scroll the pane well past its rows: only the last frame drawn may remain in the buffer.
     // If SCROLLED never shows, the failure also says how soon after MAX-RATE-DONE was seen the line was sent
-    // and accepted; the typing itself is unchanged.
+    // and accepted. The shell also writes a file just before and just after printing SCROLLED, so a failure says
+    // whether the shell finished the line (its output then waited downstream) or stopped inside it.
+    const beforeScrolled = join(animationDirectory, 'before-scrolled')
+    const afterScrolled = join(animationDirectory, 'after-scrolled')
+    const shellWrote = () => ({ beforeScrolled: existsSync(beforeScrolled), afterScrolled: existsSync(afterScrolled) })
     const lastMarkerSeen = Date.now()
     const scrollLine = typeIntoAnimatedPane(typedShell.windows
-      ? `0..79 | ForEach-Object { "scroll-$_" }; ${printed('SCROLL', 'ED')}\r`
-      : `i=0; while [ $i -lt 80 ]; do echo scroll-$i; i=$((i + 1)); done; printf '%s%s\\n' SCROLL ED\r`)
+      ? `0..79 | ForEach-Object { "scroll-$_" }; [IO.File]::WriteAllText(${powerShellQuote(beforeScrolled)}, 'x'); ` +
+        `${printed('SCROLL', 'ED')}; [IO.File]::WriteAllText(${powerShellQuote(afterScrolled)}, 'x')\r`
+      : `i=0; while [ $i -lt 80 ]; do echo scroll-$i; i=$((i + 1)); done; : > '${beforeScrolled}'; ` +
+        `printf '%s%s\\n' SCROLL ED; : > '${afterScrolled}'\r`)
     const scrollSent = Date.now() - lastMarkerSeen
     await scrollLine
     const scrollAccepted = Date.now() - lastMarkerSeen
@@ -1173,6 +1178,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         const appeared = (marker: string, milliseconds: number) => bounded(waitForAnimatedLine(marker, milliseconds)
           .then(() => true, () => false), milliseconds + 1_000, false)
         const atFailure = await hostOutput()
+        record('shellWroteAtFailure', shellWrote())
         record('atFailure', atFailure)
         const failureBytes = atFailure !== null && typeof atFailure === 'object' &&
           typeof (atFailure as { outputBytes?: unknown }).outputBytes === 'number' ? (atFailure as { outputBytes: number }).outputBytes : undefined
@@ -1217,6 +1223,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         2_000, 'no answer within 2 s'))
         record('probeAnswered', observed.probeWrite === 'accepted' ? await appeared('PROBE', 5_000) : null)
         record('afterProbe', await hostOutput(failureBytes))
+        record('shellWroteAfterProbe', shellWrote())
         record('viewAfterProbe', await viewState())
       } catch (failure) {
         observed.observationError = failure instanceof Error ? failure.message : String(failure)

@@ -17,6 +17,9 @@ export function codexSixelFrame(seed: number): string {
   return `\u001bP9;1;0q"1;1;96;75${body}\u001b\\`
 }
 
+/** The 60x75 one-color Sixel frame the self-test first prints in the pane through the shell, before the animation. */
+export const PTY_SIXEL_FIXTURE = `\u001bP9;1;0q"1;1;60;75#1;2;100;0;0#1${Array(13).fill('!60~').join('-')}\u001b\\`
+
 /**
  * Arguments: frame count, seconds between frames, label. Each frame blanks the pet's rows, draws frame0.six or
  * frame1.six from its own folder there and restores the cursor; the last line is `<label>-DONE`.
