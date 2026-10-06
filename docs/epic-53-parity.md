@@ -860,3 +860,27 @@ JSON is ignored; malformed tagged custody data is refused. Native compilation,
 handshake, job enumeration, cleanup and follow-up focus fault controls are
 **UNVERIFIED** until the run is collected. These repairs change diagnostic handling;
 no original terminal defect repair or complete Windows acceptance is claimed.
+
+[Method 14 collection](https://github.com/forever-Agriculture/BMN/actions/runs/37459149785)
+at `cc6a949` passed Linux and five auxiliary workflows. Windows passed 3,383 unit
+assertions, failed the new owned-window fault control, and skipped 27. Closing the
+window did not make either later capture throw, so that negative control did not
+establish the intended fault. All six original strict first-focus cases passed.
+The OpenCode case passed in the full inventory and alone (159 ms); all twenty
+alternating link/copy first-unlink observations passed. Its prior cleanup cause
+remains unconfirmed, and no cleanup repair is inferred.
+
+Cold unqualified PowerShell commands in the minimal environment took 27–32 seconds
+(one cell hit its 60-second cap); explicit Utility imports/qualified commands and
+full CI environments took milliseconds. Redirecting only `LOCALAPPDATA` stayed fast,
+while reusing a minimal profile stayed slow. This weakens the cache-location theory
+but does not identify the historical terminal defect. The first prefix published a
+complete eleven-member job snapshot, then its observer failed before acknowledgement.
+Custody remained unconfirmed, its profile was retained, and further arms and ordinary
+acceptance stopped. SCROLLED was **NOTRUN**; the previous reproduced failure remains.
+
+The next consultant-agreed method adds bounded observer stage, HRESULT and timing
+metadata, plus six actual owned-window disappearance observations. It changes no
+original assertion, acceptance predicate, cleanup action or deadline. Observation
+metadata cannot confirm custody or satisfy SCROLLED. Native PowerShell and HWND
+results remain **UNVERIFIED** until that separate run is collected.

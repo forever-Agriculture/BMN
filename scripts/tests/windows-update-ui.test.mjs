@@ -170,6 +170,29 @@ describe.runIf(native)('native Windows update windows', () => {
     }
   }, 120000)
 
+  it.runIf(process.env.GITHUB_ACTIONS === 'true')('observes actual owned-window disappearance without assuming a capture exception', async () => {
+    const began = Date.now(), observations = []
+    for (let index = 0; index < 6 && Date.now() - began < 90000; index++) {
+      const f = fixture(), nextChild = started.length
+      const title = 'BMN window disappearance observation'
+      const answer = askWindowsUpdateQuestion({ parent: f.parent, title, text: 'synthetic', buttons: 'close', start })
+      const child = await startedChild(nextChild)
+      let childExitedAtMs
+      child.once('exit', () => { childExitedAtMs = Date.now() })
+      const view = await automateWindow({ processId: child.pid, title, until: 'Close', focusName: 'Close',
+        forceFocusSamplesForSelfTest: true, closeAfterFirstForSelfTest: true, observeWindowLossForSelfTest: true })
+      expect(view.found).toBe(true)
+      expect(await answer).toBe('closed')
+      await exited(child)
+      observations.push({ index, closeReturnedAtMs: view.closeReturnedAtMs, childExitedAtMs,
+        samples: view.focusSamples.map(sample => ({ capturedAtMs: sample.capturedAtMs, windowAlive: sample.windowAlive,
+          elementCount: sample.elements?.length ?? null, captureError: sample.captureError ?? null })) })
+    }
+    console.log(JSON.stringify({ nativeDiagnostic: 'focus-window-disappearance', observationOnly: true,
+      durationMs: Date.now() - began, observations, partial: observations.length !== 6 }))
+    // The existing propagation/retention test remains the verdict, with no new prerequisite or relaxed assertion.
+  }, 120000)
+
   it('shows the update log read-only in its own viewer and reports that it was shown', async () => {
     const f = fixture(), text = 'BMN update cccccccccccc\r\n2026-10-05T10:00:00.000Z FAIL  Packaging the new build (12 s; build command failed; exit 1)'
     const shown = showWindowsUpdateLog({ parent: f.parent, text, start })

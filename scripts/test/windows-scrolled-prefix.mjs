@@ -41,8 +41,8 @@ export async function recordScrolledPrefixes(binary, budgetMs = 600_000) {
         { env: windowsInstallerSmokeEnvironment(profile), stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
       let stdout = '', stderr = '', lines = ''
       child.stdin.on('error', () => {})
-      child.on('exit', () => { row.exitObserved = true })
-      child.on('close', () => { row.closeObserved = true })
+      child.on('exit', () => { row.exitObserved = true; row.appExitedAtMs = Date.now() })
+      child.on('close', () => { row.closeObserved = true; row.appClosedAtMs = Date.now() })
       child.stdout.on('data', bytes => {
         try {
         const text = bytes.toString('utf8')
@@ -58,13 +58,21 @@ export async function recordScrolledPrefixes(binary, budgetMs = 600_000) {
           const entries = diagnosticCustodyEntries(ready, child.pid, arm)
           if (readyCount !== 1 || !entries) { row.guardError = 'INCONCLUSIVE: invalid custody receipt'; child.kill(); continue }
           row.custodyReceipt = ready
-          observerPromise = windowsExitObserver(entries, -1, [], { overallWaitMs: 15_000 }).then(held => {
+          row.custodyReceivedAtMs = Date.now()
+          row.acknowledgementBudgetMs = 20_000
+          observerPromise = windowsExitObserver(entries, -1, [], { overallWaitMs: 15_000, diagnostic: true }).then(held => {
             observer = held
-            if (child.exitCode !== null || !child.stdin.writable) throw new Error('Application ended before custody acknowledgement')
+            row.observerDiagnostic = held.diagnostic
+            if (child.exitCode !== null || !child.stdin.writable) throw Object.assign(new Error('Application ended before custody acknowledgement'),
+              { observerDiagnostic: { ...held.diagnostic, class: 'app-ended-before-ack' } })
             child.stdin.end('SCROLLED-CUSTODY-READY\n')
+            row.acknowledgementWrittenAtMs = Date.now()
             row.custodyArmed = true
             return held
-          }).catch(() => { row.guardError = 'INCONCLUSIVE: retained observer did not arm'; child.kill(); return undefined })
+          }).catch(error => {
+            row.observerFailure = { ...error.observerDiagnostic, message: error.message.slice(0, 200) }
+            row.guardError = 'INCONCLUSIVE: retained observer did not arm'; child.kill(); return undefined
+          })
         }
         if (lines.length > 128 * 1024) { row.guardError = 'INCONCLUSIVE: oversized custody line'; child.kill(); lines = '' }
         } catch { row.guardError = 'INCONCLUSIVE: custody listener failed'; child.kill() }
