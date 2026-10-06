@@ -22,7 +22,7 @@ progress; the maintainer's local BMAD tracker mirrors accepted results.
 The implementation team owns development, testing and repair on Linux and Windows.
 The Windows collaborator supplies an independent final verification of Windows
 quality; this supplements, rather than replaces, the team's Windows checks.
-Each pull request names its platform impact and records the checks actually run.
+Each pull request names its platform impact and records the checks actually run. The repository PR template includes both operating systems, tested revisions, evidence links and remaining failures or unrun acceptance.
 
 ## Prerequisites
 
