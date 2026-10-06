@@ -22,7 +22,10 @@ export const requiredSelfTestPhases = [
 ]
 
 /** The required phases a receipt lacks; any one fails the run. */
-export const missingSelfTestPhases = (receipt) => requiredSelfTestPhases.filter((phase) => receipt?.[phase] === undefined)
+export const missingSelfTestPhases = (receipt) => [
+  ...(receipt?.diagnosticOnly === true ? ['diagnosticOnly'] : []),
+  ...requiredSelfTestPhases.filter((phase) => receipt?.[phase] === undefined)
+]
 
 /**
  * The facts a packaged or installed build is accepted on, beyond its phases. Windows has no ncurses
@@ -31,6 +34,7 @@ export const missingSelfTestPhases = (receipt) => requiredSelfTestPhases.filter(
  */
 export function packagedReceiptComplete(receipt, platform = process.platform) {
   return !(
+    receipt?.diagnosticOnly === true ||
     receipt.electronVersion !== '44.3.0' ||
     receipt.nativeModules?.nodePty !== true ||
     receipt.nativeModules?.betterSqlite3 !== true ||

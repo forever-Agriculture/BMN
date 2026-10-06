@@ -133,6 +133,11 @@ const receipt = await withTemporaryRoot(temporaryRootContracts.electronDevelopme
   } finally { await application.close() }
 })
 if (binary && process.platform === 'win32' && process.env.GITHUB_ACTIONS === 'true') {
+  // An explicitly partial A/B observation; its result never controls the unchanged installed gate.
+  const { recordScrolledPrefixes } = await import('./windows-scrolled-prefix.mjs')
+  receipt.windowsScrolledPrefixes = await recordScrolledPrefixes(binary).catch(error => ({
+    diagnosticOnly: true, unavailable: error?.code ?? 'diagnostic-error'
+  }))
   // Observation only: locates where the packaged self-test stops natively before the installed gate runs it.
   const { recordWindowsPackagedSelfTest } = await import('./windows-self-test-diagnostic.mjs')
   receipt.windowsSelfTestDiagnostic = await recordWindowsPackagedSelfTest(binary)

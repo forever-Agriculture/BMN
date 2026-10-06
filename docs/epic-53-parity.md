@@ -806,3 +806,26 @@ Each item below passes on Linux; its Windows test is written and runs in the nex
 - **Control endpoint (53.4).** Preferences names the Windows endpoint "Endpoint file" and the status "control pipe"; readiness is reported only once listening, and the answer never carries a token. A Windows test proves closing keeps an endpoint file another server has since written.
 - **Hook command form (53.6).** On Windows BMN writes a PowerShell entry (`if ($env:BMN_CONTROL_SOCKET -and (Get-Command bmn …)) { bmn hook <agent> }; exit 0`), with `"shell": "powershell"` on Claude Code's entries, and shows rather than counts POSIX or unpinned entries. `bmn hook` accepts the byte-order mark Cursor adds to its payload. A Windows test runs the written entry through Windows PowerShell and PowerShell 7 with a stand-in `bmn.exe`. Real hook events from each harness on Windows remain **UNVERIFIED**.
 - **Manual Windows testing.** Each "Linux and Windows build" run keeps its Windows build as the artifact `bmn-windows-x64-<commit>` (unsigned installer and unpacked folder) for 14 days.
+
+## Windows terminal investigation: method 13
+
+At `115b184`, all five reduced DA1 timing/typeahead controls passed natively, including
+an unanswered query. The packaged and installed SCROLLED assertions still failed.
+The minimal pane resumed during the post-resize observation, before the typed probe;
+this does not establish which action or timer released it. Reader causality remains open.
+The Windows inventory passed 3274 tests, failed two strict update-button focus checks,
+and skipped 27. The five auxiliary workflows and the Linux build passed.
+
+The next diagnostic compares the current full self-test prefix with and without its
+direct renderer Sixel fixture, using six interleaved fresh profiles. It retains real
+PTY Sixel transport, animations, quiet-pane checks and the original cleanup. After an
+initial SCROLLED failure it observes passively for 40 seconds. Shell clocks, input,
+output, resize and process anchors help locate any release; loaded ConPTY and console
+image identities are reported with their association limits. Diagnostic receipts are
+explicitly rejected by both acceptance readers, and the ordinary packaged/installed
+gate remains unchanged. Native results for this method are **UNVERIFIED**.
+
+Update-window focus diagnostics record the foreground process, owned thread focus,
+MSAA and UI Automation states and readiness age. A false first result is followed by
+two observations, while the assertion still uses that first result. No focus repair
+or assertion relaxation is inferred from the earlier passing run.

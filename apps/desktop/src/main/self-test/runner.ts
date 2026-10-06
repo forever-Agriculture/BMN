@@ -97,6 +97,8 @@ import {
   sep
 } from 'node:path'
 import type { AttachmentIdentity, HostHealth, SelfTestHost, SessionIdentity } from '../index'
+import { scrolledDiagnosticArm } from './scrolled-diagnostic'
+import { conptyIdentity } from '../../utility/conpty-identity'
 import { fileReferenceFixtureNames } from '../../renderer/src/file-reference-probe'
 import {
   MODE_PASTE_TEXT,
@@ -419,6 +421,8 @@ export function reportSelfTestFailure(error: unknown): void {
 }
 
 export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTestRecorder): Promise<void> {
+  const diagnosticArm = scrolledDiagnosticArm(process.argv)
+  const diagnosticAnchors = { appStartedAtMs: Math.round(Date.now() - process.uptime() * 1000), prefixStartedAtMs: Date.now() }
   host = selfTestHost
   taps = recorder
   const { hostEntry, repoRoot } = host.appPaths()
@@ -461,6 +465,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
   let graceful = true
   let clientClosed = false
   try {
+    selfTestSequence: {
     const isolatedCwd = process.env.BMN_STATE_HOME
     if (!isolatedCwd) throw new Error('self-test requires BMN_STATE_HOME')
     const envelopedInvokeChannels = await verifyRegisteredInvokeEnvelopes()
@@ -1054,7 +1059,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     }
     // Decode a known frame in one real pane. This bypasses shell command timing so a failure names
     // the renderer itself; transport has its own framing and queue checks.
-    const sixelDirect = await host.applicationWindow.webContents.executeJavaScript(`
+    const sixelDirect = diagnosticArm === 'without-fixture' ? null : await host.applicationWindow.webContents.executeJavaScript(`
       new Promise((resolve, reject) => {
         const deadline = Date.now() + 5000;
         const probe = () => {
@@ -1073,17 +1078,17 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     `) as { fixture: { storageMB: number; layer: boolean };
       otherBefore: { imageStorageMB: number; imageLayerPresent: boolean };
       otherAfter: { imageStorageMB: number; imageLayerPresent: boolean } }
-    const sixelRender = {
+    const sixelRender = sixelDirect === null ? undefined : {
       ownStorageMB: sixelDirect.fixture.storageMB,
       ownLayer: sixelDirect.fixture.layer,
       otherStorageMB: sixelDirect.otherAfter.imageStorageMB,
       otherImageUnchanged: sixelDirect.otherBefore.imageStorageMB === sixelDirect.otherAfter.imageStorageMB &&
         sixelDirect.otherBefore.imageLayerPresent === sixelDirect.otherAfter.imageLayerPresent
     }
-    if (!(sixelRender.ownStorageMB > 0 && sixelRender.ownLayer)) {
+    if (sixelRender && !(sixelRender.ownStorageMB > 0 && sixelRender.ownLayer)) {
       throw new Error(`the real pane could not decode the Sixel fixture: ${JSON.stringify(sixelRender)}`)
     }
-    if (!sixelRender.otherImageUnchanged || sixelRender.otherStorageMB !== 0) {
+    if (sixelRender && (!sixelRender.otherImageUnchanged || sixelRender.otherStorageMB !== 0)) {
       throw new Error(`Sixel output changed the other pane image layer: ${JSON.stringify(sixelRender)}`)
     }
 
@@ -1136,10 +1141,13 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     const beforeScrolled = join(animationDirectory, 'before-scrolled')
     const afterScrolled = join(animationDirectory, 'after-scrolled')
     const shellWrote = () => ({ beforeScrolled: existsSync(beforeScrolled), afterScrolled: existsSync(afterScrolled) })
+    let initialScrolledWithinBudget = true
+    let passiveObservation: Record<string, unknown> | undefined
     const lastMarkerSeen = Date.now()
     const scrollLine = typeIntoAnimatedPane(typedShell.windows
       ? `0..79 | ForEach-Object { "scroll-$_" }; [IO.File]::WriteAllText(${powerShellQuote(beforeScrolled)}, 'x'); ` +
-        `${printed('SCROLL', 'ED')}; [IO.File]::WriteAllText(${powerShellQuote(afterScrolled)}, 'x')\r`
+        `${diagnosticArm ? '$b=[DateTime]::UtcNow.Ticks; ' : ''}${printed('SCROLL', 'ED')}; ` +
+        `[IO.File]::WriteAllText(${powerShellQuote(afterScrolled)}, ${diagnosticArm ? "[string]::Format('{0} {1}', $b, [DateTime]::UtcNow.Ticks)" : "'x'"})\r`
       : `i=0; while [ $i -lt 80 ]; do echo scroll-$i; i=$((i + 1)); done; : > '${beforeScrolled}'; ` +
         `printf '%s%s\\n' SCROLL ED; : > '${afterScrolled}'\r`)
     const scrollSent = Date.now() - lastMarkerSeen
@@ -1147,6 +1155,41 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     const scrollAccepted = Date.now() - lastMarkerSeen
     await waitForAnimatedLine('SCROLLED', 10_000).catch(async (error: unknown) => {
       const message = error instanceof Error ? error.message : String(error)
+      if (diagnosticArm) {
+        initialScrolledWithinBudget = false
+        const failureAtMs = Date.now()
+        const deadline = failureAtMs + 40_000
+        const samples: Array<Record<string, unknown>> = []
+        const state = async () => {
+          let timer: ReturnType<typeof setTimeout> | undefined
+          try {
+            return await Promise.race([
+              client.request<{ selfTestOutputState: Record<string, unknown> }>(METHOD_REGISTRY.healthGet,
+                { selfTestOutputState: { sessionId: secondSession.sessionId } }).then(answer => answer.selfTestOutputState),
+              new Promise<Record<string, unknown>>(resolve => {
+                timer = setTimeout(() => resolve({ unavailable: 'diagnostic health query exceeded 2 seconds' }), 2_000)
+              })
+            ])
+          } finally { clearTimeout(timer) }
+        }
+        const atFailure = await state()
+        while (Date.now() < deadline) {
+          const snapshot = await state()
+          samples.push({ atMs: Date.now(), outputBytes: snapshot.outputBytes, lastOutputAgoMs: snapshot.lastOutputAgoMs,
+            conin: (snapshot.ptyReader as { conin?: unknown } | undefined)?.conin ?? null, markers: shellWrote() })
+          await new Promise(resolve => setTimeout(resolve, Math.min(500, Math.max(0, deadline - Date.now()))))
+        }
+        const atEnd = await state()
+        const viewAtEnd = await host.applicationWindow!.webContents.executeJavaScript(`(() => {
+          const snapshot = window.__aitermTest.snapshot(${animatedId});
+          return { rendererInputEvents: snapshot.inputEvents, cols: snapshot.cols, rows: snapshot.rows,
+            lines: snapshot.bufferLines.filter(line => line.trim()).slice(-8) };
+        })()`)
+        passiveObservation = { failure: message, scrollTypedAtMs: lastMarkerSeen, failureAtMs,
+          passiveEndedAtMs: Date.now(), controllerPokes: [], atFailure, samples, atEnd, viewAtEnd,
+          markers: shellWrote(), shellTicks: existsSync(afterScrolled) ? readFileSync(afterScrolled, 'utf8') : null }
+        return
+      }
       // Observation only, once the failure is certain. Stages in order: what the host and the view hold now; a late
       // wait; a focus report; one extra reader credit; a one-column resize; a typed probe line. An earlier stage may already restore
       // output, so each record says only what was seen after its own stage. Everything shares one deadline (32 s),
@@ -1256,9 +1299,21 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       quietSelectionKept: quietBefore.selection.length > 0 && animation.quiet.selection === quietBefore.selection
     }
     // One 75 px frame covers at most 7 rows at the smallest font; more means stale frames stayed.
-    if (!sixelAnimation.noViewRebuild || !(sixelAnimation.storageMB > 0) || sixelAnimation.imageLinesAfterScroll > 7 ||
-      !sixelAnimation.quietPaneUnchanged || !sixelAnimation.quietSelectionKept) {
+    const animationPassed = sixelAnimation.noViewRebuild && sixelAnimation.storageMB > 0 &&
+      sixelAnimation.imageLinesAfterScroll <= 7 && sixelAnimation.quietPaneUnchanged && sixelAnimation.quietSelectionKept
+    if (!animationPassed && !diagnosticArm) {
       throw new Error(`the two-pane Sixel animation failed: ${JSON.stringify(sixelAnimation)}`)
+    }
+
+    if (diagnosticArm) {
+      const finalState = await client.request<{ selfTestOutputState: Record<string, unknown> }>(METHOD_REGISTRY.healthGet,
+        { selfTestOutputState: { sessionId: secondSession.sessionId } })
+      const hostIdentity = await conptyIdentity(Number(finalState.selfTestOutputState.hostPid), Number(finalState.selfTestOutputState.shellPid))
+      receipt = { selfTest: 'scrolled-diagnostic', diagnosticOnly: true, arm: diagnosticArm, anchors: diagnosticAnchors,
+        initialScrolledWithinBudget, animationPassed, sixelPty, sixelRender, sixelAnimation, passiveObservation,
+        finalState: finalState.selfTestOutputState, hostIdentity,
+        shellTicks: existsSync(afterScrolled) ? readFileSync(afterScrolled, 'utf8') : null }
+      break selfTestSequence
     }
 
     // AC3: both visible panes animate at once, at Codex's cadence; neither view is rebuilt.
@@ -5478,6 +5533,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       // Epic 17.2: the modes the rebuilt view came back with, and what the program was sent through them.
       terminalModes,
       schemaTables: restoredHealth.schemaTables
+    }
     }
   } catch (error) {
     // Print the reason before release, so a release that stalls cannot hide it.

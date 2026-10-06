@@ -19,6 +19,20 @@ using System.Runtime.InteropServices;
 using System.Text;
 using Accessibility;
 public static class BmnAccessible {
+  [StructLayout(LayoutKind.Sequential)] public struct Rect { public int left, top, right, bottom; }
+  [StructLayout(LayoutKind.Sequential)] public struct GuiInfo {
+    public uint size, flags; public IntPtr active, focus, capture, menuOwner, moveSize, caret; public Rect caretRect;
+  }
+  [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window, out uint process);
+  [DllImport("user32.dll", SetLastError=true)] static extern bool GetGUIThreadInfo(uint thread, ref GuiInfo info);
+  public static long[] Focus(IntPtr window) {
+    uint owner, foregroundOwner; uint thread=GetWindowThreadProcessId(window,out owner);
+    IntPtr foreground=GetForegroundWindow(); GetWindowThreadProcessId(foreground,out foregroundOwner);
+    GuiInfo info=new GuiInfo(); info.size=(uint)Marshal.SizeOf(typeof(GuiInfo));
+    bool ok=GetGUIThreadInfo(thread,ref info);
+    return new long[] { foreground.ToInt64(), foregroundOwner, ok ? 1 : 0, info.active.ToInt64(), info.focus.ToInt64() };
+  }
   [DllImport("oleacc.dll")] static extern int AccessibleObjectFromWindow(IntPtr window, uint id, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out IAccessible accessible);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr SendMessageTimeout(IntPtr window, uint message, IntPtr wParam, IntPtr lParam, uint flags, uint timeout, out IntPtr result);
   [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageTimeoutW")] static extern IntPtr SendTextMessage(IntPtr window, uint message, IntPtr wParam, StringBuilder lParam, uint flags, uint timeout, out IntPtr result);
@@ -69,7 +83,7 @@ do {
   $window=$null; Start-Sleep -Milliseconds 100
 } while ([DateTime]::UtcNow -lt $deadline)
 function Write-Result($value) {
-  $json=ConvertTo-Json -Compress -Depth 4 -InputObject $value
+  $json=ConvertTo-Json -Compress -Depth 8 -InputObject $value
   # Escaped, so the result never depends on the console code page.
   [Console]::Out.Write([regex]::Replace($json,'[^\\x00-\\x7F]',[Text.RegularExpressions.MatchEvaluator]{ param($match) '\\u{0:x4}' -f [int][char]$match.Value }))
 }
@@ -77,22 +91,47 @@ if (-not $window) {
   $titles=@(); try { $titles=@(foreach ($other in $A::RootElement.FindAll([Windows.Automation.TreeScope]::Children,(New-Object Windows.Automation.PropertyCondition($A::ProcessIdProperty,[int]$request.processId)))) { $other.Current.Name }) } catch {}
   Write-Result ([pscustomobject]@{ found=$false; titles=$titles; searchErrors=$searchErrors }); exit 0
 }
+function Capture-Window {
 $rows=@(foreach ($element in $window.FindAll([Windows.Automation.TreeScope]::Descendants,[Windows.Automation.Condition]::TrueCondition)) {
   $value=$null; $pattern=$null
   if ($element.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern,[ref]$pattern)) { $value=$pattern.Current.Value }
   $box=$element.Current.BoundingRectangle; $handle=[IntPtr][int64]$element.Current.NativeWindowHandle
-  $role=$null; $accessibleValue=$null; $accessibleError=$null; $text=$null
+  $role=$null; $accessibleValue=$null; $accessibleState=$null; $accessibleError=$null; $text=$null
   if ($handle -ne [IntPtr]::Zero) {
-    try { $described=[BmnAccessible]::Describe($handle); $role=$described[0]; $accessibleValue=$described[2] } catch { $accessibleError=Get-Code $_.Exception }
+    try { $described=[BmnAccessible]::Describe($handle); $role=$described[0]; $accessibleValue=$described[2]; $accessibleState=$described[3] } catch { $accessibleError=Get-Code $_.Exception }
     try { $text=[BmnAccessible]::Text($handle) } catch {}
   }
-  [pscustomobject]@{ type=$element.Current.ControlType.ProgrammaticName; className=$element.Current.ClassName; handle=[int64]$element.Current.NativeWindowHandle; accessibleRole=$role; accessibleError=$accessibleError
+  [pscustomobject]@{ type=$element.Current.ControlType.ProgrammaticName; className=$element.Current.ClassName; handle=[int64]$element.Current.NativeWindowHandle; accessibleRole=$role; accessibleError=$accessibleError; accessibleState=$accessibleState
+    msaaFocused=($null -ne $accessibleState -and ([int]$accessibleState -band 4) -ne 0); msaaDefault=($null -ne $accessibleState -and ([int]$accessibleState -band 256) -ne 0)
     name=$element.Current.Name; text=$text; value=$(if ($null -ne $value) { $value } else { $accessibleValue })
     enabled=$element.Current.IsEnabled; focused=$element.Current.HasKeyboardFocus; width=[int]$box.Width; height=[int]$box.Height }
 })
 $frame=$window.Current.BoundingRectangle
-$result=[pscustomobject]@{ found=$true; title=$window.Current.Name; width=[int]$frame.Width; height=[int]$frame.Height; elements=$rows; acted=$false; actError=$null }
+$focus=[BmnAccessible]::Focus([IntPtr][int64]$window.Current.NativeWindowHandle)
+$foreignImage=$null
+if($focus[1] -gt 0 -and $focus[1] -ne [int]$request.processId) {
+  try { $foreignImage=(Get-Process -Id $focus[1]).ProcessName } catch { $foreignImage='unavailable' }
+}
+$uiaFocus=$null
+try {
+  $focused=$A::FocusedElement
+  if($focused) { $uiaFocus=@{ pid=$focused.Current.ProcessId; owned=($focused.Current.ProcessId -eq [int]$request.processId); name=$(if($focused.Current.ProcessId -eq [int]$request.processId){$focused.Current.Name}else{$null}) } }
+} catch {}
+$now=([DateTimeOffset]::UtcNow).ToUnixTimeMilliseconds()
+return [pscustomobject]@{ found=$true; title=$window.Current.Name; width=[int]$frame.Width; height=[int]$frame.Height
+  capturedAtMs=$now; readyAgeMs=$(if($request.readyAtMs){$now-[long]$request.readyAtMs}else{$null})
+  focus=@{ foregroundHandle=$focus[0]; foregroundPid=$focus[1]; foreignImage=$foreignImage; threadQueryOk=($focus[2] -eq 1); activeHandle=$focus[3]; focusedHandle=$focus[4]; uia=$uiaFocus }
+  elements=$rows; acted=$false; actError=$null }
+}
+$result=Capture-Window
+$first=[pscustomobject]@{ capturedAtMs=$result.capturedAtMs; readyAgeMs=$result.readyAgeMs; focus=$result.focus; elements=$result.elements }
+$samples=@($first)
+if($request.focusName -and @($result.elements | Where-Object { $_.name -ceq [string]$request.focusName -and -not $_.focused }).Count -gt 0) {
+  for($sample=0;$sample -lt 2;$sample++) { Start-Sleep -Milliseconds 250; $samples+=Capture-Window }
+}
+$result | Add-Member -NotePropertyName focusSamples -NotePropertyValue $samples
 if ($request.action -eq 'invoke') {
+  $rows=$result.elements
   $target=@($rows | Where-Object { $_.accessibleRole -eq 43 -and $_.name -ceq [string]$request.name }) | Select-Object -First 1
   if ($target) {
     try { [BmnAccessible]::Press([IntPtr]$target.handle); $result.acted=$true } catch { $result.actError=Get-Code $_.Exception }
@@ -130,10 +169,10 @@ function accessibilityHelper() {
  * The search ends as soon as the window is found. Its 90 s bound covers update windows that took
  * 28-46 s to show under the parallel CI inventory (run 37299667758); startup time is not asserted here.
  */
-export async function automateWindow({ processId, title, action = 'inspect', name, until, timeoutMs = 90000 }) {
+export async function automateWindow({ processId, title, action = 'inspect', name, until, focusName, readyAtMs, timeoutMs = 90000 }) {
   const assembly = await accessibilityHelper()
   const child = spawn(powershell(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', encoded(script)],
-    { env: { ...process.env, BMN_UIA_ASSEMBLY: assembly, BMN_UIA_REQUEST: JSON.stringify({ processId, title, action, name, until, timeoutMs }) }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+    { env: { ...process.env, BMN_UIA_ASSEMBLY: assembly, BMN_UIA_REQUEST: JSON.stringify({ processId, title, action, name, until, focusName, readyAtMs, timeoutMs }) }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
   let output = '', errors = ''
   child.stdout.on('data', bytes => { output += bytes })
   child.stderr.on('data', bytes => { errors += bytes })
@@ -145,7 +184,9 @@ export async function automateWindow({ processId, title, action = 'inspect', nam
       if (code !== 0) { reject(new Error(`UI Automation failed (${code}): ${errors.slice(0, 2000)}`)); return }
       let result
       try { result = JSON.parse(output) } catch { reject(new Error('UI Automation returned no result')); return }
-      for (const element of result.elements ?? []) element.role = roles.get(element.accessibleRole) ?? null
+      for (const view of [result, ...(result.focusSamples ?? [])]) {
+        for (const element of view.elements ?? []) element.role = roles.get(element.accessibleRole) ?? null
+      }
       resolve(result)
     })
   })

@@ -371,6 +371,7 @@ interface LiveSession extends SessionIdentity {
   inputRecord?: Array<{ at: number; outputBytes: number; text: string }>
   /** Electron self-test host only: output arrival times and counts, without contents. */
   outputRecord?: Array<{ atMs: number; outputBytes: number; chunkBytes: number }>
+  resizeRecord?: Array<{ atMs: number; cols: number; rows: number }>
   undeliveredOutput: TerminalFrame[]
   undeliveredOutputState: UndeliveredOutputState
   exitComplete: Promise<void>
@@ -634,6 +635,7 @@ export class SessionManager {
    * reconnects join the run already in flight and read its recorded result; nothing starts twice.
    */
   private readonly cohortResumeActions = new Map<string, Promise<SessionCohortResumeResult>>()
+  private readonly selfTestSpawnTimes = new WeakMap<PtyLike, { beganAtMs: number; returnedAtMs: number }>()
 
   constructor(options: SessionManagerOptions) {
     this.store = options.store
@@ -1524,7 +1526,7 @@ export class SessionManager {
       decsetModes: new DecsetModeTracker(),
       programCopy: new Osc52Reader(),
       outputTail: new OutputTail(),
-      ...(this.recordInput ? { inputRecord: [], outputRecord: [] } : {}),
+      ...(this.recordInput ? { inputRecord: [], outputRecord: [], resizeRecord: [] } : {}),
       undeliveredOutput: [],
       undeliveredOutputState: {
         limitBytes: this.undeliveredOutputLimitBytes,
@@ -1612,12 +1614,15 @@ export class SessionManager {
       const argv = identity === undefined ? params.argv
         : powerShellSessionArgv(params.executable,
           bashSessionArgv(params.executable, codexSessionArgv(params.executable, params.argv, env), env), env)
-      return this.spawnPty(params.executable, argv, {
+      const beganAtMs = this.recordInput ? Date.now() : 0
+      const pty = this.spawnPty(params.executable, argv, {
         cwd: params.cwd,
         cols: params.cols,
         rows: params.rows,
         env: childEnvironment
       })
+      if (this.recordInput) this.selfTestSpawnTimes.set(pty, { beganAtMs, returnedAtMs: Date.now() })
+      return pty
     } catch (error) {
       throw new HostControlError(
         ERROR_CODES.ioError,
@@ -1882,6 +1887,10 @@ export class SessionManager {
     ) {
       throw new HostControlError(ERROR_CODES.invalidArgument, 'Terminal dimensions are invalid')
     }
+    if (session.resizeRecord) {
+      session.resizeRecord.push({ atMs: Date.now(), cols: params.cols, rows: params.rows })
+      if (session.resizeRecord.length > 128) session.resizeRecord.shift()
+    }
     session.pty.resize(params.cols, params.rows)
     session.mirror?.resize(session.pty.cols, session.pty.rows)
     return { cols: session.pty.cols, rows: session.pty.rows }
@@ -1927,8 +1936,12 @@ export class SessionManager {
         writableBytes: stream.writableLength ?? null, awaitingDrain: stream.writableNeedDrain ?? null } : null,
       view: live.outputQueue?.flowState ?? null, tail: text, ...(since ? { since } : {}),
       // What was written to the program, oldest first: when (ms before this answer), how much it had printed by then.
-      ...(live.inputRecord ? { input: live.inputRecord.map((write) => ({ atMs: write.at, agoMs: Date.now() - write.at,
-        outputBytes: write.outputBytes, text: write.text })), outputEvents: live.outputRecord?.map(event => ({ ...event })) } : {}) }
+      ...(live.inputRecord ? { hostPid: process.pid, shellPid: live.pty.pid,
+        anchors: { hostStartedAtMs: Math.round(Date.now() - process.uptime() * 1000),
+          sessionCaptureStartedAt: live.captureStartedAt, ptySpawn: this.selfTestSpawnTimes.get(live.pty) },
+        input: live.inputRecord.map((write) => ({ atMs: write.at, agoMs: Date.now() - write.at,
+          outputBytes: write.outputBytes, text: write.text })), outputEvents: live.outputRecord?.map(event => ({ ...event })),
+        resizeEvents: live.resizeRecord?.map(event => ({ ...event })) } : {}) }
   }
 
   /**

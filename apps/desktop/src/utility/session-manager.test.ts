@@ -1083,6 +1083,28 @@ describe('shell session lifecycle', () => {
     // Input is recorded only in a self-test host.
     expect(manager.outputStateForSelfTest(created.sessionId)).not.toHaveProperty('input')
     expect(manager.outputStateForSelfTest(created.sessionId)).not.toHaveProperty('outputEvents')
+    expect(manager.outputStateForSelfTest(created.sessionId)).not.toHaveProperty('resizeEvents')
+    expect(manager.outputStateForSelfTest(created.sessionId)).not.toHaveProperty('anchors')
+  })
+
+  it('records bounded self-test resize observations and real spawn anchors', async () => {
+    const { manager, cwd } = await fixture(undefined, undefined, true)
+    const began = Date.now()
+    const created = await manager.create({ ...DEFAULT_SESSION_CREATION, cwd, executable: process.execPath, argv: [], cols: 80, rows: 24 })
+    const attached = manager.attach(created)
+    for (let index = 0; index < 140; index++) manager.resize({ attachmentId: attached.attachmentId, cols: 80 + index, rows: 24 })
+    const state = manager.outputStateForSelfTest(created.sessionId)!
+    expect(state).toMatchObject({ hostPid: process.pid, shellPid: 4242 })
+    const anchors = state.anchors as { hostStartedAtMs: number; sessionCaptureStartedAt: string; ptySpawn: { beganAtMs: number; returnedAtMs: number } }
+    expect(anchors.hostStartedAtMs).toBeLessThanOrEqual(began)
+    expect(Date.parse(anchors.sessionCaptureStartedAt)).toBeGreaterThanOrEqual(began)
+    expect(anchors.ptySpawn.beganAtMs).toBeGreaterThanOrEqual(began)
+    expect(anchors.ptySpawn.returnedAtMs).toBeGreaterThanOrEqual(anchors.ptySpawn.beganAtMs)
+    const events = state.resizeEvents as Array<{ atMs: number; cols: number; rows: number }>
+    expect(events).toHaveLength(128)
+    expect(events[0]).toMatchObject({ cols: 92, rows: 24 })
+    expect(events.at(-1)).toMatchObject({ cols: 219, rows: 24 })
+    expect(events[0]!.atMs).toBeGreaterThanOrEqual(anchors.ptySpawn.returnedAtMs)
   })
 
   it('records bounded output event times only in a self-test host, independently of input writes', async () => {

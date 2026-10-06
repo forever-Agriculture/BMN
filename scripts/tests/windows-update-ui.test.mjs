@@ -1,7 +1,7 @@
 // MODULE: windows-update-ui.test.mjs - drives the actual WinForms update windows and toast helper on native Windows
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -13,7 +13,24 @@ import { automateWindow } from '../test/fixtures/windows-ui-automation.mjs'
 
 const native = process.platform === 'win32'
 const roots = [], started = []
-const start = (...args) => { const child = spawn(...args); started.push(child); return child }
+const windowDirectories = new WeakMap()
+const start = (...args) => {
+  const child = spawn(...args); started.push(child)
+  const directory = args[2]?.env?.BMN_UPDATE_UI_DIRECTORY
+  if (directory) windowDirectories.set(child, directory)
+  return child
+}
+function readyAt(child) {
+  try { return statSync(join(windowDirectories.get(child), '1-ready.event')).mtimeMs }
+  catch { return undefined }
+}
+function recordFocus(observation) {
+  mkdirSync('test-results', { recursive: true })
+  const path = join('test-results', `windows-update-focus-${randomUUID()}.json`)
+  const temporary = path + '.tmp'
+  writeFileSync(temporary, JSON.stringify(observation, null, 2), { mode: 0o600 })
+  renameSync(temporary, path)
+}
 const running = child => child.exitCode === null && child.signalCode === null
 const exited = child => running(child) ? new Promise(resolve => child.once('exit', resolve)) : Promise.resolve()
 afterEach(async () => {
@@ -108,7 +125,14 @@ describe.runIf(native)('native Windows update windows', () => {
     const f = fixture(), text = 'Literal $env:USERNAME %PATH% "quoted" ^ & `tick 数据 — nothing is evaluated.'
     const answer = askWindowsUpdateQuestion({ parent: f.parent, title: 'BMN update failed', text, buttons, start })
     const child = await startedChild(0)
-    const view = await automateWindow({ processId: child.pid, title: 'BMN update failed', until: labels[0] })
+    const request = { processId: child.pid, title: 'BMN update failed', until: labels[0], focusName: labels[0], readyAtMs: readyAt(child) }
+    const view = await automateWindow(request)
+    const snapshots = view.focusSamples ?? [view]
+    const ready = readyAt(child)
+    for (const snapshot of snapshots) {
+      if (ready !== undefined && snapshot.capturedAtMs >= ready) snapshot.readyAgeMs = snapshot.capturedAtMs - ready
+    }
+    recordFocus({ observationOnly: true, buttons, press, firstFocusRemainsAssertion: true, readyAtMs: ready, snapshots })
     expectWindow(view, { found: true })
     // Window text is what the label displays; accessible names drop '&' as a mnemonic marker.
     expect(texts(view), shown(view)).toContain(text)

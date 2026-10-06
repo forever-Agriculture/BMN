@@ -10,6 +10,7 @@ import { codexSixelFrame, NODE_ANIMATION_SOURCE, POSIX_ANIMATION_SCRIPT, PTY_SIX
 import { powerShellQuote, useStandInLauncher, writeNodeProgram } from '../main/self-test/programs'
 import { conptyReaderState, conptyReaderWorker } from './conpty-reader-state'
 import { prepareWindowsPtyLaunch } from './windows-launch'
+import { conptyIdentity } from './conpty-identity'
 
 // The packaged self-test's Windows pane stops printing right after `scroll-79`: no SCROLLED, no prompt, no echo
 // of a later line, while BMN's own view and node-pty's output stream sit drained. This replays the same typed
@@ -297,6 +298,7 @@ async function scrollSequence(variant: Variant, save: (record: Record<string, un
     stage('wait')
     // The reader worker's own state at the outcome (null on POSIX), the same answer the self-test records.
     record.readerAtOutcome = await conptyReaderState(live)
+    record.hostIdentity = await conptyIdentity(process.pid, live.pid)
     record.da1Echoed = stream.includes('62;4;9;22c')
     save(record)
 
