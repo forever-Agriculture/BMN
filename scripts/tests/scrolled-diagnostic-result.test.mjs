@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { diagnosticCustodyEntries, scrolledExperimentPartial } from '../lib/scrolled-diagnostic-result.mjs'
+import { diagnosticCustodyEntries, diagnosticJobSnapshotRecord, scrolledExperimentPartial } from '../lib/scrolled-diagnostic-result.mjs'
 const arm = index => {
   const name = ['control', 'split', 'static'][index % 3]
   const passive = { failure: 'original SCROLLED failure', failureAtMs: 11000, scrollTypedAtMs: 0,
@@ -41,6 +41,36 @@ describe('SCROLLED experiment completeness', () => {
 
 const custody = () => ({ selfTest: 'scrolled-diagnostic-custody', diagnosticOnly: true, arm: 'control', mainPid: 10,
   snapshot: { listed: 1, identified: 1, entries: [{ pid: 10, creationTimeMs: 100, creationFileTime: '116444736001000000' }] } })
+const jobRecord = () => ({ ...custody(), selfTest: 'scrolled-diagnostic-job-snapshot', index: 0, startedAtMs: 1, returnedAtMs: 2 })
+describe('bounded diagnostic job-query evidence', () => {
+  it('retains incomplete zero-identity evidence and strips unapproved fields', () => {
+    const record = { ...jobRecord(), command: 'must not persist', snapshot: { listed: 2, identified: 0, entries: [] } }
+    const parsed = diagnosticJobSnapshotRecord(record, 10, 'control')
+    expect(parsed).toEqual({ arm: 'control', mainPid: 10, index: 0, startedAtMs: 1, returnedAtMs: 2,
+      snapshot: { listed: 2, identified: 0, entries: [] } })
+    expect(diagnosticCustodyEntries(record, 10, 'control')).toBeNull()
+  })
+  it('retains exact FILETIME strings and only the three identity fields', () => {
+    const record = jobRecord(); record.snapshot.entries[0].path = 'must not persist'
+    expect(diagnosticJobSnapshotRecord(record, 10, 'control').snapshot.entries).toEqual(custody().snapshot.entries)
+  })
+  it.each(['wrong-main', 'wrong-arm', 'wrong-index', 'over-bound', 'negative-count', 'count-mismatch', 'duplicate',
+    'time-mismatch', 'unsafe-timestamp', 'overflow-ticks'])('discards %s without producing custody entries', defect => {
+    const record = jobRecord()
+    if (defect === 'wrong-main') record.mainPid++
+    if (defect === 'wrong-arm') record.arm = 'split'
+    if (defect === 'wrong-index') record.index = 2
+    if (defect === 'over-bound') record.snapshot.listed = 1025
+    if (defect === 'negative-count') record.snapshot.identified = -1
+    if (defect === 'count-mismatch') record.snapshot.identified = 0
+    if (defect === 'duplicate') { record.snapshot.entries.push(record.snapshot.entries[0]); record.snapshot.listed = record.snapshot.identified = 2 }
+    if (defect === 'time-mismatch') record.snapshot.entries[0].creationTimeMs++
+    if (defect === 'unsafe-timestamp') record.startedAtMs = Number.MAX_SAFE_INTEGER + 1
+    if (defect === 'overflow-ticks') record.snapshot.entries[0].creationFileTime = '18446744073709551616'
+    expect(diagnosticJobSnapshotRecord(record, 10, 'control')).toBeNull()
+    expect(diagnosticCustodyEntries(record, 10, 'control')).toBeNull()
+  })
+})
 describe('diagnostic retained identities', () => {
   it('accepts a complete matching job snapshot with exact FILETIME conversion', () => {
     expect(diagnosticCustodyEntries(custody(), 10, 'control')).toEqual([{ pid: 10, creationTime: 100 }])

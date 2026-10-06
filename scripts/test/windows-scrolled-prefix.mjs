@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { windowsInstallerSmokeEnvironment } from '../lib/windows-installed-worker.mjs'
 import { windowsExitObserver } from '../lib/windows-exit-observer.mjs'
-import { diagnosticCustodyEntries, scrolledExperimentPartial } from '../lib/scrolled-diagnostic-result.mjs'
+import { diagnosticCustodyEntries, diagnosticJobSnapshotRecord, scrolledExperimentPartial } from '../lib/scrolled-diagnostic-result.mjs'
 import { ensurePrivateDirectories } from '../../apps/desktop/src/utility/private-directory.ts'
 
 export async function recordScrolledPrefixes(binary, budgetMs = 600_000) {
@@ -62,6 +62,17 @@ export async function recordScrolledPrefixes(binary, budgetMs = 600_000) {
           if (line.length > 128 * 1024) { row.guardError = 'INCONCLUSIVE: oversized custody line'; kill('oversized-line'); continue }
           let ready
           try { ready = JSON.parse(line) } catch { continue }
+          if (ready?.selfTest === 'scrolled-diagnostic-job-snapshot') {
+            const snapshot = diagnosticJobSnapshotRecord(ready, child.pid, arm)
+            if (!snapshot) { row.jobSnapshotEvidence = 'malformed'; continue }
+            const snapshots = row.jobSnapshots ??= []
+            if (snapshots.some(value => value.index === snapshot.index)) { row.jobSnapshotEvidence = 'duplicate'; continue }
+            snapshots.push(snapshot)
+            if (!['malformed', 'duplicate'].includes(row.jobSnapshotEvidence)) {
+              row.jobSnapshotEvidence = snapshots.length === 2 ? 'recorded' : 'partial'
+            }
+            continue
+          }
           if (ready?.selfTest === 'scrolled-diagnostic-input' && ready.arm === arm) {
             const events = row.appInputEvents ??= []
             if (events.length < 16 && ready.diagnosticOnly === true && Number.isFinite(ready.atMs) &&
@@ -114,6 +125,7 @@ export async function recordScrolledPrefixes(binary, budgetMs = 600_000) {
         child.once('close', (code, signal) => finish({ code, signal }))
       })
       Object.assign(row, { outcome, durationMs: Date.now() - startedAtMs, stdoutBytes: Buffer.byteLength(stdout), stderrBytes: Buffer.byteLength(stderr) })
+      row.jobSnapshotEvidence ??= 'unavailable'
       for (const line of stdout.split(/\r?\n/u)) {
         try {
           const receipt = JSON.parse(line)

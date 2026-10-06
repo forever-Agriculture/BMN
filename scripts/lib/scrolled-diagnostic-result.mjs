@@ -35,6 +35,30 @@ export function scrolledExperimentPartial(record) {
     row.receipt?.arm !== row.arm || row.receipt?.graceful !== true || !scrolledObservationComplete(row))
 }
 
+/** Incomplete query results are evidence only; this projection never authorizes custody. */
+export function diagnosticJobSnapshotRecord(record, childPid, arm) {
+  if (record?.selfTest !== 'scrolled-diagnostic-job-snapshot' || record.diagnosticOnly !== true ||
+      record.arm !== arm || record.mainPid !== childPid || ![0, 1].includes(record.index) ||
+      ![record.startedAtMs, record.returnedAtMs].every(value => Number.isSafeInteger(value) && value >= 0)) return null
+  const snapshot = record.snapshot
+  if (!Number.isInteger(snapshot?.listed) || snapshot.listed < 1 || snapshot.listed > 1024 ||
+      !Number.isInteger(snapshot.identified) || snapshot.identified < 0 || snapshot.identified > snapshot.listed ||
+      !Array.isArray(snapshot.entries) || snapshot.entries.length !== snapshot.identified) return null
+  const seen = new Set(), entries = []
+  for (const entry of snapshot.entries) {
+    if (!Number.isInteger(entry?.pid) || entry.pid < 1 || entry.pid > 0xffffffff || seen.has(entry.pid) ||
+        !Number.isSafeInteger(entry.creationTimeMs) || typeof entry.creationFileTime !== 'string' ||
+        !/^[1-9][0-9]{0,19}$/u.test(entry.creationFileTime)) return null
+    const ticks = BigInt(entry.creationFileTime)
+    if (ticks < 116444736000000000n || ticks > 0xffffffffffffffffn ||
+        (ticks - 116444736000000000n) / 10000n !== BigInt(entry.creationTimeMs)) return null
+    seen.add(entry.pid)
+    entries.push({ pid: entry.pid, creationTimeMs: entry.creationTimeMs, creationFileTime: entry.creationFileTime })
+  }
+  return { arm, mainPid: childPid, index: record.index, startedAtMs: record.startedAtMs, returnedAtMs: record.returnedAtMs,
+    snapshot: { listed: snapshot.listed, identified: snapshot.identified, entries } }
+}
+
 /** Only identities from this child's complete existing-job snapshot may arm its retained observer. */
 export function diagnosticCustodyEntries(ready, childPid, arm) {
   if (ready?.selfTest !== 'scrolled-diagnostic-custody' || ready.diagnosticOnly !== true ||

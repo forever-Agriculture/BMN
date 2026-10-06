@@ -46,9 +46,26 @@ export type DiagnosticJobSnapshot = ReturnType<typeof queryApplicationLifetimePr
 export async function armDiagnosticCustody(arm: string): Promise<DiagnosticJobSnapshot | undefined> {
   if (process.platform !== 'win32') return undefined
   // MAX-RATE-DONE precedes SCROLLED. One quiescent snapshot here covers both positions.
+  const firstStartedAtMs = Date.now()
   const first = queryApplicationLifetimeProcesses()
+  const firstReturnedAtMs = Date.now()
   await new Promise(resolve => setTimeout(resolve, 100))
+  const secondStartedAtMs = Date.now()
   const snapshot = queryApplicationLifetimeProcesses()
+  const secondReturnedAtMs = Date.now()
+  // Output happens after both existing queries; it never changes their refusal predicate.
+  const recordSnapshot = (index: number, value: DiagnosticJobSnapshot, startedAtMs: number, returnedAtMs: number) => {
+    try {
+      if (value.entries.length > 1024) return
+      const text = JSON.stringify({ selfTest: 'scrolled-diagnostic-job-snapshot', diagnosticOnly: true, arm,
+        mainPid: process.pid, index, startedAtMs, returnedAtMs,
+        snapshot: { listed: value.listed, identified: value.identified, entries: value.entries.map(entry => ({
+          pid: entry.pid, creationTimeMs: entry.creationTimeMs, creationFileTime: entry.creationFileTime })) } })
+      if (Buffer.byteLength(text, 'utf8') <= 128 * 1024) console.log(text)
+    } catch { /* Metadata cannot replace the original refusal or authorize custody. */ }
+  }
+  recordSnapshot(0, first, firstStartedAtMs, firstReturnedAtMs)
+  recordSnapshot(1, snapshot, secondStartedAtMs, secondReturnedAtMs)
   const identityKey = (value: typeof snapshot) => JSON.stringify([...value.entries]
     .sort((left, right) => left.pid - right.pid).map(entry => [entry.pid, entry.creationFileTime]))
   if (first.listed !== first.identified || snapshot.listed !== snapshot.identified || identityKey(first) !== identityKey(snapshot)) {
