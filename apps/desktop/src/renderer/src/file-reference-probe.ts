@@ -1,5 +1,17 @@
 // MODULE: file-reference-probe.ts - what the Electron self-test proves about file references, shared by renderer and main
 
+/**
+ * Two real files the palette finds: one whose name the reference grammar represents only through quoting,
+ * and one it cannot represent, beside a sibling a misreading would open. NTFS names cannot hold a colon
+ * (`a:b` names a data stream of `a`), so on Windows a quote in the name exercises the quoted form and
+ * a `$`, which the grammar refuses as a shell variable, exercises the refusal.
+ */
+export function fileReferenceFixtureNames(platform: string | undefined): { representable: string; unrepresentable: string; sibling: string } {
+  return platform === 'win32'
+    ? { representable: "a'b.ts", unrepresentable: 'report$42', sibling: 'report' }
+    : { representable: 'a:b.ts', unrepresentable: 'report:42', sibling: 'report' }
+}
+
 export interface FileReferenceFlowProbe {
   launchDirectory: string
   palette: {

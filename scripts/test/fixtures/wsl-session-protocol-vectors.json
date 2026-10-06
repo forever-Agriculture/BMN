@@ -1,0 +1,2539 @@
+{
+ "description": "Shared vectors for docs/wsl-session-protocol.md. Expectations are written by hand; both implementations must meet them. Synthetic values only. Every input ends with end of input.",
+ "nonce": "0123456789abcdef0123456789abcdef",
+ "launchBase": {
+  "type": "launch",
+  "protocol": 1,
+  "profileVersion": "restricted-1",
+  "sessionNonce": "0123456789abcdef0123456789abcdef",
+  "distribution": {
+   "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+   "name": "Ubuntu-24.04"
+  },
+  "project": {
+   "id": "synthetic-project"
+  },
+  "shell": {
+   "argv": [
+    "/bin/bash",
+    "-l"
+   ]
+  },
+  "cwd": "/home/project",
+  "environment": {
+   "TERM": "xterm-sixel-256color",
+   "LANG": "C.UTF-8"
+  },
+  "size": {
+   "cols": 80,
+   "rows": 24
+  }
+ },
+ "helperExitCodes": {
+  "UNSUPPORTED_PROFILE": 69,
+  "INTERNAL": 70,
+  "EXEC_FAILED": 71,
+  "STORAGE_RECOVERY": 74,
+  "LEASE_UNAVAILABLE": 75,
+  "PROTOCOL": 76,
+  "AUTH": 77,
+  "ROOT_DENIED": 78,
+  "CLEANUP_UNCONFIRMED": 79
+ },
+ "environmentAllowlist": [
+  "TERM",
+  "COLORTERM",
+  "LANG",
+  "LANGUAGE",
+  "LC_ALL",
+  "LC_CTYPE",
+  "LC_MESSAGES",
+  "LC_COLLATE",
+  "LC_NUMERIC",
+  "LC_TIME",
+  "TZ",
+  "NO_COLOR",
+  "FORCE_COLOR",
+  "CLICOLOR"
+ ],
+ "frames": [
+  {
+   "name": "resize 80x24",
+   "frames": [
+    {
+     "channel": 2,
+     "hex": "00500018"
+    }
+   ],
+   "hex": "010200000000000400500018"
+  },
+  {
+   "name": "terminal hi",
+   "frames": [
+    {
+     "channel": 1,
+     "text": "hi"
+    }
+   ],
+   "hex": "01010000000000026869"
+  },
+  {
+   "name": "stop",
+   "frames": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "stop"
+     }
+    }
+   ],
+   "hex": "010000000000000f7b2274797065223a2273746f70227d"
+  },
+  {
+   "name": "empty terminal",
+   "frames": [
+    {
+     "channel": 1,
+     "hex": ""
+    }
+   ],
+   "hex": "0101000000000000"
+  },
+  {
+   "name": "three frames in a row",
+   "frames": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "stop"
+     }
+    },
+    {
+     "channel": 1,
+     "text": "hi"
+    },
+    {
+     "channel": 2,
+     "hex": "00500018"
+    }
+   ],
+   "hex": "010000000000000f7b2274797065223a2273746f70227d01010000000000026869010200000000000400500018"
+  },
+  {
+   "name": "non-ASCII control (both implementations must agree)",
+   "frames": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "error",
+      "sessionNonce": null,
+      "code": "INTERNAL",
+      "detail": "na\u00efve \u2713 \u001b[0m"
+     }
+    }
+   ]
+  },
+  {
+   "name": "launch (both implementations must agree)",
+   "frames": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    }
+   ]
+  }
+ ],
+ "malformed": [
+  {
+   "name": "version 2",
+   "hex": "0200000000000000",
+   "framesBefore": 0,
+   "reason": "unsupported frame version 2"
+  },
+  {
+   "name": "reserved bridge channel",
+   "hex": "0103000000000000",
+   "framesBefore": 0,
+   "reason": "channel 3 is reserved"
+  },
+  {
+   "name": "reserved file channel",
+   "hex": "0104000000000000",
+   "framesBefore": 0,
+   "reason": "channel 4 is reserved"
+  },
+  {
+   "name": "unknown channel",
+   "hex": "0109000000000000",
+   "framesBefore": 0,
+   "reason": "unknown channel 9"
+  },
+  {
+   "name": "reserved bits set",
+   "hex": "0101000100000000",
+   "framesBefore": 0,
+   "reason": "reserved header bits are set"
+  },
+  {
+   "name": "oversized terminal header alone fails before any payload",
+   "hex": "0101000000010001",
+   "framesBefore": 0,
+   "reason": "a 65537-byte payload does not fit channel 1"
+  },
+  {
+   "name": "resize of three bytes",
+   "hex": "0102000000000003000000",
+   "framesBefore": 0,
+   "reason": "a 3-byte payload does not fit channel 2"
+  },
+  {
+   "name": "truncated header",
+   "hex": "010100",
+   "framesBefore": 0,
+   "atEnd": true,
+   "reason": "input ended inside a frame (3 bytes held)"
+  },
+  {
+   "name": "truncated payload",
+   "hex": "01010000000000046869",
+   "framesBefore": 0,
+   "atEnd": true,
+   "reason": "input ended inside a frame (10 bytes held)"
+  },
+  {
+   "name": "valid frame then a bad header",
+   "hex": "010100000000000268690200000000000000",
+   "framesBefore": 1,
+   "reason": "unsupported frame version 2"
+  }
+ ],
+ "launch": [
+  {
+   "name": "valid",
+   "patch": [],
+   "ok": true
+  },
+  {
+   "name": "empty, non-ASCII and spaced arguments",
+   "patch": [
+    [
+     [
+      "shell",
+      "argv"
+     ],
+     [
+      "/usr/bin/env",
+      "",
+      " spaced ",
+      "na\u00efve \u2713"
+     ]
+    ]
+   ],
+   "ok": true
+  },
+  {
+   "name": "root directory",
+   "patch": [
+    [
+     [
+      "cwd"
+     ],
+     "/"
+    ]
+   ],
+   "ok": true
+  },
+  {
+   "name": "no environment",
+   "patch": [
+    [
+     [
+      "environment"
+     ],
+     {}
+    ]
+   ],
+   "ok": true
+  },
+  {
+   "name": "unknown top-level key",
+   "patch": [
+    [
+     [
+      "extra"
+     ],
+     1
+    ]
+   ],
+   "field": "extra"
+  },
+  {
+   "name": "missing cwd",
+   "patch": [
+    [
+     [
+      "cwd"
+     ],
+     {
+      "$delete": true
+     }
+    ]
+   ],
+   "field": "cwd"
+  },
+  {
+   "name": "missing distribution",
+   "patch": [
+    [
+     [
+      "distribution"
+     ],
+     {
+      "$delete": true
+     }
+    ]
+   ],
+   "field": "distribution"
+  },
+  {
+   "name": "wrong type",
+   "patch": [
+    [
+     [
+      "type"
+     ],
+     "launch2"
+    ]
+   ],
+   "field": "type"
+  },
+  {
+   "name": "future protocol",
+   "patch": [
+    [
+     [
+      "protocol"
+     ],
+     2
+    ]
+   ],
+   "field": "protocol"
+  },
+  {
+   "name": "protocol as boolean",
+   "patch": [
+    [
+     [
+      "protocol"
+     ],
+     true
+    ]
+   ],
+   "field": "protocol"
+  },
+  {
+   "name": "unknown profile",
+   "patch": [
+    [
+     [
+      "profileVersion"
+     ],
+     "restricted-0"
+    ]
+   ],
+   "field": "profileVersion"
+  },
+  {
+   "name": "uppercase nonce",
+   "patch": [
+    [
+     [
+      "sessionNonce"
+     ],
+     "0123456789ABCDEF0123456789ABCDEF"
+    ]
+   ],
+   "field": "sessionNonce"
+  },
+  {
+   "name": "short nonce",
+   "patch": [
+    [
+     [
+      "sessionNonce"
+     ],
+     "0123456789abcdef0123456789abcde"
+    ]
+   ],
+   "field": "sessionNonce"
+  },
+  {
+   "name": "registration without braces",
+   "patch": [
+    [
+     [
+      "distribution",
+      "id"
+     ],
+     "0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b"
+    ]
+   ],
+   "field": "distribution.id"
+  },
+  {
+   "name": "uppercase registration",
+   "patch": [
+    [
+     [
+      "distribution",
+      "id"
+     ],
+     "{0B1E2F3A-4C5D-4E6F-8A9B-0C1D2E3F4A5B}"
+    ]
+   ],
+   "field": "distribution.id"
+  },
+  {
+   "name": "distribution name with a space",
+   "patch": [
+    [
+     [
+      "distribution",
+      "name"
+     ],
+     "Ubuntu 24.04"
+    ]
+   ],
+   "field": "distribution.name"
+  },
+  {
+   "name": "distribution path supplied",
+   "patch": [
+    [
+     [
+      "distribution",
+      "path"
+     ],
+     "/mnt/c"
+    ]
+   ],
+   "field": "distribution.path"
+  },
+  {
+   "name": "project with a slash",
+   "patch": [
+    [
+     [
+      "project",
+      "id"
+     ],
+     "a/b"
+    ]
+   ],
+   "field": "project.id"
+  },
+  {
+   "name": "no arguments",
+   "patch": [
+    [
+     [
+      "shell",
+      "argv"
+     ],
+     []
+    ]
+   ],
+   "field": "shell.argv"
+  },
+  {
+   "name": "command string instead of argv",
+   "patch": [
+    [
+     [
+      "shell",
+      "argv"
+     ],
+     "/bin/bash -l"
+    ]
+   ],
+   "field": "shell.argv"
+  },
+  {
+   "name": "too many arguments",
+   "patch": [
+    [
+     [
+      "shell",
+      "argv"
+     ],
+     [
+      "/bin/true",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x",
+      "x"
+     ]
+    ]
+   ],
+   "field": "shell.argv"
+  },
+  {
+   "name": "relative program",
+   "patch": [
+    [
+     [
+      "shell",
+      "argv"
+     ],
+     [
+      "bash"
+     ]
+    ]
+   ],
+   "field": "shell.argv[0]"
+  },
+  {
+   "name": "program path with ..",
+   "patch": [
+    [
+     [
+      "shell",
+      "argv"
+     ],
+     [
+      "/usr/../bin/bash"
+     ]
+    ]
+   ],
+   "field": "shell.argv[0]"
+  },
+  {
+   "name": "argument with NUL",
+   "patch": [
+    [
+     [
+      "shell",
+      "argv"
+     ],
+     [
+      "/bin/bash",
+      "a\u0000b"
+     ]
+    ]
+   ],
+   "field": "shell.argv[1]"
+  },
+  {
+   "name": "argument not a string",
+   "patch": [
+    [
+     [
+      "shell",
+      "argv"
+     ],
+     [
+      "/bin/bash",
+      5
+     ]
+    ]
+   ],
+   "field": "shell.argv[1]"
+  },
+  {
+   "name": "argument over 4096 UTF-8 bytes in 2049 characters",
+   "patch": [
+    [
+     [
+      "shell",
+      "argv"
+     ],
+     [
+      "/bin/bash",
+      "\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9\u00e9"
+     ]
+    ]
+   ],
+   "field": "shell.argv[1]"
+  },
+  {
+   "name": "argument with an unpaired surrogate",
+   "patch": [
+    [
+     [
+      "shell",
+      "argv"
+     ],
+     [
+      "/bin/bash",
+      "\ud800"
+     ]
+    ]
+   ],
+   "field": "shell.argv[1]"
+  },
+  {
+   "name": "directory with trailing slash",
+   "patch": [
+    [
+     [
+      "cwd"
+     ],
+     "/home/project/"
+    ]
+   ],
+   "field": "cwd"
+  },
+  {
+   "name": "directory with empty segment",
+   "patch": [
+    [
+     [
+      "cwd"
+     ],
+     "/home//project"
+    ]
+   ],
+   "field": "cwd"
+  },
+  {
+   "name": "relative directory",
+   "patch": [
+    [
+     [
+      "cwd"
+     ],
+     "home/project"
+    ]
+   ],
+   "field": "cwd"
+  },
+  {
+   "name": "credential in environment",
+   "patch": [
+    [
+     [
+      "environment",
+      "BMN_TOKEN"
+     ],
+     "synthetic-not-a-token"
+    ]
+   ],
+   "field": "environment.BMN_TOKEN"
+  },
+  {
+   "name": "PATH in environment",
+   "patch": [
+    [
+     [
+      "environment",
+      "PATH"
+     ],
+     "/usr/bin"
+    ]
+   ],
+   "field": "environment.PATH"
+  },
+  {
+   "name": "environment value not a string",
+   "patch": [
+    [
+     [
+      "environment",
+      "TERM"
+     ],
+     1
+    ]
+   ],
+   "field": "environment.TERM"
+  },
+  {
+   "name": "environment as a list",
+   "patch": [
+    [
+     [
+      "environment"
+     ],
+     []
+    ]
+   ],
+   "field": "environment"
+  },
+  {
+   "name": "one column",
+   "patch": [
+    [
+     [
+      "size",
+      "cols"
+     ],
+     1
+    ]
+   ],
+   "field": "size.cols"
+  },
+  {
+   "name": "too many rows",
+   "patch": [
+    [
+     [
+      "size",
+      "rows"
+     ],
+     1001
+    ]
+   ],
+   "field": "size.rows"
+  },
+  {
+   "name": "columns as text",
+   "patch": [
+    [
+     [
+      "size",
+      "cols"
+     ],
+     "80"
+    ]
+   ],
+   "field": "size.cols"
+  },
+  {
+   "name": "size with depth",
+   "patch": [
+    [
+     [
+      "size",
+      "depth"
+     ],
+     1
+    ]
+   ],
+   "field": "size.depth"
+  },
+  {
+   "name": "not an object",
+   "message": [],
+   "field": "message"
+  }
+ ],
+ "guest": [
+  {
+   "name": "launch, input, resize, stop, late input, end",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    },
+    {
+     "channel": 1,
+     "text": "ls\r"
+    },
+    {
+     "channel": 2,
+     "hex": "0064001e"
+    },
+    {
+     "channel": 0,
+     "json": {
+      "type": "stop"
+     }
+    },
+    {
+     "channel": 1,
+     "text": "late"
+    }
+   ],
+   "events": [
+    {
+     "type": "launch",
+     "launch": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    },
+    {
+     "type": "input",
+     "bytes": "6c730d"
+    },
+    {
+     "type": "resize",
+     "cols": 100,
+     "rows": 30
+    },
+    {
+     "type": "stop"
+    },
+    {
+     "type": "teardown",
+     "reason": "eof"
+    }
+   ],
+   "state": "ended",
+   "dropped": 1
+  },
+  {
+   "name": "end before launch aborts",
+   "input": [],
+   "events": [
+    {
+     "type": "abort"
+    }
+   ],
+   "state": "ended",
+   "dropped": 0
+  },
+  {
+   "name": "end while running tears down",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    }
+   ],
+   "events": [
+    {
+     "type": "launch",
+     "launch": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    },
+    {
+     "type": "teardown",
+     "reason": "eof"
+    }
+   ],
+   "state": "ended",
+   "dropped": 0
+  },
+  {
+   "name": "input before launch",
+   "input": [
+    {
+     "channel": 1,
+     "text": "x"
+    }
+   ],
+   "events": [
+    {
+     "type": "failed",
+     "code": "PROTOCOL",
+     "reason": "terminal input before launch"
+    }
+   ],
+   "state": "failed",
+   "dropped": 0
+  },
+  {
+   "name": "first message not a launch",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "stop"
+     }
+    }
+   ],
+   "events": [
+    {
+     "type": "failed",
+     "code": "PROTOCOL",
+     "reason": "the first message must be launch"
+    }
+   ],
+   "state": "failed",
+   "dropped": 0
+  },
+  {
+   "name": "launch carrying a credential",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "BMN_TOKEN": "synthetic-not-a-token"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    }
+   ],
+   "events": [
+    {
+     "type": "failed",
+     "code": "PROTOCOL",
+     "reason": "environment.BMN_TOKEN is not allowed"
+    }
+   ],
+   "state": "failed",
+   "dropped": 0
+  },
+  {
+   "name": "second launch",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    },
+    {
+     "channel": 0,
+     "json": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    }
+   ],
+   "events": [
+    {
+     "type": "launch",
+     "launch": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    },
+    {
+     "type": "failed",
+     "code": "PROTOCOL",
+     "reason": "a second launch"
+    }
+   ],
+   "state": "failed",
+   "dropped": 0
+  },
+  {
+   "name": "control after stop",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    },
+    {
+     "channel": 0,
+     "json": {
+      "type": "stop"
+     }
+    },
+    {
+     "channel": 0,
+     "json": {
+      "type": "stop"
+     }
+    }
+   ],
+   "events": [
+    {
+     "type": "launch",
+     "launch": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    },
+    {
+     "type": "stop"
+    },
+    {
+     "type": "failed",
+     "code": "PROTOCOL",
+     "reason": "control after stop"
+    }
+   ],
+   "state": "failed",
+   "dropped": 0
+  },
+  {
+   "name": "terminal bytes that look like a stop frame stay input",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    },
+    {
+     "channel": 1,
+     "hex": "010000000000000f7b2274797065223a2273746f70227d"
+    }
+   ],
+   "events": [
+    {
+     "type": "launch",
+     "launch": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    },
+    {
+     "type": "input",
+     "bytes": "010000000000000f7b2274797065223a2273746f70227d"
+    },
+    {
+     "type": "teardown",
+     "reason": "eof"
+    }
+   ],
+   "state": "ended",
+   "dropped": 0
+  },
+  {
+   "name": "end inside a frame while running",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    },
+    {
+     "raw": "01010000000000046869"
+    }
+   ],
+   "events": [
+    {
+     "type": "launch",
+     "launch": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    },
+    {
+     "type": "failed",
+     "code": "PROTOCOL",
+     "reason": "input ended inside a frame (10 bytes held)"
+    }
+   ],
+   "state": "failed",
+   "dropped": 0
+  },
+  {
+   "name": "resize to one column",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    },
+    {
+     "channel": 2,
+     "hex": "00010018"
+    }
+   ],
+   "events": [
+    {
+     "type": "launch",
+     "launch": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    },
+    {
+     "type": "failed",
+     "code": "PROTOCOL",
+     "reason": "size.cols must be an integer from 2 to 1000"
+    }
+   ],
+   "state": "failed",
+   "dropped": 0
+  },
+  {
+   "name": "unknown control message",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    },
+    {
+     "channel": 0,
+     "json": {
+      "type": "exec",
+      "argv": [
+       "/bin/sh"
+      ]
+     }
+    }
+   ],
+   "events": [
+    {
+     "type": "launch",
+     "launch": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    },
+    {
+     "type": "failed",
+     "code": "PROTOCOL",
+     "reason": "unknown control message"
+    }
+   ],
+   "state": "failed",
+   "dropped": 0
+  },
+  {
+   "name": "stop with an extra key",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    },
+    {
+     "channel": 0,
+     "json": {
+      "type": "stop",
+      "now": true
+     }
+    }
+   ],
+   "events": [
+    {
+     "type": "launch",
+     "launch": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    },
+    {
+     "type": "failed",
+     "code": "PROTOCOL",
+     "reason": "now is not allowed"
+    }
+   ],
+   "state": "failed",
+   "dropped": 0
+  },
+  {
+   "name": "control payload that is not UTF-8",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    },
+    {
+     "channel": 0,
+     "hex": "7bff7d"
+    }
+   ],
+   "events": [
+    {
+     "type": "launch",
+     "launch": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    },
+    {
+     "type": "failed",
+     "code": "PROTOCOL",
+     "reason": "control payload is not UTF-8"
+    }
+   ],
+   "state": "failed",
+   "dropped": 0
+  },
+  {
+   "name": "control payload that is a JSON list",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    },
+    {
+     "channel": 0,
+     "hex": "5b5d"
+    }
+   ],
+   "events": [
+    {
+     "type": "launch",
+     "launch": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    },
+    {
+     "type": "failed",
+     "code": "PROTOCOL",
+     "reason": "control payload is not an object"
+    }
+   ],
+   "state": "failed",
+   "dropped": 0
+  },
+  {
+   "name": "control payload with NaN",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    },
+    {
+     "channel": 0,
+     "text": "{\"type\":NaN}"
+    }
+   ],
+   "events": [
+    {
+     "type": "launch",
+     "launch": {
+      "type": "launch",
+      "protocol": 1,
+      "profileVersion": "restricted-1",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "distribution": {
+       "id": "{0b1e2f3a-4c5d-4e6f-8a9b-0c1d2e3f4a5b}",
+       "name": "Ubuntu-24.04"
+      },
+      "project": {
+       "id": "synthetic-project"
+      },
+      "shell": {
+       "argv": [
+        "/bin/bash",
+        "-l"
+       ]
+      },
+      "cwd": "/home/project",
+      "environment": {
+       "TERM": "xterm-sixel-256color",
+       "LANG": "C.UTF-8"
+      },
+      "size": {
+       "cols": 80,
+       "rows": 24
+      }
+     }
+    },
+    {
+     "type": "failed",
+     "code": "PROTOCOL",
+     "reason": "control payload is not JSON"
+    }
+   ],
+   "state": "failed",
+   "dropped": 0
+  }
+ ],
+ "native": [
+  {
+   "name": "complete session",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "ready",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "profileVersion": "restricted-1",
+      "leasedUid": 1000001
+     }
+    },
+    {
+     "channel": 1,
+     "text": "out"
+    },
+    {
+     "channel": 0,
+     "json": {
+      "type": "exit",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "payload": {
+       "code": 0,
+       "signal": null
+      },
+      "cleanupConfirmed": true
+     }
+    }
+   ],
+   "events": [
+    {
+     "type": "ready",
+     "profileVersion": "restricted-1",
+     "leasedUid": 1000001
+    },
+    {
+     "type": "output",
+     "bytes": "6f7574"
+    },
+    {
+     "type": "exit",
+     "payload": {
+      "code": 0,
+      "signal": null
+     },
+     "cleanupConfirmed": true
+    }
+   ],
+   "complete": true
+  },
+  {
+   "name": "ended by a signal, cleanup confirmed",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "ready",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "profileVersion": "restricted-1",
+      "leasedUid": 1000001
+     }
+    },
+    {
+     "channel": 0,
+     "json": {
+      "type": "exit",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "payload": {
+       "code": null,
+       "signal": "SIGKILL"
+      },
+      "cleanupConfirmed": true
+     }
+    }
+   ],
+   "events": [
+    {
+     "type": "ready",
+     "profileVersion": "restricted-1",
+     "leasedUid": 1000001
+    },
+    {
+     "type": "exit",
+     "payload": {
+      "code": null,
+      "signal": "SIGKILL"
+     },
+     "cleanupConfirmed": true
+    }
+   ],
+   "complete": true
+  },
+  {
+   "name": "cleanup not confirmed",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "ready",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "profileVersion": "restricted-1",
+      "leasedUid": 1000001
+     }
+    },
+    {
+     "channel": 0,
+     "json": {
+      "type": "exit",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "payload": {
+       "code": 0,
+       "signal": null
+      },
+      "cleanupConfirmed": false
+     }
+    }
+   ],
+   "events": [
+    {
+     "type": "ready",
+     "profileVersion": "restricted-1",
+     "leasedUid": 1000001
+    },
+    {
+     "type": "exit",
+     "payload": {
+      "code": 0,
+      "signal": null
+     },
+     "cleanupConfirmed": false
+    }
+   ],
+   "complete": false
+  },
+  {
+   "name": "end before ready",
+   "input": [],
+   "events": [
+    {
+     "type": "failed",
+     "code": "EXEC_FAILED",
+     "reason": "the guest ended before ready"
+    }
+   ],
+   "complete": false
+  },
+  {
+   "name": "end without an exit receipt",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "ready",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "profileVersion": "restricted-1",
+      "leasedUid": 1000001
+     }
+    },
+    {
+     "channel": 1,
+     "text": "x"
+    }
+   ],
+   "events": [
+    {
+     "type": "ready",
+     "profileVersion": "restricted-1",
+     "leasedUid": 1000001
+    },
+    {
+     "type": "output",
+     "bytes": "78"
+    },
+    {
+     "type": "failed",
+     "code": "CLEANUP_UNCONFIRMED",
+     "reason": "the guest ended without an exit receipt"
+    }
+   ],
+   "complete": false
+  },
+  {
+   "name": "output before ready",
+   "input": [
+    {
+     "channel": 1,
+     "text": "x"
+    }
+   ],
+   "events": [
+    {
+     "type": "failed",
+     "code": "PROTOCOL",
+     "reason": "terminal output before ready"
+    }
+   ],
+   "complete": false
+  },
+  {
+   "name": "ready for another session",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "ready",
+      "sessionNonce": "fedcba9876543210fedcba9876543210",
+      "profileVersion": "restricted-1",
+      "leasedUid": 1000001
+     }
+    }
+   ],
+   "events": [
+    {
+     "type": "failed",
+     "code": "AUTH",
+     "reason": "ready names another session"
+    }
+   ],
+   "complete": false
+  },
+  {
+   "name": "exit for another session",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "ready",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "profileVersion": "restricted-1",
+      "leasedUid": 1000001
+     }
+    },
+    {
+     "channel": 0,
+     "json": {
+      "type": "exit",
+      "sessionNonce": "fedcba9876543210fedcba9876543210",
+      "payload": {
+       "code": 0,
+       "signal": null
+      },
+      "cleanupConfirmed": true
+     }
+    }
+   ],
+   "events": [
+    {
+     "type": "ready",
+     "profileVersion": "restricted-1",
+     "leasedUid": 1000001
+    },
+    {
+     "type": "failed",
+     "code": "AUTH",
+     "reason": "exit names another session"
+    }
+   ],
+   "complete": false
+  },
+  {
+   "name": "guest reports no free UID",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "error",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "code": "LEASE_UNAVAILABLE",
+      "detail": "no free UID"
+     }
+    }
+   ],
+   "events": [
+    {
+     "type": "failed",
+     "code": "LEASE_UNAVAILABLE",
+     "reason": "guest: no free UID"
+    }
+   ],
+   "complete": false
+  },
+  {
+   "name": "guest claims a Windows-side code",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "error",
+      "sessionNonce": null,
+      "code": "WSL_MISSING",
+      "detail": ""
+     }
+    }
+   ],
+   "events": [
+    {
+     "type": "failed",
+     "code": "PROTOCOL",
+     "reason": "error carries an unknown code"
+    }
+   ],
+   "complete": false
+  },
+  {
+   "name": "output that looks like an exit frame stays output",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "ready",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "profileVersion": "restricted-1",
+      "leasedUid": 1000001
+     }
+    },
+    {
+     "channel": 1,
+     "frameOf": {
+      "type": "exit",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "payload": {
+       "code": 0,
+       "signal": null
+      },
+      "cleanupConfirmed": true
+     }
+    }
+   ],
+   "events": [
+    {
+     "type": "ready",
+     "profileVersion": "restricted-1",
+     "leasedUid": 1000001
+    },
+    {
+     "type": "output",
+     "frameOf": {
+      "type": "exit",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "payload": {
+       "code": 0,
+       "signal": null
+      },
+      "cleanupConfirmed": true
+     }
+    },
+    {
+     "type": "failed",
+     "code": "CLEANUP_UNCONFIRMED",
+     "reason": "the guest ended without an exit receipt"
+    }
+   ],
+   "complete": false
+  },
+  {
+   "name": "exit with both code and signal",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "ready",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "profileVersion": "restricted-1",
+      "leasedUid": 1000001
+     }
+    },
+    {
+     "channel": 0,
+     "json": {
+      "type": "exit",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "payload": {
+       "code": 1,
+       "signal": "SIGTERM"
+      },
+      "cleanupConfirmed": true
+     }
+    }
+   ],
+   "events": [
+    {
+     "type": "ready",
+     "profileVersion": "restricted-1",
+     "leasedUid": 1000001
+    },
+    {
+     "type": "failed",
+     "code": "PROTOCOL",
+     "reason": "payload needs exactly one of code and signal"
+    }
+   ],
+   "complete": false
+  },
+  {
+   "name": "bytes after the exit receipt",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "ready",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "profileVersion": "restricted-1",
+      "leasedUid": 1000001
+     }
+    },
+    {
+     "channel": 0,
+     "json": {
+      "type": "exit",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "payload": {
+       "code": 0,
+       "signal": null
+      },
+      "cleanupConfirmed": true
+     }
+    },
+    {
+     "channel": 1,
+     "text": "x"
+    }
+   ],
+   "events": [
+    {
+     "type": "ready",
+     "profileVersion": "restricted-1",
+     "leasedUid": 1000001
+    },
+    {
+     "type": "exit",
+     "payload": {
+      "code": 0,
+      "signal": null
+     },
+     "cleanupConfirmed": true
+    },
+    {
+     "type": "failed",
+     "code": "PROTOCOL",
+     "reason": "bytes after the exit receipt"
+    }
+   ],
+   "complete": false
+  },
+  {
+   "name": "second ready",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "ready",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "profileVersion": "restricted-1",
+      "leasedUid": 1000001
+     }
+    },
+    {
+     "channel": 0,
+     "json": {
+      "type": "ready",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "profileVersion": "restricted-1",
+      "leasedUid": 1000001
+     }
+    }
+   ],
+   "events": [
+    {
+     "type": "ready",
+     "profileVersion": "restricted-1",
+     "leasedUid": 1000001
+    },
+    {
+     "type": "failed",
+     "code": "PROTOCOL",
+     "reason": "a second ready"
+    }
+   ],
+   "complete": false
+  },
+  {
+   "name": "exit before ready",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "exit",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "payload": {
+       "code": 0,
+       "signal": null
+      },
+      "cleanupConfirmed": true
+     }
+    }
+   ],
+   "events": [
+    {
+     "type": "failed",
+     "code": "PROTOCOL",
+     "reason": "exit before ready"
+    }
+   ],
+   "complete": false
+  },
+  {
+   "name": "guest sends a resize",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "ready",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "profileVersion": "restricted-1",
+      "leasedUid": 1000001
+     }
+    },
+    {
+     "channel": 2,
+     "hex": "00500018"
+    }
+   ],
+   "events": [
+    {
+     "type": "ready",
+     "profileVersion": "restricted-1",
+     "leasedUid": 1000001
+    },
+    {
+     "type": "failed",
+     "code": "PROTOCOL",
+     "reason": "the guest cannot send resize frames"
+    }
+   ],
+   "complete": false
+  },
+  {
+   "name": "leased UID zero",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "ready",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "profileVersion": "restricted-1",
+      "leasedUid": 0
+     }
+    }
+   ],
+   "events": [
+    {
+     "type": "failed",
+     "code": "PROTOCOL",
+     "reason": "leasedUid must be an integer from 1 to 2147483647"
+    }
+   ],
+   "complete": false
+  },
+  {
+   "name": "end inside a frame after exit",
+   "input": [
+    {
+     "channel": 0,
+     "json": {
+      "type": "ready",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "profileVersion": "restricted-1",
+      "leasedUid": 1000001
+     }
+    },
+    {
+     "channel": 0,
+     "json": {
+      "type": "exit",
+      "sessionNonce": "0123456789abcdef0123456789abcdef",
+      "payload": {
+       "code": 0,
+       "signal": null
+      },
+      "cleanupConfirmed": true
+     }
+    },
+    {
+     "raw": "0101"
+    }
+   ],
+   "events": [
+    {
+     "type": "ready",
+     "profileVersion": "restricted-1",
+     "leasedUid": 1000001
+    },
+    {
+     "type": "exit",
+     "payload": {
+      "code": 0,
+      "signal": null
+     },
+     "cleanupConfirmed": true
+    },
+    {
+     "type": "failed",
+     "code": "PROTOCOL",
+     "reason": "input ended inside a frame (2 bytes held)"
+    }
+   ],
+   "complete": false
+  }
+ ]
+}

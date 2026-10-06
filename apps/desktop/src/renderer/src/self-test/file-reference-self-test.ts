@@ -1,6 +1,6 @@
 // MODULE: file-reference-self-test.ts - Electron self-test of file references: keyboard palette, Ctrl+click, mouse mode, no PTY input
 import type { Terminal } from '@xterm/xterm'
-import type { FileReferenceFlowProbe } from '../file-reference-probe'
+import { fileReferenceFixtureNames, type FileReferenceFlowProbe } from '../file-reference-probe'
 
 
 const MARKER = 'FILEREF refs/src/parser.ts:42:7'
@@ -568,10 +568,11 @@ export async function runEpic27FileReferenceIntegration(options: {
   window.dispatchEvent(new KeyboardEvent('keydown', {
     key: 'P', code: 'KeyP', ctrlKey: true, shiftKey: true, bubbles: true
   }))
+  const fixtureNames = fileReferenceFixtureNames(window.aiTerminal.platform)
   const colonPalette = await waitFor('colon file palette', () => document.querySelector<HTMLInputElement>('.command-palette input'))
-  setInputValue(colonPalette, 'a:b.ts')
+  setInputValue(colonPalette, fixtureNames.representable)
   await waitFor('colon file row', () => [...document.querySelectorAll<HTMLElement>('.palette-results [data-group="Files"]')]
-    .find((row) => row.textContent?.includes('a:b.ts')))
+    .find((row) => row.textContent?.includes(fixtureNames.representable)))
   await waitFor('colon file selected', () => document.querySelector('.palette-results [data-group="Files"][aria-selected="true"]'))
   colonPalette.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
   const colonDialog = await waitFor('colon file preview', openDialog)
@@ -582,9 +583,9 @@ export async function runEpic27FileReferenceIntegration(options: {
     key: 'P', code: 'KeyP', ctrlKey: true, shiftKey: true, bubbles: true
   }))
   const numericPalette = await waitFor('numeric suffix palette', () => document.querySelector<HTMLInputElement>('.command-palette input'))
-  setInputValue(numericPalette, 'report:42')
+  setInputValue(numericPalette, fixtureNames.unrepresentable)
   await waitFor('numeric suffix row', () => [...document.querySelectorAll<HTMLElement>('.palette-results [data-group="Files"]')]
-    .find((row) => row.textContent?.includes('report:42')))
+    .find((row) => row.textContent?.includes(fixtureNames.unrepresentable)))
   await waitFor('numeric suffix selected', () => document.querySelector('.palette-results [data-group="Files"][aria-selected="true"]'))
   numericPalette.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
   const numericSuffixRejected = await waitFor('numeric suffix rejection', () =>

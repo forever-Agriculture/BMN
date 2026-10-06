@@ -36,6 +36,8 @@ export interface PortWatchOptions {
   /** Every session BMN knows, live or stopped: a stopped session's leftover server stays under it. */
   knownSessionIds(): ReadonlySet<string>
   liveSessionIds(): readonly string[]
+  /** Native jobs have no surviving server after exit; bind each result to its exact live incarnation. */
+  currentIncarnation?(sessionId: string): string | undefined
   /** Called after a scan or a session change alters what any session lists. */
   changed(): void
   now?: () => number
@@ -45,6 +47,7 @@ export interface PortWatchOptions {
 
 export class PortWatch {
   private result = new Map<string, ListeningPort[]>()
+  private resultIncarnations = new Map<string, string>()
   private readonly lastOutputAt = new Map<string, number>()
   private readonly carry = new Map<string, string>()
   /** Whether each listed session was live when the window was last told, so a stop alone is announced too. */
@@ -89,7 +92,8 @@ export class PortWatch {
     const known = this.options.knownSessionIds()
     const live = new Set(this.options.liveSessionIds())
     return [...this.result]
-      .filter(([sessionId]) => known.has(sessionId))
+      .filter(([sessionId]) => known.has(sessionId) && (!this.options.currentIncarnation ||
+        (live.has(sessionId) && this.resultIncarnations.get(sessionId) === this.options.currentIncarnation(sessionId))))
       .map(([sessionId, ports]) => ({ sessionId, stopped: !live.has(sessionId), ports }))
   }
 
@@ -129,6 +133,15 @@ export class PortWatch {
         if (map === this.result) removed = true
       }
     }
+    if (this.options.currentIncarnation) {
+      const live = new Set(this.options.liveSessionIds())
+      for (const [sessionId, incarnation] of this.resultIncarnations) {
+        if (known.has(sessionId) && live.has(sessionId) && this.options.currentIncarnation(sessionId) === incarnation) continue
+        this.result.delete(sessionId)
+        this.resultIncarnations.delete(sessionId)
+        removed = true
+      }
+    }
     if (this.liveChanged() || removed) {
       // Called from the session's own start and stop: a listener that throws must not break those.
       try {
@@ -163,15 +176,29 @@ export class PortWatch {
   private async runScan(): Promise<void> {
     this.lastScanAt = this.now()
     const known = this.options.knownSessionIds()
+    const before = this.options.currentIncarnation
+      ? new Map([...known].map(id => [id, this.options.currentIncarnation!(id)])) : undefined
     let next: Map<string, ListeningPort[]>
     try {
-      next = await this.options.scan(known)
+      next = new Map(await this.options.scan(known))
     } catch {
-      // An unreadable table says nothing about the ports: the previous result stands.
-      return
+      // Linux can retain its last reading; unknown native ownership clears it.
+      if (!this.options.currentIncarnation) return
+      next = new Map()
     }
-    if (sameResult(this.result, next)) return
+    const incarnations = new Map<string, string>()
+    if (before) {
+      for (const id of next.keys()) {
+        const incarnation = before.get(id)
+        if (!incarnation || this.options.currentIncarnation!(id) !== incarnation) next.delete(id)
+        else incarnations.set(id, incarnation)
+      }
+    }
+    const sameIncarnations = this.resultIncarnations.size === incarnations.size &&
+      [...incarnations].every(([id, incarnation]) => this.resultIncarnations.get(id) === incarnation)
+    if (sameResult(this.result, next) && sameIncarnations) return
     this.result = next
+    this.resultIncarnations = incarnations
     this.liveChanged()
     this.options.changed()
   }

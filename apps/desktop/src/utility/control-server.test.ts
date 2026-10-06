@@ -1,7 +1,7 @@
 // MODULE: control-server.test.ts - the control socket authenticates, targets, validates and deduplicates requests
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { lstat, mkdir, mkdtemp, rm, stat } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { createConnection, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -9,9 +9,12 @@ import { ERROR_CODES, MAX_CONTROL_FRAME_BYTES } from '@bmn/protocol'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ControlAuth } from './control-auth'
 import {
+  CONTROL_PIPE_PATTERN,
   ControlError,
   ControlServer,
   MemoryReceiptStore,
+  isUserOnlyPipeDacl,
+  resolveControlEndpoint,
   type ControlHandlers,
   type ReceiptStore
 } from './control-server'
@@ -63,9 +66,10 @@ class TestClient {
     })
   }
 
-  static connect(path: string): Promise<TestClient> {
+  static async connect(path: string): Promise<TestClient> {
+    const endpoint = await resolveControlEndpoint(path)
     return new Promise((resolve, reject) => {
-      const socket = createConnection(path)
+      const socket = createConnection(endpoint)
       socket.once('error', reject)
       socket.once('connect', () => {
         socket.off('error', reject)
@@ -186,6 +190,22 @@ async function leaveStaleSocket(path: string): Promise<void> {
 }
 
 describe('control server authentication', () => {
+  it.each(['C:\\Users\\fixture 数据\\.claude', '\\\\server\\share\\.claude', 'C:relative\\.claude', 'relative/.claude'])(
+    'validates a Claude hook config directory with native path rules: %s', async (claudeConfigDir) => {
+      const fixture = await serverFixture()
+      const client = await authenticated(fixture, sessionToken(fixture))
+      const response = await client.request('hook.observe', { agent: 'claude', event: 'Stop', effects: [], claudeConfigDir })
+      const valid = process.platform === 'win32' && (claudeConfigDir.startsWith('C:\\') || claudeConfigDir.startsWith('\\\\'))
+      if (valid) {
+        expect(response.error).toBeUndefined()
+        expect(fixture.handlers.observeHookEvent).toHaveBeenCalledWith(expect.objectContaining({ claudeConfigDir }))
+      } else {
+        expectError(response, ERROR_CODES.invalidArgument)
+        expect(fixture.handlers.observeHookEvent).not.toHaveBeenCalled()
+      }
+    }
+  )
+
   it('requires auth as the first request and closes the connection otherwise', async () => {
     const fixture = await serverFixture()
     const client = await TestClient.connect(fixture.socketPath)
@@ -1267,8 +1287,24 @@ describe('control server idempotency', () => {
   })
 })
 
+const windows = process.platform === 'win32'
+
 describe('control server socket lifecycle', () => {
-  it('creates a private directory and socket and removes the socket on close', async () => {
+  it('closes a connection that never authenticates', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'aitcs-'))
+    createdRoots.add(root)
+    const socketPath = join(root, 'ctl', 'control.sock')
+    const server = new ControlServer({
+      socketPath, auth: new ControlAuth(), handlers: fakeHandlers(new Map()), receipts: new MemoryReceiptStore(), authDeadlineMs: 50
+    })
+    await server.listen()
+    servers.add(server)
+
+    const client = await TestClient.connect(socketPath)
+    await client.untilClosed()
+  })
+
+  it.runIf(!windows)('creates a private directory and socket and removes the socket on close', async () => {
     const fixture = await serverFixture()
 
     expect((await stat(dirname(fixture.socketPath))).mode & 0o777).toBe(0o700)
@@ -1279,7 +1315,7 @@ describe('control server socket lifecycle', () => {
     await expect(lstat(fixture.socketPath)).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
-  it('replaces a stale socket left by a crashed server', async () => {
+  it.runIf(!windows)('replaces a stale socket left by a crashed server', async () => {
     const root = await mkdtemp(join(tmpdir(), 'aitcs-'))
     createdRoots.add(root)
     const socketPath = join(root, 'ctl', 'control.sock')
@@ -1300,6 +1336,57 @@ describe('control server socket lifecycle', () => {
     expect((await client.request('auth', { token: auth.ownerToken })).result).toEqual({ scope: 'owner' })
   })
 
+  it.runIf(windows)('serves a current-user-only pipe named by a private endpoint file it removes on close', async () => {
+    const fixture = await serverFixture()
+    const named = (await readFile(fixture.socketPath, 'utf8')).trim()
+
+    expect(named).toMatch(CONTROL_PIPE_PATTERN)
+    expect(fixture.server.endpoint).toBe(named)
+    const { restrictControlPipe } = (await import('node-pty')) as unknown as {
+      restrictControlPipe(name: string): { user: string; dacl: string; verifiedCurrentUserOnly: boolean }
+    }
+    expect(isUserOnlyPipeDacl(restrictControlPipe(named))).toBe(true)
+
+    await fixture.server.close()
+    await expect(lstat(fixture.socketPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(new Promise((resolve, reject) => {
+      const probe = createConnection(named)
+      probe.once('connect', () => { probe.destroy(); resolve('connected') })
+      probe.once('error', reject)
+    })).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it.runIf(windows)('replaces an endpoint file whose pipe is gone', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'aitcs-'))
+    createdRoots.add(root)
+    const socketPath = join(root, 'ctl', 'control.sock')
+    await mkdir(dirname(socketPath), { recursive: true })
+    await writeFile(socketPath, `\\\\.\\pipe\\bmn-control-${'0'.repeat(32)}\n`)
+    const auth = new ControlAuth()
+    const server = new ControlServer({ socketPath, auth, handlers: fakeHandlers(new Map()), receipts: new MemoryReceiptStore() })
+
+    await server.listen()
+    servers.add(server)
+
+    expect((await readFile(socketPath, 'utf8')).trim()).toBe(server.endpoint)
+    const client = await TestClient.connect(socketPath)
+    expect((await client.request('auth', { token: auth.ownerToken })).result).toEqual({ scope: 'owner' })
+  })
+
+  it.runIf(windows)('stays unready and writes no endpoint when the pipe cannot be restricted to this user', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'aitcs-'))
+    createdRoots.add(root)
+    const socketPath = join(root, 'ctl', 'control.sock')
+    const server = new ControlServer({
+      socketPath, auth: new ControlAuth(), handlers: fakeHandlers(new Map()), receipts: new MemoryReceiptStore(),
+      restrictPipe: async () => ({ user: 'S-1-5-21-1-2-3-1001', dacl: 'D:(A;;FA;;;S-1-5-21-1-2-3-1001)(A;;FR;;;WD)' })
+    })
+
+    await expect(server.listen()).rejects.toThrow(/not restricted to this user/)
+    expect(server.endpoint).toBeUndefined()
+    await expect(lstat(socketPath)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   it('refuses to take over a live socket', async () => {
     const fixture = await serverFixture()
     const intruder = new ControlServer({
@@ -1314,5 +1401,41 @@ describe('control server socket lifecycle', () => {
 
     const client = await TestClient.connect(fixture.socketPath)
     expect((await client.request('auth', { token: fixture.auth.ownerToken })).result).toEqual({ scope: 'owner' })
+  })
+})
+
+describe('control endpoint helpers', () => {
+  const user = 'S-1-5-21-111-222-333-1001'
+
+  it('accepts normalized SID aliases only after native structural verification', () => {
+    const normalized = { user: 'S-1-5-21-111-222-333-500', dacl: 'D:P(A;;FA;;;LA)' }
+    expect(isUserOnlyPipeDacl({ ...normalized, verifiedCurrentUserOnly: true })).toBe(true)
+    expect(isUserOnlyPipeDacl({ ...normalized, verifiedCurrentUserOnly: false })).toBe(false)
+    expect(isUserOnlyPipeDacl(normalized)).toBe(false)
+  })
+
+  it('accepts only a protected DACL that grants the current user alone', () => {
+    expect(isUserOnlyPipeDacl({ user, dacl: `D:P(A;;FA;;;${user})`, verifiedCurrentUserOnly: true })).toBe(true)
+    expect(isUserOnlyPipeDacl({ user, dacl: `D:P(A;;GA;;;${user})`, verifiedCurrentUserOnly: true })).toBe(true)
+    // Unprotected, an extra Everyone read entry, another user, or a malformed SID all fail.
+    expect(isUserOnlyPipeDacl({ user, dacl: `D:(A;;FA;;;${user})` })).toBe(false)
+    expect(isUserOnlyPipeDacl({ user, dacl: `D:P(A;;FA;;;${user})(A;;FR;;;WD)` })).toBe(false)
+    expect(isUserOnlyPipeDacl({ user, dacl: 'D:P(A;;FA;;;S-1-5-21-9-9-9-1002)' })).toBe(false)
+    expect(isUserOnlyPipeDacl({ user: 'WD', dacl: 'D:P(A;;FA;;;WD)' })).toBe(false)
+  })
+
+  it('reads a Windows endpoint file and rejects anything that is not a BMN control pipe', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'aitcs-'))
+    createdRoots.add(root)
+    const file = join(root, 'control.sock')
+    const pipe = `\\\\.\\pipe\\bmn-control-${'a1'.repeat(16)}`
+    await writeFile(file, `${pipe}\r\n`)
+    expect(await resolveControlEndpoint(file, 'win32')).toBe(pipe)
+    expect(await resolveControlEndpoint(pipe, 'win32')).toBe(pipe)
+    expect(await resolveControlEndpoint(file, 'linux')).toBe(file)
+    for (const wrong of ['\\\\.\\pipe\\other', 'C:\\Users\\x\\control.sock', `${pipe}x`]) {
+      await writeFile(file, wrong)
+      await expect(resolveControlEndpoint(file, 'win32')).rejects.toThrow(/does not name a BMN control pipe/)
+    }
   })
 })

@@ -10,7 +10,8 @@ import {
 import { resolveApplicationRoots } from '../../utility/roots'
 import { selfTestHistoryEnvironment } from '../agent-history-self-test'
 import { startFakeBotApi, type FakeBotApi } from '../fake-bot-api'
-import { validateWav, whisperArguments, type transcribeRecording } from '../voice-engine'
+import { validateWav, WHISPER_ENGINE_FILE, whisperArguments, type transcribeRecording } from '../voice-engine'
+import { windowsEnvironment } from '../../utility/windows-launch'
 import type { SelfTestTaps } from './contract'
 
 /** The self-test's pages wait this long instead of 15 s, so each card shape costs seconds, not a quarter minute. */
@@ -51,7 +52,7 @@ export class SelfTestRecorder implements SelfTestTaps {
 
   /** The stand-in engine and model live in the isolated data folder; the transcript is synthetic. */
   readonly voice: SelfTestTaps['voice'] = {
-    binary: join(this.voiceFolder(), 'whisper-cli'),
+    binary: join(this.voiceFolder(), WHISPER_ENGINE_FILE),
     transcribe: async (options: Parameters<typeof transcribeRecording>[0]) => {
       const { durationSeconds } = validateWav(options.wav)
       const vocabulary = [...(options.vocabulary ?? [])]
@@ -98,14 +99,14 @@ export class SelfTestRecorder implements SelfTestTaps {
   }
 
   async hostLaunch(base: NodeJS.ProcessEnv): Promise<{ environment: NodeJS.ProcessEnv; args: string[] }> {
-    return {
-      environment: {
-        ...base, ...selfTestHistoryEnvironment(),
-        BMN_SELF_TEST_TELEGRAM_ORIGIN: (await this.telegram()).origin,
-        BMN_SELF_TEST_PAGE_AFTER_MS: String(SELF_TEST_PAGE_AFTER_MS)
-      },
-      args: ['--self-test-host']
+    const additions = {
+      ...selfTestHistoryEnvironment(),
+      BMN_SELF_TEST_TELEGRAM_ORIGIN: (await this.telegram()).origin,
+      BMN_SELF_TEST_PAGE_AFTER_MS: String(SELF_TEST_PAGE_AFTER_MS)
     }
+    // Windows names are case-insensitive: one PATH spelling, so the stand-ins really come first.
+    const environment = process.platform === 'win32' ? windowsEnvironment(base, additions) : { ...base, ...additions }
+    return { environment, args: ['--self-test-host'] }
   }
 
   rendererState<State extends { sessions: SessionRecord[]; templates: LaunchTemplateRecord[] }>(state: State): State {

@@ -5,7 +5,7 @@ import { ERROR_CODES } from '@bmn/protocol'
 import type { IpcMainInvokeEvent } from 'electron'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { encodeWav } from '../renderer/src/voice-wav'
-import { SPEECH_DETECTOR_FILE, SPEECH_MODEL_FILE, VOICE_MODELS } from './voice-engine'
+import { WHISPER_ENGINE_FILE, SPEECH_DETECTOR_FILE, SPEECH_MODEL_FILE, VOICE_MODELS } from './voice-engine'
 import { installVoiceIpcHandlers, type VoiceIpcOptions } from './voice-ipc'
 
 type Handler = (event: IpcMainInvokeEvent, params?: unknown) => unknown
@@ -26,7 +26,7 @@ function install(overrides: Partial<VoiceIpcOptions> = {}): Map<string, Handler>
   const handlers = new Map<string, Handler>()
   installVoiceIpcHandlers({ handle: (channel, listener) => handlers.set(channel, listener) }, {
     senderIsAllowed: (event) => (event as unknown as { allowed: boolean }).allowed,
-    binary: join(folder, 'whisper-cli'),
+    binary: join(folder, WHISPER_ENGINE_FILE),
     modelFolder: async () => ({ path: join(folder, 'models'), custom: false }),
     chooseFolder: async () => null,
     ...overrides
@@ -35,7 +35,7 @@ function install(overrides: Partial<VoiceIpcOptions> = {}): Map<string, Handler>
 }
 
 async function installEngine(): Promise<void> {
-  for (const name of ['whisper-cli', SPEECH_DETECTOR_FILE]) {
+  for (const name of [WHISPER_ENGINE_FILE, SPEECH_DETECTOR_FILE]) {
     await writeFile(join(folder, name), '#!/bin/sh\n')
     await chmod(join(folder, name), 0o755)
   }
@@ -77,7 +77,7 @@ describe('voice IPC', () => {
     const transcribe = handlers.get('aiterm:voice:transcribe')!
     await expect(transcribe(allowed, { model: 'base', language: 'auto', wav })).rejects.toThrow(/pnpm run voice:build/)
     // An engine built before the speech check existed lacks the detector and its model: it is not usable yet.
-    await writeFile(join(folder, 'whisper-cli'), '')
+    await writeFile(join(folder, WHISPER_ENGINE_FILE), '')
     await writeFile(join(folder, SPEECH_DETECTOR_FILE), '')
     await expect(transcribe(allowed, { model: 'base', language: 'auto', wav })).rejects.toThrow(/pnpm run voice:build/)
     expect((await handlers.get('aiterm:voice:status')!(allowed) as { engineAvailable: boolean }).engineAvailable).toBe(false)
@@ -101,7 +101,7 @@ describe('voice IPC', () => {
     release('привіт')
     await expect(first).resolves.toEqual({ text: 'привіт' })
     expect(transcribe).toHaveBeenCalledWith(expect.objectContaining({
-      binary: join(folder, 'whisper-cli'),
+      binary: join(folder, WHISPER_ENGINE_FILE),
       modelPath: join(folder, 'models', 'ggml-base.bin'),
       language: 'uk',
       wav,

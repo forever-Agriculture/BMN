@@ -1,0 +1,44 @@
+name: Windows Chromium storage regression
+on:
+  pull_request:
+    paths:
+      - .github/workflows/windows-cache-probe.yml
+      - scripts/test/windows-cache-acl-probe.mjs
+      - scripts/test/windows-missing-root-probe.mjs
+      - scripts/test/windows-storage-cross-user.mjs
+      - scripts/test/windows-storage-scale.mjs
+      - apps/desktop/src/utility/private-directory.ts
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: windows-2025
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+      - name: Diagnose missing-root aliases in Windows PowerShell 5.1
+        run: node scripts/test/windows-missing-root-probe.mjs
+      - name: Verify ordinary-account storage denial
+        run: node scripts/test/windows-storage-cross-user.mjs
+      - name: Measure accepted private storage trees and replacements
+        run: node scripts/test/windows-storage-scale.mjs
+      - name: Install pinned Electron only
+        shell: pwsh
+        run: |
+          $probeDir = Join-Path $env:RUNNER_TEMP 'bmn-electron-acl-probe'
+          npm install --prefix $probeDir --ignore-scripts --no-audit --no-fund electron@44.3.0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node (Join-Path $probeDir 'node_modules/electron/install.js')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "BMN_PROBE_ELECTRON=$(Join-Path $probeDir 'node_modules/electron/dist/electron.exe')" >> $env:GITHUB_ENV
+      - name: Verify synthetic Chromium storage and restart
+        run: node scripts/test/windows-cache-acl-probe.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-cache-acl
+          path: test-results/
+          retention-days: 7

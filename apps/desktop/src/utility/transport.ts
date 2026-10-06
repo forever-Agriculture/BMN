@@ -75,6 +75,12 @@ export class HostOutputQueue {
     return this.skipped
   }
 
+  /** Where this view's output stands: queued here, sent and unacknowledged, and whether the PTY is paused. */
+  get flowState(): { paused: boolean; pendingBytes: number; inFlightBytes: number; enqueuedBytes: number; acknowledgedBytes: number } {
+    return { paused: this.paused, pendingBytes: this.pendingBytes, inFlightBytes: this.inFlightBytes,
+      enqueuedBytes: this.enqueuedBytes, acknowledgedBytes: this.acknowledgedBytes }
+  }
+
   enqueue(output: TerminalFrame): void {
     if (this.disconnected) return
     const frame = this.synchronize(output)

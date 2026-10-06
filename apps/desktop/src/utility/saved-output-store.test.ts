@@ -228,3 +228,21 @@ describe('file saved-output store', () => {
     await expect(readdir(directory)).resolves.toHaveLength(TERMINAL_SAVED_OUTPUT_RETENTION + 1)
   }, retentionBoundTimeout)
 })
+
+describe('file saved-output store replacement', () => {
+  it('keeps the previous capture whole and leaves no staged file when the replacement is refused', async () => {
+    const { directory, store } = await storeFixture()
+    const first = snapshot()
+    await store.save(first)
+    // The refusal is forced by occupying the next capture's name with a folder; Windows refuses a file another
+    // program holds open the same way, at the rename.
+    const blocked = snapshot({ viewEpoch: 'view-2' })
+    await mkdir(join(directory, `${blocked.sessionId}--${blocked.incarnationId}--${blocked.viewEpoch}.snapshot.json`, 'inside'),
+      { recursive: true })
+
+    await expect(store.save(blocked)).rejects.toMatchObject({ code: expect.any(String) })
+
+    expect((await readdir(directory)).filter((name) => name.endsWith('.tmp'))).toEqual([])
+    await expect(store.load(first, first.viewEpoch)).resolves.toMatchObject({ content: 'saved output' })
+  })
+})

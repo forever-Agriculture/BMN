@@ -1,0 +1,90 @@
+"""Interpret the actual compiled synthetic BPF, without namespaces or syscalls.
+
+AST extraction imports no guest-only fcntl/pwd or Linux libc on the Windows host.
+Socket constants match the x86_64 guest ABI, not the test host's AF_UNIX value.
+"""
+import ast,ctypes,errno,json,sys,types
+
+packet=json.load(sys.stdin)
+tree=ast.parse(packet['fixture'])
+factory_node=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='candidate_source')
+factory={}
+exec(compile(ast.Module(body=[factory_node],type_ignores=[]),'candidate-source','exec'),factory)
+source=factory['candidate_source'](packet['helper'],True,True)
+tree=ast.parse(source)
+nodes=[node for node in tree.body if
+       isinstance(node,ast.FunctionDef) and node.name=='restrict_syscalls' or
+       isinstance(node,ast.Assign) and any(isinstance(target,ast.Name) and target.id=='NAMESPACES' for target in node.targets)]
+scope={'ctypes':ctypes,'errno':errno,'socket':types.SimpleNamespace(AF_UNIX=1,AF_INET=2,AF_INET6=10),'checked':lambda value:None}
+exec(compile(ast.Module(body=nodes,type_ignores=[]),'candidate-bytecode','exec'),scope)
+
+class Capture:
+    def prctl(self,*args):
+        if args[0]==22:
+            program=args[2]._obj
+            self.ops=[(program.filter[i].code,program.filter[i].jt,program.filter[i].jf,program.filter[i].k) for i in range(program.length)]
+        return 0
+
+capture=Capture();scope['LIBC']=capture;scope['restrict_syscalls']()
+def decide(number,arg0=0,arg1=0,arg2=0,arch=0xc000003e):
+    offset=0;value=0
+    for _ in range(len(capture.ops)+1):
+        op,yes,no,k=capture.ops[offset];offset+=1
+        if op==0x20:value={0:number,4:arch,16:arg0&0xffffffff,24:arg1&0xffffffff,32:arg2&0xffffffff}[k]
+        elif op==0x15:offset+=yes if value==k else no
+        elif op==0x35:offset+=yes if value>=k else no
+        elif op==0x45:offset+=yes if value&k else no
+        elif op==0x06:return k
+        else:raise AssertionError(op)
+    raise AssertionError('Unterminated bytecode')
+
+denied=0x50000|errno.EPERM;allow=0x7fff0000;kill=0x80000000
+for number,flags in [(56,0x8000),(56,0x2000),(56,0x2000000),(272,0x2000000),(272,0x80)]:
+    assert decide(number,flags)==denied,(number,flags,decide(number,flags))
+for number,flags in [(56,17),(56,0x10000000|0x20000|17),(272,0x10000000|0x20000)]:
+    assert decide(number,flags)==allow,(number,flags,decide(number,flags))
+assert decide(308)==denied
+assert decide(435)==0x50000|errno.ENOSYS
+for flags in [0,0x80000,0x800,0x80800]:
+    assert decide(41,16,3|flags,0)==allow,(flags,'route raw socket refused')
+    # Linux truncates these three syscall parameters to int; high bits confer
+    # no extra family/type/protocol authority, and the filter follows that ABI.
+    assert decide(41,(1<<32)|16,(1<<32)|3|flags,1<<32)==allow
+    for protocol in [1,9,15,16,0xffffffff]:assert decide(41,16,3|flags,protocol)==denied
+for kind in [0,1,2,4,5,10,3|0x400,3|0x100000]:assert decide(41,16,kind,0)==denied
+assert decide(53,16,3,0)==denied
+for family in [1,2,10]:
+    for number in [41,53]:assert decide(number,family,1,0)==allow
+for family in [17,40,0xffffffff]:assert decide(41,family,3,0)==denied
+assert decide(102,16,3,0,arch=0x40000003)==kill  # i386 socketcall.
+assert decide(0x40000000|41,16,3,0)==kill  # x32 socket.
+
+# Replay the actual pre-bind validator with synthetic device metadata only.
+# No mount, device open or Linux-only module runs on either test host.
+root=next(node for node in tree.body if isinstance(node,ast.FunctionDef) and node.name=='install_root')
+assignments=[node for node in root.body if isinstance(node,ast.Assign) and
+             any(isinstance(target,ast.Name) and target.id=='device_ids' for target in node.targets)]
+validators=[node for node in root.body if isinstance(node,ast.For) and isinstance(node.target,ast.Tuple) and
+            [target.id for target in node.target.elts]==['name','expected']]
+assert len(assignments)==1 and len(validators)==1,'Missing pre-bind device validator'
+validator=compile(ast.Module(body=assignments+validators,type_ignores=[]),'synthetic-device-validator','exec')
+import stat
+expected={'null':(1,3),'zero':(1,5),'full':(1,7),'random':(1,8),'urandom':(1,9),'tty':(5,0)}
+devices={name:types.SimpleNamespace(st_mode=stat.S_IFCHR|0o666,st_rdev=device) for name,device in expected.items()}
+class DevicePath:
+    def __init__(self,base,name):assert base=='/dev';self.name=name
+    def lstat(self):return devices[self.name]
+context={'pathlib':types.SimpleNamespace(Path=DevicePath),'stat':stat,
+         'os':types.SimpleNamespace(major=lambda device:device[0],minor=lambda device:device[1])}
+exec(validator,context)
+for name in expected:
+    original=devices[name]
+    for invalid in [types.SimpleNamespace(st_mode=stat.S_IFREG|0o666,st_rdev=original.st_rdev),
+                    types.SimpleNamespace(st_mode=original.st_mode,st_rdev=(99,99))]:
+        devices[name]=invalid
+        try:exec(validator,context)
+        except RuntimeError:pass
+        else:raise AssertionError(('Device substitution accepted',name))
+    devices[name]=original
+assert source.index('                os.setsid()')<source.index('                drop_privileges(uid)')
+print('NESTED_FILTER_AND_NARROW_ROUTE_OK')

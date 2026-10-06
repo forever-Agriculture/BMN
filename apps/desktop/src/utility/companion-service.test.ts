@@ -1,10 +1,10 @@
 // MODULE: companion-service.test.ts - backup export/verify completeness and artifact reconciliation against the real store
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
-import { createRequire } from 'node:module'
+import files, { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import filePromises, { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { createRequire, syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import {
   AGENT_ATTENTION_ORIGINS,
   DEFAULT_APP_SETTINGS,
@@ -33,6 +33,7 @@ import {
 } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { CompanionService } from './companion-service'
+import { armFixturePtyExit } from './pty-exit.test-support'
 import type { DatabaseWorkerClient } from './database-client'
 import { scrubBackupProducerBindings, COMPANION_OPERATIONS, insertArtifact, listReadyArtifacts, type CompanionOperationName } from './database-companion-store'
 import { initializeDatabase, type DatabaseConnection } from './database-initialization'
@@ -44,6 +45,9 @@ import type { ScreenLike } from './remote-answer'
 import type { TelegramConnector, InboundReply } from './telegram-connector'
 import { DEFAULT_WORKSPACE_ID } from './store-schema'
 import { startFakeBotApi } from '../main/fake-bot-api'
+import { nativeTimings, type NativeTimings } from '../../../../scripts/tests/native-timings.test-support.mjs'
+
+const actualCreateReadStream = files.createReadStream, actualCopyFile = filePromises.copyFile
 
 const testRequire = createRequire(import.meta.url)
 const BetterSqlite3 = testRequire('better-sqlite3') as new (path: string, options?: { readonly?: boolean; fileMustExist?: boolean }) => DatabaseConnection
@@ -65,6 +69,25 @@ let targetAvailabilityReads: number
 let holdFinalAvailabilityResponse: (() => Promise<void>) | null
 /** Conversation bindings the store would return, by session; none unless a test sets one. */
 let bindings: Map<string, unknown>
+let backupObservation: NativeTimings | undefined
+
+async function observeBackup(name: string, originalBudgetMs: number): Promise<NativeTimings> {
+  const trace = nativeTimings(name, originalBudgetMs)
+  backupObservation = trace
+  let copies = 0, hashes = 0
+  // Transparent observers retain the exact real copies and complete hash reads.
+  vi.spyOn(filePromises, 'copyFile').mockImplementation(async (...args) => {
+    await actualCopyFile(...args)
+    if (++copies % 100 === 0) trace.mark(`copied:${copies}`)
+  })
+  vi.spyOn(files, 'createReadStream').mockImplementation((...args) => {
+    const stream = actualCreateReadStream(...args)
+    stream.once('end', () => { if (++hashes % 100 === 0) trace.mark(`hashed:${hashes}`) })
+    return stream
+  })
+  syncBuiltinESMExports()
+  return trace
+}
 
 /** Runs the real store operations the worker would, on an in-memory database. */
 function workerLike(connection: DatabaseConnection): DatabaseWorkerClient {
@@ -240,7 +263,8 @@ describe('artifact delivery destination', () => {
     database.prepare('UPDATE session SET archived_at = NULL WHERE session_id = ?').run('s2')
     const result = await service.route(METHOD_REGISTRY.artifactDeliver, request) as { path: string }
     expect(writes).toHaveLength(1)
-    expect(new TextDecoder().decode(writes[0]!.bytes)).toBe(`\u001b[200~${result.path} \u001b[201~`)
+    const pathText = process.platform === 'win32' ? `'${result.path}'` : result.path
+    expect(new TextDecoder().decode(writes[0]!.bytes)).toBe(`\u001b[200~${pathText} \u001b[201~`)
     expect(readFileSync(artifact.storedPath, 'utf8')).toBe('original')
   })
 
@@ -308,7 +332,7 @@ describe('artifact delivery destination', () => {
 describe('file reference paste', () => {
   const request = {
     requestId: 'paste-one', sessionId: 's2', expectedIncarnationId: 'incarnation-2',
-    sourcePath: '/synthetic/notes and [plans]:v2.ts', line: 42, column: 7
+    sourcePath: resolve('/synthetic', process.platform === 'win32' ? 'notes and [plans]-v2.ts' : 'notes and [plans]:v2.ts'), line: 42, column: 7
   }
 
   it('claims concurrent duplicate clicks and writes the exact unstamped reference once without Enter', async () => {
@@ -322,7 +346,7 @@ describe('file reference paste', () => {
     })
     expect(writes).toHaveLength(1)
     const bytes = new TextDecoder().decode(writes[0]!.bytes)
-    expect(bytes).toBe(`\u001b[200~"/synthetic/notes and [plans]:v2.ts":42:7\u001b[201~`)
+    expect(bytes).toBe(`\u001b[200~"${request.sourcePath}":42:7\u001b[201~`)
     expect(bytes).not.toContain('[BMN handoff')
     const receipt = await workerLike(database).companion('getReceipt', 'file-reference-paste:paste-one')
     expect(receipt).toMatchObject({ state: 'done', result: first })
@@ -382,7 +406,7 @@ describe('file reference paste', () => {
   })
 
   it('treats a staged receipt from an interrupted host as uncertain and never replays the write', async () => {
-    const payload = '"/synthetic/notes and [plans]:v2.ts":42:7'
+    const payload = `"${request.sourcePath}":42:7`
     const paramsHash = createHash('sha256')
       .update(JSON.stringify([request.sessionId, request.expectedIncarnationId, payload])).digest('hex')
     await workerLike(database).companion('putReceipt', {
@@ -400,7 +424,9 @@ describe('file reference paste', () => {
   })
 
   it('rejects grammar failures and malformed positions before any PTY write', async () => {
-    for (const sourcePath of ['/synthetic/$HOME.ts', '/synthetic/a`b.ts', '/synthetic/a\\b.ts', '/synthetic/a*.ts', '/synthetic/a\'"b.ts']) {
+    const invalidPaths = ['/synthetic/$HOME.ts', '/synthetic/a`b.ts', '/synthetic/a*.ts', '/synthetic/a\'"b.ts',
+      process.platform === 'win32' ? 'C:\\synthetic\\a.ts:stream' : '/synthetic/a\\b.ts']
+    for (const sourcePath of invalidPaths) {
       await expect(service.route(METHOD_REGISTRY.fileReferencePaste, { ...request, requestId: sourcePath, sourcePath }))
         .rejects.toMatchObject({ code: ERROR_CODES.invalidArgument })
     }
@@ -469,12 +495,32 @@ describe('file search address', () => {
   })
 })
 
+let realPtyObservation: ReturnType<typeof armFixturePtyExit> | undefined
+
 afterEach(async () => {
-  service['pager'].close()
-  service['cards'].dispose()
-  await service['telegramDeliveryWrites']
-  database.close()
-  rmSync(root, { recursive: true, force: true })
+  backupObservation?.mark('cleanup:begin')
+  try {
+    service['pager'].close()
+    service['cards'].dispose()
+    await service['telegramDeliveryWrites']
+    database.close()
+    if (realPtyObservation) {
+      const confirmed = realPtyObservation.hasExited()
+      console.log(JSON.stringify({ nativeDiagnostic: 'companion-real-pty-cleanup', observationOnly: true,
+        originalBudgetMs: 30000, beforeRootDeletion: true, exitConfirmed: confirmed, ...realPtyObservation.snapshot() }))
+      if (!confirmed) throw new Error('Refusing to delete the fixture root before owned PTY exit is confirmed')
+    }
+    rmSync(root, { recursive: true, force: true })
+  } finally {
+    if (realPtyObservation?.hasExited()) realPtyObservation.dispose()
+    realPtyObservation = undefined
+    backupObservation?.mark('cleanup:end')
+    backupObservation?.report()
+    backupObservation = undefined
+    if (vi.isMockFunction(filePromises.copyFile)) vi.mocked(filePromises.copyFile).mockRestore()
+    if (vi.isMockFunction(files.createReadStream)) vi.mocked(files.createReadStream).mockRestore()
+    syncBuiltinESMExports()
+  }
 })
 
 /** Stores `count` ready originals on disk, one second apart, oldest first. */
@@ -502,6 +548,7 @@ async function storeArtifacts(count: number): Promise<ArtifactRecord[]> {
       state: 'ready',
       createdAt: new Date(Date.parse(now) + index * 1000).toISOString()
     }))
+    if ((index + 1) % 100 === 0) backupObservation?.mark(`seeded:${index + 1}`)
   }
   return records
 }
@@ -1029,27 +1076,41 @@ describe('legacy draft delivery guard', () => {
 
 describe('backup', () => {
   it('keeps two exports at the same timestamp independent and preserves the first snapshot', async () => {
+    const trace = await observeBackup('backup-same-timestamp', 5000)
     const parent = join(root, 'backups')
+    trace.mark('first-export:begin')
     const first = await exportBackup(parent)
+    trace.mark('first-export:end')
     const originalManifest = await readFile(join(first.directory, 'manifest.json'), 'utf8')
     const originalDatabase = await readFile(join(first.directory, 'state.sqlite3'))
     await storePublishedArtifact('second-backup-only')
+    trace.mark('second-export:begin')
     const second = await exportBackup(parent)
+    trace.mark('second-export:end')
     expect(second.directory).not.toBe(first.directory)
     expect(await readFile(join(first.directory, 'manifest.json'), 'utf8')).toBe(originalManifest)
     expect(await readFile(join(first.directory, 'state.sqlite3'))).toEqual(originalDatabase)
     expect(first.manifest.artifacts).toHaveLength(0)
     expect(second.manifest.artifacts).toHaveLength(1)
+    trace.mark('verify:begin')
     expect(await verifyBackup(first.directory)).toMatchObject({ ok: true, checked: 1 })
     expect(await verifyBackup(second.directory)).toMatchObject({ ok: true, checked: 2 })
-  })
+    trace.mark('verify:end')
+  }, 5000)
 
   it('exports every ready artifact, not only the newest 1,000', async () => {
+    const trace = await observeBackup('backup-1001-artifacts', 30000)
+    trace.mark('seed:begin')
     const records = await storeArtifacts(1001)
+    trace.mark('seed:end')
+    trace.mark('export:begin')
     const { manifest, directory } = await exportBackup(join(root, 'backups'))
+    trace.mark('export:end')
     expect(manifest.artifacts.map((entry) => entry.artifactId).sort()).toEqual(records.map((record) => record.artifactId))
+    trace.mark('verify:begin')
     expect(await verifyBackup(directory)).toMatchObject({ ok: true, checked: 1002, failures: [] })
-  }, 30_000)
+    trace.mark('verify:end')
+  }, 30000)
 
   it('explicitly excludes retained hook metadata from backups', async () => {
     await mkdir(join(root, 'state'), { recursive: true })
@@ -1744,36 +1805,47 @@ describe('Telegram attention notifications', () => {
 
   it('round-trips Telegram choice, Other and card replies through the connector into a real PTY', async () => {
     const bot = await startFakeBotApi(424242, 424242)
-    const receiver = join(root, 'receiver.txt')
-    const pty = (testRequire('node-pty') as typeof import('node-pty')).spawn(process.execPath, ['-e',
-      `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(receiver)},'');process.stdin.setRawMode(true);process.stdin.on('data',b=>fs.appendFileSync(${JSON.stringify(receiver)},b));process.stdout.write('READY');setInterval(()=>{},1000)`
-    ], { name: 'xterm-256color', cols: 100, rows: 30, cwd: root, env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } })
-    let output = ''
-    pty.onData(text => { output += text })
-    const options = service['options']
-    await service.close()
-    service = new CompanionService({ ...options, telegramApiOrigin: bot.origin, pageAfterMs: 5,
-      manager: { ...options.manager, writeToSession: (sessionId: string, bytes: Uint8Array) => {
-        expect(sessionId).toBe('s1'); writes.push({ sessionId, bytes }); pty.write(Buffer.from(bytes))
-        if (new TextDecoder().decode(bytes).includes('Uncertain custom')) throw new Error('synthetic ambiguous write')
-      } } as unknown as SessionManager })
-    const receivedReplies: InboundReply[] = []
-    const handleReply = service['handleTelegramReply'].bind(service)
-    let failOffsetSave = false, offsetFailures = 0
-    const store = service['options'].database
-    const companion = store.companion.bind(store)
-    const offsetSpy = vi.spyOn(store, 'companion').mockImplementation(async (name, ...args) => {
-      if (name === 'putRawSetting' && args[0] === 'telegram.offset' && failOffsetSave) {
-        failOffsetSave = false; offsetFailures++; throw new Error('synthetic offset persistence failure')
-      }
-      return companion(name, ...args)
-    })
-    service['handleTelegramReply'] = async reply => {
-      receivedReplies.push(reply)
-      if (reply.text === 'Custom answer') failOffsetSave = true
-      await handleReply(reply)
-    }
+    let pty: import('node-pty').IPty | undefined
+    let offsetSpy: { mockRestore(): void } | undefined
+    let primaryFailure = false
+    const cleanupErrors: string[] = []
     try {
+      const receiver = join(root, 'receiver.txt')
+      const receiverScript = join(root, 'receiver.cjs')
+      writeFileSync(receiverScript,
+        `const fs=require('node:fs');fs.writeFileSync(${JSON.stringify(receiver)},'');process.stdin.setRawMode(true);process.stdin.on('data',b=>fs.appendFileSync(${JSON.stringify(receiver)},b));process.stdout.write('READY');setInterval(()=>{},1000)`)
+      pty = (testRequire('node-pty') as typeof import('node-pty')).spawn(process.execPath, [receiverScript], {
+        name: 'xterm-256color', cols: 100, rows: 30, cwd: root,
+        env: { ...process.env }, useConpty: true, useConptyDll: process.platform === 'win32'
+      })
+      realPtyObservation = armFixturePtyExit(pty)
+      if (process.platform === 'win32') expect(pty.processStartIdentity).toMatch(/^windows-filetime:[0-9]+$/)
+      const ownedPty = pty
+      let output = ''
+      pty.onData(text => { output += text })
+      const options = service['options']
+      await service.close()
+      service = new CompanionService({ ...options, telegramApiOrigin: bot.origin, pageAfterMs: 5,
+        manager: { ...options.manager, writeToSession: (sessionId: string, bytes: Uint8Array) => {
+          expect(sessionId).toBe('s1'); writes.push({ sessionId, bytes }); ownedPty.write(Buffer.from(bytes))
+          if (new TextDecoder().decode(bytes).includes('Uncertain custom')) throw new Error('synthetic ambiguous write')
+        } } as unknown as SessionManager })
+      const receivedReplies: InboundReply[] = []
+      const handleReply = service['handleTelegramReply'].bind(service)
+      let failOffsetSave = false, offsetFailures = 0
+      const store = service['options'].database
+      const companion = store.companion.bind(store)
+      offsetSpy = vi.spyOn(store, 'companion').mockImplementation(async (name, ...args) => {
+        if (name === 'putRawSetting' && args[0] === 'telegram.offset' && failOffsetSave) {
+          failOffsetSave = false; offsetFailures++; throw new Error('synthetic offset persistence failure')
+        }
+        return companion(name, ...args)
+      })
+      service['handleTelegramReply'] = async reply => {
+        receivedReplies.push(reply)
+        if (reply.text === 'Custom answer') failOffsetSave = true
+        await handleReply(reply)
+      }
       await vi.waitFor(() => expect(output).toContain('READY'), { timeout: 5000 })
       await service.sessionsChanged()
       COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', { enabled: true, allowedChatId: 424242,
@@ -1837,9 +1909,19 @@ describe('Telegram attention notifications', () => {
       expect(writes).toHaveLength(7)
       expect(offsetFailures).toBe(1)
       expect(bot.calls.some(call => String(call.body.text).includes('Message submitted'))).toBe(true)
-    } finally {
-      offsetSpy.mockRestore(); await service.close(); pty.kill(); await bot.close()
+    } catch (error) { primaryFailure = true; throw error }
+    finally {
+      try { offsetSpy?.mockRestore() } catch { cleanupErrors.push('spy-restore') }
+      try { await service.close() } catch { cleanupErrors.push('service-close') }
+      if (pty) {
+        try { await realPtyObservation!.stop() } catch { cleanupErrors.push('pty-exit') }
+      }
+      try { await bot.close() } catch { cleanupErrors.push('fake-bot-close') }
+      if (cleanupErrors.length > 0) {
+        console.log(JSON.stringify({ nativeDiagnostic: 'companion-real-pty-cleanup-errors', primaryFailure, cleanupErrors }))
+      }
     }
+    if (cleanupErrors.length > 0) throw new Error('Owned fixture cleanup did not complete')
   }, 30000)
 
   it('keeps the reply as a draft when the process changes immediately before the write', async () => {
@@ -2068,7 +2150,7 @@ describe('refused agent requests', () => {
       `${now} conversation.observe refused for the owner: conversationReference must be a UUID`,
       ''
     ].join('\n'))
-    expect(statSync(service.refusalLogPath).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') expect(statSync(service.refusalLogPath).mode & 0o777).toBe(0o600)
   })
 
   it('keeps a refusal on one line, whatever the caller put in the parameter name', async () => {
@@ -3099,7 +3181,7 @@ describe('repeat watch notices and calibration', () => {
     expect(Buffer.byteLength(content)).toBeLessThanOrEqual(128 * 1024)
     expect(content.trim().split('\n').every((line) => typeof JSON.parse(line) === 'object')).toBe(true)
     expect(JSON.parse(content.trim().split('\n').at(-1)!)).toMatchObject({ maxRepeat: 3 })
-    expect(statSync(path).mode & 0o777).toBe(0o600)
+    if (process.platform !== 'win32') expect(statSync(path).mode & 0o777).toBe(0o600)
     await calls(2)
     database.prepare("DELETE FROM session WHERE session_id = 's1'").run()
     await service.sessionsChanged()
@@ -3533,12 +3615,14 @@ describe('plan use (Story 37.2)', () => {
   })
 })
 
+// The /proc scanner is the Linux port route; Windows attribution belongs to Story 53.10. Collect on every OS.
 describe('session ports (Story 41.1)', () => {
+  const uid = process.getuid?.() ?? 1000
   const HEADER = '  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode'
   // 127.0.0.1:5173 and 0.0.0.0:8000, both listening.
   const TCP = [HEADER,
-    `   0: 0100007F:1435 00000000:0000 0A 00000000:00000000 00:00000000 00000000  ${process.getuid!()}        0 101 1 0 100 0 0 10 0`,
-    `   1: 00000000:1F40 00000000:0000 0A 00000000:00000000 00:00000000 00000000  ${process.getuid!()}        0 201 1 0 100 0 0 10 0`].join('\n')
+    `   0: 0100007F:1435 00000000:0000 0A 00000000:00000000 00:00000000 00000000  ${uid}        0 101 1 0 100 0 0 10 0`,
+    `   1: 00000000:1F40 00000000:0000 0A 00000000:00000000 00:00000000 00000000  ${uid}        0 201 1 0 100 0 0 10 0`].join('\n')
   const processes: Record<string, { environ: string; fd: string; comm: string }> = {
     '10': { environ: 'BMN_SESSION_ID=s1\0', fd: 'socket:[101]', comm: 'vite' },
     // A server whose session BMN no longer knows.
@@ -3554,12 +3638,12 @@ describe('session ports (Story 41.1)', () => {
       return Buffer.from(path.endsWith('/environ') ? entry.environ : path.endsWith('/comm') ? `${entry.comm}\n` : fail())
     },
     readlink: (path) => processes[path.split('/')[2]!]?.fd ?? fail(),
-    ownerUid: () => process.getuid!()
+    ownerUid: () => uid
   }
   const listed = (target: CompanionService) => target.route(METHOD_REGISTRY.portsList, {}) as Promise<SessionPorts[]>
 
   it('lists what a scan attributed, marks a stopped session, and forgets a deleted one', async () => {
-    const scanning = new CompanionService({ ...service['options'], proc })
+    const scanning = new CompanionService({ ...service['options'], proc, procUid: uid })
     await scanning.sessionsChanged()
     await expect(listed(scanning)).resolves.toEqual([])
     await (scanning as unknown as { ports: { scanNow(): Promise<void> } }).ports.scanNow()
@@ -3882,4 +3966,18 @@ it('preserves the correlated native OpenCode route while old supported ownership
     kind: 'question', title: 'Synthetic', origin: 'cli', manualChoices: { options: [{ label: 'Proceed', description: null }, { label: 'Wait', description: null }], allowOther: true } })
   expect(await service.answerability(unknown)).toMatchObject({ answerable: false })
   expect(writes).toHaveLength(0)
+})
+
+describe('control info', () => {
+  it('reports readiness only once listening, names this OS\'s transport and never carries a token', async () => {
+    const before = await service.route(METHOD_REGISTRY.controlInfo, {}) as Record<string, unknown>
+    expect(before).toMatchObject({ listening: false, transport: process.platform === 'win32' ? 'windows-pipe' : 'unix-socket' })
+    expect(before.detail).toMatch(/has not started$/)
+    await service.start()
+    const after = await service.route(METHOD_REGISTRY.controlInfo, {}) as Record<string, unknown>
+    expect(after).toMatchObject({ listening: true, detail: 'Agents and the bmn CLI can reach this app' })
+    expect(Object.keys(after).sort()).toEqual(['cliPath', 'detail', 'listening', 'socketPath', 'transport'])
+    expect(JSON.stringify(after)).not.toContain(service['auth'].ownerToken)
+    await service.close()
+  })
 })

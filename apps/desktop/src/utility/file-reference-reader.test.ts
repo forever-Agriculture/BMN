@@ -1,12 +1,18 @@
 // MODULE: file-reference-reader.test.ts - bounded read-only snapshots of referenced files and their refusals
 import { spawnSync } from 'node:child_process'
-import { appendFile, mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { appendFile, mkdir, mkdtemp, open, realpath, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FileReferenceReadResult, FileReferenceSnapshot, FileReferenceUnavailable } from '@bmn/protocol'
 import { readFileReference, type FileReferenceReadRequest } from './file-reference-reader'
 import { HostControlError } from './session-manager'
+import { replaceWindowsFixtureFile } from './windows-fixture-io.test-support'
+import { readFileReference as originalReadFileReference } from '../../../../scripts/test/fixtures/file-reference-reader-baseline.mjs'
+
+vi.mock('node:fs/promises', { spy: true })
 
 let root: string
 let launch: string
@@ -19,6 +25,9 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  vi.mocked(realpath).mockReset()
+  vi.mocked(stat).mockReset()
+  vi.mocked(open).mockReset()
   await rm(root, { recursive: true, force: true })
 })
 
@@ -96,9 +105,16 @@ describe('readFileReference', () => {
   it('explains missing files, folders, devices, pipes and a missing launch directory', async () => {
     expect(refused(await readFileReference(request('src/absent.ts'))).reason).toBe('missing')
     expect(refused(await readFileReference(request('./src'))).reason).toBe('not-a-file')
-    const device = refused(await readFileReference(request('/dev/null')))
-    expect(device).toMatchObject({ reason: 'not-a-file', canonicalPath: '/dev/null' })
-    expect(device.message).toMatch(/device/)
+    if (process.platform === 'win32') {
+      // Windows device/pipe namespaces are refused by the typed path boundary.
+      for (const path of ['\\\\.\\NUL', '\\\\.\\pipe\\bmn-file-reference-fixture']) {
+        expect((await rejection(readFileReference(request(path)))).code).toBe('INVALID_ARGUMENT')
+      }
+    } else {
+      const device = refused(await readFileReference(request('/dev/null')))
+      expect(device).toMatchObject({ reason: 'not-a-file', canonicalPath: '/dev/null' })
+      expect(device.message).toMatch(/device/)
+    }
     const loop = join(launch, 'loop.txt')
     await symlink(loop, loop)
     expect(refused(await readFileReference(request('loop.txt'))).reason).toBe('missing')
@@ -114,6 +130,18 @@ describe('readFileReference', () => {
     expect(result.reason).toBe('not-a-file')
     expect(result.message).toMatch(/pipe/)
   })
+
+  // Windows has no FIFOs; its equivalents are reserved device names, which open a device in any folder, and the
+  // pipe and device namespaces. None may be shown as file text or wait for input. CON is not opened here: reading
+  // it could wait on this console.
+  it.runIf(process.platform === 'win32')('refuses Windows devices and pipe paths without reading them', async () => {
+    for (const reference of ['./NUL', './nul.txt', './COM1.log']) {
+      expect((await readFileReference(request(reference))).status, reference).toBe('unavailable')
+    }
+    for (const reference of ['\\\\.\\pipe\\bmn-file-reference', '\\\\?\\GLOBALROOT\\Device\\Null']) {
+      await expect(readFileReference(request(reference)), reference).rejects.toThrow('Device paths are not file references')
+    }
+  }, 15_000)
 
   it('refuses binary, non-UTF-8 and oversized files', async () => {
     await writeFile(join(launch, 'image.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2]))
@@ -140,21 +168,99 @@ describe('readFileReference', () => {
   it('reports a change when the shown path stops naming the file that was read', async () => {
     const path = join(launch, 'src', 'parser.ts')
     await writeFile(join(launch, 'replacement.ts'), 'other bytes\n')
+    let replacementFailure: unknown
     const replaced = refused(await readFileReference(request('src/parser.ts'), {
-      afterCheck: () => rename(join(launch, 'replacement.ts'), path)
+      afterCheck: async () => {
+        const replacement = join(launch, 'replacement.ts')
+        try {
+          if (process.platform === 'win32') replaceWindowsFixtureFile(root, replacement, path)
+          else await rename(replacement, path)
+        } catch (error) { replacementFailure = error; throw error }
+      }
     }))
+    // Preserve the native fixture's actual error in the unit JSON receipt.
+    if (replacementFailure) throw replacementFailure
     expect(replaced).toMatchObject({ reason: 'changed', canonicalPath: path })
+
+    // Windows refuses this physical-parent rename while the child handle is
+    // open (native EPERM, replacement incomplete). Its live ancestor-path swap
+    // uses the directory-junction discriminator below instead.
+    if (process.platform === 'win32') return
 
     // A folder on the path becomes a symlink to another tree holding the same name.
     await mkdir(join(root, 'elsewhere', 'src'), { recursive: true })
     await writeFile(join(root, 'elsewhere', 'src', 'parser.ts'), 'elsewhere\n')
+    const beforeSwap = await stat(path)
+    let swapStage = 'callback-not-run', swapFailure: { code?: string; syscall?: string; name: string } | undefined
     const swapped = refused(await readFileReference(request('src/parser.ts'), {
       afterCheck: async () => {
-        await rename(join(launch, 'src'), join(launch, 'src-old'))
-        await symlink(join(root, 'elsewhere', 'src'), join(launch, 'src'))
+        try {
+          swapStage = 'folder-rename'
+          await rename(join(launch, 'src'), join(launch, 'src-old'))
+          swapStage = 'symlink-create'
+          await symlink(join(root, 'elsewhere', 'src'), join(launch, 'src'))
+          swapStage = 'replacement-complete'
+        } catch (error) {
+          const native = error as NodeJS.ErrnoException
+          swapFailure = { ...(native.code ? { code: native.code } : {}), ...(native.syscall ? { syscall: native.syscall } : {}), name: native.name }
+          throw error
+        }
       }
     }))
-    expect(swapped.reason).toBe('changed')
+    const afterSwap = await stat(path).catch(() => undefined)
+    expect(swapped.reason, JSON.stringify({ stage: swapStage, failure: swapFailure,
+      message: swapped.message, replacementComplete: swapStage === 'replacement-complete',
+      canonicalPathEqual: swapped.canonicalPath === path,
+      sameFileIdentity: afterSwap ? beforeSwap.dev === afterSwap.dev && beforeSwap.ino === afterSwap.ino : null })).toBe('changed')
+  })
+
+  it('detects a retargeted directory link while the original physical file remains open, original RED/current GREEN', async () => {
+    const baseline = readFileSync(new URL('../../../../scripts/test/fixtures/file-reference-reader-baseline.mjs', import.meta.url), 'utf8').replaceAll('\r\n', '\n')
+    expect(createHash('sha256').update(baseline).digest('hex')).toBe('7ae3b5bc518feaf23d9a3631e92b298d4bf2a5aa4624801127b4032213d16438')
+    const alias = join(launch, 'linked-src'), first = join(launch, 'src'), second = join(root, 'second-src')
+    await mkdir(second)
+    await writeFile(join(second, 'parser.ts'), 'second physical tree\n')
+    const originalBytes = await readFile(join(first, 'parser.ts'), 'utf8')
+    const linkKind = process.platform === 'win32' ? 'junction' : 'dir'
+    for (const [name, read] of [['original', originalReadFileReference], ['current', readFileReference]] as const) {
+      await symlink(first, alias, linkKind)
+      let completed = false
+      const observed = await read(request('linked-src/parser.ts'), { afterCheck: async () => {
+        // Remove only our directory link; both physical trees stay intact.
+        await rm(alias, { recursive: true })
+        await symlink(second, alias, linkKind)
+        expect(await realpath(join(alias, 'parser.ts'))).toBe(join(second, 'parser.ts'))
+        completed = true
+      } })
+      expect(completed, `${name}: native directory-link replacement must complete`).toBe(true)
+      expect(await readFile(join(first, 'parser.ts'), 'utf8')).toBe(originalBytes)
+      if (name === 'original') expect(observed).toMatchObject({ status: 'ready', content: originalBytes })
+      else expect(observed).toMatchObject({ status: 'unavailable', reason: 'changed', canonicalPath: join(first, 'parser.ts') })
+      await rm(alias, { recursive: true })
+    }
+  })
+
+  it.each(['realpath', 'stat'] as const)('reports unreadable when final %s metadata is inaccessible, original RED/current GREEN', async (operation) => {
+    const error = Object.assign(new Error('synthetic inaccessible metadata'), { code: 'EACCES' })
+    for (const [name, read] of [['original', originalReadFileReference], ['current', readFileReference]] as const) {
+      const observed = await read(request('src/parser.ts'), { afterCheck: async () => {
+        if (operation === 'realpath') vi.mocked(realpath).mockRejectedValueOnce(error)
+        else vi.mocked(stat).mockRejectedValueOnce(error)
+      } })
+      expect(observed).toMatchObject({ status: 'unavailable', reason: name === 'original' ? 'changed' : 'unreadable' })
+    }
+  })
+
+  it('keeps an unchanged file unreadable when its actual open-handle read fails', async () => {
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+    for (const read of [originalReadFileReference, readFileReference]) {
+      vi.mocked(open).mockImplementationOnce(async (...args) => {
+        const handle = await actual.open(...args)
+        vi.spyOn(handle, 'read').mockRejectedValueOnce(Object.assign(new Error('synthetic read denial'), { code: 'EACCES' }))
+        return handle
+      })
+      expect(await read(request('src/parser.ts'))).toMatchObject({ status: 'unavailable', reason: 'unreadable' })
+    }
   })
 
   it('rejects malformed references and folders before touching the filesystem', async () => {

@@ -1,5 +1,5 @@
 // MODULE: file-reference-links.ts - Ctrl+click file links in terminal output, found only in the line xterm asks about
-import { findFileReferences } from '@bmn/protocol'
+import { findFileReferences, type FileReferencePathStyle } from '@bmn/protocol'
 import type { IBufferRange, ILink, ILinkProvider } from '@xterm/xterm'
 
 interface LinkBufferCell {
@@ -31,7 +31,7 @@ export interface FileReferenceLink {
  * The file references in the logical line holding buffer row `row` (1-based, as xterm asks), with cell ranges.
  * Only rows the terminal itself wrapped are joined, so text from separate output lines is never combined.
  */
-export function fileReferenceLinks(buffer: LinkBuffer, row: number): FileReferenceLink[] {
+export function fileReferenceLinks(buffer: LinkBuffer, row: number, style: FileReferencePathStyle = 'posix'): FileReferenceLink[] {
   let first = row - 1
   while (first > 0 && row - 1 - first < MAX_WRAPPED_ROWS && buffer.getLine(first)?.isWrapped) first -= 1
   let last = row - 1
@@ -57,7 +57,7 @@ export function fileReferenceLinks(buffer: LinkBuffer, row: number): FileReferen
       text += chars
     }
   }
-  return findFileReferences(text).flatMap((match) => {
+  return findFileReferences(text, style).flatMap((match) => {
     const start = cells[match.start]
     const end = cells[match.end - 1]
     if (!start || !end) return []
@@ -68,6 +68,7 @@ export function fileReferenceLinks(buffer: LinkBuffer, row: number): FileReferen
 }
 
 export interface FileReferenceLinkHost {
+  pathStyle?: FileReferencePathStyle
   buffer(): LinkBuffer
   /** False while the program reads the mouse (vim, htop): clicks belong to it and links stay off. */
   enabled(): boolean
@@ -112,7 +113,7 @@ export function createFileReferenceLinkProvider(host: FileReferenceLinkHost): Fi
     // A drag that ends on the link made a selection; that stays a copy, not an open.
     if (press.opened || !host.enabled() || host.hasSelection()) return false
     // Output can rewrite these cells before xterm renders and drops the link; open only what is still printed.
-    const current = fileReferenceLinks(host.buffer(), range.start.y)
+    const current = fileReferenceLinks(host.buffer(), range.start.y, host.pathStyle)
     if (!current.some((item) => item.text === text && sameRange(item.range, range))) return false
     press.opened = true
     host.open(text)
@@ -139,7 +140,7 @@ export function createFileReferenceLinkProvider(host: FileReferenceLinkHost): Fi
         callback(undefined)
         return
       }
-      const links = fileReferenceLinks(host.buffer(), row).map((found): ILink => {
+      const links = fileReferenceLinks(host.buffer(), row, host.pathStyle).map((found): ILink => {
         const link: ILink = {
           range: found.range,
           text: found.text,

@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { expect, it } from 'vitest'
+import { windowsEnvironmentValue } from '../../bin/windows-env.mjs'
 
 const wrapper = fileURLToPath(new URL('../../bin/codex', import.meta.url))
 
@@ -12,10 +13,18 @@ it('runs the real Codex with local hooks in BMN and preserves explicit remote la
   try {
     const fake = join(root, 'codex')
     writeFileSync(fake, '#!/bin/sh\nprintf "%s\\n" "$@"\n', { mode: 0o755 })
-    const path = `${dirname(wrapper)}:${root}:/usr/bin:/bin`
+    const shellPath = (value: string) => value.replaceAll('\\', '/').replace(/^([A-Za-z]):/, (_match, drive: string) => `/${drive.toLowerCase()}`)
+    const path = `${shellPath(dirname(wrapper))}:${shellPath(root)}:/usr/bin:/bin`
+    const programFiles = windowsEnvironmentValue(process.env, 'ProgramFiles')
+    const bash = process.platform === 'win32' ? join(programFiles ?? '', 'Git', 'bin', 'bash.exe') : null
+    const essentials = Object.fromEntries(['SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'ComSpec'].flatMap(key => {
+      const value = windowsEnvironmentValue(process.env, key)
+      return process.platform === 'win32' && value ? [[key, value]] : []
+    }))
     const run = (args: string[], inBMN: boolean) => {
-      const result = spawnSync(wrapper, args, {
-        env: { PATH: path, ...(inBMN ? { BMN_CONTROL_SOCKET: '/synthetic/socket', BMN_TOKEN: 'synthetic' } : {}) },
+      const result = spawnSync(bash ?? wrapper, bash ? [shellPath(wrapper), ...args] : args, {
+        env: { ...essentials, PATH: path, HOME: root, ...(process.platform === 'win32' ? { USERPROFILE: root } : {}),
+          ...(inBMN ? { BMN_CONTROL_SOCKET: '/synthetic/socket', BMN_TOKEN: 'synthetic' } : {}) },
         encoding: 'utf8'
       })
       expect(result.status).toBe(0)

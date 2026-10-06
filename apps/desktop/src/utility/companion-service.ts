@@ -1,9 +1,9 @@
 // MODULE: companion-service.ts - host-side artifacts, attention, progress, drafts, settings, control socket, Telegram and backup
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { appendFile, chmod, copyFile, lstat, mkdir, mkdtemp, readFile, rename, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises'
+import { appendFile, chmod, copyFile, lstat, mkdir, readFile, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
-import { basename, dirname, extname, isAbsolute, join, relative } from 'node:path'
+import { basename, delimiter, dirname, extname, isAbsolute, join, relative } from 'node:path'
 import {
   ERROR_CODES,
   exactAbsoluteFileReference,
@@ -58,13 +58,16 @@ import {
   type UsageAgent,
   type UsageReading
 } from '@bmn/protocol'
+import { writeClaudeFolderAsync } from './agent-history-claude'
 import { ArtifactFileError, ArtifactFileStore, type InstalledOriginal } from './artifact-files'
 import { ControlAuth, writeOwnerToken, type ControlScope } from './control-auth'
+import { replaceFile } from './file-replace'
 import { HookEventHistory } from './hook-event-history'
 import { LiveProducers } from './live-producers'
 import { ControlError, ControlServer, type ReceiptRecord } from './control-server'
 import type { DatabaseWorkerClient } from './database-client'
 import type { ApplicationRoots } from './roots'
+import { createPrivateDirectory } from './private-directory'
 import { HostControlError, type SessionIdentity, type SessionManager } from './session-manager'
 import { runHookConfigurationCheck } from './hook-configuration-check'
 import { codexRolloutPath } from './conversation-binding'
@@ -140,6 +143,8 @@ export interface CompanionServiceOptions {
   telegramApiOrigin?: string
   /** Agents whose sessions the history limit prunes (Story 31.2); none means Claude folders only. */
   historyAdapters?: readonly AgentHistoryAdapter[]
+  /** Every running command line; Windows supplies its native reader, Linux reads /proc by default. */
+  commandLines?: () => string
   /** The owner's home, where `~/.claude` lives; the self-test points it at a scratch folder. */
   home?: string
   /** How long a question or permission waits before it is paged; only the self-test host shortens it. */
@@ -147,7 +152,23 @@ export interface CompanionServiceOptions {
   now?: () => Date
   /** Where port scans read /proc; tests hand it a fixture tree. */
   proc?: ProcReader
+  /** UID of an explicitly injected synthetic /proc reader. */
+  procUid?: number
 }
+
+/** Writes the owner-only staged copy `replaceFile` moves into place; a failed write leaves no partial copy. */
+async function writeStaged(path: string, contents: string): Promise<void> {
+  try {
+    await writeFile(path, contents, { mode: 0o600 })
+    await chmod(path, 0o600)
+  } catch (error) {
+    await rm(path, { force: true }).catch(() => undefined)
+    throw error
+  }
+}
+
+/** What agents and the CLI connect to on this OS, as Preferences reports it. */
+const CONTROL_ENDPOINT = process.platform === 'win32' ? 'control pipe' : 'control socket'
 
 function invalid(message: string): never {
   throw new HostControlError(ERROR_CODES.invalidArgument, message)
@@ -211,7 +232,8 @@ async function sha256File(path: string): Promise<{ sha256: string; byteLength: n
 }
 
 function backupArtifactFile(artifact: ArtifactRecord): string {
-  return join('artifacts', artifact.sha256.slice(0, 2), artifact.artifactId)
+  // Manifest names are portable relative paths, independent of the writer OS.
+  return `artifacts/${artifact.sha256.slice(0, 2)}/${artifact.artifactId}`
 }
 
 function isBackupManifestEntry(value: unknown): value is BackupManifestEntry {
@@ -271,7 +293,7 @@ export class CompanionService {
   private readonly control: ControlServer
   private readonly knownSessions = new Map<string, SessionRecord>()
   private controlListening = false
-  private controlDetail = 'The control socket has not started'
+  private controlDetail = `The ${CONTROL_ENDPOINT} has not started`
   private telegram: TelegramConnector | undefined
   private telegramToken: string | null = null
   private telegramHealth: ConnectorHealth | undefined
@@ -396,12 +418,16 @@ export class CompanionService {
       sessionExists: sessionId => this.knownSessions.has(sessionId), live: () => this.liveHookEvents() })
     this.now = options.now ?? (() => new Date())
     const proc = options.proc ?? procReader
-    const uid = process.getuid?.() ?? -1
+    const uid = options.procUid ?? (process.getuid?.() ?? -1)
     const scanMemory = createScanMemory()
     this.ports = new PortWatch({
-      scan: (sessionIds) => scanSessionPorts(proc, sessionIds, uid, scanMemory),
+      scan: (sessionIds) => process.platform === 'win32' && !options.proc
+        ? options.manager.scanWindowsSessionPorts(sessionIds)
+        : scanSessionPorts(proc, sessionIds, uid, scanMemory),
       knownSessionIds: () => new Set(this.knownSessions.keys()),
       liveSessionIds: () => options.manager.liveSessionIds(),
+      ...(process.platform === 'win32' && !options.proc
+        ? { currentIncarnation: (id: string) => options.manager.liveIncarnationId(id) } : {}),
       changed: () => this.emit('ports', null)
     })
     this.pager = createAttentionPager({
@@ -422,6 +448,9 @@ export class CompanionService {
     this.history = new AgentHistory({
       home: options.home ?? homedir(),
       adapters: options.historyAdapters ?? [],
+      ...(options.commandLines ? { commandLines: options.commandLines } : {}),
+      ...(process.platform === 'win32' ? { writeClaudeFolder: (folder: string, days: number) =>
+        writeClaudeFolderAsync(folder, days, join(dirname(options.cliScriptPath ?? options.cliPath), 'safe-config-write.mjs')) } : {}),
       readSettings: async () => (await options.database.companion('getSettings')).agentHistory,
       writeSettings: async (next) => {
         await options.database.companion('putSettingsSection', 'agentHistory', next, this.iso())
@@ -613,7 +642,7 @@ export class CompanionService {
 
   /** The PATH every session's processes see: BMN's CLI first, then BMN's own PATH. */
   sessionPath(): string {
-    return [dirname(this.options.cliPath), process.env.PATH ?? '/usr/bin:/bin'].join(':')
+    return [dirname(this.options.cliPath), process.env.PATH ?? (process.platform === 'win32' ? '' : '/usr/bin:/bin')].filter(Boolean).join(delimiter)
   }
 
   /** Environment for one incarnation: its scoped control credential and the CLI on PATH. */
@@ -644,10 +673,10 @@ export class CompanionService {
       this.controlDetail = 'Agents and the bmn CLI can reach this app'
     } catch (error) {
       // The kernel caps a Unix socket path and reports only EINVAL, so name the real cause.
-      const tooLong = Buffer.byteLength(this.socketPath) > MAX_SOCKET_PATH_BYTES
+      const tooLong = process.platform !== 'win32' && Buffer.byteLength(this.socketPath) > MAX_SOCKET_PATH_BYTES
       this.controlDetail = tooLong
         ? `The control socket is unavailable: its path is longer than ${MAX_SOCKET_PATH_BYTES} bytes (${this.socketPath}); use a shorter runtime directory`
-        : `The control socket is unavailable: ${error instanceof Error ? error.message.slice(0, 200) : 'unknown error'}`
+        : `The ${CONTROL_ENDPOINT} is unavailable: ${error instanceof Error ? error.message.slice(0, 200) : 'unknown error'}`
     }
     this.sweepTimer = setInterval(() => void this.sweepAttention(), ATTENTION_SWEEP_MS)
     this.sweepTimer.unref()
@@ -921,6 +950,7 @@ export class CompanionService {
       case METHOD_REGISTRY.controlInfo:
         return {
           socketPath: this.socketPath,
+          transport: process.platform === 'win32' ? 'windows-pipe' : 'unix-socket',
           cliPath: this.options.cliPath,
           listening: this.controlListening,
           detail: this.controlDetail
@@ -2009,7 +2039,8 @@ export class CompanionService {
     }
     const payload = delivery.ownedArtifactPath
       ? `${this.quotePath(delivery.ownedArtifactPath)} `
-      : exactAbsoluteFileReference(sourcePath, line as number | null, column as number | null)
+      : exactAbsoluteFileReference(sourcePath, line as number | null, column as number | null,
+        process.platform === 'win32' ? 'win32' : 'posix')
     if (!payload) invalid('This path cannot be sent as an exact file reference')
     const fingerprint = JSON.stringify([sessionId, expectedIncarnationId, payload])
     const paramsHash = createHash('sha256').update(fingerprint).digest('hex')
@@ -2420,7 +2451,9 @@ export class CompanionService {
     if (!isAbsolute(parent)) invalid('The backup location must be an absolute path')
     const createdAt = this.iso()
     await mkdir(parent, { recursive: true, mode: 0o700 })
-    const directory = await mkdtemp(join(parent, `bmn-backup-${createdAt.replaceAll(':', '-')}-`))
+    // The backup holds the whole database; only this account may open it, wherever the owner puts it.
+    const directory = join(parent, `bmn-backup-${createdAt.replaceAll(':', '-')}-${randomUUID().slice(0, 8)}`)
+    await createPrivateDirectory(directory)
     await mkdir(join(directory, 'artifacts'), { recursive: true, mode: 0o700 })
     const databaseFile = join(directory, 'state.sqlite3')
     await this.options.database.backupInto(databaseFile)
@@ -2444,8 +2477,8 @@ export class CompanionService {
       excluded: ['Telegram bot token', 'control socket credentials', 'saved terminal output', 'retained hook event history', 'live question producer bindings']
     }
     const manifestPath = join(directory, 'manifest.json')
-    await writeFile(`${manifestPath}.tmp`, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 })
-    await rename(`${manifestPath}.tmp`, manifestPath)
+    await writeStaged(`${manifestPath}.tmp`, `${JSON.stringify(manifest, null, 2)}\n`)
+    await replaceFile(`${manifestPath}.tmp`, manifestPath)
     return { directory, manifest }
   }
 
@@ -2522,9 +2555,8 @@ export class CompanionService {
       }
       await mkdir(this.options.roots.config, { recursive: true, mode: 0o700 })
       const temporary = `${this.tokenPath()}.${randomUUID()}.tmp`
-      await writeFile(temporary, `${token.trim()}\n`, { mode: 0o600 })
-      await chmod(temporary, 0o600)
-      await rename(temporary, this.tokenPath())
+      await writeStaged(temporary, `${token.trim()}\n`)
+      await replaceFile(temporary, this.tokenPath())
     }
     await this.restartTelegram()
     return this.telegramStatus()

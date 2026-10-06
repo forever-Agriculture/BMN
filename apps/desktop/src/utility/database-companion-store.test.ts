@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, normalize } from 'node:path'
 import {
   DEFAULT_APP_SETTINGS,
   ERROR_CODES,
@@ -782,12 +782,13 @@ describe('companion store', () => {
   })
 
   it('loads a voice row stored before the vocabulary existed with an empty vocabulary and its other fields intact', () => {
+    const modelFolder = process.platform === 'win32' ? String.raw`C:\media\models` : '/media/models'
     database.prepare(
       `INSERT INTO app_setting(key, value_json, updated_at) VALUES ('voice', ?, ?)
        ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`
-    ).run('{"model":"small","language":"uk","modelFolder":"/media/models","holdSpaceToTalk":false}', now)
+    ).run(JSON.stringify({ model: 'small', language: 'uk', modelFolder, holdSpaceToTalk: false }), now)
     expect(getSettings(database).voice).toEqual({
-      model: 'small', language: 'uk', modelFolder: '/media/models', holdSpaceToTalk: false, vocabulary: []
+      model: 'small', language: 'uk', modelFolder, holdSpaceToTalk: false, vocabulary: []
     })
   })
 
@@ -811,8 +812,11 @@ describe('companion store', () => {
   })
 
   it('keeps the voice model folder only as a normalized absolute path', () => {
-    putSettingsSection(database, 'voice', { model: 'base', language: 'en', modelFolder: '/media/disk/models//whisper/' }, now)
-    expect(getSettings(database).voice).toEqual({ model: 'base', language: 'en', modelFolder: '/media/disk/models/whisper/', holdSpaceToTalk: true, vocabulary: [] })
+    const modelFolder = process.platform === 'win32' ? 'C:/media/disk/models//whisper/' : '/media/disk/models//whisper/'
+    putSettingsSection(database, 'voice', { model: 'base', language: 'en', modelFolder }, now)
+    const expected = process.platform === 'win32' ? String.raw`C:\media\disk\models\whisper` + '\\' : '/media/disk/models/whisper/'
+    expect(normalize(modelFolder)).toBe(expected)
+    expect(getSettings(database).voice).toEqual({ model: 'base', language: 'en', modelFolder: expected, holdSpaceToTalk: true, vocabulary: [] })
     for (const modelFolder of ['models/whisper', '', 42, '/media/\0disk']) {
       expect(() => putSettingsSection(database, 'voice', { model: 'base', language: 'en', modelFolder }, now)).toThrow(/absolute path/)
     }

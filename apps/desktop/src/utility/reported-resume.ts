@@ -1,6 +1,7 @@
 // MODULE: reported-resume.ts - where a program's reported resume command runs from (Epic 43)
 import { accessSync, constants, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { findWindowsExecutable } from './windows-launch'
 
 /**
  * The file a plain command name runs from on `path`: the first absolute directory holding an executable regular file
@@ -8,6 +9,7 @@ import { join } from 'node:path'
  * searched; nor is a directory that happens to carry the name.
  */
 export function findProgramOnPath(name: string, path: string): string | null {
+  if (process.platform === 'win32') return findWindowsExecutable(name, process.cwd(), { ...process.env, PATH: path })
   for (const directory of path.split(':')) {
     if (!directory.startsWith('/')) continue
     const candidate = join(directory, name)

@@ -38,7 +38,7 @@ describe('desktop source update', () => {
     expect(repositoryReadiness({ ...ready, originHead: 'def' })).toMatch(/push the commit first/u)
   })
 
-  it('packages only after rebuilding every workspace package the desktop imports', () => {
+  it.each(['package', 'package:unpacked'])('%s rebuilds every workspace package the desktop imports', (command) => {
     // Workspace dist folders are gitignored, so a checkout that only ran the desktop build keeps a
     // stale @bmn/protocol and the queued update failed on a missing export (2026-09-28).
     const root = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'))
@@ -46,7 +46,7 @@ describe('desktop source update', () => {
     const workspaceDeps = Object.entries({ ...desktop.dependencies, ...desktop.devDependencies })
       .filter(([, version]) => String(version).startsWith('workspace:'))
       .map(([name]) => name)
-    const steps = root.scripts.package.split('&&').map((step) => step.trim())
+    const steps = root.scripts[command].split('&&').map((step) => step.trim())
     const packageStep = steps.indexOf('pnpm --filter @bmn/desktop run package')
 
     expect(workspaceDeps).toContain('@bmn/protocol')
@@ -65,7 +65,7 @@ describe('desktop source update', () => {
     const desktop = JSON.parse(readFileSync(join(repoRoot, 'apps/desktop/package.json'), 'utf8'))
 
     expect(root.scripts.package.split('&&').at(-1).trim()).toBe('pnpm --filter @bmn/desktop run package')
-    expect(desktop.scripts.package.split('&&').at(-1).trim()).toMatch(/^electron-builder --linux dir$/u)
+    expect(desktop.scripts.package.split('&&').at(-1).trim()).toBe('electron-builder --dir')
     expect(root.scripts['smoke:packaged']).toBe('node scripts/smoke/packaged.mjs')
   })
 

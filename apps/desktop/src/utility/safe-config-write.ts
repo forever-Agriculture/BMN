@@ -3,6 +3,7 @@ export {
   ConfigWriteError,
   currentText,
   jsonIndent,
+  linkTarget,
   rewrittenNumbers,
   writeConfigSafely
 } from '../../bin/safe-config-write.mjs'

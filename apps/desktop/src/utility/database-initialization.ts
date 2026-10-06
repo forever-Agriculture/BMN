@@ -43,6 +43,18 @@ export function initializeDatabase(
   database: DatabaseConnection,
   now: string = new Date().toISOString()
 ): DatabaseInitialization {
+  // An older payload must not switch journal mode, apply migrations or label
+  // running sessions interrupted before it knows that this schema is supported.
+  const hasMigrations = database.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migration'"
+  ).get() !== undefined
+  const appliedRows = hasMigrations
+    ? database.prepare('SELECT version FROM schema_migration').all() as Array<{ version: number }>
+    : []
+  const supported = new Set(DATABASE_MIGRATIONS.map(migration => migration.version))
+  if (appliedRows.some(row => !supported.has(row.version))) {
+    throw new Error('BMN refuses an unsupported data schema. Use a compatible version or recover the matching verified data snapshot; no migrations were applied.')
+  }
   configureDatabase(database)
   database.exec(`
     CREATE TABLE IF NOT EXISTS schema_migration (
@@ -50,9 +62,6 @@ export function initializeDatabase(
       applied_at TEXT NOT NULL
     )
   `)
-  const appliedRows = database.prepare('SELECT version FROM schema_migration').all() as Array<{
-    version: number
-  }>
   const applied = new Set(appliedRows.map((row) => row.version))
   for (const migration of DATABASE_MIGRATIONS) {
     if (applied.has(migration.version)) continue

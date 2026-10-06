@@ -1,6 +1,7 @@
 import { accessSync, constants } from 'node:fs'
 import { basename, delimiter, isAbsolute, resolve } from 'node:path'
 import { DEFAULT_WORKSPACE_ID, METHOD_REGISTRY, type ProtocolMethod } from '@bmn/protocol'
+import { findWindowsExecutable, windowsDefaultShell, windowsEnvironmentValue } from '../utility/windows-launch'
 
 export interface ApplicationLaunchSpec {
   cwd: string
@@ -17,6 +18,7 @@ interface SessionCreateClient {
 }
 
 function executablePath(command: string, cwd: string, environment: NodeJS.ProcessEnv): string {
+  if (process.platform === 'win32') return findWindowsExecutable(command, cwd, environment) ?? command
   if (command.includes('/')) return isAbsolute(command) ? command : resolve(cwd, command)
   for (const directory of (environment.PATH ?? '').split(delimiter)) {
     if (!directory) continue
@@ -36,7 +38,9 @@ export function parseApplicationLaunchSpec(
   environment: NodeJS.ProcessEnv,
   defaultCwd: string
 ): ApplicationLaunchSpec {
-  const cwd = environment.BMN_LAUNCH_CWD ?? environment.AITERM_LAUNCH_CWD ?? defaultCwd
+  const cwd = process.platform === 'win32'
+    ? windowsEnvironmentValue(environment, 'BMN_LAUNCH_CWD') ?? windowsEnvironmentValue(environment, 'AITERM_LAUNCH_CWD') ?? defaultCwd
+    : environment.BMN_LAUNCH_CWD ?? environment.AITERM_LAUNCH_CWD ?? defaultCwd
   const separator = applicationArgv.indexOf('--')
   if (separator >= 0) {
     const explicit = applicationArgv.slice(separator + 1)
@@ -49,7 +53,8 @@ export function parseApplicationLaunchSpec(
       argv: explicit.slice(1)
     }
   }
-  const shell = environment.BMN_SHELL ?? environment.AITERM_SHELL ?? environment.SHELL ?? '/bin/bash'
+  const shell = process.platform === 'win32' ? windowsDefaultShell(environment)
+    : environment.BMN_SHELL ?? environment.AITERM_SHELL ?? environment.SHELL ?? '/bin/bash'
   return { cwd, executable: executablePath(shell, cwd, environment), argv: [] }
 }
 

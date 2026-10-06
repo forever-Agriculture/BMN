@@ -2,8 +2,10 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import type { BrowserWindow } from 'electron'
+import { windowsEnvironmentValue } from '../utility/windows-launch'
+import { writeNodeProgram } from './self-test/programs'
 
 const DAY_MS = 86_400_000
 
@@ -14,12 +16,18 @@ export function selfTestHistoryRoots(): { home: string; bin: string } | null {
   return { home: join(state, 'self-test-home'), bin: join(state, 'self-test-bin') }
 }
 
+/** The stand-in agents the history fixture records; nothing may call them. */
+const RECORDED_AGENTS = ['codex', 'opencode', 'cursor-agent'] as const
+
 /** Host environment additions for the self-test: its own home, and stand-in agents ahead of the real ones. */
 export function selfTestHistoryEnvironment(): NodeJS.ProcessEnv {
   const roots = selfTestHistoryRoots()
   if (!roots) return {}
   mkdirSync(roots.home, { recursive: true })
-  return { BMN_SELF_TEST_HOME: roots.home, PATH: `${roots.bin}:${process.env.PATH ?? ''}` }
+  if (process.platform !== 'win32') return { BMN_SELF_TEST_HOME: roots.home, PATH: `${roots.bin}${delimiter}${process.env.PATH ?? ''}` }
+  // Each Windows stand-in is a launcher copy in a folder of its own; the host emits one PATH spelling.
+  const folders = RECORDED_AGENTS.map((name) => join(roots.bin, name))
+  return { BMN_SELF_TEST_HOME: roots.home, PATH: [...folders, windowsEnvironmentValue(process.env, 'PATH') ?? ''].join(delimiter) }
 }
 
 export interface HistoryFixture {
@@ -41,6 +49,16 @@ type Database = { exec(sql: string): void; prepare(sql: string): { run(...values
 
 function recordingBinary(bin: string, name: string): string {
   const log = join(bin, `${name}.log`)
+  if (process.platform === 'win32') {
+    // The same record as the POSIX script: working directory and arguments joined by spaces.
+    writeNodeProgram(join(bin, name), name, [
+      "const { appendFileSync } = require('node:fs')",
+      `appendFileSync(${JSON.stringify(log)}, process.cwd() + '|' + process.argv.slice(2).join(' ') + '\\n')`,
+      "process.stdout.write('Deleted session ' + process.argv.slice(2).join(' ') + '\\n')",
+      ''
+    ].join('\n'))
+    return log
+  }
   writeFileSync(join(bin, name),
     `#!/bin/sh\nprintf '%s|%s\\n' "$PWD" "$*" >> '${log}'\necho "Deleted session $*"\nexit 0\n`)
   chmodSync(join(bin, name), 0o755)
@@ -110,7 +128,10 @@ export function prepareHistoryFixture(isolatedCwd: string, now = Date.now()): Hi
   const openCodeLog = recordingBinary(roots.bin, 'opencode')
   const cursorLog = recordingBinary(roots.bin, 'cursor-agent')
   // A process outside BMN that has both held sessions open, as `codex resume <id>` would.
-  const holder = spawn('/bin/sh', ['-c', 'sleep 120', 'bmn-history-holder', ids.heldCodex, ids.heldOpenCode], { stdio: 'ignore' })
+  const holder = process.platform === 'win32'
+    ? spawn(process.execPath, ['-e', 'setTimeout(() => undefined, 120000)', 'bmn-history-holder', ids.heldCodex, ids.heldOpenCode],
+      { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: 'ignore', windowsHide: true })
+    : spawn('/bin/sh', ['-c', 'sleep 120', 'bmn-history-holder', ids.heldCodex, ids.heldOpenCode], { stdio: 'ignore' })
   return {
     home: roots.home, claudeHome, glm, work, codexLog, openCodeLog, cursorLog, ids, holder,
     storeFiles: () => [...listFiles(codexHome), ...listFiles(join(dataHome, 'opencode'))]

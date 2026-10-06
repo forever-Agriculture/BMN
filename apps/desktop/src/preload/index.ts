@@ -314,6 +314,7 @@ ipcRenderer.on('aiterm:presence', (_event, message: unknown) => {
 })
 
 contextBridge.exposeInMainWorld('aiTerminal', {
+  platform: process.platform,
   security: {
     sandboxed: process.sandboxed === true,
     contextIsolated: process.contextIsolated === true
@@ -700,6 +701,9 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   verifyBackup(directory?: string): Promise<BackupVerifyResult | null> {
     return invokeBridge('aiterm:backup:verify', directory ? { directory } : {})
+  },
+  getNotificationHealth(): Promise<{ cue: string | null }> {
+    return invokeBridge('aiterm:notifications:health', {})
   },
   readClipboardText(): Promise<{ text: string }> {
     return invokeBridge('aiterm:clipboard:read-text', {})

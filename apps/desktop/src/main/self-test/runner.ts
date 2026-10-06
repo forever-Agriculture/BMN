@@ -33,12 +33,14 @@ import {
   runLaunchSetRepositorySelfTest
 } from '../launch-set-repository-self-test'
 import { runCheckoutPeersSelfTest } from '../checkout-peers-self-test'
+import { codexSixelFrame, NODE_ANIMATION_SOURCE, POSIX_ANIMATION_SCRIPT, PTY_SIXEL_FIXTURE } from './animation'
 import {
   closeWithinDeadline,
   drainAfterExit,
   PtyHostRemoteError
 } from '../pty-host-client'
 import {
+  WHISPER_ENGINE_FILE,
   SPEECH_DETECTOR_FILE,
   SPEECH_MODEL_FILE,
   VOICE_MODELS
@@ -91,9 +93,15 @@ import {
 } from 'node:fs'
 import {
   basename,
-  join
+  join,
+  sep
 } from 'node:path'
 import type { AttachmentIdentity, HostHealth, SelfTestHost, SessionIdentity } from '../index'
+import { scrolledDiagnosticArm } from './scrolled-diagnostic'
+import { observeDiagnosticFailure } from './diagnostic-observation'
+import { armDiagnosticCustody, diagnosticLateMembers, type DiagnosticJobSnapshot } from './diagnostic-custody'
+import { diagnosticObservationPublisher } from './diagnostic-publication'
+import { fileReferenceFixtureNames } from '../../renderer/src/file-reference-probe'
 import {
   MODE_PASTE_TEXT,
   closePromptDialogText,
@@ -135,6 +143,16 @@ import {
   writeTerminalModeProgram,
   writeTerminalNoticeHarness
 } from './harnesses'
+import {
+  powerShellQuote,
+  selfTestShell,
+  useStandInLauncher,
+  WINDOWS_FULL_SCREEN,
+  WINDOWS_SHELL_CHECKS,
+  windowsSystemFolder,
+  writeNodeProgram
+} from './programs'
+import { sixelTerminfoReady } from '../../utility/terminal-graphics'
 import { SELF_TEST_LAUNCH_DISABLED_REASON, SELF_TEST_TELEGRAM_CHAT_ID, type SelfTestRecorder } from './taps'
 
 export { SelfTestRecorder } from './taps'
@@ -405,9 +423,28 @@ export function reportSelfTestFailure(error: unknown): void {
 }
 
 export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTestRecorder): Promise<void> {
+  const diagnosticArm = scrolledDiagnosticArm(process.argv)
+  const diagnosticAnchors = { appStartedAtMs: Math.round(Date.now() - process.uptime() * 1000), prefixStartedAtMs: Date.now() }
   host = selfTestHost
   taps = recorder
   const { hostEntry, repoRoot } = host.appPaths()
+  // Windows stand-ins run as copies of the bmn.exe launcher; sessions type into PowerShell there.
+  useStandInLauncher(host.hostEnvironment(repoRoot).BMN_CLI_PATH)
+  const typedShell = selfTestShell()
+  // PowerShell forms of POSIX redirection: `>` would write UTF-16 there, and `&&`/`||` do not exist in 5.1.
+  const savedOutput = (command: string, file: string): string =>
+    `[IO.File]::WriteAllLines(${powerShellQuote(file)}, [string[]](${command}))`
+  const writtenLine = (line: string, file: string, append: boolean): string =>
+    `[IO.File]::${append ? 'AppendAllText' : 'WriteAllText'}(${powerShellQuote(file)}, "${line}\`n")`
+  const whenExit = (command: string, success: boolean, then: string): string =>
+    `${command}${success ? '' : ' 2>$null'}; if ($LASTEXITCODE ${success ? '-eq' : '-ne'} 0) { ${then} }`
+  /** Prints the parts joined, so the echoed command never holds the joined marker. */
+  const printed = (...parts: string[]): string => `Write-Output (${parts.map(powerShellQuote).join(' + ')})`
+  const ran = (program: string, ...args: string[]): string => [`& ${powerShellQuote(program)}`, ...args].join(' ')
+  /** The shell's arguments that run one program, as an agent typed into a shell would be. */
+  const shellRunning = (program: string): string[] =>
+    typedShell.windows ? ['-NoLogo', '-NoProfile', '-Command', ran(program)] : ['-c', program]
+  const displayedFile = (file: string): string => `[Console]::Out.Write([IO.File]::ReadAllText(${powerShellQuote(file)}))`
   // Set before the host starts: the utility captures CODEX_HOME into every session's launch context.
   process.env.CODEX_HOME = selfTestCodexHome()
   await nativeFailureSelfTest(hostEntry, repoRoot)
@@ -429,7 +466,13 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
   } | undefined
   let graceful = true
   let clientClosed = false
+  let initialScrolledWithinBudget: boolean | undefined
+  let passiveObservation: Record<string, unknown> | undefined
+  let diagnosticSnapshot: DiagnosticJobSnapshot | undefined
+  const publishObservation = diagnosticObservationPublisher(() => ({ arm: diagnosticArm!, anchors: diagnosticAnchors,
+    initialScrolledWithinBudget, passiveObservation, lateMembers: diagnosticLateMembers(diagnosticSnapshot) }))
   try {
+    selfTestSequence: {
     const isolatedCwd = process.env.BMN_STATE_HOME
     if (!isolatedCwd) throw new Error('self-test requires BMN_STATE_HOME')
     const envelopedInvokeChannels = await verifyRegisteredInvokeEnvelopes()
@@ -439,7 +482,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         workspaceId: DEFAULT_WORKSPACE_ID,
         name: 'Invalid directory probe',
         cwd: join(isolatedCwd, 'missing-launch-directory'),
-        executable: '/bin/bash',
+        executable: typedShell.executable,
         argv: [],
         cols: 80,
         rows: 24
@@ -475,8 +518,8 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       workspaceId: DEFAULT_WORKSPACE_ID,
       name: 'Self-test shell',
       cwd: isolatedCwd,
-      executable: '/bin/bash',
-      argv: ['--noprofile', '--norc'],
+      executable: typedShell.executable,
+      argv: [...typedShell.argv],
       cols: 80,
       rows: 24
     })
@@ -495,8 +538,10 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       kind: 'terminal-input',
       method: METHOD_REGISTRY.terminalWrite,
       attachmentId: attachment.attachmentId,
-      bytes: new TextEncoder().encode(
-        `if [ -z "\${ELECTRON_RUN_AS_NODE+x}" ]; then printf 'AITERM-1-1-%s\\nAITERM-1-1-ELECTRON-ENV-%s\\n' 'PORT-ROUNDTRIP' 'UNSET'; else printf 'AITERM-1-1-ELECTRON-ENV-%s\\n' 'LEAK'; fi\r`
+      // Each marker is printed in parts, so the echoed command never contains it whole.
+      bytes: new TextEncoder().encode(typedShell.windows
+        ? "if ($null -eq $env:ELECTRON_RUN_AS_NODE) { 'AITERM-1-1-' + 'PORT-ROUNDTRIP'; 'AITERM-1-1-ELECTRON-ENV-' + 'UNSET' } else { 'AITERM-1-1-ELECTRON-ENV-' + 'LEAK' }\r"
+        : `if [ -z "\${ELECTRON_RUN_AS_NODE+x}" ]; then printf 'AITERM-1-1-%s\\nAITERM-1-1-ELECTRON-ENV-%s\\n' 'PORT-ROUNDTRIP' 'UNSET'; else printf 'AITERM-1-1-ELECTRON-ENV-%s\\n' 'LEAK'; fi\r`
       )
     })
     const observed = await markerResult
@@ -537,8 +582,8 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       METHOD_REGISTRY.templateCreate,
       {
         name: 'Template-picked shell',
-        executable: '/bin/bash',
-        argv: ['--noprofile', '--norc'],
+        executable: typedShell.executable,
+        argv: [...typedShell.argv],
         cwd: isolatedCwd,
         backgroundChoice: 'stop'
       }
@@ -547,8 +592,8 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       workspaceId: DEFAULT_WORKSPACE_ID,
       name: 'Same CLI chat B',
       cwd: isolatedCwd,
-      executable: '/bin/bash',
-      argv: ['--noprofile', '--norc'],
+      executable: typedShell.executable,
+      argv: [...typedShell.argv],
       cols: 80,
       rows: 24
     })
@@ -563,8 +608,8 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       workspaceId: secondWorkspace.workspaceId,
       name: 'Archived running chat',
       cwd: isolatedCwd,
-      executable: '/bin/bash',
-      argv: ['--noprofile', '--norc'],
+      executable: typedShell.executable,
+      argv: [...typedShell.argv],
       cols: 80,
       rows: 24,
       backgroundChoice: 'hide'
@@ -778,12 +823,14 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       name: 'another-sessions-file.txt',
       bytes: new TextEncoder().encode('not this session\n')
     })
+    const publish = `bmn publish ${typedShell.windows ? powerShellQuote(evidenceLog) : evidenceLog} --key self-test-evidence --json`
     writeFixtureCommand(
       session,
       `bmn progress running "Self-test evidence baseline" --source evidence --observed 2026-09-18T19:00:00.000Z; ` +
-      `bmn publish ${evidenceLog} --key self-test-evidence --json > ${evidenceReceipt}; ` +
-      // The same key must return the same artifact, which is what makes a later reference safe.
-      `bmn publish ${evidenceLog} --key self-test-evidence --json > ${evidenceRetryReceipt}`
+      (typedShell.windows
+        ? `${savedOutput(publish, evidenceReceipt)}; ${savedOutput(publish, evidenceRetryReceipt)}`
+        // The same key must return the same artifact, which is what makes a later reference safe.
+        : `${publish} > ${evidenceReceipt}; ${publish} > ${evidenceRetryReceipt}`)
     )
     const publishedEvidence = await (async (): Promise<{ first: string; retry: string }> => {
       const deadline = Date.now() + 10_000
@@ -801,8 +848,21 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       }
       throw new Error('the session did not publish its own evidence file')
     })()
+    const refusals: Array<[string, string]> = [
+      [`--evidence-id ${otherSessionEvidence.artifactId}`, 'refused-other-session'],
+      [`--evidence-id ${attachedToSession.artifactId}`, 'refused-input'],
+      ['--evidence-id no-such-artifact', 'refused-unknown'],
+      [`--evidence-id ${publishedEvidence.first} --evidence-id ${publishedEvidence.first}`, 'refused-duplicate']
+    ]
     writeFixtureCommand(
       session,
+      typedShell.windows ? [
+        whenExit(`bmn progress verified "Self-test checks passed" --source evidence --detail "3 checks, 0 failures" ` +
+          `--evidence-id ${publishedEvidence.first}`, true, writtenLine('accepted', evidenceOutcome, false)),
+        ...refusals.map(([references, line]) => whenExit(`bmn progress failed "Should not be stored" --source evidence ${references}`,
+          false, writtenLine(line, evidenceOutcome, true))),
+        writtenLine('done', evidenceOutcome, true)
+      ].join('; ') :
       // No --observed: the accepted report must be fresh, so the strip reads "Reported verified"
       // rather than the stale "Last reported verified". The baseline above is the old one.
       `bmn progress verified "Self-test checks passed" --source evidence ` +
@@ -917,9 +977,10 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     for (let index = 0; index < 120; index += 1) {
       writeFileSync(join(searchRoot, `search-cap-${String(index).padStart(3, '0')}.ts`), 'fixture\n')
     }
-    writeFileSync(join(searchRoot, 'report:42'), 'exact colon-named file\n')
-    writeFileSync(join(searchRoot, 'report'), Array.from({ length: 60 }, () => 'wrong sibling').join('\n'))
-    writeFileSync(join(searchRoot, 'a:b.ts'), 'representable colon-named file\n')
+    const fixtureNames = fileReferenceFixtureNames(process.platform)
+    writeFileSync(join(searchRoot, fixtureNames.unrepresentable), 'exact unrepresentable file\n')
+    writeFileSync(join(searchRoot, fixtureNames.sibling), Array.from({ length: 60 }, () => 'wrong sibling').join('\n'))
+    writeFileSync(join(searchRoot, fixtureNames.representable), 'representable quoted file\n')
     mkdirSync(join(searchRoot, 'node_modules'), { recursive: true })
     mkdirSync(join(searchRoot, '.git'), { recursive: true })
     writeFileSync(join(searchRoot, 'node_modules', 'bmn-excluded.ts'), 'fixture\n')
@@ -930,7 +991,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     writeFixtureInput(session, 'EXISTING-HANDOFF-PREFIX ')
     // Dictation needs an engine and an installed model to start; both are stand-ins, and transcription is synthetic.
     mkdirSync(join(taps.voiceFolder(), 'models'), { recursive: true })
-    writeFileSync(join(taps.voiceFolder(), 'whisper-cli'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    writeFileSync(join(taps.voiceFolder(), WHISPER_ENGINE_FILE), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
     writeFileSync(join(taps.voiceFolder(), SPEECH_DETECTOR_FILE), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
     writeFileSync(join(taps.voiceFolder(), SPEECH_MODEL_FILE), '')
     writeFileSync(join(taps.voiceFolder(), 'models', VOICE_MODELS[0]!.file), '')
@@ -965,8 +1026,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       throw new Error(`Sixel CSP did not preserve the eval boundary: ${JSON.stringify(cspProbe)}`)
     }
     const sixelPtyPath = join(isolatedCwd, 'sixel-pty-frame.bin')
-    writeFileSync(sixelPtyPath,
-      `\u001bP9;1;0q"1;1;60;75#1;2;100;0;0#1${Array(13).fill('!60~').join('-')}\u001b\\`)
+    writeFileSync(sixelPtyPath, PTY_SIXEL_FIXTURE)
     const sixelPtyBefore = await host.applicationWindow.webContents.executeJavaScript(`
       new Promise((resolve, reject) => {
         const deadline = Date.now() + 5000;
@@ -983,7 +1043,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     if (!sixelPtyRuntime) throw new Error('PTY Sixel fixture runtime was unavailable')
     await client.request(METHOD_REGISTRY.terminalWrite, {
       attachmentId: sixelPtyRuntime.attachment.attachmentId,
-      bytes: new TextEncoder().encode(`cat '${sixelPtyPath.replaceAll("'", "'\\''")}'\r`)
+      bytes: new TextEncoder().encode(typedShell.windows ? `${displayedFile(sixelPtyPath)}\r` : `cat '${sixelPtyPath.replaceAll("'", "'\\''")}'\r`)
     })
     const sixelPty = await host.applicationWindow.webContents.executeJavaScript(`
       new Promise((resolve, reject) => {
@@ -1044,35 +1104,12 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     // frame blanks the pet's rows, draws the next image there and restores the cursor.
     const animationDirectory = join(isolatedCwd, 'sixel-animation')
     mkdirSync(animationDirectory, { recursive: true })
-    const codexFrame = (seed: number): string => {
-      let body = ''
-      for (let color = 0; color < 8; color += 1) {
-        body += `#${color};2;${(color * 37 + seed * 11) % 100};${(color * 53) % 100};${(color * 71 + seed * 5) % 100}`
-      }
-      for (let row = 0; row < 13; row += 1) {
-        for (let color = 0; color < 8; color += 1) {
-          body += `#${color}`
-          for (let x = 0; x < 96; x += 1) body += String.fromCharCode(63 + ((x * 7 + row * 13 + color * 5 + seed) % 64))
-          if (color < 7) body += '$'
-        }
-        if (row < 12) body += '-'
-      }
-      return `\u001bP9;1;0q"1;1;96;75${body}\u001b\\`
-    }
-    writeFileSync(join(animationDirectory, 'frame0.six'), codexFrame(0))
-    writeFileSync(join(animationDirectory, 'frame1.six'), codexFrame(1))
-    const animationScript = join(animationDirectory, 'animate.sh')
-    writeFileSync(animationScript, [
-      '#!/bin/sh',
-      'frames=$1; delay=$2; label=$3; dir=$(dirname "$0"); i=0',
-      'while [ "$i" -lt "$frames" ]; do',
-      "  printf '\\0337'",
-      "  r=2; while [ \"$r\" -le 7 ]; do printf '\\033[%d;40H%24s' \"$r\" ''; r=$((r + 1)); done",
-      "  printf '\\033[2;40H'; cat \"$dir/frame$((i % 2)).six\"; printf '\\0338'",
-      '  i=$((i + 1)); sleep "$delay"',
-      'done',
-      "printf '%s-DONE\\r\\n' \"$label\""
-    ].join('\n') + '\n', { mode: 0o700 })
+    writeFileSync(join(animationDirectory, 'frame0.six'), codexSixelFrame(0))
+    writeFileSync(join(animationDirectory, 'frame1.six'), codexSixelFrame(1))
+    const posixAnimationScript = join(animationDirectory, 'animate.sh')
+    const animationScript = typedShell.windows
+      ? writeNodeProgram(animationDirectory, 'animate', NODE_ANIMATION_SOURCE) : posixAnimationScript
+    if (!typedShell.windows) writeFileSync(posixAnimationScript, POSIX_ANIMATION_SCRIPT, { mode: 0o700 })
     const animatedRuntime = host.runtimes.get(secondSession.sessionId)
     if (!animatedRuntime) throw new Error('the animation pane runtime was unavailable')
     const animatedAttachment = animatedRuntime.attachment.attachmentId
@@ -1088,7 +1125,10 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         if (window.__aitermTest?.snapshot(${animatedId}).bufferLines.some((line) => line.includes(${JSON.stringify(marker)}))) return;
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
-      throw new Error(${JSON.stringify(`the animation pane never printed ${marker}`)});
+      // The pane's last lines show whether the command arrived, ran or is still waiting.
+      const lines = (window.__aitermTest?.snapshot(${animatedId}).bufferLines ?? []).filter((line) => line.trim())
+        .slice(-12).map((line) => line.trimEnd().slice(0, 160));
+      throw new Error(${JSON.stringify(`the animation pane never printed ${marker}: `)} + JSON.stringify(lines));
     })()`) as Promise<void>
     const quietBefore = await host.applicationWindow.webContents.executeJavaScript(`(() => {
       const hook = window.__aitermTest;
@@ -1096,13 +1136,163 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       const snapshot = hook.snapshot(${quietId});
       return { lines: snapshot.bufferLines, storageMB: snapshot.imageStorageMB, layer: snapshot.imageLayerPresent, selection };
     })()`) as { lines: string[]; storageMB: number; layer: boolean; selection: string }
-    await typeIntoAnimatedPane(`clear; '${animationScript}' 64 0.12 CODEX-RATE; '${animationScript}' 120 0.016 MAX-RATE\r`)
+    await typeIntoAnimatedPane(typedShell.windows
+      ? `Clear-Host; ${ran(animationScript, '64', '0.12', 'CODEX-RATE')}; ${ran(animationScript, '120', '0.016', 'MAX-RATE')}\r`
+      : `clear; '${animationScript}' 64 0.12 CODEX-RATE; '${animationScript}' 120 0.016 MAX-RATE\r`)
     await waitForAnimatedLine('CODEX-RATE-DONE', 30_000)
     await waitForAnimatedLine('MAX-RATE-DONE', 30_000)
     // Scroll the pane well past its rows: only the last frame drawn may remain in the buffer.
-    await typeIntoAnimatedPane(`i=0; while [ $i -lt 80 ]; do echo scroll-$i; i=$((i + 1)); done; printf '%s%s\\n' SCROLL ED\r`)
-    await waitForAnimatedLine('SCROLLED', 10_000)
-    const animation = await host.applicationWindow.webContents.executeJavaScript(`(() => {
+    // If SCROLLED never shows, the failure also says how soon after MAX-RATE-DONE was seen the line was sent
+    // and accepted. The shell also writes a file just before and just after printing SCROLLED, so a failure says
+    // whether the shell finished the line (its output then waited downstream) or stopped inside it.
+    const beforeScrolled = join(animationDirectory, 'before-scrolled')
+    const afterScrolled = join(animationDirectory, 'after-scrolled')
+    const shellWrote = () => ({ beforeScrolled: existsSync(beforeScrolled), afterScrolled: existsSync(afterScrolled) })
+    const diagnosticShellTicks = () => {
+      try { return existsSync(afterScrolled) ? readFileSync(afterScrolled, 'utf8') : null }
+      catch { return 'unavailable: shell marker read failed' }
+    }
+    if (diagnosticArm) diagnosticSnapshot = await armDiagnosticCustody(diagnosticArm)
+    const lastMarkerSeen = Date.now()
+    const scrollLine = typeIntoAnimatedPane(typedShell.windows
+      ? `0..79 | ForEach-Object { "scroll-$_" }; [IO.File]::WriteAllText(${powerShellQuote(beforeScrolled)}, 'x'); ` +
+        `${diagnosticArm ? '$loadedBefore=@(Get-Module Microsoft.PowerShell.Utility).Count; $b=[DateTime]::UtcNow.Ticks; ' : ''}` +
+        (diagnosticArm === 'split' ? `$c = ${printed('SCROLL', 'ED')}; $m=[DateTime]::UtcNow.Ticks; $c; ` :
+          diagnosticArm === 'static' ? "[Console]::Out.WriteLine(('SCROLL' + 'ED')); $m=[DateTime]::UtcNow.Ticks; " :
+            `${printed('SCROLL', 'ED')}; ${diagnosticArm ? '$m=[DateTime]::UtcNow.Ticks; ' : ''}`) +
+        `${diagnosticArm ? '$e=[DateTime]::UtcNow.Ticks; $loadedAfter=@(Get-Module Microsoft.PowerShell.Utility).Count; ' : ''}` +
+        `[IO.File]::WriteAllText(${powerShellQuote(afterScrolled)}, ${diagnosticArm ? "[string]::Format('{0} {1} {2} {3} {4}', $b, $m, $e, $loadedBefore, $loadedAfter)" : "'x'"})\r`
+      : `i=0; while [ $i -lt 80 ]; do echo scroll-$i; i=$((i + 1)); done; : > '${beforeScrolled}'; ` +
+        `printf '%s%s\\n' SCROLL ED; : > '${afterScrolled}'\r`)
+    const scrollSent = Date.now() - lastMarkerSeen
+    await scrollLine
+    const scrollAccepted = Date.now() - lastMarkerSeen
+    await waitForAnimatedLine('SCROLLED', 10_000).then(() => { initialScrolledWithinBudget = true }).catch(async (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error)
+      if (diagnosticArm) {
+        initialScrolledWithinBudget = false
+        const failureAtMs = Date.now()
+        const deadline = failureAtMs + 40_000
+        const samples: Array<Record<string, unknown>> = []
+        const observationErrors: Array<{ label: string; kind: string }> = []
+        passiveObservation = { failure: message, scrollTypedAtMs: lastMarkerSeen, failureAtMs,
+          controllerPokes: [], samples, observationErrors }
+        const state = async () => {
+          const answer = await observeDiagnosticFailure(message, 'host state', () =>
+            client.request<{ selfTestOutputState: Record<string, unknown> | null }>(METHOD_REGISTRY.healthGet,
+              { selfTestOutputState: { sessionId: secondSession.sessionId } }).then(answer => answer?.selfTestOutputState),
+            2_000, state => typeof state.outputBytes === 'number')
+          if (answer.observationError) observationErrors.push(answer.observationError)
+          return answer.observation
+        }
+        const atFailure = await state()
+        while (Date.now() < deadline) {
+          const snapshot = await state()
+          samples.push({ atMs: Date.now(), outputBytes: snapshot.outputBytes, lastOutputAgoMs: snapshot.lastOutputAgoMs,
+            conin: (snapshot.ptyReader as { conin?: unknown } | undefined)?.conin ?? null, markers: shellWrote() })
+          await new Promise(resolve => setTimeout(resolve, Math.min(500, Math.max(0, deadline - Date.now()))))
+        }
+        const atEnd = await state()
+        const view = await observeDiagnosticFailure(message, 'renderer after passive wait', () =>
+          host.applicationWindow!.webContents.executeJavaScript(`(() => {
+            const snapshot = window.__aitermTest.snapshot(${animatedId});
+            return { rendererInputEvents: snapshot.inputEvents, cols: snapshot.cols, rows: snapshot.rows,
+              lines: snapshot.bufferLines.filter(line => line.trim()).slice(-8) };
+          })()`), 2_000, view => typeof view.rendererInputEvents === 'number' && Array.isArray(view.lines))
+        if (view.observationError) observationErrors.push(view.observationError)
+        Object.assign(passiveObservation, { passiveEndedAtMs: Date.now(), atFailure, atEnd,
+          viewAtEnd: view.observation, markers: shellWrote(),
+          shellTicks: diagnosticShellTicks() })
+        return
+      }
+      // Observation only, once the failure is certain. Stages in order: what the host and the view hold now; a late
+      // wait; a focus report; one extra reader credit; a one-column resize; a typed probe line. An earlier stage may already restore
+      // output, so each record says only what was seen after its own stage. Everything shares one deadline (32 s),
+      // each stage is printed as it completes, and a failure inside the observation is recorded beside the original
+      // failure, never instead of it.
+      const observed: Record<string, unknown> = { scrollTypedAtMs: lastMarkerSeen, failureAtMs: Date.now(), stageAtMs: {} }
+      const deadline = Date.now() + 32_000
+      const remaining = () => deadline - Date.now()
+      const bounded = <T>(work: Promise<T>, milliseconds: number, late: T): Promise<T> =>
+        Promise.race([work, new Promise<T>((resolve) => setTimeout(resolve, Math.max(0, Math.min(milliseconds, remaining())), late))])
+      const record = (stage: string, value: unknown): void => {
+        (observed.stageAtMs as Record<string, number>)[stage] = Date.now()
+        observed[stage] = value
+        console.error(`[BMN] self-test observation: ${stage} ${JSON.stringify(value).slice(0, 600)}`)
+      }
+      try {
+        const hostOutput = async (since?: number) => bounded(client.request<{ selfTestOutputState: unknown }>(METHOD_REGISTRY.healthGet, {
+          selfTestOutputState: { sessionId: secondSession.sessionId, ...(since === undefined ? {} : { tailBytes: 8192, sinceBytes: since }) }
+        }).then((answer) => answer.selfTestOutputState, () => 'unavailable'), 2_000, 'no answer within 2 s')
+        // The view's side. `rendererInputEvents` is a running count of what this view itself put on the PTY (keys,
+        // query replies and focus reports alike, not their content); the self-test's own typed lines go through
+        // terminal.write and are not in it.
+        const viewState = async () => bounded(host.applicationWindow!.webContents.executeJavaScript(`(() => {
+          const snapshot = window.__aitermTest?.snapshot(${animatedId});
+          if (!snapshot) return null;
+          return { rendererInputEvents: snapshot.inputEvents, focusReportMode: snapshot.modes.sendFocusMode, cols: snapshot.cols,
+            rows: snapshot.rows, lines: snapshot.bufferLines.filter((line) => line.trim()).slice(-6).map((line) => line.trimEnd().slice(0, 160)) };
+        })()`) as Promise<unknown>, 2_000, 'no answer within 2 s').catch(() => 'unavailable')
+        // The renderer's own timer cannot end its wait if the renderer stops running, so this side bounds it too.
+        const appeared = (marker: string, milliseconds: number) => bounded(waitForAnimatedLine(marker, milliseconds)
+          .then(() => true, () => false), milliseconds + 1_000, false)
+        const atFailure = await hostOutput()
+        record('shellWroteAtFailure', shellWrote())
+        record('atFailure', atFailure)
+        const failureBytes = atFailure !== null && typeof atFailure === 'object' &&
+          typeof (atFailure as { outputBytes?: unknown }).outputBytes === 'number' ? (atFailure as { outputBytes: number }).outputBytes : undefined
+        record('viewAtFailure', await viewState())
+        const lateStart = Date.now()
+        record('lateMs', await appeared('SCROLLED', 4_000) ? Date.now() - lateStart : null)
+        record('afterWait', await hostOutput(failureBytes))
+        const settle = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, Math.max(0, Math.min(milliseconds, remaining()))))
+        // Focus out and back in, as the view reports them once ConPTY has turned focus reporting on: input the
+        // shell does not print. Output after it points at the console host holding what it had already drawn;
+        // none is inconclusive. Each host answer also holds the ConPTY reader worker's own state (`ptyReader`).
+        record('focusReport', await bounded(typeIntoAnimatedPane('\x1b[O\x1b[I')
+          .then(() => 'accepted', (failure: unknown) => `refused: ${failure instanceof Error ? failure.message : String(failure)}`),
+        2_000, 'no answer within 2 s'))
+        // Separate focus from the extra read credit: attempt11 printed ~3 s after focus, during the old
+        // post-nudge window. A full 5 s without a nudge distinguishes those interventions.
+        await settle(5_000)
+        record('afterFocusReport', await hostOutput(failureBytes))
+        // One extra read credit for the Windows ConPTY output reader (it bypasses the reader's one-chunk
+        // backpressure): output after it is consistent with a reader that held output or stopped reading, or with
+        // coincident progress; none does not prove that nothing reached the reader.
+        record('nudge', await bounded(client.request<{ selfTestOutputNudge: unknown }>(METHOD_REGISTRY.healthGet,
+          { selfTestOutputNudge: { sessionId: secondSession.sessionId } }).then((answer) => answer.selfTestOutputNudge,
+          () => 'unavailable'), 2_000, 'no answer within 2 s'))
+        await settle(2_000)
+        const afterNudge = await hostOutput(failureBytes)
+        record('afterNudge', afterNudge)
+        // A one-column resize: output after it shows progress somewhere on the output path; none is inconclusive,
+        // since ConPTY need not redraw. The PTY and the renderer may disagree about the pane's width afterwards.
+        const size = afterNudge !== null && typeof afterNudge === 'object'
+          ? (afterNudge as { size?: { cols: number; rows: number } }).size : undefined
+        record('resize', size ? await bounded(client.request(METHOD_REGISTRY.terminalResize, {
+          attachmentId: (host.runtimes.get(secondSession.sessionId) ?? animatedRuntime).attachment.attachmentId,
+          cols: size.cols + 1, rows: size.rows
+        }).then(() => 'accepted', (failure: unknown) => `refused: ${failure instanceof Error ? failure.message : String(failure)}`),
+        2_000, 'no answer within 2 s') : 'no size')
+        await settle(3_000)
+        record('afterResize', await hostOutput(failureBytes))
+        // Last, a typed line (earlier runs printed again after one). `since` holds what was printed from the failure
+        // on, up to 8 KiB, and says whether that is all of it; a later SCROLLED shows delayed observation, not where
+        // the bytes waited.
+        record('probeWrite', await bounded(typeIntoAnimatedPane(typedShell.windows ? `${printed('PRO', 'BE')}\r` : "printf '%s%s\\n' PRO BE\r")
+          .then(() => 'accepted', (failure: unknown) => `refused: ${failure instanceof Error ? failure.message : String(failure)}`),
+        2_000, 'no answer within 2 s'))
+        record('probeAnswered', observed.probeWrite === 'accepted' ? await appeared('PROBE', 5_000) : null)
+        record('afterProbe', await hostOutput(failureBytes))
+        record('shellWroteAfterProbe', shellWrote())
+        record('viewAfterProbe', await viewState())
+      } catch (failure) {
+        observed.observationError = failure instanceof Error ? failure.message : String(failure)
+      }
+      throw new Error(`${message} (line sent +${scrollSent} ms and accepted +${scrollAccepted} ms after MAX-RATE-DONE was seen) ` +
+        JSON.stringify(observed))
+    })
+    const readAnimation = () => host.applicationWindow!.webContents.executeJavaScript(`(() => {
       const hook = window.__aitermTest;
       const own = hook.snapshot(${animatedId});
       const quiet = hook.snapshot(${quietId});
@@ -1113,9 +1303,17 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
             hook.view(${quietId}).clearSelection();
             return selection;
           })() } };
-    })()`) as { storageMB: number; imageLines: number[];
+    })()`) as Promise<{ storageMB: number; imageLines: number[];
+      quiet: { lines: string[]; storageMB: number; layer: boolean; selection: string } }>
+    const observedAnimation = diagnosticArm ? await observeDiagnosticFailure(String(passiveObservation?.failure ?? ''),
+      'animation after scroll', readAnimation, 2_000, state => typeof state.storageMB === 'number' &&
+        Array.isArray(state.imageLines) && state.quiet !== null && typeof state.quiet === 'object' &&
+        Array.isArray((state.quiet as { lines?: unknown }).lines) &&
+        typeof (state.quiet as { selection?: unknown }).selection === 'string') : undefined
+    const animation = (observedAnimation?.observation ?? await readAnimation()) as { storageMB: number; imageLines: number[];
       quiet: { lines: string[]; storageMB: number; layer: boolean; selection: string } }
-    const sixelAnimation = {
+    const sixelAnimation: Record<string, unknown> = observedAnimation?.observationError
+      ? { unavailable: 'animation snapshot unavailable', observationError: observedAnimation.observationError } : {
       noViewRebuild: host.runtimes.get(secondSession.sessionId)?.attachment.attachmentId === animatedAttachment,
       storageMB: animation.storageMB,
       imageLinesAfterScroll: animation.imageLines.length,
@@ -1124,9 +1322,25 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       quietSelectionKept: quietBefore.selection.length > 0 && animation.quiet.selection === quietBefore.selection
     }
     // One 75 px frame covers at most 7 rows at the smallest font; more means stale frames stayed.
-    if (!sixelAnimation.noViewRebuild || !(sixelAnimation.storageMB > 0) || sixelAnimation.imageLinesAfterScroll > 7 ||
-      !sixelAnimation.quietPaneUnchanged || !sixelAnimation.quietSelectionKept) {
+    const animationPassed = sixelAnimation.noViewRebuild === true && typeof sixelAnimation.storageMB === 'number' &&
+      sixelAnimation.storageMB > 0 && typeof sixelAnimation.imageLinesAfterScroll === 'number' &&
+      sixelAnimation.imageLinesAfterScroll <= 7 && sixelAnimation.quietPaneUnchanged === true && sixelAnimation.quietSelectionKept === true
+    if (!animationPassed && !diagnosticArm) {
       throw new Error(`the two-pane Sixel animation failed: ${JSON.stringify(sixelAnimation)}`)
+    }
+
+    if (diagnosticArm) {
+      const final = await observeDiagnosticFailure(String(passiveObservation?.failure ?? ''), 'final host state', () =>
+        client.request<{ selfTestOutputState: Record<string, unknown> | null }>(METHOD_REGISTRY.healthGet,
+          { selfTestOutputState: { sessionId: secondSession.sessionId } }).then(answer => answer?.selfTestOutputState),
+        2_000, state => typeof state.outputBytes === 'number')
+      const finalState = final.observation
+      receipt = { selfTest: 'scrolled-diagnostic', diagnosticOnly: true, arm: diagnosticArm, anchors: diagnosticAnchors,
+        initialScrolledWithinBudget, animationPassed, sixelPty, sixelRender, sixelAnimation, passiveObservation,
+        finalState, finalObservationError: final.observationError,
+        shellTicks: diagnosticShellTicks() }
+      await publishObservation()
+      break selfTestSequence
     }
 
     // AC3: both visible panes animate at once, at Codex's cadence; neither view is rebuilt.
@@ -1135,9 +1349,13 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     const quietAttachment = quietRuntime.attachment.attachmentId
     const animatedAttachmentBoth = host.runtimes.get(secondSession.sessionId)!.attachment.attachmentId
     await client.request(METHOD_REGISTRY.terminalWrite, { attachmentId: quietAttachment,
-      // Ctrl+U first: this prompt holds unsent handoff-fixture input, restored below.
-      bytes: new TextEncoder().encode(`\u0015clear; '${animationScript}' 64 0.12 BOTH-B\r`) })
-    await typeIntoAnimatedPane(`clear; '${animationScript}' 64 0.12 BOTH-A\r`)
+      // Ctrl+U first (PSReadLine: Ctrl+C cancels the line): this prompt holds unsent handoff-fixture input, restored below.
+      bytes: new TextEncoder().encode(typedShell.windows
+        ? `\u0003Clear-Host; ${ran(animationScript, '64', '0.12', 'BOTH-B')}\r`
+        : `\u0015clear; '${animationScript}' 64 0.12 BOTH-B\r`) })
+    await typeIntoAnimatedPane(typedShell.windows
+      ? `Clear-Host; ${ran(animationScript, '64', '0.12', 'BOTH-A')}\r`
+      : `clear; '${animationScript}' 64 0.12 BOTH-A\r`)
     await waitForAnimatedLine('BOTH-A-DONE', 30_000)
     await host.applicationWindow.webContents.executeJavaScript(`(async () => {
       const end = Date.now() + 30000;
@@ -1160,7 +1378,9 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       throw new Error(`the two-pane animation rebuilt a view or lost its images: ${JSON.stringify(sixelTwoPaneAnimation)}`)
     }
     await client.request(METHOD_REGISTRY.terminalWrite, { attachmentId: quietAttachment,
-      bytes: new TextEncoder().encode(`clear; printf '%s-%s\\n' QUIET-PANE CLEARED\r`) })
+      bytes: new TextEncoder().encode(typedShell.windows
+        ? `Clear-Host; ${printed('QUIET-PANE', '-', 'CLEARED')}\r`
+        : `clear; printf '%s-%s\\n' QUIET-PANE CLEARED\r`) })
     await host.applicationWindow.webContents.executeJavaScript(`(async () => {
       const end = Date.now() + 10000;
       while (Date.now() < end) {
@@ -1183,11 +1403,26 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
 
     // The alternate screen keeps its image out of the normal buffer.
     // A known image above the prompt, so the commands typed below it overwrite no image cell.
-    await typeIntoAnimatedPane(`clear; cat '${join(animationDirectory, 'frame0.six')}'; printf '\\n%s-%s\\n' ALT BASE\r`)
+    // Windows: a Node stand-in prints the same bytes; it builds the markers, so the typed line never shows them.
+    const alternateProgram = typedShell.windows ? writeNodeProgram(animationDirectory, 'alternate', [
+      "const { readFileSync } = require('node:fs')",
+      "const frame = readFileSync(__dirname + '/frame0.six', 'latin1')",
+      "if (process.argv[2] === 'base') process.stdout.write(frame + '\\r\\n' + ['ALT', 'BASE'].join('-') + '\\r\\n')",
+      "else {",
+      "  process.stdout.write('\\u001b[?1049h' + frame + ['ALT-SCREEN', 'TEXT'].join('-'))",
+      "  setTimeout(() => process.stdout.write('\\u001b[?1049l' + ['ALT', 'DONE'].join('-') + '\\r\\n'), 1500)",
+      '}',
+      ''
+    ].join('\n')) : ''
+    await typeIntoAnimatedPane(typedShell.windows
+      ? `Clear-Host; ${ran(alternateProgram, 'base')}\r`
+      : `clear; cat '${join(animationDirectory, 'frame0.six')}'; printf '\\n%s-%s\\n' ALT BASE\r`)
     await waitForAnimatedLine('ALT-BASE', 10_000)
     const imageLinesBeforeAlternate = await host.applicationWindow.webContents.executeJavaScript(
       `window.__aitermTest.view(${animatedId}).imageCells().lines`) as number[]
-    await typeIntoAnimatedPane(`printf '\\033[?1049h'; cat '${join(animationDirectory, 'frame0.six')}'; printf '%s-%s' ALT-SCREEN TEXT; sleep 1.5; printf '\\033[?1049l'; printf '%s-%s\\n' ALT DONE\r`)
+    await typeIntoAnimatedPane(typedShell.windows
+      ? `${ran(alternateProgram, 'screen')}\r`
+      : `printf '\\033[?1049h'; cat '${join(animationDirectory, 'frame0.six')}'; printf '%s-%s' ALT-SCREEN TEXT; sleep 1.5; printf '\\033[?1049l'; printf '%s-%s\\n' ALT DONE\r`)
     // While the alternate screen is active, its own image and text are what the view shows.
     await waitForAnimatedLine('ALT-SCREEN-TEXT', 10_000)
     const duringAlternate = await host.applicationWindow.webContents.executeJavaScript(
@@ -1208,7 +1443,9 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
 
 
     // Later steps read this pane from its first rows, as a fresh shell leaves it.
-    await typeIntoAnimatedPane(`clear; printf '%s-%s\\n' ANIMATION-PANE CLEARED\r`)
+    await typeIntoAnimatedPane(typedShell.windows
+      ? `Clear-Host; ${printed('ANIMATION-PANE', '-', 'CLEARED')}\r`
+      : `clear; printf '%s-%s\\n' ANIMATION-PANE CLEARED\r`)
     await waitForAnimatedLine('ANIMATION-PANE-CLEARED', 10_000)
 
     const layoutSelectionsBeforeRendererProbe = taps.layoutPutSelections.length
@@ -1219,8 +1456,9 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       await client.request(METHOD_REGISTRY.terminalWrite, {
         attachmentId: runtime.attachment.attachmentId,
         bytes: new TextEncoder().encode(
-          'bmn ask self-update "Self-test turn revised" --kind notice; ' +
-          "printf 'FILEREF %s/%s\\n' refs src/parser.ts:42:7; cd refs\r"
+          'bmn ask self-update "Self-test turn revised" --kind notice; ' + (typedShell.windows
+            ? `${printed('FILEREF ', 'refs/src/parser.ts:42:7')}; cd refs\r`
+            : "printf 'FILEREF %s/%s\\n' refs src/parser.ts:42:7; cd refs\r")
         )
       })
       console.error('[BMN] self-test phase: live attention revision accepted by host')
@@ -1389,7 +1627,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       fileReferenceFlow.epic27.openedFile !== referencedFile ||
       !fileReferenceFlow.epic27.foreignSearchSession.includes('Archived running chat') ||
       fileReferenceFlow.epic27.foreignSearchFile !== referencedFile ||
-      fileReferenceFlow.epic27.colonFile !== join(searchRoot, 'a:b.ts') ||
+      fileReferenceFlow.epic27.colonFile !== join(searchRoot, fixtureNames.representable) ||
       !fileReferenceFlow.epic27.numericSuffixRejected ||
       fileReferenceFlow.ptyInputEvents !== 0 ||
       !fileReferenceFlow.terminalUnchanged ||
@@ -1678,9 +1916,11 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     const lifecycleStoppedBeforeRestart = defaultSessionsAfterLifecycleStop.find(
       (record) => record.sessionId === preloadProbe.templateCreatedSession.sessionId
     )?.lastProcess
+    // Linux records the signal that ended the session; Windows ends its job, and ConPTY reports only an exit code.
+    const applicationQuitDetail = typedShell.windows ? /^application quit · exit code \d+$/u : /^application quit · signal /u
     if (
       lifecycleStoppedBeforeRestart?.state !== 'interrupted' ||
-      !lifecycleStoppedBeforeRestart.detail?.startsWith('application quit · signal ')
+      !applicationQuitDetail.test(lifecycleStoppedBeforeRestart.detail ?? '')
     ) {
       throw new Error(
         `application-quit stop was not recorded as interrupted: ${JSON.stringify(lifecycleStoppedBeforeRestart)}`
@@ -1731,8 +1971,9 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     await withinPhase('type into existing attachment', host.applicationWindow.webContents.executeJavaScript(`
       window.aiTerminal.sendTerminalInput(
         ${JSON.stringify(inactiveAttachmentId)},
-        new TextEncoder().encode(${JSON.stringify(
-          "for line in $(seq 1 80); do echo \"inactive-following-output-$line\"; done; printf 'AITERM-2-1-%s\\n' INACTIVE-FOLLOWING-DONE\r"
+        new TextEncoder().encode(${JSON.stringify(typedShell.windows
+          ? `1..80 | ForEach-Object { "inactive-following-output-$_" }; ${printed('AITERM-2-1-', 'INACTIVE-FOLLOWING-DONE')}\r`
+          : "for line in $(seq 1 80); do echo \"inactive-following-output-$line\"; done; printf 'AITERM-2-1-%s\\n' INACTIVE-FOLLOWING-DONE\r"
         )})
       );
       true;
@@ -2160,8 +2401,8 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       "writeFileSync(file('finished'), '')"
     ])
     const cursorShell = await host.createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
-      name: 'Cursor in a shell', cwd: isolatedCwd, executable: '/bin/bash',
-      argv: ['-c', cursorShellHarness], cols: 80, rows: 24 }, true)
+      name: 'Cursor in a shell', cwd: isolatedCwd, executable: typedShell.executable,
+      argv: shellRunning(cursorShellHarness), cols: 80, rows: 24 }, true)
     await untilFileExists(join(cursorShellDirectory, 'finished'), 'finished shell Cursor events')
     await host.recoverApplicationRenderer(host.applicationWindow)
     const cursorChip = await modelOriginProbe(host.applicationWindow, cursorShell.session.sessionId, 'Cursor in a shell', 'default')
@@ -2387,8 +2628,15 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     const resetDirectory = join(isolatedCwd, 'reset-modes')
     mkdirSync(resetDirectory, { recursive: true })
     const resetInputLog = join(resetDirectory, 'input.log')
-    const resetExecutable = join(resetDirectory, 'shell.sh')
-    writeFileSync(resetExecutable, [
+    // Windows: the same raw-mode program as a Node stand-in; stty and cat are POSIX.
+    const resetExecutable = typedShell.windows ? writeNodeProgram(resetDirectory, 'shell', [
+      "const { createWriteStream } = require('node:fs')",
+      'if (process.stdin.isTTY) process.stdin.setRawMode(true)',
+      "process.stdout.write('\\u001b[?1000h\\u001b[?1006h\\u001b[?2004h\\u001b[?1004hMODES-ARMED\\r\\n')",
+      `process.stdin.pipe(createWriteStream(${JSON.stringify(resetInputLog)}))`,
+      ''
+    ].join('\n')) : join(resetDirectory, 'shell.sh')
+    if (!typedShell.windows) writeFileSync(resetExecutable, [
       '#!/bin/sh',
       'stty raw -echo',
       "printf '\\033[?1000h\\033[?1006h\\033[?2004h\\033[?1004hMODES-ARMED\\r\\n'",
@@ -2773,7 +3021,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     console.error('[BMN] self-test phase: model origin flags')
     const originDirectory = join(isolatedCwd, 'model-origin')
     const { session: originSession } = await host.createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
-      name: 'Model origin', cwd: isolatedCwd, executable: '/bin/bash', argv: ['-c', writeOriginHarness(originDirectory)],
+      name: 'Model origin', cwd: isolatedCwd, executable: typedShell.executable, argv: shellRunning(writeOriginHarness(originDirectory)),
       cols: 80, rows: 24 }, true)
     await host.recoverApplicationRenderer(host.applicationWindow)
     const originScenarios = [
@@ -2807,8 +3055,8 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       ? join(process.resourcesPath, 'self-test', 'remote-answers')
       : join(repoRoot, 'apps', 'desktop', 'src', 'utility', 'test-fixtures', 'remote-answers')
     const { session: answerSession } = await host.createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
-      name: 'Remote answers', cwd: isolatedCwd, executable: '/bin/bash',
-      argv: ['-c', writeRemoteAnswerHarness(answerDirectory, answerFixtures)], cols: 200, rows: 50 }, true)
+      name: 'Remote answers', cwd: isolatedCwd, executable: typedShell.executable,
+      argv: shellRunning(writeRemoteAnswerHarness(answerDirectory, answerFixtures)), cols: 200, rows: 50 }, true)
     await host.recoverApplicationRenderer(host.applicationWindow)
     const answerRun = async (scenario: string, requestKey: string, answer: unknown) => {
       writeFileSync(join(answerDirectory, `fire-${scenario}`), '')
@@ -3477,8 +3725,8 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       workspaceId: DEFAULT_WORKSPACE_ID,
       name: 'Live exit shell',
       cwd: isolatedCwd,
-      executable: '/bin/bash',
-      argv: ['--noprofile', '--norc'],
+      executable: typedShell.executable,
+      argv: [...typedShell.argv],
       cols: 80,
       rows: 24
     }, true)
@@ -3549,7 +3797,22 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       '-c',
       `while [ ! -f ${JSON.stringify(activityGate)} ]; do sleep 0.05; done; ${body}`
     ]
-    const activityFixtures = [
+    // PowerShell forms of the same output and pacing; titles go out as UTF-8 OSC 0 sequences.
+    const powerShellGated = (body: string): string[] => ['-NoLogo', '-NoProfile', '-Command',
+      `[Console]::OutputEncoding = [Text.Encoding]::UTF8; while (-not (Test-Path -LiteralPath ${powerShellQuote(activityGate)})) ` +
+      `{ Start-Sleep -Milliseconds 50 }; ${body}`]
+    const title = (text: string): string => `[Console]::Write([char]27 + ']0;' + ${powerShellQuote(text)} + [char]7 + [char]10)`
+    const dots = (count: number, milliseconds: number): string =>
+      `1..${count} | ForEach-Object { Write-Output '.'; Start-Sleep -Milliseconds ${milliseconds} }`
+    const activityFixtures = typedShell.windows ? [
+      ['burst', 'Activity burst', powerShellGated(
+        "1..8 | ForEach-Object { Write-Output 'x'; Start-Sleep -Milliseconds 200 }; Write-Output 'DONE'; Start-Sleep 300")],
+      ['silent', 'Activity silent', ['-NoLogo', '-NoProfile', '-Command', 'Start-Sleep 300']],
+      ['late', 'Activity late first byte', powerShellGated("Start-Sleep 1; Write-Output 'FIRST'; Start-Sleep 300")],
+      ['titled', 'Activity titles', powerShellGated(
+        `${title('\u2733 x')}; Start-Sleep 4; ${title('Action Required x')}; Start-Sleep 4; ${title('\u2733 y')}; ${dots(200, 50)}`)],
+      ['flood', 'Activity flood', powerShellGated(`${dots(1200, 10)}; Start-Sleep 300`)]
+    ] as const : [
       // Prints every 200 ms, then stops: Working while it prints, Idle 1.5-2.0 s after the last byte.
       ['burst', 'Activity burst', gated("for index in $(seq 1 8); do printf 'x\\n'; sleep 0.2; done; printf 'DONE\\n'; sleep 300")],
       // Never prints: Running for the start grace, then Idle, and never Working.
@@ -3570,7 +3833,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         workspaceId: DEFAULT_WORKSPACE_ID,
         name,
         cwd: isolatedCwd,
-        executable: '/bin/bash',
+        executable: typedShell.executable,
         argv: [...argv],
         cols: 80,
         rows: 24
@@ -4585,7 +4848,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     const evidenceOriginal = (await client.request<ArtifactRecord[]>(METHOD_REGISTRY.artifactList, {}))
       .find((row) => row.artifactId === evidenceArtifactId)
     const syntheticDataRoot = resolveApplicationRoots().data
-    if (!evidenceOriginal?.storedPath.startsWith(`${syntheticDataRoot}/`)) {
+    if (!evidenceOriginal?.storedPath.startsWith(`${syntheticDataRoot}${sep}`)) {
       throw new Error('the results evidence original is outside the isolated data root')
     }
     unlinkSync(evidenceOriginal.storedPath)
@@ -4661,7 +4924,8 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     // the 5 rows Codex reserves. Overflow is measured and reported, not hidden.
     // Its own shell: the panes used earlier may be stopped by now.
     const placementShell = await host.createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
-      name: 'Sixel placement', cwd: isolatedCwd, executable: '/bin/sh', argv: [], cols: 80, rows: 24 }, true)
+      name: 'Sixel placement', cwd: isolatedCwd, executable: typedShell.windows ? typedShell.executable : '/bin/sh',
+      argv: typedShell.windows ? [...typedShell.argv] : [], cols: 80, rows: 24 }, true)
     await host.recoverApplicationRenderer(host.applicationWindow)
     const placementId = JSON.stringify(placementShell.session.sessionId)
     const typeIntoPlacementPane = (text: string) => client.request(METHOD_REGISTRY.terminalWrite, {
@@ -4690,7 +4954,9 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         }
       })()`)
       await new Promise((resolve) => setTimeout(resolve, 300))
-      await typeIntoPlacementPane(`clear; cat '${sixelPtyPath}'; echo; printf 'PLACED-%s\\n' ${fontSize}-${zoom * 100}\r`)
+      await typeIntoPlacementPane(typedShell.windows
+        ? `Clear-Host; ${displayedFile(sixelPtyPath)}; Write-Output ''; ${printed('PLACED-', `${fontSize}-${zoom * 100}`)}\r`
+        : `clear; cat '${sixelPtyPath}'; echo; printf 'PLACED-%s\\n' ${fontSize}-${zoom * 100}\r`)
       await waitForPlacementLine(`PLACED-${fontSize}-${zoom * 100}`)
       const cells = await host.applicationWindow!.webContents.executeJavaScript(`(async () => {
         const end = Date.now() + 3000;
@@ -4722,7 +4988,9 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     const [windowWidth, windowHeight] = host.applicationWindow.getSize() as [number, number]
     host.applicationWindow.setSize(Math.max(800, windowWidth - 240), Math.max(600, windowHeight - 160))
     await new Promise((resolve) => setTimeout(resolve, 400))
-    await typeIntoPlacementPane(`cat '${join(animationDirectory, 'frame1.six')}'; echo; printf '%sD\\n' RESIZE\r`)
+    await typeIntoPlacementPane(typedShell.windows
+      ? `${displayedFile(join(animationDirectory, 'frame1.six'))}; Write-Output ''; ${printed('RESIZE', 'D')}\r`
+      : `cat '${join(animationDirectory, 'frame1.six')}'; echo; printf '%sD\\n' RESIZE\r`)
     await waitForPlacementLine('RESIZED')
     host.applicationWindow.setSize(windowWidth, windowHeight)
     await new Promise((resolve) => setTimeout(resolve, 1000))
@@ -4745,22 +5013,39 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     mkdirSync(join(coldDirectory, 'bin'), { recursive: true })
     const largeImage = `\u001bP9;1;0q"1;1;256;256#1;2;0;0;100#1${Array(43).fill('!256~').join('-')}\u001b\\`
     writeFileSync(join(coldDirectory, 'large.six'), largeImage)
-    writeFileSync(join(coldDirectory, 'frame.six'), codexFrame(2))
-    const capProgram = join(coldDirectory, 'fill-images')
-    writeFileSync(capProgram, [
-      '#!/bin/sh',
-      'i=0; while [ "$i" -lt 40 ]; do cat "$(dirname "$0")/large.six"; i=$((i + 1)); done',
-      "printf 'CAP-AFTER\\r\\n'",
-      'sleep 60'
-    ].join('\n') + '\n', { mode: 0o700 })
-    const coldCodex = join(coldDirectory, 'bin', 'codex')
-    writeFileSync(coldCodex, [
-      '#!/bin/sh',
-      `date +%s%3N > '${join(coldDirectory, 'started').replaceAll("'", "'\\''")}'`,
-      `cat '${join(coldDirectory, 'frame.six').replaceAll("'", "'\\''")}'`,
-      "printf 'COLD-AFTER TERM=%s\\r\\n' \"$TERM\"",
-      'sleep 60'
-    ].join('\n') + '\n', { mode: 0o700 })
+    writeFileSync(join(coldDirectory, 'frame.six'), codexSixelFrame(2))
+    // Windows: the same output from Node stand-ins (cat, date and sleep are POSIX).
+    const capProgram = typedShell.windows ? writeNodeProgram(coldDirectory, 'fill-images', [
+      "const image = require('node:fs').readFileSync(__dirname + '/large.six', 'latin1')",
+      'let written = 0',
+      "const next = () => written++ < 40 ? process.stdout.write(image, next) : process.stdout.write('CAP-AFTER\\r\\n')",
+      'next()',
+      'setTimeout(() => undefined, 60000)',
+      ''
+    ].join('\n')) : join(coldDirectory, 'fill-images')
+    const coldCodex = typedShell.windows ? writeNodeProgram(join(coldDirectory, 'bin'), 'codex', [
+      "const { readFileSync, writeFileSync } = require('node:fs')",
+      `writeFileSync(${JSON.stringify(join(coldDirectory, 'started'))}, String(Date.now()) + '\\n')`,
+      `process.stdout.write(readFileSync(${JSON.stringify(join(coldDirectory, 'frame.six'))}, 'latin1'))`,
+      "process.stdout.write('COLD-AFTER TERM=' + (process.env.TERM ?? '') + '\\r\\n')",
+      'setTimeout(() => undefined, 60000)',
+      ''
+    ].join('\n')) : join(coldDirectory, 'bin', 'codex')
+    if (!typedShell.windows) {
+      writeFileSync(capProgram, [
+        '#!/bin/sh',
+        'i=0; while [ "$i" -lt 40 ]; do cat "$(dirname "$0")/large.six"; i=$((i + 1)); done',
+        "printf 'CAP-AFTER\\r\\n'",
+        'sleep 60'
+      ].join('\n') + '\n', { mode: 0o700 })
+      writeFileSync(coldCodex, [
+        '#!/bin/sh',
+        `date +%s%3N > '${join(coldDirectory, 'started').replaceAll("'", "'\\''")}'`,
+        `cat '${join(coldDirectory, 'frame.six').replaceAll("'", "'\\''")}'`,
+        "printf 'COLD-AFTER TERM=%s\\r\\n' \"$TERM\"",
+        'sleep 60'
+      ].join('\n') + '\n', { mode: 0o700 })
+    }
     const capSessions = []
     for (let index = 0; index < 9; index += 1) {
       capSessions.push((await host.createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
@@ -4826,72 +5111,185 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     // attributes reply, bracketed paste at the prompt, and a full-screen mouse TUI (less).
     const regressionDirectory = join(isolatedCwd, 'shell-regression')
     mkdirSync(regressionDirectory, { recursive: true })
-    const regressionChecks = join(regressionDirectory, 'checks.sh')
-    writeFileSync(regressionChecks, [
-      "old=$(stty -g); stty raw -echo min 0 time 10; printf '\\033[c'; reply=$(dd bs=64 count=1 2>/dev/null); stty \"$old\"",
-      "da1=$(printf '%s' \"$reply\" | od -An -c | tr -d ' \\n')",
-      'lscolors=$(eval "$(dircolors -b)"; [ -n "$LS_COLORS" ] && echo yes || echo no)',
-      "case \"$PS1\" in *'[01;32m'*) prompt=color;; *) prompt=plain;; esac",
-      "case \"$PS1\" in *']0;'*) title=yes;; *) title=no;; esac",
-      "printf 'REGRESSION term=%s colors=%s lscolors=%s\\n' \"$TERM\" \"$(tput colors)\" \"$lscolors\"",
-      "printf 'REGRESSION2 prompt=%s title=%s da1=%s\\n' \"$prompt\" \"$title\" \"$da1\""
-    ].join('\n') + '\n')
-    const regressionShells = [
-      { label: 'clean-sixel', graphics: 'sixel' as const, argv: ['--rcfile', '/etc/skel/.bashrc', '-i'] },
-      { label: 'clean-standard', graphics: 'standard' as const, argv: ['--rcfile', '/etc/skel/.bashrc', '-i'] },
-      { label: 'owner-sixel', graphics: 'sixel' as const, argv: ['-i'] }
-    ]
-    const regressionIds: Record<string, string> = {}
-    for (const shell of regressionShells) {
-      regressionIds[shell.label] = (await host.createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
-        name: `Shell regression ${shell.label}`, cwd: isolatedCwd, executable: '/bin/bash', argv: shell.argv,
-        cols: 100, rows: 30, terminalGraphics: shell.graphics }, true)).session.sessionId
-    }
-    await host.recoverApplicationRenderer(host.applicationWindow)
     const shellRegression: Record<string, Record<string, unknown>> = {}
-    for (const shell of regressionShells) {
-      const id = JSON.stringify(regressionIds[shell.label])
-      const type = (text: string) => client.request(METHOD_REGISTRY.terminalWrite, {
-        attachmentId: host.runtimes.get(regressionIds[shell.label]!)!.attachment.attachmentId,
-        bytes: new TextEncoder().encode(text)
-      })
-      const read = (marker: string) => host.applicationWindow!.webContents.executeJavaScript(`(async () => {
-        const end = Date.now() + 15000;
-        while (Date.now() < end) {
-          const snapshot = window.__aitermTest?.snapshots()[${id}];
-          const line = snapshot?.bufferLines.find((row) => row.includes(${JSON.stringify(marker)}));
-          if (line) return { line, modes: snapshot.modes };
-          await new Promise((resolve) => setTimeout(resolve, 50));
+    if (typedShell.windows) {
+      // Windows: Windows PowerShell clean (-NoProfile) and with the owner's profile, and cmd without
+      // AutoRun. Each shell runs the shared checks: TERM and COLORTERM, the device attributes reply
+      // the shell itself reads, a console-API and a 256-color run as the view stores them, the
+      // shell's own coloring (cmd's prompt, PSReadLine's input) and the title it sets; then a
+      // full-screen program's alternate screen, mouse and bracketed paste reach the view.
+      const checksScript = join(regressionDirectory, 'checks.ps1')
+      const fullScreenScript = join(regressionDirectory, 'full-screen.ps1')
+      writeFileSync(checksScript, WINDOWS_SHELL_CHECKS)
+      writeFileSync(fullScreenScript, WINDOWS_FULL_SCREEN)
+      const regressionShells = [
+        { label: 'clean-sixel', graphics: 'sixel' as const, executable: typedShell.executable, argv: [...typedShell.argv], cmd: false },
+        { label: 'clean-standard', graphics: 'standard' as const, executable: typedShell.executable, argv: [...typedShell.argv], cmd: false },
+        { label: 'owner-sixel', graphics: 'sixel' as const, executable: typedShell.executable, argv: ['-NoLogo'], cmd: false },
+        { label: 'cmd-sixel', graphics: 'sixel' as const, executable: join(windowsSystemFolder(), 'cmd.exe'), argv: ['/d'], cmd: true }
+      ]
+      const regressionIds: Record<string, string> = {}
+      for (const shell of regressionShells) {
+        regressionIds[shell.label] = (await host.createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
+          name: `Shell regression ${shell.label}`, cwd: isolatedCwd, executable: shell.executable, argv: shell.argv,
+          cols: 100, rows: 30, terminalGraphics: shell.graphics }, true)).session.sessionId
+      }
+      await host.recoverApplicationRenderer(host.applicationWindow)
+      type Color = { mode: string; color: number; bold: boolean } | null
+      type Modes = { alternateScreen: boolean; mouseTrackingMode: string; bracketedPasteMode: boolean }
+      for (const shell of regressionShells) {
+        const sessionId = regressionIds[shell.label]!
+        const id = JSON.stringify(sessionId)
+        const type = (text: string) => client.request(METHOD_REGISTRY.terminalWrite, {
+          attachmentId: host.runtimes.get(sessionId)!.attachment.attachmentId,
+          bytes: new TextEncoder().encode(text)
+        })
+        const page = <Value>(script: string) => host.applicationWindow!.webContents.executeJavaScript(script) as Promise<Value>
+        // A PowerShell start under a loaded runner can take tens of seconds.
+        const read = (marker: string) => page<string>(`(async () => {
+          const end = Date.now() + 60000;
+          while (Date.now() < end) {
+            const line = window.__aitermTest?.snapshots()[${id}]?.bufferLines.find((row) => row.includes(${JSON.stringify(marker)}));
+            if (line) return line;
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+          throw new Error(${JSON.stringify(`the ${shell.label} shell never printed `)} + ${JSON.stringify(marker)});
+        })()`)
+        const colorOf = (text: string) => page<Color>(`window.__aitermTest.view(${id}).textColor(${JSON.stringify(text)})`)
+        const modes = () => page<Modes>(`window.__aitermTest.snapshots()[${id}].modes`)
+        // The checks run in PowerShell itself, or from cmd as a program it starts.
+        const runScript = (file: string) => shell.cmd
+          ? `"${typedShell.executable}" -NoLogo -NoProfile -Command "iex ([IO.File]::ReadAllText(${powerShellQuote(file)}))"\r`
+          : `iex ([IO.File]::ReadAllText(${powerShellQuote(file)}))\r`
+        await type(runScript(checksScript))
+        const terms = await read('REGRESSION term=')
+        const replies = await read('REGRESSION2 da1=')
+        await read('REGRESSION-256')
+        const color256 = await colorOf('REGRESSION-256')
+        const hostColor = await colorOf('REGRESSION-HOSTCOLOR')
+        await type(shell.cmd ? 'title REGRESSION-TITLE\r' : "$Host.UI.RawUI.WindowTitle = 'REGRESSION-' + 'TITLE'\r")
+        const title = await page<string | null>(`(async () => {
+          const end = Date.now() + 15000;
+          while (Date.now() < end) {
+            if (window.__bmnActivity?.titles()[${id}]?.includes('REGRESSION-TITLE')) break;
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+          return window.__bmnActivity?.titles()[${id}] ?? null;
+        })()`)
+        let shellColor: Color
+        if (shell.cmd) {
+          await type('prompt $E[01;32mREGRESSION-PROMPT$G$E[0m\r')
+          await read('REGRESSION-PROMPT>')
+          shellColor = await colorOf('REGRESSION-PROMPT>')
+        } else {
+          await type("Write-Output ('PROMPT-' + 'READY')\r")
+          await read('PROMPT-READY')
+          shellColor = await colorOf('Write-Output')
         }
-        throw new Error(${JSON.stringify(`the ${shell.label} shell never printed `)} + ${JSON.stringify(marker)});
-      })()`) as Promise<{ line: string; modes: { bracketedPasteMode: boolean; mouseTrackingMode: string } }>
-      await type(`. '${regressionChecks}'\r`)
-      const result = await read('REGRESSION term=')
-      const result2 = await read('REGRESSION2 prompt=')
-      // Readline turns bracketed paste on at the prompt; the view's modes show what the program asked for.
-      await type(`printf '%s-%s\\n' PROMPT READY\r`)
-      const prompt = await read('PROMPT-READY')
-      await new Promise((resolve) => setTimeout(resolve, 300))
-      const atPrompt = await host.applicationWindow.webContents.executeJavaScript(
-        `window.__aitermTest.snapshots()[${id}].modes`) as { bracketedPasteMode: boolean }
-      await type(`less --mouse '${regressionChecks}'\r`)
-      await new Promise((resolve) => setTimeout(resolve, 800))
-      const inLess = await host.applicationWindow.webContents.executeJavaScript(
-        `window.__aitermTest.snapshots()[${id}].modes`) as { mouseTrackingMode: string }
-      await type('q')
-      await type(`printf '%s-%s\\n' LESS DONE\r`)
-      await read('LESS-DONE')
-      const fields = Object.fromEntries(`${result.line.replace(/^.*REGRESSION /, '')} ${result2.line.replace(/^.*REGRESSION2 /, '')}`
-        .trim().split(' ').map((pair) => pair.split('=') as [string, string]))
-      shellRegression[shell.label] = { ...fields, bracketedPaste: atPrompt.bracketedPasteMode,
-        lessMouse: inLess.mouseTrackingMode, promptSeen: prompt.line.includes('PROMPT-READY') }
-    }
-    const expectedTerms: Record<string, string> = { 'clean-sixel': 'xterm-sixel-256color',
-      'clean-standard': 'xterm-256color', 'owner-sixel': 'xterm-sixel-256color' }
-    for (const [label, row] of Object.entries(shellRegression)) {
-      if (row.term !== expectedTerms[label] || row.colors !== '256' || row.lscolors !== 'yes' || row.prompt !== 'color' ||
-        row.title !== 'yes' || row.da1 !== '033[?62;4;9;22c' || row.bracketedPaste !== true || row.lessMouse === 'none') {
-        throw new Error(`an ordinary shell regressed under its terminal entry: ${JSON.stringify(shellRegression)}`)
+        await new Promise((resolve) => setTimeout(resolve, 300))
+        const atPrompt = await modes()
+        await type(runScript(fullScreenScript))
+        await read('FULL-SCREEN-READY')
+        const fullScreen = await page<Modes>(`(async () => {
+          const end = Date.now() + 3000;
+          let modes = window.__aitermTest.snapshots()[${id}].modes;
+          while (Date.now() < end && !(modes.alternateScreen && modes.mouseTrackingMode !== 'none' && modes.bracketedPasteMode)) {
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            modes = window.__aitermTest.snapshots()[${id}].modes;
+          }
+          return modes;
+        })()`)
+        await type('q')
+        await read('FULL-SCREEN-DONE')
+        const restored = await modes()
+        const fields = Object.fromEntries(`${terms.replace(/^.*REGRESSION /, '')} ${replies.replace(/^.*REGRESSION2 /, '')}`
+          .trim().split(' ').map((pair) => pair.split('=') as [string, string]))
+        shellRegression[shell.label] = { ...fields, color256, hostColor, shellColor, title,
+          bracketedPasteAtPrompt: atPrompt.bracketedPasteMode,
+          fullScreen: { alternateScreen: fullScreen.alternateScreen, mouse: fullScreen.mouseTrackingMode, bracketedPaste: fullScreen.bracketedPasteMode },
+          restored: { alternateScreen: restored.alternateScreen, mouse: restored.mouseTrackingMode, bracketedPaste: restored.bracketedPasteMode } }
+      }
+      const expectedTerms: Record<string, string> = { 'clean-sixel': 'xterm-sixel-256color',
+        'clean-standard': 'xterm-256color', 'owner-sixel': 'xterm-sixel-256color', 'cmd-sixel': 'xterm-sixel-256color' }
+      const colored = (value: unknown) => (value as Color)?.mode === 'palette' || (value as Color)?.mode === 'rgb'
+      for (const [label, row] of Object.entries(shellRegression)) {
+        const color256 = row.color256 as Color
+        const fullScreen = row.fullScreen as { alternateScreen: boolean; mouse: string; bracketedPaste: boolean }
+        // xterm's palette entry 202 is #ff5f00; a route that sends it as 24-bit color shows the same color.
+        const exact256 = color256?.mode === 'palette' ? color256.color === 202 : color256?.mode === 'rgb' && color256.color === 0xff5f00
+        if (row.term !== expectedTerms[label] || row.colorterm !== 'truecolor' || !exact256 || !colored(row.hostColor) ||
+          !colored(row.shellColor) || !String(row.title ?? '').includes('REGRESSION-TITLE') ||
+          !/^033\[\?[\d;]+c$/u.test(String(row.da1)) || !fullScreen.alternateScreen || fullScreen.mouse === 'none' || !fullScreen.bracketedPaste) {
+          throw new Error(`an ordinary shell regressed under its terminal entry: ${JSON.stringify(shellRegression)}`)
+        }
+      }
+    } else {
+      const regressionChecks = join(regressionDirectory, 'checks.sh')
+      writeFileSync(regressionChecks, [
+        "old=$(stty -g); stty raw -echo min 0 time 10; printf '\\033[c'; reply=$(dd bs=64 count=1 2>/dev/null); stty \"$old\"",
+        "da1=$(printf '%s' \"$reply\" | od -An -c | tr -d ' \\n')",
+        'lscolors=$(eval "$(dircolors -b)"; [ -n "$LS_COLORS" ] && echo yes || echo no)',
+        "case \"$PS1\" in *'[01;32m'*) prompt=color;; *) prompt=plain;; esac",
+        "case \"$PS1\" in *']0;'*) title=yes;; *) title=no;; esac",
+        "printf 'REGRESSION term=%s colors=%s lscolors=%s\\n' \"$TERM\" \"$(tput colors)\" \"$lscolors\"",
+        "printf 'REGRESSION2 prompt=%s title=%s da1=%s\\n' \"$prompt\" \"$title\" \"$da1\""
+      ].join('\n') + '\n')
+      const regressionShells = [
+        { label: 'clean-sixel', graphics: 'sixel' as const, argv: ['--rcfile', '/etc/skel/.bashrc', '-i'] },
+        { label: 'clean-standard', graphics: 'standard' as const, argv: ['--rcfile', '/etc/skel/.bashrc', '-i'] },
+        { label: 'owner-sixel', graphics: 'sixel' as const, argv: ['-i'] }
+      ]
+      const regressionIds: Record<string, string> = {}
+      for (const shell of regressionShells) {
+        regressionIds[shell.label] = (await host.createSessionRuntime({ workspaceId: DEFAULT_WORKSPACE_ID,
+          name: `Shell regression ${shell.label}`, cwd: isolatedCwd, executable: '/bin/bash', argv: shell.argv,
+          cols: 100, rows: 30, terminalGraphics: shell.graphics }, true)).session.sessionId
+      }
+      await host.recoverApplicationRenderer(host.applicationWindow)
+      for (const shell of regressionShells) {
+        const id = JSON.stringify(regressionIds[shell.label])
+        const type = (text: string) => client.request(METHOD_REGISTRY.terminalWrite, {
+          attachmentId: host.runtimes.get(regressionIds[shell.label]!)!.attachment.attachmentId,
+          bytes: new TextEncoder().encode(text)
+        })
+        const read = (marker: string) => host.applicationWindow!.webContents.executeJavaScript(`(async () => {
+          const end = Date.now() + 15000;
+          while (Date.now() < end) {
+            const snapshot = window.__aitermTest?.snapshots()[${id}];
+            const line = snapshot?.bufferLines.find((row) => row.includes(${JSON.stringify(marker)}));
+            if (line) return { line, modes: snapshot.modes };
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+          throw new Error(${JSON.stringify(`the ${shell.label} shell never printed `)} + ${JSON.stringify(marker)});
+        })()`) as Promise<{ line: string; modes: { bracketedPasteMode: boolean; mouseTrackingMode: string } }>
+        await type(`. '${regressionChecks}'\r`)
+        const result = await read('REGRESSION term=')
+        const result2 = await read('REGRESSION2 prompt=')
+        // Readline turns bracketed paste on at the prompt; the view's modes show what the program asked for.
+        await type(`printf '%s-%s\\n' PROMPT READY\r`)
+        const prompt = await read('PROMPT-READY')
+        await new Promise((resolve) => setTimeout(resolve, 300))
+        const atPrompt = await host.applicationWindow.webContents.executeJavaScript(
+          `window.__aitermTest.snapshots()[${id}].modes`) as { bracketedPasteMode: boolean }
+        await type(`less --mouse '${regressionChecks}'\r`)
+        await new Promise((resolve) => setTimeout(resolve, 800))
+        const inLess = await host.applicationWindow.webContents.executeJavaScript(
+          `window.__aitermTest.snapshots()[${id}].modes`) as { mouseTrackingMode: string }
+        await type('q')
+        await type(`printf '%s-%s\\n' LESS DONE\r`)
+        await read('LESS-DONE')
+        const fields = Object.fromEntries(`${result.line.replace(/^.*REGRESSION /, '')} ${result2.line.replace(/^.*REGRESSION2 /, '')}`
+          .trim().split(' ').map((pair) => pair.split('=') as [string, string]))
+        shellRegression[shell.label] = { ...fields, bracketedPaste: atPrompt.bracketedPasteMode,
+          lessMouse: inLess.mouseTrackingMode, promptSeen: prompt.line.includes('PROMPT-READY') }
+      }
+      const expectedTerms: Record<string, string> = { 'clean-sixel': 'xterm-sixel-256color',
+        'clean-standard': 'xterm-256color', 'owner-sixel': 'xterm-sixel-256color' }
+      for (const [label, row] of Object.entries(shellRegression)) {
+        if (row.term !== expectedTerms[label] || row.colors !== '256' || row.lscolors !== 'yes' || row.prompt !== 'color' ||
+          row.title !== 'yes' || row.da1 !== '033[?62;4;9;22c' || row.bracketedPaste !== true || row.lessMouse === 'none') {
+          throw new Error(`an ordinary shell regressed under its terminal entry: ${JSON.stringify(shellRegression)}`)
+        }
       }
     }
 
@@ -4905,8 +5303,16 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     writeFileSync(join(viewSwapDirectory, 'part2.bin'),
       `PqLEAK${'~'.repeat(200)}\u001b\\VISIBLE-AFTER\r\n` +
       `\u001bP9;1;0q"1;1;60;75#1;2;100;0;0#1${Array(13).fill('!60~').join('-')}\u001b\\\r\n`)
-    const viewSwapScript = join(viewSwapDirectory, 'program')
-    writeFileSync(viewSwapScript, [
+    // Windows: the same two-part output from a Node stand-in.
+    const viewSwapScript = typedShell.windows ? writeNodeProgram(viewSwapDirectory, 'program', [
+      "const { existsSync, readFileSync } = require('node:fs')",
+      "const part = (name) => readFileSync(__dirname + '/' + name, 'latin1')",
+      "process.stdout.write('VIEW-SWAP-START\\n' + part('part1.bin'))",
+      "const waiting = setInterval(() => { if (!existsSync(__dirname + '/go')) return; clearInterval(waiting); process.stdout.write(part('part2.bin')) }, 50)",
+      'setTimeout(() => undefined, 30000)',
+      ''
+    ].join('\n')) : join(viewSwapDirectory, 'program')
+    if (!typedShell.windows) writeFileSync(viewSwapScript, [
       '#!/bin/sh',
       `cd '${viewSwapDirectory.replaceAll("'", "'\\''")}'`,
       "printf 'VIEW-SWAP-START\\n'",
@@ -4973,16 +5379,32 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     if (!graphicsRoot) throw new Error('self-test graphics entry requires BMN_DATA_HOME')
     const terminfoDirectory = join(graphicsRoot, 'terminfo')
     const terminfoEntry = join(terminfoDirectory, 'x', 'xterm-sixel-256color')
-    const sixelResolved = existsSync(terminfoEntry) && spawnSync('infocmp',
-      ['-A', terminfoDirectory, 'xterm-sixel-256color'], { stdio: 'ignore' }).status === 0
-    const standardResolved = spawnSync('infocmp', ['xterm-256color'], {
+    // Windows has no ncurses database: the sixel entry is checked by the product's own compiled-entry
+    // reading, and no standard entry exists to resolve (null, not a claimed success).
+    const terminfoSource = app.isPackaged
+      ? join(process.resourcesPath, 'terminfo', 'x', 'xterm-sixel-256color')
+      : join(repoRoot, 'apps', 'desktop', 'resources', 'terminfo', 'x', 'xterm-sixel-256color')
+    const sixelResolved = typedShell.windows
+      ? sixelTerminfoReady({ directory: terminfoDirectory, source: terminfoSource }, 'win32')
+      : existsSync(terminfoEntry) && spawnSync('infocmp',
+        ['-A', terminfoDirectory, 'xterm-sixel-256color'], { stdio: 'ignore' }).status === 0
+    const standardResolved = typedShell.windows ? null : spawnSync('infocmp', ['xterm-256color'], {
       stdio: 'ignore', env: { ...process.env, TERMINFO_DIRS: `${terminfoDirectory}:` }
     }).status === 0
-    const fakeCodex = join(isolatedCwd, 'graphics-probe', 'codex')
-    mkdirSync(join(isolatedCwd, 'graphics-probe'), { recursive: true })
+    const graphicsProbeDirectory = join(isolatedCwd, 'graphics-probe')
+    mkdirSync(graphicsProbeDirectory, { recursive: true })
     // BMN launches a direct Codex executable with --no-daemon so its hooks keep this session's environment.
-    writeFileSync(fakeCodex, '#!/bin/sh\n[ "$1" = "--no-daemon" ] && shift\nprintf "%s\\n" "$TERM" > "$1"\nsleep 2\n',
-      { mode: 0o700 })
+    const fakeCodex = typedShell.windows ? writeNodeProgram(graphicsProbeDirectory, 'codex', [
+      'const args = process.argv.slice(2)',
+      "if (args[0] === '--no-daemon') args.shift()",
+      "require('node:fs').writeFileSync(args[0], (process.env.TERM ?? '') + '\\n')",
+      'setTimeout(() => undefined, 2000)',
+      ''
+    ].join('\n')) : join(graphicsProbeDirectory, 'codex')
+    if (!typedShell.windows) {
+      writeFileSync(fakeCodex, '#!/bin/sh\n[ "$1" = "--no-daemon" ] && shift\nprintf "%s\\n" "$TERM" > "$1"\nsleep 2\n',
+        { mode: 0o700 })
+    }
     const probeTerm = async (file: string): Promise<string> => {
       await client.request(METHOD_REGISTRY.sessionCreate, {
         workspaceId: DEFAULT_WORKSPACE_ID, name: 'Synthetic graphics TERM probe',
@@ -4996,7 +5418,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     writeFileSync(terminfoEntry, 'corrupt test entry')
     const fallbackTerm = await probeTerm(join(isolatedCwd, 'graphics-after.txt'))
     const graphicsTerminfo = { sixelResolved, standardResolved, initialTerm, fallbackTerm }
-    if (!sixelResolved || !standardResolved || initialTerm !== 'xterm-sixel-256color' ||
+    if (!sixelResolved || standardResolved === false || initialTerm !== 'xterm-sixel-256color' ||
       fallbackTerm !== 'xterm-256color') {
       throw new Error(`isolated terminfo fallback failed: ${JSON.stringify(graphicsTerminfo)}`)
     }
@@ -5139,7 +5561,9 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       terminalModes,
       schemaTables: restoredHealth.schemaTables
     }
+    }
   } catch (error) {
+    if (diagnosticArm) await publishObservation()
     // Print the reason before release, so a release that stalls cannot hide it.
     reportSelfTestFailure(error)
     throw error
@@ -5161,6 +5585,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     taps.rendererLaunchBlockedSessionId = undefined
     taps.rendererUnavailableTemplate = undefined
   }
+  if (diagnosticArm && receipt) receipt.lateMembers = diagnosticLateMembers(diagnosticSnapshot)
   if (!graceful) throw new Error('the real terminal host did not shut down gracefully')
   console.log(JSON.stringify({ ...receipt, graceful }))
 }

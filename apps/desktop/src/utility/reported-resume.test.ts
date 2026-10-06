@@ -1,7 +1,7 @@
 // MODULE: reported-resume.test.ts - where a reported command's name resolves on PATH (Epic 43)
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { findProgramOnPath, missingProgramReason } from './reported-resume'
 
@@ -18,7 +18,7 @@ async function folder(): Promise<string> {
 
 async function program(directory: string, name: string, mode = 0o755): Promise<string> {
   await mkdir(directory, { recursive: true })
-  const path = join(directory, name)
+  const path = join(directory, name + (process.platform === 'win32' ? mode === 0o644 ? '.txt' : '.EXE' : ''))
   await writeFile(path, '#!/bin/sh\nexit 0\n')
   await chmod(path, mode)
   return path
@@ -29,16 +29,16 @@ describe('finding a reported program on PATH', () => {
     const root = await folder()
     const first = await program(join(root, 'first'), 'my-agent')
     await program(join(root, 'second'), 'my-agent')
-    expect(findProgramOnPath('my-agent', [join(root, 'missing'), join(root, 'first'), join(root, 'second')].join(':'))).toBe(first)
+    expect(findProgramOnPath('my-agent', [join(root, 'missing'), join(root, 'first'), join(root, 'second')].join(delimiter))).toBe(first)
   })
 
   it('never searches a relative entry, a directory by that name or a file that cannot run', async () => {
     const root = await folder()
-    await mkdir(join(root, 'dir-entry', 'my-agent'), { recursive: true })
+    await mkdir(join(root, 'dir-entry', process.platform === 'win32' ? 'my-agent.EXE' : 'my-agent'), { recursive: true })
     await program(join(root, 'not-executable'), 'my-agent', 0o644)
     const runnable = await program(join(root, 'runnable'), 'my-agent')
-    expect(findProgramOnPath('my-agent', ['', '.', 'relative', join(root, 'dir-entry'), join(root, 'not-executable')].join(':'))).toBeNull()
-    expect(findProgramOnPath('my-agent', [join(root, 'dir-entry'), join(root, 'not-executable'), join(root, 'runnable')].join(':')))
+    expect(findProgramOnPath('my-agent', ['', '.', 'relative', join(root, 'dir-entry'), join(root, 'not-executable')].join(delimiter))).toBeNull()
+    expect(findProgramOnPath('my-agent', [join(root, 'dir-entry'), join(root, 'not-executable'), join(root, 'runnable')].join(delimiter)))
       .toBe(runnable)
   })
 

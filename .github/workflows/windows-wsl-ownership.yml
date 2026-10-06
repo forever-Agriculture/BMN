@@ -1,0 +1,32 @@
+name: WSL guest ownership feasibility
+on:
+  pull_request:
+    paths:
+      - .github/workflows/windows-wsl-ownership.yml
+      - scripts/test/windows-wsl-systemd-spike.mjs
+      - scripts/test/wsl-raw-supervisor-spike.mjs
+      - scripts/test/wsl-broker-escape-spike.mjs
+      - scripts/test/config-path-spike.mjs
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  guest:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.0
+      - name: Measure native config paths and ACL preservation
+        run: node scripts/test/config-path-spike.mjs
+      - name: Measure disposable ordinary-user systemd ownership
+        if: ${{ !cancelled() }}
+        run: node scripts/test/windows-wsl-systemd-spike.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-wsl-ownership
+          path: test-results/
+          retention-days: 14

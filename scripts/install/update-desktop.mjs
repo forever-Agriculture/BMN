@@ -217,9 +217,18 @@ const directlyInvoked = process.argv[1] && resolve(process.argv[1]) === workerPa
 if (directlyInvoked) {
   const worker = process.argv.includes('--worker')
   Promise.resolve()
-    .then(() => worker ? runWorker() : queueWorker())
+    .then(async () => {
+      if (process.platform === 'win32') {
+        if (worker) throw new Error('Windows queued updates resume through the installed Start menu launcher')
+        return (await import('./windows-update-desktop.mjs')).queueWindowsDesktopUpdate(repoRoot)
+      }
+      return worker ? runWorker() : queueWorker()
+    })
     .catch((error) => {
       const message = error instanceof Error ? error.message : String(error)
+      if (process.platform === 'win32') {
+        console.error(`BMN update failed: ${message}`); process.exitCode = 1; return
+      }
       writeStatus({ phase: 'failed', error: message, liveBuild, updatedAt: new Date().toISOString(), logPath })
       log(`FAILED ${message}`)
       notify('BMN update failed', `See ${logPath}`, 'critical')

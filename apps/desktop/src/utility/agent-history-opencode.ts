@@ -29,7 +29,7 @@ export interface OpenCodeHistoryOptions {
 export function openCodeHistoryAdapter(options: OpenCodeHistoryOptions): AgentHistoryAdapter {
   const env = options.env ?? process.env
   const store = `${env.XDG_DATA_HOME || `${options.home}/.local/share`}/opencode/opencode.db`
-  const binary = (): string | null => findOnPath('opencode', env.PATH)
+  const binary = (): string | null => findOnPath('opencode', undefined, env)
   const query = <T>(work: Parameters<typeof readOnlyQuery<T>>[2]): T => readOnlyQuery(options.open, store, work)
   return {
     agent: 'opencode',

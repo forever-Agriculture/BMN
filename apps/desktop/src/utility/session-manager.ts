@@ -1,8 +1,9 @@
+// MODULE: session-manager.ts - session records, launches and live terminal attachments in the utility process
 import { randomUUID } from 'node:crypto'
 import { access, stat } from 'node:fs/promises'
 import { constants } from 'node:fs'
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, posix, win32 } from 'node:path'
 import { kill as signalProcessByPid } from 'node:process'
 import {
   ERROR_CODES,
@@ -16,6 +17,7 @@ import {
   lifecycleStopDetail,
   lifecycleStopSource,
   type BackgroundChoice,
+  type ListeningPort,
   type BoundConversationBinding,
   type ConversationBindingState,
   type ConversationObservation,
@@ -59,6 +61,9 @@ import {
   type WorkspaceRecord
 } from '@bmn/protocol'
 import { processStartIdentity } from './process-start-identity'
+import { scanOwnedWindowsSessionPorts } from './windows-session-ports'
+import { findWindowsExecutable, windowsEnvironment } from './windows-launch'
+import { codexWithoutSharedDaemon } from '../../bin/codex-launch.mjs'
 import {
   newestInterruptionCohort,
   resumableStopCause,
@@ -71,6 +76,7 @@ import { DecsetModeTracker } from './decset-modes'
 import { Osc52Reader } from './osc52'
 import { findProgramOnPath, missingProgramReason } from './reported-resume'
 import { OutputTail, ScreenMirror } from './screen-mirror'
+import { conptyReaderState, conptyReaderWorker } from './conpty-reader-state'
 import {
   agentCli,
   applyCapturedLaunchEnvironment,
@@ -105,30 +111,13 @@ interface Disposable {
 }
 
 /** A Codex app-server daemon keeps its first client's environment, so its hooks cannot address this session. */
-const CODEX_VALUE_OPTIONS = new Set([
-  '-c', '--config', '-C', '--cd', '-m', '--model', '-p', '--profile', '-s', '--sandbox',
-  '-a', '--ask-for-approval', '--remote-auth-token-env', '--add-dir', '-i', '--image', '--local-provider',
-  '--enable', '--disable'
-])
-
 function codexSessionArgv(
   executable: string,
   argv: readonly string[],
   environment: Readonly<Record<string, string | undefined>>
 ): readonly string[] {
   if (agentCli(executable) !== 'codex' || environment.CODEX_EXEC_SERVER_URL) return argv
-  let skipValue = false
-  let command: string | null = null
-  for (const arg of argv) {
-    if (skipValue) { skipValue = false; continue }
-    // Following `--`, even flag-shaped words are prompt text.
-    if (arg === '--') break
-    if (arg === '--no-daemon' || arg === '--remote' || arg.startsWith('--remote=')) return argv
-    if (CODEX_VALUE_OPTIONS.has(arg)) { skipValue = true; continue }
-    if (!arg.startsWith('-') && command === null) command = arg
-  }
-  if (['agents', 'app-server', 'remote-control'].includes(command ?? '')) return argv
-  return ['--no-daemon', ...argv]
+  return codexWithoutSharedDaemon(argv)
 }
 
 /** Bash startup files may move a global Codex ahead of BMN's session-local launcher on PATH. */
@@ -152,7 +141,37 @@ function bashSessionArgv(
   return interactive ? ['--rcfile', join(bin, 'bmn-bashrc'), ...argv] : argv
 }
 
+/**
+ * bmn-bashrc for PowerShell: after the owner's profiles, and before every prompt, BMN's CLI folder is
+ * first on PATH again. Inline, because the default execution policy refuses script files. No double
+ * quotes: Windows PowerShell joins the arguments after -Command with spaces.
+ */
+export const POWERSHELL_CLI_PATH_RESTORE = [
+  '$global:BMNCliBin = $env:BMN_CLI_BIN_DIR',
+  'function global:BMNRestoreCliPath { if ($env:PATH.Split([IO.Path]::PathSeparator)[0] -ne $global:BMNCliBin) ' +
+    '{ $env:PATH = $global:BMNCliBin + [IO.Path]::PathSeparator + $env:PATH } }',
+  'BMNRestoreCliPath',
+  '$global:BMNOwnerPrompt = $function:prompt',
+  'function global:prompt { BMNRestoreCliPath; & $global:BMNOwnerPrompt }'
+].join('; ')
+
+/** PowerShell profiles may move a global Codex ahead of BMN's session-local launcher, as Bash startup files can. */
+function powerShellSessionArgv(
+  executable: string,
+  argv: readonly string[],
+  environment: Readonly<Record<string, string | undefined>>
+): readonly string[] {
+  const bin = environment.BMN_CLI_BIN_DIR
+  if (!bin || !/^(powershell|pwsh)(\.exe)?$/i.test(win32.basename(executable))) return argv
+  // Only the plain interactive start: a command, a file, -NoProfile or -NoExit is the owner's own startup.
+  return argv.every((arg) => /^[-/]nologo$/i.test(arg)) ? [...argv, '-NoExit', '-Command', POWERSHELL_CLI_PATH_RESTORE] : argv
+}
+
 export interface PtyLike {
+  readonly processOwnership?: 'windows-job'
+  readonly processStartIdentity?: string
+  queryListeningPorts?(): Promise<readonly ListeningPort[]>
+  onLifecycleError?(listener: (reason: string) => void): Disposable
   readonly pid: number
   readonly cols: number
   readonly rows: number
@@ -316,6 +335,8 @@ interface SessionManagerOptions {
   sessionPath?: () => string
   /** Addressed-control variables added after the private-variable filter for each process incarnation. */
   sessionEnvironment?: (identity: SessionIdentity) => Readonly<Record<string, string>>
+  /** Electron self-test host only: keep bounded input writes and output event times for `outputStateForSelfTest`. */
+  recordInputForSelfTest?: boolean
 }
 
 export interface UndeliveredOutputState {
@@ -331,6 +352,7 @@ interface LiveSession extends SessionIdentity {
   ownership: Pick<SessionRecord, 'workspaceId' | 'name'>
   dataSubscription?: Disposable
   exitSubscription?: Disposable
+  lifecycleSubscription?: Disposable | undefined
   cwd: string
   executable: string
   captureStartedAt: string
@@ -345,6 +367,11 @@ interface LiveSession extends SessionIdentity {
   outputTail: OutputTail
   /** A headless copy of the screen, only for sessions running an agent (Epic 30). */
   mirror?: ScreenMirror | undefined
+  /** Electron self-test host only: the last input writes, oldest first, as escaped text within SELF_TEST_INPUT_RECORD_CHARS. */
+  inputRecord?: Array<{ at: number; outputBytes: number; text: string }>
+  /** Electron self-test host only: output arrival times and counts, without contents. */
+  outputRecord?: Array<{ atMs: number; outputBytes: number; chunkBytes: number }>
+  resizeRecord?: Array<{ atMs: number; cols: number; rows: number }>
   undeliveredOutput: TerminalFrame[]
   undeliveredOutputState: UndeliveredOutputState
   exitComplete: Promise<void>
@@ -376,6 +403,14 @@ interface ConversationReservation {
 }
 
 const CAPABILITY_PROBE_OUTPUT_BYTES = 256 * 1024
+const SELF_TEST_INPUT_RECORD_CHARS = 4 * 1024
+
+/** Printable ASCII as it is, every other byte as \xNN: self-test diagnostics only. */
+function escapedBytes(bytes: Uint8Array): string {
+  let escaped = ''
+  for (const byte of bytes) escaped += byte >= 0x20 && byte < 0x7f ? String.fromCharCode(byte) : `\\x${byte.toString(16).padStart(2, '0')}`
+  return escaped
+}
 const SHELL_ENVIRONMENT_PRIVATE_PREFIXES = [
   'ELECTRON_',
   'CHROME_',
@@ -428,13 +463,16 @@ const SHELL_ENVIRONMENT_PRIVATE_KEYS = new Set([
 ])
 
 export function buildShellEnvironment(
-  environment: Readonly<Record<string, string | undefined>>
+  environment: Readonly<Record<string, string | undefined>>,
+  platform: NodeJS.Platform = process.platform
 ): Record<string, string | undefined> {
   const shellEnvironment: Record<string, string | undefined> = {}
   for (const [key, value] of Object.entries(environment)) {
+    const checkedKey = platform === 'win32' ? key.toUpperCase() : key
     if (
-      SHELL_ENVIRONMENT_PRIVATE_KEYS.has(key) ||
-      SHELL_ENVIRONMENT_PRIVATE_PREFIXES.some((prefix) => key.startsWith(prefix))
+      SHELL_ENVIRONMENT_PRIVATE_KEYS.has(checkedKey) ||
+      (platform === 'win32' && checkedKey === 'TERMINFO_DIRS') ||
+      SHELL_ENVIRONMENT_PRIVATE_PREFIXES.some((prefix) => checkedKey.startsWith(prefix))
     ) {
       continue
     }
@@ -443,7 +481,7 @@ export function buildShellEnvironment(
   shellEnvironment.TERM = 'xterm-256color'
   // xterm renders 24-bit color; without this Claude Code and Codex quantize their colors to the 256-color palette.
   shellEnvironment.COLORTERM = 'truecolor'
-  return shellEnvironment
+  return platform === 'win32' ? windowsEnvironment(shellEnvironment) : shellEnvironment
 }
 
 export class HostControlError extends Error {
@@ -501,12 +539,13 @@ function bytesFromPty(data: string | Uint8Array): Uint8Array {
 }
 
 /** Expands a leading ~ or ~/ the way a shell would, so a folder typed as ~/code/app launches; other paths are unchanged. */
-export function resolveHomeDirectory(path: string, home: string = homedir()): string {
+export function resolveHomeDirectory(path: string, home: string = homedir(), platform: NodeJS.Platform = process.platform): string {
+  if (platform === 'win32' && (path === '~' || /^~[\\/]/.test(path))) return win32.resolve(home, path.slice(2))
   if (path !== '~' && !path.startsWith('~/')) return path
-  return resolve(join(home, path.slice(1)))
+  return posix.resolve(posix.join(home, path.slice(1)))
 }
 
-export async function validateLaunch(params: PtyLaunchParams): Promise<void> {
+export async function validateLaunch(params: PtyLaunchParams, environment: Readonly<Record<string, string | undefined>> = process.env): Promise<void> {
   let cwdInfo
   try {
     cwdInfo = await stat(params.cwd)
@@ -524,9 +563,10 @@ export async function validateLaunch(params: PtyLaunchParams): Promise<void> {
   }
 
   try {
-    const executableInfo = await stat(params.executable)
+    const executable = process.platform === 'win32' ? findWindowsExecutable(params.executable, params.cwd, environment) ?? params.executable : params.executable
+    const executableInfo = await stat(executable)
     if (!executableInfo.isFile()) throw new Error('not a file')
-    await access(params.executable, constants.X_OK)
+    await access(executable, process.platform === 'win32' ? constants.F_OK : constants.X_OK)
   } catch {
     throw new HostControlError(
       ERROR_CODES.invalidArgument,
@@ -562,6 +602,7 @@ export class SessionManager {
     | ((identity: SessionIdentity) => Readonly<Record<string, string>>)
     | undefined
   private readonly sessionPath: () => string
+  private readonly recordInput: boolean
   private readonly signalProcess: (pid: number, signal: NodeJS.Signals) => boolean
   private readonly stopGraceMs: number
   private readonly stopKillWaitMs: number
@@ -594,6 +635,7 @@ export class SessionManager {
    * reconnects join the run already in flight and read its recorded result; nothing starts twice.
    */
   private readonly cohortResumeActions = new Map<string, Promise<SessionCohortResumeResult>>()
+  private readonly selfTestSpawnTimes = new WeakMap<PtyLike, { beganAtMs: number; returnedAtMs: number }>()
 
   constructor(options: SessionManagerOptions) {
     this.store = options.store
@@ -605,6 +647,7 @@ export class SessionManager {
     this.homeDirectory = options.homeDirectory ?? homedir()
     this.sessionEnvironment = options.sessionEnvironment
     this.sessionPath = options.sessionPath ?? (() => buildShellEnvironment(this.environment).PATH ?? '')
+    this.recordInput = options.recordInputForSelfTest === true
     this.signalProcess = options.signalProcess ?? signalProcessByPid
     this.stopGraceMs = options.stopGraceMs ?? 2_000
     this.stopKillWaitMs = options.stopKillWaitMs ?? 2_000
@@ -633,7 +676,7 @@ export class SessionManager {
     if (!params.workspaceId || !params.name.trim() || params.name.length > 120) {
       throw new HostControlError(ERROR_CODES.invalidArgument, 'Session workspace and name are invalid')
     }
-    await validateLaunch(params)
+    await this.validateLaunch(params)
     const sessionId = randomUUID()
     const captureStartedAt = new Date().toISOString()
     const prepared = await prepareConversationLaunch(
@@ -998,7 +1041,7 @@ export class SessionManager {
         rows: params.rows,
         terminalGraphics: stored.terminalGraphics
       }
-      await validateLaunch(launchParams)
+      await this.validateLaunch(launchParams)
       const live = await this.startIncarnation(
         params.sessionId,
         launchParams,
@@ -1246,7 +1289,7 @@ export class SessionManager {
         rows: params.rows,
         terminalGraphics: stored.terminalGraphics
       }
-      await validateLaunch(launchParams)
+      await this.validateLaunch(launchParams)
       const live = await this.startIncarnation(
         params.sessionId,
         launchParams,
@@ -1402,7 +1445,7 @@ export class SessionManager {
       rows: params.rows,
       terminalGraphics: stored.terminalGraphics
     }
-    await validateLaunch(launchParams)
+    await this.validateLaunch(launchParams, resumeEnvironment)
     const startedAt = new Date().toISOString()
     const live = await this.startIncarnation(
       params.sessionId,
@@ -1483,6 +1526,7 @@ export class SessionManager {
       decsetModes: new DecsetModeTracker(),
       programCopy: new Osc52Reader(),
       outputTail: new OutputTail(),
+      ...(this.recordInput ? { inputRecord: [], outputRecord: [], resizeRecord: [] } : {}),
       undeliveredOutput: [],
       undeliveredOutputState: {
         limitBytes: this.undeliveredOutputLimitBytes,
@@ -1512,9 +1556,13 @@ export class SessionManager {
     this.sessions.set(sessionId, live)
     live.dataSubscription = pty.onData((data) => this.onPtyData(live, bytesFromPty(data)))
     live.exitSubscription = pty.onExit((exit) => void this.onPtyExit(live, exit))
+    live.lifecycleSubscription = pty.onLifecycleError?.((reason) => void this.markInterrupted(live, reason))
 
     try {
-      live.processStartIdentity = await this.identifyProcess(pty.pid)
+      live.processStartIdentity = pty.processOwnership === 'windows-job'
+        ? pty.processStartIdentity ?? ''
+        : await this.identifyProcess(pty.pid)
+      if (!live.processStartIdentity) throw new Error('Retained process creation identity is unavailable')
       await createRecord({
         sessionId,
         incarnationId,
@@ -1545,6 +1593,12 @@ export class SessionManager {
     return live
   }
 
+  /** The companion's PATH is available before an incarnation receives credentials. */
+  async validateLaunch(params: PtyLaunchParams, environment = this.environment): Promise<void> {
+    await validateLaunch(params, process.platform === 'win32'
+      ? windowsEnvironment(environment, { PATH: this.sessionPath() }) : environment)
+  }
+
   spawnValidatedPty(
     params: PtyLaunchParams,
     environment: Readonly<Record<string, string | undefined>> = this.environment,
@@ -1556,14 +1610,19 @@ export class SessionManager {
         ...terminalGraphicsEnvironment(params.terminalGraphics ?? null, environment, this.terminfoAsset),
         ...(identity ? this.sessionEnvironment?.(identity) : undefined)
       }
+      const childEnvironment = process.platform === 'win32' ? windowsEnvironment(env) : env
       const argv = identity === undefined ? params.argv
-        : bashSessionArgv(params.executable, codexSessionArgv(params.executable, params.argv, env), env)
-      return this.spawnPty(params.executable, argv, {
+        : powerShellSessionArgv(params.executable,
+          bashSessionArgv(params.executable, codexSessionArgv(params.executable, params.argv, env), env), env)
+      const beganAtMs = this.recordInput ? Date.now() : 0
+      const pty = this.spawnPty(params.executable, argv, {
         cwd: params.cwd,
         cols: params.cols,
         rows: params.rows,
-        env
+        env: childEnvironment
       })
+      if (this.recordInput) this.selfTestSpawnTimes.set(pty, { beganAtMs, returnedAtMs: Date.now() })
+      return pty
     } catch (error) {
       throw new HostControlError(
         ERROR_CODES.ioError,
@@ -1764,6 +1823,11 @@ export class SessionManager {
     return [...this.sessions].filter(([, live]) => !live.exited).map(([sessionId]) => sessionId)
   }
 
+  /** Attribute native listeners only through each live retained Windows job. */
+  scanWindowsSessionPorts(ids: ReadonlySet<string>): Promise<Map<string, ListeningPort[]>> {
+    return scanOwnedWindowsSessionPorts(ids, id => this.sessions.get(id))
+  }
+
   /** The incarnation the host currently holds live for a session, if any. */
   liveIncarnationId(sessionId: string): string | undefined {
     const live = this.sessions.get(sessionId)
@@ -1785,6 +1849,7 @@ export class SessionManager {
     if (bytes.byteLength > MAX_TERMINAL_CHUNK_BYTES) {
       throw new HostControlError(ERROR_CODES.invalidArgument, 'Terminal input chunk exceeds 256 KiB')
     }
+    this.recordInputWrite(live, bytes)
     live.pty.write(bytes)
   }
 
@@ -1792,7 +1857,18 @@ export class SessionManager {
     if (message.bytes.byteLength > MAX_TERMINAL_CHUNK_BYTES) {
       throw new HostControlError(ERROR_CODES.invalidArgument, 'Terminal input chunk exceeds 256 KiB')
     }
-    this.byAttachment(message.attachmentId).pty.write(message.bytes)
+    const session = this.byAttachment(message.attachmentId)
+    this.recordInputWrite(session, message.bytes)
+    session.pty.write(message.bytes)
+  }
+
+  /** Self-test host only: one input write, with how much the session had printed by then; the oldest go first. */
+  private recordInputWrite(live: LiveSession, bytes: Uint8Array): void {
+    const record = live.inputRecord
+    if (!record) return
+    record.push({ at: Date.now(), outputBytes: live.outputTail.pushedBytes, text: escapedBytes(bytes) })
+    let chars = record.reduce((total, write) => total + write.text.length, 0)
+    while (record.length > 1 && chars > SELF_TEST_INPUT_RECORD_CHARS) chars -= record.shift()!.text.length
   }
 
   acknowledge(message: Pick<TerminalAckMessage, 'attachmentId' | 'streamSeq'>): void {
@@ -1811,6 +1887,10 @@ export class SessionManager {
     ) {
       throw new HostControlError(ERROR_CODES.invalidArgument, 'Terminal dimensions are invalid')
     }
+    if (session.resizeRecord) {
+      session.resizeRecord.push({ atMs: Date.now(), cols: params.cols, rows: params.rows })
+      if (session.resizeRecord.length > 128) session.resizeRecord.shift()
+    }
     session.pty.resize(params.cols, params.rows)
     session.mirror?.resize(session.pty.cols, session.pty.rows)
     return { cols: session.pty.cols, rows: session.pty.rows }
@@ -1825,6 +1905,66 @@ export class SessionManager {
     if (!live || live.exited || (incarnationId !== undefined && live.incarnationId !== incarnationId)) return undefined
     live.mirror ??= new ScreenMirror(live.pty.cols, live.pty.rows, live.outputTail.read())
     return live.mirror
+  }
+
+  /**
+   * Electron self-test only (pty-host's `selfTestHealthProbe`): what the session printed last, as escaped
+   * text, and where that output stands on its way to the view: node-pty's own output stream (read only,
+   * through its internal socket) and the view's queue. The self-test prints only synthetic output. With
+   * `sinceBytes` (a total output count from an earlier answer), the same answer also holds everything printed
+   * after that point, up to `tailBytes`, and says whether that is all of it.
+   */
+  outputStateForSelfTest(sessionId: string, tailBytes = 600, sinceBytes?: number): Record<string, unknown> | undefined {
+    const live = this.sessions.get(sessionId)
+    if (!live) return undefined
+    const recent = live.outputTail.read()
+    const escape = escapedBytes
+    const text = escape(recent.subarray(Math.max(0, recent.byteLength - tailBytes)))
+    let since: Record<string, unknown> | undefined
+    if (sinceBytes !== undefined) {
+      const printed = Math.max(0, live.outputTail.pushedBytes - sinceBytes)
+      const kept = Math.min(printed, recent.byteLength, tailBytes)
+      // When the bound cut it, the text starts later than `fromBytes`: at `textFromBytes`.
+      since = { fromBytes: sinceBytes, toBytes: live.outputTail.pushedBytes, complete: kept === printed,
+        textFromBytes: live.outputTail.pushedBytes - kept, text: escape(recent.subarray(recent.byteLength - kept)) }
+    }
+    const stream = (live.pty as unknown as { _socket?: { isPaused?(): boolean; readableLength?: number; writableLength?: number;
+      writableNeedDrain?: boolean } })._socket
+    return { exited: live.exited, outputBytes: live.outputTail.pushedBytes, size: { cols: live.pty.cols, rows: live.pty.rows },
+      lastOutputAgoMs: live.outputTail.lastPushAt === 0 ? null : Date.now() - live.outputTail.lastPushAt,
+      ptyStream: stream ? { paused: stream.isPaused?.() ?? null, readableBytes: stream.readableLength ?? null,
+        writableBytes: stream.writableLength ?? null, awaitingDrain: stream.writableNeedDrain ?? null } : null,
+      view: live.outputQueue?.flowState ?? null, tail: text, ...(since ? { since } : {}),
+      // What was written to the program, oldest first: when (ms before this answer), how much it had printed by then.
+      ...(live.inputRecord ? { hostPid: process.pid, shellPid: live.pty.pid,
+        anchors: { hostStartedAtMs: Math.round(Date.now() - process.uptime() * 1000),
+          sessionCaptureStartedAt: live.captureStartedAt, ptySpawn: this.selfTestSpawnTimes.get(live.pty) },
+        input: live.inputRecord.map((write) => ({ atMs: write.at, agoMs: Date.now() - write.at,
+          outputBytes: write.outputBytes, text: write.text })), outputEvents: live.outputRecord?.map(event => ({ ...event })),
+        resizeEvents: live.resizeRecord?.map(event => ({ ...event })) } : {}) }
+  }
+
+  /**
+   * Electron self-test only, once a session's output has already stopped: one extra read credit for node-pty's
+   * Windows ConPTY output reader (a worker that reads one chunk per credit). An intervention: it bypasses the
+   * reader's one-chunk backpressure. Output after it is consistent with a reader that held output or stopped
+   * reading (or with coincident progress); none does not prove nothing reached the reader. True means the credit
+   * was posted, not that the worker took it. Undefined for an unknown session; false where the session has no such
+   * reader (POSIX).
+   */
+  nudgeOutputReaderForSelfTest(sessionId: string): boolean | undefined {
+    const live = this.sessions.get(sessionId)
+    if (!live) return undefined
+    const reader = conptyReaderWorker(live.pty)
+    if (!reader) return false
+    reader.postMessage('read')
+    return true
+  }
+
+  /** Electron self-test only: `conptyReaderState` for a session's PTY (null on POSIX); undefined for an unknown session. */
+  readerStateForSelfTest(sessionId: string): Promise<Record<string, unknown> | null> | undefined {
+    const live = this.sessions.get(sessionId)
+    return live ? conptyReaderState(live.pty) : undefined
   }
 
   /** Stops the mirror when the agent that needed it has left the session; the tail keeps going. */
@@ -1851,6 +1991,11 @@ export class SessionManager {
       if (session.attachmentId) this.revokeAttachment(session)
       session.dataSubscription?.dispose()
       session.exitSubscription?.dispose()
+      session.lifecycleSubscription?.dispose()
+      if (session.pty.processOwnership === 'windows-job') {
+        session.pty.kill()
+        continue
+      }
       try {
         this.signalProcess(-session.pty.pid, 'SIGKILL')
       } catch {
@@ -2364,6 +2509,18 @@ export class SessionManager {
 
   private async performTeardownSession(session: LiveSession): Promise<string | undefined> {
     if (session.exited) return undefined
+    if (session.pty.processOwnership === 'windows-job') {
+      try {
+        // The retained native job, not a PID lookup, is termination authority.
+        session.pty.kill()
+      } catch {
+        // A request is not an exit confirmation. Keep the bounded waiter authoritative.
+      }
+      if (await this.waitForExit(session, this.stopGraceMs + this.stopKillWaitMs)) return undefined
+      const reason = 'Exit of the owned Windows process tree was not confirmed'
+      await this.markInterrupted(session, reason)
+      return reason
+    }
     const identityMatches = async (): Promise<boolean> => {
       try {
         return session.processStartIdentity.length > 0 &&
@@ -2432,6 +2589,10 @@ export class SessionManager {
     // the view is gone, because that is exactly when the next view will need it.
     session.decsetModes.read(bytes)
     session.outputTail.push(bytes)
+    if (session.outputRecord) {
+      session.outputRecord.push({ atMs: Date.now(), outputBytes: session.outputTail.pushedBytes, chunkBytes: bytes.byteLength })
+      if (session.outputRecord.length > 128) session.outputRecord.shift()
+    }
     session.mirror?.write(bytes)
     // Neither the port watch nor a clipboard write may cost the view this chunk: a failure in one stops here.
     try {
@@ -2467,6 +2628,7 @@ export class SessionManager {
   private async onPtyExit(session: LiveSession, exit: IncarnationExit): Promise<void> {
     if (session.exited) return session.exitComplete
     session.exited = true
+    session.lifecycleSubscription?.dispose()
     // The program is gone; its modes go with it, so nothing stale can reach a later view.
     session.decsetModes.clear()
     session.mirror?.dispose()

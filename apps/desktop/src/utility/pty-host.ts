@@ -1,3 +1,4 @@
+// MODULE: pty-host.ts - the utility process that owns sessions, the control endpoint and its terminal streams
 import { randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
@@ -59,26 +60,31 @@ import {
   SessionManager,
   findStoredSession,
   resolveHomeDirectory,
-  validateLaunch,
   type CreateSessionParams,
   type PtyLike,
   type SessionIdentity
 } from './session-manager'
+
+import { prepareWindowsPtyLaunch } from './windows-launch'
 
 type NativeModuleName = 'node-pty' | 'better-sqlite3'
 
 interface NodePtyModule {
   spawn(
     executable: string,
-    argv: string[],
+    argv: string[] | string,
     options: {
       cwd: string
       cols: number
       rows: number
       env: Record<string, string | undefined>
       encoding: null
+      useConpty?: boolean
+      useConptyDll?: boolean
     }
   ): PtyLike
+  /** The patched Windows addon's reader of every process command line this account may read. */
+  queryProcessCommandLines?(): string[]
 }
 
 interface TerminalPort {
@@ -282,14 +288,18 @@ async function start(): Promise<void> {
   const companionHolder: { current?: CompanionService } = {}
   const manager = new SessionManager({
     ...(terminfoAsset ? { terminfoAsset } : {}),
+    recordInputForSelfTest: process.argv.includes('--self-test-host'),
     store: database,
     savedOutputStore,
-    spawnPty: (executable, argv, options) =>
-      nodePty.spawn!(executable, [...argv], {
+    spawnPty: (executable, argv, options) => {
+      const native = process.platform === 'win32' ? prepareWindowsPtyLaunch(executable, argv, options.cwd, options.env) : undefined
+      return nodePty.spawn!(native?.executable ?? executable, native?.arguments ?? [...argv], {
         ...options,
         env: { ...options.env },
-        encoding: null
-      }),
+        encoding: null,
+        ...(process.platform === 'win32' ? { useConpty: true, useConptyDll: true } : {})
+      })
+    },
     sendTerminalMessage: (message) => terminalPort?.postMessage(message),
     conversationReferenceExists: (binding) => conversationReferenceExists(binding, agentHome()),
     conversationBeingDeleted: (binding) => companionHolder.current?.historyDeleting(binding.conversationReference) ?? false,
@@ -315,6 +325,8 @@ async function start(): Promise<void> {
       ? { telegramApiOrigin: process.env.BMN_SELF_TEST_TELEGRAM_ORIGIN }
       : {}),
     historyAdapters: historyAdapters(),
+    // Windows has no /proc: held-session protection reads command lines through the ConPTY addon.
+    ...(process.platform === 'win32' ? { commandLines: () => nodePty.queryProcessCommandLines!().join('\n') } : {}),
     ...(process.env.BMN_SELF_TEST_HOME && process.argv.includes('--self-test-host') ? { home: process.env.BMN_SELF_TEST_HOME } : {}),
     // Electron self-test only (Story 31.4): pages sooner, so every answer shape fits the run's time.
     ...(process.argv.includes('--self-test-host') && process.env.BMN_SELF_TEST_PAGE_AFTER_MS
@@ -328,7 +340,7 @@ async function start(): Promise<void> {
   const launchSets = new LaunchSetCoordinator({
     getSet: (workspaceId, setId) => database.getLaunchSet(workspaceId, setId),
     listWorkspaces: () => database.listWorkspaces(),
-    validate: validateLaunch,
+    validate: (params) => manager.validateLaunch(params),
     create: async (params) => {
       const identity = await manager.create(params)
       if (process.argv.includes('--self-test-host') &&
@@ -377,8 +389,9 @@ async function start(): Promise<void> {
   }
 
   /**
-   * Electron self-test only: the two health.get requests the self-test uses to end this host abruptly
-   * (host loss) and to answer an open request at a key the way a Telegram tap will (Epic 30.2).
+   * Electron self-test only: the health.get requests the self-test uses to end this host abruptly
+   * (host loss), to answer an open request at a key the way a Telegram tap will (Epic 30.2), and to
+   * observe a pane whose output stopped (its output state, and one extra read credit for its reader).
    * Undefined for every other request and for any host not started with `--self-test-host`; the control
    * socket never reaches it.
    */
@@ -393,6 +406,19 @@ async function start(): Promise<void> {
         })
       }, 0)
       return Promise.resolve({ selfTestHostLossScheduled: true })
+    }
+    if (params.selfTestOutputState !== undefined) {
+      const request = record(params.selfTestOutputState)
+      const tailBytes = Math.min(8192, Math.max(600, Number.isInteger(request.tailBytes) ? request.tailBytes as number : 600))
+      const sinceBytes = Number.isSafeInteger(request.sinceBytes) && (request.sinceBytes as number) >= 0 ? request.sinceBytes as number : undefined
+      const state = manager.outputStateForSelfTest(String(request.sessionId), tailBytes, sinceBytes)
+      if (!state) return Promise.resolve({ selfTestOutputState: null })
+      // Taken just after the output state: the ConPTY reader worker's own answer and the input pipe (null on POSIX).
+      return (manager.readerStateForSelfTest(String(request.sessionId)) ?? Promise.resolve(null))
+        .then((ptyReader) => ({ selfTestOutputState: { ...state, ptyReader } }))
+    }
+    if (params.selfTestOutputNudge !== undefined) {
+      return Promise.resolve({ selfTestOutputNudge: manager.nudgeOutputReaderForSelfTest(String(record(params.selfTestOutputNudge).sessionId)) ?? null })
     }
     if (params.selfTestRemoteAnswer === undefined) return undefined
     const probe = record(params.selfTestRemoteAnswer)
@@ -522,7 +548,7 @@ async function start(): Promise<void> {
             if ('cwd' in update || 'executable' in update || 'argv' in update) {
               const current = await findStoredSession(database, update.sessionId)
               if (!current) throw new HostControlError(ERROR_CODES.notFound, 'The session was not found')
-              await validateLaunch({
+              await manager.validateLaunch({
                 cwd: update.cwd ?? current.cwd,
                 executable: update.executable ?? current.executable,
                 argv: update.argv ?? current.argv,

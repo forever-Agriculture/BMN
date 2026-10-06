@@ -7,17 +7,26 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { CLAUDE_KEEP_FOREVER_DAYS } from '@bmn/protocol'
 import { claudeTargetDays, readClaudeFolder, writeClaudeFolder } from './agent-history-claude'
 
+import { ownWindowsFixtureFile } from './windows-fixture-owner.test-support'
+import { nativeTimings, type NativeTimings } from '../../../../scripts/tests/native-timings.test-support.mjs'
+
 const roots: string[] = []
+let historyTrace: NativeTimings | undefined
 
 async function folder(settings?: string): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'bmn-claude-folder-'))
   roots.push(root)
-  if (settings !== undefined) await writeFile(join(root, 'settings.json'), settings)
+  if (settings !== undefined) {
+    await writeFile(join(root, 'settings.json'), settings)
+    ownWindowsFixtureFile(root, join(root, 'settings.json'))
+  }
   return root
 }
 
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
+  historyTrace?.mark('cleanup:begin')
+  try { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))) }
+  finally { historyTrace?.mark('cleanup:end'); historyTrace?.report(); historyTrace = undefined }
 })
 
 describe('Claude history folders', () => {
@@ -93,14 +102,21 @@ describe('Claude history folders', () => {
   })
 
   it('writes through a symlinked settings file and keeps the link', async () => {
+    historyTrace = nativeTimings('claude-history-symlink', 5000)
+    const trace = historyTrace
+    trace.mark('setup:begin')
     const root = await folder()
     const dotfiles = join(root, 'dotfiles')
     await mkdir(dotfiles)
     await writeFile(join(dotfiles, 'claude-settings.json'), '{ "model": "opus" }')
+    trace.measure('fresh-target-owner', () => ownWindowsFixtureFile(root, join(dotfiles, 'claude-settings.json')))
     await symlink(join(dotfiles, 'claude-settings.json'), join(root, 'settings.json'))
-
-    expect(writeClaudeFolder(root, 30)).toMatchObject({ ok: true })
+    trace.mark('setup:end')
+    expect(trace.measure('read-before-write', () => readClaudeFolder(root))).toMatchObject({ ok: true })
+    expect(trace.measure('write', () => writeClaudeFolder(root, 30))).toMatchObject({ ok: true })
+    trace.mark('readback:begin')
     expect(JSON.parse(await readFile(join(dotfiles, 'claude-settings.json'), 'utf8'))).toEqual({ model: 'opus', cleanupPeriodDays: 30 })
     expect(lstatSync(join(root, 'settings.json')).isSymbolicLink()).toBe(true)
-  })
+    trace.mark('assertions:end')
+  }, process.platform === 'win32' ? 30000 : 5000)
 })

@@ -1,7 +1,8 @@
 // MODULE: control-auth.ts - in-memory owner and HMAC session credentials for the local control socket
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
-import { chmod, mkdir, open, rename, unlink } from 'node:fs/promises'
+import { chmod, mkdir, open, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
+import { replaceFile } from './file-replace'
 
 export type ControlScope =
   | { kind: 'owner' }
@@ -88,7 +89,7 @@ export async function writeOwnerToken(directory: string, token: string): Promise
     } finally {
       await handle.close()
     }
-    await rename(temporary, destination)
+    await replaceFile(temporary, destination)
   } catch (error) {
     await unlink(temporary).catch(() => undefined)
     throw error

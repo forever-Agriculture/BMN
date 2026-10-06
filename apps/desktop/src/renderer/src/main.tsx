@@ -69,6 +69,7 @@ import { createLayoutWriter } from './layout-writer'
 import {
   BACKGROUND_CHOICE_OPTIONS,
   INITIAL_SESSION_FORM,
+  LAUNCH_PLATFORM,
   LAUNCH_AGENTS,
   applyLaunchAgent,
   applyLaunchTemplate,
@@ -131,7 +132,7 @@ import { loadSavedOutputPresentation, type SavedOutputCatalogPresentation } from
 import { createSpaceHold } from './space-hold'
 import { applyChromeTheme, COLOR_MODE_PRESENTATION, IDENTITY_PRESENTATION } from './theme'
 import { markerForWorkspace, WorkspaceIdentityMark, workspaceMarkerOptions } from './workspace-marker'
-import { startVoiceRecording, VOICE_MAX_SECONDS, VOICE_SAMPLE_RATE, type VoiceRecording } from './voice-recorder'
+import { microphoneFailure, startVoiceRecording, VOICE_MAX_SECONDS, VOICE_SAMPLE_RATE, type VoiceRecording } from './voice-recorder'
 import { modelName, voiceReadiness } from './voice-readiness'
 import { VOICE_SUGGESTION_BYTES, VOICE_SUGGESTION_ROWS, suggestVocabulary } from './voice-suggestions'
 import { createVoiceSettingsWriter } from './voice-settings-writer'
@@ -1048,7 +1049,16 @@ function App(): React.JSX.Element {
         // Queued and built from the latest settings, so the fallback never restores an older language or vocabulary.
         void voiceSettingsWriter.update((current) => ({ ...current, model })).catch(fail('Voice model was not saved'))
       }
-      voiceRecording.current = await startVoiceRecording()
+      const recording = await startVoiceRecording(() => {
+        // The microphone went away mid-recording: close it, keep nothing, and say so rather than wait on silence.
+        if (voiceRecording.current !== recording) return
+        clearTimeout(voiceTimer.current)
+        voiceRecording.current = null
+        recording.cancel()
+        updateVoice(null)
+        brief('The microphone stopped while recording (unplugged, turned off or taken by another app). Nothing was transcribed.')
+      })
+      voiceRecording.current = recording
       updateVoice({ ...capture, phase: 'recording', startedAt: Date.now(), model })
       const howToStop = trigger === 'hold' ? 'Release Space to stop.' : 'Press Speak again to stop.'
       announce(model === chosenModel
@@ -1059,8 +1069,8 @@ function App(): React.JSX.Element {
     } catch (error) {
       updateVoice(null)
       const name = error instanceof DOMException ? error.name : ''
-      if (name === 'NotAllowedError') brief('Microphone access was refused.')
-      else if (name === 'NotFoundError') brief('No microphone was found.')
+      const message = microphoneFailure(name, window.aiTerminal.platform ?? '')
+      if (message) brief(message)
       else fail('Could not start the microphone')(error)
     }
   }
@@ -1628,7 +1638,7 @@ function App(): React.JSX.Element {
     setPickedTemplateId('')
     setSessionForm((current) => applyLaunchAgent(current, agent.id, pickedTemplateName ? [pickedTemplateName] : []))
   }
-  const resolvedCommand = `${sessionForm.executable} ${sessionForm.argv}`.trim()
+  const resolvedCommand = sessionForm.batchCommand ?? `${sessionForm.executable} ${sessionForm.argv}`.trim()
   const observedProgressFor = (session: SessionRecord): ProgressPresentation | null => progressPresentation(
     progress,
     session.sessionId,
@@ -2306,6 +2316,25 @@ function App(): React.JSX.Element {
                       </option>
                     ))}</select>
                   </label>
+                  {LAUNCH_PLATFORM === 'win32' && <label className="field">Launch type
+                    <select aria-label="Launch type" value={sessionForm.batchCommand === undefined ? 'program' : 'batch'} onChange={(event) => {
+                      setPickedTemplateId('')
+                      const batchCommand = event.target.value === 'batch' ? '' : undefined
+                      setSessionForm((current) => ({ ...current, batchCommand }))
+                    }}>
+                      <option value="program">Program with literal arguments</option>
+                      <option value="batch">Batch command (cmd syntax)</option>
+                    </select>
+                  </label>}
+                  {sessionForm.batchCommand !== undefined ? <>
+                    <label className="field">Batch command
+                      <input aria-label="Batch command" className="mono" value={sessionForm.batchCommand} onChange={(event) => {
+                        const batchCommand = event.target.value
+                        setSessionForm((current) => ({ ...current, batchCommand }))
+                      }} />
+                    </label>
+                    <p className="field-help">Command Prompt interprets this text, including variables, pipes and redirection.</p>
+                  </> : <>
                   <label className="field">Command
                     <input aria-label="Executable" className="mono" value={sessionForm.executable} onChange={(event) => {
                       const executable = event.target.value
@@ -2320,6 +2349,8 @@ function App(): React.JSX.Element {
                       setSessionForm((current) => ({ ...current, argv }))
                     }} />
                   </label>
+                  {LAUNCH_PLATFORM === 'win32' && <p className="field-help">Double quotes group spaces. Backslashes remain literal except before a double quote. Variables and shell operators are not expanded.</p>}
+                  </>}
                   <p className="field-help resolved">Runs <code>{resolvedCommand}</code></p>
                   <label className="field">When windows close
                     <select aria-label="When windows close" value={sessionForm.backgroundChoice ?? ''} onChange={(event) => {
@@ -2408,7 +2439,7 @@ function App(): React.JSX.Element {
                 openFileReference(null, path, true)
                 return
               }
-              const reference = exactAbsoluteFileReference(path, null, null)
+              const reference = exactAbsoluteFileReference(path, null, null, window.aiTerminal.platform === 'win32' ? 'win32' : 'posix')
               if (!reference) {
                 brief('This filename cannot be represented as a file reference.')
                 return
@@ -2470,7 +2501,7 @@ function App(): React.JSX.Element {
           onUpdated={updated => setWorkspaces(current => current.map(item => item.workspaceId === updated.workspaceId && item.revision <= updated.revision ? updated : item))}
           onOpen={path => {
             const current = workspacesRef.current.find(item => item.workspaceId === workspace.workspaceId && item.archivedAt === null)
-            const reference = exactAbsoluteFileReference(path, null, null)
+            const reference = exactAbsoluteFileReference(path, null, null, window.aiTerminal.platform === 'win32' ? 'win32' : 'posix')
             if (!current || !reference) { brief('This pin is unavailable. Reopen Pinned files.'); return }
             setDialog({ kind: 'file-reference', request: { workspaceId: current.workspaceId, sessionName: '', workspaceName: current.name,
               launchDirectory: current.defaultCwd ?? '/', reference, openNow: true, openedFromWorkspaceId: activeWorkspaceId } })

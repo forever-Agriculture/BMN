@@ -256,7 +256,10 @@ export async function inverseTextContrast(
           // Selecting the session in the tree already made its attachment the active one.
           window.aiTerminal.sendTerminalInput(
             ${JSON.stringify(live.attachmentId)},
-            new TextEncoder().encode(${JSON.stringify("printf '\\033[7m%s\\033[0m\\n' INVERSE-PROBE\r")})
+            new TextEncoder().encode(${JSON.stringify(process.platform === 'win32'
+              // PowerShell: the marker in parts, so only the output holds it whole.
+              ? "[Console]::Out.Write([char]27 + '[7m' + 'INVERSE-' + 'PROBE' + [char]27 + '[0m' + [char]10)\r"
+              : "printf '\\033[7m%s\\033[0m\\n' INVERSE-PROBE\r")})
           );
         }
         const span = shown && [...pane.querySelectorAll('.xterm-rows span')].find((item) => item.textContent === 'INVERSE-PROBE');

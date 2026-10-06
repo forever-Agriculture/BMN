@@ -1,6 +1,8 @@
 // MODULE: index.ts - Electron main process: windows, bridge IPC and host lifecycle; `--self-test` loads ./self-test
-import { chmodSync, mkdirSync } from 'node:fs'
+import { writeSync } from 'node:fs'
 import { homedir } from 'node:os'
+import { ensurePrivateDirectories } from '../utility/private-directory'
+import { createNotificationHealth, notificationHealthCue } from './notification-health'
 import { join, resolve } from 'node:path'
 import {
   ERROR_CODES,
@@ -57,6 +59,8 @@ import {
 } from './host-loss'
 import { resolveApplicationRoots } from '../utility/roots'
 import { acquireRootScopedSingleInstance, focusExistingWindow } from './single-instance'
+import { protectWindowsApplicationLifetime } from './windows-application-lifetime'
+import { retainWindowsDataLease, retainWindowsInstalledRelease } from './windows-installed-release'
 import { trackAllowedSender } from './allowed-senders'
 import { createDevelopmentRoot } from './development-root'
 import { installSavedOutputIpcHandler } from './saved-output-ipc'
@@ -80,7 +84,7 @@ import {
 import { installFileReferenceIpcHandlers } from './file-reference-ipc'
 import { createPresenceMonitor, readMutterIdleMs } from './presence-monitor'
 import { installVoiceIpcHandlers } from './voice-ipc'
-import { transcribeRecording } from './voice-engine'
+import { transcribeRecording, WHISPER_ENGINE_FILE } from './voice-engine'
 import {
   attachCreatedSession,
   createExplicitLaunchSession,
@@ -246,6 +250,8 @@ const presence = createPresenceMonitor({
     return () => clearTimeout(timer)
   }
 })
+// Story 53.9: a notification the system refused is reported in Preferences, never taken as delivered.
+const notificationHealth = createNotificationHealth()
 const appEvents = createAppEventForwarder({
   client: () => hostClient,
   targets: allowedTargets,
@@ -253,8 +259,12 @@ const appEvents = createAppEventForwarder({
     !window.isDestroyed() && window.isFocused() && selectedSessions.get(window.webContents.id) === sessionId
   ),
   notify: ({ title, body, sessionId, requestId, kind, revision }) => {
-    if (!Notification.isSupported()) return
+    if (!Notification.isSupported()) {
+      notificationHealth.unsupported()
+      return
+    }
     const notification = new Notification({ title, body, silent: false })
+    notificationHealth.watch(notification)
     notification.on('click', () => {
       void activateAttentionNotification({ sessionId, requestId, kind, revision }, {
         close: () => notification.close(),
@@ -275,8 +285,12 @@ const appEvents = createAppEventForwarder({
       selfTestTaps.appNotice(notice)
       return
     }
-    if (!Notification.isSupported()) return
+    if (!Notification.isSupported()) {
+      notificationHealth.unsupported()
+      return
+    }
     const notification = new Notification({ ...notice, silent: false })
+    notificationHealth.watch(notification)
     notification.on('click', () => {
       notification.close()
       focusExistingWindow(applicationWindow)
@@ -334,11 +348,19 @@ function hostEnvironment(repoRoot: string): NodeJS.ProcessEnv {
 
 /** The JavaScript the CLI runs; the packaged `bmn` is a shell launcher for it that node cannot load. */
 function bmnCliScript(): string {
-  return app.isPackaged ? join(process.resourcesPath, 'bin', 'bmn.mjs') : bmnCliPath()
+  return app.isPackaged ? join(process.resourcesPath, 'bin', 'bmn.mjs') : join(app.getAppPath(), 'bin', 'bmn')
 }
 
-/** Sessions get this file's directory on PATH; packaged builds carry a launcher for it under resources/bin. */
+/**
+ * Sessions get this file's directory on PATH; packaged builds carry a launcher for it under resources/bin.
+ * Windows uses the native bmn.exe launcher (scripts/build/windows-cli.mjs), never the Unix shell launcher.
+ */
 function bmnCliPath(): string {
+  if (process.platform === 'win32') {
+    return app.isPackaged
+      ? join(process.resourcesPath, 'bin', 'bmn.exe')
+      : join(app.getAppPath(), 'native-out', 'windows-cli', 'bmn.exe')
+  }
   return app.isPackaged
     ? join(process.resourcesPath, 'bin', 'bmn')
     : join(app.getAppPath(), 'bin', 'bmn')
@@ -473,8 +495,8 @@ function requireKnownSession(event: IpcMainInvokeEvent, sessionId: unknown): str
 /** Built by `pnpm run voice:build`; packaged builds carry it under resources/whisper. */
 function whisperBinaryPath(): string {
   return app.isPackaged
-    ? join(process.resourcesPath, 'whisper', 'whisper-cli')
-    : join(app.getAppPath(), 'resources', 'whisper', 'whisper-cli')
+    ? join(process.resourcesPath, 'whisper', WHISPER_ENGINE_FILE)
+    : join(app.getAppPath(), 'resources', 'whisper', WHISPER_ENGINE_FILE)
 }
 
 /** Only the app window may use the microphone, and only for dictation; every other web permission is refused. */
@@ -529,6 +551,12 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
       return createSessionRuntime(params as SessionCreateParams, rendererTestMode)
     }
   })
+  bridgeIpc.handle('aiterm:notifications:health', (event) => {
+    if (!senderIsAllowed(event)) {
+      throw new MainIpcError(ERROR_CODES.unauthorized, 'Renderer sender is not authorized')
+    }
+    return { cue: notificationHealthCue(notificationHealth.current(), process.platform) }
+  })
   bridgeIpc.handle('aiterm:launch-directory:normalize', (event, value: unknown) => {
     if (!senderIsAllowed(event)) {
       throw new MainIpcError(ERROR_CODES.unauthorized, 'Renderer sender is not authorized')
@@ -539,7 +567,7 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
       throw new MainIpcError(ERROR_CODES.invalidArgument, 'Launch directories are invalid')
     }
     return directories.map((directory: string) => resolve(
-      directory === '~' || directory.startsWith('~/')
+      directory === '~' || directory.startsWith('~/') || (process.platform === 'win32' && directory.startsWith('~\\'))
         ? join(homedir(), directory.slice(1)) : directory
     ))
   })
@@ -1028,20 +1056,69 @@ function actionableStartupFailure(error: unknown): StartupFailure {
 
 const selfTest = process.argv.includes('--self-test')
 const rendererTestMode = process.argv.includes('--bmn-test-mode')
+// A self-test names each startup step as it enters and returns, with milliseconds since process start, so a
+// run that stops before its first phase shows where. Written synchronously: the step may block or end main.
+const startupMarker = (marker: string): void => {
+  if (!selfTest) return
+  try {
+    writeSync(2, `[BMN] self-test phase: startup ${marker} +${Math.round(performance.now())}ms\n`)
+  } catch {
+    // Without stderr the self-test still reports through its exit status.
+  }
+}
+function startupStep<T>(step: string, run: () => T): T {
+  startupMarker(`${step} enter`)
+  const result = run()
+  startupMarker(`${step} return`)
+  return result
+}
+startupMarker('main module')
+if (selfTest) {
+  // Without a handler Electron shows a modal error dialog and the run waits on it unseen; a self-test
+  // reports the first uncaught error once and exits nonzero instead.
+  let uncaughtReported = false
+  process.on('uncaughtException', (error) => {
+    if (uncaughtReported) return
+    uncaughtReported = true
+    try {
+      writeSync(2, `[BMN] session self-test failed: uncaught main-process error: ${(error.stack ?? error.message).slice(0, 2_000)}\n`)
+    } catch {
+      // The nonzero exit still reports the failure.
+    }
+    app.exit(1)
+  })
+}
+// Must match the installer/Start Menu shortcut appId before any Windows toast.
+startupStep('app identity', () => {
+  if (process.platform === 'win32') app.setAppUserModelId('dev.bmn.desktop')
+})
 if (selfTest) {
   // The dictation flow records from Chromium's fake microphone, so the real recorder path runs without hardware.
   app.commandLine.appendSwitch('use-fake-device-for-media-stream')
   app.commandLine.appendSwitch('use-fake-ui-for-media-stream')
 }
-ensureDevelopmentRoots()
+const installedReleaseLease = startupStep('installed release', () => retainWindowsInstalledRelease(app.getPath('exe')))
+// The closure retains the native handle until process exit, including all
+// utility shutdown and saved-output work. Kernel death releases it on a crash.
+process.once('exit', () => installedReleaseLease?.close())
+startupStep('development roots', ensureDevelopmentRoots)
 app.on('will-quit', cleanupDevelopmentRoot)
 process.once('exit', cleanupDevelopmentRoot)
-const instanceDataRoot = resolveApplicationRoots().data
-mkdirSync(instanceDataRoot, { recursive: true, mode: 0o700 })
-chmodSync(instanceDataRoot, 0o700)
-const primaryInstance = acquireRootScopedSingleInstance(app, instanceDataRoot, () =>
-  focusExistingWindow(applicationWindow)
+const instanceRoots = startupStep('root resolution', () => resolveApplicationRoots())
+const instanceDataRoot = instanceRoots.data
+startupStep('private directories', () =>
+  ensurePrivateDirectories(Object.values(instanceRoots), process.platform, instanceDataRoot)
 )
+const dataUpdateLease = startupStep('data lease', () => retainWindowsDataLease(instanceDataRoot))
+process.once('exit', () => dataUpdateLease?.close())
+// A standalone statement: the lifecycle fixture's original-defect control removes exactly this call.
+startupMarker('application lifetime enter')
+protectWindowsApplicationLifetime()
+startupMarker('application lifetime return')
+const primaryInstance = startupStep('single instance', () =>
+  acquireRootScopedSingleInstance(app, instanceDataRoot, () => focusExistingWindow(applicationWindow))
+)
+startupMarker(`single instance ${primaryInstance ? 'acquired' : 'refused'}`)
 
 function runningTargets(): RunningSessionTarget[] {
   return trackedRunningTargets(processTracking)
@@ -1233,7 +1310,9 @@ function selfTestHost(): SelfTestHost {
 }
 if (primaryInstance) autoUpdater.on('update-downloaded', () => applicationLifecycle.updateDownloaded())
 
+startupMarker('awaiting ready')
 if (primaryInstance) void app.whenReady().then(async () => {
+  startupMarker('ready')
   // The Chancel header replaces Electron's default File/Edit/View/Window bar and its stray
   // accelerators (reload, zoom, close); Quit lives in the command palette.
   Menu.setApplicationMenu(null)

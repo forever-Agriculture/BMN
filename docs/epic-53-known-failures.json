@@ -1,0 +1,9 @@
+{
+  "description": "Epic 53 failing tests still owned by a port story. Open failures are not waived: the gate in scripts/test/unit-inventory-gate.mjs fails on any unlisted failure, and each story removes its entries as it repairs them.",
+  "source": "Native 8b9a915 run 37278665858: Windows 3147 pass/14 fail/12 skipped; Linux 3135/0/38 skipped. Both native control-endpoint equivalents passed (1131/1819 ms), so the two POSIX socket keys are removed; the POSIX cases stay Linux-only. The fourteen Linux shell-launcher obligations now have native equivalents in scripts/tests/windows-desktop-launcher.test.mjs; the POSIX launcher suite is Linux-only and its keys are removed, so any native equivalent failure is unlisted. No failures waived.",
+  "minimumTests": 2650,
+  "platforms": {
+    "linux": {},
+    "win32": {}
+  }
+}

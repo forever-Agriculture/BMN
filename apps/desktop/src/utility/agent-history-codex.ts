@@ -28,7 +28,7 @@ export function codexHistoryAdapter(options: CodexHistoryOptions): AgentHistoryA
   const env = options.env ?? process.env
   const codexHome = env.CODEX_HOME || `${options.home}/.codex`
   const store = `${codexHome}/state_5.sqlite`
-  const binary = (): string | null => findOnPath('codex', env.PATH)
+  const binary = (): string | null => findOnPath('codex', undefined, env)
   const query = <T>(work: Parameters<typeof readOnlyQuery<T>>[2]): T => readOnlyQuery(options.open, store, work)
   return {
     agent: 'codex',

@@ -2,11 +2,14 @@
 import { execFile } from 'node:child_process'
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runHookConfigurationCheck } from './hook-configuration-check'
+import { denyWindowsFixtureFileReads } from './windows-fixture-io.test-support'
 import type { HookCheckAgentReport, HookCheckReport } from '@bmn/protocol'
+
+if (process.platform === 'win32') vi.setConfig({ testTimeout: 30_000 })
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
 const CLAUDE_EVENTS = [
@@ -29,6 +32,7 @@ async function configFixture(): Promise<{ root: string; env: Record<string, stri
   const env = {
     // Cursor's file sits in the home directory, so the home is the fixture's too.
     HOME: root,
+    ...(process.platform === 'win32' ? { USERPROFILE: root } : {}),
     CLAUDE_CONFIG_DIR: join(root, 'claude'),
     CODEX_HOME: join(root, 'codex'),
     OPENCODE_CONFIG_DIR: join(root, 'opencode')
@@ -85,8 +89,10 @@ describe('runHookConfigurationCheck', () => {
       entries: [{ event: 'plugin', optional: false, state: 'missing' }],
       missing: ['plugin']
     })
-    expect(agentNamed(report, 'cursor')).toMatchObject({
-      file: join(root, '.cursor', 'hooks.json'), state: 'missing',
+    const cursor = agentNamed(report, 'cursor')
+    expect(normalize(cursor.file)).toBe(join(root, '.cursor', 'hooks.json'))
+    expect(cursor).toMatchObject({
+      state: 'missing',
       missing: ['sessionStart', 'beforeSubmitPrompt', 'postToolUse', 'stop', 'sessionEnd']
     })
   })
@@ -136,15 +142,18 @@ describe('runHookConfigurationCheck', () => {
     const { root, env } = await configFixture()
     const unreadable = join(root, 'claude', 'settings.json')
     await writeHookFile(unreadable, hookFile(CLAUDE_EVENTS, 'claude'))
-    await chmod(unreadable, 0o000)
+    if (process.platform === 'win32') denyWindowsFixtureFileReads(root, unreadable, true)
+    else await chmod(unreadable, 0o000)
 
     try {
+      await expect(readFile(unreadable)).rejects.toThrow()
       const report = await check(env)
 
       expect(agentNamed(report, 'claude')).toMatchObject({ state: 'unreadable', missing: CLAUDE_EVENTS })
       expect(JSON.stringify(report)).not.toContain('EACCES')
     } finally {
-      await chmod(unreadable, 0o600)
+      if (process.platform === 'win32') denyWindowsFixtureFileReads(root, unreadable, false)
+      else await chmod(unreadable, 0o600)
     }
   })
 

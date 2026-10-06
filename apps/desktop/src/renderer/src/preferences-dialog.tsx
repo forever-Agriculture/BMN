@@ -52,10 +52,29 @@ const HOOK_CHECK_NAMES: Readonly<Record<HookCheckAgent, string>> = {
   claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor'
 }
 
+/** How often an open Preferences rereads whether the system showed BMN's last notification. */
+const NOTIFICATION_CUE_POLL_MS = 5_000
+
+/** Story 53.9: says, in the Telegram cue's form, that the system refused BMN's last desktop notification. */
+export function NotificationHealthCue(props: { cue: string | null }): React.JSX.Element | null {
+  return props.cue ? (
+    <div className="history-confirm notification-cue" role="status">
+      <span className="status-dot needs-you" aria-hidden="true" />
+      <p>{props.cue}</p>
+    </div>
+  ) : null
+}
+
+/** Story 53.4: the control endpoint's row name. On Windows the path is the private file that names the pipe. */
+export function controlEndpointLabel(transport: ControlInfo['transport'] | undefined): string {
+  return transport === 'windows-pipe' ? 'Endpoint file' : 'Socket path'
+}
+
 /**
  * Telegram's status as a list. An error is said once: in the cue while it shows, otherwise in full under Last error;
  * State then gives only its word.
  */
+
 export function TelegramStatusList(props: { status: TelegramStatus; cueShown: boolean }): React.JSX.Element {
   const status = props.status
   return (
@@ -163,6 +182,28 @@ export function PreferencesDialog(props: {
       setTerminalBusy(false)
     }
   }
+
+  // --- Desktop notifications: did the system show the last one (Story 53.9) ---
+  const [notificationCue, setNotificationCue] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    const load = (): void => {
+      window.aiTerminal
+        .getNotificationHealth()
+        .then((health) => {
+          if (!cancelled) setNotificationCue(health.cue)
+        })
+        // Only a cue: Preferences works the same when it cannot be read.
+        .catch(() => undefined)
+    }
+    load()
+    // A notification can fail while Preferences stays open; the cue follows it.
+    const timer = setInterval(load, NOTIFICATION_CUE_POLL_MS)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [])
 
   // --- Telegram: status ------------------------------------------------
   const [telegramStatus, setTelegramStatus] = useState<TelegramStatus | null>(null)
@@ -356,7 +397,7 @@ export function PreferencesDialog(props: {
     setCopyMessage(null)
     try {
       await window.aiTerminal.writeClipboardText(text)
-      setCopyMessage(kind === 'socket' ? 'Socket path copied.' : 'CLI path copied.')
+      setCopyMessage(kind === 'socket' ? `${controlEndpointLabel(controlInfo?.transport)} copied.` : 'CLI path copied.')
     } catch (error) {
       setCopyError(failureDetail(error, 'Could not copy to the clipboard'))
     } finally {
@@ -554,6 +595,7 @@ export function PreferencesDialog(props: {
             <p className="preferences-help">When a session needs you and no BMN window is focused.</p>
           </div>
         </div>
+        <NotificationHealthCue cue={notifications.desktop ? notificationCue : null} />
         {notificationsError && (
           <p className="preferences-error" role="alert">
             {notificationsError}
@@ -786,11 +828,11 @@ export function PreferencesDialog(props: {
           <>
             <div className="preferences-row">
               <div className="preferences-row-label">
-                <span>Socket path</span>
+                <span>{controlEndpointLabel(controlInfo.transport)}</span>
               </div>
               <div className="preferences-row-control">
                 <code className="preferences-mono preferences-path" title={controlInfo.socketPath}><bdi>{controlInfo.socketPath}</bdi></code>
-                <button type="button" disabled={copying === 'socket'} onClick={() => void copyText('socket', controlInfo.socketPath)}>
+                <button type="button" disabled={!controlInfo.listening || copying === 'socket'} onClick={() => void copyText('socket', controlInfo.socketPath)}>
                   Copy
                 </button>
               </div>
@@ -801,7 +843,7 @@ export function PreferencesDialog(props: {
               </div>
               <div className="preferences-row-control">
                 <code className="preferences-mono preferences-path" title={controlInfo.cliPath}><bdi>{controlInfo.cliPath}</bdi></code>
-                <button type="button" disabled={copying === 'cli'} onClick={() => void copyText('cli', controlInfo.cliPath)}>
+                <button type="button" disabled={!controlInfo.listening || copying === 'cli'} onClick={() => void copyText('cli', controlInfo.cliPath)}>
                   Copy
                 </button>
               </div>

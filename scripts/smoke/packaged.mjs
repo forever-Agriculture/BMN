@@ -6,6 +6,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { assertOwnerRootsUnchanged, fingerprintOwnerRoots } from '../lib/owner-root-guard.mjs'
 import { packagedApp } from '../lib/packaged-app.mjs'
+import { packagedReceiptComplete } from '../lib/self-test-receipt.mjs'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
@@ -47,15 +48,16 @@ if (!existsSync(packagedTerminfo)) throw new Error(`packaged Sixel terminfo is m
 if (!existsSync(join(packagedResources, 'self-test/remote-answers/claude/ask-single.pre-tool-use.json'))) {
   throw new Error(`packaged self-test fixtures are missing: ${join(packagedResources, 'self-test/remote-answers')}`)
 }
-const packagedWhisper = join(packagedResources, 'whisper/whisper-cli')
-if (!existsSync(packagedWhisper) || (statSync(packagedWhisper).mode & 0o111) === 0) {
+const suffix = process.platform === 'win32' ? '.exe' : ''
+const packagedWhisper = join(packagedResources, 'whisper', 'whisper-cli' + suffix)
+if (!existsSync(packagedWhisper) || (process.platform !== 'win32' && (statSync(packagedWhisper).mode & 0o111) === 0)) {
   throw new Error(`packaged voice engine is missing or not executable: ${packagedWhisper}`)
 }
 if (spawnSync(packagedWhisper, ['--help'], { stdio: 'ignore' }).status !== 0) {
   throw new Error(`packaged voice engine does not run: ${packagedWhisper}`)
 }
 // Dictation first asks the speech detector whether a recording holds speech; one second of silence must hold none.
-const packagedDetector = join(packagedResources, 'whisper/whisper-vad-speech-segments')
+const packagedDetector = join(packagedResources, 'whisper', 'whisper-vad-speech-segments' + suffix)
 const silenceFolder = mkdtempSync(join(tmpdir(), 'bmn-smoke-voice-'))
 try {
   const silence = Buffer.alloc(44 + 32_000)
@@ -117,21 +119,7 @@ await withTemporaryRoot(temporaryRootContracts.packagedSmoke, async ({ roots }) 
     )
   }
   const receipt = parseReceipt(result.stdout)
-  if (
-    receipt.electronVersion !== '44.3.0' ||
-    receipt.nativeModules?.nodePty !== true ||
-    receipt.nativeModules?.betterSqlite3 !== true ||
-    receipt.sixelPty?.beforeMB !== 0 || !(receipt.sixelPty?.afterMB > 0) ||
-    receipt.sixelPty?.layer !== true ||
-    !(receipt.sixelRender?.ownStorageMB > 0 && receipt.sixelRender?.ownLayer === true &&
-      receipt.sixelRender?.otherStorageMB === 0 && receipt.sixelRender?.otherImageUnchanged === true) ||
-    receipt.cspProbe?.evalRefused !== true || receipt.cspProbe?.wasmAllowed !== true ||
-    receipt.graphicsTerminfo?.sixelResolved !== true ||
-    receipt.graphicsTerminfo?.standardResolved !== true ||
-    receipt.graphicsTerminfo?.initialTerm !== 'xterm-sixel-256color' ||
-    receipt.graphicsTerminfo?.fallbackTerm !== 'xterm-256color' ||
-    receipt.graceful !== true
-  ) {
+  if (!packagedReceiptComplete(receipt)) {
     throw new Error(`packaged self-test receipt was incomplete: ${JSON.stringify(receipt)}`)
   }
   assertOwnerRootsUnchanged(ownerRootsBefore, ownerFingerprint(), 'during packaged smoke')

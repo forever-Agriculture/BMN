@@ -1,6 +1,6 @@
 // MODULE: agent-history.ts - one history limit for every agent: Claude folders, the pruning runner and its schedule (Stories 31.1, 31.2)
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
-import { basename } from 'node:path'
+import { basename, win32 } from 'node:path'
 import {
   MAX_CLAUDE_CONFIG_DIRS,
   MAX_DELETIONS_PER_RUN,
@@ -16,7 +16,8 @@ import {
   claudeSettingsPath,
   claudeTargetDays,
   readClaudeFolder,
-  writeClaudeFolder
+  writeClaudeFolder,
+  type ClaudeFolderWrite
 } from './agent-history-claude'
 
 export const DAY_MS = 86_400_000
@@ -110,6 +111,17 @@ export function runningCommandLines(procRoot = '/proc'): string {
   return lines.join('\n')
 }
 
+/**
+ * Where cleanup reads running command lines when none is supplied: /proc on Linux. Windows has no /proc;
+ * its host supplies the native reader, and without one cleanup deletes nothing rather than nothing held.
+ */
+export function defaultCommandLines(platform: NodeJS.Platform = process.platform): () => string {
+  if (platform !== 'win32') return () => runningCommandLines()
+  return () => {
+    throw new Error('running command lines are unavailable, so no session can be shown free')
+  }
+}
+
 export interface AgentHistoryOptions {
   home: string
   adapters: readonly AgentHistoryAdapter[]
@@ -119,6 +131,7 @@ export interface AgentHistoryOptions {
   writeState(next: AgentHistoryState): Promise<void>
   /** Conversation references bound to a running BMN incarnation. */
   liveConversationIds(): Promise<ReadonlySet<string>>
+  writeClaudeFolder?(folder: string, days: number): Promise<ClaudeFolderWrite>
   commandLines?(): string
   now?(): Date
   log?(line: string): void
@@ -144,8 +157,22 @@ export class AgentHistory {
     this.options = options
   }
 
+  private folderKey(folder: string): string {
+    if (process.platform !== 'win32') return folder
+    const normalized = win32.normalize(folder)
+    const root = win32.parse(normalized).root
+    return (normalized.length > root.length ? normalized.replace(/\\+$/u, '') : normalized).toLowerCase()
+  }
+
   private get homeFolder(): string {
-    return `${this.options.home}/.claude`
+    return process.platform === 'win32' ? win32.join(this.options.home, '.claude') : `${this.options.home}/.claude`
+  }
+
+  private displayFolder(folder: string): string {
+    if (process.platform !== 'win32') return folder.startsWith(`${this.options.home}/`) ? `~${folder.slice(this.options.home.length)}` : folder
+    const home = win32.normalize(this.options.home).replace(/\\+$/u, '')
+    const normalized = win32.normalize(folder)
+    return normalized.toLowerCase().startsWith(`${home.toLowerCase()}\\`) ? `~${normalized.slice(home.length)}` : folder
   }
 
   private now(): Date {
@@ -160,17 +187,22 @@ export class AgentHistory {
   }
 
   private folders(settings: AgentHistorySettings): string[] {
-    return [...new Set([this.homeFolder, ...settings.claudeConfigDirs])]
+    const seen = new Set<string>()
+    return [this.homeFolder, ...settings.claudeConfigDirs].filter(folder => {
+      const key = this.folderKey(folder)
+      if (seen.has(key)) return false
+      seen.add(key); return true
+    })
   }
 
   /** A Claude hook reported where its settings live; only folders with a settings.json are remembered. */
   async learnClaudeFolder(folder: string): Promise<void> {
-    if (folder === this.homeFolder) return
+    if (this.folderKey(folder) === this.folderKey(this.homeFolder)) return
     await this.exclusive(async () => {
       const settings = await this.options.readSettings()
-      if (settings.claudeConfigDirs.includes(folder)) return
+      if (settings.claudeConfigDirs.some(dir => this.folderKey(dir) === this.folderKey(folder))) return
       if (!existsSync(claudeSettingsPath(folder))) return
-      const learned = [...settings.claudeConfigDirs.filter((dir) => dir !== this.homeFolder), folder]
+      const learned = [...settings.claudeConfigDirs.filter((dir) => this.folderKey(dir) !== this.folderKey(this.homeFolder)), folder]
       await this.options.writeSettings({ ...settings, claudeConfigDirs: learned.slice(-MAX_CLAUDE_CONFIG_DIRS) })
       this.options.changed?.()
     })
@@ -187,7 +219,7 @@ export class AgentHistory {
       return {
         path,
         name: path === this.homeFolder ? 'Claude Code' : basename(path) === '.claude-glm' ? 'GLM' : 'Claude',
-        displayPath: path.startsWith(`${this.options.home}/`) ? `~${path.slice(this.options.home.length)}` : path,
+        displayPath: this.displayFolder(path),
         currentDays: read.ok ? read.currentDays : null,
         targetDays: target,
         // A folder the owner has not confirmed since BMN learned it waits for Start cleanup, even when it holds the value.
@@ -251,7 +283,7 @@ export class AgentHistory {
   /** Oldest first, never a session in use: bound to a live BMN session, recent, or named on a running command line. */
   private eligible(candidates: readonly HistoryCandidate[], protectedIds: ReadonlySet<string>): HistoryCandidate[] {
     const recent = this.now().getTime() - RECENT_SESSION_MS
-    const commandLines = (this.options.commandLines ?? runningCommandLines)()
+    const commandLines = (this.options.commandLines ?? defaultCommandLines())()
     return candidates
       .filter((candidate) => !protectedIds.has(candidate.id) && candidate.updatedAt < recent &&
         !commandLines.includes(candidate.id))
@@ -278,15 +310,15 @@ export class AgentHistory {
         const applied = state.applied[path]
         const read = readClaudeFolder(path)
         if (applied === undefined || !read.ok || read.currentDays !== applied.days) continue
-        this.writeFolder(path, claudeTargetDays(keepDays), state)
+        await this.writeFolder(path, claudeTargetDays(keepDays), state)
       }
       await this.options.writeState(state)
       this.options.changed?.()
     })
   }
 
-  private writeFolder(path: string, days: number, state: AgentHistoryState): void {
-    const result = writeClaudeFolder(path, days)
+  private async writeFolder(path: string, days: number, state: AgentHistoryState): Promise<void> {
+    const result = await (this.options.writeClaudeFolder?.(path, days) ?? writeClaudeFolder(path, days))
     if (result.ok) {
       state.applied[path] = { days, at: this.now().toISOString() }
       delete state.failures[path]
@@ -310,7 +342,7 @@ export class AgentHistory {
           delete state.failures[path]
           continue
         }
-        this.writeFolder(path, target, state)
+        await this.writeFolder(path, target, state)
       }
       await this.options.writeState(state)
       this.options.changed?.()

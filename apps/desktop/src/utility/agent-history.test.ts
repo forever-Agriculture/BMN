@@ -1,5 +1,8 @@
 // MODULE: agent-history.test.ts - the history limit: confirmation rules, Claude folder policy, the pruning runner and its schedule
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { once } from 'node:events'
+import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -9,6 +12,7 @@ import {
   AgentHistory,
   DAY_MS,
   RUN_INTERVAL_MS,
+  defaultCommandLines,
   emptyHistoryState,
   isShorterLimit,
   readHistoryState,
@@ -17,6 +21,10 @@ import {
   type AgentHistoryState,
   type HistoryCandidate
 } from './agent-history'
+
+import { ownWindowsFixtureFile } from './windows-fixture-owner.test-support'
+
+if (process.platform === 'win32') vi.setConfig({ testTimeout: 30_000 })
 
 const NOW = new Date('2026-09-28T12:00:00.000Z')
 const roots: string[] = []
@@ -71,6 +79,7 @@ async function fixture(options: {
   await mkdir(join(home, '.claude'))
   if (options.claudeSettings !== null) {
     await writeFile(join(home, '.claude', 'settings.json'), options.claudeSettings ?? '{ "model": "opus" }')
+    ownWindowsFixtureFile(home, join(home, '.claude', 'settings.json'))
   }
   let settings: AgentHistorySettings = { ...DEFAULT_APP_SETTINGS.agentHistory, claudeConfigDirs: [], ...options.settings }
   let state: AgentHistoryState = emptyHistoryState()
@@ -95,6 +104,20 @@ async function fixture(options: {
 }
 
 describe('agent history limit', () => {
+  it.skipIf(process.platform !== 'win32')('treats Windows casing, separators and trailing separators as one config folder', async () => {
+    const f = await fixture()
+    const homeFolder = join(f.home, '.claude')
+    await f.history.learnClaudeFolder(homeFolder.toUpperCase().replaceAll('\\', '/') + '/')
+    expect(f.settings().claudeConfigDirs).toEqual([])
+    const sibling = join(f.home, 'profile', '.claude')
+    await mkdir(sibling, { recursive: true }); await writeFile(join(sibling, 'settings.json'), '{}')
+    ownWindowsFixtureFile(f.home, join(sibling, 'settings.json'))
+    await f.history.learnClaudeFolder(sibling)
+    await f.history.learnClaudeFolder(sibling.toUpperCase().replaceAll('\\', '/') + '/')
+    expect(f.settings().claudeConfigDirs).toEqual([sibling])
+    expect((await f.history.status()).claude.map(row => row.path)).toEqual([homeFolder, sibling])
+  })
+
   it('orders limits with Never longest', () => {
     expect(isShorterLimit(10, 30)).toBe(true)
     expect(isShorterLimit(90, null)).toBe(true)
@@ -165,6 +188,7 @@ describe('agent history limit', () => {
     const glm = join(f.home, '.claude-glm')
     await mkdir(glm)
     await writeFile(join(glm, 'settings.json'), '{ "cleanupPeriodDays": 30 }')
+    ownWindowsFixtureFile(f.home, join(glm, 'settings.json'))
     await f.history.confirm()
     expect(await f.claudeDays()).toBe(30)
 
@@ -173,6 +197,7 @@ describe('agent history limit', () => {
     const drifted = join(f.home, 'drifted')
     await mkdir(drifted)
     await writeFile(join(drifted, 'settings.json'), '{ "cleanupPeriodDays": 5 }')
+    ownWindowsFixtureFile(f.home, join(drifted, 'settings.json'))
     await f.history.learnClaudeFolder(drifted)
     await f.history.confirm()
     expect(await f.claudeDays(drifted)).toBe(30)
@@ -181,6 +206,7 @@ describe('agent history limit', () => {
     const newer = join(f.home, 'newer')
     await mkdir(newer)
     await writeFile(join(newer, 'settings.json'), '{ "cleanupPeriodDays": 5 }')
+    ownWindowsFixtureFile(f.home, join(newer, 'settings.json'))
     await f.history.learnClaudeFolder(newer)
 
     await f.history.setKeepDays(90)
@@ -205,6 +231,7 @@ describe('agent history limit', () => {
     const glm = join(f.home, '.claude-glm')
     await mkdir(glm)
     await writeFile(join(glm, 'settings.json'), '{ "cleanupPeriodDays": 30 }')
+    ownWindowsFixtureFile(f.home, join(glm, 'settings.json'))
     await f.history.learnClaudeFolder(glm)
 
     const before = await f.history.status()
@@ -231,6 +258,7 @@ describe('agent history limit', () => {
       const folder = join(f.home, `config-${index}`)
       await mkdir(folder)
       await writeFile(join(folder, 'settings.json'), '{}')
+      ownWindowsFixtureFile(f.home, join(folder, 'settings.json'))
       folders.push(folder)
       await f.history.learnClaudeFolder(folder)
     }
@@ -439,6 +467,37 @@ describe('agent history limit', () => {
     await mkdir(join(proc, 'self'))
     expect(runningCommandLines(proc)).toContain('opencode -s ses_0123456789abABCDEFGHIJKLMN')
   })
+
+  it('deletes nothing while running command lines cannot be read, and Windows has no /proc to read', async () => {
+    expect(() => defaultCommandLines('win32')()).toThrow('running command lines are unavailable')
+    expect(typeof defaultCommandLines('linux')()).toBe('string')
+    const codex = fakeAdapter('codex', [{ id: 'held-elsewhere', updatedAt: daysAgo(60) }])
+    const f = await fixture({ adapters: [codex], commandLines: () => { throw new Error('reader failed') } })
+    await f.history.confirm()
+
+    await f.history.run()
+
+    expect(codex.removed).toEqual([])
+    expect(f.logs.join('')).toContain('codex not recognised (reader failed)')
+  })
+
+  it.skipIf(process.platform !== 'win32')('keeps a session named on a running Windows command line, read natively', async () => {
+    const held = `held-${randomUUID()}`
+    const holder = spawn(process.execPath, ['-e', 'setTimeout(() => undefined, 30000)', held], { stdio: 'ignore', windowsHide: true })
+    try {
+      await once(holder, 'spawn')
+      const { queryProcessCommandLines } = await import('node-pty')
+      const codex = fakeAdapter('codex', [{ id: held, updatedAt: daysAgo(60) }, { id: 'free-session', updatedAt: daysAgo(60) }])
+      const f = await fixture({ adapters: [codex], commandLines: () => queryProcessCommandLines().join('\n') })
+      await f.history.confirm()
+
+      await f.history.run()
+
+      expect(codex.removed).toEqual(['free-session'])
+    } finally {
+      holder.kill()
+    }
+  })
 })
 
 describe('Cursor in the history section (Story 31.3 AC3)', () => {
@@ -447,7 +506,8 @@ describe('Cursor in the history section (Story 31.3 AC3)', () => {
     roots.push(home)
     const bin = join(home, 'bin')
     await mkdir(bin)
-    await writeFile(join(bin, 'cursor-agent'), '#!/bin/sh\n', { mode: 0o755 })
+    if (process.platform === 'win32') await copyFile(process.execPath, join(bin, 'cursor-agent.exe'))
+    else await writeFile(join(bin, 'cursor-agent'), '#!/bin/sh\n', { mode: 0o755 })
     const cursor = cursorHistoryAdapter({ home, env: { PATH: bin } })
     const remove = vi.spyOn(cursor, 'remove')
     const codex = fakeAdapter('codex', [{ id: 'old', updatedAt: daysAgo(40) }])

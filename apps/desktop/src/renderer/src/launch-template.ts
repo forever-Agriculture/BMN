@@ -1,4 +1,5 @@
 // MODULE: launch-template.ts - the session launch form, template application and its create/update params
+import { quoteWindowsArgv, splitWindowsArgv } from '@bmn/protocol'
 import type {
   BackgroundChoice,
   LaunchTemplateRecord,
@@ -8,6 +9,9 @@ import type {
   TerminalGraphicsChoice
 } from '@bmn/protocol'
 
+export type LaunchPlatform = 'linux' | 'win32'
+export const LAUNCH_PLATFORM: LaunchPlatform = typeof window !== 'undefined' && window.aiTerminal?.platform === 'win32' ? 'win32' : 'linux'
+
 export interface SessionLaunchForm {
   name: string
   executable: string
@@ -15,13 +19,14 @@ export interface SessionLaunchForm {
   cwd: string
   backgroundChoice: BackgroundChoice | null
   terminalGraphics: TerminalGraphicsChoice
+  batchCommand?: string | undefined
 }
 
 export const INITIAL_SESSION_FORM: SessionLaunchForm = Object.freeze({
   name: 'Shell',
-  executable: '/bin/bash',
+  executable: LAUNCH_PLATFORM === 'win32' ? 'powershell.exe' : '/bin/bash',
   argv: '',
-  cwd: '/',
+  cwd: LAUNCH_PLATFORM === 'win32' ? '~' : '/',
   backgroundChoice: null,
   terminalGraphics: null
 })
@@ -38,7 +43,7 @@ export interface LaunchAgent {
 }
 
 /** The shell every choice runs in, so the session survives the agent exiting. */
-export const LAUNCH_SHELL = '/bin/bash'
+export const LAUNCH_SHELL = LAUNCH_PLATFORM === 'win32' ? 'powershell.exe' : '/bin/bash'
 
 export const LAUNCH_AGENTS: ReadonlyArray<LaunchAgent> = [
   { id: 'terminal', label: 'Terminal', name: 'Shell', command: null },
@@ -48,8 +53,33 @@ export const LAUNCH_AGENTS: ReadonlyArray<LaunchAgent> = [
   { id: 'cursor', label: 'Cursor', name: 'Cursor', command: 'cursor-agent' }
 ]
 
-function agentArgv(agent: LaunchAgent): string[] {
-  return agent.command ? ['-ic', `${agent.command}; exec bash -i`] : []
+function agentArgv(agent: LaunchAgent, platform: LaunchPlatform): string[] {
+  if (!agent.command) return []
+  return platform === 'win32'
+    ? ['/d', '/v:off', '/s', '/k', agent.command]
+    : ['-ic', `${agent.command}; exec bash -i`]
+}
+
+function agentShell(agent: LaunchAgent, platform: LaunchPlatform): string {
+  return platform === 'win32' ? agent.command ? 'cmd.exe' : 'powershell.exe' : '/bin/bash'
+}
+
+function windowsBasename(executable: string): string {
+  return executable.replaceAll('\\', '/').split('/').pop()!.toLowerCase()
+}
+
+function launchFields(executable: string, argv: readonly string[], platform: LaunchPlatform) {
+  const batch = platform === 'win32' && windowsBasename(executable) === 'cmd.exe' &&
+    argv.length === 5 && argv.slice(0, 4).join(' ').toLowerCase() === '/d /v:off /s /c'
+  return { executable, argv: quoteArgv(argv, platform), ...(batch ? { batchCommand: argv[4]! } : {}) }
+}
+
+function commandFields(form: SessionLaunchForm) {
+  if (form.batchCommand !== undefined) {
+    if (!form.batchCommand.trim()) throw new Error('Enter a batch command')
+    return { executable: 'cmd.exe', argv: ['/d', '/v:off', '/s', '/c', form.batchCommand] }
+  }
+  return { executable: form.executable, argv: formArgv(form) }
 }
 
 /**
@@ -59,7 +89,8 @@ function agentArgv(agent: LaunchAgent): string[] {
 export function applyLaunchAgent(
   form: SessionLaunchForm,
   agentId: LaunchAgentId,
-  suggestedNames: readonly string[] = []
+  suggestedNames: readonly string[] = [],
+  platform: LaunchPlatform = LAUNCH_PLATFORM
 ): SessionLaunchForm {
   const agent = LAUNCH_AGENTS.find((item) => item.id === agentId)
   if (!agent) return form
@@ -68,17 +99,21 @@ export function applyLaunchAgent(
   return {
     ...form,
     name: typedName ? form.name : agent.name,
-    executable: LAUNCH_SHELL,
-    argv: quoteArgv(agentArgv(agent))
+    executable: agentShell(agent, platform),
+    argv: quoteArgv(agentArgv(agent, platform), platform),
+    ...(form.batchCommand === undefined ? {} : { batchCommand: undefined })
   }
 }
 
 /** The agent whose launch the form still matches, or null once Advanced fields were changed. */
-export function launchAgentOf(form: SessionLaunchForm): LaunchAgentId | null {
-  if (form.executable !== LAUNCH_SHELL) return null
-  const argv = formArgv(form)
+export function launchAgentOf(form: SessionLaunchForm, platform: LaunchPlatform = LAUNCH_PLATFORM): LaunchAgentId | null {
+  if (form.batchCommand !== undefined) return null
+  let argv: string[]
+  try { argv = splitArgv(form.argv, platform) } catch { return null }
   return LAUNCH_AGENTS.find((agent) => {
-    const expected = agentArgv(agent)
+    const shell = agentShell(agent, platform)
+    if (platform === 'win32' ? windowsBasename(form.executable) !== shell : form.executable !== shell) return false
+    const expected = agentArgv(agent, platform)
     return expected.length === argv.length && expected.every((value, index) => argv[index] === value)
   })?.id ?? null
 }
@@ -86,12 +121,14 @@ export function launchAgentOf(form: SessionLaunchForm): LaunchAgentId | null {
 const PLAIN_ARGUMENT = /^[A-Za-z0-9_\-./:=@%+,]+$/
 
 /** Joins argv so `splitArgv` reads it back unchanged; arguments with spaces or quotes are single-quoted. */
-export function quoteArgv(argv: ReadonlyArray<string>): string {
+export function quoteArgv(argv: ReadonlyArray<string>, platform: LaunchPlatform = LAUNCH_PLATFORM): string {
+  if (platform === 'win32') return quoteWindowsArgv(argv)
   return argv.map((value) => PLAIN_ARGUMENT.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`).join(' ')
 }
 
 /** Shell-style split: whitespace separates, single quotes are literal, double quotes and backslashes escape. */
-export function splitArgv(text: string): string[] {
+export function splitArgv(text: string, platform: LaunchPlatform = LAUNCH_PLATFORM): string[] {
+  if (platform === 'win32') return splitWindowsArgv(text)
   const argv: string[] = []
   let current = ''
   let started = false
@@ -133,24 +170,23 @@ export const BACKGROUND_CHOICE_OPTIONS: ReadonlyArray<{ value: '' | BackgroundCh
 /** Choosing an available template fills its fields; unavailable or missing templates are inert. */
 export function applyLaunchTemplate(
   form: SessionLaunchForm,
-  template: LaunchTemplateRecord | undefined
+  template: LaunchTemplateRecord | undefined,
+  platform: LaunchPlatform = LAUNCH_PLATFORM
 ): SessionLaunchForm {
   if (!template || template.launchDisabledReason) return form
   return {
     name: template.name,
-    executable: template.executable,
-    argv: quoteArgv(template.argv),
+    ...launchFields(template.executable, template.argv, platform),
     cwd: template.cwd,
     backgroundChoice: template.backgroundChoice,
     terminalGraphics: form.terminalGraphics ?? template.terminalGraphics
   }
 }
 
-export function sessionLaunchForm(session: SessionRecord): SessionLaunchForm {
+export function sessionLaunchForm(session: SessionRecord, platform: LaunchPlatform = LAUNCH_PLATFORM): SessionLaunchForm {
   return {
     name: session.name,
-    executable: session.executable,
-    argv: quoteArgv(session.argv),
+    ...launchFields(session.executable, session.argv, platform),
     cwd: session.cwd,
     backgroundChoice: session.backgroundChoice,
     terminalGraphics: session.terminalGraphics
@@ -170,8 +206,7 @@ export function sessionCreateParams(
     workspaceId,
     name: form.name,
     cwd: form.cwd,
-    executable: form.executable,
-    argv: formArgv(form),
+    ...commandFields(form),
     cols: size.cols,
     rows: size.rows,
     backgroundChoice: form.backgroundChoice,
@@ -188,8 +223,7 @@ export function sessionUpdateParams(
     expectedRevision: session.revision,
     name: form.name,
     cwd: form.cwd,
-    executable: form.executable,
-    argv: formArgv(form),
+    ...commandFields(form),
     backgroundChoice: form.backgroundChoice,
     terminalGraphics: form.terminalGraphics
   }

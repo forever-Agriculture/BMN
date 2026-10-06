@@ -1,19 +1,48 @@
 // MODULE: control-cli.test.ts - the bmn CLI drives a real control server with truthful output and exit codes
 import { execFile } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { createServer } from 'node:net'
+import { createHash, randomUUID } from 'node:crypto'
+import { createServer, type Socket } from 'node:net'
 import { existsSync } from 'node:fs'
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { stripTypeScriptTypes } from 'node:module'
 import { runInNewContext } from 'node:vm'
 import { homedir, tmpdir } from 'node:os'
-import { basename, dirname, join } from 'node:path'
+import { basename, dirname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn as spawnPty } from 'node-pty'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ControlAuth, writeOwnerToken } from './control-auth'
 import { ERROR_CODES, HANDOFF_OUTLINE } from '@bmn/protocol'
 import { ControlError, ControlServer, MemoryReceiptStore, type ControlHandlers } from './control-server'
+
+import { ownWindowsFixtureFile } from './windows-fixture-owner.test-support'
+import { denyWindowsFixtureFileReads } from './windows-fixture-io.test-support'
+import { windowsEnvironmentValue } from '../../bin/windows-env.mjs'
+import { instrumentCliConnection } from './cli-connection-diagnostic.test-support'
+
+// Native ACL subprocesses can exceed the default 5s; each CLI child retains its 15s bound.
+if (process.platform === 'win32') vi.setConfig({ testTimeout: 30_000 })
+const rawEndpoint = (root: string, name: string) => process.platform === 'win32'
+  ? `\\\\.\\pipe\\bmn-control-${randomUUID().replaceAll('-', '')}` : join(root, name)
+
+// These cases exercise the Bash route used by native Claude when Git for Windows is installed.
+function fixtureShell(name: 'sh' | 'bash'): string {
+  if (process.platform !== 'win32') return `/bin/${name}`
+  const programFiles = windowsEnvironmentValue(process.env, 'ProgramFiles')
+  if (!programFiles) throw new Error('Native shell fixture requires ProgramFiles')
+  const path = join(programFiles, 'Git', 'bin', `${name}.exe`)
+  if (!existsSync(path)) throw new Error('Native Claude shell fixture requires Git for Windows')
+  return path
+}
+const shellPath = (path: string): string => process.platform === 'win32' ? path.replaceAll('\\', '/') : path
+const shellQuote = (value: string): string => `'${value.replaceAll("'", "'\"'\"'")}'`
+function fixtureSearchPath(first: readonly string[], inherited: string): string {
+  if (process.platform !== 'win32') return [...first, inherited].filter(Boolean).join(':')
+  // MSYS converts a Windows PATH on startup; mixed C:/drive and colon lists are ambiguous.
+  const programFiles = windowsEnvironmentValue(process.env, 'ProgramFiles')
+  if (!programFiles) throw new Error('Native shell fixture requires ProgramFiles')
+  return [...first, join(programFiles, 'Git', 'usr', 'bin'), join(programFiles, 'Git', 'bin')].join(';')
+}
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
 const AGENT_CONTROL_DOC = fileURLToPath(new URL('../../../../docs/agent-control.md', import.meta.url))
@@ -32,10 +61,23 @@ interface CliResult {
   stdout: string
   stderr: string
 }
+type CliTrace = (stage: string, metadata?: Record<string, string | number | boolean | null>) => void
+
+/** The CLI's test-only choice of hook entry form (bin/bmn HOOK_SHELL); without it Windows writes PowerShell's. */
+const HOOK_FORM_POSIX = { NODE_ENV: 'test', BMN_TEST_HOOK_SHELL: 'posix' }
+const HOOK_FORM_POWERSHELL = { NODE_ENV: 'test', BMN_TEST_HOOK_SHELL: 'powershell' }
 
 function runCli(
   args: string[],
-  options: { env?: Record<string, string>; cwd?: string; input?: string | Buffer | undefined } = {}
+  options: { env?: Record<string, string>; cwd?: string; input?: string | Buffer | undefined; trace?: CliTrace } = {}
+): Promise<CliResult> {
+  return runCommand(process.execPath, [CLI, ...args], options)
+}
+
+function runCommand(
+  executable: string,
+  args: string[],
+  options: { env?: Record<string, string>; cwd?: string; input?: string | Buffer | undefined; verbatim?: boolean; trace?: CliTrace } = {}
 ): Promise<CliResult> {
   const env: NodeJS.ProcessEnv = { ...process.env }
   for (const key of Object.keys(env)) {
@@ -46,14 +88,27 @@ function runCli(
   }
   return new Promise((resolve) => {
     const child = execFile(
-      process.execPath,
-      [CLI, ...args],
-      { env: { ...env, ...options.env }, ...(options.cwd === undefined ? {} : { cwd: options.cwd }), timeout: 15_000 },
+      executable,
+      args,
+      {
+        // Hook entries are read and written in their POSIX form on every OS unless a test asks for PowerShell's.
+        env: { ...env, ...HOOK_FORM_POSIX, ...options.env, ...(process.platform === 'win32' && options.env?.HOME ? { USERPROFILE: options.env.HOME } : {}) }, ...(options.cwd === undefined ? {} : { cwd: options.cwd }), timeout: 15_000,
+        ...(options.verbatim ? { windowsVerbatimArguments: true } : {})
+      },
       (error, stdout, stderr) => {
         const code = error === null ? 0 : typeof error.code === 'number' ? error.code : null
+        options.trace?.('child-callback', { code, errorCode: error?.code ?? null,
+          signal: error?.signal ?? null, killed: error?.killed ?? false })
         resolve({ code, stdout, stderr })
       }
     )
+    if (options.trace) {
+      child.on('spawn', () => options.trace?.('child-spawn'))
+      child.on('error', error => options.trace?.('child-error', { code: (error as NodeJS.ErrnoException).code ?? null }))
+      child.on('exit', (code, signal) => options.trace?.('child-exit', { code, signal }))
+      child.on('close', (code, signal) => options.trace?.('child-close', { code, signal }))
+      child.stdin?.on('finish', () => options.trace?.('stdin-finish'))
+    }
     child.stdin?.end(options.input ?? '')
   })
 }
@@ -442,13 +497,13 @@ describe('long text from standard input (Story 35.1)', () => {
   ])('refuses %j over its limit or not UTF-8 before opening the socket', async (args, input, message) => {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'aitcli-')))
     createdRoots.add(root)
-    const socketPath = join(root, 'count.sock')
+    const socketPath = rawEndpoint(root, 'count.sock')
     let connections = 0
     const counter = createServer((socket) => {
       connections += 1
       socket.destroy()
     })
-    await new Promise<void>((resolve) => counter.listen(socketPath, resolve))
+    await new Promise<void>((resolve, reject) => { counter.once('error', reject); counter.listen(socketPath, resolve) })
     try {
       const refused = await runCli(args, { env: { BMN_CONTROL_SOCKET: socketPath, BMN_TOKEN: 'unused' }, input })
       expect(refused).toEqual({ code: 2, stdout: '', stderr: `bmn: ${message}\nRun "bmn help" for usage.\n` })
@@ -459,7 +514,13 @@ describe('long text from standard input (Story 35.1)', () => {
   })
 
   it('ships the CLI executable, since sessions find it on PATH (Astra recheck)', async () => {
-    expect((await stat(CLI)).mode & 0o111).not.toBe(0)
+    if (process.platform === 'win32') {
+      const launcher = fileURLToPath(new URL('../../native-out/windows-cli/bmn.exe', import.meta.url))
+      expect((await stat(launcher)).isFile()).toBe(true)
+      expect((await runCommand(launcher, ['help'])).code).toBe(0)
+    } else {
+      expect((await stat(CLI)).mode & 0o111).not.toBe(0)
+    }
   })
 
   it('accepts input exactly at the limit, counted in the app\'s own unit', async () => {
@@ -474,19 +535,27 @@ describe('long text from standard input (Story 35.1)', () => {
     expect((await runCli(['send', '--text-file', '-'], { env, input: `${'s'.repeat(64 * 1024)}\n` })).code).toBe(0)
   })
 
-  it.skipIf(!existsSync('/usr/bin/script'))('refuses a terminal on standard input instead of waiting for typing', async () => {
+  it('refuses a terminal on standard input instead of waiting for typing', async () => {
     const fixture = await cliFixture()
-    const command = [process.execPath, CLI, 'ask', 'k', 'T', '--body-file', '-'].map((part) => `'${part}'`).join(' ')
-    // util-linux script(1) gives the CLI a real pseudo-terminal as standard input.
-    const result = await new Promise<{ code: number | null; output: string }>((resolve) => {
-      execFile('/usr/bin/script', ['-qec', command, '/dev/null'], {
-        env: { ...process.env, ...fixture.sessionEnv }, timeout: 15_000
-      }, (error, stdout) => resolve({ code: error === null ? 0 : typeof error.code === 'number' ? error.code : null, output: stdout }))
+    // A real pseudo-terminal is the CLI's standard input: a Linux PTY, or ConPTY on Windows.
+    const child = spawnPty(process.execPath, [CLI, 'ask', 'k', 'T', '--body-file', '-'], {
+      name: 'xterm-256color', cols: 120, rows: 24, cwd: process.cwd(),
+      env: Object.fromEntries(Object.entries({ ...process.env, ...fixture.sessionEnv })
+        .filter((entry): entry is [string, string] => typeof entry[1] === 'string')),
+      ...(process.platform === 'win32' ? { useConpty: true, useConptyDll: true } : {})
     })
-    expect(result.code).toBe(2)
-    expect(result.output).toContain('bmn: --body-file - needs piped input, not a terminal')
+    let output = ''
+    child.onData((part) => { output += part })
+    const code = await new Promise<number | null>((resolve) => {
+      const timeout = setTimeout(() => { child.kill(); resolve(null) }, 15_000)
+      child.onExit(({ exitCode }) => { clearTimeout(timeout); resolve(exitCode) })
+    })
+    // eslint-disable-next-line no-control-regex
+    const text = output.replace(/\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07/gu, '')
+    expect(code).toBe(2)
+    expect(text).toContain('bmn: --body-file - needs piped input, not a terminal')
     expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
-  })
+  }, 20_000)
 })
 
 describe('bmn resume-command (Story 43.1)', () => {
@@ -603,7 +672,7 @@ describe('bmn help agents', () => {
 
   it('holds the CLI outline, the form outline and the documented one to one text (Story 35.2)', async () => {
     const [outline, documentation] = await Promise.all([runCli(['handoff', '--outline']), readFile(AGENT_CONTROL_DOC, 'utf8')])
-    const fenced = /`bmn handoff --outline` prints[\s\S]*?```text\n([\s\S]*?)```/.exec(documentation)
+    const fenced = /`bmn handoff --outline` prints[\s\S]*?```text\n([\s\S]*?)```/.exec(documentation.replace(/\r\n/g, '\n'))
 
     expect(outline.stdout).toBe(`${HANDOFF_OUTLINE}\n`)
     expect(fenced?.[1]).toBe(`${HANDOFF_OUTLINE}\n`)
@@ -618,14 +687,14 @@ describe('bmn help agents', () => {
       runCli(['help', 'agents']),
       readFile(AGENT_CONTROL_DOC, 'utf8')
     ])
-    const fenced = /## A brief for agents[\s\S]*?```text\n([\s\S]*?)```/.exec(documentation)
+    const fenced = /## A brief for agents[\s\S]*?```text\n([\s\S]*?)```/.exec(documentation.replace(/\r\n/g, '\n'))
 
     expect(fenced?.[1]).toBe(brief.stdout)
   })
 
   it('keeps the documented command block identical to what `bmn help` prints (Story 38.3)', async () => {
     const [usage, documentation] = await Promise.all([runCli(['help']), readFile(AGENT_CONTROL_DOC, 'utf8')])
-    const block = /<!-- BEGIN `bmn help` [^\n]*-->\n```text\n([\s\S]*?)```\n<!-- END `bmn help` -->/.exec(documentation)
+    const block = /<!-- BEGIN `bmn help` [^\n]*-->\n```text\n([\s\S]*?)```\n<!-- END `bmn help` -->/.exec(documentation.replace(/\r\n/g, '\n'))
 
     expect(usage.code).toBe(0)
     expect(block?.[1], 'docs/agent-control.md differs from `bmn help`; regenerate it with `pnpm run docs:bmn-help`')
@@ -1186,9 +1255,9 @@ describe('bmn hook provenance and the hook event log', () => {
 
   // Story 31.1: the Claude config folder rides along, resolved the way `hooks install` resolves it.
   it.each([
-    ['an absolute folder', '/srv/agents/glm-config', undefined, '/srv/agents/glm-config'],
-    ['a relative folder, against the working directory', 'conf/glm', 'cwd', '<cwd>/conf/glm'],
-    ['a folder with .. kept as written', '/srv/agents/../glm', undefined, '/srv/agents/../glm'],
+    ['an absolute folder', process.platform === 'win32' ? 'C:\\srv\\agents\\glm-config' : '/srv/agents/glm-config', undefined, process.platform === 'win32' ? 'C:\\srv\\agents\\glm-config' : '/srv/agents/glm-config'],
+    ['a relative folder, against the working directory', 'conf/glm', 'cwd', process.platform === 'win32' ? '<cwd>\\conf/glm' : '<cwd>/conf/glm'],
+    ['a folder with .. kept as written', process.platform === 'win32' ? 'C:\\srv\\agents\\..\\glm' : '/srv/agents/../glm', undefined, process.platform === 'win32' ? 'C:\\srv\\agents\\..\\glm' : '/srv/agents/../glm'],
     ['no variable, the home folder', undefined, undefined, '<home>/.claude']
   ])('sends claudeConfigDir for %s', async (_label, variable, cwd, expected) => {
     const fixture = await cliFixture()
@@ -1465,6 +1534,7 @@ async function hookFileFixture(contents?: unknown, name = 'settings.json'): Prom
   const path = join(root, name)
   if (contents !== undefined) {
     await writeFile(path, typeof contents === 'string' ? contents : `${JSON.stringify(contents, null, 2)}\n`)
+    ownWindowsFixtureFile(root, path)
   }
   return path
 }
@@ -1510,9 +1580,19 @@ function ttyHooks(args: string[], pipe: 'none' | 'stdin' | 'stdout' | 'stderr' =
       ? `child.${pipe}.on('data', part => process.stdout.write(part));` : ''}
     child.on('exit', code => { process.exitCode = code ?? 1 });`
   const command = pipe === 'none' ? [CLI, 'hooks', ...args] : ['-e', wrapper, CLI, 'hooks', ...args]
+  const fileIndex = args.indexOf('--file')
+  const fixtureHome = fileIndex >= 0 ? dirname(args[fileIndex + 1]!) : tmpdir()
+  const essentials = process.platform === 'win32' ? Object.fromEntries(
+    ['SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'ComSpec'].flatMap(key => {
+      const value = windowsEnvironmentValue(process.env, key)
+      return value ? [[key, value]] : []
+    })
+  ) : {}
   const child = spawnPty(process.execPath, command, {
     name: 'xterm-256color', cols: 100, rows: 32, cwd: process.cwd(),
-    env: { PATH: process.env.PATH ?? '', HOME: tmpdir() }
+    env: { ...essentials, ...HOOK_FORM_POSIX, PATH: process.env.PATH ?? '', HOME: fixtureHome,
+      ...(process.platform === 'win32' ? { USERPROFILE: fixtureHome } : {}) },
+    ...(process.platform === 'win32' ? { useConpty: true, useConptyDll: true } : {})
   })
   let output = ''
   const waiting = new Set<{ text: string; resolve: () => void }>()
@@ -1548,15 +1628,20 @@ describe('bmn hooks check', () => {
 
   it('reports a file it cannot read as unreadable, and installs nothing over it', async () => {
     const path = await hookFileFixture({ hooks: {} })
-    await chmod(path, 0o000)
+    if (process.platform === 'win32') denyWindowsFixtureFileReads(dirname(path), path, true)
+    else await chmod(path, 0o000)
 
-    const check = await runHooks(['check', 'claude', '--file', path])
-    const install = await runHooks(['install', '--yes', 'claude', '--file', path])
-    await chmod(path, 0o600)
-
-    expect(check.code).toBe(1)
-    expect(check.stdout).toContain('EACCES')
-    expect(install.code).toBe(1)
+    try {
+      await expect(readFile(path)).rejects.toThrow()
+      const check = await runHooks(['check', 'claude', '--file', path])
+      const install = await runHooks(['install', '--yes', 'claude', '--file', path])
+      expect(check.code).toBe(1)
+      expect(check.stdout).toMatch(/EACCES|EPERM/)
+      expect(install.code).toBe(1)
+    } finally {
+      if (process.platform === 'win32') denyWindowsFixtureFileReads(dirname(path), path, false)
+      else await chmod(path, 0o600)
+    }
     // Somebody's configuration BMN could not read is never something to overwrite.
     expect(JSON.parse(await readFile(path, 'utf8'))).toEqual({ hooks: {} })
     expect(await backupsOf(path)).toEqual([])
@@ -2274,7 +2359,7 @@ it('ends every Codex report with the limit of what it checked', async () => {
       join(bin, 'bmn'),
       ['#!/bin/sh', '[ "$#" -eq 2 ] || exit 0', '[ "$1" = hook ] && [ "$2" = claude ] || exit 0',
         'event=$(cat)', 'case "$event" in', '  \'{\'*) ;;', '  *) exit 0 ;;', 'esac',
-        `echo yes >> ${ran}`, 'exit 0', ''].join('\n'),
+        `echo yes >> ${shellQuote(shellPath(ran))}`, 'exit 0', ''].join('\n'),
       { mode: 0o755 }
     )
     const EVENT = '{"hook_event_name":"Stop"}'
@@ -2290,8 +2375,8 @@ it('ends every Codex report with the limit of what it checked', async () => {
     for (const command of accepted) {
       await rm(ran, { force: true })
       const failure = await new Promise<string | null>((resolve) => {
-        const child = execFile('/bin/bash', ['-c', `${command}\nwait`], {
-          env: { PATH: `${bin}:${process.env.PATH ?? ''}`, BMN_CONTROL_SOCKET: '/x', AITERM_CONTROL_SOCKET: '/x' },
+        const child = execFile(fixtureShell('bash'), ['-c', `${command}\nwait`], {
+          env: { PATH: fixtureSearchPath([bin], process.env.PATH ?? ''), BMN_CONTROL_SOCKET: '/x', AITERM_CONTROL_SOCKET: '/x' },
           cwd: root, timeout: 10_000
         }, (error) => {
           if (error === null) return resolve(null)
@@ -2366,8 +2451,8 @@ it('ends every Codex report with the limit of what it checked', async () => {
     // Both agents, each at its own default path, and the moved Codex directory is the one consulted.
     const report = JSON.parse(result.stdout)
     expect(report.agents.map((agent: { agent: string }) => agent.agent)).toEqual(['claude', 'codex', 'opencode', 'cursor'])
-    expect(report.agents[0].file).toBe(join(home.root, '.claude', 'settings.json'))
-    expect(report.agents[1].file).toBe(join(codexHome, 'hooks.json'))
+    expect(normalize(report.agents[0].file)).toBe(join(home.root, '.claude', 'settings.json'))
+    expect(normalize(report.agents[1].file)).toBe(join(codexHome, 'hooks.json'))
     expect(report.agents[0].events.find((row: { event: string }) => row.event === 'Stop').state).toBe('wired')
     expect(report.agents[1].events.every((row: { state: string }) => row.state === 'missing')).toBe(true)
     expect(result.code).toBe(1)
@@ -2378,11 +2463,11 @@ it('ends every Codex report with the limit of what it checked', async () => {
     const codexHome = join(home.root, 'moved-codex')
     const env = { HOME: home.root, CODEX_HOME: codexHome }
 
-    const install = await runHooks(['install', '--yes', 'codex'], env)
+    const install = await runHooks(['install', '--yes', 'codex', '--json'], env)
     const check = await runHooks(['check', 'codex'], env)
 
     expect(install.code).toBe(0)
-    expect(install.stdout).toContain(join(codexHome, 'hooks.json'))
+    expect(normalize(JSON.parse(install.stdout).file)).toBe(join(codexHome, 'hooks.json'))
     expect(Object.keys(JSON.parse(await readFile(join(codexHome, 'hooks.json'), 'utf8')).hooks))
       .toEqual(expect.arrayContaining(CODEX_EVENTS))
     expect(check.code).toBe(0)
@@ -2417,7 +2502,7 @@ describe('bmn hooks install', () => {
     const accepted = ttyHooks(['install', 'codex', '--file', path], 'stdout')
     await accepted.waitFor('Install these hooks? [y/N] ')
     accepted.write('yes\r')
-    expect(await accepted.finish).toBe(0)
+    expect(await accepted.finish, accepted.output()).toBe(0)
     expect((await runHooks(['check', 'codex', '--file', path])).code).toBe(0)
 
     const other = await hookFileFixture({}, 'hooks.json')
@@ -2440,7 +2525,7 @@ describe('bmn hooks install', () => {
       await tty.waitFor('Install these hooks? [y/N] ')
       expect(await readFile(path, 'utf8')).toBe(before)
       tty.write(answer)
-      expect(await tty.finish).toBe(answer === 'yes\r' ? 0 : 1)
+      expect(await tty.finish, tty.output()).toBe(answer === 'yes\r' ? 0 : 1)
       if (answer === 'yes\r') {
         expect((await runHooks(['check', 'codex', '--file', path])).code).toBe(0)
         expect((await backupsOf(path)).length).toBe(1)
@@ -2544,7 +2629,12 @@ describe('bmn hooks install', () => {
     const before = await readFile(path, 'utf8')
     const child = spawnPty(process.execPath, [CLI, 'hooks', 'install', 'codex', '--file', path], {
       name: 'xterm-256color', cols: 80, rows: 24, cwd: process.cwd(),
-      env: { PATH: process.env.PATH ?? '', HOME: dirname(path) }
+      env: { ...Object.fromEntries(['SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'ComSpec'].flatMap(key => {
+        const value = windowsEnvironmentValue(process.env, key)
+        return process.platform === 'win32' && value ? [[key, value]] : []
+      })), PATH: process.env.PATH ?? '', HOME: dirname(path),
+      ...(process.platform === 'win32' ? { USERPROFILE: dirname(path) } : {}) },
+      ...(process.platform === 'win32' ? { useConpty: true, useConptyDll: true } : {})
     })
     let output = ''
     const finished = new Promise<number>((resolve) => child.onExit(({ exitCode }) => resolve(exitCode)))
@@ -2664,6 +2754,7 @@ describe('bmn hooks install', () => {
     const real = await hookFileFixture({ hooks: {} }, 'real-settings.json')
     const link = join(dirname(real), 'settings.json')
     await chmod(real, 0o640)
+    const originalMode = (await stat(real)).mode & 0o777
     await symlink(real, link)
 
     const install = await runHooks(['install', '--yes', 'claude', '--file', link])
@@ -2671,7 +2762,7 @@ describe('bmn hooks install', () => {
     expect(install.code).toBe(0)
     expect((await lstat(link)).isSymbolicLink()).toBe(true)
     expect(Object.keys(JSON.parse(await readFile(real, 'utf8')).hooks)).toEqual(CLAUDE_EVENTS)
-    expect((await stat(real)).mode & 0o777).toBe(0o640)
+    expect((await stat(real)).mode & 0o777).toBe(originalMode)
   })
 
   it('writes through a symlinked parent to the file the kernel would, not one of the same name', async () => {
@@ -2680,14 +2771,64 @@ describe('bmn hooks install', () => {
     // and overwrite whatever is there.
     const root = dirname(await hookFileFixture({ hooks: {} }, 'unused.json'))
     await mkdir(join(root, 'real', 'nested'), { recursive: true })
-    await symlink(join('real', 'nested'), join(root, 'alias'))
+    await symlink(join('real', 'nested'), join(root, 'alias'), 'dir')
     await symlink(join('..', 'target.json'), join(root, 'real', 'nested', 'settings.json'))
     await writeFile(join(root, 'target.json'), 'SENTINEL: nothing to do with any harness\n')
     await writeFile(join(root, 'real', 'target.json'), '{"real":"target"}\n')
+    ownWindowsFixtureFile(root, join(root, 'real', 'target.json'))
 
+    let nativeDiagnostic: unknown
+    if (process.platform === 'win32') {
+      const probeRoot = join(root, 'native-write-probe')
+      const helper = new URL('../../bin/safe-config-write.mjs', import.meta.url).href
+      const ownerHelper = new URL('./windows-fixture-owner.test-support.ts', import.meta.url).href
+      const script = `import assert from 'node:assert/strict';import {spawnSync} from 'node:child_process';
+import {existsSync,mkdirSync,symlinkSync,writeFileSync,readFileSync,realpathSync} from 'node:fs';
+import {join} from 'node:path';import {linkTarget,writeConfigSafely} from ${JSON.stringify(helper)};
+import {ownWindowsFixtureFile} from ${JSON.stringify(ownerHelper)};
+const root=process.argv[1],report={stage:'prepare',status:'UNVERIFIED'};
+try {
+ mkdirSync(join(root,'real','nested'),{recursive:true});
+ symlinkSync(join('real','nested'),join(root,'alias'),'dir');
+ symlinkSync(join('..','target.json'),join(root,'real','nested','settings.json'));
+ writeFileSync(join(root,'target.json'),'synthetic unrelated sentinel');
+ const expected='{"real":"target"}\\n',target=join(root,'real','target.json');writeFileSync(target,expected);
+ const selected=join(root,'alias','settings.json');
+ report.resolutionEqual=linkTarget(selected)===realpathSync.native(target);
+ const ownerSource="$ErrorActionPreference='Stop';Import-Module ([IO.Path]::Combine($PSHOME,'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1'));$PSModuleAutoLoadingPreference='None';[Console]::InputEncoding=[Text.UTF8Encoding]::new($false);$p=ConvertFrom-Json ([Console]::In.ReadToEnd());$owner=[IO.File]::GetAccessControl($p).GetOwner([Security.Principal.SecurityIdentifier]).Value;$user=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value;[Console]::Out.Write((ConvertTo-Json -Compress @{ownerMatchesUser=($owner -eq $user)}))";
+ const owner=spawnSync(join(process.env.SystemRoot,'System32/WindowsPowerShell/v1.0/powershell.exe'),['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(ownerSource,'utf16le').toString('base64')],{input:JSON.stringify(target),encoding:'utf8',timeout:15000,windowsHide:true});
+ assert.ok(!owner.error&&owner.status===0,'Fresh target owner query must complete');
+ report.originalOwnerMatchesUser=JSON.parse(owner.stdout).ownerMatchesUser;
+ if(!report.originalOwnerMatchesUser){
+  report.stage='original-owner-refusal';let refusal;
+  try{writeConfigSafely(selected,expected,'{"real":"target","syntheticProbe":true}\\n')}catch(error){refusal=error}
+  assert.ok(refusal&&refusal.nativeOperation==='prepare:original-owner'&&refusal.created===false&&refusal.recoveryRequired===false,'Original owner guard must refuse before staging');
+  assert.equal(readFileSync(target,'utf8'),expected);report.originalOwnerRefused=true;
+ }else{report.originalOwnerControl='not-applicable-already-current-owner'}
+ assert.equal(readFileSync(join(root,'target.json'),'utf8'),'synthetic unrelated sentinel','Original refusal cannot change sentinel');
+ report.stage='fresh-target-owner-setup';ownWindowsFixtureFile(root,target);
+ assert.equal(readFileSync(target,'utf8'),expected,'Ownership setup cannot change bytes');
+ report.stage='write-config-safely';writeConfigSafely(selected,expected,'{"real":"target","syntheticProbe":true}\\n');
+ assert.equal(JSON.parse(readFileSync(target,'utf8')).syntheticProbe,true);
+ report.afterOwnershipSuccess=true;
+ report.status='PASS';
+} catch(error) {
+ report.status='REFUSED';
+ for(const key of ['code','nativeOperation','nativeErrorCode','nativeExceptionType','nativeErrorIdentifier','nativeLaunchError','recoveryRequired','created']) {
+  if(['string','number','boolean'].includes(typeof error[key])) report[key]=error[key];
+ }
+}
+report.sentinelPreserved=existsSync(join(root,'target.json'))&&readFileSync(join(root,'target.json'),'utf8')==='synthetic unrelated sentinel';
+console.log(JSON.stringify(report));`
+      const probe = await runCommand(process.execPath, ['--input-type=module', '-e', script, probeRoot])
+      try { nativeDiagnostic = { exit: probe.code, ...JSON.parse(probe.stdout) } }
+      catch { nativeDiagnostic = { exit: probe.code, malformedReceipt: true, stderrBytes: Buffer.byteLength(probe.stderr) } }
+    }
     const install = await runHooks(['install', '--yes', 'claude', '--file', join(root, 'alias', 'settings.json')])
 
-    expect(install.code).toBe(0)
+    expect(install.code, JSON.stringify({ stderr: install.stderr, nativeDiagnostic })).toBe(0)
+    if (process.platform === 'win32') expect(nativeDiagnostic).toMatchObject({ exit: 0, status: 'PASS',
+      resolutionEqual: true, afterOwnershipSuccess: true, sentinelPreserved: true })
     expect(await readFile(join(root, 'target.json'), 'utf8')).toBe('SENTINEL: nothing to do with any harness\n')
     const written = JSON.parse(await readFile(join(root, 'real', 'target.json'), 'utf8'))
     expect(written.real).toBe('target')
@@ -2700,13 +2841,19 @@ describe('bmn hooks install', () => {
     // that has nothing to do with any harness. Node's own realpathSync collapses it as text.
     const root = dirname(await hookFileFixture({ hooks: {} }, 'unused.json'))
     await mkdir(join(root, 'real', 'nested'), { recursive: true })
-    await symlink(join('real', 'nested'), join(root, 'branch'))
+    await symlink(join('real', 'nested'), join(root, 'branch'), 'dir')
     await symlink('branch/../target.json', join(root, 'settings.json'))
     await writeFile(join(root, 'target.json'), 'SENTINEL: nothing to do with any harness\n')
     await writeFile(join(root, 'real', 'target.json'), '{"real":true}\n')
 
     const install = await runHooks(['install', '--yes', 'claude', '--file', join(root, 'settings.json')])
 
+    if (process.platform === 'win32') {
+      expect(install.code).toBe(1)
+      expect(await readFile(join(root, 'target.json'), 'utf8')).toBe('SENTINEL: nothing to do with any harness\n')
+      expect(await readFile(join(root, 'real', 'target.json'), 'utf8')).toBe('{"real":true}\n')
+      return
+    }
     expect(install.code).toBe(0)
     expect(await readFile(join(root, 'target.json'), 'utf8')).toBe('SENTINEL: nothing to do with any harness\n')
     const written = JSON.parse(await readFile(join(root, 'real', 'target.json'), 'utf8'))
@@ -2724,7 +2871,7 @@ describe('bmn hooks install', () => {
     const install = await runHooks(['install', '--yes', 'claude', '--file', join(root, 'settings.json')])
 
     expect(install.code).toBe(1)
-    expect(install.stderr).toContain('which does not exist; resolve it by hand')
+    expect(install.stderr).toContain(process.platform === 'win32' ? 'not valid JSON' : 'which does not exist; resolve it by hand')
     expect(await readFile(join(root, 'target.json'), 'utf8')).toBe('SENTINEL\n')
     expect(await backupsOf(join(root, 'settings.json'))).toEqual([])
   })
@@ -2737,10 +2884,16 @@ describe('bmn hooks install', () => {
     await mkdir(join(root, 'cfg', 'claude'), { recursive: true })
     await writeFile(join(root, 'cfg', 'settings.json'), '{"hooks":{}}\n')
     await writeFile(join(root, 'settings.json'), 'SENTINEL\n')
-    await symlink(join(root, 'cfg', 'claude'), join(root, 'x'))
+    await symlink(join(root, 'cfg', 'claude'), join(root, 'x'), 'dir')
 
     const install = await runHooks(['install', '--yes', 'claude', '--file', `${join(root, 'x')}/../settings.json`])
 
+    if (process.platform === 'win32') {
+      expect(install.code).toBe(1)
+      expect(await readFile(join(root, 'settings.json'), 'utf8')).toBe('SENTINEL\n')
+      expect(await readFile(join(root, 'cfg', 'settings.json'), 'utf8')).toBe('{"hooks":{}}\n')
+      return
+    }
     expect(install.code).toBe(0)
     // The kernel reads `x/..` as `cfg`, so the hooks belong in cfg/settings.json...
     expect(Object.keys(JSON.parse(await readFile(join(root, 'cfg', 'settings.json'), 'utf8')).hooks))
@@ -2756,10 +2909,16 @@ describe('bmn hooks install', () => {
     await mkdir(join(root, 'cfg', 'claude'), { recursive: true })
     await writeFile(join(root, 'cfg', 'settings.json'), '{"hooks":{}}\n')
     await writeFile(join(root, 'settings.json'), 'SENTINEL\n')
-    await symlink(join(root, 'cfg', 'claude'), join(root, 'x'))
+    await symlink(join(root, 'cfg', 'claude'), join(root, 'x'), 'dir')
 
     const install = await runHooks(['install', '--yes', 'claude'], { CLAUDE_CONFIG_DIR: `${join(root, 'x')}/..` })
 
+    if (process.platform === 'win32') {
+      expect(install.code).toBe(1)
+      expect(await readFile(join(root, 'settings.json'), 'utf8')).toBe('SENTINEL\n')
+      expect(await readFile(join(root, 'cfg', 'settings.json'), 'utf8')).toBe('{"hooks":{}}\n')
+      return
+    }
     expect(install.code).toBe(0)
     expect(Object.keys(JSON.parse(await readFile(join(root, 'cfg', 'settings.json'), 'utf8')).hooks))
       .toEqual(CLAUDE_EVENTS)
@@ -2773,7 +2932,7 @@ describe('bmn hooks install', () => {
     const install = await runHooks(['install', '--yes', 'claude', '--file', `${join(root, 'none')}/../settings.json`])
 
     expect(install.code).toBe(1)
-    expect(install.stderr).toContain('which does not exist; resolve it by hand')
+    expect(install.stderr).toContain(process.platform === 'win32' ? 'not valid JSON' : 'which does not exist; resolve it by hand')
     expect(await readFile(join(root, 'settings.json'), 'utf8')).toBe('SENTINEL\n')
   })
 
@@ -3003,7 +3162,7 @@ describe('OpenCode hooks', () => {
       }
       return result
     }
-    const create = runInNewContext(`${javascript}; BMNPlugin`, { process: { env } })
+    const create = runInNewContext(`${javascript}; BMNPlugin`, { Headers, AbortController, clearTimeout, process: { env } })
     const plugin = await create({ $: shell })
     const root = { type: 'session.created', properties: { sessionID: OPENCODE_SESSION } }
     await plugin.event({ event: root })
@@ -3047,7 +3206,7 @@ describe('OpenCode hooks', () => {
       posts.push({ url: request.url, body: JSON.parse(await request.text()) })
       return { ok: status < 300, status }
     }
-    const create = runInNewContext(`${javascript}; BMNPlugin`, {
+    const create = runInNewContext(`${javascript}; BMNPlugin`, { Headers, AbortController, clearTimeout,
       process: { env: { BMN_CONTROL_SOCKET: '/fixture/socket' } }, URL, Request, setTimeout, Buffer
     })
     const plugin = await create({
@@ -3110,12 +3269,12 @@ describe('OpenCode hooks', () => {
           const quote = (value: unknown): string => `'${String(value).replaceAll("'", "'\"'\"'")}'`
           const command = strings.reduce((text, part, index) => text + part + (index < values.length
             ? (Array.isArray(values[index]) ? values[index].map(quote).join(' ') : quote(values[index])) : ''), '')
-          child = execFile('/bin/sh', ['-c', command], { env }, () => resolve())
+          child = execFile(fixtureShell('sh'), ['-c', command], { env }, () => resolve())
         })
       }
       return result
     }
-    const create = runInNewContext(`${javascript}; BMNPlugin`, { process: { env: { BMN_CONTROL_SOCKET: '/fixture/socket' } } })
+    const create = runInNewContext(`${javascript}; BMNPlugin`, { Headers, AbortController, clearTimeout, process: { env: { BMN_CONTROL_SOCKET: '/fixture/socket' } } })
     const plugin = await create({ $: shell })
     const started = Date.now()
     const safety = setTimeout(() => {
@@ -3221,18 +3380,27 @@ describe('OpenCode hooks', () => {
     const fixture = await cliFixture()
     const malformed = 'ses_zzzzzzzzzzzzhVbLiXJ8YHJQjV'
     const methods: string[] = []
-    const socketPath = join(fixture.root, 'raw-hook.sock')
+    const sockets = new Set<Socket>(), started = Date.now()
+    const trace: { stage: string; elapsedMs: number; metadata?: Record<string, string | number | boolean | null> }[] = []
+    const track: CliTrace = (stage, metadata) => { if (trace.length < 100) trace.push({ stage, elapsedMs: Date.now() - started, ...(metadata ? { metadata } : {}) }) }
+    const socketPath = rawEndpoint(fixture.root, 'raw-hook.sock')
     const rawServer = createServer((socket) => {
+      sockets.add(socket); track('server-connection')
+      socket.on('end', () => track('socket-end'))
+      socket.on('error', error => track('socket-error', { code: (error as NodeJS.ErrnoException).code ?? null }))
+      socket.on('close', () => { sockets.delete(socket); track('socket-close') })
       socket.setEncoding('utf8')
       let buffer = ''
       socket.on('data', (chunk: string) => {
+        track('server-data', { bytes: Buffer.byteLength(chunk), newlines: chunk.split('\n').length - 1 })
         buffer += chunk
         let newline = buffer.indexOf('\n')
         while (newline !== -1) {
           const message = JSON.parse(buffer.slice(0, newline)) as { id: number; method: string }
           buffer = buffer.slice(newline + 1)
           methods.push(message.method)
-          socket.write(`${JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { recorded: true } })}\n`)
+          track('complete-method', { method: ['auth', 'conversation.observe', 'hook.observe'].includes(message.method) ? message.method : 'other' })
+          socket.write(`${JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { recorded: true } })}\n`, () => track('reply-written'))
           newline = buffer.indexOf('\n')
         }
       })
@@ -3241,13 +3409,37 @@ describe('OpenCode hooks', () => {
       rawServer.once('error', reject)
       rawServer.listen(socketPath, resolve)
     })
+    track('listen-ready')
     try {
       const proc = await procTree(fixture.root, OPENCODE_FOREGROUND)
       const env = { ...fixture.sessionEnv, BMN_CONTROL_SOCKET: socketPath, BMN_PROC_ROOT: proc }
-      expect(await runCli(['hook', 'opencode'], { env, input: JSON.stringify({
+      const observed = await runCli(['hook', 'opencode'], { env, trace: track, input: JSON.stringify({
         hook_event_name: 'session.created', sessionID: malformed, info: { id: malformed }
-      }) })).toEqual(QUIET)
-      expect(methods).toEqual(['auth', 'hook.observe'])
+      }) })
+      const originalMethods = [...methods], originalTrace = [...trace]
+      const connectionMatrix: unknown[] = []
+      {
+        const source = await readFile(CLI, 'utf8')
+        for (const listenersFirst of [false, true]) {
+          const copy = join(fixture.root, `instrumented-${listenersFirst ? 'listeners-first' : 'original'}.mjs`)
+          await writeFile(copy, instrumentCliConnection(source, new URL('../../bin/safe-config-write.mjs', import.meta.url).href, listenersFirst))
+          for (const [referenceKind, reference] of [['malformed', malformed], ['valid', OPENCODE_SESSION]] as const) {
+            methods.length = 0
+            const sample = await runCommand(process.execPath, [copy, 'hook', 'opencode'], { env, input: JSON.stringify({
+              hook_event_name: 'session.created', sessionID: reference, info: { id: reference }
+            }) })
+            const phases = sample.stderr.split(/\r?\n/).filter(line => line.startsWith('[BMN_SYNTHETIC_CLIENT]'))
+              .slice(0, 100).map(line => JSON.parse(line.slice('[BMN_SYNTHETIC_CLIENT]'.length)) as unknown)
+            connectionMatrix.push({ construction: listenersFirst ? 'listeners-first' : 'original', runtime: 'Node',
+              referenceKind, code: sample.code, stdoutBytes: Buffer.byteLength(sample.stdout), phases, methods: [...methods] })
+          }
+        }
+        connectionMatrix.push({ runtime: 'Bun', result: 'UNVERIFIED', reason: 'Actual pinned Bun runs in the separately owned native CLI gate' })
+      }
+      if (process.platform === 'win32') console.log(JSON.stringify({ nativeDiagnostic: 'hook-connection', originalTrace, connectionMatrix }))
+      expect(observed, JSON.stringify({ methods: originalMethods, trace: originalTrace, connectionMatrix })).toEqual(QUIET)
+      // Diagnostic matrix methods must not replace the original invocation's proof.
+      expect(originalMethods).toEqual(['auth', 'hook.observe'])
 
       methods.length = 0
       expect(await runCli(['hook', 'opencode'], { env, input: JSON.stringify({
@@ -3255,9 +3447,13 @@ describe('OpenCode hooks', () => {
       }) })).toEqual(QUIET)
       expect(methods).toEqual(['auth', 'conversation.observe', 'hook.observe'])
     } finally {
-      await new Promise<void>((resolve) => rawServer.close(() => resolve()))
+      for (const socket of sockets) socket.destroy()
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Synthetic raw pipe cleanup timeout')), 2000)
+        rawServer.close(() => { clearTimeout(timer); resolve() })
+      })
     }
-  })
+  }, process.platform === 'win32' ? 90000 : 5000)
 
   it.each([['session.created', 'startup'], ['tui.session.select', 'resume']])('captures %s with the OpenCode reference', async (event, source) => {
     const fixture = await cliFixture()
@@ -3306,13 +3502,13 @@ describe('OpenCode hooks', () => {
     const config = join(fixture.root, 'opencode')
     const env = { OPENCODE_CONFIG_DIR: config }
     const first = JSON.parse((await runHooks(['check', 'opencode', '--json'], env)).stdout)
-    expect(first.agents[0].file).toBe(join(config, 'plugins', 'bmn.ts'))
+    expect(normalize(first.agents[0].file)).toBe(join(config, 'plugins', 'bmn.ts'))
     const fresh = JSON.parse((await runHooks(['install', '--yes', 'opencode', '--json'], env)).stdout)
-    expect(fresh.file).toBe(join(config, 'plugins', 'bmn.ts'))
+    expect(normalize(fresh.file)).toBe(join(config, 'plugins', 'bmn.ts'))
     expect(await readFile(fresh.file, 'utf8')).toContain('export const BMNPlugin')
     await mkdir(join(config, 'plugin'), { recursive: true })
     const installed = JSON.parse((await runHooks(['install', '--yes', 'opencode', '--json'], env)).stdout)
-    expect(installed.file).toBe(join(config, 'plugin', 'bmn.ts'))
+    expect(normalize(installed.file)).toBe(join(config, 'plugin', 'bmn.ts'))
   })
 })
 
@@ -3764,7 +3960,7 @@ describe('Cursor hooks (Epic 31.3)', () => {
 
     const report = JSON.parse(result.stdout)
     expect(report.agents.map((agent: { agent: string }) => agent.agent)).toEqual(['claude', 'codex', 'opencode', 'cursor'])
-    expect(report.agents[3].file).toBe(join(home.root, '.cursor', 'hooks.json'))
+    expect(normalize(report.agents[3].file)).toBe(join(home.root, '.cursor', 'hooks.json'))
   })
 
   it('drives bmn hook cursor with every event check expects, and each one reaches the app', async () => {
@@ -3882,10 +4078,25 @@ describe('bmn statusline (Story 37.2)', () => {
     expect(await backupsOf(path)).toHaveLength(2)
   })
 
+  it('refuses to install the POSIX wrapper on Windows and leaves the file alone; check still reads it', async () => {
+    const path = await hookFileFixture(settings)
+    const original = await readFile(path, 'utf8')
+
+    const install = await runStatusLine(['install', '--file', path], HOOK_FORM_POWERSHELL)
+    const check = await runStatusLine(['check', '--file', path, '--json'], HOOK_FORM_POWERSHELL)
+
+    expect(install.code).toBe(1)
+    expect(install.stderr).toBe(`bmn: the status-line wrapper is not supported on Windows yet; ${path} was left untouched\n`)
+    expect(await readFile(path, 'utf8')).toBe(original)
+    expect(await backupsOf(path)).toHaveLength(0)
+    expect(JSON.parse(check.stdout)).toMatchObject({ state: 'unwrapped' })
+  })
+
   it('finds Claude\'s settings the way hooks install does when no file is named', async () => {
     const path = await hookFileFixture(settings)
     const check = await runStatusLine(['check', '--json'], { CLAUDE_CONFIG_DIR: dirname(path) })
-    expect(JSON.parse(check.stdout)).toEqual({ file: path, state: 'unwrapped' })
+    const report = JSON.parse(check.stdout)
+    expect({ ...report, file: normalize(report.file) }).toEqual({ file: path, state: 'unwrapped' })
   })
 
   it.each([
@@ -3932,11 +4143,11 @@ describe('bmn statusline (Story 37.2)', () => {
       const root = await realpath(await mkdtemp(join(tmpdir(), 'aitline-')))
       createdRoots.add(root)
       await mkdir(join(root, 'bin'))
-      await writeFile(join(root, 'bin', 'bmn'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(CLI)} "$@"\n`, { mode: 0o755 })
+      await writeFile(join(root, 'bin', 'bmn'), `#!/bin/sh\nexec ${shellQuote(shellPath(process.execPath))} ${shellQuote(shellPath(CLI))} "$@"\n`, { mode: 0o755 })
       const clean = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BMN_') && !key.startsWith('AITERM_')))
       return new Promise<CliResult & { tmp: string }>((resolve) => {
-        const child = execFile('/bin/sh', ['-c', command], {
-          env: { ...clean, PATH: `${pathFirst}${join(root, 'bin')}:${process.env.PATH ?? ''}`, TMPDIR: root, ...env }, timeout: 15_000
+        const child = execFile(fixtureShell('sh'), ['-c', command], {
+          env: { ...clean, PATH: fixtureSearchPath([pathFirst, join(root, 'bin')].filter(Boolean), process.env.PATH ?? ''), TMPDIR: shellPath(root), ...env }, timeout: 15_000
         }, (error, stdout, stderr) => {
           resolve({ code: error === null ? 0 : typeof error.code === 'number' ? error.code : null, stdout, stderr, tmp: root })
         })
@@ -3987,14 +4198,17 @@ describe('bmn statusline (Story 37.2)', () => {
       const stdin = input(LIMITS)
       const root = await realpath(await mkdtemp(join(tmpdir(), 'aitcat-')))
       createdRoots.add(root)
-      // A full disk, played by a `cat` that stops after 40 bytes when it writes into the temporary folder.
-      await mkdir(join(root, 'shim'))
-      await writeFile(join(root, 'shim', 'cat'), `#!/bin/sh
-case "$(readlink /proc/$$/fd/1)" in ${root}/tmp/*) head -c 40; echo 'cat: write error: No space left on device' >&2; exit 1 ;; esac
-exec /bin/cat "$@"
-`, { mode: 0o755 })
+      // A shell function intercepts the same command on POSIX and Git for Windows,
+      // where native cat.exe lookup can bypass an extensionless PATH script.
+      const partialCat = `cat() {
+if [ ! -f ${shellQuote(shellPath(join(root, 'copied')))} ]; then
+  : > ${shellQuote(shellPath(join(root, 'copied')))}
+  head -c 40; echo 'cat: write error: No space left on device' >&2; return 1
+fi
+/bin/cat "$@"
+}`
       await mkdir(join(root, 'tmp'))
-      const result = await runLine(command, stdin, { ...fixture.sessionEnv, TMPDIR: join(root, 'tmp') }, `${join(root, 'shim')}:`)
+      const result = await runLine(`${partialCat}\n${command}`, stdin, { ...fixture.sessionEnv, TMPDIR: shellPath(join(root, 'tmp')) })
 
       expect(result).toMatchObject({ code: 4, stdout: '40\n', stderr: "it's the owner's\n" })
       expect(await readdir(join(root, 'tmp'))).toEqual([])
@@ -4008,7 +4222,7 @@ exec /bin/cat "$@"
       const stdin = input(LIMITS)
       const clean = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('BMN_')))
       const result = await new Promise<CliResult>((resolve) => {
-        const child = execFile('/bin/sh', ['-c', command], { env: { ...clean, PATH: '/usr/bin:/bin', ...fixture.sessionEnv } },
+        const child = execFile(fixtureShell('sh'), ['-c', command], { env: { ...clean, PATH: process.platform === 'win32' ? fixtureSearchPath([], '') : '/usr/bin:/bin', ...fixture.sessionEnv } },
           (error, stdout, stderr) => resolve({ code: error === null ? 0 : typeof error.code === 'number' ? error.code : null, stdout, stderr }))
         child.stdin?.end(stdin)
       })
@@ -4079,4 +4293,147 @@ it.each(['\u00ad', '\u061c', '\u2060'])('refuses a format-bearing manual option 
   const result = await runCli(['ask', 'format-choice', 'Synthetic', '--choices-json', JSON.stringify(options)], { env: fixture.sessionEnv })
   expect(result.code).toBe(2)
   expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
+})
+
+// Story 53.4: the native launcher sessions find on PATH. Built by scripts/build/windows-cli.mjs during install.
+describe.runIf(process.platform === 'win32')('native Windows bmn launcher', () => {
+  const launcher = fileURLToPath(new URL('../../native-out/windows-cli/bmn.exe', import.meta.url))
+  const system = process.env.SystemRoot ?? 'C:\\Windows'
+  const awkward = [
+    'he said "hi" and \\"escaped\\"',
+    '100% ^caret & amp | pipe <in >out %PATH% !bang!',
+    'C:\\Users\\Ålesia\\dir with space\\',
+    'trailing backslashes\\\\',
+    '日本語 ✓ — emoji 🙂',
+    '  spaced  '
+  ]
+
+  it('gives the CLI exactly the arguments, output and exit code the script gets when run directly', async () => {
+    const fixture = await cliFixture()
+    for (const detail of awkward) {
+      const args = ['progress', 'running', 'Fidelity', '--detail', detail, '--json']
+      const direct = await runCli(args, { env: fixture.sessionEnv })
+      const native = await runCommand(launcher, args, { env: fixture.sessionEnv })
+      expect(native).toEqual(direct)
+    }
+    const details = fixture.handlers.reportProgress.mock.calls.map(([call]) => call.detail)
+    expect(details).toEqual(awkward.flatMap((detail) => [detail, detail]))
+
+    const refused = await runCommand(launcher, ['list'], { env: { ...fixture.sessionEnv, BMN_TOKEN: 's1.x.y.0' } })
+    expect(refused).toEqual(await runCli(['list'], { env: { ...fixture.sessionEnv, BMN_TOKEN: 's1.x.y.0' } }))
+    expect(refused.code).not.toBe(0)
+  })
+
+  it('passes multiline standard input through unchanged', async () => {
+    const fixture = await cliFixture()
+    const text = 'first line\r\nsecond "quoted" & 100%\nthird ✓\n'
+
+    const native = await runCommand(launcher, ['send', '--text-file', '-'], { env: fixture.sessionEnv, input: text })
+    const direct = await runCli(['send', '--text-file', '-'], { env: fixture.sessionEnv, input: text })
+
+    expect(native).toEqual(direct)
+    const sent = fixture.handlers.submitInput.mock.calls.map(([call]) => call.text)
+    expect(sent).toHaveLength(2)
+    expect(sent[0]).toBe(sent[1])
+  })
+
+  it('is reached by name from Command Prompt and PowerShell with quoted metacharacters intact', async () => {
+    const fixture = await cliFixture()
+    const env = { ...fixture.sessionEnv, PATH: `${dirname(launcher)};${process.env.PATH ?? ''}` }
+    const cmd = await runCommand(join(system, 'System32', 'cmd.exe'),
+      ['/d', '/s', '/c', '"bmn progress running Prompt --detail "a & b ^ c | d 100%""'], { env, verbatim: true })
+    const powershell = await runCommand(join(system, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+      ['-NoProfile', '-NonInteractive', '-Command', "bmn progress running Shell --detail 'a & b ^ c | d 100% $x'; exit $LASTEXITCODE"], { env })
+
+    expect(cmd).toMatchObject({ code: 0, stderr: '' })
+    expect(powershell).toMatchObject({ code: 0, stderr: '' })
+    expect(fixture.handlers.reportProgress.mock.calls.map(([call]) => [call.label, call.detail])).toEqual([
+      ['Prompt', 'a & b ^ c | d 100%'],
+      ['Shell', 'a & b ^ c | d 100% $x']
+    ])
+  })
+})
+
+const POWERSHELL_ENTRY = (agent: string): string =>
+  `if ($env:BMN_CONTROL_SOCKET -and (Get-Command bmn -ErrorAction SilentlyContinue)) { bmn hook ${agent} }; exit 0`
+type EventRow = { event: string; optional: boolean; state: string; unrecognised?: string[] }
+const states = (stdout: string): string[] =>
+  (JSON.parse(stdout).agents[0].events as EventRow[]).filter((row) => !row.optional).map((row) => row.state)
+
+describe('hook entries in PowerShell form (Story 53.6, Windows)', () => {
+  it('writes Claude\'s entry pinned to PowerShell, and check reads every event wired', async () => {
+    const path = await hookFileFixture(undefined)
+
+    const install = await runHooks(['install', '--yes', 'claude', '--file', path, '--json'], HOOK_FORM_POWERSHELL)
+    const check = await runHooks(['check', 'claude', '--file', path, '--json'], HOOK_FORM_POWERSHELL)
+
+    expect(install.code, install.stderr).toBe(0)
+    const written = JSON.parse(await readFile(path, 'utf8'))
+    for (const event of CLAUDE_EVENTS) {
+      expect(written.hooks[event]).toEqual([{ ...(event === 'PreToolUse' ? { matcher: 'AskUserQuestion' } : {}),
+        hooks: [{ type: 'command', timeout: 5, command: POWERSHELL_ENTRY('claude'), shell: 'powershell' }] }])
+    }
+    expect(states(check.stdout)).toEqual(CLAUDE_EVENTS.map(() => 'wired'))
+  })
+
+  it('does not count Claude\'s PowerShell form without "shell": Git Bash would run it; it shows it and adds a pinned one', async () => {
+    const loose = { type: 'command', timeout: 5, command: POWERSHELL_ENTRY('claude') }
+    const path = await hookFileFixture({ hooks: { Stop: [{ hooks: [loose] }] } })
+
+    const check = await runHooks(['check', 'claude', '--file', path, '--json'], HOOK_FORM_POWERSHELL)
+    const install = await runHooks(['install', '--yes', 'claude', '--file', path, '--json'], HOOK_FORM_POWERSHELL)
+
+    const stop = (JSON.parse(check.stdout).agents[0].events as EventRow[]).find((row) => row.event === 'Stop')
+    expect(stop).toMatchObject({ state: 'missing', unrecognised: [POWERSHELL_ENTRY('claude')] })
+    expect(install.code, install.stderr).toBe(0)
+    expect(JSON.parse(await readFile(path, 'utf8')).hooks.Stop).toEqual([{ hooks: [loose] },
+      { hooks: [{ ...loose, shell: 'powershell' }] }])
+  })
+
+  it.each([['codex', CODEX_EVENTS, 'hooks.json'], ['cursor', CURSOR_EVENTS, 'hooks.json']] as const)(
+    'writes %s\'s entries in PowerShell form with no shell field, read back as wired', async (agent, events, name) => {
+      const path = await hookFileFixture(undefined, name)
+
+      const install = await runHooks(['install', '--yes', agent, '--file', path, '--json'], HOOK_FORM_POWERSHELL)
+      const check = await runHooks(['check', agent, '--file', path, '--json'], HOOK_FORM_POWERSHELL)
+
+      expect(install.code, install.stderr).toBe(0)
+      const commands = JSON.stringify(JSON.parse(await readFile(path, 'utf8')))
+      expect(commands).toContain(JSON.stringify(POWERSHELL_ENTRY(agent)))
+      expect(commands).not.toContain('"shell"')
+      expect(states(check.stdout)).toEqual(events.map(() => 'wired'))
+    })
+
+  it('shows a POSIX entry on Windows rather than calling it wired: PowerShell cannot run it', async () => {
+    const path = await hookFileFixture({ hooks: { Stop: [{ hooks: [{ type: 'command', timeout: 5, command: DOCUMENTED_CODEX }] }] } }, 'hooks.json')
+
+    const check = await runHooks(['check', 'codex', '--file', path, '--json'], HOOK_FORM_POWERSHELL)
+
+    expect((JSON.parse(check.stdout).agents[0].events as EventRow[]).find((row) => row.event === 'Stop'))
+      .toMatchObject({ state: 'missing', unrecognised: [DOCUMENTED_CODEX] })
+  })
+
+  it('writes the form of the OS it runs on when no test chooses one', async () => {
+    const path = await hookFileFixture(undefined, 'hooks.json')
+
+    const install = await runHooks(['install', '--yes', 'codex', '--file', path, '--json'], { BMN_TEST_HOOK_SHELL: '' })
+
+    expect(install.code, install.stderr).toBe(0)
+    expect(JSON.stringify(JSON.parse(await readFile(path, 'utf8'))))
+      .toContain(JSON.stringify(process.platform === 'win32' ? POWERSHELL_ENTRY('codex') : DOCUMENTED_CODEX))
+  })
+
+  it('reads a payload PowerShell piped with a byte-order mark in front', async () => {
+    const fixture = await cliFixture()
+    const proc = await procTree(fixture.root, HOLDS_TERMINAL)
+
+    const result = await runCli(['hook', 'claude'], {
+      env: { ...fixture.sessionEnv, BMN_PROC_ROOT: proc, CLAUDE_CONFIG_DIR: join(fixture.root, 'claude') },
+      input: `\uFEFF${JSON.stringify({ hook_event_name: 'Notification', notification_type: 'idle_prompt', message: 'Claude is waiting' })}`
+    })
+
+    expect(result).toEqual(QUIET)
+    expect(fixture.handlers.observeHookEvent).toHaveBeenCalledTimes(1)
+    expect(fixture.handlers.observeHookEvent.mock.calls[0]?.[0]).toMatchObject({ agent: 'claude', event: 'Notification' })
+  })
 })

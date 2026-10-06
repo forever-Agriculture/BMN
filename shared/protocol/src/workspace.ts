@@ -555,7 +555,8 @@ export function isWorkspaceUpdateParams(value: unknown): value is WorkspaceUpdat
 export function isPinnedFilePaths(value: unknown, absolute = false): value is string[] {
   return Array.isArray(value) && value.length <= 8 && new Set(value).size === value.length &&
     value.every(path => typeof path === 'string' && path.trim().length > 0 && path.length <= 4096 &&
-      !hasControlOrFormatCharacter(path) && (!absolute || path.startsWith('/')))
+      !hasControlOrFormatCharacter(path) && (!absolute || path.startsWith('/') ||
+        /^[A-Za-z]:[\\/]/u.test(path) || /^\\\\[^\\/]+\\[^\\/]+(?:\\|$)/u.test(path)))
 }
 
 export function isSessionCreateParams(value: unknown): value is SessionCreateParams {

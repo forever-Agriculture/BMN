@@ -12,11 +12,16 @@ export const SCREEN_TAIL_BYTES = 64 * 1024
 export class OutputTail {
   private readonly chunks: Uint8Array[] = []
   private bytes = 0
+  /** Every byte the session has printed, and when it last printed. */
+  pushedBytes = 0
+  lastPushAt = 0
 
   constructor(private readonly limit = SCREEN_TAIL_BYTES) {}
 
   push(chunk: Uint8Array): void {
     if (chunk.byteLength === 0) return
+    this.pushedBytes += chunk.byteLength
+    this.lastPushAt = Date.now()
     const kept = chunk.byteLength > this.limit ? chunk.slice(chunk.byteLength - this.limit) : chunk.slice()
     this.chunks.push(kept)
     this.bytes += kept.byteLength

@@ -1,6 +1,7 @@
 import { access, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
+import { quoteWindowsArgv } from '@bmn/protocol'
 import type {
   AgentCli,
   BoundConversationBinding,
@@ -247,10 +248,10 @@ export function applyCapturedLaunchEnvironment(
 }
 
 export function agentCli(executable: string): AgentCli {
-  const command = basename(executable).toLowerCase()
-  if (command === 'claude' || command === 'claude.exe') return 'claude'
-  if (command === 'codex' || command === 'codex.exe') return 'codex'
-  if (command === 'opencode' || command === 'opencode.exe') return 'opencode'
+  const command = basename(executable.replaceAll('\\', '/')).toLowerCase().replace(/\.(exe|cmd|bat)$/, '')
+  if (command === 'claude') return 'claude'
+  if (command === 'codex') return 'codex'
+  if (command === 'opencode') return 'opencode'
   // Cursor also installs the same program as `agent`, a name too generic to claim.
   if (command === 'cursor-agent') return 'cursor'
   return 'other'
@@ -773,7 +774,8 @@ function shownArgument(argument: string): string {
 }
 
 /** One readable line for a launch, with every argument's own boundaries still visible. */
-export function shownCommand(executable: string, argv: readonly string[]): string {
+export function shownCommand(executable: string, argv: readonly string[], platform: NodeJS.Platform = process.platform): string {
+  if (platform === 'win32') return quoteWindowsArgv([executable, ...argv])
   return [executable, ...argv].map(shownArgument).join(' ')
 }
 

@@ -814,7 +814,9 @@ export interface BackupVerifyResult {
 }
 
 export interface ControlInfo {
+  /** Linux: the socket itself. Windows: the private file naming the current-user-only pipe. */
   socketPath: string
+  transport: 'unix-socket' | 'windows-pipe'
   cliPath: string
   listening: boolean
   detail: string

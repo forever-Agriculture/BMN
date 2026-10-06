@@ -11,6 +11,7 @@ import {
 import {
   join
 } from 'node:path'
+import { writeNodeProgram } from './programs'
 
 /** Resume checks that a Codex rollout exists, so the self-test gives the host its own CODEX_HOME. */
 export function selfTestCodexHome(): string {
@@ -31,40 +32,30 @@ export function writeCodexHarness(
   mkdirSync(directory, { recursive: true })
   const log = join(directory, 'argv.log')
   const listing = join(directory, 'list.json')
-  const executable = join(directory, 'codex')
-  writeFileSync(join(directory, 'package.json'), '{"type":"commonjs"}\n')
-  writeFileSync(
-    executable,
-    [
-      `#!${process.env.BMN_SELF_TEST_NODE ?? '/usr/bin/env node'}`,
-      "const { spawnSync } = require('node:child_process')",
-      "const { appendFileSync, writeFileSync } = require('node:fs')",
-      "const event = JSON.stringify({",
-      "  hook_event_name: 'SessionStart',",
-      "  source: 'startup',",
-      `  session_id: ${JSON.stringify(reference)},`,
-      "})",
-      "spawnSync('bmn', ['hook', 'codex'], { input: event, stdio: ['pipe', 'ignore', 'ignore'] })",
-      // The session reads its own listing back with its own token, the way an agent would.
-      "const listed = spawnSync('bmn', ['list', '--json'], { encoding: 'utf8' })",
-      `writeFileSync(${JSON.stringify(listing)}, listed.stdout ?? '')`,
-      `appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + '\\n')`,
-      "process.stdout.write('codex harness ready\\n')",
-      "setInterval(() => undefined, 1_000)",
-      ''
-    ].join('\n'),
-    { mode: 0o700 }
-  )
+  const executable = writeNodeProgram(directory, 'codex', [
+    "const { spawnSync } = require('node:child_process')",
+    "const { appendFileSync, writeFileSync } = require('node:fs')",
+    "const event = JSON.stringify({",
+    "  hook_event_name: 'SessionStart',",
+    "  source: 'startup',",
+    `  session_id: ${JSON.stringify(reference)},`,
+    "})",
+    "spawnSync('bmn', ['hook', 'codex'], { input: event, stdio: ['pipe', 'ignore', 'ignore'] })",
+    // The session reads its own listing back with its own token, the way an agent would.
+    "const listed = spawnSync('bmn', ['list', '--json'], { encoding: 'utf8' })",
+    `writeFileSync(${JSON.stringify(listing)}, listed.stdout ?? '')`,
+    `appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + '\\n')`,
+    "process.stdout.write('codex harness ready\\n')",
+    "setInterval(() => undefined, 1_000)",
+    ''
+  ].join('\n'))
   return { executable, log, listing }
 }
 
 /** Gated real-CLI fixture: every step finishes before its receipt is published. */
 export function writeAcceptanceHarness(directory: string, name: string, steps: string[]): string {
   mkdirSync(directory, { recursive: true })
-  writeFileSync(join(directory, 'package.json'), '{"type":"commonjs"}\n')
-  const executable = join(directory, name)
-  writeFileSync(executable, [
-    `#!${process.env.BMN_SELF_TEST_NODE ?? '/usr/bin/env node'}`,
+  const executable = writeNodeProgram(directory, name, [
     "const { spawnSync } = require('node:child_process')",
     "const { existsSync, appendFileSync, writeFileSync } = require('node:fs')",
     `const directory = ${JSON.stringify(directory)}`,
@@ -75,7 +66,7 @@ export function writeAcceptanceHarness(directory: string, name: string, steps: s
     "setInterval(() => undefined, 1000)",
     ";(async () => {", ...steps,
     "})().catch(error => writeFileSync(file('error'), String(error)))", ''
-  ].join('\n'), { mode: 0o700 })
+  ].join('\n'))
   return executable
 }
 
@@ -362,20 +353,13 @@ export function listedConversation(listing: string): { sessions: number; convers
 export function writeArgvRecorder(directory: string, name: string): { executable: string; log: string } {
   mkdirSync(directory, { recursive: true })
   const log = join(directory, `${name}.log`)
-  const executable = join(directory, name)
-  writeFileSync(join(directory, 'package.json'), '{"type":"commonjs"}\n')
-  writeFileSync(
-    executable,
-    [
-      `#!${process.env.BMN_SELF_TEST_NODE ?? '/usr/bin/env node'}`,
-      "const { appendFileSync } = require('node:fs')",
-      `appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + '\\n')`,
-      `process.stdout.write(${JSON.stringify(name)} + ' started\\n')`,
-      'setInterval(() => undefined, 1_000)',
-      ''
-    ].join('\n'),
-    { mode: 0o700 }
-  )
+  const executable = writeNodeProgram(directory, name, [
+    "const { appendFileSync } = require('node:fs')",
+    `appendFileSync(${JSON.stringify(log)}, JSON.stringify(process.argv.slice(2)) + '\\n')`,
+    `process.stdout.write(${JSON.stringify(name)} + ' started\\n')`,
+    'setInterval(() => undefined, 1_000)',
+    ''
+  ].join('\n'))
   return { executable, log }
 }
 
@@ -388,26 +372,19 @@ export function writeArgvRecorder(directory: string, name: string): { executable
 export function writeTerminalModeProgram(directory: string): { executable: string; input: string } {
   mkdirSync(directory, { recursive: true })
   const input = join(directory, 'stdin.log')
-  const executable = join(directory, 'modes')
-  writeFileSync(join(directory, 'package.json'), '{"type":"commonjs"}\n')
-  writeFileSync(
-    executable,
-    [
-      `#!${process.env.BMN_SELF_TEST_NODE ?? '/usr/bin/env node'}`,
-      "const { appendFileSync } = require('node:fs')",
-      // Bracketed paste, focus reports, and mouse tracking with SGR encoding.
-      // On: bracketed paste, focus reports, mouse with SGR. Off: autowrap, which a fresh view has on.
-      "process.stdout.write('\\u001b[?2004h\\u001b[?1004h\\u001b[?1000h\\u001b[?1006h\\u001b[?7l')",
-      "process.stdout.write('MODE-PROGRAM-READY\\r\\n')",
-      // Raw mode, as every TUI does: the line discipline must not hold a paste back until Enter.
-      "if (process.stdin.isTTY) process.stdin.setRawMode(true)",
-      "process.stdin.setEncoding('latin1')",
-      `process.stdin.on('data', (chunk) => appendFileSync(${JSON.stringify(input)}, JSON.stringify(chunk) + '\\n'))`,
-      'setInterval(() => undefined, 1_000)',
-      ''
-    ].join('\n'),
-    { mode: 0o700 }
-  )
+  const executable = writeNodeProgram(directory, 'modes', [
+    "const { appendFileSync } = require('node:fs')",
+    // Bracketed paste, focus reports, and mouse tracking with SGR encoding.
+    // On: bracketed paste, focus reports, mouse with SGR. Off: autowrap, which a fresh view has on.
+    "process.stdout.write('\\u001b[?2004h\\u001b[?1004h\\u001b[?1000h\\u001b[?1006h\\u001b[?7l')",
+    "process.stdout.write('MODE-PROGRAM-READY\\r\\n')",
+    // Raw mode, as every TUI does: the line discipline must not hold a paste back until Enter.
+    "if (process.stdin.isTTY) process.stdin.setRawMode(true)",
+    "process.stdin.setEncoding('latin1')",
+    `process.stdin.on('data', (chunk) => appendFileSync(${JSON.stringify(input)}, JSON.stringify(chunk) + '\\n'))`,
+    'setInterval(() => undefined, 1_000)',
+    ''
+  ].join('\n'))
   return { executable, input }
 }
 
@@ -457,37 +434,30 @@ export function writeClaudeHookHarness(directory: string): {
   const resolved = join(directory, 'resolved')
   const secondGate = join(directory, 'second-gate')
   const reopened = join(directory, 'reopened')
-  const executable = join(directory, 'claude')
-  writeFileSync(join(directory, 'package.json'), '{"type":"commonjs"}\n')
-  writeFileSync(
-    executable,
-    [
-      `#!${process.env.BMN_SELF_TEST_NODE ?? '/usr/bin/env node'}`,
-      "const { spawnSync } = require('node:child_process')",
-      "const { existsSync, writeFileSync } = require('node:fs')",
-      "const fire = (event) => spawnSync('bmn', ['hook', 'claude'], {",
-      "  input: JSON.stringify(event), stdio: ['pipe', 'ignore', 'ignore']",
-      "})",
-      "const prompt = { hook_event_name: 'Notification', notification_type: 'permission_prompt',",
-      "  message: 'Allow the hook self-test action' }",
-      "fire(prompt)",
-      `writeFileSync(${JSON.stringify(opened)}, '')`,
-      "const after = (gate, run, marker) => {",
-      "  const timer = setInterval(() => {",
-      "    if (!existsSync(gate)) return",
-      "    clearInterval(timer)",
-      "    run()",
-      "    writeFileSync(marker, '')",
-      "  }, 25)",
-      "}",
-      `after(${JSON.stringify(toolGate)}, () => fire({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: {} }), ${JSON.stringify(resolved)})`,
-      `after(${JSON.stringify(secondGate)}, () => fire(prompt), ${JSON.stringify(reopened)})`,
-      "process.stdout.write('claude hook harness ready\\n')",
-      "setInterval(() => undefined, 1_000)",
-      ''
-    ].join('\n'),
-    { mode: 0o700 }
-  )
+  const executable = writeNodeProgram(directory, 'claude', [
+    "const { spawnSync } = require('node:child_process')",
+    "const { existsSync, writeFileSync } = require('node:fs')",
+    "const fire = (event) => spawnSync('bmn', ['hook', 'claude'], {",
+    "  input: JSON.stringify(event), stdio: ['pipe', 'ignore', 'ignore']",
+    "})",
+    "const prompt = { hook_event_name: 'Notification', notification_type: 'permission_prompt',",
+    "  message: 'Allow the hook self-test action' }",
+    "fire(prompt)",
+    `writeFileSync(${JSON.stringify(opened)}, '')`,
+    "const after = (gate, run, marker) => {",
+    "  const timer = setInterval(() => {",
+    "    if (!existsSync(gate)) return",
+    "    clearInterval(timer)",
+    "    run()",
+    "    writeFileSync(marker, '')",
+    "  }, 25)",
+    "}",
+    `after(${JSON.stringify(toolGate)}, () => fire({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: {} }), ${JSON.stringify(resolved)})`,
+    `after(${JSON.stringify(secondGate)}, () => fire(prompt), ${JSON.stringify(reopened)})`,
+    "process.stdout.write('claude hook harness ready\\n')",
+    "setInterval(() => undefined, 1_000)",
+    ''
+  ].join('\n'))
   return { executable, opened, toolGate, resolved, secondGate, reopened }
 }
 
@@ -498,25 +468,18 @@ export function writeClaudeHookHarness(directory: string): {
 export function writeIsolationHookHarness(directory: string): { executable: string; fired: string; event: string } {
   mkdirSync(directory, { recursive: true })
   const fired = join(directory, 'fired')
-  const executable = join(directory, 'claude')
   const event = 'Isolation-Probe'
-  writeFileSync(join(directory, 'package.json'), '{"type":"commonjs"}\n')
-  writeFileSync(
-    executable,
-    [
-      `#!${process.env.BMN_SELF_TEST_NODE ?? '/usr/bin/env node'}`,
-      "const { spawnSync } = require('node:child_process')",
-      "const { writeFileSync } = require('node:fs')",
-      `spawnSync('bmn', ['hook', 'claude'], {`,
-      `  input: JSON.stringify({ hook_event_name: ${JSON.stringify(event)} }), stdio: ['pipe', 'ignore', 'ignore']`,
-      '})',
-      `writeFileSync(${JSON.stringify(fired)}, '')`,
-      "process.stdout.write('isolation hook harness ready\\n')",
-      'setInterval(() => undefined, 1_000)',
-      ''
-    ].join('\n'),
-    { mode: 0o700 }
-  )
+  const executable = writeNodeProgram(directory, 'claude', [
+    "const { spawnSync } = require('node:child_process')",
+    "const { writeFileSync } = require('node:fs')",
+    `spawnSync('bmn', ['hook', 'claude'], {`,
+    `  input: JSON.stringify({ hook_event_name: ${JSON.stringify(event)} }), stdio: ['pipe', 'ignore', 'ignore']`,
+    '})',
+    `writeFileSync(${JSON.stringify(fired)}, '')`,
+    "process.stdout.write('isolation hook harness ready\\n')",
+    'setInterval(() => undefined, 1_000)',
+    ''
+  ].join('\n'))
   return { executable, fired, event }
 }
 
@@ -533,38 +496,31 @@ export function writeTerminalNoticeHarness(
   const printed = join(directory, 'printed')
   const trigger = join(directory, 'trigger')
   const second = join(directory, 'second')
-  const executable = join(directory, 'notice-harness')
-  writeFileSync(join(directory, 'package.json'), '{"type":"commonjs"}\n')
-  writeFileSync(
-    executable,
-    [
-      `#!${process.env.BMN_SELF_TEST_NODE ?? '/usr/bin/env node'}`,
-      "const { spawnSync } = require('node:child_process')",
-      "const { writeFileSync } = require('node:fs')",
-      ...(options.hookFirst
-        ? [
-          "spawnSync('bmn', ['hook', 'claude'], {",
-          "  input: JSON.stringify({ hook_event_name: 'Stop', last_assistant_message: 'the harness finished' }),",
-          "  stdio: ['pipe', 'ignore', 'ignore']",
-          '})'
-        ]
-        : []),
-      // OSC 9, the plainest of the three: ESC ] 9 ; text BEL.
-      "process.stdout.write('\\u001b]9;BMN self-test notice\\u0007')",
-      `writeFileSync(${JSON.stringify(printed)}, '')`,
-      // A second notice on demand, so the probe can snapshot the terminal on both sides of one.
-      "const { existsSync } = require('node:fs')",
-      'const waiting = setInterval(() => {',
-      `  if (!existsSync(${JSON.stringify(trigger)})) return`,
-      '  clearInterval(waiting)',
-      "  process.stdout.write('\\u001b]9;BMN self-test second notice\\u0007')",
-      `  writeFileSync(${JSON.stringify(second)}, '')`,
-      '}, 25)',
-      'setInterval(() => undefined, 1_000)',
-      ''
-    ].join('\n'),
-    { mode: 0o700 }
-  )
+  const executable = writeNodeProgram(directory, 'notice-harness', [
+    "const { spawnSync } = require('node:child_process')",
+    "const { writeFileSync } = require('node:fs')",
+    ...(options.hookFirst
+      ? [
+        "spawnSync('bmn', ['hook', 'claude'], {",
+        "  input: JSON.stringify({ hook_event_name: 'Stop', last_assistant_message: 'the harness finished' }),",
+        "  stdio: ['pipe', 'ignore', 'ignore']",
+        '})'
+      ]
+      : []),
+    // OSC 9, the plainest of the three: ESC ] 9 ; text BEL.
+    "process.stdout.write('\\u001b]9;BMN self-test notice\\u0007')",
+    `writeFileSync(${JSON.stringify(printed)}, '')`,
+    // A second notice on demand, so the probe can snapshot the terminal on both sides of one.
+    "const { existsSync } = require('node:fs')",
+    'const waiting = setInterval(() => {',
+    `  if (!existsSync(${JSON.stringify(trigger)})) return`,
+    '  clearInterval(waiting)',
+    "  process.stdout.write('\\u001b]9;BMN self-test second notice\\u0007')",
+    `  writeFileSync(${JSON.stringify(second)}, '')`,
+    '}, 25)',
+    'setInterval(() => undefined, 1_000)',
+    ''
+  ].join('\n'))
   return { executable, printed, trigger, second }
 }
 

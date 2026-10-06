@@ -20,7 +20,11 @@ async function linuxProcessStartIdentity(pid: number): Promise<string> {
 }
 
 const byPlatform: Readonly<Record<string, ProcessStartIdentity>> = Object.freeze({
-  linux: linuxProcessStartIdentity
+  linux: linuxProcessStartIdentity,
+  win32: async (pid) => {
+    const { queryProcessStartIdentity } = await import('node-pty')
+    return queryProcessStartIdentity(pid)
+  }
 })
 
 /** Chosen for the platform the app is running on; unsupported platforms reject identity lookup. */

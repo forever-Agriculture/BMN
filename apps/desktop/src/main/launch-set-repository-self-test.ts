@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { BrowserWindow } from 'electron'
+import { writeNodeProgram } from './self-test/programs'
 
 interface ProbeResult {
   gitVersion: string
@@ -44,11 +45,16 @@ export async function runLaunchSetRepositorySelfTest(
   git(nested, 'init', '-q', '-b', 'main')
   git(nested, '-c', 'user.name=BMN Test', '-c', 'user.email=bmn@example.invalid',
     'commit', '--allow-empty', '-qm', 'fixture')
-  const good = join(repository, 'launch-set-good')
+  // Windows runs no shebang: the stand-in is a copied bmn.exe launcher (programs.ts).
+  const good = process.platform === 'win32'
+    ? writeNodeProgram(repository, 'launch-set-good', 'setInterval(() => undefined, 1000)\n')
+    : join(repository, 'launch-set-good')
   const plain = join(repository, '..', 'bmn-nonrepo-launch')
   mkdirSync(plain, { recursive: true })
-  writeFileSync(good, `#!${process.env.BMN_SELF_TEST_NODE ?? '/usr/bin/env node'}\nsetInterval(() => undefined, 1000)\n`)
-  chmodSync(good, 0o755)
+  if (process.platform !== 'win32') {
+    writeFileSync(good, `#!${process.env.BMN_SELF_TEST_NODE ?? '/usr/bin/env node'}\nsetInterval(() => undefined, 1000)\n`)
+    chmodSync(good, 0o755)
+  }
   const gitVersion = execFileSync('git', ['--version'], { encoding: 'utf8' }).trim()
 
   const prepared = await window.webContents.executeJavaScript(`(async () => {

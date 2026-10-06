@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // MODULE: bmn - command-line client for the BMN control socket (one connection per invocation)
 import { createHash, randomUUID } from 'node:crypto'
-import { copyFileSync, existsSync, readFileSync, writeFileSync, writeSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, writeSync } from 'node:fs'
 import { createConnection } from 'node:net'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
 import {
-  ConfigWriteError, absoluteUncollapsed, currentText, jsonIndent, linkTarget, rewrittenNumbers, writeAtomically, writeConfigSafely
+  ConfigWriteError, absoluteUncollapsed, currentText, jsonIndent, linkTarget, rewrittenNumbers, writeConfigSafely
 } from './safe-config-write.mjs'
 
 const TIMEOUT_MS = 10_000
@@ -450,10 +450,25 @@ function remoteError(error) {
   return new CliError(code, message)
 }
 
+const CONTROL_PIPE = /^\\\\\.\\pipe\\bmn-control-[0-9a-f]{32}$/
+
+/** On Windows the control path is a private file naming the app's current pipe; elsewhere it is the socket. */
+function controlEndpoint(socketPath) {
+  if (process.platform !== 'win32' || CONTROL_PIPE.test(socketPath)) return socketPath
+  let text
+  try {
+    text = readFileSync(socketPath, 'utf8').slice(0, 256).trim()
+  } catch (error) {
+    throw new CliError('IO_ERROR', `cannot reach control socket ${socketPath} (${error.code ?? 'read failed'})`)
+  }
+  if (!CONTROL_PIPE.test(text)) throw new CliError('IO_ERROR', `control endpoint ${socketPath} does not name a BMN control pipe`)
+  return text
+}
+
 /** One connection per invocation: auth, then each request in order, close. A request's remote error does not stop the rest. */
 function callEach(socketPath, token, requests, timeoutMs = TIMEOUT_MS) {
   return new Promise((resolveCall, rejectCall) => {
-    const socket = createConnection(socketPath)
+    const socket = createConnection(controlEndpoint(socketPath))
     const outcomes = []
     let buffer = ''
     let settled = false
@@ -547,6 +562,52 @@ export const BMNPlugin: Plugin = async (input) => {
   const reports: string[] = []
   let polling = false
   const inBMN = () => Boolean(process.env.BMN_CONTROL_SOCKET || process.env.AITERM_CONTROL_SOCKET)
+  // Native Windows has timeout.exe with incompatible syntax. Kill/reap the real
+  // launcher; its atomic owned job closes the runtime tree on timeout or crash.
+  const nativeRun = async (argv: string[], stdin: string, env: Record<string, string | undefined>, milliseconds: number) => {
+    const empty = () => ({ exitCode: 1, stdout: Buffer.alloc(0) })
+    if (Buffer.byteLength(stdin) > 1024 * 1024) return empty()
+    let child: ReturnType<typeof Bun.spawn> | undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let failed = false
+    let drained: Promise<unknown> | undefined
+    const kill = () => { if (failed) return; failed = true; try { child?.kill("SIGKILL") } catch { } }
+    try {
+      child = Bun.spawn(["bmn.exe", ...argv], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe", windowsHide: true })
+      timer = setTimeout(kill, milliseconds)
+      const read = async (stream: ReadableStream<Uint8Array>) => {
+        const reader = stream.getReader(), chunks: Buffer[] = []
+        let bytes = 0
+        try {
+          for (;;) {
+            const next = await reader.read()
+            if (next.done) break
+            bytes += next.value.byteLength
+            if (bytes > 1024 * 1024) throw new Error("BMN output exceeds limit")
+            chunks.push(Buffer.from(next.value))
+          }
+          return Buffer.concat(chunks)
+        } catch (error) { kill(); throw error }
+        finally { reader.releaseLock() }
+      }
+      // Drain both streams before writing: inherited pipes cannot turn a full
+      // stderr/stdout buffer into an unbounded hook wait.
+      const readers = [read(child.stdout as ReadableStream<Uint8Array>), read(child.stderr as ReadableStream<Uint8Array>)]
+      drained = Promise.allSettled(readers)
+      const streams = Promise.all(readers)
+      const result = Promise.all([child.exited, streams])
+      // Handle rejection immediately while stdin is being flushed.
+      void result.catch(() => undefined)
+      child.stdin.write(stdin)
+      await child.stdin.end()
+      const [exitCode, [stdout]] = await result
+      return failed ? empty() : { exitCode, stdout }
+    } catch {
+      kill()
+      await Promise.all([child?.exited.catch(() => undefined), drained])
+      return empty()
+    } finally { if (timer) clearTimeout(timer) }
+  }
   // An answer BMN already decided from a tap, posted to this OpenCode's own server by its request ID.
   const reply = async (answer: { requestRef?: string; kind?: string; answers?: string[][]; reply?: string }) => {
     if (!answer.requestRef || !waiting.has(answer.requestRef)) return
@@ -557,12 +618,22 @@ export const BMNPlugin: Plugin = async (input) => {
     const url = new URL(\`\${route}/\${encodeURIComponent(answer.requestRef)}/reply\`, input.serverUrl)
     url.searchParams.set("directory", input.directory)
     const body = route === "question" ? { answers: answer.answers } : { reply: reject ? "reject" : "once" }
-    const fetcher = (input.client as any)?._client?.getConfig?.().fetch ?? fetch
+    const clientConfig = (input.client as any)?._client?.getConfig?.()
+    const fetcher = clientConfig?.fetch ?? fetch
+    const headers = new Headers(clientConfig?.headers)
+    headers.set("content-type", "application/json")
     // A lost connection or a server error may still have applied the reply, so only an accepted reply or a
     // refused request (4xx: nothing was applied) is reported.
-    const response = await fetcher(new Request(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }))
-    if (response.ok) reports.push(\`\${answer.requestRef}=ok\`)
-    else if (response.status >= 400 && response.status < 500) reports.push(\`\${answer.requestRef}=failed\`)
+    const controller = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const response = await Promise.race([
+        fetcher(new Request(url, { method: "POST", headers, redirect: "error", body: JSON.stringify(body), signal: controller.signal })),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new Error("BMN reply timed out")) }, 10000) })
+      ])
+      if (response.ok) reports.push(\`\${answer.requestRef}=ok\`)
+      else if (response.status >= 400 && response.status < 500) reports.push(\`\${answer.requestRef}=failed\`)
+    } finally { if (timer) clearTimeout(timer) }
   }
   // Asks BMN only while something waits, and gives up after three failures so an absent BMN costs nothing.
   const poll = async () => {
@@ -572,9 +643,11 @@ export const BMNPlugin: Plugin = async (input) => {
     try {
       while ((waiting.size > 0 || reports.length > 0) && failures < 3) {
         const report = reports.shift()
-        const result = report
-          ? await input.$\`timeout -s KILL 10s bmn answer take --wait 0 --reported \${report} --json\`.quiet().nothrow()
-          : await input.$\`timeout -s KILL 35s bmn answer take --wait 25 --json\`.quiet().nothrow()
+        const result = process.platform === "win32"
+          ? await nativeRun(["answer", "take", "--wait", report ? "0" : "25", ...(report ? ["--reported", report] : []), "--json"], "", { ...process.env }, report ? 10000 : 35000)
+          : report
+            ? await input.$\`timeout -s KILL 10s bmn answer take --wait 0 --reported \${report} --json\`.quiet().nothrow()
+            : await input.$\`timeout -s KILL 35s bmn answer take --wait 25 --json\`.quiet().nothrow()
         if (result.exitCode !== 0) {
           if (report) reports.unshift(report)
           failures += 1
@@ -602,9 +675,12 @@ export const BMNPlugin: Plugin = async (input) => {
         if (!properties.info?.parentID && id && (!sessionID || String(event.type) === "tui.session.select")) sessionID = id
         const payload = JSON.stringify({ hook_event_name: event.type, ...event.properties })
         // Bound startup as well as socket I/O.
-        const deadline = ["timeout", "-s", "KILL", "3s"]
-        await input.$\`printf '%s' \${payload} | \${deadline} bmn hook opencode\`
-          .env({ ...process.env, BMN_OPENCODE_SESSION_ID: sessionID ?? "" }).quiet().nothrow()
+        const env = { ...process.env, BMN_OPENCODE_SESSION_ID: sessionID ?? "" }
+        if (process.platform === "win32") await nativeRun(["hook", "opencode"], payload, env, 3000)
+        else {
+          const deadline = ["timeout", "-s", "KILL", "3s"]
+          await input.$\`printf '%s' \${payload} | \${deadline} bmn hook opencode\`.env(env).quiet().nothrow()
+        }
         const type = String(event.type)
         if (properties.sessionID === sessionID && properties.id && (type === "question.asked" || type === "permission.asked")) {
           waiting.add(properties.id)
@@ -1223,12 +1299,29 @@ function hookFilePath(agent) {
   return `${absoluteUncollapsed(moved || `${homedir()}/${directory}`)}/${rest.join('/')}`
 }
 
+/**
+ * Which shell runs the entry BMN writes. On Windows, Codex and Cursor run hook commands through PowerShell, and
+ * Claude Code does for an entry whose `shell` is "powershell" (Git Bash otherwise, when installed); elsewhere a
+ * POSIX shell runs them. Tests choose either form on any OS.
+ */
+const HOOK_SHELL = process.env.NODE_ENV === 'test' && ['posix', 'powershell'].includes(process.env.BMN_TEST_HOOK_SHELL)
+  ? process.env.BMN_TEST_HOOK_SHELL : process.platform === 'win32' ? 'powershell' : 'posix'
+
+/** Runs `bmn hook` only inside a BMN session that has the CLI, and always succeeds, in the shell that runs it. */
 function hookEntryCommand(agent) {
-  return `[ -n "$BMN_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook ${agent}; exit 0`
+  return HOOK_SHELL === 'powershell'
+    ? `if ($env:BMN_CONTROL_SOCKET -and (Get-Command bmn -ErrorAction SilentlyContinue)) { bmn hook ${agent} }; exit 0`
+    : `[ -n "$BMN_CONTROL_SOCKET" ] && command -v bmn >/dev/null && bmn hook ${agent}; exit 0`
+}
+
+/** Whether Claude Code would run this entry in PowerShell: the PowerShell form means nothing to Git Bash. */
+function claudeRunsInPowerShell(entry) {
+  return isObject(entry) && entry.shell === 'powershell' && entry.args === undefined
 }
 
 function hookEntry(agent) {
-  return { type: 'command', timeout: HOOK_ENTRY_TIMEOUT, command: hookEntryCommand(agent) }
+  return { type: 'command', timeout: HOOK_ENTRY_TIMEOUT, command: hookEntryCommand(agent),
+    ...(HOOK_SHELL === 'powershell' && agent === 'claude' ? { shell: 'powershell' } : {}) }
 }
 
 /**
@@ -1248,8 +1341,9 @@ function recognisedEntries(agent) {
   const documented = hookEntryCommand(agent)
   return [
     documented,
-    // The owner's own files predate Epic 13's rename, and `bmn hook` still reads the older name.
-    documented.replace('$BMN_CONTROL_SOCKET', '$AITERM_CONTROL_SOCKET'),
+    // The owner's own files predate Epic 13's rename, and `bmn hook` still reads the older name. Windows support
+    // came later, so its PowerShell form has no older wording.
+    ...(HOOK_SHELL === 'posix' ? [documented.replace('$BMN_CONTROL_SOCKET', '$AITERM_CONTROL_SOCKET')] : []),
     // The call with nothing around it, which is what someone writes who wants it to run always.
     `bmn hook ${agent}`
   ]
@@ -1261,10 +1355,14 @@ function recognisedEntries(agent) {
  * `bmn hook <agent>`. A `named` entry counts as missing - BMN will not say a command it does not
  * read works - but `check` shows it, because it is the one the owner needs to look at.
  */
-function hookEntryState(command, agent) {
+function hookEntryState(command, agent, entry = undefined) {
   // Reachable for a lenient harness, whose file is read rather than refused over a bad entry.
   if (typeof command !== 'string') return 'missing'
   const text = command.replace(SHELL_BLANKS, '')
+  // Claude Code on Windows runs the PowerShell form only when the entry says PowerShell; Git Bash cannot.
+  if (HOOK_SHELL === 'powershell' && agent === 'claude' && text === hookEntryCommand(agent) && !claudeRunsInPowerShell(entry)) {
+    return namesHook(command, agent) ? 'named' : 'missing'
+  }
   if (text === hookEntryCommand(agent)) return 'wired'
   if (recognisedEntries(agent).includes(text)) return 'older'
   // The note is for the owner to read, not a verdict, so it may look past any whitespace at all.
@@ -1325,7 +1423,7 @@ function hookEventState(listed, agent, event) {
       if (!isObject(entry) || entry.type !== 'command') continue
       // An entry the harness will not run is not an entry BMN can answer for. It still names the
       // hook, so the owner is shown it rather than left with an unexplained duplicate.
-      const recognition = hookEntryState(entry.command, agent)
+      const recognition = hookEntryState(entry.command, agent, entry)
       const runnable = runnableEntry(entry, agent)
       const read = runnable ? recognition : (namesHook(entry.command, agent) ? 'named' : 'missing')
       if (gated && read !== 'missing') {
@@ -1707,11 +1805,7 @@ async function installOpenCodePlugin(path, asJson, yes) {
     }
     try {
       unchanged()
-      if (before !== null) {
-        backup = `${path}.bmn-backup-${new Date().toISOString()}`
-        copyFileSync(path, backup)
-      }
-      writeAtomically(path, OPENCODE_PLUGIN, unchanged)
+      ;({ backup } = writeConfigSafely(path, before, OPENCODE_PLUGIN, { beforeCommit: unchanged }))
     } catch (error) {
       process.stderr.write(`bmn: ${error.code ?? 'IO_ERROR'}: ${error.message}\n`)
       return 1
@@ -1773,14 +1867,7 @@ async function installHooksCommand(agent, path, asJson, yes) {
   let backup = null
   try {
     unchanged()
-    // Every file that exists is copied first, whatever BMN thinks of its shape. Keying this on one
-    // state meant a file BMN could not vouch for was written over without a copy of it.
-    if (file.state !== 'missing') {
-      backup = `${path}.bmn-backup-${new Date().toISOString()}`
-      copyFileSync(path, backup)
-    }
-    // Checked once more with the replacement already staged, so the window is as small as a rename.
-    writeAtomically(path, nextText, unchanged)
+    ;({ backup } = writeConfigSafely(path, file.state === 'missing' ? null : file.text, nextText, { beforeCommit: unchanged }))
   } catch (error) {
     if (error instanceof CliError) {
       process.stderr.write(`bmn: ${error.code}: ${error.message}\n`)
@@ -1916,6 +2003,13 @@ function statusLineCommand(argv) {
   }
   const path = parsed.options.file === undefined ? statusLineFilePath() : absoluteUncollapsed(parsed.options.file)
   const asJson = parsed.options.json === true
+  let expectedTarget
+  if (action !== 'check') {
+    try { expectedTarget = linkTarget(path) } catch (error) {
+      process.stderr.write(`bmn: cannot resolve settings target (${error.code ?? 'error'}); it was left untouched\n`)
+      return 1
+    }
+  }
   const read = readStatusLine(path)
   const say = (result, words) => {
     writeSync(1, `${asJson ? JSON.stringify(result, null, 2) : words}\n`)
@@ -1923,6 +2017,12 @@ function statusLineCommand(argv) {
   if (action === 'check') {
     say({ file: path, state: read.state }, `${path} ${STATUS_LINE_WORDS[read.state]}.`)
     return read.state === 'wrapped' ? 0 : 1
+  }
+  // The wrapper is POSIX shell; which shell Claude Code runs a Windows status line in is not measured, so BMN
+  // writes nothing there rather than a line that might break the owner's status line. Check and uninstall still work.
+  if (action === 'install' && HOOK_SHELL === 'powershell') {
+    process.stderr.write(`bmn: the status-line wrapper is not supported on Windows yet; ${path} was left untouched\n`)
+    return 1
   }
   const wanted = action === 'install' ? 'unwrapped' : 'wrapped'
   const done = action === 'install' ? 'wrapped' : 'unwrapped'
@@ -1942,7 +2042,7 @@ function statusLineCommand(argv) {
   const next = `${JSON.stringify({ ...read.data, statusLine: { ...read.data.statusLine, command } }, null, jsonIndent(read.text))}\n`
   let backup
   try {
-    ;({ backup } = writeConfigSafely(path, read.text, next, { beforeCommit: holdAtTestGate }))
+    ;({ backup } = writeConfigSafely(path, read.text, next, { beforeCommit: holdAtTestGate, expectedTarget }))
   } catch (error) {
     process.stderr.write(`bmn: ${error instanceof ConfigWriteError ? error.message : `cannot write ${path} (${error.code ?? error.message})`}\n`)
     return 1
@@ -2052,7 +2152,8 @@ async function runHook(args) {
   if (agentPid === null) return 0
   let event
   try {
-    event = JSON.parse(readFileSync(0, 'utf8'))
+    // Cursor on Windows pipes its payload through PowerShell, which puts a byte-order mark in front.
+    event = JSON.parse(readFileSync(0, 'utf8').replace(/^\uFEFF/u, ''))
   } catch {
     return 0
   }

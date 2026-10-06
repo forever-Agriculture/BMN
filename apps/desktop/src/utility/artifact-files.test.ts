@@ -15,7 +15,9 @@ import {
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { ensurePrivateDirectories } from './private-directory'
+import { denyWindowsFixtureDirectoryWrites, windowsFixtureAllowsOnlyCurrentUser } from './windows-fixture-io.test-support'
 import {
   ArtifactFileError,
   ArtifactFileStore,
@@ -24,6 +26,8 @@ import {
   type ArtifactFileErrorCode,
   type ArtifactFileStoreOptions
 } from './artifact-files'
+
+if (process.platform === 'win32') vi.setConfig({ testTimeout: 30_000 })
 
 const createdRoots = new Set<string>()
 const runningAsRoot = process.getuid?.() === 0
@@ -49,6 +53,7 @@ async function fixture(overrides: Partial<ArtifactFileStoreOptions> = {}): Promi
   const stagingRoot = join(base, 'state', 'artifact-staging')
   const workspace = join(base, 'workspace')
   await mkdir(workspace, { recursive: true })
+  if (process.platform === 'win32') ensurePrivateDirectories([join(base, 'data'), join(base, 'state')])
   const store = new ArtifactFileStore({ root, stagingRoot, usedBytes: async () => 0, ...overrides })
   return { base, root, stagingRoot, workspace, store }
 }
@@ -88,7 +93,7 @@ async function installed(store: ArtifactFileStore, workspace: string, content = 
 
 describe('artifact file import', () => {
   it('installs an immutable, hashed original without touching the source', async () => {
-    const { root, stagingRoot, workspace, store } = await fixture()
+    const { base, root, stagingRoot, workspace, store } = await fixture()
     const source = join(workspace, 'report.md')
     const content = '# Findings\n\nall green\n'
     await writeFile(source, content)
@@ -108,9 +113,18 @@ describe('artifact file import', () => {
     })
     expect(store.storedPathFor('artifact-1', sha256)).toBe(result.storedPath)
     await expect(readFile(result.storedPath, 'utf8')).resolves.toBe(content)
-    expect(await modeOf(result.storedPath)).toBe(0o400)
-    expect(await modeOf(root)).toBe(0o700)
-    expect(await modeOf(stagingRoot)).toBe(0o700)
+    if (process.platform === 'win32') {
+      expect((await modeOf(result.storedPath)) & 0o222).toBe(0)
+      expect(windowsFixtureAllowsOnlyCurrentUser(base, result.storedPath)).toBe(true)
+      await expect(appendFile(result.storedPath, 'must-not-write')).rejects.toMatchObject({ code: expect.stringMatching(/^(?:EACCES|EPERM)$/) })
+    } else expect(await modeOf(result.storedPath)).toBe(0o400)
+    if (process.platform === 'win32') {
+      expect(windowsFixtureAllowsOnlyCurrentUser(base, root)).toBe(true)
+      expect(windowsFixtureAllowsOnlyCurrentUser(base, stagingRoot)).toBe(true)
+    } else {
+      expect(await modeOf(root)).toBe(0o700)
+      expect(await modeOf(stagingRoot)).toBe(0o700)
+    }
     await expect(readdir(stagingRoot)).resolves.toEqual([])
     const sourceAfter = await stat(source)
     await expect(readFile(source, 'utf8')).resolves.toBe(content)
@@ -161,15 +175,15 @@ describe('artifact file import', () => {
   it('rejects directories, FIFOs, devices and missing sources before opening them', async () => {
     const { workspace, store } = await fixture()
     const fifo = join(workspace, 'pipe')
-    expect(spawnSync('mkfifo', [fifo]).status).toBe(0)
+    if (process.platform !== 'win32') expect(spawnSync('mkfifo', [fifo]).status).toBe(0)
 
     await expectCode(store.importFile(workspace, { artifactId: 'dir' }), 'not-regular-file')
-    await expectCode(store.importFile('/dev/null', { artifactId: 'device' }), 'not-regular-file')
+    if (process.platform !== 'win32') await expectCode(store.importFile('/dev/null', { artifactId: 'device' }), 'not-regular-file')
     await expectCode(store.importFile(join(workspace, 'absent.txt'), { artifactId: 'absent' }), 'source-missing')
     await symlink(join(workspace, 'nowhere.txt'), join(workspace, 'dangling.txt'))
     await expectCode(store.importFile(join(workspace, 'dangling.txt'), { artifactId: 'dangling' }), 'source-missing')
     // A blocking open of a FIFO would hang this test instead of failing it.
-    await expectCode(store.importFile(fifo, { artifactId: 'fifo' }), 'not-regular-file')
+    if (process.platform !== 'win32') await expectCode(store.importFile(fifo, { artifactId: 'fifo' }), 'not-regular-file')
   })
 
   it('refuses oversized files and bytes before staging anything', async () => {
@@ -230,7 +244,7 @@ describe('artifact file import', () => {
   })
 
   it('imports in-memory bytes with a sanitized name and sniffed media type', async () => {
-    const { store } = await fixture()
+    const { base, store } = await fixture()
     const bytes = Uint8Array.from([...PNG_HEAD, 1, 2, 3])
 
     const pending = store.importBytes(bytes, { artifactId: 'clip', originalName: '../../evil shot.png' })
@@ -245,7 +259,11 @@ describe('artifact file import', () => {
       mediaType: 'image/png'
     })
     await expect(readFile(result.storedPath)).resolves.toEqual(Buffer.from(expected))
-    expect(await modeOf(result.storedPath)).toBe(0o400)
+    if (process.platform === 'win32') {
+      expect((await modeOf(result.storedPath)) & 0o222).toBe(0)
+      expect(windowsFixtureAllowsOnlyCurrentUser(base, result.storedPath)).toBe(true)
+      await expect(appendFile(result.storedPath, 'must-not-write')).rejects.toMatchObject({ code: expect.stringMatching(/^(?:EACCES|EPERM)$/) })
+    } else expect(await modeOf(result.storedPath)).toBe(0o400)
   })
 
   it('reconciles only staging leftovers this store could have written', async () => {
@@ -315,7 +333,8 @@ describe('artifact file integrity and export', () => {
     const original = await installed(store, workspace)
     const locked = join(base, 'locked')
     await mkdir(locked)
-    await chmod(locked, 0o500)
+    if (process.platform === 'win32') denyWindowsFixtureDirectoryWrites(base, locked, true)
+    else await chmod(locked, 0o500)
     try {
       await expectCode(
         store.saveAs(original.storedPath, original.sha256, join(locked, 'report.md')),
@@ -323,7 +342,8 @@ describe('artifact file integrity and export', () => {
       )
       await expect(readdir(locked)).resolves.toEqual([])
     } finally {
-      await chmod(locked, 0o700)
+      if (process.platform === 'win32') denyWindowsFixtureDirectoryWrites(base, locked, false)
+      else await chmod(locked, 0o700)
     }
   })
 

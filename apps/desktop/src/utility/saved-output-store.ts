@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, readdir, rename, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import {
   SAVED_OUTPUT_FORMAT_VERSION,
@@ -9,6 +9,7 @@ import {
   type SavedOutputSnapshot,
   type SavedOutputUnreadableEntry
 } from '@bmn/protocol'
+import { replaceFile } from './file-replace'
 import type { SavedOutputStore, SessionIdentity } from './session-manager'
 
 const RETENTION_FILE = '_retention.json'
@@ -337,8 +338,14 @@ export class FileSavedOutputStore implements SavedOutputStore {
     await mkdir(this.directory, { recursive: true, mode: 0o700 })
     const destination = join(this.directory, name)
     const temporary = `${destination}.${process.pid}.${randomUUID()}.tmp`
-    await writeFile(temporary, JSON.stringify(value), { encoding: 'utf8', mode: 0o600 })
-    await rename(temporary, destination)
+    try {
+      await writeFile(temporary, JSON.stringify(value), { encoding: 'utf8', mode: 0o600 })
+    } catch (error) {
+      await unlink(temporary).catch(() => undefined)
+      throw error
+    }
+    // A refused replacement (a locked file on Windows) keeps the previous record whole and removes the staged copy.
+    await replaceFile(temporary, destination)
   }
 
   private async scan(): Promise<ScanResult> {

@@ -53,11 +53,16 @@ function sizeLabel(bytes: number): string {
   return bytes >= 1024 * 1024 ? `${bytes / (1024 * 1024)} MiB` : `${Math.round(bytes / 1024)} KiB`
 }
 
-/** True when `path` still resolves to itself and names the same file as the open handle's `stats`. */
-async function namesSameFile(path: string, stats: Stats): Promise<boolean> {
-  const resolved = await realpath(path).catch(() => null)
-  if (resolved !== path) return false
-  const named = await stat(path).catch(() => null)
+/** Metadata permission/I/O errors cannot confirm a change; let the caller
+ * report unreadable. A disappeared name does confirm identity loss. */
+async function namesSameFile(path: string, stats: Stats, canonicalPath = path): Promise<boolean> {
+  const missing = (error: unknown): null => {
+    if (['ENOENT', 'ENOTDIR', 'ELOOP'].includes(errorCode(error) ?? '')) return null
+    throw error
+  }
+  const resolved = await realpath(path).catch(missing)
+  if (resolved !== canonicalPath) return false
+  const named = await stat(path).catch(missing)
   return named !== null && named.dev === stats.dev && named.ino === stats.ino
 }
 
@@ -80,7 +85,7 @@ export async function readFileReference(
   options: FileReferenceReaderOptions = {}
 ): Promise<FileReferenceReadResult> {
   if (typeof request.reference !== 'string') invalid('The file reference must be text')
-  const parsed = parseFileReference(request.reference)
+  const parsed = parseFileReference(request.reference, 'typed', process.platform === 'win32' ? 'win32' : 'posix')
   if (!parsed.ok) invalid(parsed.reason)
   const { path, line, column } = parsed.reference
   const chosen = chosenBase(request.baseDirectory)
@@ -147,7 +152,8 @@ export async function readFileReference(
       length += bytesRead
     }
     // A folder on the path swapped for a symlink, or the file replaced, would make the shown path describe other bytes.
-    if (!(await namesSameFile(canonicalPath, stats))) {
+    if (!(await namesSameFile(canonicalPath, stats)) ||
+      (target.resolvedPath !== canonicalPath && !(await namesSameFile(target.resolvedPath, stats, canonicalPath)))) {
       return unavailable('changed', 'The file changed while it was being read; refresh to read it again.', canonicalPath)
     }
     if (length > maxBytes) {
