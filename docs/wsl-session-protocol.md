@@ -84,6 +84,7 @@ A session's receipt is complete only with a matching `ready`, a matching `exit` 
 ## Session authority (bridge, model only)
 
 `scripts/lib/wsl-capabilities.mjs` models the authority a WSL session's `bmn` would carry, tested in `scripts/tests/wsl-capabilities.test.mjs`. The bridge channel itself stays reserved until it is designed and reviewed.
+- Session and incarnation identities must be literal strings, and distribution identities must have the canonical lowercase registration GUID shape. Values are never coerced into identities. A refused replacement leaves the current grant usable.
 - Native BMN mints one credential per session incarnation, limited to listed operations within a fixed ceiling (at most what a native session's own credential may do) and to roots in the session's distribution. It keeps only the credential's digest; the secret travels once, in the private launch stream, never in argv, environment listings or logs. A new incarnation's credential replaces the old one, and Stop or disconnect revokes it at once.
 - A request is judged by the transport it arrived on: the credential must belong to that channel's session and incarnation. A request has exactly the fields `secret`, `sequence`, `operation` and optionally `path`; a claimed session or distribution is refused, not ignored.
 - Sequences strictly increase; an authenticated request uses up its sequence even when it is then denied, so nothing can be replayed. A path is a path in the credential's own distribution and must lie below one of its roots.

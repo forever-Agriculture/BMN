@@ -33,7 +33,8 @@ export class WslCapabilities {
    * for the session's private bootstrap frame; it never goes into argv, environment listings or logs.
    */
   mint({ sessionId, incarnationId, distributionId, roots, operations }) {
-    if (!IDENTIFIER.test(String(sessionId)) || !IDENTIFIER.test(String(incarnationId))) throw new ProtocolError('PROTOCOL', 'session identity is not valid')
+    if (typeof sessionId !== 'string' || !IDENTIFIER.test(sessionId) ||
+      typeof incarnationId !== 'string' || !IDENTIFIER.test(incarnationId)) throw new ProtocolError('PROTOCOL', 'session identity is not valid')
     const scoped = (Array.isArray(roots) ? roots : []).map((root) => qualifiedGuestPath(distributionId, root))
     if (scoped.length === 0) throw new ProtocolError('PROTOCOL', 'a credential needs at least one authorized root')
     if (!Array.isArray(operations)) throw new ProtocolError('PROTOCOL', 'operations are a list')

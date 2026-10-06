@@ -37,6 +37,20 @@ describe('WSL session capabilities', () => {
     expect(() => capabilities.mint(grant({ sessionId: 'a.b' }))).toThrow('session identity is not valid')
   })
 
+  it('refuses non-string session identities without coercing them or revoking an existing grant', () => {
+    const capabilities = new WslCapabilities({ ceiling: CEILING, random })
+    const first = capabilities.mint(grant()).secret
+    let coerced = false
+    const impostor = { toString: () => { coerced = true; return 'session-a' } }
+    for (const key of ['sessionId', 'incarnationId']) {
+      for (const value of [null, true, 17, ['session-a'], impostor]) {
+        expect(() => capabilities.mint(grant({ [key]: value }))).toThrow('session identity is not valid')
+      }
+    }
+    expect(coerced).toBe(false)
+    expect(capabilities.authorize(channelA, { secret: first, sequence: 1, operation: 'progress.report' }).ok).toBe(true)
+  })
+
   it('judges the transport a request arrived on and ignores nothing the guest adds', () => {
     const capabilities = new WslCapabilities({ ceiling: CEILING, random })
     const { secret } = capabilities.mint(grant())

@@ -93,7 +93,7 @@ export function resolveRecordedDistribution(recorded, discovery) {
 
 /** A Linux path qualified by its distribution's registration identity; equal paths in two distributions never collide. */
 export function qualifiedGuestPath(distributionId, linuxPath) {
-  if (typeof distributionId !== 'string' || !/^\{[0-9a-f-]{36}\}$/u.test(distributionId)) throw new ProtocolError('PROTOCOL', 'distribution identity is not a lowercase registration GUID')
+  if (typeof distributionId !== 'string' || !GUID.test(distributionId) || distributionId !== distributionId.toLowerCase()) throw new ProtocolError('PROTOCOL', 'distribution identity is not a lowercase registration GUID')
   return { distributionId, path: validateLinuxPath(linuxPath, 'path') }
 }
 

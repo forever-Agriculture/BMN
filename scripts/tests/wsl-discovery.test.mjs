@@ -16,6 +16,14 @@ const debian = { id: DEBIAN, name: 'Debian', version: 2, state: 1, basePath: 'C:
 const recorded = { id: UBUNTU.toLowerCase(), name: 'Ubuntu-24.04' }
 
 describe('WSL discovery', () => {
+  it('requires the canonical registration GUID shape when qualifying guest paths', () => {
+    for (const id of ['{' + '-'.repeat(36) + '}', '{' + 'a'.repeat(36) + '}',
+      '{0b1e2f3a4-c5d-4e6f-8a9b-0c1d2e3f4a5}', UBUNTU, null, 17]) {
+      expect(() => qualifiedGuestPath(id, '/home/project')).toThrow('lowercase registration GUID')
+    }
+    expect(qualifiedGuestPath(UBUNTU.toLowerCase(), '/home/project').distributionId).toBe(UBUNTU.toLowerCase())
+  })
+
   it('reads the versions wsl.exe --version prints, and gives null for labels it cannot find', () => {
     // As printed on the Windows runner (run 37322654021).
     const text = 'WSL version: 2.7.14.0\r\nKernel version: 6.18.33.2-2\r\nWSLg version: 1.0.73.2\r\nWindows version: 10.0.26100.33438'
