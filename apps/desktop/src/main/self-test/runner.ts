@@ -98,7 +98,9 @@ import {
 } from 'node:path'
 import type { AttachmentIdentity, HostHealth, SelfTestHost, SessionIdentity } from '../index'
 import { scrolledDiagnosticArm } from './scrolled-diagnostic'
-import { conptyIdentity } from '../../utility/conpty-identity'
+import { observeDiagnosticFailure } from './diagnostic-observation'
+import { armDiagnosticCustody, diagnosticLateMembers, type DiagnosticJobSnapshot } from './diagnostic-custody'
+import { diagnosticObservationPublisher } from './diagnostic-publication'
 import { fileReferenceFixtureNames } from '../../renderer/src/file-reference-probe'
 import {
   MODE_PASTE_TEXT,
@@ -464,6 +466,11 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
   } | undefined
   let graceful = true
   let clientClosed = false
+  let initialScrolledWithinBudget: boolean | undefined
+  let passiveObservation: Record<string, unknown> | undefined
+  let diagnosticSnapshot: DiagnosticJobSnapshot | undefined
+  const publishObservation = diagnosticObservationPublisher(() => ({ arm: diagnosticArm!, anchors: diagnosticAnchors,
+    initialScrolledWithinBudget, passiveObservation, lateMembers: diagnosticLateMembers(diagnosticSnapshot) }))
   try {
     selfTestSequence: {
     const isolatedCwd = process.env.BMN_STATE_HOME
@@ -1059,7 +1066,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     }
     // Decode a known frame in one real pane. This bypasses shell command timing so a failure names
     // the renderer itself; transport has its own framing and queue checks.
-    const sixelDirect = diagnosticArm === 'without-fixture' ? null : await host.applicationWindow.webContents.executeJavaScript(`
+    const sixelDirect = await host.applicationWindow.webContents.executeJavaScript(`
       new Promise((resolve, reject) => {
         const deadline = Date.now() + 5000;
         const probe = () => {
@@ -1078,17 +1085,17 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     `) as { fixture: { storageMB: number; layer: boolean };
       otherBefore: { imageStorageMB: number; imageLayerPresent: boolean };
       otherAfter: { imageStorageMB: number; imageLayerPresent: boolean } }
-    const sixelRender = sixelDirect === null ? undefined : {
+    const sixelRender = {
       ownStorageMB: sixelDirect.fixture.storageMB,
       ownLayer: sixelDirect.fixture.layer,
       otherStorageMB: sixelDirect.otherAfter.imageStorageMB,
       otherImageUnchanged: sixelDirect.otherBefore.imageStorageMB === sixelDirect.otherAfter.imageStorageMB &&
         sixelDirect.otherBefore.imageLayerPresent === sixelDirect.otherAfter.imageLayerPresent
     }
-    if (sixelRender && !(sixelRender.ownStorageMB > 0 && sixelRender.ownLayer)) {
+    if (!(sixelRender.ownStorageMB > 0 && sixelRender.ownLayer)) {
       throw new Error(`the real pane could not decode the Sixel fixture: ${JSON.stringify(sixelRender)}`)
     }
-    if (sixelRender && (!sixelRender.otherImageUnchanged || sixelRender.otherStorageMB !== 0)) {
+    if (!sixelRender.otherImageUnchanged || sixelRender.otherStorageMB !== 0) {
       throw new Error(`Sixel output changed the other pane image layer: ${JSON.stringify(sixelRender)}`)
     }
 
@@ -1141,36 +1148,42 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     const beforeScrolled = join(animationDirectory, 'before-scrolled')
     const afterScrolled = join(animationDirectory, 'after-scrolled')
     const shellWrote = () => ({ beforeScrolled: existsSync(beforeScrolled), afterScrolled: existsSync(afterScrolled) })
-    let initialScrolledWithinBudget = true
-    let passiveObservation: Record<string, unknown> | undefined
+    const diagnosticShellTicks = () => {
+      try { return existsSync(afterScrolled) ? readFileSync(afterScrolled, 'utf8') : null }
+      catch { return 'unavailable: shell marker read failed' }
+    }
+    if (diagnosticArm) diagnosticSnapshot = await armDiagnosticCustody(diagnosticArm)
     const lastMarkerSeen = Date.now()
     const scrollLine = typeIntoAnimatedPane(typedShell.windows
       ? `0..79 | ForEach-Object { "scroll-$_" }; [IO.File]::WriteAllText(${powerShellQuote(beforeScrolled)}, 'x'); ` +
-        `${diagnosticArm ? '$b=[DateTime]::UtcNow.Ticks; ' : ''}${printed('SCROLL', 'ED')}; ` +
-        `[IO.File]::WriteAllText(${powerShellQuote(afterScrolled)}, ${diagnosticArm ? "[string]::Format('{0} {1}', $b, [DateTime]::UtcNow.Ticks)" : "'x'"})\r`
+        `${diagnosticArm ? '$loadedBefore=@(Get-Module Microsoft.PowerShell.Utility).Count; $b=[DateTime]::UtcNow.Ticks; ' : ''}` +
+        (diagnosticArm === 'split' ? `$c = ${printed('SCROLL', 'ED')}; $m=[DateTime]::UtcNow.Ticks; $c; ` :
+          diagnosticArm === 'static' ? "[Console]::Out.WriteLine(('SCROLL' + 'ED')); $m=[DateTime]::UtcNow.Ticks; " :
+            `${printed('SCROLL', 'ED')}; ${diagnosticArm ? '$m=[DateTime]::UtcNow.Ticks; ' : ''}`) +
+        `${diagnosticArm ? '$e=[DateTime]::UtcNow.Ticks; $loadedAfter=@(Get-Module Microsoft.PowerShell.Utility).Count; ' : ''}` +
+        `[IO.File]::WriteAllText(${powerShellQuote(afterScrolled)}, ${diagnosticArm ? "[string]::Format('{0} {1} {2} {3} {4}', $b, $m, $e, $loadedBefore, $loadedAfter)" : "'x'"})\r`
       : `i=0; while [ $i -lt 80 ]; do echo scroll-$i; i=$((i + 1)); done; : > '${beforeScrolled}'; ` +
         `printf '%s%s\\n' SCROLL ED; : > '${afterScrolled}'\r`)
     const scrollSent = Date.now() - lastMarkerSeen
     await scrollLine
     const scrollAccepted = Date.now() - lastMarkerSeen
-    await waitForAnimatedLine('SCROLLED', 10_000).catch(async (error: unknown) => {
+    await waitForAnimatedLine('SCROLLED', 10_000).then(() => { initialScrolledWithinBudget = true }).catch(async (error: unknown) => {
       const message = error instanceof Error ? error.message : String(error)
       if (diagnosticArm) {
         initialScrolledWithinBudget = false
         const failureAtMs = Date.now()
         const deadline = failureAtMs + 40_000
         const samples: Array<Record<string, unknown>> = []
+        const observationErrors: Array<{ label: string; kind: string }> = []
+        passiveObservation = { failure: message, scrollTypedAtMs: lastMarkerSeen, failureAtMs,
+          controllerPokes: [], samples, observationErrors }
         const state = async () => {
-          let timer: ReturnType<typeof setTimeout> | undefined
-          try {
-            return await Promise.race([
-              client.request<{ selfTestOutputState: Record<string, unknown> }>(METHOD_REGISTRY.healthGet,
-                { selfTestOutputState: { sessionId: secondSession.sessionId } }).then(answer => answer.selfTestOutputState),
-              new Promise<Record<string, unknown>>(resolve => {
-                timer = setTimeout(() => resolve({ unavailable: 'diagnostic health query exceeded 2 seconds' }), 2_000)
-              })
-            ])
-          } finally { clearTimeout(timer) }
+          const answer = await observeDiagnosticFailure(message, 'host state', () =>
+            client.request<{ selfTestOutputState: Record<string, unknown> | null }>(METHOD_REGISTRY.healthGet,
+              { selfTestOutputState: { sessionId: secondSession.sessionId } }).then(answer => answer?.selfTestOutputState),
+            2_000, state => typeof state.outputBytes === 'number')
+          if (answer.observationError) observationErrors.push(answer.observationError)
+          return answer.observation
         }
         const atFailure = await state()
         while (Date.now() < deadline) {
@@ -1180,14 +1193,16 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
           await new Promise(resolve => setTimeout(resolve, Math.min(500, Math.max(0, deadline - Date.now()))))
         }
         const atEnd = await state()
-        const viewAtEnd = await host.applicationWindow!.webContents.executeJavaScript(`(() => {
-          const snapshot = window.__aitermTest.snapshot(${animatedId});
-          return { rendererInputEvents: snapshot.inputEvents, cols: snapshot.cols, rows: snapshot.rows,
-            lines: snapshot.bufferLines.filter(line => line.trim()).slice(-8) };
-        })()`)
-        passiveObservation = { failure: message, scrollTypedAtMs: lastMarkerSeen, failureAtMs,
-          passiveEndedAtMs: Date.now(), controllerPokes: [], atFailure, samples, atEnd, viewAtEnd,
-          markers: shellWrote(), shellTicks: existsSync(afterScrolled) ? readFileSync(afterScrolled, 'utf8') : null }
+        const view = await observeDiagnosticFailure(message, 'renderer after passive wait', () =>
+          host.applicationWindow!.webContents.executeJavaScript(`(() => {
+            const snapshot = window.__aitermTest.snapshot(${animatedId});
+            return { rendererInputEvents: snapshot.inputEvents, cols: snapshot.cols, rows: snapshot.rows,
+              lines: snapshot.bufferLines.filter(line => line.trim()).slice(-8) };
+          })()`), 2_000, view => typeof view.rendererInputEvents === 'number' && Array.isArray(view.lines))
+        if (view.observationError) observationErrors.push(view.observationError)
+        Object.assign(passiveObservation, { passiveEndedAtMs: Date.now(), atFailure, atEnd,
+          viewAtEnd: view.observation, markers: shellWrote(),
+          shellTicks: diagnosticShellTicks() })
         return
       }
       // Observation only, once the failure is certain. Stages in order: what the host and the view hold now; a late
@@ -1277,7 +1292,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       throw new Error(`${message} (line sent +${scrollSent} ms and accepted +${scrollAccepted} ms after MAX-RATE-DONE was seen) ` +
         JSON.stringify(observed))
     })
-    const animation = await host.applicationWindow.webContents.executeJavaScript(`(() => {
+    const readAnimation = () => host.applicationWindow!.webContents.executeJavaScript(`(() => {
       const hook = window.__aitermTest;
       const own = hook.snapshot(${animatedId});
       const quiet = hook.snapshot(${quietId});
@@ -1288,9 +1303,17 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
             hook.view(${quietId}).clearSelection();
             return selection;
           })() } };
-    })()`) as { storageMB: number; imageLines: number[];
+    })()`) as Promise<{ storageMB: number; imageLines: number[];
+      quiet: { lines: string[]; storageMB: number; layer: boolean; selection: string } }>
+    const observedAnimation = diagnosticArm ? await observeDiagnosticFailure(String(passiveObservation?.failure ?? ''),
+      'animation after scroll', readAnimation, 2_000, state => typeof state.storageMB === 'number' &&
+        Array.isArray(state.imageLines) && state.quiet !== null && typeof state.quiet === 'object' &&
+        Array.isArray((state.quiet as { lines?: unknown }).lines) &&
+        typeof (state.quiet as { selection?: unknown }).selection === 'string') : undefined
+    const animation = (observedAnimation?.observation ?? await readAnimation()) as { storageMB: number; imageLines: number[];
       quiet: { lines: string[]; storageMB: number; layer: boolean; selection: string } }
-    const sixelAnimation = {
+    const sixelAnimation: Record<string, unknown> = observedAnimation?.observationError
+      ? { unavailable: 'animation snapshot unavailable', observationError: observedAnimation.observationError } : {
       noViewRebuild: host.runtimes.get(secondSession.sessionId)?.attachment.attachmentId === animatedAttachment,
       storageMB: animation.storageMB,
       imageLinesAfterScroll: animation.imageLines.length,
@@ -1299,20 +1322,24 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       quietSelectionKept: quietBefore.selection.length > 0 && animation.quiet.selection === quietBefore.selection
     }
     // One 75 px frame covers at most 7 rows at the smallest font; more means stale frames stayed.
-    const animationPassed = sixelAnimation.noViewRebuild && sixelAnimation.storageMB > 0 &&
-      sixelAnimation.imageLinesAfterScroll <= 7 && sixelAnimation.quietPaneUnchanged && sixelAnimation.quietSelectionKept
+    const animationPassed = sixelAnimation.noViewRebuild === true && typeof sixelAnimation.storageMB === 'number' &&
+      sixelAnimation.storageMB > 0 && typeof sixelAnimation.imageLinesAfterScroll === 'number' &&
+      sixelAnimation.imageLinesAfterScroll <= 7 && sixelAnimation.quietPaneUnchanged === true && sixelAnimation.quietSelectionKept === true
     if (!animationPassed && !diagnosticArm) {
       throw new Error(`the two-pane Sixel animation failed: ${JSON.stringify(sixelAnimation)}`)
     }
 
     if (diagnosticArm) {
-      const finalState = await client.request<{ selfTestOutputState: Record<string, unknown> }>(METHOD_REGISTRY.healthGet,
-        { selfTestOutputState: { sessionId: secondSession.sessionId } })
-      const hostIdentity = await conptyIdentity(Number(finalState.selfTestOutputState.hostPid), Number(finalState.selfTestOutputState.shellPid))
+      const final = await observeDiagnosticFailure(String(passiveObservation?.failure ?? ''), 'final host state', () =>
+        client.request<{ selfTestOutputState: Record<string, unknown> | null }>(METHOD_REGISTRY.healthGet,
+          { selfTestOutputState: { sessionId: secondSession.sessionId } }).then(answer => answer?.selfTestOutputState),
+        2_000, state => typeof state.outputBytes === 'number')
+      const finalState = final.observation
       receipt = { selfTest: 'scrolled-diagnostic', diagnosticOnly: true, arm: diagnosticArm, anchors: diagnosticAnchors,
         initialScrolledWithinBudget, animationPassed, sixelPty, sixelRender, sixelAnimation, passiveObservation,
-        finalState: finalState.selfTestOutputState, hostIdentity,
-        shellTicks: existsSync(afterScrolled) ? readFileSync(afterScrolled, 'utf8') : null }
+        finalState, finalObservationError: final.observationError,
+        shellTicks: diagnosticShellTicks() }
+      await publishObservation()
       break selfTestSequence
     }
 
@@ -5536,6 +5563,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     }
     }
   } catch (error) {
+    if (diagnosticArm) await publishObservation()
     // Print the reason before release, so a release that stalls cannot hide it.
     reportSelfTestFailure(error)
     throw error
@@ -5557,6 +5585,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     taps.rendererLaunchBlockedSessionId = undefined
     taps.rendererUnavailableTemplate = undefined
   }
+  if (diagnosticArm && receipt) receipt.lateMembers = diagnosticLateMembers(diagnosticSnapshot)
   if (!graceful) throw new Error('the real terminal host did not shut down gracefully')
   console.log(JSON.stringify({ ...receipt, graceful }))
 }

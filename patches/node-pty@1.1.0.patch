@@ -15,7 +15,7 @@ diff --git a/lib/index.js b/lib/index.js
 index 1527069b2e039e006cdb6398d44b8fba38cc0ca1..188ac820aab62c2e0695569388b7ceea756072ea 100644
 --- a/lib/index.js
 +++ b/lib/index.js
-@@ -5,9 +5,17 @@
+@@ -5,9 +5,18 @@
   * Copyright (c) 2018, Microsoft Corporation (MIT License).
   */
  Object.defineProperty(exports, "__esModule", { value: true });
@@ -31,12 +31,13 @@ index 1527069b2e039e006cdb6398d44b8fba38cc0ca1..188ac820aab62c2e0695569388b7ceea
 +exports.queryProcessCommandLines = queryProcessCommandLines;
 +exports.restrictControlPipe = restrictControlPipe;
 +exports.protectApplicationLifetime = protectApplicationLifetime;
++exports.queryApplicationLifetimeProcesses = queryApplicationLifetimeProcesses;
 +const utils_1 = require("./utils");
 +let terminalCtor;
  if (process.platform === 'win32') {
      terminalCtor = require('./windowsTerminal').WindowsTerminal;
  }
-@@ -29,24 +37,56 @@ else {
+@@ -29,24 +38,66 @@ else {
  function spawn(file, args, opt) {
      return new terminalCtor(file, args, opt);
  }
@@ -100,6 +101,16 @@ index 1527069b2e039e006cdb6398d44b8fba38cc0ca1..188ac820aab62c2e0695569388b7ceea
 +        throw new Error('BMN application lifetime addon missing');
 +    binding.protectApplicationLifetime();
 +}
++/** BMN: bounded identities from the already established application job, observation only. */
++function queryApplicationLifetimeProcesses() {
++    if (process.platform !== 'win32')
++        throw new Error('Windows application lifetime only');
++    const binding = (0, utils_1.loadNativeModule)('conpty').module;
++    if (binding.bmnApplicationLifetimeVersion !== 1 || typeof binding.queryApplicationLifetimeProcesses !== 'function')
++        throw new Error('BMN application lifetime snapshot unavailable');
++    return binding.queryApplicationLifetimeProcesses();
++}
++
 diff --git a/lib/windowsConoutConnection.js b/lib/windowsConoutConnection.js
 index 1be15ca061370127d2e24e943067538ab395a566..bf6e593a10a2e8eb45b5b0bff3cc047d60eedc97 100644
 --- a/lib/windowsConoutConnection.js
@@ -1071,7 +1082,7 @@ diff --git a/src/index.ts b/src/index.ts
 index 8a7e95051ead1cbcaa7dffa010c35affcb7be10c..e0f2b8f8897cd327d08aead220d82c612eb1e4ca 100644
 --- a/src/index.ts
 +++ b/src/index.ts
-@@ -50,3 +50,35 @@ export function open(options: IPtyOpenOptions): ITerminal {
+@@ -50,3 +50,47 @@ export function open(options: IPtyOpenOptions): ITerminal {
   * could be removed at any time.
   */
  export const native = (process.platform !== 'win32' ? loadNativeModule('pty').module : null);
@@ -1107,11 +1118,23 @@ index 8a7e95051ead1cbcaa7dffa010c35affcb7be10c..e0f2b8f8897cd327d08aead220d82c61
 +  if (binding.bmnApplicationLifetimeVersion !== 1) throw new Error('BMN application lifetime addon missing');
 +  binding.protectApplicationLifetime();
 +}
++
++/** Identities in this process's established application job; never creates or exports its job handle. */
++export function queryApplicationLifetimeProcesses(): { listed: number; identified: number;
++  entries: Array<{ pid: number; creationTimeMs: number; creationFileTime: string }> } {
++  if (process.platform !== 'win32') throw new Error('Windows application lifetime only');
++  const binding: IConptyNative = loadNativeModule('conpty').module;
++  if (binding.bmnApplicationLifetimeVersion !== 1 || typeof binding.queryApplicationLifetimeProcesses !== 'function') {
++    throw new Error('BMN application lifetime snapshot unavailable');
++  }
++  return binding.queryApplicationLifetimeProcesses();
++}
++
 diff --git a/src/native.d.ts b/src/native.d.ts
 index c53e086b4968d6fb0bf601ace3a813809433fedb..fec467b38081482ce1c0c092ee3ee69ca667e7ff 100644
 --- a/src/native.d.ts
 +++ b/src/native.d.ts
-@@ -3,8 +3,18 @@
+@@ -3,8 +3,19 @@
   */
  
  interface IConptyNative {
@@ -1125,6 +1148,7 @@ index c53e086b4968d6fb0bf601ace3a813809433fedb..fec467b38081482ce1c0c092ee3ee69c
 +  restrictControlPipe(name: string): { user: string; dacl: string; verifiedCurrentUserOnly: true };
 +  bmnApplicationLifetimeVersion?: number;
 +  protectApplicationLifetime(): void;
++  queryApplicationLifetimeProcesses(): { listed: number; identified: number; entries: Array<{ pid: number; creationTimeMs: number; creationFileTime: string }> };
    startProcess(file: string, cols: number, rows: number, debug: boolean, pipeName: string, conptyInheritCursor: boolean, useConptyDll: boolean): IConptyProcess;
 -  connect(ptyId: number, commandLine: string, cwd: string, env: string[], useConptyDll: boolean, onExitCallback: (exitCode: number) => void): { pid: number };
 +  connect(ptyId: number, commandLine: string, cwd: string, env: string[], useConptyDll: boolean, onExitCallback: (result: { exitCode: number; treeEmpty: true } | { error: string }) => void): { pid: number; startIdentity: string };
@@ -1135,7 +1159,7 @@ diff --git a/src/win/conpty.cc b/src/win/conpty.cc
 index 7b286d3d644c26141df516929703aa6e129df4b2..426b66048ad8a69a122438953afe4439dfb70599 100644
 --- a/src/win/conpty.cc
 +++ b/src/win/conpty.cc
-@@ -2,582 +2,823 @@
+@@ -2,582 +2,875 @@
   * Copyright (c) 2013-2015, Christopher Jeffrey, Peter Sunde (MIT License)
   * Copyright (c) 2016, Daniel Imms (MIT License).
   * Copyright (c) 2018, Microsoft Corporation (MIT License).
@@ -2369,6 +2393,57 @@ index 7b286d3d644c26141df516929703aa6e129df4b2..426b66048ad8a69a122438953afe4439
 +static std::mutex applicationLifetimeMutex;
 +static HANDLE applicationLifetimeJob = nullptr;
 +
++// Read-only snapshot of the already established job. Do not duplicate its lifetime handle.
++static Napi::Value queryApplicationLifetimeProcesses(const Napi::CallbackInfo& info) {
++  Napi::Env env = info.Env();
++  if (info.Length() != 0) throw Napi::Error::New(env, "Application lifetime snapshot takes no arguments");
++  std::lock_guard<std::mutex> lock(applicationLifetimeMutex);
++  if (!applicationLifetimeJob) throw Napi::Error::New(env, "Application lifetime job is not established");
++  constexpr DWORD MAX_PROCESSES = 1024;
++  const ULONGLONG deadline = GetTickCount64() + 500;
++  const DWORD listBytes = static_cast<DWORD>(offsetof(JOBOBJECT_BASIC_PROCESS_ID_LIST, ProcessIdList) + MAX_PROCESSES * sizeof(ULONG_PTR));
++  std::vector<ULONG_PTR> storage((listBytes + sizeof(ULONG_PTR) - 1) / sizeof(ULONG_PTR));
++  auto* list = reinterpret_cast<JOBOBJECT_BASIC_PROCESS_ID_LIST*>(storage.data());
++  if (!QueryInformationJobObject(applicationLifetimeJob, JobObjectBasicProcessIdList, list, listBytes, nullptr) ||
++      list->NumberOfAssignedProcesses > MAX_PROCESSES || list->NumberOfProcessIdsInList > MAX_PROCESSES ||
++      list->NumberOfAssignedProcesses != list->NumberOfProcessIdsInList) {
++    throw Napi::Error::New(env, "Application job snapshot is unavailable or incomplete");
++  }
++  std::unordered_map<DWORD, bool> seen;
++  std::vector<std::unique_ptr<OwnedPortProcess>> held;
++  Napi::Array entries = Napi::Array::New(env);
++  bool includedSelf = false;
++  for (DWORD index = 0; index < list->NumberOfProcessIdsInList; ++index) {
++    if (GetTickCount64() > deadline) throw Napi::Error::New(env, "Application job snapshot exceeded its time bound");
++    const ULONG_PTR rawPid = list->ProcessIdList[index];
++    if (!rawPid || rawPid > MAXDWORD || seen.count(static_cast<DWORD>(rawPid))) {
++      throw Napi::Error::New(env, "Application job snapshot has an invalid process ID");
++    }
++    const DWORD pid = static_cast<DWORD>(rawPid);
++    seen.emplace(pid, true);
++    auto process = std::make_unique<OwnedPortProcess>(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid));
++    if (!process->process.value) continue; // Counts below make an unidentified member an explicit incomplete snapshot.
++    FILETIME exited{}, kernel{}, user{};
++    if (!GetProcessTimes(process->process.value, &process->created, &exited, &kernel, &user) ||
++        !stillOwned(process->process.value, applicationLifetimeJob, process->created)) continue;
++    const ULONGLONG created = (static_cast<ULONGLONG>(process->created.dwHighDateTime) << 32) | process->created.dwLowDateTime;
++    if (created < 116444736000000000ULL) throw Napi::Error::New(env, "Application process creation time is invalid");
++    Napi::Object entry = Napi::Object::New(env);
++    entry.Set("pid", pid);
++    entry.Set("creationTimeMs", static_cast<double>((created - 116444736000000000ULL) / 10000ULL));
++    entry.Set("creationFileTime", std::to_string(created));
++    entries.Set(static_cast<uint32_t>(held.size()), entry);
++    includedSelf |= pid == GetCurrentProcessId();
++    held.push_back(std::move(process));
++  }
++  if (!includedSelf) throw Napi::Error::New(env, "Application job snapshot omitted this process");
++  Napi::Object result = Napi::Object::New(env);
++  result.Set("listed", list->NumberOfProcessIdsInList);
++  result.Set("identified", static_cast<uint32_t>(held.size()));
++  result.Set("entries", entries);
++  return result; // RAII closes every process query handle; the original lifetime handle is untouched.
++}
++
 +static Napi::Value protectApplicationLifetime(const Napi::CallbackInfo& info) {
 +  Napi::Env env = info.Env();
 +  if (info.Length() != 0) throw Napi::Error::New(env, "Application lifetime protection takes no arguments");
@@ -2458,6 +2533,7 @@ index 7b286d3d644c26141df516929703aa6e129df4b2..426b66048ad8a69a122438953afe4439
 +  exports.Set("restrictControlPipe", Napi::Function::New(env, restrictControlPipe, "restrictControlPipe"));
 +  exports.Set("bmnControlTransportVersion", 2);
 +  exports.Set("protectApplicationLifetime", Napi::Function::New(env, protectApplicationLifetime, "protectApplicationLifetime"));
++  exports.Set("queryApplicationLifetimeProcesses", Napi::Function::New(env, queryApplicationLifetimeProcesses, "queryApplicationLifetimeProcesses"));
 +  exports.Set("bmnApplicationLifetimeVersion", 1);
 +  exports.Set("acquireInstallLease", Napi::Function::New(env, InstallLease::acquire, "acquireInstallLease"));
 +  exports.Set("bmnInstallLeaseVersion", 1);
@@ -3137,7 +3213,7 @@ diff --git a/typings/node-pty.d.ts b/typings/node-pty.d.ts
 index 6f050ff1d97b8d3477be7ee95d2af516bd9517b7..95062f3759c9e727739edc2fc68954701846a6cd 100644
 --- a/typings/node-pty.d.ts
 +++ b/typings/node-pty.d.ts
-@@ -15,6 +15,14 @@ declare module 'node-pty' {
+@@ -15,6 +15,15 @@ declare module 'node-pty' {
     * @see Parsing C++ Comamnd-Line Arguments https://msdn.microsoft.com/en-us/library/17w5ykft.aspx
     * @see GetCommandLine https://msdn.microsoft.com/en-us/library/windows/desktop/ms683156.aspx
     */
@@ -3148,11 +3224,12 @@ index 6f050ff1d97b8d3477be7ee95d2af516bd9517b7..95062f3759c9e727739edc2fc6895470
 +  export function restrictControlPipe(name: string): { user: string; dacl: string; verifiedCurrentUserOnly: true };
 +  /** Process-lifetime backstop; no JavaScript disposer. */
 +  export function protectApplicationLifetime(): void;
++  export function queryApplicationLifetimeProcesses(): { listed: number; identified: number; entries: Array<{ pid: number; creationTimeMs: number; creationFileTime: string }> };
 +
    export function spawn(file: string, args: string[] | string, options: IPtyForkOptions | IWindowsPtyForkOptions): IPty;
  
    export interface IBasePtyForkOptions {
-@@ -114,6 +122,11 @@ declare module 'node-pty' {
+@@ -114,6 +123,11 @@ declare module 'node-pty' {
     * An interface representing a pseudoterminal, on Windows this is emulated via the winpty library.
     */
    export interface IPty {

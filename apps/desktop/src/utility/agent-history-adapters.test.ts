@@ -1,8 +1,9 @@
 // MODULE: agent-history-adapters.test.ts - Codex and OpenCode history adapters against fixture databases and recording stand-in binaries
-import { chmod, copyFile, link, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, link, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, describe, expect, it } from 'vitest'
 import { codexHistoryAdapter } from './agent-history-codex'
 import { openCodeHistoryAdapter } from './agent-history-opencode'
@@ -24,7 +25,7 @@ const NOW = Date.parse('2026-09-28T12:00:00.000Z')
 const DAY = 86_400_000
 
 /** A stand-in agent binary that appends its argv and cwd to a log and exits with `code`. */
-async function fakeBinary(bin: string, name: string, code = 0, output = ''): Promise<string> {
+async function fakeBinary(bin: string, name: string, code = 0, output = '', identity: 'auto' | 'link' | 'copy' = 'auto'): Promise<string> {
   await mkdir(bin, { recursive: true })
   const log = join(bin, `${name}.log`)
   if (process.platform === 'win32') {
@@ -34,8 +35,12 @@ async function fakeBinary(bin: string, name: string, code = 0, output = ''): Pro
 appendFileSync(${JSON.stringify(log)}, process.cwd()+'|'+process.argv.slice(2).join(' ')+'\\n');
 appendFileSync(${JSON.stringify(log+'.argv')}, JSON.stringify(process.argv.slice(2))+'\\n');
 console.error(${JSON.stringify(output)});process.exit(${code});`)
-    try { await link(process.execPath, join(bin, 'node.exe')) } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') await copyFile(process.execPath, join(bin, 'node.exe'))
+    if (identity === 'copy') await copyFile(process.execPath, join(bin, 'node.exe'))
+    else {
+      try { await link(process.execPath, join(bin, 'node.exe')) } catch (error) {
+        if (identity === 'link') throw error
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') await copyFile(process.execPath, join(bin, 'node.exe'))
+      }
     }
     return log
   }
@@ -154,6 +159,42 @@ describe('OpenCode history adapter', () => {
     expect(await adapter.remove('../../etc')).toEqual({ ok: false, reason: 'not an OpenCode session id' })
     expect(await readFile(log, 'utf8')).toBe(`${home}|session delete ${OPENCODE_IDS[0]} --pure\n`)
   })
+
+  it.runIf(process.platform === 'win32' && process.env.GITHUB_ACTIONS === 'true')('observes link versus private-copy teardown without forgiving the first unlink error', async () => {
+    const began = Date.now(), observations: Array<Record<string, unknown>> = []
+    let firstFailure: unknown
+    for (let index = 0; index < 20 && Date.now() - began < 60_000; index++) {
+      const identity = index % 2 ? 'copy' : 'link'
+      const home = await root(), bin = join(home, 'bin')
+      const row: Record<string, unknown> = { index, requestedIdentity: identity }
+      observations.push(row)
+      try {
+        await fakeBinary(bin, 'opencode', 0, '', identity)
+        const target = join(bin, 'node.exe'), executable = await stat(target), parent = await stat(process.execPath)
+        Object.assign(row, { identity, ino: executable.ino, nlink: executable.nlink,
+          parentIno: parent.ino, parentNlink: parent.nlink, sameIdentity: executable.ino === parent.ino })
+        await openCodeStore(home)
+        const adapter = openCodeHistoryAdapter({ home, open, env: { PATH: bin } })
+        expect(await adapter.remove(OPENCODE_IDS[0]!)).toEqual({ ok: true })
+        const removedAt = performance.now()
+        row.firstUnlinkAfterRemoveMs = performance.now() - removedAt
+        try { await unlink(target); row.firstErrorCode = null }
+        catch (error) {
+          firstFailure ??= error
+          row.firstErrorCode = (error as NodeJS.ErrnoException).code ?? 'unknown'
+          const failedAt = performance.now()
+          for (let retry = 0; retry < 20; retry++) {
+            await delay(100)
+            try { await unlink(target); row.witnessClearedAfterMs = performance.now() - failedAt; break }
+            catch { /* Witness only: the first failure will still be rethrown. */ }
+          }
+        }
+      } catch (error) { firstFailure ??= error; row.observationError = (error as NodeJS.ErrnoException).code ?? 'observation-error' }
+    }
+    console.log(JSON.stringify({ nativeDiagnostic: 'history-fixture-unlink', observationOnly: true,
+      firstFailureStillFails: true, budgetMs: 60_000, durationMs: Date.now() - began, repetitions: observations.length, observations }))
+    if (firstFailure) throw firstFailure
+  }, 90000)
 
   it('follows XDG_DATA_HOME and is not recognised without time_updated', async () => {
     const home = await root()

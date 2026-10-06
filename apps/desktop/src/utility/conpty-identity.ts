@@ -10,7 +10,8 @@ function File-Identity($path) {
   $version=[Diagnostics.FileVersionInfo]::GetVersionInfo($path)
   @{ path=$path; fileVersion=$version.FileVersion; productVersion=$version.ProductVersion; sha256=(Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant() }
 }
-$modules=@((Get-Process -Id $r.hostPid).Modules | Where-Object { $_.ModuleName -ieq 'conpty.dll' } | ForEach-Object { File-Identity $_.FileName })
+$process=[Diagnostics.Process]::GetProcessById([int]$r.hostPid)
+try { $modules=@($process.Modules | Where-Object { $_.ModuleName -ieq 'conpty.dll' } | ForEach-Object { File-Identity $_.FileName }) } finally { $process.Dispose() }
 $anchors=@([int]$r.hostPid)
 $chain=@(); $pidToRead=[int]$r.shellPid
 for($depth=0;$depth -lt 4 -and $pidToRead -gt 0;$depth++) {
@@ -38,19 +39,29 @@ export async function conptyIdentity(hostPid: number, shellPid: number): Promise
     const child = spawn(join(root, 'System32/WindowsPowerShell/v1.0/powershell.exe'),
       ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(SCRIPT, 'utf16le').toString('base64')],
       { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
-    let output = '', settled = false
+    let output = '', settled = false, terminationTimer: ReturnType<typeof setTimeout> | undefined
+    let timedOut = false
     const finish = (value: Record<string, unknown>): void => {
       if (settled) return
       settled = true
       clearTimeout(timer)
+      clearTimeout(terminationTimer)
       resolve(value)
     }
-    const timer = setTimeout(() => { child.kill(); finish({ unavailable: 'identity query exceeded 8 seconds' }) }, 8_000)
+    const timer = setTimeout(() => {
+      timedOut = true
+      child.kill()
+      terminationTimer = setTimeout(() => {
+        child.stdout.destroy(); child.stderr.destroy(); child.stdin.destroy()
+        finish({ unavailable: 'identity query exceeded 8 seconds', terminationUnconfirmed: true })
+      }, 2_000)
+    }, 8_000)
     child.stdout.on('data', bytes => { if (output.length < 64 * 1024) output += bytes.toString('utf8') })
     child.stderr.resume()
-    child.on('error', () => finish({ unavailable: 'identity query did not launch' }))
+    child.on('error', () => finish({ unavailable: 'identity query did not launch', ...(child.pid ? { terminationUnconfirmed: true } : {}) }))
     child.stdin.on('error', () => {})
     child.once('close', code => {
+      if (timedOut) { finish({ unavailable: 'identity query exceeded 8 seconds', terminationConfirmed: true }); return }
       if (code !== 0) { finish({ unavailable: 'identity query failed', exitCode: code }); return }
       try { finish(JSON.parse(output) as Record<string, unknown>) }
       catch { finish({ unavailable: 'identity query returned no valid record' }) }

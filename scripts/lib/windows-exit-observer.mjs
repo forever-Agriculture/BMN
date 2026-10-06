@@ -3,8 +3,9 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 
-export async function windowsExitObserver(entries, killIndex = -1, beforeKill = []) {
+export async function windowsExitObserver(entries, killIndex = -1, beforeKill = [], { overallWaitMs } = {}) {
   assert.equal(process.platform, 'win32')
+  assert.ok(overallWaitMs === undefined || (Number.isInteger(overallWaitMs) && overallWaitMs >= 1 && overallWaitMs <= 15000))
   assert.ok(entries.length && entries.every(entry => Number.isInteger(entry.pid) && entry.pid > 0 && Number.isFinite(entry.creationTime)))
   const validIndex = index => Number.isInteger(index) && index >= 0 && index < entries.length
   assert.ok(killIndex === -1 || validIndex(killIndex))
@@ -33,37 +34,95 @@ try {
   if($null -eq $config.entries[$config.killIndex].creationTime) { throw 'Termination requires creation identity' };
   if(![HeldProcess]::TerminateProcess($held[$config.killIndex].Handle,77)) { throw 'Synthetic host crash failed' };
  }
- foreach($p in $held) { if(!$p.WaitForExit(15000)) { throw 'Owned process survived lifecycle action' } };
+ $watch=[Diagnostics.Stopwatch]::StartNew();
+ foreach($p in $held) {
+  $budget=$(if($config.overallWaitMs){[Math]::Max(0,[int]$config.overallWaitMs-[int]$watch.ElapsedMilliseconds)}else{15000});
+  if(!$p.WaitForExit($budget)) { throw 'Owned process survived lifecycle action' };
+ };
  [Console]::Out.WriteLine((@{passed=$true;retainedHandles=$held.Count} | ConvertTo-Json -Compress));
 } finally {
  # These handles refer only to processes created by the isolated fixture.
- foreach($p in $held) { if(!$p.HasExited) { $null=[HeldProcess]::TerminateProcess($p.Handle,99); $null=$p.WaitForExit(5000) }; $p.Dispose() }
+ $cleanup=[Diagnostics.Stopwatch]::StartNew();
+ foreach($p in $held) {
+  if(!$p.HasExited) {
+   $null=[HeldProcess]::TerminateProcess($p.Handle,99);
+   $budget=$(if($config.overallWaitMs){[Math]::Max(0,5000-[int]$cleanup.ElapsedMilliseconds)}else{5000});
+   $null=$p.WaitForExit($budget);
+  }; $p.Dispose();
+ }
 }`
   const child = spawn(join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
     ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
     { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true })
-  let output = '', stderr = ''
-  let readyResolve, readyReject
+  let output = '', stderr = '', completionTimer, readyTimer
+  let readySeen = false, readySettled = false, doneSettled = false, closed = false
+  let readyResolve, readyReject, doneResolve, doneReject
   const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject })
-  child.stdout.on('data', data => { output += data; if (output.includes('READY')) readyResolve() })
-  child.stderr.on('data', data => { stderr += data })
-  const timer = setTimeout(() => { child.stdin.end('abort\n'); readyReject(new Error('Process observer readiness timeout')) }, 20000)
-  const done = new Promise((resolve, reject) => {
-    child.once('error', error => { readyReject(error); reject(error) })
-    child.once('exit', code => {
-      clearTimeout(timer)
-      if (code !== 0) { const error = new Error(`Process observer failed: ${stderr}`); readyReject(error); reject(error); return }
-      const line = output.split(/\r?\n/).find(line => line.startsWith('{'))
-      try { resolve(JSON.parse(line)) } catch (error) { reject(error) }
-    })
+  const done = new Promise((resolve, reject) => { doneResolve = resolve; doneReject = reject })
+  const settleReady = error => {
+    if (readySettled) return
+    readySettled = true; clearTimeout(readyTimer)
+    if (error) readyReject(error)
+    else readyResolve()
+  }
+  const settle = (error, receipt) => {
+    if (doneSettled) return
+    doneSettled = true; clearTimeout(readyTimer); clearTimeout(completionTimer)
+    if (!readySeen) settleReady(error ?? new Error('Process observer ended before READY'))
+    if (error) doneReject(error)
+    else doneResolve(receipt)
+  }
+  const unconfirmed = () => Object.assign(new Error('Process observer termination is unconfirmed'),
+    { code: 'DIAGNOSTIC_CUSTODY_UNCONFIRMED' })
+  const terminate = error => {
+    child.kill(); child.stdin.destroy(); child.stdout.destroy(); child.stderr.destroy()
+    settle(error)
+  }
+  const boundCompletion = milliseconds => {
+    if (overallWaitMs === undefined || doneSettled) return
+    clearTimeout(completionTimer)
+    completionTimer = setTimeout(() => terminate(unconfirmed()), milliseconds)
+  }
+  child.stdout.on('data', data => {
+    if (output.length < 1024 * 1024) output += data
+    if (!readySeen && output.split(/\r?\n/u).includes('READY')) { readySeen = true; settleReady() }
   })
-  // Failure can arrive before the caller begins the lifecycle action.
+  child.stderr.on('data', data => { if (stderr.length < 65536) stderr += data })
+  child.once('error', error => terminate(error))
+  child.once('close', code => {
+    closed = true
+    if (!readySeen) { settle(new Error('Process observer ended before READY')); return }
+    if (code !== 0) { settle(new Error(`Process observer failed: ${stderr}`)); return }
+    try {
+      const receipt = JSON.parse(output.split(/\r?\n/u).find(line => line.startsWith('{')))
+      if (overallWaitMs !== undefined) assert.ok(receipt.passed === true && receipt.retainedHandles === entries.length,
+        'Retained exit receipt is incomplete')
+      settle(undefined, receipt)
+    } catch (error) { settle(error) }
+  })
+  readyTimer = setTimeout(() => {
+    settleReady(new Error('Process observer readiness timeout')); boundCompletion(10000)
+    child.stdin.end('abort\n')
+  }, 20000)
   void done.catch(() => {})
-  child.stdin.write(JSON.stringify({ entries, killIndex, beforeKill }) + '\n')
-  await ready
-  clearTimeout(timer)
+  child.stdin.on('error', error => terminate(error))
+  child.stdin.write(JSON.stringify({ entries, killIndex, beforeKill, overallWaitMs }) + '\n')
+  try { await ready } catch (error) {
+    if (overallWaitMs !== undefined) await done.catch(() => {})
+    throw error
+  }
   return {
-    async finish() { child.stdin.end('go\n'); return done },
-    async abort() { if (child.exitCode === null) child.stdin.end('abort\n'); await done.catch(() => {}) }
+    async finish() {
+      boundCompletion(overallWaitMs + 10000)
+      if (!closed) child.stdin.end('go\n')
+      return done
+    },
+    async abort() {
+      if (!doneSettled) {
+        boundCompletion(10000)
+        if (!closed && child.stdin.writable) child.stdin.end('abort\n')
+      }
+      await done.catch(error => { if (error.code === 'DIAGNOSTIC_CUSTODY_UNCONFIRMED') throw error })
+    }
   }
 }

@@ -126,8 +126,13 @@ return [pscustomobject]@{ found=$true; title=$window.Current.Name; width=[int]$f
 $result=Capture-Window
 $first=[pscustomobject]@{ capturedAtMs=$result.capturedAtMs; readyAgeMs=$result.readyAgeMs; focus=$result.focus; elements=$result.elements }
 $samples=@($first)
-if($request.focusName -and @($result.elements | Where-Object { $_.name -ceq [string]$request.focusName -and -not $_.focused }).Count -gt 0) {
-  for($sample=0;$sample -lt 2;$sample++) { Start-Sleep -Milliseconds 250; $samples+=Capture-Window }
+if($request.closeAfterFirstForSelfTest) { $window.GetCurrentPattern([Windows.Automation.WindowPattern]::Pattern).Close() }
+if($request.forceFocusSamplesForSelfTest -or ($request.focusName -and @($result.elements | Where-Object { $_.name -ceq [string]$request.focusName -and -not $_.focused }).Count -gt 0)) {
+  for($sample=0;$sample -lt 2;$sample++) {
+    Start-Sleep -Milliseconds 250
+    try { $samples+=Capture-Window }
+    catch { if($request.propagateFollowUpErrorForSelfTest){throw}; $samples+=[pscustomobject]@{ capturedAtMs=([DateTimeOffset]::UtcNow).ToUnixTimeMilliseconds(); captureError=(Get-Code $_.Exception) } }
+  }
 }
 $result | Add-Member -NotePropertyName focusSamples -NotePropertyValue $samples
 if ($request.action -eq 'invoke') {
@@ -169,10 +174,10 @@ function accessibilityHelper() {
  * The search ends as soon as the window is found. Its 90 s bound covers update windows that took
  * 28-46 s to show under the parallel CI inventory (run 37299667758); startup time is not asserted here.
  */
-export async function automateWindow({ processId, title, action = 'inspect', name, until, focusName, readyAtMs, timeoutMs = 90000 }) {
+export async function automateWindow({ processId, title, action = 'inspect', name, until, focusName, readyAtMs, forceFocusSamplesForSelfTest = false, closeAfterFirstForSelfTest = false, propagateFollowUpErrorForSelfTest = false, timeoutMs = 90000 }) {
   const assembly = await accessibilityHelper()
   const child = spawn(powershell(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', encoded(script)],
-    { env: { ...process.env, BMN_UIA_ASSEMBLY: assembly, BMN_UIA_REQUEST: JSON.stringify({ processId, title, action, name, until, focusName, readyAtMs, timeoutMs }) }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+    { env: { ...process.env, BMN_UIA_ASSEMBLY: assembly, BMN_UIA_REQUEST: JSON.stringify({ processId, title, action, name, until, focusName, readyAtMs, forceFocusSamplesForSelfTest, closeAfterFirstForSelfTest, propagateFollowUpErrorForSelfTest, timeoutMs }) }, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
   let output = '', errors = ''
   child.stdout.on('data', bytes => { output += bytes })
   child.stderr.on('data', bytes => { errors += bytes })

@@ -49,6 +49,9 @@ void (async () => {
       executable: node, argv: [fixture, directory], cols: 80, rows: 24, backgroundChoice: 'stop'
     })
     const native = createRequire(join(desktop, 'package.json'))('node-pty')
+    const binding = createRequire(join(desktop, 'package.json'))('node-pty/lib/utils').loadNativeModule('conpty').module
+    assert.throws(() => binding.queryApplicationLifetimeProcesses('extra'), /takes no arguments/)
+    if (mode === 'without-backstop') assert.throws(() => native.queryApplicationLifetimeProcesses(), /not established/)
     const metrics = app.getAppMetrics()
     const hosts = metrics.filter(metric => metric.name === 'pty-host' || metric.serviceName === 'pty-host')
     assert.equal(hosts.length, 1, 'Observe the actual utility host')
@@ -61,11 +64,23 @@ void (async () => {
       terminalPids.push(pid)
       identities.set(pid, { pid, creationTime: Number(BigInt(identity.slice('windows-filetime:'.length)) / 10000n) - 11644473600000 })
     }
+    let jobSnapshot
+    if (mode === 'protected') {
+      jobSnapshot = native.queryApplicationLifetimeProcesses()
+      assert.equal(jobSnapshot.listed, jobSnapshot.identified)
+      assert.equal(jobSnapshot.entries.length, jobSnapshot.listed)
+      assert.ok(jobSnapshot.entries.some(entry => entry.pid === process.pid))
+      assert.ok(terminalPids.every(pid => jobSnapshot.entries.some(entry => entry.pid === pid)), 'Nested terminal jobs must appear in the application snapshot')
+      for (const entry of jobSnapshot.entries) {
+        assert.deepEqual(Object.keys(entry).sort(), ['creationFileTime', 'creationTimeMs', 'pid'])
+        assert.equal(entry.creationTimeMs, Number((BigInt(entry.creationFileTime) - 116444736000000000n) / 10000n))
+      }
+    }
     const entries = [...identities.values()]
     assert.ok(entries.some(entry => entry.pid === process.pid))
     assert.ok(entries.length >= 6, 'Retain main, Electron descendants and the terminal tree')
     const temporary = report + '.tmp'
-    writeFileSync(temporary, JSON.stringify({ ready: true, mode, mainPid: process.pid, utilityPid: hosts[0].pid, terminalPids, entries }))
+    writeFileSync(temporary, JSON.stringify({ ready: true, mode, mainPid: process.pid, utilityPid: hosts[0].pid, terminalPids, entries, jobSnapshot }))
     const { renameSync } = await import('node:fs')
     renameSync(temporary, report)
     // The parent retains creation-checked handles before deliberately killing main.

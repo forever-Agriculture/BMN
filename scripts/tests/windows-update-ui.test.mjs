@@ -10,6 +10,8 @@ import { askWindowsUpdateQuestion, notifyWindowsUpdate, showWindowsUpdateLog, st
 import { WINDOWS_UPDATE_LOG, WindowsUpdateObserver } from '../lib/windows-update-progress.mjs'
 import { ensurePrivateDirectories } from '../../apps/desktop/src/utility/private-directory.ts'
 import { automateWindow } from '../test/fixtures/windows-ui-automation.mjs'
+import { diagnosticBeforeVerdict } from '../lib/diagnostic-before-verdict.mjs'
+import { recordWindowsPowerShellDiscovery } from '../test/windows-powershell-discovery.mjs'
 
 const native = process.platform === 'win32'
 const roots = [], started = []
@@ -132,8 +134,11 @@ describe.runIf(native)('native Windows update windows', () => {
     for (const snapshot of snapshots) {
       if (ready !== undefined && snapshot.capturedAtMs >= ready) snapshot.readyAgeMs = snapshot.capturedAtMs - ready
     }
-    recordFocus({ observationOnly: true, buttons, press, firstFocusRemainsAssertion: true, readyAtMs: ready, snapshots })
-    expectWindow(view, { found: true })
+    diagnosticBeforeVerdict(
+      () => recordFocus({ observationOnly: true, buttons, press, firstFocusRemainsAssertion: true, readyAtMs: ready, snapshots }),
+      () => expectWindow(view, { found: true }),
+      error => console.warn(JSON.stringify({ nativeDiagnostic: 'focus-artifact-write', observationOnly: true,
+        ...error, firstFocusRemainsAssertion: true })))
     // Window text is what the label displays; accessible names drop '&' as a mnemonic marker.
     expect(texts(view), shown(view)).toContain(text)
     expect(view.elements.filter(element => element.role === 'button').map(element => element.name).sort()).toEqual([...labels].sort())
@@ -141,6 +146,28 @@ describe.runIf(native)('native Windows update windows', () => {
     const acted = await automateWindow({ processId: child.pid, title: 'BMN update failed', action: press ? 'invoke' : 'close', name: press ?? undefined })
     expectWindow(acted, { acted: true })
     expect(await answer).toBe(decision)
+  }, 120000)
+
+  it('keeps the initial focus snapshot when a later observation loses its owned window', async () => {
+    for (const propagateFollowUpErrorForSelfTest of [true, false]) {
+      const f = fixture()
+      const nextChild = started.length
+      const answer = askWindowsUpdateQuestion({ parent: f.parent, title: 'BMN focus observation fixture', text: 'synthetic', buttons: 'close', start })
+      const child = await startedChild(nextChild)
+      const request = { processId: child.pid, title: 'BMN focus observation fixture', until: 'Close', focusName: 'Close',
+        forceFocusSamplesForSelfTest: true, closeAfterFirstForSelfTest: true, propagateFollowUpErrorForSelfTest }
+      if (propagateFollowUpErrorForSelfTest) {
+        await expect(automateWindow(request)).rejects.toThrow('UI Automation failed')
+      } else {
+        const view = await automateWindow(request)
+        expect(view.found).toBe(true)
+        expect(view.focusSamples).toHaveLength(3)
+        expect(view.focusSamples[0].elements.find(element => element.name === 'Close').focused)
+          .toBe(view.elements.find(element => element.name === 'Close').focused)
+        expect(view.focusSamples[1].captureError).toMatch(/^0x[0-9A-F]{8}$/u)
+      }
+      expect(await answer).toBe('closed')
+    }
   }, 120000)
 
   it('shows the update log read-only in its own viewer and reports that it was shown', async () => {
@@ -162,6 +189,11 @@ describe.runIf(native)('native Windows update windows', () => {
 
   // Observation only: one sample of where a window's start time goes, with the product's flags and
   // environment, plus a full-environment control. It locates a cost; it does not assert a budget.
+  it.runIf(process.env.GITHUB_ACTIONS === 'true')('records cold PowerShell command discovery without a PTY', async () => {
+    const result = await recordWindowsPowerShellDiscovery()
+    console.log(JSON.stringify({ nativeDiagnostic: 'powershell-command-discovery', ...result }))
+  }, 380000)
+
   it('records where an update window spends its start time', async () => {
     const product = windowEnvironment({}, process.env), full = { ...process.env }
     const winforms = 'Add-Type -AssemblyName System.Windows.Forms,System.Drawing'

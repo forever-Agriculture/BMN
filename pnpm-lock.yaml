@@ -106,7 +106,7 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
-  node-pty@1.1.0: 542953ce63caeded1dd18505f39d7babec12afacbe2a09af426149a8315bcaf9
+  node-pty@1.1.0: f83d7f0bff9c1e1c34b47048dfa4bf4bc0bb59cd63432f55f446320c2bf4d47d
 
 importers:
 
@@ -165,7 +165,7 @@ importers:
         version: 13.0.3
       node-pty:
         specifier: 1.1.0
-        version: 1.1.0(patch_hash=542953ce63caeded1dd18505f39d7babec12afacbe2a09af426149a8315bcaf9)
+        version: 1.1.0(patch_hash=f83d7f0bff9c1e1c34b47048dfa4bf4bc0bb59cd63432f55f446320c2bf4d47d)
       react:
         specifier: 19.2.8
         version: 19.2.8
@@ -4424,7 +4424,7 @@ snapshots:
 
   node-int64@0.4.0: {}
 
-  node-pty@1.1.0(patch_hash=542953ce63caeded1dd18505f39d7babec12afacbe2a09af426149a8315bcaf9):
+  node-pty@1.1.0(patch_hash=f83d7f0bff9c1e1c34b47048dfa4bf4bc0bb59cd63432f55f446320c2bf4d47d):
     dependencies:
       node-addon-api: 7.1.1
 

@@ -829,3 +829,34 @@ Update-window focus diagnostics record the foreground process, owned thread focu
 MSAA and UI Automation states and readiness age. A false first result is followed by
 two observations, while the assertion still uses that first result. No focus repair
 or assertion relaxation is inferred from the earlier passing run.
+
+
+[Method 13 native collection](https://github.com/forever-Agriculture/BMN/actions/runs/37441839132)
+on `3534485` passed Linux and the five auxiliary workflows. Windows passed 3,282
+unit assertions, failed the OpenCode fixture's cleanup with `EBUSY` on its temporary
+`node.exe`, and skipped 27. The holder and product cause are unconfirmed. All six
+strict first update-button focus assertions passed; the earlier false-focus cause
+remains unconfirmed. All six prefixes failed the original ten-second SCROLLED check
+and recovered spontaneously around twelve seconds, without further input, resize
+or controller actions. Their shell-write intervals were 11.7–12.7 seconds. Toggling
+the direct renderer fixture had no measured effect. Ordinary packaged and installed
+SCROLLED checks still fail; the port and release remain unfinished.
+
+## Windows terminal investigation: method 14
+
+The consultant agreed one observation run: sixteen cold PowerShell cells without a
+PTY, and six fresh-profile terminal prefixes alternating the original command, split
+assignment/output and a direct console write. The original command and ten-second
+assertion remain unchanged. Warm or diagnostic passes cannot satisfy that gate.
+A separate link/copy fixture observation and isolated original OpenCode case retain
+the first unlink failure rather than forgiving it.
+
+Diagnostic evidence is published provisionally before cleanup; a separate final
+receipt requires graceful release. Existing application-job identities arm the
+retained-handle observer before SCROLLED. Read-only requeries before and after cleanup
+reject new live members or incomplete observations. Unknown custody stops subsequent
+arms and ordinary acceptance, retaining the private profile. Null or primitive log
+JSON is ignored; malformed tagged custody data is refused. Native compilation,
+handshake, job enumeration, cleanup and follow-up focus fault controls are
+**UNVERIFIED** until the run is collected. These repairs change diagnostic handling;
+no original terminal defect repair or complete Windows acceptance is claimed.

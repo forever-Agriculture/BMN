@@ -53,7 +53,12 @@ if (status === 0) status = await run('vitest', [join(root, 'node_modules/vitest/
 receipt.inventoryExitCode = status; save()
 if (process.platform === 'win32' && process.env.GITHUB_ACTIONS === 'true' &&
     receipt.children.find(row => row.role === 'protocol-build')?.exitCode === 0) {
-  for (const [index, observation] of nativeUnitObservations.entries()) {
+  // Same original case, alone: a witness of the inventory cleanup failure, never a replacement verdict.
+  const historyObservation = { file: 'apps/desktop/src/utility/agent-history-adapters.test.ts',
+    fullName: 'OpenCode history adapter reads sessions across every project and removes with `opencode session delete <id> --pure`',
+    runnerName: 'OpenCode history adapter > reads sessions across every project and removes with `opencode session delete <id> --pure`',
+    originalBudgetMs: 5000 }
+  for (const [index, observation] of [...nativeUnitObservations, historyObservation].entries()) {
     const pattern = nativeObservationPattern(observation)
     const observed = await run(`native-observation-${index + 1}`, [join(root, 'node_modules/vitest/vitest.mjs'),
       'run', observation.file, '-t', pattern, '--maxWorkers=1', '--exclude', '.claude/**', '--exclude', '.dev-auto/**',
