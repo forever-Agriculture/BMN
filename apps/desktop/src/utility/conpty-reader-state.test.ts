@@ -52,7 +52,8 @@ describe('the ConPTY output reader worker (node-pty patch)', () => {
   it('passes one chunk per credit and reports where it stands without taking or giving a credit', async () => {
     const { worker, pipe, messages, next } = await readerOnSocket()
     const sent = Buffer.alloc(200 * 1024, 0x61)
-    await new Promise<void>((resolve) => pipe.write(sent, () => resolve()))
+    // Not awaited: on Windows a pipe write this large completes only as the worker reads it, one credit at a time.
+    pipe.write(sent)
     await settle()
     expect(messages.filter((message) => message.type === 'data')).toHaveLength(0)
 
