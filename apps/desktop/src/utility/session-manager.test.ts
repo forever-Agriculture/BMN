@@ -4747,10 +4747,13 @@ describe('conversation identity reported by the harness', () => {
   it('waits for the session record a hook beat, instead of refusing the first report', async () => {
     const fixture = await codexFixture()
     let writeRecord = (): void => undefined
+    let reachedRecord = (): void => undefined
+    const recordBlocked = new Promise<void>((resolve) => { reachedRecord = resolve })
     let reported: Promise<ConversationObservationResult> | undefined
     // The process is live before its record is written; hold that window open.
     fixture.store.createGate = () => new Promise<void>((resolve) => {
       writeRecord = resolve
+      reachedRecord()
     })
     fixture.store.onCreateStarting = (record) => {
       fixture.store.onCreateStarting = undefined
@@ -4774,7 +4777,7 @@ describe('conversation identity reported by the harness', () => {
       rows: 24
     })
     // Let the observation run all the way to the record it needs, which is not there yet.
-    await new Promise((resolve) => setTimeout(resolve, 5))
+    await recordBlocked
     writeRecord()
     const created = await creating
 

@@ -33,6 +33,8 @@ import {
   runLaunchSetRepositorySelfTest
 } from '../launch-set-repository-self-test'
 import { runCheckoutPeersSelfTest } from '../checkout-peers-self-test'
+import { runQuietHoursSelfTest } from './quiet-hours'
+import { runMorningDigestSelfTest } from './morning-digest'
 import {
   closeWithinDeadline,
   drainAfterExit,
@@ -5001,6 +5003,10 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       throw new Error(`isolated terminfo fallback failed: ${JSON.stringify(graphicsTerminfo)}`)
     }
 
+    const quietHours = await runQuietHoursSelfTest(host, client, taps)
+    console.error(`[BMN] self-test phase: quiet hours ${JSON.stringify(quietHours)}`)
+    const morningDigest = await runMorningDigestSelfTest(host, client, taps)
+    console.error(`[BMN] self-test phase: morning digest ${JSON.stringify(morningDigest)}`)
     const secondClose = await client.close()
     console.error('[BMN] self-test phase: second host closed')
     clientClosed = true
@@ -5111,6 +5117,8 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       modelOrigin: { flags: modelOriginFlags, afterRestart: modelOriginAfterRestart },
       remoteAnswers,
       telegramCards,
+      quietHours,
+      morningDigest,
       fullerAnswers: fuller,
       telegramCue,
       survivalTable: {

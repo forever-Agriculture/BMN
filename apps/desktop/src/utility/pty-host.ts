@@ -3,6 +3,7 @@ import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { existsSync } from 'node:fs'
+import { QUIET_LEDGER_KEY } from './quiet-hours-delivery'
 import {
   ERROR_CODES,
   METHOD_REGISTRY,
@@ -41,6 +42,8 @@ import type { AnswerRequest } from './remote-answer'
 import { DatabaseClientError, DatabaseWorkerClient } from './database-client'
 import { readFileReference } from './file-reference-reader'
 import { inspectRepositoryIdentity } from './repository-identity'
+import { readDevAutoRuns } from './dev-auto-runs'
+import { isDevAutoRunsParams } from '@bmn/protocol'
 import { LaunchSetCoordinator } from './launch-set-coordinator'
 import { nativeLoadFailureMessage } from './native-load-error'
 import { ensureApplicationRoots, resolveApplicationRoots } from './roots'
@@ -304,12 +307,16 @@ async function start(): Promise<void> {
     sessionPath: () => companionHolder.current?.sessionPath() ?? process.env.PATH ?? ''
   })
   const cliPath = process.env.BMN_CLI_PATH ?? join(__dirname, '..', '..', 'bin', 'bmn')
+  let selfTestClock: Date | undefined
+  const selfTestQuietTrace: Array<Record<string, unknown>> = []
+  let stopSelfTestQuietTrace: (() => void) | undefined
   const companion = new CompanionService({
     database,
     manager,
     roots,
     cliPath,
     cliScriptPath: process.env.BMN_CLI_SCRIPT ?? cliPath,
+    ...(process.argv.includes('--self-test-host') ? { now: () => selfTestClock ?? new Date() } : {}),
     // Electron self-test only (Story 30.3): Telegram talks to the main process's local fake Bot API.
     ...(process.argv.includes('--self-test-host') && process.env.BMN_SELF_TEST_TELEGRAM_ORIGIN
       ? { telegramApiOrigin: process.env.BMN_SELF_TEST_TELEGRAM_ORIGIN }
@@ -384,6 +391,77 @@ async function start(): Promise<void> {
    */
   function selfTestHealthProbe(params: Record<string, unknown>): Promise<unknown> | undefined {
     if (!process.argv.includes('--self-test-host')) return undefined
+    if (typeof params.selfTestQuietTrace === 'boolean') {
+      stopSelfTestQuietTrace?.(); stopSelfTestQuietTrace = undefined
+      if (!params.selfTestQuietTrace) return Promise.resolve({ stopped: true })
+      selfTestQuietTrace.length = 0
+      const quiet = companionService['quietDelivery'], deps = quiet['deps']
+      const before = quiet.before.bind(quiet), maySend = quiet.maySend.bind(quiet), settle = quiet.settle.bind(quiet)
+      const page = deps.page, summary = deps.sendSummary
+      const trace = (step: string, identity: { requestId?: string; revision?: number }, result: unknown): void => {
+        if (selfTestQuietTrace.length < 40) selfTestQuietTrace.push({ seq: selfTestQuietTrace.length, step, ...identity,
+          result, away: companionService['ownerAway'], ready: deps.ready() })
+      }
+      const failure = (error: unknown): string => error instanceof Error ? error.name : 'unknown'
+      quiet.before = async record => {
+        try { const result = await before(record); trace('before', { requestId: record.requestId, revision: record.revision },
+          result.action === 'hold' ? result.reason ?? 'hold' : result.action); return result }
+        catch (error) { trace('before-error', { requestId: record.requestId, revision: record.revision }, failure(error)); throw error }
+      }
+      quiet.maySend = (record, managed) => {
+        const result = maySend(record, managed); trace('maySend', { requestId: record.requestId, revision: record.revision }, result); return result
+      }
+      quiet.settle = async (claim, outcome) => {
+        const entry = quiet['ledger']?.entries.find(entry => 'claim' in entry && entry.claim === claim)
+        const identity = entry && 'requestId' in entry ? { requestId: entry.requestId, revision: entry.revision } : {}
+        try { await settle(claim, outcome); trace('settle', identity, outcome) }
+        catch (error) { trace('settle-error', identity, failure(error)); throw error }
+      }
+      deps.page = async record => {
+        const identity = { requestId: record.requestId, revision: record.revision }; trace('page', identity, 'start')
+        try { const result = await page(record); trace('page-end', identity, result); return result }
+        catch (error) { trace('page-error', identity, failure(error)); throw error }
+      }
+      deps.sendSummary = async text => {
+        trace('summary', {}, 'start')
+        try { await summary(text); trace('summary-end', {}, true) }
+        catch (error) { trace('summary-error', {}, failure(error)); throw error }
+      }
+      stopSelfTestQuietTrace = () => { quiet.before = before; quiet.maySend = maySend; quiet.settle = settle; deps.page = page; deps.sendSummary = summary }
+      return Promise.resolve({ tracing: true })
+    }
+    if (Array.isArray(params.selfTestQuietSnapshot) && params.selfTestQuietSnapshot.length <= 2 &&
+      params.selfTestQuietSnapshot.every(id => typeof id === 'string')) {
+      if (params.selfTestQuietExit !== undefined && (typeof params.selfTestQuietExit !== 'string' || params.selfTestQuietExit.length > 200)) {
+        return Promise.reject(new Error('Invalid self-test exit identity'))
+      }
+      return (async () => {
+        const ids = params.selfTestQuietSnapshot as string[]
+        const members = await database.companion('listQuietAttention')
+        const cards = await database.companion('listTelegramCards', ['buttons', 'open', 'sending', 'final'])
+        const rows = await Promise.all(ids.map(async id => {
+          const row = await database.companion('getAttention', id)
+          return { id, kind: row.kind, revision: row.revision, state: row.state, seen: row.seenAt !== null, expires: row.expiresAt,
+            member: members.some(item => item.record.requestId === id), eligible: members.find(item => item.record.requestId === id)?.eligible ?? false,
+            delivered: await database.companion('quietDelivered', id, row.revision), card: cards.some(card => card.requestId === id && card.revision === row.revision) }
+        }))
+        const quiet = companionService['quietDelivery']
+        return { rows, ready: companionService['telegramReady'], health: companionService['telegramHealth']?.state,
+          away: companionService['ownerAway'], flushing: !!quiet['flushing'], permits: quiet['permits'].size,
+          exitHeld: quiet['ledger']?.entries.some(entry => 'sessionId' in entry && entry.sessionId === params.selfTestQuietExit) ?? false,
+          trace: [...selfTestQuietTrace] }
+      })()
+    }
+    if (params.selfTestQuietClock !== undefined) {
+      const value = params.selfTestQuietClock
+      if (value !== null && (typeof value !== 'string' || !Number.isFinite(Date.parse(value)))) {
+        return Promise.reject(new Error('Invalid self-test clock'))
+      }
+      selfTestClock = value === null ? undefined : new Date(value as string)
+      return companionService['sweepAttention']().then(async () => ({ selfTestQuietClock: value,
+        ledger: await database.companion('getRawSetting', QUIET_LEDGER_KEY),
+        digest: await database.companion('getRawSetting', 'dev-auto-morning-digest-v1') }))
+    }
     if (params.selfTestHostLoss === true) {
       setTimeout(() => {
         void database.close().then(() => {
@@ -500,6 +578,18 @@ async function start(): Promise<void> {
       case METHOD_REGISTRY.sessionList:
         return (await database.listSessions(stringValue(params, 'workspaceId')))
           .map((record) => manager.sessionWithCurrentProcessState(record))
+      case METHOD_REGISTRY.devAutoRuns: {
+        if (!isDevAutoRunsParams(params)) throw new HostControlError(ERROR_CODES.invalidArgument, 'Run view parameters are invalid')
+        const workspaces = await database.listWorkspaces()
+        const sessions = (await Promise.all(workspaces.filter((workspace) => workspace.archivedAt === null)
+          .map((workspace) => database.listSessions(workspace.workspaceId)))).flat()
+          .map((session) => manager.sessionWithCurrentProcessState(session))
+        const liveDirectories = new Map(sessions.flatMap(session => {
+          const directory = manager.liveLaunchDirectory(session.sessionId)
+          return directory ? [[session.sessionId, directory] as const] : []
+        }))
+        return readDevAutoRuns(workspaces, sessions, await database.companion('listAttention'), params.workspaceId, undefined, liveDirectories)
+      }
       case METHOD_REGISTRY.repositoryInspect:
         if (!isRepositoryInspectParams(params)) {
           throw new HostControlError(ERROR_CODES.invalidArgument, 'Repository inspection parameters are invalid')

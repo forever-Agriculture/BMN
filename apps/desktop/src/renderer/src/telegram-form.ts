@@ -1,5 +1,5 @@
 // MODULE: telegram-form.ts - pure parsing and validation of the Telegram preferences form
-import type { TelegramSettings } from '@bmn/protocol'
+import { DEFAULT_TELEGRAM_MORNING_DIGEST, isTelegramMorningDigest, type TelegramMorningDigest, DEFAULT_TELEGRAM_QUIET_HOURS, isTelegramQuietHours, type TelegramQuietHours, type TelegramSettings } from '@bmn/protocol'
 
 /** Raw field values as the Telegram form in PreferencesDialog holds them. */
 export interface TelegramFormFields {
@@ -11,6 +11,8 @@ export interface TelegramFormFields {
   notifyOn: 'attention' | 'attention-and-exit'
   autoSubmitReplies: boolean
   answerPermissions: boolean
+  quietHours?: TelegramQuietHours
+  morningDigest?: TelegramMorningDigest
 }
 
 export type TelegramFormResult = { ok: true; value: TelegramSettings } | { ok: false; message: string }
@@ -34,6 +36,10 @@ function parseOptionalInteger(raw: string, name: string): OptionalIntegerResult 
  * owner after they already saw an inline "looks fine" state.
  */
 export function parseTelegramForm(fields: TelegramFormFields): TelegramFormResult {
+  const morningDigest = fields.morningDigest ?? DEFAULT_TELEGRAM_MORNING_DIGEST
+  if (!isTelegramMorningDigest(morningDigest)) return { ok: false, message: 'Morning digest needs a valid HH:MM time' }
+  const quietHours = fields.quietHours ?? DEFAULT_TELEGRAM_QUIET_HOURS
+  if (!isTelegramQuietHours(quietHours)) return { ok: false, message: 'Quiet hours require different HH:MM times and valid allow-through choices' }
   const chat = parseOptionalInteger(fields.allowedChatId, 'Allowed chat id')
   if (!chat.ok) return { ok: false, message: chat.message }
   const user = parseOptionalInteger(fields.allowedUserId, 'Allowed user id')
@@ -49,7 +55,9 @@ export function parseTelegramForm(fields: TelegramFormFields): TelegramFormResul
       allowedUserId: user.value,
       notifyOn: fields.notifyOn,
       autoSubmitReplies: fields.autoSubmitReplies,
-      answerPermissions: fields.answerPermissions
+      answerPermissions: fields.answerPermissions,
+      quietHours: { ...quietHours, allowKinds: [...quietHours.allowKinds], allowSessions: [...quietHours.allowSessions] },
+      morningDigest: { ...morningDigest }
     }
   }
 }

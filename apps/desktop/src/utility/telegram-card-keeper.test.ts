@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { AttentionPrompt, AttentionRecord } from '@bmn/protocol'
 import type { TelegramCardData, TelegramCardRecord, TelegramCardState } from './database-companion-store'
 import type { AnswerOutcome, AnswerRequest } from './remote-answer'
-import { TelegramCardKeeper, type Answerability, type CardConnector } from './telegram-card-keeper'
+import { TelegramCardKeeper, type Answerability, type CardConnector, type CardKeeperDependencies } from './telegram-card-keeper'
 import { TelegramConnectorError, type CardMessageOptions, type InboundTap } from './telegram-connector'
 
 const QUESTION: AttentionPrompt = {
@@ -87,6 +87,7 @@ function setup(options: {
   stored?: TelegramCardRecord[]
   retryMs?: number[]
   epoch?: number | null
+  delivery?: Partial<Pick<CardKeeperDependencies, 'beforeNewDelivery' | 'maySend' | 'settleNewDelivery' | 'holdExit'>>
 } = {}) {
   const connector = new FakeConnector()
   const state = { record: options.record === undefined ? record(QUESTION) : options.record, connected: true }
@@ -117,7 +118,8 @@ function setup(options: {
     home: null,
     settleMs: 1,
     retryMs: options.retryMs ?? [5, 5],
-    token: () => `tok-${++token}`
+    token: () => `tok-${++token}`,
+    ...options.delivery
   })
   const tap = (data: string, messageId = 100): InboundTap =>
     ({ updateId: 1, callbackId: `cb-${data}`, chatId: 1, fromUserId: 1, messageId, data })
@@ -834,4 +836,71 @@ it.each([false, true])('full review masks manual request keys/options through se
   expect(h.answers.map(answer => answer.answer)).toEqual([{ type: 'choices', choices: [0] }])
   expect(JSON.stringify([h.connector.sends, h.connector.edits, h.connector.toasts]).includes(secret)).toBe(false)
   h.keeper.dispose()
+})
+
+describe('durable new-card boundary', () => {
+  it('holds new requests and exits while existing-card edits remain available', async () => {
+    let hold = false
+    const settle = vi.fn(async () => undefined)
+    const f = setup({ delivery: {
+      beforeNewDelivery: async () => hold ? { action: 'hold' } : { action: 'send', claim: 'claim-1' },
+      maySend: () => !hold, settleNewDelivery: settle, holdExit: async () => hold
+    } })
+    expect(await f.keeper.page(f.state.record!)).toBe(true)
+    hold = true
+    f.state.record = { ...f.state.record!, revision: 2, title: 'Revised while quiet' }
+    await f.keeper.page(f.state.record)
+    await f.keeper.exited('s1')
+    expect(f.connector.sends).toHaveLength(1)
+    expect(f.connector.edits.length).toBeGreaterThan(0)
+    expect(settle).toHaveBeenCalledWith('claim-1', 'mapped')
+    f.keeper.dispose()
+  })
+
+  it('rechecks state after claiming and returns a no-send race to pending', async () => {
+    const settle = vi.fn(async () => undefined)
+    const f = setup({ delivery: {
+      beforeNewDelivery: async () => { f.state.record = { ...f.state.record!, seenAt: '2026-10-07T23:00:00Z' }; return { action: 'send', claim: 'claim-2' } },
+      settleNewDelivery: settle
+    } })
+    expect(await f.keeper.page(f.state.record!)).toBe(false)
+    expect(f.connector.sends).toHaveLength(0)
+    expect(settle).toHaveBeenCalledWith('claim-2', 'unsent')
+    f.keeper.dispose()
+  })
+
+  it('holds a formatting fallback if quiet hours begin after definite HTML refusal', async () => {
+    let allowed = true
+    const settle = vi.fn(async () => undefined)
+    const f = setup({ delivery: {
+      beforeNewDelivery: async () => ({ action: 'send', claim: 'claim-3' }), maySend: () => allowed,
+      settleNewDelivery: settle
+    } })
+    const send = vi.spyOn(f.connector, 'sendMessage').mockImplementationOnce(async () => {
+      allowed = false
+      throw new TelegramConnectorError('http', 'format refused', 400)
+    })
+    expect(await f.keeper.page(f.state.record!)).toBe(false)
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(settle).toHaveBeenCalledWith('claim-3', 'unsent')
+    f.keeper.dispose()
+  })
+
+  it('keeps an uncertain claim when mapping persistence fails after delivery', async () => {
+    const settle = vi.fn(async () => undefined)
+    const f = setup({ delivery: { beforeNewDelivery: async () => ({ action: 'send', claim: 'claim-4' }), settleNewDelivery: settle } })
+    vi.spyOn(f.keeper['deps'].store, 'put').mockRejectedValueOnce(new Error('disk unavailable'))
+    await f.keeper.page(f.state.record!)
+    expect(f.connector.sends).toHaveLength(1)
+    expect(settle).toHaveBeenCalledWith('claim-4', 'uncertain')
+    f.keeper.dispose()
+  })
+
+  it('does not report restart readiness when the mapping read fails', async () => {
+    const f = setup()
+    vi.spyOn(f.keeper['deps'].store, 'list').mockRejectedValueOnce(new Error('disk unavailable'))
+    expect(await f.keeper.sweep()).toBe(false)
+    expect(await f.keeper.sweep()).toBe(true)
+    f.keeper.dispose()
+  })
 })

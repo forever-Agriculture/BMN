@@ -51,6 +51,7 @@ const ROUTES = {
   'aiterm:session:list': METHOD_REGISTRY.sessionList,
   'aiterm:session:update': METHOD_REGISTRY.sessionUpdate,
   'aiterm:repository:inspect': METHOD_REGISTRY.repositoryInspect,
+  'aiterm:dev-auto:runs': METHOD_REGISTRY.devAutoRuns,
   'aiterm:template:list': METHOD_REGISTRY.templateList,
   'aiterm:template:create': METHOD_REGISTRY.templateCreate,
   'aiterm:launch-set:list': METHOD_REGISTRY.launchSetList,

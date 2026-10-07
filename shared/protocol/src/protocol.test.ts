@@ -85,6 +85,7 @@ describe('protocol surface', () => {
         'session.cohort.offered',
         'session.cohort.resume',
         'repository.inspect',
+        'devAuto.runs',
         'template.list',
         'template.create',
         'launchSet.list',
@@ -144,7 +145,7 @@ describe('protocol surface', () => {
         'presence.set'
       ])
     )
-    expect(Object.values(METHOD_REGISTRY)).toHaveLength(77)
+    expect(Object.values(METHOD_REGISTRY)).toHaveLength(78)
   })
 
   it('exports the initial stable error codes', () => {

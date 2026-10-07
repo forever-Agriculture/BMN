@@ -5,6 +5,10 @@ import {
   ARCHIVE_DELETE_AFTER_DAYS,
   COLOR_MODE_NAMES,
   DEFAULT_APP_SETTINGS,
+  DEFAULT_TELEGRAM_QUIET_HOURS,
+  DEFAULT_TELEGRAM_MORNING_DIGEST,
+  isTelegramMorningDigest,
+  isTelegramQuietHours,
   ERROR_CODES,
   IDENTITY_NAMES,
   TERMINAL_FONT_SIZE_RANGE,
@@ -440,6 +444,57 @@ export function listAttention(database: DatabaseConnection): AttentionRecord[] {
     "SELECT * FROM attention_request WHERE state != 'open' ORDER BY resolved_at DESC, rowid DESC LIMIT 50"
   ).all() as AttentionRow[]
   return [...open, ...closed].map(attentionFromRow)
+}
+
+/** Private delivery metadata never enters AttentionRecord, receipts or agent APIs. */
+export function listQuietAttention(database: DatabaseConnection): Array<{ record: AttentionRecord; heldAt: number; eligible: boolean }> {
+  const rows = database.prepare(`SELECT * FROM attention_request WHERE telegram_quiet_held_at IS NOT NULL AND telegram_quiet_attempt_revision IS NULL ORDER BY opened_at, rowid`)
+    .all() as Array<AttentionRow & { telegram_quiet_held_at: number; telegram_quiet_eligible: number }>
+  return rows.map(row => ({ record: attentionFromRow(row), heldAt: row.telegram_quiet_held_at, eligible: row.telegram_quiet_eligible === 1 }))
+}
+
+/** A durable attempt remains suppressive even after delivery membership or history is retired. */
+export function quietDelivered(database: DatabaseConnection, requestId: string, revision: number): boolean {
+  return database.prepare('SELECT 1 FROM attention_request WHERE request_id = ? AND telegram_quiet_attempt_revision = ?')
+    .get(requestId, revision) !== undefined || hasTelegramCard(database, requestId, revision)
+}
+
+/** Commit cohort membership and its bounded ledger together, including the overflow request. */
+export function commitQuietDelivery(database: DatabaseConnection, value: unknown, changes: {
+  hold?: { requestId: string; revision: number; heldAt: number }
+  claim?: { requestId: string; revision: number }
+  unclaim?: { requestId: string; revision: number }
+  release?: boolean
+  clear?: Array<{ requestId: string; revision: number }>
+}, now: string): boolean {
+  return database.transaction(() => {
+    if (changes.hold) {
+      const { requestId, revision, heldAt } = changes.hold
+      const result = database.prepare(`UPDATE attention_request SET
+        telegram_quiet_eligible = CASE WHEN telegram_quiet_held_at IS NULL OR telegram_quiet_attempt_revision IS NOT NULL THEN 0 ELSE telegram_quiet_eligible END,
+        telegram_quiet_held_at = CASE WHEN telegram_quiet_held_at IS NULL OR telegram_quiet_attempt_revision IS NOT NULL THEN ? ELSE telegram_quiet_held_at END,
+        telegram_quiet_attempt_revision = NULL
+        WHERE request_id = ? AND revision = ? AND telegram_quiet_attempt_revision IS NOT ?
+          AND state = 'open' AND seen_at IS NULL AND (expires_at IS NULL OR expires_at > ?)`)
+        .run(heldAt, requestId, revision, revision, now)
+      if (!result.changes) return false
+    }
+    if (changes.claim) {
+      const { requestId, revision } = changes.claim
+      const result = database.prepare(`UPDATE attention_request SET telegram_quiet_attempt_revision = ?
+        WHERE request_id = ? AND revision = ? AND telegram_quiet_held_at IS NOT NULL AND telegram_quiet_attempt_revision IS NULL
+          AND state = 'open' AND seen_at IS NULL AND (expires_at IS NULL OR expires_at > ?)`)
+        .run(revision, requestId, revision, now)
+      if (!result.changes) return false
+    }
+    if (changes.unclaim) database.prepare('UPDATE attention_request SET telegram_quiet_attempt_revision = NULL WHERE request_id = ? AND telegram_quiet_attempt_revision = ?')
+      .run(changes.unclaim.requestId, changes.unclaim.revision)
+    if (changes.release) database.prepare('UPDATE attention_request SET telegram_quiet_eligible = 1 WHERE telegram_quiet_held_at IS NOT NULL').run()
+    const clear = database.prepare('UPDATE attention_request SET telegram_quiet_held_at = NULL, telegram_quiet_eligible = 0 WHERE request_id = ? AND revision = ?')
+    for (const item of changes.clear ?? []) clear.run(item.requestId, item.revision)
+    putRawSetting(database, 'telegram-quiet-delivery-v1', value, now)
+    return true
+  })()
 }
 
 interface ProgressRow {
@@ -1093,6 +1148,11 @@ export function updateTelegramCard(
   ).run(revision, state, JSON.stringify(card), messageId)
 }
 
+export function hasTelegramCard(database: DatabaseConnection, requestId: string, revision: number): boolean {
+  return database.prepare('SELECT 1 FROM telegram_message WHERE request_id = ? AND revision = ? AND card_json IS NOT NULL LIMIT 1')
+    .get(requestId, revision) !== undefined
+}
+
 /** Cards in these states, oldest first; rows without a card (plain notices before 30.3) never appear. */
 export function listTelegramCards(database: DatabaseConnection, states: TelegramCardState[]): TelegramCardRecord[] {
   if (states.length === 0) return []
@@ -1196,6 +1256,10 @@ export function validateSettingsSection(section: string, value: unknown): AppSet
       // Sections saved before Epic 30 have no answerPermissions and keep it off.
       const answerPermissions = candidate.answerPermissions ?? DEFAULT_APP_SETTINGS.telegram.answerPermissions
       if (typeof answerPermissions !== 'boolean') invalid('Answering permission prompts must be on or off')
+      const morningDigest = candidate.morningDigest ?? DEFAULT_TELEGRAM_MORNING_DIGEST
+      if (!isTelegramMorningDigest(morningDigest)) invalid('Morning digest needs a valid HH:MM time')
+      const quietHours = candidate.quietHours ?? DEFAULT_TELEGRAM_QUIET_HOURS
+      if (!isTelegramQuietHours(quietHours)) invalid('Quiet hours require different HH:MM times and valid allow-through choices')
       const allowedChatId = nullableInteger(candidate.allowedChatId, 'Allowed chat id')
       const allowedUserId = nullableInteger(candidate.allowedUserId, 'Allowed user id')
       if (candidate.enabled && allowedChatId === null) invalid('Choose the allowed chat before enabling Telegram')
@@ -1205,7 +1269,9 @@ export function validateSettingsSection(section: string, value: unknown): AppSet
         allowedUserId,
         notifyOn: candidate.notifyOn,
         autoSubmitReplies: candidate.autoSubmitReplies,
-        answerPermissions
+        answerPermissions,
+        quietHours: { ...quietHours, allowKinds: [...quietHours.allowKinds], allowSessions: [...quietHours.allowSessions] },
+        morningDigest: { ...morningDigest }
       }
     }
     case 'voice': {
@@ -1294,6 +1360,10 @@ export function getSettings(database: DatabaseConnection): AppSettings {
       // A corrupt stored section falls back to defaults; the next valid save replaces it.
     }
   }
+  const quiet = settings.telegram.quietHours ?? DEFAULT_TELEGRAM_QUIET_HOURS
+  const active = new Set((database.prepare(`SELECT s.session_id FROM session s JOIN workspace w ON w.workspace_id = s.workspace_id
+    WHERE s.archived_at IS NULL AND w.archived_at IS NULL`).all() as Array<{ session_id: string }>).map(row => row.session_id))
+  settings.telegram.quietHours = { ...quiet, allowKinds: [...quiet.allowKinds], allowSessions: quiet.allowSessions.filter(id => active.has(id)) }
   return settings
 }
 
@@ -1426,6 +1496,10 @@ export const COMPANION_OPERATIONS = Object.freeze({
   updateTelegramCard,
   creditTelegramAnswer,
   listTelegramCards,
+  hasTelegramCard,
+  listQuietAttention,
+  commitQuietDelivery,
+  quietDelivered,
   getSettings,
   putSettingsSection,
   getRawSetting,

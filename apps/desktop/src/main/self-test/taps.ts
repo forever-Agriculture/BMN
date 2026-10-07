@@ -40,6 +40,9 @@ export class SelfTestRecorder implements SelfTestTaps {
   readonly shownFileReferences: string[] = []
   /** Story 32.2: app notices the self-test records instead of showing. */
   readonly appNotices: Array<{ title: string; body: string }> = []
+  captureAttentionNotifications = false
+  readonly attentionNotices: Array<{ title: string; body: string; sessionId: string }> = []
+  attentionNotice(notice: { title: string; body: string; sessionId: string }): void { this.attentionNotices.push(notice) }
   /** Every reference the renderer asked to read, in order: hovering and output must add none. */
   readonly readFileReferences: Array<{ sessionId: string; reference: string }> = []
   readonly voiceTranscriptions: SelfTestTranscription[] = []

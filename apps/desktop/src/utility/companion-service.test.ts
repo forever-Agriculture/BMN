@@ -1137,6 +1137,67 @@ describe('Telegram attention notifications', () => {
     vi.useRealTimers()
   })
 
+  it('recovers ordinary unsent pages even when the quiet sweep rejects', async () => {
+    const bot = await startFakeBotApi(424242, 424242)
+    const options = service['options']; await service.close()
+    service = new CompanionService({ ...options, telegramApiOrigin: bot.origin, pageAfterMs: 5 })
+    try {
+      COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', { ...DEFAULT_APP_SETTINGS.telegram,
+        enabled: true, allowedChatId: 424242, allowedUserId: 424242 }, now)
+      bot.failWith('network')
+      await service.route(METHOD_REGISTRY.telegramConfigure, { token: '123456789:SYNTHETIC_test_token_not_real' })
+      await service.route(METHOD_REGISTRY.presenceSet, { away: true })
+      await service['openAttention']({ sessionId: 's1', incarnationId: null, requestKey: 'quiet-read-failure', kind: 'question', title: 'Synthetic recovery question' })
+      await new Promise(resolve => setTimeout(resolve, 40))
+      expect(bot.calls.filter(call => call.method === 'sendMessage')).toHaveLength(0)
+      const sweep = vi.spyOn(service['quietDelivery'], 'sweep').mockRejectedValueOnce(new Error('Synthetic ledger read failure'))
+      const retry = vi.spyOn(service['pager'], 'retryUnsent')
+      bot.failWith(null)
+      await vi.waitFor(() => expect(bot.calls.filter(call => call.method === 'sendMessage')).toHaveLength(1), { timeout: 3000, interval: 20 })
+      expect(sweep).toHaveBeenCalled(); expect(retry).toHaveBeenCalled()
+      expect(writes).toHaveLength(0)
+    } finally { await service.close(); await bot.close() }
+  })
+
+  it('holds question, permission and exit without changing requests, then sends one masked summary and cards', async () => {
+    const bot = await startFakeBotApi(424242, 424242)
+    const options = service['options']
+    await service.close()
+    service = new CompanionService({ ...options, telegramApiOrigin: bot.origin, pageAfterMs: 5, home: '/home/synthetic' })
+    const local = new Date('2026-10-07T23:00:00')
+    clock = local.toISOString()
+    try {
+      COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', {
+        ...DEFAULT_APP_SETTINGS.telegram, enabled: true, allowedChatId: 424242, allowedUserId: 424242,
+        notifyOn: 'attention-and-exit', quietHours: { enabled: true, start: '22:00', end: '07:00', allowKinds: [], allowSessions: [] }
+      }, clock)
+      await service['sessionsChanged']()
+      await service.route(METHOD_REGISTRY.telegramConfigure, { token: '123456789:SYNTHETIC_test_token_not_real' })
+      await service.route(METHOD_REGISTRY.presenceSet, { away: true })
+      const question = await service['openAttention']({ sessionId: 's1', incarnationId: null, requestKey: 'quiet-q', kind: 'question', title: 'Question /home/synthetic/repo' })
+      const permission = await service['openAttention']({ sessionId: 's2', incarnationId: null, requestKey: 'quiet-p', kind: 'permission', title: 'Permission?' })
+      const storedQuestion = COMPANION_OPERATIONS.getAttention(database, question.requestId)
+      const storedPermission = COMPANION_OPERATIONS.getAttention(database, permission.requestId)
+      service.sessionStateChanged('s2', 'exited')
+      await vi.waitFor(async () => expect((await service['telegramStatus']()).quietHours?.waiting).toBe(3))
+      expect(bot.calls.filter(call => call.method === 'sendMessage')).toHaveLength(0)
+      expect(COMPANION_OPERATIONS.getAttention(database, question.requestId)).toEqual(storedQuestion)
+      expect(COMPANION_OPERATIONS.getAttention(database, permission.requestId)).toEqual(storedPermission)
+      expect(emitted.some(event => event.topic === 'attention')).toBe(true)
+      expect(writes).toHaveLength(0)
+      clock = new Date('2026-10-08T07:00:00').toISOString()
+      await service['sweepAttention']()
+      const sends = bot.calls.filter(call => call.method === 'sendMessage')
+      expect(sends).toHaveLength(3)
+      expect(JSON.stringify(sends[0])).toContain('Quiet hours ended')
+      expect(JSON.stringify(sends[0])).toContain('~/repo')
+      expect(JSON.stringify(sends[0])).not.toContain('/home/synthetic')
+      await service['sweepAttention']()
+      expect(bot.calls.filter(call => call.method === 'sendMessage')).toHaveLength(3)
+      expect(writes).toHaveLength(0)
+    } finally { await service.close(); await bot.close() }
+  })
+
   it('keeps recovered pages behind stale-card cleanup across overlapping polling reports', async () => {
     const bot = await startFakeBotApi(424242, 424242)
     const options = service['options']
@@ -1271,6 +1332,7 @@ describe('Telegram attention notifications', () => {
   })
 
   it('binds each notification to the process incarnation live when it was sent', async () => {
+    service['telegramReady'] = true // This fixture injects an already-recovered connector.
     service['telegram'] = {
       sendMessage: async () => ({ messageId: 77 })
     } as unknown as TelegramConnector
@@ -1292,6 +1354,7 @@ describe('Telegram attention notifications', () => {
   })
 
   it('sends a repeated prompt once after it waited unseen, and nothing for a prompt seen at the desk', async () => {
+    service['telegramReady'] = true
     vi.useFakeTimers()
     const sent: string[] = []
     service['telegram'] = {
@@ -1317,6 +1380,7 @@ describe('Telegram attention notifications', () => {
   })
 
   it('pages only once the owner is away, never for a prompt their phone already got, and reports exits only away', async () => {
+    service['telegramReady'] = true
     vi.useFakeTimers()
     const sent: string[] = []
     service['telegram'] = {

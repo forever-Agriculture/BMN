@@ -1,6 +1,6 @@
 // MODULE: needs-you-popover.tsx - unresolved requests, unread sessions and recent request history under the header count
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import { stripFormatCharacters, manualChoiceQuestion, type AttentionPrompt, type AttentionPromptQuestion, type AttentionRecord } from '@bmn/protocol'
+import { stripFormatCharacters, manualChoiceQuestion, type AttentionPrompt, type AttentionPromptQuestion, type AttentionRecord, type TelegramStatus } from '@bmn/protocol'
 import { attentionProvenance, expiryText, isActionableAttention, openAttentionGroups, relativeAge } from './session-presentation'
 
 export interface SessionPlace {
@@ -104,6 +104,7 @@ function PermissionDetail(props: { prompt: Extract<AttentionPrompt, { type: 'per
 
 export function NeedsYouPopover(props: {
   requests: AttentionRecord[]
+  phone?: TelegramStatus['quietHours'] | undefined
   unread: UnreadEntry[]
   place(sessionId: string): SessionPlace
   now: number
@@ -220,6 +221,10 @@ export function NeedsYouPopover(props: {
           {' · '}
           <span className="provenance">{attentionProvenance(request)}</span>
         </p>
+        {props.phone?.requests[request.requestId] ? <p className="seen">{props.phone.requests[request.requestId] === 'uncertain'
+          ? 'Phone: may not have arrived' : props.phone.active ? `Phone: held until ${props.phone.until}` : 'Phone: waiting for delivery'}</p> : null}
+        {props.phone?.uncertainRevisions[request.requestId]?.some(revision => revision !== request.revision)
+          ? <p className="seen">Phone: an earlier revision may not have arrived</p> : null}
         <div className="actions">
           <button type="button" className="primary"
             data-response-navigation={actionable ? `${request.requestId}:${request.revision}` : undefined}
@@ -267,6 +272,7 @@ export function NeedsYouPopover(props: {
         }
       }}
     >
+      {props.phone?.problem ? <p role="alert">Phone delivery history is unavailable. Automatic delivery is paused until it can be read.</p> : null}
       <header>
         <strong>Needs you</strong>
         <span>{responses.length} need response · {updates.length} {updates.length === 1 ? 'update' : 'updates'} · {props.unread.length} unread</span>

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   DEFAULT_APP_SETTINGS,
+  isTelegramQuietHours,
   ERROR_CODES,
   type ArtifactRecord,
   type AttentionPrompt,
@@ -16,6 +17,7 @@ import {
   artifactBytesUsed,
   claimHandoffDraft,
   closeAttention,
+  commitQuietDelivery,
   createDraft,
   discardHandoffDraft,
   expireAttention,
@@ -23,12 +25,14 @@ import {
   getAttention,
   getDraft,
   getReceipt,
+  getRawSetting,
   getSettings,
   getTelegramMessage,
   insertArtifact,
   listAgentHandoffs,
   listArtifacts,
   listAttention,
+  listQuietAttention,
   listDrafts,
   listProgress,
   markAttentionSeen,
@@ -39,6 +43,7 @@ import {
   putReceipt,
   putSettingsSection,
   putTelegramMessage,
+  quietDelivered,
   setArtifactState,
   updateDraft,
   updateHandoffDraft,
@@ -702,9 +707,24 @@ describe('companion store', () => {
     const legacy = { enabled: false, allowedChatId: 7, allowedUserId: null, notifyOn: 'attention', autoSubmitReplies: true }
     database.prepare("INSERT OR REPLACE INTO app_setting(key, value_json, updated_at) VALUES ('telegram', ?, ?)")
       .run(JSON.stringify(legacy), now)
-    expect(getSettings(database).telegram).toEqual({ ...legacy, answerPermissions: false })
+    expect(getSettings(database).telegram).toEqual({ ...legacy, answerPermissions: false, quietHours: DEFAULT_APP_SETTINGS.telegram.quietHours, morningDigest: DEFAULT_APP_SETTINGS.telegram.morningDigest })
     expect(putSettingsSection(database, 'telegram', { ...legacy, answerPermissions: true }, now).telegram.answerPermissions).toBe(true)
     expect(() => putSettingsSection(database, 'telegram', { ...legacy, answerPermissions: 'yes' }, now)).toThrow(/permission prompts/)
+  })
+
+  it('shares quiet-hours validation with the form and prunes unavailable session exceptions on load', () => {
+    const quiet = { enabled: true, start: '22:00', end: '07:00', allowKinds: ['question' as const], allowSessions: ['s1', 's2', 'deleted'] }
+    expect(isTelegramQuietHours(quiet)).toBe(true)
+    const value = { ...DEFAULT_APP_SETTINGS.telegram, quietHours: quiet }
+    expect(putSettingsSection(database, 'telegram', value, now).telegram.quietHours?.allowSessions).toEqual(['s1', 's2'])
+    database.prepare('UPDATE session SET archived_at = ? WHERE session_id = ?').run(now, 's2')
+    expect(getSettings(database).telegram.quietHours?.allowSessions).toEqual(['s1'])
+    for (const bad of [{ ...quiet, start: '7:00' }, { ...quiet, end: '22:00' },
+      { ...quiet, allowSessions: Array.from({ length: 21 }, (_, i) => String(i)) }]) {
+      expect(isTelegramQuietHours(bad)).toBe(false)
+      expect(() => putSettingsSection(database, 'telegram', { ...value, quietHours: bad }, now)).toThrow(/Quiet hours/)
+    }
+    expect(getSettings(database).telegram.quietHours?.start).toBe('22:00')
   })
 
   it('splits a theme stored before identity and color mode were separate choices', () => {
@@ -818,5 +838,110 @@ describe('companion store', () => {
     }
     putSettingsSection(database, 'voice', { model: 'base', language: 'en', modelFolder: null }, now)
     expect(getSettings(database).voice.modelFolder).toBeNull()
+  })
+})
+
+describe('private quiet delivery markers', () => {
+  const params = { sessionId: 's1', incarnationId: null, requestKey: 'quiet', kind: 'question' as const, title: 'Synthetic question' }
+  const ledger = { version: 1, entries: [], window: null, summaryHighWater: 0 }
+
+  it('spends membership with the exact attempt, preserves suppression on clear, and resets only a new hold', () => {
+    const row = openAttention(database, params, 'held', now)
+    const hold = { requestId: row.requestId, revision: row.revision, heldAt: 1 }
+    commitQuietDelivery(database, ledger, { hold, release: true }, now)
+    expect(commitQuietDelivery(database, ledger, { claim: row }, now)).toBe(true)
+    expect(listQuietAttention(database)).toEqual([])
+    expect(quietDelivered(database, row.requestId, row.revision)).toBe(true)
+    expect(commitQuietDelivery(database, ledger, { hold }, now)).toBe(false)
+    expect(commitQuietDelivery(database, ledger, { claim: row }, now)).toBe(false)
+    commitQuietDelivery(database, ledger, { release: true, clear: [row] }, now)
+    expect(quietDelivered(database, row.requestId, row.revision)).toBe(true)
+    const revised = openAttention(database, { ...params, title: 'Next revision' }, 'unused', now)
+    expect(quietDelivered(database, revised.requestId, revised.revision)).toBe(false)
+    commitQuietDelivery(database, ledger, { hold: { requestId: revised.requestId, revision: revised.revision, heldAt: 2 } }, now)
+    expect(listQuietAttention(database)).toMatchObject([{ heldAt: 2, eligible: false, record: { revision: revised.revision } }])
+    expect(commitQuietDelivery(database, ledger, { claim: row }, now)).toBe(false)
+    expect(commitQuietDelivery(database, ledger, { claim: revised }, now)).toBe(true)
+    commitQuietDelivery(database, ledger, { unclaim: row }, now)
+    expect(quietDelivered(database, revised.requestId, revised.revision)).toBe(true)
+    commitQuietDelivery(database, ledger, { unclaim: revised }, now)
+    expect(listQuietAttention(database)).toHaveLength(1)
+  })
+
+  it('keeps an unattempted eligible member across revisions and rolls back a failed claim ledger write', () => {
+    const row = openAttention(database, params, 'held', now)
+    commitQuietDelivery(database, ledger, { hold: { requestId: row.requestId, revision: row.revision, heldAt: 1 }, release: true }, now)
+    const revised = openAttention(database, { ...params, title: 'New current revision' }, 'unused', now)
+    commitQuietDelivery(database, ledger, { hold: { requestId: revised.requestId, revision: revised.revision, heldAt: 2 } }, now)
+    expect(listQuietAttention(database)).toMatchObject([{ eligible: true, heldAt: 1 }])
+    expect(() => commitQuietDelivery(database, { bad: BigInt(1) }, { claim: revised }, now)).toThrow()
+    expect(quietDelivered(database, revised.requestId, revised.revision)).toBe(false)
+    expect(listQuietAttention(database)).toHaveLength(1)
+    expect(JSON.stringify(getAttention(database, row.requestId))).not.toContain('telegram_quiet')
+    expect(JSON.stringify(listAttention(database))).not.toContain('telegram_quiet')
+    putReceipt(database, { key: 'quiet-private-proof', paramsHash: 'synthetic', state: 'done', result: getAttention(database, row.requestId) }, now)
+    expect(JSON.stringify(getReceipt(database, 'quiet-private-proof'))).not.toContain('telegram_quiet')
+  })
+
+  it('atomically records a hold without changing the public request, rejecting stale admissions', () => {
+    const row = openAttention(database, params, 'held', now)
+    const before = getAttention(database, row.requestId)
+    expect(commitQuietDelivery(database, ledger, { hold: { requestId: row.requestId, revision: row.revision, heldAt: 1 } }, now)).toBe(true)
+    expect(getAttention(database, row.requestId)).toEqual(before)
+    expect(listQuietAttention(database)).toEqual([{ record: before, heldAt: 1, eligible: false }])
+    expect(commitQuietDelivery(database, { invalid: true }, { hold: { requestId: row.requestId, revision: 999, heldAt: 2 } }, now)).toBe(false)
+    expect(getRawSetting(database, 'telegram-quiet-delivery-v1')).toEqual(ledger)
+    expect(() => commitQuietDelivery(database, { invalid: BigInt(1) }, { release: true }, now)).toThrow()
+    expect(listQuietAttention(database)[0]!.eligible).toBe(false)
+    expect(getRawSetting(database, 'telegram-quiet-delivery-v1')).toEqual(ledger)
+  })
+
+  it('does not clear a revised marker when an older revision finishes mapping', () => {
+    const row = openAttention(database, params, 'held', now)
+    commitQuietDelivery(database, ledger, { hold: { requestId: row.requestId, revision: row.revision, heldAt: 1 }, release: true }, now)
+    const revised = openAttention(database, { ...params, title: 'Changed question' }, 'unused', now)
+    expect(revised.revision).toBe(row.revision + 1)
+    commitQuietDelivery(database, ledger, { clear: [row] }, now)
+    expect(listQuietAttention(database)).toMatchObject([{ record: { revision: revised.revision }, eligible: true }])
+    commitQuietDelivery(database, ledger, { clear: [revised] }, now)
+    expect(listQuietAttention(database)).toEqual([])
+    expect(getAttention(database, row.requestId).state).toBe('open')
+  })
+
+  it('recovers 201 exact marked requests after closing and reopening SQLite, excluding unrelated rows', () => {
+    const root = mkdtempSync(join(tmpdir(), 'bmn-quiet-store-'))
+    const path = join(root, 'store.sqlite')
+    let disk = new BetterSqlite3(path)
+    try {
+      initializeDatabase(disk, now)
+      disk.prepare(`INSERT INTO session(session_id, workspace_id, name, cwd, executable, argv_json, revision, created_at, position)
+        VALUES ('s1', ?, 'Synthetic', '/work', '/bin/bash', '[]', 1, ?, 0)`).run(DEFAULT_WORKSPACE_ID, now)
+      for (let n = 0; n < 202; n += 1) {
+        const row = openAttention(disk, { ...params, requestKey: `q${n}` }, `r${n}`, now)
+        if (n < 201) commitQuietDelivery(disk, ledger, { hold: { requestId: row.requestId, revision: row.revision, heldAt: n } }, now)
+      }
+      disk.close(); disk = new BetterSqlite3(path); initializeDatabase(disk, now)
+      const held = listQuietAttention(disk)
+      expect(held).toHaveLength(201)
+      expect(held.some(item => item.record.requestId === 'r201')).toBe(false)
+      expect(held.every(item => !item.eligible)).toBe(true)
+      commitQuietDelivery(disk, ledger, { release: true }, now)
+      disk.close(); disk = new BetterSqlite3(path); initializeDatabase(disk, now)
+      expect(listQuietAttention(disk).every(item => item.eligible)).toBe(true)
+      expect(listAttention(disk)).toHaveLength(202)
+    } finally { disk.close(); rmSync(root, { recursive: true, force: true }) }
+  })
+})
+
+
+describe('morning digest stored settings', () => {
+  it('defaults old sections off and applies the same strict local-time validation as the form', () => {
+    expect(getSettings(database).telegram.morningDigest).toEqual({ enabled: false, time: '08:00' })
+    const value = { ...DEFAULT_APP_SETTINGS.telegram, morningDigest: { enabled: true, time: '09:15' } }
+    expect(putSettingsSection(database, 'telegram', value, now).telegram.morningDigest).toEqual(value.morningDigest)
+    for (const time of ['9:15', '24:00', '', '12:60']) {
+      expect(() => putSettingsSection(database, 'telegram', { ...value, morningDigest: { enabled: true, time } }, now)).toThrow(/Morning digest/)
+    }
+    expect(getSettings(database).telegram.morningDigest).toEqual(value.morningDigest)
   })
 })

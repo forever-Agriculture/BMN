@@ -27,6 +27,8 @@ export interface SelfTestTaps {
   fileReferenceClient(client: RequestClient): RequestClient
   shownInFolder(path: string): void
   appNotice(notice: { title: string; body: string }): void
+  readonly captureAttentionNotifications: boolean
+  attentionNotice(notice: { title: string; body: string; sessionId: string }): void
   readonly voice: {
     binary: string
     transcribe: typeof transcribeRecording

@@ -26,7 +26,7 @@ function record(change: Partial<AttentionRecord> = {}): AttentionRecord {
   }
 }
 
-function pagerFixture(): {
+function pagerFixture(holdQuiet?: (record: AttentionRecord) => Promise<boolean>): {
   pager: ReturnType<typeof createAttentionPager>
   stored: Map<string, AttentionRecord>
   sent: AttentionRecord[]
@@ -41,6 +41,7 @@ function pagerFixture(): {
   const presence: { away: boolean | null; now: number } = { away: true, now: 0 }
   let due: Array<() => void> = []
   const pager = createAttentionPager({
+    ...(holdQuiet ? { holdQuiet } : {}),
     ownerAway: () => presence.away,
     now: () => presence.now,
     current: async (requestId) => stored.get(requestId) ?? null,
@@ -66,6 +67,39 @@ function pagerFixture(): {
 }
 
 describe('attention pager', () => {
+  it('keeps a definitely unsent page retryable when quiet-history storage rejects', async () => {
+    let first = true
+    const f = pagerFixture(async () => { if (first) { first = false; throw new Error('Synthetic ledger I/O failure') }; return false })
+    const row = record(); f.stored.set(row.requestId, row)
+    f.pager.opened(row); await f.elapse()
+    expect(f.sent).toHaveLength(0)
+    f.pager.retryUnsent(); await f.settle()
+    expect(f.sent).toEqual([row])
+  })
+  it('holds timer, departure and recovery routes, including an overnight request due at the desk', async () => {
+    let quiet = true
+    const f = pagerFixture(async () => quiet)
+    const row = record()
+    f.stored.set(row.requestId, row)
+    f.presence.away = false
+    f.pager.opened(row); await f.elapse()
+    f.presence.now += 8 * 60 * 60_000
+    f.presence.away = true
+    f.pager.ownerLeft(); await f.settle()
+    f.pager.retryUnsent(); await f.settle()
+    expect(f.sent).toHaveLength(0)
+    quiet = false
+    f.pager.retryUnsent(); await f.settle()
+    expect(f.sent).toEqual([row])
+  })
+
+  it('keeps the existing desktop expiry rule when the quiet hook allows delivery', async () => {
+    const f = pagerFixture(async () => false), row = record()
+    f.stored.set(row.requestId, row)
+    f.presence.away = false; f.pager.opened(row); await f.elapse()
+    f.presence.now = 11 * 60_000; f.presence.away = true; f.pager.ownerLeft(); await f.settle()
+    expect(f.sent).toHaveLength(0)
+  })
   it('sends a request once however often the agent repeats it, after the wait for its kind', async () => {
     const { pager, stored, sent, waits, elapse } = pagerFixture()
     const opened = record()

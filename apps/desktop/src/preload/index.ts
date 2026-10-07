@@ -42,6 +42,7 @@ import {
   type InterruptedSessionCohort,
   type ProgressRecord,
   type RepositoryIdentity,
+  type DevAutoRunsResult,
   type SessionCohortOfferedResult,
   type TelegramStatus,
   type VoiceLanguage,
@@ -462,6 +463,9 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   inspectRepository(directory: string): Promise<RepositoryIdentity> {
     return invokeBridge('aiterm:repository:inspect', { directory })
+  },
+  readDevAutoRuns(workspaceId?: string): Promise<DevAutoRunsResult> {
+    return invokeBridge('aiterm:dev-auto:runs', workspaceId ? { workspaceId } : {})
   },
   normalizeLaunchDirectories(directories: string[]): Promise<string[]> {
     return invokeBridge('aiterm:launch-directory:normalize', { directories })

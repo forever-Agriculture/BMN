@@ -6,6 +6,8 @@ import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, join, relative } from 'node:path'
 import {
   ERROR_CODES,
+  DEFAULT_TELEGRAM_QUIET_HOURS,
+  type TelegramQuietHours,
   exactAbsoluteFileReference,
   HOOK_EVENT_LOG_LIMIT,
   isAttentionOrigin,
@@ -75,6 +77,10 @@ import { observeTelegramDelivery, type TelegramDeliveryEvent } from './telegram-
 import { RemoteAnswers, answerRoute, type AnswerOutcome, type AnswerRequest, type PluginAnswer } from './remote-answer'
 import { observeRepeat, REPEAT_NOTICE_AT, type RepeatState, type RepeatSegment } from './repeat-watch'
 import { TelegramCardKeeper } from './telegram-card-keeper'
+import { QUIET_LEDGER_KEY, QuietHoursDelivery, phoneField } from './quiet-hours-delivery'
+import { DEFAULT_TELEGRAM_MORNING_DIGEST, telegramQuietWindow, type TelegramMorningDigest } from '@bmn/protocol'
+import { DIGEST_KEY, DevAutoMorningDigest } from './dev-auto-digest'
+import { readDevAutoRuns } from './dev-auto-runs'
 import { manualCardFits } from './telegram-cards'
 import { createScanMemory, procReader, scanSessionPorts, type ProcReader } from './listening-ports'
 import { PortWatch } from './port-watch'
@@ -331,6 +337,11 @@ export class CompanionService {
    */
   private readonly hookReporters = new Map<string, string>()
   private readonly producers: LiveProducers
+  private readonly quietDelivery: QuietHoursDelivery
+  private readonly morningDigest: DevAutoMorningDigest
+  private digestSettings: TelegramMorningDigest = { ...DEFAULT_TELEGRAM_MORNING_DIGEST }
+  private quietSettings: TelegramQuietHours = { ...DEFAULT_TELEGRAM_QUIET_HOURS }
+  private telegramReady = false
   private readonly manualAnswerClaims = new Set<string>()
   private readonly attentionChanges = new Map<string, { generation: number; pending: number }>()
   /**
@@ -395,6 +406,50 @@ export class CompanionService {
     this.retainedHooks = new HookEventHistory({ root: options.roots.state,
       sessionExists: sessionId => this.knownSessions.has(sessionId), live: () => this.liveHookEvents() })
     this.now = options.now ?? (() => new Date())
+    this.quietDelivery = new QuietHoursDelivery({
+      read: () => options.database.companion('getRawSetting', QUIET_LEDGER_KEY),
+      write: (value, changes) => options.database.companion('commitQuietDelivery', value, changes ?? {}, this.iso()),
+      settings: () => this.quietSettings,
+      now: () => this.now(), ownerAway: () => this.ownerAway,
+      ready: () => this.telegramReady && this.telegramHealth?.state === 'polling',
+      requests: () => options.database.companion('listQuietAttention'),
+      retire: record => this.pager.retire(record),
+      current: async id => {
+        try { return await options.database.companion('getAttention', id) }
+        catch (error) {
+          if (typeof error === 'object' && error !== null && 'code' in error && error.code === ERROR_CODES.notFound) return null
+          throw error
+        }
+      },
+      mapped: (id, revision) => options.database.companion('quietDelivered', id, revision),
+      sessionName: id => this.knownSessions.get(id)?.name ?? 'Session',
+      home: options.home ?? homedir(),
+      sendSummary: async text => { await this.telegram!.sendMessage(text) },
+      page: record => this.cards.page(record),
+      changed: () => this.emit('telegram', null)
+    })
+    this.morningDigest = new DevAutoMorningDigest({
+      read: () => options.database.companion('getRawSetting', DIGEST_KEY),
+      write: value => options.database.companion('putRawSetting', DIGEST_KEY, value, this.iso()),
+      settings: () => this.digestSettings,
+      ready: () => this.telegramHealth?.state === 'polling',
+      quiet: () => telegramQuietWindow(this.now(), this.quietSettings).active,
+      now: () => this.now(), monotonic: () => performance.now(), home: options.home ?? homedir(),
+      snapshot: async () => {
+        const workspaces = await options.database.listWorkspaces()
+        const sessions = (await Promise.all(workspaces.filter(workspace => workspace.archivedAt === null)
+          .map(workspace => options.database.listSessions(workspace.workspaceId)))).flat()
+          .map(session => options.manager.sessionWithCurrentProcessState(session))
+        const liveDirectories = new Map(sessions.flatMap(session => {
+          const directory = options.manager.liveLaunchDirectory(session.sessionId)
+          return directory ? [[session.sessionId, directory] as const] : []
+        }))
+        const result = await readDevAutoRuns(workspaces, sessions, await options.database.companion('listAttention'), undefined,
+          value => phoneField(value, options.home ?? homedir(), Infinity), liveDirectories)
+        return { result, workspaceNames: Object.fromEntries(workspaces.map(workspace => [workspace.workspaceId, workspace.name])) }
+      },
+      send: async text => { await this.telegram!.sendMessage(text) }
+    })
     const proc = options.proc ?? procReader
     const uid = process.getuid?.() ?? -1
     const scanMemory = createScanMemory()
@@ -407,6 +462,7 @@ export class CompanionService {
     this.pager = createAttentionPager({
       current: (requestId) => this.attentionForDelivery(requestId),
       send: (record) => this.cards.page(record),
+      holdQuiet: record => this.quietDelivery.hold(record),
       schedule: (callback, ms) => {
         const timer = setTimeout(callback, ms)
         timer.unref()
@@ -477,6 +533,14 @@ export class CompanionService {
           options.database.companion('putTelegramMessage', messageId, sessionId, requestId, incarnationId, this.iso())
       },
       home: homedir(),
+      beforeNewDelivery: async record => {
+        const decision = await this.quietDelivery.before(record)
+        if (decision.action === 'hold') observeTelegramDelivery(event => this.logTelegramDelivery(event), record, decision.reason ?? 'held-quiet')
+        return decision
+      },
+      maySend: (record, managed) => this.quietDelivery.maySend(record, managed),
+      settleNewDelivery: (claim, outcome) => this.quietDelivery.settle(claim, outcome),
+      holdExit: (sessionId, incarnationId) => this.quietDelivery.holdExit(sessionId, incarnationId),
       observeDelivery: (event) => this.logTelegramDelivery(event)
     })
     this.answers.onLateOutcome((requestId, outcome) => this.cards.lateOutcome(requestId, outcome))
@@ -691,9 +755,11 @@ export class CompanionService {
   /** Called for every session process transition so exit notices and the session cache stay current. */
   sessionStateChanged(sessionId: string, state: string): void {
     void this.sessionsChanged().then(async () => {
-      if (state !== 'exited' || this.ownerAway === false) return
+      if (state !== 'exited') return
       const settings = await this.options.database.companion('getSettings')
       if (!settings.telegram.enabled || settings.telegram.notifyOn !== 'attention-and-exit') return
+      if (this.ownerAway === false) return
+      if (await this.quietDelivery.holdExit(sessionId, this.options.manager.liveIncarnationId(sessionId) ?? null)) return
       await this.cards.exited(sessionId)
     }).catch(() => undefined)
   }
@@ -916,7 +982,10 @@ export class CompanionService {
         if (away !== true && away !== false && away !== null) invalid('away must be true, false or null')
         const left = away === true && this.ownerAway !== true
         this.ownerAway = away
-        if (left) this.pager.ownerLeft()
+        if (left) {
+          this.pager.ownerLeft()
+          void this.quietDelivery.sweep().catch(() => undefined)
+        }
         return { away }
       }
       case METHOD_REGISTRY.controlInfo:
@@ -1866,6 +1935,8 @@ export class CompanionService {
     // Requests closed by expiry or by the owner are forgotten here; hooks report their own closes.
     const rows = await this.options.database.companion('listAttention').catch(() => null)
     if (rows) this.answers.retain(new Set(rows.filter((row) => row.state === 'open').map((row) => row.requestId)))
+    await this.quietDelivery.sweep(true).catch(() => undefined)
+    await this.morningDigest.sweep().catch(() => undefined)
   }
 
   private async readyArtifact(artifactId: string): Promise<ArtifactRecord> {
@@ -2531,6 +2602,7 @@ export class CompanionService {
   }
 
   private async telegramStatus(): Promise<TelegramStatus> {
+    const quietHours = await this.quietDelivery.status().catch(() => undefined)
     const token = this.telegramToken ?? await this.readTelegramToken()
     const redact = (value: string | null): string | null => value && token ? redactToken(value, token) : value
     if (this.telegram && this.telegramHealth) {
@@ -2541,7 +2613,8 @@ export class CompanionService {
         lastPollAt: this.telegramHealth.lastPollAt,
         lastError: redact(this.telegramHealth.lastError),
         rejectedUpdates: this.telegramHealth.rejectedUpdates,
-        failingSince: this.telegramHealth.failingSince
+        failingSince: this.telegramHealth.failingSince,
+        ...(quietHours ? { quietHours } : {})
       }
     }
     const settings = await this.options.database.companion('getSettings')
@@ -2552,16 +2625,20 @@ export class CompanionService {
       lastPollAt: null,
       lastError: null,
       rejectedUpdates: 0,
-      failingSince: null
+      failingSince: null,
+      ...(quietHours ? { quietHours } : {})
     }
   }
 
   private async restartTelegram(): Promise<void> {
+    this.telegramReady = false
     const previous = this.telegram
     this.telegram = undefined
     this.telegramHealth = undefined
     await previous?.stop().catch(() => undefined)
     const settings: AppSettings = await this.options.database.companion('getSettings')
+    this.quietSettings = settings.telegram.quietHours ?? { ...DEFAULT_TELEGRAM_QUIET_HOURS }
+    this.digestSettings = settings.telegram.morningDigest ?? { ...DEFAULT_TELEGRAM_MORNING_DIGEST }
     const token = await this.readTelegramToken()
     this.telegramToken = token
     if (!settings.telegram.enabled) {
@@ -2593,9 +2670,16 @@ export class CompanionService {
           if (entered) this.telegramStateEntry += 1
           this.telegramHealth = health
           // Cards a previous run left with buttons are finished once Telegram is reachable, before new pages.
-          if (health.state === 'polling' && !this.telegramRecovery) {
-            this.telegramRecovery = this.cards.sweep().then(() => {
-              if (this.telegramHealth?.state === 'polling') this.pager.retryUnsent()
+          if (health.state === 'polling' && (entered || !this.telegramReady) && !this.telegramRecovery) {
+            this.telegramRecovery = this.cards.sweep().then(async ready => {
+              if (this.telegram !== connector) return
+              this.telegramReady = ready
+              if (ready && this.telegramHealth?.state === 'polling') {
+                try { await this.quietDelivery.sweep() }
+                finally {
+                  if (this.telegram === connector && this.telegramHealth?.state === 'polling') this.pager.retryUnsent()
+                }
+              }
             }).catch(() => undefined).finally(() => {
               this.telegramRecovery = undefined
             })

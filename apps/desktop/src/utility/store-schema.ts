@@ -598,5 +598,18 @@ export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = Object.freeze([
   {
     version: 23,
     sql: `ALTER TABLE workspace ADD COLUMN pinned_file_paths_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(pinned_file_paths_json));`
+  },
+  {
+    version: 24,
+    sql: `ALTER TABLE attention_request ADD COLUMN telegram_quiet_held_at INTEGER;
+      ALTER TABLE attention_request ADD COLUMN telegram_quiet_eligible INTEGER NOT NULL DEFAULT 0 CHECK (telegram_quiet_eligible IN (0, 1));
+      CREATE INDEX attention_quiet_held ON attention_request(telegram_quiet_held_at) WHERE telegram_quiet_held_at IS NOT NULL;`
+  },
+  {
+    version: 25,
+    sql: `ALTER TABLE attention_request ADD COLUMN telegram_quiet_attempt_revision INTEGER;
+      DROP INDEX attention_quiet_held;
+      CREATE INDEX attention_quiet_held ON attention_request(telegram_quiet_held_at)
+        WHERE telegram_quiet_held_at IS NOT NULL AND telegram_quiet_attempt_revision IS NULL;`
   }
 ])

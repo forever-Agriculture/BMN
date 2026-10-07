@@ -1,6 +1,9 @@
 // MODULE: index.ts - public exports of the shared BMN protocol package
 export * from './binding'
 export * from './companion'
+export * from './dev-auto'
+export * from './telegram-quiet'
+export * from './telegram-digest'
 export * from './attention-prompt'
 export * from './attention-producer'
 export * from './manual-choices'

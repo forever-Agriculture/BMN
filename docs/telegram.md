@@ -5,6 +5,30 @@ session. It uses a bot you create and own. It is off by default.
 
 ## What it does
 
+- **Quiet hours** in Preferences → Telegram are off by default. Choose different local start
+  and end times, including overnight windows. New request and exit messages wait; Needs you,
+  desktop notifications, existing-card edits, replies and the test message stay available.
+  Allow chosen request kinds through in Preferences, or up to 20 sessions from their menus.
+  The window follows local wall-clock time, including clock and daylight-saving changes.
+- When quiet hours end, one summary lists pending sessions, kinds and titles, plus counts of
+  requests handled meanwhile and session exits. Names beyond the bounded history are replaced
+  by counts. Pending cards follow oldest first, ten per 30-second sweep. If you are at the desk,
+  leaving within ten minutes of the window's end releases the batch. Secrets are masked and
+  home-folder paths in the summary are shortened to `~/…`.
+  A message whose delivery is uncertain shows **Phone: may not have arrived** in Needs you;
+  BMN never resends that revision automatically, including after restart. A revised request
+  can receive a new card; Needs you retains a warning about any uncertain earlier revision. If delivery history
+  fills up, held requests wait instead of risking duplicate messages; ordinary paging keeps its rules.
+  A private marker on each held request preserves recovery beyond the 200-entry history cap.
+  Expired desktop reminders stay retired; an already eligible offline backlog survives restart.
+- **Morning digest** in Preferences → Telegram is off by default. Choose a local time to receive
+  one message with Done, Decided for you, Waiting on you and Blocked items from your dev-auto runs.
+  It sends workspace and checkout names, selected epics, Status, current decisions and owner-item
+  titles, with secrets masked and home-folder paths shortened. Copied handoffs are excluded;
+  unavailable or truncated sources are reported as incomplete.
+  It needs Telegram connected and obeys quiet hours. A late start can send that day's digest;
+  missed days are skipped. An uncertain send is not repeated that day. Reading a digest never
+  answers a request or changes a run.
 - When an agent asks for your attention (`bmn ask`, `bmn handoff`, or a Claude Code, Codex or OpenCode hook), the bot
   sends you the request while you are away from the desk and the request is still unanswered. If
   BMN cannot read idle time, it treats you as away. Claude sessions connected to Remote Control

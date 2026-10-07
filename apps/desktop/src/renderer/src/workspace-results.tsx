@@ -101,6 +101,7 @@ interface ResultSnapshot {
 export function WorkspaceResultsDialog(props: {
   workspace: WorkspaceRecord
   now: number
+  onOpenRuns(): void
   onClose(): void
   onOpenReport(session: SessionRecord, report: ProgressRecord): void
   onReviewHandoff(draft: InputDraftRecord, signal: AbortSignal): Promise<void>
@@ -199,6 +200,7 @@ export function WorkspaceResultsDialog(props: {
       <p className="dialog-note">Agent report: reported by the agent; BMN has not verified it. Current reports and handoffs; use History for earlier records.</p>
       <div className="workspace-results-toolbar">
         <button type="button" onClick={() => void load()}>Refresh results</button>
+        <button type="button" onClick={props.onOpenRuns}>dev-auto runs…</button>
         {snapshot && state === 'ready' ? <span>Read {new Date(snapshot.checkedAt).toLocaleString()}</span> : null}
       </div>
       {state === 'loading' ? <p role="status">Loading workspace results…</p> : null}
