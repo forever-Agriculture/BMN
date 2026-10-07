@@ -129,6 +129,7 @@ beforeEach(() => {
   screens = new Map()
   const manager = {
     liveIncarnationId: (sessionId: string) => liveIncarnations.get(sessionId),
+    foregroundProcessIdentity: (sessionId: string) => liveIncarnations.has(sessionId) ? `synthetic-foreground:${sessionId}` : null,
     liveSessionIds: () => [...liveIncarnations.keys()],
     liveLaunchDirectory: (sessionId: string) => liveDirectories.get(sessionId),
     writeToSession: (sessionId: string, bytes: Uint8Array) => writes.push({ sessionId, bytes }),
@@ -2929,6 +2930,27 @@ describe('repeat watch notices and calibration', () => {
   const reset = (event = 'Interrupt') => observe({ event, fingerprint: undefined })
   const rows = () => service.route(METHOD_REGISTRY.attentionList, {}) as Promise<AttentionRecord[]>
 
+  it('withdraws a host repeat notice without invalidating the foreground conversation', async () => {
+    const producer = { agentCli: 'claude' as const, conversationReference: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }
+    service['producers'].observe('s1', 'incarnation-1', producer)
+    await service.sessionsChanged()
+    const question = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1',
+      requestKey: 'repeat-independent', kind: 'question', title: 'Synthetic decision', origin: 'cli',
+      manualChoices: { options: [{ label: 'Wait', description: null }, { label: 'Proceed', description: null }], allowOther: true } })
+    await calls(8)
+    const notice = (await rows()).find(row => row.requestKey === 'watch:repeat')!
+    await reset('UserPromptSubmit')
+    expect(COMPANION_OPERATIONS.getAttention(database, notice.requestId).state).toBe('withdrawn')
+    expect(service.listHookEvents('s1').at(-1)?.effects).toContain('withdrew')
+    expect(await service.answerAttention({ requestId: question.requestId, revision: question.revision,
+      incarnationId: 'incarnation-1', epoch: -1, answer: { type: 'choices', choices: [0] } })).toMatchObject({ state: 'submitted' })
+    expect(writes).toHaveLength(1)
+    const next = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1',
+      requestKey: 'claude:question', kind: 'question', title: 'Next decision', origin: 'cli', manualChoices: question.manualChoices! })
+    await service['closeAttentionByKey']('s1', next.requestKey, 'withdrawn', null, 'hook:claude:SessionEnd', undefined, producer)
+    expect(COMPANION_OPERATIONS.getAttention(database, next.requestId).state).toBe('withdrawn')
+  })
+
   it('opens exactly once at eight, records the successful effect, and never writes to the PTY', async () => {
     await service.sessionsChanged()
     await calls(7)
@@ -2953,7 +2975,7 @@ describe('repeat watch notices and calibration', () => {
     await calls(8)
     expect((await rows())[0]!.requestId).toBe(original)
     await reset('UserPromptSubmit')
-    expect((await rows())[0]).toMatchObject({ state: 'withdrawn', resolvedBy: 'hook:claude:UserPromptSubmit' })
+    expect((await rows())[0]).toMatchObject({ state: 'withdrawn', resolvedBy: 'watch:repeat' })
     await calls(8)
     const all = await rows()
     expect(all.filter((row) => row.state === 'open')).toHaveLength(1)
@@ -3632,6 +3654,23 @@ describe('explicit manual answers to a live foreground conversation', () => {
     expect(writes).toHaveLength(0)
   })
 
+  it('refuses foreground replacement after the final database snapshot without losing the manual request', async () => {
+    stamp()
+    const record = await ask()
+    const original = service['options'].database.companion.bind(service['options'].database)
+    vi.spyOn(service['options'].database, 'companion').mockImplementation(async (name, ...args) => {
+      const result = await original(name, ...args)
+      if (name === 'telegramMessageBoundary') {
+        service['options'].manager.foregroundProcessIdentity = () => 'different-program'
+      }
+      return result
+    })
+    expect(await service.answerAttention(answer(record))).toMatchObject({ state: 'refused' })
+    expect(writes).toHaveLength(0)
+    expect(COMPANION_OPERATIONS.getAttention(database, record.requestId)).toMatchObject({ state: 'open', revision: record.revision })
+    expect(COMPANION_OPERATIONS.listDrafts(database).find(row => row.requestId === record.requestId)?.state).toBe('draft')
+  })
+
   it('rejects an expired manual card before the expiry sweep and a direct reply to an older revision', async () => {
     stamp()
     const expired = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'expiry',
@@ -3735,7 +3774,7 @@ it('keeps live producer binding private in agent snapshots and control responses
   const session = await service['snapshot']({ kind: 'session', sessionId: 's1', incarnationId: 'incarnation-1' })
   expect(JSON.stringify(session)).not.toContain(producer.conversationReference)
   const owner = await service['snapshot']({ kind: 'owner' })
-  expect(JSON.stringify(owner)).toContain(producer.conversationReference)
+  expect(JSON.stringify(owner)).not.toContain(producer.conversationReference)
 })
 
 

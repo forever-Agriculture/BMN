@@ -59,6 +59,7 @@ import {
   type WorkspaceRecord
 } from '@bmn/protocol'
 import { processStartIdentity } from './process-start-identity'
+import { foregroundProcessIdentity } from './foreground-process'
 import {
   newestInterruptionCohort,
   resumableStopCause,
@@ -1768,6 +1769,12 @@ export class SessionManager {
   liveIncarnationId(sessionId: string): string | undefined {
     const live = this.sessions.get(sessionId)
     return live && !live.exited ? live.incarnationId : undefined
+  }
+
+  /** Kernel-owned foreground identity, never a conversation ID or durable resume binding. */
+  foregroundProcessIdentity(sessionId: string): string | null {
+    const live = this.sessions.get(sessionId)
+    return live && !live.exited ? foregroundProcessIdentity(live.pty.pid) : null
   }
 
   /** The directory the live process was started in, which an edit to the stored launch settings does not move. */

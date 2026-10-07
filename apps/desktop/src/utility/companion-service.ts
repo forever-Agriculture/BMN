@@ -433,7 +433,8 @@ export class CompanionService {
       log: (line) => process.stderr.write(line),
       changed: () => this.emit('settings', null)
     })
-    this.producers = new LiveProducers((sessionId) => options.manager.liveIncarnationId(sessionId))
+    this.producers = new LiveProducers((sessionId) => options.manager.liveIncarnationId(sessionId),
+      process.platform === 'linux' ? (sessionId) => options.manager.foregroundProcessIdentity(sessionId) : undefined)
     this.answers = new RemoteAnswers({
       getAttention: (requestId) => options.database.companion('getAttention', requestId).catch(() => null),
       liveIncarnationId: (sessionId) => options.manager.liveIncarnationId(sessionId),
@@ -1030,7 +1031,7 @@ export class CompanionService {
         conversation: session.conversation
       })),
       attention: attention.filter((request) => request.state === 'open' && visible.has(request.sessionId))
-        .map(request => scope.kind === 'owner' ? request : this.publicAttention(request)),
+        .map(request => this.publicAttention(request)),
       handoffs: scope.kind === 'owner'
         ? handoffs.filter((draft) => 'origin' in draft && draft.origin === 'handoff')
         : handoffs,
@@ -1152,7 +1153,7 @@ export class CompanionService {
     }
     const pluginPrompt = p.prompt?.harness === 'opencode'
     if (pluginPrompt) this.producers.unavailable(p.sessionId)
-    const producer = pluginPrompt ? null : p.producer && p.origin?.endsWith(':PreToolUse')
+    const producer = pluginPrompt || p.origin === 'watch:repeat' ? null : p.producer && p.origin?.endsWith(':PreToolUse')
       ? this.producers.observe(p.sessionId, p.incarnationId, p.producer)
       : this.producers.stamp(p.sessionId, p.incarnationId)
     if (p.producer && producer && (p.producer.agentCli !== producer.agentCli ||
@@ -1560,9 +1561,8 @@ export class CompanionService {
             const open = rows.find((row) => row.sessionId === p.sessionId &&
               row.requestKey === 'watch:repeat' && row.state === 'open')
             if (p.event === 'UserPromptSubmit' && open) {
-              await this.closeAttentionByKey(p.sessionId, 'watch:repeat', 'withdrawn', null,
-                `hook:${p.agent}:${p.event}`)
-              if (!effects.includes('withdrew')) effects.push('withdrew')
+              const closed = await this.closeAttentionByKey(p.sessionId, 'watch:repeat', 'withdrawn', null, 'watch:repeat')
+              if (closed.state === 'withdrawn' && !effects.includes('withdrew')) effects.push('withdrew')
             } else if (result.fire && !open && p.incarnationId !== null &&
               this.options.manager.liveIncarnationId(p.sessionId) === p.incarnationId) {
               const opened = await this.openAttention({

@@ -3,6 +3,29 @@ import { LiveProducers } from './live-producers'
 import type { AttentionRecord } from '@bmn/protocol'
 
 describe('live foreground producer ownership', () => {
+  it('fails closed on lost foreground identity without reviving old cards when the process returns', () => {
+    let foreground: string | null = 'agent-a'
+    const owners = new LiveProducers(() => 'run', () => foreground)
+    const producer = { agentCli: 'codex' as const, conversationReference: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }
+    const record = { sessionId: 's', incarnationId: 'run', producer: owners.observe('s', 'run', producer) } as AttentionRecord
+    expect(owners.current(record)).toBe(true)
+    foreground = null
+    expect(owners.current(record)).toBe(false)
+    foreground = 'agent-a'
+    expect(owners.current(record)).toBe(false)
+    expect(owners.stamp('s', 'run')).toBeNull()
+    const fresh = owners.observe('s', 'run', producer)
+    expect(fresh?.generation).not.toBe(record.producer?.generation)
+    expect(owners.current(record)).toBe(false)
+  })
+
+  it('never stamps a newly observed producer while the host cannot inspect its foreground process', () => {
+    const owners = new LiveProducers(() => 'run', () => null)
+    expect(owners.current({ sessionId: 's', incarnationId: 'run' } as AttentionRecord)).toBe(true)
+    expect(owners.observe('s', 'run', { agentCli: 'codex', conversationReference: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' })).toBeNull()
+    expect(owners.stamp('s', 'run')).toBeNull()
+  })
+
   it('does not replace B with a destructive old A event; returning A has a fresh generation', () => {
     const live = new Map([['s', 'run']])
     const owners = new LiveProducers(id => live.get(id))

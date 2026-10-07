@@ -65,6 +65,14 @@ parity matrix when that matrix is created.
 - A shell-launched agent's lightweight live producer is separate from its durable
   resume binding. A refusal to relabel the shell is not proof that live attribution
   failed.
+- On Linux, a stamped producer also requires the same foreground process group,
+  process start time and executable at delivery. Observed exit, suspension, a changed
+  executable or unreadable process evidence makes its card unavailable without answering or
+  withdrawing it. This protects the shell even when `SessionEnd` never arrives.
+  Real-PTY synthetic regressions exercise these cases; actual client and phone
+  acceptance remain separate. The fence cannot identify a change inside an unchanged
+  multiplexer or an exec into the same executable. An already sent card updates on
+  its next refresh or interaction; delivery always rechecks the current foreground.
 - Current-producer compaction and genuine shutdown need separate checks. Retain
   the passing Claude compaction, switch, old-card refusal and shutdown evidence;
   do not extend its verdict to unexercised Codex cases.
