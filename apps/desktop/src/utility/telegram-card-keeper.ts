@@ -36,7 +36,8 @@ import {
   type RenderedCard
 } from './telegram-cards'
 import { TelegramConnectorError, type CardMessageOptions, type InboundReply, type InboundTap } from './telegram-connector'
-import { observeTelegramDelivery, type TelegramDeliveryObserver } from './telegram-delivery'
+import { observeTelegramDelivery, telegramSendDefinitelyUnsent, type TelegramDeliveryObserver } from './telegram-delivery'
+import type { NewDeliveryDecision } from './quiet-hours-delivery'
 
 export interface CardConnector {
   sendMessage(text: string, options?: CardMessageOptions): Promise<{ messageId: number }>
@@ -49,7 +50,7 @@ export type Answerability =
   | { answerable: false; reason: 'unsupported' | 'permissions-off'; detail?: string }
 
 export interface CardKeeperDependencies {
-  /** The polling connector, or undefined while Telegram is off or not connected. */
+  /** Stable identity for the polling connector; undefined while off or disconnected. */
   connector(): CardConnector | undefined
   getAttention(requestId: string): Promise<AttentionRecord | null>
   header(sessionId: string, record: AttentionRecord | null): CardHeader
@@ -73,6 +74,10 @@ export interface CardKeeperDependencies {
   retryMs?: readonly number[]
   token?: () => string
   observeDelivery?: TelegramDeliveryObserver
+  beforeNewDelivery?(record: AttentionRecord): Promise<NewDeliveryDecision>
+  maySend?(record: AttentionRecord, managed: boolean): boolean
+  settleNewDelivery?(claim: string, outcome: 'mapped' | 'unsent' | 'uncertain'): Promise<void>
+  holdExit?(sessionId: string, incarnationId: string | null): Promise<boolean>
 }
 
 type TapAction =
@@ -214,6 +219,23 @@ export class TelegramCardKeeper {
       incarnationId: record.incarnationId ?? incarnationId
     }
     const composed = await this.compose(record, START, null, binding.epoch)
+    let claim: string | null | undefined
+    if (this.deps.beforeNewDelivery) {
+      let decision: NewDeliveryDecision
+      try { decision = await this.deps.beforeNewDelivery(record) }
+      catch { observeTelegramDelivery(this.deps.observeDelivery, record, 'quiet-history-unavailable'); return false }
+      if (decision.action !== 'send') return decision.action === 'consumed'
+      claim = decision.claim
+    }
+    const settle = async (outcome: 'mapped' | 'unsent' | 'uncertain'): Promise<void> => {
+      if (claim) await this.deps.settleNewDelivery?.(claim, outcome).catch(() => undefined)
+    }
+    const canDispatch = async (): Promise<boolean> => {
+      const final = await this.deps.getAttention(record.requestId).catch(() => null)
+      return !this.disposed && connector === this.deps.connector() && !!final && final.state === 'open' &&
+        final.seenAt === null && final.revision === record.revision && (this.deps.maySend?.(final, !!claim) ?? true)
+    }
+    if (!await canDispatch()) { await settle('unsent'); return false }
     let format: TelegramCardData['format'] = 'html'
     let messageId: number
     observeTelegramDelivery(this.deps.observeDelivery, record, 'send-started')
@@ -224,18 +246,23 @@ export class TelegramCardKeeper {
       })).messageId
     } catch (error) {
       if (!isFormattingRefusal(error)) {
+        if (telegramSendDefinitelyUnsent(error)) { await settle('unsent'); return false }
         observeTelegramDelivery(this.deps.observeDelivery, record, 'send-uncertain')
+        await settle('uncertain')
         return true
       }
       observeTelegramDelivery(this.deps.observeDelivery, record, 'format-fallback')
       // Telegram refused the formatting: the owner still gets the words, answered at the laptop.
       format = 'plain'
       const fallback = plainFallback(composed.rendered.text, composed.state === 'buttons')
+      if (!await canDispatch()) { await settle('unsent'); return false }
       try {
         messageId = (await connector.sendMessage(record.manualChoices ? plainText(composed.rendered.text) : fallback,
           record.manualChoices ? { keyboard: composed.rendered.keyboard } : undefined)).messageId
-      } catch {
+      } catch (error) {
         observeTelegramDelivery(this.deps.observeDelivery, record, 'fallback-failed')
+        if (telegramSendDefinitelyUnsent(error)) { await settle('unsent'); return false }
+        await settle('uncertain')
         return true
       }
     }
@@ -264,6 +291,7 @@ export class TelegramCardKeeper {
     this.cards.set(messageId, card)
     this.byRequest.set(record.requestId, messageId)
     if (state === 'buttons') this.mint(card, composed, binding)
+    let mapped = true
     await this.deps.store.put({
       messageId,
       sessionId: record.sessionId,
@@ -272,7 +300,8 @@ export class TelegramCardKeeper {
       revision: record.revision,
       state,
       card: { base: card.base, format }
-    }).catch(() => { observeTelegramDelivery(this.deps.observeDelivery, record, 'mapping-write-failed') })
+    }).catch(() => { mapped = false; observeTelegramDelivery(this.deps.observeDelivery, record, 'mapping-write-failed') })
+    await settle(mapped ? 'mapped' : 'uncertain')
     // The request may have closed while the card was on its way.
     await this.enqueue(card, () => this.refreshCard(card))
     return true
@@ -509,11 +538,14 @@ export class TelegramCardKeeper {
    * Once per BMN start: a card left with buttons can no longer be answered, and one left sending never learned
    * its outcome. Cards this process already keeps are live and left alone.
    */
-  async sweep(): Promise<void> {
+  async sweep(): Promise<boolean> {
     const connector = this.deps.connector()
-    if (!connector || this.swept || this.disposed) return
+    if (this.swept) return true
+    if (!connector || this.disposed) return false
     this.swept = true
-    const stale = await this.deps.store.list(['buttons', 'sending']).catch(() => [])
+    let stale: TelegramCardRecord[]
+    try { stale = await this.deps.store.list(['buttons', 'sending']) }
+    catch { this.swept = false; return false }
     let unfinished = false
     for (const row of stale) {
       if (this.cards.has(row.messageId)) continue
@@ -529,17 +561,19 @@ export class TelegramCardKeeper {
           continue
         }
       }
-      await this.deps.store.update(row.messageId, row.revision, 'final', row.card).catch(() => undefined)
+      await this.deps.store.update(row.messageId, row.revision, 'final', row.card).catch(() => { unfinished = true })
     }
     // The next connection, or the next start, tries the rest again.
     if (unfinished) this.swept = false
+    return !unfinished
   }
 
   /** The session's process ended; says so in the same header style as the cards. */
   async exited(sessionId: string): Promise<void> {
+    const incarnationId = this.deps.liveIncarnationId(sessionId) ?? null
+    if (await this.deps.holdExit?.(sessionId, incarnationId)) return
     const connector = this.deps.connector()
     if (!connector || this.disposed) return
-    const incarnationId = this.deps.liveIncarnationId(sessionId) ?? null
     try {
       const sent = await connector.sendMessage(exitCard(this.deps.header(sessionId, null)), { html: true })
       await this.deps.store.message(sent.messageId, sessionId, null, incarnationId)

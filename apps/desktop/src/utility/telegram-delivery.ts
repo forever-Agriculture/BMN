@@ -1,7 +1,16 @@
 import type { AttentionRecord } from '@bmn/protocol'
+import { TelegramConnectorError } from './telegram-connector'
+
+/** Local validation or a definite Bot API refusal is safe to retry; transport/protocol failures are not. */
+export function telegramSendDefinitelyUnsent(error: unknown): boolean {
+  return error instanceof TelegramConnectorError && (error.kind === 'invalid-argument' ||
+    (error.status !== undefined && error.status !== null && [400, 401, 403, 404, 429].includes(error.status)))
+}
 
 export type TelegramDeliveryPhase =
-  | 'scheduled' | 'timer-fired' | 'held-at-desk' | 'departure-window-expired'
+  | 'scheduled' | 'timer-fired' | 'held-at-desk' | 'held-quiet' | 'departure-window-expired'
+  | 'quiet-history-unavailable'
+  | 'quiet-backlog' | 'quiet-capacity' | 'quiet-restarting'
   | 'request-unavailable' | 'request-read-failed' | 'request-closed' | 'request-seen' | 'request-revised'
   | 'already-notified-elsewhere'
   | 'connector-unavailable' | 'page-error' | 'send-started' | 'send-confirmed'

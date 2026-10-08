@@ -1,0 +1,3 @@
+.dev-auto-dialog p, .dev-auto-dialog li, .dev-auto-dialog code { overflow-wrap: anywhere; }
+.dev-auto-dialog section { margin-top: 16px; }
+.dev-auto-dialog code { white-space: pre-wrap; }

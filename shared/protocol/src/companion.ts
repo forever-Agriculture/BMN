@@ -4,6 +4,8 @@ import type { AttentionPrompt } from './attention-prompt'
 import type { AttentionProducerBinding } from './attention-producer'
 import type { ManualChoices } from './manual-choices'
 import type { SessionRecord, WorkspaceRecord } from './workspace'
+import { DEFAULT_TELEGRAM_QUIET_HOURS, type TelegramQuietHours } from './telegram-quiet'
+import { DEFAULT_TELEGRAM_MORNING_DIGEST, type TelegramMorningDigest } from './telegram-digest'
 
 export type ArtifactDirection = 'input' | 'output'
 export type ArtifactSource = 'owner' | 'agent' | 'telegram'
@@ -520,6 +522,9 @@ export interface TelegramSettings {
   autoSubmitReplies: boolean
   /** Telegram may answer permission prompts (allow once or deny, never always); off until the owner turns it on. */
   answerPermissions: boolean
+  /** Older saved sections load with quiet hours off. */
+  quietHours?: TelegramQuietHours
+  morningDigest?: TelegramMorningDigest
 }
 
 export type VoiceModelId = 'base' | 'small'
@@ -665,7 +670,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = Object.freeze({
     allowedUserId: null,
     notifyOn: 'attention',
     autoSubmitReplies: false,
-    answerPermissions: false
+    answerPermissions: false,
+    quietHours: DEFAULT_TELEGRAM_QUIET_HOURS,
+    morningDigest: DEFAULT_TELEGRAM_MORNING_DIGEST
   }),
   voice: Object.freeze({ model: 'base', language: 'auto', modelFolder: null, holdSpaceToTalk: true, vocabulary: Object.freeze([]) as unknown as string[] }),
   archive: Object.freeze({ deleteAfterDays: null }),
@@ -692,6 +699,15 @@ export interface TelegramStatus {
   rejectedUpdates: number
   /** When the current run of transient failures began; null once Telegram answers. */
   failingSince: string | null
+  quietHours?: {
+    active: boolean
+    until: string
+    waiting: number
+    capacityBlocked: boolean
+    requests: Record<string, 'held-quiet' | 'uncertain'>
+    uncertainRevisions: Record<string, number[]>
+    problem?: 'history-unavailable'
+  }
 }
 
 /**

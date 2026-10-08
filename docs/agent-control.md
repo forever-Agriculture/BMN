@@ -252,6 +252,14 @@ agent, and they do nothing outside BMN.
 | `SessionStart` with `startup`, `resume`, `clear` or `fork` | Reports current ownership; invalidates older controls without racing a new question. Separately reports the durable conversation for Resume |
 | Codex `Interrupt` | Withdraws open prompts |
 
+On Linux, live conversation ownership also checks the terminal's foreground
+process identity immediately before an addressed answer. Returning to a shell or
+changing that identity makes an existing card unavailable even if no shutdown hook
+arrives. This identifies the foreground job: an unchanged multiplexer or replacement
+using the same executable may not reveal a change inside it. These identities stay in host memory; control-socket snapshots,
+including owner snapshots, omit producer bindings. Repeat-watch notices belong to
+BMN and their cleanup does not retire the agent's conversation.
+
 ### Cursor's terminal agent
 
 Measured on `cursor-agent` 2026.09.26-dd393fe (installed from `https://cursor.com/install`, owner account) on

@@ -24,8 +24,9 @@ function fixture() {
     if (state.failFallback && !options.html) throw new TelegramConnectorError('network', 'PRIVATE-FALLBACK-ERROR')
     return { messageId: 1 }
   })
+  const connector = { sendMessage, editMessageText: async () => {}, answerCallbackQuery: async () => {} }
   const keeper = new TelegramCardKeeper({
-    connector: () => state.connected ? { sendMessage, editMessageText: async () => {}, answerCallbackQuery: async () => {} } : undefined,
+    connector: () => state.connected ? connector : undefined,
     getAttention: async () => state.record,
     header: () => ({ session: 'PRIVATE-SESSION-NAME', agent: 'codex', flag: null }),
     answerability: async () => ({ answerable: true, deny: false }), answerEpoch: () => null,

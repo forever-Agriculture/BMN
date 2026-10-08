@@ -129,6 +129,7 @@ beforeEach(() => {
   screens = new Map()
   const manager = {
     liveIncarnationId: (sessionId: string) => liveIncarnations.get(sessionId),
+    foregroundProcessIdentity: (sessionId: string) => liveIncarnations.has(sessionId) ? `synthetic-foreground:${sessionId}` : null,
     liveSessionIds: () => [...liveIncarnations.keys()],
     liveLaunchDirectory: (sessionId: string) => liveDirectories.get(sessionId),
     writeToSession: (sessionId: string, bytes: Uint8Array) => writes.push({ sessionId, bytes }),
@@ -1136,6 +1137,67 @@ describe('Telegram attention notifications', () => {
     vi.useRealTimers()
   })
 
+  it('recovers ordinary unsent pages even when the quiet sweep rejects', async () => {
+    const bot = await startFakeBotApi(424242, 424242)
+    const options = service['options']; await service.close()
+    service = new CompanionService({ ...options, telegramApiOrigin: bot.origin, pageAfterMs: 5 })
+    try {
+      COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', { ...DEFAULT_APP_SETTINGS.telegram,
+        enabled: true, allowedChatId: 424242, allowedUserId: 424242 }, now)
+      bot.failWith('network')
+      await service.route(METHOD_REGISTRY.telegramConfigure, { token: '123456789:SYNTHETIC_test_token_not_real' })
+      await service.route(METHOD_REGISTRY.presenceSet, { away: true })
+      await service['openAttention']({ sessionId: 's1', incarnationId: null, requestKey: 'quiet-read-failure', kind: 'question', title: 'Synthetic recovery question' })
+      await new Promise(resolve => setTimeout(resolve, 40))
+      expect(bot.calls.filter(call => call.method === 'sendMessage')).toHaveLength(0)
+      const sweep = vi.spyOn(service['quietDelivery'], 'sweep').mockRejectedValueOnce(new Error('Synthetic ledger read failure'))
+      const retry = vi.spyOn(service['pager'], 'retryUnsent')
+      bot.failWith(null)
+      await vi.waitFor(() => expect(bot.calls.filter(call => call.method === 'sendMessage')).toHaveLength(1), { timeout: 3000, interval: 20 })
+      expect(sweep).toHaveBeenCalled(); expect(retry).toHaveBeenCalled()
+      expect(writes).toHaveLength(0)
+    } finally { await service.close(); await bot.close() }
+  })
+
+  it('holds question, permission and exit without changing requests, then sends one masked summary and cards', async () => {
+    const bot = await startFakeBotApi(424242, 424242)
+    const options = service['options']
+    await service.close()
+    service = new CompanionService({ ...options, telegramApiOrigin: bot.origin, pageAfterMs: 5, home: '/home/synthetic' })
+    const local = new Date('2026-10-07T23:00:00')
+    clock = local.toISOString()
+    try {
+      COMPANION_OPERATIONS.putSettingsSection(database, 'telegram', {
+        ...DEFAULT_APP_SETTINGS.telegram, enabled: true, allowedChatId: 424242, allowedUserId: 424242,
+        notifyOn: 'attention-and-exit', quietHours: { enabled: true, start: '22:00', end: '07:00', allowKinds: [], allowSessions: [] }
+      }, clock)
+      await service['sessionsChanged']()
+      await service.route(METHOD_REGISTRY.telegramConfigure, { token: '123456789:SYNTHETIC_test_token_not_real' })
+      await service.route(METHOD_REGISTRY.presenceSet, { away: true })
+      const question = await service['openAttention']({ sessionId: 's1', incarnationId: null, requestKey: 'quiet-q', kind: 'question', title: 'Question /home/synthetic/repo' })
+      const permission = await service['openAttention']({ sessionId: 's2', incarnationId: null, requestKey: 'quiet-p', kind: 'permission', title: 'Permission?' })
+      const storedQuestion = COMPANION_OPERATIONS.getAttention(database, question.requestId)
+      const storedPermission = COMPANION_OPERATIONS.getAttention(database, permission.requestId)
+      service.sessionStateChanged('s2', 'exited')
+      await vi.waitFor(async () => expect((await service['telegramStatus']()).quietHours?.waiting).toBe(3))
+      expect(bot.calls.filter(call => call.method === 'sendMessage')).toHaveLength(0)
+      expect(COMPANION_OPERATIONS.getAttention(database, question.requestId)).toEqual(storedQuestion)
+      expect(COMPANION_OPERATIONS.getAttention(database, permission.requestId)).toEqual(storedPermission)
+      expect(emitted.some(event => event.topic === 'attention')).toBe(true)
+      expect(writes).toHaveLength(0)
+      clock = new Date('2026-10-08T07:00:00').toISOString()
+      await service['sweepAttention']()
+      const sends = bot.calls.filter(call => call.method === 'sendMessage')
+      expect(sends).toHaveLength(3)
+      expect(JSON.stringify(sends[0])).toContain('Quiet hours ended')
+      expect(JSON.stringify(sends[0])).toContain('~/repo')
+      expect(JSON.stringify(sends[0])).not.toContain('/home/synthetic')
+      await service['sweepAttention']()
+      expect(bot.calls.filter(call => call.method === 'sendMessage')).toHaveLength(3)
+      expect(writes).toHaveLength(0)
+    } finally { await service.close(); await bot.close() }
+  })
+
   it('keeps recovered pages behind stale-card cleanup across overlapping polling reports', async () => {
     const bot = await startFakeBotApi(424242, 424242)
     const options = service['options']
@@ -1270,6 +1332,7 @@ describe('Telegram attention notifications', () => {
   })
 
   it('binds each notification to the process incarnation live when it was sent', async () => {
+    service['telegramReady'] = true // This fixture injects an already-recovered connector.
     service['telegram'] = {
       sendMessage: async () => ({ messageId: 77 })
     } as unknown as TelegramConnector
@@ -1291,6 +1354,7 @@ describe('Telegram attention notifications', () => {
   })
 
   it('sends a repeated prompt once after it waited unseen, and nothing for a prompt seen at the desk', async () => {
+    service['telegramReady'] = true
     vi.useFakeTimers()
     const sent: string[] = []
     service['telegram'] = {
@@ -1316,6 +1380,7 @@ describe('Telegram attention notifications', () => {
   })
 
   it('pages only once the owner is away, never for a prompt their phone already got, and reports exits only away', async () => {
+    service['telegramReady'] = true
     vi.useFakeTimers()
     const sent: string[] = []
     service['telegram'] = {
@@ -2929,6 +2994,27 @@ describe('repeat watch notices and calibration', () => {
   const reset = (event = 'Interrupt') => observe({ event, fingerprint: undefined })
   const rows = () => service.route(METHOD_REGISTRY.attentionList, {}) as Promise<AttentionRecord[]>
 
+  it('withdraws a host repeat notice without invalidating the foreground conversation', async () => {
+    const producer = { agentCli: 'claude' as const, conversationReference: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' }
+    service['producers'].observe('s1', 'incarnation-1', producer)
+    await service.sessionsChanged()
+    const question = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1',
+      requestKey: 'repeat-independent', kind: 'question', title: 'Synthetic decision', origin: 'cli',
+      manualChoices: { options: [{ label: 'Wait', description: null }, { label: 'Proceed', description: null }], allowOther: true } })
+    await calls(8)
+    const notice = (await rows()).find(row => row.requestKey === 'watch:repeat')!
+    await reset('UserPromptSubmit')
+    expect(COMPANION_OPERATIONS.getAttention(database, notice.requestId).state).toBe('withdrawn')
+    expect(service.listHookEvents('s1').at(-1)?.effects).toContain('withdrew')
+    expect(await service.answerAttention({ requestId: question.requestId, revision: question.revision,
+      incarnationId: 'incarnation-1', epoch: -1, answer: { type: 'choices', choices: [0] } })).toMatchObject({ state: 'submitted' })
+    expect(writes).toHaveLength(1)
+    const next = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1',
+      requestKey: 'claude:question', kind: 'question', title: 'Next decision', origin: 'cli', manualChoices: question.manualChoices! })
+    await service['closeAttentionByKey']('s1', next.requestKey, 'withdrawn', null, 'hook:claude:SessionEnd', undefined, producer)
+    expect(COMPANION_OPERATIONS.getAttention(database, next.requestId).state).toBe('withdrawn')
+  })
+
   it('opens exactly once at eight, records the successful effect, and never writes to the PTY', async () => {
     await service.sessionsChanged()
     await calls(7)
@@ -2953,7 +3039,7 @@ describe('repeat watch notices and calibration', () => {
     await calls(8)
     expect((await rows())[0]!.requestId).toBe(original)
     await reset('UserPromptSubmit')
-    expect((await rows())[0]).toMatchObject({ state: 'withdrawn', resolvedBy: 'hook:claude:UserPromptSubmit' })
+    expect((await rows())[0]).toMatchObject({ state: 'withdrawn', resolvedBy: 'watch:repeat' })
     await calls(8)
     const all = await rows()
     expect(all.filter((row) => row.state === 'open')).toHaveLength(1)
@@ -3632,6 +3718,23 @@ describe('explicit manual answers to a live foreground conversation', () => {
     expect(writes).toHaveLength(0)
   })
 
+  it('refuses foreground replacement after the final database snapshot without losing the manual request', async () => {
+    stamp()
+    const record = await ask()
+    const original = service['options'].database.companion.bind(service['options'].database)
+    vi.spyOn(service['options'].database, 'companion').mockImplementation(async (name, ...args) => {
+      const result = await original(name, ...args)
+      if (name === 'telegramMessageBoundary') {
+        service['options'].manager.foregroundProcessIdentity = () => 'different-program'
+      }
+      return result
+    })
+    expect(await service.answerAttention(answer(record))).toMatchObject({ state: 'refused' })
+    expect(writes).toHaveLength(0)
+    expect(COMPANION_OPERATIONS.getAttention(database, record.requestId)).toMatchObject({ state: 'open', revision: record.revision })
+    expect(COMPANION_OPERATIONS.listDrafts(database).find(row => row.requestId === record.requestId)?.state).toBe('draft')
+  })
+
   it('rejects an expired manual card before the expiry sweep and a direct reply to an older revision', async () => {
     stamp()
     const expired = await service['openAttention']({ sessionId: 's1', incarnationId: 'incarnation-1', requestKey: 'expiry',
@@ -3735,7 +3838,7 @@ it('keeps live producer binding private in agent snapshots and control responses
   const session = await service['snapshot']({ kind: 'session', sessionId: 's1', incarnationId: 'incarnation-1' })
   expect(JSON.stringify(session)).not.toContain(producer.conversationReference)
   const owner = await service['snapshot']({ kind: 'owner' })
-  expect(JSON.stringify(owner)).toContain(producer.conversationReference)
+  expect(JSON.stringify(owner)).not.toContain(producer.conversationReference)
 })
 
 

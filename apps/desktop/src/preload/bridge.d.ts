@@ -35,6 +35,7 @@ import type {
   SessionCohortOfferedResult,
   ProgressRecord,
   RepositoryIdentity,
+  DevAutoRunsResult,
   TelegramStatus,
   TerminalNoticeCode,
   VoiceLanguage,
@@ -191,6 +192,7 @@ export interface AiTerminalBridge {
   createSession(params: SessionCreateParams): Promise<CreatedSession>
   updateSession(params: SessionUpdateParams): Promise<SessionRecord>
   inspectRepository(directory: string): Promise<RepositoryIdentity>
+  readDevAutoRuns(workspaceId?: string): Promise<DevAutoRunsResult>
   normalizeLaunchDirectories(directories: string[]): Promise<string[]>
   listTemplates(): Promise<LaunchTemplateRecord[]>
   createTemplate(params: {

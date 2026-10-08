@@ -24,6 +24,7 @@ export const METHOD_REGISTRY = Object.freeze({
   sessionCohortOffered: 'session.cohort.offered',
   sessionCohortResume: 'session.cohort.resume',
   repositoryInspect: 'repository.inspect',
+  devAutoRuns: 'devAuto.runs',
   templateList: 'template.list',
   templateCreate: 'template.create',
   launchSetList: 'launchSet.list',

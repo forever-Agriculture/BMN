@@ -253,6 +253,7 @@ const appEvents = createAppEventForwarder({
     !window.isDestroyed() && window.isFocused() && selectedSessions.get(window.webContents.id) === sessionId
   ),
   notify: ({ title, body, sessionId, requestId, kind, revision }) => {
+    if (selfTestTaps?.captureAttentionNotifications) { selfTestTaps.attentionNotice({ title, body, sessionId }); return }
     if (!Notification.isSupported()) return
     const notification = new Notification({ title, body, silent: false })
     notification.on('click', () => {
@@ -269,7 +270,7 @@ const appEvents = createAppEventForwarder({
     })
     notification.show()
   },
-  notificationsEnabled: () => !selfTestTaps?.headless,
+  notificationsEnabled: () => !selfTestTaps?.headless || selfTestTaps.captureAttentionNotifications,
   notifyApp: (notice) => {
     if (selfTestTaps) {
       selfTestTaps.appNotice(notice)

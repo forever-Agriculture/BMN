@@ -3,9 +3,10 @@ import type { AttentionProducer, AttentionProducerBinding, AttentionRecord } fro
 
 /** One foreground producer per live process. No transcripts, persistence or resume authority. */
 export class LiveProducers {
-  private readonly slots = new Map<string, { incarnationId: string; binding: AttentionProducerBinding | null; available: boolean; seen: Set<string>; overflow: boolean; ambiguous: boolean }>()
+  private readonly slots = new Map<string, { incarnationId: string; binding: AttentionProducerBinding | null; foreground: string | null; available: boolean; seen: Set<string>; overflow: boolean; ambiguous: boolean }>()
 
-  constructor(private readonly live: (sessionId: string) => string | undefined) {}
+  constructor(private readonly live: (sessionId: string) => string | undefined,
+    private readonly foreground?: (sessionId: string) => string | null) {}
 
   private slot(sessionId: string): ReturnType<typeof this.slots.get> {
     const slot = this.slots.get(sessionId)
@@ -13,6 +14,8 @@ export class LiveProducers {
       this.slots.delete(sessionId)
       return undefined
     }
+    if (slot?.available && this.foreground &&
+      (!slot.foreground || this.foreground(sessionId) !== slot.foreground)) slot.available = false
     return slot
   }
 
@@ -21,6 +24,11 @@ export class LiveProducers {
     // Prune exited sessions whenever new evidence arrives, bounding state by live sessions.
     for (const id of this.slots.keys()) this.slot(id)
     const previous = this.slot(sessionId)
+    const foreground = this.foreground?.(sessionId) ?? null
+    if (this.foreground && !foreground) {
+      this.unavailable(sessionId, producer)
+      return null
+    }
     if (previous?.available && previous.binding?.agentCli === producer.agentCli &&
       previous.binding.conversationReference === producer.conversationReference) return previous.binding
     const identity = this.identity(producer)
@@ -30,7 +38,7 @@ export class LiveProducers {
     const overflow = !!previous?.overflow || seen.size >= 64 && !seen.has(identity)
     if (seen.size < 64) seen.add(identity)
     const binding = { ...producer, generation: randomUUID() }
-    this.slots.set(sessionId, { incarnationId, binding, available: true, seen, overflow, ambiguous })
+    this.slots.set(sessionId, { incarnationId, binding, foreground, available: true, seen, overflow, ambiguous })
     return binding
   }
 
@@ -85,7 +93,7 @@ export class LiveProducers {
     if (slot) slot.available = false
     else {
       const incarnationId = this.live(sessionId)
-      if (incarnationId) this.slots.set(sessionId, { incarnationId, binding: null, available: false,
+      if (incarnationId) this.slots.set(sessionId, { incarnationId, binding: null, foreground: null, available: false,
         seen: new Set(), overflow: false, ambiguous: true })
     }
     const held = this.slot(sessionId)

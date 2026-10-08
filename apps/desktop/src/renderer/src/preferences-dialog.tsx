@@ -13,7 +13,7 @@ import type {
   TelegramStatus,
   VoiceSettings
 } from '@bmn/protocol'
-import { COLOR_MODE_NAMES, DEFAULT_APP_SETTINGS, IDENTITY_NAMES, TERMINAL_FONT_SIZE_RANGE } from '@bmn/protocol'
+import { COLOR_MODE_NAMES, DEFAULT_APP_SETTINGS, DEFAULT_TELEGRAM_QUIET_HOURS, DEFAULT_TELEGRAM_MORNING_DIGEST, IDENTITY_NAMES, TERMINAL_FONT_SIZE_RANGE, type AttentionKind } from '@bmn/protocol'
 import { Icon } from './icons'
 import { COLOR_MODE_PRESENTATION, IDENTITY_PRESENTATION } from './theme'
 import { VoicePreferences } from './voice-preferences'
@@ -229,6 +229,8 @@ export function PreferencesDialog(props: {
   const [autoSubmitReplies, setAutoSubmitReplies] = useState(props.settings.telegram.autoSubmitReplies)
   const [answerPermissions, setAnswerPermissions] = useState(props.settings.telegram.answerPermissions)
   const [telegramEnabled, setTelegramEnabled] = useState(props.settings.telegram.enabled)
+  const [quietHours, setQuietHours] = useState(props.settings.telegram.quietHours ?? DEFAULT_TELEGRAM_QUIET_HOURS)
+  const [morningDigest, setMorningDigest] = useState(props.settings.telegram.morningDigest ?? DEFAULT_TELEGRAM_MORNING_DIGEST)
   const [telegramFormBusy, setTelegramFormBusy] = useState(false)
   const [telegramFormError, setTelegramFormError] = useState<string | null>(null)
   const [telegramFormSuccess, setTelegramFormSuccess] = useState<string | null>(null)
@@ -240,7 +242,9 @@ export function PreferencesDialog(props: {
       allowedUserId: userIdInput,
       notifyOn,
       autoSubmitReplies,
-      answerPermissions
+      answerPermissions,
+      quietHours,
+      morningDigest
     }
     const parsed = parseTelegramForm(fields)
     if (!parsed.ok) {
@@ -259,6 +263,8 @@ export function PreferencesDialog(props: {
       setAutoSubmitReplies(result.telegram.autoSubmitReplies)
       setAnswerPermissions(result.telegram.answerPermissions)
       setTelegramEnabled(result.telegram.enabled)
+      setQuietHours(result.telegram.quietHours ?? DEFAULT_TELEGRAM_QUIET_HOURS)
+      setMorningDigest(result.telegram.morningDigest ?? DEFAULT_TELEGRAM_MORNING_DIGEST)
       onSettings.current(result)
       setTelegramFormSuccess('Telegram settings saved.')
       void refreshTelegramStatus()
@@ -684,6 +690,41 @@ export function PreferencesDialog(props: {
             </select>
           </div>
         </div>
+
+        <fieldset disabled={telegramFormBusy}>
+          <legend>Morning digest</legend>
+          <div className="preferences-row">
+            <label><input type="checkbox" checked={morningDigest.enabled}
+              onChange={event => setMorningDigest({ ...morningDigest, enabled: event.target.checked })} /> Send a morning digest</label>
+            <label>Local time <input type="time" value={morningDigest.time}
+              onChange={event => setMorningDigest({ ...morningDigest, time: event.target.value })} /></label>
+          </div>
+          <p className="preferences-help">Sends workspace, checkout name, epics, Status, Decided-for-you entries and owner-item titles. Obeys quiet hours; missed days are skipped.</p>
+          {!telegramEnabled && <p className="preferences-help">Telegram is off; no digest will be sent. Enable and connect Telegram to deliver it.</p>}
+        </fieldset>
+        <fieldset disabled={telegramFormBusy}>
+          <legend>Quiet hours</legend>
+          <label><input type="checkbox" checked={quietHours.enabled}
+            onChange={event => setQuietHours({ ...quietHours, enabled: event.target.checked })} /> Hold new phone messages</label>
+          <div className="preferences-row">
+            <label>Local start <input aria-label="Quiet hours start" type="time" value={quietHours.start}
+              onChange={event => setQuietHours({ ...quietHours, start: event.target.value })} /></label>
+            <label>Local end <input aria-label="Quiet hours end" type="time" value={quietHours.end}
+              onChange={event => setQuietHours({ ...quietHours, end: event.target.value })} /></label>
+          </div>
+          <p className="preferences-help">When quiet hours end, a summary sends session names, request kinds and titles to Telegram. Needs you stays available throughout.</p>
+          <p>Allow these kinds through:</p>
+          {(['permission', 'question', 'handoff', 'review', 'notice'] as AttentionKind[]).map(kind => (
+            <label key={kind}><input type="checkbox" checked={quietHours.allowKinds.includes(kind)}
+              onChange={event => setQuietHours({ ...quietHours, allowKinds: event.target.checked
+                ? [...quietHours.allowKinds, kind] : quietHours.allowKinds.filter(value => value !== kind) })} /> {kind}</label>
+          ))}
+          <p className="preferences-help">Allow individual sessions through from their session menu (up to 20).</p>
+          {telegramStatus?.quietHours ? <p role="status">{telegramStatus.quietHours.active
+            ? `Active until ${telegramStatus.quietHours.until}` : 'Not active'} · {telegramStatus.quietHours.waiting} waiting
+            {telegramStatus.quietHours.capacityBlocked ? ' · Delivery history is full; uncertain messages need checking.' : ''}</p> : null}
+          {telegramStatus?.quietHours?.problem ? <p role="alert">Phone delivery history is unavailable. Automatic delivery is paused until it can be read.</p> : null}
+        </fieldset>
 
         <div className="preferences-row">
           <div className="preferences-row-label">

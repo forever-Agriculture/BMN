@@ -4,6 +4,7 @@ import { createRoot } from 'react-dom/client'
 import {
   COLOR_MODE_NAMES,
   DEFAULT_APP_SETTINGS,
+  DEFAULT_TELEGRAM_QUIET_HOURS,
   IDENTITY_NAMES,
   RESTORED_VIEW_NOTICE,
   TERMINAL_FONT_SIZE_RANGE,
@@ -47,6 +48,7 @@ import { FilesPanel } from './files-panel'
 import { HookEventsDialog } from './hook-events-dialog'
 import { ProgressEvidenceDialog } from './progress-evidence-dialog'
 import { WorkspaceResultsDialog } from './workspace-results'
+import { DevAutoRunsDialog } from './dev-auto-runs'
 import { prepareWorkspaceHandoffReview, sameHandoffDraft } from './workspace-handoff-review'
 import { HookObservationView } from './hook-observation-view'
 import { PlanUseDialog, PlanUseView } from './plan-use-view'
@@ -168,6 +170,7 @@ type ShellDialog =
   | { kind: 'preferences'; section?: 'agent-control' }
   | { kind: 'workspace-results'; workspace: WorkspaceRecord; openedFromWorkspaceId: string | null }
   | { kind: 'new-workspace' }
+  | { kind: 'dev-auto-runs'; workspaceId?: string }
   | { kind: 'rename-workspace'; workspace: WorkspaceRecord }
   | { kind: 'launch-sets'; workspace: WorkspaceRecord; initialMode: 'manage' | 'launch' }
   | { kind: 'locate'; session: SessionRecord; binding: ConversationBindingState }
@@ -1376,6 +1379,17 @@ function App(): React.JSX.Element {
     { label: 'Split beside', onSelect: () => splitBeside(session), shortcut: SHORTCUT_LABELS['split-toggle'] },
     { label: 'Session details', onSelect: () => { selectSessionForPanel(session); setPanel('details') } },
     { label: 'Hook events…', onSelect: () => setDialog({ kind: 'hook-events', session }) },
+    {
+      label: settings.telegram.quietHours?.allowSessions.includes(session.sessionId) ? 'Stop allowing through quiet hours' : 'Allow through quiet hours',
+      disabled: !settings.telegram.quietHours?.allowSessions.includes(session.sessionId) && (settings.telegram.quietHours?.allowSessions.length ?? 0) >= 20,
+      onSelect: () => {
+        const quiet = settings.telegram.quietHours ?? DEFAULT_TELEGRAM_QUIET_HOURS
+        const allowSessions = quiet.allowSessions.includes(session.sessionId)
+          ? quiet.allowSessions.filter(id => id !== session.sessionId) : [...quiet.allowSessions, session.sessionId]
+        void window.aiTerminal.putSettings('telegram', { ...settings.telegram, quietHours: { ...quiet, allowSessions } })
+          .then(setSettings).catch(fail('Quiet-hours exception could not be saved'))
+      }
+    },
     { label: 'Edit launch settings', onSelect: () => beginSessionEdit(session) },
     { label: 'Move up', disabled: index === 0, onSelect: () => void moveSession(siblings, index, -1).catch(fail('Session move failed')) },
     { label: 'Move down', disabled: index === siblings.length - 1, onSelect: () => void moveSession(siblings, index, 1).catch(fail('Session move failed')) },
@@ -1511,6 +1525,7 @@ function App(): React.JSX.Element {
       }),
       command('next-attention', 'Go to next request needing you', nextNeedingYou, { shortcut: SHORTCUT_LABELS['attention-next'], context: `${unresolved.length} waiting` }),
       command('new-workspace', 'New workspace…', () => setDialog({ kind: 'new-workspace' })),
+      command('dev-auto-runs', 'dev-auto runs…', () => setDialog({ kind: 'dev-auto-runs' })),
       command('new-session', 'New session…', () => beginNewSession(activeWorkspace), { disabled: !activeWorkspace || activeWorkspace.archivedAt !== null, context: activeWorkspace?.name }),
       command('save-launch-set', 'Save a launch set…', () => activeWorkspace && setDialog({ kind: 'launch-sets', workspace: activeWorkspace, initialMode: 'manage' }),
         { disabled: !activeWorkspace || activeWorkspace.archivedAt !== null, context: activeWorkspace?.name }),
@@ -1737,6 +1752,7 @@ function App(): React.JSX.Element {
         {needsYouOpen ? (
           <NeedsYouPopover
             requests={attention}
+            phone={telegramStatus?.quietHours}
             unread={unreadEntries}
             place={place}
             now={now}
@@ -2487,10 +2503,14 @@ function App(): React.JSX.Element {
           telegramCue={telegramCue}
         />
       ) : null}
+      {dialog?.kind === 'dev-auto-runs' ? <DevAutoRunsDialog
+        workspaceId={dialog.workspaceId} workspaces={workspaces}
+        onClose={() => setDialog(null)} onOpenSession={(id) => { setDialog(null); openSession(id) }} /> : null}
       {dialog?.kind === 'workspace-results' ? (
         <WorkspaceResultsDialog
           workspace={dialog.workspace}
           now={now}
+          onOpenRuns={() => setDialog({ kind: 'dev-auto-runs', workspaceId: dialog.workspace.workspaceId })}
           onClose={() => setDialog(null)}
           onOpenReport={(session, report) => {
             if (activeWorkspaceRef.current !== dialog.openedFromWorkspaceId ||

@@ -26,6 +26,8 @@ export interface AttentionPagerOptions {
   pageAfterMs?: Readonly<Record<AttentionKind, number>>
   leftWithinMs?: number
   observeDelivery?: TelegramDeliveryObserver
+  /** Runs before the desktop rule so overnight requests retain delivery eligibility. */
+  holdQuiet?(record: AttentionRecord): Promise<boolean>
 }
 
 /**
@@ -39,6 +41,8 @@ export function createAttentionPager(options: AttentionPagerOptions): {
   ownerLeft(): void
   /** Telegram is available again; try only revisions definitely left unsent. */
   retryUnsent(): void
+  /** Quiet-hours departure eligibility expired; keep the request itself untouched. */
+  retire(record: AttentionRecord): void
   close(): void
 } {
   const pageAfterMs = options.pageAfterMs ?? PAGE_AFTER_MS
@@ -50,7 +54,7 @@ export function createAttentionPager(options: AttentionPagerOptions): {
   const inFlight = new Set<string>()
   let availability = 0
   let closed = false
-  const page = async (key: string, record: AttentionRecord): Promise<void> => {
+  const page = async (key: string, record: AttentionRecord, openedAt?: number): Promise<void> => {
     if (closed || handled.has(key) || inFlight.has(key)) return
     inFlight.add(key)
     atDesk.delete(key)
@@ -67,9 +71,23 @@ export function createAttentionPager(options: AttentionPagerOptions): {
         return
       }
       // Departure made this revision eligible already; reconnects must not reset or expire that eligibility.
+      let held = false
+      try { held = await options.holdQuiet?.(current) ?? false }
+      catch {
+        observeTelegramDelivery(options.observeDelivery, current, 'quiet-history-unavailable')
+        unsent.set(key, current)
+        return
+      }
+      if (held) {
+        observeTelegramDelivery(options.observeDelivery, current, 'held-quiet')
+        unsent.set(key, current)
+        return
+      }
+      if (handled.has(key)) return
       if (options.ownerAway() === false) {
         observeTelegramDelivery(options.observeDelivery, record, 'held-at-desk', { away: false })
-        unsent.set(key, current)
+        if (openedAt !== undefined) atDesk.set(key, { record: current, openedAt })
+        else unsent.set(key, current)
         return
       }
       const consumed = await options.send(current).catch(() => {
@@ -95,6 +113,11 @@ export function createAttentionPager(options: AttentionPagerOptions): {
     }
   }
   return {
+    retire: record => {
+      const key = `${record.requestId}:${record.revision}`
+      pending.get(key)?.(); pending.delete(key)
+      atDesk.delete(key); unsent.delete(key); handled.add(key)
+    },
     opened: (record) => {
       const key = `${record.requestId}:${record.revision}`
       if (closed || record.state !== 'open' || record.seenAt !== null || pending.has(key) || atDesk.has(key) || handled.has(key) || unsent.has(key) || inFlight.has(key)) {
@@ -109,11 +132,11 @@ export function createAttentionPager(options: AttentionPagerOptions): {
         forgetStale()
         const away = options.ownerAway()
         observeTelegramDelivery(options.observeDelivery, record, 'timer-fired', { away, elapsedMs: options.now() - openedAt })
-        if (away === false) {
+        if (away === false && !options.holdQuiet) {
           observeTelegramDelivery(options.observeDelivery, record, 'held-at-desk', { away })
           atDesk.set(key, { record, openedAt })
         }
-        else void page(key, record)
+        else void page(key, record, openedAt)
       }, pageAfterMs[record.kind]))
     },
     ownerLeft: () => {
