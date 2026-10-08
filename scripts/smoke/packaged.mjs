@@ -103,6 +103,8 @@ await withTemporaryRoot(temporaryRootContracts.packagedSmoke, async ({ roots }) 
       BMN_DATA_HOME: join(roots.data, 'bmn'),
       BMN_STATE_HOME: join(roots.state, 'bmn'),
       BMN_RUNTIME_HOME: join(roots.runtime, 'bmn'),
+      // The synthetic session fixtures run on this Node, as in the source self-test.
+      BMN_SELF_TEST_NODE: process.execPath,
       ...(waylandDisplay ? { WAYLAND_DISPLAY: waylandDisplay } : {})
     }
   })
