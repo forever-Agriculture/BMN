@@ -1,5 +1,6 @@
 /* global window, document */
 // Visible archive/Undo and real OSC output on a disposable Electron stack.
+import { toggleSessionRequests } from './session-request-helpers.mjs'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -24,7 +25,7 @@ setTimeout(()=>process.stdout.write('\\x1b]9;Real synthetic notice\\x07'),150)},
   const env = { ...process.env }
   if (env.WAYLAND_DISPLAY && !isAbsolute(env.WAYLAND_DISPLAY)) env.WAYLAND_DISPLAY = join(env.XDG_RUNTIME_DIR, env.WAYLAND_DISPLAY)
   for (const key of ['BMN_TOKEN', 'BMN_SESSION_ID', 'BMN_CONTROL_SOCKET', 'BMN_PTY_INCARNATION_ID']) delete env[key]
-  const app = await _electron.launch({ executablePath: createRequire(join(repo, 'apps/desktop/package.json'))('electron'), cwd: repo,
+  const app = await _electron.launch({ chromiumSandbox: true, executablePath: createRequire(join(repo, 'apps/desktop/package.json'))('electron'), cwd: repo,
     args: [join(repo, 'apps/desktop'), ...(!env.WAYLAND_DISPLAY && env.DISPLAY ? ['--ozone-platform=x11'] : []), '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
     env: { ...env, XDG_CONFIG_HOME: roots.config, XDG_DATA_HOME: roots.data, XDG_STATE_HOME: roots.state,
       XDG_CACHE_HOME: roots.cache, XDG_RUNTIME_DIR: roots.runtime, BMN_CONFIG_HOME: join(roots.config, 'bmn'),
@@ -71,7 +72,7 @@ setTimeout(()=>process.stdout.write('\\x1b]9;Real synthetic notice\\x07'),150)},
       await page.getByRole('button', { name: 'Actions for Archive fixture', exact: true }).click()
       assert.equal(await page.getByRole('menuitem', { name: 'Archive workspace', exact: true }).isDisabled(), true)
       await page.keyboard.press('Escape')
-      await page.locator('.needs-you-button').click()
+      await toggleSessionRequests(page)
       await page.locator('.attention-item').filter({ hasText: 'Real synthetic notice' }).waitFor()
       await page.keyboard.press('Escape')
     }

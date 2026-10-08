@@ -1,5 +1,6 @@
 /* global window, document, requestAnimationFrame */
 // Epics51/52 and manual desktop choices: isolated owner UI → store → host/PTY acceptance.
+import { toggleSessionRequests } from './session-request-helpers.mjs'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
@@ -43,7 +44,7 @@ const name=process.argv[2];writeFileSync(${JSON.stringify(root)}+'/input-'+name,
 process.stdout.write('MATCH_TOP '+name+'\\r\\n'+Array.from({length:18},(_,i)=>'row '+i+' '+name).join('\\r\\n')+'\\r\\nMATCH_BOTTOM '+name+'\\r\\n');
 function observe(method='conversation.observe',params={agentCli:'codex',conversationReference:'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',source:'startup'}){return new Promise((resolve,reject)=>{const s=createConnection(process.env.BMN_CONTROL_SOCKET);let t='';s.on('error',reject);s.on('connect',()=>s.write(JSON.stringify({jsonrpc:'2.0',id:1,method:'auth',params:{token:process.env.BMN_TOKEN}})+'\\n'));s.on('data',b=>{t+=b;while(t.includes('\\n')){const i=t.indexOf('\\n'),r=JSON.parse(t.slice(0,i));t=t.slice(i+1);if(r.id===1)s.write(JSON.stringify({jsonrpc:'2.0',id:2,method,params})+'\\n');else if(r.id===2){s.end();if(r.error)reject(new Error(r.error.message));else resolve(r.result)}}})})}
 setInterval(async()=>{if(name!=='A'||!existsSync(${JSON.stringify(command)}))return;const p=JSON.parse(readFileSync(${JSON.stringify(command)},'utf8'));unlinkSync(${JSON.stringify(command)});await observe();if(p.native){const result=await observe('attention.open',p.native);writeFileSync(${JSON.stringify(ready)},JSON.stringify({status:0,result}));return}const r=spawnSync(${JSON.stringify(process.execPath)},[${JSON.stringify(cli)},'ask',p.key,p.title,'--kind',p.kind??'question',...(p.plain?[]:['--choices-json',JSON.stringify({options:[{label:'Proceed',description:null},{label:'Wait',description:'Keep pending'}]})]),...(p.body?['--body',p.body]:[]),'--json'],{encoding:'utf8'});writeFileSync(${JSON.stringify(ready)},JSON.stringify({status:r.status,result:r.status===0?JSON.parse(r.stdout):null}));},25);`)
-  const launch = () => _electron.launch({ executablePath: createRequire(join(repo, 'apps/desktop/package.json'))('electron'), cwd: repo,
+  const launch = () => _electron.launch({ chromiumSandbox: true, executablePath: createRequire(join(repo, 'apps/desktop/package.json'))('electron'), cwd: repo,
     args: [join(repo, 'apps/desktop'), '--ozone-platform=x11', '--bmn-test-mode'], env: { ...env,
       XDG_CONFIG_HOME: roots.config, XDG_DATA_HOME: roots.data, XDG_STATE_HOME: roots.state, XDG_CACHE_HOME: roots.cache,
       XDG_RUNTIME_DIR: roots.runtime, BMN_CONFIG_HOME: join(roots.config, 'bmn'), BMN_DATA_HOME: join(roots.data, 'bmn'),
@@ -231,18 +232,18 @@ setInterval(async()=>{if(name!=='A'||!existsSync(${JSON.stringify(command)}))ret
     const asked = JSON.parse(readFileSync(ready)); assert.equal(asked.status, 0); assert.equal(asked.result.producer, undefined)
     const owned = await page.evaluate(() => window.aiTerminal.listAttention())
     assert.ok(owned.find(row => row.requestId === asked.result.requestId)?.producer)
-    await page.getByRole('button', { name: /Needs you/ }).click()
+    await toggleSessionRequests(page)
     const card = page.locator('.attention-item').filter({ hasText: 'Synthetic manual checkpoint' })
     assert.equal(await card.locator('h3').count(), 0)
     for (const [width, height] of [[800, 500], [1000, 700], [1280, 900]]) {
       await app.evaluate(({ BrowserWindow }, size) => { const w = BrowserWindow.getAllWindows()[0]; w.setContentSize(...size) }, [width, height])
       await page.screenshot({ path: join(evidence, `manual-card-${width}.png`) })
     }
-    await card.getByLabel('Proceed', { exact: true }).check()
-    await card.getByRole('button', { name: 'Copy answer', exact: true }).click()
-    await page.waitForFunction(() => document.body.textContent.includes('Answer copied; not submitted'))
+    assert.ok((await card.innerText()).includes('Proceed'))
+    assert.equal(await card.locator('input, textarea').count(), 0)
+    await card.getByRole('button', { name: 'Dismiss', exact: true }).click()
     assert.equal(readFileSync(input('A'), 'utf8'), '')
-    result.checks.push('Actual bmn ask API reaches desktop choices; Copy is clipboard-only')
+    result.checks.push('Actual bmn ask API reaches read-only desktop choices; Dismiss writes no input')
     const publishCard = async params => {
       unlinkSync(ready); writeFileSync(command, JSON.stringify(params)); await waitFile(ready)
       assert.equal(JSON.parse(readFileSync(ready)).status, 0)
@@ -258,13 +259,14 @@ setInterval(async()=>{if(name!=='A'||!existsSync(${JSON.stringify(command)}))ret
       body: '/synthetic/project/' + 'long-path-component/'.repeat(15) + 'instruction.md\nPermission is pending; no command ran.' })
     const multiple = page.locator('.attention-item[data-request-id]').filter({ hasText: 'Synthetic two-part question' })
     const permission = page.locator('.attention-item[data-request-id]').filter({ hasText: 'Synthetic permission target' })
+    await toggleSessionRequests(page)
     await multiple.waitFor(); await permission.waitFor()
-    assert.equal(await multiple.locator('fieldset').count(), 2)
+    assert.equal(await multiple.locator('.attention-questions section').count(), 2)
     assert.ok((await permission.innerText()).includes('long-path-component'))
     for (const [width, height] of [[800, 500], [1000, 700], [1280, 900]]) {
       await app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setContentSize(...size), [width, height])
       await permission.scrollIntoViewIfNeeded()
-      assert.equal(await page.locator('.needs-you-popover').evaluate(element => element.scrollWidth <= element.clientWidth), true)
+      assert.equal(await page.locator('.session-request-card').evaluate(element => element.scrollWidth <= element.clientWidth), true)
       await page.screenshot({ path: join(evidence, `populated-cards-${width}.png`) })
     }
     result.checks.push('Synthetic native multi-question and long permission target retain context and fit all three sizes')

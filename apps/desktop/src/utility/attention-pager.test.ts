@@ -67,6 +67,19 @@ function pagerFixture(holdQuiet?: (record: AttentionRecord) => Promise<boolean>)
 }
 
 describe('attention pager', () => {
+  it.each([true, false])('navigation-withdrawn notices never page, while selected questions still page (away=%s)', async initiallyAway => {
+    const f = pagerFixture()
+    f.presence.away = initiallyAway
+    const notice = record({ requestId: 'notice', kind: 'notice' })
+    const question = record({ requestId: 'question', kind: 'question' })
+    for (const row of [notice, question]) { f.stored.set(row.requestId, row); f.pager.opened(row) }
+    if (!initiallyAway) { await f.elapse(); expect(f.sent).toEqual([]) }
+    f.stored.set(notice.requestId, { ...notice, state: 'withdrawn', resolvedBy: 'owner', resolution: 'Opened in BMN; reminder cleared' })
+    await f.elapse()
+    if (!initiallyAway) { f.presence.now += 1000; f.presence.away = true; f.pager.ownerLeft(); await f.settle() }
+    expect(f.sent.map(row => row.requestId)).toEqual(['question'])
+  })
+
   it('keeps a definitely unsent page retryable when quiet-history storage rejects', async () => {
     let first = true
     const f = pagerFixture(async () => { if (first) { first = false; throw new Error('Synthetic ledger I/O failure') }; return false })

@@ -1,6 +1,7 @@
-/* global window, document, innerHeight */
+/* global window, document */
 // Epic 55: real Electron catalogue, addressed editing and response-card keyboard navigation.
 // Run on a private X display after building; all sessions and requests are synthetic.
+import { sessionRequestControl } from './session-request-helpers.mjs'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -25,7 +26,7 @@ process.stdin.on('data',b=>appendFileSync(base+'.input',b));process.stdout.write
 setInterval(()=>{if(!existsSync(base+'.command'))return;const command=JSON.parse(readFileSync(base+'.command','utf8'));unlinkSync(base+'.command');
 const r=spawnSync(${JSON.stringify(process.execPath)},[${JSON.stringify(cli)},...command.args],{encoding:'utf8',input:command.input});
 writeFileSync(base+'.result',JSON.stringify({key:command.key,status:r.status,error:r.stderr}));},25);`)
-  const app = await _electron.launch({ executablePath: createRequire(join(repo, 'apps/desktop/package.json'))('electron'), cwd: repo,
+  const app = await _electron.launch({ chromiumSandbox: true, executablePath: createRequire(join(repo, 'apps/desktop/package.json'))('electron'), cwd: repo,
     args: [join(repo, 'apps/desktop'), '--ozone-platform=x11', '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
     env: { ...env, XDG_CONFIG_HOME: roots.config, XDG_DATA_HOME: roots.data, XDG_STATE_HOME: roots.state,
       XDG_CACHE_HOME: roots.cache, XDG_RUNTIME_DIR: roots.runtime, BMN_CONFIG_HOME: join(roots.config, 'bmn'),
@@ -126,7 +127,7 @@ writeFileSync(base+'.result',JSON.stringify({key:command.key,status:r.status,err
           assert.deepEqual(await snapshot(), before, 'Closing sidebar Details disturbed the split')
           result.details.push({ crossWorkspaceSidebar: true, gridsInputModesWorkspacePreserved: true })
         }
-        const opener = page.locator('.needs-you-button'); await opener.focus()
+        const opener = page.getByRole('button', { name: 'Command palette', exact: true }); await opener.focus()
         await openPalette(); await search.fill('edit launch')
         const action = page.locator(`#palette-edit-launch-${target.session.sessionId}`)
         assert.ok((await action.innerText()).includes(mode === 'split' ? south.name : north.name))
@@ -171,65 +172,44 @@ writeFileSync(base+'.result',JSON.stringify({key:command.key,status:r.status,err
     await openPalette(); await search.fill('edit launch'); await search.press('Enter')
     await page.getByRole('button', { name: 'Save session', exact: true }).click()
     await page.locator('.feedback-notice.brief').waitFor()
-    await page.locator('.needs-you-button').click()
+    await select(a.session.sessionId)
+    const opener = await sessionRequestControl(page, a.session.sessionId)
+    await opener.focus(); await page.keyboard.press('Enter')
+    const card = page.locator('.session-request-card')
+    await card.waitFor()
     const toast = await page.locator('.feedback-notice.brief').boundingBox()
-    const popover = await page.locator('.needs-you-popover').boundingBox()
-    assert.ok(toast.x + toast.width <= popover.x || toast.y >= popover.y + popover.height ||
-      toast.y + toast.height <= popover.y, 'Confirmation covers response actions')
-    const nav = page.locator('.needs-you-popover button[data-response-navigation]')
-    await page.waitForFunction(() => document.querySelectorAll('button[data-response-navigation]').length === 13)
+    const bounds = await card.boundingBox()
+    assert.ok(toast.x + toast.width <= bounds.x || toast.y >= bounds.y + bounds.height ||
+      toast.y + toast.height <= bounds.y, 'Confirmation covers response actions')
+    const nav = card.locator('article .actions button.primary')
+    assert.equal(await nav.count(), 7) // six north manual requests and its native question
     await nav.nth(4).focus()
-    const identity = await nav.nth(4).getAttribute('data-response-navigation')
-    await emit('south', 'incoming', ['ask', 'incoming', 'New synthetic request'])
-    assert.equal(await page.evaluate(() => document.activeElement.dataset.responseNavigation), identity, 'Arrival stole focus/revision')
-    const beforeRequests = await page.evaluate(() => window.aiTerminal.listAttention())
-    for (let i = 0; i < 7; i++) await page.keyboard.press('ArrowDown')
-    assert.ok(await page.evaluate(() => { const r = document.activeElement.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight }))
-    await page.keyboard.press('ArrowUp')
-    const focused = await page.evaluate(() => document.activeElement.dataset.responseNavigation)
-    const keys = await nav.evaluateAll(buttons => buttons.map(button => button.dataset.responseNavigation))
-    const next = keys[keys.indexOf(focused) + 1]
-    const request = beforeRequests.find(row => `${row.requestId}:${row.revision}` === focused)
+    const identity = await nav.nth(4).evaluate(button => button.closest('article').dataset.requestId)
+    await emit('north', 'incoming', ['ask', 'incoming', 'New synthetic request'])
+    assert.equal(await page.evaluate(() => document.activeElement.closest('article').dataset.requestId), identity, 'Arrival stole focus')
+    await page.keyboard.press('Tab')
+    assert.ok(await page.evaluate(() => document.activeElement.textContent === 'Mark answered'))
+    const request = (await page.evaluate(() => window.aiTerminal.listAttention())).find(row => row.requestId === identity)
     await page.evaluate(r => window.aiTerminal.resolveAttention(r.requestId, 'Synthetic removal', { kind: r.kind, revision: r.revision }, 'owner', 'withdrawn'), request)
-    await page.waitForFunction(key => document.activeElement.dataset.responseNavigation === key, next)
-    // A replaced revision must not keep the old navigation action focused under new contents.
+    await page.waitForFunction(id => document.activeElement.closest('article')?.dataset.requestId !== id && !!document.activeElement.closest('.session-request-card'), identity)
     const revisable = (await page.evaluate(() => window.aiTerminal.listAttention())).find(row => row.requestKey === 'manual-4')
-    const revisionKey = `${revisable.requestId}:${revisable.revision}`
-    await page.locator(`button[data-response-navigation="${revisionKey}"]`).focus()
+    const revised = card.locator(`article[data-request-id="${revisable.requestId}"]`)
+    await revised.getByRole('button', { name: 'Dismiss', exact: true }).focus()
     await emit('north', 'revised', ['ask', 'manual-4', 'Revised synthetic decision', '--choices-json', choices])
-    await page.locator(`button[data-response-navigation="${revisionKey}"]`).waitFor({ state: 'detached' })
-    assert.ok(await page.evaluate(() => document.activeElement.hasAttribute('data-response-navigation')))
-    assert.notEqual(await page.evaluate(() => document.activeElement.closest('article').dataset.requestId), revisable.requestId)
-    const radio = page.locator('.attention-item input[type="radio"]').first()
-    await radio.focus(); await page.keyboard.press('ArrowDown')
-    assert.ok(await page.evaluate(() => document.activeElement.matches('input[type="radio"]')), 'Card navigation captured radio arrows')
-    const card = radio.locator('xpath=ancestor::article')
-    await card.getByLabel('Other', { exact: true }).check()
-    await card.getByLabel('Your answer', { exact: true }).fill('Synthetic text')
-    await page.keyboard.press('ArrowUp')
-    assert.ok(await page.evaluate(() => document.activeElement.tagName === 'TEXTAREA'))
-    const remaining = await page.evaluate(() => window.aiTerminal.listAttention())
-    assert.ok(remaining.filter(r => r.requestId !== request.requestId).every(r => r.state === 'open'))
+    await page.waitForFunction(({id,revision}) => document.querySelector(`article[data-request-id="${id}"]`)?.dataset.requestRevision !== String(revision), { id: revisable.requestId, revision: revisable.revision })
+    assert.ok(await page.evaluate(() => !!document.activeElement.closest('.session-request-card')))
+    assert.equal(await card.locator('input,textarea').count(), 0)
     assert.equal(readFileSync(join(root, 'north.input'), 'utf8'), '')
     assert.equal(readFileSync(join(root, 'south.input'), 'utf8'), '')
     await page.screenshot({ path: join(evidence, 'attention-narrow.png') })
     await page.keyboard.press('Escape')
-    assert.ok(await page.locator('.needs-you-button').evaluate(el => el === document.activeElement))
-    // Browsing does not resolve anything; Enter keeps its existing explicit navigation meaning.
-    await page.locator('.needs-you-button').click()
-    const addressed = await nav.first().evaluate(button => button.closest('article').dataset.requestId)
-    const addressedRequest = (await page.evaluate(() => window.aiTerminal.listAttention())).find(row => row.requestId === addressed)
-    await nav.first().focus(); await page.keyboard.press('Enter')
-    await page.waitForSelector('.needs-you-popover', { state: 'detached' })
-    assert.ok(await page.locator(`.session-terminal[data-session-id="${addressedRequest.sessionId}"]`).isVisible())
+    assert.ok(await opener.evaluate(el => el === document.activeElement))
+    const before = (await page.evaluate(() => window.aiTerminal.listAttention())).filter(row => row.state === 'open').length
     await page.keyboard.press('Control+Shift+U')
-    await page.locator('.needs-you-button').click()
-    await nav.last().focus()
+    assert.equal((await page.evaluate(() => window.aiTerminal.listAttention())).filter(row => row.state === 'open').length, before)
     for (const r of (await page.evaluate(() => window.aiTerminal.listAttention())).filter(row => row.state === 'open')) {
       await page.evaluate(row => window.aiTerminal.resolveAttention(row.requestId, 'Fixture cleanup', { kind: row.kind, revision: row.revision }, 'owner', 'withdrawn'), r)
     }
-    await page.waitForFunction(() => document.activeElement.classList.contains('needs-you-button'))
-    await page.keyboard.press('Escape')
     // An intentionally visible archived session remains inspectable but has no palette Edit action.
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1280, 900))
     await page.evaluate(id => window.aiTerminal.stopSession(id), exact.session.sessionId)

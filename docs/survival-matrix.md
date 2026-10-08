@@ -35,7 +35,9 @@ it, the outcome each column promises, and the current evidence state — **exerc
 ## Columns
 
 The six columns are the survival table's own: **process**, **live screen**, **saved output**,
-**session record and layout**, **conversation resume**, **open Needs you requests**.
+**session record and layout**, **conversation resume**, **open Needs you requests**. Open requests
+are reachable from the session request control after restart, including a stopped session. Cleared
+notice snapshots belong only to the current renderer selection and are not a persistent history.
 
 ## Rows
 

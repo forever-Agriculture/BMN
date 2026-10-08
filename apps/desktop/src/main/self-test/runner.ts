@@ -1264,7 +1264,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       JSON.stringify(preloadProbe.attentionTriage.responseTitlesAfterUpdate) !==
         JSON.stringify(expectedResponseTitles) ||
       JSON.stringify(preloadProbe.attentionTriage.remainingResponseTitles) !==
-        JSON.stringify(expectedResponseTitles.filter(title => title !== 'Choose the self-test answer').toSorted()) ||
+        JSON.stringify(expectedResponseTitles.toSorted()) ||
       JSON.stringify(preloadProbe.attentionTriage.updateTitles) !== JSON.stringify(['Self-test turn finished']) ||
       JSON.stringify(preloadProbe.attentionTriage.updatedUpdateTitles) !== JSON.stringify(['Self-test turn revised']) ||
       !preloadProbe.attentionTriage.progressText.includes('Observed self-test failure') ||
@@ -2059,11 +2059,11 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       const wait = async (read) => { const end = Date.now() + 10000; while (Date.now() < end) {
         const value = read(); if (value) return value; await new Promise(r => setTimeout(r, 25));
       } throw new Error('OpenCode provenance UI timed out'); };
-      (await wait(() => document.querySelector('.needs-you-button'))).click();
+      (await wait(() => document.querySelector('[data-session-requests="${openCodeSession.session.sessionId}"]'))).click();
       const row = await wait(() => [...document.querySelectorAll('.attention-item')]
         .find(r => r.textContent.includes('OpenCode asks to bash')));
       const provenance = row.querySelector('.provenance').textContent;
-      document.querySelector('.needs-you-button').click();
+      document.querySelector('[aria-label="Close session requests"]').click();
       return provenance;
     })()`) as string
     writeFileSync(join(openCodeDirectory, 'reply-gate'), '')
@@ -2144,11 +2144,11 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
       const wait = async (read) => { const end = Date.now() + 10000; while (Date.now() < end) {
         const value = read(); if (value) return value; await new Promise(r => setTimeout(r, 25));
       } throw new Error('Cursor Needs you row timed out'); };
-      (await wait(() => document.querySelector('.needs-you-button'))).click();
+      (await wait(() => document.querySelector('[data-session-requests="${cursorSession.session.sessionId}"]'))).click();
       const row = await wait(() => [...document.querySelectorAll('.attention-item')]
         .find(r => r.textContent.includes('Cursor finished its turn')));
       const provenance = row.querySelector('.provenance')?.textContent ?? null;
-      document.querySelector('.needs-you-button').click();
+      document.querySelector('[aria-label="Close session requests"]').click();
       return { provenance };
     })()`) as { provenance: string | null }
     const cursorBinding = await client.request<PersistedConversationBinding>(METHOD_REGISTRY.sessionBindingGet, { sessionId: cursorSession.session.sessionId })
@@ -2351,11 +2351,11 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
     const repeatRows = (await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {}))
       .filter(row => row.sessionId === repeatSession.session.sessionId && row.requestKey === 'watch:repeat' && row.state === 'open')
     const repeatProvenance = await host.applicationWindow.webContents.executeJavaScript(`(async () => {
-      document.querySelector('.needs-you-button').click();
+      document.querySelector('[data-session-requests="${repeatSession.session.sessionId}"]').click();
       const end = Date.now() + 10000;
       while (Date.now() < end) {
         const row = [...document.querySelectorAll('.attention-item')].find(r => r.textContent.includes('Repeat acceptance repeated'));
-        if (row) { const text = row.querySelector('.provenance')?.textContent; document.querySelector('.needs-you-button').click(); return text; }
+        if (row) { const text = row.querySelector('.provenance')?.textContent; document.querySelector('[aria-label="Close session requests"]').click(); return text; }
         await new Promise(r => setTimeout(r, 25));
       } throw new Error('repeat notice missing from Needs you');
     })()`) as string
@@ -4423,7 +4423,7 @@ export async function runSelfTest(selfTestHost: SelfTestHost, recorder: SelfTest
         }, 'the suppressed notification in the hook log');
         const pane = await wait(() => document.querySelector('.session-terminal[data-session-id="' + plainId + '"]'), 'the pane');
         // The words the owner reads: Needs you says where the row came from.
-        const needsButton = await wait(() => document.querySelector('.needs-you-button'), 'the Needs you button');
+        const needsButton = await wait(() => document.querySelector('[data-session-requests="' + plainId + '"]'), 'the session request control');
         needsButton.click();
         const provenance = await wait(() => {
           const row = [...document.querySelectorAll('.attention-item')]

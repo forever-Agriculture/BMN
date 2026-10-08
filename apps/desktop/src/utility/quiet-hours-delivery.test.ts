@@ -82,6 +82,16 @@ function fixture() {
 }
 
 describe('quiet delivery authority', () => {
+  it('counts a navigation-withdrawn held notice as closed and releases the unanswered question', async () => {
+    const f = fixture(), notice = f.add(1), question = f.add(2)
+    notice.kind = 'notice'
+    await f.coordinator.hold(notice); await f.coordinator.hold(question)
+    notice.state = 'withdrawn'; notice.resolvedBy = 'owner'; notice.resolution = 'Opened in BMN; reminder cleared'
+    f.time('2026-10-08T07:00:00Z'); await f.coordinator.sweep(true)
+    expect(f.sent).toEqual([question.requestId])
+    expect(f.summaries[0]).toContain('1 answered, seen or closed')
+  })
+
   it('prunes closed uncertainty tombstones so 200 historical failures cannot block a new request', async () => {
     const f = fixture(); f.settings.enabled = false
     const entries = Array.from({ length: 200 }, (_, n) => {

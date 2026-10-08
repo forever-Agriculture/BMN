@@ -40,8 +40,7 @@ export async function runTerminalIntegration(handle: TerminalTestHandle<Terminal
     }
     throw new Error('renderer behavioural integration step timed out')
   }
-  const needsButton = await waitFor(() => document.querySelector<HTMLButtonElement>('.needs-you-button'))
-  const totalCount = Number(needsButton.querySelector('.count')?.textContent ?? Number.NaN)
+  const needsButton = await waitFor(() => handle.section.current?.querySelector<HTMLButtonElement>('[data-session-requests]'))
   const progressText = (await waitFor(() => {
     const text = handle.section.current?.querySelector<HTMLElement>('.progress-strip')?.textContent?.trim()
     return text?.includes('Observed self-test failure') && text.includes('Last observed failed') &&
@@ -63,23 +62,33 @@ export async function runTerminalIntegration(handle: TerminalTestHandle<Terminal
   })
   console.warn('[BMN] renderer behavioural integration: progress evidence detail')
 
-  needsButton.click()
-  const attentionPopover = await waitFor(() => document.querySelector<HTMLElement>('.needs-you-popover'))
-  const groupTitles = (label: string): string[] => {
-    const group = attentionPopover.querySelector<HTMLElement>(`.attention-group[aria-label="${label}"]`)
-    if (!group) throw new Error(`attention group ${label} was not rendered`)
-    return [...group.querySelectorAll<HTMLElement>('.attention-item h3')]
-      .map((item) => item.textContent?.trim() ?? '')
+  // Count and name the other pane's requests from its actual rendered card, not the store.
+  const otherControl = await waitFor(() => reportingPane.querySelector<HTMLButtonElement>('[data-session-requests]'))
+  for (const id of [handle.startup.sessionId, reportingPane.dataset.sessionId!]) {
+    await waitFor(() => document.querySelector(`.session-row button[data-session-id="${id}"] .status-dot.needs-you`))
   }
-  const responseTitles = groupTitles('Needs your response')
+  otherControl.click()
+  const otherCard = await waitFor(() => document.querySelector<HTMLElement>('.session-request-card'))
+  const otherResponseTitles = [...otherCard.querySelectorAll<HTMLElement>('.attention-item.request h3')]
+    .map(item => item.textContent?.trim() ?? '')
+  let totalCount = otherCard.querySelectorAll('.attention-item:not([data-cleared])').length
+  otherCard.querySelector<HTMLButtonElement>('[aria-label="Close session requests"]')!.click()
+  await waitFor(() => !document.querySelector('.session-request-card') ? true : undefined)
+  needsButton.click()
+  const attentionPopover = await waitFor(() => document.querySelector<HTMLElement>('.session-request-card'))
+  const groupTitles = (label: string): string[] => [...attentionPopover.querySelectorAll<HTMLElement>(
+    label === 'Updates' ? '.attention-item.update h3' : '.attention-item.request h3'
+  )].map(item => item.textContent?.trim() ?? '')
+  totalCount += attentionPopover.querySelectorAll('.attention-item:not([data-cleared])').length
+  const responseTitles = [...groupTitles('Needs your response'), ...otherResponseTitles].sort()
   const updateTitles = groupTitles('Updates')
-  const firstResponse = attentionPopover.querySelector<HTMLElement>('.attention-group[aria-label="Needs your response"] .attention-item')
+  const firstResponse = attentionPopover.querySelector<HTMLElement>('.attention-item.request')
   const firstResponseRow = {
     age: firstResponse?.querySelector('.where .age')?.textContent ?? '',
     label: firstResponse?.getAttribute('aria-label') ?? ''
   }
   const focusedResponseAction = attentionPopover.querySelector<HTMLButtonElement>(
-    '.attention-group[aria-label="Needs your response"] .attention-item button.primary'
+    '.attention-item.request button.primary'
   )
   if (!focusedResponseAction) throw new Error('the response action was not rendered')
   focusedResponseAction.focus()
@@ -94,7 +103,16 @@ export async function runTerminalIntegration(handle: TerminalTestHandle<Terminal
   const focusStableAfterIncomingUpdate = document.activeElement === focusedResponseAction
   attentionPopover.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
   const focusReturned = await waitFor(() =>
-    !document.querySelector('.needs-you-popover') && document.activeElement === needsButton ? true : undefined)
+    !document.querySelector('.session-request-card') && document.activeElement === needsButton ? true : undefined)
+  // Re-read the other session's rendered card after the update; cached titles cannot prove it survived.
+  otherControl.click()
+  const otherCardAfterUpdate = await waitFor(() => document.querySelector<HTMLElement>('.session-request-card'))
+  updatedGroups.responses.push(...[...otherCardAfterUpdate.querySelectorAll<HTMLElement>('.attention-item.request h3')]
+    .map(item => item.textContent?.trim() ?? ''))
+  updatedGroups.responses.sort()
+  otherCardAfterUpdate.querySelector<HTMLButtonElement>('[aria-label="Close session requests"]')!.click()
+  await waitFor(() => !document.querySelector('.session-request-card') ? true : undefined)
+  needsButton.focus()
   window.dispatchEvent(new KeyboardEvent('keydown', {
     key: 'U', code: 'KeyU', ctrlKey: true, shiftKey: true, bubbles: true
   }))
@@ -102,13 +120,10 @@ export async function runTerminalIntegration(handle: TerminalTestHandle<Terminal
     const selected = (await window.aiTerminal.getLayout(handle.startup.workspaceId)).layout.selectedSessionId
     return selected && selected !== handle.startup.sessionId ? selected : undefined
   })
-  needsButton.click()
-  const reopenedPopover = await waitFor(() => document.querySelector<HTMLElement>('.needs-you-popover'))
-  const updateArticle = [...reopenedPopover.querySelectorAll<HTMLElement>('.attention-item.update')]
-    .find((item) => item.querySelector('h3')?.textContent?.trim() === 'Self-test turn revised')
-  const openUpdate = updateArticle?.querySelector<HTMLButtonElement>('button.primary')
-  if (!openUpdate) throw new Error('the informational update action was not rendered')
-  openUpdate.click()
+  // Explicitly select the notice's session; navigation now clears only notices (59.1).
+  const noticeSessionButton = await waitFor(() => document.querySelector<HTMLButtonElement>(
+    `.session-row button[data-session-id="${handle.startup.sessionId}"]`))
+  noticeSessionButton.click()
   const noticeResolved = await waitFor(async () =>
     (await window.aiTerminal.listAttention())
       .some((request) => request.title === 'Self-test turn revised' && request.state === 'open')

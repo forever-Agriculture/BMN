@@ -3,7 +3,8 @@ import { usageClock, usageWindowName, type AttentionRecord, type HookOriginRecor
 import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { NeedsYouPopover } from './needs-you-popover'
+import { SessionRequestCard } from './session-request-card'
+import { applyAttentionWithdrawal } from './attention-actions'
 import { PlanWindows } from './plan-use-view'
 import {
   activeHookOrigin,
@@ -11,6 +12,7 @@ import {
   handoffDraftForAttention,
   handoffPreparedBy,
   attentionActionWhenOpened,
+  otherSessionRequestCue,
   displayPath,
   inferHome,
   modelOriginFlag,
@@ -435,11 +437,46 @@ describe('session presentation', () => {
     expect(preferencesGearCue(true, null).title).toBe('Preferences · History: Start cleanup waits for you')
   })
 
+  it('does not raise a phone-history fault when Telegram is disabled, preserving the history cleanup cue', () => {
+    expect(preferencesGearCue(false, null, true, false)).toEqual({ dot: false, title: 'Preferences', description: undefined })
+    expect(preferencesGearCue(true, null, true, false)).toEqual({
+      dot: true, title: 'Preferences · History: Start cleanup waits for you', description: 'Agent history cleanup waits for you'
+    })
+    expect(preferencesGearCue(false, null, true, true).title).toContain('Phone delivery history is unavailable')
+  })
+
+  it('counts other sessions including stopped/archived IDs, with one waiting count per session', () => {
+    const base = request('base', 'own', '2026-09-14T11:55:00.000Z')
+    expect(otherSessionRequestCue([base], 'own')).toBeNull()
+    expect(otherSessionRequestCue([base, { ...base, sessionId: 'stopped', requestId: 'q2' },
+      { ...base, sessionId: 'stopped', requestId: 'r2', kind: 'review' },
+      { ...base, sessionId: 'archived', requestId: 'n2', kind: 'notice' }], 'own'))
+      .toBe('1 session waiting for your response · 1 update')
+    expect(preferencesGearCue(false, null, true)).toMatchObject({ dot: true, title: expect.stringContaining('Phone delivery history is unavailable') })
+  })
+
+  it('retains exact cleared notice detail and phone state without actions or a dot', () => {
+    const cleared = { ...request('n', 's1', '2026-09-14T11:55:00.000Z'), kind: 'notice' as const, body: 'Exact notice body' }
+    const markup = renderToStaticMarkup(createElement(SessionRequestCard, {
+      requests: applyAttentionWithdrawal([cleared], cleared, { ...cleared, state: 'withdrawn', revision: cleared.revision + 1 }), cleared: [{ request: cleared, phone: { active: false, until: '07:00', waiting: 1, capacityBlocked: false, requests: { n: 'uncertain' }, uncertainRevisions: { n: [2] } } }],
+      now, anchor: null, place: () => ({ workspace: 'Work', session: 'Builder' }),
+      onOpenHandoff: () => undefined, onAcknowledge: () => undefined, onMarkAnswered: () => undefined, onClose: () => undefined
+    }))
+    expect(markup).toContain('Exact notice body')
+    expect(markup.match(/<article /g)).toHaveLength(1)
+    expect(markup).toContain('Cleared update')
+    expect(markup).toContain('Phone: may not have arrived')
+    expect(markup).toContain('Phone: an earlier revision may not have arrived')
+    expect(markup).not.toContain('class="status-dot')
+    expect(markup).not.toContain('Mark answered')
+    expect(markup).not.toContain('Dismiss')
+  })
+
   it('shows the deadline after the age and in the row name, and nothing without one', () => {
-    const popover = (requests: AttentionRecord[]): string => renderToStaticMarkup(createElement(NeedsYouPopover, {
-      requests, unread: [], now, anchor: null,
+    const popover = (requests: AttentionRecord[]): string => renderToStaticMarkup(createElement(SessionRequestCard, {
+      requests, cleared: [], now, anchor: null,
       place: () => ({ workspace: 'Work', session: 'Builder' }),
-      onOpenSession: () => undefined, onAcknowledge: () => undefined,
+      onOpenHandoff: () => undefined, onAcknowledge: () => undefined,
       onMarkAnswered: () => undefined, onClose: () => undefined
     }))
     const soon = { ...request('soon', 's1', '2026-09-14T11:55:00.000Z'), expiresAt: '2026-09-14T12:10:00.000Z' }
@@ -453,15 +490,15 @@ describe('session presentation', () => {
   })
 
   it('gives every card one primary and plates for the rest, and says the source on the seen line (Story 40.1)', () => {
-    const markup = renderToStaticMarkup(createElement(NeedsYouPopover, {
+    const markup = renderToStaticMarkup(createElement(SessionRequestCard, {
       requests: [
         { ...request('asked', 's1', '2026-09-14T11:55:00.000Z'), openedBy: 'cli' },
         { ...request('allow', 's1', '2026-09-14T11:50:00.000Z'), kind: 'permission' as const, openedBy: 'hook:claude:PermissionRequest' },
         { ...request('built', 's1', '2026-09-14T11:45:00.000Z'), kind: 'notice' as const, openedBy: 'osc:9' }
       ],
-      unread: [], now, anchor: null,
+      cleared: [], now, anchor: null,
       place: () => ({ workspace: 'Work', session: 'Builder' }),
-      onOpenSession: () => undefined, onAcknowledge: () => undefined,
+      onOpenHandoff: () => undefined, onAcknowledge: () => undefined,
       onMarkAnswered: () => undefined, onClose: () => undefined
     }))
     const actions = [...markup.matchAll(/<div class="actions">(.*?)<\/div>/gu)].map((match) => match[1]!)
@@ -490,38 +527,41 @@ describe('session presentation', () => {
     expect(requestsAnsweredByTyping(records, 's3')).toEqual([])
   })
 
-  it('clears reminders for opened notices and prompts without claiming a producer answer', () => {
+  it('clears only notice reminders on explicit navigation (59.1)', () => {
     const prompt = request('prompt', 's1', '2026-09-14T11:00:00.000Z')
-    expect(attentionActionWhenOpened(prompt)).toBe('dismiss-reminder')
-    expect(attentionActionWhenOpened({ ...prompt, seenAt: now.toString() })).toBe('dismiss-reminder')
-    expect(attentionActionWhenOpened({ ...prompt, kind: 'permission' })).toBe('dismiss-reminder')
+    expect(attentionActionWhenOpened(prompt)).toBeNull()
+    expect(attentionActionWhenOpened({ ...prompt, seenAt: now.toString() })).toBeNull()
+    expect(attentionActionWhenOpened({ ...prompt, kind: 'permission' })).toBeNull()
     expect(attentionActionWhenOpened({ ...prompt, kind: 'notice' })).toBe('dismiss-reminder')
     expect(attentionActionWhenOpened({ ...prompt, kind: 'notice', state: 'answered' })).toBeNull()
   })
 
-  it('clears a reviewed reminder without claiming an answer or approval (46.8)', () => {
+  it('keeps every blocking request open on navigation (59.1 supersedes 46.8)', () => {
     const prompt = request('prompt', 's1', '2026-09-14T11:00:00.000Z')
     for (const kind of ['question', 'permission', 'review', 'handoff', 'notice'] as const) {
-      expect(attentionActionWhenOpened({ ...prompt, kind })).toBe('dismiss-reminder')
-      expect(attentionActionWhenOpened({ ...prompt, kind, seenAt: now.toString() })).toBe('dismiss-reminder')
+      expect(attentionActionWhenOpened({ ...prompt, kind })).toBe(kind === 'notice' ? 'dismiss-reminder' : null)
+      expect(attentionActionWhenOpened({ ...prompt, kind, seenAt: now.toString() })).toBe(kind === 'notice' ? 'dismiss-reminder' : null)
     }
     expect(attentionActionWhenOpened({ ...prompt, state: 'withdrawn' })).toBeNull()
   })
 
-  it('offers actual option selection, Other and copy with an explicit dismiss action (46.8)', () => {
-    const markup = renderToStaticMarkup(createElement(NeedsYouPopover, {
+  it('shows questions read-only with an explicit dismiss action (59.2 supersedes 46.8)', () => {
+    const markup = renderToStaticMarkup(createElement(SessionRequestCard, {
       requests: [{ ...request('asked', 's1', '2026-09-14T11:55:00.000Z'), prompt: {
         type: 'questions', harness: 'codex', shape: 'async-choice', requestRef: null,
         toolUseId: 'call_synthetic', questions: [{ id: 'color', header: 'Color', text: 'Which color?',
           multiSelect: false, options: [{ label: 'Gold', description: null }, { label: 'Black', description: null }] }]
       } }],
-      unread: [], now, anchor: null, place: () => ({ workspace: 'Work', session: 'Builder' }),
-      onOpenSession: () => undefined, onAcknowledge: () => undefined,
+      cleared: [], now, anchor: null, place: () => ({ workspace: 'Work', session: 'Builder' }),
+      onOpenHandoff: () => undefined, onAcknowledge: () => undefined,
       onMarkAnswered: () => undefined, onClose: () => undefined
     }))
-    expect(markup).toContain('type="radio"')
-    expect(markup).toContain('Other')
-    expect(markup).toContain('Copy answer')
+    expect(markup).not.toContain('<input')
+    expect(markup).not.toContain('Other')
+    expect(markup).not.toContain('Copy answer')
+    expect(markup).toContain('Which color?')
+    expect(markup).toContain('Gold')
+    expect(markup).toContain('Black')
     expect(markup).toContain('Dismiss')
     expect(markup).not.toContain('Acknowledge')
   })
@@ -585,16 +625,16 @@ describe('agent handoff entry and provenance', () => {
     expect(draft.text).toBe('Result for you')
     expect(draft.artifactIds).toEqual(['file-1'])
     expect(openAttentionGroups([petition]).responses).toEqual([petition])
-    expect(attentionActionWhenOpened(petition)).toBe('dismiss-reminder')
+    expect(attentionActionWhenOpened(petition)).toBeNull()
     expect(requestsAnsweredByTyping([petition], 'source')).toEqual([])
     expect(attentionProvenance(petition)).toBe('from bmn handoff')
   })
 
   it('offers Open handoff and acknowledgement without a terminal-answer action', () => {
-    const markup = renderToStaticMarkup(createElement(NeedsYouPopover, {
-      requests: [petition], unread: [], now, anchor: null,
+    const markup = renderToStaticMarkup(createElement(SessionRequestCard, {
+      requests: [petition], cleared: [], now, anchor: null,
       place: () => ({ workspace: 'Work', session: 'Builder' }),
-      onOpenSession: () => undefined, onAcknowledge: () => undefined,
+      onOpenHandoff: () => undefined, onAcknowledge: () => undefined,
       onMarkAnswered: () => undefined, onClose: () => undefined
     }))
     expect(markup).toContain('Open handoff')

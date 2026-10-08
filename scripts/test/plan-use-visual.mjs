@@ -5,6 +5,7 @@
 // runs it (`/bin/sh -c`); a synthetic `codex` reports its conversation through `bmn hook codex`, and its session
 // file holds one synthetic `token_count` line. No agent runs and nothing leaves the machine. Screenshots land in
 // .dev-auto/evidence/epic-37/shots/ (ignored).
+import { toggleSessionRequests } from './session-request-helpers.mjs'
 import { execFileSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -77,7 +78,7 @@ async function planUse(page, sessionId, expected) {
 mkdirSync(evidenceDirectory, { recursive: true })
 await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ root, roots }) => {
   const codexHome = join(root, 'codex-home')
-  const application = await electron.launch({
+  const application = await electron.launch({ chromiumSandbox: true,
     executablePath: electronBinary,
     args: [appDirectory, '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
     cwd: repoRoot,
@@ -215,9 +216,9 @@ while :; do [ -e ${JSON.stringify(quit)} ] && exit 0; sleep 0.2; done
       .map((row) => ({ title: row.title, kind: row.kind, state: row.state, openedBy: row.openedBy, expiresAt: row.expiresAt }))
     result.noticeExpiresAtReset = result.notices.length === 1 && Date.parse(result.notices[0].expiresAt) === epoch(weekResets) * 1000
     await setColorMode(page, 'black')
-    await page.locator('.needs-you-button').click()
-    await page.locator('.needs-you-popover .attention-item').first().waitFor()
-    await page.locator('.needs-you-popover').screenshot({ path: join(evidenceDirectory, 'needs-you-plan-notice-black.png') })
+    await toggleSessionRequests(page)
+    await page.locator('.session-request-card .attention-item').first().waitFor()
+    await page.locator('.session-request-card').screenshot({ path: join(evidenceDirectory, 'needs-you-plan-notice-black.png') })
     await page.keyboard.press('Escape')
     writeFileSync(quit, '')
     console.log(JSON.stringify({ directory: evidenceDirectory, ...result }))

@@ -1,44 +1,65 @@
-// MODULE: attention-actions.ts - guarded owner reminder dismissal and clipboard-only question answers
-import type { AttentionRecord } from '@bmn/protocol'
+// MODULE: attention-actions.ts - revision-guarded owner withdrawal, held through the renderer refresh
+import { ERROR_CODES, type AttentionRecord } from '@bmn/protocol'
 import type { AiTerminalBridge } from '../../preload/bridge'
+import { attentionActionWhenOpened } from './session-presentation'
 
-type AttentionBridge = Pick<AiTerminalBridge, 'listAttention' | 'resolveAttention' | 'writeClipboardText'>
-const pendingReminders = new WeakMap<object, Map<string, Promise<AttentionRecord>>>()
+type WithdrawalObserver = (record: AttentionRecord) => void
+interface PendingReminder {
+  operation: Promise<AttentionRecord | null>
+  result: AttentionRecord | null
+  observers: WithdrawalObserver[]
+}
+const pendingReminders = new WeakMap<object, Map<string, PendingReminder>>()
+
+export function noticesWhenNavigating(records: readonly AttentionRecord[], sessionId: string): AttentionRecord[] {
+  return records.filter(request => request.sessionId === sessionId && attentionActionWhenOpened(request) !== null)
+}
+
+/** Resolution advances the store revision. Replace the captured revision, never a newer arrival. */
+export function applyAttentionWithdrawal(records: AttentionRecord[], captured: AttentionRecord, resolved: AttentionRecord): AttentionRecord[] {
+  return records.map(record => record.requestId === captured.requestId && record.revision === captured.revision ? resolved : record)
+}
 
 export async function dismissAttentionReminder(
-  bridge: Pick<AttentionBridge, 'resolveAttention'>,
+  bridge: Pick<AiTerminalBridge, 'resolveAttention'>,
   request: AttentionRecord,
-  resolution = 'Dismissed in BMN'
-): Promise<AttentionRecord> {
+  resolution = 'Dismissed in BMN',
+  refresh: () => Promise<unknown> = async () => undefined,
+  onWithdrawn?: WithdrawalObserver
+): Promise<AttentionRecord | null> {
   let pending = pendingReminders.get(bridge)
   if (!pending) { pending = new Map(); pendingReminders.set(bridge, pending) }
   const key = `${request.requestId}:${request.revision}`
   const active = pending.get(key)
-  if (active) return active
-  const operation = bridge.resolveAttention(request.requestId, resolution,
-    { kind: request.kind, revision: request.revision }, 'owner', 'withdrawn')
-    .finally(() => pending.delete(key))
-  pending.set(key, operation)
-  return operation
-}
-
-/** Copying is an owner action, never a producer answer or terminal write. */
-export async function copyAttentionAnswer(
-  bridge: AttentionBridge,
-  request: AttentionRecord,
-  text: string
-): Promise<void> {
-  if (!text.trim()) throw new Error('Choose an answer or enter your own.')
-  const current = (await bridge.listAttention()).find((record) => record.requestId === request.requestId)
-  if (!current || current.state !== 'open' || !(current.kind === 'question' || current.kind === 'permission' && current.manualChoices) ||
-      current.revision !== request.revision || current.incarnationId !== request.incarnationId ||
-      !(current.manualChoices || current.prompt?.type === 'questions')) {
-    throw new Error('This question changed. Open the current card before copying.')
+  if (active) {
+    if (onWithdrawn) {
+      if (active.result) onWithdrawn(active.result)
+      else active.observers.push(onWithdrawn)
+    }
+    return active.operation
   }
-  await bridge.writeClipboardText(text)
-  try {
-    await dismissAttentionReminder(bridge, request, 'Answer copied; not submitted')
-  } catch {
-    throw new Error('Answer copied. The reminder could not be cleared; review the current card.')
-  }
+  const entry: PendingReminder = { operation: Promise.resolve(null), result: null, observers: onWithdrawn ? [onWithdrawn] : [] }
+  pending.set(key, entry)
+  entry.operation = (async () => {
+    let failed = false
+    let failure: unknown
+    try {
+      entry.result = await bridge.resolveAttention(request.requestId, resolution,
+        { kind: request.kind, revision: request.revision }, 'owner', 'withdrawn')
+      for (const observe of entry.observers) observe(entry.result)
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? error.code : null
+      if (code !== ERROR_CODES.notFound && code !== ERROR_CODES.revisionConflict) { failed = true; failure = error }
+    }
+    try {
+      await refresh()
+    } catch (error) {
+      if (!failed) throw new Error(entry.result
+        ? 'Reminder cleared. The request list could not refresh; try again.'
+        : 'The request list could not refresh; try again.', { cause: error })
+    }
+    if (failed) throw failure
+    return entry.result
+  })().finally(() => pending.delete(key))
+  return entry.operation
 }

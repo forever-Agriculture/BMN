@@ -112,7 +112,9 @@ export function SessionTerminal(props: {
   register(sessionId: string, controller: TerminalController | undefined): void
   onView(update: SessionViewUpdate): void
   onFailure(message: string): void
-  onSelect(): void
+  requestControl: React.ReactNode
+  focusCue: string | null
+  onSelect(focusTerminal?: boolean): void
   onSplit(): void
   onFocusMode(): void
   onFiles(): void
@@ -535,7 +537,8 @@ export function SessionTerminal(props: {
   useEffect(() => {
     if (!props.visible || !props.selected) return
     const terminal = element.current?.querySelector('.xterm-helper-textarea') as HTMLElement | null
-    if (!document.querySelector('dialog[open]')) terminal?.focus()
+    if (!document.querySelector('dialog[open], .session-request-card') &&
+        !section.current?.contains(document.activeElement)) terminal?.focus()
     ensureActive()
   }, [props.visible, props.selected])
 
@@ -570,9 +573,12 @@ export function SessionTerminal(props: {
       aria-label={`${name} terminal`}
       data-session-id={props.startup.sessionId}
       style={{ order: props.order, flexGrow: props.ratio }}
-      onPointerDownCapture={() => {
-        if (!props.selected) props.onSelect()
+      onPointerDownCapture={event => {
+        const control = event.target instanceof Element && event.target.closest('button, input, select, textarea, a, [contenteditable], [tabindex]')
+        const interactive = !!control && event.currentTarget.contains(control)
+        props.onSelect(!props.selected && !interactive)
       }}
+      onKeyUpCapture={event => { if (event.key === 'Tab') props.onSelect(false) }}
       onDragOver={(event) => {
         if (!event.dataTransfer.types.includes('Files') || exitStatus) return
         event.preventDefault()
@@ -608,7 +614,9 @@ export function SessionTerminal(props: {
         ) : null}
         <span className={`status-dot ${dot}`} aria-hidden="true" />
         <span className={`pane-status${props.attention && !exitStatus ? ' needs-you' : ''}`}>
-          <span className="pane-state">{stateWord}</span>
+          {props.requestControl && !props.attention && !exitStatus ? <span className="pane-state">{attentionWord} · </span> : null}
+          {props.requestControl ?? <span className="pane-state">{stateWord}</span>}
+          {exitStatus && props.requestControl ? <span className="pane-exit"> · {exitStatus}</span> : null}
           <span className="pane-directory">{` · ${props.startup.cwd}`}</span>
         </span>
         <PanePorts entry={props.ports} onOpen={props.onOpenPort} />
@@ -616,8 +624,9 @@ export function SessionTerminal(props: {
           <button type="button" aria-pressed={props.split} title={`Split (${SHORTCUT_LABELS['split-toggle']})`} onClick={props.onSplit}>
             <Icon name="split" /><span className="button-label">{props.split ? 'Unsplit' : 'Split'}</span>
           </button>
-          <button type="button" aria-pressed={props.focusMode} title={`Focus (${SHORTCUT_LABELS['focus-toggle']})`} onClick={props.onFocusMode}>
+          <button type="button" aria-pressed={props.focusMode} title={[`Focus (${SHORTCUT_LABELS['focus-toggle']})`, props.focusCue].filter(Boolean).join(' · ')} onClick={props.onFocusMode}>
             <Icon name="focus" /><span className="button-label">Focus</span>
+            {props.focusCue ? <span className="status-dot needs-you" aria-hidden="true" /> : null}
           </button>
           <button type="button" aria-label="Files" aria-pressed={props.filesOpen} onClick={props.onFiles}>
             <Icon name="files" /><span className="button-label">Files</span>

@@ -1,6 +1,7 @@
 /* global window, document, innerWidth, innerHeight, getComputedStyle */
 // MODULE: everyday-repairs.mjs - visible handoff/image/action/attention regressions on an isolated Electron stack.
 // Run after build. --baseline records original visibility failures without accepting them.
+import { toggleSessionRequests } from './session-request-helpers.mjs'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { createHash } from 'node:crypto'
@@ -21,7 +22,7 @@ mkdirSync(evidence, { recursive: true })
 await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ root, roots }) => {
   const env = { ...process.env }
   for (const key of ['BMN_TOKEN', 'BMN_SESSION_ID', 'BMN_CONTROL_SOCKET', 'BMN_PTY_INCARNATION_ID']) delete env[key]
-  const app = await _electron.launch({ executablePath: binary, cwd: repo, timeout: 20000,
+  const app = await _electron.launch({ chromiumSandbox: true, executablePath: binary, cwd: repo, timeout: 20000,
     args: [join(repo, 'apps/desktop'), ...(!wayland && process.env.DISPLAY ? ['--ozone-platform=x11'] : []), '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
     env: { ...env, XDG_CONFIG_HOME: roots.config, XDG_DATA_HOME: roots.data,
       XDG_STATE_HOME: roots.state, XDG_CACHE_HOME: roots.cache, XDG_RUNTIME_DIR: roots.runtime,
@@ -65,7 +66,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       assert.fail('Next action not reachable by the natural keyboard order')
     }
     const focusedVisible = async target => target.evaluate(el => {
-      const r = el.getBoundingClientRect(), p = el.closest('.files-panel, .needs-you-popover').getBoundingClientRect()
+      const r = el.getBoundingClientRect(), p = el.closest('.files-panel, .session-request-card').getBoundingClientRect()
       const occluded = [...document.querySelectorAll('.feedback-notice')].some(note => {
         const n = note.getBoundingClientRect(), style = getComputedStyle(note)
         return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) > 0 &&
@@ -114,8 +115,8 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await page.reload(); await page.waitForSelector('.shell-window')
     for (const [width, height] of [[800, 500], [1000, 700], [1280, 900]]) {
       await resize(width, height)
-      await page.locator('.needs-you-button').click()
-      const overflow = await page.locator('.needs-you-popover').evaluate(el => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
+      await toggleSessionRequests(page)
+      const overflow = await page.locator('.session-request-card').evaluate(el => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }))
       await page.screenshot({ path: join(evidence, `attention-${width}.png`) })
       if (!baseline) assert.ok(overflow.scrollWidth <= overflow.clientWidth, JSON.stringify(overflow))
       if (baseline || width === 800) {
@@ -124,7 +125,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
         if (!baseline) { await tabTo(openReview); assert.ok(await focusedVisible(openReview), 'Attention keyboard action clipped') }
         await openReview.click()
       } else {
-        await page.locator('.needs-you-button').click()
+        await toggleSessionRequests(page)
         await page.locator(`#handoff-${prepared.draftId}`).getByRole('button', { name: 'Edit', exact: true }).click()
       }
       await page.waitForSelector('.handoff-form textarea')

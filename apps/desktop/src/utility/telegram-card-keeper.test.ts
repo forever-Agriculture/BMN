@@ -539,6 +539,7 @@ describe('outcomes', () => {
     ['answered at the laptop', { state: 'answered' as const, resolvedBy: 'owner' }, '<i>Answered at the laptop.</i>'],
     ['answered from Telegram by a reply', { state: 'answered' as const, resolvedBy: 'telegram' }, '✓ <i>Answered from Telegram.</i>'],
     ['withdrawn', { state: 'withdrawn' as const, resolvedBy: 'hook:claude:UserPromptSubmit' }, '<i>No longer open.</i>'],
+    ['owner navigation withdrawal', { state: 'withdrawn' as const, resolvedBy: 'owner', resolution: 'Opened in BMN; reminder cleared' }, '<i>No longer open.</i>'],
     ['expired', { state: 'expired' as const, resolvedBy: 'expiry' }, '<i>No longer open.</i>']
   ])('removes the buttons and says so when the request is %s', async (_label, patch, line) => {
     const h = setup()

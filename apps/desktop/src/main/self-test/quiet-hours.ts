@@ -82,19 +82,51 @@ setInterval(()=>{if(fs.existsSync(${JSON.stringify(exitSignal)}))process.exit(0)
     phase('held-3')
     assert.equal(bot.calls.slice(callsFrom).filter(call => call.method === 'sendMessage').length, 0)
     await until(async () => taps.attentionNotices.slice(noticeFrom).some(notice => notice.sessionId === sessionId) ? true : undefined, 'desktop notification path')
+    // Keep the synthetic away fixture unwatched: selecting a focused pane marks requests seen.
+    host.applicationWindow!.blur()
+    await until(async () => !host.applicationWindow!.isFocused() ? true : undefined, 'synthetic away window unfocused')
+    // Fixture creation bypasses renderer-owned creation; publish its registry before owner navigation.
+    await host.recoverApplicationRenderer(host.applicationWindow!)
+    await until(async () => {
+      const ready = await host.applicationWindow!.webContents.executeJavaScript(`!!document.querySelector('.workspace-group[aria-label="Quiet hours proof"]') && !!document.querySelector('.session-terminal[data-session-id="${sessionId}"]')`)
+      return ready ? true : undefined
+    }, 'fixture renderer registry')
+    await host.applicationWindow!.webContents.executeJavaScript(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
+    host.applicationWindow!.webContents.send('aiterm:open-session', sessionId)
+    await until(async () => {
+      const selected = await host.applicationWindow!.webContents.executeJavaScript(`(async()=>{
+        const pane=document.querySelector('.session-terminal[data-session-id="${sessionId}"]');
+        return (await window.aiTerminal.getLayout(${JSON.stringify(workspace.workspaceId)})).layout.selectedSessionId===${JSON.stringify(sessionId)} && !!pane && !pane.classList.contains('session-terminal-hidden');
+      })()`)
+      return selected ? true : undefined
+    }, 'quiet request session selected')
+    await host.applicationWindow!.webContents.executeJavaScript(`new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))`)
     phase('cue')
     const cue = await host.applicationWindow!.webContents.executeJavaScript(`(async()=>{
-      document.querySelector('.needs-you-button').click();
+      const end=Date.now()+10000; while(!document.querySelector('[data-session-requests="${sessionId}"]') && Date.now()<end) await new Promise(r=>setTimeout(r,25));
+      document.querySelector('[data-session-requests="${sessionId}"]').click();
       const by=Date.now()+10000;
       while(Date.now()<by){const items=[...document.querySelectorAll('.attention-item')];
         const item=items.find(e=>e.textContent.includes('Quiet synthetic question'));
         if(item?.textContent.includes('Phone: held until 07:00'))return item.textContent;
         await new Promise(r=>setTimeout(r,50));}
-      throw new Error('Quiet hold cue missing from Needs you');})()`)
+      throw new Error('Quiet hold cue missing from session requests');})()`)
     assert.match(cue, /Phone: held until 07:00/)
     assert.equal(readFileSync(input, 'utf8'), '')
     diagnostic.before = await snapshot()
     await client.request(METHOD_REGISTRY.presenceSet, { away: true })
+    await until(async () => {
+      const held = await snapshot()
+      return held.away === true && held.allMembers && held.exitHeld ? true : undefined
+    }, 'away with unchanged held requests')
+    assert.equal(bot.calls.slice(callsFrom).filter(call => call.method === 'sendMessage').length, 0)
+    assert.equal(host.applicationWindow!.isFocused(), false, 'Quiet fixture became watched')
+    const heldRecords = await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {})
+    for (const expected of rows) {
+      const held = heldRecords.find(row => row.requestId === expected.requestId)
+      assert.ok(held && held.sessionId === sessionId && held.revision === expected.revision &&
+        held.kind === expected.kind && held.state === 'open' && held.seenAt === null, 'Quiet fixture request became seen or changed')
+    }
     phase('clock-end')
     const end = await setClock(new Date('2001-01-03T07:00:00').toISOString()) as {
       ledger: { window: { summary: string; eligible: boolean } | null; entries: Array<{ requestId?: string; revision?: number; phase: string }> } }

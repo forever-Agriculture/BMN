@@ -157,6 +157,9 @@ live observation, request, reporter, compaction or usage state and has no contro
 **Progress and requests keep their evidence.** Process state, progress reports, unread state and
 the resolution of an agent's question are stored separately. An agent saying it is done is shown as
 a claim, not as verified success. A question stays open until it is answered or withdrawn.
+Explicit owner navigation withdraws only captured notice revisions through the existing guarded owner resolution.
+The renderer retains their read-only detail until navigation elsewhere; request cards overlay panes and never
+write terminal input. Mounting, reconciliation and request arrival never perform this withdrawal.
 The optional workspace results view reads the latest report per session and named source,
 its evidence references and the bounded draft list. It rechecks the exact report or handoff
 before routing the owner to the existing detail or Files flow; the view cannot deliver a draft.

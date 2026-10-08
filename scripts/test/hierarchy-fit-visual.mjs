@@ -4,6 +4,7 @@
 // and cursor-agent, so each row carries its agent chip; the Claude one reports a z.ai origin and a permission request
 // through `bmn hook claude`. No agent runs and nothing leaves the machine. Each colour mode asserts the layout facts
 // below; screenshots land in .dev-auto/evidence/epic-40/shots/ (ignored).
+import { sessionRequestControl } from './session-request-helpers.mjs'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
@@ -146,7 +147,7 @@ function assertSelects(selects, where, minimum) {
 
 mkdirSync(evidenceDirectory, { recursive: true })
 await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ root, roots }) => {
-  const application = await electron.launch({
+  const application = await electron.launch({ chromiumSandbox: true,
     executablePath: electronBinary,
     args: [appDirectory, '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
     cwd: repoRoot,
@@ -229,61 +230,70 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       assertRows(rows, `${colorMode} sidebar`)
       result[`${colorMode}Rows`] = rows.length
 
+      await runControlCli(roots, watcher, 'send', "printf '\\033]9;Nightly build finished on the watcher\\007'", '--submit')
       phase(`${colorMode}: Needs you cards`)
       // Opened from the keyboard: Tab then walks the cards' buttons in the order they read, none skipped.
-      await page.locator('.needs-you-button').focus()
-      await page.keyboard.press('Enter')
-      await page.waitForSelector('.needs-you-popover .attention-item')
-      await page.waitForFunction(() => document.activeElement?.closest('.needs-you-popover'))
-      const tabOrder = []
-      for (let step = 0; step < 6; step++) {
-        tabOrder.push(await page.evaluate(() => [...document.querySelectorAll('.needs-you-popover button:not(:disabled)')]
-          .indexOf(document.activeElement)))
-        await page.keyboard.press('Tab')
+      const allCards = []
+      for (const requestSession of [fixture[0], codex, watcher]) {
+        await (await sessionRequestControl(page, requestSession)).focus()
+        await page.keyboard.press('Enter')
+        await page.waitForSelector('.session-request-card .attention-item')
+        await page.waitForFunction(() => document.activeElement?.closest('.session-request-card'))
+        const tabOrder = []
+        const controls = await page.locator('.session-request-card button:not(:disabled)').count()
+        for (let step = 0; step < controls; step++) {
+          tabOrder.push(await page.evaluate(() => [...document.querySelectorAll('.session-request-card button:not(:disabled)')]
+            .indexOf(document.activeElement)))
+          if (step + 1 < controls) await page.keyboard.press('Tab')
+        }
+        assert.ok(tabOrder[0] >= 0 && tabOrder.every((index, step) => index === tabOrder[0] + step), `${colorMode} tab order: ${tabOrder}`)
+        await sleep(300)
+        await shot(`${colorMode}-requests-${requestSession}.png`, '.session-request-card')
+        const popover = await page.evaluate(() => ({
+          header: document.querySelector('.session-request-card header span')?.textContent ?? null,
+          cards: [...document.querySelectorAll('.session-request-card .attention-item')].map((card) => {
+            const provenance = card.querySelector('.provenance')
+            const buttons = [...card.querySelectorAll('.actions button')]
+            return {
+              cleared: card.dataset.cleared === 'true',
+              title: card.querySelector('h3')?.textContent ?? null,
+              primaries: buttons.filter((button) => button.classList.contains('primary')).length,
+              ghosts: buttons.filter((button) => button.classList.contains('ghost')).length,
+              // A plate has a fill of its own; a bare word on the card's background is the pattern Epic 40 retires.
+              unfilled: buttons.filter((button) => /rgba\(.+, 0\)$|transparent/.test(getComputedStyle(button).backgroundColor))
+                .map((button) => button.textContent),
+              provenanceOnSeenLine: provenance?.parentElement?.classList.contains('seen') ?? false,
+              provenanceCut: provenance instanceof HTMLElement ? provenance.scrollWidth > provenance.clientWidth : null,
+              provenance: provenance?.textContent ?? null,
+              whereHeight: card.querySelector('.where')?.getBoundingClientRect().height ?? null,
+              kindBorder: (() => {
+                const kind = card.querySelector('.attention-kind')
+                return kind ? getComputedStyle(kind).borderTopWidth : null
+              })()
+            }
+          })
+        }))
+        assert.equal(popover.cards.length, 1, JSON.stringify(popover))
+        assert.equal(popover.header, popover.cards[0].cleared ? '0 open' : '1 open', JSON.stringify(popover))
+        for (const card of popover.cards) {
+          const detail = `${colorMode} card: ${JSON.stringify(card)}`
+          assert.equal(card.primaries, card.cleared ? 0 : 1, detail)
+          assert.equal(card.ghosts, 0, detail)
+          assert.deepEqual(card.unfilled, [], detail)
+          assert.equal(card.provenanceOnSeenLine, true, detail)
+          assert.equal(card.provenanceCut, false, detail)
+          assert.match(card.provenance ?? '', /^from /, detail)
+          // The place, kind and age share one line however long the session name, and the kind tag is filled.
+          assert.ok((card.whereHeight ?? 99) <= 24, detail)
+          assert.equal(card.kindBorder, '0px', detail)
+        }
+        allCards.push(...popover.cards.map(card => card.provenance))
+        await page.keyboard.press('Escape')
+        await sleep(200)
+
       }
-      assert.ok(tabOrder[0] >= 0 && tabOrder.every((index, step) => index === tabOrder[0] + step), `${colorMode} tab order: ${tabOrder}`)
-      await sleep(300)
-      await shot(`${colorMode}-needs-you.png`, '.needs-you-popover')
-      const popover = await page.evaluate(() => ({
-        header: document.querySelector('.needs-you-popover header span')?.textContent ?? null,
-        cards: [...document.querySelectorAll('.needs-you-popover .attention-item')].map((card) => {
-          const provenance = card.querySelector('.provenance')
-          const buttons = [...card.querySelectorAll('.actions button')]
-          return {
-            title: card.querySelector('h3')?.textContent ?? null,
-            primaries: buttons.filter((button) => button.classList.contains('primary')).length,
-            ghosts: buttons.filter((button) => button.classList.contains('ghost')).length,
-            // A plate has a fill of its own; a bare word on the card's background is the pattern Epic 40 retires.
-            unfilled: buttons.filter((button) => /rgba\(.+, 0\)$|transparent/.test(getComputedStyle(button).backgroundColor))
-              .map((button) => button.textContent),
-            provenanceOnSeenLine: provenance?.parentElement?.classList.contains('seen') ?? false,
-            provenanceCut: provenance instanceof HTMLElement ? provenance.scrollWidth > provenance.clientWidth : null,
-            provenance: provenance?.textContent ?? null,
-            whereHeight: card.querySelector('.where')?.getBoundingClientRect().height ?? null,
-            kindBorder: (() => {
-              const kind = card.querySelector('.attention-kind')
-              return kind ? getComputedStyle(kind).borderTopWidth : null
-            })()
-          }
-        })
-      }))
-      assert.match(popover.header ?? '', /· 1 update ·/, JSON.stringify(popover))
-      assert.equal(popover.cards.length, 3, JSON.stringify(popover))
-      for (const card of popover.cards) {
-        const detail = `${colorMode} card: ${JSON.stringify(card)}`
-        assert.equal(card.primaries, 1, detail)
-        assert.equal(card.ghosts, 0, detail)
-        assert.deepEqual(card.unfilled, [], detail)
-        assert.equal(card.provenanceOnSeenLine, true, detail)
-        assert.equal(card.provenanceCut, false, detail)
-        assert.match(card.provenance ?? '', /^from /, detail)
-        // The place, kind and age share one line however long the session name, and the kind tag is filled.
-        assert.ok((card.whereHeight ?? 99) <= 24, detail)
-        assert.equal(card.kindBorder, '0px', detail)
-      }
-      result[`${colorMode}Cards`] = popover.cards.map((card) => card.provenance)
-      await page.keyboard.press('Escape')
-      await sleep(200)
+      assert.equal(allCards.length, 3)
+      result[`${colorMode}Cards`] = allCards
 
       phase(`${colorMode}: Preferences`)
       await page.locator('.preferences-button').click()

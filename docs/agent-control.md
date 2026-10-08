@@ -805,8 +805,10 @@ bmn hook is not yours
   "Agent reports done", "Reported verified" — and never as BMN's own judgement.
 - Evidence must be a file **this session** published. A restarted session can still name a file
   its previous process published: the rule is about the session, not the process.
-- A request stays open in **Needs you** until it is resolved or withdrawn; reading it only clears
-  the unread mark. Typing into its session resolves it, except a review or handoff.
+- Explicitly navigating to a session withdraws its open notices with “Opened in BMN; reminder cleared”.
+  Blocking requests stay open until answered or explicitly dismissed, withdrawn or expired. The session
+  request card retains cleared notice details until navigation elsewhere. Typing resolves questions,
+  permissions and notices, except reviews or handoffs.
 
 These checks separate sessions from each other inside the app. They are not a sandbox against a
 malicious program that already runs as your user and can read your files.
@@ -820,7 +822,7 @@ bmn ask synthetic-checkpoint "Continue the synthetic check?" --choices-json \
 
 `--choices-file -` reads the same JSON from stdin, with only one stdin field per
 invocation. Choices apply only to question and permission asks. Other is automatic.
-Desktop Copy answer is clipboard-only (“Answer copied; not submitted”). Telegram
+Desktop request cards show choices read-only; answer in the terminal. Telegram
 taps/Other send a bounded ordinary message naming the request and decision to its
 freshly attributed foreground conversation, including agents launched in a shell.
 Without that stamp, the new route stays unavailable/draft-only. A manual permission

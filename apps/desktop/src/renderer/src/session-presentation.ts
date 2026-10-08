@@ -248,11 +248,12 @@ export function relativeAge(fromIso: string, now: number): string {
 }
 
 /** The Preferences gear's one dot and the words for it: history cleanup waiting, Telegram not delivering, or both. */
-export function preferencesGearCue(historyPending: boolean, telegramCue: string | null): {
+export function preferencesGearCue(historyPending: boolean, telegramCue: string | null, phoneHistoryProblem = false, telegramEnabled = true): {
   dot: boolean
   title: string
   description: string | undefined
 } {
+  if (telegramEnabled && phoneHistoryProblem) telegramCue = [telegramCue, 'Phone delivery history is unavailable. Automatic delivery is paused until it can be read.'].filter(Boolean).join('. ')
   return {
     dot: historyPending || telegramCue !== null,
     title: ['Preferences', historyPending ? 'History: Start cleanup waits for you' : null, telegramCue].filter(Boolean).join(' · '),
@@ -489,7 +490,7 @@ export type OpenAttentionAction = 'dismiss-reminder' | null
 export function attentionActionWhenOpened(
   request: Pick<AttentionRecord, 'kind' | 'state' | 'seenAt'>
 ): OpenAttentionAction {
-  if (request.state !== 'open') return null
+  if (request.state !== 'open' || request.kind !== 'notice') return null
   return 'dismiss-reminder'
 }
 
@@ -561,4 +562,13 @@ export function handoffPreparedBy(
     stale: !!request?.incarnationId && !!source?.lastProcess &&
       request.incarnationId !== source.lastProcess.incarnationId
   }
+}
+
+/** Cross-session cue includes stopped and archived sessions, counting each session once per group. */
+export function otherSessionRequestCue(records: readonly AttentionRecord[], currentSessionId: string | null): string | null {
+  const other = openRequests(records).filter(request => request.sessionId !== currentSessionId)
+  const waiting = new Set(other.filter(isActionableAttention).map(request => request.sessionId)).size
+  const updates = new Set(other.filter(request => !isActionableAttention(request)).map(request => request.sessionId)).size
+  return [waiting ? `${waiting} ${waiting === 1 ? 'session' : 'sessions'} waiting for your response` : null,
+    updates ? `${updates} ${updates === 1 ? 'update' : 'updates'}` : null].filter(Boolean).join(' · ') || null
 }

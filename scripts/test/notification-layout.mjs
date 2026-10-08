@@ -1,5 +1,6 @@
 /* global window, document, innerWidth, innerHeight */
 // Exercise long confirmations and real Archive Undo in narrow isolated Electron windows.
+import { toggleSessionRequests } from './session-request-helpers.mjs'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -22,7 +23,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
 process.stdin.setRawMode(true);process.stdin.resume();
 setTimeout(()=>spawnSync(${JSON.stringify(process.execPath)},[${JSON.stringify(join(repo, 'apps/desktop/bin/bmn'))},'ask','notice-probe','Synthetic response'],{stdio:'ignore'}),200);
 setInterval(()=>{},1000);`)
-  const app = await _electron.launch({
+  const app = await _electron.launch({ chromiumSandbox: true,
     executablePath: createRequire(join(repo, 'apps/desktop/package.json'))('electron'), cwd: repo,
     args: [join(repo, 'apps/desktop'), '--ozone-platform=x11', '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
     env: { ...env, XDG_CONFIG_HOME: roots.config, XDG_DATA_HOME: roots.data, XDG_STATE_HOME: roots.state,
@@ -53,9 +54,9 @@ setInterval(()=>{},1000);`)
       await page.getByRole('textbox', { name: 'Session name', exact: true }).waitFor()
     }
     const closePopover = async () => {
-      if (await page.locator('.needs-you-popover').count()) {
-        await page.locator('.needs-you-button').click()
-        await page.locator('.needs-you-popover').waitFor({ state: 'detached' })
+      if (await page.locator('.session-request-card').count()) {
+        await toggleSessionRequests(page)
+        await page.locator('.session-request-card').waitFor({ state: 'detached' })
       }
     }
     const measure = async (width, stage, overlay) => {
@@ -101,8 +102,8 @@ setInterval(()=>{},1000);`)
       await page.getByRole('textbox', { name: 'Session name', exact: true }).fill(longName)
       await page.getByRole('button', { name: 'Save session', exact: true }).click()
       await page.locator('.feedback-notice.brief').waitFor()
-      await page.locator('.needs-you-button').click()
-      await measure(width, 'save-popover', '.needs-you-popover')
+      await toggleSessionRequests(page)
+      await measure(width, 'save-popover', '.session-request-card')
       await closePopover()
       await openEdit()
       await measure(width, 'save-drawer', '.session-launcher')
@@ -119,8 +120,8 @@ setInterval(()=>{},1000);`)
         assert.ok(await archived(), 'Archive fixture did not archive')
         const beforeUndo = await stoppedRecord()
         await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setContentSize(width, 500), width)
-        await page.locator('.needs-you-button').click()
-        await measure(width, `undo-${method}`, '.needs-you-popover')
+        await toggleSessionRequests(page)
+        await measure(width, `undo-${method}`, '.session-request-card')
         // On a RED layout, report inaccessible Undo rather than blocking the other cases.
         if (observations.at(-1).viewport && observations.at(-1).undoHit) {
           if (method === 'pointer') {
@@ -170,7 +171,7 @@ setInterval(()=>{},1000);`)
         writeFileSync(join(evidence, `${width}-${method}-restored.json`), JSON.stringify(restoredView, null, 2))
       }
     }
-    await page.locator('.needs-you-button').click()
+    await toggleSessionRequests(page)
     await page.waitForTimeout(200)
     const terminal = () => page.evaluate(id => {
       const s = window.__aitermTest.snapshot(id)

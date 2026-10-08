@@ -6,7 +6,7 @@ session. It uses a bot you create and own. It is off by default.
 ## What it does
 
 - **Quiet hours** in Preferences → Telegram are off by default. Choose different local start
-  and end times, including overnight windows. New request and exit messages wait; Needs you,
+  and end times, including overnight windows. New request and exit messages wait; session dots and request cards,
   desktop notifications, existing-card edits, replies and the test message stay available.
   Allow chosen request kinds through in Preferences, or up to 20 sessions from their menus.
   The window follows local wall-clock time, including clock and daylight-saving changes.
@@ -15,9 +15,9 @@ session. It uses a bot you create and own. It is off by default.
   by counts. Pending cards follow oldest first, ten per 30-second sweep. If you are at the desk,
   leaving within ten minutes of the window's end releases the batch. Secrets are masked and
   home-folder paths in the summary are shortened to `~/…`.
-  A message whose delivery is uncertain shows **Phone: may not have arrived** in Needs you;
+  A message whose delivery is uncertain shows **Phone: may not have arrived** in the session request card;
   BMN never resends that revision automatically, including after restart. A revised request
-  can receive a new card; Needs you retains a warning about any uncertain earlier revision. If delivery history
+  can receive a new card; the session request card retains a warning about any uncertain earlier revision. If delivery history
   fills up, held requests wait instead of risking duplicate messages; ordinary paging keeps its rules.
   A private marker on each held request preserves recovery beyond the 200-entry history cap.
   Expired desktop reminders stay retired; an already eligible offline backlog survives restart.
@@ -68,7 +68,7 @@ conversation. A tap or Other reply submits deliberately; a direct reply follows
 permission prompts**. With either required setting off, keep the answer as a draft
 or use the laptop. Typed manual answers retain exact text up to 4,000 characters;
 invalid/control-bearing text is refused. Native picker limits below remain separate.
-Desktop Copy answer changes only the clipboard. A completed manual permission card
+Desktop request cards show choices read-only; answer in the terminal. A completed manual permission card
 can receive an ordinary follow-up under reply settings; that never renews its grant.
 An unconfirmed or stale manual destination stays draft-only/unavailable, even after
 its reminder is dismissed. Uncertain/submitted attempts never replay.

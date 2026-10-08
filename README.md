@@ -47,9 +47,9 @@ feature stops. This page sums up the product and how to install it.
   `bmn hooks install <agent>` adds the missing ones without touching anything else.
   ([Agent attention](docs/features.md#agent-attention-needs-you-progress-and-handoffs),
   [docs/agent-control.md](docs/agent-control.md))
-- **Needs you.** Agent questions stay open until you answer them or the agent withdraws them. A
-  header count, a dot on each workspace that has a waiting session or open update, and
-  `Ctrl+Shift+U` take you to the right one. OpenCode subagent requests appear here too. Repeated
+- **Needs you.** Agent questions stay open until you answer them or the agent withdraws them. Session and workspace dots, plus
+  `Ctrl+Shift+U`, take you to the right one. Going to a session clears its notices; blocking
+  requests stay until answered or explicitly dismissed. Its status button opens the request card. OpenCode subagent requests appear here too. Repeated
   Claude Code or Codex tool calls can open one informational notice; BMN never stops the agent.
   Progress reports are shown as the agent's claims, with any files it published as evidence.
   A workspace's **Review results…** view groups those reports and pending handoffs; Session

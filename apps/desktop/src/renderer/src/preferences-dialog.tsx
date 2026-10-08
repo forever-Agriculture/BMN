@@ -712,7 +712,7 @@ export function PreferencesDialog(props: {
             <label>Local end <input aria-label="Quiet hours end" type="time" value={quietHours.end}
               onChange={event => setQuietHours({ ...quietHours, end: event.target.value })} /></label>
           </div>
-          <p className="preferences-help">When quiet hours end, a summary sends session names, request kinds and titles to Telegram. Needs you stays available throughout.</p>
+          <p className="preferences-help">When quiet hours end, a summary sends session names, request kinds and titles to Telegram. Session dots stay current throughout.</p>
           <p>Allow these kinds through:</p>
           {(['permission', 'question', 'handoff', 'review', 'notice'] as AttentionKind[]).map(kind => (
             <label key={kind}><input type="checkbox" checked={quietHours.allowKinds.includes(kind)}

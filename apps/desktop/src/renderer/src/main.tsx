@@ -81,8 +81,8 @@ import {
   sessionUpdateParams,
   type SessionLaunchForm
 } from './launch-template'
-import { NeedsYouPopover, type UnreadEntry } from './needs-you-popover'
-import { copyAttentionAnswer, dismissAttentionReminder } from './attention-actions'
+import { SessionRequestCard, type ClearedNotice } from './session-request-card'
+import { dismissAttentionReminder, noticesWhenNavigating, applyAttentionWithdrawal } from './attention-actions'
 import { PopupMenu, type MenuAnchor, type MenuEntry } from './popup-menu'
 import { PreferencesDialog } from './preferences-dialog'
 import {
@@ -98,7 +98,7 @@ import {
 import {
   activeHookOrigin,
   agentTag,
-  attentionActionWhenOpened,
+  otherSessionRequestCue,
   displayPath,
   modelOriginFlag,
   modelOriginLabel,
@@ -212,7 +212,6 @@ function App(): React.JSX.Element {
   /** The resume-after-stop offer is read once per window, not on every renderer recovery. */
   const interruptedOfferChecked = useRef(false)
   const commandRef = useRef<(command: AppCommand) => void>(() => undefined)
-  const needsYouButton = useRef<HTMLButtonElement>(null)
   const sessionArea = useRef<HTMLElement>(null)
   const [startup, setStartup] = useState<SuccessfulStartup>()
   const [failure, setFailure] = useState<string>()
@@ -263,7 +262,9 @@ function App(): React.JSX.Element {
   const [interrupted, setInterrupted] = useState<InterruptedSessionCohort | null>(null)
   /** Its own state, not a ShellDialog: a close question must not replace work the owner has open. */
   const [closePrompt, setClosePrompt] = useState<ClosePromptRequest | null>(null)
-  const [needsYouOpen, setNeedsYouOpen] = useState(false)
+  const [requestCard, setRequestCard] = useState<{ sessionId: string; anchor: HTMLElement | null } | null>(null)
+  const [clearedNotices, setClearedNotices] = useState<{ sessionId: string | null; notices: ClearedNotice[] }>({ sessionId: null, notices: [] })
+  const navigationEpoch = useRef({ sessionId: null as string | null, epoch: 0 })
   const recentSessions = useRef<string[]>([])
   const catalogueReadSequence = useRef(0)
   const [armed, setArmed] = useState(false)
@@ -355,7 +356,7 @@ function App(): React.JSX.Element {
   const home = useMemo(() => inferHome(sessions.map((session) => session.cwd)), [sessions])
   const unresolved = useMemo(() => openRequests(attention), [attention])
   const telegramCue = telegramOwnerCue(settings.telegram.enabled, telegramStatus, now)
-  const gearCue = preferencesGearCue(historyPending, telegramCue)
+  const gearCue = preferencesGearCue(historyPending, telegramCue, !!telegramStatus?.quietHours?.problem, settings.telegram.enabled)
   const answering = useRef(new Set<string>())
 
   /** xterm reports the title the harness set; it refines the resting word and fills the row tooltip, nothing else. */
@@ -744,8 +745,40 @@ function App(): React.JSX.Element {
       .catch(fail('Binding unavailable'))
   }, [selectedSessionId, bindingRevision])
 
+  /** Only owner event handlers call this. Capture revisions before any asynchronous withdrawal. */
+  const navigateAttention = (sessionId: string | null): void => {
+    if (navigationEpoch.current.sessionId !== sessionId) {
+      navigationEpoch.current = { sessionId, epoch: navigationEpoch.current.epoch + 1 }
+      setClearedNotices({ sessionId, notices: [] })
+      setRequestCard(null)
+    }
+    if (!sessionId) return
+    const epoch = navigationEpoch.current.epoch
+    const phone = telegramStatus?.quietHours ? structuredClone(telegramStatus.quietHours) : undefined
+    for (const captured of noticesWhenNavigating(attention, sessionId)) {
+      void dismissAttentionReminder(window.aiTerminal, captured, 'Opened in BMN; reminder cleared', refresh.attention, result => {
+          // Only replace the exact captured revision; an arriving replacement belongs to another action.
+          setAttention(current => applyAttentionWithdrawal(current, captured, result))
+          if (navigationEpoch.current.epoch !== epoch) return
+          setClearedNotices(current => {
+            const notices = current.sessionId === sessionId ? current.notices : []
+            if (notices.some(snapshot => snapshot.request.requestId === captured.requestId && snapshot.request.revision === captured.revision)) return current
+            return { sessionId, notices: [...notices, { request: captured, phone }] }
+          })
+        }).catch(fail('Request update failed'))
+    }
+  }
+
+  const navigateWorkspace = (workspaceId: string): void => {
+    const target = writer.layouts()[workspaceId]?.selectedSessionId ??
+      visibleWorkspaceSessions(sessions, workspaceId, false)[0]?.sessionId ?? null
+    navigateAttention(target)
+    setTree(current => selectTreeWorkspace(current, workspaceId))
+  }
+
   const applyTreeSessionAction = (action: TreeSessionAction | null): void => {
     if (!action) return
+    navigateAttention(action.sessionId)
     recentSessions.current = rememberRecentSession(recentSessions.current, action.sessionId)
     setTree(action.tree)
     writer.apply(action.workspaceId, action.change)
@@ -760,15 +793,16 @@ function App(): React.JSX.Element {
     })
   }
 
-  const openSession = (sessionId: string): boolean => {
+  const openSession = (sessionId: string, revealArchived = false): boolean => {
     const record = sessionsRef.current.find((session) => session.sessionId === sessionId)
     const workspace = record ? workspaces.find((item) => item.workspaceId === record.workspaceId) : undefined
-    if (!record || record.archivedAt !== null || !workspace || workspace.archivedAt !== null) {
+    if (!record || !workspace || !revealArchived && (record.archivedAt !== null || workspace.archivedAt !== null)) {
       brief('That session is unavailable. Refreshing attention items.')
       return false
     }
+    if (record.archivedAt !== null || workspace.archivedAt !== null) setTree(current => ({ ...current, showArchived: true }))
     applyTreeSessionAction(selectTreeSession(sessionsRef.current, sessionId))
-    setNeedsYouOpen(false)
+    clearUnread(sessionId)
     requestAnimationFrame(() => controllers.current.get(sessionId)?.focus())
     return true
   }
@@ -880,6 +914,7 @@ function App(): React.JSX.Element {
 
   /** Inspect an existing pane in place, including panes owned by another workspace. */
   const selectSessionForPanel = (session: SessionRecord): void => {
+    navigateAttention(session.sessionId)
     const workspaceId = activeWorkspaceRef.current
     const current = workspaceId ? writer.layouts()[workspaceId] : undefined
     if (workspaceId && current?.split.panes.some(pane => pane.sessionId === session.sessionId)) {
@@ -1181,6 +1216,7 @@ function App(): React.JSX.Element {
       brief('This workspace is already split. Close the split first.')
       return
     }
+    navigateAttention(sessionId)
     writer.apply(activeWorkspaceId, (state) => splitLayoutSession(state, sessionId, allSessionIds))
     clearUnread(sessionId)
     requestAnimationFrame(() => controllers.current.get(sessionId)?.focus())
@@ -1211,12 +1247,17 @@ function App(): React.JSX.Element {
   }
 
   /** Selects a pane in the active composition without navigating to that session's own workspace. */
-  const focusLayoutSession = (sessionId: string): void => {
-    if (!activeWorkspaceId || !layout?.split.panes.some((pane) => pane.sessionId === sessionId)) return
-    recentSessions.current = rememberRecentSession(recentSessions.current, sessionId)
-    writer.apply(activeWorkspaceId, (state) => selectLayoutSession(state, sessionId, allSessionIds))
+  const focusLayoutSession = (sessionId: string, focusTerminal = true): void => {
+    if (!activeWorkspaceId) return
+    const current = writer.layouts()[activeWorkspaceId]
+    if (!current?.split.panes.some((pane) => pane.sessionId === sessionId)) return
+    navigateAttention(sessionId)
+    if (current.selectedSessionId !== sessionId) {
+      recentSessions.current = rememberRecentSession(recentSessions.current, sessionId)
+      writer.apply(activeWorkspaceId, (state) => selectLayoutSession(state, sessionId, allSessionIds))
+    }
     clearUnread(sessionId)
-    requestAnimationFrame(() => controllers.current.get(sessionId)?.focus())
+    if (focusTerminal) requestAnimationFrame(() => controllers.current.get(sessionId)?.focus())
   }
 
   /** Moves selection and the keyboard to the other pane of a split. */
@@ -1244,6 +1285,7 @@ function App(): React.JSX.Element {
       }
       return splitLayoutSession(next, session.sessionId, allSessionIds)
     })
+    navigateAttention(session.sessionId)
     clearUnread(session.sessionId)
     requestAnimationFrame(() => controllers.current.get(session.sessionId)?.focus())
   }
@@ -1292,15 +1334,12 @@ function App(): React.JSX.Element {
       }
       return
     }
-    const opening = attentionActionWhenOpened(request)
-    if (!opening) return
-    const action = dismissAttentionReminder(window.aiTerminal, request, 'Opened in BMN; reminder cleared')
-    void action
-      .catch((error: unknown) => {
-        fail('Request update failed')(error)
+    if (request.kind === 'review') {
+      requestAnimationFrame(() => {
+        const anchor = document.querySelector<HTMLElement>(`[data-session-requests="${request.sessionId}"]`)
+        setRequestCard({ sessionId: request.sessionId, anchor })
       })
-      .then(() => refresh.attention())
-      .catch(fail('Attention refresh failed'))
+    }
   }
 
   const nextNeedingYou = (): void => {
@@ -1309,7 +1348,7 @@ function App(): React.JSX.Element {
       brief('None waiting.')
       return
     }
-    if (!openSession(request.sessionId)) {
+    if (!openSession(request.sessionId, true)) {
       void refresh.attention().catch(fail('Attention refresh failed'))
       return
     }
@@ -1326,7 +1365,7 @@ function App(): React.JSX.Element {
         const ids = visibleWorkspaces(workspaces, false).map((item) => item.workspaceId)
         const next = neighbor(ids, activeWorkspaceId, command === 'workspace-next' ? 1 : -1)
         if (next) {
-          setTree((current) => selectTreeWorkspace(current, next))
+          navigateWorkspace(next)
           announce(workspaceName(next))
         }
         return
@@ -1511,7 +1550,7 @@ function App(): React.JSX.Element {
         group: 'Workspaces',
         label: workspace.name,
         context: ((count) => `${count} ${count === 1 ? 'session' : 'sessions'}`)(visibleWorkspaceSessions(sessions, workspace.workspaceId, false).length),
-        run: () => setTree((current) => selectTreeWorkspace(current, workspace.workspaceId))
+        run: () => navigateWorkspace(workspace.workspaceId)
       })),
       ...ports.flatMap((entry) => {
         const session = sessions.find((each) => each.sessionId === entry.sessionId)
@@ -1681,15 +1720,36 @@ function App(): React.JSX.Element {
   }
   const panes = layout?.split.panes ?? []
   const orientation = layout?.split.orientation ?? 'side-by-side'
-  const unreadEntries: UnreadEntry[] = Object.entries(unread)
-    .filter(([sessionId]) => sessionId !== selectedSessionId)
-    .map(([sessionId, at]) => ({ sessionId, reason: 'New output', at }))
   const firstRatio = dragRatio ?? panes[0]?.ratio ?? 1
   /** Stopped sessions keep their pane's place and share of a split. */
   const paneStyle = (sessionId: string): React.CSSProperties => {
     const index = panes.findIndex((pane) => pane.sessionId === sessionId)
     if (panes.length < 2 || index === -1) return { order: 0 }
     return { order: index * 2, flexGrow: index === 0 ? firstRatio : 1 - firstRatio }
+  }
+
+  const snapshotsFor = (sessionId: string): ClearedNotice[] => selectedSessionId === sessionId && clearedNotices.sessionId === sessionId ? clearedNotices.notices : []
+  const requestControl = (sessionId: string): React.JSX.Element | null => {
+    const requests = unresolved.filter(request => request.sessionId === sessionId)
+    const snapshots = snapshotsFor(sessionId)
+    if (!requests.length && !snapshots.length) return null
+    const word = requests.some(request => request.kind !== 'notice') ? 'Waiting for your response'
+      : requests.length ? 'Update available' : 'Cleared updates'
+    return <button type="button" className="pane-request-control" data-cleared={requests.length === 0 || undefined} data-session-requests={sessionId}
+      aria-haspopup="dialog" aria-expanded={requestCard?.sessionId === sessionId}
+      onClick={event => {
+        const anchor = event.currentTarget
+        setRequestCard(current => current?.sessionId === sessionId ? null : { sessionId, anchor })
+      }}>
+      {word}{requests.length > 1 ? ` · ${requests.length}` : ''}</button>
+  }
+  const focusCue = focusMode ? otherSessionRequestCue(attention, selectedSessionId) : null
+  const closeRequestCard = (returnFocus: boolean): void => {
+    setRequestCard(null)
+    if (returnFocus) {
+      const target = requestCard?.anchor?.isConnected ? requestCard.anchor : sessionArea.current
+      target?.focus({ preventScroll: true })
+    }
   }
 
   const commitRatio = (ratio: number): void => {
@@ -1722,18 +1782,6 @@ function App(): React.JSX.Element {
           ) : <span>Create a workspace.</span>}
         </nav>
         <div className="header-actions">
-          <button
-            ref={needsYouButton}
-            type="button"
-            className="needs-you-button"
-            data-has-items={unresolved.length > 0}
-            aria-haspopup="dialog"
-            aria-expanded={needsYouOpen}
-            title={`Needs you (${SHORTCUT_LABELS['attention-next']} jumps to the next)`}
-            onClick={() => setNeedsYouOpen((value) => !value)}
-          >
-            <Icon name="bell" /><span>Needs you</span><span className="count">{unresolved.length}</span>
-          </button>
           <button type="button" className="icon-button" aria-label="Command palette" title={`Command palette (${SHORTCUT_LABELS.palette})`} onClick={() => setDialog({ kind: 'palette' })}>
             <Icon name="search" />
           </button>
@@ -1749,47 +1797,7 @@ function App(): React.JSX.Element {
             {gearCue.dot ? <span className="status-dot needs-you" aria-hidden="true" /> : null}
           </button>
         </div>
-        {needsYouOpen ? (
-          <NeedsYouPopover
-            requests={attention}
-            phone={telegramStatus?.quietHours}
-            unread={unreadEntries}
-            place={place}
-            now={now}
-            anchor={needsYouButton.current}
-            onOpenSession={(sessionId, request) => {
-              if (!openSession(sessionId)) {
-                void refresh.attention().catch(fail('Attention refresh failed'))
-                return
-              }
-              if (request) recordAttentionOpened(request)
-            }}
-            onAcknowledge={(request) => {
-              const action = dismissAttentionReminder(window.aiTerminal, request)
-              void action.then(() => refresh.attention()).catch(fail('Request update failed'))
-            }}
-            onCopyAnswer={async (request, text) => {
-              await copyAttentionAnswer(window.aiTerminal, request, text)
-              await refresh.attention().catch(fail('Attention refresh failed'))
-              announce('Answer copied. Paste it into the terminal to submit.')
-            }}
-            handoffDestination={(request) => {
-              const draft = handoffDraftForAttention(request, drafts)
-              const destination = sessions.find((session) => session.sessionId === draft?.sessionId)
-              return destination ? { ...place(destination.sessionId), cwd: destination.cwd } : null
-            }}
-            onMarkAnswered={(request) => {
-              void window.aiTerminal.resolveAttention(request.requestId, 'Answered in the terminal',
-                { kind: request.kind, revision: request.revision }, 'owner')
-                .then(() => refresh.attention())
-                .catch(fail('Request update failed'))
-            }}
-            onClose={() => {
-              setNeedsYouOpen(false)
-              needsYouButton.current?.focus()
-            }}
-          />
-        ) : null}
+
       </header>
       {failure ? (
         <div className="feedback-notice" role="status">
@@ -1827,6 +1835,7 @@ function App(): React.JSX.Element {
                   <section key={workspace.workspaceId} className="workspace-group" aria-label={workspace.name}>
                     <div className={`workspace-row${workspace.archivedAt ? ' archived' : ''}`}>
                       <button type="button" title={workspaceTitle} aria-expanded={isExpanded} onClick={() => {
+                        if (activeWorkspaceId !== workspace.workspaceId) navigateWorkspace(workspace.workspaceId)
                         setTree((current) => toggleWorkspaceExpanded(current, workspace.workspaceId))
                       }}>
                         <WorkspaceIdentityMark workspaceName={workspace.name} marker={workspace.marker} reserveSlot={anyMarker} decorative />
@@ -1911,7 +1920,7 @@ function App(): React.JSX.Element {
             </div>
           </aside>
         )}
-        <section ref={sessionArea} className={`session-area ${orientation}${panes.length > 1 ? ' split' : ''}`} aria-label="Sessions">
+        <section ref={sessionArea} tabIndex={-1} className={`session-area ${orientation}${panes.length > 1 ? ' split' : ''}`} aria-label="Sessions">
           {Object.values(live).map((terminalStartup) => {
             const paneIndex = panes.findIndex((pane) => pane.sessionId === terminalStartup.sessionId)
             const record = sessions.find((session) => session.sessionId === terminalStartup.sessionId)
@@ -1930,6 +1939,8 @@ function App(): React.JSX.Element {
                 focusMode={focusMode}
                 filesOpen={panel === 'files'}
                 attention={sessionAttention(unresolved, terminalStartup.sessionId)}
+                requestControl={requestControl(terminalStartup.sessionId)}
+                focusCue={focusCue}
                 activity={activity[terminalStartup.sessionId] ?? null}
                 modelOrigin={record ? activeHookOrigin(hookOrigins, record, terminalStartup.incarnationId) : null}
                 ports={portsFor(ports, terminalStartup.sessionId)}
@@ -1948,7 +1959,7 @@ function App(): React.JSX.Element {
                 }}
                 onView={(update) => applySessionView(writer, sessionsRef.current, terminalStartup.sessionId, update)}
                 onFailure={setFailure}
-                onSelect={() => focusLayoutSession(terminalStartup.sessionId)}
+                onSelect={(focusTerminal) => focusLayoutSession(terminalStartup.sessionId, focusTerminal)}
                 onSplit={() => toggleSplit(terminalStartup.sessionId)}
                 onFocusMode={() => setFocusMode((value) => !value)}
                 onFiles={() => setPanel((value) => value === 'files' ? null : 'files')}
@@ -2011,7 +2022,14 @@ function App(): React.JSX.Element {
             />
           ) : null}
           {selectedRecord && !live[selectedRecord.sessionId] ? (
-            <section className="stopped-session" style={paneStyle(selectedRecord.sessionId)}>
+            <section className="stopped-session" style={paneStyle(selectedRecord.sessionId)}
+              onPointerDownCapture={() => navigateAttention(selectedRecord.sessionId)}
+              onKeyUpCapture={event => { if (event.key === 'Tab') navigateAttention(selectedRecord.sessionId) }}>
+              <header className="stopped-request-heading">{requestControl(selectedRecord.sessionId)}
+                <button type="button" aria-pressed={focusMode} title={['Focus', focusCue].filter(Boolean).join(' · ')}
+                  onClick={() => setFocusMode(value => !value)}><Icon name="focus" />Focus
+                  {focusCue ? <span className="status-dot needs-you" aria-hidden="true" /> : null}</button>
+              </header>
               <span className="eyebrow">
                 {[workspaceName(selectedRecord.workspaceId), agentTag(selectedRecord.executable, selectedRecord.argv)]
                   .filter((part) => part !== 'Shell').join(' · ')}
@@ -2043,7 +2061,10 @@ function App(): React.JSX.Element {
               const record = sessions.find((session) => session.sessionId === pane.sessionId)
               if (!record) return null
               return (
-                <section key={pane.sessionId} className="stopped-pane" style={paneStyle(pane.sessionId)}>
+                <section key={pane.sessionId} className="stopped-pane" style={paneStyle(pane.sessionId)}
+                  onPointerDownCapture={() => focusLayoutSession(record.sessionId, false)}
+                  onKeyUpCapture={event => { if (event.key === 'Tab') focusLayoutSession(record.sessionId, false) }}>
+                  {requestControl(record.sessionId)}
                   <strong>{record.name}</strong>
                   <p>{sessionProcessLabel(record.lastProcess)}</p>
                   <ProgressStrip progress={observedProgressFor(record)} onOpen={() => openProgressDetail(record, observedProgressFor(record))} />
@@ -2051,6 +2072,27 @@ function App(): React.JSX.Element {
                 </section>
               )
             }) : null}
+          {requestCard ? <SessionRequestCard key={requestCard.sessionId}
+            requests={attention.filter(request => request.sessionId === requestCard.sessionId)}
+            cleared={snapshotsFor(requestCard.sessionId)} phone={telegramStatus?.quietHours}
+            place={place} now={now} anchor={requestCard.anchor}
+            onOpenHandoff={request => { recordAttentionOpened(request); closeRequestCard(false) }}
+            onAcknowledge={request => {
+              void dismissAttentionReminder(window.aiTerminal, request, 'Dismissed in BMN', refresh.attention).catch(fail('Request update failed'))
+            }}
+            handoffDestination={request => {
+              const draft = handoffDraftForAttention(request, drafts)
+              const destination = sessions.find(session => session.sessionId === draft?.sessionId)
+              return destination ? { ...place(destination.sessionId), cwd: destination.cwd } : null
+            }}
+            onMarkAnswered={request => {
+              if (answering.current.has(request.requestId)) return
+              answering.current.add(request.requestId)
+              void window.aiTerminal.resolveAttention(request.requestId, 'Answered in the terminal',
+                { kind: request.kind, revision: request.revision }, 'owner')
+                .then(() => refresh.attention()).catch(fail('Request update failed'))
+                .finally(() => answering.current.delete(request.requestId))
+            }} onClose={closeRequestCard} /> : null}
           {!selectedRecord ? (
             <div className="empty-state">
               {activeWorkspace ? (

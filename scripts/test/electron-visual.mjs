@@ -1,4 +1,6 @@
 /* global window, document, HTMLElement, HTMLButtonElement, getComputedStyle, requestAnimationFrame */
+import { toggleSessionRequests } from './session-request-helpers.mjs'
+import { sessionRequestControl } from './session-request-helpers.mjs'
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -40,13 +42,12 @@ const baselineCss = `
     box-shadow: inset 2px 0 var(--text) !important;
   }
   button:disabled { color: var(--muted) !important; opacity: 1 !important; }
-  .needs-you-button .count { color: var(--text) !important; box-shadow: none !important; }
   .pane-actions button[aria-pressed='true'] { background: transparent !important; }
   .session-row > button:first-child:focus-visible,
   .workspace-row > button:first-child:focus-visible,
   .popup-menu [role='menuitem']:focus-visible,
   .app-dialog-body button:focus-visible,
-  .needs-you-popover button:focus-visible { outline-offset: 2px !important; }
+  .session-request-card button:focus-visible { outline-offset: 2px !important; }
 `
 
 const epic20BaselineCss = `
@@ -298,7 +299,7 @@ const evidence = await withTemporaryRoot(
   temporaryRootContracts.electronDevelopment,
   async ({ root, roots }) => {
     phase('launching isolated Electron app')
-    const application = await electron.launch({
+    const application = await electron.launch({ chromiumSandbox: true,
       executablePath: electronBinary,
       args: [appDirectory, '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
       cwd: repoRoot,
@@ -438,7 +439,7 @@ const evidence = await withTemporaryRoot(
         'question'
       )
       await page.waitForFunction(() =>
-        document.querySelector('.needs-you-button')?.getAttribute('data-has-items') === 'true'
+        document.querySelector('.session-row .status-dot.needs-you') !== null
       )
       phase('attention fixture visible')
 
@@ -575,11 +576,11 @@ const evidence = await withTemporaryRoot(
       }
       phase('contrast checks passed')
 
-      const needsButton = page.locator('.needs-you-button')
+      const needsButton = (await sessionRequestControl(page))
       await needsButton.focus()
       await page.keyboard.press('Enter')
-      await page.waitForSelector('.needs-you-popover')
-      await page.waitForFunction(() => document.activeElement?.closest('.needs-you-popover'))
+      await page.waitForSelector('.session-request-card')
+      await page.waitForFunction(() => document.activeElement?.closest('.session-request-card'))
       const popoverFocus = await page.evaluate(() => {
         const focused = document.activeElement
         const style = focused instanceof HTMLElement ? getComputedStyle(focused) : null
@@ -595,7 +596,7 @@ const evidence = await withTemporaryRoot(
       assert.notEqual(popoverFocus.outlineWidth, '0px')
       const primaryPress = await pointerStates(
         page,
-        page.locator('.needs-you-popover button.primary').first(),
+        page.locator('.session-request-card button.primary').first(),
         'black-knight-primary-active.png'
       )
       if (primaryPress.activeScreenshot) screenshots.push(primaryPress.activeScreenshot)
@@ -1019,7 +1020,7 @@ const evidence = await withTemporaryRoot(
       phase('driving two live sessions into Working and Idle')
       await runControlCli(roots, fixture.selectedSessionId, 'withdraw', 'epic5-visual')
       await page.waitForFunction(() =>
-        document.querySelector('.needs-you-button')?.getAttribute('data-has-items') === 'false')
+        document.querySelector('.session-row .status-dot.needs-you') === null)
       await runControlCli(
         roots,
         fixture.selectedSessionId,
@@ -1354,7 +1355,7 @@ const evidence = await withTemporaryRoot(
         roots, fixture.selectedSessionId, 'ask', 'epic14-precedence', 'Which branch?', '--kind', 'question'
       )
       await page.waitForFunction(() =>
-        document.querySelector('.needs-you-button')?.getAttribute('data-has-items') === 'true')
+        document.querySelector('.session-row .status-dot.needs-you') !== null)
       const precedence = await page.evaluate(async (sessionId) => {
         const wait = async (check) => {
           for (let attempt = 0; attempt < 80; attempt += 1) {
@@ -1372,7 +1373,7 @@ const evidence = await withTemporaryRoot(
           settled,
           rowWord: rowWord(),
           rowMark: row?.querySelector('.status-dot')?.className ?? null,
-          paneWord: pane?.querySelector('.pane-state')?.textContent?.trim() ?? null,
+          paneWord: pane?.querySelector('.pane-request-control, .pane-state')?.textContent?.trim() ?? null,
           paneMark: pane?.querySelector('.status-dot')?.className ?? null
         }
       }, fixture.selectedSessionId)
@@ -1387,9 +1388,9 @@ const evidence = await withTemporaryRoot(
       ))
 
       // 14.2 AC3: the popover says what opened each request, in plain words beside the row content.
-      await page.locator('.needs-you-button').click()
-      await page.waitForSelector('.needs-you-popover')
-      const provenanceLines = await page.evaluate(() => [...document.querySelectorAll('.needs-you-popover')]
+      await toggleSessionRequests(page)
+      await page.waitForSelector('.session-request-card')
+      const provenanceLines = await page.evaluate(() => [...document.querySelectorAll('.session-request-card')]
         .flatMap((popover) => [...popover.querySelectorAll('.provenance')])
         .map((line) => line.textContent?.trim() ?? ''))
       screenshots.push(await screenshot(
@@ -1510,7 +1511,7 @@ const evidence = await withTemporaryRoot(
         '--kind', 'question'
       )
       await page.waitForFunction(() =>
-        document.querySelector('.needs-you-button')?.getAttribute('data-has-items') === 'true')
+        document.querySelector('.session-row .status-dot.needs-you') !== null)
       // The markers were just chosen with the mouse, and Chromium keeps that modality until a key
       // arrives: a programmatic focus after a click is not :focus-visible. One Tab makes the focus
       // below the keyboard focus this criterion is actually about.
@@ -2254,7 +2255,7 @@ const evidence = await withTemporaryRoot(
 const interruptedGlance = await withTemporaryRoot(
   temporaryRootContracts.electronDevelopment,
   async ({ root, roots }) => {
-    const launch = () => electron.launch({
+    const launch = () => electron.launch({ chromiumSandbox: true,
       executablePath: electronBinary,
       args: [appDirectory, '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
       cwd: repoRoot,

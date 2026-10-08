@@ -7,6 +7,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron } from 'playwright'
 import { temporaryRootContracts, withTemporaryRoot } from '../lib/temporary-root.mjs'
+import { waitForAsyncState } from './session-request-helpers.mjs'
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const evidence = join(repo, '.dev-auto/evidence/epic-48/runtime'); mkdirSync(evidence, { recursive: true })
@@ -21,7 +22,7 @@ process.stdout.write('palette fixture ready\\r\\n');let sent=false;setInterval((
   const env = { ...process.env }
   if (env.WAYLAND_DISPLAY && !isAbsolute(env.WAYLAND_DISPLAY)) env.WAYLAND_DISPLAY = join(env.XDG_RUNTIME_DIR, env.WAYLAND_DISPLAY)
   for (const key of ['BMN_TOKEN', 'BMN_SESSION_ID', 'BMN_CONTROL_SOCKET', 'BMN_PTY_INCARNATION_ID']) delete env[key]
-  const app = await _electron.launch({ executablePath: createRequire(join(repo, 'apps/desktop/package.json'))('electron'), cwd: repo,
+  const app = await _electron.launch({ chromiumSandbox: true, executablePath: createRequire(join(repo, 'apps/desktop/package.json'))('electron'), cwd: repo,
     args: [join(repo, 'apps/desktop'), ...(!env.WAYLAND_DISPLAY && env.DISPLAY ? ['--ozone-platform=x11'] : []), '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
     env: { ...env, XDG_CONFIG_HOME: roots.config, XDG_DATA_HOME: roots.data, XDG_STATE_HOME: roots.state,
       XDG_CACHE_HOME: roots.cache, XDG_RUNTIME_DIR: roots.runtime, BMN_CONFIG_HOME: join(roots.config, 'bmn'),
@@ -57,18 +58,18 @@ process.stdout.write('palette fixture ready\\r\\n');let sent=false;setInterval((
     assert.ok((await page.locator('.file-reference-dialog').innerText()).includes('syntheticSource'))
     await page.keyboard.press('Escape')
     writeFileSync(trigger, '')
-    await page.waitForFunction(() => document.querySelector('.needs-you-button .count')?.textContent === '1')
+    await waitForAsyncState(page, async () => (await window.aiTerminal.listAttention()).filter(r => r.state === 'open').length === 1)
     await openPalette(); await search.fill('nxt req')
     const command = page.locator('#palette-next-attention')
     await command.waitFor()
     assert.equal(await search.getAttribute('aria-activedescendant'), 'palette-next-attention')
     await page.locator('.palette-results [data-group="Files"]').filter({ hasText: 'target-source-nxtreq.ts' }).waitFor()
     assert.equal(await search.getAttribute('aria-activedescendant'), 'palette-next-attention', 'Late files replaced command selection')
-    assert.equal(await page.locator('.needs-you-button .count').innerText(), '1', 'Search executed a command before Enter')
+    assert.equal(await page.evaluate(async () => (await window.aiTerminal.listAttention()).filter(r => r.state === 'open').length), 1, 'Search executed a command before Enter')
     await page.screenshot({ path: join(evidence, 'abbreviation.png') })
     await search.press('Enter')
     await page.waitForSelector('.command-palette', { state: 'detached' })
-    await page.waitForFunction(() => document.querySelector('.needs-you-button .count')?.textContent === '0')
+    await waitForAsyncState(page, async () => (await window.aiTerminal.listAttention()).every(r => r.state !== 'open'))
     const after = await page.evaluate(id => ({ snapshot: window.__aitermTest.snapshot(id), same: window.bmnPaletteTerminal === document.querySelector(`.session-terminal[data-session-id="${id}"] .xterm`), focused: document.activeElement?.classList.contains('xterm-helper-textarea') }), sid)
     assert.equal(after.same, true); assert.equal(after.focused, true)
     for (const key of ['cols', 'rows', 'ptyCols', 'ptyRows', 'inputEvents']) assert.equal(after.snapshot[key], before[key])

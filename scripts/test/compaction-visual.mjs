@@ -64,7 +64,7 @@ async function compactionLine(page, expected) {
 
 mkdirSync(evidenceDirectory, { recursive: true })
 await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ root, roots }) => {
-  const application = await electron.launch({
+  const application = await electron.launch({ chromiumSandbox: true,
     executablePath: electronBinary,
     args: [appDirectory, '--bmn-test-mode', '--', '/bin/bash', '--noprofile', '--norc'],
     cwd: repoRoot,
@@ -147,7 +147,7 @@ done
       await page.locator('dialog.hook-events-dialog').screenshot({ path: join(evidenceDirectory, `hook-events-${colorMode}.png`) })
     }
     await page.keyboard.press('Escape')
-    result.needsYouOpen = (await page.evaluate(() => window.aiTerminal.listAttention()))
+    result.openRequestCount = (await page.evaluate(() => window.aiTerminal.listAttention()))
       .filter((request) => request.state === 'open').length
 
     phase('relaunched run: a new incarnation starts from none')

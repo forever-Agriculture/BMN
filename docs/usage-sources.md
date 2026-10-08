@@ -121,7 +121,8 @@ Its context share was not driven, so it is not read.
 - **Notice at 90%.** When a window reaches 90% (the whole percent shown), BMN opens one **Needs you**
   notice for that agent and window, for example "Codex weekly limit at 91% · resets Fri 09:00". It
   opens once per reset period, expires by itself when the window resets, and reaches Telegram only
-  by the pager's rule for notices.
+  by the pager's rule for notices. Going to its session clears the notice; its exact text stays
+  readable in the request card until navigation elsewhere.
   - **One period.** A period is known by its reset time, stored as the first notice's expiry. A later
     reading of the same agent and window whose reset lies within 10 minutes of a stored one belongs to
     that period, whichever session reports it, whether the notice is open, dismissed or expired, and

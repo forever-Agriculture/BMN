@@ -188,18 +188,19 @@ keeps.
 
 ## Agent attention: Needs you, progress and handoffs
 
-**Needs you** is the queue of open requests across your sessions, counted in the header;
+**Needs you** is the set of open requests across your sessions, shown by session and workspace dots;
 `Ctrl+Shift+U` jumps to the next one. A request can be a *question*, *permission*, *review*,
 *notice* or *handoff*. Each row says what opened it and what closed it — "from Claude Notification",
-"withdrawn by Claude Stop", "resolved by typing", "expired". A request stays open until you answer
-it, the agent withdraws it or it expires. Typing, pasting or dictating into a session also resolves
+"withdrawn by Claude Stop", "resolved by typing", "expired". Going to a session clears its notices, retaining their details in that session’s request card until you navigate elsewhere.
+Blocking requests stay open until answered, explicitly dismissed, withdrawn by the agent or expired. Typing, pasting or dictating into a session also resolves
 its open prompts and notices, the way answering in the terminal does. Typing does not close review
-or handoff requests. The popover offers **Open session**, **Dismiss**, and
-**Mark answered** once you have dealt with it in the terminal.
+or handoff requests. Click the session’s status word to open its request card, including for stopped or archived sessions.
+It offers **Open handoff**, **Dismiss**, and **Mark answered** once you have dealt with it in the terminal.
 
-On a response card's **Open session** or **Open handoff** button, Up/Down moves to the previous/next
-response card and scrolls it into view. Browsing sends nothing. Arrow keys in answer controls keep
-their normal behavior; incoming requests leave your focus in place.
+Questions and choices are read-only in the card; answer in the terminal or on Telegram.
+`Ctrl+Shift+U` cycles sessions in the highest waiting tier, opens a review’s card or a handoff in Files,
+and focuses the terminal for questions and permissions. A gold dot on Focus signals requests in other sessions.
+Incoming requests leave your focus in place; cards overlay the pane without resizing its terminal.
 
 When desktop notifications are enabled, BMN shows one for a new request unless you are already
 looking at that session.

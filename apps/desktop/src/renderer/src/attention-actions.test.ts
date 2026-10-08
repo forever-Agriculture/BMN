@@ -1,77 +1,98 @@
 import type { AttentionRecord } from '@bmn/protocol'
 import { describe, expect, it, vi } from 'vitest'
-import { copyAttentionAnswer, dismissAttentionReminder } from './attention-actions'
+import { dismissAttentionReminder, noticesWhenNavigating, applyAttentionWithdrawal } from './attention-actions'
 
-const question: AttentionRecord = {
-  requestId: 'question-synthetic', sessionId: 'source', incarnationId: 'run-one', requestKey: 'question',
-  kind: 'question', title: 'Which color?', body: null, state: 'open', resolution: null,
+const notice: AttentionRecord = {
+  requestId: 'notice-synthetic', sessionId: 'source', incarnationId: 'run-one', requestKey: 'notice',
+  kind: 'notice', title: 'Finished', body: 'Build finished', state: 'open', resolution: null,
   openedAt: '2026-09-30T00:00:00.000Z', expiresAt: null, resolvedAt: null, seenAt: null,
-  revision: 3, openedBy: 'hook:codex:PreToolUse', resolvedBy: null,
-  prompt: { type: 'questions', harness: 'codex', shape: 'async-choice', requestRef: null,
-    toolUseId: 'call-synthetic', questions: [{ id: 'color', header: null, text: 'Which color?',
-      multiSelect: false, options: [{ label: 'Gold', description: null }] }] }
+  revision: 3, openedBy: 'osc:9', resolvedBy: null, prompt: null
 }
-
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(done => { resolve = done })
+  return { promise, resolve }
+}
 function bridge() {
-  return {
-    listAttention: vi.fn(async () => [question]),
-    writeClipboardText: vi.fn(async () => ({ written: true as const })),
-    resolveAttention: vi.fn(async (): Promise<AttentionRecord> => ({ ...question, state: 'withdrawn' }))
-  }
+  return { resolveAttention: vi.fn(async (): Promise<AttentionRecord> => ({ ...notice, state: 'withdrawn', revision: notice.revision + 1 })) }
 }
 
 describe('owner attention actions', () => {
-  it('dismisses only the reviewed revision without recording an answer or granting permission', async () => {
+  it('dismisses only the captured revision without answering or approving', async () => {
     const api = bridge()
-    await dismissAttentionReminder(api, { ...question, kind: 'permission' })
-    expect(api.resolveAttention).toHaveBeenCalledExactlyOnceWith(question.requestId, 'Dismissed in BMN',
+    await dismissAttentionReminder(api, { ...notice, kind: 'permission' })
+    expect(api.resolveAttention).toHaveBeenCalledExactlyOnceWith(notice.requestId, 'Dismissed in BMN',
       { kind: 'permission', revision: 3 }, 'owner', 'withdrawn')
-    expect(api.writeClipboardText).not.toHaveBeenCalled()
   })
-
-  it('copies exact text, then clears the reminder with a not-submitted disposition', async () => {
-    const api = bridge()
-    await copyAttentionAnswer(api, question, 'Gold')
-    expect(api.writeClipboardText).toHaveBeenCalledExactlyOnceWith('Gold')
-    expect(api.resolveAttention).toHaveBeenCalledExactlyOnceWith(question.requestId, 'Answer copied; not submitted',
-      { kind: 'question', revision: 3 }, 'owner', 'withdrawn')
-    expect(api.writeClipboardText.mock.invocationCallOrder[0]).toBeLessThan(api.resolveAttention.mock.invocationCallOrder[0]!)
+  it('captures only open notices in the addressed session', () => {
+    expect(noticesWhenNavigating([notice, ...(['question', 'permission', 'review', 'handoff'] as const).map(kind => ({ ...notice, kind })),
+      { ...notice, sessionId: 'other' }, { ...notice, state: 'answered' }], 'source')).toEqual([notice])
   })
-
-  it('coalesces rapid repeated dismissal of the same revision', async () => {
+  it('coalesces repeats before resolution and until the renderer refresh finishes', async () => {
     const api = bridge()
-    let finish!: (record: AttentionRecord) => void
-    api.resolveAttention.mockReturnValue(new Promise((resolve) => { finish = resolve }))
-    const first = dismissAttentionReminder(api, question)
-    const second = dismissAttentionReminder(api, question)
+    const resolved = deferred<AttentionRecord>()
+    const refreshed = deferred<void>()
+    api.resolveAttention.mockReturnValue(resolved.promise)
+    const refresh = vi.fn(() => refreshed.promise)
+    const first = dismissAttentionReminder(api, notice, 'Opened in BMN; reminder cleared', refresh)
+    const second = dismissAttentionReminder(api, notice, 'Opened in BMN; reminder cleared', refresh)
     expect(api.resolveAttention).toHaveBeenCalledOnce()
-    finish({ ...question, state: 'withdrawn' })
-    await Promise.all([first, second])
+    resolved.resolve({ ...notice, state: 'withdrawn' })
+    await Promise.resolve()
+    expect(refresh).toHaveBeenCalledOnce()
+    const third = dismissAttentionReminder(api, notice, 'Opened in BMN; reminder cleared', refresh)
+    expect(api.resolveAttention).toHaveBeenCalledOnce()
+    refreshed.resolve()
+    await Promise.all([first, second, third])
   })
-
-  it.each([
-    { ...question, revision: 4 }, { ...question, state: 'withdrawn' as const },
-    { ...question, incarnationId: 'run-two' }, { ...question, kind: 'permission' as const },
-    { ...question, prompt: null }
-  ])('refuses changed or unavailable questions before copying', async (current) => {
+  it.each(['NOT_FOUND', 'REVISION_CONFLICT'])('refreshes %s without attempting a newer revision', async code => {
     const api = bridge()
-    api.listAttention.mockResolvedValue([current])
-    await expect(copyAttentionAnswer(api, question, 'Gold')).rejects.toThrow('question changed')
-    expect(api.writeClipboardText).not.toHaveBeenCalled()
-    expect(api.resolveAttention).not.toHaveBeenCalled()
+    api.resolveAttention.mockRejectedValue({ code })
+    const refresh = vi.fn(async () => undefined)
+    await expect(dismissAttentionReminder(api, notice, undefined, refresh)).resolves.toBeNull()
+    expect(api.resolveAttention).toHaveBeenCalledOnce()
+    expect(refresh).toHaveBeenCalledOnce()
   })
-
-  it('retains the reminder and draft when the clipboard fails', async () => {
+  it('keeps genuine failures visible and retryable', async () => {
     const api = bridge()
-    api.writeClipboardText.mockRejectedValue(new Error('Clipboard unavailable'))
-    await expect(copyAttentionAnswer(api, question, 'Gold')).rejects.toThrow('Clipboard unavailable')
-    expect(api.resolveAttention).not.toHaveBeenCalled()
+    api.resolveAttention.mockRejectedValueOnce({ code: 'IO_ERROR', message: 'disk unavailable' })
+    const refresh = vi.fn(async () => undefined)
+    await expect(dismissAttentionReminder(api, notice, undefined, refresh)).rejects.toMatchObject({ code: 'IO_ERROR' })
+    await expect(dismissAttentionReminder(api, notice, undefined, refresh)).resolves.toMatchObject({ state: 'withdrawn' })
+    expect(api.resolveAttention).toHaveBeenCalledTimes(2)
+    expect(refresh).toHaveBeenCalledTimes(2)
   })
+})
 
-  it('reports a successful copy truthfully when a revised reminder refuses dismissal', async () => {
-    const api = bridge()
-    api.resolveAttention.mockRejectedValue(new Error('Revision changed'))
-    await expect(copyAttentionAnswer(api, question, 'Gold')).rejects.toThrow('Answer copied. The reminder could not be cleared')
-    expect(api.writeClipboardText).toHaveBeenCalledExactlyOnceWith('Gold')
-  })
+it('publishes the withdrawn revision before a failed refresh, including a later coalesced navigation', async () => {
+  const api = bridge()
+  const pendingRefresh = deferred<void>()
+  const snapshots: AttentionRecord[] = []
+  const refresh = () => pendingRefresh.promise.then(() => { throw new Error('list unavailable') })
+  const first = dismissAttentionReminder(api, notice, undefined, refresh, row => snapshots.push(row))
+  // Attach rejection handlers immediately; the failure must remain visible to each caller.
+  const firstFailure = expect(first).rejects.toThrow('Reminder cleared. The request list could not refresh')
+  await Promise.resolve()
+  expect(snapshots).toHaveLength(1)
+  const second = dismissAttentionReminder(api, notice, undefined, refresh, row => snapshots.push(row))
+  const secondFailure = expect(second).rejects.toThrow('Reminder cleared. The request list could not refresh')
+  expect(snapshots).toHaveLength(2)
+  expect(snapshots.every(row => row.state === 'withdrawn' && row.revision === 4)).toBe(true)
+  expect(api.resolveAttention).toHaveBeenCalledOnce()
+  pendingRefresh.resolve()
+  await Promise.all([firstFailure, secondFailure])
+})
+
+it('replaces the captured open revision with the incremented withdrawal while retaining newer arrivals', () => {
+  const resolved = { ...notice, state: 'withdrawn' as const, revision: 4 }
+  expect(applyAttentionWithdrawal([notice], notice, resolved)).toEqual([resolved])
+  const newer = { ...notice, revision: 5, title: 'New notice' }
+  expect(applyAttentionWithdrawal([newer], notice, resolved)).toEqual([newer])
+})
+
+it('preserves a genuine withdrawal failure when refreshing also fails', async () => {
+  const api = bridge()
+  api.resolveAttention.mockRejectedValue({ code: 'IO_ERROR', message: 'Could not withdraw' })
+  await expect(dismissAttentionReminder(api, notice, undefined, async () => { throw new Error('Could not list') }))
+    .rejects.toMatchObject({ code: 'IO_ERROR', message: 'Could not withdraw' })
 })
