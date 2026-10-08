@@ -198,14 +198,6 @@ malicious program already running as your user.
 
 ## License
 
-BMN is source-available under [FSL-1.1-MIT](LICENSE) (Functional Source License 1.1, MIT Future
-License). Subject to its terms, you may use, modify and redistribute BMN for any Permitted Purpose,
-including internal commercial use; Competing Use is defined in [LICENSE](LICENSE). Each version
-receives an additional MIT license on the second anniversary of when it is first made available.
-Previously published MIT versions, including commit `d315410207d9c15749d47bbb0286a0c68efa52e9`
-(8 October 2026) and its published ancestors, remain MIT-licensed; see [NOTICE](NOTICE). New
-contributions are accepted under FSL-1.1-MIT, including its future MIT grant.
-
-whisper.cpp is MIT-licensed; its license is copied next to the built engine. The
+[MIT](LICENSE). whisper.cpp is MIT-licensed; its license is copied next to the built engine. The
 Silero speech model (MIT, [snakers4/silero-vad](https://github.com/snakers4/silero-vad)) comes from
 whisper.cpp's source archive.
