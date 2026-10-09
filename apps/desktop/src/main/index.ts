@@ -80,6 +80,7 @@ import {
 import { installFileReferenceIpcHandlers } from './file-reference-ipc'
 import { createPresenceMonitor, readMutterIdleMs } from './presence-monitor'
 import { installVoiceIpcHandlers } from './voice-ipc'
+import { installAgentsIpcHandlers } from './agents-ipc'
 import { transcribeRecording } from './voice-engine'
 import {
   attachCreatedSession,
@@ -626,6 +627,7 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
   })
   const defaultVoiceModelFolder = join(resolveApplicationRoots().data, 'voice', 'models')
   const productionVoiceBinary = whisperBinaryPath()
+  installAgentsIpcHandlers(bridgeIpc, { senderIsAllowed, cliScript: bmnCliScript })
   installVoiceIpcHandlers(bridgeIpc, {
     senderIsAllowed,
     // Handlers install before the self-test's taps exist, so its stand-ins are read per call.

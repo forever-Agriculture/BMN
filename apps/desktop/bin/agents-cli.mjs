@@ -184,7 +184,7 @@ function rosterValidate(argv) {
   }
 }
 
-function rosterStatus(argv) {
+async function rosterStatus(argv) {
   let parsed
   try {
     parsed = readOptions(argv, { flags: ['json'] })
@@ -211,6 +211,11 @@ function rosterStatus(argv) {
     fileProblem = error
   }
   const differences = generation && roster ? machineDiff(generation.data, roster.data) : null
+  let effects = []
+  if (roster && (differences === null || differences.length > 0) && (generation || approvalProblem?.code === 'NOT_APPROVED')) {
+    const { consequences } = await import('./agents-check.mjs')
+    effects = consequences(generation?.data ?? null, roster.data)
+  }
   const result = {
     ok: approvalProblem === null && fileProblem === null,
     file: rosterPath(),
@@ -219,6 +224,7 @@ function rosterStatus(argv) {
     ...(approvalProblem ? { approval: { code: approvalProblem.code, message: approvalProblem.message, ...(approvalProblem.lastGood !== undefined ? { last_good_generation: approvalProblem.lastGood } : {}) } } : {}),
     ...(fileProblem ? { file_problem: { code: fileProblem.code, message: fileProblem.message, ...(fileProblem.errors ? { errors: fileProblem.errors } : {}) } } : {}),
     differences,
+    consequences: effects,
     history: listGenerations().slice(0, 10)
   }
   if (asJson) {
@@ -239,6 +245,7 @@ function rosterStatus(argv) {
         ? 'No pending differences: the file matches the approved roster.'
         : `${differences.length} pending difference${differences.length === 1 ? '' : 's'}, none in effect until approved in Preferences > Agents:`)
       for (const entry of differences) lines.push(`  ${diffLine(entry)}`)
+      if (effects.length > 0) lines.push('If approved:', ...effects.map((effect) => `  ${effect}`))
     } else if (generation === null && roster !== null) {
       lines.push('Nothing takes effect until the first approval in Preferences > Agents.')
     }

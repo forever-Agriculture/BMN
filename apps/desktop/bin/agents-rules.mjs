@@ -7,7 +7,7 @@ import {
 import { homedir } from 'node:os'
 import { dirname } from 'node:path'
 import { createInterface } from 'node:readline'
-import { HARNESSES, RosterError, agentState, agentsDirectory, sha256 } from './agents-roster.mjs'
+import { HARNESSES, RosterError, agentState, agentsDirectory, canonicalJson, sha256 } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
 import { AgentsUsageError, EXIT, failWith, out, readOptions, usage } from './agents-cli.mjs'
 import { absoluteUncollapsed, pathState, replaceFileSafely, restorePathState } from './safe-config-write.mjs'
@@ -341,7 +341,11 @@ function snapshotMaster(master, reason, now = new Date()) {
  * through the confirmed, change-refusing, read-back flow. A failure part-way stops and keeps the
  * manifest so `restore` can undo what changed.
  */
-export async function installRules(harnesses, { yes = false, asJson = false, environment = process.env, now = new Date(), beforeTarget } = {}) {
+/**
+ * What an install would write, without writing: each target's prior state, kind of replacement,
+ * rendering and diff, plus a hash of all of it that a confirmed install must match.
+ */
+export async function planInstall(harnesses, { environment = process.env } = {}) {
   const master = readMaster()
   const generation = approvedOrNull()
   const plans = []
@@ -350,7 +354,7 @@ export async function installRules(harnesses, { yes = false, asJson = false, env
     const decision = routeFor(harness, generation)
     const route = await routeStillMatches(harness, decision, environment)
     if (!route.ok) {
-      return { code: 'ROUTE_CHANGED', message: `refusing a full rendering for ${harness}: ${route.reason}; approve the route again in Preferences > Agents` }
+      return { code: 'ROUTE_CHANGED', message: `refusing a full rendering for ${harness}: ${route.reason}; approve the route again in Preferences > Agents`, plans: [], planHash: null }
     }
     const path = targetPath(harness, environment)
     const prior = pathState(path)
@@ -363,6 +367,40 @@ export async function installRules(harnesses, { yes = false, asJson = false, env
             : 'updates BMN\'s file'
     plans.push({ harness, path, prior, rendering, kind, diff: unifiedDiff(describeState(prior), rendering.text, path),
       fold: prior.kind === 'file' && records[path] !== undefined && records[path] !== sha256(prior.text) ? foldInLines(prior.text, rendering.text) : [] })
+  }
+  return { code: 'OK', master, plans, planHash: planHash(plans) }
+}
+
+function planHash(plans) {
+  return sha256(canonicalJson(plans.map((plan) => ({
+    harness: plan.harness, path: plan.path, kind: plan.kind, rendered: plan.rendering.hash,
+    prior: plan.prior.kind === 'file' ? { kind: 'file', hash: sha256(plan.prior.text) } : plan.prior
+  }))))
+}
+
+/** The plan as the panel and `--plan --json` show it: no file bytes beyond the diffs. */
+export function planView(result) {
+  return {
+    code: result.code, ...(result.message ? { message: result.message } : {}), plan_hash: result.planHash,
+    targets: result.plans.map((plan) => ({ harness: plan.harness, path: plan.path, kind: plan.kind, restricted: plan.rendering.restricted,
+      reason: plan.rendering.reason, team_form: plan.rendering.team_form, ...(plan.prior.kind === 'link' ? { link_target: plan.prior.target } : {}),
+      diff: plan.diff, fold: plan.fold }))
+  }
+}
+
+/**
+ * One install transaction: re-inspect routes, record each target's prior state (bytes, link
+ * text or absence) and BMN's last-written records, then write each target as a regular file
+ * through the confirmed, change-refusing, read-back flow. A failure part-way stops and keeps the
+ * manifest so `restore` can undo what changed. With `expectedPlanHash`, the plan must be exactly
+ * the one the owner confirmed elsewhere (the Rules panel), or nothing is written.
+ */
+export async function installRules(harnesses, { yes = false, asJson = false, environment = process.env, now = new Date(), beforeTarget, expectedPlanHash } = {}) {
+  const planned = await planInstall(harnesses, { environment })
+  if (planned.code !== 'OK') return { code: planned.code, message: planned.message, transaction: null, written: [] }
+  const { master, plans } = planned
+  if (expectedPlanHash !== undefined && expectedPlanHash !== planned.planHash) {
+    return { code: 'REVISION_CONFLICT', message: 'the targets or the rendering changed since the plan was shown; review it again', transaction: null, written: [] }
   }
   if (plans.length === 0) return { code: 'OK', transaction: null, written: [], message: 'Every target already holds its current rendering.' }
   const details = plans.map((plan) => [
@@ -426,7 +464,7 @@ export function listTransactions() {
 }
 
 /** Puts every target of a transaction back as it was before, links as links, and resets the records. */
-export async function restoreTransaction(id, { yes = false, asJson = false } = {}) {
+export async function restoreTransaction(id, { yes = false, asJson = false, planOnly = false, expectedPlanHash } = {}) {
   if (!/^[0-9TZ-]+-\d+$/.test(id)) return { code: 'NOT_FOUND', message: `no transaction ${id}` }
   const folder = `${transactionsDirectory()}/${id}`
   const manifest = readJson(`${folder}/manifest.json`, null)
@@ -438,7 +476,13 @@ export async function restoreTransaction(id, { yes = false, asJson = false } = {
     const current = pathState(target.path)
     return { ...target, priorState: prior, current }
   })
-  const details = plans.map((plan) => `${plan.harness}: ${plan.path} -> ${plan.priorState.kind === 'link' ? `link to ${plan.priorState.target}` : plan.priorState.kind === 'missing' ? 'removed (it did not exist)' : 'its earlier bytes'}\n${unifiedDiff(describeState(plan.current), describeState(plan.priorState), plan.path)}`).join('\n\n')
+  const targets = plans.map((plan) => ({ harness: plan.harness, path: plan.path,
+    becomes: plan.priorState.kind === 'link' ? `link to ${plan.priorState.target}` : plan.priorState.kind === 'missing' ? 'removed (it did not exist)' : 'its earlier bytes',
+    diff: unifiedDiff(describeState(plan.current), describeState(plan.priorState), plan.path) }))
+  const hash = sha256(canonicalJson(plans.map((plan) => ({ path: plan.path, current: plan.current.kind === 'file' ? sha256(plan.current.text) : plan.current, prior: plan.priorState.kind === 'file' ? sha256(plan.priorState.text) : plan.priorState }))))
+  if (planOnly) return { code: 'OK', plan_hash: hash, targets }
+  if (expectedPlanHash !== undefined && expectedPlanHash !== hash) return { code: 'REVISION_CONFLICT', message: 'the targets changed since the restore was shown; review it again' }
+  const details = targets.map((target) => `${target.harness}: ${target.path} -> ${target.becomes}\n${target.diff}`).join('\n\n')
   if (!await confirm(`Restore transaction ${id}?`, details, { yes, asJson })) return { code: 'NOT_CONFIRMED' }
   const restored = []
   for (const plan of plans) {
@@ -664,9 +708,9 @@ function findRollout(root, cwd, since) {
 export const RULES_USAGE = `Usage: bmn rules render <harness>                 The exact file BMN writes for one harness (stdout)
        bmn rules check [--json]                    Each target: unreadable, missing, link, unmanaged,
                                                    edited-outside, stale or current; exit 0 only if all current
-       bmn rules install [harness…] [--yes] [--json]
+       bmn rules install [harness…] [--plan] [--expect-plan <hash>] [--yes] [--json]
                                                    One confirmed transaction writing every (or each named) target
-       bmn rules restore --transaction <id> [--yes] [--json]
+       bmn rules restore --transaction <id> [--plan] [--expect-plan <hash>] [--yes] [--json]
        bmn rules restore --list                    Undo one install; links come back as links
        bmn rules history [--json]                  The master-source snapshots BMN kept
        bmn rules revert-master <revision> [--yes]  Write one snapshot back as the master (a new revision)
@@ -690,7 +734,7 @@ export async function runRulesCommand(argv) {
   }
   let parsed
   try {
-    parsed = readOptions(rest, { flags: ['json', 'yes', 'list'], values: ['transaction', 'from'] })
+    parsed = readOptions(rest, { flags: ['json', 'yes', 'list', 'plan'], values: ['transaction', 'from', 'expect-plan'] })
     if (parsed.rest !== null) throw new AgentsUsageError('rules takes no -- arguments')
   } catch (error) {
     if (error instanceof AgentsUsageError) return usage(error.message)
@@ -698,7 +742,7 @@ export async function runRulesCommand(argv) {
   }
   const { positionals, options } = parsed
   const asJson = options.json === true
-  const allowed = { render: [], check: ['json'], install: ['json', 'yes'], restore: ['json', 'yes', 'list', 'transaction'], history: ['json'],
+  const allowed = { render: [], check: ['json'], install: ['json', 'yes', 'plan', 'expect-plan'], restore: ['json', 'yes', 'list', 'transaction', 'plan', 'expect-plan'], history: ['json'],
     'revert-master': ['json', 'yes'], import: ['json', 'yes', 'from'], probe: ['json'] }
   if (!Object.hasOwn(allowed, action)) return usage(`rules expects render, check, install, restore, history, revert-master, import or probe, not ${action}`)
   for (const name of Object.keys(options)) {
@@ -727,11 +771,17 @@ export async function runRulesCommand(argv) {
     if (action === 'install') {
       const harnesses = positionals.length === 0 ? HARNESSES : positionals
       for (const harness of harnesses) if (!HARNESSES.includes(harness)) return usage(`unknown harness ${harness}`)
-      const result = await installRules(harnesses, { yes: options.yes === true, asJson })
+      if (options.plan) {
+        const planned = planView(await planInstall(harnesses))
+        out(asJson ? JSON.stringify(planned, null, 2) : planned.code !== 'OK' ? `${planned.code}: ${planned.message}` : planned.targets.length === 0 ? 'Every target already holds its current rendering.'
+          : planned.targets.map((target) => `${target.harness}: ${target.path}\n  ${target.kind}\n${target.diff}`).join('\n\n'))
+        return planned.code === 'OK' ? 0 : 1
+      }
+      const result = await installRules(harnesses, { yes: options.yes === true, asJson, ...(options['expect-plan'] !== undefined ? { expectedPlanHash: options['expect-plan'] } : {}) })
       if (asJson) out(JSON.stringify(result, null, 2))
       else if (result.code === 'OK') out(result.transaction === null ? result.message : [`Wrote ${result.written.length} rules file(s) in transaction ${result.transaction}:`, ...result.written.map((entry) => `  ${entry.harness}: ${entry.path}${entry.restricted ? ' (restricted)' : ''}`), `Undo: bmn rules restore --transaction ${result.transaction}`, 'Sessions started before this keep their old rules.'].join('\n'))
       else if (result.code !== 'NOT_CONFIRMED') writeSync(2, `bmn: ${result.code}: ${result.message}\n`)
-      return result.code === 'OK' ? 0 : result.code === 'NOT_CONFIRMED' ? (asJson ? 2 : 1) : 1
+      return result.code === 'OK' ? 0 : result.code === 'NOT_CONFIRMED' ? (asJson ? 2 : 1) : result.code === 'REVISION_CONFLICT' ? EXIT.REVISION_CONFLICT : 1
     }
     if (action === 'restore') {
       if (options.list) {
@@ -740,8 +790,10 @@ export async function runRulesCommand(argv) {
         return 0
       }
       if (options.transaction === undefined) return usage('rules restore needs --transaction <id> or --list')
-      const result = await restoreTransaction(options.transaction, { yes: options.yes === true, asJson })
+      const result = await restoreTransaction(options.transaction, { yes: options.yes === true, asJson, planOnly: options.plan === true,
+        ...(options['expect-plan'] !== undefined ? { expectedPlanHash: options['expect-plan'] } : {}) })
       if (asJson) out(JSON.stringify(result, null, 2))
+      else if (result.code === 'OK' && options.plan) out(result.targets.map((target) => `${target.harness}: ${target.path} -> ${target.becomes}\n${target.diff}`).join('\n\n'))
       else if (result.code === 'OK') out(`Restored ${result.restored.join(', ')} to their state before transaction ${options.transaction}.`)
       else if (result.code !== 'NOT_CONFIRMED') writeSync(2, `bmn: ${result.code}: ${result.message}\n`)
       return result.code === 'OK' ? 0 : result.code === 'REVISION_CONFLICT' ? EXIT.REVISION_CONFLICT : 1

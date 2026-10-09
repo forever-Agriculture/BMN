@@ -51,3 +51,5 @@ export declare function inspectRoute(agent: RosterAgent, argv: string[] | null, 
 export declare function harnessVersion(command: string, environment: NodeJS.ProcessEnv): string | null
 export declare function receiptHash(body: Record<string, unknown>): string
 export declare function runCheckCommand(action: string, argv: string[]): Promise<number>
+export declare function lowSecurityReasons(agent: RosterAgent, data: RosterData): string[]
+export declare function consequences(before: RosterData | null, after: RosterData): string[]

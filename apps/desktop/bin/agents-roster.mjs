@@ -908,3 +908,31 @@ export function rewriteRoster(text, data, { scope = null } = {}) {
   if (appended !== '') out = `${out}${out.endsWith('\n') || out === '' ? '' : '\n'}${appended}`
   return out
 }
+
+/** The prose of an agent's section: everything after its yaml block, up to the next section. */
+export function proseOf(text, id) {
+  const sections = splitSections(text)
+  const index = sections.findIndex((section) => section.heading === id)
+  if (index === -1 || sections[index].blocks.length === 0) return null
+  const end = index + 1 < sections.length ? sections[index + 1].start : text.length
+  return text.slice(sections[index].blocks[sections[index].blocks.length - 1].end, end).trim()
+}
+
+/**
+ * The roster with one agent's prose replaced. Prose is never parsed and takes effect at once; the
+ * yaml block and every other section keep their bytes. Fences and `## ` headings inside the new
+ * prose are refused, since they would change what the file's sections are.
+ */
+export function rewriteProse(text, id, prose) {
+  if (/^ {0,3}(```|~~~)/m.test(prose) || /^##(?!#)/m.test(prose)) {
+    throw new RosterError('ROSTER_INVALID', 'an opinion cannot hold code fences or ## headings')
+  }
+  const sections = splitSections(text)
+  const index = sections.findIndex((section) => section.heading === id)
+  if (index === -1 || sections[index].blocks.length === 0) throw new RosterError('ROSTER_INVALID', `no agent section ${id} with a yaml block`)
+  const start = sections[index].blocks[sections[index].blocks.length - 1].end
+  const end = index + 1 < sections.length ? sections[index + 1].start : text.length
+  const body = prose.trim()
+  const tail = index + 1 < sections.length ? '\n' : ''
+  return `${text.slice(0, start)}${body === '' ? tail : `\n${body}\n${tail}`}${text.slice(end)}`
+}

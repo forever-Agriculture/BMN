@@ -11,6 +11,18 @@ import {
   type AppEventMessage,
   type ProgramCopyNotice,
   type AgentHistoryStatus,
+  type AgentsOutcome,
+  type AgentsPreview,
+  type AgentsShownRevision,
+  type AgentsSnapshot,
+  type RosterDataShape,
+  type RosterHarness,
+  type RouteInspectionView,
+  type RulesOutcome,
+  type RulesPlan,
+  type RulesSnapshot,
+  type WorkspaceLabelView,
+  type RosterIssueShape,
   type AppSettings,
   type ArtifactPreview,
   type ArtifactRecord,
@@ -704,6 +716,63 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   verifyBackup(directory?: string): Promise<BackupVerifyResult | null> {
     return invokeBridge('aiterm:backup:verify', directory ? { directory } : {})
+  },
+  agentsSnapshot(): Promise<AgentsSnapshot> {
+    return invokeBridge('aiterm:agents:snapshot', {})
+  },
+  previewAgents(data: RosterDataShape): Promise<AgentsPreview> {
+    return invokeBridge('aiterm:agents:preview', { data })
+  },
+  approveAgents(shown: AgentsShownRevision): Promise<AgentsOutcome> {
+    return invokeBridge('aiterm:agents:approve', { shown })
+  },
+  saveAgents(shown: AgentsShownRevision, data: RosterDataShape): Promise<AgentsOutcome> {
+    return invokeBridge('aiterm:agents:save', { shown, data })
+  },
+  revertAgents(shown: AgentsShownRevision, scope: string[] | null): Promise<AgentsOutcome> {
+    return invokeBridge('aiterm:agents:revert', { shown, scope })
+  },
+  restoreAgents(shown: AgentsShownRevision, number: number): Promise<AgentsOutcome> {
+    return invokeBridge('aiterm:agents:restore', { shown, number })
+  },
+  agentsGeneration(number: number): Promise<{ generation: number; createdAt: string; data: RosterDataShape } | null> {
+    return invokeBridge('aiterm:agents:generation', { number })
+  },
+  saveAgentOpinion(shown: AgentsShownRevision, agent: string, text: string): Promise<AgentsOutcome> {
+    return invokeBridge('aiterm:agents:opinion', { shown, agent, text })
+  },
+  agentsLabels(paths: string[], data?: RosterDataShape): Promise<WorkspaceLabelView[]> {
+    return invokeBridge('aiterm:agents:labels', data === undefined ? { paths } : { paths, data })
+  },
+  inspectAgentRoute(harness: RosterHarness): Promise<RouteInspectionView> {
+    return invokeBridge('aiterm:agents:inspect-route', { harness })
+  },
+  rulesSnapshot(): Promise<RulesSnapshot> {
+    return invokeBridge('aiterm:rules:snapshot', {})
+  },
+  planRulesMaster(text: string): Promise<{ valid: boolean; errors: RosterIssueShape[]; diff: string; expectedHash: string | null }> {
+    return invokeBridge('aiterm:rules:plan-master', { text })
+  },
+  saveRulesMaster(text: string, expectedHash: string | null): Promise<RulesOutcome> {
+    return invokeBridge('aiterm:rules:save-master', { text, expectedHash })
+  },
+  planRulesInstall(): Promise<RulesPlan> {
+    return invokeBridge('aiterm:rules:plan-install', {})
+  },
+  installRules(planHash: string): Promise<RulesOutcome> {
+    return invokeBridge('aiterm:rules:install', { planHash })
+  },
+  planRulesRestore(transaction: string): Promise<RulesPlan> {
+    return invokeBridge('aiterm:rules:plan-restore', { transaction })
+  },
+  restoreRules(transaction: string, planHash: string): Promise<RulesOutcome> {
+    return invokeBridge('aiterm:rules:restore', { transaction, planHash })
+  },
+  planRulesRevertMaster(revision: number): Promise<{ ok: boolean; diff: string; expectedHash: string | null; text?: string; message?: string }> {
+    return invokeBridge('aiterm:rules:plan-revert-master', { revision })
+  },
+  probeRules(harness: RosterHarness): Promise<RulesOutcome> {
+    return invokeBridge('aiterm:rules:probe', { harness })
   },
   readClipboardText(): Promise<{ text: string }> {
     return invokeBridge('aiterm:clipboard:read-text', {})

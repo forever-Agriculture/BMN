@@ -3,6 +3,18 @@ import type {
   AppEventMessage,
   ProgramCopyNotice,
   AgentHistoryStatus,
+  AgentsOutcome,
+  AgentsPreview,
+  AgentsShownRevision,
+  AgentsSnapshot,
+  RosterDataShape,
+  RosterHarness,
+  RouteInspectionView,
+  RulesOutcome,
+  RulesPlan,
+  RulesSnapshot,
+  WorkspaceLabelView,
+  RosterIssueShape,
   AppSettings,
   ArtifactPreview,
   ArtifactRecord,
@@ -316,6 +328,36 @@ export interface AiTerminalBridge {
   getControlInfo(): Promise<ControlInfo>
   exportBackup(): Promise<{ directory: string; manifest: BackupManifest } | null>
   verifyBackup(directory?: string): Promise<BackupVerifyResult | null>
+  /** Epic 60.5: the roster file, the approved generation, pending differences with consequences, and approval history. */
+  agentsSnapshot(): Promise<AgentsSnapshot>
+  /** The staged edits as the file would hold them: validity, the grouped diff and its consequences in words. */
+  previewAgents(data: RosterDataShape): Promise<AgentsPreview>
+  /** Approves the roster file exactly as shown; refused when the file or the approval moved. */
+  approveAgents(shown: AgentsShownRevision): Promise<AgentsOutcome>
+  /** Writes the staged data into the file, then approves exactly that. */
+  saveAgents(shown: AgentsShownRevision, data: RosterDataShape): Promise<AgentsOutcome>
+  /** Writes the approved data back into the file's yaml blocks (all, or the named sections). */
+  revertAgents(shown: AgentsShownRevision, scope: string[] | null): Promise<AgentsOutcome>
+  /** An earlier generation's data becomes a new generation. */
+  restoreAgents(shown: AgentsShownRevision, number: number): Promise<AgentsOutcome>
+  agentsGeneration(number: number): Promise<{ generation: number; createdAt: string; data: RosterDataShape } | null>
+  /** An agent's prose (the owner's opinion); never reaches an agent. */
+  saveAgentOpinion(shown: AgentsShownRevision, agent: string, text: string): Promise<AgentsOutcome>
+  /** Effective label and its source for each folder, from the approved (or the given staged) labels. */
+  agentsLabels(paths: string[], data?: RosterDataShape): Promise<WorkspaceLabelView[]>
+  /** Inspection only: where a harness's default route resolves now, and its version. */
+  inspectAgentRoute(harness: RosterHarness): Promise<RouteInspectionView>
+  /** Epic 60.6: the master, each harness's rendering, health from `bmn rules check`, probes, transactions and history. */
+  rulesSnapshot(): Promise<RulesSnapshot>
+  planRulesMaster(text: string): Promise<{ valid: boolean; errors: RosterIssueShape[]; diff: string; expectedHash: string | null }>
+  saveRulesMaster(text: string, expectedHash: string | null): Promise<RulesOutcome>
+  planRulesInstall(): Promise<RulesPlan>
+  installRules(planHash: string): Promise<RulesOutcome>
+  planRulesRestore(transaction: string): Promise<RulesPlan>
+  restoreRules(transaction: string, planHash: string): Promise<RulesOutcome>
+  planRulesRevertMaster(revision: number): Promise<{ ok: boolean; diff: string; expectedHash: string | null; text?: string; message?: string }>
+  /** Owner-run: sends the rules to that harness's provider; High routes only. */
+  probeRules(harness: RosterHarness): Promise<RulesOutcome>
   readClipboardText(): Promise<{ text: string }>
   writeClipboardText(text: string): Promise<{ written: true }>
   /** Local Whisper dictation: engine and model availability, with progress for running downloads. */

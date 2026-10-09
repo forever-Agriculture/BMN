@@ -652,6 +652,97 @@ function sessionRecord(codexHome, id) {
 }
 
 /**
+ * Why an agent's effective security is Low (empty when it is High): the agent itself, or its
+ * harness route missing, Low or owner-declared (60.3 AC4). `explain` and the Agents panel's
+ * consequence wording read the same reasons.
+ */
+export function lowSecurityReasons(agent, data) {
+  const reasons = []
+  const route = data.harness_routes.find((entry) => entry.harness === agent.harness)
+  if (agent.security === 'low') reasons.push(`${agent.id} is Low`)
+  if (route === undefined) reasons.push(`no approved ${agent.harness} route in ## harness-routes`)
+  else if (route.security === 'low') reasons.push(`the ${agent.harness} route is Low`)
+  else if (route.basis === 'owner-declared') reasons.push(`the ${agent.harness} route is owner-declared`)
+  return reasons
+}
+
+/** What an approved generation lets each agent do, in the terms the check enforces. */
+function capabilities(data) {
+  const out = new Map()
+  for (const agent of data.agents) {
+    const active = agentState(agent) === 'active'
+    const checkable = agent.harness === 'claude' || agent.harness === 'codex'
+    out.set(agent.id, {
+      name: agent.name, active,
+      lead: active && agent.title === 'knight' && agent.roles.includes('lead'),
+      private: active && checkable && agent.host !== null && lowSecurityReasons(agent, data).length === 0,
+      roles: new Set(active ? agent.roles : [])
+    })
+  }
+  return out
+}
+
+function firstEligible(data, role) {
+  const states = new Map(data.agents.map((agent) => [agent.id, agentState(agent)]))
+  for (const text of role.candidates) {
+    const agent = /^([a-z0-9-]+)@/.exec(text)?.[1]
+    if (agent !== undefined && states.get(agent) === 'active') return agent
+  }
+  return null
+}
+
+/**
+ * The consequences of moving from `before` to `after` approved data, in words: who could start or
+ * stop leading, receiving private work, or taking a role; which chain starts elsewhere; which
+ * workspaces change label; which harness versions become trusted. `before` may be null (first approval).
+ */
+export function consequences(before, after) {
+  const empty = { agents: [], roles: [], harness_routes: [], data_labels: { default: 'private', paths: [] } }
+  const old = capabilities(before ?? empty)
+  const next = capabilities(after)
+  const out = []
+  const name = (id) => next.get(id)?.name ?? old.get(id)?.name ?? id
+  for (const id of new Set([...old.keys(), ...next.keys()])) {
+    const a = old.get(id) ?? { active: false, lead: false, private: false, roles: new Set() }
+    const b = next.get(id) ?? { active: false, lead: false, private: false, roles: new Set() }
+    if (!a.active && b.active) out.push(`${name(id)} could be dispatched`)
+    if (a.active && !b.active) out.push(`${name(id)} could no longer be dispatched`)
+    if (!a.lead && b.lead) out.push(`${name(id)} could lead`)
+    if (a.lead && !b.lead) out.push(`${name(id)} could no longer lead`)
+    if (!a.private && b.private) out.push(`${name(id)} could receive private work`)
+    if (a.private && !b.private) out.push(`${name(id)} could no longer receive private work`)
+    if (a.active && b.active) {
+      for (const role of b.roles) if (!a.roles.has(role)) out.push(`${name(id)} could take the ${role} role`)
+      for (const role of a.roles) if (!b.roles.has(role)) out.push(`${name(id)} could no longer take the ${role} role`)
+    }
+  }
+  const oldRoles = new Map((before?.roles ?? []).map((role) => [role.id, role]))
+  for (const role of after.roles) {
+    const previous = oldRoles.get(role.id)
+    const first = firstEligible(after, role)
+    const was = previous === undefined ? null : firstEligible(before, previous)
+    if (first !== was) {
+      out.push(first === null ? `${role.id} would have no eligible candidate (then ${role.then})` : `${role.id} would start with ${name(first)}${was === null ? '' : ` instead of ${name(was)}`}`)
+    }
+    if (previous !== undefined && previous.then !== role.then) out.push(`when every ${role.id} candidate fails: ${role.then} instead of ${previous.then}`)
+  }
+  for (const role of before?.roles ?? []) if (!after.roles.some((entry) => entry.id === role.id)) out.push(`the ${role.id} role would be removed`)
+  const oldLabels = new Map((before?.data_labels.paths ?? []).map((entry) => [entry.path, entry.label]))
+  for (const entry of after.data_labels.paths) {
+    if (oldLabels.get(entry.path) !== entry.label) {
+      out.push(entry.label === 'public' ? `${entry.path} becomes public: Low routes could receive its tracked files in packets` : `${entry.path} becomes private: only High routes could receive its work`)
+    }
+  }
+  if ((before?.data_labels.default ?? 'private') !== after.data_labels.default) out.push(`unlabelled workspaces become ${after.data_labels.default}`)
+  const oldRoutes = new Map((before?.harness_routes ?? []).map((route) => [route.harness, route]))
+  for (const route of after.harness_routes) {
+    const added = (route.accepted_versions ?? []).filter((version) => !(oldRoutes.get(route.harness)?.accepted_versions ?? []).includes(version))
+    for (const version of added) out.push(`${route.harness} ${version} could carry private work (owner-accepted, untested by BMN)`)
+  }
+  return [...new Set(out)]
+}
+
+/**
  * Evaluates one dispatch against the approved generation. Returns `{ verdict: 'PASS', receipt, steps }`
  * or `{ verdict: 'REFUSED', code, message, next, steps }`; `steps` is what `explain` prints.
  */
@@ -767,11 +858,7 @@ export function evaluate(inputs, { environment = process.env, cwd: processCwd = 
     }
     note(`${parsed.harness} ${version ?? '(version unreadable)'}: ${versionState}`)
 
-    const lowReasons = []
-    if (agent.security === 'low') lowReasons.push(`${agent.id} is Low`)
-    if (harnessRoute === undefined) lowReasons.push(`no approved ${parsed.harness} route in ## harness-routes`)
-    else if (harnessRoute.security === 'low') lowReasons.push(`the ${parsed.harness} route is Low`)
-    else if (harnessRoute.basis === 'owner-declared') lowReasons.push(`the ${parsed.harness} route is owner-declared`)
+    const lowReasons = lowSecurityReasons(agent, data)
     const security = lowReasons.length === 0 ? 'high' : 'low'
     note(`effective security ${security}${lowReasons.length ? ` (${lowReasons.join('; ')})` : ''}`)
 
