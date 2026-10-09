@@ -82,7 +82,7 @@ const waylandDisplay =
     : originalWaylandDisplay
 
 await withTemporaryRoot(temporaryRootContracts.packagedSmoke, async ({ roots }) => {
-  const result = spawnSync(packagedBinary, ['--self-test'], {
+  const result = spawnSync(packagedBinary, [...(!waylandDisplay && process.env.DISPLAY ? ['--ozone-platform=x11'] : []), '--self-test'], {
     encoding: 'utf8',
     // The self-test covers renderer and host restarts, remote answers and agent history; it took
     // about two minutes by Epic 31, so the bound leaves room for slower machines and later phases.
