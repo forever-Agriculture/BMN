@@ -1,5 +1,5 @@
 // MODULE: history-preferences.tsx - Preferences → History: one agent-history limit, its per-agent rows, Start cleanup, and BMN's archive limit
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import {
   AGENT_HISTORY_KEEP_DAYS,
   ARCHIVE_DELETE_AFTER_DAYS,
@@ -28,13 +28,16 @@ const RUNNING_POLL_MS = 1_500
 const ARCHIVE_ORDER: readonly ArchiveDeleteAfterDays[] = [...ARCHIVE_DELETE_AFTER_DAYS]
   .sort((a, b) => (a ?? Number.POSITIVE_INFINITY) - (b ?? Number.POSITIVE_INFINITY))
 
-/** Four equal segments; arrow keys move the choice, like a native radio group. */
-export function Segmented<Value extends number | null>(props: {
+/** Equal segments, one per option; arrow keys move the choice, like a native radio group. */
+export function Segmented<Value extends string | number | null>(props: {
   labelledBy: string
   options: readonly Value[]
   value: Value
-  disabled?: boolean
-  optionLabel(value: Value): string
+  disabled?: boolean | undefined
+  /** Segments sized by their words instead of equal widths (long words such as "owner chooses"). */
+  fit?: boolean | undefined
+  /** A label may carry a mark before its word (Agents: seal, pips). */
+  optionLabel(value: Value): ReactNode
   onChange(value: Value): void
 }): React.JSX.Element {
   const buttons = useRef<Array<HTMLButtonElement | null>>([])
@@ -49,7 +52,8 @@ export function Segmented<Value extends number | null>(props: {
     buttons.current[next]?.focus()
   }
   return (
-    <div className="segmented" role="radiogroup" aria-labelledby={props.labelledBy} onKeyDown={move}>
+    <div className={props.fit ? 'segmented fit' : 'segmented'} role="radiogroup" aria-labelledby={props.labelledBy} onKeyDown={move}
+      style={{ '--segments': props.options.length } as CSSProperties}>
       {props.options.map((option, index) => {
         const checked = option === props.value
         return (

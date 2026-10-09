@@ -19,10 +19,10 @@ import {
   type RosterHarness,
   type RouteInspectionView,
   type RulesOutcome,
+  type RulesMasterPlan,
   type RulesPlan,
   type RulesSnapshot,
   type WorkspaceLabelView,
-  type RosterIssueShape,
   type AppSettings,
   type ArtifactPreview,
   type ArtifactRecord,
@@ -723,8 +723,8 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   previewAgents(data: RosterDataShape): Promise<AgentsPreview> {
     return invokeBridge('aiterm:agents:preview', { data })
   },
-  approveAgents(shown: AgentsShownRevision): Promise<AgentsOutcome> {
-    return invokeBridge('aiterm:agents:approve', { shown })
+  approveAgents(shown: AgentsShownRevision, scope?: string[]): Promise<AgentsOutcome> {
+    return invokeBridge('aiterm:agents:approve', scope === undefined ? { shown } : { shown, scope })
   },
   saveAgents(shown: AgentsShownRevision, data: RosterDataShape): Promise<AgentsOutcome> {
     return invokeBridge('aiterm:agents:save', { shown, data })
@@ -750,7 +750,7 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   rulesSnapshot(): Promise<RulesSnapshot> {
     return invokeBridge('aiterm:rules:snapshot', {})
   },
-  planRulesMaster(text: string): Promise<{ valid: boolean; errors: RosterIssueShape[]; diff: string; expectedHash: string | null }> {
+  planRulesMaster(text: string): Promise<RulesMasterPlan> {
     return invokeBridge('aiterm:rules:plan-master', { text })
   },
   saveRulesMaster(text: string, expectedHash: string | null): Promise<RulesOutcome> {

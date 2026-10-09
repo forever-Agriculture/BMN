@@ -360,12 +360,11 @@ export async function planInstall(harnesses, { environment = process.env } = {})
     const prior = pathState(path)
     const records = lastWritten()
     if (prior.kind === 'file' && prior.text === rendering.text && records[path] === rendering.hash) continue
-    const kind = prior.kind === 'link' ? 'replaces a symbolic link'
-      : prior.kind === 'missing' ? 'creates the file'
-        : records[path] === undefined ? 'replaces a file BMN did not write (unmanaged)'
-          : records[path] !== sha256(prior.text) ? 'replaces a file edited outside BMN'
-            : 'updates BMN\'s file'
-    plans.push({ harness, path, prior, rendering, kind, diff: unifiedDiff(describeState(prior), rendering.text, path),
+    const change = prior.kind === 'link' ? 'link' : prior.kind === 'missing' ? 'missing'
+      : records[path] === undefined ? 'unmanaged' : records[path] !== sha256(prior.text) ? 'edited-outside' : 'stale'
+    const kind = { link: 'replaces a symbolic link', missing: 'creates the file', unmanaged: 'replaces a file BMN did not write (unmanaged)',
+      'edited-outside': 'replaces a file edited outside BMN', stale: 'updates BMN\'s file' }[change]
+    plans.push({ harness, path, prior, rendering, kind, change, diff: unifiedDiff(describeState(prior), rendering.text, path),
       fold: prior.kind === 'file' && records[path] !== undefined && records[path] !== sha256(prior.text) ? foldInLines(prior.text, rendering.text) : [] })
   }
   return { code: 'OK', master, plans, planHash: planHash(plans) }
@@ -382,7 +381,7 @@ function planHash(plans) {
 export function planView(result) {
   return {
     code: result.code, ...(result.message ? { message: result.message } : {}), plan_hash: result.planHash,
-    targets: result.plans.map((plan) => ({ harness: plan.harness, path: plan.path, kind: plan.kind, restricted: plan.rendering.restricted,
+    targets: result.plans.map((plan) => ({ harness: plan.harness, path: plan.path, kind: plan.kind, change: plan.change, restricted: plan.rendering.restricted,
       reason: plan.rendering.reason, team_form: plan.rendering.team_form, ...(plan.prior.kind === 'link' ? { link_target: plan.prior.target } : {}),
       diff: plan.diff, fold: plan.fold }))
   }
@@ -476,7 +475,7 @@ export async function restoreTransaction(id, { yes = false, asJson = false, plan
     const current = pathState(target.path)
     return { ...target, priorState: prior, current }
   })
-  const targets = plans.map((plan) => ({ harness: plan.harness, path: plan.path,
+  const targets = plans.map((plan) => ({ harness: plan.harness, path: plan.path, change: plan.priorState.kind,
     becomes: plan.priorState.kind === 'link' ? `link to ${plan.priorState.target}` : plan.priorState.kind === 'missing' ? 'removed (it did not exist)' : 'its earlier bytes',
     diff: unifiedDiff(describeState(plan.current), describeState(plan.priorState), plan.path) }))
   const hash = sha256(canonicalJson(plans.map((plan) => ({ path: plan.path, current: plan.current.kind === 'file' ? sha256(plan.current.text) : plan.current, prior: plan.priorState.kind === 'file' ? sha256(plan.priorState.text) : plan.priorState }))))

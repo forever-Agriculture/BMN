@@ -414,7 +414,7 @@
 /* Segmented: one track, the chosen segment a raised plate with a short gold bar; focus is the white ring. */
 .segmented {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(var(--segments, 4), minmax(0, 1fr));
   gap: 2px;
   padding: 2px;
   border-radius: 8px;
@@ -423,6 +423,10 @@
 
 .segmented [role='radio'] {
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   min-height: 26px;
   height: 26px;
   padding: 0 8px;
@@ -435,6 +439,16 @@
   white-space: nowrap;
   text-overflow: ellipsis;
   box-shadow: none;
+}
+
+.segmented.fit {
+  grid-template-columns: repeat(var(--segments, 4), auto);
+}
+
+.segmented [role='radio'] svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
 }
 
 .segmented [role='radio']::before {
@@ -615,4 +629,686 @@
 .preferences-dialog .telegram-group .advanced {
   padding-top: 0;
   border-top: 0;
+}
+
+/* Roster (Epic 60): solid rows, shape carries meaning, gold marks selection only. */
+.preferences-dialog .preferences-subhead {
+  margin: 16px 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.preferences-dialog .preferences-section-head .meta {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.preferences-dialog .agent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.preferences-dialog .agent-row {
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.preferences-dialog .agent-row[data-open='true'] {
+  background: var(--raised);
+}
+
+.preferences-dialog .agent-list.disabled .agent-row {
+  color: var(--muted);
+}
+
+.preferences-dialog .agent-summary {
+  display: grid;
+  grid-template-columns: 16px 96px minmax(0, 1fr) 16px 18px 48px auto;
+  gap: 0 10px;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 10px 0 12px;
+}
+
+/* The disclosure button spans the first six columns; the switch is its own control. */
+.preferences-dialog .agent-open {
+  display: contents;
+}
+
+.preferences-dialog .agent-open > * {
+  cursor: pointer;
+}
+
+.preferences-dialog .agent-name {
+  overflow: hidden;
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.preferences-dialog .agent-model {
+  overflow: hidden;
+  color: var(--muted);
+  font: 11.5px/18px var(--font-mono);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.preferences-dialog .agent-authority {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.preferences-dialog .agent-note {
+  grid-column: 2 / -1;
+  padding-bottom: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.preferences-dialog .mark {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  color: var(--text);
+}
+
+.preferences-dialog .mark svg {
+  width: 100%;
+  height: 100%;
+}
+
+.preferences-dialog .mark.pips {
+  width: 18px;
+}
+
+/* Switch: thumb position carries the state; no colour beyond grey. */
+.preferences-dialog .switch {
+  position: relative;
+  flex: none;
+  align-self: center;
+  width: 30px;
+  min-width: 30px;
+  height: 16px;
+  min-height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  box-shadow: none;
+  transition: var(--hover-transition);
+}
+
+.preferences-dialog .switch::after {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--muted);
+  content: '';
+  transition: transform 100ms ease-out, background-color 100ms ease-out;
+}
+
+.preferences-dialog .switch[aria-checked='true'] {
+  background: color-mix(in srgb, var(--text) 30%, transparent);
+}
+
+.preferences-dialog .switch[aria-checked='true']::after {
+  transform: translateX(14px);
+  background: var(--text);
+}
+
+.preferences-dialog .agent-editor {
+  padding: 4px 12px 10px;
+  border-top: 1px solid var(--hairline);
+}
+
+.preferences-dialog .agent-editor .preferences-row {
+  padding: 6px 0;
+}
+
+.preferences-dialog .agent-editor input[type='text'] {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.preferences-dialog .agent-editor textarea {
+  flex: 1 1 100%;
+  min-height: 72px;
+  border: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  color: var(--text);
+  font: 12px/1.5 var(--font-chrome);
+  resize: vertical;
+}
+
+/* Toggle chips (efforts, effort choice): pressed = brighter plate with the gold bar. */
+.preferences-dialog .chip-toggle {
+  position: relative;
+  min-height: 22px;
+  padding: 0 8px 2px;
+  border: 0;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--muted);
+  font: 11px/18px var(--font-mono);
+  box-shadow: none;
+}
+
+.preferences-dialog .chip-toggle::before {
+  position: absolute;
+  right: 6px;
+  bottom: 2px;
+  left: 6px;
+  height: 2px;
+  border-radius: 1px;
+  background: transparent;
+  content: '';
+}
+
+.preferences-dialog .chip-toggle[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--text) 14%, transparent);
+  color: var(--text);
+}
+
+.preferences-dialog .chip-toggle[aria-pressed='true']::before {
+  background: var(--identity);
+}
+
+.preferences-dialog .chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* Role chain: full-width plate; each candidate a line with its order controls, name, effort chips. */
+.preferences-dialog .chain {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.preferences-dialog .chain + .chain {
+  margin-top: 4px;
+}
+
+.preferences-dialog .chain-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 16px;
+  align-items: center;
+}
+
+.preferences-dialog .chain-head > span {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.preferences-dialog .chain-head small {
+  margin-left: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.preferences-dialog .chain-list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.preferences-dialog .candidate {
+  display: grid;
+  grid-template-columns: auto 16px 96px minmax(0, 1fr);
+  gap: 0 8px;
+  align-items: center;
+  min-height: 30px;
+}
+
+.preferences-dialog .candidate .order {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.preferences-dialog .candidate .order .icon-button {
+  width: 22px;
+  height: 22px;
+}
+
+.preferences-dialog .candidate-efforts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.preferences-dialog .candidate-efforts small {
+  margin-left: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* Labels and routes: ordinary rows; the control line holds a segmented and a source or basis word. */
+.preferences-dialog .label-row .segmented,
+.preferences-dialog .route-row .segmented {
+  flex: 0 0 160px;
+}
+
+.preferences-dialog .label-source,
+.preferences-dialog .route-basis {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.preferences-dialog .route-inspected {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Confirm band and outside-difference rows share one diff anatomy. */
+.preferences-dialog .roster-confirm,
+.preferences-dialog .rules-confirm {
+  margin-top: 12px;
+  padding: 10px 0 4px;
+  border-top: 1px solid var(--hairline);
+}
+
+.preferences-dialog .confirm-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.preferences-dialog .confirm-head .status-dot {
+  margin-top: 6px;
+}
+
+.preferences-dialog .confirm-head p {
+  flex: 1;
+  margin: 0;
+}
+
+.preferences-dialog .diff-groups {
+  list-style: none;
+  margin: 8px 0 0 22px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.preferences-dialog .diff-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.preferences-dialog .diff-lines {
+  display: grid;
+  grid-template-columns: fit-content(45%) minmax(0, 1fr);
+  gap: 2px 10px;
+  margin: 4px 0 0;
+  font: 11.5px/18px var(--font-mono);
+}
+
+.preferences-dialog .diff-lines dt {
+  color: var(--muted);
+}
+
+.preferences-dialog .diff-lines dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.preferences-dialog .diff-lines del {
+  color: var(--faint);
+  text-decoration: line-through;
+}
+
+.preferences-dialog .diff-lines ins {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.preferences-dialog .diff-consequence {
+  margin: 2px 0 0;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.preferences-dialog .confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.preferences-dialog .roster-outside {
+  margin: 0 0 8px;
+  padding: 8px 12px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.preferences-dialog .roster-outside .diff-groups {
+  margin-left: 0;
+}
+
+/* History: generation rows with their two plates. */
+.preferences-dialog .generation-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.preferences-dialog .generation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  color: var(--text);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.preferences-dialog .generation > span:first-child {
+  flex: 1 1 200px;
+}
+
+/* Rules: health table, editor, preview. */
+.preferences-dialog .rules-health {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 4px 12px;
+  align-items: center;
+  margin: 0;
+  font-size: 12px;
+}
+
+.preferences-dialog .rules-target {
+  display: contents;
+}
+
+.preferences-dialog .rules-target .state {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+.preferences-dialog .rules-target .state .status-dot {
+  flex: none;
+}
+
+.preferences-dialog .rules-target dd {
+  margin: 0;
+}
+
+.preferences-dialog .rules-target .probe {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.preferences-dialog .rules-editor-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 4px 12px;
+}
+
+.preferences-dialog .rules-editor-head .meta {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.preferences-dialog .rules-master {
+  width: 100%;
+  min-height: 200px;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  color: var(--text);
+  font: 12px/1.5 var(--font-mono);
+  resize: vertical;
+  tab-size: 2;
+}
+
+.preferences-dialog .rules-preview {
+  margin: 6px 0 0;
+  max-height: 240px;
+  padding: 8px 10px;
+  overflow: auto;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  color: var(--muted);
+  font: 12px/1.5 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.preferences-dialog .rules-confirm details {
+  margin: 4px 0 0 22px;
+}
+
+.preferences-dialog .rules-confirm summary {
+  color: var(--text);
+  font: 11.5px/20px var(--font-mono);
+  cursor: pointer;
+}
+
+@media (max-width: 560px) {
+  .preferences-dialog .agent-summary {
+    grid-template-columns: 16px minmax(0, 1fr) 16px 18px 48px auto;
+  }
+
+  .preferences-dialog .agent-model {
+    grid-column: 2 / -1;
+    grid-row: 2;
+    padding-bottom: 6px;
+  }
+
+  .preferences-dialog .rules-health {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Section-specific additions to the Epic 60 design: removable chips, choice lists, chain head, outside "all". */
+.preferences-dialog .roster-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 22px;
+  max-width: 100%;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  color: var(--text);
+  font: 11px/18px var(--font-mono);
+}
+
+.preferences-dialog .roster-chip code {
+  font: inherit;
+  overflow-wrap: anywhere;
+}
+
+.preferences-dialog .roster-chip:has(button) {
+  padding-right: 2px;
+}
+
+.preferences-dialog .roster-chip button {
+  min-width: 20px;
+  min-height: 20px;
+  padding: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.preferences-dialog .roster-chip button:hover:not(:disabled) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 13%, transparent);
+}
+
+.preferences-dialog .agent-open {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  box-shadow: none;
+}
+
+.preferences-dialog .agent-open:focus-visible {
+  outline: none;
+}
+
+.preferences-dialog .agent-summary:has(.agent-open:focus-visible) {
+  border-radius: 8px;
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.preferences-dialog .chain-then {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.preferences-dialog .diff-general {
+  list-style: none;
+  margin: 8px 0 0 22px;
+  padding: 0;
+}
+
+.preferences-dialog .outside-all {
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.preferences-dialog .generation-open {
+  flex: 1 1 100%;
+  padding-bottom: 8px;
+}
+
+.preferences-dialog .generation-open .diff-groups {
+  margin-left: 0;
+}
+
+.preferences-dialog .choice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 8px 0 0 22px;
+  padding: 2px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.preferences-dialog .choice-list [role='radio'] {
+  position: relative;
+  min-height: 28px;
+  padding: 0 10px 0 14px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  box-shadow: none;
+}
+
+.preferences-dialog .choice-list [role='radio']::before {
+  position: absolute;
+  top: 7px;
+  bottom: 7px;
+  left: 5px;
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+  content: '';
+}
+
+.preferences-dialog .choice-list [role='radio']:hover:not(:disabled) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.preferences-dialog .choice-list [role='radio'][aria-checked='true'] {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 14%, transparent);
+}
+
+.preferences-dialog .choice-list [role='radio'][aria-checked='true']::before {
+  background: var(--identity);
+}
+
+.preferences-dialog .route-inspected {
+  flex: 1 1 100%;
+  flex-wrap: wrap;
+}
+
+.preferences-dialog .rules-actions {
+  margin-top: 8px;
+}
+
+.preferences-dialog .rules-preview-meta {
+  margin-top: 6px;
+}
+
+.preferences-dialog .agent-editor .advanced {
+  margin-top: 4px;
+}
+
+/* A labelled folder in the label column keeps its tail (the folder's own name) visible. */
+.preferences-dialog .label-path {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  direction: rtl;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
+.preferences-dialog .label-path > bdi {
+  direction: ltr;
+  unicode-bidi: isolate;
 }

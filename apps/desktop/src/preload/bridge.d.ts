@@ -11,10 +11,10 @@ import type {
   RosterHarness,
   RouteInspectionView,
   RulesOutcome,
+  RulesMasterPlan,
   RulesPlan,
   RulesSnapshot,
   WorkspaceLabelView,
-  RosterIssueShape,
   AppSettings,
   ArtifactPreview,
   ArtifactRecord,
@@ -332,8 +332,8 @@ export interface AiTerminalBridge {
   agentsSnapshot(): Promise<AgentsSnapshot>
   /** The staged edits as the file would hold them: validity, the grouped diff and its consequences in words. */
   previewAgents(data: RosterDataShape): Promise<AgentsPreview>
-  /** Approves the roster file exactly as shown; refused when the file or the approval moved. */
-  approveAgents(shown: AgentsShownRevision): Promise<AgentsOutcome>
+  /** Approves the roster file exactly as shown, or only the named sections' changes; refused when the file or the approval moved. */
+  approveAgents(shown: AgentsShownRevision, scope?: string[]): Promise<AgentsOutcome>
   /** Writes the staged data into the file, then approves exactly that. */
   saveAgents(shown: AgentsShownRevision, data: RosterDataShape): Promise<AgentsOutcome>
   /** Writes the approved data back into the file's yaml blocks (all, or the named sections). */
@@ -349,7 +349,7 @@ export interface AiTerminalBridge {
   inspectAgentRoute(harness: RosterHarness): Promise<RouteInspectionView>
   /** Epic 60.6: the master, each harness's rendering, health from `bmn rules check`, probes, transactions and history. */
   rulesSnapshot(): Promise<RulesSnapshot>
-  planRulesMaster(text: string): Promise<{ valid: boolean; errors: RosterIssueShape[]; diff: string; expectedHash: string | null }>
+  planRulesMaster(text: string): Promise<RulesMasterPlan>
   saveRulesMaster(text: string, expectedHash: string | null): Promise<RulesOutcome>
   planRulesInstall(): Promise<RulesPlan>
   installRules(planHash: string): Promise<RulesOutcome>

@@ -164,12 +164,18 @@ export interface RulesSnapshot {
 export interface RulesPlanTarget {
   harness: RosterHarness
   path: string
+  /** What happens, in words (install), or what the target becomes (restore). */
   kind: string
+  /** Install: the target's state before (`link`, `missing`, `unmanaged`, `edited-outside`, `stale`); restore: what it becomes (`link`, `file`, `missing`). */
+  change: string
   diff: string
   restricted?: boolean
   linkTarget?: string
   fold?: string[]
 }
+
+/** A master edit before saving: whether it renders, its diff, the hash a save must still find, and each harness's rendering of it. */
+export interface RulesMasterPlan { valid: boolean; errors: RosterIssueShape[]; diff: string; expectedHash: string | null; renderings: RulesRenderingView[] }
 
 export interface RulesPlan { ok: boolean; code: string; message?: string; planHash: string | null; targets: RulesPlanTarget[] }
 

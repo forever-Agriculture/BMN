@@ -1,4 +1,4 @@
-// MODULE: preferences-dialog.tsx - owner-facing preferences: appearance, notifications, voice, Telegram, history, agent control, backup
+// MODULE: preferences-dialog.tsx - owner-facing preferences: appearance, notifications, voice, Telegram, history, agents, rules, agent control, backup
 import { useEffect, useRef, useState } from 'react'
 import type {
   AppearanceSettings,
@@ -20,6 +20,8 @@ import { VoicePreferences } from './voice-preferences'
 import { Dialog } from './dialog'
 import { failureDetail } from './bridge-error'
 import { HistoryPreferences } from './history-preferences'
+import { AgentsPreferences } from './agents-preferences'
+import { RulesPreferences } from './rules-preferences'
 import { createHookCheckRunner } from './hook-check-runner'
 import { parseTelegramForm, type TelegramFormFields } from './telegram-form'
 import './preferences-dialog.css'
@@ -426,7 +428,7 @@ export function PreferencesDialog(props: {
           target.focus({ preventScroll: true })
         }}>
           <option value="" disabled>Choose section…</option>
-          {['Appearance', 'Terminal', 'Notifications', 'Voice', 'Telegram', 'History', 'Local agent control', 'Backup']
+          {['Appearance', 'Terminal', 'Notifications', 'Voice', 'Telegram', 'History', 'Agents', 'Rules', 'Local agent control', 'Backup']
             .map(section => <option key={section}>{section}</option>)}
         </select>
       </label>
@@ -925,6 +927,10 @@ export function PreferencesDialog(props: {
       </section>
 
       <HistoryPreferences settings={props.settings} onSettings={(next) => onSettings.current(next)} />
+
+      <AgentsPreferences />
+
+      <RulesPreferences />
 
       <section className="preferences-section" id="agent-control-section" tabIndex={-1}>
         <h3>Local agent control</h3>

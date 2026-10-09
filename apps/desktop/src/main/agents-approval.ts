@@ -171,6 +171,49 @@ export function approveRoster(shown: ShownRevision, seams: ApprovalSeams = {}): 
   })
 }
 
+/** Section ids a row names: an agent id, `roles`, `data-labels` or `harness-routes`. */
+const SHARED_SECTIONS = ['roles', 'data-labels', 'harness-routes'] as const
+
+/** The approved data with the named sections taken from the file, in the file's agent order. */
+export function mergeSections(approved: RosterData, file: RosterData, scope: readonly string[]): RosterData {
+  const fromFile = new Map(file.agents.map((agent) => [agent.id, agent]))
+  const fromApproved = new Map(approved.agents.map((agent) => [agent.id, agent]))
+  const agents = [...new Set([...file.agents.map((agent) => agent.id), ...approved.agents.map((agent) => agent.id)])]
+    .map((id) => (scope.includes(id) ? fromFile.get(id) : fromApproved.get(id)))
+    .filter((agent): agent is RosterData['agents'][number] => agent !== undefined)
+  return {
+    ...approved,
+    agents,
+    roles: scope.includes('roles') ? file.roles : approved.roles,
+    data_labels: scope.includes('data-labels') ? file.data_labels : approved.data_labels,
+    harness_routes: scope.includes('harness-routes') ? file.harness_routes : approved.harness_routes
+  }
+}
+
+/**
+ * Approves only the named sections' outside changes (60.5 AC3: one row, one Approve). The file is
+ * left as it is; the other sections stay pending. Refused when the approved result would not be a
+ * valid roster on its own, for example a role chain naming an agent whose change is still pending.
+ */
+export function approveSections(shown: ShownRevision, scope: string[], seams: ApprovalSeams = {}): Generation {
+  return withLock(seams, () => {
+    seams.afterLock?.()
+    const current = currentGeneration()
+    const file = readFileState()
+    checkShown(shown, current, file.hash)
+    const fileData = validData(file.text)
+    if (current === null) return publish(fileData, file.hash, current, seams)
+    const unknown = scope.filter((id) => !(SHARED_SECTIONS as readonly string[]).includes(id)
+      && !fileData.agents.some((agent) => agent.id === id) && !current.data.agents.some((agent) => agent.id === id))
+    if (scope.length === 0 || unknown.length > 0) throw new RosterError('INVALID_VALUE', `no section ${unknown.join(', ') || '(none named)'} to approve`)
+    const parsed = parseRoster(rewriteRoster(file.text, mergeSections(current.data, fileData, scope)))
+    if (parsed.data === null) {
+      throw new RosterError('ROSTER_INVALID', 'this change depends on another pending change; approve them together or revert one', { errors: parsed.errors })
+    }
+    return publish(parsed.data, file.hash, current, seams)
+  })
+}
+
 /** Writes the roster backup BMN keeps of the file it is about to replace (R60-NFR2 "record prior state"). */
 function keepPriorState(state: PathState, now: Date): void {
   const folder = `${stateDirectory()}/roster-backups`

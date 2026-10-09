@@ -13,6 +13,7 @@ import {
   type RulesOutcome,
   type RulesPlan,
   type RulesProbeView,
+  type RulesRenderingView,
   type RulesSnapshot,
   type RulesTargetHealth,
   type WorkspaceLabelView
@@ -24,7 +25,7 @@ import { consequences, inspectRoute, labelFor } from '../../bin/agents-check.mjs
 import { lastProbes, listTransactions, masterHistory, masterPath, parseMaster, render, writeMaster, type RulesHarness } from '../../bin/agents-rules.mjs'
 import { pathState, replaceFileSafely } from '../../bin/safe-config-write.mjs'
 import { unifiedDiff } from '../../bin/text-diff.mjs'
-import { approveRoster, restoreGeneration, revertFileToApproved, saveAndApprove } from './agents-approval'
+import { approveRoster, approveSections, restoreGeneration, revertFileToApproved, saveAndApprove } from './agents-approval'
 import { MainIpcError } from './workspace-ipc'
 
 interface AgentsIpcRegistrar {
@@ -43,6 +44,7 @@ export interface AgentsIpcOptions {
 /** Variables the rules CLI reads to find each harness's file and its route; nothing else of this process's environment. */
 const RULES_ENV = ['HOME', 'PATH', 'XDG_CONFIG_HOME', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'OPENCODE_CONFIG_DIR',
   'OPENAI_BASE_URL', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'] as const
+const PROBE_OUTCOME_WORDS: Readonly<Record<string, string>> = { pass: 'passed', fail: 'failed', inconclusive: 'was inconclusive', unavailable: 'was unavailable' }
 const CLI_TIMEOUT_MS = 30_000
 const PROBE_TIMEOUT_MS = 240_000
 const OUTPUT_LIMIT = 2 * 1024 * 1024
@@ -64,6 +66,13 @@ function shownParam(params: Record<string, unknown>): AgentsShownRevision {
     invalid('shown must name the generation and file hash the panel showed')
   }
   return { generation: shown.generation, fileHash: shown.fileHash }
+}
+
+function scopeParam(params: Record<string, unknown>): string[] | null {
+  if (params.scope === undefined || params.scope === null) return null
+  if (Array.isArray(params.scope) && params.scope.length > 0 && params.scope.length <= 64
+    && params.scope.every((id) => typeof id === 'string' && id.length <= 32)) return params.scope as string[]
+  invalid('scope must be a list of section ids')
 }
 
 function harnessParam(value: unknown): RosterHarness {
@@ -193,6 +202,15 @@ function parseJson(text: string): Record<string, unknown> | null {
   }
 }
 
+/** Each harness's exact rendering of `text` against the approved generation (60.6 AC2). */
+function renderAll(path: string, text: string, generation: Generation | null): RulesRenderingView[] {
+  const master = { path, text, hash: sha256(text), parts: parseMaster(text).parts }
+  return (HARNESSES as RulesHarness[]).map((harness) => {
+    const rendering = render(master, harness, generation)
+    return { harness, text: rendering.text, bytes: rendering.bytes, restricted: rendering.restricted, reason: rendering.reason, teamForm: rendering.team_form }
+  })
+}
+
 export interface RulesIpcContext { script: string; env: NodeJS.ProcessEnv; probeEnv: NodeJS.ProcessEnv; now: () => Date }
 
 async function rulesHealth(context: RulesIpcContext): Promise<RulesSnapshot['health']> {
@@ -221,12 +239,7 @@ export async function rulesSnapshot(context: RulesIpcContext): Promise<RulesSnap
   }
   const errors = text === null ? [] : parseMaster(text).errors
   const { generation } = approvedOrProblem()
-  const renderings = text !== null && errors.length === 0
-    ? (HARNESSES as RulesHarness[]).map((harness) => {
-        const rendering = render({ path, text: text as string, hash: sha256(text as string), parts: parseMaster(text as string).parts }, harness, generation)
-        return { harness, text: rendering.text, bytes: rendering.bytes, restricted: rendering.restricted, reason: rendering.reason, teamForm: rendering.team_form }
-      })
-    : []
+  const renderings = text !== null && errors.length === 0 ? renderAll(path, text, generation) : []
   let history: RulesSnapshot['history']
   try {
     history = masterHistory()
@@ -252,7 +265,7 @@ function planFrom(result: CliResult, kind: 'install' | 'restore'): RulesPlan {
   if (result.failed || report === null) return { ok: false, code: 'IO_ERROR', message: `The ${kind} plan could not be read${result.failed ? ` (${result.failed})` : ''}`, planHash: null, targets: [] }
   if (report.code !== 'OK') return { ok: false, code: String(report.code ?? 'IO_ERROR'), message: String(report.message ?? 'The plan was refused'), planHash: null, targets: [] }
   const targets = Array.isArray(report.targets) ? (report.targets as Record<string, unknown>[]).map((row) => ({
-    harness: row.harness as RosterHarness, path: String(row.path), kind: String(row.kind ?? row.becomes ?? ''), diff: String(row.diff ?? ''),
+    harness: row.harness as RosterHarness, path: String(row.path), kind: String(row.kind ?? row.becomes ?? ''), change: String(row.change ?? row.becomes ?? ''), diff: String(row.diff ?? ''),
     ...(typeof row.restricted === 'boolean' ? { restricted: row.restricted } : {}),
     ...(typeof row.link_target === 'string' ? { linkTarget: row.link_target } : {}),
     ...(Array.isArray(row.fold) ? { fold: (row.fold as unknown[]).map(String) } : {})
@@ -289,7 +302,10 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
   handle('aiterm:agents:preview', (params) => previewStaged(stagedParam(params)))
   handle('aiterm:agents:approve', (params) => {
     const shown = shownParam(params)
-    return outcome(() => `Approved generation ${approveRoster(shown).number}.`)
+    const scope = scopeParam(params)
+    return outcome(() => scope === null
+      ? `Approved generation ${approveRoster(shown).number}.`
+      : `Approved ${scope.join(', ')} as generation ${approveSections(shown, scope).number}; other differences stay pending.`)
   })
   handle('aiterm:agents:save', (params) => {
     const shown = shownParam(params)
@@ -298,8 +314,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
   })
   handle('aiterm:agents:revert', (params) => {
     const shown = shownParam(params)
-    const scope = params.scope === undefined || params.scope === null ? null
-      : Array.isArray(params.scope) && params.scope.every((id) => typeof id === 'string') ? params.scope as string[] : invalid('scope must be a list of section ids')
+    const scope = scopeParam(params)
     return outcome(() => revertFileToApproved(shown, scope).changed ? 'The file holds the approved data again.' : 'The file already matched the approved data.')
   })
   handle('aiterm:agents:restore', (params) => {
@@ -357,7 +372,10 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const state = pathState(masterPath())
     const current = state.kind === 'file' ? state.text : state.kind === 'missing' ? '' : readFileSync(masterPath(), 'utf8')
     const errors = parseMaster(text).errors
-    return { valid: errors.length === 0, errors, diff: unifiedDiff(current, text, masterPath()), expectedHash: state.kind === 'missing' ? null : sha256(current) }
+    return {
+      valid: errors.length === 0, errors, diff: unifiedDiff(current, text, masterPath()), expectedHash: state.kind === 'missing' ? null : sha256(current),
+      renderings: errors.length === 0 ? renderAll(masterPath(), text, approvedOrProblem().generation) : []
+    }
   })
   handle('aiterm:rules:save-master', async (params) => {
     const text = textParam(params, 'text')
@@ -412,6 +430,6 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const harness = harnessParam(params.harness)
     const ctx = context()
     const result = await runCli(ctx.script, ['rules', 'probe', harness, '--json'], ctx.probeEnv, PROBE_TIMEOUT_MS)
-    return rulesOutcome(ctx, result, (report) => `${harness}: ${String(report.outcome)} - ${String(report.detail)}`)
+    return rulesOutcome(ctx, result, (report) => `${harness} probe ${PROBE_OUTCOME_WORDS[String(report.outcome)] ?? String(report.outcome)}: ${String(report.detail)}`)
   })
 }
