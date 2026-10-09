@@ -15,3 +15,15 @@ export declare function writeConfigSafely(
 ): { target: string; backup: string | null }
 export declare function rewrittenNumbers(text: string): string[]
 export declare function jsonIndent(text: string): number | '\t'
+export type PathState =
+  | { kind: 'missing' }
+  | { kind: 'link'; target: string }
+  | { kind: 'file'; text: string; mode: number }
+export declare function pathState(path: string): PathState
+export declare function replaceFileSafely(
+  path: string,
+  expected: PathState,
+  nextText: string,
+  options?: { beforeCommit?: () => void; mode?: number }
+): PathState
+export declare function restorePathState(path: string, state: PathState): void

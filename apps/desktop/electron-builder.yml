@@ -30,6 +30,17 @@ extraResources:
   # bmn.mjs imports it by relative path; the utility process bundles its own copy.
   - from: bin/safe-config-write.mjs
     to: bin/safe-config-write.mjs
+  # Epic 60: the roster, approval-state reader, dispatch check and rules master that bmn.mjs imports.
+  - from: bin/agents-roster.mjs
+    to: bin/agents-roster.mjs
+  - from: bin/agents-state.mjs
+    to: bin/agents-state.mjs
+  - from: bin/agents-cli.mjs
+    to: bin/agents-cli.mjs
+  - from: bin/agents-check.mjs
+    to: bin/agents-check.mjs
+  - from: bin/agents-rules.mjs
+    to: bin/agents-rules.mjs
   # The --self-test stand-in agents draw these recorded dialogs; the packaged smoke runs that phase too.
   - from: src/utility/test-fixtures/remote-answers
     to: self-test/remote-answers

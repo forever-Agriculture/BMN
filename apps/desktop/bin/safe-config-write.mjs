@@ -1,5 +1,5 @@
 // MODULE: safe-config-write.mjs - backup, revision check and atomic write for agent config files, shared by bin/bmn and the utility process
-import { chmodSync, copyFileSync, mkdirSync, readFileSync, readlinkSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 
 /** A refusal with a stable code such as REVISION_CONFLICT; nothing was written when it is thrown. */
@@ -197,4 +197,92 @@ export function writeConfigSafely(path, expectedText, nextText, { beforeCommit, 
     unchanged()
   })
   return { target, backup }
+}
+
+/**
+ * What a path holds right now, without following a final symbolic link: a regular file with its
+ * bytes, a link with its target text, or nothing. Epic 60 records this before every write so a
+ * rollback can put back exactly what was there, a link as a link.
+ */
+export function pathState(path) {
+  let stat
+  try {
+    stat = lstatSync(path)
+  } catch (error) {
+    if (error.code === 'ENOENT') return { kind: 'missing' }
+    throw error
+  }
+  if (stat.isSymbolicLink()) return { kind: 'link', target: readlinkSync(path) }
+  if (!stat.isFile()) throw new ConfigWriteError('NOT_A_FILE', `${path} is not a regular file or a symbolic link`)
+  return { kind: 'file', text: readFileSync(path, 'utf8'), mode: stat.mode & 0o777 }
+}
+
+function sameState(a, b) {
+  return a.kind === b.kind && a.target === b.target && a.text === b.text
+}
+
+/**
+ * Epic 60's write for files outside BMN (R60-NFR2): the caller has shown the diff and had it
+ * approved; this refuses when the path no longer holds `expected` (a pathState), stages the new
+ * bytes beside the path, checks again with them staged, then renames over the path. A rename
+ * replaces a symbolic link's own entry and never writes through it to the file it points at,
+ * unlike `writeAtomically`. The result is read back. `beforeCommit` is a test seam between checks.
+ */
+export function replaceFileSafely(path, expected, nextText, { beforeCommit, mode = 0o600 } = {}) {
+  const unchanged = () => {
+    const now = pathState(path)
+    if (!sameState(now, expected)) {
+      throw new ConfigWriteError('REVISION_CONFLICT', `${path} changed while BMN was reading it; nothing was written`)
+    }
+  }
+  unchanged()
+  const directory = dirname(path)
+  mkdirSync(directory, { recursive: true })
+  const temporary = join(directory, `.${basename(path)}.bmn-${process.pid}-${Date.now()}.tmp`)
+  try {
+    writeFileSync(temporary, nextText, { mode: expected.kind === 'file' ? expected.mode : mode, flag: 'wx' })
+    if (expected.kind === 'file') chmodSync(temporary, expected.mode)
+    beforeCommit?.()
+    unchanged()
+    renameSync(temporary, path)
+  } catch (error) {
+    try {
+      unlinkSync(temporary)
+    } catch {
+      // Already renamed into place, or never created.
+    }
+    throw error
+  }
+  const after = pathState(path)
+  if (after.kind !== 'file' || after.text !== nextText) {
+    throw new ConfigWriteError('READBACK_FAILED', `${path} does not hold what BMN wrote; check it by hand`)
+  }
+  return after
+}
+
+/** Puts a recorded pathState back: a file's bytes, a link as a link, or removes what was missing. */
+export function restorePathState(path, state) {
+  const directory = dirname(path)
+  if (state.kind === 'missing') {
+    try {
+      unlinkSync(path)
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error
+    }
+    return
+  }
+  mkdirSync(directory, { recursive: true })
+  const temporary = join(directory, `.${basename(path)}.bmn-${process.pid}-${Date.now()}.tmp`)
+  try {
+    if (state.kind === 'link') symlinkSync(state.target, temporary)
+    else writeFileSync(temporary, state.text, { mode: state.mode ?? 0o600, flag: 'wx' })
+    renameSync(temporary, path)
+  } catch (error) {
+    try {
+      unlinkSync(temporary)
+    } catch {
+      // Never created.
+    }
+    throw error
+  }
 }

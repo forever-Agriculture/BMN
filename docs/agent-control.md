@@ -78,6 +78,14 @@ Commands:
   statusline check|install|uninstall [--file PATH]
                                             Put one line in front of Claude Code's own status-line command so
                                             its plan use reaches BMN; the command itself is kept unchanged
+  team [--all] [--json]                     The owner-approved team: one line per enabled active agent
+  roster validate|status|role|route|check|explain
+                                            The typed roster in ~/.config/bmn/agents: validate the file, list
+                                            pending differences, print a role's chain, and check a dispatch
+                                            before work leaves for another agent (bmn roster --help)
+  rules render|check|install|restore|history|revert-master|probe
+                                            One rules master written into each agent's own rules file
+                                            (bmn rules --help)
   help [agents|terminal]                    Show this help or a short agent/terminal guide
 
 Long text from standard input (instead of one quoted argument; only - is accepted, pipe a file with cat):
@@ -96,6 +104,7 @@ Options:
 Environment: BMN_CONTROL_SOCKET, BMN_TOKEN
 Exit status: 0 success, 1 remote or connection error, 2 usage error
              hooks uses 1 for "something is missing or unreadable"; it needs no socket and no token
+             team, roster and rules need no socket either; their own codes are listed in their --help
 ```
 <!-- END `bmn help` -->
 
