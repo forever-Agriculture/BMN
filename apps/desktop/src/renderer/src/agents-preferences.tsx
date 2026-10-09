@@ -660,6 +660,10 @@ export function AgentsPreferences(): React.JSX.Element {
             onClick={() => { setNotice(null); setOpened(null); void load() }}>Reload</button>
         </span>
       </div>
+      {notice ? (
+        notice.ok ? <p className="preferences-success" role="status">{notice.text}</p>
+          : <><p className="preferences-error" role="alert">{notice.text}</p>{notice.issues ? <Issues issues={notice.issues} /> : null}</>
+      ) : null}
       {loadError ? <p className="preferences-error" role="alert">{loadError}</p> : null}
       {snapshot === null && loadError === null ? <p className="preferences-help">Loading…</p> : null}
       {snapshot && !approved ? (
@@ -723,10 +727,6 @@ export function AgentsPreferences(): React.JSX.Element {
       ) : null}
 
       {bandBody()}
-      {notice ? (
-        notice.ok ? <p className="preferences-success" role="status">{notice.text}</p>
-          : <><p className="preferences-error" role="alert">{notice.text}</p>{notice.issues ? <Issues issues={notice.issues} /> : null}</>
-      ) : null}
 
       {snapshot ? (
         <details className="advanced">

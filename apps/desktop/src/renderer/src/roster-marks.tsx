@@ -13,11 +13,17 @@ export function Sigil(props: { title: RosterAgentShape['title'] }): React.JSX.El
   )
 }
 
-/** Closed seal: High security. Open seal: Low. */
+/**
+ * Seals are rings, a different family from the small solid trust pips: High is a ring sealed by a
+ * filled core, Low the same ring left empty. No gap or arc, which would read as a refresh control.
+ */
 export function SealShape(props: { level: RosterAgentShape['security'] }): React.JSX.Element {
-  return props.level === 'high'
-    ? <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle cx="8" cy="8" r="5" fill="currentColor" /></svg>
-    : <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M11.54 4.46A5 5 0 1 0 12.83 9.29" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+      {props.level === 'high' ? <circle cx="8" cy="8" r="2.75" fill="currentColor" /> : null}
+    </svg>
+  )
 }
 
 export function Seal(props: { level: RosterAgentShape['security'] }): React.JSX.Element {

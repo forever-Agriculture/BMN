@@ -788,13 +788,13 @@
 
 .preferences-dialog .agent-editor textarea {
   flex: 1 1 100%;
-  min-height: 72px;
+  height: 96px;
   border: 0;
   border-radius: 6px;
   background: color-mix(in srgb, var(--text) 5%, transparent);
   color: var(--text);
   font: 12px/1.5 var(--font-chrome);
-  resize: vertical;
+  resize: none;
 }
 
 /* Toggle chips (efforts, effort choice): pressed = brighter plate with the gold bar. */
@@ -988,7 +988,7 @@
 }
 
 .preferences-dialog .diff-lines del {
-  color: var(--faint);
+  color: var(--muted);
   text-decoration: line-through;
 }
 
@@ -1094,7 +1094,7 @@
 
 .preferences-dialog .rules-master {
   width: 100%;
-  min-height: 200px;
+  height: clamp(200px, 45vh, 420px);
   margin-top: 6px;
   padding: 8px 10px;
   border: 0;
@@ -1102,7 +1102,7 @@
   background: color-mix(in srgb, var(--text) 5%, transparent);
   color: var(--text);
   font: 12px/1.5 var(--font-mono);
-  resize: vertical;
+  resize: none;
   tab-size: 2;
 }
 

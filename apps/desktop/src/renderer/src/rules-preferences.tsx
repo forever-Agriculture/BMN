@@ -310,10 +310,11 @@ export function RulesPreferences(): React.JSX.Element {
       <div className="preferences-section-head">
         <h3 id="rules-head">Rules</h3>
         <span className="meta">
-          {snapshot?.master.exists ? `${kilobytes(snapshot.master.bytes)} · ${lineCount(saved)} lines` : snapshot ? 'No master yet' : ''}
+          {snapshot && !snapshot.master.exists ? 'No master yet' : ''}
           <button type="button" className="small" disabled={busy} onClick={() => void load()}>{busy && !pending ? 'Checking…' : 'Check'}</button>
         </span>
       </div>
+      {result ? <p className={result.ok ? 'preferences-success' : 'preferences-error'} role={result.ok ? 'status' : 'alert'}>{result.text}</p> : null}
       {loadError ? <p className="preferences-error" role="alert">{loadError}</p> : null}
       {snapshot === null && loadError === null ? <p className="preferences-help">Loading…</p> : null}
       {snapshot ? (
@@ -405,7 +406,6 @@ export function RulesPreferences(): React.JSX.Element {
           </div>
         </div>
       ) : null}
-      {result ? <p className={result.ok ? 'preferences-success' : 'preferences-error'} role={result.ok ? 'status' : 'alert'}>{result.text}</p> : null}
 
       {snapshot ? (
         <details className="advanced">
