@@ -13,6 +13,7 @@ import type {
   RulesOutcome,
   RulesMasterPlan,
   RulesPlan,
+  RulesRevertPlan,
   RulesSnapshot,
   WorkspaceLabelView,
   AppSettings,
@@ -350,12 +351,12 @@ export interface AiTerminalBridge {
   /** Epic 60.6: the master, each harness's rendering, health from `bmn rules check`, probes, transactions and history. */
   rulesSnapshot(): Promise<RulesSnapshot>
   planRulesMaster(text: string): Promise<RulesMasterPlan>
-  saveRulesMaster(text: string, expectedHash: string | null): Promise<RulesOutcome>
+  saveRulesMaster(text: string, expectedHash: string | null, expectedLink: string | null): Promise<RulesOutcome>
   planRulesInstall(): Promise<RulesPlan>
   installRules(planHash: string): Promise<RulesOutcome>
   planRulesRestore(transaction: string): Promise<RulesPlan>
   restoreRules(transaction: string, planHash: string): Promise<RulesOutcome>
-  planRulesRevertMaster(revision: number): Promise<{ ok: boolean; diff: string; expectedHash: string | null; text?: string; message?: string }>
+  planRulesRevertMaster(revision: number): Promise<RulesRevertPlan>
   /** Owner-run: sends the rules to that harness's provider; High routes only. */
   probeRules(harness: RosterHarness): Promise<RulesOutcome>
   readClipboardText(): Promise<{ text: string }>

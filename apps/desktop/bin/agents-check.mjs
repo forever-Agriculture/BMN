@@ -518,14 +518,35 @@ function inspectOpenCode(environment) {
   return { basis: 'unknown', provider: null, host: null, reason: 'no OpenCode configuration names a model', sources: [] }
 }
 
-/** `<harness> --version`, the only thing BMN runs. */
+const versionCache = new Map()
+
+/** The executable PATH would run, with its change time, so a reinstall is never served from cache. */
+function executableIdentity(command, environment) {
+  for (const directory of (environment.PATH ?? '').split(':')) {
+    if (!directory.startsWith('/')) continue
+    try {
+      const stat = statSync(`${directory}/${command}`)
+      if (stat.isFile()) return `${directory}/${command}:${stat.ino}:${stat.mtimeMs}:${stat.ctimeMs}`
+    } catch {
+      // Not in this directory.
+    }
+  }
+  return null
+}
+
+/** `<harness> --version`, the only thing BMN runs; remembered per executable until it changes. */
 export function harnessVersion(command, environment) {
+  const identity = executableIdentity(command, environment)
+  if (identity !== null && versionCache.has(identity)) return versionCache.get(identity)
+  let version
   try {
     const text = execFileSync(command, ['--version'], { env: environment, encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] })
-    return /\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?/.exec(text)?.[0] ?? null
+    version = /\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?/.exec(text)?.[0] ?? null
   } catch {
-    return null
+    version = null
   }
+  if (identity !== null && version !== null) versionCache.set(identity, version)
+  return version
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -675,7 +696,7 @@ function capabilities(data) {
     const checkable = agent.harness === 'claude' || agent.harness === 'codex'
     out.set(agent.id, {
       name: agent.name, active,
-      lead: active && agent.title === 'knight' && agent.roles.includes('lead'),
+      lead: active && agent.title === 'knight' && agent.authority === 'lead' && agent.roles.includes('lead'),
       private: active && checkable && agent.host !== null && lowSecurityReasons(agent, data).length === 0,
       roles: new Set(active ? agent.roles : [])
     })
@@ -739,6 +760,8 @@ export function consequences(before, after) {
   for (const route of after.harness_routes) {
     const added = (route.accepted_versions ?? []).filter((version) => !(oldRoutes.get(route.harness)?.accepted_versions ?? []).includes(version))
     for (const version of added) out.push(`${route.harness} ${version} could carry private work (owner-accepted, untested by BMN)`)
+    const revoked = (oldRoutes.get(route.harness)?.accepted_versions ?? []).filter((version) => !(route.accepted_versions ?? []).includes(version))
+    for (const version of revoked) out.push(`${route.harness} ${version} could no longer carry private work (acceptance revoked)`)
   }
   return [...new Set(out)]
 }
@@ -764,6 +787,7 @@ export function evaluate(inputs, { environment = process.env, cwd: processCwd = 
     if (role === undefined) refuse('ROLE_UNKNOWN', `no role ${inputs.role} in the approved ## roles`)
     if (!agent.roles.includes(role.id)) refuse('ROLE_INELIGIBLE', `${agent.id} does not hold role ${role.id}`)
     if (role.id === 'lead' && agent.title === 'squire') refuse('SQUIRE_CANNOT_LEAD', `${agent.id} is a squire`)
+    if (role.id === 'lead' && agent.authority !== 'lead') refuse('ROLE_INELIGIBLE', `${agent.id} has authority ${agent.authority}; only authority lead may lead`)
     note(`role ${role.id}: held`)
 
     const parsed = parseDispatch(inputs.argv)
@@ -804,11 +828,9 @@ export function evaluate(inputs, { environment = process.env, cwd: processCwd = 
     const workspace = canonicalDirectory(inputs.workspace, processCwd)
     if (workspace === null) refuse('WORKSPACE_UNKNOWN', `${inputs.workspace} is not an existing directory`)
     if (cwd === null) refuse('WORKSPACE_MISMATCH', `--cwd ${inputs.cwd} is not an existing directory without ..`)
-    let packet = null
-    if (inputs.packet !== undefined) {
-      packet = canonicalDirectory(inputs.packet, processCwd)
-      if (packet === null) refuse('PACKET_INVALID', `--packet ${inputs.packet} is not an existing directory`)
-    }
+    // An unreadable packet is a packet refusal, reported in its place in the order, after every earlier one.
+    const packet = inputs.packet === undefined ? null : canonicalDirectory(inputs.packet, processCwd)
+    const packetMissing = inputs.packet !== undefined && packet === null
     const within = (dir) => inside(dir, workspace) || (packet !== null && inside(dir, packet))
     if (!within(cwd)) refuse('WORKSPACE_MISMATCH', `cwd ${cwd} is outside the workspace${packet ? ' and the packet' : ''}`)
     if (parsed.cd !== undefined) {
@@ -869,13 +891,14 @@ export function evaluate(inputs, { environment = process.env, cwd: processCwd = 
       try {
         stdin = { path: realpathSync(path), sha256: hashFile(realpathSync(path)) }
       } catch {
-        refuse(packet ? 'PACKET_INVALID' : 'WORKSPACE_MISMATCH', `--stdin ${inputs.stdin} cannot be read`)
+        refuse(inputs.packet !== undefined ? 'PACKET_INVALID' : 'WORKSPACE_MISMATCH', `--stdin ${inputs.stdin} cannot be read`)
       }
     }
     let manifest = null
     if (security === 'low') {
-      if (effectiveData === 'private') refuse('DATA_FORBIDDEN', `private work never goes to a Low route (${lowReasons.join('; ')})`)
       if (parsed.harness !== 'claude') refuse('ROUTE_UNSUPPORTED', `a Low dispatch goes only through a packet to claude -p, not ${parsed.harness}`)
+      if (effectiveData === 'private') refuse('DATA_FORBIDDEN', `private work never goes to a Low route (${lowReasons.join('; ')})`)
+      if (packetMissing) refuse('PACKET_INVALID', `--packet ${inputs.packet} is not an existing directory`)
       if (packet === null) refuse('PACKET_INVALID', 'a Low route receives public work only in packet mode (--packet)')
       if (parsed.envMode !== 'clean') refuse('PACKET_INVALID', 'packet mode needs env -i')
       if (!parsed.safeMode) refuse('PACKET_INVALID', 'packet mode needs --safe-mode')
@@ -907,6 +930,8 @@ export function evaluate(inputs, { environment = process.env, cwd: processCwd = 
         }
       }
       note(`packet ${packet}: ${manifest.length} file(s); the prompt is lead-authored, not verified`)
+    } else if (packetMissing) {
+      refuse('PACKET_INVALID', `--packet ${inputs.packet} is not an existing directory`)
     } else if (packet !== null) {
       manifest = packetManifest(packet)
     }
@@ -943,13 +968,28 @@ export function evaluate(inputs, { environment = process.env, cwd: processCwd = 
 export function verifyReceipt(path, argv, options = {}) {
   const receipt = readReceiptFile(path)
   if (receipt === null) return { ok: false, reason: `${path} is not an intact version-1 receipt` }
-  const result = evaluate({
+  let result
+  try {
+    result = evaluateReceipt(receipt, argv, options)
+  } catch (error) {
+    // Approved state that is missing or corrupt now means the receipt cannot be reproduced.
+    if (error instanceof RosterError) return { ok: false, reason: `the receipt cannot be checked again: ${error.code}: ${error.message}` }
+    throw error
+  }
+  if (result.verdict !== 'PASS') return { ok: false, reason: `the dispatch no longer passes: ${result.code}: ${result.message}` }
+  return sameReceipt(receipt, result.receipt)
+}
+
+function evaluateReceipt(receipt, argv, options) {
+  return evaluate({
     agent: receipt.agent, role: receipt.role, workspace: receipt.workspace, data: receipt.data, cwd: receipt.cwd, argv,
     ...(receipt.stdin ? { stdin: receipt.stdin.path } : {}),
     ...(receipt.packet ? { packet: receipt.packet.path } : {}),
     ...(receipt.resume ? { resumeOf: receipt.resume.original_receipt } : {})
   }, { ...options, now: new Date(receipt.issued_at) })
-  if (result.verdict !== 'PASS') return { ok: false, reason: `the dispatch no longer passes: ${result.code}: ${result.message}` }
+}
+
+function sameReceipt(receipt, recomputed) {
   const strip = (value) => {
     const rest = { ...value }
     delete rest.receipt_hash
@@ -957,7 +997,7 @@ export function verifyReceipt(path, argv, options = {}) {
     return rest
   }
   const before = strip(receipt)
-  const after = strip(result.receipt)
+  const after = strip(recomputed)
   if (canonicalJson(before) !== canonicalJson(after)) {
     const changed = Object.keys({ ...before, ...after }).filter((key) => canonicalJson(before[key] ?? null) !== canonicalJson(after[key] ?? null))
     return { ok: false, reason: `the receipt no longer matches: ${changed.join(', ')} changed` }

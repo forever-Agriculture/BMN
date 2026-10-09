@@ -41,11 +41,21 @@ function formatPlain(value: unknown): string {
   return String(value)
 }
 
+/** An added or removed entry shows every value it carries, one line per field (60.5 AC2). */
+function linesFor(diff: RosterDiffShape): DiffLine[] {
+  if (diff.field !== null) return [lineFor(diff)]
+  const side = diff.kind === 'added' ? diff.after : diff.before
+  const prefix = diff.scope === 'agent' ? '' : `${diff.id} `
+  const head: DiffLine = { field: diff.scope === 'agent' ? 'agent' : diff.id, before: diff.kind === 'added' ? '—' : 'present', after: diff.kind === 'removed' ? 'removed' : 'added' }
+  if (!side?.present || side.value === null || typeof side.value !== 'object') return [head]
+  return [head, ...Object.entries(side.value as Record<string, unknown>).filter(([key]) => key !== 'id' && !(diff.scope === 'harness-routes' && key === 'harness')).map(([key, value]) => {
+    const text = formatPlain(value)
+    return { field: `${prefix}${key}`, before: diff.kind === 'added' ? '—' : text, after: diff.kind === 'added' ? text : '—' }
+  })]
+}
+
 function lineFor(diff: RosterDiffShape): DiffLine {
-  if (diff.field === null) {
-    return { field: diff.scope === 'agent' ? 'agent' : diff.id, before: diff.kind === 'added' ? '—' : 'present', after: diff.kind === 'removed' ? 'removed' : 'added' }
-  }
-  const field = diff.scope === 'agent' ? diff.field
+  const field = diff.scope === 'agent' ? diff.field ?? 'agent'
     : diff.scope === 'roles' ? `${diff.id} ${diff.field}`
       : diff.scope === 'data-labels' ? (diff.id === 'default' ? 'default' : diff.id)
         : `${diff.id} ${diff.field}`
@@ -69,7 +79,7 @@ export function groupDifferences(diffs: readonly RosterDiffShape[], data: Roster
       group = { key, subject: agent?.name ?? SECTION_SUBJECTS[key] ?? key, lines: [], consequences: [], ...(agent ? { agent } : {}) }
       groups.set(key, group)
     }
-    group.lines.push(lineFor(diff))
+    group.lines.push(...linesFor(diff))
   }
   const general: string[] = []
   const roleIds = new Set([...(data?.roles ?? []), ...(approved?.roles ?? [])].map((role) => role.id))
@@ -81,12 +91,38 @@ export function groupDifferences(diffs: readonly RosterDiffShape[], data: Roster
   return { groups: [...groups.values()], general }
 }
 
+/**
+ * Display only: the confirm band's unclaimed sentences gathered under the agent or role they name,
+ * so a first approval reads agent by agent instead of as one list. These rows carry no differences
+ * and no section to approve; whatever names nothing stays in `general`.
+ */
+export function groupConsequences(sentences: readonly string[], data: RosterDataShape | null,
+  approved: RosterDataShape | null): { groups: DiffGroup[]; general: string[] } {
+  const agents = [...(data?.agents ?? []), ...(approved?.agents ?? [])]
+  const roleIds = new Set([...(data?.roles ?? []), ...(approved?.roles ?? [])].map((role) => role.id))
+  const groups = new Map<string, DiffGroup>()
+  const general: string[] = []
+  for (const sentence of sentences) {
+    const agent = agents.find((entry) => sentence.startsWith(`${entry.name} `))
+    const roleWord = /^(?:when every |the )?([a-z0-9-]+) /.exec(sentence)?.[1]
+    const key = agent ? `agent:${agent.id}` : roleWord !== undefined && roleIds.has(roleWord) ? 'roles' : null
+    if (key === null) { general.push(sentence); continue }
+    let group = groups.get(key)
+    if (group === undefined) {
+      group = { key, subject: agent?.name ?? 'Roles', lines: [], consequences: [], ...(agent ? { agent } : {}) }
+      groups.set(key, group)
+    }
+    group.consequences.push(sentence)
+  }
+  return { groups: [...groups.values()], general }
+}
+
 function claimant(sentence: string, groups: DiffGroup[], roleIds: ReadonlySet<string>): DiffGroup | undefined {
   const agentGroup = groups.find((group) => group.agent !== undefined && sentence.startsWith(`${group.subject} `))
   if (agentGroup) return agentGroup
   const section = (key: string): DiffGroup | undefined => groups.find((group) => group.key === key)
   if (sentence.startsWith('/') || sentence.startsWith('unlabelled workspaces')) return section('data-labels')
-  if (sentence.includes(' could carry private work')) return section('harness-routes')
+  if (sentence.includes(' could carry private work') || sentence.includes(' could no longer carry private work (acceptance revoked)')) return section('harness-routes')
   const roleWord = /^(?:when every |the )?([a-z0-9-]+) /.exec(sentence)?.[1]
   if (roleWord !== undefined && roleIds.has(roleWord)) return section('roles')
   return undefined
@@ -189,6 +225,16 @@ export function setRecheck(data: RosterDataShape, roleId: string, sameReviewer: 
   })
 }
 
+/** A per-agent recheck effort for one role; null returns that agent to the effort it reviewed at. */
+export function setRecheckEffort(data: RosterDataShape, roleId: string, agentId: string, effort: RosterEffort | null): RosterDataShape {
+  return updateRole(data, roleId, (role) => {
+    const recheck: Record<string, boolean | string> = { ...(role.recheck ?? { same_reviewer: true }) }
+    if (effort === null) delete recheck[agentId]
+    else recheck[agentId] = effort
+    return { ...role, recheck }
+  })
+}
+
 export function setSmallEpic(data: RosterDataShape, roleId: string, candidate: string | null): RosterDataShape {
   return updateRole(data, roleId, (role) => {
     const next: RosterRoleShape = { ...role }
@@ -248,6 +294,21 @@ export function acceptVersion(data: RosterDataShape, harness: RosterHarness, ver
   const route = data.harness_routes.find((entry) => entry.harness === harness)
   if (route === undefined || (route.accepted_versions ?? []).includes(version)) return data
   return updateRoute(data, harness, { accepted_versions: [...(route.accepted_versions ?? []), version] })
+}
+
+/** Revoking an accepted version: private work refuses on it again until it is accepted anew. */
+export function revokeVersion(data: RosterDataShape, harness: RosterHarness, version: string): RosterDataShape {
+  return {
+    ...data,
+    harness_routes: data.harness_routes.map((route) => {
+      if (route.harness !== harness) return route
+      const rest = (route.accepted_versions ?? []).filter((entry) => entry !== version)
+      const next: RosterRouteShape = { ...route }
+      if (rest.length > 0) next.accepted_versions = rest
+      else delete next.accepted_versions
+      return next
+    })
+  }
 }
 
 export function agentGroups(data: RosterDataShape): { active: RosterAgentShape[]; proposed: RosterAgentShape[]; disabled: RosterAgentShape[] } {

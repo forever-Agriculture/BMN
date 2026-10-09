@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { consequences, evaluate, readCodexConfig, setReadTracer } from '../../bin/agents-check.mjs'
+import { consequences, evaluate, readCodexConfig, setReadTracer, verifyReceipt } from '../../bin/agents-check.mjs'
 import { readValidRoster } from '../../bin/agents-state.mjs'
 import { parseRoster } from '../../bin/agents-roster.mjs'
 import { approveRoster } from '../main/agents-approval'
@@ -41,7 +41,7 @@ function approve(text: string): void {
   } catch {
     generation = null
   }
-  approveRoster({ generation, fileHash: readValidRoster().hash })
+  approveRoster({ generation, fileHash: readValidRoster().hash }, { checkNewlyAccepted: () => {} })
 }
 
 function stub(name: string, version: string): void {
@@ -167,14 +167,16 @@ describe('destination resolution (60.3 AC3-AC4)', () => {
 
   it('treats a Low agent or a missing route as Low (an owner-declared route with a High default agent fails validation)', () => {
     const argv = ASTRA_REVIEW(workspace)
+    // Treated as Low: Codex is never a Low route (ROUTE_UNSUPPORTED comes before DATA_FORBIDDEN in the contract order).
+    const asLow = { code: 'ROUTE_UNSUPPORTED', message: expect.stringContaining('a Low dispatch goes only through a packet') }
     approve(roster((text) => edit(text, 'codex: {provider: openai, security: high, basis: observed-default}\n', '')))
-    expect(check({ argv })).toMatchObject({ code: 'DATA_FORBIDDEN' })
+    expect(check({ argv })).toMatchObject(asLow)
     mkdirSync(join(home, 'public'))
     const publicDir = join(home, 'public')
     expect(check({ argv: ASTRA_REVIEW(publicDir), workspace: publicDir, cwd: publicDir, data: 'public' })).toMatchObject({ code: 'ROUTE_UNSUPPORTED' })
     approve(roster((text) => edit(text, 'name: Astra\ntitle: knight\nharness: codex\nmodel: gpt-6-astra\nprovider: openai\nhost: default\nsecurity: high',
       'name: Astra\ntitle: knight\nharness: codex\nmodel: gpt-6-astra\nprovider: openai\nhost: default\nsecurity: low')))
-    expect(check({ argv })).toMatchObject({ code: 'DATA_FORBIDDEN' })
+    expect(check({ argv })).toMatchObject(asLow)
   })
 
   it('records only provider, host and source names, never URL paths or other environment values', () => {
@@ -266,6 +268,15 @@ describe('Low routes and packet mode (60.3 AC6)', () => {
     expect(['PACKET_INVALID', 'HOST_UNKNOWN', 'HOST_MISMATCH', 'WORKSPACE_MISMATCH', 'DATA_FORBIDDEN']).toContain(result.code)
   })
 
+  it('--verify refuses a packet receipt once a packet file changed after the check', () => {
+    const result = low()
+    expect(result.verdict).toBe('PASS')
+    writeFileSync(join(home, 'packet-receipt.json'), JSON.stringify(result.receipt))
+    expect(verifyReceipt(join(home, 'packet-receipt.json'), LOW(), { environment: env, cwd: packet })).toEqual({ ok: true })
+    writeFileSync(join(packet, 'src/a.ts'), 'export const a = 2\n')
+    expect(verifyReceipt(join(home, 'packet-receipt.json'), LOW(), { environment: env, cwd: packet })).toMatchObject({ ok: false })
+  })
+
   it('accepts the restricted rendering in --append-system-prompt and nothing else', () => {
     const result = evaluate({ agent: 'glm', role: 'helper', workspace: publicRepo, data: 'public', cwd: packet, packet, stdin: join(packet, 'prompt.md'), argv: LOW('RESTRICTED') },
       { environment: env, cwd: packet, restrictedRules: 'RESTRICTED' })
@@ -276,6 +287,15 @@ describe('Low routes and packet mode (60.3 AC6)', () => {
     approve(roster((text) => edit(text, 'name: Luna\ntitle: squire\nharness: codex\nmodel: gpt-6-luna\nprovider: openai\nhost: default\nsecurity: high',
       'name: Luna\ntitle: squire\nharness: codex\nmodel: gpt-6-luna\nprovider: openai\nhost: default\nsecurity: low')))
     expect(check({ agent: 'luna', role: 'helper', workspace: publicRepo, cwd: publicRepo, data: 'public', argv: LUNA_BROWSE(publicRepo) }).code).toBe('ROUTE_UNSUPPORTED')
+    // ROUTE_UNSUPPORTED comes before DATA_FORBIDDEN in the contract order.
+    expect(check({ agent: 'luna', role: 'helper', workspace: publicRepo, cwd: publicRepo, data: 'private', argv: LUNA_BROWSE(publicRepo) }).code).toBe('ROUTE_UNSUPPORTED')
+  })
+
+  it('a missing packet is a packet refusal and never pre-empts an earlier one', () => {
+    const missing = join(home, 'no-such-packet')
+    expect(low({ packet: missing, cwd: publicRepo, stdin: undefined, data: 'private' }).code).toBe('DATA_FORBIDDEN')
+    expect(low({ packet: missing, cwd: publicRepo, stdin: undefined })).toMatchObject({ code: 'PACKET_INVALID', message: expect.stringContaining('not an existing directory') })
+    expect(check({ packet: missing, argv: ASTRA_REVIEW(workspace) })).toMatchObject({ code: 'PACKET_INVALID' })
   })
 })
 
@@ -320,6 +340,12 @@ describe('receipts and --verify (60.3 AC7)', () => {
     writeFileSync(join(home, 'tampered.json'), JSON.stringify({ ...receipt, data: 'public' }))
     expect((await runCli(['roster', 'check', '--verify', join(home, 'tampered.json'), '--', ...argv])).code).toBe(11)
     approve(roster((text) => edit(text, 'name: Sol', 'name: Sol2')))
+    expect((await runCli(['roster', 'check', '--verify', join(home, 'receipt.json'), '--', ...argv])).code).toBe(11)
+    // Approved state that is gone or corrupt makes the receipt unverifiable: exit 11, not 5 or 6.
+    writeFileSync(join(home, '.config/bmn/agents/state/current'), '{corrupt')
+    const corrupt = await runCli(['roster', 'check', '--verify', join(home, 'receipt.json'), '--', ...argv])
+    expect(corrupt.code, corrupt.stdout + corrupt.stderr).toBe(11)
+    rmSync(join(home, '.config/bmn/agents/state'), { recursive: true, force: true })
     expect((await runCli(['roster', 'check', '--verify', join(home, 'receipt.json'), '--', ...argv])).code).toBe(11)
   })
 
@@ -454,6 +480,11 @@ describe('consequences in words (60.5 AC2; the same sentences `bmn roster status
   ])('%s', (_name, change, expected) => {
     const before = data(EXAMPLE)
     expect(consequences(before, data(change(EXAMPLE)))).toEqual(expected)
+  })
+
+  it('names a revoked accepted version', () => {
+    const accepted = edit(EXAMPLE, 'codex: {provider: openai, security: high, basis: observed-default}', 'codex: {provider: openai, security: high, basis: observed-default, accepted_versions: [0.170.0]}')
+    expect(consequences(data(accepted), data(EXAMPLE))).toEqual(['codex 0.170.0 could no longer carry private work (acceptance revoked)'])
   })
 
   it('names a folder becoming public, the default label and an accepted version', () => {

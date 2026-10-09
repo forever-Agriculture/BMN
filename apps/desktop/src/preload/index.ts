@@ -21,6 +21,7 @@ import {
   type RulesOutcome,
   type RulesMasterPlan,
   type RulesPlan,
+  type RulesRevertPlan,
   type RulesSnapshot,
   type WorkspaceLabelView,
   type AppSettings,
@@ -753,8 +754,8 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   planRulesMaster(text: string): Promise<RulesMasterPlan> {
     return invokeBridge('aiterm:rules:plan-master', { text })
   },
-  saveRulesMaster(text: string, expectedHash: string | null): Promise<RulesOutcome> {
-    return invokeBridge('aiterm:rules:save-master', { text, expectedHash })
+  saveRulesMaster(text: string, expectedHash: string | null, expectedLink: string | null): Promise<RulesOutcome> {
+    return invokeBridge('aiterm:rules:save-master', { text, expectedHash, expectedLink })
   },
   planRulesInstall(): Promise<RulesPlan> {
     return invokeBridge('aiterm:rules:plan-install', {})
@@ -768,7 +769,7 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   restoreRules(transaction: string, planHash: string): Promise<RulesOutcome> {
     return invokeBridge('aiterm:rules:restore', { transaction, planHash })
   },
-  planRulesRevertMaster(revision: number): Promise<{ ok: boolean; diff: string; expectedHash: string | null; text?: string; message?: string }> {
+  planRulesRevertMaster(revision: number): Promise<RulesRevertPlan> {
     return invokeBridge('aiterm:rules:plan-revert-master', { revision })
   },
   probeRules(harness: RosterHarness): Promise<RulesOutcome> {

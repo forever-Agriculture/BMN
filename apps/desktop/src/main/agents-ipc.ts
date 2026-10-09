@@ -22,11 +22,11 @@ import type { IpcMainInvokeEvent } from 'electron'
 import { HARNESSES, RosterError, parseRoster, proseOf, rewriteProse, rewriteRoster, rosterPath, sha256, type RosterData } from '../../bin/agents-roster.mjs'
 import { listGenerations, machineDiff, readApproved, readGeneration, type Generation } from '../../bin/agents-state.mjs'
 import { consequences, inspectRoute, labelFor } from '../../bin/agents-check.mjs'
-import { lastProbes, listTransactions, masterHistory, masterPath, parseMaster, render, writeMaster, type RulesHarness } from '../../bin/agents-rules.mjs'
+import { lastProbes, listTransactions, masterHistory, masterPath, parseMaster, probeInspector, render, writeMaster, type RulesHarness } from '../../bin/agents-rules.mjs'
 import { pathState, replaceFileSafely } from '../../bin/safe-config-write.mjs'
 import { unifiedDiff } from '../../bin/text-diff.mjs'
 import { approveRoster, approveSections, restoreGeneration, revertFileToApproved, saveAndApprove } from './agents-approval'
-import { judgeInspection } from './route-baselines'
+import { assertStillAcceptable, judgeInspection, type RouteResolution } from './route-baselines'
 import { MainIpcError } from './workspace-ipc'
 
 interface AgentsIpcRegistrar {
@@ -66,7 +66,14 @@ function shownParam(params: Record<string, unknown>): AgentsShownRevision {
     || !(shown.generation === null || (typeof shown.generation === 'number' && Number.isSafeInteger(shown.generation)))) {
     invalid('shown must name the generation and file hash the panel showed')
   }
-  return { generation: shown.generation, fileHash: shown.fileHash }
+  if (shown.link !== undefined && shown.link !== null && typeof shown.link !== 'string') invalid('shown.link must be the link target or null')
+  return { generation: shown.generation, fileHash: shown.fileHash, ...(shown.link === undefined ? {} : { link: shown.link }) }
+}
+
+/** What a path linked to when read: the target, or null for a regular file or no file. */
+function linkOf(path: string): string | null {
+  const state = pathState(path)
+  return state.kind === 'link' ? state.target : null
 }
 
 function scopeParam(params: Record<string, unknown>): string[] | null {
@@ -116,7 +123,7 @@ export function agentsSnapshot(): AgentsSnapshot {
   return {
     rosterPath: path,
     file: {
-      exists: text !== null, hash: text === null ? null : sha256(text),
+      exists: text !== null, hash: text === null ? null : sha256(text), link: linkOf(path),
       errors: parsed?.errors ?? [], warnings: parsed?.warnings ?? [], data: data as RosterDataShape | null, prose
     },
     approved: generation ? { generation: generation.number, createdAt: generation.created_at, data: generation.data as RosterDataShape } : null,
@@ -249,10 +256,11 @@ export async function rulesSnapshot(context: RulesIpcContext): Promise<RulesSnap
   }
   return {
     masterPath: path,
+    home: context.env.HOME ?? null,
     master: { exists: text !== null, text, hash: text === null ? null : sha256(text), bytes: text === null ? 0 : Buffer.byteLength(text), errors },
     renderings,
     health: text === null ? { state: 'failed', checkedAt: context.now().toISOString(), reason: `No rules master at ${path}` } : await rulesHealth(context),
-    probes: lastProbes() as RulesProbeView[],
+    probes: lastProbes({ inspect: await probeInspector(context.probeEnv) }) as RulesProbeView[],
     transactions: listTransactions().slice(0, 10).map((entry) => ({
       id: entry.id, valid: entry.valid, ...(entry.created_at ? { createdAt: entry.created_at } : {}),
       ...(entry.state ? { state: entry.state } : {}), ...(entry.targets ? { targets: entry.targets } : {})
@@ -305,13 +313,13 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const shown = shownParam(params)
     const scope = scopeParam(params)
     return outcome(() => scope === null
-      ? `Approved generation ${approveRoster(shown).number}.`
-      : `Approved ${scope.join(', ')} as generation ${approveSections(shown, scope).number}; other differences stay pending.`)
+      ? `Approved generation ${approveRoster(shown, seams).number}.`
+      : `Approved ${scope.join(', ')} as generation ${approveSections(shown, scope, seams).number}; other differences stay pending.`)
   })
   handle('aiterm:agents:save', (params) => {
     const shown = shownParam(params)
     const data = stagedParam(params)
-    return outcome(() => `Saved and approved generation ${saveAndApprove(shown, data as RosterData).number}.`)
+    return outcome(() => `Saved and approved generation ${saveAndApprove(shown, data as RosterData, seams).number}.`)
   })
   handle('aiterm:agents:revert', (params) => {
     const shown = shownParam(params)
@@ -322,7 +330,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const shown = shownParam(params)
     const number = params.number
     if (typeof number !== 'number' || !Number.isSafeInteger(number) || number < 1) invalid('number must be a generation number')
-    return outcome(() => `Generation ${number} restored as generation ${restoreGeneration(shown, number).number}.`)
+    return outcome(() => `Generation ${number} restored as generation ${restoreGeneration(shown, number, seams).number}.`)
   })
   handle('aiterm:agents:generation', (params) => {
     const number = params.number
@@ -338,7 +346,9 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
       const state = pathState(rosterPath())
       if (state.kind === 'missing') throw new RosterError('ROSTER_MISSING', `no roster at ${rosterPath()}`)
       const current = state.kind === 'file' ? state.text : readFileSync(rosterPath(), 'utf8')
-      if (sha256(current) !== shown.fileHash) throw new RosterError('REVISION_CONFLICT', 'the roster changed since it was shown; reload to see it')
+      if (sha256(current) !== shown.fileHash || (shown.link !== undefined && shown.link !== (state.kind === 'link' ? state.target : null))) {
+        throw new RosterError('REVISION_CONFLICT', 'the roster changed since it was shown; reload to see it')
+      }
       const next = rewriteProse(current, agent, text)
       if (next !== current) replaceFileSafely(rosterPath(), state, next)
       return 'Opinion saved. Prose takes effect at once and never reaches an agent.'
@@ -355,14 +365,33 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
       return { path, label: result.label, source: result.source }
     })
   })
-  handle('aiterm:agents:inspect-route', (params) => {
-    const harness = harnessParam(params.harness)
+  const resolve = (harness: RosterHarness): { resolution: RouteResolution; versionTested: boolean; reason?: string } => {
     const environment = options.environment?.() ?? process.env
     const result = inspectRoute({ harness } as never, null, rulesEnvironment(environment), environment.HOME ?? '/') as Record<string, unknown>
-    const resolution = {
-      harness, basis: String(result.basis ?? 'unknown'), provider: (result.provider as string | null) ?? null, host: (result.host as string | null) ?? null,
-      sources: Array.isArray(result.sources) ? result.sources as string[] : [], version: (result.version as string | null) ?? null
+    return {
+      resolution: {
+        harness, basis: String(result.basis ?? 'unknown'), provider: (result.provider as string | null) ?? null, host: (result.host as string | null) ?? null,
+        sources: Array.isArray(result.sources) ? result.sources as string[] : [], version: (result.version as string | null) ?? null
+      },
+      versionTested: result.version_tested === true,
+      ...(typeof result.reason === 'string' ? { reason: result.reason } : {})
     }
+  }
+  /** Approval seam: every newly accepted version is re-inspected now (60.3 AC3). */
+  const seams = {
+    checkNewlyAccepted: (versions: { harness: string; version: string }[]) => {
+      for (const entry of versions) {
+        if (entry.harness !== 'claude' && entry.harness !== 'codex') throw new RosterError('ROUTE_CHANGED', `BMN does not check ${entry.harness} dispatches, so it accepts no ${entry.harness} version`)
+        assertStillAcceptable(entry.version, resolve(entry.harness).resolution)
+      }
+    }
+  }
+
+  handle('aiterm:agents:inspect-route', (params) => {
+    const harness = harnessParam(params.harness)
+    const inspected = resolve(harness)
+    const resolution = inspected.resolution
+    const result = { version_tested: inspected.versionTested, ...(inspected.reason ? { reason: inspected.reason } : {}) } as Record<string, unknown>
     const accepted = approvedOrProblem().generation?.data.harness_routes.find((route) => route.harness === harness)?.accepted_versions ?? []
     const versionTested = result.version_tested === true
     const verdict = harness === 'claude' || harness === 'codex'
@@ -383,17 +412,21 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const errors = parseMaster(text).errors
     return {
       valid: errors.length === 0, errors, diff: unifiedDiff(current, text, masterPath()), expectedHash: state.kind === 'missing' ? null : sha256(current),
+      expectedLink: state.kind === 'link' ? state.target : null,
       renderings: errors.length === 0 ? renderAll(masterPath(), text, approvedOrProblem().generation) : []
     }
   })
   handle('aiterm:rules:save-master', async (params) => {
     const text = textParam(params, 'text')
     const expectedHash = params.expectedHash === null ? null : textParam(params, 'expectedHash', 64)
+    const expectedLink = params.expectedLink === undefined || params.expectedLink === null ? null : textParam(params, 'expectedLink', 4096)
     const ctx = context()
     try {
       const state = pathState(masterPath())
       const current = state.kind === 'missing' ? null : state.kind === 'file' ? state.text : readFileSync(masterPath(), 'utf8')
-      if ((current === null ? null : sha256(current)) !== expectedHash) throw new RosterError('REVISION_CONFLICT', 'the master changed since it was shown; reload to see it')
+      if ((current === null ? null : sha256(current)) !== expectedHash || (state.kind === 'link' ? state.target : null) !== expectedLink) {
+        throw new RosterError('REVISION_CONFLICT', 'the master changed since it was shown; reload to see it')
+      }
       writeMaster(state, text, 'saved in Preferences > Rules', { now: ctx.now() })
       return { ok: true, message: 'Master saved and kept as a new revision. Install to write the agents\' files.', snapshot: await rulesSnapshot(ctx) } satisfies RulesOutcome
     } catch (error) {
@@ -432,8 +465,11 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     if (entry === undefined || !entry.intact) return { ok: false, diff: '', expectedHash: null, message: `revision ${revision} is missing or corrupt` }
     const text = readFileSync(`${masterPath().replace(/global-rules\.md$/, '')}state/rules/master-history/${String(revision).padStart(6, '0')}.md`, 'utf8')
     const state = pathState(masterPath())
-    const current = state.kind === 'file' ? state.text : ''
-    return { ok: true, diff: unifiedDiff(current, text, masterPath()), expectedHash: state.kind === 'file' ? sha256(current) : null, text }
+    const currentText = state.kind === 'missing' ? null : state.kind === 'file' ? state.text : readFileSync(masterPath(), 'utf8')
+    return {
+      ok: true, diff: unifiedDiff(currentText ?? '', text, masterPath()), expectedHash: currentText === null ? null : sha256(currentText),
+      expectedLink: state.kind === 'link' ? state.target : null, text
+    }
   })
   handle('aiterm:rules:probe', async (params) => {
     const harness = harnessParam(params.harness)

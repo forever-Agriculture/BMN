@@ -1,6 +1,7 @@
 // MODULE: route-baselines.ts - Epic 60.3 AC3: an untested harness version is offered for acceptance only when it resolves the route a tested or accepted version did
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import type { RosterHarness } from '@bmn/protocol'
+import { RosterError } from '../../bin/agents-roster.mjs'
 import { stateDirectory } from '../../bin/agents-state.mjs'
 
 /** What an inspection resolved: the parts that must match before an untested version is offered. */
@@ -67,4 +68,18 @@ export function judgeInspection(resolution: RouteResolution, accepted: readonly 
     return { acceptable: false, comparison: `Resolves ${describe(resolution)}, not ${describe(baseline)} as ${baseline.version} did; not offered.` }
   }
   return { acceptable: true, comparison: `Same route and sources as ${baseline.version}: ${describe(resolution)}.` }
+}
+
+/**
+ * At approval time (60.3 AC3): a newly accepted version must be the one installed now, and must
+ * still resolve the route and sources a tested or accepted version recorded. Throws to refuse.
+ */
+export function assertStillAcceptable(version: string, resolution: RouteResolution): void {
+  const baseline = readBaselines()[resolution.harness]
+  if (resolution.version !== version) {
+    throw new RosterError('ROUTE_CHANGED', `${resolution.harness} ${version} is not the installed version (${resolution.version ?? 'unreadable'}); inspect it in Preferences > Agents first`)
+  }
+  if (baseline === undefined || !same(resolution, baseline)) {
+    throw new RosterError('ROUTE_CHANGED', `${resolution.harness} ${version} does not resolve the route a tested or accepted version recorded; it cannot be accepted`)
+  }
 }

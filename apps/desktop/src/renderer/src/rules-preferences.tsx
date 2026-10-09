@@ -6,6 +6,7 @@ import {
   type RulesMasterPlan,
   type RulesOutcome,
   type RulesPlan,
+  type RulesRevertPlan,
   type RulesProbeView,
   type RulesRenderingView,
   type RulesSnapshot,
@@ -13,6 +14,14 @@ import {
 } from '@bmn/protocol'
 import { failureDetail } from './bridge-error'
 import { Segmented } from './history-preferences'
+import { displayPath } from './session-presentation'
+
+/** The master's block markers by what they do; each inserts its exact syntax at the cursor (60.6). */
+const MARKERS: ReadonlyArray<{ label: string; text: string; caret: number }> = [
+  { label: 'Harness only', text: '<!-- bmn:harness claude codex -->\n\n<!-- /bmn:harness -->\n', caret: 34 },
+  { label: 'Shareable', text: '<!-- bmn:shareable -->\n\n<!-- /bmn:shareable -->\n', caret: 23 },
+  { label: 'Team', text: '<!-- bmn:team -->\n', caret: 18 }
+]
 
 const PLAN_DELAY_MS = 300
 const cap = <Word extends string>(word: Word): string => word.charAt(0).toUpperCase() + word.slice(1)
@@ -61,10 +70,10 @@ export function probeLine(probe: RulesProbeView | undefined): string {
 }
 
 type Pending =
-  | { kind: 'save'; plan: RulesMasterPlan }
+  | { kind: 'save'; text: string; plan: RulesMasterPlan }
   | { kind: 'install'; plan: RulesPlan }
   | { kind: 'restore'; transaction: string | null; plan: RulesPlan | null }
-  | { kind: 'revert'; revision: number | null; plan: { ok: boolean; diff: string; expectedHash: string | null; text?: string; message?: string } | null }
+  | { kind: 'revert'; revision: number | null; plan: RulesRevertPlan | null }
   | { kind: 'probe'; harness: RosterHarness }
 
 /** A vertical list of choices with radio semantics: arrow keys move, the chosen row is the raised plate. */
@@ -136,6 +145,7 @@ export function RulesPreferences(): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<RulesSnapshot | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
+  const editor = useRef<HTMLTextAreaElement | null>(null)
   const [draftPlan, setDraftPlan] = useState<RulesMasterPlan | null>(null)
   const [previewHarness, setPreviewHarness] = useState<RosterHarness>('claude')
   const [pending, setPending] = useState<Pending | null>(null)
@@ -195,7 +205,10 @@ export function RulesPreferences(): React.JSX.Element {
   async function begin(kind: Pending['kind'], harness?: RosterHarness): Promise<void> {
     setResult(null)
     try {
-      if (kind === 'save') open({ kind, plan: await window.aiTerminal.planRulesMaster(draft) })
+      if (kind === 'save') {
+        const text = draft
+        open({ kind, text, plan: await window.aiTerminal.planRulesMaster(text) })
+      }
       else if (kind === 'install') open({ kind, plan: await window.aiTerminal.planRulesInstall() })
       else if (kind === 'restore') open({ kind, transaction: null, plan: null })
       else if (kind === 'revert') open({ kind, revision: null, plan: null })
@@ -226,7 +239,12 @@ export function RulesPreferences(): React.JSX.Element {
   async function confirm(): Promise<void> {
     if (pending === null) return
     let run: (() => Promise<RulesOutcome>) | null = null
-    if (pending.kind === 'save') run = () => window.aiTerminal.saveRulesMaster(draft, pending.plan.expectedHash)
+    if (pending.kind === 'save') {
+      // The text the diff was planned for, never the editor's later state (60.6 AC1).
+      const { text } = pending
+      const { expectedHash, expectedLink } = pending.plan
+      run = () => window.aiTerminal.saveRulesMaster(text, expectedHash, expectedLink)
+    }
     else if (pending.kind === 'install' && pending.plan.planHash) {
       const planHash = pending.plan.planHash
       run = () => window.aiTerminal.installRules(planHash)
@@ -236,7 +254,8 @@ export function RulesPreferences(): React.JSX.Element {
       run = () => window.aiTerminal.restoreRules(transaction, planHash)
     } else if (pending.kind === 'revert' && pending.plan?.ok && pending.plan.text !== undefined) {
       const { text, expectedHash } = pending.plan
-      run = () => window.aiTerminal.saveRulesMaster(text, expectedHash)
+      const expectedLink = pending.plan.expectedLink ?? null
+      run = () => window.aiTerminal.saveRulesMaster(text, expectedHash, expectedLink)
     } else if (pending.kind === 'probe') {
       const { harness } = pending
       run = () => window.aiTerminal.probeRules(harness)
@@ -334,14 +353,26 @@ export function RulesPreferences(): React.JSX.Element {
           <h4 className="preferences-subhead" id="rules-master-head">Master</h4>
           <div className="rules-editor-head">
             <span className="meta">{kilobytes(new TextEncoder().encode(draft).length)} · {lineCount(draft)} lines{dirty ? ' · unsaved' : ''}</span>
-            <span className="chip-row" aria-label="Markers">
-              <span className="roster-chip"><code>{'<!-- bmn:harness claude codex -->'}</code></span>
-              <span className="roster-chip"><code>{'<!-- bmn:shareable -->'}</code></span>
-              <span className="roster-chip"><code>{'<!-- bmn:team -->'}</code></span>
+            <span className="rules-insert" role="group" aria-label="Insert a block">
+              <span className="meta" aria-hidden="true">Insert</span>
+              {MARKERS.map((marker) => (
+                <button key={marker.label} type="button" title={marker.text.trim()} disabled={busy || pending !== null}
+                  onClick={() => {
+                    const element = editor.current
+                    const at = element ? element.selectionStart : draft.length
+                    const end = element ? element.selectionEnd : draft.length
+                    const before = draft.slice(0, at)
+                    const lead = before === '' || before.endsWith('\n') ? '' : '\n'
+                    setDraft(`${before}${lead}${marker.text}${draft.slice(end)}`)
+                    const caret = at + lead.length + marker.caret
+                    requestAnimationFrame(() => { element?.focus(); element?.setSelectionRange(caret, caret) })
+                  }}>{marker.label}</button>
+              ))}
             </span>
           </div>
-          <textarea className="rules-master" aria-labelledby="rules-master-head" value={draft} spellCheck={false} onChange={(event) => setDraft(event.target.value)} />
-          <p className="preferences-help">Harness blocks reach only the harnesses they name; shareable blocks survive restriction for Low routes; one team marker expands to the approved team.</p>
+          <textarea ref={editor} className="rules-master" aria-labelledby="rules-master-head" value={draft} spellCheck={false} readOnly={pending !== null}
+            onChange={(event) => setDraft(event.target.value)} />
+          <p className="preferences-help">Harness only: reaches just the harnesses it names. Shareable: kept in the restricted copy Low routes get. Team: becomes the approved team.</p>
           {renderErrors.length > 0 ? (
             <div className="preferences-error" role="alert">
               <p>This master would not render:</p>
@@ -389,7 +420,7 @@ export function RulesPreferences(): React.JSX.Element {
             const counts = diffCounts(target.diff)
             return (
               <details key={target.path}>
-                <summary>{target.path} · {pending.kind === 'restore' ? `becomes ${target.kind}` : target.kind}{pending.kind === 'install' && target.linkTarget ? ` (→ ${target.linkTarget})` : ''}{target.restricted ? ' · restricted' : ''} · +{counts.added} −{counts.removed}</summary>
+                <summary><span title={target.path}>{displayPath(target.path, snapshot?.home ?? null)}</span> · {pending.kind === 'restore' ? `becomes ${target.kind}` : target.kind}{pending.kind === 'install' && target.linkTarget ? ` (→ ${displayPath(target.linkTarget, snapshot?.home ?? null)})` : ''}{target.restricted ? ' · restricted' : ''} · +{counts.added} −{counts.removed}</summary>
                 <pre className="rules-preview">{target.diff || 'No change.'}</pre>
               </details>
             )

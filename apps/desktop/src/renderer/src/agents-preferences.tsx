@@ -25,6 +25,7 @@ import { Pips, PipsShape, Seal, SealShape, Sigil } from './roster-marks'
 import {
   acceptVersion,
   agentGroups,
+  groupConsequences,
   groupDifferences,
   hostKind,
   moveCandidate,
@@ -32,7 +33,9 @@ import {
   sameData,
   setDefaultLabel,
   setLabel,
+  revokeVersion,
   setRecheck,
+  setRecheckEffort,
   setRoleThen,
   setSmallEpic,
   summarize,
@@ -65,14 +68,14 @@ export function DiffGroups(props: { groups: readonly DiffGroup[] }): React.JSX.E
       {props.groups.map((group) => (
         <li key={group.key}>
           {group.subject ? <div className="diff-group-head">{group.agent ? <Sigil title={group.agent.title} /> : null}{group.subject}</div> : null}
-          <dl className="diff-lines">
+          {group.lines.length > 0 ? <dl className="diff-lines">
             {group.lines.map((line, index) => (
               <Fragment key={`${line.field}-${index}`}>
                 <dt>{line.field}</dt>
                 <dd><del>{line.before}</del> <span aria-hidden="true">▸</span><span className="visually-hidden">becomes</span> <ins>{line.after}</ins></dd>
               </Fragment>
             ))}
-          </dl>
+          </dl> : null}
           {group.consequences.map((sentence) => <p key={sentence} className="diff-consequence">{cap(sentence)}.</p>)}
         </li>
       ))}
@@ -176,6 +179,9 @@ function AgentEditor(props: {
       <Row id={`${id}-authority`} label="Authority">
         <Segmented labelledBy={`${id}-authority`} options={ROSTER_AUTHORITIES} value={agent.authority} optionLabel={cap} onChange={(authority) => props.onPatch({ authority })} />
       </Row>
+      <Row id={`${id}-status`} label="Status" help="Proposed agents are listed but never dispatched.">
+        <Segmented labelledBy={`${id}-status`} options={['active', 'proposed'] as const} value={agent.status} optionLabel={cap} onChange={(status) => props.onPatch({ status })} />
+      </Row>
       <Row id={`${id}-efforts`} label="Efforts">
         <div className="chip-row" role="group" aria-labelledby={`${id}-efforts`}>
           {ROSTER_EFFORTS.map((effort) => (
@@ -275,12 +281,15 @@ export function RoleChain(props: { role: RosterRoleShape; data: RosterDataShape;
           const name = agent?.name ?? candidate.agent
           return (
             <li key={candidate.agent} className="candidate">
-              <span className="order">
-                <button type="button" className="icon-button" aria-label={`Move ${name} up in ${role.id}`} disabled={index === 0}
-                  onClick={() => props.onData(moveCandidate(props.data, role.id, index, -1))}>▲</button>
-                <button type="button" className="icon-button" aria-label={`Move ${name} down in ${role.id}`} disabled={index === role.candidates.length - 1}
-                  onClick={() => props.onData(moveCandidate(props.data, role.id, index, 1))}>▼</button>
-              </span>
+              {/* A one-candidate chain has nothing to reorder: the column stays, the arrows go. */}
+              <span className="order">{role.candidates.length > 1 ? (
+                <>
+                  <button type="button" className="icon-button" aria-label={`Move ${name} up in ${role.id}`} disabled={index === 0}
+                    onClick={() => props.onData(moveCandidate(props.data, role.id, index, -1))}>▲</button>
+                  <button type="button" className="icon-button" aria-label={`Move ${name} down in ${role.id}`} disabled={index === role.candidates.length - 1}
+                    onClick={() => props.onData(moveCandidate(props.data, role.id, index, 1))}>▼</button>
+                </>
+              ) : null}</span>
               {agent ? <Sigil title={agent.title} /> : <span />}
               <span className="agent-name">{name}</span>
               <span className="candidate-efforts" role="group" aria-label={`Effort for ${name} in ${role.id}`}>
@@ -297,10 +306,22 @@ export function RoleChain(props: { role: RosterRoleShape; data: RosterDataShape;
       <details className="advanced">
         <summary>Recheck and small epics</summary>
         <div className="advanced-body">
-          <Row id={`${id}-recheck`} label="Recheck" help="The same reviewer checks the repair; per-agent recheck efforts stay as the file sets them.">
+          <Row id={`${id}-recheck`} label="Recheck" help="The same reviewer checks the repair, at the effort chosen for it below.">
             <button type="button" role="switch" className="switch" aria-checked={role.recheck?.same_reviewer === true} aria-labelledby={`${id}-recheck`}
               onClick={() => props.onData(setRecheck(props.data, role.id, role.recheck?.same_reviewer !== true))} />
           </Row>
+          {role.recheck?.same_reviewer === true ? role.candidates.map((text) => {
+            const agent = agentOf(parseCandidate(text).agent)
+            if (agent === undefined) return null
+            const current = role.recheck?.[agent.id]
+            const effort = typeof current === 'string' ? current : 'as reviewed'
+            return (
+              <Row key={agent.id} id={`${id}-recheck-${agent.id}`} label={`${agent.name} rechecks at`}>
+                <Segmented fit labelledBy={`${id}-recheck-${agent.id}`} options={['as reviewed', ...agent.efforts]} value={effort} optionLabel={(word) => word}
+                  onChange={(next) => props.onData(setRecheckEffort(props.data, role.id, agent.id, next === 'as reviewed' ? null : next as RosterEffort))} />
+              </Row>
+            )
+          }) : null}
           <Row id={`${id}-small`} label="Small epic" help="One candidate as agent@effort, used instead for a small epic; empty for none.">
             <TextField id={`${id}-small-input`} label={`Small epic agent for ${role.id}`} value={role.small_epic ?? ''} placeholder="astra@low" maxLength={48}
               onChange={(value) => props.onData(setSmallEpic(props.data, role.id, value))} />
@@ -373,15 +394,26 @@ function RouteRows(props: {
         const accepted = route.accepted_versions ?? []
         return (
           <div key={route.harness} className="preferences-row route-row">
-            <div className="preferences-row-label"><span id={id}>{cap(route.harness)}</span><span className="preferences-help">{route.provider}</span></div>
+            <div className="preferences-row-label"><span id={id}>{cap(route.harness)}</span></div>
             <div className="preferences-row-control">
+              <input type="text" className="route-provider" aria-label={`Default provider for ${route.harness}`} value={route.provider} maxLength={40} spellCheck={false}
+                onChange={(event) => props.onData(updateRoute(props.data, route.harness, { provider: event.target.value }))} />
               <Segmented labelledBy={id} options={['high', 'low'] as const} value={route.security}
                 optionLabel={(level) => <><SealShape level={level} />{cap(level)}</>} onChange={(security) => props.onData(updateRoute(props.data, route.harness, { security }))} />
               <span id={`${id}-basis`} className="visually-hidden">Basis for {route.harness}</span>
               <Segmented labelledBy={`${id}-basis`} options={['observed-default', 'owner-declared'] as const} value={route.basis}
                 optionLabel={(basis) => (basis === 'observed-default' ? 'Observed' : 'Declared')} onChange={(basis) => props.onData(updateRoute(props.data, route.harness, { basis }))} />
               {accepted.length > 0
-                ? <span className="chip-row" aria-label={`Accepted ${route.harness} versions`}>{accepted.map((version) => <span key={version} className="roster-chip"><span>{version}</span></span>)}</span>
+                ? (
+                  <span className="chip-row" role="group" aria-label={`Accepted ${route.harness} versions`}>
+                    {accepted.map((version) => (
+                      <span key={version} className="roster-chip">
+                        <span>{version}</span>
+                        <button type="button" aria-label={`Revoke ${route.harness} ${version}`} onClick={() => props.onData(revokeVersion(props.data, route.harness, version))}>×</button>
+                      </span>
+                    ))}
+                  </span>
+                )
                 : null}
               <button type="button" className="small" onClick={() => props.onInspect(route.harness)}>Inspect</button>
               {typeof inspection === 'string' ? <p className="preferences-error">{inspection}</p> : inspection ? (
@@ -418,7 +450,8 @@ export function AgentsPreferences(): React.JSX.Element {
   const [snapshot, setSnapshot] = useState<AgentsSnapshot | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [staged, setStaged] = useState<RosterDataShape | null>(null)
-  const [preview, setPreview] = useState<AgentsPreview | null>(null)
+  // The preview remembers the staged data it was computed for, so the band never offers a stale diff (60.5 AC2).
+  const [computed, setPreview] = useState<{ data: RosterDataShape; result: AgentsPreview } | null>(null)
   const [band, setBand] = useState<Band | null>(null)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<{ ok: boolean; text: string; issues?: RosterIssueShape[] } | null>(null)
@@ -448,7 +481,9 @@ export function AgentsPreferences(): React.JSX.Element {
 
   const base = snapshot?.file.data ?? null
   const data = staged ?? base
-  const shown: AgentsShownRevision | null = snapshot?.file.hash ? { generation: snapshot.approved?.generation ?? null, fileHash: snapshot.file.hash } : null
+  const shown: AgentsShownRevision | null = snapshot?.file.hash
+    ? { generation: snapshot.approved?.generation ?? null, fileHash: snapshot.file.hash, link: snapshot.file.link } : null
+  const preview = computed !== null && computed.data === staged ? computed.result : null
 
   // The staged data as the file would hold it: validity, the diff against the approval and its consequences.
   useEffect(() => {
@@ -459,7 +494,7 @@ export function AgentsPreferences(): React.JSX.Element {
     let cancelled = false
     const timer = setTimeout(() => {
       window.aiTerminal.previewAgents(staged)
-        .then((result) => { if (!cancelled) setPreview(result) })
+        .then((result) => { if (!cancelled) setPreview({ data: staged, result }) })
         .catch((error: unknown) => { if (!cancelled) setNotice({ ok: false, text: failureDetail(error, 'Could not preview the change') }) })
     }, PREVIEW_DELAY_MS)
     return () => {
@@ -527,7 +562,11 @@ export function AgentsPreferences(): React.JSX.Element {
   async function confirmBand(): Promise<void> {
     if (!shown || band === null) return
     if (band.kind === 'restore') return settle(() => window.aiTerminal.restoreAgents(shown, band.number))
-    if (staged !== null) return settle(() => window.aiTerminal.saveAgents(shown, staged))
+    if (staged !== null) {
+      if (computed === null || computed.data !== staged) return
+      const shownData = computed.data
+      return settle(() => window.aiTerminal.saveAgents(shown, shownData))
+    }
     return settle(() => window.aiTerminal.approveAgents(shown))
   }
 
@@ -627,8 +666,11 @@ export function AgentsPreferences(): React.JSX.Element {
     if (band === null || !snapshot) return null
     const source = band.kind === 'restore' ? band.preview : staged !== null ? preview : null
     const firstWithoutEdits = band.kind === 'first' && staged === null
-    const grouped = source ? groupDifferences(source.differences, band.kind === 'restore' ? null : data, approved?.data ?? null, source.consequences)
+    const diffGrouped = source ? groupDifferences(source.differences, band.kind === 'restore' ? null : data, approved?.data ?? null, source.consequences)
       : firstWithoutEdits ? { groups: [], general: snapshot.consequences } : null
+    // Sentences no difference row claims (a first approval's are all of them) gather under the agent or role they name.
+    const rest = diffGrouped ? groupConsequences(diffGrouped.general, data, approved?.data ?? null) : null
+    const grouped = diffGrouped && rest ? { groups: [...diffGrouped.groups, ...rest.groups], general: rest.general } : null
     const sentence = band.kind === 'restore'
       ? `Restore generation ${band.number} as a new approval. ${summarize(band.preview.differences)}; the roster file keeps its text.`
       : !approved ? `First approval: ${groups?.active.length ?? 0} active agents and ${data?.roles.length ?? 0} roles take effect.`

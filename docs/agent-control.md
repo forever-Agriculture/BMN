@@ -736,8 +736,9 @@ the previous generation in force. No command approves (exit 12): agents and dev-
 approved generation with BMN closed. A missing, invalid or unreadable state never yields a default
 team; every check refuses until the first approval.
 
-The Agents section shows one row per agent (sword for a knight, pennon for a squire; a closed seal
-for High security, an open one for Low; one to three pips of trust; authority as a word) with an
+The Agents section shows one row per agent (sword for a knight, pennon for a squire; a sealed ring
+for High security, an empty ring for Low; one to three pips of trust; authority as a word; only
+authority lead may hold the lead role) with an
 on/off switch, then **Awaiting approval** and **Disabled**, role chains, folder labels and harness
 routes. Edits are staged: one grouped diff with its consequences in words ("Luna could lead",
 "Astra could no longer receive private work"), then **Save & approve** writes the file and approves
@@ -760,7 +761,8 @@ their `env` there), never opens an auth file, and reads only the first line of a
 bind a resume. Private work goes only to High routes; a Low route may receive only a packet of
 tracked files from a public workspace, through a tools-disabled, safe-mode Claude Code call whose
 appended system prompt is exactly the restricted rendering. `bmn roster explain` gives the same
-evaluation in words; `--verify <receipt>` recomputes it and exits 11 on any difference.
+evaluation in words; `--verify <receipt>` recomputes it and exits 11 on any difference, including
+approved state that has since gone missing or corrupt.
 
 **Rules.** The master is ordinary Markdown. Untagged text reaches every harness;
 `<!-- bmn:harness codex opencode -->` … `<!-- /bmn:harness -->` limits a section to those
@@ -771,17 +773,19 @@ sections. Each rendering starts with a line naming the master and its hash; Curs
 its `.mdc` frontmatter.
 
 **Preferences → Rules** edits the master (size, line count and the three markers above the editor;
-a master that would not render is not saved; every save keeps a source snapshot and refuses a
-change made meanwhile), previews each harness's exact rendering, and reads health the way the hooks
+a master that would not render is not saved; every save first keeps the text it replaces, then the
+new text, as source snapshots, and refuses a change or a swapped link made meanwhile), previews each harness's exact rendering, and reads health the way the hooks
 check is read: each target is unreadable, missing, a link, not written by BMN, edited outside BMN,
 stale or current, with its restriction and last probe. **Install** shows every target's diff,
 including a link, a hand-written file or an outside edit it replaces, and runs one transaction;
 **Restore** puts a chosen transaction's targets back, links as links; **Revert master** writes an
-earlier snapshot back. Each confirms first against the exact plan it showed and refuses if the
-targets changed since. A target that is a link is replaced by a regular file; the file it pointed
+earlier snapshot back. Each confirms first against the exact plan it showed, plans again once you
+confirm, and refuses if the targets changed since. A target that is a link is replaced by a regular file; the file it pointed
 to is never written. **Probe** asks a harness which rules it loaded; it sends the rendered rules
-to that harness's provider, so it runs only for High routes, and answers passed, failed,
-inconclusive or unavailable.
+to that harness's provider, so it runs only for High routes, inspects the destination again just
+before sending, and answers passed, failed, inconclusive or unavailable. A Codex probe passes only
+when its own rollout carries the rendered header before any tool ran. A probe turns stale when the
+rendering, the approved route, the harness version or the destination changes.
 
 ### What the roster and rules do not enforce
 
@@ -801,7 +805,9 @@ inconclusive or unavailable.
   route). Sessions started before an install keep the rules they started with.
 - A harness version you accept in the Agents section is your risk decision, not a version BMN
   tested. The panel offers it only when that version resolves the same route from the same sources
-  as the last tested or accepted version it inspected.
+  as the last tested or accepted version it inspected, and approval checks that again, so a version
+  added to the file by hand is refused unless it is the installed one and still resolves that
+  route. Revoke one with its × in the route row.
 
 ## A brief for agents
 

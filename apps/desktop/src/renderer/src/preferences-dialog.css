@@ -711,6 +711,12 @@
   font-size: 12px;
 }
 
+/* A disabled agent with a note takes two lines: pad the first so the name does not sit on the edge. */
+.preferences-dialog .agent-summary:has(.agent-note) {
+  padding-top: 8px;
+  row-gap: 2px;
+}
+
 .preferences-dialog .agent-note {
   grid-column: 2 / -1;
   padding-bottom: 8px;
@@ -888,6 +894,7 @@
 .preferences-dialog .candidate .order {
   display: inline-flex;
   gap: 2px;
+  min-width: 46px;
 }
 
 .preferences-dialog .candidate .order .icon-button {
@@ -912,6 +919,12 @@
 .preferences-dialog .label-row .segmented,
 .preferences-dialog .route-row .segmented {
   flex: 0 0 160px;
+}
+
+.preferences-dialog .route-row .route-provider {
+  flex: 0 1 120px;
+  min-width: 0;
+  font-family: var(--font-mono);
 }
 
 .preferences-dialog .label-source,
@@ -1040,8 +1053,9 @@
 /* Rules: health table, editor, preview. */
 .preferences-dialog .rules-health {
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr) minmax(0, 1fr) auto;
-  gap: 4px 12px;
+  /* The state column takes its words and tag on one line; the probe column takes what is left. */
+  grid-template-columns: 72px max-content minmax(0, 1fr) auto;
+  gap: 4px 16px;
   align-items: center;
   margin: 0;
   font-size: 12px;
@@ -1053,7 +1067,8 @@
 
 .preferences-dialog .rules-target .state {
   display: inline-flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  white-space: nowrap;
   align-items: center;
   gap: 8px;
   color: var(--text);
@@ -1084,6 +1099,20 @@
   color: var(--muted);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+}
+
+/* Marker inserts: small solid buttons named by what each block does. */
+.preferences-dialog .rules-insert {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.preferences-dialog .rules-insert button {
+  min-height: 24px;
+  padding: 0 10px;
+  font-size: 12px;
 }
 
 .preferences-dialog .rules-master {
@@ -1136,6 +1165,11 @@
 
   .preferences-dialog .rules-health {
     grid-template-columns: 1fr;
+  }
+
+  .preferences-dialog .rules-target .state {
+    flex-wrap: wrap;
+    white-space: normal;
   }
 }
 

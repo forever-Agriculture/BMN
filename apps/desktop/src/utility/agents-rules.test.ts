@@ -218,6 +218,14 @@ describe('install transactions and restore (60.4 AC3-AC4)', () => {
     expect(existsSync(target.codex())).toBe(false)
   })
 
+  it('plans again after the confirmation and writes nothing when the plan changed meanwhile', async () => {
+    const result = await installRules(['codex'], { yes: true, environment: env,
+      afterConfirm: () => writeMasterFile(MASTER.replace('Plain rule for everyone.', 'Changed while the owner read the diff.')) })
+    expect(result).toMatchObject({ code: 'REVISION_CONFLICT', transaction: null, written: [] })
+    expect(existsSync(target.codex())).toBe(false)
+    expect(existsSync(join(home, '.config/bmn/agents/state/rules/transactions'))).toBe(false)
+  })
+
   it('needs a TTY or --yes, and writes nothing otherwise', async () => {
     const result = await runCli(['rules', 'install', 'codex'])
     expect(result.code).toBe(1)
@@ -246,6 +254,23 @@ describe('master history (60.4 AC4)', () => {
     const before = readFileSync(join(home, '.config/bmn/agents/global-rules.md'), 'utf8')
     expect((await runCli(['rules', 'revert-master', '1', '--yes'])).code).toBe(13)
     expect(readFileSync(join(home, '.config/bmn/agents/global-rules.md'), 'utf8')).toBe(before)
+  })
+
+  it('keeps a master edited outside BMN as a snapshot before a save replaces it', async () => {
+    await installRules(['codex'], { yes: true, environment: env })
+    const outside = MASTER.replace('Plain rule for everyone.', 'Edited by hand, never snapshotted.')
+    writeMasterFile(outside)
+    writeMaster({ kind: 'file', text: outside, mode: 0o644 }, MASTER.replace('Plain rule for everyone.', 'Saved from the panel.'), 'panel save')
+    const history = masterHistory()
+    expect(history.map((entry: { reason: string }) => entry.reason)).toEqual([expect.stringMatching(/^install /), 'before panel save', 'panel save'])
+    expect(history[1]?.hash).toBe(sha256(outside))
+  })
+
+  it('refuses a save before writing when the history cannot record the text it replaces', async () => {
+    await installRules(['codex'], { yes: true, environment: env })
+    writeFileSync(join(home, '.config/bmn/agents/state/rules/master-history/index.json'), '{not json')
+    expect(() => writeMaster({ kind: 'file', text: MASTER, mode: 0o644 }, MASTER.replace('Plain', 'New'), 'panel save')).toThrow(/history/)
+    expect(readFileSync(join(home, '.config/bmn/agents/global-rules.md'), 'utf8')).toBe(MASTER)
   })
 
   it('refuses to write a master that would not render', () => {
@@ -294,29 +319,53 @@ describe('probes (60.4 AC5)', () => {
     await installRules(['claude', 'codex', 'opencode', 'cursor'], { yes: true, environment: env })
   })
 
-  it('Claude passes when it quotes the rendered hash with tools off, fails on another', () => {
+  it('Claude passes when it quotes the rendered hash with tools off, fails on another', async () => {
     stub('claude', `case "$1" in --version) echo "2.1.295 (Claude Code)";; *) cat > /dev/null; grep -o 'master sha256 [0-9a-f]*' "$HOME/.claude/CLAUDE.md" | cut -d' ' -f3;; esac`)
-    const result = probe('claude', { environment: env })
+    const result = await probe('claude', { environment: env })
     expect(result).toMatchObject({ outcome: 'pass', version: '2.1.295' })
     stub('claude', 'case "$1" in --version) echo "2.1.295";; *) cat > /dev/null; echo 0000000000000000000000000000000000000000000000000000000000000000;; esac')
-    expect(probe('claude', { environment: env }).outcome).toBe('fail')
+    expect((await probe('claude', { environment: env })).outcome).toBe('fail')
     stub('claude', 'case "$1" in --version) echo "2.1.295";; *) cat > /dev/null; echo "I cannot tell";; esac')
-    expect(probe('claude', { environment: env }).outcome).toBe('inconclusive')
+    expect((await probe('claude', { environment: env })).outcome).toBe('inconclusive')
   })
 
-  it('Codex reads the injected instructions from its own probe rollout', () => {
+  it('Codex reads the injected instructions from its own probe rollout', async () => {
     stub('codex', `case "$1" in --version) echo "codex-cli 0.161.0";; exec) cwd="$4"; d="$HOME/.codex/sessions/2026/10/09"; mkdir -p "$d"; cat > /dev/null
       printf '{"type":"session_meta","payload":{"cwd":"%s"}}\\n{"type":"instructions","text":"%s"}\\n' "$cwd" "$(head -1 "$HOME/.codex/AGENTS.md" | sed 's/"/ /g')" > "$d/rollout-probe.jsonl";; esac`)
-    expect(probe('codex', { environment: env })).toMatchObject({ outcome: 'pass' })
+    expect(await probe('codex', { environment: env })).toMatchObject({ outcome: 'pass', version: '0.161.0', host: expect.any(String) })
     expect(lastProbes().find((entry: { harness: string }) => entry.harness === 'codex')).toMatchObject({ outcome: 'pass', stale: false })
     writeMasterFile(MASTER.replace('Plain rule for everyone.', 'Changed.'))
     expect(lastProbes().find((entry: { harness: string }) => entry.harness === 'codex')).toMatchObject({ stale: true })
   })
 
-  it('is unavailable for a Low route or a missing CLI, and leaves no throwaway folder', () => {
+  it('a hash the rollout shows only after a tool ran is no evidence: the agent may have read the file', async () => {
+    stub('codex', `case "$1" in --version) echo "codex-cli 0.161.0";; exec) cwd="$4"; d="$HOME/.codex/sessions/2026/10/09"; mkdir -p "$d"; cat > /dev/null
+      printf '{"type":"session_meta","payload":{"cwd":"%s"}}\\n{"type":"response_item","payload":{"type":"function_call","name":"shell"}}\\n{"type":"response_item","payload":{"type":"function_call_output","output":"%s"}}\\n' "$cwd" "$(head -1 "$HOME/.codex/AGENTS.md" | sed 's/"/ /g')" > "$d/rollout-probe.jsonl";; esac`)
+    expect(await probe('codex', { environment: env })).toMatchObject({ outcome: 'fail', detail: expect.stringContaining('before any tool ran') })
+  })
+
+  it('reinspects the destination before sending and refuses when it moved; nothing runs', async () => {
+    stub('codex', `case "$1" in --version) echo "codex-cli 0.161.0";; *) touch "$HOME/codex-ran";; esac`)
+    const moved = await probe('codex', { environment: { ...env, OPENAI_BASE_URL: 'https://proxy.example.test/v1' } })
+    expect(moved).toMatchObject({ outcome: 'unavailable', detail: expect.stringContaining('refused') })
+    expect(existsSync(join(home, 'codex-ran'))).toBe(false)
+  })
+
+  it('an earlier probe is stale once the harness version or its destination changes', async () => {
+    stub('claude', `case "$1" in --version) echo "2.1.295 (Claude Code)";; *) cat > /dev/null; grep -o 'master sha256 [0-9a-f]*' "$HOME/.claude/CLAUDE.md" | cut -d' ' -f3;; esac`)
+    const passed = await probe('claude', { environment: env })
+    const claude = (inspect: (harness: string) => { version: string | null; host: string | null }): unknown =>
+      lastProbes({ inspect }).find((entry: { harness: string }) => entry.harness === 'claude')
+    const host = passed.host ?? null
+    expect(claude(() => ({ version: '2.1.295', host }))).toMatchObject({ stale: false })
+    expect(claude(() => ({ version: '2.1.296', host }))).toMatchObject({ stale: true })
+    expect(claude(() => ({ version: '2.1.295', host: 'proxy.example.test' }))).toMatchObject({ stale: true })
+  })
+
+  it('is unavailable for a Low route or a missing CLI, and leaves no throwaway folder', async () => {
     stub('opencode', 'echo "1.18.32"')
-    expect(probe('opencode', { environment: env })).toMatchObject({ outcome: 'unavailable', detail: expect.stringContaining('not High') })
-    expect(probe('cursor', { environment: env }).outcome).toBe('unavailable')
+    expect(await probe('opencode', { environment: env })).toMatchObject({ outcome: 'unavailable', detail: expect.stringContaining('not High') })
+    expect((await probe('cursor', { environment: env })).outcome).toBe('unavailable')
     expect(readFileSync(join(home, '.config/bmn/agents/state/probes.jsonl'), 'utf8').split('\n').filter(Boolean)).toHaveLength(2)
     expect(existsSync(join(home, '.bmn-rules-probe-'))).toBe(false)
   })

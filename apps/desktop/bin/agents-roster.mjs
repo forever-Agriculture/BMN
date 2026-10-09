@@ -464,7 +464,8 @@ function validateAgent(id, entry, add) {
     }
   }
   const check = (key, ok, message) => {
-    if (!Object.hasOwn(value, key) || value[key] === null && key !== 'host') return
+    // A required field set to null fails its own check; only an optional null is reported above instead.
+    if (!Object.hasOwn(value, key) || (value[key] === null && OPTIONAL_AGENT_FIELDS.includes(key))) return
     if (!ok(value[key])) {
       bad(key, message)
       valid = false
@@ -502,6 +503,12 @@ function validateAgent(id, entry, add) {
   }
   if (value.title === 'squire' && value.authority === 'lead') {
     add('SQUIRE_LEAD', at('authority'), `${id} is a squire with authority lead; a squire never leads`)
+    return null
+  }
+  // Authority is what the agent may do: only authority lead may hold the lead role.
+  if (value.roles.includes('lead') && value.authority !== 'lead') {
+    if (value.title === 'squire') add('SQUIRE_LEAD', at('roles'), `${id} is a squire holding role lead; a squire never leads`)
+    else add('LEAD_AUTHORITY', at('roles'), `${id} holds role lead with authority ${value.authority}; only authority lead may lead`)
     return null
   }
   const agent = { id }

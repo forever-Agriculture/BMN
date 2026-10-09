@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { parseRoster, proseOf, rewriteProse, rewriteRoster } from '../../bin/agents-roster.mjs'
 import { approveRoster } from '../main/agents-approval'
-import { readApproved, readValidRoster } from '../../bin/agents-state.mjs'
+import { machineDiff, readApproved, readValidRoster } from '../../bin/agents-state.mjs'
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
 const EXAMPLE = readFileSync(fileURLToPath(new URL('./test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
@@ -86,11 +86,15 @@ describe('roster validation (60.1 AC1, AC2)', () => {
     ['text over its bound', (t) => edit(t, 'name: Luna\n', `name: ${'L'.repeat(41)}\n`), 'INVALID_VALUE'],
     ['trust out of range', (t) => edit(t, 'trust: 2\nauthority: read\nenabled: true\nstatus: active\nefforts: [max]', 'trust: 4\nauthority: read\nenabled: true\nstatus: active\nefforts: [max]'), 'INVALID_VALUE'],
     ['null in an optional field', (t) => edit(t, 'aliases: [fable]', 'aliases: null'), 'NULL_OPTIONAL'],
+    ['null in a required field', (t) => edit(t, 'name: Luna\ntitle: squire', 'name: Luna\ntitle: null'), 'INVALID_VALUE'],
+    ['null efforts', (t) => edit(t, 'trust: 2\nauthority: read\nenabled: true\nstatus: active\nefforts: [max]', 'trust: 2\nauthority: read\nenabled: true\nstatus: active\nefforts: null'), 'INVALID_VALUE'],
     ['candidate effort the agent does not list', (t) => edit(t, 'browser: {candidates: [luna@max]', 'browser: {candidates: [luna@high]'), 'EFFORT_NOT_LISTED'],
     ['candidate lacking the role', (t) => edit(t, 'helper: {candidates: [luna@max], then: lead}', 'helper: {candidates: [luna@max, astra@low], then: lead}'), 'ROLE_NOT_HELD'],
     ['squire with authority lead', (t) => edit(t, 'trust: 2\nauthority: read\nenabled: true\nstatus: active\nefforts: [max]', 'trust: 2\nauthority: lead\nenabled: true\nstatus: active\nefforts: [max]'), 'SQUIRE_LEAD'],
     ['squire in the lead chain', (t) => edit(edit(t, 'lead: {candidates: [sol@xhigh, opus@xhigh]', 'lead: {candidates: [sol@xhigh, opus@xhigh, luna@max]'),
       'roles: [helper, focused-reviewer, browser, pre-reviewer, project-pre-reviewer]', 'roles: [helper, focused-reviewer, browser, pre-reviewer, project-pre-reviewer, lead]'), 'SQUIRE_LEAD'],
+    ['knight holding lead without lead authority', (t) => edit(t, 'efforts: [low, medium, high]\nroles: [focused-reviewer, epic-reviewer, final-reviewer, consultant]',
+      'efforts: [low, medium, high]\nroles: [lead, focused-reviewer, epic-reviewer, final-reviewer, consultant]'), 'LEAD_AUTHORITY'],
     ['candidate naming an unknown agent', (t) => edit(t, 'browser: {candidates: [luna@max]', 'browser: {candidates: [nova@max]'), 'UNKNOWN_AGENT'],
     ['relative label path', (t) => edit(t, 'default: private\n', 'default: private\ncode/public: public\n'), 'LABEL_PATH'],
     ['label path with ..', (t) => edit(t, 'default: private\n', 'default: private\n/work/../public: public\n'), 'LABEL_PATH'],
@@ -244,6 +248,19 @@ describe('roster status (60.2 AC3)', () => {
     expect(human.stdout).toMatch(/agent glm\.enabled_note: changed \(#[0-9a-f]{12} -> #[0-9a-f]{12}\)/)
     const team = JSON.parse((await runCli(['team', '--json'])).stdout)
     expect(team.agents.find((agent: { id: string }) => agent.id === 'luna').security).toBe('high')
+  })
+})
+
+describe('machine differences (60.5 AC2)', () => {
+  it('an added or removed agent carries every machine value, free text only as a short hash', () => {
+    const approved = parseRoster(EXAMPLE).data!
+    const withNova = { ...approved, agents: [...approved.agents, { ...approved.agents[0]!, id: 'nova', name: 'Nova', enabled_note: 'NOTE-SENTINEL-NOVA' }] }
+    const [added] = machineDiff(approved, withNova)
+    expect(added).toMatchObject({ scope: 'agent', id: 'nova', field: null, kind: 'added', after: { present: true, value: { name: 'Nova', harness: approved.agents[0]!.harness } } })
+    expect(JSON.stringify(added)).not.toContain('NOTE-SENTINEL-NOVA')
+    expect((added!.after!.value as { enabled_note: string }).enabled_note).toMatch(/^text [0-9a-f]{8}$/)
+    const [removed] = machineDiff(withNova, approved)
+    expect(removed).toMatchObject({ kind: 'removed', before: { value: { name: 'Nova' } } })
   })
 })
 

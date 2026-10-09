@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import {
   acceptVersion,
   agentGroups,
+  groupConsequences,
   groupDifferences,
   moveCandidate,
   setLabel,
@@ -104,6 +105,20 @@ describe('the grouped diff (60.5 AC2-AC3)', () => {
     expect(general).toEqual(['something nobody claims'])
   })
 
+  it('gathers a first approval\'s sentences under the agent or role they name, in order', () => {
+    const { groups, general } = groupConsequences([
+      'Astra could be dispatched', 'Fable could be dispatched', 'Astra could receive private work',
+      'epic-reviewer would start with Astra', 'something nobody claims'
+    ], DATA, null)
+    expect(groups.map((group) => [group.key, group.subject, group.lines, group.consequences])).toEqual([
+      ['agent:astra', 'Astra', [], ['Astra could be dispatched', 'Astra could receive private work']],
+      ['agent:fable', 'Fable', [], ['Fable could be dispatched']],
+      ['roles', 'Roles', [], ['epic-reviewer would start with Astra']]
+    ])
+    expect(groups[0]?.agent?.id).toBe('astra')
+    expect(general).toEqual(['something nobody claims'])
+  })
+
   it('shows free text only as changed, never its words', () => {
     const { groups } = groupDifferences(diffs, DATA, DATA, [])
     expect(groups[0]?.lines).toEqual([
@@ -112,6 +127,27 @@ describe('the grouped diff (60.5 AC2-AC3)', () => {
     ])
     expect(groups[1]?.lines).toEqual([{ field: 'epic-reviewer candidates', before: 'astra@medium, fable@medium', after: 'fable@medium, astra@medium' }])
     expect(groups[2]?.lines).toEqual([{ field: '/srv/app', before: '—', after: 'public' }])
+  })
+
+  it('an added agent, role or route shows every value it brings; a removed one every value it takes away', () => {
+    const added: RosterDiffShape[] = [
+      { scope: 'agent', id: 'nova', field: null, kind: 'added', after: { present: true, value: { name: 'Nova', title: 'knight', harness: 'claude', security: 'high', efforts: ['low'], quota: 'text 1234abcd' } } },
+      { scope: 'roles', id: 'scout', field: null, kind: 'removed', before: { present: true, value: { id: 'scout', candidates: ['luna@max'], then: 'skip' } } },
+      { scope: 'harness-routes', id: 'cursor', field: null, kind: 'added', after: { present: true, value: { harness: 'cursor', provider: 'cursor', security: 'low', basis: 'owner-declared' } } }
+    ]
+    const { groups } = groupDifferences(added, DATA, DATA, [])
+    expect(groups[0]?.lines).toEqual([
+      { field: 'agent', before: '—', after: 'added' }, { field: 'name', before: '—', after: 'Nova' }, { field: 'title', before: '—', after: 'knight' },
+      { field: 'harness', before: '—', after: 'claude' }, { field: 'security', before: '—', after: 'high' }, { field: 'efforts', before: '—', after: 'low' },
+      { field: 'quota', before: '—', after: 'text 1234abcd' }
+    ])
+    expect(groups[1]?.lines).toEqual([
+      { field: 'scout', before: 'present', after: 'removed' }, { field: 'scout candidates', before: 'luna@max', after: '—' }, { field: 'scout then', before: 'skip', after: '—' }
+    ])
+    expect(groups[2]?.lines).toEqual([
+      { field: 'cursor', before: '—', after: 'added' }, { field: 'cursor provider', before: '—', after: 'cursor' },
+      { field: 'cursor security', before: '—', after: 'low' }, { field: 'cursor basis', before: '—', after: 'owner-declared' }
+    ])
   })
 
   it('summarises the counts in one sentence', () => {

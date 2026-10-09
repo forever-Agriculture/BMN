@@ -1,5 +1,5 @@
 // MODULE: agents-rules.mjs - Epic 60.4: one rules master rendered into each harness's own rules file, with check, install, restore and probes
-import { execFileSync, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import {
   appendFileSync, chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statSync,
   writeSync
@@ -284,7 +284,7 @@ async function routeStillMatches(harness, decision, environment) {
   const { inspectRoute } = await import('./agents-check.mjs')
   const inspected = inspectRoute({ harness }, null, environment, environment.HOME || homedir())
   const ok = inspected.basis === 'default' && inspected.provider === decision.route.provider
-  return ok ? { ok: true } : { ok: false, reason: `${harness} now resolves to ${inspected.host ?? 'an unknown destination'}${inspected.reason ? ` (${inspected.reason})` : ''}, not default:${decision.route.provider}` }
+  return ok ? { ok: true, inspected } : { ok: false, reason: `${harness} now resolves to ${inspected.host ?? 'an unknown destination'}${inspected.reason ? ` (${inspected.reason})` : ''}, not default:${decision.route.provider}` }
 }
 
 /** Shows target, resolved path and diff on stderr every time, then asks (default No) unless --yes. */
@@ -322,11 +322,30 @@ function foldInLines(current, rendered) {
   return current.split('\n').filter((line) => line.trim() !== '' && !wanted.has(line))
 }
 
-function snapshotMaster(master, reason, now = new Date()) {
+function readHistoryIndex() {
   const folder = historyDirectory()
   ensurePrivate(folder)
-  const index = readJson(`${folder}/index.json`, { revisions: [] })
-  if (!Array.isArray(index.revisions)) throw new RosterError('HISTORY_UNAVAILABLE', 'master history index is corrupt')
+  let index
+  try {
+    index = readJson(`${folder}/index.json`, { revisions: [] })
+  } catch {
+    throw new RosterError('HISTORY_UNAVAILABLE', 'the master history index cannot be read; nothing was written')
+  }
+  if (!Array.isArray(index?.revisions)) throw new RosterError('HISTORY_UNAVAILABLE', 'the master history index is corrupt; nothing was written')
+  return index
+}
+
+function linkedText(path) {
+  try {
+    return readFileSync(path, 'utf8')
+  } catch {
+    return null
+  }
+}
+
+function snapshotMaster(master, reason, now = new Date()) {
+  const folder = historyDirectory()
+  const index = readHistoryIndex()
   const last = index.revisions[index.revisions.length - 1]
   if (last?.hash === master.hash) return last
   const revision = { revision: (last?.revision ?? 0) + 1, hash: master.hash, bytes: Buffer.byteLength(master.text), at: now.toISOString(), reason }
@@ -394,7 +413,7 @@ export function planView(result) {
  * manifest so `restore` can undo what changed. With `expectedPlanHash`, the plan must be exactly
  * the one the owner confirmed elsewhere (the Rules panel), or nothing is written.
  */
-export async function installRules(harnesses, { yes = false, asJson = false, environment = process.env, now = new Date(), beforeTarget, expectedPlanHash } = {}) {
+export async function installRules(harnesses, { yes = false, asJson = false, environment = process.env, now = new Date(), afterConfirm, beforeTarget, expectedPlanHash } = {}) {
   const planned = await planInstall(harnesses, { environment })
   if (planned.code !== 'OK') return { code: planned.code, message: planned.message, transaction: null, written: [] }
   const { master, plans } = planned
@@ -410,6 +429,13 @@ export async function installRules(harnesses, { yes = false, asJson = false, env
     plan.diff
   ].join('\n')).join('\n\n')
   if (!await confirm('Write these rules files?', details, { yes, asJson })) return { code: 'NOT_CONFIRMED', transaction: null, written: [] }
+  // The answer may come long after the diff: plan again and write only what was confirmed.
+  afterConfirm?.()
+  const confirmed = await planInstall(harnesses, { environment })
+  if (confirmed.code !== 'OK') return { code: confirmed.code, message: confirmed.message, transaction: null, written: [] }
+  if (confirmed.planHash !== planned.planHash) {
+    return { code: 'REVISION_CONFLICT', message: 'the targets or the rendering changed while the confirmation was open; nothing was written', transaction: null, written: [] }
+  }
   const id = `${now.toISOString().replaceAll(':', '-').replace(/\.\d+Z$/, 'Z')}-${process.pid}`
   const folder = `${transactionsDirectory()}/${id}`
   ensurePrivate(folder)
@@ -530,6 +556,11 @@ export function writeMaster(expected, text, reason, { now = new Date() } = {}) {
   const parsed = parseMaster(text)
   if (parsed.errors.length > 0) throw new RosterError('MASTER_INVALID', 'the new master would not render', { errors: parsed.errors })
   ensurePrivate(agentsDirectory())
+  // The text being replaced is kept first, so no master is lost to a save; an unreadable history
+  // refuses before anything is written.
+  const prior = expected.kind === 'file' ? expected.text : expected.kind === 'link' ? linkedText(masterPath()) : null
+  if (prior === null) readHistoryIndex()
+  else snapshotMaster({ text: prior, hash: sha256(prior) }, `before ${reason}`, now)
   const written = replaceFileSafely(masterPath(), expected, text)
   snapshotMaster({ text, hash: sha256(text) }, reason, now)
   return written
@@ -583,7 +614,11 @@ function probeLog() {
   }
 }
 
-export function lastProbes() {
+/**
+ * The latest probe per harness. Stale when the rendering or approved route changed, or, given
+ * `inspect` (the harness's current version and destination), when either differs from the probe's.
+ */
+export function lastProbes({ inspect } = {}) {
   const latest = {}
   for (const entry of probeLog()) latest[entry.harness] = entry
   let master = null
@@ -599,8 +634,23 @@ export function lastProbes() {
     if (entry === undefined) return { harness, outcome: null }
     const rendered = master === null ? null : render(master, harness, generation).hash
     const route = routeFor(harness, generation)
-    const stale = rendered !== entry.rendered_hash || canonicalRoute(route) !== entry.route
+    let stale = rendered !== entry.rendered_hash || canonicalRoute(route) !== entry.route
+    if (!stale && inspect) {
+      const now = inspect(harness)
+      stale = now.version !== (entry.version ?? null) || now.host !== (entry.host ?? null)
+    }
     return { ...entry, stale }
+  })
+}
+
+const PROBE_COMMANDS = { claude: 'claude', codex: 'codex', opencode: 'opencode', cursor: 'cursor-agent' }
+
+/** The harness's version and destination now, for marking an earlier probe stale. */
+export async function probeInspector(environment = process.env) {
+  const { harnessVersion, inspectRoute } = await import('./agents-check.mjs')
+  return (harness) => ({
+    version: harnessVersion(PROBE_COMMANDS[harness], environment),
+    host: inspectRoute({ harness }, null, environment, environment.HOME || homedir()).host ?? null
   })
 }
 
@@ -613,30 +663,50 @@ function hashInText(text, hash) {
 }
 
 /**
+ * A rollout up to its first tool call: what the session was given before the agent could read
+ * anything itself. A hash found later may come from a tool reading the file, which proves nothing.
+ */
+export function beforeFirstToolCall(rollout) {
+  const kept = []
+  for (const line of rollout.split('\n')) {
+    let type
+    try {
+      type = JSON.parse(line)?.payload?.type
+    } catch {
+      type = undefined
+    }
+    if (typeof type === 'string' && (type.endsWith('_call') || type.endsWith('_begin'))) break
+    kept.push(line)
+  }
+  return kept.join('\n')
+}
+
+/**
  * Runs the harness once in a throwaway folder under the home folder, without naming the expected
  * revision, and records pass, fail, inconclusive or unavailable against the harness version, the
  * route and the rendered file's hash. Sends the rules to that harness's provider: High routes only.
  */
-export function probe(harness, { environment = process.env, now = new Date(), timeoutMs = 180_000 } = {}) {
+export async function probe(harness, { environment = process.env, now = new Date(), timeoutMs = 180_000 } = {}) {
   const master = readMaster()
   const generation = approvedOrNull()
   const rendering = render(master, harness, generation)
   const decision = routeFor(harness, generation)
-  const command = { claude: 'claude', codex: 'codex', opencode: 'opencode', cursor: 'cursor-agent' }[harness]
+  const command = PROBE_COMMANDS[harness]
+  let host = decision.route?.host ?? null
   const record = (outcome, detail, version = null) => {
-    const entry = { harness, at: now.toISOString(), outcome, detail, version, route: canonicalRoute(decision), rendered_hash: rendering.hash, master_hash: master.hash }
+    const entry = { harness, at: now.toISOString(), outcome, detail, version, host, route: canonicalRoute(decision), rendered_hash: rendering.hash, master_hash: master.hash }
     ensurePrivate(dirname(probeLogPath()))
     appendFileSync(probeLogPath(), `${JSON.stringify(entry)}\n`, { mode: 0o600 })
     return entry
   }
-  let version
-  try {
-    const text = execFileSync(command, ['--version'], { env: environment, encoding: 'utf8', timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] })
-    version = /\d+\.\d+\.\d+/.exec(text)?.[0] ?? text.trim().slice(0, 40)
-  } catch {
-    return record('unavailable', `${command} is not installed or did not answer --version`)
-  }
+  const { harnessVersion } = await import('./agents-check.mjs')
+  const version = harnessVersion(command, environment)
+  if (version === null) return record('unavailable', `${command} is not installed or did not answer --version`)
   if (decision.restricted) return record('unavailable', `the ${harness} route is not High (${decision.reason}); a probe would send the rules to that provider`, version)
+  // Like install: the destination is inspected again right before anything is sent (60.6 AC4).
+  const route = await routeStillMatches(harness, decision, environment)
+  if (!route.ok) return record('unavailable', `refused: ${route.reason}; approve the route again in Preferences > Agents`, version)
+  if (route.inspected) host = route.inspected.host ?? null
   const current = pathState(targetPath(harness, environment))
   if (current.kind !== 'file' || sha256(current.text) !== rendering.hash) {
     return record('fail', `${targetPath(harness, environment)} does not hold the current rendering; install first`, version)
@@ -653,9 +723,9 @@ export function probe(harness, { environment = process.env, now = new Date(), ti
       if (run.error || run.status === null) return record('inconclusive', 'codex did not finish', version)
       const rollout = findRollout(`${codexHome}/sessions`, folder, started)
       if (rollout === null) return record('inconclusive', 'no session rollout for the probe run was found', version)
-      return hashInText(rollout, master.hash)
-        ? record('pass', 'the probe run\'s own rollout carries the rendered header', version)
-        : record('fail', 'the probe run\'s rollout does not carry the rendered header', version)
+      return hashInText(beforeFirstToolCall(rollout), master.hash)
+        ? record('pass', 'the probe run\'s rollout carries the rendered header before any tool ran', version)
+        : record('fail', 'the probe run\'s rollout does not carry the rendered header before any tool ran', version)
     }
     const args = harness === 'claude'
       ? ['-p', '--tools', '', '--no-session-persistence', '--output-format', 'text']
@@ -825,7 +895,7 @@ export async function runRulesCommand(argv) {
       return 0
     }
     if (positionals.length !== 1 || !HARNESSES.includes(positionals[0])) return usage(`rules probe expects one harness: ${HARNESSES.join(', ')}`)
-    const result = probe(positionals[0])
+    const result = await probe(positionals[0])
     out(asJson ? JSON.stringify(result, null, 2) : `${result.harness}: ${result.outcome} - ${result.detail}${result.version ? ` (${result.version})` : ''}`)
     return result.outcome === 'pass' ? 0 : 1
   } catch (error) {

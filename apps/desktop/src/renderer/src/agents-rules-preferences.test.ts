@@ -50,6 +50,7 @@ describe('the grouped diff (60.5 AC2)', () => {
 describe('rules health (60.6 AC3, AC5)', () => {
   const snapshot = (stale: boolean): RulesSnapshot => ({
     masterPath: '/home/owner/.config/bmn/agents/global-rules.md',
+    home: '/home/owner',
     master: { exists: true, text: '# rules\n', hash: 'h', bytes: 8, errors: [] },
     renderings: [],
     health: { state: 'checked', checkedAt: '2026-10-09T10:00:00.000Z', ok: false, targets: [

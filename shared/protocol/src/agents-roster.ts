@@ -67,7 +67,7 @@ export interface RosterDiffShape {
 }
 
 /** What the panel showed; an approval or save carries it back and is refused when either moved. */
-export interface AgentsShownRevision { generation: number | null; fileHash: string }
+export interface AgentsShownRevision { generation: number | null; fileHash: string; link?: string | null }
 
 export interface AgentsGenerationSummary {
   number: number
@@ -84,6 +84,8 @@ export interface AgentsSnapshot {
   file: {
     exists: boolean
     hash: string | null
+    /** What the roster path linked to when read, or null. */
+    link: string | null
     errors: RosterIssueShape[]
     warnings: RosterIssueShape[]
     data: RosterDataShape | null
@@ -157,6 +159,8 @@ export interface RulesProbeView {
 
 export interface RulesSnapshot {
   masterPath: string
+  /** The home directory the agents' files resolve under, for showing them as `~/…` (display only). */
+  home: string | null
   master: { exists: boolean; text: string | null; hash: string | null; bytes: number; errors: RosterIssueShape[] }
   renderings: RulesRenderingView[]
   health: { state: 'checked'; checkedAt: string; ok: boolean; targets: RulesTargetHealth[] } | { state: 'failed'; checkedAt: string; reason: string }
@@ -179,7 +183,9 @@ export interface RulesPlanTarget {
 }
 
 /** A master edit before saving: whether it renders, its diff, the hash a save must still find, and each harness's rendering of it. */
-export interface RulesMasterPlan { valid: boolean; errors: RosterIssueShape[]; diff: string; expectedHash: string | null; renderings: RulesRenderingView[] }
+export interface RulesMasterPlan { valid: boolean; errors: RosterIssueShape[]; diff: string; expectedHash: string | null; expectedLink: string | null; renderings: RulesRenderingView[] }
+
+export interface RulesRevertPlan { ok: boolean; diff: string; expectedHash: string | null; expectedLink?: string | null; text?: string; message?: string }
 
 export interface RulesPlan { ok: boolean; code: string; message?: string; planHash: string | null; targets: RulesPlanTarget[] }
 

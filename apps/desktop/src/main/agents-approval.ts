@@ -1,5 +1,6 @@
 // MODULE: agents-approval.ts - Epic 60.2: the only writer of approved roster generations, used by the Agents panel
-import { appendFileSync, chmodSync, closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { appendFileSync, chmodSync, closeSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { RosterError, agentsDirectory, parseRoster, rewriteRoster, rosterPath, sha256, type RosterData } from '../../bin/agents-roster.mjs'
 import {
@@ -24,12 +25,40 @@ export interface ApprovalSeams {
   beforePublish?: () => void
   /** Process start identity for lock liveness; Linux reads /proc. */
   startIdentity?: (pid: number) => string | null
+  /** Runs after a stale lock was judged dead and before it is moved aside: the breaker-race seam. */
+  beforeBreak?: () => void
+  /**
+   * Judges harness versions an approval would newly accept (60.3 AC3): throws to refuse. The app
+   * passes one that re-inspects the route; without it every new acceptance is refused.
+   */
+  checkNewlyAccepted?: (versions: AcceptedVersion[]) => void
 }
 
-/** What the panel showed: the approved generation (null when none) and the roster file hash. */
+export interface AcceptedVersion { harness: string; version: string }
+
+/** What the panel showed: the approved generation (null when none), the roster file hash and, when given, what the roster path linked to. */
 export interface ShownRevision {
   generation: number | null
   fileHash: string
+  /** The roster path's link target as shown, or null for a regular file; omitted by callers that do not track it. */
+  link?: string | null
+}
+
+/** Versions `next` accepts that `previous` did not. */
+export function newlyAccepted(previous: RosterData | null, next: RosterData): AcceptedVersion[] {
+  const before = new Map((previous?.harness_routes ?? []).map((route) => [route.harness, route.accepted_versions ?? []]))
+  return next.harness_routes.flatMap((route) => (route.accepted_versions ?? [])
+    .filter((version) => !(before.get(route.harness) ?? []).includes(version))
+    .map((version) => ({ harness: route.harness, version })))
+}
+
+function judgeAccepted(previous: RosterData | null, next: RosterData, seams: ApprovalSeams): void {
+  const versions = newlyAccepted(previous, next)
+  if (versions.length === 0) return
+  if (seams.checkNewlyAccepted === undefined) {
+    throw new RosterError('ROUTE_CHANGED', `${versions.map((entry) => `${entry.harness} ${entry.version}`).join(', ')} can be accepted only after BMN inspected its route in Preferences > Agents`)
+  }
+  seams.checkNewlyAccepted(versions)
 }
 
 function linuxStartIdentity(pid: number): string | null {
@@ -72,34 +101,70 @@ function logHistory(entry: Record<string, unknown>, now: Date): void {
   appendFileSync(historyLogPath(), `${JSON.stringify({ at: now.toISOString(), ...entry })}\n`, { mode: 0o600 })
 }
 
+/** The lock text this process wrote while it holds the lock; checked again before every write. */
+let heldLock: string | null = null
+interface LockHolder { pid?: unknown; start?: unknown }
+const UNREADABLE_LOCK_GRACE_MS = 10_000
+
+/** Refuses a write when the lock is no longer this process's (fencing against a broken or stolen lock). */
+function assertLockHeld(): void {
+  let text: string | null = null
+  try { text = readFileSync(approvalLockPath(), 'utf8') } catch { /* gone */ }
+  if (heldLock === null || text !== heldLock) throw new RosterError('REVISION_CONFLICT', 'the approval lock was lost; nothing more was written; reload and try again')
+}
+
 /**
- * One approval at a time, across processes: `approve.lock` records pid and start time. A lock
- * whose process is gone, or whose pid now belongs to a different process, is broken with a logged
- * note; a live one makes this approval a REVISION_CONFLICT (exit-7 semantics).
+ * One approval at a time, across processes: `approve.lock` records pid and start time. It appears
+ * complete or not at all (written aside, then hard-linked into place). A lock whose process is gone,
+ * or whose pid now belongs to a different process, is moved aside and broken with a logged note,
+ * but only if what was moved is still the lock judged dead; a fresh lock moved by a racing breaker
+ * is put back. A live lock makes this approval a REVISION_CONFLICT (exit-7 semantics).
  */
 function withLock<T>(seams: ApprovalSeams, work: () => T): T {
   const identity = seams.startIdentity ?? linuxStartIdentity
   const now = seams.now ?? (() => new Date())
   ensurePrivateDirectory(stateDirectory())
   const path = approvalLockPath()
-  const mine = JSON.stringify({ pid: process.pid, start: identity(process.pid) })
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  const mine = JSON.stringify({ pid: process.pid, start: identity(process.pid), nonce: randomBytes(8).toString('hex') })
+  const aside = `${path}.${process.pid}.${randomBytes(4).toString('hex')}`
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    writeFileSync(aside, mine, { mode: 0o600 })
     try {
-      writeFileSync(path, mine, { flag: 'wx', mode: 0o600 })
+      linkSync(aside, path)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-      let holder: { pid?: unknown; start?: unknown } = {}
-      try { holder = JSON.parse(readFileSync(path, 'utf8')) as typeof holder } catch { /* unreadable: treat as stale */ }
-      const live = typeof holder.pid === 'number' && identity(holder.pid) !== null && identity(holder.pid) === holder.start
+      let found: { text: string; age: number }
+      try {
+        found = { text: readFileSync(path, 'utf8'), age: Date.now() - statSync(path).mtimeMs }
+      } catch { continue /* released meanwhile: try again */ }
+      const { text, age } = found
+      let holder: LockHolder | null
+      try { holder = JSON.parse(text) as LockHolder } catch { holder = null }
+      const live = holder === null ? age < UNREADABLE_LOCK_GRACE_MS
+        : typeof holder.pid === 'number' && identity(holder.pid) !== null && identity(holder.pid) === holder.start
       if (live) throw new RosterError('REVISION_CONFLICT', 'another approval is in progress; reload and try again')
-      try { unlinkSync(path) } catch { /* another breaker got there first */ }
-      logHistory({ event: 'lock-broken', holder }, now())
+      seams.beforeBreak?.()
+      const moved = `${path}.broken.${process.pid}.${randomBytes(4).toString('hex')}`
+      try { renameSync(path, moved) } catch { continue /* another breaker got there first */ }
+      const movedText = readFileSync(moved, 'utf8')
+      if (movedText !== text) {
+        // A racing breaker's fresh lock was moved: put it back unless someone holds the path already.
+        try { linkSync(moved, path) } catch { /* the path is taken; that holder's fencing check decides */ }
+        unlinkSync(moved)
+        throw new RosterError('REVISION_CONFLICT', 'another approval is in progress; reload and try again')
+      }
+      unlinkSync(moved)
+      logHistory({ event: 'lock-broken', holder: holder ?? { unreadable: true } }, now())
       continue
+    } finally {
+      try { unlinkSync(aside) } catch { /* already gone */ }
     }
+    heldLock = mine
     try {
       return work()
     } finally {
-      try { unlinkSync(path) } catch { /* already gone */ }
+      try { if (readFileSync(path, 'utf8') === mine) unlinkSync(path) } catch { /* already gone */ }
+      heldLock = null
     }
   }
   throw new RosterError('REVISION_CONFLICT', 'could not take the approval lock; reload and try again')
@@ -119,8 +184,9 @@ function currentGeneration(): Generation | null {
   }
 }
 
-function checkShown(shown: ShownRevision, current: Generation | null, fileHash: string): void {
-  if ((current?.number ?? null) !== shown.generation || fileHash !== shown.fileHash) {
+function checkShown(shown: ShownRevision, current: Generation | null, fileHash: string, state?: PathState): void {
+  const link = state === undefined ? undefined : state.kind === 'link' ? state.target : null
+  if ((current?.number ?? null) !== shown.generation || fileHash !== shown.fileHash || (shown.link !== undefined && link !== undefined && shown.link !== link)) {
     throw new RosterError('REVISION_CONFLICT', 'the roster or its approval changed since it was shown; reload to see the current state')
   }
 }
@@ -135,9 +201,11 @@ function publish(data: RosterData, rosterFileHash: string, parent: Generation | 
     number, parent: parent?.number ?? null, data, rosterFileHash, kind, now,
     ...(restoredFrom === undefined ? {} : { restoredFrom })
   })
+  assertLockHeld()
   writeDurably(generationPath(number), `${JSON.stringify(generation, null, 2)}\n`)
   if (readGeneration(number)?.hash !== generation.hash) throw new RosterError('STATE_CORRUPT', `generation ${number} did not read back`)
   seams.beforePointer?.()
+  assertLockHeld()
   writeDurably(currentPointerPath(), `${JSON.stringify({ generation: number, hash: generation.hash })}\n`)
   logHistory({ event: kind, generation: number, parent: parent?.number ?? null, roster_file_hash: rosterFileHash,
     ...(restoredFrom === undefined ? {} : { restored_from: restoredFrom }) }, now)
@@ -166,8 +234,10 @@ export function approveRoster(shown: ShownRevision, seams: ApprovalSeams = {}): 
     seams.afterLock?.()
     const current = currentGeneration()
     const file = readFileState()
-    checkShown(shown, current, file.hash)
-    return publish(validData(file.text), file.hash, current, seams)
+    checkShown(shown, current, file.hash, file.state)
+    const data = validData(file.text)
+    judgeAccepted(current?.data ?? null, data, seams)
+    return publish(data, file.hash, current, seams)
   })
 }
 
@@ -200,9 +270,12 @@ export function approveSections(shown: ShownRevision, scope: string[], seams: Ap
     seams.afterLock?.()
     const current = currentGeneration()
     const file = readFileState()
-    checkShown(shown, current, file.hash)
+    checkShown(shown, current, file.hash, file.state)
     const fileData = validData(file.text)
-    if (current === null) return publish(fileData, file.hash, current, seams)
+    if (current === null) {
+      judgeAccepted(null, fileData, seams)
+      return publish(fileData, file.hash, current, seams)
+    }
     const unknown = scope.filter((id) => !(SHARED_SECTIONS as readonly string[]).includes(id)
       && !fileData.agents.some((agent) => agent.id === id) && !current.data.agents.some((agent) => agent.id === id))
     if (scope.length === 0 || unknown.length > 0) throw new RosterError('INVALID_VALUE', `no section ${unknown.join(', ') || '(none named)'} to approve`)
@@ -210,6 +283,7 @@ export function approveSections(shown: ShownRevision, scope: string[], seams: Ap
     if (parsed.data === null) {
       throw new RosterError('ROSTER_INVALID', 'this change depends on another pending change; approve them together or revert one', { errors: parsed.errors })
     }
+    judgeAccepted(current.data, parsed.data, seams)
     return publish(parsed.data, file.hash, current, seams)
   })
 }
@@ -231,11 +305,13 @@ export function saveAndApprove(shown: ShownRevision, data: RosterData, seams: Ap
     seams.afterLock?.()
     const current = currentGeneration()
     const file = readFileState()
-    checkShown(shown, current, file.hash)
+    checkShown(shown, current, file.hash, file.state)
     const nextText = rewriteRoster(file.text, data)
     const nextData = validData(nextText)
+    judgeAccepted(current?.data ?? null, nextData, seams)
     if (nextText !== file.text) {
       keepPriorState(file.state, (seams.now ?? (() => new Date()))())
+      assertLockHeld()
       replaceFileSafely(rosterPath(), file.state, nextText)
     }
     seams.beforePublish?.()
@@ -254,11 +330,18 @@ export function revertFileToApproved(shown: ShownRevision, scope: string[] | nul
     const current = currentGeneration()
     if (current === null) throw new RosterError('NOT_APPROVED', 'nothing is approved yet, so there is nothing to revert to')
     const file = readFileState()
-    checkShown(shown, current, file.hash)
+    checkShown(shown, current, file.hash, file.state)
+    const fileData = parseRoster(file.text).data
+    const added = (fileData?.agents ?? []).filter((agent) => !current.data.agents.some((entry) => entry.id === agent.id)
+      && (scope === null || scope.includes(agent.id))).map((agent) => agent.id)
+    if (added.length > 0) {
+      throw new RosterError('INVALID_VALUE', `${added.join(', ')} ${added.length === 1 ? 'is' : 'are'} new in the file; reverting would delete ${added.length === 1 ? 'its section and prose' : 'their sections and prose'}. Remove ${added.length === 1 ? 'it' : 'them'} in the file, or approve.`)
+    }
     const nextText = rewriteRoster(file.text, current.data, { scope })
     if (nextText === file.text) return { changed: false }
     if (scope === null) validData(nextText)
     keepPriorState(file.state, (seams.now ?? (() => new Date()))())
+    assertLockHeld()
     replaceFileSafely(rosterPath(), file.state, nextText)
     return { changed: true }
   })
@@ -270,9 +353,10 @@ export function restoreGeneration(shown: ShownRevision, number: number, seams: A
     seams.afterLock?.()
     const current = currentGeneration()
     const file = readFileState()
-    checkShown(shown, current, file.hash)
+    checkShown(shown, current, file.hash, file.state)
     const earlier = readGeneration(number)
     if (earlier === null) throw new RosterError('STATE_CORRUPT', `generation ${number} is missing or does not verify`)
+    judgeAccepted(current?.data ?? null, earlier.data, seams)
     return publish(earlier.data, earlier.roster_file_hash, current, seams, 'restore', number)
   })
 }

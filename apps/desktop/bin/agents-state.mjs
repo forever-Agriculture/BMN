@@ -191,7 +191,12 @@ export function machineDiff(approved, file) {
     const before = approvedAgents.get(id)
     const after = fileAgents.get(id)
     if (before === undefined || after === undefined) {
-      out.push({ scope: 'agent', id, field: null, kind: before === undefined ? 'added' : 'removed' })
+      // The whole entry rides along, so an approval shows every value it adds or removes; free text as a hash.
+      const entry = before ?? after
+      const value = Object.fromEntries(AGENT_FIELDS.filter((field) => Object.hasOwn(entry, field))
+        .map((field) => [field, FREE_TEXT_FIELDS.includes(field) ? `text ${sha256(canonicalJson(entry[field])).slice(0, 8)}` : entry[field]]))
+      out.push({ scope: 'agent', id, field: null, kind: before === undefined ? 'added' : 'removed',
+        ...(after ? { after: { present: true, value } } : { before: { present: true, value } }) })
       continue
     }
     for (const field of AGENT_FIELDS) {
