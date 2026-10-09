@@ -49,6 +49,7 @@ import { nativeLoadFailureMessage } from './native-load-error'
 import { ensureApplicationRoots, resolveApplicationRoots } from './roots'
 import { installBundledTerminfo } from './terminal-graphics'
 import { FileSavedOutputStore } from './saved-output-store'
+import { removeOriginals } from './artifact-files'
 import { routeTerminalSavedOutputGet } from './saved-output-route'
 import { type AgentHistoryAdapter } from './agent-history'
 import { codexHistoryAdapter } from './agent-history-codex'
@@ -232,14 +233,18 @@ function failure(
  */
 async function purgeExpiredArchives(
   database: DatabaseWorkerClient,
-  savedOutputStore: FileSavedOutputStore
+  savedOutputStore: FileSavedOutputStore,
+  dataRoot: string
 ): Promise<void> {
   try {
     const purged = await database.purgeExpiredArchives()
     if (purged.sessionIds.length === 0 && purged.workspaceIds.length === 0) return
     await savedOutputStore.removeSessions(purged.sessionIds)
+    // After the commit: a crash before this leaves only unused files, never a record without its file.
+    const files = await removeOriginals(dataRoot, purged.originals)
     process.stderr.write(
-      `[BMN] deleted ${purged.sessionIds.length} archived session(s) and ${purged.workspaceIds.length} archived workspace(s)\n`
+      `[BMN] deleted ${purged.sessionIds.length} archived session(s), ${purged.workspaceIds.length} archived workspace(s) and ${files.removed} file(s)` +
+        `${files.failed > 0 ? `; ${files.failed} file(s) could not be removed` : ''}\n`
     )
   } catch (error) {
     const message = error instanceof Error ? error.message : 'unknown error'
@@ -278,7 +283,7 @@ async function start(): Promise<void> {
   )
   const initialized = await database.initialize()
   const savedOutputStore = new FileSavedOutputStore(join(roots.state, 'saved-output'))
-  await purgeExpiredArchives(database, savedOutputStore)
+  await purgeExpiredArchives(database, savedOutputStore, roots.data)
   let terminalPort: TerminalPort | undefined
   let handshaken = false
   // The manager's callbacks run before the companion exists, so they read it through a holder.

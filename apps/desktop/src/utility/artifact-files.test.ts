@@ -19,7 +19,10 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   ArtifactFileError,
   ArtifactFileStore,
+  artifactLinksRoot,
+  artifactOriginalsRoot,
   detectMediaType,
+  removeOriginals,
   sanitizeOriginalName,
   type ArtifactFileErrorCode,
   type ArtifactFileStoreOptions
@@ -384,5 +387,45 @@ describe('artifact media type and name rules', () => {
     expect(Buffer.byteLength(long)).toBeLessThanOrEqual(255)
     expect(long.endsWith('.txt')).toBe(true)
     expect(long).toBe(`${'€'.repeat(83)}.txt`)
+  })
+})
+
+describe('removing originals after a purge', () => {
+  it('removes the named originals and their delivery links and leaves everything else', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'bmn-artifact-remove-test-'))
+    createdRoots.add(base)
+    const store = new ArtifactFileStore({
+      root: artifactOriginalsRoot(base), stagingRoot: join(base, 'staging'), usedBytes: async () => 0
+    })
+    const gone = await store.importBytes(new TextEncoder().encode('gone'), { artifactId: 'gone', originalName: 'gone.txt' })
+    const kept = await store.importBytes(new TextEncoder().encode('kept'), { artifactId: 'kept', originalName: 'kept.txt' })
+    const links = artifactLinksRoot(base)
+    await mkdir(links, { recursive: true })
+    await symlink(gone.storedPath, join(links, 'gone.txt'))
+    await symlink(kept.storedPath, join(links, 'kept.txt'))
+    const outside = join(base, 'outside.txt')
+    await writeFile(outside, 'owner file')
+
+    const result = await removeOriginals(base, [
+      { artifactId: 'gone', sha256: gone.sha256 },
+      // Already absent: not a failure.
+      { artifactId: 'never-stored', sha256: 'c'.repeat(64) }
+    ])
+
+    expect(result).toEqual({ removed: 1, failed: 0 })
+    expect(await listFiles(artifactOriginalsRoot(base))).toEqual([kept.storedPath])
+    expect(await readdir(links)).toEqual(['kept.txt'])
+    expect(await readFile(outside, 'utf8')).toBe('owner file')
+  })
+
+  it('counts an unusable ID as a failure and touches nothing', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'bmn-artifact-remove-test-'))
+    createdRoots.add(base)
+    const outside = join(base, 'outside.txt')
+    await writeFile(outside, 'owner file')
+
+    expect(await removeOriginals(base, [{ artifactId: '../../outside.txt', sha256: 'd'.repeat(64) }]))
+      .toEqual({ removed: 0, failed: 1 })
+    expect(await readFile(outside, 'utf8')).toBe('owner file')
   })
 })

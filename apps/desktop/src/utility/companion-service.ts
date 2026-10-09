@@ -62,7 +62,13 @@ import {
   type GuardReport,
   type GuardStop
 } from '@bmn/protocol'
-import { ArtifactFileError, ArtifactFileStore, type InstalledOriginal } from './artifact-files'
+import {
+  ArtifactFileError,
+  ArtifactFileStore,
+  artifactLinksRoot,
+  artifactOriginalsRoot,
+  type InstalledOriginal
+} from './artifact-files'
 import { ControlAuth, writeOwnerToken, type ControlScope } from './control-auth'
 import { HookEventHistory } from './hook-event-history'
 import { LiveProducers } from './live-producers'
@@ -555,7 +561,7 @@ export class CompanionService {
     this.refusalLogPath = join(options.roots.state, 'refused-requests.log')
     this.telegramDeliveryLogPath = join(options.roots.state, 'telegram-delivery.log')
     this.files = new ArtifactFileStore({
-      root: join(options.roots.data, 'artifacts', 'originals'),
+      root: artifactOriginalsRoot(options.roots.data),
       stagingRoot: join(options.roots.state, 'artifact-staging'),
       usedBytes: () => options.database.companion('artifactBytesUsed')
     })
@@ -2074,7 +2080,7 @@ export class CompanionService {
   }
 
   private async prepareArtifactLink(artifact: ArtifactRecord): Promise<string> {
-    const linkDirectory = join(this.options.roots.data, 'artifacts', 'links')
+    const linkDirectory = artifactLinksRoot(this.options.roots.data)
     await mkdir(linkDirectory, { recursive: true, mode: 0o700 })
     const linkPath = join(linkDirectory, `${artifact.artifactId}${linkExtension(artifact)}`)
     const existing = await lstat(linkPath).catch(() => undefined)

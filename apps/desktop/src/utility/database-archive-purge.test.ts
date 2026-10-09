@@ -46,13 +46,27 @@ function handoff(
   draftId: string,
   sourceSessionId: string,
   destinationSessionId: string,
-  state: 'draft' | 'accepted' | 'uncertain' | 'discarded'
+  state: 'draft' | 'accepted' | 'uncertain' | 'discarded',
+  artifactIds: string[] = []
 ): void {
   database.prepare(
     `INSERT INTO input_draft(
        draft_id, session_id, origin, source_session_id, text, artifact_ids_json, state, created_at, updated_at
-     ) VALUES (?, ?, 'handoff', ?, 'Synthetic handoff', '[]', ?, ?, ?)`
-  ).run(draftId, destinationSessionId, sourceSessionId, state, now, now)
+     ) VALUES (?, ?, 'handoff', ?, 'Synthetic handoff', ?, ?, ?, ?)`
+  ).run(draftId, destinationSessionId, sourceSessionId, JSON.stringify(artifactIds), state, now, now)
+}
+
+function artifact(artifactId: string, sessionId: string): void {
+  database.prepare(
+    `INSERT INTO artifact(artifact_id, session_id, incarnation_id, direction, source, original_name, media_type,
+       byte_length, sha256, stored_path, source_path, state, created_at)
+     VALUES (?, ?, NULL, 'output', 'agent', 'notes.md', 'text/markdown', 1, ?, '/store/x', NULL, 'ready', ?)`
+  ).run(artifactId, sessionId, 'b'.repeat(64), now)
+}
+
+function artifactSessions(): Array<{ artifact_id: string; session_id: string | null }> {
+  return database.prepare('SELECT artifact_id, session_id FROM artifact ORDER BY artifact_id').all() as
+    Array<{ artifact_id: string; session_id: string | null }>
 }
 
 /** One row in every table that points at a session. */
@@ -118,7 +132,7 @@ describe('archive retention', () => {
     expect(getSettings(database).archive).toEqual({ deleteAfterDays: null })
     session('old', DEFAULT_WORKSPACE_ID, daysAgo(400))
     workspace('w-old', daysAgo(400))
-    expect(purgeExpiredArchives(database, now)).toEqual({ sessionIds: [], workspaceIds: [] })
+    expect(purgeExpiredArchives(database, now)).toEqual({ sessionIds: [], workspaceIds: [], originals: [] })
     expect(listSessions(database, DEFAULT_WORKSPACE_ID).map((record) => record.sessionId)).toEqual(['old'])
     expect(listWorkspaces(database, true).map((record) => record.workspaceId)).toContain('w-old')
   })
@@ -131,21 +145,23 @@ describe('archive retention', () => {
     expect(getSettings(database).archive).toEqual({ deleteAfterDays: 30 })
   })
 
-  it('deletes sessions archived past the period with their records and keeps published files', () => {
+  it('deletes sessions archived past the period with their records and their files', () => {
     retention(30)
     session('expired', DEFAULT_WORKSPACE_ID, daysAgo(31))
     session('fresh', DEFAULT_WORKSPACE_ID, daysAgo(29))
     session('active', DEFAULT_WORKSPACE_ID, null)
     for (const id of ['expired', 'fresh', 'active']) dependents(id)
 
-    expect(purgeExpiredArchives(database, now)).toEqual({ sessionIds: ['expired'], workspaceIds: [] })
+    expect(purgeExpiredArchives(database, now)).toEqual({
+      sessionIds: ['expired'], workspaceIds: [], originals: [{ artifactId: 'a-expired', sha256: 'a'.repeat(64) }]
+    })
 
     expect(listSessions(database, DEFAULT_WORKSPACE_ID).map((record) => record.sessionId).sort()).toEqual(['active', 'fresh'])
     expect(childCount('expired')).toBe(0)
     expect(childCount('fresh')).toBe(CHILD_TABLES.length)
     expect(childCount('active')).toBe(CHILD_TABLES.length)
-    expect(database.prepare("SELECT session_id FROM artifact WHERE artifact_id = 'a-expired'").get()).toEqual({ session_id: null })
-    // The evidence link goes with its session; the file it pointed at is kept and only unlinked.
+    expect(database.prepare('SELECT artifact_id FROM artifact ORDER BY artifact_id').all())
+      .toEqual([{ artifact_id: 'a-active' }, { artifact_id: 'a-fresh' }])
     expect(database.prepare("SELECT COUNT(*) AS n FROM progress_evidence WHERE artifact_id = 'a-expired'").get())
       .toEqual({ n: 0 })
   })
@@ -158,12 +174,12 @@ describe('archive retention', () => {
     database.pragma('foreign_keys = OFF')
 
     try {
-      expect(purgeExpiredArchives(database, now)).toEqual({ sessionIds: ['expired'], workspaceIds: [] })
+      expect(purgeExpiredArchives(database, now)).toMatchObject({ sessionIds: ['expired'], workspaceIds: [] })
       expect(database.prepare('SELECT COUNT(*) AS n FROM progress_evidence').get()).toEqual({ n: 0 })
     } finally {
       database.pragma('foreign_keys = ON')
     }
-    expect(purgeExpiredArchives(database, now)).toEqual({ sessionIds: [], workspaceIds: [] })
+    expect(purgeExpiredArchives(database, now)).toEqual({ sessionIds: [], workspaceIds: [], originals: [] })
   })
 
   it('deletes an expired workspace with all its sessions and never the default workspace', () => {
@@ -175,7 +191,9 @@ describe('archive retention', () => {
     session('inside-fresh', 'w-fresh', daysAgo(2))
     dependents('inside-active')
 
-    expect(purgeExpiredArchives(database, now)).toEqual({ sessionIds: ['inside-active'], workspaceIds: ['w-expired'] })
+    expect(purgeExpiredArchives(database, now)).toEqual({
+      sessionIds: ['inside-active'], workspaceIds: ['w-expired'], originals: [{ artifactId: 'a-inside-active', sha256: 'a'.repeat(64) }]
+    })
 
     expect(listWorkspaces(database, true).map((record) => record.workspaceId).sort())
       .toEqual([DEFAULT_WORKSPACE_ID, 'w-fresh'].sort())
@@ -197,7 +215,8 @@ describe('archive retention', () => {
 
     expect(purgeExpiredArchives(database, now)).toEqual({
       sessionIds: ['destination-expired', 'source-expired'],
-      workspaceIds: []
+      workspaceIds: [],
+      originals: []
     })
 
     expect(database.prepare(
@@ -208,6 +227,41 @@ describe('archive retention', () => {
       { draft_id: 'kept-draft', source_session_id: null, state: 'draft' },
       { draft_id: 'kept-uncertain', source_session_id: null, state: 'uncertain' }
     ])
+  })
+
+  it('keeps a file a kept session handoff still names until that handoff is deleted too', () => {
+    retention(30)
+    session('source', DEFAULT_WORKSPACE_ID, daysAgo(31))
+    session('destination', DEFAULT_WORKSPACE_ID, null)
+    session('other', DEFAULT_WORKSPACE_ID, null)
+    for (const id of ['handed', 'discarded-only', 'unused']) artifact(id, 'source')
+    handoff('pending', 'source', 'destination', 'accepted', ['handed'])
+    handoff('dropped', 'source', 'other', 'discarded', ['discarded-only'])
+
+    const first = purgeExpiredArchives(database, now)
+
+    expect(first.originals.map((original) => original.artifactId)).toEqual(['discarded-only', 'unused'])
+    expect(artifactSessions()).toEqual([{ artifact_id: 'handed', session_id: null }])
+
+    // The destination expires later: its handoff goes, and the file it alone kept goes with it.
+    database.prepare("UPDATE session SET archived_at = ? WHERE session_id = 'destination'").run(daysAgo(31))
+    expect(purgeExpiredArchives(database, now)).toEqual({
+      sessionIds: ['destination'],
+      workspaceIds: [],
+      originals: [{ artifactId: 'handed', sha256: 'b'.repeat(64) }]
+    })
+    expect(artifactSessions()).toEqual([])
+  })
+
+  it('never deletes an unlinked file no deleted session refers to', () => {
+    retention(30)
+    session('expired', DEFAULT_WORKSPACE_ID, daysAgo(31))
+    session('kept', DEFAULT_WORKSPACE_ID, null)
+    artifact('earlier-orphan', 'kept')
+    database.prepare("UPDATE artifact SET session_id = NULL WHERE artifact_id = 'earlier-orphan'").run()
+
+    expect(purgeExpiredArchives(database, now).originals).toEqual([])
+    expect(artifactSessions()).toEqual([{ artifact_id: 'earlier-orphan', session_id: null }])
   })
 
   it('removes deleted sessions from a kept workspace layout so it still opens', () => {

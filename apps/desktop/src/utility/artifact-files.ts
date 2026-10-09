@@ -9,6 +9,7 @@ import {
   mkdir,
   open,
   readdir,
+  readlink,
   realpath,
   rename,
   rm,
@@ -110,6 +111,64 @@ function destinationError(error: unknown): ArtifactFileError {
 function checkedArtifactId(artifactId: string): string {
   if (!ARTIFACT_ID.test(artifactId)) throw new TypeError('artifact id must be 1-128 safe filename characters')
   return artifactId
+}
+
+function originalPath(root: string, artifactId: string, sha256: string): string {
+  if (!SHA256_HEX.test(sha256)) throw new TypeError('sha256 must be 64 lowercase hex characters')
+  return join(root, sha256.slice(0, 2), checkedArtifactId(artifactId))
+}
+
+/** Where verified originals live under the application data root. */
+export function artifactOriginalsRoot(dataRoot: string): string {
+  return join(dataRoot, 'artifacts', 'originals')
+}
+
+/** Where the delivery links pasted into sessions live; each is a symlink to one original. */
+export function artifactLinksRoot(dataRoot: string): string {
+  return join(dataRoot, 'artifacts', 'links')
+}
+
+/**
+ * Removes originals whose records are already deleted, and the delivery links that point at them.
+ * Each path is rebuilt from ID and digest rather than read from the database, so nothing outside the
+ * store can be touched. One failure does not stop the rest; the failed files are reported, not retried.
+ */
+export async function removeOriginals(
+  dataRoot: string,
+  originals: readonly { artifactId: string; sha256: string }[]
+): Promise<{ removed: number; failed: number }> {
+  const root = resolve(artifactOriginalsRoot(dataRoot))
+  const paths = new Set<string>()
+  let removed = 0
+  let failed = 0
+  for (const original of originals) {
+    try {
+      const path = originalPath(root, original.artifactId, original.sha256)
+      paths.add(path)
+      await unlink(path)
+      removed += 1
+    } catch (error) {
+      if (errnoOf(error) !== 'ENOENT') failed += 1
+    }
+  }
+  if (paths.size === 0) return { removed, failed }
+  const linksRoot = resolve(artifactLinksRoot(dataRoot))
+  let names: string[] = []
+  try {
+    names = await readdir(linksRoot)
+  } catch (error) {
+    if (errnoOf(error) !== 'ENOENT') failed += 1
+  }
+  for (const name of names) {
+    const linkPath = join(linksRoot, name)
+    try {
+      if (!(await lstat(linkPath)).isSymbolicLink()) continue
+      if (paths.has(resolve(linksRoot, await readlink(linkPath)))) await unlink(linkPath)
+    } catch (error) {
+      if (errnoOf(error) !== 'ENOENT') failed += 1
+    }
+  }
+  return { removed, failed }
 }
 
 function sameFile(left: Stats, right: Stats): boolean {
@@ -250,8 +309,7 @@ export class ArtifactFileStore {
   }
 
   storedPathFor(artifactId: string, sha256: string): string {
-    if (!SHA256_HEX.test(sha256)) throw new TypeError('sha256 must be 64 lowercase hex characters')
-    return join(this.root, sha256.slice(0, 2), checkedArtifactId(artifactId))
+    return originalPath(this.root, artifactId, sha256)
   }
 
   async importFile(
