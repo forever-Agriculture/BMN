@@ -83,8 +83,7 @@ setInterval(()=>{if(fs.existsSync(${JSON.stringify(exitSignal)}))process.exit(0)
     assert.equal(bot.calls.slice(callsFrom).filter(call => call.method === 'sendMessage').length, 0)
     await until(async () => taps.attentionNotices.slice(noticeFrom).some(notice => notice.sessionId === sessionId) ? true : undefined, 'desktop notification path')
     // Keep the synthetic away fixture unwatched: selecting a focused pane marks requests seen.
-    host.applicationWindow!.blur()
-    await until(async () => !host.applicationWindow!.isFocused() ? true : undefined, 'synthetic away window unfocused')
+    taps.windowUnwatched = true
     // Fixture creation bypasses renderer-owned creation; publish its registry before owner navigation.
     await host.recoverApplicationRenderer(host.applicationWindow!)
     await until(async () => {
@@ -120,7 +119,6 @@ setInterval(()=>{if(fs.existsSync(${JSON.stringify(exitSignal)}))process.exit(0)
       return held.away === true && held.allMembers && held.exitHeld ? true : undefined
     }, 'away with unchanged held requests')
     assert.equal(bot.calls.slice(callsFrom).filter(call => call.method === 'sendMessage').length, 0)
-    assert.equal(host.applicationWindow!.isFocused(), false, 'Quiet fixture became watched')
     const heldRecords = await client.request<AttentionRecord[]>(METHOD_REGISTRY.attentionList, {})
     for (const expected of rows) {
       const held = heldRecords.find(row => row.requestId === expected.requestId)
@@ -168,6 +166,7 @@ setInterval(()=>{if(fs.existsSync(${JSON.stringify(exitSignal)}))process.exit(0)
     console.error(`[BMN] quiet-hours diag: ${encoded.slice(0, 2_000)}`)
     if (existsSync(requestReceipt)) console.error(`[BMN] quiet-hours request fixture: ${readFileSync(requestReceipt, 'utf8')}`)
     taps.captureAttentionNotifications = false
+    taps.windowUnwatched = false
     if (sessionId) await host.applicationWindow!.webContents.executeJavaScript(`window.aiTerminal.stopSession(${JSON.stringify(sessionId)})`).catch(() => undefined)
     await client.request(METHOD_REGISTRY.settingsPut, { section: 'telegram', value: original })
     await setClock(null)

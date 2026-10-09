@@ -28,6 +28,8 @@ export interface SelfTestTaps {
   shownInFolder(path: string): void
   appNotice(notice: { title: string; body: string }): void
   readonly captureAttentionNotifications: boolean
+  /** The owner is looking elsewhere: Wayland compositors ignore blur(), so a shown self-test window can keep focus. */
+  readonly windowUnwatched: boolean
   attentionNotice(notice: { title: string; body: string; sessionId: string }): void
   readonly voice: {
     binary: string

@@ -249,7 +249,7 @@ const presence = createPresenceMonitor({
 const appEvents = createAppEventForwarder({
   client: () => hostClient,
   targets: allowedTargets,
-  watching: (sessionId) => !presence.current().away && BrowserWindow.getAllWindows().some((window) =>
+  watching: (sessionId) => !presence.current().away && !selfTestTaps?.windowUnwatched && BrowserWindow.getAllWindows().some((window) =>
     !window.isDestroyed() && window.isFocused() && selectedSessions.get(window.webContents.id) === sessionId
   ),
   notify: ({ title, body, sessionId, requestId, kind, revision }) => {
