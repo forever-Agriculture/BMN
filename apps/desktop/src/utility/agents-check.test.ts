@@ -5,8 +5,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { evaluate, readCodexConfig, setReadTracer } from '../../bin/agents-check.mjs'
+import { consequences, evaluate, readCodexConfig, setReadTracer } from '../../bin/agents-check.mjs'
 import { readValidRoster } from '../../bin/agents-state.mjs'
+import { parseRoster } from '../../bin/agents-roster.mjs'
 import { approveRoster } from '../main/agents-approval'
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
@@ -425,5 +426,52 @@ describe('readCodexConfig', () => {
     expect(config.providers['my-corp']).toEqual({ base_url: 'https://h.example' })
     expect(config.unreadable).toEqual([])
     expect(readCodexConfig('model_provider = 42\n').unreadable).toEqual(['model_provider'])
+  })
+})
+
+describe('consequences in words (60.5 AC2; the same sentences `bmn roster status` prints)', () => {
+  const data = (text: string) => {
+    const parsed = parseRoster(text)
+    if (parsed.data === null) throw new Error(JSON.stringify(parsed.errors))
+    return parsed.data
+  }
+  const LUNA = 'name: Luna\ntitle: squire\nharness: codex\nmodel: gpt-6-luna\nprovider: openai\nhost: default\nsecurity: high\ntrust: 2\nauthority: read'
+  const ASTRA_SECURITY = 'model: gpt-6-astra\nprovider: openai\nhost: default\nsecurity: high'
+
+  it.each([
+    ['security High to Low', (text: string) => edit(text, ASTRA_SECURITY, ASTRA_SECURITY.replace('high', 'low')), ['Astra could no longer receive private work']],
+    ['a squire made knight with lead authority and the lead role', (text: string) => edit(edit(edit(text, LUNA, LUNA.replace('squire', 'knight').replace('authority: read', 'authority: lead')),
+      'roles: [helper, focused-reviewer, browser, pre-reviewer, project-pre-reviewer]', 'roles: [lead, helper, focused-reviewer, browser, pre-reviewer, project-pre-reviewer]'),
+    'lead: {candidates: [sol@xhigh, opus@xhigh], then: owner-chooses}', 'lead: {candidates: [sol@xhigh, opus@xhigh, luna@max], then: owner-chooses}'),
+    ['Luna could lead', 'Luna could take the lead role']],
+    ['a chain reordered', (text: string) => edit(text, 'epic-reviewer: {candidates: [astra@medium, fable@medium]', 'epic-reviewer: {candidates: [fable@medium, astra@medium]'),
+      ['epic-reviewer would start with Fable instead of Astra']],
+    ['then changed', (text: string) => edit(text, 'pre-reviewer: {candidates: [luna@max], then: skip}\nepic', 'pre-reviewer: {candidates: [luna@max], then: lead}\nepic'),
+      ['when every pre-reviewer candidate fails: lead instead of skip']],
+    ['an agent switched off', (text: string) => edit(text, 'authority: lead\nenabled: true\nstatus: active\nefforts: [low, medium, high, xhigh, max]\nroles: [lead]\ncost: low',
+      'authority: lead\nenabled: false\nstatus: active\nefforts: [low, medium, high, xhigh, max]\nroles: [lead]\ncost: low'),
+    ['Sol could no longer be dispatched', 'Sol could no longer lead', 'Sol could no longer receive private work', 'lead would start with Opus instead of Sol']]
+  ])('%s', (_name, change, expected) => {
+    const before = data(EXAMPLE)
+    expect(consequences(before, data(change(EXAMPLE)))).toEqual(expected)
+  })
+
+  it('names a folder becoming public, the default label and an accepted version', () => {
+    const after = data(edit(edit(EXAMPLE, 'default: private\n', 'default: public\n/srv/app: public\n'),
+      'codex: {provider: openai, security: high, basis: observed-default}', 'codex: {provider: openai, security: high, basis: observed-default, accepted_versions: [0.170.0]}'))
+    expect(consequences(data(EXAMPLE), after)).toEqual([
+      '/srv/app becomes public: Low routes could receive its tracked files in packets',
+      'unlabelled workspaces become public',
+      'codex 0.170.0 could carry private work (owner-accepted, untested by BMN)'
+    ])
+  })
+
+  it('`bmn roster status` prints the same sentences under "If approved:"', async () => {
+    approve(EXAMPLE)
+    writeFileSync(join(home, '.config/bmn/agents/roster.md'), edit(EXAMPLE, ASTRA_SECURITY, ASTRA_SECURITY.replace('high', 'low')))
+    const output = await new Promise<string>((resolve) => {
+      execFile(process.execPath, [CLI, 'roster', 'status'], { env }, (_error, stdout) => resolve(stdout))
+    })
+    expect(output).toContain('If approved:\n  Astra could no longer receive private work')
   })
 })

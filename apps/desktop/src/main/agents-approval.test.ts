@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { parseRoster, sha256 } from '../../bin/agents-roster.mjs'
 import { approvalLockPath, currentPointerPath, generationPath, historyLogPath, machineDiff, readApproved, readValidRoster } from '../../bin/agents-state.mjs'
-import { approveRoster, restoreGeneration, revertFileToApproved, saveAndApprove } from './agents-approval'
+import { approveRoster, approveSections, restoreGeneration, revertFileToApproved, saveAndApprove } from './agents-approval'
 
 const EXAMPLE = readFileSync(fileURLToPath(new URL('../utility/test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
 const BIN = fileURLToPath(new URL('../../bin/', import.meta.url))
@@ -218,5 +218,47 @@ describe('no CLI route approves (60.2 AC5)', () => {
       }
     }
     expect(offenders, offenders.length ? 'FAIL' : 'PASS').toEqual([])
+  })
+})
+
+describe('approving one outside section (60.5 AC3)', () => {
+  const FOCUSED = 'focused-reviewer: {candidates: [luna@max, astra@low], then: lead}'
+  const FOCUSED_SWAPPED = 'focused-reviewer: {candidates: [astra@low, luna@max], then: lead}'
+
+  it('approves only the named section; the other outside change stays pending and the file is untouched', () => {
+    writeRoster(EXAMPLE)
+    approveRoster(shown())
+    const outside = edit(edit(EXAMPLE, FOCUSED, FOCUSED_SWAPPED), LUNA_HIGH, LUNA_LOW)
+    writeRoster(outside)
+    const generation = approveSections(shown(), ['roles'])
+    expect(generation).toMatchObject({ number: 2, parent: 1, roster_file_hash: sha256(outside) })
+    expect(generation.data.roles.find((role) => role.id === 'focused-reviewer')?.candidates).toEqual(['astra@low', 'luna@max'])
+    expect(generation.data.agents.find((agent) => agent.id === 'luna')?.security).toBe('high')
+    expect(readFileSync(rosterFile(), 'utf8')).toBe(outside)
+    expect(machineDiff(readApproved().data, readValidRoster().data).map((diff) => `${diff.scope}:${diff.id}:${diff.field}`)).toEqual(['agent:luna:security'])
+  })
+
+  it('refuses a section whose change depends on another pending one, and writes nothing', () => {
+    writeRoster(EXAMPLE)
+    approveRoster(shown())
+    // Haiku gains the helper role in its own section and joins the helper chain: the chain alone would name a non-holder.
+    const outside = edit(EXAMPLE, 'helper: {candidates: [luna@max], then: lead}', 'helper: {candidates: [luna@max, haiku@low], then: lead}')
+      .replace(/(## haiku[\s\S]*?roles: )\[\]/, '$1[helper]')
+    writeRoster(outside)
+    expect(parseRoster(outside).data).not.toBeNull()
+    expect(() => approveSections(shown(), ['roles'])).toThrow(expect.objectContaining({ code: 'ROSTER_INVALID' }))
+    expect(readApproved().number).toBe(1)
+    expect(approveSections(shown(), ['roles', 'haiku']).number).toBe(2)
+  })
+
+  it('refuses an unknown section and a stale view', () => {
+    writeRoster(EXAMPLE)
+    approveRoster(shown())
+    writeRoster(edit(EXAMPLE, FOCUSED, FOCUSED_SWAPPED))
+    expect(() => approveSections(shown(), ['nobody'])).toThrow(expect.objectContaining({ code: 'INVALID_VALUE' }))
+    const stale = shown()
+    writeRoster(EXAMPLE)
+    expect(() => approveSections(stale, ['roles'])).toThrow(expect.objectContaining({ code: 'REVISION_CONFLICT' }))
+    expect(readApproved().number).toBe(1)
   })
 })

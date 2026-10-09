@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { parseRoster, rewriteRoster } from '../../bin/agents-roster.mjs'
+import { parseRoster, proseOf, rewriteProse, rewriteRoster } from '../../bin/agents-roster.mjs'
 import { approveRoster } from '../main/agents-approval'
 import { readApproved, readValidRoster } from '../../bin/agents-state.mjs'
 
@@ -258,5 +258,30 @@ describe('rewriteRoster', () => {
     const lunaEnd = EXAMPLE.indexOf('## sonnet')
     expect(out.slice(0, lunaStart)).toBe(EXAMPLE.slice(0, lunaStart))
     expect(out.slice(out.indexOf('## sonnet'))).toBe(EXAMPLE.slice(lunaEnd))
+  })
+})
+
+describe('the opinion is the section prose (60.5 AC5)', () => {
+  it('rewrites only that agent\'s prose; machine data and every other byte stay', () => {
+    const next = rewriteProse(EXAMPLE, 'sol', 'Fast and thorough.\n\nSecond paragraph.')
+    expect(proseOf(next, 'sol')).toBe('Fast and thorough.\n\nSecond paragraph.')
+    expect(parseRoster(next).data).toEqual(parseRoster(EXAMPLE).data)
+    expect(next.replace(/\n(Fast and thorough\.\n\nSecond paragraph\.)\n/, '\nOwner\'s opinion: PROSE-SENTINEL-SOL.\n')).toBe(EXAMPLE)
+    expect(proseOf(rewriteProse(EXAMPLE, 'sol', ''), 'sol')).toBe('')
+  })
+
+  it.each([['a code fence', 'x\n```yaml\nname: Evil\n```'], ['a section heading', 'x\n## evil']])('refuses %s, which would change the roster\'s structure', (_name, prose) => {
+    expect(() => rewriteProse(EXAMPLE, 'sol', prose)).toThrow(expect.objectContaining({ code: 'ROSTER_INVALID' }))
+  })
+
+  it('never reaches an agent: `bmn team` carries no opinion', async () => {
+    mkdirSync(join(home, '.config/bmn/agents'), { recursive: true })
+    writeFileSync(join(home, '.config/bmn/agents/roster.md'), rewriteProse(EXAMPLE, 'sol', 'OPINION-SENTINEL written in the panel.'))
+    approveRoster({ generation: null, fileHash: readValidRoster().hash })
+    const output = await new Promise<string>((resolve) => {
+      execFile(process.execPath, [CLI, 'team'], { env: { HOME: home, PATH: '/usr/bin:/bin' } }, (_error, stdout) => resolve(stdout))
+    })
+    expect(output).toContain('Sol')
+    expect(output).not.toContain('OPINION-SENTINEL')
   })
 })

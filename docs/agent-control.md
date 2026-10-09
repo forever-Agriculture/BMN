@@ -716,6 +716,91 @@ notifications while you are away. A Claude session connected to Remote Control i
 Telegram: the Claude app already notifies your phone. The hook reads that from Claude Code's
 `~/.claude/sessions/<pid>.json` (or `$CLAUDE_CONFIG_DIR/sessions`), which needs `/proc`.
 
+## The team: roster, check and rules
+
+The team lives in two files you own, both under `~/.config/bmn/agents/`, outside every repository
+and BMN's own data, so updates and uninstall never touch them:
+
+- `roster.md` — one `## <agent-id>` section per agent, each a single fenced `yaml` block (the
+  machine fields: title, harness, model, provider, host, security, trust, authority, efforts,
+  roles, status) followed by free prose, your opinion of that agent; then `## roles` (each role's
+  ordered candidates as `agent@effort`, `agent@low|high` for an effort the lead chooses, and what
+  happens when every candidate fails), `## data-labels` (public or private per folder; nearest
+  labelled parent wins; default private) and `## harness-routes`.
+- `global-rules.md` — the rules master BMN renders into each agent's own rules file.
+
+**Approval.** A machine field takes effect only after you approve it in **Preferences → Agents**;
+prose takes effect at once and never reaches an agent. Approval writes a numbered generation under
+`state/` (folders `0700`, files `0600`) and only then moves the `current` pointer, so a crash leaves
+the previous generation in force. No command approves (exit 12): agents and dev-auto read the
+approved generation with BMN closed. A missing, invalid or unreadable state never yields a default
+team; every check refuses until the first approval.
+
+The Agents section shows one row per agent (sword for a knight, pennon for a squire; a closed seal
+for High security, an open one for Low; one to three pips of trust; authority as a word) with an
+on/off switch, then **Awaiting approval** and **Disabled**, role chains, folder labels and harness
+routes. Edits are staged: one grouped diff with its consequences in words ("Luna could lead",
+"Astra could no longer receive private work"), then **Save & approve** writes the file and approves
+exactly that diff. Escape or Discard drops staged edits; a file that changed meanwhile is reloaded
+and nothing is written. An edit made outside BMN shows as its own row, per agent or section, with
+**Approve** and **Revert file to approved**. Advanced keeps the approval history: open a generation
+to see how it differs, or restore it as a new generation.
+
+**Asking the roster.** `bmn team` prints the approved team; `bmn roster role <role>` the ordered
+chain with each candidate's eligibility. Neither prints prose, notes, cost, quota or tags.
+
+**The check.** Immediately before work leaves for another agent, `bmn roster check` takes the
+agent, role, workspace, data label and the exact dispatch command, and answers PASS with a
+version-1 receipt or the first refusal in a fixed order (exit 10). It parses `codex exec [resume
+<id>]` and `claude -p` (optionally under `env -i`), resolves the destination from named,
+non-secret settings only (Codex `config.toml` model and provider keys and `OPENAI_BASE_URL`;
+Claude's `ANTHROPIC_BASE_URL` from the environment and settings files, an unknown host when they
+disagree), never opens an auth file, and reads only the first line of a Codex session record to
+bind a resume. Private work goes only to High routes; a Low route may receive only a packet of
+tracked files from a public workspace, through a tools-disabled, safe-mode Claude Code call whose
+appended system prompt is exactly the restricted rendering. `bmn roster explain` gives the same
+evaluation in words; `--verify <receipt>` recomputes it and exits 11 on any difference.
+
+**Rules.** The master is ordinary Markdown. Untagged text reaches every harness;
+`<!-- bmn:harness codex opencode -->` … `<!-- /bmn:harness -->` limits a section to those
+harnesses; `<!-- bmn:shareable -->` … `<!-- /bmn:shareable -->` marks text a Low route may receive;
+one `<!-- bmn:team -->` line expands to the approved team (at most 1,200 bytes, then without roles,
+then a pointer to `bmn team`). A harness whose approved route is not High gets only the shareable
+sections. Each rendering starts with a line naming the master and its hash; Cursor's file also gets
+its `.mdc` frontmatter.
+
+**Preferences → Rules** edits the master (size, line count and the three markers above the editor;
+a master that would not render is not saved; every save keeps a source snapshot and refuses a
+change made meanwhile), previews each harness's exact rendering, and reads health the way the hooks
+check is read: each target is unreadable, missing, a link, not written by BMN, edited outside BMN,
+stale or current, with its restriction and last probe. **Install** shows every target's diff,
+including a link, a hand-written file or an outside edit it replaces, and runs one transaction;
+**Restore** puts a chosen transaction's targets back, links as links; **Revert master** writes an
+earlier snapshot back. Each confirms first against the exact plan it showed and refuses if the
+targets changed since. A target that is a link is replaced by a regular file; the file it pointed
+to is never written. **Probe** asks a harness which rules it loaded; it sends the rendered rules
+to that harness's provider, so it runs only for High routes, and answers passed, failed,
+inconclusive or unavailable.
+
+### What the roster and rules do not enforce
+
+- Approval is workflow protection against processes running as your user, not an operating-system
+  boundary: such a process can edit the state folder as easily as the roster. It makes a change
+  take effect only after you saw it in BMN; it does not stop a hostile program.
+- The check governs only dispatches that call it; a dispatch that skips it, from a lead or any
+  other tool, is not checked.
+- Between a PASS and the command starting there is a short window in which a configuration file,
+  the packet or the stdin file could change. Run the check immediately before the dispatch, feed
+  exactly the checked stdin file, never reuse a receipt, and use `--verify` after the fact when
+  in doubt.
+- Restricted renderings govern only the global rules files BMN writes. Project files, skills or
+  other context a harness reads inside a workspace are outside them, and a prompt the lead writes is
+  the lead's responsibility.
+- A probe proves loading only in the context it ran (that harness version, that folder, that
+  route). Sessions started before an install keep the rules they started with.
+- A harness version you accept in the Agents section is your risk decision, not a version BMN
+  tested.
+
 ## A brief for agents
 
 `bmn help agents` prints this page from the binary, so an agent can read it without leaving its
