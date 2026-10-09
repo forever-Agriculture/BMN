@@ -543,3 +543,68 @@
   top: 3px;
   right: 3px;
 }
+
+/* Morning digest and Quiet hours: each feature is a hairline-separated group of ordinary rows. A schedule keeps its
+   checkbox, words and time fields on one baseline; each "words [time]" pair wraps as a unit. */
+.preferences-dialog .telegram-group {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
+}
+
+.preferences-dialog .telegram-schedule {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  min-height: 32px;
+}
+
+.preferences-dialog .telegram-schedule > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.preferences-dialog .telegram-schedule > span:has(input:disabled) {
+  color: var(--muted);
+}
+
+.preferences-dialog .telegram-schedule input[type='time']:disabled,
+.preferences-dialog .telegram-kinds:has(input:disabled) {
+  opacity: 0.5;
+}
+
+.preferences-dialog .telegram-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  inline-size: 100%;
+  padding-top: 7px;
+}
+
+.preferences-dialog .telegram-quiet-state {
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.preferences-dialog .telegram-quiet-state[data-active='true'] {
+  color: var(--text);
+}
+
+.preferences-dialog .preferences-row-control > :is(.advanced, .preferences-error) {
+  flex: 1 1 100%;
+}
+
+/* Inside a group the hairline above the group already separates it; the disclosure needs no second rule. */
+.preferences-dialog .telegram-group .advanced {
+  padding-top: 0;
+  border-top: 0;
+}

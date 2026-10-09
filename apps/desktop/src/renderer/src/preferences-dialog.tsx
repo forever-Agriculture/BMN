@@ -48,6 +48,15 @@ const USAGE_LINES = [
 
 const TEST_MESSAGE_DISABLED_TITLE = 'Send a test message once Telegram is connected and polling'
 
+/** Request kinds quiet hours can let through, in display order; the stored values stay lowercase. */
+const QUIET_ALLOW_KINDS: ReadonlyArray<{ kind: AttentionKind; label: string }> = [
+  { kind: 'permission', label: 'Permission' },
+  { kind: 'question', label: 'Question' },
+  { kind: 'handoff', label: 'Handoff' },
+  { kind: 'review', label: 'Review' },
+  { kind: 'notice', label: 'Notice' }
+]
+
 const HOOK_CHECK_NAMES: Readonly<Record<HookCheckAgent, string>> = {
   claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor'
 }
@@ -691,40 +700,145 @@ export function PreferencesDialog(props: {
           </div>
         </div>
 
-        <fieldset disabled={telegramFormBusy}>
-          <legend>Morning digest</legend>
+        {/* Morning digest and Quiet hours keep the dialog's label/control rows; dependent controls stay rendered and keep
+            their values while their feature is off, and only Save Telegram settings persists them. */}
+        <div className="telegram-group">
           <div className="preferences-row">
-            <label><input type="checkbox" checked={morningDigest.enabled}
-              onChange={event => setMorningDigest({ ...morningDigest, enabled: event.target.checked })} /> Send a morning digest</label>
-            <label>Local time <input type="time" value={morningDigest.time}
-              onChange={event => setMorningDigest({ ...morningDigest, time: event.target.value })} /></label>
+            <div className="preferences-row-label">
+              <label htmlFor="preferences-telegram-digest">Morning digest</label>
+            </div>
+            <div className="preferences-row-control">
+              <div className="telegram-schedule">
+                <input
+                  id="preferences-telegram-digest"
+                  type="checkbox"
+                  checked={morningDigest.enabled}
+                  disabled={telegramFormBusy}
+                  onChange={(event) => setMorningDigest({ ...morningDigest, enabled: event.target.checked })}
+                />
+                <span>
+                  <label htmlFor="preferences-telegram-digest-time">Send daily at</label>
+                  <input
+                    id="preferences-telegram-digest-time"
+                    type="time"
+                    value={morningDigest.time}
+                    disabled={telegramFormBusy || !morningDigest.enabled}
+                    onChange={(event) => setMorningDigest({ ...morningDigest, time: event.target.value })}
+                  />
+                </span>
+              </div>
+              <p className="preferences-help">Local time. Waits while quiet hours are on; a missed day is skipped.</p>
+              {!telegramEnabled && (
+                <p className="preferences-help">Telegram is off; no digest will be sent. Enable and connect Telegram to deliver it.</p>
+              )}
+              <details className="advanced">
+                <summary>What the digest includes</summary>
+                <div className="advanced-body">
+                  <p>Each workspace with its checkout name, epics, Status, Decided-for-you entries and owner-item titles.</p>
+                </div>
+              </details>
+            </div>
           </div>
-          <p className="preferences-help">Sends workspace, checkout name, epics, Status, Decided-for-you entries and owner-item titles. Obeys quiet hours; missed days are skipped.</p>
-          {!telegramEnabled && <p className="preferences-help">Telegram is off; no digest will be sent. Enable and connect Telegram to deliver it.</p>}
-        </fieldset>
-        <fieldset disabled={telegramFormBusy}>
-          <legend>Quiet hours</legend>
-          <label><input type="checkbox" checked={quietHours.enabled}
-            onChange={event => setQuietHours({ ...quietHours, enabled: event.target.checked })} /> Hold new phone messages</label>
+        </div>
+
+        <div className="telegram-group">
           <div className="preferences-row">
-            <label>Local start <input aria-label="Quiet hours start" type="time" value={quietHours.start}
-              onChange={event => setQuietHours({ ...quietHours, start: event.target.value })} /></label>
-            <label>Local end <input aria-label="Quiet hours end" type="time" value={quietHours.end}
-              onChange={event => setQuietHours({ ...quietHours, end: event.target.value })} /></label>
+            <div className="preferences-row-label">
+              <label htmlFor="preferences-telegram-quiet">Quiet hours</label>
+            </div>
+            <div className="preferences-row-control">
+              <div className="telegram-schedule">
+                <input
+                  id="preferences-telegram-quiet"
+                  type="checkbox"
+                  checked={quietHours.enabled}
+                  disabled={telegramFormBusy}
+                  onChange={(event) => setQuietHours({ ...quietHours, enabled: event.target.checked })}
+                />
+                <span>
+                  <label htmlFor="preferences-telegram-quiet-start">Hold phone messages from</label>
+                  <input
+                    id="preferences-telegram-quiet-start"
+                    aria-label="Quiet hours start"
+                    type="time"
+                    value={quietHours.start}
+                    disabled={telegramFormBusy || !quietHours.enabled}
+                    onChange={(event) => setQuietHours({ ...quietHours, start: event.target.value })}
+                  />
+                </span>
+                <span>
+                  <label htmlFor="preferences-telegram-quiet-end">to</label>
+                  <input
+                    id="preferences-telegram-quiet-end"
+                    aria-label="Quiet hours end"
+                    type="time"
+                    value={quietHours.end}
+                    disabled={telegramFormBusy || !quietHours.enabled}
+                    onChange={(event) => setQuietHours({ ...quietHours, end: event.target.value })}
+                  />
+                </span>
+              </div>
+              <p className="preferences-help">Local time. Held messages are sent when quiet hours end.</p>
+            </div>
           </div>
-          <p className="preferences-help">When quiet hours end, a summary sends session names, request kinds and titles to Telegram. Session dots stay current throughout.</p>
-          <p>Allow these kinds through:</p>
-          {(['permission', 'question', 'handoff', 'review', 'notice'] as AttentionKind[]).map(kind => (
-            <label key={kind}><input type="checkbox" checked={quietHours.allowKinds.includes(kind)}
-              onChange={event => setQuietHours({ ...quietHours, allowKinds: event.target.checked
-                ? [...quietHours.allowKinds, kind] : quietHours.allowKinds.filter(value => value !== kind) })} /> {kind}</label>
-          ))}
-          <p className="preferences-help">Allow individual sessions through from their session menu (up to 20).</p>
-          {telegramStatus?.quietHours ? <p role="status">{telegramStatus.quietHours.active
-            ? `Active until ${telegramStatus.quietHours.until}` : 'Not active'} · {telegramStatus.quietHours.waiting} waiting
-            {telegramStatus.quietHours.capacityBlocked ? ' · Delivery history is full; uncertain messages need checking.' : ''}</p> : null}
-          {telegramStatus?.quietHours?.problem ? <p role="alert">Phone delivery history is unavailable. Automatic delivery is paused until it can be read.</p> : null}
-        </fieldset>
+
+          <div className="preferences-row">
+            <div className="preferences-row-label">
+              <span id="preferences-telegram-quiet-allow">Let through</span>
+            </div>
+            <div className="preferences-row-control">
+              <div className="telegram-kinds" role="group" aria-labelledby="preferences-telegram-quiet-allow">
+                {QUIET_ALLOW_KINDS.map(({ kind, label }) => (
+                  <label key={kind} className="preferences-radio">
+                    <input
+                      type="checkbox"
+                      checked={quietHours.allowKinds.includes(kind)}
+                      disabled={telegramFormBusy || !quietHours.enabled}
+                      onChange={(event) => setQuietHours({ ...quietHours, allowKinds: event.target.checked
+                        ? [...quietHours.allowKinds, kind] : quietHours.allowKinds.filter(value => value !== kind) })}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+              <p className="preferences-help">Single sessions can also be let through from their session menu (up to 20).</p>
+            </div>
+          </div>
+
+          {telegramStatus?.quietHours ? (
+            <div className="preferences-row">
+              <div className="preferences-row-label">
+                <span>Now</span>
+              </div>
+              <div className="preferences-row-control">
+                <p className="telegram-quiet-state" role="status" data-active={telegramStatus.quietHours.active}>
+                  {telegramStatus.quietHours.active ? `Active until ${telegramStatus.quietHours.until}` : 'Not active'}
+                  {' · '}{telegramStatus.quietHours.waiting} waiting
+                  {telegramStatus.quietHours.capacityBlocked ? ' · Delivery history is full; uncertain messages need checking.' : ''}
+                </p>
+                {telegramStatus.quietHours.problem ? (
+                  <p className="preferences-error" role="alert">
+                    Phone delivery history is unavailable. Automatic delivery is paused until it can be read.
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
+          <div className="preferences-row">
+            <div className="preferences-row-label" />
+            <div className="preferences-row-control">
+              <details className="advanced">
+                <summary>How quiet hours work</summary>
+                <div className="advanced-body">
+                  <p>When quiet hours end, Telegram gets one summary with session names, request kinds and titles, then each request that is still waiting.</p>
+                  <p>Session dots stay current throughout.</p>
+                  <p>The kinds and sessions you let through still arrive immediately.</p>
+                </div>
+              </details>
+            </div>
+          </div>
+        </div>
 
         <div className="preferences-row">
           <div className="preferences-row-label">
