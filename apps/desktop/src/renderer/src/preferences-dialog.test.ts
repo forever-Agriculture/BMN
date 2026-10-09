@@ -50,7 +50,10 @@ describe('Morning digest and Quiet hours rows', () => {
     const markup = dialog(true, true)
     expect(markup).not.toMatch(/<fieldset|<legend/)
     expect(markup).toContain('<label for="preferences-telegram-digest">Morning digest</label>')
-    expect(markup).toContain('<label for="preferences-telegram-digest-time">Send daily at</label>')
+    // The words beside each feature's checkbox label that checkbox, so clicking them turns the feature on.
+    expect(markup).toContain('<label for="preferences-telegram-digest">Send daily at</label>')
+    expect(markup).toContain('<label for="preferences-telegram-quiet">Hold phone messages from</label>')
+    expect(input(markup, 'preferences-telegram-digest-time')).toContain('aria-label="Morning digest time"')
     expect(markup).toContain('<label for="preferences-telegram-quiet">Quiet hours</label>')
     expect(markup).toContain('role="group" aria-labelledby="preferences-telegram-quiet-allow"')
     for (const kind of ['Permission', 'Question', 'Handoff', 'Review', 'Notice']) expect(markup).toContain(`/>${kind}</label>`)

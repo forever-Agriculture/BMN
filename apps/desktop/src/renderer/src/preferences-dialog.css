@@ -568,10 +568,6 @@
   white-space: nowrap;
 }
 
-.preferences-dialog .telegram-schedule > span:has(input:disabled) {
-  color: var(--muted);
-}
-
 .preferences-dialog .telegram-schedule input[type='time']:disabled,
 .preferences-dialog .telegram-kinds:has(input:disabled) {
   opacity: 0.5;
@@ -599,8 +595,20 @@
   color: var(--text);
 }
 
-.preferences-dialog .preferences-row-control > :is(.advanced, .preferences-error) {
+.preferences-dialog .telegram-group .preferences-row-control > :is(.advanced, .preferences-error, .telegram-quiet-now) {
   flex: 1 1 100%;
+}
+
+/* The words beside a feature's checkbox also label it, so they take the checkbox's pointer. */
+.preferences-dialog .telegram-schedule label {
+  cursor: pointer;
+}
+
+.preferences-dialog .telegram-quiet-now {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
 }
 
 /* Inside a group the hairline above the group already separates it; the disclosure needs no second rule. */

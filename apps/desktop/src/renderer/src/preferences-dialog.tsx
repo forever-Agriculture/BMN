@@ -717,9 +717,10 @@ export function PreferencesDialog(props: {
                   onChange={(event) => setMorningDigest({ ...morningDigest, enabled: event.target.checked })}
                 />
                 <span>
-                  <label htmlFor="preferences-telegram-digest-time">Send daily at</label>
+                  <label htmlFor="preferences-telegram-digest">Send daily at</label>
                   <input
                     id="preferences-telegram-digest-time"
+                    aria-label="Morning digest time"
                     type="time"
                     value={morningDigest.time}
                     disabled={telegramFormBusy || !morningDigest.enabled}
@@ -756,7 +757,7 @@ export function PreferencesDialog(props: {
                   onChange={(event) => setQuietHours({ ...quietHours, enabled: event.target.checked })}
                 />
                 <span>
-                  <label htmlFor="preferences-telegram-quiet-start">Hold phone messages from</label>
+                  <label htmlFor="preferences-telegram-quiet">Hold phone messages from</label>
                   <input
                     id="preferences-telegram-quiet-start"
                     aria-label="Quiet hours start"
@@ -767,7 +768,7 @@ export function PreferencesDialog(props: {
                   />
                 </span>
                 <span>
-                  <label htmlFor="preferences-telegram-quiet-end">to</label>
+                  <span>to</span>
                   <input
                     id="preferences-telegram-quiet-end"
                     aria-label="Quiet hours end"
@@ -811,11 +812,15 @@ export function PreferencesDialog(props: {
                 <span>Now</span>
               </div>
               <div className="preferences-row-control">
-                <p className="telegram-quiet-state" role="status" data-active={telegramStatus.quietHours.active}>
-                  {telegramStatus.quietHours.active ? `Active until ${telegramStatus.quietHours.until}` : 'Not active'}
-                  {' · '}{telegramStatus.quietHours.waiting} waiting
-                  {telegramStatus.quietHours.capacityBlocked ? ' · Delivery history is full; uncertain messages need checking.' : ''}
-                </p>
+                <div className="telegram-quiet-now" role="status">
+                  <p className="telegram-quiet-state" data-active={telegramStatus.quietHours.active}>
+                    {telegramStatus.quietHours.active ? `Active until ${telegramStatus.quietHours.until}` : 'Not active'}
+                    {' · '}{telegramStatus.quietHours.waiting} waiting
+                  </p>
+                  {telegramStatus.quietHours.capacityBlocked ? (
+                    <p className="preferences-error">Delivery history is full; uncertain messages need checking.</p>
+                  ) : null}
+                </div>
                 {telegramStatus.quietHours.problem ? (
                   <p className="preferences-error" role="alert">
                     Phone delivery history is unavailable. Automatic delivery is paused until it can be read.
