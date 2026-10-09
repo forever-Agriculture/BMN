@@ -30,6 +30,8 @@ extraResources:
   # bmn.mjs imports it by relative path; the utility process bundles its own copy.
   - from: bin/safe-config-write.mjs
     to: bin/safe-config-write.mjs
+  - from: bin/text-diff.mjs
+    to: bin/text-diff.mjs
   # Epic 60: the roster, approval-state reader, dispatch check and rules master that bmn.mjs imports.
   - from: bin/agents-roster.mjs
     to: bin/agents-roster.mjs

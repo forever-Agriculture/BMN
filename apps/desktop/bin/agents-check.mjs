@@ -6,6 +6,7 @@ import { basename, isAbsolute, relative, sep } from 'node:path'
 import { RosterError, agentState, canonicalJson, rosterPath, sha256 } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
 import { AgentsUsageError, EXIT, failWith, out, readOptions, usage } from './agents-cli.mjs'
+import { restrictedRendering } from './agents-rules.mjs'
 
 /**
  * The check answers one question immediately before a dispatch: may this exact command, run from
@@ -804,7 +805,7 @@ export function evaluate(inputs, { environment = process.env, cwd: processCwd = 
       }
       if (!inside(cwd, packet)) refuse('PACKET_INVALID', 'packet mode runs from inside the packet')
       if (stdin === null || !inside(stdin.path, packet)) refuse('PACKET_INVALID', '--stdin must name the prompt file inside the packet')
-      if (parsed.appendSystemPrompt !== undefined && parsed.appendSystemPrompt !== restrictedRules) {
+      if (parsed.appendSystemPrompt !== undefined && parsed.appendSystemPrompt !== (typeof restrictedRules === 'function' ? restrictedRules() : restrictedRules)) {
         refuse('PACKET_INVALID', '--append-system-prompt must be the restricted rules rendering or absent')
       }
       if (label.label !== 'public') refuse('PACKET_INVALID', 'the workspace whose files the packet carries must be labelled public')
@@ -901,9 +902,9 @@ export function inspectRoute(agent, argv, environment, processCwd) {
 
 const CHECK_VALUES = ['agent', 'role', 'workspace', 'data', 'cwd', 'stdin', 'packet', 'resume-of', 'verify']
 
-async function restrictedClaudeRules() {
+/** Read only when a packet dispatch carries --append-system-prompt, so other checks never open the master. */
+function restrictedClaudeRules() {
   try {
-    const { restrictedRendering } = await import('./agents-rules.mjs')
     return restrictedRendering('claude')
   } catch {
     return null
@@ -927,7 +928,7 @@ export async function runCheckCommand(action, argv) {
       if (action !== 'check') throw new AgentsUsageError('--verify is only for roster check')
       const others = Object.keys(options).filter((name) => !['verify', 'json'].includes(name))
       if (others.length > 0 || parsed.rest === null) throw new AgentsUsageError('roster check --verify <receipt> -- <dispatch argv> takes no other options')
-      const result = verifyReceipt(options.verify, parsed.rest, { restrictedRules: await restrictedClaudeRules() })
+      const result = verifyReceipt(options.verify, parsed.rest, { restrictedRules: restrictedClaudeRules })
       if (asJson) out(JSON.stringify({ ok: result.ok, ...(result.ok ? {} : { code: 'RECEIPT_INVALID', reason: result.reason }) }, null, 2))
       else out(result.ok ? 'Receipt verified: the same check passes with the same inputs.' : `bmn: RECEIPT_INVALID: ${result.reason}`)
       return result.ok ? 0 : EXIT.RECEIPT_INVALID
@@ -941,7 +942,7 @@ export async function runCheckCommand(action, argv) {
       agent: options.agent, role: options.role, workspace: options.workspace, data: options.data, argv: parsed.rest,
       ...(options.cwd !== undefined ? { cwd: options.cwd } : {}), ...(options.stdin !== undefined ? { stdin: options.stdin } : {}),
       ...(options.packet !== undefined ? { packet: options.packet } : {}), ...(options['resume-of'] !== undefined ? { resumeOf: options['resume-of'] } : {})
-    }, { restrictedRules: await restrictedClaudeRules() })
+    }, { restrictedRules: restrictedClaudeRules })
     if (action === 'explain') {
       const lines = result.steps.map((step) => `  ${step}`)
       lines.push(result.verdict === 'PASS' ? 'PASS: this dispatch may proceed.' : `REFUSED ${result.code}: ${result.message}\nNext: ${result.next}`)

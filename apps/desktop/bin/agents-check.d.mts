@@ -38,7 +38,7 @@ export interface CheckReceipt {
 export type CheckResult =
   | { verdict: 'PASS'; receipt: CheckReceipt; steps: string[]; code?: undefined; message?: undefined; next?: undefined }
   | { verdict: 'REFUSED'; code: string; message: string; next: string; steps: string[]; receipt?: undefined }
-export interface CheckOptions { environment?: NodeJS.ProcessEnv | Record<string, string>; cwd?: string; restrictedRules?: string | null; now?: Date }
+export interface CheckOptions { environment?: NodeJS.ProcessEnv | Record<string, string>; cwd?: string; restrictedRules?: string | null | (() => string | null); now?: Date }
 export declare const REFUSALS: string[]
 export declare const TESTED_HARNESS_VERSIONS: Record<string, string[]>
 export declare function setReadTracer(tracer: ((path: string) => void) | null): void
