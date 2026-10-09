@@ -451,8 +451,9 @@ function settingsEnv(text, name) {
 /**
  * Where a `claude -p` goes. ANTHROPIC_BASE_URL may come from the dispatch environment or any
  * settings file Claude Code loads (managed, user, the cwd's project and local files, --settings).
- * BMN cannot prove which wins in every version, nor that --safe-mode skips a file's `env`, so it
- * reads them all: one value everywhere is that host, disagreeing values are unknown.
+ * --safe-mode does not skip a file's `env`: Claude Code 2.1.295 under --safe-mode still sent requests to
+ * a user settings ANTHROPIC_BASE_URL (loopback probe, 2026-10-09). BMN cannot prove which source wins
+ * in every version, so it reads them all: one value everywhere is that host, disagreeing values are unknown.
  */
 export function resolveClaudeRoute(parsed, environment, cwd) {
   const env = dispatchEnvironment(parsed, environment)

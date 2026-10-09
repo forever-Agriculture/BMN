@@ -755,7 +755,8 @@ version-1 receipt or the first refusal in a fixed order (exit 10). It parses `co
 <id>]` and `claude -p` (optionally under `env -i`), resolves the destination from named,
 non-secret settings only (Codex `config.toml` model and provider keys and `OPENAI_BASE_URL`;
 Claude's `ANTHROPIC_BASE_URL` from the environment and settings files, an unknown host when they
-disagree), never opens an auth file, and reads only the first line of a Codex session record to
+disagree; settings are read under `--safe-mode` too, because Claude Code 2.1.295 still applies
+their `env` there), never opens an auth file, and reads only the first line of a Codex session record to
 bind a resume. Private work goes only to High routes; a Low route may receive only a packet of
 tracked files from a public workspace, through a tools-disabled, safe-mode Claude Code call whose
 appended system prompt is exactly the restricted rendering. `bmn roster explain` gives the same
@@ -799,7 +800,8 @@ inconclusive or unavailable.
 - A probe proves loading only in the context it ran (that harness version, that folder, that
   route). Sessions started before an install keep the rules they started with.
 - A harness version you accept in the Agents section is your risk decision, not a version BMN
-  tested.
+  tested. The panel offers it only when that version resolves the same route from the same sources
+  as the last tested or accepted version it inspected.
 
 ## A brief for agents
 

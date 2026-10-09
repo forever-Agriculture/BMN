@@ -118,6 +118,10 @@ export interface RouteInspectionView {
   sources: string[]
   version: string | null
   versionTested: boolean
+  /** True only for an untested version that resolves the same route and sources a tested or accepted one did. */
+  acceptable: boolean
+  /** That comparison, or why nothing is offered, in words. */
+  comparison: string
   reason?: string
 }
 

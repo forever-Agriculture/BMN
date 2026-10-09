@@ -26,6 +26,7 @@ import { lastProbes, listTransactions, masterHistory, masterPath, parseMaster, r
 import { pathState, replaceFileSafely } from '../../bin/safe-config-write.mjs'
 import { unifiedDiff } from '../../bin/text-diff.mjs'
 import { approveRoster, approveSections, restoreGeneration, revertFileToApproved, saveAndApprove } from './agents-approval'
+import { judgeInspection } from './route-baselines'
 import { MainIpcError } from './workspace-ipc'
 
 interface AgentsIpcRegistrar {
@@ -358,10 +359,18 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const harness = harnessParam(params.harness)
     const environment = options.environment?.() ?? process.env
     const result = inspectRoute({ harness } as never, null, rulesEnvironment(environment), environment.HOME ?? '/') as Record<string, unknown>
-    const view: RouteInspectionView = {
+    const resolution = {
       harness, basis: String(result.basis ?? 'unknown'), provider: (result.provider as string | null) ?? null, host: (result.host as string | null) ?? null,
-      sources: Array.isArray(result.sources) ? result.sources as string[] : [], version: (result.version as string | null) ?? null,
-      versionTested: result.version_tested === true, ...(typeof result.reason === 'string' ? { reason: result.reason } : {})
+      sources: Array.isArray(result.sources) ? result.sources as string[] : [], version: (result.version as string | null) ?? null
+    }
+    const accepted = approvedOrProblem().generation?.data.harness_routes.find((route) => route.harness === harness)?.accepted_versions ?? []
+    const versionTested = result.version_tested === true
+    const verdict = harness === 'claude' || harness === 'codex'
+      ? judgeInspection(resolution, accepted, versionTested || (resolution.version !== null && accepted.includes(resolution.version)), (options.now ?? (() => new Date()))())
+      : { acceptable: false, comparison: 'Inspection only: BMN does not check this harness\'s dispatches.' }
+    const view: RouteInspectionView = {
+      ...resolution, versionTested, acceptable: verdict.acceptable, comparison: verdict.comparison,
+      ...(typeof result.reason === 'string' ? { reason: result.reason } : {})
     }
     return view
   })

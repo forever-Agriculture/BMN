@@ -385,16 +385,21 @@ function RouteRows(props: {
                 : null}
               <button type="button" className="small" onClick={() => props.onInspect(route.harness)}>Inspect</button>
               {typeof inspection === 'string' ? <p className="preferences-error">{inspection}</p> : inspection ? (
-                <p className="preferences-help route-inspected">
-                  {inspection.provider ?? 'unknown provider'} · {inspection.host ?? 'unknown host'} · version {inspection.version ?? 'unknown'}
-                  {inspection.versionTested ? ' · tested by BMN' : accepted.includes(inspection.version ?? '') ? ' · accepted' : ' · untested'}
-                  {inspection.reason ? ` · ${inspection.reason}` : ''}
-                  {inspection.version && !inspection.versionTested && !accepted.includes(inspection.version) ? (
+                <div className="preferences-help route-inspected" role="status">
+                  <p>
+                    {inspection.provider ?? 'unknown provider'} · {inspection.host ?? 'unknown host'} · version {inspection.version ?? 'unknown'}
+                    {inspection.versionTested ? ' · tested by BMN' : accepted.includes(inspection.version ?? '') ? ' · owner-accepted' : ''}
+                    {inspection.reason ? ` · ${inspection.reason}` : ''}
+                  </p>
+                  {inspection.version && !inspection.versionTested && !accepted.includes(inspection.version)
+                    ? <p>BMN has not tested how this version picks its destination.</p> : null}
+                  <p>{inspection.comparison}</p>
+                  {inspection.acceptable && inspection.version && !accepted.includes(inspection.version) ? (
                     <button type="button" className="small" onClick={() => props.onData(acceptVersion(props.data, route.harness, inspection.version as string))}>
                       Accept {inspection.version}
                     </button>
                   ) : null}
-                </p>
+                </div>
               ) : null}
             </div>
           </div>

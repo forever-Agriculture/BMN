@@ -5,7 +5,7 @@
 // owner's own rules. Screenshots land in .dev-auto/evidence/epic-60/shots/ (ignored).
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -203,6 +203,27 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await saveAndApprove()
     assert.deepEqual(generation(current().generation).data.data_labels.paths, [{ path: work, label: 'public' }])
     passed('labelling a folder public shows its child workspace inheriting it')
+
+    phase('accept an untested harness version only when it resolves the tested route')
+    const codexRoute = agents.locator('.route-row', { has: page.locator('#route-codex') })
+    await codexRoute.getByRole('button', { name: 'Inspect' }).click()
+    await codexRoute.getByText(/^0\.161\.0 is tested by BMN; recorded its route/).waitFor()
+    stub('codex', 'echo "codex-cli 0.170.0"')
+    await codexRoute.getByRole('button', { name: 'Inspect' }).click()
+    await codexRoute.getByText('BMN has not tested how this version picks its destination.').waitFor()
+    await codexRoute.getByText(/^Same route and sources as 0\.161\.0/).waitFor()
+    await codexRoute.getByRole('button', { name: 'Accept 0.170.0' }).click()
+    await band.getByText('Codex 0.170.0 could carry private work (owner-accepted, untested by BMN).').waitFor()
+    await saveAndApprove()
+    assert.deepEqual(generation(current().generation).data.harness_routes.find((route) => route.harness === 'codex').accepted_versions, ['0.170.0'])
+    stub('codex', 'echo "codex-cli 0.171.0"')
+    writeFileSync(join(home, '.codex/config.toml'), 'model_provider = "proxy"\n[model_providers.proxy]\nbase_url = "https://proxy.example.com/v1"\n')
+    await codexRoute.getByRole('button', { name: 'Inspect' }).click()
+    await codexRoute.getByText(/not offered\.$/).waitFor()
+    assert.equal(await codexRoute.getByRole('button', { name: 'Accept 0.171.0' }).count(), 0)
+    rmSync(join(home, '.codex/config.toml'))
+    stub('codex', 'echo "codex-cli 0.161.0"')
+    passed('an untested version is offered only with the tested route; a changed route withholds it')
 
     phase('an outside role-chain edit: approve it, then revert another')
     const approveOutside = async (edit, action) => {

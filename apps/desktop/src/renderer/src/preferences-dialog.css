@@ -920,12 +920,6 @@
   font-size: 12px;
 }
 
-.preferences-dialog .route-inspected {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
 /* Confirm band and outside-difference rows share one diff anatomy. */
 .preferences-dialog .roster-confirm,
 .preferences-dialog .rules-confirm {
@@ -1280,8 +1274,15 @@
 }
 
 .preferences-dialog .route-inspected {
+  display: flex;
   flex: 1 1 100%;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.preferences-dialog .route-inspected p {
+  margin: 0;
 }
 
 .preferences-dialog .rules-actions {
