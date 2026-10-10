@@ -16,8 +16,8 @@ export const HARNESSES = ['claude', 'codex', 'opencode', 'cursor']
 /** How BMN names each agent app to the owner, in the order they are always listed. */
 export const APP_NAMES = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor' }
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
-/** The four chess classes: a knight leads an epic/project, a queen designs and thinks creatively, a bishop reviews and advises, a pawn does jobs a lead hands off. */
-export const CLASSES = ['knight', 'queen', 'bishop', 'pawn']
+/** The five chess classes: a knight leads an epic/project, a queen may hold any role, a rook designs, a bishop reviews and advises, a pawn does jobs a lead hands off. */
+export const CLASSES = ['knight', 'queen', 'rook', 'bishop', 'pawn']
 export const STATUSES = ['active', 'proposed']
 export const THEN = ['lead', 'skip', 'blocked', 'owner-chooses']
 export const PRIVATE_WORK = ['allowed', 'public_only']
@@ -27,20 +27,20 @@ export const BASES = ['observed-default', 'owner-declared']
 export const RESERVED_SECTIONS = ['roster', 'roles', 'providers', 'exceptions', 'harness-routes', 'skills', 'tools']
 const UNREAD_SECTIONS = ['skills', 'tools']
 export const MAX_EXCEPTIONS = 64
-/** The one role only a knight may hold. */
+/** The role only a knight or a queen may hold. */
 export const LEAD_ROLE = 'lead'
-/** The one role only a queen may hold: the design pass. */
+/** The role only a rook or a queen may hold: the design pass. */
 export const DESIGNER_ROLE = 'designer'
-/** Roles one class alone may hold, with the refusal another class gets. Every other role is open to every class. */
+/** Roles only some classes may hold, with the refusal another class gets. Every other role is open to every class, and every role to a queen. */
 export const CLASS_ROLES = {
-  [LEAD_ROLE]: { class: 'knight', code: 'CLASS_CANNOT_LEAD', rule: 'only a knight leads' },
-  [DESIGNER_ROLE]: { class: 'queen', code: 'CLASS_CANNOT_DESIGN', rule: 'only a queen designs' }
+  [LEAD_ROLE]: { classes: ['knight', 'queen'], code: 'CLASS_CANNOT_LEAD', rule: 'only a knight or a queen leads' },
+  [DESIGNER_ROLE]: { classes: ['rook', 'queen'], code: 'CLASS_CANNOT_DESIGN', rule: 'only a rook or a queen designs' }
 }
 
 /** Why an agent of this class may not hold a role, or null when it may. */
 export function classRefusal(agentClass, role) {
   const rule = Object.hasOwn(CLASS_ROLES, role) ? CLASS_ROLES[role] : undefined
-  return rule === undefined || rule.class === agentClass ? null : rule
+  return rule === undefined || rule.classes.includes(agentClass) ? null : rule
 }
 export const ID_PATTERN = /^[a-z0-9-]{1,32}$/
 const CANDIDATE_PATTERN = /^([a-z0-9-]{1,32})@([a-z]+(?:\|[a-z]+)*)$/
@@ -58,7 +58,7 @@ const PROVIDER_FIELDS = ['name', 'hosts', 'sites', 'private_work']
 const ROLE_FIELDS = ['description', 'candidates', 'then', 'recheck', 'small_work']
 const ROUTE_FIELDS = ['provider', 'basis', 'accepted_versions']
 /** What schema 1 called things, for the refusal that tells its owner what changed. */
-const SCHEMA_1_CHANGES = 'schema 1 is the earlier layout: title became class (knight | queen | bishop | pawn); trust, authority, security, cost, quota, tags and ## data-labels are gone; small_epic became small_work and max_context_tokens became context_limit; privacy is now ## providers with private_work: allowed | public_only'
+const SCHEMA_1_CHANGES = 'schema 1 is the earlier layout: title became class (knight | queen | rook | bishop | pawn); trust, authority, security, cost, quota, tags and ## data-labels are gone; small_epic became small_work and max_context_tokens became context_limit; privacy is now ## providers with private_work: allowed | public_only'
 
 export function agentsDirectory() {
   return `${homedir()}/.config/bmn/agents`

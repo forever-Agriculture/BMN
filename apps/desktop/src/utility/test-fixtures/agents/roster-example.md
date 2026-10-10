@@ -79,7 +79,7 @@ roles: [focused-reviewer, epic-reviewer, final-reviewer, consultant]
 
 ```yaml
 name: Fable
-class: queen
+class: rook
 harness: claude
 model: claude-fable-5-1
 provider: anthropic

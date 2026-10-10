@@ -169,14 +169,22 @@ describe('dispatch forms dev-auto documents (60.3 AC1-AC2)', () => {
     const hash = sha256(canonicalJson(rest))
     writeFileSync(file, JSON.stringify({ ...rest, hash }))
     writeFileSync(pointerPath, JSON.stringify({ ...pointer, hash }))
-    expect(check({ agent: 'astra', role: 'lead', argv: ASTRA_REVIEW(workspace) })).toMatchObject({ code: 'CLASS_CANNOT_LEAD', message: 'astra is a bishop; only a knight leads' })
+    expect(check({ agent: 'astra', role: 'lead', argv: ASTRA_REVIEW(workspace) })).toMatchObject({ code: 'CLASS_CANNOT_LEAD', message: 'astra is a bishop; only a knight or a queen leads' })
     expect(check({ agent: 'fable', role: 'lead', argv: FABLE_PACKET('rules') }).code).toBe('CLASS_CANNOT_LEAD')
-    expect(check({ agent: 'astra', role: 'designer', argv: ASTRA_REVIEW(workspace) })).toMatchObject({ code: 'CLASS_CANNOT_DESIGN', message: 'astra is a bishop; only a queen designs' })
+    expect(check({ agent: 'astra', role: 'designer', argv: ASTRA_REVIEW(workspace) })).toMatchObject({ code: 'CLASS_CANNOT_DESIGN', message: 'astra is a bishop; only a rook or a queen designs' })
   })
 
-  it('a queen designs, and reviews and advises like a bishop', () => {
-    expect(check({ agent: 'fable', role: 'designer', argv: FABLE_PACKET('rules') }).receipt).toMatchObject({ class: 'queen', role: 'designer' })
+  it('a rook designs, and reviews and advises like a bishop', () => {
+    expect(check({ agent: 'fable', role: 'designer', argv: FABLE_PACKET('rules') }).receipt).toMatchObject({ class: 'rook', role: 'designer' })
     expect(check({ agent: 'fable', role: 'consultant', argv: FABLE_PACKET('rules') }).verdict).toBe('PASS')
+  })
+
+  it('a queen does what she wants: she leads, designs and reviews', () => {
+    approve(roster((text) => edit(edit(text, 'name: Fable\nclass: rook', 'name: Fable\nclass: queen'),
+      'roles: [designer, epic-reviewer, final-reviewer, consultant]', 'roles: [lead, designer, epic-reviewer, final-reviewer, consultant]')))
+    for (const role of ['lead', 'designer', 'epic-reviewer']) {
+      expect(check({ agent: 'fable', role, argv: FABLE_PACKET('rules') }).receipt).toMatchObject({ verdict: 'PASS', class: 'queen', role })
+    }
   })
 
   it('reports the first refusal when several apply', () => {

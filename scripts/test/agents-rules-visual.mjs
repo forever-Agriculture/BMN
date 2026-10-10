@@ -221,7 +221,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     assert.match(await sol.locator('.agent-notes').textContent(), /PROSE-SENTINEL-SOL/)
     assert.match(await card('GLM-5\\.3').locator('.agent-app').textContent(), /public work only$/)
     assert.equal(await card('GLM-5\\.3').locator('.agent-notes').textContent(), 'NOTE-SENTINEL-GLM')
-    assert.equal(await card('Fable').locator('.class-word').textContent(), 'Queen')
+    assert.equal(await card('Fable').locator('.class-word').textContent(), 'Rook')
     assert.deepEqual(await main.locator('.group-head').evaluateAll((heads) => heads.map((head) => head.firstChild.textContent)), ['Active', 'Proposed', 'Off'])
     passed('cards carry the class piece and word, notes, app · model, public work only, price; groups Active, Proposed, Off')
 
@@ -273,7 +273,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await main.locator('details.advanced > summary').click()
     assert.deepEqual(await main.locator('details.advanced .preferences-row-label').allTextContents(), ['Paid by', 'Compact at', 'Host', 'Also called', 'Team file'])
     assert.deepEqual(await main.locator('[role="radiogroup"][aria-label="Class"] .choice').allTextContents().then((lines) => lines.map((line) => line.replace(/\s+/g, ' ').trim())),
-      ['Knight leads an epic/project', 'Queen designs and thinks creatively', 'Bishop reviews and advises', 'Pawn does jobs a lead hands off'])
+      ['Knight leads an epic/project', 'Queen does what she wants, in any role', 'Rook the Artist: designs what is not there yet', 'Bishop reviews and advises', 'Pawn does jobs a lead hands off'])
     assert.equal(await main.getByRole('checkbox', { name: /^Designer/ }).isDisabled(), true, 'a knight is offered the designer role')
     passed('an agent lists Identity, Model and Work rows; Advanced is closed and holds Paid by, Compact at, Host, Also called and the team file')
     await go('Team')

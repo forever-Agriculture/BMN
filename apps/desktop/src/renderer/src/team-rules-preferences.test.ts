@@ -33,7 +33,7 @@ const DATA: RosterDataShape = {
   schema_version: 2,
   agents: [
     agent('sol', { class: 'knight', roles: ['lead'], efforts: ['xhigh'], context_window: 400000, context_limit: 272000, price: { input: 1.25, output: 10, source: 'https://prices.example.test/sol', as_of: '2026-10-01' } }),
-    agent('fable', { class: 'queen', harness: 'claude', provider: 'anthropic', roles: ['designer', 'helper'] }),
+    agent('fable', { class: 'rook', harness: 'claude', provider: 'anthropic', roles: ['designer', 'helper'] }),
     agent('luna', { class: 'pawn', efforts: ['max'], roles: ['helper'] }),
     agent('haiku', { class: 'pawn', harness: 'claude', provider: 'anthropic', status: 'proposed' }),
     agent('glm', { class: 'pawn', harness: 'claude', provider: 'zai', host: 'api.z.ai', enabled: false, enabled_note: 'Subscription ended', efforts: [], roles: ['helper'] })
@@ -95,7 +95,7 @@ describe('Team › Agents (60.5 AC2)', () => {
   it('groups solid cards as Active, Proposed and Off, each with its piece, class word, notes, app and model', () => {
     expect([...markup.matchAll(/<h4 class="group-head">([A-Za-z]+)/g)].map((match) => match[1])).toEqual(['Active', 'Proposed', 'Off'])
     expect(markup).toContain('<span class="class-word">Knight</span>')
-    expect(markup).toContain('<span class="class-word">Queen</span>')
+    expect(markup).toContain('<span class="class-word">Rook</span>')
     expect(markup).toContain('<div class="agent-notes">Fast lead for everyday work.</div>')
     expect(markup).not.toContain('Second line.')
     expect(markup).toContain('<div class="agent-app">Codex · <span class="mono">model-sol</span></div>')
@@ -134,9 +134,9 @@ describe('Team › Agents (60.5 AC2)', () => {
   it('offers to start a team when there is no team file, and names the file when it cannot be read', () => {
     const none = pageMarkup({ name: 'agents' }, team({ snapshot: { ...SNAPSHOT, file: { ...SNAPSHOT.file, exists: false, data: null, hash: null }, approved: null }, data: null }))
     expect(none).toContain('>Start a team</button>')
-    const broken = pageMarkup({ name: 'agents' }, team({ data: null, snapshot: { ...SNAPSHOT, file: { ...SNAPSHOT.file, data: null, errors: [{ code: 'INVALID_VALUE', line: 12, message: 'class must be knight, queen, bishop or pawn' }] } } }))
+    const broken = pageMarkup({ name: 'agents' }, team({ data: null, snapshot: { ...SNAPSHOT, file: { ...SNAPSHOT.file, data: null, errors: [{ code: 'INVALID_VALUE', line: 12, message: 'class must be knight | queen | rook | bishop | pawn' }] } } }))
     expect(broken).toContain('<span class="mono">~/.config/bmn/agents/roster.md</span>')
-    expect(broken).toContain('<li>Line 12: class must be knight, queen, bishop or pawn</li>')
+    expect(broken).toContain('<li>Line 12: class must be knight | queen | rook | bishop | pawn</li>')
   })
 })
 
@@ -157,12 +157,12 @@ describe('Team › an agent, New agent (60.5 AC3, AC4)', () => {
     expect(markup).toContain('>Turn off…</button>')
   })
 
-  it('offers four classes with their piece and line, and bars the roles a class may not hold', () => {
+  it('offers five classes with their piece and line, and bars the roles a class may not hold', () => {
     const markup = pageMarkup({ name: 'agent', id: 'luna' })
     expect([...markup.matchAll(/<\/svg>([A-Za-z]+) <span class="choice-line">([^<]+)<\/span>/g)].map((match) => `${match[1]}: ${match[2]}`)).toEqual(
-      ['Knight: leads an epic/project', 'Queen: designs and thinks creatively', 'Bishop: reviews and advises', 'Pawn: does jobs a lead hands off'])
-    expect(markup).toContain('<label class="choice disabled"><input type="checkbox" disabled=""/>Lead <span class="choice-line">Only a Knight leads</span></label>')
-    expect(markup).toContain('<label class="choice disabled"><input type="checkbox" disabled=""/>Designer <span class="choice-line">Only a Queen designs</span></label>')
+      ['Knight: leads an epic/project', 'Queen: does what she wants, in any role', 'Rook: the Artist: designs what is not there yet', 'Bishop: reviews and advises', 'Pawn: does jobs a lead hands off'])
+    expect(markup).toContain('<label class="choice disabled"><input type="checkbox" disabled=""/>Lead <span class="choice-line">Only a Knight or a Queen leads</span></label>')
+    expect(markup).toContain('<label class="choice disabled"><input type="checkbox" disabled=""/>Designer <span class="choice-line">Only a Rook or a Queen designs</span></label>')
     expect(markup).toContain('<label class="choice"><input type="checkbox" checked=""/>Helper <span class="choice-line"></span></label>')
   })
 

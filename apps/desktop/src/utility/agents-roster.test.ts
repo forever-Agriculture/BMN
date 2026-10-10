@@ -64,12 +64,20 @@ function codes(text: string): string[] {
 }
 
 describe('roster validation (60.1 AC1, AC2)', () => {
+  it('opens every role to a queen: she may lead and design', () => {
+    const queen = edit(edit(EXAMPLE, 'name: Fable\nclass: rook', 'name: Fable\nclass: queen'),
+      'roles: [designer, epic-reviewer, final-reviewer, consultant]', 'roles: [lead, designer, epic-reviewer, final-reviewer, consultant]')
+    const parsed = parseRoster(queen)
+    expect(parsed.errors).toEqual([])
+    expect(parsed.data?.agents.find((agent) => agent.id === 'fable')).toMatchObject({ class: 'queen', roles: ['lead', 'designer', 'epic-reviewer', 'final-reviewer', 'consultant'] })
+  })
+
   it('accepts the synthetic example with every field type', () => {
     const parsed = parseRoster(EXAMPLE)
     expect(parsed.errors).toEqual([])
     expect(parsed.data?.schema_version).toBe(2)
     expect(parsed.data?.agents.map((agent) => agent.id)).toEqual(['sol', 'opus', 'astra', 'fable', 'luna', 'sonnet', 'haiku', 'glm'])
-    expect(parsed.data?.agents.map((agent) => agent.class)).toEqual(['knight', 'knight', 'bishop', 'queen', 'pawn', 'bishop', 'pawn', 'pawn'])
+    expect(parsed.data?.agents.map((agent) => agent.class)).toEqual(['knight', 'knight', 'bishop', 'rook', 'pawn', 'bishop', 'pawn', 'pawn'])
     expect(parsed.data?.roles).toHaveLength(10)
     expect(parsed.data?.providers.map((provider) => `${provider.id}:${provider.private_work}`))
       .toEqual(['openai:allowed', 'anthropic:allowed', 'zai:public_only', 'opencode-go:public_only', 'cursor:public_only'])
@@ -119,10 +127,10 @@ describe('roster validation (60.1 AC1, AC2)', () => {
     ['candidate lacking the role', (t) => edit(t, 'candidates: [luna@max], then: lead}\nfocused', 'candidates: [luna@max, astra@low], then: lead}\nfocused'), 'ROLE_NOT_HELD'],
     ['a pawn holding the lead role', (t) => edit(t, 'roles: [helper, focused-reviewer, browser, pre-reviewer, project-pre-reviewer]', 'roles: [helper, focused-reviewer, browser, pre-reviewer, project-pre-reviewer, lead]'), 'CLASS_CANNOT_LEAD'],
     ['a bishop holding the lead role', (t) => edit(t, 'roles: [focused-reviewer, epic-reviewer, final-reviewer, consultant]', 'roles: [lead, focused-reviewer, epic-reviewer, final-reviewer, consultant]'), 'CLASS_CANNOT_LEAD'],
-    ['a queen holding the lead role', (t) => edit(t, 'roles: [designer, epic-reviewer, final-reviewer, consultant]', 'roles: [lead, designer, epic-reviewer, final-reviewer, consultant]'), 'CLASS_CANNOT_LEAD'],
+    ['a rook holding the lead role', (t) => edit(t, 'roles: [designer, epic-reviewer, final-reviewer, consultant]', 'roles: [lead, designer, epic-reviewer, final-reviewer, consultant]'), 'CLASS_CANNOT_LEAD'],
     ['a knight holding the designer role', (t) => edit(t, 'roles: [lead]\ncontext_window', 'roles: [lead, designer]\ncontext_window'), 'CLASS_CANNOT_DESIGN'],
     ['a bishop holding the designer role', (t) => edit(t, 'roles: [focused-reviewer, epic-reviewer, final-reviewer, consultant]', 'roles: [designer, focused-reviewer, epic-reviewer, final-reviewer, consultant]'), 'CLASS_CANNOT_DESIGN'],
-    ['a queen made bishop while holding the designer role', (t) => edit(t, 'name: Fable\nclass: queen', 'name: Fable\nclass: bishop'), 'CLASS_CANNOT_DESIGN'],
+    ['a rook made bishop while holding the designer role', (t) => edit(t, 'name: Fable\nclass: rook', 'name: Fable\nclass: bishop'), 'CLASS_CANNOT_DESIGN'],
     ['a bishop in the lead chain', (t) => edit(t, 'candidates: [sol@xhigh, opus@xhigh]', 'candidates: [sol@xhigh, opus@xhigh, astra@high]'), 'ROLE_NOT_HELD'],
     ['candidate naming an unknown agent', (t) => edit(t, 'browser: {candidates: [luna@max]', 'browser: {candidates: [nova@max]'), 'UNKNOWN_AGENT'],
     ['agent naming an unknown provider', (t) => edit(t, 'model: gpt-6-luna\nprovider: openai', 'model: gpt-6-luna\nprovider: nowhere'), 'UNKNOWN_PROVIDER'],

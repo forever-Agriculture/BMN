@@ -53,7 +53,7 @@ const DATA: RosterDataShape = {
   agents: [
     agent('sol', { class: 'knight', roles: ['lead'], efforts: ['high', 'xhigh'] }),
     agent('astra', { roles: ['epic-reviewer'] }),
-    agent('fable', { class: 'queen', harness: 'claude', provider: 'anthropic', roles: ['designer', 'epic-reviewer'] }),
+    agent('fable', { class: 'rook', harness: 'claude', provider: 'anthropic', roles: ['designer', 'epic-reviewer'] }),
     agent('luna', { class: 'pawn', efforts: ['max'] }),
     agent('haiku', { class: 'pawn', harness: 'claude', provider: 'anthropic', status: 'proposed' }),
     agent('glm', { class: 'pawn', harness: 'claude', provider: 'zai', host: 'api.z.ai', enabled: false, enabled_note: 'off', efforts: [] })
@@ -124,11 +124,14 @@ describe('chains and the roles agents hold (60.5 AC5)', () => {
     expect(role(released, 'epic-reviewer')).toEqual({ id: 'epic-reviewer', candidates: ['fable@medium'], then: 'blocked', recheck: { same_reviewer: true } })
   })
 
-  it('only a Knight takes lead and only a Queen takes designer; an agent with no efforts takes nothing', () => {
-    expect(classBar('bishop', 'lead')).toBe('Only a Knight leads')
-    expect(classBar('knight', 'designer')).toBe('Only a Queen designs')
-    expect(classBar('queen', 'epic-reviewer')).toBeNull()
-    expect(classBar('queen', 'lead')).toBe('Only a Knight leads')
+  it('a Knight or a Queen takes lead, a Rook or a Queen takes designer; an agent with no efforts takes nothing', () => {
+    expect(classBar('bishop', 'lead')).toBe('Only a Knight or a Queen leads')
+    expect(classBar('knight', 'designer')).toBe('Only a Rook or a Queen designs')
+    expect(classBar('rook', 'epic-reviewer')).toBeNull()
+    expect(classBar('rook', 'designer')).toBeNull()
+    expect(classBar('rook', 'lead')).toBe('Only a Knight or a Queen leads')
+    // Every role is open to a Queen.
+    expect(['lead', 'designer', 'epic-reviewer', 'helper'].map((role) => classBar('queen', role))).toEqual([null, null, null, null])
     expect(toggleAgentRole(DATA, 'astra', 'lead')).toBe(DATA)
     expect(toggleAgentRole(DATA, 'sol', 'designer')).toBe(DATA)
     expect(toggleAgentRole(DATA, 'glm', 'epic-reviewer')).toBe(DATA)

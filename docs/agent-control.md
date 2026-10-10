@@ -733,10 +733,10 @@ and BMN's own data, so updates and uninstall never touch them:
   agent app sends data and whether BMN observed that or you declared it.
 - `global-rules.md`, the rules master BMN renders into each agent app's own rules file.
 
-**Classes.** Every agent has one of four chess classes: a knight leads an epic or project, a queen
-designs and thinks creatively, a bishop reviews and advises, a pawn does jobs a lead hands off.
-Only a knight may hold the `lead` role and only a queen the `designer` role; a queen may also
-review and advise.
+**Classes.** Every agent has one of five chess classes: a knight leads an epic or project, a queen
+does what she wants, a rook is the artist who designs, a bishop reviews and advises, a pawn does
+jobs a lead hands off. Only a knight or a queen may hold the `lead` role, and only a rook or a
+queen the `designer` role; a rook may also review and advise, and every role is open to a queen.
 
 **Privacy is per provider.** A provider marked `public_only` never receives private work. A
 workspace counts as public only while a record under seven days old says GitHub reports its

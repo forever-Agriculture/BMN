@@ -1,7 +1,7 @@
 // MODULE: agents-roster.d.mts - types for the Epic 60 roster module so the main process can import it
 export type Harness = 'claude' | 'codex' | 'opencode' | 'cursor'
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
-export type AgentClass = 'knight' | 'queen' | 'bishop' | 'pawn'
+export type AgentClass = 'knight' | 'queen' | 'rook' | 'bishop' | 'pawn'
 export type PrivateWork = 'allowed' | 'public_only'
 export interface RosterPrice { input: number; output: number; cached_input?: number; source?: string; as_of?: string }
 export interface RosterAgent {
@@ -65,7 +65,7 @@ export declare const CLASSES: AgentClass[]
 export declare const PRIVATE_WORK: PrivateWork[]
 export declare const LEAD_ROLE: 'lead'
 export declare const DESIGNER_ROLE: 'designer'
-export interface ClassRule { class: AgentClass; code: 'CLASS_CANNOT_LEAD' | 'CLASS_CANNOT_DESIGN'; rule: string }
+export interface ClassRule { classes: AgentClass[]; code: 'CLASS_CANNOT_LEAD' | 'CLASS_CANNOT_DESIGN'; rule: string }
 export declare const CLASS_ROLES: Record<string, ClassRule>
 export declare function classRefusal(agentClass: AgentClass, role: string): ClassRule | null
 export declare const MAX_EXCEPTIONS: number

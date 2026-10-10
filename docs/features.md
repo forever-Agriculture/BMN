@@ -268,7 +268,7 @@ program that already runs as your user.
 ### The team and one rules master
 
 Preferences → **Team** keeps the agents you work with in one file you own: each agent's class
-(knight, queen, bishop or pawn), app, model and provider, which roles it may take and in what
+(knight, queen, rook, bishop or pawn), app, model and provider, which roles it may take and in what
 order, and whether its provider may see private work. Nothing in that file takes effect until you
 approve it there; every approval is a numbered version you can open or restore. Agents read the
 approved team with `bmn team`, and a lead runs `bmn roster check` before it hands work to another

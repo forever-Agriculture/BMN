@@ -8,9 +8,9 @@ export type RosterEffort = (typeof ROSTER_EFFORTS)[number]
 export const ROSTER_THEN = ['lead', 'skip', 'blocked', 'owner-chooses'] as const
 export type RosterThen = (typeof ROSTER_THEN)[number]
 /** The chess classes, in the order the owner chooses among them. */
-export const ROSTER_CLASSES = ['knight', 'queen', 'bishop', 'pawn'] as const
+export const ROSTER_CLASSES = ['knight', 'queen', 'rook', 'bishop', 'pawn'] as const
 export type RosterClass = (typeof ROSTER_CLASSES)[number]
-/** The one role only a knight may hold, and the one only a queen may hold. */
+/** The role only a knight or a queen may hold, and the one only a rook or a queen may hold. */
 export const ROSTER_LEAD_ROLE = 'lead'
 export const ROSTER_DESIGNER_ROLE = 'designer'
 export type RosterPrivateWork = 'allowed' | 'public_only'

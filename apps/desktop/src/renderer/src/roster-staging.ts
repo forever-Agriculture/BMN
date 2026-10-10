@@ -40,7 +40,8 @@ export interface DiffGroup {
 
 export const CLASS_WORDS: Readonly<Record<RosterClass, { name: string; line: string }>> = {
   knight: { name: 'Knight', line: 'leads an epic/project' },
-  queen: { name: 'Queen', line: 'designs and thinks creatively' },
+  queen: { name: 'Queen', line: 'does what she wants, in any role' },
+  rook: { name: 'Rook', line: 'the Artist: designs what is not there yet' },
   bishop: { name: 'Bishop', line: 'reviews and advises' },
   pawn: { name: 'Pawn', line: 'does jobs a lead hands off' }
 }
@@ -379,10 +380,10 @@ export function effortWords(candidate: Pick<Candidate, 'efforts'>): string {
   return candidate.efforts.join(' or ')
 }
 
-/** Why a class may not hold a role, or null when it may: only a Knight leads, only a Queen designs. */
+/** Why a class may not hold a role, or null when it may: a Knight or a Queen leads, a Rook or a Queen designs. */
 export function classBar(agentClass: RosterClass, roleId: string): string | null {
-  if (roleId === ROSTER_LEAD_ROLE && agentClass !== 'knight') return 'Only a Knight leads'
-  if (roleId === ROSTER_DESIGNER_ROLE && agentClass !== 'queen') return 'Only a Queen designs'
+  if (roleId === ROSTER_LEAD_ROLE && agentClass !== 'knight' && agentClass !== 'queen') return 'Only a Knight or a Queen leads'
+  if (roleId === ROSTER_DESIGNER_ROLE && agentClass !== 'rook' && agentClass !== 'queen') return 'Only a Rook or a Queen designs'
   return null
 }
 
