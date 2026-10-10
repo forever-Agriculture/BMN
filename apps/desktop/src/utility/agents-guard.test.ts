@@ -1,5 +1,6 @@
 // MODULE: agents-guard.test.ts - Epic 60.8: the prompt guard's decision over synthetic teams, process tables, settings and workspaces
 import { execFileSync } from 'node:child_process'
+import { EventEmitter } from 'node:events'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -318,6 +319,33 @@ describe('a decision that takes too long (60.8 AC2)', () => {
     expect(slow).toMatchObject({ outcome: 'stop', cause: 'slow', allow: false })
     expect(slow.line).toBe('BMN stopped this prompt: it could not decide within 2 seconds whether it may leave. Send it again.')
     expect(await decideWithin(input)).toEqual(decide(input))
+  })
+
+  it('stops the prompt when the thread that decides cannot start, fails or ends without an answer, and never decides on the hook\'s own thread', async () => {
+    approve(team())
+    const input = { agent: 'claude', pid: session(['claude']), procRoot: proc, event: { cwd: workspace } }
+    // On this thread the same prompt would pass: the provider may see private work.
+    expect(decide(input)).toMatchObject({ outcome: 'pass' })
+    const failed = { outcome: 'stop', cause: 'state', allow: false, line: 'BMN stopped this prompt: its check failed. Open BMN Preferences › Team; if the team shows no problem, start the session again.' }
+    const thread = (fire: (emitter: EventEmitter) => void) => () => {
+      const emitter = new EventEmitter()
+      queueMicrotask(() => fire(emitter))
+      return Object.assign(emitter, { terminate: () => {} })
+    }
+    expect(await decideWithin(input, 2000, { startThread: () => { throw new Error('synthetic: no thread') } })).toMatchObject(failed)
+    expect(await decideWithin(input, 2000, { startThread: thread((emitter) => emitter.emit('error', new Error('synthetic'))) })).toMatchObject(failed)
+    expect(await decideWithin(input, 2000, { startThread: thread((emitter) => emitter.emit('exit', 1)) })).toMatchObject(failed)
+    // A thread that never answers ends at the limit.
+    expect(await decideWithin(input, 30, { startThread: thread(() => {}) })).toMatchObject({ outcome: 'stop', cause: 'slow' })
+  })
+
+  it('answers an installation that never approved a team without starting the thread', async () => {
+    const input = { agent: 'claude', pid: session(['claude'], { env: MOONSHOT_ENV }), procRoot: proc, event: { cwd: workspace } }
+    let started = 0
+    const verdict = await decideWithin(input, 2000, { startThread: () => { started += 1; throw new Error('synthetic: no thread') } })
+    expect(verdict).toEqual(decide(input))
+    expect(verdict).toMatchObject({ outcome: 'pass', cause: 'inactive' })
+    expect(started).toBe(0)
   })
 })
 

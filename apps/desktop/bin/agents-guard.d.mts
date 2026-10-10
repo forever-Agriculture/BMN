@@ -31,6 +31,7 @@ export declare function guardState(): { state: 'inactive' } | { state: 'active';
 export declare function readAgentProcess(procRoot: string, pid: number): { argv: string[]; env: Record<string, string>; cwd: string | null; start: string | null } | null
 export declare function parseLaunch(agent: string, argv: string[]): Record<string, unknown> & { unknown?: string }
 export declare function decide(input: GuardInput): GuardVerdict
-export declare function decideWithin(input: GuardInput, limitMs?: number): Promise<GuardVerdict>
+/** `startThread` is the seam for tests: what starts the thread that decides. */
+export declare function decideWithin(input: GuardInput, limitMs?: number, seams?: { startThread?: (data: { bmnGuard: GuardInput }) => { once(event: string, listener: (...values: unknown[]) => void): unknown; terminate(): unknown } }): Promise<GuardVerdict>
 export declare function stopAnswer(agent: string, line: string): string | null
 export declare function guardStanding(agent: string): string

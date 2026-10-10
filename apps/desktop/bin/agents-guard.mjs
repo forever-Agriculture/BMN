@@ -1,9 +1,10 @@
 // MODULE: agents-guard.mjs - Epic 60.8: the decision a prompt hook takes, from the approved team on disk, before a prompt leaves a session the owner started
 import { readFileSync, readlinkSync, realpathSync, statSync } from 'node:fs'
+import { access, readdir } from 'node:fs/promises'
 import { basename, isAbsolute } from 'node:path'
 import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads'
 import { APP_NAMES, RosterError } from './agents-roster.mjs'
-import { everApproved, readApproved } from './agents-state.mjs'
+import { currentPointerPath, everApproved, generationsDirectory, historyLogPath, readApproved } from './agents-state.mjs'
 import { destinationOf, privateWorkAnswer, resolveClaudeRoute, resolveCodexRoute, sessionRecord, sessionRecordAt, workspaceRoot } from './agents-check.mjs'
 
 /**
@@ -256,13 +257,47 @@ function slow(input) {
   }
 }
 
+/** The thread that decides could not start or ended without an answer: the prompt is stopped, never decided on this thread, whose reads the limit could not end. */
+function unchecked(input) {
+  const app = APP_NAMES[input.agent] ?? input.agent
+  return {
+    agent: input.agent, app, pid: input.pid || null, start: null, folder: null, workspace: null, provider: null, host: null, name: null,
+    outcome: 'stop', cause: 'state', allow: false,
+    line: 'BMN stopped this prompt: its check failed. Open BMN Preferences › Team; if the team shows no problem, start the session again.'
+  }
+}
+
 /**
- * `decide`, held to `limitMs`: the reads run on another thread so that one which never returns
- * (a folder on a dead network mount) ends as a stop, not as a hook the app gives up on and a
- * prompt that leaves unchecked. An installation that never approved a team answers at once.
+ * `everApproved`, asked without holding this thread, so the limit covers it as well: true only
+ * where nothing of an approval is on disk; anything that cannot be read counts as approved.
  */
-export function decideWithin(input, limitMs = GUARD_LIMIT_MS) {
-  if (guardState().state === 'inactive') return Promise.resolve(decide(input))
+async function neverApproved() {
+  const absent = async (path) => {
+    try {
+      await access(path)
+      return false
+    } catch (error) {
+      return error?.code === 'ENOENT'
+    }
+  }
+  try {
+    if ((await readdir(generationsDirectory())).some((name) => /^\d{6}\.json$/.test(name))) return false
+  } catch (error) {
+    if (error?.code !== 'ENOENT') return false
+  }
+  return await absent(currentPointerPath()) && await absent(historyLogPath())
+}
+
+const decidingThread = (data) => new Worker(new URL(import.meta.url), { workerData: data })
+
+/**
+ * `decide`, held to `limitMs` from its first read: the reads run on another thread so that one
+ * which never returns (a folder on a dead network mount) ends as a stop, not as a hook the app
+ * gives up on and a prompt that leaves unchecked. Nothing here reads on this thread, because a
+ * read that held it would hold the limit too. An installation that never approved a team
+ * answers without starting the thread. `startThread` is the seam for tests.
+ */
+export function decideWithin(input, limitMs = GUARD_LIMIT_MS, { startThread = decidingThread } = {}) {
   return new Promise((resolve) => {
     let worker = null
     let settled = false
@@ -274,14 +309,23 @@ export function decideWithin(input, limitMs = GUARD_LIMIT_MS) {
       resolve(result)
     }
     const timer = setTimeout(() => finish(slow(input)), limitMs)
-    try {
-      worker = new Worker(new URL(import.meta.url), { workerData: { bmnGuard: input } })
-      worker.once('message', finish)
-      // A thread that cannot start is not a reason to stop every prompt: decide here instead.
-      worker.once('error', () => finish(decide(input)))
-    } catch {
-      finish(decide(input))
+    const onThread = () => {
+      if (settled) return
+      try {
+        worker = startThread({ bmnGuard: input })
+        worker.once('message', finish)
+        // Once a team was approved, a check that cannot run stops the prompt.
+        worker.once('error', () => finish(unchecked(input)))
+        worker.once('exit', () => finish(unchecked(input)))
+      } catch {
+        finish(unchecked(input))
+      }
     }
+    neverApproved().then((never) => {
+      if (!never) return onThread()
+      const app = APP_NAMES[input.agent] ?? input.agent
+      return finish({ agent: input.agent, app, pid: input.pid || null, start: null, folder: null, workspace: null, provider: null, host: null, name: null, outcome: 'pass', cause: 'inactive' })
+    }, onThread)
   })
 }
 
