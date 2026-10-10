@@ -78,13 +78,18 @@ function shownParam(params: Record<string, unknown>): AgentsShownRevision {
     invalid('shown must name the approved version and file hash the page showed')
   }
   if (shown.link !== undefined && shown.link !== null && typeof shown.link !== 'string') invalid('shown.link must be the link target or null')
-  return { generation: shown.generation, fileHash: shown.fileHash, ...(shown.link === undefined ? {} : { link: shown.link }) }
+  if (shown.directory !== undefined && shown.directory !== null && (typeof shown.directory !== 'string' || shown.directory.length > 4096)) invalid('shown.directory must be a folder path or null')
+  return { generation: shown.generation, fileHash: shown.fileHash, ...(shown.link === undefined ? {} : { link: shown.link }), ...(typeof shown.directory === 'string' ? { directory: shown.directory } : {}) }
 }
 
-/** What a path linked to when read: the target, or null for a regular file or no file. */
-function linkOf(path: string): string | null {
-  const state = pathState(path)
-  return state.kind === 'link' ? state.target : null
+/** What a path linked to when read (the target, or null for a regular file or no file) and the real folder holding it. */
+function placeOf(path: string): { link: string | null; directory: string | null } {
+  try {
+    const state = pathState(path)
+    return { link: state.kind === 'link' ? state.target : null, directory: state.directory }
+  } catch {
+    return { link: null, directory: null }
+  }
 }
 
 function scopeParam(params: Record<string, unknown>): string[] | null {
@@ -155,7 +160,7 @@ export function agentsSnapshot(): AgentsSnapshot {
     rosterPath: path,
     home: process.env.HOME ?? null,
     file: {
-      exists: text !== null, hash: text === null ? null : sha256(text), link: linkOf(path),
+      exists: text !== null, hash: text === null ? null : sha256(text), ...placeOf(path),
       errors: parsed?.errors ?? [], warnings: parsed?.warnings ?? [], data: data as RosterDataShape | null, prose
     },
     approved: generation ? { generation: generation.number, createdAt: generation.created_at, data: generation.data as RosterDataShape } : null,
@@ -186,7 +191,7 @@ function fileToApproved(): boolean {
   const now = agentsSnapshot()
   if (now.approved === null || now.file.hash === null || (now.differences ?? []).length === 0) return false
   try {
-    revertFileToApproved({ generation: now.approved.generation, fileHash: now.file.hash, link: now.file.link }, null)
+    revertFileToApproved({ generation: now.approved.generation, fileHash: now.file.hash, link: now.file.link, directory: now.file.directory }, null)
     return false
   } catch {
     return true
@@ -533,7 +538,8 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
       const state = pathState(rosterPath())
       if (state.kind === 'missing') throw new RosterError('ROSTER_MISSING', `no team file at ${rosterPath()}`)
       const current = state.kind === 'file' ? state.text : readFileSync(rosterPath(), 'utf8')
-      if (sha256(current) !== shown.fileHash || (shown.link !== undefined && shown.link !== (state.kind === 'link' ? state.target : null))) {
+      if (sha256(current) !== shown.fileHash || (shown.link !== undefined && shown.link !== (state.kind === 'link' ? state.target : null))
+        || (typeof shown.directory === 'string' && shown.directory !== state.directory)) {
         throw new RosterError('REVISION_CONFLICT', 'the team file changed since it was shown; reload to see it')
       }
       const next = rewriteProse(current, agent, text)
@@ -550,7 +556,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const errors = parseMaster(text).errors
     return {
       valid: errors.length === 0, errors, diff: unifiedDiff(current, text, masterPath()), expectedHash: state.kind === 'missing' ? null : sha256(current),
-      expectedLink: state.kind === 'link' ? state.target : null,
+      expectedLink: state.kind === 'link' ? state.target : null, expectedDirectory: state.directory,
       renderings: errors.length === 0 ? renderAll(masterPath(), text, approvedOrProblem().generation) : []
     }
   })
@@ -558,11 +564,14 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const text = textParam(params, 'text')
     const expectedHash = params.expectedHash === null ? null : textParam(params, 'expectedHash', 64)
     const expectedLink = params.expectedLink === undefined || params.expectedLink === null ? null : textParam(params, 'expectedLink', 4096)
+    const expectedDirectory = params.expectedDirectory === undefined || params.expectedDirectory === null ? null : textParam(params, 'expectedDirectory', 4096)
     const ctx = context()
     try {
       const state = pathState(masterPath())
       const current = state.kind === 'missing' ? null : state.kind === 'file' ? state.text : readFileSync(masterPath(), 'utf8')
-      if ((current === null ? null : sha256(current)) !== expectedHash || (state.kind === 'link' ? state.target : null) !== expectedLink) {
+      // The same bytes in another folder are not the rules that were shown: a link on the way moved (R60-NFR2).
+      if ((current === null ? null : sha256(current)) !== expectedHash || (state.kind === 'link' ? state.target : null) !== expectedLink
+        || (expectedDirectory !== null && expectedDirectory !== state.directory)) {
         throw new RosterError('REVISION_CONFLICT', 'the rules changed since they were shown; reload to see them')
       }
       writeMaster(state, text, 'saved in Preferences > Rules', { now: ctx.now() })
@@ -606,7 +615,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const currentText = state.kind === 'missing' ? null : state.kind === 'file' ? state.text : readFileSync(masterPath(), 'utf8')
     return {
       ok: true, diff: unifiedDiff(currentText ?? '', text, masterPath()), expectedHash: currentText === null ? null : sha256(currentText),
-      expectedLink: state.kind === 'link' ? state.target : null, text
+      expectedLink: state.kind === 'link' ? state.target : null, expectedDirectory: state.directory, text
     }
   })
   handle('aiterm:rules:probe', async (params) => {

@@ -52,6 +52,8 @@ export interface ShownRevision {
   fileHash: string
   /** The roster path's link target as shown, or null for a regular file; omitted by callers that do not track it. */
   link?: string | null
+  /** The real folder that held the roster as shown (every link on the way followed); omitted or null when not tracked. */
+  directory?: string | null
 }
 
 /** Versions `next` accepts that `previous` did not. */
@@ -204,7 +206,9 @@ function currentGeneration(): Generation | null {
 
 function checkShown(shown: ShownRevision, current: Generation | null, fileHash: string, state?: PathState): void {
   const link = state === undefined ? undefined : state.kind === 'link' ? state.target : null
-  if ((current?.number ?? null) !== shown.generation || fileHash !== shown.fileHash || (shown.link !== undefined && link !== undefined && shown.link !== link)) {
+  // The same bytes in another folder are not the file that was shown: a link on the way moved (R60-NFR2).
+  const moved = typeof shown.directory === 'string' && state !== undefined && shown.directory !== state.directory
+  if ((current?.number ?? null) !== shown.generation || fileHash !== shown.fileHash || (shown.link !== undefined && link !== undefined && shown.link !== link) || moved) {
     throw new RosterError('REVISION_CONFLICT', 'the roster or its approval changed since it was shown; reload to see the current state')
   }
 }

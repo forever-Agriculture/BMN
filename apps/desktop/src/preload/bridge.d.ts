@@ -351,7 +351,7 @@ export interface AiTerminalBridge {
   /** Epic 60.6: the master, each app's rendering, health from `bmn rules check`, loading tests, the agent apps, installs and history. */
   rulesSnapshot(): Promise<RulesSnapshot>
   planRulesMaster(text: string): Promise<RulesMasterPlan>
-  saveRulesMaster(text: string, expectedHash: string | null, expectedLink: string | null): Promise<RulesOutcome>
+  saveRulesMaster(text: string, expectedHash: string | null, expectedLink: string | null, expectedDirectory: string | null): Promise<RulesOutcome>
   planRulesInstall(): Promise<RulesPlan>
   installRules(planHash: string): Promise<RulesOutcome>
   planRulesRestore(transaction: string): Promise<RulesPlan>

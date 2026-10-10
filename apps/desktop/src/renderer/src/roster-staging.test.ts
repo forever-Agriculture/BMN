@@ -342,6 +342,17 @@ describe('differences in words (60.5 AC7)', () => {
     expect(summaryWords('Restored version 3', roles)).toBe('Restored version 3')
   })
 
+  it('a first approval names every folder it would allow private work in, in full', () => {
+    const data = { ...DATA, exceptions: [{ id: 'zai-here', provider: 'zai', folder: '/home/synthetic/work' }, { id: 'zai-there', provider: 'zai', folder: '/home/synthetic/other' }] }
+    const { groups, general } = firstApprovalGroups(data, ['Sol could be given work', 'Z.ai could receive private work in 2 more workspaces'])
+    expect(groups[0]).toEqual({
+      key: 'exceptions', subject: 'Allowed workspaces', consequences: ['Z.ai could receive private work in 2 more workspaces'],
+      lines: [{ field: 'Z.ai · workspace', before: '—', after: '/home/synthetic/work' }, { field: 'Z.ai · workspace', before: '—', after: '/home/synthetic/other' }]
+    })
+    expect(general).toEqual([])
+    expect(firstApprovalGroups(DATA, ['Sol could be given work']).groups.map((group) => group.key)).toEqual(['sol'])
+  })
+
   it('reviews a first approval as one row per agent and one per role', () => {
     const { groups, general } = firstApprovalGroups(DATA, [
       'Sol could be given work', 'Sol could lead', 'Sol could receive private work', 'Astra could be given work', 'Fable could be given work', 'Fable could design',

@@ -80,7 +80,7 @@ export interface RosterDiffShape {
 }
 
 /** What the page showed; an approval or save carries it back and is refused when either moved. */
-export interface AgentsShownRevision { generation: number | null; fileHash: string; link?: string | null }
+export interface AgentsShownRevision { generation: number | null; fileHash: string; link?: string | null; directory?: string | null }
 
 export interface AgentsGenerationSummary {
   number: number
@@ -105,6 +105,8 @@ export interface AgentsSnapshot {
     hash: string | null
     /** What the roster path linked to when read, or null. */
     link: string | null
+    /** The real folder holding the team file when read: every link on the way to it followed. */
+    directory: string | null
     errors: RosterIssueShape[]
     warnings: RosterIssueShape[]
     data: RosterDataShape | null
@@ -236,9 +238,18 @@ export interface RulesPlanTarget {
 }
 
 /** A master edit before saving: whether it renders, its diff, the hash a save must still find, and each app's rendering of it. */
-export interface RulesMasterPlan { valid: boolean; errors: RosterIssueShape[]; diff: string; expectedHash: string | null; expectedLink: string | null; renderings: RulesRenderingView[] }
+export interface RulesMasterPlan {
+  valid: boolean
+  errors: RosterIssueShape[]
+  diff: string
+  expectedHash: string | null
+  expectedLink: string | null
+  /** The real folder holding the master when the diff was made; a save refuses once a link on the way leads elsewhere. */
+  expectedDirectory: string
+  renderings: RulesRenderingView[]
+}
 
-export interface RulesRevertPlan { ok: boolean; diff: string; expectedHash: string | null; expectedLink?: string | null; text?: string; message?: string }
+export interface RulesRevertPlan { ok: boolean; diff: string; expectedHash: string | null; expectedLink?: string | null; expectedDirectory?: string; text?: string; message?: string }
 
 export interface RulesPlan { ok: boolean; code: string; message?: string; planHash: string | null; targets: RulesPlanTarget[] }
 

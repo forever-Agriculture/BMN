@@ -248,7 +248,7 @@ export function useRulesState(): RulesState {
     if (pending.kind === 'save') {
       // The text the diff was shown for, never the editor's later state.
       const { text, plan } = pending
-      run = () => window.aiTerminal.saveRulesMaster(text, plan.expectedHash, plan.expectedLink)
+      run = () => window.aiTerminal.saveRulesMaster(text, plan.expectedHash, plan.expectedLink, plan.expectedDirectory)
     } else if (pending.kind === 'install') {
       const { planHash } = pending.plan
       if (planHash === null) return
@@ -259,9 +259,9 @@ export function useRulesState(): RulesState {
       const planHash = plan.planHash
       run = () => window.aiTerminal.restoreRules(transaction, planHash)
     } else if (pending.kind === 'restore') {
-      const { text, expectedHash, expectedLink } = pending.plan
+      const { text, expectedHash, expectedLink, expectedDirectory } = pending.plan
       if (text === undefined) return
-      run = () => window.aiTerminal.saveRulesMaster(text, expectedHash, expectedLink ?? null)
+      run = () => window.aiTerminal.saveRulesMaster(text, expectedHash, expectedLink ?? null, expectedDirectory ?? null)
     } else {
       const { harness } = pending
       run = () => window.aiTerminal.probeRules(harness)

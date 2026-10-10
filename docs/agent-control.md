@@ -749,7 +749,7 @@ repositories are not covered) and never applies to a destination BMN cannot conf
 dispatch only when every folder the agent would work in belongs to that workspace, and it must
 name the workspace's real path: a path that passes through a link grants nothing, wherever the
 link points, and `bmn roster validate` says so. A changed exception shows on the Team page with
-both folders, to approve or revert. Work in a repository nested inside a public workspace counts
+both folders, to approve or revert, and a first approval lists every such folder first. Work in a repository nested inside a public workspace counts
 as private.
 
 **Approval.** A machine field takes effect only after you approve it in **Preferences → Team**;
@@ -770,7 +770,8 @@ approved version: open one to see how it differs, or restore it as a new version
 staged. The bar at the foot counts them, **Review** shows one grouped list with its consequences
 in words ("Luna could lead", "Haiku could receive private work") and each rules file the change
 would rewrite, and **Approve** writes the team file and approves exactly what was shown. Escape
-or Discard drops staged edits; a file that changed meanwhile is reloaded and nothing is written.
+or Discard drops staged edits; a file that changed meanwhile, or that a link now leads to in
+another folder, is reloaded and nothing is written.
 An edit made outside BMN shows as its own row with **Keep** and **Revert**.
 
 **Asking the team.** `bmn team` prints the approved team; `bmn roster role <role>` the ordered
@@ -806,7 +807,7 @@ Cursor's file also gets its `.mdc` frontmatter.
 **Preferences → Rules** has two pages. **Editor** edits the master with line numbers, dimmed
 markers and an **Insert** menu for the three markers; rules that would not render are not saved,
 and every save first keeps the text it replaces, then the new text, and refuses a change or a
-swapped link made meanwhile. Beside it, **What each app reads** shows each app's exact file, and
+swapped link made meanwhile, including a link on the way to the folder that holds the rules. Beside it, **What each app reads** shows each app's exact file, and
 **Earlier versions** lists saves and installs with **Restore…** and **Undo…**. **Install…** shows
 every file's difference, including a link, a hand-written file or an outside edit it replaces,
 and writes them in one step; a file that is a link is replaced by a regular file, and the file it

@@ -754,8 +754,8 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   planRulesMaster(text: string): Promise<RulesMasterPlan> {
     return invokeBridge('aiterm:rules:plan-master', { text })
   },
-  saveRulesMaster(text: string, expectedHash: string | null, expectedLink: string | null): Promise<RulesOutcome> {
-    return invokeBridge('aiterm:rules:save-master', { text, expectedHash, expectedLink })
+  saveRulesMaster(text: string, expectedHash: string | null, expectedLink: string | null, expectedDirectory: string | null): Promise<RulesOutcome> {
+    return invokeBridge('aiterm:rules:save-master', { text, expectedHash, expectedLink, expectedDirectory })
   },
   planRulesInstall(): Promise<RulesPlan> {
     return invokeBridge('aiterm:rules:plan-install', {})

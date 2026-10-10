@@ -1202,16 +1202,17 @@ export function evaluate(inputs, {
       if (target === null || !inside(target, workspace)) refuse('WORKSPACE_MISMATCH', `--add-dir ${dir} is outside the workspace`)
       reached.push(target)
     }
-    // An exception and a public record belong to one workspace root. A directory in a repository
-    // nested in the workspace, or in a packet outside it, is another workspace (60.8 AC6): the
-    // exception does not cover the dispatch, and work in a nested repository is private.
+    // An exception and a public record belong to one workspace root. A directory with another root
+    // (a repository nested in the workspace, a subfolder of a workspace outside Git) or in a packet
+    // outside it is another workspace (60.8 AC6): the exception does not cover the dispatch, and
+    // work in a nested workspace is private.
     const root = workspaceRoot(workspace)
     const nested = reached.find((dir) => inside(dir, workspace) && workspaceRoot(dir) !== root)
     const answer = privateWorkAnswer(data, destination, nested === undefined && reached.every((dir) => inside(dir, workspace)) ? root : null)
     note(`private work: ${answer.reason}`)
     const visibility = workspaceVisibility(workspace, now)
     const dataLabel = stricter(stricter(visibility.public ? 'public' : 'private', inputs.data), nested === undefined ? 'public' : 'private')
-    note(`workspace ${workspace}: ${visibility.public ? `public (${visibility.reason})` : `private (${visibility.reason})`}; data ${dataLabel}${nested === undefined ? '' : ` (${nested} is another repository inside the workspace)`}`)
+    note(`workspace ${workspace}: ${visibility.public ? `public (${visibility.reason})` : `private (${visibility.reason})`}; data ${dataLabel}${nested === undefined ? '' : ` (${nested} is another workspace inside this one)`}`)
     let stdin = null
     let stdinProblem = null
     if (inputs.stdin !== undefined) {

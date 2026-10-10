@@ -58,7 +58,7 @@ const DATA: RosterDataShape = {
 
 const SNAPSHOT: AgentsSnapshot = {
   rosterPath: '/home/synthetic/.config/bmn/agents/roster.md', home: '/home/synthetic',
-  file: { exists: true, hash: 'f'.repeat(64), link: null, errors: [], warnings: [], data: DATA, prose: { sol: 'Fast lead for everyday work.\nSecond line.' } },
+  file: { exists: true, hash: 'f'.repeat(64), link: null, directory: '/home/synthetic/.config/bmn/agents', errors: [], warnings: [], data: DATA, prose: { sol: 'Fast lead for everyday work.\nSecond line.' } },
   approved: { generation: 4, createdAt: '2026-10-09T22:13:00.000Z', data: DATA },
   approvalProblem: null, differences: [], consequences: [],
   history: [

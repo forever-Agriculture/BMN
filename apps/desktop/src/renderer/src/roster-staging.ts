@@ -265,7 +265,8 @@ const ABILITY_WORDS: Readonly<Record<string, string>> = {
 /**
  * A first approval has nothing to differ from, so its review is the consequences themselves, one
  * row per agent ("Can be given work, can lead, may receive private work") and one per role, whose
- * chain the page draws. Sentences about neither stay in `general`.
+ * chain the page draws; and one row naming, in full, every folder where a provider that otherwise
+ * gets public work only would be allowed private work. Sentences about none of these stay in `general`.
  */
 export function firstApprovalGroups(data: RosterDataShape, sentences: readonly string[]): { groups: DiffGroup[]; general: string[] } {
   const roleIds = roleIdsOf(data)
@@ -283,6 +284,16 @@ export function firstApprovalGroups(data: RosterDataShape, sentences: readonly s
     if (mine.length === 0) continue
     for (const sentence of mine) left.delete(sentence)
     groups.push({ key: `role:${role.id}`, subject: roleName(role.id), role, lines: [], consequences: mine.some((sentence) => sentence.includes(' would have no agent to start with')) ? ['Nobody can start it yet'] : [] })
+  }
+  if (data.exceptions.length > 0) {
+    const names = namesOf(data)
+    const mine = sentences.filter((sentence) => / could receive private work in /.test(sentence))
+    for (const sentence of mine) left.delete(sentence)
+    // First, so it is read before Approve without scrolling past every agent and role.
+    groups.unshift({
+      key: 'exceptions', subject: SECTION_SUBJECTS.exceptions ?? 'exceptions', consequences: mine,
+      lines: data.exceptions.map((exception) => ({ field: `${names.providers.get(exception.provider) ?? exception.provider} · workspace`, before: '—', after: exception.folder }))
+    })
   }
   return { groups, general: sentences.filter((sentence) => left.has(sentence)).map((sentence) => consequenceWords(sentence, roleIds)) }
 }

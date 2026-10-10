@@ -1,9 +1,9 @@
 // MODULE: agents-ipc.test.ts - Epic 60.4–60.6: the Team and Rules handlers preview an approval, update only the rules files that were shown, and re-inspect what an approval records
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, RosterDataShape, RulesOutcome, RulesPlan, RulesSnapshot } from '@bmn/protocol'
+import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, RosterDataShape, RulesMasterPlan, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSnapshot } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { installAgentsIpcHandlers } from './agents-ipc'
 
@@ -51,7 +51,7 @@ afterEach(() => {
 const rosterFile = (): string => join(home, '.config/bmn/agents/roster.md')
 const call = async <Result>(channel: string, params: Record<string, unknown> = {}): Promise<Result> => await handlers.get(`aiterm:${channel}`)?.(undefined as never, params) as Result
 const snapshot = (): Promise<AgentsSnapshot> => call('agents:snapshot')
-const shownOf = (state: AgentsSnapshot): AgentsShownRevision => ({ generation: state.approved?.generation ?? null, fileHash: state.file.hash as string, link: state.file.link })
+const shownOf = (state: AgentsSnapshot): AgentsShownRevision => ({ generation: state.approved?.generation ?? null, fileHash: state.file.hash as string, link: state.file.link, directory: state.file.directory })
 const shown = async (): Promise<AgentsShownRevision> => shownOf(await snapshot())
 const activate = (data: RosterDataShape, id: string): RosterDataShape => ({ ...data, agents: data.agents.map((agent) => (agent.id === id ? { ...agent, status: 'active' as const } : agent)) })
 const bindings = (preview: AgentsPreview) => preview.teamUpdate.map((target) => ({ harness: target.harness, binding: target.binding }))
@@ -245,6 +245,73 @@ describe('an approval inspects again what it records (60.3 AC3, 60.6 AC4)', () =
     stub('codex', 'echo "codex-cli 0.170.0"')
     expect(await call<AgentsOutcome>('agents:save', { shown: await shown(), data: accepting })).toMatchObject({ ok: true })
     expect((await call<RulesSnapshot>('rules:snapshot')).apps[1]).toMatchObject({ version: '0.170.0', versionState: 'accepted', acceptable: false })
+  })
+})
+
+describe('a link on the way to the team file or the rules (R60-NFR2)', () => {
+  const stores = () => ({ a: join(home, 'store-a'), b: join(home, 'store-b') })
+  const agents = (): string => join(home, '.config/bmn/agents')
+  /** `~/.config/bmn/agents` is a link to one folder; `retarget` copies that folder and points the link at the copy. */
+  function linked(): void {
+    rmSync(agents(), { recursive: true })
+    mkdirSync(stores().a)
+    symlinkSync(stores().a, agents())
+  }
+  function retarget(): void {
+    cpSync(stores().a, stores().b, { recursive: true })
+    rmSync(agents())
+    symlinkSync(stores().b, agents())
+  }
+  const back = (): void => {
+    rmSync(agents())
+    rmSync(stores().b, { recursive: true })
+    symlinkSync(stores().a, agents())
+  }
+
+  it('says which folder really holds the team file and refuses every approving control once the link leads to a copy', async () => {
+    linked()
+    writeFileSync(rosterFile(), EXAMPLE)
+    const first = await snapshot()
+    expect(first.file).toMatchObject({ link: null, directory: stores().a })
+    retarget()
+    expect(await call<AgentsOutcome>('agents:approve', { shown: shownOf(first) })).toMatchObject({ ok: false, code: 'REVISION_CONFLICT' })
+    // Nothing was approved in the copy (only the lock an approval takes was made there).
+    expect(existsSync(join(stores().b, 'state/current'))).toBe(false)
+    back()
+    expect(await call<AgentsOutcome>('agents:approve', { shown: shownOf(first) })).toMatchObject({ ok: true })
+    const approved = await snapshot()
+    const data = approved.file.data as RosterDataShape
+    retarget()
+    const before = readFileSync(join(stores().b, 'roster.md'), 'utf8')
+    expect(await call<AgentsOutcome>('agents:save', { shown: shownOf(approved), data: activate(data, 'haiku') })).toMatchObject({ ok: false, code: 'REVISION_CONFLICT' })
+    expect(await call<AgentsOutcome>('agents:notes', { shown: shownOf(approved), agent: 'astra', text: 'Written into the copy.' })).toMatchObject({ ok: false, code: 'REVISION_CONFLICT' })
+    expect(await call<AgentsOutcome>('agents:revert', { shown: shownOf(approved), scope: null })).toMatchObject({ ok: false, code: 'REVISION_CONFLICT' })
+    expect(await call<AgentsOutcome>('agents:restore', { shown: shownOf(approved), number: 1 })).toMatchObject({ ok: false, code: 'REVISION_CONFLICT' })
+    expect(readFileSync(join(stores().b, 'roster.md'), 'utf8')).toBe(before)
+    back()
+    expect(await call<AgentsOutcome>('agents:save', { shown: shownOf(approved), data: activate(data, 'haiku') })).toMatchObject({ ok: true })
+  })
+
+  it('refuses to save the rules into a copy of the folder their diff was shown for', async () => {
+    linked()
+    expect(await call<RulesOutcome>('rules:save-master', { text: MASTER, expectedHash: null, expectedLink: null })).toMatchObject({ ok: true })
+    const next = MASTER.replace('Answer first.', 'Answer first, plainly.')
+    const plan = await call<RulesMasterPlan>('rules:plan-master', { text: next })
+    expect(plan).toMatchObject({ valid: true, expectedLink: null, expectedDirectory: stores().a })
+    retarget()
+    const save = { text: next, expectedHash: plan.expectedHash, expectedLink: plan.expectedLink, expectedDirectory: plan.expectedDirectory }
+    expect(await call<RulesOutcome>('rules:save-master', save)).toMatchObject({ ok: false, code: 'REVISION_CONFLICT' })
+    expect(readFileSync(join(stores().b, 'global-rules.md'), 'utf8')).toBe(MASTER)
+    back()
+    expect(await call<RulesOutcome>('rules:save-master', save)).toMatchObject({ ok: true })
+    expect(readFileSync(join(stores().a, 'global-rules.md'), 'utf8')).toBe(next)
+    // Restoring an earlier version is bound the same way.
+    const revert = await call<RulesRevertPlan>('rules:plan-revert-master', { revision: 1 })
+    expect(revert).toMatchObject({ ok: true, expectedDirectory: stores().a })
+    retarget()
+    expect(await call<RulesOutcome>('rules:save-master', { text: revert.text, expectedHash: revert.expectedHash, expectedLink: revert.expectedLink, expectedDirectory: revert.expectedDirectory }))
+      .toMatchObject({ ok: false, code: 'REVISION_CONFLICT' })
+    expect(readFileSync(join(stores().b, 'global-rules.md'), 'utf8')).toBe(next)
   })
 })
 

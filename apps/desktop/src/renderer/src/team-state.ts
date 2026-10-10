@@ -134,7 +134,7 @@ export function useTeamState(): TeamState {
   const approved = snapshot?.approved?.data ?? null
   const data = staged ?? base
   const shown: AgentsShownRevision | null = snapshot?.file.hash
-    ? { generation: snapshot.approved?.generation ?? null, fileHash: snapshot.file.hash, link: snapshot.file.link } : null
+    ? { generation: snapshot.approved?.generation ?? null, fileHash: snapshot.file.hash, link: snapshot.file.link, directory: snapshot.file.directory } : null
   const preview = computed !== null && computed.data === staged ? computed.result : null
 
   useEffect(() => {
@@ -218,7 +218,7 @@ export function useTeamState(): TeamState {
     for (const [agent, text] of notes) {
       if (latest.file.hash === null) break
       try {
-        const saved = await window.aiTerminal.saveAgentNotes({ generation: latest.approved?.generation ?? null, fileHash: latest.file.hash, link: latest.file.link }, agent, text)
+        const saved = await window.aiTerminal.saveAgentNotes({ generation: latest.approved?.generation ?? null, fileHash: latest.file.hash, link: latest.file.link, directory: latest.file.directory }, agent, text)
         latest = saved.snapshot
       } catch {
         break

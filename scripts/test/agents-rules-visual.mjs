@@ -184,9 +184,11 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     const review = ledger.locator('.ledger-sheet .review-group')
     await review.filter({ hasText: /^Sonnet/ }).getByText('Can be given work, may receive private work').waitFor()
     await review.filter({ hasText: /^Lead/ }).locator('.chain-step').first().waitFor()
-    assert.equal(await review.count(), 16, 'six agents and ten roles')
-    // What is about neither an agent nor a role stays a sentence of its own: here the one allowed workspace.
-    assert.deepEqual(await ledger.locator('.ledger-sheet .review > .consequence').allTextContents(), ['Z.ai could receive private work in one more workspace'])
+    assert.equal(await review.count(), 17, 'six agents, ten roles and the allowed workspaces')
+    // A first approval also allows private work in a folder: the folder is named in full before Approve.
+    const allowed = review.filter({ hasText: /^Allowed workspaces/ })
+    assert.match((await allowed.textContent()).replace(/\s+/g, ' '), /Z\.ai · workspace.*\/synthetic\/EXCEPTION-SENTINEL-FOLDER.*Z\.ai could receive private work in one more workspace/)
+    assert.deepEqual(await ledger.locator('.ledger-sheet .review > .consequence').allTextContents(), [], 'no loose sentence is left over')
     await shot('team-first-approval-1280.png')
     await approve()
     await notice(/^Approved · version 1$/)
