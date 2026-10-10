@@ -161,7 +161,8 @@ export interface RulesState {
   beginUndo(transaction: string): Promise<void>
   beginRestore(revision: number): Promise<void>
   beginTest(harness: RosterHarness): void
-  confirm(): Promise<void>
+  /** Carries out what the sheet shows. With `then: 'install'`, a save is followed by the sheet that shows what each app would get. */
+  confirm(then?: 'install'): Promise<void>
   cancel(): void
 }
 
@@ -244,7 +245,7 @@ export function useRulesState(): RulesState {
     }
   }
 
-  async function confirm(): Promise<void> {
+  async function confirm(then?: 'install'): Promise<void> {
     if (pending === null) return
     let run: () => Promise<RulesOutcome>
     if (pending.kind === 'save') {
@@ -278,6 +279,16 @@ export function useRulesState(): RulesState {
           : outcome.code === 'REVISION_CONFLICT' ? 'Something changed since this was shown. Reloaded without writing.' : outcome.message
       })
       setPending(null)
+      // Save and install…: the saved rules go straight to the sheet that shows each app's file. Nothing is written there before Install.
+      if (then === 'install' && outcome.ok && pending.kind === 'save') {
+        try {
+          const plan = await window.aiTerminal.planRulesInstall()
+          if (plan.ok) setPending({ kind: 'install', plan })
+          else setNotice({ ok: false, text: `Saved, not installed. ${plan.message ?? 'Install cannot run now'}` })
+        } catch (error) {
+          setNotice({ ok: false, text: `Saved, not installed. ${failureDetail(error, 'Could not prepare the install')}` })
+        }
+      }
     } catch (error) {
       setNotice({ ok: false, text: failureDetail(error, 'That could not be done') })
     } finally {
@@ -310,13 +321,18 @@ export function useRulesState(): RulesState {
 }
 
 /** A confirmation in place: what would happen, the files or diff it touches, then the one action and Cancel. */
-function Sheet(props: { title: string; note?: string | undefined; action: string; ready?: boolean | undefined; busy: boolean; onConfirm(): void; onCancel(): void; children?: ReactNode }): React.JSX.Element {
+function Sheet(props: {
+  title: string; note?: string | undefined; action: string; ready?: boolean | undefined; busy: boolean; onConfirm(): void; onCancel(): void; children?: ReactNode
+  /** A second way to go on, beside the main one. */
+  also?: { label: string; onClick(): void } | undefined
+}): React.JSX.Element {
   return (
     <div className="sheet" role="group" aria-label={props.title}>
       <div className="sheet-head"><b>{props.title}</b>{props.note ? <span className="muted">{props.note}</span> : null}</div>
       {props.children}
       <div className="inline">
         <button type="button" className="primary" disabled={props.busy || props.ready === false} onClick={props.onConfirm}>{props.busy ? 'Working…' : props.action}</button>
+        {props.also ? <button type="button" disabled={props.busy || props.ready === false} onClick={props.also.onClick}>{props.also.label}</button> : null}
         <button type="button" disabled={props.busy} onClick={props.onCancel}>Cancel</button>
       </div>
     </div>
@@ -360,7 +376,8 @@ function PendingSheet(props: { rules: RulesState }): React.JSX.Element | null {
     case 'save':
       return (
         <Sheet {...common} title={pending.plan.valid ? `Save the rules · ${diffSummary(pending.plan.diff)}` : 'These rules cannot be saved'} action="Save" ready={pending.plan.valid && pending.plan.diff !== ''}
-          note={pending.plan.valid ? 'The text before this save is kept under Earlier versions. Nothing is installed.' : 'An app could not read them as written.'}>
+          note={pending.plan.valid ? 'The text before this save is kept under Earlier versions. Save installs nothing; Save and install… then shows each app\'s file first.' : 'An app could not read them as written.'}
+          also={pending.plan.valid ? { label: 'Save and install…', onClick: () => void rules.confirm('install') } : undefined}>
           <Issues issues={pending.plan.errors} />
           <LinkNote link={pending.plan.expectedLink} home={home} what="The rules file" />
           {pending.plan.diff ? <pre className="diff">{diffBody(pending.plan.diff)}</pre> : null}

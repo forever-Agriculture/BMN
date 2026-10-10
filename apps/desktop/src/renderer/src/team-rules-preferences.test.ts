@@ -526,6 +526,19 @@ describe('Rules › Editor (60.6 AC1–AC3)', () => {
     expect(rulesMarkup('editor', rules({ pending: { kind: 'save', text: 'new', plan: { ...plan, expectedLink: null } } }))).not.toContain('is a link to')
   })
 
+  it('offers Save and install… beside Save, only for rules that can be saved, and says that neither installs unseen', () => {
+    const plan = { valid: true, errors: [], diff: '--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new', expectedHash: 'a'.repeat(64), expectedLink: null, expectedDirectory: '/home/synthetic/.config/bmn/agents', renderings: [] }
+    const sheet = rulesMarkup('editor', rules({ pending: { kind: 'save', text: 'new', plan } }))
+    expect(sheet).toContain('<button type="button" class="primary">Save</button><button type="button">Save and install…</button><button type="button">Cancel</button>')
+    expect(sheet).toContain('The text before this save is kept under Earlier versions. Save installs nothing; Save and install… then shows each app&#x27;s file first.')
+    // Rules an app could not read are not saved, so there is nothing to install either.
+    const refused = rulesMarkup('editor', rules({ pending: { kind: 'save', text: 'new', plan: { ...plan, valid: false, errors: [{ code: 'RULES_MARKER', message: 'A public section is not closed.' }] } } }))
+    expect(refused).toContain('These rules cannot be saved')
+    expect(refused).not.toContain('Save and install…')
+    // While a save is being written neither button can be pressed again.
+    expect(rulesMarkup('editor', rules({ busy: true, pending: { kind: 'save', text: 'new', plan } }))).toContain('<button type="button" class="primary" disabled="">Working…</button><button type="button" disabled="">Save and install…</button>')
+  })
+
   it('heads the page with the save and install dates and, since an app differs, the dot, the count and Install…', () => {
     expect(markup).toContain(`<span class="faint">Saved ${shortDate('2026-10-09T21:50:00.000Z')} · last installed ${shortDate('2026-10-08T14:02:00.000Z')}</span>`)
     expect(markup).toContain('<span class="muted">2 apps differ</span><button type="button" class="primary">Install…</button>')
