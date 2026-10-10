@@ -299,17 +299,19 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       await page.locator('.preferences-button').click()
       await page.waitForSelector('.preferences-dialog')
       await sleep(400)
-      const sections = await page.locator('.preferences-dialog .preferences-section').count()
-      for (let index = 0; index < sections; index++) {
-        const heading = await page.locator('.preferences-dialog .preferences-section').nth(index).evaluate((section) => {
-          section.scrollIntoView({ block: 'start' })
-          return section.querySelector('h3')?.textContent ?? `section-${index}`
-        })
+      // Each earlier section is its own page now: open them one by one from the navigation.
+      const pages = await page.locator('.preferences-dialog .nav-group .nav-item').allTextContents()
+      assert.deepEqual(pages, ['Appearance', 'Terminal', 'Notifications', 'Voice', 'Telegram', 'Local control', 'History', 'Backup'])
+      const helps = []
+      for (const [index, heading] of pages.entries()) {
+        await page.locator('.preferences-dialog .nav-group .nav-item', { hasText: new RegExp(`^${heading}$`) }).click()
+        await page.locator('.preferences-dialog .preferences-page:not([hidden]) h3', { hasText: new RegExp(`^${heading}$`) }).waitFor()
         await sleep(200)
         await shot(`${colorMode}-preferences-${index}-${heading.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.png`, '.preferences-dialog')
+        helps.push(...await readHelp(page, '.preferences-dialog .preferences-help'))
       }
       assertSelects(await readSelects(page, '.preferences-dialog'), `${colorMode} Preferences`, 2)
-      assertOneLine(await readHelp(page, '.preferences-dialog .preferences-help'), `${colorMode} Preferences`, 10)
+      assertOneLine(helps, `${colorMode} Preferences`, 10)
       const telegram = await page.evaluate(() => {
         const status = document.querySelector('.preferences-dialog dl.telegram-status')
         const section = [...document.querySelectorAll('.preferences-dialog .preferences-section')]

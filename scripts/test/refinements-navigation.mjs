@@ -151,15 +151,17 @@ setInterval(async()=>{if(name!=='A'||!existsSync(${JSON.stringify(command)}))ret
       await page.getByRole('button', { name: 'Close search', exact: true }).click()
       await page.getByRole('button', { name: 'Preferences', exact: true }).click()
       const prefs = page.getByRole('dialog', { name: 'Preferences', exact: true })
-      const jump = prefs.getByRole('combobox', { name: 'Preferences section', exact: true })
-      await jump.selectOption('Telegram')
+      const openPage = name => prefs.getByRole('navigation', { name: 'Preference pages', exact: true }).getByRole('button', { name, exact: true }).click()
+      // Pages stay mounted while hidden; messages are read from the one shown.
+      const shown = prefs.locator('.preferences-page:not([hidden])')
+      await openPage('Telegram')
       const chat = prefs.locator('#preferences-telegram-chat-id')
       if (await chat.count()) {
         await chat.fill('synthetic invalid')
         await prefs.getByRole('button', { name: 'Save Telegram settings', exact: true }).click()
-        await prefs.locator('.preferences-error').waitFor()
+        await shown.locator('.preferences-error').waitFor()
       }
-      const validation = await prefs.locator('.preferences-error').allTextContents()
+      const validation = await shown.locator('.preferences-error').allTextContents()
       if (mode === 'split' && width === 800) {
         const locked = join(root, 'settings-locked'), unlock = join(root, 'settings-unlock')
         const driver = createRequire(join(repo, 'apps/desktop/package.json')).resolve('better-sqlite3')
@@ -171,30 +173,31 @@ setInterval(async()=>{if(name!=='A'||!existsSync(${JSON.stringify(command)}))ret
           await chat.fill('123')
           await prefs.getByRole('button', { name: 'Save Telegram settings', exact: true }).click()
           await prefs.getByRole('button', { name: 'Saving…', exact: true }).waitFor()
-          await jump.selectOption('Appearance'); await jump.selectOption('Telegram')
+          await openPage('Appearance'); await openPage('Telegram')
           assert.equal(await prefs.getByRole('button', { name: 'Saving…', exact: true }).isDisabled(), true)
           assert.equal(await chat.inputValue(), '123')
         } finally { writeFileSync(unlock, '') }
         await prefs.getByRole('button', { name: 'Save Telegram settings', exact: true }).waitFor()
-        await prefs.locator('.preferences-success').waitFor()
+        await shown.locator('.preferences-success').waitFor()
         lockChild.kill('SIGTERM'); lockChild = undefined
         await chat.fill('synthetic invalid'); await prefs.getByRole('button', { name: 'Save Telegram settings', exact: true }).click()
-        await prefs.locator('.preferences-error').waitFor()
-        result.checks.push('Preferences jumps preserve an actual pending SQLite save and its unsaved field')
+        await shown.locator('.preferences-error').waitFor()
+        result.checks.push('Preferences pages preserve an actual pending SQLite save and its unsaved field')
       }
-      for (const section of ['Backup', 'History', 'Voice', 'Appearance', 'Terminal', 'Notifications', 'Local agent control', 'Telegram']) {
-        await jump.selectOption(section)
+      for (const section of ['Backup', 'History', 'Voice', 'Appearance', 'Terminal', 'Notifications', 'Local control', 'Telegram']) {
+        await openPage(section)
         assert.equal(await page.evaluate(() => document.activeElement.textContent), section)
+        assert.deepEqual(await prefs.locator('.preferences-page:not([hidden]) h3').allTextContents(), [section])
       }
       if (await chat.count()) assert.equal(await chat.inputValue(), 'synthetic invalid')
-      assert.deepEqual(await prefs.locator('.preferences-error').allTextContents(), validation)
+      assert.deepEqual(await shown.locator('.preferences-error').allTextContents(), validation)
       await page.screenshot({ path: join(evidence, `preferences-${mode}-${width}.png`) })
       await page.getByRole('button', { name: 'Close Preferences', exact: true }).click()
       result.states.push({ mode, width, height, findGrid: [after.cols, after.rows], inputEvents: after.inputEvents })
     }
       if (mode === 'focus') await page.keyboard.press('Control+Shift+Z')
     }
-    result.checks.push('Find overlay/query/match stability and Preferences mounted section focus at three sizes')
+    result.checks.push('Find overlay/query/match stability and Preferences pages, mounted while hidden, at three sizes')
     // Explicit workspace pins use the menu, not the active session's path.
     await page.getByRole('button', { name: 'Actions for Project A', exact: true }).click()
     await page.getByRole('menuitem', { name: 'Pinned files…', exact: true }).click()

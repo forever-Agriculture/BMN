@@ -231,7 +231,7 @@ that view never pastes or submits a handoff. Its draft list is bounded, not a co
 Every session gets the `bmn` command and a token scoped to that session and run. An agent can list
 sessions, publish a file, report progress, ask you a question, prepare a handoff, or send text to
 its own terminal. `bmn help agents` prints the etiquette page agents can read. Preferences →
-**Local agent control** shows whether the control socket is listening, with its path; a runtime
+**Local control** shows whether the control socket is listening, with its path; a runtime
 path that is too long disables the socket, and Preferences says so. **Check configured hooks**
 reads BMN's existing checker report for Claude Code, Codex and OpenCode, including missing
 entries and a check time. It changes no harness file. **Configured** describes entries in a
@@ -264,6 +264,20 @@ The full command reference, the hook contract and the security model are in
 [agent-control.md](agent-control.md). Two limits matter here: everything an agent reports is its
 claim, not a verified fact, and the control API keeps sessions apart but is not a sandbox against a
 program that already runs as your user.
+
+### The team and one rules master
+
+Preferences → **Team** keeps the agents you work with in one file you own: each agent's class
+(knight, queen, bishop or pawn), app, model and provider, which roles it may take and in what
+order, and whether its provider may see private work. Nothing in that file takes effect until you
+approve it there; every approval is a numbered version you can open or restore. Agents read the
+approved team with `bmn team`, and a lead runs `bmn roster check` before it hands work to another
+agent.
+
+Preferences → **Rules** keeps one rules text and writes it into each agent app's own rules file
+(Claude Code, Codex, OpenCode and Cursor), shows each file's difference before it writes, and can
+undo an install. An app whose provider may not see private work receives only the sections you
+marked public. Details and limits are in [agent-control.md](agent-control.md#the-team-team-file-check-and-rules).
 
 ## Files and file references
 
@@ -381,6 +395,9 @@ full shortcut table is in the [README](../README.md#keyboard).
 
 - No account, no cloud backend, no telemetry, analytics or update checks. Everything runs on your
   computer.
+- One exception, only once you keep a team file: when a session opens in a workspace, at most
+  once a day, BMN asks GitHub without credentials whether that workspace's `origin` repository is
+  public. The request carries the repository's owner and name and nothing else.
 - The interface runs in a sandboxed renderer with context isolation and no Node.js access; it
   reaches the rest of the app only through a narrow preload API.
 - The agent control API is a Unix socket in an owner-only folder, with no TCP listener; each
@@ -395,6 +412,7 @@ malicious program already running as your user.
 | What | Where |
 | --- | --- |
 | Settings, bot token | `~/.config/bmn/` |
+| Team file, rules master, approved versions | `~/.config/bmn/agents/` |
 | Database, stored files, voice models | `~/.local/share/bmn/` |
 | Saved output, file staging | `~/.local/state/bmn/` |
 | Control socket | `$XDG_RUNTIME_DIR/bmn/control/` |
@@ -415,4 +433,4 @@ Pins store paths only, and never send content to an agent.
 
 Collapsed workspace groups retain the selected unarchived session row and hide its
 siblings. Counts and Move up/down still refer to the complete group. In Preferences,
-**Jump to section** reaches every existing section without saving or resetting edits.
+the list on the left opens one page at a time; changing page neither saves nor resets edits.

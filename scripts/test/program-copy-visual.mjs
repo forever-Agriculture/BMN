@@ -177,6 +177,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     phase('Preferences → Terminal turns it off')
     await page.locator('.preferences-button').click()
     await page.waitForSelector('.preferences-dialog')
+    await page.locator('.preferences-dialog .nav-group .nav-item', { hasText: /^Terminal$/ }).click()
     const checkbox = page.locator('#preferences-program-clipboard')
     assert.equal(await checkbox.isChecked(), true)
     await checkbox.click()

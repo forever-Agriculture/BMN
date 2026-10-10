@@ -61,6 +61,7 @@ import { trackAllowedSender } from './allowed-senders'
 import { createDevelopmentRoot } from './development-root'
 import { installSavedOutputIpcHandler } from './saved-output-ipc'
 import { shouldAdoptLaunchSetRuntime } from './launch-set-runtime'
+import { refreshVisibilityOnOpen } from './visibility-refresh'
 import {
   bridgeInvokeRegistrar,
   type BridgeInvokeRegistration
@@ -373,6 +374,13 @@ function requireHostClient(): PtyHostClient {
   return hostClient
 }
 
+/** Epic 60.3 AC10: a session opening in a workspace refreshes its visibility record, at most once a day. Test runs ask nothing. */
+function refreshOpenedWorkspace(cwd: string): void {
+  if (rendererTestMode || selfTestTaps) return
+  // After the session is answered: the refresh reads the folder's origin before it asks anything.
+  setImmediate(() => { void refreshVisibilityOnOpen(cwd) })
+}
+
 async function createSessionRuntime(
   params: SessionCreateParams,
   testMode: boolean
@@ -395,6 +403,7 @@ async function createSessionRuntime(
   }
   runtimes.set(record.sessionId, current)
   sessionRecords.set(record.sessionId, record)
+  refreshOpenedWorkspace(record.cwd)
   return { session: record, startup: startupForRuntime(current) }
 }
 
@@ -566,6 +575,7 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
       const record = byId.get(entry.sessionId)
       if (!record) throw new Error('A started session was not saved')
       sessionRecords.set(record.sessionId, record)
+      refreshOpenedWorkspace(record.cwd)
       sessions.push(record)
       if (!shouldAdoptLaunchSetRuntime(
         entry, record,
