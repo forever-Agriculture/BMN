@@ -1,5 +1,5 @@
 // MODULE: safe-config-write.mjs - backup, revision check and atomic write for agent config files, shared by bin/bmn and the utility process
-import { chmodSync, copyFileSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join } from 'node:path'
 
 /** A refusal with a stable code such as REVISION_CONFLICT; nothing was written when it is thrown. */
@@ -200,25 +200,53 @@ export function writeConfigSafely(path, expectedText, nextText, { beforeCommit, 
 }
 
 /**
+ * The directory that really holds a path's entry, every link on the way followed. Where the last
+ * folders do not exist yet, the nearest one that does is resolved and the rest appended, so a link
+ * above a folder BMN has still to create is bound as well.
+ */
+function holdingDirectory(path) {
+  let existing = dirname(path)
+  const missing = []
+  for (;;) {
+    try {
+      return join(realpathSync(existing), ...missing)
+    } catch (error) {
+      if (error.code !== 'ENOENT' || dirname(existing) === existing) throw error
+      missing.unshift(basename(existing))
+      existing = dirname(existing)
+    }
+  }
+}
+
+/**
  * What a path holds right now, without following a final symbolic link: a regular file with its
- * bytes, a link with its target text, or nothing. Epic 60 records this before every write so a
- * rollback can put back exactly what was there, a link as a link.
+ * bytes, a link with its target text, or nothing; and `directory`, the real directory holding that
+ * entry. Epic 60 records this before every write so a rollback can put back exactly what was
+ * there, a link as a link, and so a plan stops being valid when a link on the way to the file
+ * starts pointing somewhere else (R60-NFR2).
  */
 export function pathState(path) {
+  const directory = holdingDirectory(path)
   let stat
   try {
     stat = lstatSync(path)
   } catch (error) {
-    if (error.code === 'ENOENT') return { kind: 'missing' }
+    if (error.code === 'ENOENT') return { kind: 'missing', directory }
     throw error
   }
-  if (stat.isSymbolicLink()) return { kind: 'link', target: readlinkSync(path) }
+  if (stat.isSymbolicLink()) return { kind: 'link', target: readlinkSync(path), directory }
   if (!stat.isFile()) throw new ConfigWriteError('NOT_A_FILE', `${path} is not a regular file or a symbolic link`)
-  return { kind: 'file', text: readFileSync(path, 'utf8'), mode: stat.mode & 0o777 }
+  return { kind: 'file', text: readFileSync(path, 'utf8'), mode: stat.mode & 0o777, directory }
 }
 
-function sameState(a, b) {
-  return a.kind === b.kind && a.target === b.target && a.text === b.text
+/** Whether two states of one path are the same entry in the same real directory. */
+export function sameState(a, b) {
+  return a.kind === b.kind && a.target === b.target && a.text === b.text && a.directory === b.directory
+}
+
+/** Where a write to `path` would really land, given its state: the path with every link before its last part followed. */
+export function resolvedPath(path, state) {
+  return join(state.directory, basename(path))
 }
 
 /**

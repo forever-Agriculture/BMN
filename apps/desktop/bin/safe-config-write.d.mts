@@ -15,11 +15,14 @@ export declare function writeConfigSafely(
 ): { target: string; backup: string | null }
 export declare function rewrittenNumbers(text: string): string[]
 export declare function jsonIndent(text: string): number | '\t'
+/** `directory` is the real directory holding the entry: every link before the path's last part followed. */
 export type PathState =
-  | { kind: 'missing' }
-  | { kind: 'link'; target: string }
-  | { kind: 'file'; text: string; mode: number }
+  | { kind: 'missing'; directory: string }
+  | { kind: 'link'; target: string; directory: string }
+  | { kind: 'file'; text: string; mode: number; directory: string }
 export declare function pathState(path: string): PathState
+export declare function sameState(a: PathState, b: PathState): boolean
+export declare function resolvedPath(path: string, state: PathState): string
 export declare function replaceFileSafely(
   path: string,
   expected: PathState,

@@ -464,7 +464,7 @@ export function parseRoster(text) {
 
   const routes = validateRoutes(blocks.get('harness-routes'), providerIds, add)
   const roles = validateRoles(blocks.get('roles'), agentById, agentIds, add, warnings)
-  const exceptions = validateExceptions(blocks.get('exceptions'), providerIds, add)
+  const exceptions = validateExceptions(blocks.get('exceptions'), providerIds, add, (code, line, message) => warnings.push({ code, line, message }))
 
   const providerById = new Map(providers.map((provider) => [provider.id, provider]))
   const roleIds = new Set(roles.map((role) => role.id))
@@ -785,7 +785,7 @@ export function resolvedDirectory(path) {
  * `## exceptions`: one entry per public-only provider the owner allowed in one workspace, keyed
  * by an opaque id (the only part of an exception a receipt ever carries).
  */
-function validateExceptions(entry, providerIds, add) {
+function validateExceptions(entry, providerIds, add, warn) {
   if (!entry) return []
   const exceptions = []
   const resolved = new Map()
@@ -821,7 +821,11 @@ function validateExceptions(entry, providerIds, add) {
       continue
     }
     const path = folder.length > 1 ? folder.replace(/\/+$/, '') : folder
-    const key = `${exception.provider}\n${resolvedDirectory(path)}`
+    // The check compares this text with a workspace's real path and follows no link, so what was
+    // approved can never come to mean another folder. A path through a link grants nothing; say so.
+    const real = resolvedDirectory(path)
+    if (real !== path) warn('EXCEPTION_LINK', line, `## exceptions.${id}: folder passes through a link; an exception counts only for a workspace's real path, so write that path`)
+    const key = `${exception.provider}\n${real}`
     if (resolved.has(key)) {
       add('EXCEPTION_COLLISION', line, `## exceptions.${id} names the same folder as ${resolved.get(key)} for provider ${exception.provider}`)
       continue

@@ -257,13 +257,21 @@ describe('bmn team (60.1 AC3-AC4, 60.2 AC2)', () => {
     const env = { BMN_CONTROL_SOCKET: join(home, 'no-such.sock') }
     expect((await runCli(['roster', 'validate'], env)).code).toBe(3)
     const missingTeam = await runCli(['team'], env)
-    expect(missingTeam.code).toBe(5)
+    expect(missingTeam.code).toBe(3)
     expect(missingTeam.stdout).toBe('')
     writeRoster(EXAMPLE)
     expect((await runCli(['roster', 'validate'], env)).code).toBe(0)
     expect((await runCli(['team'], env)).code).toBe(5)
     approveFile()
     expect((await runCli(['team'], env)).code).toBe(0)
+    // A missing file prints no team, even with one approved (60.1 AC4).
+    rmSync(join(home, '.config/bmn/agents/roster.md'))
+    for (const command of [['team'], ['team', '--json'], ['roster', 'role', 'lead']]) {
+      const gone = await runCli(command, env)
+      expect(gone.code, command.join(' ')).toBe(3)
+      expect(gone.stdout).not.toContain('opus')
+    }
+    writeRoster(EXAMPLE)
     // An invalid file blocks only what reads the file; the approved team still answers.
     writeRoster(edit(EXAMPLE, 'schema_version: 2', 'schema_version: 9'))
     const invalid = await runCli(['roster', 'validate', '--json'], env)

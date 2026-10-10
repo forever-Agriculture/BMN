@@ -10,7 +10,7 @@ import {
   bindSession, consequences, evaluate, evaluateResearch, harnessVersion, normalizedGithubOrigin, prepareResearchRun, readCodexConfig, refreshVisibility,
   setReadTracer, verifyReceipt, visibilityPath, workspaceRoot, workspaceVisibility
 } from '../../bin/agents-check.mjs'
-import { readValidRoster } from '../../bin/agents-state.mjs'
+import { machineDiff, readApproved, readValidRoster } from '../../bin/agents-state.mjs'
 import { canonicalJson, parseRoster, sha256 } from '../../bin/agents-roster.mjs'
 import { approveRoster } from '../main/agents-approval'
 
@@ -293,10 +293,60 @@ describe('private work, providers and exceptions (60.3 AC4)', () => {
     expect(inner(join(outer, 'nested')).code).toBe('DATA_FORBIDDEN')
   })
 
-  it('an exception written through a link names the folder it resolves to', () => {
-    symlinkSync(workspace, join(home, 'link-to-work'))
-    approve(withException(join(home, 'link-to-work')))
+  it('an exception for the outer workspace never covers a dispatch that works in a repository nested in it, or in a packet elsewhere', () => {
+    const outer = join(home, 'outer')
+    mkdirSync(join(outer, '.git'), { recursive: true })
+    mkdirSync(join(outer, 'sub'), { recursive: true })
+    mkdirSync(join(outer, 'nested/.git'), { recursive: true })
+    mkdirSync(join(home, 'elsewhere'))
+    approve(withException(outer))
+    const from = (overrides: Partial<Inputs>, argv = GLM()) => check({ agent: 'glm', role: 'helper', workspace: outer, cwd: outer, argv, ...overrides })
+    expect(from({}).verdict).toBe('PASS')
+    expect(from({ cwd: join(outer, 'sub') }).verdict).toBe('PASS')
+    // The workspace named is the excepted one; the folder the agent would work in is not.
+    expect(from({ cwd: join(outer, 'nested') })).toMatchObject({ code: 'DATA_FORBIDDEN' })
+    expect(from({}, [...GLM(), '--add-dir', join(outer, 'nested')])).toMatchObject({ code: 'DATA_FORBIDDEN' })
+    expect(from({}, [...GLM(), '--add-dir', join(outer, 'sub')]).verdict).toBe('PASS')
+    expect(from({ cwd: join(home, 'elsewhere'), packet: join(home, 'elsewhere') })).toMatchObject({ code: 'DATA_FORBIDDEN' })
+  })
+
+  it('work in a repository nested in a public workspace is private', () => {
+    const outer = join(home, 'outer')
+    mkdirSync(join(outer, 'nested/.git'), { recursive: true })
+    execFileSync('git', ['init', '-q', outer])
+    execFileSync('git', ['-C', outer, 'remote', 'add', 'origin', 'https://github.com/synthetic-owner/synthetic-repo.git'])
+    recordVisibility(outer)
+    const astra = (folder: string) => check({ workspace: outer, cwd: outer, data: 'public', argv: ASTRA_REVIEW(folder) })
+    expect(astra(outer).receipt).toMatchObject({ data: 'public', public_status: { public: true } })
+    expect(astra(join(outer, 'nested')).receipt).toMatchObject({ data: 'private', public_status: { public: true } })
+  })
+
+  it('an exception counts only for a workspace\'s real path: one written through a link grants nothing, wherever the link points', () => {
+    const link = join(home, 'link-to-work')
+    symlinkSync(workspace, link)
+    approve(withException(link))
+    expect(readValidRoster().data.exceptions.find((entry) => entry.id === 'zai-synthetic')?.folder).toBe(link)
+    expect(readValidRoster().warnings).toEqual([expect.objectContaining({ code: 'EXCEPTION_LINK', message: expect.not.stringContaining(home) })])
+    expect(check({ agent: 'glm', role: 'helper', argv: GLM() })).toMatchObject({ code: 'DATA_FORBIDDEN', message: expect.stringContaining('through a link') })
+    // The link points at another workspace afterwards: nothing was ever approved for it.
+    const other = join(home, 'other-work')
+    mkdirSync(other)
+    rmSync(link)
+    symlinkSync(other, link)
+    expect(check({ agent: 'glm', role: 'helper', workspace: other, cwd: other, argv: GLM() })).toMatchObject({ code: 'DATA_FORBIDDEN' })
+    expect(check({ agent: 'glm', role: 'helper', workspace: link, cwd: other, argv: GLM() })).toMatchObject({ code: 'DATA_FORBIDDEN' })
+    // The real path is what an exception names.
+    approve(withException(workspace))
+    expect(readValidRoster().warnings).toEqual([])
     expect(check({ agent: 'glm', role: 'helper', argv: GLM() }).verdict).toBe('PASS')
+    // A changed folder is a pending difference: redacted for agents, exact for the owner's review.
+    writeFileSync(join(home, '.config/bmn/agents/roster.md'), withException(other))
+    const approved = readApproved().data
+    const file = readValidRoster().data
+    expect(machineDiff(approved, file)).toEqual([expect.objectContaining({ scope: 'exceptions', id: 'zai-synthetic', field: 'folder', free_text: true })])
+    expect(JSON.stringify(machineDiff(approved, file))).not.toContain(other)
+    expect(machineDiff(approved, file, { folders: true })).toEqual([expect.objectContaining({ field: 'folder', before: { present: true, value: workspace }, after: { present: true, value: other } })])
+    expect(check({ agent: 'glm', role: 'helper', workspace: other, cwd: other, argv: GLM() })).toMatchObject({ code: 'DATA_FORBIDDEN' })
   })
 
   it('no exception applies to an owner-declared destination, and none changes host or version checks', () => {
@@ -564,16 +614,59 @@ describe('public-only destinations and packet mode (60.3 AC6)', () => {
     expect(luna('public')).toMatchObject({ code: 'PACKET_INVALID', message: expect.stringContaining('claude -p') })
   })
 
+  it('--verify judges the public record as of now, not as of the receipt', () => {
+    recordVisibility(publicRepo, { commit, checked_at: new Date(NOW.getTime() - 6 * 86_400_000).toISOString() })
+    const result = glm()
+    expect(result.verdict, JSON.stringify(result)).toBe('PASS')
+    writeFileSync(join(home, 'packet-receipt.json'), JSON.stringify(result.receipt))
+    const verify = (now: Date) => verifyReceipt(join(home, 'packet-receipt.json'), GLM(), { environment: env, cwd: packet, now })
+    expect(verify(NOW)).toEqual({ ok: true })
+    expect(verify(new Date(NOW.getTime() + 86_400_000 - 1))).toEqual({ ok: true })
+    // The record is 7 days old, so the workspace counts as private: a fresh check refuses and the receipt no longer reproduces.
+    expect(glm({}, { now: new Date(NOW.getTime() + 86_400_000) }).code).toBe('DATA_FORBIDDEN')
+    expect(verify(new Date(NOW.getTime() + 86_400_000))).toMatchObject({ ok: false, reason: expect.stringContaining('no longer passes: DATA_FORBIDDEN') })
+  })
+
+  it('reads the published commit itself: a replacement ref or a git environment cannot stand in for it', () => {
+    // A private commit, never published, that git would serve in place of the recorded one.
+    writeFileSync(join(publicRepo, 'src/a.ts'), 'export const a = "PRIVATE-REPLACEMENT"\n')
+    git(publicRepo, 'commit', '-q', '-am', 'private')
+    const secret = git(publicRepo, 'rev-parse', 'HEAD')
+    git(publicRepo, 'reset', '-q', '--hard', commit)
+    git(publicRepo, 'replace', commit, secret)
+    expect(git(publicRepo, 'show', `${commit}:src/a.ts`)).toContain('PRIVATE-REPLACEMENT')
+    expect(glm().verdict).toBe('PASS')
+    writeFileSync(join(packet, 'src/a.ts'), 'export const a = "PRIVATE-REPLACEMENT"\n')
+    expect(glm()).toMatchObject({ code: 'PACKET_INVALID', message: expect.stringContaining('src/a.ts is not byte-identical') })
+    writeFileSync(join(packet, 'src/a.ts'), 'export const a = 1\n')
+    // Another repository named by the environment answers nothing.
+    const elsewhere = join(home, 'elsewhere')
+    mkdirSync(elsewhere)
+    git(elsewhere, 'init', '-q')
+    const saved = { dir: process.env.GIT_DIR, objects: process.env.GIT_OBJECT_DIRECTORY }
+    process.env.GIT_DIR = join(elsewhere, '.git')
+    process.env.GIT_OBJECT_DIRECTORY = join(elsewhere, '.git/objects')
+    try {
+      expect(glm().verdict).toBe('PASS')
+    } finally {
+      if (saved.dir === undefined) delete process.env.GIT_DIR
+      else process.env.GIT_DIR = saved.dir
+      if (saved.objects === undefined) delete process.env.GIT_OBJECT_DIRECTORY
+      else process.env.GIT_OBJECT_DIRECTORY = saved.objects
+    }
+  })
+
   it('--verify refuses a packet receipt once a packet file changed after the check', () => {
     const result = glm()
     expect(result.verdict).toBe('PASS')
     writeFileSync(join(home, 'packet-receipt.json'), JSON.stringify(result.receipt))
-    expect(verifyReceipt(join(home, 'packet-receipt.json'), GLM(), { environment: env, cwd: packet })).toEqual({ ok: true })
+    const verify = (now = NOW) => verifyReceipt(join(home, 'packet-receipt.json'), GLM(), { environment: env, cwd: packet, now })
+    expect(verify()).toEqual({ ok: true })
     writeFileSync(join(packet, 'prompt.md'), 'Review src/a.ts, and more.\n')
-    expect(verifyReceipt(join(home, 'packet-receipt.json'), GLM(), { environment: env, cwd: packet })).toMatchObject({ ok: false, reason: expect.stringContaining('packet') })
+    expect(verify()).toMatchObject({ ok: false, reason: expect.stringContaining('packet') })
     writeFileSync(join(packet, 'prompt.md'), 'Review src/a.ts.\n')
     writeFileSync(join(packet, 'src/a.ts'), 'export const a = 2\n')
-    expect(verifyReceipt(join(home, 'packet-receipt.json'), GLM(), { environment: env, cwd: packet })).toMatchObject({ ok: false })
+    expect(verify()).toMatchObject({ ok: false })
   })
 
   it('for a destination that may see private work, an unreadable prompt is a workspace problem and a missing packet a packet problem', () => {
@@ -641,6 +734,45 @@ function runCli(args: string[], extraEnv: Record<string, string> = {}, nodeArgs:
     child.stdin?.end()
   })
 }
+
+describe('a missing or invalid team file (R60-NFR1)', () => {
+  const file = (): string => join(home, '.config/bmn/agents/roster.md')
+  const args = (): string[] => ['roster', 'check', '--agent', 'astra', '--role', 'epic-reviewer', '--workspace', workspace, '--data', 'private', '--json', '--', ...ASTRA_REVIEW(workspace)]
+
+  it('never passes a dispatch, though the approved version is intact', async () => {
+    const pass = check({ argv: ASTRA_REVIEW(workspace) })
+    expect(pass.verdict).toBe('PASS')
+    writeFileSync(join(home, 'receipt.json'), JSON.stringify(pass.receipt))
+    const text = readFileSync(file(), 'utf8')
+    rmSync(file())
+    expect(() => check({ argv: ASTRA_REVIEW(workspace) })).toThrowError(expect.objectContaining({ code: 'ROSTER_MISSING' }))
+    const missing = await runCli(args())
+    expect(missing.code).toBe(3)
+    expect(missing.stdout).not.toContain('PASS')
+    expect(verifyReceipt(join(home, 'receipt.json'), ASTRA_REVIEW(workspace), { environment: env, cwd: workspace, now: NOW })).toMatchObject({ ok: false, reason: expect.stringContaining('ROSTER_MISSING') })
+    writeFileSync(file(), edit(text, 'schema_version: 2', 'schema_version: 9'))
+    expect(() => check({ argv: ASTRA_REVIEW(workspace) })).toThrowError(expect.objectContaining({ code: 'ROSTER_INVALID' }))
+    const invalid = await runCli(args())
+    expect(invalid.code).toBe(4)
+    expect(invalid.stdout).not.toContain('PASS')
+  })
+
+  it('a valid edit not yet approved changes nothing: the approved version still decides', async () => {
+    const text = readFileSync(file(), 'utf8')
+    writeFileSync(file(), edit(text, 'hosts: [api.openai.com], sites: [openai.com], private_work: allowed', 'hosts: [api.openai.com], sites: [openai.com], private_work: public_only'))
+    const pending = check({ argv: ASTRA_REVIEW(workspace) })
+    expect(pending.verdict).toBe('PASS')
+    expect(pending.receipt).toMatchObject({ roster_file_hash: sha256(readFileSync(file(), 'utf8')), generation: { number: readApproved().number } })
+    expect((await runCli(args())).code).toBe(0)
+  })
+
+  it('never passes a research run', () => {
+    const run = prepareResearchRun('Research these models: claude-fable-5-1.\n', { now: NOW })
+    rmSync(file())
+    expect(() => evaluateResearch({ agent: 'fable', argv: [], stdin: run.prompt, cwd: run.cwd }, { environment: env, cwd: run.cwd, now: NOW }))
+      .toThrowError(expect.objectContaining({ code: 'ROSTER_MISSING' }))
+  })
+})
 
 describe('receipts and --verify (60.3 AC7)', () => {
   it('returns a hashed receipt and refuses it after any hashed input changes', async () => {

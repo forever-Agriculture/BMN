@@ -36,6 +36,7 @@ export declare function lastGoodGeneration(): number | null
 export declare function readApproved(): Generation
 export declare function listGenerations(): Record<string, unknown>[]
 export declare function restoreProblem(number: number): string | null
-export declare function machineDiff(approved: RosterData, file: RosterData): DiffEntry[]
+export declare function machineDiff(approved: RosterData, file: RosterData, options?: { folders?: boolean }): DiffEntry[]
+export declare function readApprovedWithFile(options?: { valid?: boolean }): Generation
 export declare function diffLine(entry: DiffEntry): string
 export declare function buildGeneration(options: { number: number; parent: number | null; data: RosterData; rosterFileHash: string; kind?: 'approval' | 'restore'; restoredFrom?: number; now?: Date }): Generation

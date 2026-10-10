@@ -1,7 +1,7 @@
 // MODULE: agents-cli.mjs - Epic 60: `bmn team`, `bmn roster …` and `bmn rules …`, owner commands that need no control socket
 import { writeSync } from 'node:fs'
 import { RosterError, roleChain, roleChainText, rosterPath, team, teamLine } from './agents-roster.mjs'
-import { diffLine, listGenerations, machineDiff, readApproved, readValidRoster } from './agents-state.mjs'
+import { diffLine, listGenerations, machineDiff, readApproved, readApprovedWithFile, readValidRoster } from './agents-state.mjs'
 
 /** Exit codes shared by every Epic 60 command (the epic's shared contract). */
 export const EXIT = {
@@ -106,8 +106,9 @@ command approves (exit 12). Works with BMN closed; only visibility --refresh use
 Exit: 0 PASS, 2 usage, 3 roster missing, 4 invalid, 5 nothing approved, 6 state corrupt,
 10 refusal, 11 receipt stale or invalid.`
 
+/** What `team` and `roster role` answer from: the approved version, and nothing once the team file is gone (60.1 AC4). */
 function approvedData() {
-  return readApproved()
+  return readApprovedWithFile()
 }
 
 export async function runTeam(argv) {

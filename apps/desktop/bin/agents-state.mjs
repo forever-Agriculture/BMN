@@ -161,6 +161,17 @@ export function readApproved() {
   return generation
 }
 
+/**
+ * Approved state for an answer that must not outlive the team file (R60-NFR1, 60.1 AC4): a missing
+ * file is ROSTER_MISSING and, with `valid`, an invalid one ROSTER_INVALID, before any state is
+ * read. A valid file that differs from the approved version is a pending edit and changes nothing.
+ */
+export function readApprovedWithFile({ valid = false } = {}) {
+  if (valid) readValidRoster()
+  else readRosterFile()
+  return readApproved()
+}
+
 function corrupt(message) {
   const lastGood = lastGoodGeneration()
   return new RosterError('STATE_CORRUPT',
@@ -201,9 +212,9 @@ export function restoreProblem(number) {
 /** Fields status shows only as changed, with a short hash: the owner's free text and exception folders. */
 const HASHED_FIELDS = [...FREE_TEXT_FIELDS, 'folder']
 
-function shown(field, value) {
+function shown(field, value, hashed = HASHED_FIELDS.includes(field)) {
   if (value === undefined) return { present: false }
-  if (HASHED_FIELDS.includes(field)) return { present: true, hash: sha256(canonicalJson(value)).slice(0, 12) }
+  if (hashed) return { present: true, hash: sha256(canonicalJson(value)).slice(0, 12) }
   return { present: true, value }
 }
 
@@ -222,9 +233,11 @@ const DIFF_SCOPES = [
 
 /**
  * Every machine difference, approved → file. Free-text fields and exception folders carry only a
- * short hash on each side, so `status` can say one changed without printing it.
+ * short hash on each side, so `status` can say one changed without printing it. `folders` is for
+ * the owner's own review in BMN, which must show the exact folder an exception would allow.
  */
-export function machineDiff(approved, file) {
+export function machineDiff(approved, file, { folders = false } = {}) {
+  const hashed = (field) => HASHED_FIELDS.includes(field) && !(folders && field === 'folder')
   const out = []
   for (const { scope, list, key, fields } of DIFF_SCOPES) {
     const before = new Map(approved[list].map((item) => [item[key], item]))
@@ -236,7 +249,7 @@ export function machineDiff(approved, file) {
         // The whole entry rides along, so an approval shows every value it adds or removes; hashed fields as a hash.
         const entry = was ?? now
         const value = Object.fromEntries(fields.filter((field) => Object.hasOwn(entry, field))
-          .map((field) => [field, HASHED_FIELDS.includes(field) ? `text ${sha256(canonicalJson(entry[field])).slice(0, 8)}` : entry[field]]))
+          .map((field) => [field, hashed(field) ? `text ${sha256(canonicalJson(entry[field])).slice(0, 8)}` : entry[field]]))
         out.push({ scope, id, field: null, kind: was === undefined ? 'added' : 'removed',
           ...(now ? { after: { present: true, value } } : { before: { present: true, value } }) })
         continue
@@ -244,7 +257,7 @@ export function machineDiff(approved, file) {
       for (const field of fields) {
         if (sameValue(was[field], now[field])) continue
         out.push({ scope, id, field, kind: was[field] === undefined ? 'added' : now[field] === undefined ? 'removed' : 'changed',
-          ...(HASHED_FIELDS.includes(field) ? { free_text: true } : {}), before: shown(field, was[field]), after: shown(field, now[field]) })
+          ...(hashed(field) ? { free_text: true } : {}), before: shown(field, was[field], hashed(field)), after: shown(field, now[field], hashed(field)) })
       }
     }
   }

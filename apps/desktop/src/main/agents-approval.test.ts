@@ -436,7 +436,7 @@ describe('revert and restore (60.2 AC6)', () => {
     expect(lstatSync(rosterFile()).isFile()).toBe(true)
     expect(readFileSync(elsewhere, 'utf8')).toBe(edit(EXAMPLE, LUNA_PAWN, LUNA_BISHOP))
     const backups = readdirSync(join(home, '.config/bmn/agents/state/roster-backups'))
-    expect(JSON.parse(readFileSync(join(home, '.config/bmn/agents/state/roster-backups', backups[0]!), 'utf8'))).toEqual({ kind: 'link', target: elsewhere })
+    expect(JSON.parse(readFileSync(join(home, '.config/bmn/agents/state/roster-backups', backups[0]!), 'utf8'))).toEqual({ kind: 'link', target: elsewhere, directory: join(home, '.config/bmn/agents') })
     expect(() => readlinkSync(rosterFile())).toThrow()
   })
 

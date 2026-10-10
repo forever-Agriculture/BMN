@@ -745,15 +745,22 @@ credentials, and is the only network call in these commands. The app refreshes t
 session opens in the workspace, at most once a day, and only once a team file exists. A missing
 origin, another host, a private repository, an error, a timeout or a malformed record all mean
 private. An exception admits one public-only provider in one workspace (its Git top-level; nested
-repositories are not covered) and never applies to a destination BMN cannot confirm.
+repositories are not covered) and never applies to a destination BMN cannot confirm. It covers a
+dispatch only when every folder the agent would work in belongs to that workspace, and it must
+name the workspace's real path: a path that passes through a link grants nothing, wherever the
+link points, and `bmn roster validate` says so. A changed exception shows on the Team page with
+both folders, to approve or revert. Work in a repository nested inside a public workspace counts
+as private.
 
 **Approval.** A machine field takes effect only after you approve it in **Preferences → Team**;
 notes take effect at once and never reach an agent. Approval writes a numbered version under
 `state/` (folders `0700`, files `0600`) and only then moves the `current` pointer, so a crash
 leaves the previous version in force. No command approves (exit 12): agents and dev-auto read the
 approved version with BMN closed. A missing, invalid or unreadable state never yields a default
-team; every check refuses until the first approval. A team approved under the earlier layout is
-kept as read-only history and must be approved again.
+team; every check refuses until the first approval. The team file must still be there: without it
+`bmn team` and `bmn roster role` print nothing (exit 3), and while it is missing or invalid no
+check passes (exit 3 or 4). A valid edit you have not approved yet changes nothing. A team
+approved under the earlier layout is kept as read-only history and must be approved again.
 
 **Preferences → Team** has three pages. **Agents** shows one card per agent with its class piece,
 app, model, provider and an on/off switch, grouped Active, Proposed and Off; a card opens the
@@ -780,10 +787,13 @@ unknown host when they disagree; settings are read under `--safe-mode` too, beca
 of a Codex session record to bind a resume. Private work goes only to a provider that allows it.
 A public-only destination may receive only a packet of files that match the public commit the
 visibility record names, through a tools-disabled, safe-mode Claude Code call whose appended
-system prompt is exactly the public rules rendering. `bmn roster explain` gives the same
-evaluation in words; `--verify <receipt>` recomputes it and exits 11 on any difference, including
-approved state that has since gone missing or corrupt. `bmn roster bind` ties a started session
-to its receipt so a later resume can be checked.
+system prompt is exactly the public rules rendering. The commit's files are read from the
+workspace's own repository with Git's replacement refs off and no `GIT_*` variable in effect, so
+nothing local can stand in for the published commit. `bmn roster explain` gives the same
+evaluation in words; `--verify <receipt>` recomputes it as of now and exits 11 on any difference,
+including a public record that went stale since and approved state or a team file that has gone
+missing or corrupt. `bmn roster bind` ties a started session to its receipt so a later resume can
+be checked.
 
 **Rules.** The master is ordinary Markdown. Untagged text reaches every agent app;
 `<!-- bmn:apps codex opencode -->` … `<!-- /bmn:apps -->` limits a section to those apps;
@@ -803,7 +813,9 @@ and writes them in one step; a file that is a link is replaced by a regular file
 pointed to is never written. The full rules are written, updated or sent in a test only while the
 app runs a version BMN tested or you accepted under Health; on any other version Install refuses
 them and names the version. Each action confirms against the exact plan it showed, plans again
-once you confirm, and refuses if the files changed since. **Health** reads each file the way the
+once you confirm, and refuses if the files changed since. A plan is bound to the folder that
+really holds each file: when a link on the way to a file leads elsewhere, the confirmation names
+that place too, and a link that moves afterwards makes the plan refuse. **Health** reads each file the way the
 hooks check is read (current, differs from the rules, edited outside BMN, not installed, a link,
 missing or unreadable) and, under **Agent apps**, where each app sends data and which versions
 you accepted. **Test…** asks an app which rules it loaded; it sends the rendered rules to that
@@ -813,8 +825,10 @@ only when its own session record carries the rendered header before any tool ran
 stale when the rendering, the approved destination, the app version or the host changes.
 
 After you approve a team change that alters the team's names, BMN rewrites the team line in the
-rules files that were current, exactly the files the Review listed; a file that changed meanwhile
-is skipped, and the notice offers **Undo**.
+rules files that were current, exactly the files the Review listed; a file that changed
+meanwhile, or whose app, app version or deciding setting changed, is skipped, and the notice
+offers **Undo**. Undo first shows what each file would become, including any edit made since that
+it would replace, and puts nothing back until you confirm.
 
 ### What the team file and rules do not enforce
 

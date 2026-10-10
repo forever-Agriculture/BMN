@@ -3,8 +3,8 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, statSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
-import { APP_NAMES, DESIGNER_ROLE, LEAD_ROLE, RosterError, agentState, canonicalJson, classRefusal, resolvedDirectory, rosterPath, sha256 } from './agents-roster.mjs'
-import { readApproved, stateDirectory } from './agents-state.mjs'
+import { APP_NAMES, DESIGNER_ROLE, LEAD_ROLE, RosterError, agentState, canonicalJson, classRefusal, resolvedDirectory, sha256 } from './agents-roster.mjs'
+import { readApproved, readApprovedWithFile, readValidRoster, stateDirectory } from './agents-state.mjs'
 import { AgentsUsageError, EXIT, failWith, out, readOptions, usage } from './agents-cli.mjs'
 import { publicRendering } from './agents-rules.mjs'
 
@@ -608,8 +608,15 @@ export function normalizedGithubOrigin(url) {
   return `github.com/${match[1].toLowerCase()}/${match[2].toLowerCase()}`
 }
 
+/**
+ * Git, asked about this workspace's own repository and nothing else: no `GIT_*` variable may point
+ * it at another repository, object store or configuration, and replacement refs are off, so an
+ * object name always reads the object with that hash (60.3 AC6).
+ */
 function git(workspace, args, options = {}) {
-  return execFileSync('git', ['-C', workspace, ...args], { stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000, maxBuffer: 64 * 1024 * 1024, ...options })
+  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')))
+  return execFileSync('git', ['--no-replace-objects', '-C', workspace, ...args],
+    { stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000, maxBuffer: 64 * 1024 * 1024, ...options, env: { ...env, GIT_NO_REPLACE_OBJECTS: '1' } })
 }
 
 /** The workspace's `origin` as git would use it: `{ origin }`, or `{ reason }` when there is none or it is not GitHub. */
@@ -769,7 +776,10 @@ export function destinationOf(data, harness, route) {
  * Whether a destination may receive private work (60.3 AC4): its provider answers `allowed` and
  * the destination is evidenced (an observed default, or an explicit listed host); or it is
  * evidenced that way and an exception names that provider and this workspace's root. An
- * owner-declared destination is public work only and no exception applies to it.
+ * owner-declared destination is public work only and no exception applies to it. `root` is the
+ * canonical root every directory of the dispatch belongs to, or null when they do not share one.
+ * An exception's folder is compared as approved, text against that real path, and no link in it
+ * is followed: wherever a link points later, the approval never comes to mean another folder.
  */
 export function privateWorkAnswer(data, destination, root) {
   const provider = data.providers.find((entry) => entry.id === destination.provider)
@@ -778,9 +788,11 @@ export function privateWorkAnswer(data, destination, root) {
   if (destination.basis === 'owner-declared') return { allowed: false, answer, reason: `the destination is owner-declared, not inspected, so ${name} gets public work only` }
   if (answer === 'allowed') return { allowed: true, answer, reason: `${name} may see private work` }
   const exception = root === null ? undefined
-    : data.exceptions.find((entry) => entry.provider === destination.provider && resolvedDirectory(entry.folder) === root)
+    : data.exceptions.find((entry) => entry.provider === destination.provider && entry.folder === root)
   if (exception !== undefined) return { allowed: true, answer, exception: { id: exception.id, scope: 'this workspace' }, reason: `${name} is allowed in this workspace (exception ${exception.id})` }
-  return { allowed: false, answer, reason: `${name} gets public work only` }
+  const linked = root === null ? undefined
+    : data.exceptions.find((entry) => entry.provider === destination.provider && resolvedDirectory(entry.folder) === root)
+  return { allowed: false, answer, reason: `${name} gets public work only${linked === undefined ? '' : ` (exception ${linked.id} names this workspace through a link, not by its real path, and counts for nothing)`}` }
 }
 
 /** Why an agent could not receive private work in a workspace without an exception (empty when it could). */
@@ -1113,14 +1125,6 @@ function versionStanding(data, harness, version, tested = TESTED_HARNESS_VERSION
   return { tested: isTested, accepted, state: isTested ? 'tested' : accepted ? 'owner-accepted, untested' : 'untested' }
 }
 
-function rosterFileHash() {
-  try {
-    return sha256(readText(rosterPath()))
-  } catch {
-    return null
-  }
-}
-
 function receiptRoute(destination, route) {
   return { provider: destination.provider, host: destination.host, basis: destination.basis, sources: route.sources, harness_provider: destination.harness_provider }
 }
@@ -1142,6 +1146,8 @@ export function evaluate(inputs, {
   const steps = []
   const note = (text) => steps.push(text)
   try {
+    // A missing or invalid team file stops here (R60-NFR1); a valid one that differs from the approved version is a pending edit.
+    const file = readValidRoster()
     const generation = readApproved()
     const data = generation.data
     note(`approved version ${generation.number}`)
@@ -1184,19 +1190,28 @@ export function evaluate(inputs, {
     const packetMissing = inputs.packet !== undefined && packet === null
     const within = (dir) => inside(dir, workspace) || (packet !== null && inside(dir, packet))
     if (!within(cwd)) refuse('WORKSPACE_MISMATCH', `cwd ${cwd} is outside the workspace${packet ? ' and the packet' : ''}`)
+    // Every directory the agent would work in.
+    const reached = [cwd]
     if (parsed.cd !== undefined) {
       const target = canonicalDirectory(parsed.cd, cwd)
       if (target === null || !within(target)) refuse('WORKSPACE_MISMATCH', `-C ${parsed.cd} is outside the workspace${packet ? ' and the packet' : ''}`)
+      reached.push(target)
     }
     for (const dir of parsed.addDir ?? []) {
       const target = canonicalDirectory(dir, cwd)
       if (target === null || !inside(target, workspace)) refuse('WORKSPACE_MISMATCH', `--add-dir ${dir} is outside the workspace`)
+      reached.push(target)
     }
-    const answer = privateWorkAnswer(data, destination, workspaceRoot(workspace))
+    // An exception and a public record belong to one workspace root. A directory in a repository
+    // nested in the workspace, or in a packet outside it, is another workspace (60.8 AC6): the
+    // exception does not cover the dispatch, and work in a nested repository is private.
+    const root = workspaceRoot(workspace)
+    const nested = reached.find((dir) => inside(dir, workspace) && workspaceRoot(dir) !== root)
+    const answer = privateWorkAnswer(data, destination, nested === undefined && reached.every((dir) => inside(dir, workspace)) ? root : null)
     note(`private work: ${answer.reason}`)
     const visibility = workspaceVisibility(workspace, now)
-    const dataLabel = stricter(visibility.public ? 'public' : 'private', inputs.data)
-    note(`workspace ${workspace}: ${visibility.public ? `public (${visibility.reason})` : `private (${visibility.reason})`}; data ${dataLabel}`)
+    const dataLabel = stricter(stricter(visibility.public ? 'public' : 'private', inputs.data), nested === undefined ? 'public' : 'private')
+    note(`workspace ${workspace}: ${visibility.public ? `public (${visibility.reason})` : `private (${visibility.reason})`}; data ${dataLabel}${nested === undefined ? '' : ` (${nested} is another repository inside the workspace)`}`)
     let stdin = null
     let stdinProblem = null
     if (inputs.stdin !== undefined) {
@@ -1294,7 +1309,7 @@ export function evaluate(inputs, {
       route: receiptRoute(destination, route),
       private_work: receiptAnswer(answer),
       generation: { number: generation.number, hash: generation.hash },
-      roster_file_hash: rosterFileHash(),
+      roster_file_hash: file.hash,
       ...(resume ? { resume: { session_id: resume.session_id, original_receipt_hash: resume.original_receipt_hash, original_receipt: resume.original_receipt } } : {}),
       ...(packet !== null ? { packet: { path: packet, manifest, prompt: 'lead-authored, not verified' } } : {}),
       ...(stdin !== null ? { stdin } : {}),
@@ -1370,6 +1385,8 @@ export function evaluateResearch(inputs, {
   const steps = []
   const note = (text) => steps.push(text)
   try {
+    // A missing or invalid team file stops here (R60-NFR1); a valid one that differs from the approved version is a pending edit.
+    const file = readValidRoster()
     const generation = readApproved()
     const data = generation.data
     note(`approved version ${generation.number}`)
@@ -1431,7 +1448,7 @@ export function evaluateResearch(inputs, {
       route: receiptRoute(destination, route),
       private_work: receiptAnswer(answer),
       generation: { number: generation.number, hash: generation.hash },
-      roster_file_hash: rosterFileHash(),
+      roster_file_hash: file.hash,
       stdin,
       issued_at: now.toISOString()
     }
@@ -1460,15 +1477,15 @@ export function verifyReceipt(path, argv, options = {}) {
   return sameReceipt(receipt, result.receipt)
 }
 
+/** The receipt's dispatch, evaluated as of now: a public record that went stale since issuance no longer reproduces it. */
 function evaluateReceipt(receipt, argv, options) {
-  const at = { ...options, now: new Date(receipt.issued_at) }
-  if (receipt.mode === 'research') return evaluateResearch({ agent: receipt.agent, cwd: receipt.cwd, stdin: receipt.stdin?.path, argv }, at)
+  if (receipt.mode === 'research') return evaluateResearch({ agent: receipt.agent, cwd: receipt.cwd, stdin: receipt.stdin?.path, argv }, options)
   return evaluate({
     agent: receipt.agent, role: receipt.role, workspace: receipt.workspace, data: receipt.data, cwd: receipt.cwd, argv,
     ...(receipt.stdin ? { stdin: receipt.stdin.path } : {}),
     ...(receipt.packet ? { packet: receipt.packet.path } : {}),
     ...(receipt.resume ? { resumeOf: receipt.resume.original_receipt } : {})
-  }, at)
+  }, options)
 }
 
 function sameReceipt(receipt, recomputed) {
@@ -1605,7 +1622,7 @@ export async function runCheckCommand(action, argv) {
 
 function routeCommand(options, rest, asJson) {
   if (options.agent === undefined) throw new AgentsUsageError('roster route requires --agent')
-  const generation = readApproved()
+  const generation = readApprovedWithFile()
   const agent = generation.data.agents.find((candidate) => candidate.id === options.agent)
   if (agent === undefined) throw new RosterError('UNKNOWN_AGENT', `no agent ${options.agent} in approved version ${generation.number}`)
   const result = inspectRoute(agent, rest, process.env, process.cwd(), generation.data)

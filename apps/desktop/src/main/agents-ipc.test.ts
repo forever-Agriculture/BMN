@@ -100,6 +100,21 @@ describe('what an approving control would approve (60.5 AC7)', () => {
     expect((await snapshot()).approved?.generation).toBe(1)
   })
 
+  it('shows the owner the exact folder an exception would allow, before and after', async () => {
+    writeFileSync(rosterFile(), EXAMPLE)
+    await call<AgentsOutcome>('agents:approve', { shown: await shown() })
+    writeFileSync(rosterFile(), EXAMPLE.replace('folder: /synthetic/EXCEPTION-SENTINEL-FOLDER', 'folder: /synthetic/another-workspace')
+      .replace('zai-synthetic: {provider: zai', 'zai-second: {provider: zai, folder: /synthetic/second-workspace}\nzai-synthetic: {provider: zai'))
+    const outside = await snapshot()
+    const preview = await call<AgentsPreview>('agents:preview', { request: { kind: 'file' } })
+    for (const differences of [outside.differences, preview.differences]) {
+      expect(differences).toEqual([
+        { scope: 'exceptions', id: 'zai-synthetic', field: 'folder', kind: 'changed', before: { present: true, value: '/synthetic/EXCEPTION-SENTINEL-FOLDER' }, after: { present: true, value: '/synthetic/another-workspace' } },
+        { scope: 'exceptions', id: 'zai-second', field: null, kind: 'added', after: { present: true, value: { provider: 'zai', folder: '/synthetic/second-workspace' } } }
+      ])
+    }
+  })
+
   it('says why staged data would not be a valid team instead of previewing it', async () => {
     writeFileSync(rosterFile(), EXAMPLE)
     const data = (await snapshot()).file.data as RosterDataShape

@@ -72,7 +72,7 @@ const SNAPSHOT: AgentsSnapshot = {
 const team = (extra: Partial<TeamState> = {}): TeamState => ({
   snapshot: SNAPSHOT, loadError: null, base: DATA, data: DATA, approved: DATA, hasStaged: false, preview: null, outside: { groups: [], general: [] },
   changed: new Set(), busy: false, notice: null, confirmation: null, needsOwner: false, stage: noop, discard: noop, reload: later, setNotice: noop,
-  requestApproval: later, commit: later, cancelConfirmation: noop, revert: later, saveNotes: later, pendingNotes: {}, setPendingNote: noop, undoRulesUpdate: later, ...extra
+  requestApproval: later, commit: later, cancelConfirmation: noop, revert: later, saveNotes: later, pendingNotes: {}, setPendingNote: noop, undoRulesUpdate: later, rulesUndo: null, confirmRulesUndo: later, cancelRulesUndo: noop, ...extra
 })
 const pageMarkup = (page: TeamPage, state: TeamState = team()): string => renderToStaticMarkup(createElement(TeamPreferences, { team: state, page, go: noop }))
 const ledgerMarkup = (state: TeamState): string => renderToStaticMarkup(createElement(TeamLedger, { team: state }))
@@ -235,8 +235,9 @@ describe('the approval footer (60.5 AC7)', () => {
     }))
     expect(markup).toContain('role="group" aria-label="Approve these changes"')
     expect(markup).toContain('<div class="consequence">Also updates the Team line in 2 rules files</div>')
-    expect(markup).toContain('<span>Claude Code</span> <span class="mono muted">~/.claude/CLAUDE.md</span> <span class="faint">Full rules</span>')
-    expect(markup).toContain('<span>Cursor</span> <span class="mono muted">~/.cursor/rules/bmn-global-rules.mdc</span> <span class="faint">Public sections only</span>')
+    const path = (file: string): string => `<span class="target-path"><span class="path mono" title="/home/synthetic/${file}">~/${file}</span></span>`
+    expect(markup).toContain(`<span>Claude Code</span> ${path('.claude/CLAUDE.md')} <span class="faint">Full rules</span>`)
+    expect(markup).toContain(`<span>Cursor</span> ${path('.cursor/rules/bmn-global-rules.mdc')} <span class="faint">Public sections only</span>`)
     expect(markup).toContain('<pre class="diff">-old\n+new</pre>')
     expect([...markup.matchAll(/>([A-Za-z]+)<\/button>/g)].map((match) => match[1])).toEqual(['Approve', 'Cancel'])
   })
@@ -248,6 +249,28 @@ describe('the approval footer (60.5 AC7)', () => {
     const markup = toastMarkup(team({ notice: { ok: true, text: 'Approved · version 5 · Rules updated in 2 apps', undo: 't' } }))
     expect(markup).toContain('<div class="toast" role="status"><span>Approved · version 5 · Rules updated in 2 apps</span>')
     expect(markup).toContain('>Undo</button>')
+  })
+
+  it('Undo shows what each rules file would become and waits for the owner; nothing is put back unasked', () => {
+    const plan = { ok: true, code: 'OK', planHash: 'h'.repeat(64), targets: [
+      { harness: 'claude' as const, path: '/home/synthetic/.claude/CLAUDE.md', kind: 'its earlier bytes', change: 'file', diff: '--- a\n+++ b\n@@ -1,2 +1 @@\n-edited since the update\n old' },
+      { harness: 'codex' as const, path: '/home/synthetic/.codex/AGENTS.md', resolvedPath: '/home/synthetic/dotfiles/codex/AGENTS.md', kind: 'its earlier bytes', change: 'file', diff: '-new\n+old' }
+    ] }
+    const markup = ledgerMarkup(team({ rulesUndo: { transaction: 't', plan } }))
+    expect(markup).toContain('<div class="ledger-sheet" role="group" aria-label="Undo the rules update">')
+    expect(words(markup).replace(/\s+/g, ' ')).toContain('Claude Code ~/.claude/CLAUDE.md Put back · +0 −1')
+    expect(words(markup).replace(/\s+/g, ' ')).toContain('Codex ~/.codex/AGENTS.md → ~/dotfiles/codex/AGENTS.md Put back · +1 −1')
+    expect(markup).toContain('<pre class="diff">-edited since the update\n old</pre>')
+    expect([...markup.matchAll(/>([A-Za-z ]+)<\/button>/g)].map((match) => match[1])).toEqual(['Undo update', 'Cancel'])
+    expect(ledgerMarkup(team({ rulesUndo: { transaction: 't', plan: { ...plan, planHash: null } } }))).toMatch(/<button type="button" class="primary" disabled="">Undo update/)
+  })
+
+  it('an approval and an install name where a write would really land when a link leads elsewhere', () => {
+    const preview = { valid: true, errors: [], differences: [], consequences: [], teamUpdate: [
+      { harness: 'codex' as const, path: '/home/synthetic/.codex/AGENTS.md', resolvedPath: '/home/synthetic/dotfiles/codex/AGENTS.md', kind: 'full' as const, diff: '-a\n+b', binding: 'b' }
+    ] }
+    const markup = ledgerMarkup(team({ confirmation: { request: { kind: 'file' }, title: 'Approve these changes', action: 'Approve', preview } }))
+    expect(words(markup).replace(/\s+/g, ' ')).toContain('Codex ~/.codex/AGENTS.md → ~/dotfiles/codex/AGENTS.md Full rules')
   })
 
   it('a message floats over the page and leaves the footer to staged changes; only a failure waits to be dismissed', () => {

@@ -1,6 +1,6 @@
 // MODULE: agents-rules.test.ts - Epic 60.4: the rules master, per-app renderings, link-safe install transactions, the Team phrase after an approval, restore and probes
 import { execFile } from 'node:child_process'
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -11,6 +11,7 @@ import {
   TEAM_LIMIT_BYTES, applyTeamUpdate, checkTargets, importedMaster, installRules, lastProbes, masterHistory, parseMaster, planTeamUpdate, probe, probeInspector, readMaster, render,
   restoreTransaction, teamPhrase, writeMaster
 } from '../../bin/agents-rules.mjs'
+import type { PathState } from '../../bin/safe-config-write.mjs'
 import { approveRoster } from '../main/agents-approval'
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
@@ -280,6 +281,83 @@ describe('install transactions and restore (60.4 AC3-AC4)', () => {
     expect(existsSync(join(home, '.config/bmn/agents/state/rules/transactions'))).toBe(false)
   })
 
+  describe('a link on the way to a rules file (R60-NFR2)', () => {
+    const stores = () => ({ a: join(home, 'store-a'), b: join(home, 'store-b') })
+    /** `~/.codex` is a link to one folder; a second folder holds the same bytes. */
+    function linkedCodex(text: string | null): void {
+      const { a, b } = stores()
+      for (const store of [a, b]) {
+        mkdirSync(store)
+        if (text !== null) writeFileSync(join(store, 'AGENTS.md'), text)
+      }
+      symlinkSync(a, join(home, '.codex'))
+    }
+    function retarget(): void {
+      rmSync(join(home, '.codex'))
+      symlinkSync(stores().b, join(home, '.codex'))
+    }
+
+    it('shows where the write would land and refuses once the link leads elsewhere, though the bytes there are the same', async () => {
+      linkedCodex('Written by hand.\n')
+      const shown = JSON.parse((await runCli(['rules', 'install', 'codex', '--plan', '--json'])).stdout)
+      expect(shown.targets[0]).toMatchObject({ path: target.codex(), resolved_path: join(stores().a, 'AGENTS.md') })
+      // Between the diff and the answer.
+      expect(await installRules(['codex'], { yes: true, environment: env, afterConfirm: retarget })).toMatchObject({ code: 'REVISION_CONFLICT', written: [] })
+      expect(readFileSync(join(stores().b, 'AGENTS.md'), 'utf8')).toBe('Written by hand.\n')
+      // Between the last plan and the write itself.
+      rmSync(join(home, '.codex'))
+      symlinkSync(stores().a, join(home, '.codex'))
+      const late = await installRules(['codex'], { yes: true, environment: env, beforeTarget: retarget })
+      expect(late).toMatchObject({ code: 'INSTALL_FAILED', written: [] })
+      expect(late.message).toContain('REVISION_CONFLICT')
+      for (const store of Object.values(stores())) expect(readFileSync(join(store, 'AGENTS.md'), 'utf8')).toBe('Written by hand.\n')
+    })
+
+    it('binds a link above folders that do not exist yet', async () => {
+      const { a, b } = stores()
+      for (const store of [a, b]) mkdirSync(store)
+      symlinkSync(a, join(home, '.cursor'))
+      const shown = JSON.parse((await runCli(['rules', 'install', 'cursor', '--plan', '--json'])).stdout)
+      expect(shown.targets[0]).toMatchObject({ path: target.cursor(), resolved_path: join(a, 'rules/bmn-global-rules.mdc') })
+      const moved = await installRules(['cursor'], { yes: true, environment: env, afterConfirm: () => { rmSync(join(home, '.cursor')); symlinkSync(b, join(home, '.cursor')) } })
+      expect(moved).toMatchObject({ code: 'REVISION_CONFLICT', written: [] })
+      expect(readdirSync(b)).toEqual([])
+      // Unmoved, the same install creates the folder and writes where it said it would.
+      rmSync(join(home, '.cursor'))
+      symlinkSync(a, join(home, '.cursor'))
+      expect((await installRules(['cursor'], { yes: true, environment: env })).code).toBe('OK')
+      expect(existsSync(join(a, 'rules/bmn-global-rules.mdc'))).toBe(true)
+    })
+
+    it('a restore shown for one folder never lands in another', async () => {
+      linkedCodex(null)
+      const installed = await installRules(['codex'], { yes: true, environment: env })
+      expect(installed.code).toBe('OK')
+      cpSync(join(stores().a, 'AGENTS.md'), join(stores().b, 'AGENTS.md'))
+      const plan = await restoreTransaction(installed.transaction!, { planOnly: true })
+      expect(plan.targets?.[0]).toMatchObject({ path: target.codex(), resolved_path: join(stores().a, 'AGENTS.md') })
+      retarget()
+      expect(await restoreTransaction(installed.transaction!, { yes: true, expectedPlanHash: plan.plan_hash! })).toMatchObject({ code: 'REVISION_CONFLICT' })
+      expect(existsSync(join(stores().b, 'AGENTS.md'))).toBe(true)
+    })
+  })
+
+  it('gives every transaction its own id and manifest, even two in the same second of one process', async () => {
+    const now = new Date('2026-10-10T12:00:00.000Z')
+    const first = await installRules(['codex'], { yes: true, environment: env, now })
+    const firstText = readFileSync(target.codex(), 'utf8')
+    writeMasterFile(MASTER.replace('Plain rule for everyone.', 'Plain rule, second version.'))
+    const second = await installRules(['codex'], { yes: true, environment: env, now })
+    expect([first.code, second.code]).toEqual(['OK', 'OK'])
+    expect(second.transaction).not.toBe(first.transaction)
+    expect(readdirSync(join(home, '.config/bmn/agents/state/rules/transactions')).sort()).toEqual([first.transaction, second.transaction].sort())
+    // Each manifest still holds its own prior state: undoing them in turn walks back both steps.
+    expect((await restoreTransaction(second.transaction!, { yes: true })).code).toBe('OK')
+    expect(readFileSync(target.codex(), 'utf8')).toBe(firstText)
+    expect((await restoreTransaction(first.transaction!, { yes: true })).code).toBe('OK')
+    expect(existsSync(target.codex())).toBe(false)
+  })
+
   it('needs a TTY or --yes, and writes nothing otherwise', async () => {
     const result = await runCli(['rules', 'install', 'codex'])
     expect(result.code).toBe(1)
@@ -288,11 +366,14 @@ describe('install transactions and restore (60.4 AC3-AC4)', () => {
   })
 })
 
+/** The master as `pathState` reports it while it holds `text`. */
+const masterState = (text: string): PathState => ({ kind: 'file', text, mode: 0o644, directory: join(home, '.config/bmn/agents') })
+
 describe('master history (60.4 AC4)', () => {
   it('lists source snapshots and writes one back as a new revision', async () => {
     await installRules(['codex'], { yes: true, environment: env })
     const changed = MASTER.replace('Plain rule for everyone.', 'Plain rule, second version.')
-    writeMaster({ kind: 'file', text: MASTER, mode: 0o644 }, changed, 'panel save')
+    writeMaster(masterState(MASTER), changed, 'panel save')
     expect(masterHistory().map((entry: { revision: number; reason: string }) => [entry.revision, entry.reason])).toEqual([[1, expect.stringMatching(/^install /)], [2, 'panel save']])
     const reverted = await runCli(['rules', 'revert-master', '1', '--yes'])
     expect(reverted.code, reverted.stderr).toBe(0)
@@ -314,7 +395,7 @@ describe('master history (60.4 AC4)', () => {
     await installRules(['codex'], { yes: true, environment: env })
     const outside = MASTER.replace('Plain rule for everyone.', 'Edited by hand, never snapshotted.')
     writeMasterFile(outside)
-    writeMaster({ kind: 'file', text: outside, mode: 0o644 }, MASTER.replace('Plain rule for everyone.', 'Saved from the panel.'), 'panel save')
+    writeMaster(masterState(outside), MASTER.replace('Plain rule for everyone.', 'Saved from the panel.'), 'panel save')
     const history = masterHistory()
     expect(history.map((entry: { reason: string }) => entry.reason)).toEqual([expect.stringMatching(/^install /), 'before panel save', 'panel save'])
     expect(history[1]?.hash).toBe(sha256(outside))
@@ -323,12 +404,12 @@ describe('master history (60.4 AC4)', () => {
   it('refuses a save before writing when the history cannot record the text it replaces', async () => {
     await installRules(['codex'], { yes: true, environment: env })
     writeFileSync(join(home, '.config/bmn/agents/state/rules/master-history/index.json'), '{not json')
-    expect(() => writeMaster({ kind: 'file', text: MASTER, mode: 0o644 }, MASTER.replace('Plain', 'New'), 'panel save')).toThrow(/history/)
+    expect(() => writeMaster(masterState(MASTER), MASTER.replace('Plain', 'New'), 'panel save')).toThrow(/history/)
     expect(readFileSync(join(home, '.config/bmn/agents/global-rules.md'), 'utf8')).toBe(MASTER)
   })
 
   it('refuses to write a master that would not render', () => {
-    expect(() => writeMaster({ kind: 'file', text: MASTER, mode: 0o644 }, '<!-- bmn:public -->\nunclosed', 'bad')).toThrow(/would not render/)
+    expect(() => writeMaster(masterState(MASTER), '<!-- bmn:public -->\nunclosed', 'bad')).toThrow(/would not render/)
     expect(readFileSync(join(home, '.config/bmn/agents/global-rules.md'), 'utf8')).toBe(MASTER)
   })
 })
@@ -554,6 +635,40 @@ describe('an approval that changes the Team phrase (60.4 AC6)', () => {
     approve(EXAMPLE)
     writeMasterFile(readFileSync(join(home, '.config/bmn/agents/global-rules.md'), 'utf8').replace('Plain rule for everyone.', 'Plain rule, changed.'))
     expect(await applyTeamUpdate(later.targets, { environment: env })).toMatchObject({ transaction: null, written: [], skipped: later.targets.map((entry: { harness: string }) => entry.harness) })
+  })
+
+  it('skips a shown target once a link on the way to it leads to another folder holding the same bytes', async () => {
+    const stores = { a: join(home, 'store-a'), b: join(home, 'store-b') }
+    renameSync(join(home, '.codex'), stores.a)
+    cpSync(stores.a, stores.b, { recursive: true })
+    symlinkSync(stores.a, join(home, '.codex'))
+    expect(states().codex).toBe('current')
+    const plan = await planTeamUpdate(dataOf(WITHOUT_LUNA), { environment: env })
+    expect(plan.targets.find((entry: { harness: string }) => entry.harness === 'codex')).toMatchObject({ path: target.codex(), resolved_path: join(stores.a, 'AGENTS.md') })
+    approve(WITHOUT_LUNA)
+    rmSync(join(home, '.codex'))
+    symlinkSync(stores.b, join(home, '.codex'))
+    expect(await applyTeamUpdate(plan.targets, { environment: env })).toMatchObject({ code: 'OK', skipped: ['codex'], written: [{ harness: 'claude' }, { harness: 'opencode' }, { harness: 'cursor' }] })
+    for (const store of Object.values(stores)) expect(readFileSync(join(store, 'AGENTS.md'), 'utf8')).toContain(TEAM)
+  })
+
+  it('binds the whole inspection: another accepted version or another deciding source skips the target', async () => {
+    const accepting = (text: string): string => edit(text, 'codex: {provider: openai, basis: observed-default}', 'codex: {provider: openai, basis: observed-default, accepted_versions: [0.170.0]}')
+    approve(accepting(EXAMPLE))
+    expect(states().codex).toBe('current')
+    const plan = await planTeamUpdate(dataOf(accepting(WITHOUT_LUNA)), { environment: env })
+    expect(plan.targets.map((entry: { harness: string }) => entry.harness)).toEqual([...ALL])
+    approve(accepting(WITHOUT_LUNA))
+    const only = (harness: string) => plan.targets.filter((entry: { harness: string }) => entry.harness === harness)
+    // Still Codex's own servers, but a setting now says so where nothing did when the plan was shown.
+    writeFileSync(join(home, '.codex/config.toml'), 'model_provider = "openai"\n')
+    expect(await applyTeamUpdate(only('codex'), { environment: env })).toMatchObject({ transaction: null, written: [], skipped: ['codex'] })
+    rmSync(join(home, '.codex/config.toml'))
+    // A version the owner accepted, but not the one inspected for the plan.
+    stub('codex', 'echo "codex-cli 0.170.0"')
+    expect(await applyTeamUpdate(only('codex'), { environment: env })).toMatchObject({ transaction: null, written: [], skipped: ['codex'] })
+    stub('codex', 'echo "codex-cli 0.161.0"')
+    expect((await applyTeamUpdate(only('codex'), { environment: env })).written).toEqual([{ harness: 'codex', path: target.codex(), kind: 'full' }])
   })
 
   it('never writes beyond what was shown, and nothing when nothing was shown or another roster was approved', async () => {

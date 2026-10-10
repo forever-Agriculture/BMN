@@ -5,7 +5,7 @@
 // owner's own rules. Screenshots land in .dev-auto/evidence/epic-60/shots/ (ignored).
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -578,10 +578,23 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     assert.match(readFileSync(join(home, '.claude/CLAUDE.md'), 'utf8'), /Claude Code \(Fable, Sonnet, Haiku, Kimi\)/)
     assert.match(readFileSync(join(home, '.codex/AGENTS.md'), 'utf8'), /Claude Code \(Fable, Sonnet, Haiku, Kimi\)/)
     await shot('team-rules-updated-1280.png')
+    // An edit made outside BMN after the update: Undo must show that it would go, before anything is written.
+    appendFileSync(join(home, '.claude/CLAUDE.md'), 'A line added outside BMN after the update.\n')
+    const updated = { claude: readFileSync(join(home, '.claude/CLAUDE.md'), 'utf8'), codex: readFileSync(join(home, '.codex/AGENTS.md'), 'utf8') }
     await toast.getByRole('button', { name: 'Undo' }).click()
+    const undoSheet = ledger.locator('.ledger-sheet[role="group"]')
+    await undoSheet.getByText('Undo the rules update', { exact: true }).waitFor()
+    assert.deepEqual({ claude: readFileSync(join(home, '.claude/CLAUDE.md'), 'utf8'), codex: readFileSync(join(home, '.codex/AGENTS.md'), 'utf8') }, updated, 'Undo wrote before its files were shown')
+    assert.deepEqual(await undoSheet.locator('.rules-target > summary').allTextContents().then((lines) => lines.map((line) => line.replace(/\s+/g, ' ').trim().replace(/ · .*$/, ''))),
+      ['Claude Code ~/.claude/CLAUDE.md Put back', 'Codex ~/.codex/AGENTS.md Put back'])
+    await undoSheet.locator('.rules-target > summary').first().click()
+    assert.match(await undoSheet.locator('.rules-target pre.diff').first().textContent(), /^-A line added outside BMN after the update\.$/m)
+    await undoSheet.getByRole('button', { name: 'Cancel', exact: true }).waitFor()
+    await shot('team-rules-undo-1280.png')
+    await undoSheet.getByRole('button', { name: 'Undo update', exact: true }).click()
     await notice(/^Put back Claude Code, Codex/)
-    assert.doesNotMatch(readFileSync(join(home, '.claude/CLAUDE.md'), 'utf8'), /Haiku/)
-    passed('Approve first lists each rules file with its path and diff, commits from there, updates exactly those files and offers Undo')
+    assert.doesNotMatch(readFileSync(join(home, '.claude/CLAUDE.md'), 'utf8'), /Haiku|added outside BMN/)
+    passed('Approve first lists each rules file with its path and diff, commits from there, updates exactly those files; Undo shows what it puts back and waits for the owner')
 
     phase('three sizes: no horizontal scrollbar, every control named')
     const pages = [

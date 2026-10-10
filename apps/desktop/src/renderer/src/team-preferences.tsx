@@ -54,6 +54,7 @@ import {
   thousands,
   toggleAgentEffort,
   toggleAgentRole,
+  undoWords,
   toggleCandidateEffort,
   updateAgent,
   type DiffGroup,
@@ -806,13 +807,29 @@ export function TeamLedger(props: { team: TeamState }): React.JSX.Element | null
   const home = team.snapshot?.home ?? null
   const confirmation = team.confirmation
   const preview = team.preview
-  if (!team.hasStaged && confirmation === null) return null
+  const undo = team.rulesUndo
+  if (!team.hasStaged && confirmation === null && undo === null) return null
   const staged = preview === null ? null : groupDifferencesFor(team)
   const also = preview ? teamUpdateWords(preview.teamUpdate.length) : null
   const first = team.snapshot !== null && team.snapshot.approved === null
   return (
     <footer className="ledger">
-      {confirmation ? (
+      {undo ? (
+        <div className="ledger-sheet" role="group" aria-label="Undo the rules update">
+          <b>Undo the rules update</b>
+          <p className="preferences-help">Each file goes back to what it was before the update. The team stays as approved.</p>
+          {undo.plan.targets.map((target) => (
+            <details key={target.harness} className="rules-target">
+              <summary><span>{ROSTER_APP_NAMES[target.harness]}</span> <TargetPath target={target} home={home} /> <span className="faint">{undoWords(target)}</span></summary>
+              <pre className="diff">{diffBody(target.diff) || 'No change.'}</pre>
+            </details>
+          ))}
+          <div className="inline">
+            <button type="button" className="primary" disabled={team.busy || undo.plan.planHash === null} onClick={() => void team.confirmRulesUndo()}>Undo update</button>
+            <button type="button" disabled={team.busy} onClick={team.cancelRulesUndo}>Cancel</button>
+          </div>
+        </div>
+      ) : confirmation ? (
         <div className="ledger-sheet" role="group" aria-label={confirmation.title}>
           <b>{confirmation.title}</b>
           {(() => {
@@ -824,7 +841,7 @@ export function TeamLedger(props: { team: TeamState }): React.JSX.Element | null
               <div className="consequence">{teamUpdateWords(confirmation.preview.teamUpdate.length)}</div>
               {confirmation.preview.teamUpdate.map((target) => (
                 <details key={target.harness} className="rules-target">
-                  <summary><span>{ROSTER_APP_NAMES[target.harness]}</span> <span className="mono muted">{displayPath(target.path, home)}</span> <span className="faint">{target.kind === 'full' ? 'Full rules' : 'Public sections only'}</span></summary>
+                  <summary><span>{ROSTER_APP_NAMES[target.harness]}</span> <TargetPath target={target} home={home} /> <span className="faint">{target.kind === 'full' ? 'Full rules' : 'Public sections only'}</span></summary>
                   <pre className="diff">{diffBody(target.diff)}</pre>
                 </details>
               ))}
@@ -859,6 +876,20 @@ export function TeamLedger(props: { team: TeamState }): React.JSX.Element | null
         </>
       ) : null}
     </footer>
+  )
+}
+
+/**
+ * A rules file as a confirmation names it: its path and, when a link on the way to it leads
+ * elsewhere, the place the write would really land (R60-NFR2).
+ */
+export function TargetPath(props: { target: { path: string; resolvedPath?: string }; home: string | null }): React.JSX.Element {
+  const { target, home } = props
+  return (
+    <span className="target-path">
+      <span className="path mono" title={target.path}>{displayPath(target.path, home)}</span>
+      {target.resolvedPath ? <span className="path mono" title={target.resolvedPath}>→ {displayPath(target.resolvedPath, home)}</span> : null}
+    </span>
   )
 }
 

@@ -10,7 +10,7 @@ import { createInterface } from 'node:readline'
 import { APP_NAMES, HARNESSES, RosterError, agentState, agentsDirectory, canonicalJson, harnessPrivateWork, sha256 } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
 import { AgentsUsageError, EXIT, failWith, out, readOptions, usage } from './agents-cli.mjs'
-import { absoluteUncollapsed, pathState, replaceFileSafely, restorePathState } from './safe-config-write.mjs'
+import { absoluteUncollapsed, pathState, replaceFileSafely, resolvedPath, restorePathState, sameState } from './safe-config-write.mjs'
 import { unifiedDiff } from './text-diff.mjs'
 
 /**
@@ -406,7 +406,7 @@ export async function planInstall(harnesses, { environment = process.env } = {})
       : records[path] === undefined ? 'unmanaged' : records[path] !== sha256(prior.text) ? 'edited-outside' : 'stale'
     const kind = { link: 'replaces a symbolic link', missing: 'creates the file', unmanaged: 'replaces a file BMN did not write (unmanaged)',
       'edited-outside': 'replaces a file edited outside BMN', stale: 'updates BMN\'s file' }[change]
-    plans.push({ harness, path, prior, rendering, kind, change, diff: unifiedDiff(describeState(prior), rendering.text, path),
+    plans.push({ harness, path, resolved: resolvedPath(path, prior), prior, rendering, kind, change, diff: unifiedDiff(describeState(prior), rendering.text, path),
       fold: prior.kind === 'file' && records[path] !== undefined && records[path] !== sha256(prior.text) ? foldInLines(prior.text, rendering.text) : [] })
   }
   return { code: 'OK', master, plans, planHash: planHash(plans) }
@@ -415,7 +415,7 @@ export async function planInstall(harnesses, { environment = process.env } = {})
 function planHash(plans) {
   return sha256(canonicalJson(plans.map((plan) => ({
     harness: plan.harness, path: plan.path, kind: plan.kind, rendered: plan.rendering.hash,
-    prior: plan.prior.kind === 'file' ? { kind: 'file', hash: sha256(plan.prior.text) } : plan.prior
+    prior: plan.prior.kind === 'file' ? { kind: 'file', hash: sha256(plan.prior.text), directory: plan.prior.directory } : plan.prior
   }))))
 }
 
@@ -423,7 +423,7 @@ function planHash(plans) {
 export function planView(result) {
   return {
     code: result.code, ...(result.message ? { message: result.message } : {}), plan_hash: result.planHash,
-    targets: result.plans.map((plan) => ({ harness: plan.harness, path: plan.path, kind: plan.kind, change: plan.change, rendering: plan.rendering.kind,
+    targets: result.plans.map((plan) => ({ harness: plan.harness, path: plan.path, resolved_path: plan.resolved, kind: plan.kind, change: plan.change, rendering: plan.rendering.kind,
       reason: plan.rendering.reason, team_form: plan.rendering.team_form, ...(plan.prior.kind === 'link' ? { link_target: plan.prior.target } : {}),
       diff: plan.diff, fold: plan.fold }))
   }
@@ -445,7 +445,7 @@ export async function installRules(harnesses, { yes = false, asJson = false, env
   }
   if (plans.length === 0) return { code: 'OK', transaction: null, written: [], message: 'Every target already holds its current rendering.' }
   const details = plans.map((plan) => [
-    `${plan.harness}: ${plan.path}`,
+    `${plan.harness}: ${plan.path}${plan.resolved === plan.path ? '' : ` (written at ${plan.resolved})`}`,
     `  ${plan.kind}${plan.prior.kind === 'link' ? ` (link to ${plan.prior.target}; the link is replaced, its target is not touched)` : ''}`,
     `  ${KIND_WORDS[plan.rendering.kind]} (${plan.rendering.reason}); team: ${plan.rendering.team_form}`,
     ...(plan.fold.length ? ['  lines in the outside edit you may want to fold into the master:', ...plan.fold.map((line) => `    ${line}`)] : []),
@@ -463,14 +463,31 @@ export async function installRules(harnesses, { yes = false, asJson = false, env
 }
 
 /**
+ * A transaction's own, new directory. The id is the second and the process, with a count added
+ * when that is taken: an existing directory is never reused, so one transaction can never
+ * overwrite another's manifest or backups.
+ */
+function newTransaction(now) {
+  ensurePrivate(transactionsDirectory())
+  const base = `${now.toISOString().replaceAll(':', '-').replace(/\.\d+Z$/, 'Z')}-${process.pid}`
+  for (let count = 1; ; count += 1) {
+    const id = count === 1 ? base : `${base}-${count}`
+    try {
+      mkdirSync(`${transactionsDirectory()}/${id}`, { mode: 0o700 })
+      return { id, folder: `${transactionsDirectory()}/${id}` }
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error
+    }
+  }
+}
+
+/**
  * Writes planned targets as one transaction: the manifest of each target's prior state and BMN's
  * last-written record first, then each file through the change-refusing, read-back flow. A
  * failure part-way stops and keeps the manifest so `restore` can undo what changed.
  */
 function writeTransaction(master, plans, { now = new Date(), beforeTarget, reason = 'install' } = {}) {
-  const id = `${now.toISOString().replaceAll(':', '-').replace(/\.\d+Z$/, 'Z')}-${process.pid}`
-  const folder = `${transactionsDirectory()}/${id}`
-  ensurePrivate(folder)
+  const { id, folder } = newTransaction(now)
   const records = lastWritten()
   const manifest = {
     id, created_at: now.toISOString(), master_hash: master.hash, state: 'started', reason,
@@ -509,10 +526,17 @@ function writeTransaction(master, plans, { now = new Date(), beforeTarget, reaso
 // ---------------------------------------------------------------------------------------------
 // The Team phrase after an approval (60.4 AC6)
 
-function teamBinding(master, harness, path, priorText, inspected, proposed) {
+/**
+ * What a shown Team update is bound to: the master, the file as it is (its bytes and the real
+ * directory that holds it), the proposed bytes, and the whole inspection that allowed a full
+ * rendering: destination, app version and the sources that decided. Any of them changing between
+ * the preview and the write skips the target.
+ */
+function teamBinding(master, harness, path, prior, inspected, proposed) {
   return sha256(canonicalJson({
-    master: master.hash, harness, path, prior: sha256(priorText), proposed: proposed.hash,
-    route: inspected === null ? 'not inspected' : `${inspected.basis}/${inspected.provider}/${inspected.host}`
+    master: master.hash, harness, path, directory: prior.directory, prior: sha256(prior.text), proposed: proposed.hash,
+    route: inspected === null ? 'not inspected'
+      : { basis: inspected.basis, provider: inspected.provider, host: inspected.host, version: inspected.version ?? null, sources: [...(inspected.sources ?? [])].sort() }
   }))
 }
 
@@ -553,7 +577,7 @@ export async function planTeamUpdate(nextData, { environment = process.env } = {
     if (render(master, harness, next, { team: was }).text !== prior.text) continue
     const route = await routeStillMatches(harness, routeFor(harness, next), environment)
     if (!route.ok) continue
-    targets.push({ harness, path, kind: proposed.kind, diff: unifiedDiff(prior.text, proposed.text, path), binding: teamBinding(master, harness, path, prior.text, route.inspected, proposed) })
+    targets.push({ harness, path, resolved_path: resolvedPath(path, prior), kind: proposed.kind, diff: unifiedDiff(prior.text, proposed.text, path), binding: teamBinding(master, harness, path, prior, route.inspected, proposed) })
   }
   return { targets }
 }
@@ -580,7 +604,7 @@ export async function applyTeamUpdate(shown, { environment = process.env, now = 
     }
     const rendering = render(master, target.harness, generation)
     const route = prior?.kind === 'file' ? await routeStillMatches(target.harness, routeFor(target.harness, generation), environment) : { ok: false }
-    if (!route.ok || teamBinding(master, target.harness, path, prior.text, route.inspected, rendering) !== target.binding) {
+    if (!route.ok || teamBinding(master, target.harness, path, prior, route.inspected, rendering) !== target.binding) {
       skipped.push(target.harness)
       continue
     }
@@ -618,18 +642,17 @@ export async function restoreTransaction(id, { yes = false, asJson = false, plan
     const current = pathState(target.path)
     return { ...target, priorState: prior, current }
   })
-  const targets = plans.map((plan) => ({ harness: plan.harness, path: plan.path, change: plan.priorState.kind,
+  const targets = plans.map((plan) => ({ harness: plan.harness, path: plan.path, resolved_path: resolvedPath(plan.path, plan.current), change: plan.priorState.kind,
     becomes: plan.priorState.kind === 'link' ? `link to ${plan.priorState.target}` : plan.priorState.kind === 'missing' ? 'removed (it did not exist)' : 'its earlier bytes',
     diff: unifiedDiff(describeState(plan.current), describeState(plan.priorState), plan.path) }))
-  const hash = sha256(canonicalJson(plans.map((plan) => ({ path: plan.path, current: plan.current.kind === 'file' ? sha256(plan.current.text) : plan.current, prior: plan.priorState.kind === 'file' ? sha256(plan.priorState.text) : plan.priorState }))))
+  const hash = sha256(canonicalJson(plans.map((plan) => ({ path: plan.path, directory: plan.current.directory, current: plan.current.kind === 'file' ? sha256(plan.current.text) : plan.current, prior: plan.priorState.kind === 'file' ? sha256(plan.priorState.text) : plan.priorState }))))
   if (planOnly) return { code: 'OK', plan_hash: hash, targets }
   if (expectedPlanHash !== undefined && expectedPlanHash !== hash) return { code: 'REVISION_CONFLICT', message: 'the targets changed since the restore was shown; review it again' }
-  const details = targets.map((target) => `${target.harness}: ${target.path} -> ${target.becomes}\n${target.diff}`).join('\n\n')
+  const details = targets.map((target) => `${target.harness}: ${target.path}${target.resolved_path === target.path ? '' : ` (written at ${target.resolved_path})`} -> ${target.becomes}\n${target.diff}`).join('\n\n')
   if (!await confirm(`Restore transaction ${id}?`, details, { yes, asJson })) return { code: 'NOT_CONFIRMED' }
   const restored = []
   for (const plan of plans) {
-    const now = pathState(plan.path)
-    if (now.kind !== plan.current.kind || now.text !== plan.current.text || now.target !== plan.current.target) {
+    if (!sameState(pathState(plan.path), plan.current)) {
       return { code: 'REVISION_CONFLICT', message: `${plan.path} changed while BMN was reading it; ${restored.length} target(s) restored`, restored }
     }
     restorePathState(plan.path, plan.priorState)

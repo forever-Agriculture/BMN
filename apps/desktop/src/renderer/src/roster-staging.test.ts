@@ -309,6 +309,14 @@ describe('differences in words (60.5 AC7)', () => {
     expect(differenceLine({ lines: [{ field: 'Model', before: 'gpt-6-luna', after: 'gpt-6.1-luna' }, { field: 'On', before: 'yes', after: 'no' }] })).toBe('model gpt-6-luna → gpt-6.1-luna · on yes → no')
   })
 
+  it('names the folder an exception allows, in full, on both sides', () => {
+    const data = { ...DATA, exceptions: [{ id: 'zai-here', provider: 'zai', folder: '/home/synthetic/work' }] }
+    const lines = (diff: RosterDiffShape): unknown => groupDifferences([diff], data, data, []).groups[0]?.lines.map((line) => `${line.field}: ${line.before} → ${line.after}`)
+    expect(lines(changed('exceptions', 'zai-here', 'folder', '/home/synthetic/old-work', '/home/synthetic/work'))).toEqual(['Z.ai · workspace: /home/synthetic/old-work → /home/synthetic/work'])
+    expect(lines({ scope: 'exceptions', id: 'zai-here', field: null, kind: 'added', after: { present: true, value: { provider: 'zai', folder: '/home/synthetic/work' } } }))
+      .toEqual(['Z.ai: — → added', 'Z.ai · provider: — → Z.ai', 'Z.ai · workspace: — → /home/synthetic/work'])
+  })
+
   it('says names where the file holds ids: agents, providers, roles, fallbacks and a price\'s parts', () => {
     const lines = (diff: RosterDiffShape): unknown => groupDifferences([diff], DATA, DATA, []).groups[0]?.lines.map((line) => `${line.field}: ${line.before} → ${line.after}`)
     expect(lines(changed('roles', 'helper', 'small_work', undefined, 'astra@low'))).toEqual(['Helper · small work: — → Astra low'])

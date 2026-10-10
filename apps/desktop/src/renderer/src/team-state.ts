@@ -7,7 +7,8 @@ import type {
   AgentsShownRevision,
   AgentsSnapshot,
   RosterDataShape,
-  RosterIssueShape
+  RosterIssueShape,
+  RulesPlan
 } from '@bmn/protocol'
 import { failureDetail } from './bridge-error'
 import { changedSections, groupDifferences, sameData, type DiffGroup, type RosterSection } from './roster-staging'
@@ -23,6 +24,12 @@ export interface TeamNotice {
   issues?: RosterIssueShape[]
   /** The rules transaction an approval ran, for Undo. */
   undo?: string
+}
+
+/** An Undo of a rules update waiting for the owner: what each file would become, shown before anything is written. */
+export interface TeamRulesUndo {
+  transaction: string
+  plan: RulesPlan
 }
 
 /** An approving control waiting for the owner to confirm it, with what it would approve. */
@@ -50,6 +57,7 @@ export interface TeamState {
   busy: boolean
   notice: TeamNotice | null
   confirmation: TeamConfirmation | null
+  rulesUndo: TeamRulesUndo | null
   /** True when anything on the Team pages waits for the owner. */
   needsOwner: boolean
   stage(next: RosterDataShape): void
@@ -65,7 +73,10 @@ export interface TeamState {
   /** Notes written for an agent the team file does not hold yet; saved once the agent is approved into it. */
   pendingNotes: Readonly<Record<string, string>>
   setPendingNote(agent: string, text: string): void
+  /** Reads what undoing a rules update would put back and shows it; nothing is written until `confirmRulesUndo`. */
   undoRulesUpdate(transaction: string): Promise<void>
+  confirmRulesUndo(): Promise<void>
+  cancelRulesUndo(): void
 }
 
 /** "Rules updated in 2 apps", with what was left for Install when a file changed meanwhile. */
@@ -86,6 +97,7 @@ export function useTeamState(): TeamState {
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<TeamNotice | null>(null)
   const [confirmation, setConfirmation] = useState<TeamConfirmation | null>(null)
+  const [rulesUndo, setRulesUndo] = useState<TeamRulesUndo | null>(null)
   const [pendingNotes, setPendingNotes] = useState<Record<string, string>>({})
 
   const reload = useCallback(async (): Promise<void> => {
@@ -110,7 +122,7 @@ export function useTeamState(): TeamState {
 
   // An edit made outside BMN shows when the window comes back. Never under staged edits or an open
   // confirmation: those are approved against the file as it was shown, and a reload would hide a conflict.
-  const idle = staged === null && confirmation === null && !busy
+  const idle = staged === null && confirmation === null && rulesUndo === null && !busy
   useEffect(() => {
     if (!idle) return
     const onFocus = (): void => { void reload() }
@@ -268,8 +280,9 @@ export function useTeamState(): TeamState {
         setNotice({ ok: false, text: plan.message ?? 'The rules files could not be put back' })
         return
       }
-      const result = await window.aiTerminal.restoreRules(transaction, plan.planHash)
-      setNotice({ ok: result.ok, text: result.message })
+      // The files may hold an edit made since the update: the owner sees what Undo would replace first.
+      setNotice(null)
+      setRulesUndo({ transaction, plan })
     } catch (error) {
       setNotice({ ok: false, text: failureDetail(error, 'The rules files could not be put back') })
     } finally {
@@ -277,10 +290,25 @@ export function useTeamState(): TeamState {
     }
   }
 
+  async function confirmRulesUndo(): Promise<void> {
+    if (rulesUndo === null || rulesUndo.plan.planHash === null) return
+    setBusy(true)
+    try {
+      // Bound to the plan that was shown: a file that changed since then refuses, and nothing is written.
+      const result = await window.aiTerminal.restoreRules(rulesUndo.transaction, rulesUndo.plan.planHash)
+      setNotice({ ok: result.ok, text: result.message })
+    } catch (error) {
+      setNotice({ ok: false, text: failureDetail(error, 'The rules files could not be put back') })
+    } finally {
+      setRulesUndo(null)
+      setBusy(false)
+    }
+  }
+
   return {
-    snapshot, loadError, base, data, approved, hasStaged: staged !== null, preview, outside, changed, busy, notice, confirmation,
+    snapshot, loadError, base, data, approved, hasStaged: staged !== null, preview, outside, changed, busy, notice, confirmation, rulesUndo,
     needsOwner: staged !== null || outsideDiffs.length > 0 || (snapshot !== null && snapshot.file.exists && snapshot.approved === null),
-    stage, discard, reload, setNotice, requestApproval, commit, cancelConfirmation: () => setConfirmation(null), revert, saveNotes, undoRulesUpdate,
+    stage, discard, reload, setNotice, requestApproval, commit, cancelConfirmation: () => setConfirmation(null), revert, saveNotes, undoRulesUpdate, confirmRulesUndo, cancelRulesUndo: () => setRulesUndo(null),
     pendingNotes, setPendingNote: (agent, text) => setPendingNotes((notes) => ({ ...notes, [agent]: text }))
   }
 }

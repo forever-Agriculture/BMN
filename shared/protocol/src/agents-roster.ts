@@ -119,7 +119,15 @@ export interface AgentsSnapshot {
 }
 
 /** One rules file an approval would rewrite because the Team phrase in it changes (60.4 AC6). */
-export interface TeamUpdateTarget { harness: RosterHarness; path: string; kind: RulesRenderingKind; diff: string; binding: string }
+export interface TeamUpdateTarget {
+  harness: RosterHarness
+  path: string
+  /** Where the write would really land, when a link on the way to the file leads elsewhere. */
+  resolvedPath?: string
+  kind: RulesRenderingKind
+  diff: string
+  binding: string
+}
 
 export interface AgentsPreview {
   valid: boolean
@@ -215,6 +223,8 @@ export interface RulesSnapshot {
 export interface RulesPlanTarget {
   harness: RosterHarness
   path: string
+  /** Where the write would really land, when a link on the way to the file leads elsewhere. */
+  resolvedPath?: string
   /** What happens, in words (install), or what the target becomes (restore). */
   kind: string
   /** Install: the target's state before (`link`, `missing`, `unmanaged`, `edited-outside`, `stale`); restore: what it becomes (`link`, `file`, `missing`). */

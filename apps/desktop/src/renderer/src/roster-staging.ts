@@ -145,7 +145,10 @@ function formatPlain(value: unknown, field: string | undefined, names: Names): s
   return typeof value === 'number' && value >= 10_000 ? thousands(value) : String(value)
 }
 
-/** One value as the review shows it; the owner's free text and folders show only that they changed, never their words. */
+/**
+ * One value as the review shows it. The owner's free text shows only that it changed; an
+ * exception's folder shows in full, because approving it is what lets private work into that folder.
+ */
 export function formatValue(side: RosterDiffShape['before'], field?: string, names: Names = NO_NAMES): string {
   if (side === undefined || !side.present) return '—'
   if (side.hash !== undefined) return 'changed'
@@ -282,6 +285,23 @@ export function firstApprovalGroups(data: RosterDataShape, sentences: readonly s
     groups.push({ key: `role:${role.id}`, subject: roleName(role.id), role, lines: [], consequences: mine.some((sentence) => sentence.includes(' would have no agent to start with')) ? ['Nobody can start it yet'] : [] })
   }
   return { groups, general: sentences.filter((sentence) => left.has(sentence)).map((sentence) => consequenceWords(sentence, roleIds)) }
+}
+
+/** "+3 −1" for a unified diff, headers excluded; "No change" for an empty one. */
+export function diffSummary(diff: string): string {
+  let added = 0
+  let removed = 0
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('+++') || line.startsWith('---')) continue
+    if (line.startsWith('+')) added += 1
+    else if (line.startsWith('-')) removed += 1
+  }
+  return added + removed === 0 ? 'No change' : `+${added} −${removed}`
+}
+
+/** What a file becomes when an install or a rules update is undone. */
+export function undoWords(target: { change: string; diff: string }): string {
+  return target.change === 'link' ? 'Becomes a link again' : target.change === 'missing' ? 'Removed again' : `Put back · ${diffSummary(target.diff)}`
 }
 
 /** A group's differences on one line, as the "changed outside BMN" row shows them. */

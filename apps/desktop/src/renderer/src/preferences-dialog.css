@@ -1609,7 +1609,7 @@
   border-bottom: 1px solid var(--hairline);
 }
 
-.preferences-dialog .target-file {
+.preferences-dialog :is(.target-file, .target-path) {
   display: flex;
   flex-direction: column;
   min-width: 0;

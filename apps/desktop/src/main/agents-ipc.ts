@@ -143,7 +143,8 @@ export function agentsSnapshot(): AgentsSnapshot {
   const data = parsed?.data ?? null
   const prose: Record<string, string> = {}
   if (text !== null && data !== null) for (const agent of data.agents) prose[agent.id] = proseOf(text, agent.id) ?? ''
-  const differences = generation && data ? machineDiff(generation.data, data) : null
+  // The owner's own review names an exception's folder; `bmn roster status` never does.
+  const differences = generation && data ? machineDiff(generation.data, data, { folders: true }) : null
   const effects = data && (generation || problem?.code === 'NOT_APPROVED') && (differences === null || differences.length > 0)
     ? consequences(generation?.data ?? null, data) : []
   const history = (listGenerations() as unknown as AgentsSnapshot['history']).slice(0, HISTORY_LIMIT).map((entry) => {
@@ -223,8 +224,9 @@ export async function previewApproval(request: AgentsApprovalRequest, environmen
   }
   if (next === null) return { valid: false, errors, ...NOT_PREVIEWED }
   return {
-    valid: true, errors: [], differences: generation ? machineDiff(generation.data, next) : [], consequences: consequences(generation?.data ?? null, next),
-    teamUpdate: (await planTeamUpdate(next, { environment })).targets
+    valid: true, errors: [], differences: generation ? machineDiff(generation.data, next, { folders: true }) : [], consequences: consequences(generation?.data ?? null, next),
+    teamUpdate: (await planTeamUpdate(next, { environment })).targets.map(({ resolved_path: resolved, ...target }) => (
+      { ...target, ...(resolved === target.path ? {} : { resolvedPath: resolved }) }))
   }
 }
 
@@ -406,6 +408,7 @@ function planFrom(result: CliResult, kind: 'install' | 'restore'): RulesPlan {
   if (report.code !== 'OK') return { ok: false, code: String(report.code ?? 'IO_ERROR'), message: String(report.message ?? 'The plan was refused'), planHash: null, targets: [] }
   const targets = Array.isArray(report.targets) ? (report.targets as Record<string, unknown>[]).map((row) => ({
     harness: row.harness as RosterHarness, path: String(row.path), kind: String(row.kind ?? row.becomes ?? ''), change: String(row.change ?? row.becomes ?? ''), diff: String(row.diff ?? ''),
+    ...(typeof row.resolved_path === 'string' && row.resolved_path !== row.path ? { resolvedPath: row.resolved_path } : {}),
     ...(row.rendering === 'full' ? { rendering: 'full' as const } : row.rendering === 'public' ? { rendering: 'public' as const } : {}),
     ...(typeof row.link_target === 'string' ? { linkTarget: row.link_target } : {}),
     ...(Array.isArray(row.fold) ? { fold: (row.fold as unknown[]).map(String) } : {})

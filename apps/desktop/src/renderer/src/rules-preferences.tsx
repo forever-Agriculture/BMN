@@ -21,10 +21,12 @@ import {
 import { failureDetail } from './bridge-error'
 import { Segmented } from './history-preferences'
 import { Dot } from './roster-marks'
-import { acceptVersion, diffBody, revokeVersion, setDestination } from './roster-staging'
+import { acceptVersion, diffBody, diffSummary, revokeVersion, setDestination, undoWords } from './roster-staging'
 import { displayPath } from './session-presentation'
-import { Issues, PageHead, shortDate } from './team-preferences'
+import { Issues, PageHead, TargetPath, shortDate } from './team-preferences'
 import type { TeamState } from './team-state'
+
+export { diffSummary, undoWords }
 
 export type RulesPage = 'editor' | 'health'
 
@@ -67,18 +69,6 @@ export function lineCount(text: string): number {
   return text === '' ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0)
 }
 
-/** "+3 −1" for a unified diff, headers excluded; "No change" for an empty one. */
-export function diffSummary(diff: string): string {
-  let added = 0
-  let removed = 0
-  for (const line of diff.split('\n')) {
-    if (line.startsWith('+++') || line.startsWith('---')) continue
-    if (line.startsWith('+')) added += 1
-    else if (line.startsWith('-')) removed += 1
-  }
-  return added + removed === 0 ? 'No change' : `+${added} −${removed}`
-}
-
 export const KIND_WORDS: Readonly<Record<RulesRenderingKind, string>> = { full: 'Full rules', public: 'Public sections only' }
 
 export const STATE_WORDS: Readonly<Record<RulesTargetState, string>> = {
@@ -112,11 +102,6 @@ export function changeWords(target: Pick<RulesPlanTarget, 'change' | 'diff'>): s
         : target.change === 'missing' ? 'New file' : null
   const size = diffSummary(target.diff)
   return what === null ? size : target.change === 'missing' ? what : `${what} · ${size}`
-}
-
-/** What a file becomes when an install is undone. */
-export function undoWords(target: Pick<RulesPlanTarget, 'change' | 'diff'>): string {
-  return target.change === 'link' ? 'Becomes a link again' : target.change === 'missing' ? 'Removed again' : `Put back · ${diffSummary(target.diff)}`
 }
 
 /** Where an app sends data as BMN inspected it, in words. */
@@ -343,7 +328,7 @@ function Targets(props: { targets: readonly RulesPlanTarget[]; home: string | nu
         <details key={target.path} className="target">
           <summary>
             <span>{ROSTER_APP_NAMES[target.harness]}</span>
-            <span className="target-file"><span className="path mono" title={target.path}>{displayPath(target.path, props.home)}</span><span className="muted">{props.words(target)}</span></span>
+            <span className="target-file"><TargetPath target={target} home={props.home} /><span className="muted">{props.words(target)}</span></span>
             <span className="muted">{target.rendering ? KIND_WORDS[target.rendering] : ''}</span>
           </summary>
           <pre className="diff">{diffBody(target.diff) || 'No change.'}</pre>
