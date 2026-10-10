@@ -1,4 +1,4 @@
-// MODULE: agents-schema-search.test.ts - Epic 60.1 AC5: a PASS/FAIL search proving no schema-1 roster key, label, seal or trust pip is left in code, fixtures, tests or current docs
+// MODULE: agents-source-search.test.ts - Epic 60.1 AC5 and R60-NFR3: PASS/FAIL searches proving no schema-1 roster word is left, and that team and rules state has no path into the database, Backup export, Telegram or logs
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -14,7 +14,7 @@ const inFolder = (folder: string, pattern: RegExp): string[] => readdirSync(join
 const ROSTER_CODE = [
   ...inFolder('apps/desktop/bin', /^agents-.*\.(mjs|d\.mts)$/),
   ...inFolder('apps/desktop/src/main', /^(agents-.*|route-baselines|visibility-refresh)\.ts$/),
-  ...inFolder('apps/desktop/src/utility', /^agents-(?!schema-search).*\.ts$/),
+  ...inFolder('apps/desktop/src/utility', /^agents-(?!source-search).*\.ts$/),
   ...inFolder('apps/desktop/src/utility/test-fixtures/agents', /./),
   ...inFolder('apps/desktop/src/renderer/src', /^(team-.*|rules-preferences|roster-.*)\.tsx?$/),
   'shared/protocol/src/agents-roster.ts',
@@ -93,5 +93,51 @@ describe('no schema-1 roster word is left (60.1 AC5)', () => {
     expect(section).toContain('schema_version: 2')
     const hits = section.split('\n').flatMap((line, index) => new RegExp(`\`(${WORDS})\`|\\b(squire|trust|authority|data label|sealed|pips?)\\b|\\b(High|Low) (route|security)`).test(line) ? [`${index + 1}: ${line}`] : [])
     expect(hits.length === 0 ? 'PASS' : `FAIL\n${hits.join('\n')}`).toBe('PASS')
+  })
+})
+
+/**
+ * R60-NFR3: the team file, notes, exceptions, visibility records, receipts and rules live in
+ * owner files under ~/.config/bmn/agents and nowhere else. Backup export copies the database and
+ * stored files; Telegram and diagnostics read the database and the app's own state. So the proof
+ * is structural: the modules that hold this state reach no store, service or logger, and nothing
+ * but the app's entry point and the CLI reaches them.
+ */
+describe('team and rules state has no path into the database, Backup export, Telegram or logs (R60-NFR3)', () => {
+  const HOLDERS = [
+    ...inFolder('apps/desktop/bin', /^(agents-.*|safe-config-write|text-diff)\.mjs$/),
+    ...inFolder('apps/desktop/src/main', /^(agents-(approval|ipc)|route-baselines|visibility-refresh)\.ts$/)
+  ]
+  // Static imports and re-exports (their binding lists hold no quotes or brackets), bare imports and dynamic ones.
+  const IMPORT = /(?:^|\n)\s*(?:import|export)\s+(?:type\s+)?[\w*\s{},$]+?\s+from\s+['"]([^'"]+)['"]|(?:^|\n)\s*import\s+['"]([^'"]+)['"]|\bimport\(\s*['"]([^'"]+)['"]\s*\)/g
+  const imports = (file: string): string[] => [...readFileSync(join(REPOSITORY, file), 'utf8').matchAll(IMPORT)].map((match) => (match[1] ?? match[2] ?? match[3]) as string)
+
+  it('searches the modules that hold it, and reads their imports', () => {
+    expect(HOLDERS).toHaveLength(11)
+    expect(imports('apps/desktop/src/main/agents-ipc.ts')).toEqual(expect.arrayContaining(['node:fs', '@bmn/protocol', '../../bin/agents-roster.mjs', './agents-approval', './workspace-ipc']))
+    expect(imports('apps/desktop/bin/agents-rules.mjs')).toEqual(expect.arrayContaining(['./agents-check.mjs']))
+  })
+
+  it('they import only Node, the protocol types, each other and the IPC error type', () => {
+    const allowed = /^(node:[a-z/_]+|electron|@bmn\/protocol|\.\.?\/(\.\.\/bin\/)?(agents-(roster|state|check|rules|cli|approval)|safe-config-write|text-diff|route-baselines)(\.mjs)?|\.\/workspace-ipc)$/
+    const hits = HOLDERS.flatMap((file) => imports(file).filter((name) => !allowed.test(name)).map((name) => `${file}: imports ${name}`))
+    expect(hits.length === 0 ? 'PASS' : `FAIL\n${hits.join('\n')}`).toBe('PASS')
+    // The one Electron import is a type, and the IPC module takes only its error class from the workspace handlers.
+    expect(readFileSync(join(REPOSITORY, 'apps/desktop/src/main/agents-ipc.ts'), 'utf8')).toMatch(/^import type \{ IpcMainInvokeEvent \} from 'electron'$/m)
+    expect(readFileSync(join(REPOSITORY, 'apps/desktop/src/main/agents-ipc.ts'), 'utf8')).toMatch(/^import \{ MainIpcError \} from '\.\/workspace-ipc'$/m)
+  })
+
+  it('they write nothing to a console or a logger', () => {
+    const main = HOLDERS.filter((file) => file.endsWith('.ts'))
+    expect(report(search(main, /\bconsole\.|\blogger\b|\blog\.(info|warn|error|debug)\(/))).toBe('PASS')
+  })
+
+  it('only the app entry point and the CLI reach them', () => {
+    const sources = [
+      ...inFolder('apps/desktop/src/main', /\.ts$/), ...inFolder('apps/desktop/src/utility', /\.ts$/),
+      ...inFolder('apps/desktop/src/preload', /\.ts$/), ...inFolder('apps/desktop/src/renderer/src', /\.tsx?$/), 'apps/desktop/bin/bmn'
+    ].filter((file) => !/\.test\.tsx?$/.test(file) && !HOLDERS.includes(file))
+    const reaching = sources.filter((file) => imports(file).some((name) => /(^|\/)(agents-(roster|state|check|rules|cli|approval|ipc)|route-baselines|visibility-refresh)(\.mjs)?$/.test(name)))
+    expect(reaching.sort()).toEqual(['apps/desktop/bin/bmn', 'apps/desktop/src/main/index.ts'])
   })
 })

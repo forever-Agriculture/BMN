@@ -44,8 +44,11 @@ function writeBaselines(baselines: Partial<Record<RosterHarness, RouteBaseline>>
 const same = (a: Omit<RouteResolution, 'harness' | 'version'>, b: Omit<RouteResolution, 'harness' | 'version'>): boolean =>
   a.provider === b.provider && a.host === b.host && a.basis === b.basis && JSON.stringify([...a.sources].sort()) === JSON.stringify([...b.sources].sort())
 
-function describe(route: Omit<RouteResolution, 'harness' | 'version'>): string {
-  const where = route.host === null ? 'an unknown destination' : route.host.startsWith('default:') ? `the default servers of ${route.host.slice('default:'.length)}` : route.host
+/** A provider id as the owner knows it; the caller passes the team's names. */
+export type ProviderName = (id: string) => string
+
+function describe(route: Omit<RouteResolution, 'harness' | 'version'>, providerName: ProviderName): string {
+  const where = route.host === null ? 'an unknown destination' : route.host.startsWith('default:') ? `${providerName(route.host.slice('default:'.length))}'s own servers` : route.host
   return `${where} (${route.sources.length ? `set by ${route.sources.join(', ')}` : 'nothing overrides it'})`
 }
 
@@ -54,7 +57,7 @@ function describe(route: Omit<RouteResolution, 'harness' | 'version'>): string {
  * when its resolution equals that record. Without a record nothing is offered: BMN has nothing to
  * compare the new version's choice of destination with.
  */
-export function judgeInspection(resolution: RouteResolution, accepted: readonly string[], testedOrAccepted: boolean, now: Date): AcceptanceVerdict {
+export function judgeInspection(resolution: RouteResolution, accepted: readonly string[], testedOrAccepted: boolean, now: Date, providerName: ProviderName = (id) => id): AcceptanceVerdict {
   const baselines = readBaselines()
   const baseline = baselines[resolution.harness]
   const app = ROSTER_APP_NAMES[resolution.harness]
@@ -67,9 +70,9 @@ export function judgeInspection(resolution: RouteResolution, accepted: readonly 
     return { acceptable: false, comparison: `BMN never saw where a tested or accepted ${app} version sends data, so it has nothing to compare ${resolution.version} with.` }
   }
   if (!same(resolution, baseline)) {
-    return { acceptable: false, comparison: `${resolution.version} sends data to ${describe(resolution)}, not to ${describe(baseline)} as ${baseline.version} did.` }
+    return { acceptable: false, comparison: `${resolution.version} sends data to ${describe(resolution, providerName)}, not to ${describe(baseline, providerName)} as ${baseline.version} did.` }
   }
-  return { acceptable: true, comparison: `Sends data to the same place as ${baseline.version}: ${describe(resolution)}.` }
+  return { acceptable: true, comparison: `Sends data to the same place as ${baseline.version}: ${describe(resolution, providerName)}.` }
 }
 
 /**

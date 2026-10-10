@@ -652,6 +652,7 @@
 }
 
 .preferences-dialog .preferences-frame {
+  position: relative;
   display: flex;
   flex: 1;
   min-height: 0;
@@ -1198,9 +1199,17 @@
 }
 
 .preferences-dialog .outside-diff {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
   min-width: 0;
-  color: var(--muted);
   overflow-wrap: anywhere;
+}
+
+/* One changed value: its name, then before and after; a role's order as its steps. */
+.preferences-dialog :is(.difference, .review-group) .chain {
+  display: inline-flex;
+  vertical-align: middle;
 }
 
 /* Lists: roles, approved versions, earlier versions of the rules. */
@@ -1314,6 +1323,29 @@
 
 .preferences-dialog .version-role .chain {
   margin-top: 0;
+}
+
+/* What the last action did: over the foot of the page, taking no room from it. */
+.preferences-dialog .toast {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  z-index: 9;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  max-width: min(640px, calc(100% - 32px));
+  padding: 7px 14px;
+  transform: translateX(-50%);
+  border-radius: 6px;
+  background: var(--selected);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 60%);
+}
+
+.preferences-dialog .toast .issue-list {
+  flex-basis: 100%;
+  margin: 0;
 }
 
 /* The approval footer: the staged count and first consequence, then Review, Discard and the one light plate. */

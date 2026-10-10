@@ -340,7 +340,7 @@ function appView(harness: RosterHarness, context: RulesIpcContext, generation: G
   const isAccepted = resolution.version !== null && accepted.includes(resolution.version)
   const checked = harness === 'claude' || harness === 'codex'
   const verdict = checked
-    ? judgeInspection(resolution, accepted, versionTested || isAccepted, context.now())
+    ? judgeInspection(resolution, accepted, versionTested || isAccepted, context.now(), (id) => generation?.data.providers.find((provider) => provider.id === id)?.name ?? id)
     : { acceptable: false, comparison: `BMN does not check ${ROSTER_APP_NAMES[harness]} dispatches, so its versions are neither tested nor accepted.` }
   return {
     ...resolution,

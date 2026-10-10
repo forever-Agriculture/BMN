@@ -20,7 +20,7 @@ import { VoicePreferences } from './voice-preferences'
 import { Dialog } from './dialog'
 import { failureDetail } from './bridge-error'
 import { HistoryPreferences } from './history-preferences'
-import { TeamLedger, TeamPreferences, type TeamPage } from './team-preferences'
+import { TeamLedger, TeamPreferences, TeamToast, type TeamPage } from './team-preferences'
 import { useTeamState } from './team-state'
 import { RulesPreferences, useRulesState } from './rules-preferences'
 import { Dot, RulesIcon, TeamIcon } from './roster-marks'
@@ -1152,6 +1152,7 @@ export function PreferencesDialog(props: {
       </section>
       </>)}
       </main>
+      {ledger ? <TeamToast team={team} /> : null}
       </div>
       {ledger ? <TeamLedger team={team} /> : null}
     </Dialog>

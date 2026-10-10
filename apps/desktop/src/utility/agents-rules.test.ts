@@ -239,6 +239,20 @@ describe('install transactions and restore (60.4 AC3-AC4)', () => {
     expect(existsSync(target.codex())).toBe(false)
   })
 
+  it('refuses a full rendering on an app version nobody tested or accepted, and writes it once the owner accepted that version', async () => {
+    stub('codex', 'echo "codex-cli 0.170.0"')
+    const refused = await installRules(['codex', 'opencode'], { yes: true, environment: env })
+    expect(refused).toMatchObject({ code: 'ROUTE_CHANGED', message: expect.stringContaining('Codex 0.170.0 is a version BMN has not tested and you have not accepted') })
+    expect(refused.message).toContain('accept that version in Preferences > Rules > Health')
+    expect(existsSync(target.codex())).toBe(false)
+    expect(existsSync(target.opencode())).toBe(false)
+    // A public rendering carries nothing private, so the version does not matter for it.
+    expect(await installRules(['opencode'], { yes: true, environment: env })).toMatchObject({ code: 'OK', written: [{ harness: 'opencode', kind: 'public' }] })
+    approve(edit(EXAMPLE, 'codex: {provider: openai, basis: observed-default}', 'codex: {provider: openai, basis: observed-default, accepted_versions: ["0.170.0"]}'))
+    expect(await installRules(['codex'], { yes: true, environment: env })).toMatchObject({ code: 'OK', written: [{ harness: 'codex', kind: 'full' }] })
+    expect(readFileSync(target.codex(), 'utf8')).toContain('PRIVATE-SENTINEL')
+  })
+
   it('never rests a full rendering on the owner\'s word: a declared destination installs the public rendering, uninspected', async () => {
     approve(edit(EXAMPLE, 'codex: {provider: openai, basis: observed-default}', 'codex: {provider: openai, basis: owner-declared}'))
     // The app now resolves to a proxy: nothing private is written for it, so nothing needs inspecting.
@@ -430,6 +444,13 @@ describe('probes (60.4 AC5)', () => {
     expect(claude(() => ({ version: '2.1.295', host: 'proxy.example.test' }))).toMatchObject({ stale: true })
   })
 
+  it('sends nothing on an app version nobody tested or accepted', async () => {
+    await installRules(['claude'], { yes: true, environment: env })
+    stub('claude', `case "$1" in --version) echo "2.1.296 (Claude Code)";; *) touch "$HOME/claude-ran";; esac`)
+    expect(await probe('claude', { environment: env })).toMatchObject({ outcome: 'unavailable', version: '2.1.296', detail: expect.stringContaining('BMN has not tested and you have not accepted') })
+    expect(existsSync(join(home, 'claude-ran'))).toBe(false)
+  })
+
   it('a probe goes stale through the app\'s own version inspector once the harness that runs is replaced', async () => {
     const shadow = join(home, 'shadow')
     mkdirSync(shadow)
@@ -464,6 +485,21 @@ describe('an approval that changes the Team phrase (60.4 AC6)', () => {
     // The public section names the team too, so the public renderings move with it.
     writeMasterFile(MASTER.replace('Answer first, plainly.', 'Answer first, plainly. Ask <!-- bmn:team --> for help.').replace('The team: <!-- bmn:team -->, and the owner.', 'The team is in the roster.'))
     expect((await installRules([...ALL], { yes: true, environment: env })).code).toBe('OK')
+  })
+
+  it('leaves a full rendering alone once its app runs a version nobody tested or accepted', async () => {
+    stub('codex', 'echo "codex-cli 0.170.0"')
+    const plan = await planTeamUpdate(dataOf(WITHOUT_LUNA), { environment: env })
+    expect(plan.targets.map((entry: { harness: string }) => entry.harness)).toEqual(['claude', 'opencode', 'cursor'])
+  })
+
+  it('skips a shown full rendering whose app changed to an untested version before the write', async () => {
+    const plan = await planTeamUpdate(dataOf(WITHOUT_LUNA), { environment: env })
+    approve(WITHOUT_LUNA)
+    stub('codex', 'echo "codex-cli 0.170.0"')
+    const before = readFileSync(target.codex(), 'utf8')
+    expect(await applyTeamUpdate(plan.targets, { environment: env })).toMatchObject({ code: 'OK', skipped: ['codex'], written: [{ harness: 'claude' }, { harness: 'opencode' }, { harness: 'cursor' }] })
+    expect(readFileSync(target.codex(), 'utf8')).toBe(before)
   })
 
   it('rewrites exactly the current targets, as one transaction with Undo', async () => {

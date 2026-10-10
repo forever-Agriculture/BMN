@@ -13,7 +13,9 @@ import { failureDetail } from './bridge-error'
 import { changedSections, groupDifferences, sameData, type DiffGroup, type RosterSection } from './roster-staging'
 
 const PREVIEW_DELAY_MS = 250
-const NOTICE_MS = 8_000
+/** How long a message that something worked stays; one offering Undo stays longer, and that undo remains under Rules › Editor › Earlier versions. */
+const NOTICE_MS = 5_000
+const UNDO_NOTICE_MS = 12_000
 
 export interface TeamNotice {
   ok: boolean
@@ -99,10 +101,10 @@ export function useTeamState(): TeamState {
     void reload()
   }, [reload])
 
-  // A message that something worked leaves by itself; a refusal, or one offering Undo, waits to be dismissed.
+  // A message that something worked leaves by itself; a refusal waits to be dismissed.
   useEffect(() => {
-    if (notice === null || !notice.ok || notice.undo !== undefined) return
-    const timer = setTimeout(() => setNotice(null), NOTICE_MS)
+    if (notice === null || !notice.ok) return
+    const timer = setTimeout(() => setNotice(null), notice.undo === undefined ? NOTICE_MS : UNDO_NOTICE_MS)
     return () => clearTimeout(timer)
   }, [notice])
 

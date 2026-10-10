@@ -19,7 +19,7 @@ import {
   undoWords,
   type RulesState
 } from './rules-preferences'
-import { Chain, TeamLedger, TeamPreferences, firstApprovalWords, shortDate, type TeamPage } from './team-preferences'
+import { Chain, TeamLedger, TeamPreferences, TeamToast, firstApprovalWords, shortDate, type TeamPage } from './team-preferences'
 import { rulesUpdateWords, type TeamState } from './team-state'
 
 const noop = (): void => {}
@@ -76,6 +76,7 @@ const team = (extra: Partial<TeamState> = {}): TeamState => ({
 })
 const pageMarkup = (page: TeamPage, state: TeamState = team()): string => renderToStaticMarkup(createElement(TeamPreferences, { team: state, page, go: noop }))
 const ledgerMarkup = (state: TeamState): string => renderToStaticMarkup(createElement(TeamLedger, { team: state }))
+const toastMarkup = (state: TeamState): string => renderToStaticMarkup(createElement(TeamToast, { team: state }))
 const count = (markup: string, text: string): number => markup.split(text).length - 1
 /** What the owner reads: the markup without tags, attributes left out. */
 const words = (markup: string): string => markup.replace(/<[^>]+>/g, ' ')
@@ -117,7 +118,7 @@ describe('Team › Agents (60.5 AC2)', () => {
       outside: { groups: [{ key: 'luna', subject: 'Luna', agent: DATA.agents[2] as RosterAgentShape, lines: [{ field: 'Model', before: 'gpt-6-luna', after: 'gpt-6.1-luna' }], consequences: [] }], general: [] }
     }))
     expect(count(changed, 'class="needs-dot" role="img" aria-label="Unapproved change"')).toBe(1)
-    expect(changed).toContain('<b>Luna</b><span class="muted">changed outside BMN:</span><span class="outside-diff mono">model gpt-6-luna → gpt-6.1-luna</span>')
+    expect(changed).toContain('<b>Luna</b><span class="muted">changed outside BMN:</span><span class="outside-diff"><span class="difference"><span class="muted">Model:</span> gpt-6-luna → gpt-6.1-luna</span></span>')
     expect(changed).toContain('aria-label="Keep the change to Luna">Keep</button>')
     expect(changed).toContain('aria-label="Revert the change to Luna">Revert</button>')
   })
@@ -244,9 +245,50 @@ describe('the approval footer (60.5 AC7)', () => {
     expect(rulesUpdateWords({ transaction: 't', written: ['claude', 'codex'], skipped: [] })).toBe('Rules updated in 2 apps')
     expect(rulesUpdateWords({ transaction: 't', written: ['claude'], skipped: ['codex'] })).toBe('Rules updated in 1 app · 1 changed meanwhile and waits for Install')
     expect(rulesUpdateWords({ transaction: null, written: [], skipped: ['claude', 'codex'], failed: 'disk full' })).toBe('No rules file was updated · 2 changed meanwhile and wait for Install · stopped: disk full')
-    const markup = ledgerMarkup(team({ notice: { ok: true, text: 'Approved · version 5 · Rules updated in 2 apps', undo: 't' } }))
-    expect(markup).toContain('role="status"><span class="muted">Approved · version 5 · Rules updated in 2 apps</span>')
+    const markup = toastMarkup(team({ notice: { ok: true, text: 'Approved · version 5 · Rules updated in 2 apps', undo: 't' } }))
+    expect(markup).toContain('<div class="toast" role="status"><span>Approved · version 5 · Rules updated in 2 apps</span>')
     expect(markup).toContain('>Undo</button>')
+  })
+
+  it('a message floats over the page and leaves the footer to staged changes; only a failure waits to be dismissed', () => {
+    const done = team({ notice: { ok: true, text: 'Approved · version 5' } })
+    expect(ledgerMarkup(done)).toBe('')
+    expect(toastMarkup(done)).toBe('<div class="toast" role="status"><span>Approved · version 5</span></div>')
+    const failed = toastMarkup(team({ notice: { ok: false, text: 'The team file changed meanwhile' } }))
+    expect(failed).toContain('<div class="toast failed" role="alert"><span class="error-text">The team file changed meanwhile</span>')
+    expect(failed).toContain('aria-label="Dismiss the message">Dismiss</button>')
+    expect(toastMarkup(team())).toBe('')
+  })
+
+  it('reviews a first approval as rows: each agent with what it could do, each role with its chain', () => {
+    const first = team({
+      snapshot: { ...SNAPSHOT, approved: null, history: [] }, approved: null, hasStaged: true,
+      confirmation: {
+        request: { kind: 'file' }, title: 'Approve the team for the first time', action: 'Approve',
+        preview: { valid: true, errors: [], differences: [], teamUpdate: [], consequences: ['Sol could be given work', 'Sol could lead', 'Sol could receive private work', 'lead would start with Sol'] }
+      }
+    })
+    const markup = ledgerMarkup(first)
+    expect(count(markup, 'class="review-group"')).toBe(2)
+    expect(markup).toMatch(/<span class="review-subject"><svg[^>]*>.*?<\/svg>Sol<\/span><div><div class="consequence">Can be given work, can lead, may receive private work<\/div><\/div>/)
+    expect(markup).toMatch(/<span class="review-subject">Lead<\/span><div><div class="chain"><span class="chain-step"><svg[^>]*>.*?<\/svg><span>Sol<\/span><span class="effort mono">xhigh<\/span><\/span>/)
+    expect(markup).not.toContain('lead would start with Sol')
+  })
+
+  it('draws a changed order as steps, before and after', () => {
+    const markup = ledgerMarkup(team({
+      hasStaged: true,
+      confirmation: {
+        request: { kind: 'staged', data: DATA }, title: 'Approve these changes', action: 'Approve',
+        preview: {
+          valid: true, errors: [], teamUpdate: [], consequences: ['helper would start with Luna instead of GLM-5.3'],
+          differences: [{ scope: 'roles', id: 'helper', field: 'candidates', kind: 'changed', before: { present: true, value: ['glm@max', 'luna@max'] }, after: { present: true, value: ['luna@max', 'glm@max'] } }]
+        }
+      }
+    }))
+    expect(count(markup, '<span class="chain">')).toBe(2)
+    expect(markup).not.toContain('luna@max')
+    expect(markup).toContain('<div class="consequence">Helper would start with Luna instead of GLM-5.3</div>')
   })
 })
 

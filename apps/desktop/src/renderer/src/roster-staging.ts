@@ -19,13 +19,18 @@ import {
 /** A section a row names, as the approval writer and `revertAgents` take it: an agent id or a shared section. */
 export type RosterSection = string
 
-/** `detail` marks a value carried by an entry that was added or removed whole; a one-line summary leaves those out. */
-export interface DiffLine { field: string; before: string; after: string; detail?: true }
+/**
+ * `detail` marks a value carried by an entry that was added or removed whole; a one-line summary
+ * leaves those out. `chain` carries a role's candidates on each side, for a page to draw as steps.
+ */
+export interface DiffLine { field: string; before: string; after: string; detail?: true; chain?: { before: string[] | null; after: string[] | null } }
 
+/** `role` marks a row about one role whose whole chain the page draws (a first approval). */
 export interface DiffGroup {
   key: RosterSection
   subject: string
   agent?: RosterAgentShape
+  role?: RosterRoleShape
   lines: DiffLine[]
   consequences: string[]
 }
@@ -56,7 +61,8 @@ const FIELD_WORDS: Readonly<Record<string, string>> = {
   name: 'Name', class: 'Class', harness: 'Agent app', model: 'Model', provider: 'Provider', host: 'Host', enabled: 'On', status: 'Status',
   efforts: 'Efforts', roles: 'Roles', aliases: 'Also called', enabled_note: 'Reason it is off', context_window: 'Capacity', context_limit: 'Context limit',
   compact_at: 'Compact at', paid_by: 'Paid by', price: 'Price', description: 'Line', candidates: 'Order', then: 'If all fail', recheck: 'Recheck',
-  small_work: 'Small work', hosts: 'Hosts', sites: 'Sites', private_work: 'Private work', folder: 'Workspace', basis: 'Destination', accepted_versions: 'Accepted versions'
+  small_work: 'Small work', hosts: 'Hosts', sites: 'Sites', private_work: 'Private work', folder: 'Workspace', basis: 'Destination', accepted_versions: 'Accepted versions',
+  input: 'In', cached_input: 'Cached in', output: 'Out', source: 'Source', as_of: 'As of'
 }
 
 const VALUE_WORDS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
@@ -95,46 +101,87 @@ function sectionOf(diff: RosterDiffShape): RosterSection {
   return diff.scope === 'agent' ? diff.id : diff.scope
 }
 
-function formatPlain(value: unknown, field?: string): string {
-  if (value === null || value === undefined) return 'none'
-  if (Array.isArray(value)) return value.length === 0 ? 'none' : value.map((entry) => formatPlain(entry)).join(', ')
-  if (typeof value === 'object') {
-    return Object.entries(value as Record<string, unknown>).map(([key, entry]) => `${(FIELD_WORDS[key] ?? key).toLowerCase()} ${formatPlain(entry, key)}`).join(' · ')
+/** The names an id stands for on the pages: the file's ids never reach the owner's eyes. */
+interface Names { agents: ReadonlyMap<string, string>; providers: ReadonlyMap<string, string>; exceptions: ReadonlyMap<string, string> }
+
+const NO_NAMES: Names = { agents: new Map(), providers: new Map(), exceptions: new Map() }
+
+/** Later sources win, so a renamed agent or provider reads by its new name. */
+function namesOf(...sources: Array<RosterDataShape | null>): Names {
+  const present = sources.filter((source): source is RosterDataShape => source !== null)
+  return {
+    agents: new Map(present.flatMap((source) => source.agents.map((agent) => [agent.id, agent.name] as const))),
+    providers: new Map(present.flatMap((source) => source.providers.map((provider) => [provider.id, provider.name] as const))),
+    exceptions: new Map(present.flatMap((source) => source.exceptions.map((exception) => [exception.id, exception.provider] as const)))
   }
+}
+
+/** `luna@max` reads "Luna max"; `astra@medium|high` reads "Astra medium or high". */
+function candidateWords(text: string, names: Names): string {
+  const candidate = parseCandidate(text)
+  return `${names.agents.get(candidate.agent) ?? candidate.agent} ${effortWords(candidate)}`
+}
+
+function formatPlain(value: unknown, field: string | undefined, names: Names): string {
+  if (value === null || value === undefined) return 'none'
+  if (Array.isArray(value)) {
+    if (value.length === 0) return 'none'
+    if (field === 'candidates') return value.map((entry) => candidateWords(String(entry), names)).join(', ')
+    if (field === 'roles') return value.map((entry) => roleName(String(entry))).join(', ')
+    return value.map((entry) => formatPlain(entry, undefined, names)).join(', ')
+  }
+  if (typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+    // A recheck names who rechecks and at which effort: `{same_reviewer: true, astra: low}`.
+    if (field === 'recheck') {
+      return entries.map(([key, entry]) => key === 'same_reviewer' ? (entry === true ? 'the same reviewer' : 'another reviewer') : `${names.agents.get(key) ?? key} ${String(entry)}`).join(' · ')
+    }
+    return entries.map(([key, entry]) => `${(FIELD_WORDS[key] ?? key).toLowerCase()} ${formatPlain(entry, key, names)}`).join(' · ')
+  }
+  if (field === 'small_work') return candidateWords(String(value), names)
+  if (field === 'provider') return names.providers.get(String(value)) ?? String(value)
   const word = field === undefined ? undefined : VALUE_WORDS[field]?.[String(value)]
   if (word !== undefined) return word
   return typeof value === 'number' && value >= 10_000 ? thousands(value) : String(value)
 }
 
 /** One value as the review shows it; the owner's free text and folders show only that they changed, never their words. */
-export function formatValue(side: RosterDiffShape['before'], field?: string): string {
+export function formatValue(side: RosterDiffShape['before'], field?: string, names: Names = NO_NAMES): string {
   if (side === undefined || !side.present) return '—'
   if (side.hash !== undefined) return 'changed'
-  return formatPlain(side.value, field)
+  return formatPlain(side.value, field, names)
 }
 
-function fieldWords(diff: RosterDiffShape): string {
+function fieldWords(diff: RosterDiffShape, names: Names): string {
   const word = FIELD_WORDS[diff.field ?? ''] ?? diff.field ?? ''
   if (diff.scope === 'agent') return word
-  const subject = diff.scope === 'roles' ? roleName(diff.id) : diff.scope === 'harness-routes' ? ROSTER_APP_NAMES[diff.id as RosterHarness] ?? diff.id : diff.id
+  const provider = (id: string): string => names.providers.get(id) ?? id
+  const subject = diff.scope === 'roles' ? roleName(diff.id)
+    : diff.scope === 'harness-routes' ? ROSTER_APP_NAMES[diff.id as RosterHarness] ?? diff.id
+      : diff.scope === 'providers' ? provider(diff.id)
+        : diff.scope === 'exceptions' ? provider(names.exceptions.get(diff.id) ?? diff.id) : diff.id
   return word === '' ? subject : `${subject} · ${word.toLowerCase()}`
 }
 
-function lineFor(diff: RosterDiffShape): DiffLine {
-  return { field: fieldWords(diff), before: formatValue(diff.before, diff.field ?? undefined), after: formatValue(diff.after, diff.field ?? undefined) }
+const candidatesOf = (side: RosterDiffShape['before']): string[] | null =>
+  side?.present && side.hash === undefined && Array.isArray(side.value) ? side.value.map(String) : null
+
+function lineFor(diff: RosterDiffShape, names: Names): DiffLine {
+  const line: DiffLine = { field: fieldWords(diff, names), before: formatValue(diff.before, diff.field ?? undefined, names), after: formatValue(diff.after, diff.field ?? undefined, names) }
+  return diff.field === 'candidates' ? { ...line, chain: { before: candidatesOf(diff.before), after: candidatesOf(diff.after) } } : line
 }
 
 /** An added or removed entry shows every value it carries, one line per field (60.5 AC2). */
-function linesFor(diff: RosterDiffShape): DiffLine[] {
-  if (diff.field !== null) return [lineFor(diff)]
+function linesFor(diff: RosterDiffShape, names: Names): DiffLine[] {
+  if (diff.field !== null) return [lineFor(diff, names)]
   const added = diff.kind === 'added'
   const side = added ? diff.after : diff.before
-  const head: DiffLine = { field: fieldWords({ ...diff, field: null }) || 'Agent', before: added ? '—' : 'present', after: added ? 'added' : 'removed' }
+  const head: DiffLine = { field: fieldWords({ ...diff, field: null }, names) || 'Agent', before: added ? '—' : 'present', after: added ? 'added' : 'removed' }
   if (!side?.present || side.value === null || typeof side.value !== 'object') return [head]
   const hidden = new Set(['id', ...(diff.scope === 'harness-routes' ? ['harness'] : [])])
   return [head, ...Object.entries(side.value as Record<string, unknown>).filter(([key]) => !hidden.has(key)).map(([key, value]) => {
-    const text = typeof value === 'string' && value.startsWith('text ') ? 'set' : formatPlain(value, key)
-    return { field: fieldWords({ ...diff, field: key }), before: added ? '—' : text, after: added ? text : '—', detail: true as const }
+    const text = typeof value === 'string' && value.startsWith('text ') ? 'set' : formatPlain(value, key, names)
+    return { field: fieldWords({ ...diff, field: key }, names), before: added ? '—' : text, after: added ? text : '—', detail: true as const }
   })]
 }
 
@@ -150,6 +197,34 @@ function claimant(sentence: string, groups: DiffGroup[], roleIds: ReadonlySet<st
   return undefined
 }
 
+const spaced = (id: string): string => id.replaceAll('-', ' ')
+const thenWords = (id: string): string => THEN_WORDS[id as RosterThen] ?? id
+
+/**
+ * A consequence sentence as a page shows it. The sentences are 60.3's, shared with
+ * `bmn roster status`, where a role and a fallback go by their ids; here they go by their words.
+ */
+export function consequenceWords(sentence: string, roleIds: ReadonlySet<string>): string {
+  const known = (id: string | undefined): id is string => id !== undefined && roleIds.has(id)
+  const starts = /^([a-z0-9-]+) would (start with .*|have no agent to start with) ?(?:\(then ([a-z-]+)\))?$/.exec(sentence)
+  if (starts && known(starts[1])) return `${roleName(starts[1])} would ${starts[2]}${starts[3] ? ` (then: ${thenWords(starts[3])})` : ''}`
+  const fails = /^when every ([a-z0-9-]+) candidate fails: ([a-z-]+) instead of ([a-z-]+)$/.exec(sentence)
+  if (fails && known(fails[1])) return `When every ${spaced(fails[1])} candidate fails: ${thenWords(fails[2] as string)} instead of ${thenWords(fails[3] as string)}`
+  const removed = /^the ([a-z0-9-]+) role would be removed$/.exec(sentence)
+  if (removed && known(removed[1])) return `The ${spaced(removed[1])} role would be removed`
+  return sentence.replace(/ take the ([a-z0-9-]+) role$/, (whole, id: string) => (roleIds.has(id) ? ` take the ${spaced(id)} role` : whole))
+}
+
+/** An approved version's one-line summary: its first consequence in the pages' words, then "· N more". */
+export function summaryWords(summary: string, roleIds: ReadonlySet<string>): string {
+  const more = / · \d+ more$/.exec(summary)
+  return more ? `${consequenceWords(summary.slice(0, more.index), roleIds)}${more[0]}` : consequenceWords(summary, roleIds)
+}
+
+export function roleIdsOf(...sources: Array<RosterDataShape | null>): Set<string> {
+  return new Set(sources.flatMap((source) => source?.roles.map((role) => role.id) ?? []))
+}
+
 /**
  * Groups machine differences into one row per agent or shared section, and gives each row the
  * consequence sentences about it (the sentences come from 60.3's `consequences`, the same words
@@ -158,6 +233,7 @@ function claimant(sentence: string, groups: DiffGroup[], roleIds: ReadonlySet<st
 export function groupDifferences(diffs: readonly RosterDiffShape[], data: RosterDataShape | null, approved: RosterDataShape | null,
   sentences: readonly string[]): { groups: DiffGroup[]; general: string[] } {
   const agentById = new Map([...(approved?.agents ?? []), ...(data?.agents ?? [])].map((agent) => [agent.id, agent]))
+  const names = namesOf(approved, data)
   const groups = new Map<RosterSection, DiffGroup>()
   for (const diff of diffs) {
     const key = sectionOf(diff)
@@ -167,21 +243,61 @@ export function groupDifferences(diffs: readonly RosterDiffShape[], data: Roster
       group = { key, subject: agent?.name ?? SECTION_SUBJECTS[key] ?? key, lines: [], consequences: [], ...(agent ? { agent } : {}) }
       groups.set(key, group)
     }
-    group.lines.push(...linesFor(diff))
+    group.lines.push(...linesFor(diff, names))
   }
   const general: string[] = []
-  const roleIds = new Set([...(data?.roles ?? []), ...(approved?.roles ?? [])].map((role) => role.id))
+  const roleIds = roleIdsOf(data, approved)
   for (const sentence of sentences) {
     const owner = claimant(sentence, [...groups.values()], roleIds)
-    if (owner) owner.consequences.push(sentence)
-    else general.push(sentence)
+    if (owner) owner.consequences.push(consequenceWords(sentence, roleIds))
+    else general.push(consequenceWords(sentence, roleIds))
   }
   return { groups: [...groups.values()], general }
+}
+
+const ABILITY_WORDS: Readonly<Record<string, string>> = {
+  'be given work': 'can be given work', lead: 'can lead', design: 'can design', 'receive private work': 'may receive private work'
+}
+
+/**
+ * A first approval has nothing to differ from, so its review is the consequences themselves, one
+ * row per agent ("Can be given work, can lead, may receive private work") and one per role, whose
+ * chain the page draws. Sentences about neither stay in `general`.
+ */
+export function firstApprovalGroups(data: RosterDataShape, sentences: readonly string[]): { groups: DiffGroup[]; general: string[] } {
+  const roleIds = roleIdsOf(data)
+  const left = new Set(sentences)
+  const groups: DiffGroup[] = []
+  for (const agent of data.agents) {
+    const mine = sentences.filter((sentence) => sentence.startsWith(`${agent.name} could `))
+    if (mine.length === 0) continue
+    for (const sentence of mine) left.delete(sentence)
+    const abilities = mine.map((sentence) => sentence.slice(`${agent.name} could `.length)).map((ability) => ABILITY_WORDS[ability] ?? `could ${ability}`).join(', ')
+    groups.push({ key: agent.id, subject: agent.name, agent, lines: [], consequences: [abilities.charAt(0).toUpperCase() + abilities.slice(1)] })
+  }
+  for (const role of data.roles) {
+    const mine = sentences.filter((sentence) => sentence.startsWith(`${role.id} would `))
+    if (mine.length === 0) continue
+    for (const sentence of mine) left.delete(sentence)
+    groups.push({ key: `role:${role.id}`, subject: roleName(role.id), role, lines: [], consequences: mine.some((sentence) => sentence.includes(' would have no agent to start with')) ? ['Nobody can start it yet'] : [] })
+  }
+  return { groups, general: sentences.filter((sentence) => left.has(sentence)).map((sentence) => consequenceWords(sentence, roleIds)) }
 }
 
 /** A group's differences on one line, as the "changed outside BMN" row shows them. */
 export function differenceLine(group: Pick<DiffGroup, 'lines'>): string {
   return group.lines.filter((line) => line.detail !== true).map((line) => `${line.field.toLowerCase()} ${line.before} → ${line.after}`).join(' · ')
+}
+
+/**
+ * A difference as a sheet shows it: the changed lines with their context. The two file lines and
+ * the position lines of the diff format are left out, because the sheet names the file itself.
+ */
+export function diffBody(diff: string): string {
+  const lines = diff.split('\n')
+  const body = lines.filter((line, index) => !(index < 2 && /^(---|\+\+\+) /.test(line)))
+  const first = body.findIndex((line) => line.startsWith('@@'))
+  return body.flatMap((line, index) => !line.startsWith('@@') ? [line] : index === first ? [] : ['⋯']).join('\n')
 }
 
 /** "1 unapproved change", the footer's count. */

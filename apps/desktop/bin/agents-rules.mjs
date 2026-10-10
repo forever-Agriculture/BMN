@@ -286,15 +286,28 @@ export function checkTargets(environment = process.env) {
 
 /**
  * Re-inspection before a full rendering leaves BMN: the app must still resolve to the default of
- * the provider the approved roster names. A public rendering needs none, and an owner-declared
- * destination never gets a full one (routeFor), so nothing here rests on the owner's word.
+ * the provider the approved roster names, on a version BMN tested or the owner accepted, because
+ * an inspection decides nothing on a version whose way of picking a destination nobody checked
+ * (60.3 AC3). A public rendering needs none, and an owner-declared destination never gets a full
+ * one (routeFor), so nothing here rests on the owner's word. `remedy` says where the owner fixes it.
  */
 async function routeStillMatches(harness, decision, environment) {
   if (decision.kind !== 'full') return { ok: true, inspected: null }
   const { inspectRoute } = await import('./agents-check.mjs')
   const inspected = inspectRoute({ harness }, null, environment, environment.HOME || homedir())
-  const ok = inspected.basis === 'default' && inspected.provider === decision.route.provider
-  return ok ? { ok: true, inspected } : { ok: false, reason: `${APP_NAMES[harness]} now sends data to ${inspected.host ?? 'an unknown destination'}${inspected.reason ? ` (${inspected.reason})` : ''}, not default:${decision.route.provider}` }
+  if (inspected.basis !== 'default' || inspected.provider !== decision.route.provider) {
+    return {
+      ok: false, remedy: "set the app's destination again in Preferences > Rules > Health",
+      reason: `${APP_NAMES[harness]} now sends data to ${inspected.host ?? 'an unknown destination'}${inspected.reason ? ` (${inspected.reason})` : ''}, not default:${decision.route.provider}`
+    }
+  }
+  if (inspected.version_tested !== true && !(decision.route.accepted_versions ?? []).includes(inspected.version)) {
+    return {
+      ok: false, remedy: 'accept that version in Preferences > Rules > Health, or keep the public sections only',
+      reason: `${APP_NAMES[harness]} ${inspected.version ?? '(version unreadable)'} is a version BMN has not tested and you have not accepted, so where it sends data is not established`
+    }
+  }
+  return { ok: true, inspected }
 }
 
 /** Shows target, resolved path and diff on stderr every time, then asks (default No) unless --yes. */
@@ -383,7 +396,7 @@ export async function planInstall(harnesses, { environment = process.env } = {})
     const decision = routeFor(harness, generation)
     const route = await routeStillMatches(harness, decision, environment)
     if (!route.ok) {
-      return { code: 'ROUTE_CHANGED', message: `refusing a full rendering for ${harness}: ${route.reason}; set the app's destination again in Preferences > Rules > Health`, plans: [], planHash: null }
+      return { code: 'ROUTE_CHANGED', message: `refusing a full rendering for ${harness}: ${route.reason}; ${route.remedy}`, plans: [], planHash: null }
     }
     const path = targetPath(harness, environment)
     const prior = pathState(path)
@@ -838,7 +851,7 @@ export async function probe(harness, { environment = process.env, now = new Date
   if (decision.kind !== 'full') return record('unavailable', `${decision.reason}; a loading test would send the rules to that provider`, version)
   // Like install: the destination is inspected again right before anything is sent (60.6 AC4).
   const route = await routeStillMatches(harness, decision, environment)
-  if (!route.ok) return record('unavailable', `refused: ${route.reason}; set the app's destination again in Preferences > Rules > Health`, version)
+  if (!route.ok) return record('unavailable', `refused: ${route.reason}; ${route.remedy}`, version)
   if (route.inspected) host = route.inspected.host ?? null
   const current = pathState(targetPath(harness, environment))
   if (current.kind !== 'file' || sha256(current.text) !== rendering.hash) {

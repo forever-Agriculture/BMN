@@ -336,6 +336,9 @@ describe('workspaces and their public status (60.3 AC5)', () => {
     }
     expect(status()).toEqual({ public: false, reason: 'no record' })
     expect(status({})).toMatchObject({ public: true })
+    // Fresh means younger than seven days: a record exactly that old no longer counts.
+    expect(status({ checked_at: new Date(NOW.getTime() - 7 * 86_400_000 + 1000).toISOString() })).toMatchObject({ public: true })
+    expect(status({ checked_at: new Date(NOW.getTime() - 7 * 86_400_000).toISOString() })).toMatchObject({ public: false, reason: 'stale' })
     expect(status({ checked_at: new Date(NOW.getTime() - 7 * 86_400_000 - 1000).toISOString() })).toMatchObject({ public: false, reason: 'stale' })
     expect(status({ checked_at: new Date(NOW.getTime() + 60_000).toISOString() })).toMatchObject({ public: false, reason: 'malformed' })
     expect(status({ workspace: workspace })).toMatchObject({ public: false, reason: 'malformed' })

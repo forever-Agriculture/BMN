@@ -800,7 +800,9 @@ swapped link made meanwhile. Beside it, **What each app reads** shows each app's
 **Earlier versions** lists saves and installs with **Restore…** and **Undo…**. **Install…** shows
 every file's difference, including a link, a hand-written file or an outside edit it replaces,
 and writes them in one step; a file that is a link is replaced by a regular file, and the file it
-pointed to is never written. Each action confirms against the exact plan it showed, plans again
+pointed to is never written. The full rules are written, updated or sent in a test only while the
+app runs a version BMN tested or you accepted under Health; on any other version Install refuses
+them and names the version. Each action confirms against the exact plan it showed, plans again
 once you confirm, and refuses if the files changed since. **Health** reads each file the way the
 hooks check is read (current, differs from the rules, edited outside BMN, not installed, a link,
 missing or unreadable) and, under **Agent apps**, where each app sends data and which versions

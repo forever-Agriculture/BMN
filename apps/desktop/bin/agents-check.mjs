@@ -649,7 +649,7 @@ export function workspaceVisibility(workspace, now = new Date()) {
   const checkedAt = isObject(record) && typeof record.checked_at === 'string' ? Date.parse(record.checked_at) : Number.NaN
   if (!isObject(record) || record.version !== 1 || record.workspace !== workspace || Number.isNaN(checkedAt) || checkedAt > now.getTime()
     || !['public', 'private'].includes(record.visibility)) return { public: false, reason: 'malformed' }
-  if (now.getTime() - checkedAt > VISIBILITY_MAX_AGE_MS) return { public: false, reason: 'stale', record }
+  if (now.getTime() - checkedAt >= VISIBILITY_MAX_AGE_MS) return { public: false, reason: 'stale', record }
   if (record.visibility === 'private') {
     return { public: false, reason: PRIVATE_REASONS.includes(record.reason) ? record.reason : 'private repository', record }
   }

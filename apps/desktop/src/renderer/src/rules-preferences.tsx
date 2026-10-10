@@ -21,7 +21,7 @@ import {
 import { failureDetail } from './bridge-error'
 import { Segmented } from './history-preferences'
 import { Dot } from './roster-marks'
-import { acceptVersion, revokeVersion, setDestination } from './roster-staging'
+import { acceptVersion, diffBody, revokeVersion, setDestination } from './roster-staging'
 import { displayPath } from './session-presentation'
 import { Issues, PageHead, shortDate } from './team-preferences'
 import type { TeamState } from './team-state'
@@ -346,7 +346,7 @@ function Targets(props: { targets: readonly RulesPlanTarget[]; home: string | nu
             <span className="target-file"><span className="path mono" title={target.path}>{displayPath(target.path, props.home)}</span><span className="muted">{props.words(target)}</span></span>
             <span className="muted">{target.rendering ? KIND_WORDS[target.rendering] : ''}</span>
           </summary>
-          <pre className="diff">{target.diff || 'No change.'}</pre>
+          <pre className="diff">{diffBody(target.diff) || 'No change.'}</pre>
         </details>
       ))}
     </>
@@ -365,7 +365,7 @@ function PendingSheet(props: { rules: RulesState }): React.JSX.Element | null {
         <Sheet {...common} title={pending.plan.valid ? `Save the rules · ${diffSummary(pending.plan.diff)}` : 'These rules cannot be saved'} action="Save" ready={pending.plan.valid && pending.plan.diff !== ''}
           note={pending.plan.valid ? 'The text before this save is kept under Earlier versions. Nothing is installed.' : 'An app could not read them as written.'}>
           <Issues issues={pending.plan.errors} />
-          {pending.plan.diff ? <pre className="diff">{pending.plan.diff}</pre> : null}
+          {pending.plan.diff ? <pre className="diff">{diffBody(pending.plan.diff)}</pre> : null}
         </Sheet>
       )
     case 'install': {
@@ -387,7 +387,7 @@ function PendingSheet(props: { rules: RulesState }): React.JSX.Element | null {
       return (
         <Sheet {...common} title={`Restore this version · ${diffSummary(pending.plan.diff)}`} action="Restore" ready={pending.plan.text !== undefined && pending.plan.diff !== ''}
           note="The current text is kept under Earlier versions. Nothing is installed.">
-          {pending.plan.diff ? <pre className="diff">{pending.plan.diff}</pre> : null}
+          {pending.plan.diff ? <pre className="diff">{diffBody(pending.plan.diff)}</pre> : null}
         </Sheet>
       )
     case 'test':
@@ -577,10 +577,11 @@ function DestinationSheet(props: { app: AgentAppView; data: RosterDataShape; onD
         {data.providers.map((provider) => (
           <label key={provider.id} className="choice">
             <input type="radio" name={`destination-${app.harness}`} checked={choice === provider.id} onChange={() => setChoice(provider.id)} />
-            {provider.name} <span className="choice-line">on your word: {name} gets public sections only and its agents public work only</span>
+            {provider.name} <span className="choice-line">on your word</span>
           </label>
         ))}
       </div>
+      <p className="preferences-help">Anything on your word is not checked by BMN: {name} then gets public sections only and its agents public work only.</p>
     </Sheet>
   )
 }

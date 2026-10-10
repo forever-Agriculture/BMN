@@ -28,8 +28,10 @@ import {
   agentGroups,
   agentsOnProvider,
   classBar,
-  differenceLine,
+  consequenceWords,
+  diffBody,
   effortWords,
+  firstApprovalGroups,
   firstLine,
   groupDifferences,
   landingFor,
@@ -38,6 +40,7 @@ import {
   newAgentConsequence,
   parseCandidate,
   priceWords,
+  roleIdsOf,
   providerOf,
   publicOnly,
   roleName,
@@ -46,6 +49,7 @@ import {
   setProviderAnswer,
   setRoleThen,
   summarize,
+  summaryWords,
   teamUpdateWords,
   thousands,
   toggleAgentEffort,
@@ -53,6 +57,7 @@ import {
   toggleCandidateEffort,
   updateAgent,
   type DiffGroup,
+  type DiffLine,
   type NewAgent
 } from './roster-staging'
 import { displayPath } from './session-presentation'
@@ -219,7 +224,7 @@ function OutsideRow(props: { group: DiffGroup; team: TeamState }): React.JSX.Ele
       {group.agent ? <Piece agentClass={group.agent.class} /> : null}
       <b>{group.subject}</b>
       <span className="muted">changed outside BMN:</span>
-      <span className="outside-diff mono">{differenceLine(group)}</span>
+      <span className="outside-diff">{group.lines.filter((line) => line.detail !== true).map((line, index) => <span key={index} className="difference"><Difference line={line} data={team.data} /></span>)}</span>
       <span className="actions">
         <button type="button" className="small" disabled={team.busy} aria-label={`Keep the change to ${group.subject}`}
           onClick={() => void team.requestApproval({ kind: 'sections', scope: [group.key] }, { title: `Keep the change to ${group.subject}`, action: 'Keep' })}>Keep</button>
@@ -516,12 +521,13 @@ function NewAgentPage(props: { team: TeamState; data: RosterDataShape; go(page: 
 // Team › Roles
 
 /** A chain in words and pieces: who gets the work in order, then what happens when all of them fail. */
-export function Chain(props: { role: RosterRoleShape; data: RosterDataShape }): React.JSX.Element {
-  const { role, data } = props
+/** A role's candidates in order, each as its piece, name and effort. */
+function Steps(props: { candidates: readonly string[]; data: RosterDataShape }): React.JSX.Element {
+  const { candidates, data } = props
   return (
-    <div className="chain">
-      {role.candidates.length === 0 ? <span className="faint">Nobody yet</span> : null}
-      {role.candidates.map((text, index) => {
+    <>
+      {candidates.length === 0 ? <span className="faint">Nobody yet</span> : null}
+      {candidates.map((text, index) => {
         const candidate = parseCandidate(text)
         const agent = data.agents.find((entry) => entry.id === candidate.agent)
         const state = !agent ? 'unknown' : agent.status === 'proposed' ? 'proposed' : agent.enabled ? null : 'off'
@@ -535,9 +541,26 @@ export function Chain(props: { role: RosterRoleShape; data: RosterDataShape }): 
           </span>
         )
       })}
+    </>
+  )
+}
+
+export function Chain(props: { role: RosterRoleShape; data: RosterDataShape }): React.JSX.Element {
+  const { role, data } = props
+  return (
+    <div className="chain">
+      <Steps candidates={role.candidates} data={data} />
       <span className="chain-step"><span className="faint" aria-hidden="true">→</span><span className="muted">{THEN_WORDS[role.then]}</span></span>
     </div>
   )
+}
+
+/** One changed value, before and after; a role's order is drawn as its steps. */
+function Difference(props: { line: DiffLine; data: RosterDataShape | null }): React.JSX.Element {
+  const { line, data } = props
+  const side = (candidates: string[] | null | undefined, words: string): ReactNode =>
+    candidates && data ? <span className="chain"><Steps candidates={candidates} data={data} /></span> : words
+  return <><span className="muted">{line.field}:</span> {side(line.chain?.before, line.before)} → {side(line.chain?.after, line.after)}</>
 }
 
 function ChainEditor(props: { team: TeamState; data: RosterDataShape; role: RosterRoleShape }): React.JSX.Element {
@@ -684,7 +707,9 @@ function ChangesPage(props: { team: TeamState }): React.JSX.Element {
   const [viewing, setViewing] = useState<number | null>(null)
   const history = team.snapshot?.history ?? []
   const current = team.snapshot?.approved?.generation ?? null
-  const title = (entry: AgentsGenerationSummary): string => !entry.valid ? 'This version cannot be read' : entry.summary ?? (entry.earlier_schema === undefined ? 'Approved' : 'Approved under an earlier layout')
+  const roleIds = roleIdsOf(team.data, team.approved)
+  const title = (entry: AgentsGenerationSummary): string => !entry.valid ? 'This version cannot be read'
+    : entry.summary !== undefined ? summaryWords(entry.summary, roleIds) : entry.earlier_schema === undefined ? 'Approved' : 'Approved under an earlier layout'
   return (
     <>
       <PageHead title="Changes" status="Every approved version of the team" />
@@ -750,14 +775,15 @@ export function TeamPreferences(props: { team: TeamState; page: TeamPage; go(pag
   return <AgentsPage team={team} data={data} go={props.go} />
 }
 
-function ReviewGroups(props: { groups: readonly DiffGroup[]; general: readonly string[] }): React.JSX.Element {
+function ReviewGroups(props: { groups: readonly DiffGroup[]; general: readonly string[]; data: RosterDataShape | null }): React.JSX.Element {
   return (
     <div className="review">
       {props.groups.map((group) => (
         <div key={group.key} className="review-group">
           <span className="review-subject">{group.agent ? <Piece agentClass={group.agent.class} /> : null}{group.subject}</span>
           <div>
-            {group.lines.map((line, index) => <div key={index}><span className="muted">{line.field}:</span> {line.before} → {line.after}</div>)}
+            {group.lines.map((line, index) => <div key={index}><Difference line={line} data={props.data} /></div>)}
+            {group.role && props.data ? <Chain role={group.role} data={props.data} /> : null}
             {group.consequences.map((sentence) => <div key={sentence} className="consequence">{sentence}</div>)}
           </div>
         </div>
@@ -780,28 +806,18 @@ export function TeamLedger(props: { team: TeamState }): React.JSX.Element | null
   const home = team.snapshot?.home ?? null
   const confirmation = team.confirmation
   const preview = team.preview
-  if (!team.hasStaged && confirmation === null && team.notice === null) return null
+  if (!team.hasStaged && confirmation === null) return null
   const staged = preview === null ? null : groupDifferencesFor(team)
   const also = preview ? teamUpdateWords(preview.teamUpdate.length) : null
   const first = team.snapshot !== null && team.snapshot.approved === null
   return (
     <footer className="ledger">
-      {team.notice ? (
-        <div className="ledger-line" role="status">
-          <span className={team.notice.ok ? 'muted' : 'error-text'}>{team.notice.text}</span>
-          <span className="actions">
-            {team.notice.undo ? <button type="button" className="small" disabled={team.busy} onClick={() => void team.undoRulesUpdate(team.notice?.undo ?? '')}>Undo</button> : null}
-            <button type="button" className="small" aria-label="Dismiss the message" onClick={() => team.setNotice(null)}>Dismiss</button>
-          </span>
-          {team.notice.issues ? <Issues issues={team.notice.issues} /> : null}
-        </div>
-      ) : null}
       {confirmation ? (
         <div className="ledger-sheet" role="group" aria-label={confirmation.title}>
           <b>{confirmation.title}</b>
           {(() => {
             const grouped = groupFor(confirmation.preview, team)
-            return <ReviewGroups groups={grouped.groups} general={grouped.general} />
+            return <ReviewGroups groups={grouped.groups} general={grouped.general} data={team.data} />
           })()}
           {confirmation.preview.teamUpdate.length > 0 ? (
             <>
@@ -809,7 +825,7 @@ export function TeamLedger(props: { team: TeamState }): React.JSX.Element | null
               {confirmation.preview.teamUpdate.map((target) => (
                 <details key={target.harness} className="rules-target">
                   <summary><span>{ROSTER_APP_NAMES[target.harness]}</span> <span className="mono muted">{displayPath(target.path, home)}</span> <span className="faint">{target.kind === 'full' ? 'Full rules' : 'Public sections only'}</span></summary>
-                  <pre className="diff">{target.diff}</pre>
+                  <pre className="diff">{diffBody(target.diff)}</pre>
                 </details>
               ))}
             </>
@@ -824,7 +840,7 @@ export function TeamLedger(props: { team: TeamState }): React.JSX.Element | null
           <div className="ledger-line">
             <Dot label="Unapproved change" />
             <b>{preview === null ? 'Checking the change…' : first ? 'First approval' : preview.valid ? summarize(preview.differences) : 'Unapproved changes'}</b>
-            <span className="muted">{preview === null ? '' : !preview.valid ? 'This would not be a valid team' : first ? firstApprovalWords(team.data) : firstConsequence(preview.consequences, staged?.groups ?? [])}</span>
+            <span className="muted">{preview === null ? '' : !preview.valid ? 'This would not be a valid team' : first ? firstApprovalWords(team.data) : firstConsequence(preview.consequences, staged?.groups ?? [], roleIdsOf(team.data, team.approved))}</span>
             <span className="actions">
               <button type="button" aria-expanded={reviewing} disabled={preview === null} onClick={() => setReviewing(!reviewing)}>Review</button>
               <button type="button" disabled={team.busy} onClick={() => { setReviewing(false); team.discard() }}>Discard</button>
@@ -835,7 +851,7 @@ export function TeamLedger(props: { team: TeamState }): React.JSX.Element | null
           {preview && !preview.valid ? <Issues issues={preview.errors} /> : null}
           {reviewing && preview?.valid && staged ? (
             <div className="ledger-sheet">
-              <ReviewGroups groups={staged.groups} general={staged.general} />
+              <ReviewGroups groups={staged.groups} general={staged.general} data={team.data} />
               {also ? <div className="consequence">{also}</div> : null}
               <p className="preferences-help">Approve saves exactly this. If the team file changed meanwhile, BMN reloads instead.</p>
             </div>
@@ -854,13 +870,34 @@ export function firstApprovalWords(data: RosterDataShape | null): string {
 }
 
 /** The footer's one line of meaning: the first consequence, else the first changed value. */
-function firstConsequence(consequences: readonly string[], groups: readonly DiffGroup[]): string {
+function firstConsequence(consequences: readonly string[], groups: readonly DiffGroup[], roleIds: ReadonlySet<string>): string {
   const line = groups[0]?.lines[0]
-  return consequences[0] ?? (groups[0] && line ? `${groups[0].subject}: ${line.field.toLowerCase()} ${line.before} → ${line.after}` : '')
+  if (consequences[0] !== undefined) return consequenceWords(consequences[0], roleIds)
+  return groups[0] && line ? `${groups[0].subject}: ${line.field.toLowerCase()} ${line.before} → ${line.after}` : ''
 }
 
+/** What a review lists: the grouped differences, or for a first approval what each agent and role could then do. */
 function groupFor(preview: NonNullable<TeamState['preview']>, team: TeamState): { groups: DiffGroup[]; general: string[] } {
+  if (team.snapshot?.approved === null && team.data !== null) return firstApprovalGroups(team.data, preview.consequences)
   return groupDifferences(preview.differences, team.data, team.approved, preview.consequences)
+}
+
+/**
+ * What the last action did, floating over the foot of the dialog so it takes no room from the
+ * page: a success goes away by itself, a failure stays until dismissed.
+ */
+export function TeamToast(props: { team: TeamState }): React.JSX.Element | null {
+  const { team } = props
+  const notice = team.notice
+  if (notice === null) return null
+  return (
+    <div className={notice.ok ? 'toast' : 'toast failed'} role={notice.ok ? 'status' : 'alert'}>
+      <span className={notice.ok ? undefined : 'error-text'}>{notice.text}</span>
+      {notice.issues ? <Issues issues={notice.issues} /> : null}
+      {notice.undo ? <button type="button" className="small" disabled={team.busy} onClick={() => void team.undoRulesUpdate(notice.undo ?? '')}>Undo</button> : null}
+      {notice.ok ? null : <button type="button" className="small" aria-label="Dismiss the message" onClick={() => team.setNotice(null)}>Dismiss</button>}
+    </div>
+  )
 }
 
 function groupDifferencesFor(team: TeamState): { groups: DiffGroup[]; general: string[] } | null {

@@ -142,7 +142,8 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       if (parent !== null && sub) await nav.locator('.nav-sub .nav-item', { hasText: new RegExp(`^${sub}$`) }).click()
     }
     const card = (name) => main.locator('.agent-card', { has: page.locator('.agent-open', { hasText: new RegExp(`^${name}$`) }) })
-    const notice = (pattern) => dialog.locator('.ledger [role="status"], .preferences-main [role="status"], .preferences-main [role="alert"]').filter({ hasText: pattern }).first().waitFor()
+    const toast = dialog.locator('.toast')
+    const notice = (pattern) => dialog.locator('.toast, .preferences-main [role="status"], .preferences-main [role="alert"]').filter({ hasText: pattern }).first().waitFor()
     const approve = async () => {
       const button = ledger.getByRole('button', { name: 'Approve', exact: true })
       await until(() => button.isEnabled(), 'Approve enabled')
@@ -179,11 +180,20 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await ledger.getByText('First approval', { exact: true }).waitFor()
     await ledger.getByText('6 active agents and 10 roles take effect').waitFor()
     await ledger.getByRole('button', { name: 'Review' }).click()
-    await ledger.locator('.ledger-sheet').getByText('Sonnet could be given work').waitFor()
+    // One row per agent with what it could do, one per role with its chain; never a list of loose sentences.
+    const review = ledger.locator('.ledger-sheet .review-group')
+    await review.filter({ hasText: /^Sonnet/ }).getByText('Can be given work, may receive private work').waitFor()
+    await review.filter({ hasText: /^Lead/ }).locator('.chain-step').first().waitFor()
+    assert.equal(await review.count(), 16, 'six agents and ten roles')
+    // What is about neither an agent nor a role stays a sentence of its own: here the one allowed workspace.
+    assert.deepEqual(await ledger.locator('.ledger-sheet .review > .consequence').allTextContents(), ['Z.ai could receive private work in one more workspace'])
     await shot('team-first-approval-1280.png')
     await approve()
-    await notice(/^Approved · version 1/)
+    await notice(/^Approved · version 1$/)
     assert.equal(current()?.generation, 1)
+    // The message floats over the page, takes no room from it and leaves by itself.
+    assert.equal(await ledger.count(), 0, 'the footer stays after an approval')
+    await toast.waitFor({ state: 'detached', timeout: 8_000 })
     assert.equal(approved().agents.find((agent) => agent.id === 'sonnet').status, 'active')
     await main.getByText(/^Approved \w+ \d+, \d\d:\d\d$/).waitFor()
     passed('first approval with one agent activated (60.5 AC6, AC7)')
@@ -286,7 +296,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await main.getByRole('button', { name: 'Edit Epic reviewer' }).click()
     await shot('roles-edit-1280.png')
     await main.getByRole('button', { name: 'Move Fable up' }).click()
-    await line.getByText('epic-reviewer would start with Fable instead of Astra').waitFor()
+    await line.getByText('Epic reviewer would start with Fable instead of Astra').waitFor()
     await approve()
     await notice(/^Approved · version 4/)
     assert.deepEqual(approved().roles.find((entry) => entry.id === 'epic-reviewer').candidates, ['fable@medium', 'astra@medium'])
@@ -299,6 +309,11 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       await outsideFocus()
       const row = main.locator('.outside-row', { hasText: 'changed outside BMN' })
       await row.waitFor()
+      // A changed order is drawn as steps; the file's own spelling never shows.
+      if (action === 'Keep') {
+        assert.equal(await row.locator('.chain').count(), 2, 'the order before and after')
+        assert.doesNotMatch(await row.textContent(), /@/)
+      }
       await shot(`team-outside-${action.toLowerCase()}-1280.png`)
       await row.getByRole('button', { name: `${action} the change to Roles` }).click()
       await row.waitFor({ state: 'detached' })
@@ -315,12 +330,14 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     const versions = readdirSync(join(stateDir, 'generations')).length
     await main.getByRole('button', { name: 'View version 1' }).click()
     await main.locator('.version-view').getByText('Sonnet').first().waitFor()
+    // Versions are summarised in the pages' words: a role goes by its name, never by the file's id.
+    assert.doesNotMatch(await main.textContent(), /\b(focused|epic)-reviewer\b/)
     await shot('changes-1280.png')
     await main.getByRole('button', { name: 'Restore version 3' }).click()
     await ledger.locator('.ledger-sheet').getByText('Restore version 3').waitFor()
     await shot('changes-restore-1280.png')
     await ledger.getByRole('button', { name: 'Restore', exact: true }).click()
-    await notice(/^Version 3 restored as version \d+Dismiss/)
+    await notice(/^Version 3 restored as version \d+$/)
     const restored = generation(current().generation)
     assert.deepEqual([restored.kind, restored.restored_from], ['restore', 3])
     assert.equal(readdirSync(join(stateDir, 'generations')).length, versions + 1)
@@ -344,7 +361,8 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await notice(/^The team file changed meanwhile\. Reloaded without saving\./)
     assert.equal(current().generation, stable)
     assert.equal(rosterHash(), conflictHash)
-    await ledger.getByRole('button', { name: 'Dismiss the message' }).click()
+    await toast.getByRole('button', { name: 'Dismiss the message' }).click()
+    await toast.waitFor({ state: 'detached' })
     passed('an approval after an outside change is refused and reloads; no version and no write')
 
     phase('60.6 AC1: the editor, its Insert menu and saving with a diff')
@@ -553,13 +571,14 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       ['Claude Code ~/.claude/CLAUDE.md Full rules', 'Codex ~/.codex/AGENTS.md Full rules'])
     await confirmation.locator('.rules-target > summary').first().click()
     assert.match(await confirmation.locator('.rules-target pre.diff').first().textContent(), /\+The team: Claude Code \(Fable, Sonnet, Haiku, Kimi\)/)
+    assert.doesNotMatch(await confirmation.locator('.rules-target pre.diff').first().textContent(), /^(---|\+\+\+|@@) /m, 'the sheet names the file; the diff format\'s own headers stay out')
     await shot('team-rules-files-1280.png')
     await confirmation.getByRole('button', { name: 'Approve', exact: true }).click()
     await notice(/^Approved · version \d+ · Rules updated in 2 appsUndo/)
     assert.match(readFileSync(join(home, '.claude/CLAUDE.md'), 'utf8'), /Claude Code \(Fable, Sonnet, Haiku, Kimi\)/)
     assert.match(readFileSync(join(home, '.codex/AGENTS.md'), 'utf8'), /Claude Code \(Fable, Sonnet, Haiku, Kimi\)/)
     await shot('team-rules-updated-1280.png')
-    await ledger.getByRole('button', { name: 'Undo' }).click()
+    await toast.getByRole('button', { name: 'Undo' }).click()
     await notice(/^Put back Claude Code, Codex/)
     assert.doesNotMatch(readFileSync(join(home, '.claude/CLAUDE.md'), 'utf8'), /Haiku/)
     passed('Approve first lists each rules file with its path and diff, commits from there, updates exactly those files and offers Undo')
@@ -596,7 +615,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       }
     }
     await go('Team')
-    const unnamed = await page.evaluate(() => [...document.querySelectorAll('.preferences-nav, .team-page, .rules-page, .ledger')]
+    const unnamed = await page.evaluate(() => [...document.querySelectorAll('.preferences-nav, .team-page, .rules-page, .ledger, .toast')]
       .flatMap((region) => [...region.querySelectorAll('button, input, textarea, [role="radio"], [role="switch"]')])
       .filter((element) => {
         const labelledBy = element.getAttribute('aria-labelledby')

@@ -10,8 +10,11 @@ import {
   agentsOnProvider,
   changedSections,
   classBar,
+  consequenceWords,
+  diffBody,
   differenceLine,
   effortWords,
+  firstApprovalGroups,
   firstLine,
   formatValue,
   groupDifferences,
@@ -32,6 +35,7 @@ import {
   setProviderAnswer,
   setRoleThen,
   summarize,
+  summaryWords,
   teamUpdateWords,
   thousands,
   toggleAgentEffort,
@@ -276,14 +280,17 @@ describe('differences in words (60.5 AC7)', () => {
     expect(groups.map((group) => [group.key, group.subject, group.consequences])).toEqual([
       ['astra', 'Astra', ['Astra: context limit app default → 272 000']],
       ['providers', 'Providers', ['Changing Z.ai to Allowed lets GLM receive private work']],
-      ['roles', 'Roles', ['epic-reviewer would start with Fable instead of Astra']],
+      ['roles', 'Roles', ['Epic reviewer would start with Fable instead of Astra']],
       ['harness-routes', 'Agent apps', ['Codex would count as sending data to OpenAI on your word, so it gets public work only']]
     ])
     expect(general).toEqual(['Something nobody claims'])
     expect(groups[0]?.agent?.id).toBe('astra')
     expect(groups[0]?.lines).toEqual([{ field: 'Context limit', before: '—', after: '272 000' }, { field: 'Class', before: 'Bishop', after: 'Pawn' }])
-    expect(groups[1]?.lines).toEqual([{ field: 'zai · private work', before: 'Public work only', after: 'Allowed' }])
-    expect(groups[2]?.lines).toEqual([{ field: 'Epic reviewer · order', before: 'astra@medium, fable@medium', after: 'fable@medium, astra@medium' }])
+    expect(groups[1]?.lines).toEqual([{ field: 'Z.ai · private work', before: 'Public work only', after: 'Allowed' }])
+    expect(groups[2]?.lines).toEqual([{
+      field: 'Epic reviewer · order', before: 'Astra medium, Fable medium', after: 'Fable medium, Astra medium',
+      chain: { before: ['astra@medium', 'fable@medium'], after: ['fable@medium', 'astra@medium'] }
+    }])
     expect(groups[3]?.lines).toEqual([{ field: 'Codex · destination', before: "its provider's own servers, as inspected", after: 'on your word' }])
     expect(changedSections(diffs)).toEqual(new Set(['astra', 'providers', 'roles', 'harness-routes']))
   })
@@ -300,6 +307,52 @@ describe('differences in words (60.5 AC7)', () => {
     ])
     expect(differenceLine(group ?? { lines: [] })).toBe('agent — → added')
     expect(differenceLine({ lines: [{ field: 'Model', before: 'gpt-6-luna', after: 'gpt-6.1-luna' }, { field: 'On', before: 'yes', after: 'no' }] })).toBe('model gpt-6-luna → gpt-6.1-luna · on yes → no')
+  })
+
+  it('says names where the file holds ids: agents, providers, roles, fallbacks and a price\'s parts', () => {
+    const lines = (diff: RosterDiffShape): unknown => groupDifferences([diff], DATA, DATA, []).groups[0]?.lines.map((line) => `${line.field}: ${line.before} → ${line.after}`)
+    expect(lines(changed('roles', 'helper', 'small_work', undefined, 'astra@low'))).toEqual(['Helper · small work: — → Astra low'])
+    expect(lines(changed('roles', 'helper', 'recheck', undefined, { same_reviewer: true, astra: 'low' }))).toEqual(['Helper · recheck: — → the same reviewer · Astra low'])
+    expect(lines(changed('roles', 'helper', 'candidates', ['luna@max'], ['astra@medium|high', 'nobody@low']))).toEqual(['Helper · order: Luna max → Astra medium or high, nobody low'])
+    expect(lines(changed('agent', 'astra', 'roles', ['helper'], ['helper', 'epic-reviewer']))).toEqual(['Roles: Helper → Helper, Epic reviewer'])
+    expect(lines(changed('agent', 'astra', 'provider', 'openai', 'zai'))).toEqual(['Provider: OpenAI → Z.ai'])
+    expect(lines(changed('harness-routes', 'cursor', 'provider', 'zai', 'openai'))).toEqual(['Cursor · provider: Z.ai → OpenAI'])
+    expect(lines(changed('agent', 'astra', 'price', undefined, { input: 1.25, cached_input: 0.125, output: 10, as_of: '2026-10-01' }))).toEqual(['Price: — → in 1.25 · cached in 0.125 · out 10 · as of 2026-10-01'])
+  })
+
+  it('turns a consequence sentence into the pages\' words, leaving anything else alone', () => {
+    const roles = new Set(['lead', 'epic-reviewer', 'helper'])
+    expect(consequenceWords('epic-reviewer would start with Fable instead of Astra', roles)).toBe('Epic reviewer would start with Fable instead of Astra')
+    expect(consequenceWords('helper would have no agent to start with (then owner-chooses)', roles)).toBe('Helper would have no agent to start with (then: Ask me)')
+    expect(consequenceWords('when every epic-reviewer candidate fails: blocked instead of lead', roles)).toBe('When every epic reviewer candidate fails: Stop and tell me instead of Lead does it')
+    expect(consequenceWords('the epic-reviewer role would be removed', roles)).toBe('The epic reviewer role would be removed')
+    expect(consequenceWords('Astra could take the epic-reviewer role', roles)).toBe('Astra could take the epic reviewer role')
+    expect(consequenceWords('Astra could no longer take the epic-reviewer role', roles)).toBe('Astra could no longer take the epic reviewer role')
+    expect(consequenceWords('Sol could lead', roles)).toBe('Sol could lead')
+    expect(consequenceWords('stranger would start with Sol', roles)).toBe('stranger would start with Sol')
+    expect(summaryWords('epic-reviewer would start with Fable instead of Astra · 2 more', roles)).toBe('Epic reviewer would start with Fable instead of Astra · 2 more')
+    expect(summaryWords('Restored version 3', roles)).toBe('Restored version 3')
+  })
+
+  it('reviews a first approval as one row per agent and one per role', () => {
+    const { groups, general } = firstApprovalGroups(DATA, [
+      'Sol could be given work', 'Sol could lead', 'Sol could receive private work', 'Astra could be given work', 'Fable could be given work', 'Fable could design',
+      'lead would start with Sol', 'epic-reviewer would have no agent to start with (then blocked)', 'Codex 0.170.0 could carry private work (accepted by you; BMN has not tested how this version picks its destination)'
+    ])
+    expect(groups.map((group) => [group.key, group.subject, group.agent?.id ?? group.role?.id, group.consequences])).toEqual([
+      ['sol', 'Sol', 'sol', ['Can be given work, can lead, may receive private work']],
+      ['astra', 'Astra', 'astra', ['Can be given work']],
+      ['fable', 'Fable', 'fable', ['Can be given work, can design']],
+      ['role:lead', 'Lead', 'lead', []],
+      ['role:epic-reviewer', 'Epic reviewer', 'epic-reviewer', ['Nobody can start it yet']]
+    ])
+    expect(general).toEqual(['Codex 0.170.0 could carry private work (accepted by you; BMN has not tested how this version picks its destination)'])
+  })
+
+  it('shows a difference without the diff format\'s file and position lines', () => {
+    expect(diffBody('--- /home/synthetic/a.md\n+++ /home/synthetic/a.md\n@@ -1,3 +1,3 @@\n one\n-two\n+2\n@@ -9,2 +9,2 @@\n-nine\n+9')).toBe(' one\n-two\n+2\n⋯\n-nine\n+9')
+    expect(diffBody('-old\n+new')).toBe('-old\n+new')
+    expect(diffBody('')).toBe('')
   })
 
   it('never shows the owner\'s free text: only that it changed', () => {
