@@ -14,8 +14,11 @@ export interface CheckInputs {
 export interface ResearchInputs {
   agent: string
   argv: string[]
-  stdin: string
+  /** The prompt file; not read by a dry check. */
+  stdin?: string | undefined
   cwd?: string | undefined
+  /** Ask only whether this agent could research with this argv: no folder, no prompt, no receipt. */
+  dry?: boolean
 }
 export interface PrivateWorkReceipt { answer: PrivateWork; allowed: boolean; exception?: { id: string; scope: 'this workspace' } }
 export interface ReceiptRoute { provider: string | null; host: string; basis: string; sources: string[]; harness_provider: string | null }
@@ -51,7 +54,10 @@ export interface CheckReceipt extends ReceiptBase {
 export interface ResearchReceipt extends ReceiptBase { mode: 'research'; stdin: { path: string; sha256: string } }
 interface Refused { verdict: 'REFUSED'; code: string; message: string; next: string; steps: string[]; receipt?: undefined }
 export type CheckResult = { verdict: 'PASS'; receipt: CheckReceipt; steps: string[]; code?: undefined; message?: undefined; next?: undefined } | Refused
-export type ResearchResult = { verdict: 'PASS'; receipt: ResearchReceipt; steps: string[]; code?: undefined; message?: undefined; next?: undefined } | Refused
+export type ResearchResult =
+  | { verdict: 'PASS'; receipt: ResearchReceipt; steps: string[]; dry?: undefined; version?: undefined; code?: undefined; message?: undefined; next?: undefined }
+  | { verdict: 'PASS'; dry: true; version: string | null; steps: string[]; receipt?: undefined; code?: undefined; message?: undefined; next?: undefined }
+  | Refused
 type Environment = NodeJS.ProcessEnv | Record<string, string>
 export interface CheckOptions {
   environment?: Environment
@@ -63,7 +69,7 @@ export interface CheckOptions {
   /** The recorded context-setting tests; the tests' seam for 60.9 AC1. */
   contextTestLog?: import('./agents-context.mjs').ContextTestEntry[]
 }
-export interface ResearchOptions { environment?: Environment; cwd?: string; now?: Date; testedVersions?: Record<string, string[]>; fenceVersions?: Record<string, string[]> }
+export interface ResearchOptions { environment?: Environment; cwd?: string; now?: Date; testedVersions?: Record<string, string[]>; fenceVersions?: Record<string, string[]>; contextTestLog?: import('./agents-context.mjs').ContextTestEntry[] }
 export interface VisibilityRecord {
   version: 1
   workspace: string
@@ -93,6 +99,8 @@ export declare function versionStanding(harness: string, version: string | null,
 export declare const RESUME_TESTED_VERSIONS: Record<string, string[]>
 export declare const RESEARCH_FENCE_VERSIONS: Record<string, string[]>
 export declare const RESEARCH_TOOLS: string
+export declare const CODEX_RESEARCH_CONFIG: string[]
+export declare const CODEX_RESEARCH_ANSWER: string
 export declare const VISIBILITY_MAX_AGE_MS: number
 export declare const BINDING_WINDOW_MS: number
 export declare function setReadTracer(tracer: ((path: string) => void) | null): void

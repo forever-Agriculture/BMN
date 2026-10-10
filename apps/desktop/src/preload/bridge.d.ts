@@ -13,6 +13,8 @@ import type {
   RosterHarness,
   ContextLimitApp,
   ContextLimitPlan,
+  ResearchLookup,
+  ResearchSnapshot,
   SkillsPlan,
   RulesOutcome,
   RulesMasterPlan,
@@ -380,6 +382,14 @@ export interface AiTerminalBridge {
   installSkills(planHash: string): Promise<RulesOutcome>
   /** Owner-run: asks the app which skills it sees, first in an empty home folder, then with one test skill placed where its skills live. */
   testSkills(harness: RosterHarness): Promise<RulesOutcome>
+  /** Story 60.10: what model research has found and who may research. `fresh` asks each agent's app again; a plain read does not. */
+  researchSnapshot(fresh: boolean): Promise<ResearchSnapshot>
+  chooseResearcher(researcher: string): Promise<ResearchSnapshot>
+  /** Owner-run: starts the research with that agent. It runs in the background; the snapshot says how far it is. */
+  startResearch(researcher: string): Promise<ResearchSnapshot>
+  stopResearch(): Promise<ResearchSnapshot>
+  /** Owner-run: researches one model name on one provider and resolves when that run ends. */
+  lookUpModel(researcher: string, provider: string, model: string): Promise<ResearchLookup>
   readClipboardText(): Promise<{ text: string }>
   writeClipboardText(text: string): Promise<{ written: true }>
   /** Local Whisper dictation: engine and model availability, with progress for running downloads. */

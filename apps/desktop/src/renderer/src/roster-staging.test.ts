@@ -262,6 +262,10 @@ describe('agents (60.5 AC2–AC4)', () => {
     expect(find(second.data, second.id).context_limit).toBeUndefined()
     const other = addAgent(priced, { name: 'Elsewhere', class: 'bishop', harness: 'codex', model: astra.model, host: 'llm.internal.test', privateWork: 'allowed', roles: [], efforts: ['low'] })
     expect(find(other.data, other.id).price).toBeUndefined()
+    // What research found for the model comes before what an agent on the same model records (60.10 AC6).
+    const researched = addAgent(priced, { name: 'Astra Three', class: 'bishop', harness: 'codex', model: astra.model, host: '', privateWork: 'allowed', roles: [], efforts: ['low'],
+      price: { input: 10, output: 40, source: 'https://prices.example.test/astra', as_of: '2026-10-10' }, contextWindow: 500_000 })
+    expect(researched.data.agents.at(-1)).toMatchObject({ price: { input: 10, output: 40, source: 'https://prices.example.test/astra', as_of: '2026-10-10' }, context_window: 500_000 })
   })
 
   it('a new model name takes the price and capacity the team recorded for that model, and gives them back with the old name', () => {

@@ -7,7 +7,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
-  bindSession, consequences, evaluate, evaluateResearch, harnessVersion, normalizedGithubOrigin, prepareResearchRun, readCodexConfig, refreshVisibility,
+  bindSession, CODEX_RESEARCH_CONFIG, consequences, evaluate, evaluateResearch, harnessVersion, normalizedGithubOrigin, prepareResearchRun, readCodexConfig, refreshVisibility,
   setReadTracer, verifyReceipt, visibilityPath, workspaceRoot, workspaceVisibility
 } from '../../bin/agents-check.mjs'
 import { machineDiff, readApproved, readValidRoster } from '../../bin/agents-state.mjs'
@@ -1091,6 +1091,64 @@ describe('research runs (60.3 AC11)', () => {
     run = prepareResearchRun('Another prompt.\n', { now: new Date(NOW.getTime() + 1000) })
     writeFileSync(join(run.cwd, 'leftover.txt'), 'x')
     expect(research().code).toBe('WORKSPACE_MISMATCH')
+  })
+
+  describe('through Codex (60.10)', () => {
+    const CODEX_RESEARCH = (extra: string[] = [], effort = 'medium') => ['env', '-i', `HOME=${home}`, `PATH=${env.PATH}`, 'codex', 'exec', '--skip-git-repo-check', '--ephemeral',
+      '--sandbox', 'read-only', ...CODEX_RESEARCH_CONFIG.flatMap((entry) => ['-c', entry]), '-m', 'gpt-6-astra', '-c', `model_reasoning_effort="${effort}"`,
+      '-o', join(run.folder, 'answer.md'), ...extra, '-']
+    const without = (flag: string, values = 0) => {
+      const argv = CODEX_RESEARCH()
+      argv.splice(argv.indexOf(flag), 1 + values)
+      return argv
+    }
+
+    it('passes the exact form: read-only, web search on, no command, agent or app tools, the answer beside the prompt', () => {
+      const pass = research({ agent: 'astra', argv: CODEX_RESEARCH() })
+      expect(pass.verdict, JSON.stringify(pass)).toBe('PASS')
+      expect(pass.receipt).toMatchObject({ mode: 'research', agent: 'astra', harness: 'codex', model: 'gpt-6-astra', effort: 'medium', cwd: run.cwd,
+        route: { provider: 'openai' }, private_work: { allowed: true }, context_limit_applied: null })
+      expect(pass.steps).toContain('dispatch form: env -i codex exec, read-only, web search, no command or app tools')
+    })
+
+    it.each([
+      ['no read-only sandbox', () => CODEX_RESEARCH().map((part) => (part === 'read-only' ? 'workspace-write' : part))],
+      ['no --ephemeral', () => without('--ephemeral')],
+      ['no --skip-git-repo-check', () => without('--skip-git-repo-check')],
+      ['the command tool left on', () => CODEX_RESEARCH().filter((part) => part !== 'features.shell_tool=false')],
+      ['web search off', () => CODEX_RESEARCH().map((part) => (part === 'web_search="live"' ? 'web_search="disabled"' : part))],
+      ['an MCP server', () => CODEX_RESEARCH().map((part) => (part === 'mcp_servers={}' ? 'mcp_servers.x.command="y"' : part))],
+      ['a switch given twice', () => CODEX_RESEARCH(['-c', 'features.apps=false'])],
+      ['--json', () => CODEX_RESEARCH(['--json'])],
+      ['--profile', () => CODEX_RESEARCH(['--profile', 'work'])],
+      ['a folder', () => CODEX_RESEARCH(['-C', home])],
+      ['no answer file', () => without('-o', 1)],
+      ['an extra environment value', () => ['env', '-i', `HOME=${home}`, `PATH=${env.PATH}`, 'OPENAI_BASE_URL=https://proxy.example.test', ...CODEX_RESEARCH().slice(4)]],
+      ['no env -i', () => CODEX_RESEARCH().slice(4)],
+      ['a resume', () => { const argv = CODEX_RESEARCH(); argv.splice(argv.indexOf('exec') + 1, 0, 'resume', '019a0000-0000-7000-8000-000000000001'); return argv }]
+    ])('refuses the form with %s: ROUTE_UNSUPPORTED', (_name, argv) => {
+      expect(research({ agent: 'astra', argv: argv() })).toMatchObject({ verdict: 'REFUSED', code: 'ROUTE_UNSUPPORTED' })
+    })
+
+    it('keeps every agent-level check, and the answer goes nowhere but the run folder', () => {
+      expect(research({ agent: 'astra', argv: CODEX_RESEARCH().map((part) => (part === 'gpt-6-astra' ? 'gpt-6-luna' : part)) }).code).toBe('MODEL_MISMATCH')
+      expect(research({ agent: 'astra', argv: CODEX_RESEARCH([], 'max') }).code).toBe('EFFORT_UNSUPPORTED')
+      expect(research({ agent: 'fable', argv: CODEX_RESEARCH() }).code).toBe('ROUTE_UNSUPPORTED')
+      expect(research({ agent: 'astra', argv: CODEX_RESEARCH().map((part) => (part === join(run.folder, 'answer.md') ? join(home, 'answer.md') : part)) }))
+        .toMatchObject({ code: 'WORKSPACE_MISMATCH', message: expect.stringContaining('answer.md') })
+    })
+
+    it('an ordinary dispatch never takes --ephemeral', () => {
+      expect(check({ argv: [...ASTRA_REVIEW(workspace).slice(0, 2), '--ephemeral', ...ASTRA_REVIEW(workspace).slice(2)] })).toMatchObject({ code: 'ROUTE_UNSUPPORTED', message: expect.stringContaining('research run') })
+    })
+  })
+
+  it('a dry check says whether an agent could research, without a folder, a prompt or a receipt', () => {
+    const dry = evaluateResearch({ agent: 'fable', argv: RESEARCH(), dry: true }, { environment: env, cwd: workspace, now: NOW })
+    expect(dry).toMatchObject({ verdict: 'PASS', dry: true, version: '2.1.295' })
+    expect(dry).not.toHaveProperty('receipt')
+    expect(evaluateResearch({ agent: 'sonnet', argv: RESEARCH(), dry: true }, { environment: env, cwd: workspace, now: NOW }).code).toBe('PROPOSED')
+    expect(evaluateResearch({ agent: 'fable', argv: RESEARCH(['--add-dir', '/']), dry: true }, { environment: env, cwd: workspace, now: NOW }).code).toBe('ROUTE_UNSUPPORTED')
   })
 
   it('a public-only researcher passes only on an app version whose fence was verified', () => {

@@ -15,6 +15,9 @@ import {
   type ContextLimitApp,
   type ContextLimitPlan,
   type ContextLimitView,
+  type ResearchLookup,
+  type ResearchSnapshot,
+  type ResearcherView,
   type RosterDataShape,
   type RosterHarness,
   type RulesOutcome,
@@ -39,6 +42,7 @@ import { pathState, replaceFileSafely } from '../../bin/safe-config-write.mjs'
 import { unifiedDiff } from '../../bin/text-diff.mjs'
 import { decide as decidePrompt } from '../../bin/agents-guard.mjs'
 import { CONTEXT_APPS, ContextError, applyContextDefault, contextDefault, planContextDefault, sharingAgents } from '../../bin/agents-context.mjs'
+import { chooseResearcher, chosenResearcher, fetchPublicPage, readResearch, researchView, researchers, runResearch, type ResearchRunRecord } from '../../bin/agents-research.mjs'
 import { SKILL_APPS, appStateWord, checkSkills, lastLoadingTests, lastSkillsTest, pendingCounts, skillsTests } from '../../bin/agents-skills.mjs'
 import { allowWorkspace, approveRoster, approveSections, mergeSections, restoreGeneration, revertFileToApproved, saveAndApprove, type ApprovalSeams } from './agents-approval'
 import { findAppProgram } from './app-program'
@@ -64,6 +68,11 @@ export interface AgentsIpcOptions {
   now?(): Date
   /** Where the process table is read when Allow here asks about a stopped session again; tests replace it. */
   procRoot?: string
+  /**
+   * The app's own self-test only: a folder that serves cited pages whose site name ends in `.test`,
+   * a name no real site can have. Null everywhere else, where every cited page is read from its site.
+   */
+  researchPages?(): string | null
 }
 
 /** Variables the rules CLI reads to find each app's file and its destination; nothing else of this process's environment. */
@@ -856,4 +865,93 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const result = await runCli(ctx.script, ['rules', 'probe', harness, '--json'], ctx.probeEnv, PROBE_TIMEOUT_MS)
     return rulesOutcome(ctx, result, (report) => `${ROSTER_APP_NAMES[harness]} loading test ${PROBE_OUTCOME_WORDS[String(report.outcome)] ?? String(report.outcome)}: ${String(report.detail)}`)
   })
+
+  // Team › Models (60.10). One research at a time; it runs in this process so Stop can end it and the page can say how far it is.
+  let research: { researcher: string; done: number; total: number; lookup: boolean; controller: AbortController } | null = null
+  let researchEnded: ResearchSnapshot['ended'] = null
+  let researcherList: ResearcherView[] | null = null
+  /** A research run starts the owner's own app: his environment, without BMN's stand-in commands on the program path. */
+  const researchEnvironment = (ctx: RulesIpcContext): NodeJS.ProcessEnv => {
+    const own = dirname(ctx.script)
+    return { ...ctx.probeEnv, PATH: (ctx.probeEnv.PATH ?? '').split(':').filter((entry) => entry !== own).join(':') }
+  }
+  const readPage = (address: string): ReturnType<typeof fetchPublicPage> => fetchPublicPage(address, { selfTestPages: options.researchPages?.() ?? null })
+  const researchSnapshot = (fresh: boolean): ResearchSnapshot => {
+    const ctx = context()
+    // Asking each agent's app for its version takes a moment, so it happens when Models or New agent opens, not on every look at a run.
+    if (fresh) researcherList = researchers({ environment: researchEnvironment(ctx), now: ctx.now() }) as ResearcherView[]
+    const able = (researcherList ?? []).filter((entry) => entry.ok)
+    const chosen = chosenResearcher()
+    return {
+      ...researchView(readResearch()) as Pick<ResearchSnapshot, 'last' | 'previousAt' | 'models'>,
+      researchers: researcherList ?? [],
+      researcher: able.some((entry) => entry.id === chosen) ? chosen : able[0]?.id ?? null,
+      running: research === null ? null : { researcher: research.researcher, done: research.done, total: research.total, lookup: research.lookup },
+      ended: researchEnded
+    }
+  }
+  const begin = (researcher: string, lookup: boolean): NonNullable<typeof research> => {
+    const state = { researcher, done: 0, total: 0, lookup, controller: new AbortController() }
+    research = state
+    researchEnded = null
+    return state
+  }
+  handle('aiterm:research:load', (params) => researchSnapshot(params.fresh === true))
+  handle('aiterm:research:choose', (params) => {
+    chooseResearcher(textParam(params, 'researcher', 64))
+    return researchSnapshot(false)
+  })
+  handle('aiterm:research:start', (params) => {
+    const researcher = textParam(params, 'researcher', 64)
+    if (research !== null) return researchSnapshot(false)
+    const ctx = context()
+    chooseResearcher(researcher)
+    const state = begin(researcher, false)
+    void runResearch({
+      researcher, environment: researchEnvironment(ctx), now: ctx.now, signal: state.controller.signal, fetchPage: readPage,
+      onProgress: ({ done, total }) => Object.assign(state, { done, total })
+    }).then(({ run }) => {
+      // A run the owner stopped ended as he asked; only a run that failed or ran out of time reads as a problem.
+      researchEnded = { ok: run.state === 'complete' || state.controller.signal.aborted, text: researchEndedWords(run) }
+    }, (error: unknown) => {
+      researchEnded = { ok: false, text: `Research failed: ${error instanceof Error ? error.message : String(error)}` }
+    }).finally(() => {
+      if (research === state) research = null
+    })
+    return researchSnapshot(false)
+  })
+  handle('aiterm:research:stop', () => {
+    research?.controller.abort()
+    return researchSnapshot(false)
+  })
+  handle('aiterm:research:lookup', async (params): Promise<ResearchLookup> => {
+    const researcher = textParam(params, 'researcher', 64)
+    const provider = textParam(params, 'provider', 64)
+    const model = textParam(params, 'model', 100)
+    if (research !== null) return { ok: false, message: 'A research is going. Wait for it to end, or stop it.', model: null }
+    const ctx = context()
+    const state = begin(researcher, true)
+    try {
+      const { run, found } = await runResearch({
+        researcher, only: { provider, model }, environment: researchEnvironment(ctx), now: ctx.now, signal: state.controller.signal, fetchPage: readPage,
+        onProgress: ({ done, total }) => Object.assign(state, { done, total })
+      })
+      const view = (researchView(readResearch()).models as ResearchSnapshot['models']).find((entry) => entry.providerId === provider && entry.id === model) ?? null
+      if (found.length === 0 || view === null) return { ok: false, message: `Look up found nothing: ${run.note ?? 'the researcher gave no answer'}`, model: null }
+      return { ok: true, message: `Looked up ${model}.`, model: view }
+    } catch (error) {
+      return { ok: false, message: `Look up failed: ${error instanceof Error ? error.message : String(error)}`, model: null }
+    } finally {
+      if (research === state) research = null
+    }
+  })
+}
+
+/** How a research ended, for the page's notice. */
+export function researchEndedWords(run: Pick<ResearchRunRecord, 'state' | 'models' | 'note'>): string {
+  const count = `${run.models} model${run.models === 1 ? '' : 's'}`
+  if (run.state === 'complete') return `Research found ${count}.`
+  if (run.state === 'partial') return `Research kept ${count}. ${run.note ?? ''}`.trim()
+  if (run.state === 'stopped') return `${run.note ?? 'Research stopped.'} Nothing was kept.`
+  return `Research failed: ${run.note ?? 'no reason was given'}`
 }

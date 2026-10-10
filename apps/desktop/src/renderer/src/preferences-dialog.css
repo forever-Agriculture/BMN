@@ -1780,6 +1780,108 @@
   margin-top: 10px;
 }
 
+/* Team › Models: one line per model: its name and provider, then each value with the site it was read on; one action at the far end. */
+.preferences-dialog .model-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 14px;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.preferences-dialog .model-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.preferences-dialog .model-facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+  font-size: 12px;
+}
+
+.preferences-dialog .model-facts .source {
+  color: var(--muted);
+}
+
+.preferences-dialog .team-page .model-lines ~ .preferences-help {
+  margin-top: 14px;
+}
+
+.preferences-dialog .sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: source;
+}
+
+.preferences-dialog .sources > li {
+  counter-increment: source;
+}
+
+.preferences-dialog .sources > li::before {
+  content: counter(source);
+  margin-right: 7px;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+/* A note that carries its one action at the far end, on a raised plate so it reads as something to do. */
+.preferences-dialog .page-note.with-action {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--text);
+}
+
+/* The words take the room and wrap inside it; the action keeps its place at the end of the first line. */
+.preferences-dialog .page-note.with-action > .note-text {
+  flex: 1 1 0;
+  min-width: 12em;
+}
+
+/* A button beside the Model field stands on the field's line, not between the field and its hint. */
+.preferences-dialog .preferences-row-control:has(> .model-field) {
+  align-items: flex-start;
+}
+
+.preferences-dialog .preferences-row-control > .model-field + button.small {
+  margin-top: 4px;
+}
+
+.preferences-dialog .price-changes {
+  display: flex;
+  flex-direction: column;
+  margin: 4px 0 10px;
+}
+
+.preferences-dialog .price-change {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 14px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.preferences-dialog .price-change > .wrap {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 /* A program's path is shown whole: its last part is the program's name. */
 .preferences-dialog .path.wrap {
   white-space: normal;

@@ -21,6 +21,8 @@ import {
 import { Segmented } from './history-preferences'
 import { ModelField } from './model-field'
 import { modelSourceWords, modelSuggestions, type ReportedModel } from './model-suggestions'
+import { ModelsPage, researchedModels, type ResearchState } from './models-preferences'
+import { fillFrom, fillWords, priceText, type ResearchFill } from './research-view'
 import { Dot, Piece } from './roster-marks'
 import {
   CLASS_WORDS,
@@ -79,7 +81,7 @@ type Context = readonly ContextLimitView[] | null
 /** What the apps reported in sessions that are running now. */
 type Reported = readonly ReportedModel[]
 
-export type TeamPage = { name: 'agents' } | { name: 'agent'; id: string } | { name: 'new' } | { name: 'roles' } | { name: 'changes' }
+export type TeamPage = { name: 'agents' } | { name: 'agent'; id: string } | { name: 'new'; fill?: ResearchFill } | { name: 'roles' } | { name: 'models' } | { name: 'changes' }
 
 /** "Oct 9, 22:13": the short date every Team and Rules page uses. */
 export function shortDate(iso: string | undefined): string {
@@ -489,7 +491,8 @@ export function compactHint(agent: Pick<RosterAgentShape, 'harness'>, context: C
   return row?.compactProven ? base : `Not supported yet on ${ROSTER_APP_NAMES[agent.harness]}: kept but not applied. ${base}`
 }
 
-function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: RosterAgentShape; apps: Apps; context: Context; reported: Reported; go(page: TeamPage): void }): React.JSX.Element {
+function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: RosterAgentShape; apps: Apps; context: Context; reported: Reported; research: ResearchState | null; go(page: TeamPage): void }): React.JSX.Element {
+  const researched = researchedModels(props.research?.snapshot ?? null)
   const { team, data, agent } = props
   // A price and a capacity belong to a model: once the name changes they still describe the old one until the owner says otherwise.
   const before = team.approved?.agents.find((entry) => entry.id === agent.id)
@@ -539,8 +542,8 @@ function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: Roste
           onChange={(harness: RosterHarness) => team.stage(moveAgent(data, agent.id, harness, agent.host === 'default' || agent.host === null ? '' : agent.host, 'public_only', props.apps))} />
       </Row>
       <Row label="Model">
-        <ModelField value={agent.model} hint={modelSourceWords(agent.model, data, agent.harness, props.reported, { self: agent.id, ...(before ? { approved: before.model } : {}) })}
-          suggest={(query) => modelSuggestions(data, agent.harness, props.reported, query, agent.id)} onChange={(model) => team.stage(changeModel(data, agent.id, model, before))} />
+        <ModelField value={agent.model} hint={modelSourceWords(agent.model, data, agent.harness, props.reported, { self: agent.id, ...(before ? { approved: before.model } : {}), ...(researched ? { research: researched } : {}) })}
+          suggest={(query) => modelSuggestions(data, agent.harness, props.reported, query, agent.id, researched)} onChange={(model) => team.stage(changeModel(data, agent.id, model, before))} />
       </Row>
       <PrivateWorkRow team={team} data={data} agent={agent} />
       <Row label="Price" hint={twinPrice && twin ? `Taken from ${twin.name}, which uses the same model.`
@@ -607,9 +610,31 @@ function hostOf(source: string): string {
 // ---------------------------------------------------------------------------------------------
 // Team › New agent
 
-function NewAgentPage(props: { team: TeamState; data: RosterDataShape; apps: Apps; reported: Reported; go(page: TeamPage): void }): React.JSX.Element {
-  const { team, data } = props
-  const [draft, setDraft] = useState<NewAgent>({ name: '', class: 'pawn', harness: 'claude', model: '', host: '', privateWork: 'public_only', roles: [], efforts: ['low'] })
+/** New agent as it opens: empty, or with what research found of one model. */
+function newDraft(fill?: ResearchFill): NewAgent {
+  return {
+    name: '', class: 'pawn', harness: fill?.harness ?? 'claude', model: fill?.model ?? '', host: '', privateWork: 'public_only', roles: [], efforts: ['low'],
+    ...(fill?.price ? { price: fill.price } : {}), ...(fill?.contextWindow ? { contextWindow: fill.contextWindow } : {})
+  }
+}
+
+/** A draft without what research filled in: the model changed, or the owner undid it. */
+function withoutFill(draft: NewAgent): NewAgent {
+  const rest = { ...draft }
+  delete rest.price
+  delete rest.contextWindow
+  return rest
+}
+
+function NewAgentPage(props: { team: TeamState; data: RosterDataShape; apps: Apps; reported: Reported; research: ResearchState | null; fill?: ResearchFill | undefined; go(page: TeamPage): void }): React.JSX.Element {
+  const { team, data, research } = props
+  const [draft, setDraft] = useState<NewAgent>(() => newDraft(props.fill))
+  // What research filled in, said once with the draft as it was before, so one Undo takes it all back.
+  const [filled, setFilled] = useState<{ words: string; before: NewAgent } | null>(() => (props.fill ? { words: fillWords(props.fill), before: newDraft() } : null))
+  const [lookup, setLookup] = useState<{ ok: boolean; text: string } | null>(null)
+  const [looking, setLooking] = useState(false)
+  const researched = researchedModels(research?.snapshot ?? null)
+  const canResearch = research?.snapshot?.researcher != null
   const [notes, setNotes] = useState('')
   const appId = useId()
   const answerId = useId()
@@ -624,16 +649,47 @@ function NewAgentPage(props: { team: TeamState; data: RosterDataShape; apps: App
   const [ownEfforts, setOwnEfforts] = useState(false)
   const efforts = ownEfforts || !twin ? draft.efforts : twin.efforts
   const ready = draft.name.trim() !== '' && draft.model.trim() !== '' && efforts.length > 0
+  const price = draft.price ?? twin?.price
+  const capacity = draft.contextWindow ?? twin?.context_window
+  const lookUp = async (): Promise<void> => {
+    if (research === null) return
+    const name = draft.model.trim()
+    setLooking(true)
+    setLookup(null)
+    const result = await research.lookUp(landing.provider.id, name)
+    setLooking(false)
+    if (!result.ok || result.model === null) return setLookup({ ok: false, text: result.message })
+    const fill = fillFrom(result.model, data)
+    if (fill.price === undefined && fill.contextWindow === undefined) return setLookup({ ok: false, text: `Research answered for ${name}, but BMN could not confirm a price or a capacity on the pages it cited.` })
+    setFilled({ words: fillWords(fill, true), before: draft })
+    setDraft((current) => ({ ...current, ...(fill.price ? { price: fill.price } : {}), ...(fill.contextWindow ? { contextWindow: fill.contextWindow } : {}) }))
+  }
   return (
     <>
       <PageHead title={<><button type="button" className="crumb" onClick={() => props.go({ name: 'agents' })}>Team</button> <span className="faint">›</span> New agent</>} />
+      {filled ? (
+        <div className="page-note with-action" role="status">
+          <span className="note-text">{filled.words}</span>
+          <button type="button" className="small" onClick={() => { setDraft(filled.before); setFilled(null) }}>Undo</button>
+        </div>
+      ) : null}
+      {lookup ? <p className={lookup.ok ? 'preferences-success' : 'preferences-error'} role={lookup.ok ? 'status' : 'alert'}>{lookup.text}</p> : null}
       <h4 className="group-head">Model</h4>
       <Row label="Agent app" id={appId}>
         <Segmented labelledBy={appId} fit options={ROSTER_HARNESSES} value={draft.harness} optionLabel={(harness) => ROSTER_APP_NAMES[harness]} onChange={(harness: RosterHarness) => set({ harness })} />
       </Row>
       <Row label="Model">
-        <ModelField value={draft.model} placeholder="The model name the app takes" hint={modelSourceWords(draft.model, data, draft.harness, props.reported)}
-          suggest={(query) => modelSuggestions(data, draft.harness, props.reported, query)} onChange={(model) => set({ model })} />
+        <ModelField value={draft.model} placeholder="The model name the app takes" hint={modelSourceWords(draft.model, data, draft.harness, props.reported, researched ? { research: researched } : {})}
+          suggest={(query) => modelSuggestions(data, draft.harness, props.reported, query, undefined, researched)}
+          onChange={(model) => {
+            // A price and a capacity belong to the name they were found for.
+            setDraft((current) => ({ ...withoutFill(current), model }))
+            setFilled(null)
+          }} />
+        <button type="button" className="small" disabled={looking || !canResearch || draft.model.trim() === ''} aria-label="Look up this model"
+          title={canResearch ? 'Asks your researcher for this model\'s published price and capacity' : 'No agent on your team can research'} onClick={() => void lookUp()}>
+          {looking ? 'Looking up…' : 'Look up'}
+        </button>
       </Row>
       <Row label="Host" hint={`${landing.provider.name}${landing.isNew ? ' · new provider' : ''}`}>
         <input className="field mono" aria-label="Host" placeholder="Provider default" value={draft.host} onChange={(event) => set({ host: event.currentTarget.value })} />
@@ -644,12 +700,14 @@ function NewAgentPage(props: { team: TeamState; data: RosterDataShape; apps: App
           ? <Segmented labelledBy={answerId} fit options={['allowed', 'public_only'] as const} value={draft.privateWork} optionLabel={(value) => PRIVATE_WORK_WORDS[value]} onChange={(privateWork) => set({ privateWork })} />
           : <span>{PRIVATE_WORK_WORDS[answer]}</span>}
       </Row>
-      {twin?.price ? (
-        <Row label="Price" hint={`Taken from ${twin.name}, which uses the same model.`}>
-          <span className="mono">{priceWords(twin)}</span><span className="faint"> per M tokens, in / out</span>
+      {price ? (
+        <Row label="Price" hint={draft.price ? [draft.price.source ? `Read on ${hostOf(draft.price.source)}` : null, draft.price.as_of].filter(Boolean).join(', ') : `Taken from ${twin?.name}, which uses the same model.`}>
+          <span className="mono">{priceText(price)}</span><span className="faint"> per M tokens, in / out</span>
         </Row>
       ) : null}
-      <Row label="Context limit" hint={twin?.context_window ? `Empty means the app's own default. Capacity ${thousands(twin.context_window)} tokens, taken from ${twin.name}.` : "Empty means the app's own default."}>
+      <Row label="Context limit" hint={capacity
+        ? `Empty means the app's own default. Capacity ${thousands(capacity)} tokens, ${draft.contextWindow ? 'found by research' : `taken from ${twin?.name}`}.`
+        : "Empty means the app's own default."}>
         <NumberField label="Context limit" value={draft.contextLimit} placeholder="App default" onChange={(next) => setDraft((current) => {
           const rest = { ...current }
           delete rest.contextLimit
@@ -923,7 +981,7 @@ function ChangesPage(props: { team: TeamState }): React.JSX.Element {
 // ---------------------------------------------------------------------------------------------
 // The pages and their footer
 
-export function TeamPreferences(props: { team: TeamState; page: TeamPage; apps?: Apps; context?: Context; reported?: Reported; go(page: TeamPage): void }): React.JSX.Element {
+export function TeamPreferences(props: { team: TeamState; page: TeamPage; apps?: Apps; context?: Context; reported?: Reported; research?: ResearchState; go(page: TeamPage): void }): React.JSX.Element {
   const { team, page } = props
   const snapshot = team.snapshot
   if (team.loadError) return <><PageHead title="Team" /><p className="preferences-error" role="alert">{team.loadError}</p></>
@@ -955,11 +1013,13 @@ export function TeamPreferences(props: { team: TeamState; page: TeamPage; apps?:
   }
   const apps = props.apps ?? null
   const reported = props.reported ?? []
-  if (page.name === 'new') return <NewAgentPage team={team} data={data} apps={apps} reported={reported} go={props.go} />
+  const research = props.research ?? null
+  if (page.name === 'new') return <NewAgentPage key={page.fill?.model ?? ''} team={team} data={data} apps={apps} reported={reported} research={research} fill={page.fill} go={props.go} />
   if (page.name === 'roles') return <RolesPage team={team} data={data} />
+  if (page.name === 'models' && research !== null) return <ModelsPage team={team} data={data} research={research} add={(fill) => props.go({ name: 'new', fill })} />
   if (page.name === 'changes') return <ChangesPage team={team} />
   const agent = page.name === 'agent' ? data.agents.find((entry) => entry.id === page.id) : undefined
-  if (agent) return <AgentPage key={agent.id} team={team} data={data} agent={agent} apps={apps} context={props.context ?? null} reported={reported} go={props.go} />
+  if (agent) return <AgentPage key={agent.id} team={team} data={data} agent={agent} apps={apps} context={props.context ?? null} reported={reported} research={research} go={props.go} />
   return <AgentsPage team={team} data={data} go={props.go} />
 }
 

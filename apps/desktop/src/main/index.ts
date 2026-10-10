@@ -641,7 +641,11 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
   // Sessions start the owner's shell, whose settings may add to PATH; the Team and Rules pages look where the sessions do.
   const sessionEnvironment = createSessionEnvironmentReader(() => process.env)
   void sessionEnvironment.refresh()
-  installAgentsIpcHandlers(bridgeIpc, { senderIsAllowed, cliScript: bmnCliScript, sessionEnvironment, openPath: (path) => shell.openPath(path) })
+  installAgentsIpcHandlers(bridgeIpc, {
+    senderIsAllowed, cliScript: bmnCliScript, sessionEnvironment, openPath: (path) => shell.openPath(path),
+    // Only the app's own self-test, started in test mode, serves made-up pages, and only for site names ending in `.test`.
+    researchPages: () => (rendererTestMode ? process.env.BMN_SELF_TEST_PAGES ?? null : null)
+  })
   installVoiceIpcHandlers(bridgeIpc, {
     senderIsAllowed,
     // Handlers install before the self-test's taps exist, so its stand-ins are read per call.

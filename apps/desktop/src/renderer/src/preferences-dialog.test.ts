@@ -88,7 +88,7 @@ describe('the left navigation and its pages (Story 60.5 AC1)', () => {
 
   it('lists Team and Rules first with their icons, then Workspace, Phone and Machine', () => {
     expect(PREFERENCES_NAVIGATION.map((entry) => 'parent' in entry ? `${entry.label}: ${entry.pages.map((page) => page.label).join(', ')}` : `${entry.group}: ${entry.pages.map((page) => page.label).join(', ')}`)).toEqual([
-      'Team: Agents, Roles, Changes', 'Rules: Editor, Skills, Health', 'Workspace: Appearance, Terminal, Notifications, Voice', 'Phone: Telegram', 'Machine: Local control, History, Backup'
+      'Team: Agents, Roles, Models, Changes', 'Rules: Editor, Skills, Health', 'Workspace: Appearance, Terminal, Notifications, Voice', 'Phone: Telegram', 'Machine: Local control, History, Backup'
     ])
     const markup = dialog()
     expect(markup).toContain('<nav class="preferences-nav" aria-label="Preference pages">')
@@ -97,10 +97,10 @@ describe('the left navigation and its pages (Story 60.5 AC1)', () => {
   })
 
   it('opens on Team with only Team\'s sub-pages showing', () => {
-    expect(items(dialog())).toEqual(['Team', 'Agents', 'Roles', 'Changes', 'Rules', 'Appearance', 'Terminal', 'Notifications', 'Voice', 'Telegram', 'Local control', 'History', 'Backup'])
+    expect(items(dialog())).toEqual(['Team', 'Agents', 'Roles', 'Models', 'Changes', 'Rules', 'Appearance', 'Terminal', 'Notifications', 'Voice', 'Telegram', 'Local control', 'History', 'Backup'])
     expect(dialog()).toMatch(/aria-current="true" aria-expanded="true">.*?Team/)
     expect(dialog()).toContain('<button type="button" class="nav-item" aria-current="page">Agents</button>')
-    expect([pageParent('team'), pageParent('changes'), pageParent('health'), pageParent('skills'), pageParent('voice')]).toEqual(['team', 'team', 'rules', 'rules', null])
+    expect([pageParent('team'), pageParent('models'), pageParent('changes'), pageParent('health'), pageParent('skills'), pageParent('voice')]).toEqual(['team', 'team', 'team', 'rules', 'rules', null])
   })
 
   it('keeps every earlier section as its own page, one showing at a time', () => {

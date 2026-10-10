@@ -21,6 +21,8 @@ import {
   type RosterHarness,
   type ContextLimitApp,
   type ContextLimitPlan,
+  type ResearchLookup,
+  type ResearchSnapshot,
   type SkillsPlan,
   type RulesOutcome,
   type RulesMasterPlan,
@@ -809,6 +811,21 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   testSkills(harness: RosterHarness): Promise<RulesOutcome> {
     return invokeBridge('aiterm:rules:skills-test', { harness })
+  },
+  researchSnapshot(fresh: boolean): Promise<ResearchSnapshot> {
+    return invokeBridge('aiterm:research:load', { fresh })
+  },
+  chooseResearcher(researcher: string): Promise<ResearchSnapshot> {
+    return invokeBridge('aiterm:research:choose', { researcher })
+  },
+  startResearch(researcher: string): Promise<ResearchSnapshot> {
+    return invokeBridge('aiterm:research:start', { researcher })
+  },
+  stopResearch(): Promise<ResearchSnapshot> {
+    return invokeBridge('aiterm:research:stop', {})
+  },
+  lookUpModel(researcher: string, provider: string, model: string): Promise<ResearchLookup> {
+    return invokeBridge('aiterm:research:lookup', { researcher, provider, model })
   },
   readClipboardText(): Promise<{ text: string }> {
     return invokeBridge('aiterm:clipboard:read-text', {})

@@ -114,14 +114,14 @@ describe('team and rules state has no path into the database, Backup export, Tel
   const imports = (file: string): string[] => [...readFileSync(join(REPOSITORY, file), 'utf8').matchAll(IMPORT)].map((match) => (match[1] ?? match[2] ?? match[3]) as string)
 
   it('searches the modules that hold it, and reads their imports', () => {
-    expect(HOLDERS).toHaveLength(14)
+    expect(HOLDERS).toHaveLength(15)
     expect(imports('apps/desktop/src/main/app-program.ts')).toEqual(['node:fs', 'node:path'])
     expect(imports('apps/desktop/src/main/agents-ipc.ts')).toEqual(expect.arrayContaining(['node:fs', '@bmn/protocol', '../../bin/agents-roster.mjs', './agents-approval', './workspace-ipc']))
     expect(imports('apps/desktop/bin/agents-rules.mjs')).toEqual(expect.arrayContaining(['./agents-check.mjs']))
   })
 
   it('they import only Node, the protocol types, each other and the IPC error type', () => {
-    const allowed = /^(node:[a-z/_]+|electron|@bmn\/protocol|\.\.?\/(\.\.\/bin\/)?(agents-(roster|state|check|rules|cli|approval|guard|context|skills)|safe-config-write|text-diff)(\.mjs)?|\.\/workspace-ipc|\.\/app-program)$/
+    const allowed = /^(node:[a-z/_]+|electron|@bmn\/protocol|\.\.?\/(\.\.\/bin\/)?(agents-(roster|state|check|rules|cli|approval|guard|context|skills|research)|safe-config-write|text-diff)(\.mjs)?|\.\/workspace-ipc|\.\/app-program)$/
     const hits = HOLDERS.flatMap((file) => imports(file).filter((name) => !allowed.test(name)).map((name) => `${file}: imports ${name}`))
     expect(hits.length === 0 ? 'PASS' : `FAIL\n${hits.join('\n')}`).toBe('PASS')
     // The one Electron import is a type, and the IPC module takes only its error class from the workspace handlers.
@@ -139,7 +139,7 @@ describe('team and rules state has no path into the database, Backup export, Tel
       ...inFolder('apps/desktop/src/main', /\.ts$/), ...inFolder('apps/desktop/src/utility', /\.ts$/),
       ...inFolder('apps/desktop/src/preload', /\.ts$/), ...inFolder('apps/desktop/src/renderer/src', /\.tsx?$/), 'apps/desktop/bin/bmn'
     ].filter((file) => !/\.test\.tsx?$/.test(file) && !HOLDERS.includes(file))
-    const reaching = sources.filter((file) => imports(file).some((name) => /(^|\/)(agents-(roster|state|check|rules|cli|approval|ipc|context|skills)|visibility-refresh)(\.mjs)?$/.test(name)))
+    const reaching = sources.filter((file) => imports(file).some((name) => /(^|\/)(agents-(roster|state|check|rules|cli|approval|ipc|context|skills|research|guard)|visibility-refresh)(\.mjs)?$/.test(name)))
     expect(reaching.sort()).toEqual(['apps/desktop/bin/bmn', 'apps/desktop/src/main/index.ts'])
   })
 })

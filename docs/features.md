@@ -285,6 +285,13 @@ skill can be kept to some apps, and an app that gets public work only receives j
 you mark Public; a skill an app can see but may not have is shown as exposed. Nothing is written
 for an app until its own test, on the installed version, showed where it reads skills.
 
+Team → **Models** has one of your own agents look up your models' published prices and context
+windows, in an empty folder with web tools only, sent nothing but the model names and the source
+list. BMN reads each cited page itself and marks what it cannot confirm there. **Apply prices…**
+stages the verified prices that differ from your team's, **Add to team…** and **Look up** fill a
+new agent with them, and the Model field offers the names research found. Nothing changes until
+you approve it.
+
 An agent's context limit, set on its page, is added to each run BMN or dev-auto starts with it
 and checked before the run leaves. Rules → **Health** also shows each app's default limit for the
 sessions you start yourself and can change it, one line of the app's own settings file, after

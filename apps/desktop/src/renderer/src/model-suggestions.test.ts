@@ -1,5 +1,5 @@
 // MODULE: model-suggestions.test.ts - Epic 60.5: the Model field offers each known name once, says where it came from, and its keys behave like a list
-import type { HookOriginRecord, RosterAgentShape, RosterDataShape } from '@bmn/protocol'
+import type { HookOriginRecord, ResearchModelView, RosterAgentShape, RosterDataShape } from '@bmn/protocol'
 import { describe, expect, it } from 'vitest'
 import { modelSourceWords, modelSuggestions, pickerKey, reportedModels, sessionsByApp, type ReportedModel } from './model-suggestions'
 
@@ -109,6 +109,41 @@ describe('model suggestions (60.5: the Model field)', () => {
     // The same reading counts sessions per app: a session whose run named no model still counts, an ended or earlier run does not.
     expect(sessionsByApp(records, sessions, live)).toEqual({ claude: 3, codex: 1 })
     expect(sessionsByApp(records, sessions, {})).toEqual({})
+  })
+})
+
+describe('names research found (60.10: the Model field\'s third group)', () => {
+  const found = (id: string, providerId: string, provider: string, extra: Partial<ResearchModelView> = {}): ResearchModelView => ({
+    id, provider, providerId, price: null, contextWindow: null, firstSeen: '2026-10-10T09:40:00.000Z', lastSeen: '2026-10-10T09:40:00.000Z', fresh: true, foundLast: true, ...extra
+  })
+  const price = (input: number, output: number, verified: boolean) => ({ input, output, source: 'https://prices.example.test/', as_of: '2026-10-10', rank: 2 as const, verified })
+  const RESEARCH = { day: 'Oct 10', models: [
+    found('synthetic-sol-8', 'openai', 'OpenAI', { price: price(2, 8, true) }),
+    found('synthetic-large-5', 'anthropic', 'Anthropic', { price: price(15, 75, true) }),
+    found('synthetic-large-6', 'anthropic', 'Anthropic'),
+    found('synthetic-large-7', 'anthropic', 'Anthropic', { price: price(18, 90, false), publishedName: 'Synthetic Grand 7' }),
+    found('synthetic-far-9', 'zai', 'Z.ai', { price: price(0.6, 2.5, true) })
+  ] }
+
+  it('offers each researched name once, after the team\'s and the reported ones, the app\'s own provider first', () => {
+    expect(rows(modelSuggestions(DATA, 'claude', REPORTED, null, undefined, RESEARCH)).slice(4)).toEqual([
+      'Reported by Claude Code | synthetic-large-6 | in an open session; in an open session, on gateway.example.test',
+      // The team's and the reported names are not repeated. An unverified price is said, never shown as a number.
+      'Found in research, Oct 10 | synthetic-large-7 | Anthropic · unverified price',
+      'Found in research, Oct 10 | synthetic-sol-8 | OpenAI · $2.00 / $8.00',
+      'Found in research, Oct 10 | synthetic-far-9 | Z.ai · $0.60 / $2.50'
+    ])
+    expect(rows(modelSuggestions(DATA, 'codex', [], null, undefined, RESEARCH))[1]).toBe('Found in research, Oct 10 | synthetic-sol-8 | OpenAI · $2.00 / $8.00')
+    expect(rows(modelSuggestions(DATA, 'cursor', [], 'grand', undefined, RESEARCH))).toEqual(['Found in research, Oct 10 | synthetic-large-7 | Anthropic · unverified price'])
+    expect(modelSuggestions(DATA, 'cursor', [], null, undefined, { day: null, models: RESEARCH.models })[0]!.label).toBe('Found in research')
+    expect(modelSuggestions(DATA, 'claude', [], null, undefined, { day: 'Oct 10', models: [found('synthetic-new-1', 'anthropic', 'Anthropic')] }).at(-1)!.rows[0]!.context).toBe('Anthropic · no price found')
+  })
+
+  it('says a picked name came from research and that BMN does not check the app takes it', () => {
+    expect(modelSourceWords('synthetic-large-7', DATA, 'claude', REPORTED, { research: RESEARCH })).toBe('Found in research on Oct 10. BMN does not check that Claude Code takes this name.')
+    expect(modelSourceWords('synthetic-large-7', DATA, 'claude', REPORTED, { research: { ...RESEARCH, day: null } })).toBe('Found in research. BMN does not check that Claude Code takes this name.')
+    // Without research the same name is one the owner typed.
+    expect(modelSourceWords('synthetic-large-7', DATA, 'claude', REPORTED)).toBe('Typed by you. BMN does not check that Claude Code takes this name.')
   })
 })
 

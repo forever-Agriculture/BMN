@@ -1,5 +1,5 @@
 // MODULE: team-rules-preferences.test.ts - Epic 60.5/60.6 markup: shape and plain words carry meaning, every control is named, no schema word reaches the owner
-import type { AgentsPreview, AgentsSnapshot, RosterAgentShape, RosterDataShape, RosterDiffShape, RulesSnapshot, SkillsPlan } from '@bmn/protocol'
+import type { AgentsPreview, AgentsSnapshot, ResearchModelView, ResearchSnapshot, RosterAgentShape, RosterDataShape, RosterDiffShape, RulesSnapshot, SkillsPlan } from '@bmn/protocol'
 import { createElement, createRef } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
@@ -36,6 +36,8 @@ import {
   type TeamPage
 } from './team-preferences'
 import { ModelList } from './model-field'
+import { researcherHint, researchedModels, type ResearchState } from './models-preferences'
+import { dayWords, fillFrom } from './research-view'
 import { modelSuggestions } from './model-suggestions'
 import { changeModel, groupDifferences, removeException, setSkillPublic, skillMark, toggleSkillApp } from './roster-staging'
 import { confirmsBeforeCommit, rowHidesDetail, rulesUpdateWords, type TeamState } from './team-state'
@@ -1067,5 +1069,134 @@ describe('skills (60.11 AC5)', () => {
     expect(skillsTestLine(base)).toBe('Not tested on 0.171.0')
     expect(skillsTestLine({ ...base, test: { at: 'x', version: '0.171.0', outcome: 'inconclusive', detail: 'd' } })).toBe('The test was inconclusive on 0.171.0')
     expect(skillsTestLine({ ...base, test: { at: 'x', version: '0.170.0', outcome: 'fail', detail: 'd' } })).toBe('Not tested on 0.171.0')
+  })
+})
+
+describe('Team › Models (60.10, first release)', () => {
+  const checked = (verified: boolean, why?: string) => ({ rank: 1 as const, verified, ...(why ? { why } : {}) })
+  const found = (id: string, providerId: string, extra: Partial<ResearchModelView> = {}): ResearchModelView => ({
+    id, provider: providerId === 'openai' ? 'OpenAI' : 'Anthropic', providerId, price: null, contextWindow: null,
+    firstSeen: '2026-10-10T09:40:00.000Z', lastSeen: '2026-10-10T09:40:00.000Z', fresh: false, foundLast: true, ...extra
+  })
+  const RESEARCH: ResearchSnapshot = {
+    last: { at: '2026-10-10T09:40:00.000Z', researcher: 'Fable', state: 'complete', models: 6 },
+    previousAt: '2026-10-03T09:00:00.000Z',
+    models: [
+      found('model-sol', 'openai', { price: { input: 2, output: 8, source: 'https://openai.example.test/api/pricing', as_of: '2026-10-10', ...checked(true) },
+        contextWindow: { tokens: 400000, source: 'https://openai.example.test/models', as_of: '2026-10-10', ...checked(true) } }),
+      found('model-fable', 'anthropic', { price: { input: 20, output: 100, source: 'https://www.anthropic.example.test/pricing', as_of: '2026-10-10', ...checked(true) } }),
+      found('model-luna', 'openai', { firstSeen: '2026-10-03T09:00:00.000Z', lastSeen: '2026-10-03T09:00:00.000Z', foundLast: false }),
+      found('model-next', 'anthropic', { fresh: true, price: { input: 15, output: 75, source: 'https://www.anthropic.example.test/pricing', as_of: '2026-10-10', ...checked(true) } }),
+      found('model-far', 'anthropic', { fresh: true, price: { input: 0.6, output: 2.5, source: 'https://blog.example.test/prices', as_of: '2026-10-10', rank: 2, verified: false, why: 'the page does not name this model' } }),
+      found('model-old', 'openai', { firstSeen: '2026-10-03T09:00:00.000Z' })
+    ],
+    researchers: [
+      { id: 'sol', name: 'Sol', harness: 'codex', ok: true }, { id: 'fable', name: 'Fable', harness: 'claude', ok: true }, { id: 'luna', name: 'Luna', harness: 'codex', ok: true },
+      { id: 'glm', name: 'Glm', harness: 'claude', ok: false, why: 'its provider gets public work only', reason: 'synthetic reason with the word roster in it' },
+      { id: 'kimi', name: 'Kimi', harness: 'opencode', ok: false, why: 'OpenCode cannot research', reason: 'synthetic' }
+    ],
+    researcher: 'fable', running: null, ended: null
+  }
+  const lookup = async () => ({ ok: false, message: '', model: null })
+  const research = (extra: Partial<ResearchState> = {}): ResearchState => ({
+    snapshot: RESEARCH, loadError: null, busy: false, notice: null, setNotice: noop, ensure: noop, peek: noop, choose: noop, start: later, stop: later, lookUp: lookup, ...extra
+  })
+  const modelsMarkup = (state: ResearchState = research(), teamState: TeamState = team()): string =>
+    renderToStaticMarkup(createElement(TeamPreferences, { team: teamState, page: { name: 'models' }, research: state, go: noop }))
+  const page = modelsMarkup()
+  const lines = (markup: string): string[] => [...markup.matchAll(/<div class="model-line" data-model="([^"]+)">/g)].map((match) => match[1]!)
+
+  it('heads the page with the last research, who did it and Research now (AC1)', () => {
+    expect(page).toContain(`<h3 class="page-title">Models</h3><span class="faint">Researched ${shortDate('2026-10-10T09:40:00.000Z')} by Fable · 6 models</span>`)
+    expect(page).toContain('<button type="button">Research now</button>')
+    // The researcher is one of the agents that may research; the others are named with why in plain words, never the check's own.
+    expect([...page.matchAll(/role="radio" aria-checked="(true|false)"[^>]*>([^<]+)</g)].map((match) => `${match[2]}:${match[1]}`)).toEqual(['Sol:false', 'Fable:true', 'Luna:false'])
+    expect(words(page)).toContain('BMN sends only your model names and the source list. Research runs in a separate empty folder with web tools only. Not offered: Glm (its provider gets public work only), Kimi (OpenCode cannot research).')
+    expect(page).not.toContain('synthetic')
+    expect(researcherHint('codex')).toBe("BMN sends only your model names and the source list. Research runs in a separate empty folder, read-only, with web search on and Codex's command tools off.")
+    expect(page).toContain('<ol class="sources"><li>Provider pages</li><li>Other sites</li></ol>')
+    expect(words(page)).not.toMatch(SCHEMA_WORDS)
+  })
+
+  it('lists what is new, the team as found and what was found earlier, each value with its site (AC3, AC4)', () => {
+    expect(lines(page)).toEqual(['model-next', 'model-far', 'model-sol', 'model-fable', 'model-luna', 'model-haiku', 'model-glm', 'model-old'])
+    expect(page).toContain(`<h4 class="group-head">New since ${dayWords('2026-10-03T09:00:00.000Z')}<span class="caption">first seen by the research on ${dayWords('2026-10-10T09:40:00.000Z')}</span></h4>`)
+    expect(page).toContain('<h4 class="group-head">Your team<span class="caption">as the research found them</span></h4>')
+    expect(page).toContain('<summary>Found earlier · 1 model</summary>')
+    expect(page).toContain('<span class="mono">$15.00 / $75.00</span><span class="faint">per M tokens, in / out</span><span class="mono source" title="https://www.anthropic.example.test/pricing" aria-label="anthropic.example.test, price source for model-next">anthropic.example.test</span>')
+    // A value BMN could not confirm says so, with the reason on hover.
+    expect(page).toContain('<span class="faint" title="BMN could not confirm this on the cited page: the page does not name this model.">unverified ·</span><span class="mono source" title="https://blog.example.test/prices"')
+    expect(page).toContain('<span>400 000 tokens</span><span class="faint">context window</span>')
+    expect(page).toContain('<button type="button" class="small" aria-label="Add model-next to team">Add to team…</button>')
+    // The team: a differing price says what the team has; a model this research missed says when it was last seen.
+    expect(page).toContain('<div class="faint">Your team has $1.25 / $10.00</div>')
+    expect(page).toContain('<span class="needs-dot" role="img" aria-label="Price differs from your team&#x27;s" title="Price differs from your team&#x27;s"></span>')
+    expect(page).toContain(`<div class="faint">Not found this time · last seen ${dayWords('2026-10-03T09:00:00.000Z')}</div>`)
+    expect(page).toContain('<div class="faint">Never found by the research</div>')
+    expect(page).toContain('<span class="mono">model-fable</span> <span class="faint">Fable · Anthropic</span>')
+  })
+
+  it('offers Apply prices only for verified prices that differ, and reviews them with each page before staging (AC5)', () => {
+    expect(page).toMatch(/<div class="page-note with-action" role="status"><span class="needs-dot"[^>]*><\/span><span class="note-text">2 prices differ from your team&#x27;s\.<\/span><button type="button" class="small">Apply prices…<\/button><\/div>/)
+    const same = { ...DATA, agents: DATA.agents.map((entry) => (entry.id === 'sol' ? { ...entry, price: { input: 2, output: 8 } } : entry.id === 'fable' ? { ...entry, price: { input: 20, output: 100 } } : entry)) }
+    expect(modelsMarkup(research(), team({ data: same }))).not.toContain('Apply prices…')
+    const one = { ...DATA, agents: DATA.agents.map((entry) => (entry.id === 'fable' ? { ...entry, price: { input: 20, output: 100 } } : entry)) }
+    expect(modelsMarkup(research(), team({ data: one }))).toContain('<span class="note-text">One price differs from your team&#x27;s.</span>')
+  })
+
+  it('shows a run that is going with how far it is and Stop, and keeps the researcher fixed meanwhile (AC2)', () => {
+    const running = modelsMarkup(research({ snapshot: { ...RESEARCH, running: { researcher: 'luna', done: 3, total: 9, lookup: false } } }))
+    expect(running).toContain('<span class="faint">Luna is researching · 3 of 9 models</span>')
+    expect(running).toContain('<button type="button">Stop</button>')
+    expect(running).not.toContain('Research now')
+    expect(count(running, 'role="radio"')).toBe(3)
+    expect([...running.matchAll(/role="radio"[^>]*disabled=""/g)]).toHaveLength(3)
+    const ended = modelsMarkup(research({ notice: { ok: true, text: 'Research kept 5 models. Stopped before it finished.' }, snapshot: { ...RESEARCH, last: { ...RESEARCH.last!, state: 'partial', note: 'Stopped before it finished.' } } }))
+    expect(ended).toContain('<p class="preferences-success" role="status">Research kept 5 models. Stopped before it finished.</p>')
+    expect(ended).toContain('· 6 models · not finished</span>')
+    // How the run ended is said once: the standing line shows only when the run's own notice is gone.
+    expect(ended).not.toContain('The last research did not finish')
+    expect(words(modelsMarkup(research({ snapshot: { ...RESEARCH, last: { ...RESEARCH.last!, state: 'partial', note: 'Stopped before it finished.' } } })))).toContain('The last research did not finish: Stopped before it finished.')
+  })
+
+  it('says plainly when no agent can research, and what the page shows before any research', () => {
+    const none = modelsMarkup(research({ snapshot: { ...RESEARCH, last: null, previousAt: null, models: [], researcher: null, researchers: RESEARCH.researchers.filter((entry) => !entry.ok) } }))
+    expect(none).toContain('<span class="faint">Not researched yet</span>')
+    expect(none).toContain('<span class="muted">No agent on your team can research.</span>')
+    expect(words(none)).toContain('Research needs an active agent on Claude Code or Codex whose provider may see private work. A price can still be written in the team file.')
+    expect(none).toContain('<button type="button" disabled="" title="No agent on your team can research">Research now</button>')
+    expect(none).not.toContain('role="radio"')
+    expect(lines(none)).toEqual(['model-sol', 'model-fable', 'model-luna', 'model-haiku', 'model-glm'])
+    expect(count(none, '<div class="faint">Not researched yet</div>')).toBe(5)
+    expect(modelsMarkup(research({ snapshot: null }))).toContain('Reading what research found…')
+    expect(modelsMarkup(research({ loadError: 'Could not read what research found' }))).toContain('<p class="preferences-error" role="alert">Could not read what research found</p>')
+  })
+
+  it('a first research heads its finds as not on the team, since nothing came before it', () => {
+    expect(modelsMarkup(research({ snapshot: { ...RESEARCH, previousAt: null } }))).toContain('<h4 class="group-head">Not on your team<span class="caption">first seen by the research on')
+  })
+
+  it('New agent opens filled from a find, says so once with Undo, and offers Look up (AC6)', () => {
+    const fill = fillFrom(RESEARCH.models[3]!, DATA)
+    const markup = renderToStaticMarkup(createElement(TeamPreferences, { team: team(), page: { name: 'new', fill }, research: research(), go: noop }))
+    expect(markup).toMatch(/<div class="page-note with-action" role="status"><span class="note-text">The name and the price are from research on [^<]+\. Check the Agent app and Host; BMN does not check that the app takes this name\.<\/span><button type="button" class="small">Undo<\/button><\/div>/)
+    expect(markup).toMatch(/aria-label="Model"[^>]* value="model-next"/)
+    expect(markup).toContain('<span class="mono">$15.00 / $75.00</span><span class="faint"> per M tokens, in / out</span>')
+    expect(words(markup)).toContain('Read on www.anthropic.example.test, 2026-10-10')
+    expect(markup).toContain('aria-live="polite">Found in research on ' + dayWords('2026-10-10T09:40:00.000Z') + '. BMN does not check that Claude Code takes this name.</p>')
+    expect(markup).toMatch(/<button type="button" class="small" aria-label="Look up this model" title="Asks your researcher for this model&#x27;s published price and capacity">Look up<\/button>/)
+    // Without a researcher, or without a name, Look up is off and says why.
+    const blank = renderToStaticMarkup(createElement(TeamPreferences, { team: team(), page: { name: 'new' }, research: research({ snapshot: { ...RESEARCH, researcher: null } }), go: noop }))
+    expect(blank).toMatch(/<button type="button" class="small" disabled="" aria-label="Look up this model" title="No agent on your team can research">Look up<\/button>/)
+    expect(blank).not.toContain('from research on')
+    // The class is never taken from research: a find carries none.
+    expect(Object.keys(fill).sort()).toEqual(['day', 'harness', 'model', 'price'])
+  })
+
+  it('offers the researched names to the Model field with the day of the last research', () => {
+    expect(researchedModels(null)).toBeUndefined()
+    expect(researchedModels({ ...RESEARCH, models: [] })).toBeUndefined()
+    expect(researchedModels(RESEARCH)).toEqual({ models: RESEARCH.models, day: dayWords('2026-10-10T09:40:00.000Z') })
+    expect(researchedModels({ ...RESEARCH, last: null })!.day).toBeNull()
   })
 })

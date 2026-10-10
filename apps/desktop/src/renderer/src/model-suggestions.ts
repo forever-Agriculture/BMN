@@ -1,11 +1,14 @@
 // MODULE: model-suggestions.ts - Epic 60.5: the names a Model field offers and where each came from, kept pure for tests
-import { ROSTER_APP_NAMES, type HookOriginRecord, type RosterDataShape, type RosterHarness, type SessionRecord } from '@bmn/protocol'
+import { ROSTER_APP_NAMES, type HookOriginRecord, type ResearchModelView, type RosterDataShape, type RosterHarness, type SessionRecord } from '@bmn/protocol'
 import { activeHookOrigin } from './session-presentation'
 
 /** A model name an app reported in a session that is running now, with the host it reported beside it. */
 export interface ReportedModel { harness: RosterHarness; model: string; host: string | null }
 
-export type ModelSource = 'team' | 'reported'
+export type ModelSource = 'team' | 'reported' | 'research'
+
+/** What the last research found, and the day it ran, for the Model field's third group. */
+export interface ResearchedModels { models: readonly ResearchModelView[]; day: string | null }
 
 export interface ModelSuggestion {
   /** The name exactly as it was recorded or reported; a pick writes these characters. */
@@ -68,11 +71,12 @@ function otherHost(data: RosterDataShape, provider: string | undefined, host: st
 
 /**
  * The names offered for one app, each once: the team's first (with who uses it), then what the app
- * reported in a running session. `query` narrows by the name and by what its agents are also
- * called, ignoring case; null lists everything. `self` is the agent being edited, never named as a
- * user of its own model.
+ * reported in a running session, then what research found, the app's own provider first. `query`
+ * narrows by the name and by what its agents are also called, ignoring case; null lists everything.
+ * `self` is the agent being edited, never named as a user of its own model.
  */
-export function modelSuggestions(data: RosterDataShape, harness: RosterHarness, reported: readonly ReportedModel[], query: string | null, self?: string): ModelSuggestionGroup[] {
+export function modelSuggestions(data: RosterDataShape, harness: RosterHarness, reported: readonly ReportedModel[], query: string | null, self?: string,
+  research?: ResearchedModels): ModelSuggestionGroup[] {
   const app = ROSTER_APP_NAMES[harness]
   const seen = reported.filter((entry) => entry.harness === harness)
   const team: ModelSuggestion[] = []
@@ -102,11 +106,19 @@ export function modelSuggestions(data: RosterDataShape, harness: RosterHarness, 
     if (row) row.context = row.context.includes(context) ? row.context : `${row.context}; ${context}`
     else fresh.push({ name: entry.model, source: 'reported', context, agents: [], alsoCalled: [] })
   }
+  const own = data.harness_routes.find((route) => route.harness === harness)?.provider
+  const researched: ModelSuggestion[] = []
+  for (const model of [...(research?.models ?? [])].sort((a, b) => Number(b.providerId === own) - Number(a.providerId === own))) {
+    if (team.some((row) => row.name === model.id) || fresh.some((row) => row.name === model.id) || researched.some((row) => row.name === model.id)) continue
+    const price = model.price === null ? 'no price found' : model.price.verified ? `$${model.price.input.toFixed(2)} / $${model.price.output.toFixed(2)}` : 'unverified price'
+    researched.push({ name: model.id, source: 'research', context: `${model.provider} · ${price}`, agents: [], alsoCalled: model.publishedName ? [model.publishedName] : [] })
+  }
   const text = query?.trim().toLowerCase() ?? ''
   const hit = (row: ModelSuggestion): boolean => text === '' || row.name.toLowerCase().includes(text) || row.alsoCalled.some((alias) => alias.toLowerCase().includes(text))
   return [
     { source: 'team' as const, label: 'On your team', rows: team.filter(hit) },
-    { source: 'reported' as const, label: `Reported by ${app}`, rows: fresh.filter(hit) }
+    { source: 'reported' as const, label: `Reported by ${app}`, rows: fresh.filter(hit) },
+    { source: 'research' as const, label: research?.day ? `Found in research, ${research.day}` : 'Found in research', rows: researched.filter(hit) }
   ].filter((group) => group.rows.length > 0)
 }
 
@@ -115,12 +127,14 @@ export function modelSuggestions(data: RosterDataShape, harness: RosterHarness, 
  * gets the one thing BMN cannot promise about it; the approved name and a name the app itself
  * reported need no such note. `approved` is the model the approved team holds for the agent being edited.
  */
-export function modelSourceWords(value: string, data: RosterDataShape, harness: RosterHarness, reported: readonly ReportedModel[], options: { self?: string; approved?: string } = {}): string {
+export function modelSourceWords(value: string, data: RosterDataShape, harness: RosterHarness, reported: readonly ReportedModel[],
+  options: { self?: string; approved?: string; research?: ResearchedModels } = {}): string {
   const name = value.trim()
   if (name === '') return ''
   const app = ROSTER_APP_NAMES[harness]
-  const row = modelSuggestions(data, harness, reported, null, options.self).flatMap((group) => group.rows).find((entry) => entry.name === name)
+  const row = modelSuggestions(data, harness, reported, null, options.self, options.research).flatMap((group) => group.rows).find((entry) => entry.name === name)
   if (options.approved !== undefined && options.approved === name) return 'From the approved team.'
+  if (row?.source === 'research') return `Found in research${options.research?.day ? ` on ${options.research.day}` : ''}. BMN does not check that ${app} takes this name.`
   const used = row?.source === 'team' && row.agents.length > 0
   if (!used && (row?.source === 'reported' || (row?.source === 'team' && reported.some((entry) => entry.harness === harness && entry.model === name)))) return `Reported by ${app} in an open session.`
   const source = used ? `From your team: ${names(row.agents)} ${row.agents.length === 1 ? 'uses' : 'use'} it` : 'Typed by you'

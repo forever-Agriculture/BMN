@@ -111,6 +111,8 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       BMN_STATE_HOME: join(roots.state, 'bmn'),
       BMN_RUNTIME_HOME: join(roots.runtime, 'bmn'),
       BMN_LAUNCH_CWD: root,
+      // Research reads each cited page itself; in the self-test the names under .test are served from this folder and nothing else is.
+      BMN_SELF_TEST_PAGES: join(root, 'pages'),
       ...(waylandDisplay ? { WAYLAND_DISPLAY: waylandDisplay } : {})
     }
   })
@@ -158,7 +160,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
 
     phase('60.5 AC1: the left navigation, and every earlier section as its own page')
     assert.deepEqual(await nav.locator('.nav-parent > .nav-item, .nav-group .nav-item, .nav-sub .nav-item').allTextContents().then((items) => items.map((item) => item.trim())),
-      ['Team', 'Agents', 'Roles', 'Changes', 'Rules', 'Appearance', 'Terminal', 'Notifications', 'Voice', 'Telegram', 'Local control', 'History', 'Backup'])
+      ['Team', 'Agents', 'Roles', 'Models', 'Changes', 'Rules', 'Appearance', 'Terminal', 'Notifications', 'Voice', 'Telegram', 'Local control', 'History', 'Backup'])
     assert.equal(await dialog.locator('.preferences-jump').count(), 0)
     for (const title of ['Appearance', 'Terminal', 'Notifications', 'Voice', 'Telegram', 'Local control', 'History', 'Backup']) {
       await go(null, title)
@@ -994,12 +996,212 @@ done`)
     stub('codex', 'echo "codex-cli 0.161.0"')
     passed('Skills lists each skill with its apps and state; the owner\'s test finds where Codex reads skills; a scope change is approved first; Install… shows each entry, replaces a folder BMN did not write only then, and Undo puts it back (60.11)')
 
+    phase('60.10: Models researches the team\'s models through a stand-in app, keeps what a stopped run found, stages verified prices and fills New agent')
+    assert.equal(await ledger.count(), 0, 'a change is still staged before the Models phase')
+    const today = new Date().toISOString().slice(0, 10)
+    const pricePage = 'https://prices.anthropic.test/pricing'
+    const windowPage = 'https://prices.anthropic.test/models'
+    const openaiPage = 'https://prices.openai.test/api/pricing'
+    mkdirSync(join(root, 'pages/prices.anthropic.test'), { recursive: true })
+    mkdirSync(join(root, 'pages/prices.openai.test/api'), { recursive: true })
+    writeFileSync(join(root, 'pages/prices.anthropic.test/pricing'), ['<h1>Pricing</h1><p>Prices are in US dollars per million tokens.</p><table>',
+      '<tr><td>claude-opus-5-5</td><td>$15.00</td><td>$1.50</td><td>$75.00</td></tr>',
+      '<tr><td>claude-opus-5-6</td><td>$15</td><td>$75</td></tr>',
+      '<tr><td>claude-sonnet-5-9</td><td>$3</td><td>$15</td></tr></table>'].join('\n'))
+    writeFileSync(join(root, 'pages/prices.anthropic.test/models'), '<h1>Models</h1><p>claude-opus-5-5: context window 1,000,000 tokens.</p><p>claude-opus-5-6: context window 1,000,000 tokens.</p>')
+    writeFileSync(join(root, 'pages/prices.openai.test/api/pricing'), '<h1>API pricing</h1><p>Per 1M tokens.</p><p>gpt-6.1-sol input $2.00 output $8.00</p><p>gpt-6.1-nova input $0.50 output $4.00</p><p>gpt-6-astra input $5.00 output $25.00</p>')
+    const priced = (input, output, source, cached) => ({ input, output, ...(cached === undefined ? {} : { cached_input: cached }), source, as_of: today })
+    const facts = {
+      'claude-opus-5-5': { price: priced(15, 75, pricePage, 1.5), context_window: { tokens: 1_000_000, source: windowPage, as_of: today } },
+      'gpt-6.1-sol': { price: priced(2, 8, openaiPage) },
+      // The page shows another price beside this model: BMN keeps the answer apart and never offers it.
+      'gpt-6-astra': { price: priced(9, 90, openaiPage) },
+      'claude-sonnet-5-9': { price: priced(3, 15, pricePage) }
+    }
+    const listed = {
+      'claude-opus-5-5': [{ id: 'claude-opus-5-6', price: priced(15, 75, pricePage), context_window: { tokens: 1_000_000, source: windowPage, as_of: today } }],
+      'gpt-6.1-sol': [{ id: 'gpt-6.1-nova', price: priced(0.5, 4, openaiPage) }]
+    }
+    const planFile = join(home, 'research-plan.json')
+    const researchCalls = join(root, 'research-calls.log')
+    const plan = (entries) => writeFileSync(planFile, JSON.stringify(entries))
+    // A stand-in Claude Code that answers a research prompt from the plan and anything else as the loading test's stand-in does.
+    writeFileSync(join(stubs, 'claude'), `#!${process.execPath}
+const fs = require('node:fs')
+if (process.argv[2] === '--version') { console.log('2.1.295 (Claude Code)'); process.exit(0) }
+const prompt = fs.readFileSync(0, 'utf8')
+if (!prompt.startsWith('Look up published facts')) { console.log('I cannot tell'); process.exit(0) }
+fs.appendFileSync(${JSON.stringify(researchCalls)}, JSON.stringify({ argv: process.argv.slice(2), env: Object.keys(process.env).sort(), cwd: process.cwd(), files: fs.readdirSync('.'), prompt }) + '\\n')
+const plan = JSON.parse(fs.readFileSync(${JSON.stringify(planFile)}, 'utf8'))
+const asked = prompt.slice(prompt.indexOf('Models:\\n') + 8, prompt.indexOf('\\n\\nSources')).split('\\n').map((line) => line.slice(2))
+const entry = (id, found, isListed) => ({ id, provider: 'Synthetic', listed: isListed, price: found.price ?? 'unavailable', context_window: found.context_window ?? 'unavailable' })
+const models = asked.map((id) => entry(id, plan.facts[id] ?? {}, false))
+if (prompt.includes('Then list up to')) for (const id of asked) for (const extra of plan.listed[id] ?? []) models.push(entry(extra.id, extra, true))
+setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, result: JSON.stringify({ version: 1, models }) })), asked.includes(plan.slow) ? plan.delayMs : 0)
+`)
+    const researchRuns = () => (existsSync(researchCalls) ? readFileSync(researchCalls, 'utf8').trim().split('\n').map((entry) => JSON.parse(entry)) : [])
+    const teamBefore = approved()
+    const teamModels = new Set(teamBefore.agents.map((agent) => `${agent.provider}|${agent.model}`)).size
+    const head = main.locator('.page-head')
+    const modelLine = (id) => main.locator(`.model-line[data-model="${id}"]`)
+
+    await go('Team', 'Models')
+    await head.getByText('Not researched yet').waitFor()
+    await main.getByText('Not researched yet').nth(1).waitFor()
+    // Who may research: active agents on Claude Code or Codex whose provider may see private work; the others are named, not offered.
+    const who = main.getByRole('radiogroup', { name: 'Researcher' })
+    await who.waitFor()
+    const able = await who.getByRole('radio').allTextContents()
+    const researcher = teamBefore.agents.find((agent) => agent.harness === 'claude' && able.includes(agent.name))
+    assert.ok(researcher, `no Claude Code agent is offered as the researcher: ${able.join(', ')}`)
+    for (const name of able) {
+      const agent = teamBefore.agents.find((entry) => entry.name === name)
+      assert.equal(teamBefore.providers.find((provider) => provider.id === agent.provider).private_work, 'allowed', `${name} is offered although its provider gets public work only`)
+      assert.ok(['claude', 'codex'].includes(agent.harness) && agent.enabled && agent.status === 'active', `${name} is offered although it is not an active Claude Code or Codex agent`)
+    }
+    await main.getByText(/Not offered: .*Kimi \(its provider gets public work only\)/).waitFor()
+    await who.getByRole('radio', { name: researcher.name, exact: true }).click()
+    await who.getByRole('radio', { name: researcher.name, exact: true }).and(main.locator('[aria-checked="true"]')).waitFor()
+    assert.equal(JSON.parse(readFileSync(join(stateDir, 'research/settings.json'), 'utf8')).researcher, researcher.id)
+    await main.getByText('BMN sends only your model names and the source list. Research runs in a separate empty folder with web tools only.', { exact: false }).waitFor()
+    assert.deepEqual(await main.locator('.sources li').allTextContents(), ['Provider pages', 'Other sites'])
+    await shot('models-empty-1280.png')
+
+    // A run that the owner stops keeps what the finished providers answered and says it did not finish.
+    plan({ facts, listed: {}, slow: 'gpt-6.1-sol', delayMs: 120_000 })
+    const hashesBefore = { roster: rosterHash(), state: stateHash() }
+    await head.getByRole('button', { name: 'Research now' }).click()
+    await head.getByText(new RegExp(`^${researcher.name} is researching · [1-9]\\d* of ${teamModels} models$`)).waitFor()
+    assert.equal(await who.getByRole('radio').first().isDisabled(), true, 'the researcher can be changed while it researches')
+    await shot('models-running-1280.png')
+    await head.getByRole('button', { name: 'Stop' }).click()
+    await notice(/^Research kept \d+ models?\. /)
+    await head.getByText(/ · not finished$/).waitFor()
+    assert.equal(await main.getByText(/^The last research did not finish: /).count(), 0, 'how the run ended is said twice')
+    assert.equal(await dialog.locator('.preferences-main [role="alert"]').filter({ hasText: /^Research kept/ }).count(), 0, 'a run the owner stopped reads as a failure')
+    await modelLine('claude-opus-5-5').getByText('$15.00 / $75.00').waitFor()
+    await modelLine('gpt-6.1-sol').getByText('Never found by the research').waitFor()
+    await shot('models-stopped-1280.png')
+
+    // The whole research: every provider answers, and each lists what else it publishes.
+    plan({ facts, listed, slow: null, delayMs: 0 })
+    await head.getByRole('button', { name: 'Research now' }).click()
+    await notice(new RegExp(`^Research found ${teamModels + 2} models\\.$`))
+    await head.getByText(new RegExp(`by ${researcher.name} · ${teamModels + 2} models$`)).waitFor()
+    assert.deepEqual({ roster: rosterHash(), state: stateHash() }, hashesBefore, 'a research changed the team')
+    // What the stand-in app was started with: an empty folder of its own, the home folder and the program path only, web tools only, no agent names and no prices.
+    const ran = researchRuns()
+    assert.ok(ran.length >= 2 && ran.every((call) => call.files.length === 0 && call.cwd.includes('/state/research/')), 'a research run did not start in an empty folder of its own')
+    assert.ok(ran.every((call) => call.env.every((key) => ['HOME', 'PATH', '__CF_USER_TEXT_ENCODING'].includes(key))), `a research run saw more of the environment: ${ran[0].env.join(', ')}`)
+    assert.ok(ran.every((call) => call.argv.includes('--safe-mode') && call.argv[call.argv.indexOf('--tools') + 1] === 'WebSearch,WebFetch'), 'a research run was not held to the web tools')
+    const prompts = ran.map((call) => call.prompt).join('\n')
+    for (const agent of teamBefore.agents) assert.ok(!new RegExp(`\\b${agent.name}\\b`).test(prompts) || agent.model.toLowerCase().includes(agent.name.toLowerCase()), `the prompt names the agent ${agent.name}`)
+    assert.doesNotMatch(prompts, /PROSE-SENTINEL|PRICE-SENTINEL|1\.25|Cheap helper/)
+    // Listed models the team does not have, first seen now.
+    await main.getByRole('heading', { name: /^New since / }).waitFor()
+    await modelLine('claude-opus-5-6').getByText('$15.00 / $75.00').waitFor()
+    await modelLine('claude-opus-5-6').getByText('1 000 000 tokens').waitFor()
+    await modelLine('gpt-6.1-nova').getByText('$0.50 / $4.00').waitFor()
+    // The provider is named as the team names it, not as the researcher worded it.
+    assert.match(await modelLine('claude-opus-5-6').locator('.model-text > div').first().textContent(), /^claude-opus-5-6 Anthropic$/)
+    assert.equal(await modelLine('claude-opus-5-6').locator('.source').first().getAttribute('title'), pricePage)
+    assert.equal(await modelLine('claude-opus-5-6').locator('.source').first().textContent(), 'prices.anthropic.test')
+    // A price the cited page does not show is kept apart and never counts as a difference.
+    const astra = modelLine('gpt-6-astra')
+    await astra.getByText('unverified ·').waitFor()
+    assert.equal(await astra.getByText('unverified ·').getAttribute('title'), 'BMN could not confirm this on the cited page: the page does not show this price beside the model.')
+    assert.equal(await astra.getByText('Your team has').count(), 0)
+    await modelLine('kimi-k3').getByText('No price found').waitFor()
+    // Apply prices offers each verified price that differs, with the page it was read on, and stages nothing but prices.
+    const expected = teamBefore.agents.filter((agent) => {
+      const found = agent.provider === 'anthropic' ? facts[agent.model] : agent.provider === 'openai' && agent.model !== 'gpt-6-astra' ? facts[agent.model] : undefined
+      return found?.price && (agent.price?.input !== found.price.input || agent.price?.output !== found.price.output)
+    })
+    assert.ok(expected.some((agent) => agent.id === 'sol'), 'the synthetic team no longer has Sol on gpt-6.1-sol')
+    await main.getByText(expected.length === 1 ? "One price differs from your team's." : `${expected.length} prices differ from your team's.`).waitFor()
+    await modelLine('gpt-6.1-sol').getByText('Your team has $1.25 / $10.00').waitFor()
+    await shot('models-1280.png')
+    await main.getByRole('button', { name: 'Apply prices…' }).click()
+    const stageTitle = expected.length === 1 ? 'Stage one price' : `Stage ${expected.length} prices`
+    const applySheet = main.getByRole('group', { name: stageTitle })
+    await applySheet.waitFor()
+    assert.deepEqual(await applySheet.locator('.price-change').evaluateAll((rows) => rows.map((row) => row.dataset.agent)), expected.map((agent) => agent.id))
+    assert.match(await applySheet.locator('.price-change[data-agent="sol"]').textContent(), /Sol gpt-6\.1-sol\$1\.25 \/ \$10\.00 → \$2\.00 \/ \$8\.00https:\/\/prices\.openai\.test\/api\/pricing/)
+    assert.equal(await ledger.count(), 0, 'opening the review staged something')
+    await shot('models-apply-1280.png')
+    await applySheet.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await applySheet.waitFor({ state: 'detached' })
+    assert.equal(await ledger.count(), 0)
+    await main.getByRole('button', { name: 'Apply prices…' }).click()
+    await applySheet.getByRole('button', { name: stageTitle, exact: true }).click()
+    await notice(expected.length === 1 ? /^One price staged\. Approve it below\.$/ : new RegExp(`^${expected.length} prices staged\\. Approve them below\\.$`))
+    await line.getByText(/Sol: .*price/).first().waitFor()
+    assert.equal(await main.getByRole('button', { name: 'Apply prices…' }).count(), 0, 'staged prices are offered again')
+    assert.deepEqual({ roster: rosterHash(), state: stateHash() }, hashesBefore, 'staging wrote the team')
+    await shot('models-staged-1280.png')
+    await approve()
+    await notice(/^Approved · version \d+/)
+    const teamAfter = approved()
+    assert.deepEqual(teamAfter.agents.find((agent) => agent.id === 'sol').price, { input: 2, output: 8, source: openaiPage, as_of: today })
+    const withoutPrice = (data) => data.agents.map((agent) => ({ ...agent, price: null }))
+    assert.deepEqual(withoutPrice(teamAfter), withoutPrice(teamBefore), 'approving prices changed something else of an agent')
+    assert.deepEqual(teamAfter.agents.filter((agent, index) => JSON.stringify(agent.price) !== JSON.stringify(teamBefore.agents[index].price)).map((agent) => agent.id), expected.map((agent) => agent.id))
+    await until(() => readFileSync(rosterFile, 'utf8').includes(openaiPage), 'the researched price in the team file')
+
+    // Add to team… opens New agent with what BMN verified, says so once, and one Undo takes it all back.
+    await go('Team', 'Models')
+    await main.getByRole('button', { name: 'Add claude-opus-5-6 to team' }).click()
+    await main.locator('.page-head', { hasText: /Team\s*›\s*New agent/ }).waitFor()
+    const newModel = main.getByRole('combobox', { name: 'Model', exact: true })
+    assert.equal(await newModel.inputValue(), 'claude-opus-5-6')
+    await main.getByRole('radio', { name: 'Claude Code', exact: true }).and(main.locator('[aria-checked="true"]')).waitFor()
+    await main.getByText(/^The name, the price and the capacity are from research on .+\. Check the Agent app and Host; BMN does not check that the app takes this name\.$/).waitFor()
+    const priceRow = main.locator('.preferences-row', { hasText: /^Price/ })
+    await priceRow.getByText('$15.00 / $75.00').waitFor()
+    await priceRow.getByText(`Read on prices.anthropic.test, ${today}`).waitFor()
+    await main.getByText(/Capacity 1 000 000 tokens, found by research\./).waitFor()
+    assert.equal(await main.locator('input[name="class-new"]:checked').count() <= 1, true)
+    await shot('new-agent-from-research-1280.png')
+    await main.getByRole('button', { name: 'Undo', exact: true }).click()
+    assert.equal(await newModel.inputValue(), '')
+    assert.equal(await priceRow.count(), 0, 'Undo left the researched price')
+    // The Model field offers what research found, under its own heading.
+    await newModel.click()
+    const foundGroup = main.getByRole('listbox', { name: 'Model suggestions' }).getByRole('group', { name: /^Found in research, / })
+    await foundGroup.getByRole('option', { name: /claude-opus-5-6/ }).waitFor()
+    await newModel.press('Escape')
+    // Look up asks the researcher about the one name typed and fills only what BMN could confirm.
+    plan({ facts, listed: {}, slow: null, delayMs: 0 })
+    const runsBefore = researchRuns().length
+    await newModel.fill('claude-sonnet-5-9')
+    await newModel.press('Escape')
+    await main.getByRole('button', { name: 'Look up this model' }).click()
+    await main.getByText(/^The price is from research on .+\.$/).waitFor()
+    await priceRow.getByText('$3.00 / $15.00').waitFor()
+    assert.equal(researchRuns().length, runsBefore + 1, 'a Look up is one run')
+    assert.match(researchRuns().at(-1).prompt, /Models:\n- claude-sonnet-5-9\n\n/)
+    assert.match(researchRuns().at(-1).prompt, /List no other models\./)
+    // The filled agent is staged with its price and capacity like any other; nothing is approved here.
+    await main.getByLabel('Name').fill('Nova')
+    await main.getByRole('button', { name: 'Add to team' }).click()
+    await card('Nova').waitFor()
+    assert.equal(await card('Nova').locator('.price').textContent(), '$3.00 / $15.00')
+    assert.match(await card('Nova').locator('.agent-app').textContent(), /^Claude Code · claude-sonnet-5-9$/)
+    await ledger.getByText('1 unapproved change', { exact: true }).waitFor()
+    await ledger.getByRole('button', { name: 'Discard' }).click()
+    await ledger.waitFor({ state: 'detached' })
+    assert.equal(approved().agents.some((agent) => agent.name === 'Nova'), false)
+    // The earlier stand-in comes back for the pages that follow.
+    stub('claude', 'case "$1" in --version) echo "2.1.295 (Claude Code)";; *) cat > /dev/null; echo "I cannot tell";; esac')
+    passed('Models offers only agents that may research, shows progress, keeps a stopped run\'s finished providers, marks a price its page does not show, stages verified prices behind a review and approval, and fills New agent from Add to team… and Look up (60.10 first release)')
+
     phase('three sizes: no horizontal scrollbar, every control named')
     const pages = [
       ['team', () => go('Team')],
       ['agent', async () => { await go('Team'); await card('Sol').locator('.agent-open').click(); await main.locator('details.advanced > summary').click() }],
       ['new-agent', async () => { await go('Team'); await main.getByRole('button', { name: 'New agent' }).click() }],
       ['roles', async () => { await go('Team', 'Roles'); await main.getByRole('button', { name: 'Edit Lead' }).click() }],
+      ['models', () => go('Team', 'Models')],
       ['changes', () => go('Team', 'Changes')],
       ['rules', () => go('Rules')],
       ['skills', () => go('Rules', 'Skills')],
@@ -1038,7 +1240,7 @@ done`)
         return !name || name.trim() === ''
       }).map((element) => element.outerHTML.slice(0, 120)))
     assert.deepEqual(unnamed, [])
-    passed('no horizontal scroll on ten pages at 800x500, 1000x700 and 1280x900; every control has a name (60.5 AC8, 60.6 AC5)')
+    passed('no horizontal scroll on eleven pages at 800x500, 1000x700 and 1280x900; every control has a name (60.5 AC8, 60.6 AC5)')
 
     phase('keyboard: the navigation and a card open from the keyboard')
     await resize(1280, 900)

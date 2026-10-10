@@ -152,7 +152,7 @@ function firstLine(path, limit = 8 * 1024 * 1024) {
 
 const CODEX_VALUE_FLAGS = { '-C': 'cd', '--cd': 'cd', '-m': 'model', '--model': 'model', '-c': 'config', '--config': 'config',
   '-p': 'profile', '--profile': 'profile', '-s': 'sandbox', '--sandbox': 'sandbox', '-o': 'output', '--output-last-message': 'output' }
-const CODEX_FLAGS = { '--skip-git-repo-check': 'skipGit', '--json': 'json' }
+const CODEX_FLAGS = { '--skip-git-repo-check': 'skipGit', '--json': 'json', '--ephemeral': 'ephemeral' }
 const CLAUDE_VALUE_FLAGS = { '--model': 'model', '--effort': 'effort', '--output-format': 'outputFormat', '--tools': 'tools',
   '--permission-mode': 'permissionMode', '--mcp-config': 'mcpConfig', '--settings': 'settings', '--add-dir': 'addDir',
   '--append-system-prompt': 'appendSystemPrompt' }
@@ -1397,6 +1397,7 @@ export function evaluate(inputs, {
 
     const parsed = parseDispatch(inputs.argv)
     if (parsed.unsupported) refuse('ROUTE_UNSUPPORTED', parsed.unsupported)
+    if (parsed.ephemeral) refuse('ROUTE_UNSUPPORTED', 'codex exec --ephemeral belongs to a research run (bmn roster check --research)')
     if (agent.harness !== parsed.harness) {
       refuse('ROUTE_UNSUPPORTED', UNCHECKED_APPS.includes(agent.harness)
         ? `BMN does not check ${APP_NAMES[agent.harness]} dispatches` : `${agent.id} runs on ${agent.harness}, the command is ${parsed.harness}`)
@@ -1578,8 +1579,17 @@ function emptyMcpConfig(text) {
 // Research runs (60.3 AC11)
 
 export const RESEARCH_TOOLS = 'WebSearch,WebFetch'
-/** What a research run's `env -i` may carry: where the app lives, how to find it, and its destination. */
-const RESEARCH_ENVIRONMENT = ['HOME', 'PATH', 'ANTHROPIC_BASE_URL']
+/** What a research run's `env -i` may carry: where the app lives, how to find it, its destination and the agent's context limit. */
+const RESEARCH_ENVIRONMENT = { claude: ['HOME', 'PATH', 'ANTHROPIC_BASE_URL', CLAUDE_CONTEXT_KEY], codex: ['HOME', 'PATH'] }
+/**
+ * The `-c` items every Codex research run carries: no MCP server, live web search, and none of the
+ * tools that run a command, start another agent or reach a connected app. Codex has no list of
+ * allowed tools, so its research form is these switches plus a read-only sandbox.
+ */
+export const CODEX_RESEARCH_CONFIG = ['mcp_servers={}', 'web_search="live"', 'features.shell_tool=false', 'features.unified_exec=false',
+  'features.multi_agent=false', 'features.apps=false', 'features.plugins=false']
+/** The file a Codex research run writes its answer to, beside the prompt and outside the empty folder. */
+export const CODEX_RESEARCH_ANSWER = 'answer.md'
 
 export function researchRunsDirectory() {
   return `${stateDirectory()}/research/runs`
@@ -1599,10 +1609,22 @@ export function prepareResearchRun(prompt, { now = new Date(), id = `${now.toISO
 
 /** Why `argv` is not exactly the research form, or null when it is. */
 function researchFormProblem(parsed) {
-  if (parsed.harness !== 'claude') return 'a research run goes only through claude -p'
   if (parsed.envMode !== 'clean') return 'a research run needs env -i'
-  const extra = Object.keys(parsed.assignments).filter((key) => !RESEARCH_ENVIRONMENT.includes(key))
-  if (extra.length > 0) return `a research run's env -i carries only ${RESEARCH_ENVIRONMENT.join(', ')}, not ${extra.join(', ')}`
+  const carried = RESEARCH_ENVIRONMENT[parsed.harness]
+  const extra = Object.keys(parsed.assignments).filter((key) => !carried.includes(key))
+  if (extra.length > 0) return `a research run's env -i carries only ${carried.join(', ')}, not ${extra.join(', ')}`
+  if (parsed.harness === 'codex') {
+    if (parsed.resume !== null) return 'a research run never resumes a session'
+    if (parsed.sandbox !== 'read-only') return 'a research run needs --sandbox read-only'
+    if (!parsed.skipGit || !parsed.ephemeral) return 'a research run needs --skip-git-repo-check and --ephemeral'
+    if (parsed.json || parsed.cd !== undefined || parsed.profile !== undefined) return 'a research run takes no --json, --cd or --profile'
+    if (parsed.output === undefined) return 'a research run writes its answer with -o'
+    const fixed = parsed.config.filter((entry) => CODEX_RESEARCH_CONFIG.includes(entry))
+    if (fixed.length !== CODEX_RESEARCH_CONFIG.length || new Set(fixed).size !== fixed.length) {
+      return `a research run carries exactly ${CODEX_RESEARCH_CONFIG.map((entry) => `-c ${entry}`).join(' ')}`
+    }
+    return null
+  }
   if (!parsed.safeMode) return 'a research run needs --safe-mode'
   if (parsed.tools !== RESEARCH_TOOLS) return `a research run needs --tools '${RESEARCH_TOOLS}'`
   if (!parsed.strictMcp || parsed.mcpConfig === undefined || !emptyMcpConfig(parsed.mcpConfig)) return 'a research run needs --strict-mcp-config and an empty --mcp-config'
@@ -1618,10 +1640,12 @@ function researchFormProblem(parsed) {
  * Evaluates a research run: an approved, active agent on a known destination and a tested or
  * accepted app version, the exact fenced argv, run from the empty folder BMN made, fed the prompt
  * BMN wrote. A public-only destination passes only on an app version whose fence was verified.
+ * `inputs.dry` asks only whether this agent could research with this argv: everything but the
+ * folder and the prompt, and no receipt.
  */
 export function evaluateResearch(inputs, {
   environment = process.env, cwd: processCwd = process.cwd(), now = new Date(),
-  testedVersions = TESTED_HARNESS_VERSIONS, fenceVersions = RESEARCH_FENCE_VERSIONS
+  testedVersions = TESTED_HARNESS_VERSIONS, fenceVersions = RESEARCH_FENCE_VERSIONS, contextTestLog = undefined
 } = {}) {
   const steps = []
   const note = (text) => steps.push(text)
@@ -1639,37 +1663,48 @@ export function evaluateResearch(inputs, {
     const form = researchFormProblem(parsed)
     if (form !== null) refuse('ROUTE_UNSUPPORTED', form)
     const cwd = canonicalDirectory(inputs.cwd ?? processCwd, processCwd)
-    const resolution = resolveClaudeRoute(parsed, environment, cwd ?? processCwd)
+    // The fixed research switches are not part of where Codex sends data; the route reader sees the rest.
+    const resolution = parsed.harness === 'codex'
+      ? resolveCodexRoute({ ...parsed, config: parsed.config.filter((entry) => !CODEX_RESEARCH_CONFIG.includes(entry)) }, environment, cwd ?? processCwd)
+      : resolveClaudeRoute(parsed, environment, cwd ?? processCwd)
     if (resolution.unsupported) refuse('ROUTE_UNSUPPORTED', resolution.unsupported)
     const version = harnessVersion(parsed.command, dispatchEnvironment(parsed, environment))
-    note('dispatch form: env -i claude -p, web tools only')
+    note(parsed.harness === 'codex' ? 'dispatch form: env -i codex exec, read-only, web search, no command or app tools' : 'dispatch form: env -i claude -p, web tools only')
     const { model, effort } = checkModelAndEffort(agent, resolution, note)
+    const context = checkContext(agent, resolution.context, agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(parsed.harness, version, contextTestLog))
+    if (context.refusal) refuse('CONTEXT_MISMATCH', context.refusal)
+    note(context.note)
     const route = resolution.route
     const destination = matchedDestination(data, agent, parsed.harness, route, note)
 
-    const runs = canonicalDirectory(researchRunsDirectory(), processCwd)
-    const run = cwd === null ? null : dirname(cwd)
-    if (cwd === null || runs === null || dirname(run) !== runs || basename(cwd) !== 'cwd') {
-      refuse('WORKSPACE_MISMATCH', 'a research run starts in the empty folder BMN made for it')
-    }
-    if (listDirectory(cwd).length > 0) refuse('WORKSPACE_MISMATCH', `${cwd} is not empty`)
-    let record = null
-    try {
-      record = JSON.parse(readText(`${run}/run.json`))
-    } catch {
-      record = null
-    }
     let stdin = null
-    try {
-      const path = realpathSync(isAbsolute(inputs.stdin) ? inputs.stdin : `${cwd}/${inputs.stdin}`)
-      stdin = { path, sha256: hashFile(path) }
-    } catch {
-      stdin = null
+    if (inputs.dry !== true) {
+      const runs = canonicalDirectory(researchRunsDirectory(), processCwd)
+      const run = cwd === null ? null : dirname(cwd)
+      if (cwd === null || runs === null || dirname(run) !== runs || basename(cwd) !== 'cwd') {
+        refuse('WORKSPACE_MISMATCH', 'a research run starts in the empty folder BMN made for it')
+      }
+      if (listDirectory(cwd).length > 0) refuse('WORKSPACE_MISMATCH', `${cwd} is not empty`)
+      let record = null
+      try {
+        record = JSON.parse(readText(`${run}/run.json`))
+      } catch {
+        record = null
+      }
+      try {
+        const path = realpathSync(isAbsolute(inputs.stdin) ? inputs.stdin : `${cwd}/${inputs.stdin}`)
+        stdin = { path, sha256: hashFile(path) }
+      } catch {
+        stdin = null
+      }
+      if (!isObject(record) || stdin === null || stdin.path !== `${run}/prompt.md` || stdin.sha256 !== record.prompt_sha256) {
+        refuse('WORKSPACE_MISMATCH', '--stdin must be the research prompt BMN wrote for this run, unchanged')
+      }
+      if (parsed.harness === 'codex' && (isAbsolute(parsed.output) ? parsed.output : `${cwd}/${parsed.output}`) !== `${run}/${CODEX_RESEARCH_ANSWER}`) {
+        refuse('WORKSPACE_MISMATCH', `a research run writes its answer to ${CODEX_RESEARCH_ANSWER} beside BMN's prompt`)
+      }
+      note(`research run ${basename(run)}: BMN's prompt, an empty folder`)
     }
-    if (!isObject(record) || stdin === null || stdin.path !== `${run}/prompt.md` || stdin.sha256 !== record.prompt_sha256) {
-      refuse('WORKSPACE_MISMATCH', '--stdin must be the research prompt BMN wrote for this run, unchanged')
-    }
-    note(`research run ${basename(run)}: BMN's prompt, an empty folder`)
 
     if (version === null) {
       refuse('HARNESS_UNKNOWN', `${parsed.harness}: BMN cannot read this app's version, so it cannot tell which program would run`)
@@ -1681,9 +1716,10 @@ export function evaluateResearch(inputs, {
     if (!answer.allowed && !(fenceVersions[parsed.harness] ?? []).includes(version)) {
       refuse('PACKET_INVALID', `a public-only researcher runs only on an app version whose fence BMN verified; ${parsed.harness} ${version} is not one`)
     }
+    if (inputs.dry === true) return { verdict: 'PASS', dry: true, version, steps }
     const body = {
       version: 1, mode: 'research', verdict: 'PASS', agent: agent.id, class: agent.class, harness: parsed.harness, model: model.value,
-      effort: effort.value, context_limit_applied: null, cwd,
+      effort: effort.value, context_limit_applied: context.applied, cwd,
       argv_sha256: sha256(canonicalJson(inputs.argv)),
       harness_version: { version, state: standing.state },
       route: receiptRoute(destination, route),

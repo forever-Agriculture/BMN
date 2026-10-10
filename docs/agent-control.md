@@ -968,6 +968,64 @@ in it, so a skill it may not have stays `exposed` until you mark it Public or mo
 folder; so does an entry BMN did not write. While anything is exposed the check exits 1 and an
 install does not report success.
 
+### Models: what research found
+
+Team → **Models** asks one of your own agents to look up what your team's models cost and how much
+they hold, and shows each value with the page it was read on. Research changes nothing by itself.
+
+**Who researches.** The **Researcher** row offers the approved, active agents on Claude Code or
+Codex whose provider may see private work and whose research run the check would pass; the others
+are named with why. An agent whose provider gets public work only is not offered, and neither is
+an OpenCode or Cursor agent. When no agent can research the page says so, and a price can still
+be written in the team file.
+
+**What leaves BMN.** BMN writes the prompt itself: your team's model names, grouped by provider,
+each provider's own sites from the team file (`sites`) as the first source, and the shape of the
+answer. No agent names, notes, rules, prices, folders or keys are in it. One run is started per
+provider (eight models at most in a run), one after another, each only after
+`bmn roster check --research` passed for exactly that command, in an empty folder BMN made, with
+only the home folder and the program path in its environment, at the lowest effort the agent has:
+
+| App | The run |
+| --- | --- |
+| Claude Code | `claude -p --safe-mode --tools WebSearch,WebFetch`, no MCP servers, no saved session |
+| Codex | `codex exec --ephemeral --sandbox read-only`, web search on, its command, app, plugin and sub-agent tools off, no MCP servers |
+
+The page shows how far it is ("3 of 9 models") and **Stop**. Stop, or the 20-minute limit, ends
+the run that is going with everything it started; what the finished providers answered is kept and
+the research is marked not finished. A research that found nothing is reported and not kept.
+
+**What BMN accepts.** One JSON object per run and nothing else: each asked model once, up to
+twenty other models the same providers publish (across the whole research), and for each a price
+in US dollars per million tokens (input, cached input, output) and a context window in tokens,
+each with the address of the page that shows it and the date, or `unavailable`. An answer with any
+other field, a model that was not asked for, or more listed models than asked fails that
+provider's run; the other providers' answers stay.
+
+**BMN reads each cited page itself**, once, before a value counts: a plain `https` request with no
+cookies and no sign-in, to a public address only (never this machine or a private network, also
+after a redirect), ten seconds and two megabytes at most, 24 pages per run. A price is counted
+when the page shows both the input and the output amount in dollars after that model's name,
+before the next model's name, and says the unit is a million tokens; a context window when the
+number stands there with the word context or tokens. Anything else is shown as **unverified** with
+the reason on it, is never offered by Apply prices and is never filled into a new agent. Whether a
+page is a provider's own is decided from its address, never from the answer.
+
+**What you can do with it.** Each is staged and approved like any team change:
+
+- **Apply prices…** lists every agent whose model has a verified price that differs from the one
+  your team records (or none), with both prices and the page; staging changes each agent's `price`
+  and nothing else.
+- **Add to team…** on a model your team does not have opens New agent with the name, and the
+  price and capacity BMN verified; one **Undo** takes it all back. It never picks a class.
+- **Look up** on New agent researches the one name you typed and fills the verified price and
+  capacity the same way.
+- The **Model** field offers the names research found under "Found in research". BMN does not
+  check that an app takes such a name.
+
+Scores, cost per task and a suggested effort are not part of this page yet. The run against a
+live app is the owner's to start: BMN's own tests use a stand-in app and pages in a test folder.
+
 ### The prompt guard
 
 `bmn roster check` sees only work one agent hands to another. A lead you start yourself is not a

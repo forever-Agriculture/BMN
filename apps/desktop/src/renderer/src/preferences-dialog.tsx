@@ -20,6 +20,7 @@ import { VoicePreferences } from './voice-preferences'
 import { Dialog } from './dialog'
 import { failureDetail } from './bridge-error'
 import { HistoryPreferences } from './history-preferences'
+import { useResearchState } from './models-preferences'
 import { TeamLedger, TeamPreferences, TeamToast, type TeamPage } from './team-preferences'
 import { useTeamState } from './team-state'
 import { RulesPreferences, useRulesState, type RecognisedSessions } from './rules-preferences'
@@ -67,7 +68,7 @@ const HOOK_CHECK_NAMES: Readonly<Record<HookCheckAgent, string>> = {
 }
 
 /** Every page of the dialog. Team and Rules head the navigation and open their sub-pages; the rest are grouped. */
-export type PreferencesPage = 'team' | 'roles' | 'changes' | 'rules' | 'skills' | 'health' | 'appearance' | 'terminal' | 'notifications' | 'voice' | 'telegram' | 'control' | 'history' | 'backup'
+export type PreferencesPage = 'team' | 'roles' | 'models' | 'changes' | 'rules' | 'skills' | 'health' | 'appearance' | 'terminal' | 'notifications' | 'voice' | 'telegram' | 'control' | 'history' | 'backup'
 
 /** The page Preferences last showed, kept while BMN runs; a new start opens on Team. */
 let lastPage: PreferencesPage = 'team'
@@ -76,7 +77,7 @@ export const PREFERENCES_NAVIGATION: ReadonlyArray<
   | { parent: 'team' | 'rules'; label: string; pages: ReadonlyArray<{ page: PreferencesPage; label: string }> }
   | { group: string; pages: ReadonlyArray<{ page: PreferencesPage; label: string }> }
 > = [
-  { parent: 'team', label: 'Team', pages: [{ page: 'team', label: 'Agents' }, { page: 'roles', label: 'Roles' }, { page: 'changes', label: 'Changes' }] },
+  { parent: 'team', label: 'Team', pages: [{ page: 'team', label: 'Agents' }, { page: 'roles', label: 'Roles' }, { page: 'models', label: 'Models' }, { page: 'changes', label: 'Changes' }] },
   { parent: 'rules', label: 'Rules', pages: [{ page: 'rules', label: 'Editor' }, { page: 'skills', label: 'Skills' }, { page: 'health', label: 'Health' }] },
   { group: 'Workspace', pages: [{ page: 'appearance', label: 'Appearance' }, { page: 'terminal', label: 'Terminal' }, { page: 'notifications', label: 'Notifications' }, { page: 'voice', label: 'Voice' }] },
   { group: 'Phone', pages: [{ page: 'telegram', label: 'Telegram' }] },
@@ -85,7 +86,7 @@ export const PREFERENCES_NAVIGATION: ReadonlyArray<
 
 /** The navigation parent a page sits under, or null for a grouped page. */
 export function pageParent(page: PreferencesPage): 'team' | 'rules' | null {
-  return page === 'team' || page === 'roles' || page === 'changes' ? 'team' : page === 'rules' || page === 'skills' || page === 'health' ? 'rules' : null
+  return page === 'team' || page === 'roles' || page === 'models' || page === 'changes' ? 'team' : page === 'rules' || page === 'skills' || page === 'health' ? 'rules' : null
 }
 
 /**
@@ -141,6 +142,7 @@ export function PreferencesDialog(props: {
   const [teamPage, setTeamPage] = useState<TeamPage>({ name: 'agents' })
   const team = useTeamState()
   const rules = useRulesState()
+  const research = useResearchState()
   const main = useRef<HTMLElement | null>(null)
   const parent = pageParent(page)
   // What each app may read, and which app versions count as accepted, follow the approved team.
@@ -156,15 +158,21 @@ export function PreferencesDialog(props: {
 
   function goTeam(next: TeamPage): void {
     setTeamPage(next)
-    setPage(next.name === 'roles' ? 'roles' : next.name === 'changes' ? 'changes' : 'team')
+    setPage(next.name === 'roles' ? 'roles' : next.name === 'models' ? 'models' : next.name === 'changes' ? 'changes' : 'team')
     main.current?.scrollTo({ top: 0 })
   }
 
-  const shownTeamPage: TeamPage = page === 'roles' ? { name: 'roles' } : page === 'changes' ? { name: 'changes' } : teamPage
+  const shownTeamPage: TeamPage = page === 'roles' ? { name: 'roles' } : page === 'models' ? { name: 'models' } : page === 'changes' ? { name: 'changes' } : teamPage
   // An agent's app or host is recorded as BMN inspected that app, so the pages that stage one read the apps once.
   const stagesDestination = parent === 'team' && (shownTeamPage.name === 'agent' || shownTeamPage.name === 'new')
   const ensureRules = rules.ensure
   useEffect(() => { if (stagesDestination) ensureRules() }, [stagesDestination, ensureRules])
+  // The same pages offer the names research found; reading them asks no app anything.
+  const peekResearch = research.peek
+  const ensureResearch = research.ensure
+  const startsAgent = parent === 'team' && shownTeamPage.name === 'new'
+  // New agent offers Look up, which needs to know who may research.
+  useEffect(() => { if (startsAgent) ensureResearch(); else if (stagesDestination) peekResearch() }, [startsAgent, stagesDestination, ensureResearch, peekResearch])
   const rulesNeedOwner = (rules.snapshot?.health.state === 'checked' && rules.snapshot.master.exists && rules.snapshot.health.targets.some((target) => target.state !== 'current'))
     || (rules.snapshot?.skills.pending ?? 0) > 0 || (rules.snapshot?.skills.exposed ?? 0) > 0
   // Staged edits are approved from the footer on the pages that stage them; New agent has its own.
@@ -504,7 +512,7 @@ export function PreferencesDialog(props: {
         ))}
       </nav>
       <main className="preferences-main" ref={main}>
-      {parent === 'team' ? <div className="preferences-page team-page"><TeamPreferences team={team} page={shownTeamPage} apps={rules.snapshot?.apps ?? null} context={rules.snapshot?.context ?? null} reported={props.reportedModels ?? []} go={goTeam} /></div> : null}
+      {parent === 'team' ? <div className="preferences-page team-page"><TeamPreferences team={team} page={shownTeamPage} apps={rules.snapshot?.apps ?? null} context={rules.snapshot?.context ?? null} reported={props.reportedModels ?? []} research={research} go={goTeam} /></div> : null}
       {parent === 'rules' ? <div className="preferences-page rules-page"><RulesPreferences rules={rules} team={team} page={page === 'health' ? 'health' : page === 'skills' ? 'skills' : 'editor'} recognised={props.recognisedSessions ?? {}} onTypeInSession={props.onTypeInSession} /></div> : null}
       {pageOf('appearance', <>
       <section className="preferences-section">

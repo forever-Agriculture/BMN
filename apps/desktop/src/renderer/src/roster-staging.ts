@@ -11,6 +11,7 @@ import {
   type RosterDiffShape,
   type RosterEffort,
   type RosterHarness,
+  type RosterPriceShape,
   type RosterPrivateWork,
   type RosterProviderShape,
   type RosterRoleShape,
@@ -622,6 +623,9 @@ export interface NewAgent {
   roles: string[]
   efforts: RosterEffort[]
   contextLimit?: number
+  /** A price and a capacity research found for the model; they come before what an agent on the same model records. */
+  price?: RosterPriceShape
+  contextWindow?: number
 }
 
 /**
@@ -673,8 +677,8 @@ export function addAgent(data: RosterDataShape, draft: NewAgent, apps?: readonly
     id, name: draft.name.trim(), class: draft.class, harness: draft.harness, model: draft.model.trim(), provider: landing.provider.id,
     host: landing.host ?? 'default', enabled: true, status: 'active', efforts: draft.efforts, roles: [],
     ...(draft.contextLimit === undefined ? {} : { context_limit: draft.contextLimit }),
-    ...(twin?.price === undefined ? {} : { price: twin.price }),
-    ...(twin?.context_window === undefined ? {} : { context_window: twin.context_window })
+    ...((draft.price ?? twin?.price) === undefined ? {} : { price: (draft.price ?? twin?.price) as RosterPriceShape }),
+    ...((draft.contextWindow ?? twin?.context_window) === undefined ? {} : { context_window: (draft.contextWindow ?? twin?.context_window) as number })
   }
   let next: RosterDataShape = {
     ...data,

@@ -310,6 +310,41 @@ export interface SkillsPlanTarget extends RulesPlanTarget { skill: string }
 /** What a skills install would do, before it does it (R60-NFR2), and what stays exposed whatever is installed. */
 export interface SkillsPlan { ok: boolean; code: string; message?: string; planHash: string | null; targets: SkillsPlanTarget[]; exposed: { harness: RosterHarness; skill: string; fix: string }[] }
 
+/** Whether BMN's own read of the cited page shows a researched value beside the model, and which source list the page is on (1 provider pages, 2 other sites). */
+export interface ResearchChecked { rank: 1 | 2; verified: boolean; why?: string }
+export interface ResearchPrice extends ResearchChecked { input: number; output: number; cached_input?: number; source: string; as_of: string }
+export interface ResearchWindow extends ResearchChecked { tokens: number; source: string; as_of: string }
+/** One model as research found it (Story 60.10). `fresh`: the last research of the team saw it for the first time. */
+export interface ResearchModelView {
+  id: string
+  provider: string
+  providerId: string
+  publishedName?: string
+  price: ResearchPrice | null
+  contextWindow: ResearchWindow | null
+  firstSeen: string
+  lastSeen: string
+  fresh: boolean
+  foundLast: boolean
+}
+export type ResearchRunState = 'complete' | 'partial' | 'stopped' | 'failed'
+/** An active agent and whether it could research now; `why` says why not in a few words, `reason` in the check's own. */
+export interface ResearcherView { id: string; name: string; harness: RosterHarness; ok: boolean; why?: string; reason?: string }
+/** Team › Models: what research has found, who may research, and the run that is going. */
+export interface ResearchSnapshot {
+  last: { at: string; researcher: string; state: ResearchRunState; models: number; note?: string } | null
+  previousAt: string | null
+  models: ResearchModelView[]
+  researchers: ResearcherView[]
+  /** The researcher the owner last picked, when it may still research. */
+  researcher: string | null
+  running: { researcher: string; done: number; total: number; lookup: boolean } | null
+  /** How the last run started from this window ended, in words; null when none has. */
+  ended: { ok: boolean; text: string } | null
+}
+/** What Look up found for one model name. */
+export interface ResearchLookup { ok: boolean; message: string; model: ResearchModelView | null }
+
 /** What changing a default would write, before it is written (R60-NFR2). */
 export interface ContextLimitPlan {
   ok: boolean

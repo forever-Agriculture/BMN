@@ -3,10 +3,10 @@ import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, re
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, ContextLimitPlan, RosterDataShape, RulesMasterPlan, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSnapshot, SkillsPlan } from '@bmn/protocol'
+import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, ContextLimitPlan, ResearchLookup, ResearchSnapshot, RosterDataShape, RulesMasterPlan, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSnapshot, SkillsPlan } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { approveRoster, restoreGeneration, saveAndApprove } from './agents-approval'
-import { fileToApproved, installAgentsIpcHandlers } from './agents-ipc'
+import { fileToApproved, installAgentsIpcHandlers, researchEndedWords } from './agents-ipc'
 
 const FIXTURE = readFileSync(fileURLToPath(new URL('../utility/test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
 /** BMN cannot inspect where OpenCode sends data, so the team these tests approve records it on the owner's word. */
@@ -19,6 +19,8 @@ let stubs: string
 let handlers: Map<string, (event: never, params?: unknown) => unknown>
 /** What the app's own environment holds beside HOME and PATH, for the test that needs more. */
 let appEnv: Record<string, string>
+/** The folder the self-test serves cited `.test` pages from; null as in the real app. */
+let researchPages: string | null
 const saved = { HOME: process.env.HOME, PATH: process.env.PATH, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME }
 
 function stub(name: string, body: string): void {
@@ -38,9 +40,10 @@ beforeEach(() => {
   delete process.env.XDG_CONFIG_HOME
   handlers = new Map()
   appEnv = {}
+  researchPages = null
   installAgentsIpcHandlers({ handle: (channel, listener) => { handlers.set(channel, listener) } }, {
     senderIsAllowed: () => true, cliScript: () => SCRIPT, environment: () => ({ HOME: home, PATH: `${stubs}:/usr/bin:/bin`, ...appEnv }),
-    openPath: async (path) => (existsSync(path) ? '' : 'no such file')
+    openPath: async (path) => (existsSync(path) ? '' : 'no such file'), researchPages: () => researchPages
   })
 })
 
@@ -667,5 +670,137 @@ describe('skills on Rules › Skills and Health (60.11 AC1-AC5)', () => {
     expect(approved).toMatchObject({ ok: true })
     expect(file('.config/bmn/agents/roster.md')).toContain('## skills\n\n```yaml\npublic: [alpha]\nonly: {alpha: [codex, opencode]}\n```')
     expect(((await snapshot()).approved?.data as RosterDataShape).skills).toEqual([{ id: 'alpha', public: true, only: ['codex', 'opencode'] }])
+  })
+})
+
+describe('research on Team › Models (60.10)', () => {
+  const PAGE = 'https://prices.example.test/anthropic'
+  const price = (input: number, output: number) => ({ input, output, source: PAGE, as_of: '2026-10-10' })
+  const entry = (id: string, extra: Record<string, unknown> = {}) => ({ id, provider: 'Anthropic', listed: false, price: 'unavailable', context_window: 'unavailable', ...extra })
+  const ANTHROPIC = JSON.stringify({ version: 1, models: [
+    entry('claude-fable-5-1', { price: price(20, 100) }), entry('claude-haiku-5-5'), entry('claude-opus-5-5', { price: price(15, 75) }), entry('claude-sonnet-5-5', { price: price(3, 99) }),
+    entry('claude-opus-5-6', { listed: true, price: price(15, 75) })
+  ] })
+  const unavailable = (ids: string[], provider: string): string => JSON.stringify({ version: 1, models: ids.map((id) => ({ ...entry(id), provider })) })
+  const FULL: Record<string, { text: string; delay?: number }> = {
+    'claude-fable-5-1': { text: ANTHROPIC }, 'gpt-6-astra': { text: unavailable(['gpt-6-astra', 'gpt-6-luna', 'gpt-6.1-sol'], 'OpenAI') }, 'glm-5.3': { text: unavailable(['glm-5.3'], 'Z.ai') }
+  }
+  /** A stand-in Claude Code: it records how it was started and answers from plan.json, by a model named in the prompt. */
+  const researcher = (): void => {
+    writeFileSync(join(stubs, 'claude'), `#!${process.execPath}
+const fs = require('node:fs')
+const home = process.env.HOME
+if (process.argv[2] === '--version') { console.log('2.1.295 (Claude Code)'); process.exit(0) }
+const prompt = fs.readFileSync(0, 'utf8')
+fs.appendFileSync(home + '/calls.log', JSON.stringify({ argv: process.argv.slice(2), env: Object.keys(process.env), path: process.env.PATH, cwd: process.cwd(), prompt }) + '\\n')
+const plan = JSON.parse(fs.readFileSync(home + '/plan.json', 'utf8'))
+const key = Object.keys(plan).find((model) => prompt.includes('- ' + model + '\\n'))
+const entry = plan[key] ?? { text: 'no plan' }
+setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, result: entry.text })), entry.delay ?? 0)
+`)
+    chmodSync(join(stubs, 'claude'), 0o755)
+  }
+  const plan = (entries: Record<string, { text: string; delay?: number }>): void => writeFileSync(join(home, 'plan.json'), JSON.stringify(entries))
+  const calls = (): { argv: string[]; env: string[]; path: string; cwd: string; prompt: string }[] =>
+    (existsSync(join(home, 'calls.log')) ? readFileSync(join(home, 'calls.log'), 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : [])
+  const load = (fresh = false): Promise<ResearchSnapshot> => call('research:load', { fresh })
+  const pause = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms) })
+  const ended = async (): Promise<ResearchSnapshot> => {
+    for (let tries = 0; tries < 400; tries += 1) {
+      const state = await load()
+      if (state.running === null) return state
+      await pause(25)
+    }
+    throw new Error('the research did not end')
+  }
+
+  beforeEach(async () => {
+    writeFileSync(rosterFile(), EXAMPLE)
+    expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: true })
+    researcher()
+    researchPages = join(home, 'pages')
+    mkdirSync(join(researchPages, 'prices.example.test'), { recursive: true })
+    writeFileSync(join(researchPages, 'prices.example.test/anthropic'),
+      '<p>Prices per 1M tokens.</p><ul><li>claude-opus-5-5: input $15, output $75</li><li>claude-fable-5-1: input $20, output $100</li><li>claude-sonnet-5-5: input $3, output $15</li><li>claude-opus-5-6: input $15, output $75</li></ul>')
+  })
+
+  it('offers who may research, keeps the owner\'s pick, and asks no app on a plain read', async () => {
+    const plain = await load()
+    expect(plain).toMatchObject({ last: null, previousAt: null, models: [], researchers: [], researcher: null, running: null, ended: null })
+    const fresh = await load(true)
+    expect(fresh.researchers.map((agent) => [agent.id, agent.harness, agent.ok])).toEqual([['sol', 'codex', true], ['opus', 'claude', true], ['astra', 'codex', true], ['fable', 'claude', true], ['luna', 'codex', true]])
+    expect(fresh.researcher).toBe('sol')
+    expect((await call<ResearchSnapshot>('research:choose', { researcher: 'fable' })).researcher).toBe('fable')
+    // A pick that can no longer research falls back to one that can.
+    expect((await call<ResearchSnapshot>('research:choose', { researcher: 'sonnet' })).researcher).toBe('sol')
+    expect(calls()).toEqual([])
+  })
+
+  it('runs in the background, says how far it is, and keeps what BMN confirmed on the cited pages', async () => {
+    plan({ ...FULL, 'gpt-6-astra': { ...FULL['gpt-6-astra']!, delay: 400 } })
+    await load(true)
+    const started = await call<ResearchSnapshot>('research:start', { researcher: 'fable' })
+    expect(started).toMatchObject({ running: { researcher: 'fable', lookup: false }, ended: null, researcher: 'fable' })
+    // Pressing again while it runs starts nothing more.
+    expect((await call<ResearchSnapshot>('research:start', { researcher: 'opus' })).running).toMatchObject({ researcher: 'fable' })
+    expect(await call<ResearchLookup>('research:lookup', { researcher: 'fable', provider: 'anthropic', model: 'claude-opus-5-6' })).toEqual({ ok: false, message: 'A research is going. Wait for it to end, or stop it.', model: null })
+    const state = await ended()
+    expect(state.ended).toEqual({ ok: true, text: 'Research found 9 models.' })
+    expect(state.last).toMatchObject({ researcher: 'Fable', state: 'complete', models: 9 })
+    const byId = Object.fromEntries(state.models.map((model) => [model.id, model]))
+    expect(byId['claude-opus-5-5']).toMatchObject({ providerId: 'anthropic', fresh: true, foundLast: true, price: { input: 15, output: 75, source: PAGE, rank: 2, verified: true } })
+    // The page shows another output price for this model: kept, marked, never offered as a fact.
+    expect(byId['claude-sonnet-5-5']!.price).toMatchObject({ verified: false, why: 'the page does not show this price beside the model' })
+    expect(byId['claude-haiku-5-5']).toMatchObject({ price: null, contextWindow: null })
+    expect(byId['claude-opus-5-6']).toMatchObject({ price: { verified: true } })
+    const run = calls()
+    expect(run).toHaveLength(3)
+    for (const one of run) {
+      expect(one.env.filter((name) => !name.startsWith('__')).sort()).toEqual(['HOME', 'PATH'])
+      expect(one.path.split(':')).not.toContain(dirname(SCRIPT))
+      expect(one.argv.slice(0, 5)).toEqual(['-p', '--model', 'claude-fable-5-1', '--effort', 'low'])
+      expect(one.prompt).not.toMatch(/SENTINEL|Owner's notes/)
+    }
+  })
+
+  it('Stop ends the run and keeps what the earlier runs found', async () => {
+    plan({ ...FULL, 'gpt-6-astra': { ...FULL['gpt-6-astra']!, delay: 60_000 } })
+    await call<ResearchSnapshot>('research:start', { researcher: 'fable' })
+    for (let tries = 0; tries < 400 && calls().length < 2; tries += 1) await pause(25)
+    expect((await call<ResearchSnapshot>('research:stop')).running).not.toBeNull()
+    const state = await ended()
+    // The owner stopped it: that is how he asked it to end, not a failure.
+    expect(state.ended).toEqual({ ok: true, text: 'Research kept 5 models. Stopped before it finished.' })
+    expect(state.last).toMatchObject({ state: 'partial', models: 5, note: 'Stopped before it finished.' })
+    expect(calls()).toHaveLength(2)
+    // Stop with nothing going is not an error.
+    expect((await call<ResearchSnapshot>('research:stop')).running).toBeNull()
+  })
+
+  it('Look up researches one name and hands back what BMN confirmed', async () => {
+    plan({ 'claude-opus-5-6': { text: JSON.stringify({ version: 1, models: [entry('claude-opus-5-6', { price: price(15, 75) })] }) } })
+    const result = await call<ResearchLookup>('research:lookup', { researcher: 'fable', provider: 'anthropic', model: 'claude-opus-5-6' })
+    expect(result).toMatchObject({ ok: true, message: 'Looked up claude-opus-5-6.', model: { id: 'claude-opus-5-6', providerId: 'anthropic', price: { input: 15, output: 75, verified: true } } })
+    expect(calls()[0]!.prompt).toContain('List no other models.')
+    // One name is not a research of the team.
+    expect((await load()).last).toBeNull()
+    plan({ 'claude-nova-9': { text: 'I do not know this model.' } })
+    expect(await call<ResearchLookup>('research:lookup', { researcher: 'fable', provider: 'anthropic', model: 'claude-nova-9' })).toEqual({ ok: false, message: 'Look up found nothing: Anthropic: the answer is not one JSON object', model: null })
+    expect(await call<ResearchLookup>('research:lookup', { researcher: 'sonnet', provider: 'anthropic', model: 'claude-nova-9' })).toMatchObject({ ok: false, message: expect.stringContaining('BMN did not start the run: sonnet is proposed') })
+  })
+
+  it('outside the self-test a reserved test address is never read, so nothing it shows counts', async () => {
+    researchPages = null
+    plan(FULL)
+    await call<ResearchSnapshot>('research:start', { researcher: 'fable' })
+    const state = await ended()
+    expect(state.models.find((model) => model.id === 'claude-opus-5-5')!.price).toMatchObject({ verified: false, why: 'not a public address' })
+  })
+
+  it('says how a research ended in words', () => {
+    expect(researchEndedWords({ state: 'complete', models: 1 })).toBe('Research found 1 model.')
+    expect(researchEndedWords({ state: 'partial', models: 3, note: 'Ended at the 20-minute limit.' })).toBe('Research kept 3 models. Ended at the 20-minute limit.')
+    expect(researchEndedWords({ state: 'stopped', models: 0, note: 'Stopped before it finished.' })).toBe('Stopped before it finished. Nothing was kept.')
+    expect(researchEndedWords({ state: 'failed', models: 0, note: 'BMN did not start the run: sonnet is proposed, not approved as active' })).toBe('Research failed: BMN did not start the run: sonnet is proposed, not approved as active')
   })
 })
