@@ -31,7 +31,8 @@ import {
 } from '../../bin/agents-rules.mjs'
 import { pathState, replaceFileSafely } from '../../bin/safe-config-write.mjs'
 import { unifiedDiff } from '../../bin/text-diff.mjs'
-import { approveRoster, approveSections, mergeSections, restoreGeneration, revertFileToApproved, saveAndApprove, type ApprovalSeams } from './agents-approval'
+import { decide as decidePrompt } from '../../bin/agents-guard.mjs'
+import { allowWorkspace, approveRoster, approveSections, mergeSections, restoreGeneration, revertFileToApproved, saveAndApprove, type ApprovalSeams } from './agents-approval'
 import { findAppProgram } from './app-program'
 import { MainIpcError } from './workspace-ipc'
 
@@ -53,6 +54,8 @@ export interface AgentsIpcOptions {
   /** Opens a file in the owner's own editor; resolves to an error message, or '' when it opened. */
   openPath?(path: string): Promise<string>
   now?(): Date
+  /** Where the process table is read when Allow here asks about a stopped session again; tests replace it. */
+  procRoot?: string
 }
 
 /** Variables the rules CLI reads to find each app's file and its destination; nothing else of this process's environment. */
@@ -177,6 +180,21 @@ export function agentsSnapshot(): AgentsSnapshot {
     consequences: effects,
     history
   }
+}
+
+interface ShownGuardStop { agent: string; pid: number; start: string; folder: string; workspace: string; providerId: string; host: string | null; conversation: string | null }
+
+/** What the card showed when Allow here was pressed; every part is checked again against the live process. */
+function guardStopParam(params: Record<string, unknown>): ShownGuardStop {
+  const stop = params.stop
+  const text = (value: unknown): value is string => typeof value === 'string' && value !== ''
+  if (stop === null || typeof stop !== 'object' || Array.isArray(stop)) throw new MainIpcError(ERROR_CODES.invalidArgument, 'stop must be an object')
+  const { agent, pid, start, folder, workspace, providerId, host, conversation } = stop as Record<string, unknown>
+  if (!text(agent) || typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid < 2 || !text(start) || !text(folder) || !text(workspace) || !text(providerId)
+    || !(host === null || text(host)) || !(conversation === null || text(conversation))) {
+    throw new MainIpcError(ERROR_CODES.invalidArgument, 'stop does not name a session, a provider and a workspace')
+  }
+  return { agent, pid, start, folder, workspace, providerId, host, conversation }
 }
 
 function outcome(run: () => string): AgentsOutcome {
@@ -528,6 +546,20 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const shown = shownParam(params)
     const data = stagedParam(params)
     return approving(params, () => `Approved · version ${saveAndApprove(shown, data as RosterData, seams).number}`)
+  })
+  handle('aiterm:agents:guard-allow', (params) => {
+    const shown = guardStopParam(params)
+    return outcome(() => {
+      // The same process, asked again now: Allow here records what is true at the press, not what was true at the stop.
+      const again = decidePrompt({ agent: shown.agent, pid: shown.pid, ...(options.procRoot === undefined ? {} : { procRoot: options.procRoot }),
+        event: { cwd: shown.folder, ...(shown.conversation === null ? {} : { session_id: shown.conversation }) } })
+      if (again.start !== shown.start || again.outcome !== 'stop' || again.allow !== true || again.provider?.id !== shown.providerId
+        || again.workspace !== shown.workspace || again.host !== shown.host) {
+        throw new RosterError('REVISION_CONFLICT', 'This session changed since the prompt was stopped. Send the prompt again.')
+      }
+      const generation = allowWorkspace(shown.providerId, shown.workspace, seams)
+      return `${again.provider.name} allowed in this workspace · version ${generation.number}`
+    })
   })
   handle('aiterm:agents:revert', (params) => {
     const shown = shownParam(params)

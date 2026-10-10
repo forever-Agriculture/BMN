@@ -384,6 +384,54 @@ export function restoreGeneration(shown: ShownRevision, number: number, seams: A
   })
 }
 
+/** An id for a new exception: the provider and a short hash of the folder, made unique among the ones in use. */
+function exceptionId(provider: string, folder: string, taken: ReadonlySet<string>): string {
+  const base = `${provider.slice(0, 23)}-${sha256(folder).slice(0, 8)}`
+  for (let attempt = 0; ; attempt += 1) {
+    const id = attempt === 0 ? base : `${base.slice(0, 29)}-${attempt}`
+    if (!taken.has(id)) return id
+  }
+}
+
+/**
+ * "Allow here" on a stopped prompt (60.8 AC3): one exception, for exactly that provider and that
+ * workspace, joins the approved team as a new version. The team file gains the same entry and
+ * every other unapproved edit in it stays unapproved. Refused, with nothing written, when nothing
+ * is approved yet, when the file is not valid with the entry in it, or when the pair is already
+ * approved. `folder` is the workspace's real path.
+ */
+export function allowWorkspace(provider: string, folder: string, seams: ApprovalSeams = {}): Generation {
+  return withLock(seams, () => {
+    seams.afterLock?.()
+    const current = currentGeneration()
+    if (current === null) throw new RosterError('NOT_APPROVED', 'nothing is approved yet; approve the team in Preferences > Team first')
+    if (!current.data.providers.some((entry) => entry.id === provider)) throw new RosterError('INVALID_VALUE', `the approved team has no provider ${provider}`)
+    if (current.data.exceptions.some((entry) => entry.provider === provider && entry.folder === folder)) {
+      throw new RosterError('INVALID_VALUE', 'that provider is already allowed in that workspace; send the prompt again')
+    }
+    const file = readFileState()
+    const fileData = validData(file.text)
+    const pending = fileData.exceptions.find((entry) => entry.provider === provider && entry.folder === folder)
+    const entry = pending ?? { id: exceptionId(provider, folder, new Set([...current.data.exceptions, ...fileData.exceptions].map((each) => each.id))), provider, folder }
+    const nextText = pending === undefined ? rewriteRoster(file.text, { ...fileData, exceptions: [...fileData.exceptions, entry] }) : file.text
+    try {
+      validData(nextText)
+    } catch {
+      throw new RosterError('ROSTER_INVALID', 'the team file has unapproved changes this would not fit with; review them in Preferences > Team first')
+    }
+    // The approved result on its own must be a valid team too: only the entry is new in it.
+    const approved = parseRoster(rewriteRoster(nextText, { ...current.data, exceptions: [...current.data.exceptions, entry] }))
+    if (approved.data === null) throw new RosterError('ROSTER_INVALID', 'the approved team would not be valid with this workspace allowed', { errors: approved.errors })
+    if (nextText !== file.text) {
+      keepPriorState(file.state, (seams.now ?? (() => new Date()))())
+      assertLockHeld()
+      replaceFileSafely(rosterPath(), file.state, nextText)
+    }
+    seams.beforePublish?.()
+    return publish(approved.data, sha256(nextText), current, seams)
+  })
+}
+
 export function agentsStateRoot(): string {
   return agentsDirectory()
 }

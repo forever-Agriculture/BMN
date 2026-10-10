@@ -3380,6 +3380,78 @@ describe('answers from the phone go only into the dialog that asked (Epic 30.2)'
   })
 })
 
+describe('the prompt guard\'s stops (Story 60.8)', () => {
+  type Stop = import('@bmn/protocol').GuardStop
+  const STOP = {
+    agent: 'claude' as const, outcome: 'stop' as const, cause: 'public-only' as const, line: "Moonshot AI can't see private work in ~/code/app. Allow it in BMN.", allow: true,
+    workspace: '/synthetic/code/app', folder: '/synthetic/code/app', providerId: 'moonshot', providerName: 'Moonshot AI', agentName: 'Kimi', host: 'api.moonshot.ai',
+    pid: 7001, start: '777', conversation: null
+  }
+  const report = (p: Record<string, unknown> = {}, sessionId = 's1') =>
+    (service as unknown as { recordGuard(p: object): { recorded: boolean } }).recordGuard({ sessionId, incarnationId: liveIncarnations.get(sessionId) ?? 'none', ...STOP, ...p })
+  const pass = (sessionId = 's1') =>
+    (service as unknown as { recordGuard(p: object): { recorded: boolean } }).recordGuard({ sessionId, incarnationId: liveIncarnations.get(sessionId) ?? 'none', agent: 'claude', outcome: 'pass' })
+  const stops = () => service.route(METHOD_REGISTRY.guardList, {}) as Promise<Stop[]>
+  const guardEvents = () => emitted.filter((event) => event.topic === 'guard')
+
+  it('keeps a stop for the run that reported it, announces it on that session, and drops it when a prompt passes', async () => {
+    emitted = []
+    expect(report()).toEqual({ recorded: true })
+
+    await expect(stops()).resolves.toEqual([{ sessionId: 's1', incarnationId: 'incarnation-1', ...STOP, at: now, kept: false }])
+    expect(guardEvents()).toEqual([{ kind: 'app-event', topic: 'guard', sessionId: 's1' }])
+
+    // A prompt that passed where nothing was stopped announces nothing.
+    expect(pass('s2')).toEqual({ recorded: true })
+    expect(pass()).toEqual({ recorded: true })
+    await expect(stops()).resolves.toEqual([])
+    expect(guardEvents()).toHaveLength(2)
+  })
+
+  it('takes a report only from the live run, and lists only stops whose run is still the live one', async () => {
+    expect(report({}, 's1')).toEqual({ recorded: true })
+    expect((service as unknown as { recordGuard(p: object): { recorded: boolean } }).recordGuard({ sessionId: 's2', incarnationId: 'an-earlier-run', ...STOP })).toEqual({ recorded: false })
+    await expect(stops()).resolves.toHaveLength(1)
+
+    liveIncarnations.set('s1', 'started-again')
+    await expect(stops()).resolves.toEqual([])
+  })
+
+  it('Keep blocked closes the card and keeps the mark; the same prompt stopped again opens the card again', async () => {
+    report()
+    await expect(service.route(METHOD_REGISTRY.guardKeep, { sessionId: 's1' })).resolves.toEqual({ kept: true })
+    await expect(stops()).resolves.toMatchObject([{ kept: true }])
+
+    report()
+    await expect(stops()).resolves.toMatchObject([{ kept: false }])
+    await expect(service.route(METHOD_REGISTRY.guardKeep, { sessionId: 's2' })).resolves.toEqual({ kept: false })
+  })
+
+  it('a warning the owner closed stays closed while nothing about it changed, and comes back when it does', async () => {
+    const warning = { agent: 'cursor', outcome: 'warn', cause: 'declared', allow: false, providerId: 'cursor', providerName: 'Cursor', agentName: null, host: 'default:cursor' }
+    report(warning)
+    await service.route(METHOD_REGISTRY.guardKeep, { sessionId: 's1' })
+    report(warning)
+    await expect(stops()).resolves.toMatchObject([{ outcome: 'warn', kept: true }])
+
+    report({ ...warning, workspace: '/synthetic/code/other' })
+    await expect(stops()).resolves.toMatchObject([{ kept: false, workspace: '/synthetic/code/other' }])
+  })
+
+  it('clears a stop once its workspace was allowed, and keeps it out of everything that leaves the computer or is stored', async () => {
+    report()
+    emitted = []
+    await expect(service.route(METHOD_REGISTRY.guardClear, { sessionId: 's1' })).resolves.toEqual({ cleared: true })
+    await expect(service.route(METHOD_REGISTRY.guardClear, { sessionId: 's1' })).resolves.toEqual({ cleared: false })
+    expect(guardEvents()).toHaveLength(1)
+
+    report()
+    // A stop is not a request: nothing reaches the attention list, which is what Telegram, Backup and notifications read.
+    await expect(service.route(METHOD_REGISTRY.attentionList, {})).resolves.toEqual([])
+    expect(emitted.some((event) => event.topic === 'attention' || event.topic === 'telegram')).toBe(false)
+  })
+})
+
 describe('plan use (Story 37.2)', () => {
   const RESETS = '2026-09-14T16:10:00.000Z'
   const WEEK_RESETS = '2026-09-18T09:00:00.000Z'

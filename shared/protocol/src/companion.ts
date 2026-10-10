@@ -253,6 +253,58 @@ export interface UsageReading {
   readAt: string
 }
 
+/** The apps whose prompt event BMN answers (Story 60.8). */
+export const GUARD_AGENTS = Object.freeze(['claude', 'codex', 'cursor'] as const)
+export type GuardAgent = (typeof GUARD_AGENTS)[number]
+
+/**
+ * Why a prompt was stopped: the provider may not see private work (`public-only`), where the app
+ * sends work is only the owner's word (`declared`) or cannot be told (`unknown`), the approved
+ * team cannot be read (`state`), the session's process cannot be read (`process`), or the
+ * decision took too long (`slow`).
+ */
+export const GUARD_CAUSES = Object.freeze(['public-only', 'declared', 'unknown', 'state', 'process', 'slow'] as const)
+export type GuardCause = (typeof GUARD_CAUSES)[number]
+
+/**
+ * A prompt the guard stopped, or could only warn about, in one session (Story 60.8). It lives in
+ * memory for the run that reported it and nowhere else: never in the database, a Backup export,
+ * Telegram or a notification. It names who and where, never what was typed.
+ */
+export interface GuardStop {
+  sessionId: string
+  incarnationId: string
+  agent: GuardAgent
+  /** `stop`: the app was told to stop the prompt. `warn`: the app cannot be told, so the prompt went on. */
+  outcome: 'stop' | 'warn'
+  cause: GuardCause
+  /** The one line the agent showed. */
+  line: string
+  /** Whether Allow here is offered: an inspected destination whose provider may not see private work. */
+  allow: boolean
+  /** The workspace an exception would name: the canonical Git top-level, or the folder itself outside Git. */
+  workspace: string | null
+  /** The folder the session was working in when it was stopped. */
+  folder: string | null
+  providerId: string | null
+  providerName: string | null
+  /** The team's agent on that app and provider, when there is one. */
+  agentName: string | null
+  host: string | null
+  /** The agent process and its start time, so Allow here can tell the same process from a later one. */
+  pid: number | null
+  start: string | null
+  conversation: string | null
+  at: string
+  /** The owner chose Keep blocked, or closed a warning: the card stays closed, the session's mark stays. */
+  kept: boolean
+}
+
+/** What a prompt hook reports about its decision; `pass` clears what an earlier prompt left. */
+export type GuardReport =
+  | { sessionId: string; incarnationId: string; agent: GuardAgent; outcome: 'pass' }
+  | (Omit<GuardStop, 'at' | 'kept'>)
+
 /** One local TCP port a session's own program listens on (Story 41.1). */
 export interface ListeningPort {
   port: number
@@ -772,7 +824,8 @@ export const APP_EVENT_TOPICS = [
   'settings',
   'telegram',
   'conversations',
-  'ports'
+  'ports',
+  'guard'
 ] as const
 
 export type AppEventTopic = (typeof APP_EVENT_TOPICS)[number]

@@ -2,7 +2,7 @@
 import { execFile } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:net'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { stripTypeScriptTypes } from 'node:module'
 import { runInNewContext } from 'node:vm'
@@ -14,10 +14,18 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ControlAuth, writeOwnerToken } from './control-auth'
 import { ERROR_CODES, HANDOFF_OUTLINE } from '@bmn/protocol'
 import { ControlError, ControlServer, MemoryReceiptStore, type ControlHandlers } from './control-server'
+import { readValidRoster } from '../../bin/agents-state.mjs'
+import { approveRoster } from '../main/agents-approval'
 
 const CLI = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
 const AGENT_CONTROL_DOC = fileURLToPath(new URL('../../../../docs/agent-control.md', import.meta.url))
 const createdRoots = new Set<string>()
+/**
+ * A home folder that never approved a team. `bmn hook` and `bmn hooks` read the approved team from
+ * the home folder (Story 60.8), so a test that names none must not find the one of whoever runs the suite.
+ */
+const NO_TEAM_HOME = join(tmpdir(), 'bmn-cli-test-home-without-a-team')
+mkdirSync(NO_TEAM_HOME, { recursive: true })
 const servers = new Set<ControlServer>()
 
 afterEach(async () => {
@@ -44,6 +52,7 @@ function runCli(
     if (key.startsWith('BMN_') || key.startsWith('AITERM_') ||
       key === 'ANTHROPIC_BASE_URL' || key === 'OPENAI_BASE_URL' || key === 'CLAUDE_CONFIG_DIR') delete env[key]
   }
+  if (args[0] === 'hook' || args[0] === 'hooks') env.HOME = NO_TEAM_HOME
   return new Promise((resolve) => {
     const child = execFile(
       process.execPath,
@@ -80,6 +89,7 @@ async function cliFixture() {
     resolveAttention: vi.fn<ControlHandlers['resolveAttention']>(async () => ({ resolved: true })),
     observeHookEvent: vi.fn<ControlHandlers['observeHookEvent']>(async () => ({ recorded: true })),
     reportUsage: vi.fn<ControlHandlers['reportUsage']>(async () => ({ recorded: true })),
+    reportGuard: vi.fn<ControlHandlers['reportGuard']>(async () => ({ recorded: true })),
     submitInput: vi.fn<ControlHandlers['submitInput']>(async () => undefined),
     takeAnswers: vi.fn<ControlHandlers['takeAnswers']>(async () => ({ answers: [] })),
     reportResumeCommand: vi.fn<ControlHandlers['reportResumeCommand']>(async (p) =>
@@ -1095,6 +1105,165 @@ describe('bmn hook', () => {
     expect(fixture.handlers.openAttention).not.toHaveBeenCalled()
   })
 })
+
+const GUARD_TEAM = readFileSync(fileURLToPath(new URL('./test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
+  .replace('zai: {name: Z.ai', 'moonshot: {name: Moonshot AI, hosts: [api.moonshot.ai], private_work: public_only}\nzai: {name: Z.ai')
+const MOONSHOT_SESSION = { ANTHROPIC_BASE_URL: 'https://api.moonshot.ai/anthropic' }
+const PROMPT_SENTINEL = 'PROMPT-SENTINEL-60-8 the words the owner typed'
+
+/**
+ * A home folder with an approved team, a private workspace, and a process table in which the
+ * hook's shell was started by an agent process with that command line and environment.
+ */
+async function guardedSession(root: string, argv: string[], agentEnv: Record<string, string> = {}, comm = 'claude'): Promise<{ home: string; workspace: string; proc: string }> {
+  const home = join(root, 'home')
+  const workspace = join(home, 'code/app')
+  await mkdir(join(workspace, '.git'), { recursive: true })
+  await mkdir(join(home, '.config/bmn/agents'), { recursive: true })
+  writeFileSync(join(home, '.config/bmn/agents/roster.md'), GUARD_TEAM)
+  const saved = process.env.HOME
+  process.env.HOME = home
+  try {
+    approveRoster({ generation: null, fileHash: readValidRoster().hash }, { checkInspectedRoutes: () => {} })
+  } finally {
+    process.env.HOME = saved
+  }
+  const proc = await procTree(root, { ...HOLDS_TERMINAL, comm })
+  const agent = join(proc, '7001')
+  await writeFile(join(agent, 'stat'), `7001 (${comm}) S ${[1, 7001, 7001, 34817, 7001, ...Array(13).fill(0), 777].join(' ')}\n`)
+  await writeFile(join(agent, 'cmdline'), `${argv.join('\0')}\0`)
+  await writeFile(join(agent, 'environ'), `${Object.entries({ HOME: home, PATH: '/usr/bin:/bin', ...agentEnv }).map(([key, value]) => `${key}=${value}`).join('\0')}\0`)
+  await symlink(workspace, join(agent, 'cwd'))
+  return { home, workspace, proc }
+}
+
+describe('bmn hook prompt guard (Story 60.8)', () => {
+  it('stops a prompt bound for a provider that may not see private work, and tells BMN who and where but never what was typed', async () => {
+    const fixture = await cliFixture()
+    const session = await guardedSession(fixture.root, ['claude', '--resume'], MOONSHOT_SESSION)
+    const line = "Moonshot AI can't see private work in ~/code/app. Allow it in BMN."
+
+    const result = await runCli(['hook', 'claude'], {
+      env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home },
+      input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', cwd: session.workspace, session_id: OBSERVED_REFERENCE, prompt: PROMPT_SENTINEL })
+    })
+
+    expect(result).toEqual({ code: 0, stdout: JSON.stringify({ decision: 'block', reason: line }), stderr: '' })
+    expect(fixture.handlers.reportGuard).toHaveBeenCalledTimes(1)
+    expect(fixture.handlers.reportGuard).toHaveBeenCalledWith({
+      sessionId: 'session-1', incarnationId: 'incarnation-1', agent: 'claude', outcome: 'stop', cause: 'public-only', line, allow: true,
+      workspace: session.workspace, folder: session.workspace, providerId: 'moonshot', providerName: 'Moonshot AI', agentName: null,
+      host: 'api.moonshot.ai', pid: 7001, start: '777', conversation: OBSERVED_REFERENCE
+    })
+    // The prompt went nowhere, so nothing else about the turn is reported.
+    for (const handler of [fixture.handlers.observeHookEvent, fixture.handlers.withdrawAttention, fixture.handlers.resolveAttention, fixture.handlers.observeConversation]) {
+      expect(handler).not.toHaveBeenCalled()
+    }
+    expect(JSON.stringify(fixture.handlers.reportGuard.mock.calls)).not.toContain('PROMPT-SENTINEL')
+    const kept = await runFind(session.home)
+    expect(kept).not.toContain('PROMPT-SENTINEL')
+  })
+
+  it('stops the prompt the same way when BMN is closed or cannot be reached', async () => {
+    const fixture = await cliFixture()
+    const session = await guardedSession(fixture.root, ['codex', '-c', 'model_provider="moonshot"', '-c', 'model_providers.moonshot.base_url="https://api.moonshot.ai/v1"'], {}, 'codex')
+    const input = JSON.stringify({ hook_event_name: 'UserPromptSubmit', cwd: session.workspace, prompt: PROMPT_SENTINEL })
+    const answer = JSON.stringify({ decision: 'block', reason: "Moonshot AI can't see private work in ~/code/app. Allow it in BMN." })
+
+    const closed = await runCli(['hook', 'codex'], { env: { BMN_PROC_ROOT: session.proc, HOME: session.home }, input })
+    const unreachable = await runCli(['hook', 'codex'], {
+      env: { ...fixture.sessionEnv, BMN_CONTROL_SOCKET: join(fixture.root, 'gone.sock'), BMN_PROC_ROOT: session.proc, HOME: session.home }, input
+    })
+
+    expect(closed).toEqual({ code: 0, stdout: answer, stderr: '' })
+    expect(unreachable).toEqual({ code: 0, stdout: answer, stderr: '' })
+    expect(fixture.handlers.reportGuard).not.toHaveBeenCalled()
+  })
+
+  it('lets a prompt for a provider that may see private work through untouched, and says so to BMN before the usual report', async () => {
+    const fixture = await cliFixture()
+    const session = await guardedSession(fixture.root, ['claude', '--continue'])
+
+    const result = await runCli(['hook', 'claude'], {
+      env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home },
+      input: JSON.stringify({ hook_event_name: 'UserPromptSubmit', cwd: session.workspace, prompt: PROMPT_SENTINEL })
+    })
+
+    expect(result).toEqual(QUIET)
+    expect(fixture.handlers.reportGuard).toHaveBeenCalledWith({ sessionId: 'session-1', incarnationId: 'incarnation-1', agent: 'claude', outcome: 'pass' })
+    expect(fixture.handlers.withdrawAttention).toHaveBeenCalled()
+    expect(fixture.handlers.observeHookEvent).toHaveBeenCalledTimes(1)
+  })
+
+  it('decides only on the event that carries a prompt: a session start, a stop and a tool event are never stopped', async () => {
+    const fixture = await cliFixture()
+    const session = await guardedSession(fixture.root, ['claude'], MOONSHOT_SESSION)
+
+    for (const event of [{ hook_event_name: 'SessionStart', source: 'resume', session_id: OBSERVED_REFERENCE }, { hook_event_name: 'Stop' }, { hook_event_name: 'PostToolUse', tool_name: 'Bash' }]) {
+      const result = await runCli(['hook', 'claude'], {
+        env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home }, input: JSON.stringify({ cwd: session.workspace, ...event })
+      })
+      expect(result, event.hook_event_name).toEqual(QUIET)
+    }
+    expect(fixture.handlers.reportGuard).not.toHaveBeenCalled()
+  })
+
+  it('checks nothing on an installation that never approved a team, and nothing for an agent another agent started', async () => {
+    const fixture = await cliFixture()
+    const session = await guardedSession(fixture.root, ['claude'], MOONSHOT_SESSION)
+    const input = JSON.stringify({ hook_event_name: 'UserPromptSubmit', cwd: session.workspace, prompt: PROMPT_SENTINEL })
+
+    const noTeam = await runCli(['hook', 'claude'], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc }, input })
+    const nestedProc = await procTree(join(fixture.root, 'nested'), { comm: 'claude', tty: 0, group: 7001, foreground: 7001 })
+    const nested = await runCli(['hook', 'claude'], { env: { ...fixture.sessionEnv, BMN_PROC_ROOT: nestedProc, HOME: session.home }, input })
+
+    expect([noTeam, nested]).toEqual([QUIET, QUIET])
+    expect(fixture.handlers.reportGuard).not.toHaveBeenCalled()
+  })
+
+  it('only warns in Cursor: the prompt goes on, BMN is told, and the usual report still happens', async () => {
+    const fixture = await cliFixture()
+    const session = await guardedSession(fixture.root, ['cursor-agent'], {}, 'cursor-agent')
+
+    const result = await runCli(['hook', 'cursor'], {
+      env: { ...fixture.sessionEnv, BMN_PROC_ROOT: session.proc, HOME: session.home },
+      input: JSON.stringify({ hook_event_name: 'beforeSubmitPrompt', cwd: session.workspace, conversation_id: OBSERVED_REFERENCE, prompt: PROMPT_SENTINEL })
+    })
+
+    expect(result).toEqual(QUIET)
+    expect(fixture.handlers.reportGuard).toHaveBeenCalledWith(expect.objectContaining({ agent: 'cursor', outcome: 'warn', cause: 'declared', allow: false, providerId: 'cursor' }))
+    expect(fixture.handlers.observeConversation).toHaveBeenCalledTimes(1)
+  })
+
+  it('says in `hooks check` what the guard does in each app', async () => {
+    const fixture = await cliFixture()
+    const session = await guardedSession(fixture.root, ['claude'])
+
+    const withTeam = await runHooks(['check'], { HOME: session.home })
+    const withoutTeam = await runHooks(['check', 'claude'])
+    const asJson = JSON.parse((await runHooks(['check', '--json'], { HOME: session.home })).stdout) as { agents: Array<{ agent: string; guard?: string }> }
+
+    expect(withTeam.stdout).toContain('  prompt guard: active, stops a prompt that would send private work to a provider that may not see it (not yet measured on a live Claude Code)')
+    expect(withTeam.stdout).toContain('  prompt guard: active, only warns in Cursor')
+    expect(withTeam.stdout).toContain('  prompt guard: not available in OpenCode (it has no prompt event BMN can answer)')
+    expect(withoutTeam.stdout).toContain('  prompt guard: inactive (no team has been approved, so no prompt is checked)')
+    expect(asJson.agents.find((row) => row.agent === 'codex')?.guard).toMatch(/^prompt guard: active, stops a prompt/)
+  })
+})
+
+/** Every file's text under a folder, for "nothing kept the prompt" checks. */
+async function runFind(folder: string): Promise<string> {
+  const parts: string[] = []
+  const walk = async (directory: string): Promise<void> => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name)
+      if (entry.isDirectory()) await walk(path)
+      else if (entry.isFile()) parts.push(await readFile(path, 'utf8'))
+    }
+  }
+  await walk(folder)
+  return parts.join('\n')
+}
 
 describe('bmn hook provenance and the hook event log', () => {
   it.each([

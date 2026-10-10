@@ -241,8 +241,8 @@ submission enabled; it cannot deliver the handoff.
 ## Agent hooks: Needs you for Claude Code, Codex and OpenCode
 
 `bmn hook claude`, `bmn hook codex`, `bmn hook opencode` and `bmn hook cursor` read one hook event as JSON on stdin
-and keep **Needs you** in step with the agent ([Cursor](#cursors-terminal-agent) gets its turn notice and chat id only). They print nothing and always exit 0, so a hook can never disturb the
-agent, and they do nothing outside BMN.
+and keep **Needs you** in step with the agent ([Cursor](#cursors-terminal-agent) gets its turn notice and chat id only). They always exit 0 and print nothing, so a hook can never disturb the
+agent, with one exception: the answer that stops a prompt the [prompt guard](#the-prompt-guard) refused. They do nothing outside BMN.
 
 | Event | Effect |
 | --- | --- |
@@ -856,7 +856,60 @@ meanwhile, or whose app, app version or deciding setting changed, is skipped, an
 offers **Undo**. Undo first shows what each file would become, including any edit made since that
 it would replace, and puts nothing back until you confirm.
 
+### The prompt guard
+
+`bmn roster check` sees only work one agent hands to another. A lead you start yourself is not a
+dispatch, so the same question is asked for it when a prompt is about to leave: where does this
+session send work, and may that provider see private work in this workspace?
+
+- **When.** On the event that carries a prompt: `UserPromptSubmit` in Claude Code and Codex,
+  `beforeSubmitPrompt` in Cursor. Session start, tool events and a finished turn are never stopped.
+  An agent another agent started is a dispatch and is left to the check.
+- **From what.** The approved team on disk, the agent process as Linux reports it
+  (`/proc/<pid>/cmdline`, `environ` and `cwd`) and the app's own settings, read the way the check
+  reads them. It is decided inside `bmn hook`, before anything is sent to BMN, so it holds while
+  BMN is closed. It makes no network call and never reads, keeps or sends the prompt.
+- **What passes.** A destination whose provider may see private work; or an inspected destination
+  whose provider may not, in a workspace you allowed for that provider. Every folder counts as
+  private here, a public repository included: a folder can hold files that were never pushed.
+  A workspace is the Git top-level with links resolved, or the folder itself outside Git; a
+  repository nested in an allowed one is its own workspace.
+- **What stops.** Anything else: a provider that may see public work only; a destination BMN
+  cannot tell (an address no provider lists, a setting it cannot resolve, `--oss`, a Codex session
+  saved with another provider than the settings now name, two settings that disagree); a
+  destination that is only your word and whose provider may see public work only; an approved team
+  that is missing, damaged or from an earlier BMN; a process BMN cannot read; a decision that
+  took longer than 2 seconds. The agent shows one line that names the fix, for example
+  `Moonshot AI can't see private work in ~/code/app. Allow it in BMN.`
+- **The card.** BMN shows a card on that session only, with **Allow here** and **Keep blocked**.
+  Allow here asks about the same process again and, if it still sends work to the same provider
+  from the same workspace, records that one workspace for that provider as a new approved
+  version of the team; then you send the prompt again. It is offered only for an inspected
+  destination. The card lives in memory for that run: it is not a request, so it never reaches
+  Telegram, a notification, the database or a Backup export.
+- **Until a team is approved** the guard is inactive and no prompt is checked. `bmn hooks check`
+  says which of these holds, per app.
+
+| App | What a stop does | Measured on a live app |
+| --- | --- | --- |
+| Claude Code | The hook answers `{"decision":"block","reason":…}`; the prompt is not sent and the line is shown | not yet |
+| Codex | The same answer | not yet |
+| Cursor | Nothing stops: the prompt goes on, BMN shows the card as a warning and marks the session "Public-only provider on private work" | does not apply |
+| OpenCode | Not covered: its plugin reports events after the fact and has no prompt event to answer | does not apply |
+
+Cursor reports nothing about where it sends work, so the guard goes by what you recorded for it
+on Rules → Health: a provider that may see private work passes, any other warns.
+
 ### What the team file and rules do not enforce
+
+- The prompt guard covers sessions started in BMN, because the hook entry runs `bmn` only there;
+  the same app started in another terminal is not checked. It is workflow protection like the
+  rest: removing the hook entry, or starting the app with its hooks disabled, removes the guard.
+  It reads how the app was started and its settings once per prompt, and an app that changed
+  where it sends work mid-session without either changing would not be noticed. A Claude Code
+  flag other than `--settings`, and a Codex `-c` key other than `model_provider`,
+  `model_providers`, `profile`, `profiles`, `openai_base_url` and `chatgpt_base_url`, is taken
+  not to say where work goes.
 
 - Approval is workflow protection against processes running as your user, not an operating-system
   boundary: such a process can edit the state folder as easily as the team file. It makes a
@@ -969,6 +1022,10 @@ bmn hook is not yours
 - A session token can publish, report and send only for its own session, and only while that
   process incarnation is current. `handoff.prepare` is its one exception: it may name a destination
   ID, but only prepares a bounded draft for owner delivery and cannot list another session.
+- `guard.report` is accepted only from a session token, for its own live process. It carries the
+  prompt guard's decision (the app, the cause, the line the agent showed, and the provider,
+  workspace and agent process a stop is about) and refuses any other field, so a prompt cannot
+  ride along. It is kept in memory for that run only.
 - `usage.report` is accepted only from a session token, for its own live process, with at most two
   plan windows (minutes, a share from 0 to 1000, an ISO reset time) and a context share. It never
   carries the status-line input itself. `attention.open` refuses `usage:` request keys: only BMN's

@@ -135,6 +135,7 @@ function fakeHandlers(current: Map<string, string>) {
     resolveAttention: vi.fn(async (): Promise<unknown> => ({ resolved: true })),
     observeHookEvent: vi.fn(async (): Promise<unknown> => ({ recorded: true })),
     reportUsage: vi.fn(async (): Promise<unknown> => ({ recorded: true })),
+    reportGuard: vi.fn(async (): Promise<unknown> => ({ recorded: true })),
     submitInput: vi.fn(async (): Promise<void> => undefined),
     takeAnswers: vi.fn(async (): Promise<unknown> => ({ answers: [] })),
     reportResumeCommand: vi.fn(async (p: Parameters<ControlHandlers['reportResumeCommand']>[0]): Promise<unknown> =>
@@ -724,6 +725,60 @@ describe('control server validation', () => {
     // A session may report only its own plan use.
     expectError(await client.request('usage.report', { sessionId: 'session-2', agent: 'claude', windows }), ERROR_CODES.unauthorized)
     expect(fixture.handlers.reportUsage).toHaveBeenCalledTimes(2)
+  })
+
+  it('passes a session\'s prompt-guard decision to the service with its own run, and refuses the owner and another session', async () => {
+    const fixture = await serverFixture()
+    const client = await authenticated(fixture, sessionToken(fixture))
+    const stop = {
+      agent: 'claude', outcome: 'stop', cause: 'public-only', line: "Moonshot AI can't see private work in ~/code/app. Allow it in BMN.", allow: true,
+      workspace: '/synthetic/code/app', folder: '/synthetic/code/app/src', providerId: 'moonshot', providerName: 'Moonshot AI', agentName: 'Kimi',
+      host: 'api.moonshot.ai', pid: 7001, start: '777', conversation: '01a0b657-21a8-7f00-addd-b73646828f5b'
+    }
+
+    expect((await client.request('guard.report', stop)).result).toEqual({ recorded: true })
+    expect((await client.request('guard.report', { agent: 'cursor', outcome: 'warn', cause: 'unknown', line: 'BMN cannot tell where Cursor sends work.' })).result).toEqual({ recorded: true })
+    expect((await client.request('guard.report', { agent: 'codex', outcome: 'pass' })).result).toEqual({ recorded: true })
+    expect(fixture.handlers.reportGuard).toHaveBeenNthCalledWith(1, { sessionId: 'session-1', incarnationId: 'incarnation-1', ...stop })
+    expect(fixture.handlers.reportGuard).toHaveBeenNthCalledWith(2, {
+      sessionId: 'session-1', incarnationId: 'incarnation-1', agent: 'cursor', outcome: 'warn', cause: 'unknown', line: 'BMN cannot tell where Cursor sends work.', allow: false,
+      workspace: null, folder: null, providerId: null, providerName: null, agentName: null, host: null, pid: null, start: null, conversation: null
+    })
+    expect(fixture.handlers.reportGuard).toHaveBeenNthCalledWith(3, { sessionId: 'session-1', incarnationId: 'incarnation-1', agent: 'codex', outcome: 'pass' })
+
+    const owner = await authenticated(fixture, fixture.auth.ownerToken)
+    expectError(await owner.request('guard.report', { sessionId: 'session-1', ...stop }), ERROR_CODES.unauthorized)
+    expectError(await client.request('guard.report', { sessionId: 'session-2', ...stop }), ERROR_CODES.unauthorized)
+    expect(fixture.handlers.reportGuard).toHaveBeenCalledTimes(3)
+  })
+
+  it.each([
+    ['an agent without a prompt event', { agent: 'opencode' }],
+    ['an outcome it does not know', { outcome: 'allow' }],
+    ['a cause it does not know', { cause: 'because' }],
+    ['no line', { line: undefined }],
+    ['a line with a control character', { line: 'one\ntwo' }],
+    ['a workspace that is not absolute', { workspace: 'code/app' }],
+    ['a provider id that is not one', { providerId: 'Moonshot AI' }],
+    ['a pid that is not a process', { pid: 1 }],
+    ['a start time that is not a number', { start: 'yesterday' }],
+    ['a conversation that is not a reference', { conversation: 'not-a-reference-not-a-reference-not-a' }],
+    ['the prompt', { prompt: 'what the owner typed' }],
+    ['Allow offered without a workspace', { workspace: undefined }],
+    ['Allow offered for a destination BMN cannot tell', { cause: 'unknown' }],
+    ['Allow offered on a warning', { outcome: 'warn' }]
+  ])('refuses a prompt-guard report with %s', async (_label, change) => {
+    const fixture = await serverFixture()
+    const client = await authenticated(fixture, sessionToken(fixture))
+    const stop: Record<string, unknown> = {
+      agent: 'claude', outcome: 'stop', cause: 'public-only', line: 'Moonshot AI cannot see private work here.', allow: true,
+      workspace: '/synthetic/code/app', providerId: 'moonshot', pid: 7001, start: '777', ...change
+    }
+    for (const key of Object.keys(stop)) if (stop[key] === undefined) delete stop[key]
+
+    expectError(await client.request('guard.report', stop), ERROR_CODES.invalidArgument)
+    expectError(await client.request('guard.report', { agent: 'claude', outcome: 'pass', line: 'a pass says nothing more' }), ERROR_CODES.invalidArgument)
+    expect(fixture.handlers.reportGuard).not.toHaveBeenCalled()
   })
 
   it('stores the closed origin vocabulary and records one hook event per call', async () => {

@@ -101,6 +101,26 @@ function isEarlierSchema(generation) {
   return Number.isSafeInteger(generation.data.schema_version) && generation.data.schema_version < SCHEMA_VERSION
 }
 
+/**
+ * Whether this installation ever approved a team: a pointer, a history log or any generation file
+ * is there. False only on one that never did; a folder that cannot be listed counts as approved.
+ */
+export function everApproved() {
+  try {
+    if (generationNumbers().length > 0) return true
+    readFileSync(currentPointerPath())
+    return true
+  } catch (error) {
+    if (error?.code !== 'ENOENT') return true
+  }
+  try {
+    readFileSync(historyLogPath())
+    return true
+  } catch (error) {
+    return error?.code !== 'ENOENT'
+  }
+}
+
 /** One generation file of the current schema, verified; null when it is missing, unreadable, malformed, altered or of an earlier schema. */
 export function readGeneration(number) {
   const generation = readVerified(number)

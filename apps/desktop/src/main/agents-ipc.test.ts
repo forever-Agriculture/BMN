@@ -471,3 +471,67 @@ describe('the rules snapshot (60.6)', () => {
     expect(Date.parse(rules.master.savedAt ?? '')).toBeGreaterThan(Date.now() - 60_000)
   })
 })
+
+describe('Allow here on a stopped prompt (60.8 AC3)', () => {
+  const GUARDED = EXAMPLE.replace('zai: {name: Z.ai', 'moonshot: {name: Moonshot AI, hosts: [api.moonshot.ai], private_work: public_only}\nzai: {name: Z.ai')
+  let proc: string
+  let workspace: string
+
+  /** One agent process as Linux reports it, in a process table the handlers read instead of /proc. */
+  function agentProcess(env: Record<string, string>, start = '777'): void {
+    const folder = join(proc, '7001')
+    rmSync(folder, { recursive: true, force: true })
+    mkdirSync(folder, { recursive: true })
+    writeFileSync(join(folder, 'cmdline'), 'claude\0--resume\0')
+    writeFileSync(join(folder, 'environ'), `${Object.entries({ HOME: home, PATH: '/usr/bin:/bin', ...env }).map(([key, value]) => `${key}=${value}`).join('\0')}\0`)
+    writeFileSync(join(folder, 'stat'), `7001 (claude) S ${[1, 7001, 7001, 34817, 7001, ...Array(13).fill(0), start].join(' ')}\n`)
+    symlinkSync(workspace, join(folder, 'cwd'))
+  }
+
+  const stop = (): Record<string, unknown> => ({ agent: 'claude', pid: 7001, start: '777', folder: workspace, workspace, providerId: 'moonshot', host: 'api.moonshot.ai', conversation: null })
+  const allow = (shownStop: Record<string, unknown> = stop()): Promise<AgentsOutcome> => call('agents:guard-allow', { stop: shownStop })
+
+  beforeEach(async () => {
+    proc = join(home, 'proc')
+    workspace = join(home, 'code/app')
+    mkdirSync(join(workspace, '.git'), { recursive: true })
+    installAgentsIpcHandlers({ handle: (channel, listener) => { handlers.set(channel, listener) } }, {
+      senderIsAllowed: () => true, cliScript: () => SCRIPT, environment: () => ({ HOME: home, PATH: `${stubs}:/usr/bin:/bin` }), procRoot: proc
+    })
+    writeFileSync(rosterFile(), GUARDED)
+    expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: true })
+  })
+
+  it('asks about the same session again and records that provider in that workspace as a new version', async () => {
+    agentProcess({ ANTHROPIC_BASE_URL: 'https://api.moonshot.ai/anthropic' })
+
+    const result = await allow()
+
+    expect(result).toMatchObject({ ok: true, message: 'Moonshot AI allowed in this workspace · version 2' })
+    expect(result.snapshot.approved?.data.exceptions).toContainEqual({ id: expect.stringMatching(/^moonshot-[0-9a-f]{8}$/), provider: 'moonshot', folder: workspace })
+    expect(result.snapshot.differences).toEqual([])
+    // The same press again finds the session allowed, so there is nothing left to record.
+    expect(await allow()).toMatchObject({ ok: false, code: 'REVISION_CONFLICT', message: 'This session changed since the prompt was stopped. Send the prompt again.' })
+  })
+
+  it.each([
+    ['the session now sends work elsewhere', (): void => agentProcess({}), {}],
+    ['another process took the pid', (): void => agentProcess({ ANTHROPIC_BASE_URL: 'https://api.moonshot.ai/anthropic' }, '999'), {}],
+    ['the process is gone', (): void => rmSync(join(proc, '7001'), { recursive: true, force: true }), {}],
+    ['the card named another provider', (): void => undefined, { providerId: 'zai' }],
+    ['the card named another workspace', (): void => undefined, { workspace: '/synthetic/elsewhere' }]
+  ])('refuses and approves nothing when %s', async (_label, change, shownChange) => {
+    agentProcess({ ANTHROPIC_BASE_URL: 'https://api.moonshot.ai/anthropic' })
+    change()
+
+    const result = await allow({ ...stop(), ...shownChange })
+
+    expect(result).toMatchObject({ ok: false, code: 'REVISION_CONFLICT' })
+    expect(result.snapshot.approved?.generation).toBe(1)
+    expect(readFileSync(rosterFile(), 'utf8')).toBe(GUARDED)
+  })
+
+  it('refuses a stop that names no session, provider or workspace', async () => {
+    await expect(allow({ agent: 'claude' })).rejects.toThrow(/does not name a session, a provider and a workspace/)
+  })
+})

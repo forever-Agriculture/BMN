@@ -2699,6 +2699,11 @@ input[type='radio'] {
 .attention-questions ul { margin: 0; padding-left: 18px; }
 .attention-questions li { margin-bottom: 6px; overflow-wrap: anywhere; }
 .attention-item.cleared { opacity: 0.85; }
+.session-guard-card .guard-line { margin: 0; overflow-wrap: anywhere; }
+.session-guard-card .guard-facts { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 0; font-size: 12.5px; }
+.session-guard-card .guard-facts dt { color: var(--muted); }
+.session-guard-card .guard-facts dd { margin: 0; overflow-wrap: anywhere; }
+.session-guard-card .guard-refusal { margin: 0; color: var(--attention); overflow-wrap: anywhere; }
 
 .session-request-card > header {
   position: sticky;

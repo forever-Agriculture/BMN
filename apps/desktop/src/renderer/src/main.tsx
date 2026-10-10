@@ -20,6 +20,7 @@ import {
   type HookOriginRecord,
   type ListeningPort,
   type SessionPorts,
+  type GuardStop,
   listeningPortLabel,
   type InterruptedSessionCohort,
   type LaunchTemplateRecord,
@@ -82,6 +83,7 @@ import {
   type SessionLaunchForm
 } from './launch-template'
 import { SessionRequestCard, type ClearedNotice } from './session-request-card'
+import { SessionGuardCard, guardMark } from './session-guard-card'
 import { dismissAttentionReminder, noticesWhenNavigating, applyAttentionWithdrawal } from './attention-actions'
 import { PopupMenu, type MenuAnchor, type MenuEntry } from './popup-menu'
 import { PreferencesDialog } from './preferences-dialog'
@@ -264,6 +266,10 @@ function App(): React.JSX.Element {
   /** Its own state, not a ShellDialog: a close question must not replace work the owner has open. */
   const [closePrompt, setClosePrompt] = useState<ClosePromptRequest | null>(null)
   const [requestCard, setRequestCard] = useState<{ sessionId: string; anchor: HTMLElement | null } | null>(null)
+  /** Story 60.8: what each session's prompt guard last stopped or warned about, and the one card that is open. */
+  const [guardStops, setGuardStops] = useState<GuardStop[]>([])
+  const [guardCard, setGuardCard] = useState<{ sessionId: string; anchor: HTMLElement | null; busy: boolean; refusal: string | null } | null>(null)
+  const guardSeen = useRef(new Map<string, string>())
   const [clearedNotices, setClearedNotices] = useState<{ sessionId: string | null; notices: ClearedNotice[] }>({ sessionId: null, notices: [] })
   const navigationEpoch = useRef({ sessionId: null as string | null, epoch: 0 })
   const recentSessions = useRef<string[]>([])
@@ -529,6 +535,7 @@ function App(): React.JSX.Element {
     hooks: () => window.aiTerminal.listHookOrigins().then(setHookOrigins),
     // Each scan that changes any session's ports announces it; the list is the last scan's, never a new read of /proc.
     ports: () => window.aiTerminal.listPorts().then(setPorts),
+    guard: () => window.aiTerminal.listGuardStops().then(setGuardStops),
     drafts: () => window.aiTerminal.listDrafts().then(setDrafts),
     settings: async () => {
       setSettings(await window.aiTerminal.getSettings())
@@ -745,6 +752,18 @@ function App(): React.JSX.Element {
       .then(setBinding)
       .catch(fail('Binding unavailable'))
   }, [selectedSessionId, bindingRevision])
+
+  // A prompt stopped just now opens its card on its own session; one the owner already closed does not come back.
+  useEffect(() => {
+    const seen = guardSeen.current
+    for (const sessionId of [...seen.keys()]) if (!guardStops.some(stop => stop.sessionId === sessionId)) seen.delete(sessionId)
+    const fresh = guardStops.filter(stop => !stop.kept && seen.get(stop.sessionId) !== stop.at)
+    for (const stop of guardStops) seen.set(stop.sessionId, stop.at)
+    const newest = fresh.sort((a, b) => b.at.localeCompare(a.at))[0]
+    if (!newest) return
+    const anchor = document.querySelector<HTMLElement>(`[data-session-guard="${CSS.escape(newest.sessionId)}"]`)
+    setGuardCard({ sessionId: newest.sessionId, anchor, busy: false, refusal: null })
+  }, [guardStops])
 
   /** Only owner event handlers call this. Capture revisions before any asynchronous withdrawal. */
   const navigateAttention = (sessionId: string | null): void => {
@@ -1729,6 +1748,7 @@ function App(): React.JSX.Element {
     return { order: index * 2, flexGrow: index === 0 ? firstRatio : 1 - firstRatio }
   }
 
+  const guardCardStop = guardCard ? guardStops.find(item => item.sessionId === guardCard.sessionId) ?? null : null
   const snapshotsFor = (sessionId: string): ClearedNotice[] => selectedSessionId === sessionId && clearedNotices.sessionId === sessionId ? clearedNotices.notices : []
   const requestControl = (sessionId: string): React.JSX.Element | null => {
     const requests = unresolved.filter(request => request.sessionId === sessionId)
@@ -1743,6 +1763,27 @@ function App(): React.JSX.Element {
         setRequestCard(current => current?.sessionId === sessionId ? null : { sessionId, anchor })
       }}>
       {word}{requests.length > 1 ? ` · ${requests.length}` : ''}</button>
+  }
+  /** The session's own mark for a stopped prompt; the card opens from it and, for a new stop, by itself. */
+  const guardControl = (sessionId: string): React.JSX.Element | null => {
+    const stop = guardStops.find(item => item.sessionId === sessionId)
+    if (!stop) return null
+    return <button type="button" className="pane-request-control" data-cleared={stop.kept || undefined} data-session-guard={sessionId}
+      aria-haspopup="dialog" aria-expanded={guardCard?.sessionId === sessionId} title={stop.line}
+      onClick={event => {
+        const anchor = event.currentTarget
+        setGuardCard(current => current?.sessionId === sessionId ? null : { sessionId, anchor, busy: false, refusal: null })
+      }}>{guardMark(stop)}</button>
+  }
+  const paneControls = (sessionId: string): React.JSX.Element | null => {
+    const guard = guardControl(sessionId)
+    const requests = requestControl(sessionId)
+    return guard && requests ? <>{guard}{requests}</> : guard ?? requests
+  }
+  const closeGuardCard = (returnFocus: boolean): void => {
+    const anchor = guardCard?.anchor
+    setGuardCard(null)
+    if (returnFocus) (anchor?.isConnected ? anchor : sessionArea.current)?.focus({ preventScroll: true })
   }
   const focusCue = focusMode ? otherSessionRequestCue(attention, selectedSessionId) : null
   const closeRequestCard = (returnFocus: boolean): void => {
@@ -1940,7 +1981,7 @@ function App(): React.JSX.Element {
                 focusMode={focusMode}
                 filesOpen={panel === 'files'}
                 attention={sessionAttention(unresolved, terminalStartup.sessionId)}
-                requestControl={requestControl(terminalStartup.sessionId)}
+                requestControl={paneControls(terminalStartup.sessionId)}
                 focusCue={focusCue}
                 activity={activity[terminalStartup.sessionId] ?? null}
                 modelOrigin={record ? activeHookOrigin(hookOrigins, record, terminalStartup.incarnationId) : null}
@@ -2026,7 +2067,7 @@ function App(): React.JSX.Element {
             <section className="stopped-session" style={paneStyle(selectedRecord.sessionId)}
               onPointerDownCapture={() => navigateAttention(selectedRecord.sessionId)}
               onKeyUpCapture={event => { if (event.key === 'Tab') navigateAttention(selectedRecord.sessionId) }}>
-              <header className="stopped-request-heading">{requestControl(selectedRecord.sessionId)}
+              <header className="stopped-request-heading">{paneControls(selectedRecord.sessionId)}
                 <button type="button" aria-pressed={focusMode} title={['Focus', focusCue].filter(Boolean).join(' · ')}
                   onClick={() => setFocusMode(value => !value)}><Icon name="focus" />Focus
                   {focusCue ? <span className="status-dot needs-you" aria-hidden="true" /> : null}</button>
@@ -2065,7 +2106,7 @@ function App(): React.JSX.Element {
                 <section key={pane.sessionId} className="stopped-pane" style={paneStyle(pane.sessionId)}
                   onPointerDownCapture={() => focusLayoutSession(record.sessionId, false)}
                   onKeyUpCapture={event => { if (event.key === 'Tab') focusLayoutSession(record.sessionId, false) }}>
-                  {requestControl(record.sessionId)}
+                  {paneControls(record.sessionId)}
                   <strong>{record.name}</strong>
                   <p>{sessionProcessLabel(record.lastProcess)}</p>
                   <ProgressStrip progress={observedProgressFor(record)} onOpen={() => openProgressDetail(record, observedProgressFor(record))} />
@@ -2073,6 +2114,29 @@ function App(): React.JSX.Element {
                 </section>
               )
             }) : null}
+          {guardCardStop && guardCard ? <SessionGuardCard key={`${guardCardStop.sessionId}:${guardCardStop.at}`}
+            stop={guardCardStop} place={place(guardCardStop.sessionId)} home={home} now={now} anchor={guardCard.anchor}
+            busy={guardCard.busy} refusal={guardCard.refusal}
+            onAllow={() => {
+              const stop = guardCardStop
+              setGuardCard(current => current && { ...current, busy: true, refusal: null })
+              void window.aiTerminal.allowGuardStop(stop).then(async result => {
+                if (!result.ok) {
+                  setGuardCard(current => current?.sessionId === stop.sessionId ? { ...current, busy: false, refusal: result.message } : current)
+                  return
+                }
+                await window.aiTerminal.clearGuardStop(stop.sessionId)
+                setGuardCard(null)
+                brief(`${result.message}. Send the prompt again.`)
+              }).catch(error => {
+                setGuardCard(current => current?.sessionId === stop.sessionId ? { ...current, busy: false, refusal: failureDetail(error, 'The workspace could not be allowed') } : current)
+              })
+            }}
+            onKeep={() => {
+              void window.aiTerminal.keepGuardStop(guardCardStop.sessionId).catch(fail('The card could not be closed'))
+              closeGuardCard(true)
+            }}
+            onClose={closeGuardCard} /> : null}
           {requestCard ? <SessionRequestCard key={requestCard.sessionId}
             requests={attention.filter(request => request.sessionId === requestCard.sessionId)}
             cleared={snapshotsFor(requestCard.sessionId)} phone={telegramStatus?.quietHours}

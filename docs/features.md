@@ -274,6 +274,11 @@ approve it there; every approval is a numbered version you can open or restore. 
 approved team with `bmn team`, and a lead runs `bmn roster check` before it hands work to another
 agent.
 
+A lead you start yourself is checked too, at each prompt: when its app sends work to a provider
+that may not see private work, the prompt is stopped before it leaves and the session shows a
+card with **Allow here** (that provider, that workspace only) and **Keep blocked**. This works in
+Claude Code and Codex; Cursor only warns, and OpenCode is not covered.
+
 Preferences → **Rules** keeps one rules text and writes it into each agent app's own rules file
 (Claude Code, Codex, OpenCode and Cursor), shows each file's difference before it writes, and can
 undo an install. An app whose provider may not see private work receives only the sections you

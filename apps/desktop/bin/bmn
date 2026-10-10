@@ -1562,7 +1562,7 @@ async function runHooks(argv) {
       ? hookFilePath(name)
       : absoluteUncollapsed(parsed.options.file)
     return action === 'check'
-      ? checkHooksCommand(agents, pathFor, parsed.options.json === true)
+      ? await checkHooksCommand(agents, pathFor, parsed.options.json === true)
       : await installHooksCommand(agents[0], pathFor(agents[0]), parsed.options.json === true, parsed.options.yes === true)
   } catch (error) {
     if (error instanceof UsageError) return usageFailure(error.message)
@@ -1570,16 +1570,24 @@ async function runHooks(argv) {
   }
 }
 
-function checkHooksCommand(agents, pathFor, asJson) {
+async function checkHooksCommand(agents, pathFor, asJson) {
   const reports = agents.map((name) => checkHooks(name, pathFor(name)))
   const ok = reports.every((report) => report.state === 'read' && report.missing.length === 0)
+  // Story 60.8: what the prompt guard does in each app right now, read from the approved team on disk.
+  let guard = null
+  try {
+    guard = await import('./agents-guard.mjs')
+  } catch {
+    // Without its files there is no guard to describe.
+  }
+  const standing = new Map(guard === null ? [] : reports.map((report) => [report.agent, guard.guardStanding(report.agent)]))
   if (asJson) {
     // This owner command finishes synchronously; a pipe can lose an asynchronous stdout write
     // before the CLI exits. The desktop checker reads that pipe, so finish the report first.
-    writeSync(1, `${JSON.stringify({ ok, agents: reports }, null, 2)}\n`)
+    writeSync(1, `${JSON.stringify({ ok, agents: reports.map((report) => (standing.has(report.agent) ? { ...report, guard: standing.get(report.agent) } : report)) }, null, 2)}\n`)
     return ok ? 0 : 1
   }
-  const lines = reports.map(describeHookCheck)
+  const lines = reports.map((report) => `${describeHookCheck(report)}${standing.has(report.agent) ? `\n  ${standing.get(report.agent)}` : ''}`)
   lines.push(ok
     ? 'Every hook BMN expects is wired. This is what is configured, not proof that a hook fired.'
     : 'Run `bmn hooks install <agent>` to add the missing entries. This reports configuration, not that a hook fired.')
@@ -1978,17 +1986,71 @@ function claudeRemoteControlled(agentPid, sessionId) {
   }
 }
 
-/** Hooks must never disturb the agent: nothing on stdout, and exit 0 whatever happens. */
+/**
+ * The prompt guard (Story 60.8, docs/agent-control.md): decided here, from the approved team on
+ * disk, before anything is sent anywhere, so it holds whether or not BMN is running. Only the
+ * event's folder and session reference go into the decision; the prompt text never does. Returns
+ * null when this event carries no prompt or the guard's own files are not installed.
+ */
+async function promptVerdict(agent, event, agentPid, procRoot) {
+  let guard
+  try {
+    guard = await import('./agents-guard.mjs')
+  } catch {
+    return null
+  }
+  if (guard.GUARD_APPS[agent]?.event !== event.hook_event_name) return null
+  const input = {
+    agent, pid: agentPid, procRoot,
+    event: { cwd: event.cwd, session_id: event.session_id, transcript_path: event.transcript_path }
+  }
+  let verdict
+  try {
+    verdict = await guard.decideWithin(input)
+  } catch {
+    verdict = {
+      agent, app: HOOK_AGENTS[agent], pid: agentPid || null, start: null, folder: null, workspace: null, provider: null, host: null, name: null, outcome: 'stop', cause: 'state', allow: false,
+      line: 'BMN stopped this prompt: its check failed. Open BMN Preferences › Team; if the team shows no problem, start the session again.'
+    }
+  }
+  return { verdict, answer: verdict.outcome === 'stop' ? guard.stopAnswer(agent, verdict.line) : null }
+}
+
+/** What BMN is told about a prompt decision: who and where, never what was typed. */
+function guardReport(agent, event, verdict, stopped) {
+  const outcome = verdict.outcome === 'pass' ? 'pass' : stopped ? 'stop' : 'warn'
+  if (outcome === 'pass') return { method: 'guard.report', params: { agent, outcome } }
+  return {
+    method: 'guard.report',
+    params: {
+      agent, outcome, cause: verdict.cause, line: verdict.line, allow: verdict.allow === true,
+      ...(verdict.workspace === null ? {} : { workspace: verdict.workspace }),
+      ...(verdict.provider === null ? {} : { providerId: verdict.provider.id, providerName: verdict.provider.name }),
+      ...(verdict.name === null ? {} : { agentName: verdict.name }),
+      ...(verdict.host === null ? {} : { host: verdict.host }),
+      ...(verdict.pid === null || verdict.start === null ? {} : { pid: verdict.pid, start: verdict.start }),
+      ...(verdict.folder === null ? {} : { folder: verdict.folder }),
+      ...(typeof event.session_id === 'string' && CONVERSATION_REFERENCE.test(event.session_id) ? { conversation: event.session_id.toLowerCase() } : {})
+    }
+  }
+}
+
+/**
+ * Hooks must never disturb the agent: exit 0 whatever happens, and nothing on stdout, with one
+ * exception: the answer that stops a prompt the guard refused.
+ */
 async function runHook(args) {
   const [agent] = args
   if (args.length !== 1 || !Object.hasOwn(HOOK_AGENTS, agent)) {
     process.stderr.write(`bmn: hook expects one agent: ${Object.keys(HOOK_AGENTS).join('|')}\n`)
     return 0
   }
+  if (process.stdin.isTTY) return 0
   const socketPath = process.env.BMN_CONTROL_SOCKET ?? process.env.AITERM_CONTROL_SOCKET
   const token = process.env.BMN_TOKEN ?? process.env.AITERM_TOKEN
-  if (!socketPath || !token || process.stdin.isTTY) return 0
-  const agentPid = interactiveAgentPid(process.env.BMN_PROC_ROOT ?? process.env.AITERM_PROC_ROOT ?? '/proc')
+  const procRoot = process.env.BMN_PROC_ROOT ?? process.env.AITERM_PROC_ROOT ?? '/proc'
+  // An agent another agent started is a dispatch: `bmn roster check` answers for it, not this hook.
+  const agentPid = interactiveAgentPid(procRoot)
   if (agentPid === null) return 0
   let event
   try {
@@ -2002,7 +2064,18 @@ async function runHook(args) {
   // Cursor can also run Claude Code's hook files for its own agent (off by default, docs/agent-control.md);
   // such a payload speaks for a Cursor chat, never for a Claude conversation.
   if (agent === 'claude' && Object.hasOwn(event, 'cursor_version')) return 0
-  const requests = hookRequests(agent, event)
+  const guarded = await promptVerdict(agent, event, agentPid, procRoot)
+  const stopped = guarded !== null && guarded.answer !== null
+  // The answer goes out before any socket call: a BMN that is closed or slow never delays the stop.
+  if (stopped) writeSync(1, guarded.answer)
+  if (!socketPath || !token) return 0
+  const report = guarded === null || guarded.verdict.cause === 'inactive' ? [] : [guardReport(agent, event, guarded.verdict, stopped)]
+  if (stopped) {
+    // The prompt went nowhere, so nothing about the turn changed; BMN only learns why.
+    await callEach(socketPath, token, report, HOOK_TIMEOUT_MS).catch(() => undefined)
+    return 0
+  }
+  const requests = [...report, ...hookRequests(agent, event)]
   const opens = requests.filter((request) => request.method === 'attention.open')
   if (agent === 'claude' && opens.length > 0 && claudeRemoteControlled(agentPid, event.session_id)) {
     for (const request of opens) request.params.phoneNotified = true

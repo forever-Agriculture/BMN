@@ -609,8 +609,10 @@ export function resolveClaudeRoute(parsed, environment, cwd) {
   }
   if (parsed.settings !== undefined) {
     const inline = parsed.settings.trimStart().startsWith('{')
-    const read = settingsEnv(inline ? parsed.settings : optionalText(isAbsolute(parsed.settings) ? parsed.settings : `${cwd}/${parsed.settings}`), '--settings')
-    if (read.unreadable || (!inline && read.env === undefined)) reason ??= read.unreadable ?? '--settings cannot be read'
+    // A file that is not there is not an empty one: what the app would do with it is not BMN's to guess.
+    const text = inline ? parsed.settings : optionalText(isAbsolute(parsed.settings) ? parsed.settings : `${cwd}/${parsed.settings}`)
+    const read = text === null ? { unreadable: '--settings cannot be read' } : settingsEnv(text, '--settings')
+    if (read.unreadable) reason ??= read.unreadable
     else take('--settings', read.env)
   }
   const sources = values.map((value) => value.source)
@@ -995,7 +997,7 @@ export function receiptHash(body) {
 }
 
 /** Finds `<sessions>/YYYY/MM/DD/rollout-*-<id>.jsonl` and returns its first-line metadata. */
-function sessionRecord(codexHome, id) {
+export function sessionRecord(codexHome, id) {
   if (!SESSION_ID.test(id) || codexHome === null) return null
   const root = `${codexHome}/sessions`
   const found = []
@@ -1012,8 +1014,17 @@ function sessionRecord(codexHome, id) {
     }
   }
   walk(root, 0)
-  if (found.length !== 1) return null
-  const line = firstLine(found[0])
+  return found.length === 1 ? sessionRecordAt(found[0]) : null
+}
+
+/** The first-line metadata of one Codex session record file; null when it cannot be read as one. */
+export function sessionRecordAt(path) {
+  let line
+  try {
+    line = firstLine(path)
+  } catch {
+    return null
+  }
   if (line === null) return null
   try {
     const record = JSON.parse(line)

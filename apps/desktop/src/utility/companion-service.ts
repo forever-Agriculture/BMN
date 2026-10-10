@@ -58,7 +58,9 @@ import {
   type SessionPorts,
   type SessionUsage,
   type UsageAgent,
-  type UsageReading
+  type UsageReading,
+  type GuardReport,
+  type GuardStop
 } from '@bmn/protocol'
 import { ArtifactFileError, ArtifactFileStore, type InstalledOriginal } from './artifact-files'
 import { ControlAuth, writeOwnerToken, type ControlScope } from './control-auth'
@@ -373,6 +375,11 @@ export class CompanionService {
    * In memory only, so a restart shows no reading until the agent reports again.
    */
   private readonly usageReadings = new Map<string, UsageReading>()
+  /**
+   * Story 60.8: what each session's prompt guard last stopped or warned about. Memory only and for
+   * the reporting run: it never reaches the database, a Backup export, Telegram or a notification.
+   */
+  private readonly guardStops = new Map<string, GuardStop>()
   private readonly planReadings = new Map<UsageAgent, UsageReading>()
   /** The 90% notice decisions, one at a time (Story 37.2). */
   private usageNoticeQueue: Promise<void> = Promise.resolve()
@@ -600,6 +607,7 @@ export class CompanionService {
         ),
         observeHookEvent: (p) => this.controlCall(async () => this.observeHookEvent(p)),
         reportUsage: (p) => this.controlCall(async () => this.recordUsage(p)),
+        reportGuard: (p) => this.controlCall(async () => this.recordGuard(p)),
         submitInput: (p) => this.controlCall(async () => {
           this.options.manager.writeToSession(p.sessionId, bracketedPaste(p.text, p.submit))
         }),
@@ -836,6 +844,23 @@ export class CompanionService {
       case METHOD_REGISTRY.usageList:
         // The latest plan reading per agent: the plan is the account's, so any session's reading speaks for it.
         return [...this.planReadings.values()]
+      case METHOD_REGISTRY.guardList:
+        // Only what a live run reported: a session started again answers for itself.
+        return [...this.guardStops.values()].filter((stop) => this.options.manager.liveIncarnationId(stop.sessionId) === stop.incarnationId) satisfies GuardStop[]
+      case METHOD_REGISTRY.guardKeep: {
+        const stop = this.guardStops.get(text(params, 'sessionId'))
+        if (stop !== undefined && !stop.kept) {
+          this.guardStops.set(stop.sessionId, { ...stop, kept: true })
+          this.emit('guard', stop.sessionId)
+        }
+        return { kept: stop !== undefined }
+      }
+      case METHOD_REGISTRY.guardClear: {
+        const sessionId = text(params, 'sessionId')
+        const cleared = this.guardStops.delete(sessionId)
+        if (cleared) this.emit('guard', sessionId)
+        return { cleared }
+      }
       case METHOD_REGISTRY.portsList:
         // Read-only: what the last scan found, with a stopped session's leftovers marked. Nothing here reads /proc.
         return this.ports.list() satisfies SessionPorts[]
@@ -1032,7 +1057,7 @@ export class CompanionService {
     // memory here, follows the sessions that still exist.
     let removedHooks = false
     for (const map of [this.hookEvents, this.hookReporters, this.hookObservations, this.hookOrigins, this.hookCompactions,
-      this.usageReadings, this.codexUsageReads, this.terminalNotices, this.repeatStates, this.attentionChanges]) {
+      this.usageReadings, this.guardStops, this.codexUsageReads, this.terminalNotices, this.repeatStates, this.attentionChanges]) {
       for (const sessionId of map.keys()) {
         if (!this.knownSessions.has(sessionId)) {
           if (map === this.hookEvents) removedHooks = true
@@ -1823,6 +1848,29 @@ export class CompanionService {
       // The reading stands whatever becomes of its notice; the next reading at 90% or more decides again.
       await this.usageNotice(reading).catch(() => undefined)
     }
+    return { recorded: true }
+  }
+
+  /**
+   * Story 60.8: keeps the last thing a session's prompt guard stopped or warned about, for the run
+   * that sent it. A prompt that passed clears it. A stopped prompt sent again opens its card again;
+   * a warning the owner closed stays closed while nothing about it changed.
+   */
+  private recordGuard(p: GuardReport): { recorded: boolean } {
+    // Only the live run speaks for the session, as with hook observations.
+    if (this.options.manager.liveIncarnationId(p.sessionId) !== p.incarnationId) return { recorded: false }
+    const earlier = this.guardStops.get(p.sessionId)
+    if (p.outcome === 'pass') {
+      if (earlier !== undefined) {
+        this.guardStops.delete(p.sessionId)
+        this.emit('guard', p.sessionId)
+      }
+      return { recorded: true }
+    }
+    const same = earlier !== undefined && earlier.incarnationId === p.incarnationId && earlier.outcome === p.outcome && earlier.cause === p.cause &&
+      earlier.providerId === p.providerId && earlier.workspace === p.workspace && earlier.host === p.host
+    this.guardStops.set(p.sessionId, { ...p, at: this.iso(), kept: p.outcome === 'warn' && same && earlier.kept })
+    this.emit('guard', p.sessionId)
     return { recorded: true }
   }
 

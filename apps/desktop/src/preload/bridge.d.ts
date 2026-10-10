@@ -43,6 +43,7 @@ import type {
   SessionPorts,
   SessionUsage,
   UsageReading,
+  GuardStop,
   InputDraftRecord,
   InterruptedSessionCohort,
   SessionCohortOfferedResult,
@@ -285,6 +286,13 @@ export interface AiTerminalBridge {
   getUsage(sessionId: string): Promise<SessionUsage>
   /** Read-only: the latest plan reading per agent across all sessions, since a plan belongs to the account. */
   listUsage(): Promise<UsageReading[]>
+  /** Story 60.8: what each live session's prompt guard last stopped or warned about; memory only. */
+  listGuardStops(): Promise<GuardStop[]>
+  /** Keep blocked: the card closes and the session keeps its mark until a prompt passes. */
+  keepGuardStop(sessionId: string): Promise<{ kept: boolean }>
+  clearGuardStop(sessionId: string): Promise<{ cleared: boolean }>
+  /** Allow here: asks about the same session again and, if nothing changed, approves that provider in that workspace. */
+  allowGuardStop(stop: GuardStop): Promise<AgentsOutcome>
   /** Read-only: the local ports each session's programs listen on, as the last /proc scan found them (Story 41.1). */
   listPorts(): Promise<SessionPorts[]>
   /**

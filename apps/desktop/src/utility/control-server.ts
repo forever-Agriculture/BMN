@@ -6,6 +6,8 @@ import { dirname, isAbsolute } from 'node:path'
 import {
   AGENT_ATTENTION_ORIGINS,
   ERROR_CODES,
+  GUARD_AGENTS,
+  GUARD_CAUSES,
   MAX_CONTROL_FRAME_BYTES,
   MAX_PROGRESS_EVIDENCE,
   MAX_USAGE_WINDOWS,
@@ -25,6 +27,9 @@ import {
   type AttentionEvidence,
   type AttentionPrompt,
   type ConversationObservationSource,
+  type GuardAgent,
+  type GuardCause,
+  type GuardReport,
   type HookEventAgent,
   type HookEventEffect,
   type AgentCli,
@@ -155,6 +160,11 @@ export interface ControlHandlers {
     windows: readonly UsageWindow[]
     contextUsedPercent: number | null
   }): Promise<unknown>
+  /**
+   * One prompt-guard decision from a session's own prompt hook (Story 60.8): who and where, never
+   * the prompt. Kept in memory for the reporting run; a `pass` clears what an earlier prompt left.
+   */
+  reportGuard(p: GuardReport): Promise<unknown>
   /** Writes text into the PTY as a bracketed paste; appends '\r' only when submit is true. */
   submitInput(p: { sessionId: string; text: string; submit: boolean }): Promise<void>
   /**
@@ -281,6 +291,7 @@ const RULES = {
   resolution: { min: 1, max: 200, unit: 'characters', controls: 'reject' },
   conversationReference: { min: 36, max: 36, unit: 'characters', controls: 'reject' },
   text: { min: 0, max: MAX_INPUT_TEXT_BYTES, unit: 'bytes', controls: 'allow' },
+  guardLine: { min: 1, max: 600, unit: 'characters', controls: 'reject', strip: true },
   timestamp: { min: 1, max: 64, unit: 'characters', controls: 'reject' }
 } satisfies Record<string, TextRule>
 
@@ -1142,6 +1153,51 @@ export class ControlServer {
           agent: 'claude',
           windows,
           contextUsedPercent
+        })
+      }
+      case 'guard.report': {
+        // Only a session's own prompt hook reports, and only for the run it belongs to.
+        const params = closedParams(rawParams, ['sessionId', 'agent', 'outcome', 'cause', 'line', 'allow', 'workspace', 'folder',
+          'providerId', 'providerName', 'agentName', 'host', 'pid', 'start', 'conversation'])
+        if (scope.kind !== 'session') throw unauthorized('Only a session credential may report its prompt guard')
+        const agent = params.agent
+        if (typeof agent !== 'string' || !(GUARD_AGENTS as readonly string[]).includes(agent)) throw invalid(`agent must be one of ${GUARD_AGENTS.join(', ')}`)
+        const outcome = params.outcome
+        if (outcome !== 'pass' && outcome !== 'stop' && outcome !== 'warn') throw invalid('outcome must be pass, stop or warn')
+        const sessionId = this.target(scope, params)
+        if (outcome === 'pass') {
+          if (Object.keys(params).some((key) => !['sessionId', 'agent', 'outcome'].includes(key))) throw invalid('a pass carries nothing else')
+          return handlers.reportGuard({ sessionId, incarnationId: scope.incarnationId, agent: agent as GuardAgent, outcome })
+        }
+        const cause = params.cause
+        if (typeof cause !== 'string' || !(GUARD_CAUSES as readonly string[]).includes(cause)) throw invalid(`cause must be one of ${GUARD_CAUSES.join(', ')}`)
+        const line = requireText(params, 'line', RULES.guardLine)
+        const folderPath = (key: string): string | null => {
+          const value = readText(params, key, RULES.path)
+          if (value !== undefined && !isAbsolute(value)) throw invalid(`${key} must be an absolute path`)
+          return value ?? null
+        }
+        const providerId = readText(params, 'providerId', RULES.source) ?? null
+        if (providerId !== null && !/^[a-z0-9-]{1,32}$/.test(providerId)) throw invalid('providerId must match [a-z0-9-]{1,32}')
+        const pid = params.pid
+        if (pid !== undefined && (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid < 2)) throw invalid('pid must be a process id')
+        const start = readText(params, 'start', RULES.source) ?? null
+        if (start !== null && !/^\d{1,20}$/.test(start)) throw invalid('start must be a process start time')
+        const conversation = readText(params, 'conversation', RULES.conversationReference) ?? null
+        if (conversation !== null && !CONVERSATION_REFERENCE.test(conversation)) throw invalid('conversation is not a conversation reference')
+        const workspace = folderPath('workspace')
+        const allow = readBoolean(params, 'allow') ?? false
+        // Allow here names a provider and a workspace; a report that offers it without both is not one BMN can act on.
+        if (allow && (cause !== 'public-only' || outcome !== 'stop' || workspace === null || providerId === null || pid === undefined || start === null)) {
+          throw invalid('allow needs a stopped public-only prompt with its provider, workspace and process')
+        }
+        return handlers.reportGuard({
+          sessionId, incarnationId: scope.incarnationId, agent: agent as GuardAgent, outcome, cause: cause as GuardCause, line, allow,
+          workspace, folder: folderPath('folder'), providerId,
+          providerName: readText(params, 'providerName', RULES.label) ?? null,
+          agentName: readText(params, 'agentName', RULES.label) ?? null,
+          host: readText(params, 'host', RULES.apiHost) ?? null,
+          pid: pid ?? null, start, conversation
         })
       }
       case 'input.submit': {

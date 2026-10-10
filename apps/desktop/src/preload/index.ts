@@ -37,6 +37,7 @@ import {
   type SessionPorts,
   type SessionUsage,
   type UsageReading,
+  type GuardStop,
   type BackupManifest,
   type BackupVerifyResult,
   type ControlInfo,
@@ -646,6 +647,19 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   listUsage(): Promise<UsageReading[]> {
     return invokeBridge('aiterm:usage:list', {})
+  },
+  listGuardStops(): Promise<GuardStop[]> {
+    return invokeBridge('aiterm:guard:list', {})
+  },
+  keepGuardStop(sessionId: string): Promise<{ kept: boolean }> {
+    return invokeBridge('aiterm:guard:keep', { sessionId })
+  },
+  clearGuardStop(sessionId: string): Promise<{ cleared: boolean }> {
+    return invokeBridge('aiterm:guard:clear', { sessionId })
+  },
+  allowGuardStop(stop: GuardStop): Promise<AgentsOutcome> {
+    const { agent, pid, start, folder, workspace, providerId, host, conversation } = stop
+    return invokeBridge('aiterm:agents:guard-allow', { stop: { agent, pid, start, folder, workspace, providerId, host, conversation } })
   },
   listPorts(): Promise<SessionPorts[]> {
     return invokeBridge('aiterm:ports:list', {})

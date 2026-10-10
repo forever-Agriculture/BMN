@@ -517,3 +517,60 @@ describe('approving one outside section (60.5 AC3)', () => {
     expect(readApproved().number).toBe(1)
   })
 })
+
+describe('allowing one provider in one workspace (60.8 AC3)', () => {
+  const WORKSPACE = '/synthetic/code/app'
+
+  it('approves exactly that pair as a new version and writes the same entry into the team file', () => {
+    writeRoster(EXAMPLE)
+    approveRoster(shown())
+
+    const generation = approval.allowWorkspace('zai', WORKSPACE)
+
+    const added = generation.data.exceptions.filter((entry) => entry.folder === WORKSPACE)
+    expect(added).toEqual([{ id: expect.stringMatching(/^zai-[0-9a-f]{8}$/), provider: 'zai', folder: WORKSPACE }])
+    expect(generation).toMatchObject({ number: 2, parent: 1, kind: 'approval' })
+    expect(generation.data.exceptions).toHaveLength(2)
+    expect(readValidRoster().data.exceptions).toEqual(generation.data.exceptions)
+    expect(generation.roster_file_hash).toBe(sha256(readFileSync(rosterFile(), 'utf8')))
+    expect(machineDiff(readApproved().data, readValidRoster().data)).toEqual([])
+  })
+
+  it('leaves every other unapproved edit in the team file unapproved', () => {
+    writeRoster(EXAMPLE)
+    approveRoster(shown())
+    writeRoster(edit(EXAMPLE, LUNA_PAWN, LUNA_BISHOP))
+
+    const generation = approval.allowWorkspace('zai', WORKSPACE)
+
+    expect(generation.data.agents.find((agent) => agent.id === 'luna')?.class).toBe('pawn')
+    expect(readFileSync(rosterFile(), 'utf8')).toContain(LUNA_BISHOP)
+    expect(machineDiff(readApproved().data, readValidRoster().data).map((diff) => `${diff.scope}:${diff.id}:${diff.field}`)).toEqual(['agent:luna:class'])
+  })
+
+  it('approves an entry the file already holds for that pair under the file\'s own id', () => {
+    writeRoster(EXAMPLE)
+    approveRoster(shown())
+    const pending = edit(EXAMPLE, 'zai-synthetic: {provider: zai', `zai-mine: {provider: zai, folder: ${WORKSPACE}}\nzai-synthetic: {provider: zai`)
+    writeRoster(pending)
+
+    const generation = approval.allowWorkspace('zai', WORKSPACE)
+
+    expect(generation.data.exceptions.find((entry) => entry.folder === WORKSPACE)?.id).toBe('zai-mine')
+    expect(readFileSync(rosterFile(), 'utf8')).toBe(pending)
+  })
+
+  it('refuses, writing nothing, when nothing is approved, the pair is already approved, the provider is unknown or the file is not valid', () => {
+    writeRoster(EXAMPLE)
+    expect(() => approval.allowWorkspace('zai', WORKSPACE)).toThrow(/nothing is approved yet/)
+    approveRoster(shown())
+    expect(() => approval.allowWorkspace('zai', '/synthetic/EXCEPTION-SENTINEL-FOLDER')).toThrow(/already allowed in that workspace/)
+    expect(() => approval.allowWorkspace('nobody', WORKSPACE)).toThrow(/no provider nobody/)
+    const broken = edit(EXAMPLE, LUNA_PAWN, 'name: Luna\nclass: emperor')
+    writeRoster(broken)
+    expect(() => approval.allowWorkspace('zai', WORKSPACE)).toThrow(/not valid/)
+
+    expect(readFileSync(rosterFile(), 'utf8')).toBe(broken)
+    expect(readApproved().number).toBe(1)
+  })
+})
