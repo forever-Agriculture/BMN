@@ -774,7 +774,15 @@ first approval never commits from the bar alone: it opens a sheet that names eve
 folder, agent and role, and commits from there. Escape
 or Discard drops staged edits; a file that changed meanwhile, or that a link now leads to in
 another folder, is reloaded and nothing is written.
-An edit made outside BMN shows as its own row with **Keep** and **Revert**.
+An edit made outside BMN shows as its own row with **Keep** and **Revert**. The row gives an added
+or removed entry one word, so **Keep** then opens a sheet that lists every value it carries (an
+allowed folder, a provider's answer) and what the change would do, and commits from there.
+**Restore…** waits until such edits are kept or reverted, because the team file follows the
+restored version. A team file that is a link is named with where it points: a change saved from
+these pages replaces the link with a regular file and leaves the file it pointed to alone; the
+rules master's Save sheet says the same. When the approved team can no longer be read, the page
+says so and names the last version that still reads; a version written after the one in effect is
+listed as never having taken effect.
 
 **Asking the team.** `bmn team` prints the approved team; `bmn roster role <role>` the ordered
 chain with each candidate's eligibility. Neither prints your notes or prices.
@@ -787,7 +795,11 @@ from named, non-secret settings only (Codex `config.toml` model and provider key
 `OPENAI_BASE_URL`; Claude's `ANTHROPIC_BASE_URL` from the environment and settings files, an
 unknown host when they disagree; settings are read under `--safe-mode` too, because Claude Code
 2.1.295 still applies their `env` there), never opens an auth file, and reads only the first line
-of a Codex session record to bind a resume. Private work goes only to a provider that allows it.
+of a Codex session record to bind a resume. Files it cannot prove an app skips count as well: a
+`.codex/config.toml` in the working folder or a folder above it, or `/etc/codex`, that names a
+provider or address makes a Codex destination unknown (`HOST_UNKNOWN`), and Claude settings in the
+folders above the working one and in `/etc/claude-code/managed-settings.d` are read like the
+project's own. Private work goes only to a provider that allows it.
 Any installed version of the app passes; one whose version cannot be read is refused private work
 (`HARNESS_UNKNOWN`).
 A public-only destination may receive only a packet of files that match the public commit the
@@ -868,7 +880,12 @@ it would replace, and puts nothing back until you confirm.
 - BMN's reading of where an app sends data was tested against Claude Code 2.1.295 and Codex
   0.161.0. It reads the same named settings on every later version and refuses a changed or
   unknown destination as before, but a version that starts to take its destination from a setting
-  BMN does not read would not be noticed. `accepted_versions` in a team file written under the
+  BMN does not read would not be noticed. For OpenCode BMN reads only its own configuration
+  folder: the model's provider prefix, unknown when `OPENCODE_CONFIG` names another file or the
+  provider entry carries its own address; a project's `opencode.json` is not read.
+- A packet for a public-only destination relies on Claude Code's `--safe-mode` to keep your rules
+  file, memory, skills and hooks out of the call. BMN does not test that itself; run one packet
+  with a marker line in your rules before you turn on a public-only agent. `accepted_versions` in a team file written under the
   earlier rule is still valid and no longer read; Rules → Health removes it with its ×.
 
 ## A brief for agents

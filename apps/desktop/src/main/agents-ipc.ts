@@ -510,6 +510,8 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const shown = shownParam(params)
     const number = numberParam(params)
     return approving(params, () => {
+      // The team file follows the restored version, so edits nobody reviewed would go with it unseen: its sheet never showed them.
+      if ((agentsSnapshot().differences ?? []).length > 0) throw new RosterError('PENDING_CHANGES', 'Keep or revert the changes made outside BMN first.')
       const restored = restoreGeneration(shown, number, seams).number
       return `Version ${number} restored as version ${restored}${fileToApproved() ? ' · the team file still holds later edits; keep or revert each' : ''}`
     })

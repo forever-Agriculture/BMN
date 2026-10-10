@@ -319,26 +319,41 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
 
     phase('an outside role-chain edit: keep it from its row, then revert another')
     await go('Team')
-    const outside = async (edit, action) => {
-      writeFileSync(rosterFile, edit(readFileSync(rosterFile, 'utf8')))
+    const outside = async (edit, action, subject = 'Roles', sheetText = null) => {
+      const before = readFileSync(rosterFile, 'utf8')
+      const next = edit(before)
+      assert.notEqual(next, before, 'the outside edit changes the team file')
+      writeFileSync(rosterFile, next)
       await outsideFocus()
       const row = main.locator('.outside-row', { hasText: 'changed outside BMN' })
       await row.waitFor()
       // A changed order is drawn as steps; the file's own spelling never shows.
-      if (action === 'Keep') {
+      if (action === 'Keep' && subject === 'Roles') {
         assert.equal(await row.locator('.chain').count(), 2, 'the order before and after')
         assert.doesNotMatch(await row.textContent(), /@/)
       }
-      await shot(`team-outside-${action.toLowerCase()}-1280.png`)
-      await row.getByRole('button', { name: `${action} the change to Roles` }).click()
+      if (sheetText !== null && subject !== 'Roles') assert.ok(!(await row.textContent()).includes(sheetText), 'the row gives a new entry one word')
+      await shot(`team-outside-${action.toLowerCase()}-${subject.toLowerCase().replace(/\s+/g, '-')}-1280.png`)
+      await row.getByRole('button', { name: `${action} the change to ${subject}` }).click()
+      if (sheetText !== null) {
+        // The row hides what the change does or what a new entry carries: Keep commits from the sheet that says it.
+        const sheet = ledger.locator('.ledger-sheet')
+        await sheet.getByText(sheetText).first().waitFor()
+        await shot(`team-outside-keep-sheet-${subject.toLowerCase().replace(/\s+/g, '-')}-1280.png`)
+        await sheet.getByRole('button', { name: 'Keep', exact: true }).click()
+      }
       await row.waitFor({ state: 'detached' })
     }
-    await outside((text) => text.replace('focused-reviewer: {candidates: [luna@max, astra@low], then: lead}', 'focused-reviewer: {candidates: [astra@low, luna@max], then: lead}'), 'Keep')
+    await outside((text) => text.replace('focused-reviewer: {candidates: [luna@max, astra@low], then: lead}', 'focused-reviewer: {candidates: [astra@low, luna@max], then: lead}'), 'Keep', 'Roles', 'Focused reviewer would start with Astra instead of Luna')
     assert.deepEqual(approved().roles.find((entry) => entry.id === 'focused-reviewer').candidates, ['astra@low', 'luna@max'])
     const approvedText = readFileSync(rosterFile, 'utf8')
     await outside((text) => text.replace('browser: {candidates: [luna@max], then: lead}', 'browser: {candidates: [luna@max], then: skip}'), 'Revert')
     assert.equal(readFileSync(rosterFile, 'utf8'), approvedText)
-    passed('an outside role-chain edit is kept from its row; another is reverted to the approved bytes (60.5 AC2)')
+    // A workspace allowed outside BMN: Keep names the folder before it commits.
+    const exception = 'zai-synthetic: {provider: zai, folder: /synthetic/EXCEPTION-SENTINEL-FOLDER}'
+    await outside((text) => text.replace(exception, `${exception}\nzai-more: {provider: zai, folder: /synthetic/another-folder}`), 'Keep', 'Allowed workspaces', '/synthetic/another-folder')
+    assert.ok(approved().exceptions.some((entry) => entry.folder === '/synthetic/another-folder'))
+    passed('an outside role-chain edit is kept from the sheet that says what it does; another is reverted to the approved bytes; a workspace allowed outside shows its folder before Keep commits (60.5 AC2)')
 
     phase('60.5 AC6: view and restore an earlier version')
     await go('Team', 'Changes')

@@ -1,5 +1,5 @@
 // MODULE: team-rules-preferences.test.ts - Epic 60.5/60.6 markup: shape and plain words carry meaning, every control is named, no schema word reaches the owner
-import type { AgentsPreview, AgentsSnapshot, RosterAgentShape, RosterDataShape, RulesSnapshot } from '@bmn/protocol'
+import type { AgentsPreview, AgentsSnapshot, RosterAgentShape, RosterDataShape, RosterDiffShape, RulesSnapshot } from '@bmn/protocol'
 import { createElement, createRef } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
@@ -19,8 +19,9 @@ import {
   undoWords,
   type RulesState
 } from './rules-preferences'
-import { Chain, TeamLedger, TeamPreferences, TeamToast, firstApprovalWords, shortDate, type TeamPage } from './team-preferences'
-import { confirmsBeforeCommit, rulesUpdateWords, type TeamState } from './team-state'
+import { Chain, TeamLedger, TeamPreferences, TeamToast, firstApprovalWords, nothingInEffectWords, shortDate, type TeamPage } from './team-preferences'
+import { groupDifferences } from './roster-staging'
+import { confirmsBeforeCommit, rowHidesDetail, rulesUpdateWords, type TeamState } from './team-state'
 
 const noop = (): void => {}
 const later = async (): Promise<void> => {}
@@ -197,6 +198,41 @@ describe('Team › Roles and Changes (60.5 AC5, AC6)', () => {
     expect([...markup.matchAll(/aria-label="Restore version (\d)"/g)].map((match) => match[1])).toEqual(['3'])
     expect(markup).toContain('disabled="" aria-expanded="false" aria-label="View version 2"')
   })
+
+  it('marks a version written after the one in effect as never having taken effect', () => {
+    const markup = pageMarkup({ name: 'changes' }, team({ snapshot: { ...SNAPSHOT, history: [{ number: 5, valid: true, created_at: '2026-10-10T08:00:00.000Z', summary: 'Haiku could be given work' }, ...SNAPSHOT.history] } }))
+    expect(markup).toContain('<b>Never took effect: BMN stopped before this approval finished</b> <span class="line-detail">version 5 ·')
+    expect(markup).not.toContain('Haiku could be given work')
+    expect(markup).toContain('<b>Opus could no longer be given work</b>')
+  })
+
+  it('offers no restore while the team file holds changes made outside BMN, and says where to settle them', () => {
+    const diff: RosterDiffShape = { scope: 'agent', id: 'astra', field: 'model', kind: 'changed', before: { present: true, value: 'model-astra' }, after: { present: true, value: 'model-astra-2' } }
+    const markup = pageMarkup({ name: 'changes' }, team({ outside: groupDifferences([diff], DATA, DATA, []) }))
+    expect(markup).toContain('The team file holds changes made outside BMN. Keep or revert them on Agents before restoring a version.')
+    expect(markup).toContain('<button type="button" class="small" disabled="" aria-label="Restore version 3">')
+    expect(pageMarkup({ name: 'changes' })).toContain('<button type="button" class="small" aria-label="Restore version 3">')
+  })
+
+  it('says when the approved team can no longer be read, and names the last version that still reads', () => {
+    const damaged = team({ approved: null, snapshot: { ...SNAPSHOT, approved: null, approvalProblem: { code: 'STATE_CORRUPT', message: 'generation 4 is missing, unreadable or does not match its hash', lastGood: 3 } } })
+    const page = pageMarkup({ name: 'agents' }, damaged)
+    expect(page).toContain('<span class="faint">The approved team cannot be read</span>')
+    expect(words(page)).toContain('BMN cannot read the approved team, so nothing here is in effect. Version 3 still reads: restore it on Changes, or approve the team again.')
+    expect(words(page)).not.toMatch(SCHEMA_WORDS)
+    expect(words(pageMarkup({ name: 'changes' }, damaged))).toContain('BMN cannot read the approved team, so nothing here is in effect.')
+    expect(nothingInEffectWords(true, null)).toBe('BMN cannot read the approved team, so nothing here is in effect. Approve the team again.')
+    // Never approved reads as before.
+    const fresh = team({ approved: null, snapshot: { ...SNAPSHOT, approved: null, history: [], approvalProblem: { code: 'NOT_APPROVED', message: 'nothing is approved yet', lastGood: null } } })
+    expect(pageMarkup({ name: 'agents' }, fresh)).toContain('<span class="faint">Nothing approved yet</span>')
+    expect(words(pageMarkup({ name: 'agents' }, fresh))).toContain('Nothing here takes effect until you approve the team for the first time.')
+  })
+
+  it('says a linked team file would be replaced by a regular file before any change is saved', () => {
+    const markup = words(pageMarkup({ name: 'agents' }, team({ snapshot: { ...SNAPSHOT, file: { ...SNAPSHOT.file, link: '/home/synthetic/dotfiles/roster.md' } } }))).replace(/\s+/g, ' ')
+    expect(markup).toContain('The team file is a link to ~/dotfiles/roster.md . A change saved from these pages replaces the link with a regular file here; the file it points to stays as it is.')
+    expect(pageMarkup({ name: 'agents' })).not.toContain('is a link to')
+  })
 })
 
 describe('the approval footer (60.5 AC7)', () => {
@@ -264,6 +300,27 @@ describe('the approval footer (60.5 AC7)', () => {
     }))
     expect(words(sheet).replace(/\s+/g, ' ')).toContain('Allowed workspaces Z.ai · workspace: — → /home/synthetic/work Z.ai could receive private work in one more workspace')
     expect(sheet.indexOf('Allowed workspaces')).toBeLessThan(sheet.indexOf('>Sol<'))
+  })
+
+  it('Keep opens the sheet when its row hides what an added entry grants, or a consequence', () => {
+    const added: RosterDiffShape = { scope: 'exceptions', id: 'zai-here', field: null, kind: 'added', after: { present: true, value: { provider: 'zai', folder: '/home/synthetic/work' } } }
+    const field: RosterDiffShape = { scope: 'agent', id: 'astra', field: 'model', kind: 'changed', before: { present: true, value: 'model-astra' }, after: { present: true, value: 'model-astra-2' } }
+    const sentence = 'Z.ai could receive private work in one more workspace'
+    const data = { ...DATA, exceptions: [{ id: 'zai-here', provider: 'zai', folder: '/home/synthetic/work' }] }
+    // The row gives the new entry one word: neither its folder nor what it allows shows there.
+    const row = words(pageMarkup({ name: 'agents' }, team({ data, outside: groupDifferences([added], data, DATA, [sentence]) })))
+    expect(row).toContain('changed outside BMN:')
+    expect(row).not.toContain('/home/synthetic/work')
+    expect(row).not.toContain(sentence)
+    expect([rowHidesDetail({ differences: [added], consequences: [] }), rowHidesDetail({ differences: [field], consequences: [sentence] }), rowHidesDetail({ differences: [field], consequences: [] })]).toEqual([true, true, false])
+    // So Keep commits from the sheet, which names the folder and says what it allows.
+    const sheet = words(ledgerMarkup(team({
+      data, outside: groupDifferences([added], data, DATA, [sentence]),
+      confirmation: { request: { kind: 'sections', scope: ['exceptions'] }, title: 'Keep the change to Allowed workspaces', action: 'Keep',
+        preview: { valid: true, errors: [], differences: [added], teamUpdate: [], consequences: [sentence] } }
+    }))).replace(/\s+/g, ' ')
+    expect(sheet).toContain('Z.ai · workspace: — → /home/synthetic/work')
+    expect(sheet).toContain(sentence)
   })
 
   it('Undo shows what each rules file would become and waits for the owner; nothing is put back unasked', () => {
@@ -368,6 +425,13 @@ const rulesMarkup = (page: 'editor' | 'health', state: RulesState = rules(), tea
 
 describe('Rules › Editor (60.6 AC1–AC3)', () => {
   const markup = rulesMarkup('editor')
+
+  it('says a linked rules file would be replaced by a regular file, on the sheet that saves it', () => {
+    const plan = { valid: true, errors: [], diff: '--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new', expectedHash: 'a'.repeat(64), expectedLink: '/home/synthetic/dotfiles/global-rules.md', expectedDirectory: '/home/synthetic/.config/bmn/agents', renderings: [] }
+    const linked = words(rulesMarkup('editor', rules({ pending: { kind: 'save', text: 'new', plan } }))).replace(/\s+/g, ' ')
+    expect(linked).toContain('The rules file is a link to ~/dotfiles/global-rules.md . This replaces the link with a regular file here; the file it points to stays as it is.')
+    expect(rulesMarkup('editor', rules({ pending: { kind: 'save', text: 'new', plan: { ...plan, expectedLink: null } } }))).not.toContain('is a link to')
+  })
 
   it('heads the page with the save and install dates and, since an app differs, the dot, the count and Install…', () => {
     expect(markup).toContain(`<span class="faint">Saved ${shortDate('2026-10-09T21:50:00.000Z')} · last installed ${shortDate('2026-10-08T14:02:00.000Z')}</span>`)

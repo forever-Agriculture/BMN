@@ -197,6 +197,23 @@ describe('an approval that changes the Team phrase (60.4 AC6)', () => {
   })
 })
 
+describe('restoring while the team file holds changes nobody reviewed', () => {
+  it('refuses, so the restore never puts the file back over edits its sheet did not show', async () => {
+    writeFileSync(rosterFile(), EXAMPLE)
+    await call<AgentsOutcome>('agents:approve', { shown: await shown() })
+    const state = await snapshot()
+    await call<AgentsOutcome>('agents:save', { shown: shownOf(state), data: activate(state.file.data as RosterDataShape, 'haiku') })
+    const edited = readFileSync(rosterFile(), 'utf8').replace('browser: {candidates: [luna@max], then: lead}', 'browser: {candidates: [luna@max], then: skip}')
+    writeFileSync(rosterFile(), edited)
+    const refused = await call<AgentsOutcome>('agents:restore', { shown: await shown(), number: 1 })
+    expect(refused).toMatchObject({ ok: false, code: 'PENDING_CHANGES', message: 'Keep or revert the changes made outside BMN first.', snapshot: { approved: { generation: 2 } } })
+    expect(readFileSync(rosterFile(), 'utf8')).toBe(edited)
+    // Reverted, the same restore goes through.
+    await call<AgentsOutcome>('agents:revert', { shown: await shown(), scope: null })
+    expect(await call<AgentsOutcome>('agents:restore', { shown: await shown(), number: 1 })).toMatchObject({ ok: true, message: 'Version 1 restored as version 3' })
+  })
+})
+
 describe('restoring past an agent that was added since (60.2 AC6)', () => {
   it('approves the earlier version, leaves the team file alone and says what still shows', async () => {
     writeFileSync(rosterFile(), EXAMPLE)

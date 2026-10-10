@@ -338,6 +338,16 @@ function Targets(props: { targets: readonly RulesPlanTarget[]; home: string | nu
   )
 }
 
+/** Saving writes a regular file in place of a link, never through it (R60-NFR2): say so before it happens. */
+export function LinkNote(props: { link: string | null | undefined; home: string | null; what: string }): React.JSX.Element | null {
+  if (props.link === null || props.link === undefined) return null
+  return (
+    <p className="preferences-help">
+      {props.what} is a link to <span className="path mono" title={props.link}>{displayPath(props.link, props.home)}</span>. This replaces the link with a regular file here; the file it points to stays as it is.
+    </p>
+  )
+}
+
 function PendingSheet(props: { rules: RulesState }): React.JSX.Element | null {
   const { rules } = props
   const pending = rules.pending
@@ -350,6 +360,7 @@ function PendingSheet(props: { rules: RulesState }): React.JSX.Element | null {
         <Sheet {...common} title={pending.plan.valid ? `Save the rules · ${diffSummary(pending.plan.diff)}` : 'These rules cannot be saved'} action="Save" ready={pending.plan.valid && pending.plan.diff !== ''}
           note={pending.plan.valid ? 'The text before this save is kept under Earlier versions. Nothing is installed.' : 'An app could not read them as written.'}>
           <Issues issues={pending.plan.errors} />
+          <LinkNote link={pending.plan.expectedLink} home={home} what="The rules file" />
           {pending.plan.diff ? <pre className="diff">{diffBody(pending.plan.diff)}</pre> : null}
         </Sheet>
       )
@@ -372,6 +383,7 @@ function PendingSheet(props: { rules: RulesState }): React.JSX.Element | null {
       return (
         <Sheet {...common} title={`Restore this version · ${diffSummary(pending.plan.diff)}`} action="Restore" ready={pending.plan.text !== undefined && pending.plan.diff !== ''}
           note="The current text is kept under Earlier versions. Nothing is installed.">
+          <LinkNote link={pending.plan.expectedLink} home={home} what="The rules file" />
           {pending.plan.diff ? <pre className="diff">{diffBody(pending.plan.diff)}</pre> : null}
         </Sheet>
       )

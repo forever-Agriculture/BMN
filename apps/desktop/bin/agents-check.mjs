@@ -101,6 +101,16 @@ function listDirectory(path) {
   return readdirSync(path, { withFileTypes: true })
 }
 
+/** The names in a folder, or none when it does not exist. */
+function optionalNames(path) {
+  try {
+    return listDirectory(path).map((entry) => entry.name).sort()
+  } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return []
+    throw new Refusal('HOST_UNKNOWN', `cannot read ${path} (${error.code})`)
+  }
+}
+
 function optionalText(path) {
   try {
     return readText(path)
@@ -370,11 +380,50 @@ function truthy(value) {
   return value !== undefined && value !== '' && value !== '0' && value.toLowerCase?.() !== 'false'
 }
 
+/** The config.toml keys that say where Codex sends data. */
+const CODEX_DESTINATION_KEYS = ['model_provider', 'profile', 'openai_base_url', 'chatgpt_base_url']
+
+/** Each folder from `start` up to the root. */
+function foldersAbove(start) {
+  const folders = []
+  for (let dir = start; ; dir = dirname(dir)) {
+    folders.push(dir)
+    if (dirname(dir) === dir) return folders
+  }
+}
+
+/**
+ * Config files Codex may load besides the user's config.toml: the machine's own, and a
+ * `.codex/config.toml` in a working folder or any folder above it. BMN does not model how these
+ * combine, so one that names a destination makes the destination unknown.
+ */
+function otherCodexConfig(folders, userConfig) {
+  const same = (path) => {
+    if (userConfig === null) return false
+    try {
+      return realpathSync(path) === realpathSync(userConfig)
+    } catch {
+      return path === userConfig
+    }
+  }
+  const paths = ['/etc/codex/config.toml', '/etc/codex/managed_config.toml', ...folders.flatMap(foldersAbove).map((dir) => join(dir, '.codex/config.toml'))]
+  for (const path of new Set(paths)) {
+    const text = optionalText(path)
+    if (text === null || same(path)) continue
+    const config = readCodexConfig(text)
+    const decides = config.unreadable.length > 0 || CODEX_DESTINATION_KEYS.some((key) => config.top[key] !== undefined) || Object.keys(config.providers).length > 0
+      || Object.values(config.profiles).some((profile) => CODEX_DESTINATION_KEYS.some((key) => profile[key] !== undefined))
+    if (decides) return path
+  }
+  return null
+}
+
 /**
  * Where a `codex exec` goes, with the names of the sources that decided it: `-c` overrides, then
- * the selected profile, then config.toml, then OPENAI_BASE_URL in the dispatch environment.
+ * the selected profile, then config.toml, then OPENAI_BASE_URL in the dispatch environment. `cwd`
+ * is the folder the dispatch starts in; with `-C` Codex works in another, and both are searched.
  */
-export function resolveCodexRoute(parsed, environment) {
+export function resolveCodexRoute(parsed, environment, cwd = null) {
   const env = dispatchEnvironment(parsed, environment)
   const codexHome = env.CODEX_HOME || (env.HOME ? `${env.HOME}/.codex` : null)
   const sources = []
@@ -383,6 +432,11 @@ export function resolveCodexRoute(parsed, environment) {
   const overrides = {}
   const providerOverrides = {}
   let unresolvable = config.unreadable.length > 0 ? `config.toml ${config.unreadable[0]} cannot be read` : null
+  const other = otherCodexConfig(cwd === null ? [] : [cwd, ...(parsed.cd === undefined ? [] : [isAbsolute(parsed.cd) ? parsed.cd : join(cwd, parsed.cd)])], configPath)
+  if (other !== null) {
+    unresolvable ??= `${other} also says where Codex sends data, and BMN cannot tell which file wins`
+    sources.push(other)
+  }
   for (const entry of parsed.config) {
     const equals = entry.indexOf('=')
     if (equals === -1) return { unsupported: `-c ${entry} is not key=value` }
@@ -476,6 +530,8 @@ function settingsEnv(text, name) {
  * --safe-mode does not skip a file's `env`: Claude Code 2.1.295 under --safe-mode still sent requests to
  * a user settings ANTHROPIC_BASE_URL (loopback probe, 2026-10-09). BMN cannot prove which source wins
  * in every version, so it reads them all: one value everywhere is that host, disagreeing values are unknown.
+ * The same goes for files it cannot prove are skipped: settings in the folders above the working one,
+ * and the machine's managed-settings.d.
  */
 export function resolveClaudeRoute(parsed, environment, cwd) {
   const env = dispatchEnvironment(parsed, environment)
@@ -483,6 +539,13 @@ export function resolveClaudeRoute(parsed, environment, cwd) {
   const files = [['managed settings', '/etc/claude-code/managed-settings.json']]
   if (configDir !== null) files.push(['user settings', `${configDir}/settings.json`])
   files.push(['project settings', `${cwd}/.claude/settings.json`], ['local settings', `${cwd}/.claude/settings.local.json`])
+  for (const dir of foldersAbove(cwd).slice(1)) {
+    if (configDir !== null && join(dir, '.claude') === configDir) continue
+    files.push([`settings in ${dir}`, `${dir}/.claude/settings.json`], [`local settings in ${dir}`, `${dir}/.claude/settings.local.json`])
+  }
+  for (const name of optionalNames('/etc/claude-code/managed-settings.d')) {
+    if (name.endsWith('.json')) files.push([`managed settings ${name}`, `/etc/claude-code/managed-settings.d/${name}`])
+  }
   const values = []
   let reason = null
   const take = (source, vars) => {
@@ -521,17 +584,29 @@ export function resolveClaudeRoute(parsed, environment, cwd) {
   }
 }
 
-/** OpenCode's configured model and provider prefix, for inspection only. */
+/**
+ * OpenCode's configured model and provider prefix, for inspection only. A configuration named by
+ * the environment, or a provider entry that carries its own address, could send data somewhere
+ * the prefix does not say, so either reads as unknown. A project's own opencode.json is not read.
+ */
 function inspectOpenCode(environment) {
+  for (const name of ['OPENCODE_CONFIG', 'OPENCODE_CONFIG_CONTENT']) {
+    if (environment[name]) return { basis: 'unknown', provider: null, host: null, reason: `${name} names another OpenCode configuration`, sources: [name] }
+  }
   const folder = environment.OPENCODE_CONFIG_DIR || `${environment.XDG_CONFIG_HOME || `${environment.HOME ?? homedir()}/.config`}/opencode`
   for (const name of ['opencode.json', 'opencode.jsonc']) {
     const text = optionalText(`${folder}/${name}`)
     if (text === null) continue
     const stripped = text.replace(/("(?:[^"\\]|\\.)*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (match, string) => string ?? '').replace(/,(\s*[}\]])/g, '$1')
     try {
-      const model = JSON.parse(stripped).model
+      const config = JSON.parse(stripped)
+      const model = config?.model
       if (typeof model !== 'string') return { basis: 'unknown', provider: null, host: null, reason: `${name} names no model`, sources: [name] }
       const provider = model.includes('/') ? model.slice(0, model.indexOf('/')) : null
+      const entry = provider !== null && config.provider !== null && typeof config.provider === 'object' ? config.provider[provider] : undefined
+      if (entry !== undefined && (entry === null || typeof entry !== 'object' || entry.api !== undefined || entry.npm !== undefined || entry.options?.baseURL !== undefined)) {
+        return { basis: 'unknown', provider, host: null, reason: `${name} gives ${provider} its own address`, sources: [`${name} provider.${provider}`] }
+      }
       return { basis: provider === null ? 'unknown' : 'default', provider, host: provider === null ? null : `default:${provider}`, model, sources: [`${name} model`], inspection_only: true }
     } catch {
       return { basis: 'unknown', provider: null, host: null, reason: `${name} cannot be read`, sources: [name] }
@@ -1187,7 +1262,7 @@ export function evaluate(inputs, {
     }
     const cwd = canonicalDirectory(inputs.cwd ?? processCwd, processCwd)
     const resolution = parsed.harness === 'codex'
-      ? resolveCodexRoute(parsed, environment)
+      ? resolveCodexRoute(parsed, environment, cwd ?? processCwd)
       : resolveClaudeRoute(parsed, environment, cwd ?? processCwd)
     if (resolution.unsupported) refuse('ROUTE_UNSUPPORTED', resolution.unsupported)
     const version = harnessVersion(parsed.command, dispatchEnvironment(parsed, environment))
@@ -1543,7 +1618,7 @@ export function inspectRoute(agent, argv, environment, processCwd, data = null) 
       ? (agent.harness === 'codex' ? { harness: 'codex', command: 'codex', envMode: 'inherit', assignments: {}, config: [] } : { harness: 'claude', command: 'claude', envMode: 'inherit', assignments: {}, addDir: [] })
       : parseDispatch(argv)
     if (parsed.unsupported) return { harness: agent.harness, unsupported: parsed.unsupported }
-    const resolution = parsed.harness === 'codex' ? resolveCodexRoute(parsed, environment) : resolveClaudeRoute(parsed, environment, processCwd)
+    const resolution = parsed.harness === 'codex' ? resolveCodexRoute(parsed, environment, processCwd) : resolveClaudeRoute(parsed, environment, processCwd)
     if (resolution.unsupported) return { harness: parsed.harness, unsupported: resolution.unsupported }
     const version = harnessVersion(parsed.command, dispatchEnvironment(parsed, environment))
     result = {

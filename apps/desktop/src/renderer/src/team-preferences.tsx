@@ -252,10 +252,16 @@ function AgentsPage(props: { team: TeamState; data: RosterDataShape; go(page: Te
   )
   return (
     <>
-      <PageHead title="Team" status={team.snapshot?.approved ? `Approved ${shortDate(team.snapshot.approved.createdAt)}` : 'Nothing approved yet'}>
+      <PageHead title="Team" status={team.snapshot?.approved ? `Approved ${shortDate(team.snapshot.approved.createdAt)}` : damagedApproval(team) ? 'The approved team cannot be read' : 'Nothing approved yet'}>
         <button type="button" onClick={() => props.go({ name: 'new' })}>New agent</button>
       </PageHead>
       {team.snapshot?.approved || team.hasStaged ? null : <FirstApproval team={team} />}
+      {team.snapshot?.file.link ? (
+        <p className="page-note">
+          The team file is a link to <span className="path mono" title={team.snapshot.file.link}>{displayPath(team.snapshot.file.link, team.snapshot.home)}</span>.
+          {' '}A change saved from these pages replaces the link with a regular file here; the file it points to stays as it is.
+        </p>
+      ) : null}
       {team.outside.groups.map((group) => <OutsideRow key={group.key} group={group} team={team} />)}
       {data.agents.length === 0 ? <p className="page-note">No agents yet. New agent adds the first one.</p> : null}
       {cards('Active', groups.active, 'Prices per M tokens, in / out')}
@@ -265,15 +271,28 @@ function AgentsPage(props: { team: TeamState; data: RosterDataShape; go(page: Te
   )
 }
 
-/** With nothing approved, no agent, role or provider answer takes effect: say so and offer the first approval. */
+/** Whether an approval exists that BMN can no longer read: damaged or altered, so nothing is in effect. */
+function damagedApproval(team: TeamState): boolean {
+  return team.snapshot?.approved === null && team.snapshot.approvalProblem?.code === 'STATE_CORRUPT'
+}
+
+/** What the owner reads while nothing is in effect: never approved, or approved and no longer readable. */
+export function nothingInEffectWords(damaged: boolean, lastGood: number | null): string {
+  if (!damaged) return 'Nothing here takes effect until you approve the team for the first time.'
+  return `BMN cannot read the approved team, so nothing here is in effect. ${lastGood === null ? 'Approve the team again.' : `Version ${lastGood} still reads: restore it on Changes, or approve the team again.`}`
+}
+
+/** With nothing approved, no agent, role or provider answer takes effect: say so, and why, and offer the approval. */
 function FirstApproval(props: { team: TeamState }): React.JSX.Element {
+  const damaged = damagedApproval(props.team)
+  const title = damaged ? 'Approve the team again' : 'Approve the team for the first time'
   return (
     <div className="outside-row">
       <Dot label="Needs you" />
-      <span>Nothing here takes effect until you approve the team for the first time.</span>
+      <span>{nothingInEffectWords(damaged, props.team.snapshot?.approvalProblem?.lastGood ?? null)}</span>
       <span className="actions">
         <button type="button" className="primary small" disabled={props.team.busy}
-          onClick={() => void props.team.requestApproval({ kind: 'file' }, { title: 'Approve the team for the first time', action: 'Approve' }, true)}>Approve…</button>
+          onClick={() => void props.team.requestApproval({ kind: 'file' }, { title, action: 'Approve' }, true)}>Approve…</button>
       </span>
     </div>
   )
@@ -709,12 +728,17 @@ function ChangesPage(props: { team: TeamState }): React.JSX.Element {
   const history = team.snapshot?.history ?? []
   const current = team.snapshot?.approved?.generation ?? null
   const roleIds = roleIdsOf(team.data, team.approved)
+  // BMN writes a version, then puts it into effect; one written after the version in effect never got that far.
+  const unfinished = (entry: AgentsGenerationSummary): boolean => current !== null && entry.number > current
+  const outside = team.outside.groups.length > 0
   const title = (entry: AgentsGenerationSummary): string => !entry.valid ? 'This version cannot be read'
+    : unfinished(entry) ? 'Never took effect: BMN stopped before this approval finished'
     : entry.summary !== undefined ? summaryWords(entry.summary, roleIds) : entry.earlier_schema === undefined ? 'Approved' : 'Approved under an earlier layout'
   return (
     <>
       <PageHead title="Changes" status="Every approved version of the team" />
-      {history.length === 0 ? <FirstApproval team={team} /> : null}
+      {history.length === 0 || damagedApproval(team) ? <FirstApproval team={team} /> : null}
+      {outside ? <p className="page-note">The team file holds changes made outside BMN. Keep or revert them on Agents before restoring a version.</p> : null}
       {history.map((entry) => (
         <div key={entry.number} className="role">
           <div className="list-line">
@@ -723,7 +747,7 @@ function ChangesPage(props: { team: TeamState }): React.JSX.Element {
               <button type="button" className="small" disabled={!entry.valid} aria-expanded={viewing === entry.number} aria-label={`View version ${entry.number}`}
                 onClick={() => setViewing(viewing === entry.number ? null : entry.number)}>{viewing === entry.number ? 'Close' : 'View'}</button>
               {entry.valid && entry.earlier_schema === undefined && entry.number !== current ? (
-                <button type="button" className="small" disabled={team.busy || team.hasStaged} aria-label={`Restore version ${entry.number}`}
+                <button type="button" className="small" disabled={team.busy || team.hasStaged || outside} aria-label={`Restore version ${entry.number}`}
                   onClick={() => void team.requestApproval({ kind: 'restore', number: entry.number }, { title: `Restore version ${entry.number}`, action: 'Restore' }, true)}>Restore…</button>
               ) : null}
             </span>

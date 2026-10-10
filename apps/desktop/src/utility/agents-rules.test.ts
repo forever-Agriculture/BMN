@@ -234,6 +234,24 @@ describe('install transactions and restore (60.4 AC3-AC4)', () => {
     expect(readFileSync(join(home, '.config/bmn/agents/global-rules.md'), 'utf8')).toBe(MASTER)
   })
 
+  it('gives OpenCode its full rules once its inspected destination may see private work, and refuses when its configuration gives the provider another address', async () => {
+    approve(edit(EXAMPLE, 'opencode-go: {name: OpenCode Go, hosts: [], private_work: public_only}', 'opencode-go: {name: OpenCode Go, hosts: [], private_work: allowed}'))
+    mkdirSync(join(home, '.config/opencode'), { recursive: true })
+    const config = join(home, '.config/opencode/opencode.json')
+    writeFileSync(config, '{ "model": "opencode-go/kimi-k3" }')
+    // No version is read for OpenCode: BMN never runs it, and its destination is read from its configuration.
+    expect(await installRules(['opencode'], { yes: true, environment: env })).toMatchObject({ code: 'OK', written: [{ harness: 'opencode', kind: 'full' }] })
+    expect(readFileSync(target.opencode(), 'utf8')).toContain('OpenCode-only rule.')
+    expect(readFileSync(target.opencode(), 'utf8')).toContain('Plain rule for everyone.')
+    writeMasterFile(`${MASTER}\nOne more rule.\n`)
+    writeFileSync(config, '{ "model": "opencode-go/kimi-k3", "provider": { "opencode-go": { "options": { "baseURL": "https://proxy.example.test/v1" } } } }')
+    const moved = await installRules(['opencode'], { yes: true, environment: env })
+    expect(moved).toMatchObject({ code: 'ROUTE_CHANGED', message: expect.stringContaining('opencode.json gives opencode-go its own address') })
+    expect(readFileSync(target.opencode(), 'utf8')).not.toContain('One more rule.')
+    writeFileSync(config, '{ "model": "opencode-go/kimi-k3" }')
+    expect((await installRules(['opencode'], { yes: true, environment: { ...env, OPENCODE_CONFIG: join(home, 'other.json') } })).code).toBe('ROUTE_CHANGED')
+  })
+
   it('refuses a full rendering when the route changed', async () => {
     const result = await installRules(['codex'], { yes: true, environment: { ...env, OPENAI_BASE_URL: 'https://proxy.example.test/v1' } })
     expect(result.code).toBe('ROUTE_CHANGED')

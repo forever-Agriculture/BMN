@@ -236,6 +236,27 @@ describe('destination resolution (60.3 AC3-AC4)', () => {
     expect(check({ agent: 'fable', argv }).code).toBe('HOST_UNKNOWN')
   })
 
+  it('a config file BMN cannot combine with the user\'s own never leaves the destination guessed', () => {
+    // Codex may also load a .codex/config.toml from the working folder or one above it.
+    mkdirSync(join(workspace, '.codex'))
+    writeFileSync(join(workspace, '.codex/config.toml'), 'model_reasoning_summary = "auto"\n')
+    expect(check({ argv: ASTRA_REVIEW(workspace) }).verdict).toBe('PASS')
+    writeFileSync(join(workspace, '.codex/config.toml'), 'model_provider = "proxy"\n[model_providers.proxy]\nbase_url = "https://proxy.example.test/v1"\n')
+    for (const folder of [workspace, join(workspace, 'src')]) {
+      const project = check({ argv: ASTRA_REVIEW(folder) })
+      expect(project).toMatchObject({ verdict: 'REFUSED', code: 'HOST_UNKNOWN' })
+      expect(project.message).toContain(`${workspace}/.codex/config.toml also says where Codex sends data`)
+    }
+    rmSync(join(workspace, '.codex'), { recursive: true })
+    expect(check({ argv: ASTRA_REVIEW(join(workspace, 'src')) }).verdict).toBe('PASS')
+    // Claude Code: settings in a folder above the working one count like the project's own.
+    mkdirSync(join(workspace, '.claude'))
+    writeFileSync(join(workspace, '.claude/settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'https://proxy.example.test' } }))
+    const above = check({ agent: 'fable', argv: FABLE_PACKET('rules'), cwd: join(workspace, 'src') })
+    expect(above).toMatchObject({ verdict: 'REFUSED', code: 'HOST_MISMATCH' })
+    expect(above.message).toContain('proxy.example.test')
+  })
+
   it('an explicit host names the provider that lists it, and an approved host must match exactly', () => {
     const glm = check({ agent: 'glm', role: 'helper', argv: GLM() })
     // The destination is known and matches; the provider's answer is what refuses private work.
@@ -1057,6 +1078,8 @@ process.on('exit', () => fs.writeFileSync(${JSON.stringify(join(home, 'reads.log
     const allowed = [
       new RegExp(`^${home}/\\.config/bmn/agents/(roster\\.md|state/current|state/generations/\\d+\\.json|state/generations|state/visibility/[0-9a-f]{64}\\.json)$`),
       new RegExp(`^${home}/\\.codex/config\\.toml$`),
+      // Config files Codex may also load: the machine's, and one in the working folder or a folder above it.
+      /^\/etc\/codex\/(config|managed_config)\.toml$/, /^(\/[^/]+)*\/\.codex\/config\.toml$/,
       new RegExp(`^${workspace}(/prompt\\.md)?$`),
       // The workspace's root: is there a .git here or in a folder above?
       /^(\/[^/]+)*\/\.git$/,

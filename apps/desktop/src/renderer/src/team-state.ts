@@ -90,6 +90,15 @@ export function confirmsBeforeCommit(always: boolean, firstApproval: boolean, ru
   return always || firstApproval || rulesFiles > 0
 }
 
+/**
+ * Whether keeping an outside change would commit more than its row shows. The row gives an added
+ * or removed entry one word and never a consequence sentence, so those open the sheet, which lists
+ * every value the entry carries (an exception's folder, a provider's answer) and each sentence.
+ */
+export function rowHidesDetail(preview: Pick<AgentsPreview, 'differences' | 'consequences'>): boolean {
+  return preview.consequences.length > 0 || preview.differences.some((difference) => difference.field === null)
+}
+
 /** "Rules updated in 2 apps", with what was left for Install when a file changed meanwhile. */
 export function rulesUpdateWords(update: NonNullable<Extract<AgentsOutcome, { ok: true }>['rulesUpdate']>): string {
   const written = update.written.length
@@ -255,7 +264,8 @@ export function useTeamState(): TeamState {
       setNotice({ ok: false, text: 'This would not be a valid team; nothing was changed.', issues: result.errors })
       return
     }
-    if (confirmsBeforeCommit(always, snapshot?.approved === null, result.teamUpdate.length)) setConfirmation({ request, preview: result, ...words })
+    const hidden = request.kind === 'sections' && rowHidesDetail(result)
+    if (confirmsBeforeCommit(always || hidden, snapshot?.approved === null, result.teamUpdate.length)) setConfirmation({ request, preview: result, ...words })
     else await run(request, [])
   }
 
