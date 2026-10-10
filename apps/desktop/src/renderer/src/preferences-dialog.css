@@ -1537,6 +1537,69 @@
   resize: none;
 }
 
+/* The Model field: any text, with the names BMN knows offered in a solid panel under it. */
+.preferences-dialog .model-field {
+  position: relative;
+  display: flex;
+  flex: 1 1 100%;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  max-width: 360px;
+}
+
+.preferences-dialog .model-list {
+  position: absolute;
+  top: 36px;
+  left: 0;
+  z-index: 5;
+  width: 100%;
+  max-height: 280px;
+  padding: 4px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--selected);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 60%);
+}
+
+.preferences-dialog .model-group {
+  padding: 8px 10px 3px;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.preferences-dialog .model-option {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 12px;
+  padding: 5px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.preferences-dialog .model-option.active {
+  background: var(--hover);
+}
+
+.preferences-dialog .model-option .mono {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.preferences-dialog .model-option small {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.preferences-dialog .model-none {
+  padding: 8px 10px;
+  color: var(--muted);
+}
+
 .preferences-dialog .insert {
   position: relative;
 }

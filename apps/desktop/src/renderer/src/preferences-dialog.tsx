@@ -23,6 +23,7 @@ import { HistoryPreferences } from './history-preferences'
 import { TeamLedger, TeamPreferences, TeamToast, type TeamPage } from './team-preferences'
 import { useTeamState } from './team-state'
 import { RulesPreferences, useRulesState } from './rules-preferences'
+import type { ReportedModel } from './model-suggestions'
 import { Dot, RulesIcon, TeamIcon } from './roster-marks'
 import { createHookCheckRunner } from './hook-check-runner'
 import { parseTelegramForm, type TelegramFormFields } from './telegram-form'
@@ -119,6 +120,8 @@ export function PreferencesDialog(props: {
   suggestVocabulary(): { ok: true; words: string[] } | { ok: false; reason: string }
   /** Why the gear shows a dot for Telegram, or null. */
   telegramCue?: string | null
+  /** The model names apps reported in sessions that are running now; the Team pages offer them. */
+  reportedModels?: readonly ReportedModel[]
 }): React.JSX.Element {
   const onSettings = useRef(props.onSettings)
   onSettings.current = props.onSettings
@@ -491,7 +494,7 @@ export function PreferencesDialog(props: {
         ))}
       </nav>
       <main className="preferences-main" ref={main}>
-      {parent === 'team' ? <div className="preferences-page team-page"><TeamPreferences team={team} page={shownTeamPage} apps={rules.snapshot?.apps ?? null} go={goTeam} /></div> : null}
+      {parent === 'team' ? <div className="preferences-page team-page"><TeamPreferences team={team} page={shownTeamPage} apps={rules.snapshot?.apps ?? null} reported={props.reportedModels ?? []} go={goTeam} /></div> : null}
       {parent === 'rules' ? <div className="preferences-page rules-page"><RulesPreferences rules={rules} team={team} page={page === 'health' ? 'health' : 'editor'} /></div> : null}
       {pageOf('appearance', <>
       <section className="preferences-section">

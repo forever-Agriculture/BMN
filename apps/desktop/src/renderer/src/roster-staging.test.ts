@@ -19,6 +19,7 @@ import {
   groupDifferences,
   idFor,
   landingFor,
+  modelTwin,
   moveAgent,
   moveCandidate,
   newAgentConsequence,
@@ -246,6 +247,20 @@ describe('agents (60.5 AC2–AC4)', () => {
     expect([unrecordedBasis('claude', 'anthropic', inspected), unrecordedBasis('claude', 'zai', inspected), unrecordedBasis('claude', 'anthropic', null)]).toEqual(['observed-default', 'owner-declared', 'owner-declared'])
     // A destination already recorded is never rewritten by a move.
     expect(moveAgent(DATA, 'astra', 'claude', '', 'public_only', inspected).harness_routes).toEqual(DATA.harness_routes)
+  })
+
+  it('a new agent on a model the team already runs takes over what was recorded about that model', () => {
+    const priced: RosterDataShape = { ...DATA, agents: DATA.agents.map((entry) => (entry.id === 'astra' ? { ...entry, price: { input: 10, output: 40, source: 'https://prices.example.test/astra', as_of: '2026-10-01' }, context_window: 400000 } : entry)) }
+    const astra = find(priced, 'astra')
+    expect(modelTwin(priced, 'codex', 'openai', ` ${astra.model} `)?.id).toBe('astra')
+    // Another app, another provider or another name is another model as far as price and capacity go.
+    expect([modelTwin(priced, 'claude', 'openai', astra.model), modelTwin(priced, 'codex', 'zai', astra.model), modelTwin(priced, 'codex', 'openai', 'model-else'), modelTwin(priced, 'codex', 'openai', '')]).toEqual([undefined, undefined, undefined, undefined])
+    const second = addAgent(priced, { name: 'Astra Two', class: 'bishop', harness: 'codex', model: astra.model, host: '', privateWork: 'allowed', roles: [], efforts: ['low'] })
+    expect(find(second.data, second.id)).toMatchObject({ price: astra.price, context_window: 400000 })
+    // The limit is the owner's setting for one agent and is never copied.
+    expect(find(second.data, second.id).context_limit).toBeUndefined()
+    const other = addAgent(priced, { name: 'Elsewhere', class: 'bishop', harness: 'codex', model: astra.model, host: 'llm.internal.test', privateWork: 'allowed', roles: [], efforts: ['low'] })
+    expect(find(other.data, other.id).price).toBeUndefined()
   })
 
   it('moves an agent to another app or host, onto the provider that reaches', () => {

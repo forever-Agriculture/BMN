@@ -20,6 +20,8 @@ import {
   type RulesState
 } from './rules-preferences'
 import { Chain, TeamLedger, TeamPreferences, TeamToast, firstApprovalWords, hostKind, nothingInEffectWords, outsideCountWords, shortDate, type TeamPage } from './team-preferences'
+import { ModelList } from './model-field'
+import { modelSuggestions } from './model-suggestions'
 import { groupDifferences } from './roster-staging'
 import { confirmsBeforeCommit, rowHidesDetail, rulesUpdateWords, type TeamState } from './team-state'
 
@@ -201,6 +203,49 @@ describe('Team › an agent, New agent (60.5 AC3, AC4)', () => {
       ['Agent app', 'Model', 'Host', 'Private work', 'Context limit', 'Name', 'Class', 'Notes', 'Roles', 'Efforts'])
     expect(markup).toContain('This agent may receive private work, like every agent on Anthropic.')
     expect(markup).toContain('<button type="button" class="primary" disabled="">Add to team</button>')
+  })
+})
+
+describe('the Model field (60.5: suggestions)', () => {
+  it('takes any name, is announced as a list the owner can open, and says where the current name came from', () => {
+    const page = pageMarkup({ name: 'agent', id: 'sol' })
+    expect(page).toMatch(/<input class="field mono" role="combobox" aria-label="Model" aria-autocomplete="list" aria-expanded="false" aria-controls="[^"]+" aria-describedby="[^"]+"[^>]* value="model-sol"\/>/)
+    expect(page).toContain('aria-live="polite">From the approved team. BMN does not check that Codex takes this name.</p>')
+    // Closed, the panel is not in the page at all: nothing is read or drawn until the owner opens it.
+    expect(page).not.toContain('role="listbox"')
+    const fresh = pageMarkup({ name: 'new' })
+    expect(fresh).toMatch(/role="combobox" aria-label="Model"[^>]* placeholder="The model name the app takes" value=""/)
+    expect(fresh).not.toContain('BMN does not check that')
+  })
+
+  it('lists each name once under where BMN knows it from, with the row the keys reached marked', () => {
+    const groups = modelSuggestions(DATA, 'codex', [{ harness: 'codex', model: 'model-next', host: null }, { harness: 'codex', model: 'model-luna', host: null }], null)
+    const list = renderToStaticMarkup(createElement(ModelList, { id: 'names', groups, active: 1, onPick: noop, onActive: noop }))
+    expect(list).toContain('<div class="model-list" id="names" role="listbox" aria-label="Model suggestions">')
+    expect(list).toContain('<div role="group" aria-label="On your team"><div class="model-group" aria-hidden="true">On your team</div>')
+    expect(list).toContain('<div id="names-1" role="option" aria-selected="true" class="model-option active"><span class="mono">model-luna</span><small>Luna · also reported in an open session</small></div>')
+    expect(list).toContain('<div role="group" aria-label="Reported by Codex">')
+    expect(list).toContain('<span class="mono">model-next</span><small>in an open session</small>')
+    expect([count(list, 'role="option"'), count(list, 'aria-selected="true"'), count(list, '>model-luna<')]).toEqual([3, 1, 1])
+    expect(renderToStaticMarkup(createElement(ModelList, { id: 'names', groups: [], active: -1, onPick: noop, onActive: noop }))).toContain('No suggestion matches. The name stays as you typed it.')
+  })
+
+  it('a changed model keeps its price and capacity marked as the earlier model\'s until the owner clears them', () => {
+    const renamed: RosterDataShape = { ...DATA, agents: DATA.agents.map((entry) => (entry.id === 'sol' ? { ...entry, model: 'model-sol-next' } : entry)) }
+    const page = pageMarkup({ name: 'agent', id: 'sol' }, team({ data: renamed, base: DATA, approved: DATA }))
+    expect(page).toContain('Recorded for model-sol. Clear it unless the new model costs the same.')
+    expect(page).toContain('aria-label="Clear the price recorded for model-sol">Clear</button>')
+    expect(page).toContain('of 400 000 tokens, recorded for model-sol')
+    expect(page).toContain('Typed by you. BMN does not check that Codex takes this name.')
+    // The limit the owner set is his and stays as it is.
+    expect(page).toMatch(/aria-label="Context limit"[^>]* value="272 000"/)
+    const unchanged = pageMarkup({ name: 'agent', id: 'sol' })
+    expect(unchanged).not.toContain('Recorded for')
+    expect(unchanged).toContain('prices.example.test, 2026-10-01')
+  })
+
+  it('says what Also called is without claiming what the app does with those names', () => {
+    expect(pageMarkup({ name: 'agent', id: 'sol' })).toContain('Other names allowed for this agent. BMN does not check what the app maps them to.')
   })
 })
 

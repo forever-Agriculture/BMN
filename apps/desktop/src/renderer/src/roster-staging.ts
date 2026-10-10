@@ -586,17 +586,32 @@ export function unrecordedBasis(harness: RosterHarness, provider: string, apps: 
 }
 
 /**
+ * An agent already on the team that runs the same model through the same app on the same provider:
+ * what the team recorded about that model (its price, its capacity) holds for a new agent too.
+ */
+export function modelTwin(data: RosterDataShape, harness: RosterHarness, provider: string, model: string): RosterAgentShape | undefined {
+  const name = model.trim()
+  if (name === '') return undefined
+  const twins = data.agents.filter((agent) => agent.harness === harness && agent.provider === provider && agent.model === name)
+  return twins.find((agent) => agent.price !== undefined) ?? twins.find((agent) => agent.context_window !== undefined)
+}
+
+/**
  * Adds an agent as active, with its provider when the roster does not know it and, for an app the
  * roster has no destination for, that app recorded as BMN inspected it (`apps`, from Rules › Health)
- * or else on the owner's word (public work only until it is inspected).
+ * or else on the owner's word (public work only until it is inspected). A model the team already
+ * runs brings its recorded price and capacity along.
  */
 export function addAgent(data: RosterDataShape, draft: NewAgent, apps?: readonly AgentAppView[] | null): { data: RosterDataShape; id: string } {
   const landing = landingFor(data, draft.harness, draft.host)
   const id = idFor(draft.name, data.agents.map((agent) => agent.id))
+  const twin = modelTwin(data, draft.harness, landing.provider.id, draft.model)
   const agent: RosterAgentShape = {
     id, name: draft.name.trim(), class: draft.class, harness: draft.harness, model: draft.model.trim(), provider: landing.provider.id,
     host: landing.host ?? 'default', enabled: true, status: 'active', efforts: draft.efforts, roles: [],
-    ...(draft.contextLimit === undefined ? {} : { context_limit: draft.contextLimit })
+    ...(draft.contextLimit === undefined ? {} : { context_limit: draft.contextLimit }),
+    ...(twin?.price === undefined ? {} : { price: twin.price }),
+    ...(twin?.context_window === undefined ? {} : { context_window: twin.context_window })
   }
   let next: RosterDataShape = {
     ...data,

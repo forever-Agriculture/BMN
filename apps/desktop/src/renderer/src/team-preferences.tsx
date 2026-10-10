@@ -18,6 +18,8 @@ import {
   type RosterRoleShape
 } from '@bmn/protocol'
 import { Segmented } from './history-preferences'
+import { ModelField } from './model-field'
+import { modelSourceWords, modelSuggestions, type ReportedModel } from './model-suggestions'
 import { Dot, Piece } from './roster-marks'
 import {
   CLASS_WORDS,
@@ -37,6 +39,7 @@ import {
   groupDifferences,
   landingFor,
   moveAgent,
+  modelTwin,
   moveCandidate,
   newAgentConsequence,
   parseCandidate,
@@ -68,6 +71,8 @@ import type { TeamState } from './team-state'
 
 /** Each agent app as BMN inspected it (Rules › Health), or null while that was not read. */
 type Apps = readonly AgentAppView[] | null
+/** What the apps reported in sessions that are running now. */
+type Reported = readonly ReportedModel[]
 
 export type TeamPage = { name: 'agents' } | { name: 'agent'; id: string } | { name: 'new' } | { name: 'roles' } | { name: 'changes' }
 
@@ -397,7 +402,7 @@ function AlsoCalled(props: { team: TeamState; data: RosterDataShape; agent: Rost
   const aliases = agent.aliases ?? []
   const set = (next: string[]): void => team.stage(updateAgent(data, agent.id, { aliases: next.length === 0 ? undefined : next }))
   return (
-    <Row label="Also called" hint="Other names the app accepts for this model.">
+    <Row label="Also called" hint="Other names allowed for this agent. BMN does not check what the app maps them to.">
       <div className="chips">
         {aliases.map((alias) => (
           <span key={alias} className="chip on mono">{alias}<button type="button" className="chip-remove" aria-label={`Remove ${alias}`} onClick={() => set(aliases.filter((entry) => entry !== alias))}>×</button></span>
@@ -415,8 +420,12 @@ function AlsoCalled(props: { team: TeamState; data: RosterDataShape; agent: Rost
   )
 }
 
-function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: RosterAgentShape; apps: Apps; go(page: TeamPage): void }): React.JSX.Element {
+function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: RosterAgentShape; apps: Apps; reported: Reported; go(page: TeamPage): void }): React.JSX.Element {
   const { team, data, agent } = props
+  // A price and a capacity belong to a model: once the name changes they still describe the old one until the owner says otherwise.
+  const before = team.approved?.agents.find((entry) => entry.id === agent.id)
+  const renamed = before !== undefined && before.model !== agent.model ? before.model : null
+  const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b)
   const saved = team.snapshot?.file.prose[agent.id]
   const [notes, setNotes] = useState(team.pendingNotes[agent.id] ?? saved ?? '')
   const [asking, setAsking] = useState(false)
@@ -455,15 +464,20 @@ function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: Roste
         <Segmented labelledBy={appId} fit options={ROSTER_HARNESSES} value={agent.harness} optionLabel={(harness) => ROSTER_APP_NAMES[harness]}
           onChange={(harness: RosterHarness) => team.stage(moveAgent(data, agent.id, harness, agent.host === 'default' || agent.host === null ? '' : agent.host, 'public_only', props.apps))} />
       </Row>
-      <Row label="Model"><input className="field mono" aria-label="Model" maxLength={128} value={agent.model} onChange={(event) => patch({ model: event.currentTarget.value })} /></Row>
+      <Row label="Model">
+        <ModelField value={agent.model} hint={modelSourceWords(agent.model, data, agent.harness, props.reported, { self: agent.id, ...(before ? { approved: before.model } : {}) })}
+          suggest={(query) => modelSuggestions(data, agent.harness, props.reported, query, agent.id)} onChange={(model) => patch({ model })} />
+      </Row>
       <PrivateWorkRow team={team} data={data} agent={agent} />
-      <Row label="Price" hint={agent.price ? [agent.price.source ? hostOf(agent.price.source) : null, agent.price.as_of].filter(Boolean).join(', ') || undefined : 'No price recorded.'}>
+      <Row label="Price" hint={renamed !== null && agent.price && same(agent.price, before?.price) ? `Recorded for ${renamed}. Clear it unless the new model costs the same.`
+        : agent.price ? [agent.price.source ? hostOf(agent.price.source) : null, agent.price.as_of].filter(Boolean).join(', ') || undefined : 'No price recorded.'}>
         <span className="mono">{price ?? '—'}</span>{price ? <span className="faint"> per M tokens, in / out</span> : null}
+        {renamed !== null && agent.price && same(agent.price, before?.price) ? <button type="button" className="small" aria-label={`Clear the price recorded for ${renamed}`} onClick={() => patch({ price: undefined })}>Clear</button> : null}
       </Row>
       <Row label="Context limit" hint="Empty means the app's own default.">
         <div className="inline">
           <NumberField label="Context limit" value={agent.context_limit} placeholder="App default" onChange={(next) => patch({ context_limit: next })} />
-          <span className="faint">{agent.context_window ? `of ${thousands(agent.context_window)} tokens` : 'capacity unknown'}</span>
+          <span className="faint">{agent.context_window ? `of ${thousands(agent.context_window)} tokens${renamed !== null && agent.context_window === before?.context_window ? `, recorded for ${renamed}` : ''}` : 'capacity unknown'}</span>
         </div>
       </Row>
 
@@ -509,7 +523,7 @@ function hostOf(source: string): string {
 // ---------------------------------------------------------------------------------------------
 // Team › New agent
 
-function NewAgentPage(props: { team: TeamState; data: RosterDataShape; apps: Apps; go(page: TeamPage): void }): React.JSX.Element {
+function NewAgentPage(props: { team: TeamState; data: RosterDataShape; apps: Apps; reported: Reported; go(page: TeamPage): void }): React.JSX.Element {
   const { team, data } = props
   const [draft, setDraft] = useState<NewAgent>({ name: '', class: 'pawn', harness: 'claude', model: '', host: '', privateWork: 'public_only', roles: [], efforts: ['low'] })
   const [notes, setNotes] = useState('')
@@ -522,6 +536,7 @@ function NewAgentPage(props: { team: TeamState; data: RosterDataShape; apps: App
   const declared = landing.host === null
     && (data.harness_routes.find((route) => route.harness === draft.harness)?.basis ?? unrecordedBasis(draft.harness, landing.provider.id, props.apps)) === 'owner-declared'
   const ready = draft.name.trim() !== '' && draft.model.trim() !== '' && draft.efforts.length > 0
+  const twin = modelTwin(data, draft.harness, landing.provider.id, draft.model)
   return (
     <>
       <PageHead title={<><button type="button" className="crumb" onClick={() => props.go({ name: 'agents' })}>Team</button> <span className="faint">›</span> New agent</>} />
@@ -529,7 +544,10 @@ function NewAgentPage(props: { team: TeamState; data: RosterDataShape; apps: App
       <Row label="Agent app" id={appId}>
         <Segmented labelledBy={appId} fit options={ROSTER_HARNESSES} value={draft.harness} optionLabel={(harness) => ROSTER_APP_NAMES[harness]} onChange={(harness: RosterHarness) => set({ harness })} />
       </Row>
-      <Row label="Model"><input className="field mono" aria-label="Model" maxLength={128} placeholder="The model name the app takes" value={draft.model} onChange={(event) => set({ model: event.currentTarget.value })} /></Row>
+      <Row label="Model">
+        <ModelField value={draft.model} placeholder="The model name the app takes" hint={modelSourceWords(draft.model, data, draft.harness, props.reported)}
+          suggest={(query) => modelSuggestions(data, draft.harness, props.reported, query)} onChange={(model) => set({ model })} />
+      </Row>
       <Row label="Host" hint={`${landing.provider.name}${landing.isNew ? ' · new provider' : ''}`}>
         <input className="field mono" aria-label="Host" placeholder="Provider default" value={draft.host} onChange={(event) => set({ host: event.currentTarget.value })} />
       </Row>
@@ -539,7 +557,12 @@ function NewAgentPage(props: { team: TeamState; data: RosterDataShape; apps: App
           ? <Segmented labelledBy={answerId} fit options={['allowed', 'public_only'] as const} value={draft.privateWork} optionLabel={(value) => PRIVATE_WORK_WORDS[value]} onChange={(privateWork) => set({ privateWork })} />
           : <span>{PRIVATE_WORK_WORDS[answer]}</span>}
       </Row>
-      <Row label="Context limit" hint="Empty means the app's own default.">
+      {twin?.price ? (
+        <Row label="Price" hint={`Taken from ${twin.name}, which uses the same model.`}>
+          <span className="mono">{priceWords(twin)}</span><span className="faint"> per M tokens, in / out</span>
+        </Row>
+      ) : null}
+      <Row label="Context limit" hint={twin?.context_window ? `Empty means the app's own default. Capacity ${thousands(twin.context_window)} tokens, taken from ${twin.name}.` : "Empty means the app's own default."}>
         <NumberField label="Context limit" value={draft.contextLimit} placeholder="App default" onChange={(next) => setDraft((current) => {
           const rest = { ...current }
           delete rest.contextLimit
@@ -800,7 +823,7 @@ function ChangesPage(props: { team: TeamState }): React.JSX.Element {
 // ---------------------------------------------------------------------------------------------
 // The pages and their footer
 
-export function TeamPreferences(props: { team: TeamState; page: TeamPage; apps?: Apps; go(page: TeamPage): void }): React.JSX.Element {
+export function TeamPreferences(props: { team: TeamState; page: TeamPage; apps?: Apps; reported?: Reported; go(page: TeamPage): void }): React.JSX.Element {
   const { team, page } = props
   const snapshot = team.snapshot
   if (team.loadError) return <><PageHead title="Team" /><p className="preferences-error" role="alert">{team.loadError}</p></>
@@ -831,11 +854,12 @@ export function TeamPreferences(props: { team: TeamState; page: TeamPage; apps?:
     )
   }
   const apps = props.apps ?? null
-  if (page.name === 'new') return <NewAgentPage team={team} data={data} apps={apps} go={props.go} />
+  const reported = props.reported ?? []
+  if (page.name === 'new') return <NewAgentPage team={team} data={data} apps={apps} reported={reported} go={props.go} />
   if (page.name === 'roles') return <RolesPage team={team} data={data} />
   if (page.name === 'changes') return <ChangesPage team={team} />
   const agent = page.name === 'agent' ? data.agents.find((entry) => entry.id === page.id) : undefined
-  if (agent) return <AgentPage key={agent.id} team={team} data={data} agent={agent} apps={apps} go={props.go} />
+  if (agent) return <AgentPage key={agent.id} team={team} data={data} agent={agent} apps={apps} reported={reported} go={props.go} />
   return <AgentsPage team={team} data={data} go={props.go} />
 }
 
