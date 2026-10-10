@@ -7,6 +7,7 @@ import {
   INSERTS,
   RulesEditor,
   RulesPreferences,
+  UpdateSheet,
   changeWords,
   destinationWords,
   diffSummary,
@@ -15,8 +16,11 @@ import {
   kilobytes,
   lineCount,
   markerParts,
+  recheckWords,
+  sessionsWords,
   testLine,
   undoWords,
+  updateCommand,
   type RulesState
 } from './rules-preferences'
 import { Chain, TeamLedger, TeamPreferences, TeamToast, firstApprovalWords, hostKind, nothingInEffectWords, outsideCountWords, shortDate, type TeamPage } from './team-preferences'
@@ -493,9 +497,9 @@ const RULES: RulesSnapshot = {
   },
   probes: [{ harness: 'claude', outcome: 'pass', at: '2026-10-09T20:00:00.000Z', stale: true }, { harness: 'codex', outcome: null }],
   apps: [
-    { harness: 'claude', version: '2.1.295', basis: 'default', provider: 'anthropic', host: null, sources: [], versionState: 'tested', versionNote: 'BMN tested how this version picks where to send data.' },
-    { harness: 'codex', version: '0.171.0', basis: 'default', provider: 'openai', host: null, sources: [], versionState: 'newer', versionNote: 'Newer than the version BMN tested (0.161.0). BMN reads where it sends data the same way on every version.' },
-    { harness: 'cursor', version: null, basis: 'unknown', provider: null, host: null, sources: [], versionState: 'unknown', versionNote: 'BMN does not check Cursor dispatches.' }
+    { harness: 'claude', version: '2.1.295', program: '/home/synthetic/.local/bin/claude', programTarget: '/home/synthetic/.local/share/claude/versions/2.1.295', basis: 'default', provider: 'anthropic', host: null, sources: [], versionState: 'tested', versionNote: 'BMN tested how this version picks where to send data.' },
+    { harness: 'codex', version: '0.171.0', program: '/home/synthetic/.npm-global/bin/codex', basis: 'default', provider: 'openai', host: null, sources: [], versionState: 'newer', versionNote: 'Newer than the version BMN tested (0.161.0). BMN reads where it sends data the same way on every version.' },
+    { harness: 'cursor', version: null, program: null, basis: 'unknown', provider: null, host: null, sources: [], versionState: 'unknown', versionNote: 'BMN does not check Cursor dispatches.' }
   ],
   transactions: [
     { id: 't2', createdAt: '2026-10-09T22:00:00.000Z', state: 'complete', reason: 'team update', targets: ['claude'], valid: true },
@@ -628,11 +632,85 @@ describe('Rules › Health (60.6 AC4)', () => {
   })
 })
 
+describe('Rules › Health: Update… (60.6: the app\'s own updater, shown before anything runs)', () => {
+  const markup = rulesMarkup('health')
+  const apps = RULES.apps
+  const sheet = (index: number, extra: Partial<Parameters<typeof UpdateSheet>[0]> = {}): string =>
+    renderToStaticMarkup(createElement(UpdateSheet, { app: apps[index]!, home: RULES.home, sessions: 0, hasTest: false, busy: false, result: null, onCheck: noop, onClose: noop, ...extra }))
+
+  it('shows under each version the program BMN finds, and says when it finds none', () => {
+    expect(markup).toContain('Agent apps<span class="caption">the program BMN finds, its version and where it sends data</span>')
+    expect(markup).toContain('· tested</span></span><span class="path mono" title="/home/synthetic/.local/bin/claude">~/.local/bin/claude</span></span>')
+    expect(markup).toContain('· newer than tested</span></span><span class="path mono" title="/home/synthetic/.npm-global/bin/codex">~/.npm-global/bin/codex</span></span>')
+    expect(markup).toContain('· not checked</span></span><span class="faint">Program not found</span></span>')
+  })
+
+  it('offers Update… on every app, off where there is no program to update, and opens no sheet by itself', () => {
+    expect([...markup.matchAll(/<button type="button" class="small"( disabled="")? (?:title="[^"]*" )?aria-label="Update ([^"]+)" aria-expanded="false"(?: title="([^"]*)")?>Update…<\/button>/g)].map((match) => [match[2], match[1] !== undefined, match[3]]))
+      .toEqual([['Claude Code', false, undefined], ['Codex', false, undefined], ['Cursor', true, 'BMN finds no Cursor program to update']])
+    expect(markup).not.toContain('own updater does this')
+  })
+
+  it('the command is the program by its full path and the app\'s own update word, quoted for a shell', () => {
+    expect(updateCommand({ harness: 'claude', program: '/home/synthetic/.local/bin/claude' })).toBe('/home/synthetic/.local/bin/claude update')
+    expect(updateCommand({ harness: 'codex', program: '/home/synthetic/.npm-global/bin/codex' })).toBe('/home/synthetic/.npm-global/bin/codex update')
+    expect(updateCommand({ harness: 'opencode', program: '/usr/local/bin/opencode' })).toBe('/usr/local/bin/opencode upgrade')
+    expect(updateCommand({ harness: 'cursor', program: "/home/synthetic/My Apps/it's/cursor-agent" })).toBe("'/home/synthetic/My Apps/it'\\''s/cursor-agent' update")
+    expect(updateCommand({ harness: 'cursor', program: null })).toBeNull()
+  })
+
+  it('the sheet names the program, where a link leads, the exact command and what happens afterwards, and runs nothing', () => {
+    const claude = sheet(0, { sessions: 2, hasTest: true })
+    expect(claude).toContain('<div class="sheet" role="group" aria-label="Update Claude Code" tabindex="-1">')
+    expect(claude).toContain('<b>Update Claude Code</b><span class="muted">Claude Code&#x27;s own updater does this, not BMN.</span>')
+    const read = words(claude).replace(/\s+/g, ' ')
+    expect(read).toContain('Installed 2.1.295 Program ~/.local/bin/claude A link to ~/.local/share/claude/versions/2.1.295 Command /home/synthetic/.local/bin/claude update')
+    expect(read).toContain('Open in BMN BMN currently recognises 2 Claude Code sessions. Restart them to use the updated installation; their running versions are not checked.')
+    expect(read).toContain('Afterwards Run the command in a terminal, then press Check now: BMN reads the version and where Claude Code sends data again. A loading test made before the update needs to be run again.')
+    expect(read).toContain('The updater decides what it downloads and replaces, and may ask questions; BMN does not see that in advance and cannot undo it. BMN does not know whether a newer version exists.')
+    expect([...claude.matchAll(/<button type="button"[^>]*>([^<]+)<\/button>/g)].map((match) => match[1])).toEqual(['Copy command', 'Check now', 'Close'])
+    // Nothing on the sheet starts the updater: the only action on the command is a copy.
+    expect(read).not.toMatch(/\bRun update\b|\bUpdate now\b|\bStart\b/)
+    expect(claude).not.toContain('role="status"')
+  })
+
+  it('says for Codex which program is meant, since BMN\'s sessions start its own command of that name', () => {
+    const codex = words(sheet(1)).replace(/\s+/g, ' ')
+    expect(codex).toContain("In BMN's sessions, codex is BMN's own command; it hands over to this program, and this is the one updated.".replace(/'/g, '&#x27;'))
+    expect(codex).not.toContain('A link to')
+    expect(codex).not.toContain('A loading test made before the update')
+    expect(words(sheet(0))).not.toContain('own command')
+  })
+
+  it('with no program found the command cannot be copied; a check that is running says so', () => {
+    const cursor = sheet(2, { busy: true })
+    expect(words(cursor).replace(/\s+/g, ' ')).toContain('Installed version not read Program not found Command no program found')
+    expect(cursor).toContain('<button type="button" class="primary" disabled="">Copy command</button>')
+    expect(cursor).toContain('<button type="button" disabled="">Checking…</button>')
+  })
+
+  it('counts only the sessions BMN recognises and never claims their versions', () => {
+    expect(sessionsWords('Codex', 0)).toBe('BMN recognises no Codex session right now. A session it cannot recognise keeps running what it started with.')
+    expect(sessionsWords('Codex', 1)).toBe('BMN currently recognises 1 Codex session. Restart it to use the updated installation; its running version is not checked.')
+    expect(sessionsWords('Codex', 3)).toBe('BMN currently recognises 3 Codex sessions. Restart them to use the updated installation; their running versions are not checked.')
+  })
+
+  it('after Check now it says only what the selected program reports now and before, never that an update succeeded', () => {
+    expect(recheckWords('0.171.0', '0.172.0')).toBe('The selected program now reports 0.172.0; before it reported 0.171.0.')
+    expect(recheckWords('0.171.0', '0.171.0')).toBe('The selected program still reports 0.171.0.')
+    expect(recheckWords(null, '0.172.0')).toBe('The selected program now reports 0.172.0.')
+    expect(recheckWords('0.171.0', null)).toBe('BMN could not read the installed version.')
+    expect(sheet(1, { result: recheckWords('0.171.0', '0.172.0') })).toContain('<p role="status">The selected program now reports 0.172.0; before it reported 0.171.0.</p>')
+    for (const text of [recheckWords('1', '2'), recheckWords('1', '1'), recheckWords(null, '2'), recheckWords('1', null)]) expect(text).not.toMatch(/updated|succeeded|up to date|latest/i)
+  })
+})
+
 describe('universal words (R60-NFR8)', () => {
   it('no Team or Rules page shows a word of the schema or of the earlier design', () => {
     const pages = [
       pageMarkup({ name: 'agents' }), pageMarkup({ name: 'agent', id: 'sol' }), pageMarkup({ name: 'new' }), pageMarkup({ name: 'roles' }), pageMarkup({ name: 'changes' }),
-      rulesMarkup('editor'), rulesMarkup('health')
+      rulesMarkup('editor'), rulesMarkup('health'),
+      ...RULES.apps.map((app) => renderToStaticMarkup(createElement(UpdateSheet, { app, home: RULES.home, sessions: 2, hasTest: true, busy: false, result: 'The selected program still reports 1.0.0.', onCheck: noop, onClose: noop })))
     ]
     for (const page of pages) {
       // The file names the owner's own apps use are theirs, not BMN's words.

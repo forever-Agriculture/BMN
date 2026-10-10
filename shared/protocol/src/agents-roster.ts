@@ -3,6 +3,8 @@ export const ROSTER_HARNESSES = ['claude', 'codex', 'opencode', 'cursor'] as con
 export type RosterHarness = (typeof ROSTER_HARNESSES)[number]
 /** How each agent app is named to the owner. */
 export const ROSTER_APP_NAMES: Readonly<Record<RosterHarness, string>> = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor' }
+/** What each app's own updater is started with. BMN shows the command; the updater itself decides what it does. */
+export const ROSTER_APP_UPDATE_ARGUMENTS: Readonly<Record<RosterHarness, readonly string[]>> = { claude: ['update'], codex: ['update'], opencode: ['upgrade'], cursor: ['update'] }
 export const ROSTER_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 export type RosterEffort = (typeof ROSTER_EFFORTS)[number]
 export const ROSTER_THEN = ['lead', 'skip', 'blocked', 'owner-chooses'] as const
@@ -165,6 +167,10 @@ export type AgentsOutcome =
 export interface AgentAppView {
   harness: RosterHarness
   version: string | null
+  /** The program PATH selects for this app, past BMN's own commands; null when none is found. */
+  program: string | null
+  /** Where that entry leads when it is a link. */
+  programTarget?: string
   /** `default` (its provider's own servers), `explicit` (a custom host) or `unknown`. */
   basis: string
   provider: string | null

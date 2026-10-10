@@ -1,7 +1,7 @@
 // MODULE: agents-ipc.test.ts - Epic 60.4–60.6: the Team and Rules handlers preview an approval, update only the rules files that were shown, and re-inspect what an approval records
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, RosterDataShape, RulesMasterPlan, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSnapshot } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -340,6 +340,21 @@ describe('an approval inspects again what it records (60.3 AC3, 60.6 AC4)', () =
     expect(apps[2]).toMatchObject({ versionState: 'unknown', versionNote: 'BMN does not check OpenCode dispatches.' })
     stub('codex', 'echo "codex-cli"')
     expect((await call<RulesSnapshot>('rules:snapshot')).apps[1]).toMatchObject({ version: null, versionState: 'unknown', versionNote: 'Codex is not installed, or its version cannot be read.' })
+  })
+
+  it('names the program PATH selects for each app, past BMN\'s own commands, and none where the app is not installed (60.6: Update…)', async () => {
+    const programs = async () => (await call<RulesSnapshot>('rules:snapshot')).apps.map((app) => [app.harness, app.program, app.programTarget])
+    expect(await programs()).toEqual([['claude', join(stubs, 'claude'), undefined], ['codex', join(stubs, 'codex'), undefined], ['opencode', null, undefined], ['cursor', null, undefined]])
+    // BMN's own folder holds a `codex` that only hands over to the next one: the program updated is the one after it.
+    appEnv = { PATH: `${dirname(SCRIPT)}:${stubs}:/usr/bin:/bin` }
+    expect(existsSync(join(dirname(SCRIPT), 'codex'))).toBe(true)
+    expect((await programs())[1]).toEqual(['codex', join(stubs, 'codex'), undefined])
+    // An app installed as a link is shown with where the link leads.
+    mkdirSync(join(home, 'versions'))
+    writeFileSync(join(home, 'versions/cursor-1.2.3'), '#!/bin/sh\necho "1.2.3"\n')
+    chmodSync(join(home, 'versions/cursor-1.2.3'), 0o755)
+    symlinkSync(join(home, 'versions/cursor-1.2.3'), join(stubs, 'cursor-agent'))
+    expect((await programs())[3]).toEqual(['cursor', join(stubs, 'cursor-agent'), join(home, 'versions/cursor-1.2.3')])
   })
 
   it('a version list kept from the earlier rule saves like any other field, with nothing inspected for it', async () => {

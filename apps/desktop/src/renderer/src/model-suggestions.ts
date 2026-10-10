@@ -40,6 +40,23 @@ export function reportedModels(
   return found
 }
 
+/**
+ * How many running sessions BMN recognises as each app: the ones whose current run reported to it.
+ * An app started inside a shell BMN cannot see into is not counted, so this is never "all of them".
+ */
+export function sessionsByApp(
+  records: readonly HookOriginRecord[],
+  sessions: ReadonlyArray<Pick<SessionRecord, 'sessionId' | 'lastProcess'>>,
+  live: Readonly<Record<string, { incarnationId: string } | undefined>>
+): Partial<Record<RosterHarness, number>> {
+  const counts: Partial<Record<RosterHarness, number>> = {}
+  for (const session of sessions) {
+    const origin = activeHookOrigin(records, session, live[session.sessionId]?.incarnationId)
+    if (origin !== null) counts[origin.agent] = (counts[origin.agent] ?? 0) + 1
+  }
+  return counts
+}
+
 const names = (list: readonly string[]): string => (list.length <= 1 ? list.join('') : `${list.slice(0, -1).join(', ')} and ${list.at(-1) as string}`)
 
 /** A host worth naming beside a name: one that is not the provider's own. */

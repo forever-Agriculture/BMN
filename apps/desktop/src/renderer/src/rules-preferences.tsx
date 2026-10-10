@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import {
   ROSTER_APP_NAMES,
+  ROSTER_APP_UPDATE_ARGUMENTS,
   ROSTER_HARNESSES,
   type AgentAppView,
   type RosterDataShape,
@@ -20,6 +21,7 @@ import {
 } from '@bmn/protocol'
 import { failureDetail } from './bridge-error'
 import { Segmented } from './history-preferences'
+import { quoteArgv } from './launch-template'
 import { Dot } from './roster-marks'
 import { diffBody, diffSummary, revokeVersion, setDestination, undoWords } from './roster-staging'
 import { displayPath } from './session-presentation'
@@ -548,7 +550,79 @@ function EditorPage(props: { rules: RulesState }): React.JSX.Element {
 // ---------------------------------------------------------------------------------------------
 // Rules › Health
 
-type AppAction = { kind: 'destination'; harness: RosterHarness }
+type AppAction = { kind: 'destination'; harness: RosterHarness } | { kind: 'update'; harness: RosterHarness }
+
+/** How many running sessions BMN recognises as each app. */
+export type RecognisedSessions = Readonly<Partial<Record<RosterHarness, number>>>
+
+/** The app's own update command, exactly as the owner would run it: the program by its full path, then its arguments. */
+export function updateCommand(app: Pick<AgentAppView, 'harness' | 'program'>): string | null {
+  return app.program === null ? null : quoteArgv([app.program, ...ROSTER_APP_UPDATE_ARGUMENTS[app.harness]])
+}
+
+/** What BMN can say about sessions of an app while it is updated: only the ones it recognises, and never their versions. */
+export function sessionsWords(name: string, count: number): string {
+  if (count === 0) return `BMN recognises no ${name} session right now. A session it cannot recognise keeps running what it started with.`
+  return count === 1 ? `BMN currently recognises 1 ${name} session. Restart it to use the updated installation; its running version is not checked.`
+    : `BMN currently recognises ${count} ${name} sessions. Restart them to use the updated installation; their running versions are not checked.`
+}
+
+/** What a check after an update read, said as only that: what the selected program reports now and before. */
+export function recheckWords(before: string | null, after: string | null): string {
+  if (after === null) return 'BMN could not read the installed version.'
+  if (before === null) return `The selected program now reports ${after}.`
+  return before === after ? `The selected program still reports ${after}.` : `The selected program now reports ${after}; before it reported ${before}.`
+}
+
+/**
+ * The app's own updater, shown before anything runs: which program, the exact command, what BMN
+ * knows about open sessions and what it reads again afterwards. BMN runs nothing here.
+ */
+export function UpdateSheet(props: {
+  app: AgentAppView; home: string | null; sessions: number; hasTest: boolean; busy: boolean
+  /** What the last Check now from this sheet read, or null before one. */
+  result: string | null
+  onCheck(): void; onClose(): void
+}): React.JSX.Element {
+  const { app } = props
+  const name = ROSTER_APP_NAMES[app.harness]
+  const command = updateCommand(app)
+  const [copied, setCopied] = useState<string | null>(null)
+  const sheet = useRef<HTMLDivElement | null>(null)
+  useEffect(() => sheet.current?.focus(), [])
+  const copy = (): void => {
+    if (command === null) return
+    window.aiTerminal.writeClipboardText(command).then(() => setCopied('Copied'), () => setCopied('Could not copy the command.'))
+  }
+  return (
+    <div className="sheet" ref={sheet} role="group" aria-label={`Update ${name}`} tabIndex={-1}
+      onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); props.onClose() } }}>
+      <div className="sheet-head"><b>Update {name}</b><span className="muted">{name}'s own updater does this, not BMN.</span></div>
+      <div className="facts">
+        <span>Installed</span><span className="mono">{app.version ?? 'version not read'}</span>
+        <span>Program</span>
+        <span>
+          <span className="mono wrap">{app.program ? displayPath(app.program, props.home) : 'not found'}</span>
+          {app.programTarget ? <span className="preferences-help">A link to <span className="mono wrap">{displayPath(app.programTarget, props.home)}</span></span> : null}
+          {app.harness === 'codex' ? <span className="preferences-help">In BMN's sessions, <span className="mono">codex</span> is BMN's own command; it hands over to this program, and this is the one updated.</span> : null}
+        </span>
+        <span>Command</span><span className="mono wrap">{command ?? 'no program found'}</span>
+        <span>Open in BMN</span><span>{sessionsWords(name, props.sessions)}</span>
+        <span>Afterwards</span>
+        <span>Run the command in a terminal, then press Check now: BMN reads the version and where {name} sends data again.{props.hasTest ? ' A loading test made before the update needs to be run again.' : ''}</span>
+      </div>
+      <p className="preferences-help">The updater decides what it downloads and replaces, and may ask questions; BMN does not see that in advance and cannot undo it. BMN does not know whether a newer version exists.</p>
+      {props.result ? <p role="status">{props.result}</p> : null}
+      <div className="inline">
+        <button type="button" className="primary" disabled={command === null} onClick={copy}>Copy command</button>
+        {/* The button turns off while BMN checks and would drop the focus with it; the sheet keeps it, so Escape still closes only the sheet. */}
+        <button type="button" disabled={props.busy} onClick={() => { sheet.current?.focus(); props.onCheck() }}>{props.busy ? 'Checking…' : 'Check now'}</button>
+        <button type="button" onClick={props.onClose}>Close</button>
+        {copied ? <span className="muted" role="status">{copied}</span> : null}
+      </div>
+    </div>
+  )
+}
 
 /** Where an app sends data: its provider's own servers as BMN inspected them, or the owner's word for it. */
 function DestinationSheet(props: { app: AgentAppView; data: RosterDataShape; onDone(next: RosterDataShape | null): void }): React.JSX.Element {
@@ -583,10 +657,19 @@ function DestinationSheet(props: { app: AgentAppView; data: RosterDataShape; onD
   )
 }
 
-function HealthPage(props: { rules: RulesState; team: TeamState }): React.JSX.Element {
+function HealthPage(props: { rules: RulesState; team: TeamState; recognised: RecognisedSessions }): React.JSX.Element {
   const { rules, team } = props
   const snapshot = rules.snapshot as RulesSnapshot
   const [action, setAction] = useState<AppAction | null>(null)
+  // The version an app read when Check now was pressed on its Update sheet, and the check it was read by.
+  const [watch, setWatch] = useState<{ harness: RosterHarness; before: string | null; checkedAt: string } | null>(null)
+  const opener = useRef<HTMLButtonElement | null>(null)
+  // Update… is off while its sheet is open, so the focus can go back to it only once the sheet has gone.
+  useEffect(() => {
+    if (action !== null || opener.current === null) return
+    opener.current.focus()
+    opener.current = null
+  }, [action])
   const health = snapshot.health
   const data = team.data
   const pending = rules.pending
@@ -620,7 +703,7 @@ function HealthPage(props: { rules: RulesState; team: TeamState }): React.JSX.El
         A loading test starts the app once and sends it the rules.{withheld.length > 0 ? ` It is off for ${withheld.join(' and ')}, which ${withheld.length === 1 ? 'gets' : 'get'} only the public sections.` : ''}
       </p>
 
-      <h4 className="group-head">Agent apps<span className="caption">where each app sends data</span></h4>
+      <h4 className="group-head">Agent apps<span className="caption">the program BMN finds, its version and where it sends data</span></h4>
       {snapshot.apps.map((app) => {
         const name = ROSTER_APP_NAMES[app.harness]
         const route = data?.harness_routes.find((entry) => entry.harness === app.harness)
@@ -629,12 +712,18 @@ function HealthPage(props: { rules: RulesState; team: TeamState }): React.JSX.El
           <div key={app.harness} className="app-block">
             <div className="health-row">
               <span>{name}</span>
-              <span><span className="mono">{app.version ?? 'not found'}</span> <span className="muted" title={app.versionNote}>· {VERSION_WORDS[app.versionState]}</span></span>
+              <span className="health-state">
+                <span><span className="mono">{app.version ?? 'not found'}</span> <span className="muted" title={app.versionNote}>· {VERSION_WORDS[app.versionState]}</span></span>
+                {app.program ? <span className="path mono" title={app.program}>{displayPath(app.program, snapshot.home)}</span> : <span className="faint">Program not found</span>}
+              </span>
               <span className="health-state">
                 <span>{destinationWords(app, providerName)}</span>
                 <span className="faint">{route ? `Recorded: ${providerName(route.provider)}, ${route.basis === 'observed-default' ? 'as inspected' : 'on your word'}` : 'No destination recorded'}</span>
               </span>
               <span className="app-actions">
+                <button type="button" className="small" disabled={app.program === null || action !== null} aria-label={`Update ${name}`} aria-expanded={action?.kind === 'update' && action.harness === app.harness}
+                  title={app.program === null ? `BMN finds no ${name} program to update` : undefined}
+                  onClick={(event) => { opener.current = event.currentTarget; setWatch(null); setAction({ kind: 'update', harness: app.harness }) }}>Update…</button>
                 <button type="button" className="small" disabled={data === null || action !== null} aria-label={`Set the destination of ${name}`} onClick={() => setAction({ kind: 'destination', harness: app.harness })}>Set destination…</button>
               </span>
             </div>
@@ -650,6 +739,13 @@ function HealthPage(props: { rules: RulesState; team: TeamState }): React.JSX.El
             ) : null}
             {action?.kind === 'destination' && action.harness === app.harness && data
               ? <DestinationSheet app={app} data={data} onDone={(next) => { setAction(null); if (next) team.stage(next) }} /> : null}
+            {action?.kind === 'update' && action.harness === app.harness ? (
+              <UpdateSheet app={app} home={snapshot.home} sessions={props.recognised[app.harness] ?? 0} busy={rules.busy}
+                hasTest={snapshot.probes.some((entry) => entry.harness === app.harness && entry.outcome !== null)}
+                result={watch !== null && watch.harness === app.harness && watch.checkedAt !== health.checkedAt ? recheckWords(watch.before, app.version) : null}
+                onCheck={() => { setWatch({ harness: app.harness, before: watch?.harness === app.harness ? watch.before : app.version, checkedAt: health.checkedAt }); void rules.load() }}
+                onClose={() => { setAction(null); setWatch(null) }} />
+            ) : null}
           </div>
         )
       })}
@@ -658,12 +754,12 @@ function HealthPage(props: { rules: RulesState; team: TeamState }): React.JSX.El
   )
 }
 
-export function RulesPreferences(props: { rules: RulesState; team: TeamState; page: RulesPage }): React.JSX.Element {
+export function RulesPreferences(props: { rules: RulesState; team: TeamState; page: RulesPage; recognised?: RecognisedSessions }): React.JSX.Element {
   const { rules } = props
   const { ensure } = rules
   useEffect(() => ensure(), [ensure])
   const title = props.page === 'editor' ? 'Rules' : 'Health'
   if (rules.loadError && rules.snapshot === null) return <><PageHead title={title} /><p className="preferences-error" role="alert">{rules.loadError}</p></>
   if (rules.snapshot === null) return <><PageHead title={title} /><p className="page-note">Reading the rules…</p></>
-  return props.page === 'editor' ? <EditorPage rules={rules} /> : <HealthPage rules={rules} team={props.team} />
+  return props.page === 'editor' ? <EditorPage rules={rules} /> : <HealthPage rules={rules} team={props.team} recognised={props.recognised ?? {}} />
 }

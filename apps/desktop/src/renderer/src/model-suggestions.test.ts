@@ -1,7 +1,7 @@
 // MODULE: model-suggestions.test.ts - Epic 60.5: the Model field offers each known name once, says where it came from, and its keys behave like a list
 import type { HookOriginRecord, RosterAgentShape, RosterDataShape } from '@bmn/protocol'
 import { describe, expect, it } from 'vitest'
-import { modelSourceWords, modelSuggestions, pickerKey, reportedModels, type ReportedModel } from './model-suggestions'
+import { modelSourceWords, modelSuggestions, pickerKey, reportedModels, sessionsByApp, type ReportedModel } from './model-suggestions'
 
 const agent = (id: string, extra: Partial<RosterAgentShape> = {}): RosterAgentShape => ({
   id, name: id.charAt(0).toUpperCase() + id.slice(1), class: 'bishop', harness: 'claude', model: `model-${id}`, provider: 'anthropic', host: 'default',
@@ -105,6 +105,9 @@ describe('model suggestions (60.5: the Model field)', () => {
       { harness: 'codex', model: 'synthetic-sol-7', host: 'api.anthropic.com' }
     ])
     expect(reportedModels(records, sessions, {})).toEqual([])
+    // The same reading counts sessions per app: a session whose run named no model still counts, an ended or earlier run does not.
+    expect(sessionsByApp(records, sessions, live)).toEqual({ claude: 3, codex: 1 })
+    expect(sessionsByApp(records, sessions, {})).toEqual({})
   })
 })
 

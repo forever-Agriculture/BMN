@@ -85,7 +85,7 @@ import { SessionRequestCard, type ClearedNotice } from './session-request-card'
 import { dismissAttentionReminder, noticesWhenNavigating, applyAttentionWithdrawal } from './attention-actions'
 import { PopupMenu, type MenuAnchor, type MenuEntry } from './popup-menu'
 import { PreferencesDialog } from './preferences-dialog'
-import { reportedModels } from './model-suggestions'
+import { reportedModels, sessionsByApp } from './model-suggestions'
 import {
   ACTIVITY_TICK_MS,
   capTitle,
@@ -2545,6 +2545,7 @@ function App(): React.JSX.Element {
           suggestVocabulary={suggestVoiceVocabulary}
           telegramCue={telegramCue}
           reportedModels={reportedModels(hookOrigins, sessions, live)}
+          recognisedSessions={sessionsByApp(hookOrigins, sessions, live)}
         />
       ) : null}
       {dialog?.kind === 'dev-auto-runs' ? <DevAutoRunsDialog

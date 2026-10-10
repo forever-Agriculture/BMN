@@ -1669,6 +1669,29 @@
   flex: none;
 }
 
+/* A sheet's facts: what it is about, one named value per line, never a paragraph. */
+.preferences-dialog .facts {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 7px 14px;
+}
+
+.preferences-dialog .facts > span:nth-child(odd) {
+  color: var(--muted);
+}
+
+.preferences-dialog .facts > span:nth-child(even) {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+/* A path or a command in a sheet is read whole: it wraps instead of being cut. */
+.preferences-dialog .wrap {
+  overflow-wrap: anywhere;
+}
+
 .preferences-dialog .target > summary {
   display: grid;
   grid-template-columns: 90px minmax(0, 1fr) auto;
@@ -1774,6 +1797,15 @@
 
 /* Narrow: the navigation becomes one horizontal strip above the page. */
 @media (max-width: 560px) {
+  .preferences-dialog .facts {
+    grid-template-columns: 1fr;
+    gap: 2px 14px;
+  }
+
+  .preferences-dialog .facts > span:nth-child(even) {
+    margin-bottom: 6px;
+  }
+
   .preferences-dialog .preferences-frame {
     flex-direction: column;
   }

@@ -1,6 +1,7 @@
 // MODULE: agents-ipc.ts - Epic 60.5/60.6: renderer channels for the Preferences Team and Rules pages
 import { execFile } from 'node:child_process'
 import { mkdirSync, readFileSync, statSync } from 'node:fs'
+import { dirname } from 'node:path'
 import {
   ERROR_CODES,
   ROSTER_APP_NAMES,
@@ -31,6 +32,7 @@ import {
 import { pathState, replaceFileSafely } from '../../bin/safe-config-write.mjs'
 import { unifiedDiff } from '../../bin/text-diff.mjs'
 import { approveRoster, approveSections, mergeSections, restoreGeneration, revertFileToApproved, saveAndApprove, type ApprovalSeams } from './agents-approval'
+import { findAppProgram } from './app-program'
 import { MainIpcError } from './workspace-ipc'
 
 interface AgentsIpcRegistrar {
@@ -364,7 +366,12 @@ function appView(harness: RosterHarness, context: RulesIpcContext): AgentAppView
         : versionStanding(harness, resolution.version).state === 'newer than BMN tested'
           ? ['newer', `Newer than the version BMN tested (${tested}). ${same}`]
           : ['other', `Not the version BMN tested (${tested}). ${same}`]
-  return { ...resolution, versionState, versionNote, ...(reason === undefined ? {} : { reason }) }
+  // The same PATH the version was read through, so the program shown is the one that answered.
+  const program = findAppProgram(APP_COMMANDS[harness], context.probeEnv.PATH, dirname(context.script))
+  return {
+    ...resolution, program: program?.path ?? null, ...(program?.target === undefined ? {} : { programTarget: program.target }),
+    versionState, versionNote, ...(reason === undefined ? {} : { reason })
+  }
 }
 
 async function rulesHealth(context: RulesIpcContext): Promise<RulesSnapshot['health']> {

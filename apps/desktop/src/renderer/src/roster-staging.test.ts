@@ -234,7 +234,7 @@ describe('agents (60.5 AC2–AC4)', () => {
 
   it('records an app without a destination as BMN inspected it, and on the owner\'s word when the inspection does not reach that provider', () => {
     const bare = { ...DATA, harness_routes: [] }
-    const app = (harness: AgentAppView['harness'], basis: string, provider: string | null): AgentAppView => ({ harness, version: '1.0.0', basis, provider, host: null, sources: [], versionState: 'tested', versionNote: '' })
+    const app = (harness: AgentAppView['harness'], basis: string, provider: string | null): AgentAppView => ({ harness, version: '1.0.0', program: `/synthetic/bin/${harness}`, basis, provider, host: null, sources: [], versionState: 'tested', versionNote: '' })
     const inspected = [app('claude', 'default', 'anthropic'), app('codex', 'explicit', 'zai'), app('cursor', 'unknown', null)]
     // Provider default on an agent whose app has no destination yet: the owner chose nothing about the app, so BMN's own reading is what gets recorded.
     expect(moveAgent(bare, 'astra', 'claude', '', 'public_only', inspected).harness_routes).toEqual([{ harness: 'claude', provider: 'anthropic', basis: 'observed-default' }])

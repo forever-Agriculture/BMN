@@ -605,6 +605,51 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await ledger.waitFor({ state: 'detached' })
     passed('Set destination… offers the inspected provider or the owner\'s word and stages the change with its consequence')
 
+    phase('60.6: Update… shows the program and the app\'s own command, starts nothing, and reads the version again')
+    // A copy is the one thing here that reaches outside BMN: record it instead of touching the owner's clipboard.
+    await application.evaluate(({ clipboard }) => {
+      globalThis.__bmnClipboardWrites = []
+      clipboard.writeText = (text) => { globalThis.__bmnClipboardWrites.push(text) }
+    })
+    // The stand-in program writes down how it was called, so a started updater would show.
+    const calls = join(root, 'codex-calls.txt')
+    stub('codex', `echo "$*" >> '${calls}'\necho "codex-cli 0.161.0"`)
+    const program = join(stubs, 'codex')
+    await app('Codex').locator('.path', { hasText: program }).waitFor()
+    await app('Cursor').getByText('Program not found', { exact: true }).waitFor()
+    assert.equal(await main.getByRole('button', { name: 'Update Cursor' }).isDisabled(), true, 'Update… is offered for an app with no program')
+    const updateButton = main.getByRole('button', { name: 'Update Codex' })
+    await updateButton.click()
+    const update = main.getByRole('group', { name: 'Update Codex' })
+    await update.waitFor()
+    assert.equal(await update.evaluate((node) => node === document.activeElement), true, 'the Update sheet did not take the focus')
+    await update.getByText("Codex's own updater does this, not BMN.", { exact: true }).waitFor()
+    await update.getByText(`${program} update`, { exact: true }).waitFor()
+    await update.getByText('BMN recognises no Codex session right now.', { exact: false }).waitFor()
+    await update.getByText("it hands over to this program, and this is the one updated.", { exact: false }).waitFor()
+    assert.deepEqual(await update.getByRole('button').allTextContents(), ['Copy command', 'Check now', 'Close'])
+    await shot('health-update-1280.png')
+    await update.getByRole('button', { name: 'Copy command' }).click()
+    await update.getByText('Copied', { exact: true }).waitFor()
+    assert.deepEqual(await application.evaluate(() => globalThis.__bmnClipboardWrites), [`${program} update`])
+    // The owner runs the updater in a terminal of his own; here the stand-in simply reports a newer version from now on.
+    stub('codex', `echo "$*" >> '${calls}'\necho "codex-cli 0.172.0"`)
+    await update.getByRole('button', { name: 'Check now' }).click()
+    await update.getByText('The selected program now reports 0.172.0; before it reported 0.161.0.', { exact: true }).waitFor()
+    await app('Codex').getByText('· newer than tested').waitFor()
+    await shot('health-update-checked-1280.png')
+    const started = readFileSync(calls, 'utf8').split('\n').filter((entry) => entry !== '')
+    assert.ok(started.length > 0, 'the stand-in program was never asked for its version')
+    assert.deepEqual([...new Set(started)], ['--version'], 'BMN started the app with something other than a version question')
+    await page.keyboard.press('Escape')
+    await update.waitFor({ state: 'detached' })
+    assert.equal(await dialog.isVisible(), true, 'Escape on the Update sheet closed Preferences')
+    assert.equal(await updateButton.evaluate((node) => node === document.activeElement), true, 'the focus did not return to Update…')
+    stub('codex', 'echo "codex-cli 0.161.0"')
+    await main.getByRole('button', { name: 'Check now' }).click()
+    await app('Codex').getByText('· tested').waitFor()
+    passed('Update… names the program past BMN\'s own command, copies the exact command, starts no updater and says what the program reports after a check')
+
     phase('60.5 AC7 / 60.4 AC6: an approval that changes the Team phrase lists the rules files first')
     await go('Rules')
     await install()
@@ -659,6 +704,8 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       ['changes', () => go('Team', 'Changes')],
       ['rules', () => go('Rules')],
       ['health', () => go('Rules', 'Health')],
+      // The sheet closes when the owner leaves Health, so each size opens it again.
+      ['health-update', async () => { await go('Rules', 'Health'); await main.getByRole('button', { name: 'Update Claude Code' }).click(); await main.getByRole('group', { name: 'Update Claude Code' }).waitFor() }],
       ['telegram', () => go(null, 'Telegram')]
     ]
     for (const [width, height] of SIZES) {
@@ -691,7 +738,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
         return !name || name.trim() === ''
       }).map((element) => element.outerHTML.slice(0, 120)))
     assert.deepEqual(unnamed, [])
-    passed('no horizontal scroll on eight pages at 800x500, 1000x700 and 1280x900; every control has a name (60.5 AC8, 60.6 AC5)')
+    passed('no horizontal scroll on nine pages at 800x500, 1000x700 and 1280x900; every control has a name (60.5 AC8, 60.6 AC5)')
 
     phase('keyboard: the navigation and a card open from the keyboard')
     await resize(1280, 900)
