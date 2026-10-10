@@ -862,7 +862,7 @@ export function TeamLedger(props: { team: TeamState }): React.JSX.Element | null
               <button type="button" aria-expanded={reviewing} disabled={preview === null} onClick={() => setReviewing(!reviewing)}>Review</button>
               <button type="button" disabled={team.busy} onClick={() => { setReviewing(false); team.discard() }}>Discard</button>
               <button type="button" className="primary" disabled={team.busy || preview === null || !preview.valid || team.data === null}
-                onClick={() => { if (team.data) void team.requestApproval({ kind: 'staged', data: team.data }, { title: 'Approve these changes', action: 'Approve' }) }}>Approve</button>
+                onClick={() => { if (team.data) void team.requestApproval({ kind: 'staged', data: team.data }, { title: first ? 'Approve the team for the first time' : 'Approve these changes', action: 'Approve' }) }}>Approve</button>
             </span>
           </div>
           {preview && !preview.valid ? <Issues issues={preview.errors} /> : null}

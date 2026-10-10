@@ -20,7 +20,7 @@ import {
   type RulesState
 } from './rules-preferences'
 import { Chain, TeamLedger, TeamPreferences, TeamToast, firstApprovalWords, shortDate, type TeamPage } from './team-preferences'
-import { rulesUpdateWords, type TeamState } from './team-state'
+import { confirmsBeforeCommit, rulesUpdateWords, type TeamState } from './team-state'
 
 const noop = (): void => {}
 const later = async (): Promise<void> => {}
@@ -249,6 +249,21 @@ describe('the approval footer (60.5 AC7)', () => {
     const markup = toastMarkup(team({ notice: { ok: true, text: 'Approved · version 5 · Rules updated in 2 apps', undo: 't' } }))
     expect(markup).toContain('<div class="toast" role="status"><span>Approved · version 5 · Rules updated in 2 apps</span>')
     expect(markup).toContain('>Undo</button>')
+  })
+
+  it('a first approval never commits from the footer alone: the sheet that names allowed folders comes first', () => {
+    // Asked to, or rules files would change: as before.
+    expect([confirmsBeforeCommit(true, false, 0), confirmsBeforeCommit(false, false, 2), confirmsBeforeCommit(false, false, 0)]).toEqual([true, true, false])
+    // Nothing approved yet: always, even with no rules file to update and Review never opened.
+    expect(confirmsBeforeCommit(false, true, 0)).toBe(true)
+    const data = { ...DATA, exceptions: [{ id: 'zai-here', provider: 'zai', folder: '/home/synthetic/work' }] }
+    const sheet = ledgerMarkup(team({
+      snapshot: { ...SNAPSHOT, approved: null, history: [] }, approved: null, data, hasStaged: true,
+      confirmation: { request: { kind: 'staged', data }, title: 'Approve the team for the first time', action: 'Approve',
+        preview: { valid: true, errors: [], differences: [], teamUpdate: [], consequences: ['Sol could be given work', 'Z.ai could receive private work in one more workspace'] } }
+    }))
+    expect(words(sheet).replace(/\s+/g, ' ')).toContain('Allowed workspaces Z.ai · workspace: — → /home/synthetic/work Z.ai could receive private work in one more workspace')
+    expect(sheet.indexOf('Allowed workspaces')).toBeLessThan(sheet.indexOf('>Sol<'))
   })
 
   it('Undo shows what each rules file would become and waits for the owner; nothing is put back unasked', () => {

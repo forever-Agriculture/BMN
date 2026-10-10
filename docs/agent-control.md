@@ -769,7 +769,9 @@ names and the team file). **Roles** edits each role's ordered candidates. **Chan
 approved version: open one to see how it differs, or restore it as a new version. Edits are
 staged. The bar at the foot counts them, **Review** shows one grouped list with its consequences
 in words ("Luna could lead", "Haiku could receive private work") and each rules file the change
-would rewrite, and **Approve** writes the team file and approves exactly what was shown. Escape
+would rewrite, and **Approve** writes the team file and approves exactly what was shown. The
+first approval never commits from the bar alone: it opens a sheet that names every allowed
+folder, agent and role, and commits from there. Escape
 or Discard drops staged edits; a file that changed meanwhile, or that a link now leads to in
 another folder, is reloaded and nothing is written.
 An edit made outside BMN shows as its own row with **Keep** and **Revert**.

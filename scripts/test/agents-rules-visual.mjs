@@ -179,6 +179,16 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await card('Sonnet').getByRole('button', { name: 'Activate' }).click()
     await ledger.getByText('First approval', { exact: true }).waitFor()
     await ledger.getByText('6 active agents and 10 roles take effect').waitFor()
+    // Approve with Review never opened: nothing is approved yet; the sheet names the allowed folder first, and Cancel leaves it so.
+    await approve()
+    const firstSheet = ledger.locator('.ledger-sheet[role="group"]')
+    await firstSheet.getByText('Approve the team for the first time').waitFor()
+    assert.equal(stateHash(), null, 'a first approval committed from the footer before its sheet was shown')
+    assert.match((await firstSheet.locator('.review-group').first().textContent()).replace(/\s+/g, ' '), /^Allowed workspaces.*Z\.ai · workspace.*\/synthetic\/EXCEPTION-SENTINEL-FOLDER/)
+    await shot('team-first-approval-sheet-1280.png')
+    await firstSheet.getByRole('button', { name: 'Cancel', exact: true }).click()
+    await firstSheet.waitFor({ state: 'detached' })
+    assert.equal(stateHash(), null)
     await ledger.getByRole('button', { name: 'Review' }).click()
     // One row per agent with what it could do, one per role with its chain; never a list of loose sentences.
     const review = ledger.locator('.ledger-sheet .review-group')
@@ -191,6 +201,9 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     assert.deepEqual(await ledger.locator('.ledger-sheet .review > .consequence').allTextContents(), [], 'no loose sentence is left over')
     await shot('team-first-approval-1280.png')
     await approve()
+    await firstSheet.getByText('Approve the team for the first time').waitFor()
+    assert.equal(stateHash(), null)
+    await firstSheet.getByRole('button', { name: 'Approve', exact: true }).click()
     await notice(/^Approved · version 1$/)
     assert.equal(current()?.generation, 1)
     // The message floats over the page, takes no room from it and leaves by itself.

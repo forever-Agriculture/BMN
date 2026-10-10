@@ -64,7 +64,7 @@ export interface TeamState {
   discard(): void
   reload(): Promise<void>
   setNotice(notice: TeamNotice | null): void
-  /** Asks to approve; shows the confirmation when the approval also updates rules files or `always` is set, otherwise commits. */
+  /** Asks to approve; shows the confirmation for a first approval, when the approval also updates rules files or when `always` is set, otherwise commits. */
   requestApproval(request: AgentsApprovalRequest, words: { title: string; action: string }, always?: boolean): Promise<void>
   commit(): Promise<void>
   cancelConfirmation(): void
@@ -77,6 +77,17 @@ export interface TeamState {
   undoRulesUpdate(transaction: string): Promise<void>
   confirmRulesUndo(): Promise<void>
   cancelRulesUndo(): void
+}
+
+/**
+ * Whether an approving control shows its sheet before it commits: when its caller asks, when the
+ * approval also rewrites rules files, and for every first approval. A first approval puts the
+ * whole team file into effect while the footer shows only counts; the sheet names each agent,
+ * each role and, first, every folder a public-only provider would be allowed private work in
+ * (60.2 AC5: an approval approves exactly what it shows).
+ */
+export function confirmsBeforeCommit(always: boolean, firstApproval: boolean, rulesFiles: number): boolean {
+  return always || firstApproval || rulesFiles > 0
 }
 
 /** "Rules updated in 2 apps", with what was left for Install when a file changed meanwhile. */
@@ -244,7 +255,7 @@ export function useTeamState(): TeamState {
       setNotice({ ok: false, text: 'This would not be a valid team; nothing was changed.', issues: result.errors })
       return
     }
-    if (always || result.teamUpdate.length > 0) setConfirmation({ request, preview: result, ...words })
+    if (confirmsBeforeCommit(always, snapshot?.approved === null, result.teamUpdate.length)) setConfirmation({ request, preview: result, ...words })
     else await run(request, [])
   }
 
