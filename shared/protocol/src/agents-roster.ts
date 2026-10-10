@@ -71,6 +71,27 @@ export interface RosterDataShape {
   skills?: RosterSkillShape[]
   /** The folder the skills come from, when it is not the default. */
   skills_source?: string
+  /** The owner's MCP tools, in id order; absent when there are none. */
+  tools?: RosterToolShape[]
+}
+
+/** One MCP tool: a program with arguments or an address, the environment variables it names (never a value), and who gets it. */
+export interface RosterToolShape {
+  id: string
+  name: string
+  command?: string
+  args?: (string | { env: string })[]
+  url?: string
+  /** An entry the program receives, mapped to the environment variable it comes from. */
+  env?: Record<string, string>
+  /** A request header, mapped to the environment variable it comes from. */
+  headers?: Record<string, string>
+  /** Whether an app that gets public work only may have it. */
+  public?: true
+  /** Kept to these apps; absent with `agents` absent means every app. */
+  apps?: RosterHarness[]
+  /** Kept to the runs of these agents: then no app's settings hold it. */
+  agents?: string[]
 }
 
 /** One skill's marks: `public` lets an app on a public-only route have it, `only` keeps it to some apps. */
@@ -79,7 +100,7 @@ export interface RosterSkillShape { id: string; public?: true; only?: RosterHarn
 export interface RosterIssueShape { code: string; line?: number; message: string }
 
 export interface RosterDiffShape {
-  scope: 'agent' | 'roles' | 'providers' | 'exceptions' | 'harness-routes' | 'skills'
+  scope: 'agent' | 'roles' | 'providers' | 'exceptions' | 'harness-routes' | 'skills' | 'tools'
   id: string
   field: string | null
   kind: 'added' | 'removed' | 'changed'

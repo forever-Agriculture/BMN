@@ -265,25 +265,37 @@ async function rosterStatus(argv) {
 }
 
 /**
- * Each candidate with the items that apply its agent's context limit to a run (60.9 AC2). An app's
- * version is asked once, and only when one of its agents has a limit.
+ * Each candidate with the items that apply its agent's context limit to a run (60.9 AC2) and those
+ * that give the run exactly its agent's tools (60.12 AC5). An app's version is asked once, and only
+ * when one of its agents has a limit or tools of its own.
  */
 async function withContext(data, chain) {
   const { contextItems, contextTests, provenControls, CONTEXT_CONTROLS } = await import('./agents-context.mjs')
+  const { TOOL_APPS, agentTools, appTools, toolItems, toolsTests } = await import('./agents-tools.mjs')
   const byId = new Map(data.agents.map((agent) => [agent.id, agent]))
   const versions = new Map()
   let tests
+  let toolTests
   let versionOf
+  const version = async (harness, command) => {
+    if (!versions.has(harness)) {
+      versionOf ??= (await import('./agents-check.mjs')).harnessVersion
+      versions.set(harness, versionOf(command, process.env))
+    }
+    return versions.get(harness)
+  }
+  const withTools = async (agent, candidate) => {
+    if (agentTools(data, agent.id).length === 0) return { ...candidate, tools: toolItems(agent, data, { isolation: false, variable: false }) }
+    toolTests ??= toolsTests()
+    const proven = TOOL_APPS[agent.harness] === undefined ? { isolation: false, variable: false } : appTools(agent.harness, { version: await version(agent.harness, TOOL_APPS[agent.harness].command), tests: toolTests })
+    return { ...candidate, tools: toolItems(agent, data, proven) }
+  }
   const describe = async (candidate) => {
     const agent = byId.get(candidate.agent)
     if (agent === undefined) return candidate
-    if (agent.context_limit === undefined || CONTEXT_CONTROLS[agent.harness] === undefined) return { ...candidate, context: contextItems(agent, { limit: false, compact: false }) }
-    if (!versions.has(agent.harness)) {
-      versionOf ??= (await import('./agents-check.mjs')).harnessVersion
-      versions.set(agent.harness, versionOf(CONTEXT_CONTROLS[agent.harness].command, process.env))
-    }
+    if (agent.context_limit === undefined || CONTEXT_CONTROLS[agent.harness] === undefined) return withTools(agent, { ...candidate, context: contextItems(agent, { limit: false, compact: false }) })
     tests ??= contextTests()
-    return { ...candidate, context: contextItems(agent, provenControls(agent.harness, versions.get(agent.harness), tests)) }
+    return withTools(agent, { ...candidate, context: contextItems(agent, provenControls(agent.harness, await version(agent.harness, CONTEXT_CONTROLS[agent.harness].command), tests)) })
   }
   const candidates = []
   for (const candidate of chain.candidates) candidates.push(await describe(candidate))
@@ -329,6 +341,11 @@ export async function runRules(argv) {
 export async function runSkills(argv) {
   const { runSkillsCommand } = await import('./agents-skills.mjs')
   return runSkillsCommand(argv)
+}
+
+export async function runTools(argv) {
+  const { runToolsCommand } = await import('./agents-tools.mjs')
+  return runToolsCommand(argv)
 }
 
 export async function runContext(argv) {

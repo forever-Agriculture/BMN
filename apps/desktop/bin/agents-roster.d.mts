@@ -57,8 +57,25 @@ export interface RosterData {
   skills?: RosterSkill[]
   /** The folder the skills come from, when it is not the default. */
   skills_source?: string
+  /** The owner's MCP tools, in id order; absent when there are none. */
+  tools?: RosterTool[]
 }
 export interface RosterSkill { id: string; public?: true; only?: Harness[] }
+/** One MCP tool: a program with arguments or an address, the environment variables it names (never a value), and who gets it. */
+export interface RosterTool {
+  id: string
+  name: string
+  command?: string
+  args?: (string | { env: string })[]
+  url?: string
+  /** An entry the program receives -> the environment variable it comes from. */
+  env?: Record<string, string>
+  /** A request header -> the environment variable it comes from. */
+  headers?: Record<string, string>
+  public?: true
+  apps?: Harness[]
+  agents?: string[]
+}
 export interface RosterIssue { code: string; line?: number; message: string }
 export interface RosterBlock { startLine: number; contentLine: number; endLine: number; start: number; end: number; contentStart: number; contentEnd: number; source: string }
 export interface RosterSection { heading: string; line: number; start: number; blocks: RosterBlock[] }
@@ -76,6 +93,10 @@ export declare function classRefusal(agentClass: AgentClass, role: string): Clas
 export declare const MAX_EXCEPTIONS: number
 export declare const MAX_SKILLS: number
 export declare const SKILL_PATTERN: RegExp
+export declare const MAX_TOOLS: number
+export declare const TOOL_PATTERN: RegExp
+export declare const ENV_NAME_PATTERN: RegExp
+export declare const TOOL_FIELDS: string[]
 export declare const SHARED_SECTIONS: string[]
 export declare const STARTER_ROLES: RosterRole[]
 export declare const AGENT_FIELDS: string[]
@@ -112,6 +133,7 @@ export declare function rolesYaml(roles: RosterRole[]): string
 export declare function providersYaml(providers: RosterProvider[]): string
 export declare function exceptionsYaml(exceptions: RosterException[]): string
 export declare function skillsYaml(data: Pick<RosterData, 'skills' | 'skills_source'>): string
+export declare function toolsYaml(data: Pick<RosterData, 'tools'>): string
 export declare function starterRoster(): string
 export declare function privateWorkOf(data: RosterData, agent: RosterAgent): PrivateWork
 export declare function resolvedDirectory(path: string): string

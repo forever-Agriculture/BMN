@@ -25,11 +25,17 @@ export const THEN = ['lead', 'skip', 'blocked', 'owner-chooses']
 export const PRIVATE_WORK = ['allowed', 'public_only']
 export const PAID_BY = ['per_token', 'subscription']
 export const BASES = ['observed-default', 'owner-declared']
-/** Sections that are not agents. `tools` is held for the story that defines it. */
+/** Sections that are not agents. */
 export const RESERVED_SECTIONS = ['roster', 'roles', 'providers', 'exceptions', 'harness-routes', 'skills', 'tools']
-const UNREAD_SECTIONS = ['tools']
 export const MAX_EXCEPTIONS = 64
 export const MAX_SKILLS = 256
+export const MAX_TOOLS = 64
+/** A tool's id: the name its entry carries in each app's own settings. */
+export const TOOL_PATTERN = /^[a-z0-9][a-z0-9_-]{0,39}$/
+/** The name of an environment variable; a tool names variables, it never holds their values. */
+export const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
+const HEADER_NAME_PATTERN = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/
+export const TOOL_FIELDS = ['name', 'command', 'args', 'url', 'env', 'headers', 'public', 'apps', 'agents']
 /** A skill's name is its folder's name in the skills source. */
 export const SKILL_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/
 /** The role only a knight or a queen may hold. */
@@ -418,10 +424,6 @@ export function parseRoster(text) {
       continue
     }
     seen.set(id, section.line)
-    if (UNREAD_SECTIONS.includes(id)) {
-      add('SECTION_INVALID', section.line, `"## ${id}" is reserved and not read by this version of BMN`)
-      continue
-    }
     if (section.blocks.length === 0) {
       add('MISSING_BLOCK', section.line, `"## ${id}" has no fenced yaml block`)
       continue
@@ -471,6 +473,7 @@ export function parseRoster(text) {
   const roles = validateRoles(blocks.get('roles'), agentById, agentIds, add, warnings)
   const exceptions = validateExceptions(blocks.get('exceptions'), providerIds, add, (code, line, message) => warnings.push({ code, line, message }))
   const skills = validateSkills(blocks.get('skills'), add)
+  const tools = validateTools(blocks.get('tools'), agentIds, add)
 
   const providerById = new Map(providers.map((provider) => [provider.id, provider]))
   const roleIds = new Set(roles.map((role) => role.id))
@@ -493,7 +496,7 @@ export function parseRoster(text) {
 
   if (errors.length > 0) return { data: null, errors: errors.sort((a, b) => (a.line ?? 0) - (b.line ?? 0)), warnings, sections }
   return {
-    data: { schema_version: SCHEMA_VERSION, agents: agents.filter(Boolean), roles, providers, exceptions, harness_routes: routes, ...skills },
+    data: { schema_version: SCHEMA_VERSION, agents: agents.filter(Boolean), roles, providers, exceptions, harness_routes: routes, ...skills, ...tools },
     errors, warnings, sections
   }
 }
@@ -950,7 +953,8 @@ function yamlScalar(value) {
   if (value === null) return 'null'
   if (typeof value === 'boolean' || typeof value === 'number') return String(value)
   const text = String(value)
-  const plain = /^[A-Za-z0-9_./@+-][A-Za-z0-9_ ./@|+-]*$/.test(text) && !/\s$/.test(text)
+  // A leading @ would read as a YAML tag, which this file's reader refuses: such a text is quoted.
+  const plain = /^[A-Za-z0-9_./+-][A-Za-z0-9_ ./@|+-]*$/.test(text) && !/\s$/.test(text)
     && !['null', 'true', 'false', '~'].includes(text) && !/^-?\d+(\.\d+)?$/.test(text) && !/ #|: /.test(text)
   return plain ? text : JSON.stringify(text)
 }
@@ -1016,6 +1020,113 @@ function validateSkills(entry, add) {
   if (marks.size > MAX_SKILLS) add('INVALID_VALUE', where, `## skills marks ${marks.size} skills; at most ${MAX_SKILLS}`)
   if (marks.size > 0) out.skills = [...marks.values()].sort((a, b) => (a.id < b.id ? -1 : 1))
   return out
+}
+
+/** Text of one line: no control character, so nothing in it can end a line of a settings file or hide in a preview. */
+const plainText = (value, max) => isString(value, max) && [...value].every((char) => char.codePointAt(0) >= 0x20 && char.codePointAt(0) !== 0x7f)
+
+/** Whether a tool's address is one BMN writes into an app: https, or plain http to this machine only, with no sign-in in it. */
+function toolUrlProblem(value) {
+  if (!plainText(value, 400)) return 'url must be an address of at most 400 characters'
+  let url
+  try {
+    url = new URL(value)
+  } catch {
+    return 'url is not an address'
+  }
+  const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && local)) return 'url must start with https:// (http:// only for this machine)'
+  if (url.username !== '' || url.password !== '') return 'url must not hold a name or a password; name an environment variable under headers'
+  return null
+}
+
+/**
+ * `## tools`: one entry per MCP tool, keyed by its id. A tool is a program BMN names (`command`,
+ * `args`) or an address (`url`); what it needs that is secret is named, never held: `env` maps an
+ * entry the program receives to the name of an environment variable, `headers` does the same for
+ * a request header, and an argument may be `{env: NAME}`. `public` is true when an app that gets
+ * public work only may have the tool. A tool reaches every app unless `apps` keeps it to some, or
+ * `agents` keeps it to the runs of some agents, in which case it is installed in no app. The data
+ * holds nothing at all when the section says nothing, so a team file without it keeps its hash.
+ */
+function validateTools(entry, agentIds, add) {
+  if (!entry) return {}
+  const tools = []
+  for (const [id, tool] of Object.entries(entry.value)) {
+    const line = entry.lines.get(id) ?? entry.block.startLine
+    if (!TOOL_PATTERN.test(id)) {
+      add('INVALID_VALUE', line, `## tools: tool id ${id} must be lowercase letters, digits, - or _, at most 40`)
+      continue
+    }
+    if (!isMap(tool)) {
+      add('INVALID_VALUE', line, `## tools.${id} must be a map of name and command or url`)
+      continue
+    }
+    let ok = true
+    const fail = (code, key, message) => {
+      add(code, entry.lines.get(`${id}.${key}`) ?? line, `## tools.${id}: ${message}`)
+      ok = false
+    }
+    for (const key of Object.keys(tool)) {
+      if (!TOOL_FIELDS.includes(key)) fail('UNKNOWN_FIELD', key, `unknown field ${key}`)
+    }
+    if (!plainText(tool.name, 40)) fail('INVALID_VALUE', 'name', 'name must be text of 1-40 characters')
+    const local = Object.hasOwn(tool, 'command')
+    const remote = Object.hasOwn(tool, 'url')
+    if (local === remote) fail('INVALID_VALUE', local ? 'url' : 'name', 'a tool has a command or a url, one of them')
+    if (local && !plainText(tool.command, 400)) fail('INVALID_VALUE', 'command', 'command must be a program name or path of at most 400 characters')
+    if (remote) {
+      const problem = toolUrlProblem(tool.url)
+      if (problem !== null) fail('INVALID_VALUE', 'url', problem)
+    }
+    const out = { id, name: tool.name, ...(local ? { command: tool.command } : {}), ...(remote ? { url: tool.url } : {}) }
+    if (Object.hasOwn(tool, 'args')) {
+      const fine = (arg) => plainText(arg, 400) || arg === '' || (isMap(arg) && Object.keys(arg).length === 1 && typeof arg.env === 'string' && ENV_NAME_PATTERN.test(arg.env))
+      if (!local) fail('INVALID_VALUE', 'args', 'args belong to a command, not to a url')
+      else if (!Array.isArray(tool.args) || tool.args.length > 40 || !tool.args.every(fine)) fail('INVALID_VALUE', 'args', 'args must be a list of at most 40 texts, or {env: NAME} for a value kept in an environment variable')
+      else if (tool.args.length > 0) out.args = tool.args
+    }
+    for (const [key, pattern, max, what] of [['env', ENV_NAME_PATTERN, 32, 'an entry the program receives'], ['headers', HEADER_NAME_PATTERN, 16, 'a request header']]) {
+      if (!Object.hasOwn(tool, key)) continue
+      const map = tool[key]
+      if (key === 'headers' && !remote) fail('INVALID_VALUE', key, 'headers belong to a url, not to a command')
+      else if (key === 'env' && !local) fail('INVALID_VALUE', key, 'env belongs to a command, not to a url')
+      else if (!isMap(map) || Object.keys(map).length > max || !Object.entries(map).every(([name, variable]) => pattern.test(name) && typeof variable === 'string' && ENV_NAME_PATTERN.test(variable))) {
+        fail('INVALID_VALUE', key, `${key} must map ${what} to the name of an environment variable (never its value), at most ${max}`)
+      } else if (Object.keys(map).length > 0) out[key] = Object.fromEntries(Object.entries(map).sort(([a], [b]) => (a < b ? -1 : 1)))
+    }
+    if (Object.hasOwn(tool, 'public')) {
+      if (typeof tool.public !== 'boolean') fail('INVALID_VALUE', 'public', 'public must be true or false')
+      else if (tool.public) out.public = true
+    }
+    if (Object.hasOwn(tool, 'apps') && Object.hasOwn(tool, 'agents')) fail('INVALID_VALUE', 'agents', 'a tool is kept to some apps or to some agents, not both')
+    else if (Object.hasOwn(tool, 'apps')) {
+      if (!Array.isArray(tool.apps) || tool.apps.length === 0 || tool.apps.some((app) => !HARNESSES.includes(app))) fail('INVALID_VALUE', 'apps', `apps must be a list of one or more of ${HARNESSES.join(', ')}`)
+      else if (new Set(tool.apps).size !== tool.apps.length) fail('DUPLICATE_ID', 'apps', 'apps names an app twice')
+      else out.apps = HARNESSES.filter((app) => tool.apps.includes(app))
+    } else if (Object.hasOwn(tool, 'agents')) {
+      if (!Array.isArray(tool.agents) || tool.agents.length === 0 || tool.agents.some((agent) => typeof agent !== 'string' || !ID_PATTERN.test(agent))) fail('INVALID_VALUE', 'agents', 'agents must be a list of one or more agent ids')
+      else if (new Set(tool.agents).size !== tool.agents.length) fail('DUPLICATE_ID', 'agents', 'agents names an agent twice')
+      else if (tool.agents.some((agent) => !agentIds.has(agent))) fail('AGENT_UNKNOWN', 'agents', `no agent ${tool.agents.find((agent) => !agentIds.has(agent))} in this file`)
+      else out.agents = [...tool.agents].sort()
+    }
+    if (ok) tools.push(out)
+  }
+  if (tools.length > MAX_TOOLS) add('INVALID_VALUE', entry.block.startLine, `## tools holds ${tools.length} tools; at most ${MAX_TOOLS}`)
+  return tools.length > 0 ? { tools: tools.sort((a, b) => (a.id < b.id ? -1 : 1)) } : {}
+}
+
+/** The tools as the section holds them, or '' when there are none. */
+export function toolsYaml(data) {
+  return keyedYaml((data.tools ?? []).map((tool) => Object.fromEntries(['id', ...TOOL_FIELDS].filter((key) => Object.hasOwn(tool, key)).map((key) => [key, tool[key]]))), 'id')
+}
+
+/** The tools part of machine data read back from a block's parsed value, the way `validateTools` builds it. */
+function toolsFromBlock(value, agentIds) {
+  if (!isMap(value)) return undefined
+  const issues = []
+  const out = validateTools({ value, lines: new Map(), block: { startLine: 0 } }, agentIds, (code) => issues.push(code))
+  return issues.length > 0 ? undefined : out.tools ?? []
 }
 
 /** The skills marks as the section holds them, or '' when there is nothing to say. */
@@ -1139,7 +1250,7 @@ const SHARED = [
   { id: 'exceptions', key: 'id', field: 'exceptions', yaml: exceptionsYaml },
   { id: 'harness-routes', key: 'harness', field: 'harness_routes', yaml: routesYaml }
 ]
-export const SHARED_SECTIONS = [...SHARED.map((entry) => entry.id), 'skills']
+export const SHARED_SECTIONS = [...SHARED.map((entry) => entry.id), 'skills', 'tools']
 
 /**
  * The roster text rewritten so its machine data equals `data`, changing only what must change:
@@ -1157,7 +1268,7 @@ export function rewriteRoster(text, data, { scope = null } = {}) {
   const seen = new Set()
   sections.forEach((section, index) => {
     const id = section.heading
-    if (!ID_PATTERN.test(id) || !inScope(id) || UNREAD_SECTIONS.includes(id)) return
+    if (!ID_PATTERN.test(id) || !inScope(id)) return
     const sectionEnd = index + 1 < sections.length ? sections[index + 1].start : text.length
     if (seen.has(id)) {
       if (!RESERVED_SECTIONS.includes(id) && !targets.has(id)) return
@@ -1175,6 +1286,10 @@ export function rewriteRoster(text, data, { scope = null } = {}) {
       // An emptied section keeps its heading and says so, rather than leaving a block nothing parses.
       wanted = skillsYaml(data) || 'public: []'
       current = same(skillsFromBlock(blockValue(section)), { skills: data.skills ?? [], source: data.skills_source ?? null }) ? wanted : undefined
+    } else if (id === 'tools') {
+      // An emptied section keeps its heading and says so; a block with no entries reads as no tools.
+      wanted = toolsYaml(data) || '# no tools'
+      current = same(toolsFromBlock(blockValue(section), new Set(data.agents.map((agent) => agent.id))), data.tools ?? []) ? wanted : undefined
     } else if (shared !== undefined) {
       wanted = shared.yaml(data[shared.field])
       current = same(keyedFromBlock(blockValue(section), shared.key), data[shared.field]) ? wanted : undefined
@@ -1208,6 +1323,7 @@ export function rewriteRoster(text, data, { scope = null } = {}) {
     if (shared.id !== 'providers' && data[shared.field].length > 0) ensure(shared.id, shared.yaml(data[shared.field]))
   }
   if (skillsYaml(data) !== '') ensure('skills', skillsYaml(data))
+  if (toolsYaml(data) !== '') ensure('tools', toolsYaml(data))
   let out = text
   for (const edit of edits.sort((a, b) => b.start - a.start)) out = `${out.slice(0, edit.start)}${edit.text}${out.slice(edit.end)}`
   if (appended !== '') out = `${out}${out.endsWith('\n') || out === '' ? '' : '\n'}${appended}`

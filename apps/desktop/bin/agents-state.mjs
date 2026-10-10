@@ -1,7 +1,7 @@
 // MODULE: agents-state.mjs - Epic 60.2: read-only access to the owner-approved roster generations; nothing here writes
 import { readdirSync, readFileSync } from 'node:fs'
 import {
-  AGENT_FIELDS, FREE_TEXT_FIELDS, RosterError, SCHEMA_VERSION, agentsDirectory, canonicalJson, parseRoster, rosterPath, sha256
+  AGENT_FIELDS, FREE_TEXT_FIELDS, RosterError, SCHEMA_VERSION, TOOL_FIELDS, agentsDirectory, canonicalJson, parseRoster, rosterPath, sha256
 } from './agents-roster.mjs'
 
 /**
@@ -80,6 +80,7 @@ function wellFormed(data) {
     && data.harness_routes.every((route) => isObject(route) && typeof route.harness === 'string')
     && (data.skills === undefined || (Array.isArray(data.skills) && data.skills.every((skill) => isObject(skill) && typeof skill.id === 'string')))
     && (data.skills_source === undefined || typeof data.skills_source === 'string')
+    && (data.tools === undefined || (Array.isArray(data.tools) && data.tools.every((tool) => isObject(tool) && typeof tool.id === 'string')))
 }
 
 /** A generation file whose hash verifies, whatever its schema; null when missing, unreadable or altered. */
@@ -298,7 +299,8 @@ const DIFF_SCOPES = [
   { scope: 'providers', list: 'providers', key: 'id', fields: ['name', 'hosts', 'sites', 'private_work'] },
   { scope: 'exceptions', list: 'exceptions', key: 'id', fields: ['provider', 'folder'] },
   { scope: 'harness-routes', list: 'harness_routes', key: 'harness', fields: ['provider', 'basis', 'accepted_versions'] },
-  { scope: 'skills', list: 'skills', key: 'id', fields: ['public', 'only'] }
+  { scope: 'skills', list: 'skills', key: 'id', fields: ['public', 'only'] },
+  { scope: 'tools', list: 'tools', key: 'id', fields: TOOL_FIELDS }
 ]
 
 /**

@@ -117,6 +117,8 @@ Commands:
                                             owner-run test of the setting (bmn context --help)
   skills check|install|test                 One skills folder linked or copied into each agent app, with
                                             the owner-run test of where an app reads skills (bmn skills --help)
+  tools check|install|import|test           One list of MCP tools set up in each agent app's own settings,
+                                            with the owner-run test of where an app reads them (bmn tools --help)
   help [agents|terminal]                    Show this help or a short agent/terminal guide
 
 Long text from standard input (instead of one quoted argument; only - is accepted, pipe a file with cat):
@@ -2397,13 +2399,14 @@ async function main(argv) {
   // hooks reads and writes the owner's own hook files; it never opens the control socket.
   if (argv[0] === 'hooks') return runHooks(argv.slice(1))
   // Epic 60: the roster, its check and the rules master are owner files; no socket, no token.
-  if (argv[0] === 'team' || argv[0] === 'roster' || argv[0] === 'rules' || argv[0] === 'context' || argv[0] === 'skills') {
+  if (argv[0] === 'team' || argv[0] === 'roster' || argv[0] === 'rules' || argv[0] === 'context' || argv[0] === 'skills' || argv[0] === 'tools') {
     const agents = await import('./agents-cli.mjs')
     try {
       if (argv[0] === 'team') return await agents.runTeam(argv.slice(1))
       if (argv[0] === 'roster') return await agents.runRoster(argv.slice(1))
       if (argv[0] === 'context') return await agents.runContext(argv.slice(1))
       if (argv[0] === 'skills') return await agents.runSkills(argv.slice(1))
+      if (argv[0] === 'tools') return await agents.runTools(argv.slice(1))
       return await agents.runRules(argv.slice(1))
     } catch (error) {
       if (error instanceof agents.AgentsUsageError) return agents.usage(error.message)

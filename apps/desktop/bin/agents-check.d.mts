@@ -31,6 +31,8 @@ interface ReceiptBase {
   model: string
   effort: string
   context_limit_applied: number | null
+  /** The tools this run was given and a hash of their definitions; absent when it was given none. */
+  tools?: { applied: string[]; sha256: string }
   cwd: string
   argv_sha256: string
   harness_version: { version: string | null; state: string }
@@ -68,6 +70,8 @@ export interface CheckOptions {
   resumeVersions?: Record<string, string[]>
   /** The recorded context-setting tests; the tests' seam for 60.9 AC1. */
   contextTestLog?: import('./agents-context.mjs').ContextTestEntry[]
+  /** The recorded tools tests; the tests' seam for 60.12 AC5. */
+  toolsTestLog?: import('./agents-tools.mjs').ToolsTestEntry[]
 }
 export interface ResearchOptions { environment?: Environment; cwd?: string; now?: Date; testedVersions?: Record<string, string[]>; fenceVersions?: Record<string, string[]>; contextTestLog?: import('./agents-context.mjs').ContextTestEntry[] }
 export interface VisibilityRecord {

@@ -154,7 +154,7 @@ describe('roster validation (60.1 AC1, AC2)', () => {
     ['a role description over its bound', (t) => edit(t, 'description: DESCRIPTION-SENTINEL-HELPER', `description: ${'d'.repeat(81)}`), 'INVALID_VALUE'],
     ['the earlier small_epic rule', (t) => edit(t, 'small_work: astra@low', 'small_epic: astra@low'), 'UNKNOWN_FIELD'],
     ['the earlier ## data-labels section', (t) => `${t}\n## data-labels\n\n\`\`\`yaml\ndefault: private\n\`\`\`\n`, 'MISSING_FIELD'],
-    ['a reserved section this version does not read', (t) => `${t}\n## tools\n\n\`\`\`yaml\nplaywright: {}\n\`\`\`\n`, 'SECTION_INVALID'],
+    ['a tool with neither a program nor an address', (t) => `${t}\n## tools\n\n\`\`\`yaml\nplaywright: { name: Playwright }\n\`\`\`\n`, 'INVALID_VALUE'],
     ['unsupported YAML', (t) => edit(t, 'name: Luna\n', 'name: &anchor Luna\n'), 'YAML_SYNTAX'],
     ['heading that is not an id', (t) => `${t}\n## Notes for later\n\ntext\n`, 'SECTION_INVALID']
   ]

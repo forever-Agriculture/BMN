@@ -90,6 +90,8 @@ Commands:
                                             owner-run test of the setting (bmn context --help)
   skills check|install|test                 One skills folder linked or copied into each agent app, with
                                             the owner-run test of where an app reads skills (bmn skills --help)
+  tools check|install|import|test           One list of MCP tools set up in each agent app's own settings,
+                                            with the owner-run test of where an app reads them (bmn tools --help)
   help [agents|terminal]                    Show this help or a short agent/terminal guide
 
 Long text from standard input (instead of one quoted argument; only - is accepted, pipe a file with cat):
@@ -967,6 +969,92 @@ A skill's lines are never printed: a plan names files, not their text.
 in it, so a skill it may not have stays `exposed` until you mark it Public or move it out of the
 folder; so does an entry BMN did not write. While anything is exposed the check exits 1 and an
 install does not report success.
+
+### Tools (MCP)
+
+You keep one list of MCP tools in the team file's `## tools` section, and BMN sets each one up in
+the settings of every agent app that may have it. Rules → **Tools** lists each tool with what it
+runs, who gets it and its state in each app; `bmn tools check` prints the same.
+
+```yaml
+docs: {name: Docs, url: "https://docs.example.com/mcp", headers: {Authorization: DOCS_TOKEN}, public: true}
+files: {name: Files, command: files-tool, args: ["--root", /srv/files], env: {FILES_KEY: FILES_KEY}, apps: [claude, codex]}
+browser: {name: Browser, command: npx, args: ["@playwright/mcp@0.0.75"], agents: [luna]}
+```
+
+A tool is a program (`command`, `args`) or an address (`url`). **It names environment variables
+and never holds their values:** `env` maps an entry the program receives to the variable it comes
+from, `headers` does the same for a request header, and an argument may be `{env: NAME}`. BMN
+keeps no value anywhere, not in the team file, its state, a plan or an undo. A tool reaches every
+app, unless `apps` keeps it to some, or `agents` keeps it to the runs of some agents. `public:
+true` lets an app that gets public work only have it. At most 64 tools; an id is lowercase
+letters, digits, `-` and `_`.
+
+**Where an app reads tools is tested, not assumed.** Until `bmn tools test <app>` (Rules → Health
+→ Tools → **Test…**) passed on exactly the installed version, an app's tools are "not supported
+yet" and nothing is written for it. The test starts the app in an empty home folder with no
+sign-in, so nothing is sent: it writes one stand-in tool into the app's settings file there the
+way BMN would, asks the app which tools it sees, and records whether the app named it, whether
+it passed the named variable, whether a run told to take only its own tools left that entry out,
+and whether the app's own add and remove commands change the same file.
+
+| App | Settings file | Entries under | A variable is written as | Tested on a live app |
+| --- | --- | --- | --- | --- |
+| Claude Code | `~/.claude.json` | `mcpServers` | `${NAME}` | not yet |
+| Codex | `~/.codex/config.toml` | `[mcp_servers.<id>]` | `env_vars = ["NAME"]`, `env_http_headers` | not yet |
+| OpenCode | `~/.config/opencode/opencode.jsonc` | `mcp` | `{env:NAME}` | not yet |
+| Cursor | `~/.cursor/mcp.json` | `mcpServers` | `${env:NAME}` | not yet |
+
+Codex passes a variable only under its own name and has none for an argument; a tool that needs
+either reads `blocked` for Codex, with the reason. A tool that names a variable is written only
+where the test saw that app version pass one.
+
+**One state per app and tool.**
+
+| State | Meaning |
+| --- | --- |
+| `current` | BMN's entry is in place |
+| `missing` | not in the app's settings yet |
+| `stale` | BMN's entry is older than the tool |
+| `edited-outside` | BMN's entry was changed outside BMN |
+| `unmanaged` | an entry under that name that BMN did not write |
+| `blocked` | the app cannot take the tool as it is, or its entry holds a value inline |
+| `unreadable` | BMN cannot read the entry or the file |
+| `excluded` | the app is not meant to have the tool, and does not |
+| `exposed` | the app holds a tool it may not have |
+
+Entries an app holds that are not on your list are named too: `unmanaged`, or `exposed` where the
+app gets public work only. `bmn tools check` exits 0 only when at least one app is supported,
+every tool is `current` or `excluded` in every supported app, and nothing is exposed.
+
+**Install.** `bmn tools install [app…]`, or **Install…** on the Tools page, shows every entry it
+would add, replace or remove and writes after you confirm. An app rewrites its own settings file
+all the time (`~/.claude.json` holds much besides tools), so BMN never rewrites the file: it
+changes only the named entries in the file as it is at that moment and leaves every other byte,
+comments included. It refuses when an entry changed since you saw it, and when the settings file
+is a link. Entries that are not on your list stay until you ask for their removal
+(`--remove-unlisted`). It is one transaction; what each entry held is kept as that entry's own
+text, never the file, and **Undo install…** (or `bmn rules restore --transaction <id>`) puts the
+entries back in the file as it is then. An entry that holds a value inline is never replaced or
+removed, because putting it back would need the value: move the value into an environment
+variable first. Whatever BMN shows of an entry it did not write has such values masked.
+
+**Import.** `bmn tools import` proposes the entries the apps already hold as tools: one tool
+where the apps agree on what it runs and the variables it names, separate proposals where they
+differ, each kept to the apps that hold it and none Public. A value held inline is left out and
+named ("move this value into an environment variable"), never stored or printed. `--yes` adds
+the proposals to the team file; nothing reaches an app until you approve them in BMN.
+
+**A tool kept to some agents** is in no app's settings. `bmn roster role <role> --json` gives each
+candidate a `tools` entry with the items that give a run exactly its agent's tools and shut out
+the app's own: for Codex `-c 'mcp_servers={}'` followed by one `-c mcp_servers.<id>.<setting>=…`
+per setting, for Claude Code `--strict-mcp-config --mcp-config '<json>'`. `bmn roster check`
+then compares what the command names with the agent's approved tools and refuses a missing,
+additional, altered or unreadable one with `TOOL_MISMATCH`; the receipt binds the tools and a
+hash of their definitions. It refuses with `ROUTE_UNSUPPORTED` where the installed app version
+was never seen keeping a run to its own tools, on a resume, and with a Codex profile. A packet
+run carries no tools, and a research run none either. While your team lists no tools at all,
+the check leaves a command's own tools unjudged, as it did before.
 
 ### Models: what research found
 

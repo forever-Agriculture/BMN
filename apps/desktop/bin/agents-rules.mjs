@@ -638,6 +638,8 @@ export async function restoreTransaction(id, { yes = false, asJson = false, plan
   if (manifest === null) return { code: 'NOT_FOUND', message: `no transaction ${id}` }
   // A skills install shares the transactions folder and this command; its entries are folders and links, undone by their own module.
   if (manifest.kind === 'skills') return (await import('./agents-skills.mjs')).restoreSkillsTransaction(manifest, folder, { yes, asJson, planOnly, expectedPlanHash })
+  // A tools install changed single entries inside the apps' own settings files; only those entries go back.
+  if (manifest.kind === 'tools') return (await import('./agents-tools.mjs')).restoreToolsTransaction(manifest, folder, { yes, asJson, planOnly, expectedPlanHash })
   const plans = manifest.targets.map((target) => {
     const prior = target.prior.kind === 'file'
       ? { kind: 'file', text: readFileSync(`${folder}/${target.prior.backup}`, 'utf8'), mode: target.prior.mode ?? 0o600 }

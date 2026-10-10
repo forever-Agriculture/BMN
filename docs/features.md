@@ -285,6 +285,12 @@ skill can be kept to some apps, and an app that gets public work only receives j
 you mark Public; a skill an app can see but may not have is shown as exposed. Nothing is written
 for an app until its own test, on the installed version, showed where it reads skills.
 
+Rules → **Tools** keeps one list of MCP tools and sets each up in every agent app's own settings:
+only the tool's entry changes there, every other byte of the file stays, and an install is undone
+as one step. A tool names environment variables and never holds their values. It reaches every
+app, some apps, or only the runs of some agents, where the check before a hand-off refuses any
+other set of tools. `bmn tools import` proposes what your apps already hold.
+
 Team → **Models** has one of your own agents look up your models' published prices and context
 windows, in an empty folder with web tools only, sent nothing but the model names and the source
 list. BMN reads each cited page itself and marks what it cannot confirm there. **Apply prices…**

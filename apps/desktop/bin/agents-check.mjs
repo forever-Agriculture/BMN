@@ -8,6 +8,7 @@ import { readApproved, readApprovedWithFile, readValidRoster, stateDirectory } f
 import { AgentsUsageError, EXIT, failWith, out, readOptions, usage } from './agents-cli.mjs'
 import { publicRendering } from './agents-rules.mjs'
 import { CLAUDE_CONTEXT_KEY, CODEX_CONTEXT_KEYS, checkContext, provenControls, wholeNumber } from './agents-context.mjs'
+import { agentTools, appTools, checkRunTools } from './agents-tools.mjs'
 
 /**
  * The check answers one question immediately before a dispatch: may this exact command, run from
@@ -517,6 +518,9 @@ export function resolveCodexRoute(parsed, environment, cwd = null) {
       else sizeOverrides[keys[0]] = number
     } else if (keys.length === 1 && CODEX_NEUTRAL_KEYS.includes(keys[0])) {
       continue
+    } else if (keys[0] === 'mcp_servers') {
+      // A tool given to this one run: what it may be is the tools check's question (60.12 AC5), not the destination's.
+      continue
     } else {
       return { unsupported: `-c ${keys.join('.')} is not a key BMN knows to be neutral or can resolve` }
     }
@@ -579,7 +583,7 @@ export function resolveCodexRoute(parsed, environment, cwd = null) {
     return null
   }
   const context = { limit: size(CODEX_CONTEXT_KEYS[0]), compact: size(CODEX_CONTEXT_KEYS[1]) }
-  return { route: { ...route, sources: [...new Set(sources)] }, model, effort, configHome: codexHome, context }
+  return { route: { ...route, sources: [...new Set(sources)] }, model, effort, configHome: codexHome, context, profile: profileName ?? null }
 }
 
 const CLAUDE_PROVIDER_SWITCHES = ['CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY']
@@ -1287,6 +1291,31 @@ export function consequences(before, after) {
     if (gains.length === 0 && loses.length === 0) out.push(`Skill ${id}: no app gains or loses it`)
   }
   if ((prior.skills_source ?? null) !== (after.skills_source ?? null)) out.push('Skills would come from another folder')
+  // A tool: which apps' settings would gain it, lose it or hold it changed at the next install, and whose runs would carry it (60.12 AC6).
+  const toolsOf = (data) => new Map((data.tools ?? []).map((tool) => [tool.id, tool]))
+  const oldTools = toolsOf(prior)
+  const newTools = toolsOf(after)
+  const inApp = (data, tool, harness) => tool !== undefined && tool.agents === undefined && (tool.apps === undefined || tool.apps.includes(harness))
+    && (harnessPrivateWork(data, harness).allowed || tool.public === true)
+  const what = (tool) => canonicalJson([tool.command ?? null, tool.args ?? [], tool.url ?? null, tool.env ?? {}, tool.headers ?? {}])
+  for (const id of [...new Set([...oldTools.keys(), ...newTools.keys()])].sort()) {
+    const was = oldTools.get(id)
+    const now = newTools.get(id)
+    if (canonicalJson(was ?? null) === canonicalJson(now ?? null)) continue
+    const gains = HARNESSES.filter((harness) => !inApp(prior, was, harness) && inApp(after, now, harness)).map((harness) => APP_NAMES[harness])
+    const loses = HARNESSES.filter((harness) => inApp(prior, was, harness) && !inApp(after, now, harness)).map((harness) => APP_NAMES[harness])
+    const changes = was !== undefined && now !== undefined && what(was) !== what(now)
+      ? HARNESSES.filter((harness) => inApp(prior, was, harness) && inApp(after, now, harness)).map((harness) => APP_NAMES[harness]) : []
+    const given = (now?.agents ?? []).filter((agent) => !(was?.agents ?? []).includes(agent)).map(name)
+    const taken = (was?.agents ?? []).filter((agent) => !(now?.agents ?? []).includes(agent)).map(name)
+    const said = out.length
+    if (gains.length > 0) out.push(`Tool ${id} would reach ${listed(gains)}`)
+    if (loses.length > 0) out.push(`Tool ${id} would no longer reach ${listed(loses)}`)
+    if (changes.length > 0) out.push(`Tool ${id} would change in ${listed(changes)}`)
+    if (given.length > 0) out.push(`Tool ${id} would be given to the runs of ${listed(given)}`)
+    if (taken.length > 0) out.push(`Tool ${id} would no longer be given to the runs of ${listed(taken)}`)
+    if (out.length === said) out.push(`Tool ${id}: no app gains or loses it`)
+  }
   return [...new Set(out)]
 }
 
@@ -1376,7 +1405,7 @@ function receiptAnswer(answer) {
  */
 export function evaluate(inputs, {
   environment = process.env, cwd: processCwd = process.cwd(), publicRules = null, now = new Date(),
-  testedVersions = TESTED_HARNESS_VERSIONS, resumeVersions = RESUME_TESTED_VERSIONS, contextTestLog = undefined
+  testedVersions = TESTED_HARNESS_VERSIONS, resumeVersions = RESUME_TESTED_VERSIONS, contextTestLog = undefined, toolsTestLog = undefined
 } = {}) {
   const steps = []
   const note = (text) => steps.push(text)
@@ -1412,6 +1441,14 @@ export function evaluate(inputs, {
       refuse('ROUTE_UNSUPPORTED', `resume is not checked on ${parsed.harness} ${version ?? '(version unreadable)'}: BMN has not tested that a resume on this version talks to the current configuration's destination; start a fresh checked dispatch`)
     }
     note(`dispatch form: ${parsed.envMode === 'clean' ? 'env -i ' : ''}${parsed.harness === 'codex' ? `codex exec${parsed.resume ? ' resume' : ''}` : 'claude -p'}`)
+    // The tools of this run (60.12 AC5). The test log is read only for an agent that has tools of its own;
+    // a packet run carries none. A version without a proven way to shut out inherited tools is refused here,
+    // a wrong set further down, each in its place in the order.
+    const packetRun = inputs.packet !== undefined
+    const tools = checkRunTools(agent, data, parsed,
+      !packetRun && agentTools(data, agent.id).length > 0 ? appTools(parsed.harness, { version, tests: toolsTestLog }) : { isolation: false, variable: false },
+      { packet: packetRun, profile: typeof resolution.profile === 'string' })
+    if (tools.refusal?.code === 'ROUTE_UNSUPPORTED') refuse('ROUTE_UNSUPPORTED', tools.refusal.message)
 
     const { model, effort } = checkModelAndEffort(agent, resolution, note)
     // Required only where the owner's test proved the setting on this version (60.9 AC1, AC2).
@@ -1419,6 +1456,8 @@ export function evaluate(inputs, {
     const context = checkContext(agent, resolution.context, agent.context_limit === undefined ? { limit: false, compact: false } : provenControls(parsed.harness, version, contextTestLog))
     if (context.refusal) refuse('CONTEXT_MISMATCH', context.refusal)
     note(context.note)
+    if (tools.refusal) refuse(tools.refusal.code, tools.refusal.message)
+    note(tools.note)
     const route = resolution.route
     const destination = matchedDestination(data, agent, parsed.harness, route, note)
 
@@ -1543,6 +1582,8 @@ export function evaluate(inputs, {
     const body = {
       version: 1, mode: 'dispatch', verdict: 'PASS', agent: agent.id, class: agent.class, harness: parsed.harness, model: model.value,
       role: role.id, effort: effort.value, context_limit_applied: context.applied,
+      // The tools this run was given and a hash of their definitions: variable names, never a value.
+      ...(tools.applied.length > 0 ? { tools: { applied: tools.applied, sha256: tools.hash } } : {}),
       workspace, cwd,
       public_status: { public: visibility.public, reason: visibility.reason, ...(visibility.public ? { commit: visibility.record.commit } : {}) },
       data: effectiveData,

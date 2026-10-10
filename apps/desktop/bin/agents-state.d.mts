@@ -13,7 +13,7 @@ export interface Generation {
 }
 export interface DiffSide { present: boolean; value?: unknown; hash?: string }
 export interface DiffEntry {
-  scope: 'agent' | 'roles' | 'providers' | 'exceptions' | 'harness-routes'
+  scope: 'agent' | 'roles' | 'providers' | 'exceptions' | 'harness-routes' | 'skills' | 'tools'
   id: string
   field: string | null
   kind: 'added' | 'removed' | 'changed'
