@@ -1198,6 +1198,12 @@
   background: var(--raised);
 }
 
+/* The line above the rows says why they exist; it takes the width and its two actions stay at the end. */
+.preferences-dialog .outside-why {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
 .preferences-dialog .outside-diff {
   display: flex;
   flex-wrap: wrap;

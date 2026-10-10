@@ -6,6 +6,7 @@ import {
   ROSTER_EFFORTS,
   ROSTER_HARNESSES,
   ROSTER_THEN,
+  type AgentAppView,
   type AgentsGenerationSummary,
   type RosterAgentShape,
   type RosterClass,
@@ -56,6 +57,7 @@ import {
   toggleAgentRole,
   undoWords,
   toggleCandidateEffort,
+  unrecordedBasis,
   updateAgent,
   type DiffGroup,
   type DiffLine,
@@ -63,6 +65,9 @@ import {
 } from './roster-staging'
 import { displayPath } from './session-presentation'
 import type { TeamState } from './team-state'
+
+/** Each agent app as BMN inspected it (Rules › Health), or null while that was not read. */
+type Apps = readonly AgentAppView[] | null
 
 export type TeamPage = { name: 'agents' } | { name: 'agent'; id: string } | { name: 'new' } | { name: 'roles' } | { name: 'changes' }
 
@@ -224,13 +229,40 @@ function OutsideRow(props: { group: DiffGroup; team: TeamState }): React.JSX.Ele
     <div className="outside-row">
       {group.agent ? <Piece agentClass={group.agent.class} /> : null}
       <b>{group.subject}</b>
-      <span className="muted">changed outside BMN:</span>
+      <span className="muted">in the team file:</span>
       <span className="outside-diff">{group.lines.filter((line) => line.detail !== true).map((line, index) => <span key={index} className="difference"><Difference line={line} data={team.data} /></span>)}</span>
       <span className="actions">
         <button type="button" className="small" disabled={team.busy} aria-label={`Keep the change to ${group.subject}`}
           onClick={() => void team.requestApproval({ kind: 'sections', scope: [group.key] }, { title: `Keep the change to ${group.subject}`, action: 'Keep' })}>Keep</button>
         <button type="button" className="small" disabled={team.busy} aria-label={`Revert the change to ${group.subject}`} onClick={() => void team.revert([group.key])}>Revert</button>
       </span>
+    </div>
+  )
+}
+
+/** "3 changes" for the rows that follow. */
+export function outsideCountWords(count: number): string {
+  return `${count} change${count === 1 ? '' : 's'}`
+}
+
+/**
+ * Why the rows below exist: the team file was edited where BMN did not stage it. More than one row
+ * can be kept or put back together; keeping opens the sheet first, since it commits every row at once.
+ */
+function OutsideHead(props: { team: TeamState }): React.JSX.Element {
+  const { team } = props
+  const count = team.outside.groups.length
+  return (
+    <div className="outside-row outside-head">
+      <Dot label="Needs you" />
+      <span className="outside-why">The team file was edited directly, not on these pages: by hand, by a script or by an agent. The approved team stays in effect until you keep {count === 1 ? 'the change' : 'them'}.</span>
+      {count > 1 ? (
+        <span className="actions">
+          <button type="button" className="small" disabled={team.busy} aria-label={`Keep all ${outsideCountWords(count)} to the team file`}
+            onClick={() => void team.requestApproval({ kind: 'file' }, { title: `Keep all ${outsideCountWords(count)}`, action: 'Keep all' }, true)}>Keep all…</button>
+          <button type="button" className="small" disabled={team.busy} aria-label={`Revert all ${outsideCountWords(count)} to the team file`} onClick={() => void team.revert(null)}>Revert all</button>
+        </span>
+      ) : null}
     </div>
   )
 }
@@ -262,6 +294,7 @@ function AgentsPage(props: { team: TeamState; data: RosterDataShape; go(page: Te
           {' '}A change saved from these pages replaces the link with a regular file here; the file it points to stays as it is.
         </p>
       ) : null}
+      {team.outside.groups.length > 0 ? <OutsideHead team={team} /> : null}
       {team.outside.groups.map((group) => <OutsideRow key={group.key} group={group} team={team} />)}
       {data.agents.length === 0 ? <p className="page-note">No agents yet. New agent adds the first one.</p> : null}
       {cards('Active', groups.active, 'Prices per M tokens, in / out')}
@@ -319,22 +352,28 @@ function PrivateWorkRow(props: { team: TeamState; data: RosterDataShape; agent: 
   )
 }
 
-function HostRow(props: { team: TeamState; data: RosterDataShape; agent: RosterAgentShape }): React.JSX.Element {
+/** What the Host row selects for a recorded host: nothing while none is recorded, since the check then refuses the agent. */
+export function hostKind(host: string | null): 'default' | 'custom' | null {
+  return host === null ? null : host === 'default' ? 'default' : 'custom'
+}
+
+function HostRow(props: { team: TeamState; data: RosterDataShape; agent: RosterAgentShape; apps: Apps }): React.JSX.Element {
   const { team, data, agent } = props
   const labelId = useId()
-  const custom = agent.host !== null && agent.host !== 'default'
-  const [kind, setKind] = useState<'default' | 'custom'>(custom ? 'custom' : 'default')
+  const custom = hostKind(agent.host) === 'custom'
+  const [kind, setKind] = useState<'default' | 'custom' | null>(hostKind(agent.host))
   const [host, setHost] = useState(custom ? agent.host ?? '' : '')
   const [answer, setAnswer] = useState<RosterPrivateWork>('public_only')
   const answerId = useId()
   const landing = landingFor(data, agent.harness, kind === 'custom' ? host : '')
   const pending = kind === 'custom' && host.trim() !== '' && host.trim().toLowerCase() !== agent.host
   return (
-    <Row label="Host" id={labelId} hint="A custom host counts as its own provider; BMN asks once whether it may see private work.">
-      <Segmented labelledBy={labelId} fit options={['default', 'custom'] as const} value={kind} optionLabel={(value) => (value === 'default' ? 'Provider default' : 'Custom host')}
+    <Row label="Host" id={labelId} hint={agent.host === null ? `No host is recorded, so BMN refuses every request for ${agent.name}. Choose one.`
+      : 'A custom host counts as its own provider; BMN asks once whether it may see private work.'}>
+      <Segmented<'default' | 'custom' | null> labelledBy={labelId} fit options={['default', 'custom']} value={kind} optionLabel={(value) => (value === 'default' ? 'Provider default' : 'Custom host')}
         onChange={(value) => {
           setKind(value)
-          if (value === 'default' && agent.host !== 'default') team.stage(moveAgent(data, agent.id, agent.harness, ''))
+          if (value === 'default' && agent.host !== 'default') team.stage(moveAgent(data, agent.id, agent.harness, '', 'public_only', props.apps))
         }} />
       {kind === 'custom' ? (
         <div className="stack">
@@ -345,7 +384,7 @@ function HostRow(props: { team: TeamState; data: RosterDataShape; agent: RosterA
               <Segmented<RosterPrivateWork> labelledBy={answerId} fit options={['allowed', 'public_only']} value={answer} optionLabel={(value) => PRIVATE_WORK_WORDS[value]} onChange={(value) => setAnswer(value)} />
             </>
           ) : null}
-          {pending ? <button type="button" className="small" onClick={() => team.stage(moveAgent(data, agent.id, agent.harness, host, answer))}>Use this host</button> : null}
+          {pending ? <button type="button" className="small" onClick={() => team.stage(moveAgent(data, agent.id, agent.harness, host, answer, props.apps))}>Use this host</button> : null}
         </div>
       ) : null}
     </Row>
@@ -376,7 +415,7 @@ function AlsoCalled(props: { team: TeamState; data: RosterDataShape; agent: Rost
   )
 }
 
-function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: RosterAgentShape; go(page: TeamPage): void }): React.JSX.Element {
+function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: RosterAgentShape; apps: Apps; go(page: TeamPage): void }): React.JSX.Element {
   const { team, data, agent } = props
   const saved = team.snapshot?.file.prose[agent.id]
   const [notes, setNotes] = useState(team.pendingNotes[agent.id] ?? saved ?? '')
@@ -414,7 +453,7 @@ function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: Roste
       <h4 className="group-head">Model</h4>
       <Row label="Agent app" id={appId}>
         <Segmented labelledBy={appId} fit options={ROSTER_HARNESSES} value={agent.harness} optionLabel={(harness) => ROSTER_APP_NAMES[harness]}
-          onChange={(harness: RosterHarness) => team.stage(moveAgent(data, agent.id, harness, agent.host === 'default' || agent.host === null ? '' : agent.host))} />
+          onChange={(harness: RosterHarness) => team.stage(moveAgent(data, agent.id, harness, agent.host === 'default' || agent.host === null ? '' : agent.host, 'public_only', props.apps))} />
       </Row>
       <Row label="Model"><input className="field mono" aria-label="Model" maxLength={128} value={agent.model} onChange={(event) => patch({ model: event.currentTarget.value })} /></Row>
       <PrivateWorkRow team={team} data={data} agent={agent} />
@@ -443,7 +482,7 @@ function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: Roste
         <Row label="Compact at" hint="The app starts summarising the conversation here.">
           <NumberField label="Compact at" value={agent.compact_at} placeholder="App default" onChange={(next) => patch({ compact_at: next })} />
         </Row>
-        <HostRow key={`${agent.id}-${agent.host}`} team={team} data={data} agent={agent} />
+        <HostRow key={`${agent.id}-${agent.host}`} team={team} data={data} agent={agent} apps={props.apps} />
         <AlsoCalled team={team} data={data} agent={agent} />
         <Row label="Team file" hint={fileMessage ?? undefined}>
           <div className="inline">
@@ -470,7 +509,7 @@ function hostOf(source: string): string {
 // ---------------------------------------------------------------------------------------------
 // Team › New agent
 
-function NewAgentPage(props: { team: TeamState; data: RosterDataShape; go(page: TeamPage): void }): React.JSX.Element {
+function NewAgentPage(props: { team: TeamState; data: RosterDataShape; apps: Apps; go(page: TeamPage): void }): React.JSX.Element {
   const { team, data } = props
   const [draft, setDraft] = useState<NewAgent>({ name: '', class: 'pawn', harness: 'claude', model: '', host: '', privateWork: 'public_only', roles: [], efforts: ['low'] })
   const [notes, setNotes] = useState('')
@@ -480,7 +519,8 @@ function NewAgentPage(props: { team: TeamState; data: RosterDataShape; go(page: 
   const landing = landingFor(data, draft.harness, draft.host)
   const known = data.providers.find((provider) => provider.id === landing.provider.id)
   const answer: RosterPrivateWork = landing.isNew ? draft.privateWork : known?.private_work ?? 'public_only'
-  const declared = landing.host === null && (data.harness_routes.find((route) => route.harness === draft.harness)?.basis ?? 'owner-declared') === 'owner-declared'
+  const declared = landing.host === null
+    && (data.harness_routes.find((route) => route.harness === draft.harness)?.basis ?? unrecordedBasis(draft.harness, landing.provider.id, props.apps)) === 'owner-declared'
   const ready = draft.name.trim() !== '' && draft.model.trim() !== '' && draft.efforts.length > 0
   return (
     <>
@@ -527,7 +567,7 @@ function NewAgentPage(props: { team: TeamState; data: RosterDataShape; go(page: 
         <span className="spacer" />
         <button type="button" onClick={() => props.go({ name: 'agents' })}>Cancel</button>
         <button type="button" className="primary" disabled={!ready} onClick={() => {
-          const added = addAgent(data, draft)
+          const added = addAgent(data, draft, props.apps)
           team.stage(added.data)
           if (notes.trim() !== '') team.setPendingNote(added.id, notes)
           props.go({ name: 'agents' })
@@ -760,7 +800,7 @@ function ChangesPage(props: { team: TeamState }): React.JSX.Element {
 // ---------------------------------------------------------------------------------------------
 // The pages and their footer
 
-export function TeamPreferences(props: { team: TeamState; page: TeamPage; go(page: TeamPage): void }): React.JSX.Element {
+export function TeamPreferences(props: { team: TeamState; page: TeamPage; apps?: Apps; go(page: TeamPage): void }): React.JSX.Element {
   const { team, page } = props
   const snapshot = team.snapshot
   if (team.loadError) return <><PageHead title="Team" /><p className="preferences-error" role="alert">{team.loadError}</p></>
@@ -790,11 +830,12 @@ export function TeamPreferences(props: { team: TeamState; page: TeamPage; go(pag
       </>
     )
   }
-  if (page.name === 'new') return <NewAgentPage team={team} data={data} go={props.go} />
+  const apps = props.apps ?? null
+  if (page.name === 'new') return <NewAgentPage team={team} data={data} apps={apps} go={props.go} />
   if (page.name === 'roles') return <RolesPage team={team} data={data} />
   if (page.name === 'changes') return <ChangesPage team={team} />
   const agent = page.name === 'agent' ? data.agents.find((entry) => entry.id === page.id) : undefined
-  if (agent) return <AgentPage key={agent.id} team={team} data={data} agent={agent} go={props.go} />
+  if (agent) return <AgentPage key={agent.id} team={team} data={data} agent={agent} apps={apps} go={props.go} />
   return <AgentsPage team={team} data={data} go={props.go} />
 }
 

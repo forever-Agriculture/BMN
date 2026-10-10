@@ -1,5 +1,5 @@
 // MODULE: roster-staging.test.ts - Epic 60.5: staged team edits keep chains and holders in step; differences group by section with their words
-import type { RosterAgentShape, RosterDataShape, RosterDiffShape } from '@bmn/protocol'
+import type { AgentAppView, RosterAgentShape, RosterDataShape, RosterDiffShape } from '@bmn/protocol'
 import { describe, expect, it } from 'vitest'
 import {
   activateAgent,
@@ -40,6 +40,7 @@ import {
   toggleAgentEffort,
   toggleAgentRole,
   toggleCandidateEffort,
+  unrecordedBasis,
   updateAgent
 } from './roster-staging'
 
@@ -228,6 +229,23 @@ describe('agents (60.5 AC2–AC4)', () => {
     expect(data.harness_routes.at(-1)).toEqual({ harness: 'cursor', provider: 'cursor', basis: 'owner-declared' })
     expect(data.providers.at(-1)).toEqual({ id: 'cursor', name: 'Cursor', hosts: [], private_work: 'allowed' })
     expect(find(data, 'composer')).toMatchObject({ provider: 'cursor', host: 'default' })
+  })
+
+  it('records an app without a destination as BMN inspected it, and on the owner\'s word when the inspection does not reach that provider', () => {
+    const bare = { ...DATA, harness_routes: [] }
+    const app = (harness: AgentAppView['harness'], basis: string, provider: string | null): AgentAppView => ({ harness, version: '1.0.0', basis, provider, host: null, sources: [], versionState: 'tested', versionNote: '' })
+    const inspected = [app('claude', 'default', 'anthropic'), app('codex', 'explicit', 'zai'), app('cursor', 'unknown', null)]
+    // Provider default on an agent whose app has no destination yet: the owner chose nothing about the app, so BMN's own reading is what gets recorded.
+    expect(moveAgent(bare, 'astra', 'claude', '', 'public_only', inspected).harness_routes).toEqual([{ harness: 'claude', provider: 'anthropic', basis: 'observed-default' }])
+    expect(addAgent(bare, { name: 'Haiku', class: 'pawn', harness: 'claude', model: 'haiku-x', host: '', privateWork: 'allowed', roles: [], efforts: ['low'] }, inspected).data.harness_routes)
+      .toEqual([{ harness: 'claude', provider: 'anthropic', basis: 'observed-default' }])
+    // An app that reaches somewhere else, one BMN cannot read, or apps not read yet: only the owner's word can be recorded.
+    expect(moveAgent(bare, 'astra', 'codex', '', 'public_only', inspected).harness_routes).toEqual([{ harness: 'codex', provider: 'openai', basis: 'owner-declared' }])
+    expect(moveAgent(bare, 'astra', 'cursor', '', 'public_only', inspected).harness_routes).toEqual([{ harness: 'cursor', provider: 'cursor', basis: 'owner-declared' }])
+    expect(moveAgent(bare, 'astra', 'claude', '').harness_routes).toEqual([{ harness: 'claude', provider: 'anthropic', basis: 'owner-declared' }])
+    expect([unrecordedBasis('claude', 'anthropic', inspected), unrecordedBasis('claude', 'zai', inspected), unrecordedBasis('claude', 'anthropic', null)]).toEqual(['observed-default', 'owner-declared', 'owner-declared'])
+    // A destination already recorded is never rewritten by a move.
+    expect(moveAgent(DATA, 'astra', 'claude', '', 'public_only', inspected).harness_routes).toEqual(DATA.harness_routes)
   })
 
   it('moves an agent to another app or host, onto the provider that reaches', () => {

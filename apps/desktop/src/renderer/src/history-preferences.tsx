@@ -63,7 +63,7 @@ export function Segmented<Value extends string | number | null>(props: {
             type="button"
             role="radio"
             aria-checked={checked}
-            tabIndex={checked ? 0 : -1}
+            tabIndex={checked || (index === 0 && !props.options.includes(props.value)) ? 0 : -1}
             disabled={props.disabled}
             onClick={() => { if (!checked) props.onChange(option) }}
           >

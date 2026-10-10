@@ -149,6 +149,10 @@ export function PreferencesDialog(props: {
   }
 
   const shownTeamPage: TeamPage = page === 'roles' ? { name: 'roles' } : page === 'changes' ? { name: 'changes' } : teamPage
+  // An agent's app or host is recorded as BMN inspected that app, so the pages that stage one read the apps once.
+  const stagesDestination = parent === 'team' && (shownTeamPage.name === 'agent' || shownTeamPage.name === 'new')
+  const ensureRules = rules.ensure
+  useEffect(() => { if (stagesDestination) ensureRules() }, [stagesDestination, ensureRules])
   const rulesNeedOwner = rules.snapshot?.health.state === 'checked' && rules.snapshot.master.exists && rules.snapshot.health.targets.some((target) => target.state !== 'current')
   // Staged edits are approved from the footer on the pages that stage them; New agent has its own.
   const ledger = (parent === 'team' && shownTeamPage.name !== 'new') || page === 'health'
@@ -487,7 +491,7 @@ export function PreferencesDialog(props: {
         ))}
       </nav>
       <main className="preferences-main" ref={main}>
-      {parent === 'team' ? <div className="preferences-page team-page"><TeamPreferences team={team} page={shownTeamPage} go={goTeam} /></div> : null}
+      {parent === 'team' ? <div className="preferences-page team-page"><TeamPreferences team={team} page={shownTeamPage} apps={rules.snapshot?.apps ?? null} go={goTeam} /></div> : null}
       {parent === 'rules' ? <div className="preferences-page rules-page"><RulesPreferences rules={rules} team={team} page={page === 'health' ? 'health' : 'editor'} /></div> : null}
       {pageOf('appearance', <>
       <section className="preferences-section">

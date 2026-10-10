@@ -325,7 +325,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
       assert.notEqual(next, before, 'the outside edit changes the team file')
       writeFileSync(rosterFile, next)
       await outsideFocus()
-      const row = main.locator('.outside-row', { hasText: 'changed outside BMN' })
+      const row = main.locator('.outside-row', { hasText: 'in the team file:' })
       await row.waitFor()
       // A changed order is drawn as steps; the file's own spelling never shows.
       if (action === 'Keep' && subject === 'Roles') {

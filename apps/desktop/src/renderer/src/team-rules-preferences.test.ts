@@ -19,7 +19,7 @@ import {
   undoWords,
   type RulesState
 } from './rules-preferences'
-import { Chain, TeamLedger, TeamPreferences, TeamToast, firstApprovalWords, nothingInEffectWords, shortDate, type TeamPage } from './team-preferences'
+import { Chain, TeamLedger, TeamPreferences, TeamToast, firstApprovalWords, hostKind, nothingInEffectWords, outsideCountWords, shortDate, type TeamPage } from './team-preferences'
 import { groupDifferences } from './roster-staging'
 import { confirmsBeforeCommit, rowHidesDetail, rulesUpdateWords, type TeamState } from './team-state'
 
@@ -113,15 +113,43 @@ describe('Team › Agents (60.5 AC2)', () => {
     expect(markup).toContain('class="switch" role="switch" aria-checked="false" aria-label="Glm on"')
   })
 
-  it('puts the dot on a card with an unapproved change, and one row per section changed outside BMN', () => {
+  it('puts the dot on a card with an unapproved change, and one row per section changed in the team file, under a line that says why', () => {
     const changed = pageMarkup({ name: 'agents' }, team({
       changed: new Set(['luna']),
       outside: { groups: [{ key: 'luna', subject: 'Luna', agent: DATA.agents[2] as RosterAgentShape, lines: [{ field: 'Model', before: 'gpt-6-luna', after: 'gpt-6.1-luna' }], consequences: [] }], general: [] }
     }))
     expect(count(changed, 'class="needs-dot" role="img" aria-label="Unapproved change"')).toBe(1)
-    expect(changed).toContain('<b>Luna</b><span class="muted">changed outside BMN:</span><span class="outside-diff"><span class="difference"><span class="muted">Model:</span> gpt-6-luna → gpt-6.1-luna</span></span>')
+    expect(changed).toContain('<b>Luna</b><span class="muted">in the team file:</span><span class="outside-diff"><span class="difference"><span class="muted">Model:</span> gpt-6-luna → gpt-6.1-luna</span></span>')
     expect(changed).toContain('aria-label="Keep the change to Luna">Keep</button>')
     expect(changed).toContain('aria-label="Revert the change to Luna">Revert</button>')
+    // The owner ran a script and read "outside BMN" as "not me": the line says what happened and what holds meanwhile.
+    expect(words(changed)).toContain('The team file was edited directly, not on these pages: by hand, by a script or by an agent. The approved team stays in effect until you keep the change.')
+    expect(changed).not.toContain('Keep all')
+  })
+
+  it('several changes in the team file can be kept or put back together, and keeping all opens the sheet first', () => {
+    const asked: Array<{ request: unknown; words: { title: string; action: string }; always: boolean | undefined }> = []
+    const group = (index: number) => ({ key: ['luna', 'fable', 'harness-routes'][index] as string, subject: ['Luna', 'Fable', 'Agent apps'][index] as string, lines: [{ field: 'Host', before: 'none', after: 'Provider default' }], consequences: [] })
+    const state = team({ outside: { groups: [group(0), group(1), group(2)], general: [] }, requestApproval: async (request, title, always) => { asked.push({ request, words: title, always }) } })
+    const markup = pageMarkup({ name: 'agents' }, state)
+    expect(words(markup)).toContain('The approved team stays in effect until you keep them.')
+    expect(markup).toContain('aria-label="Keep all 3 changes to the team file">Keep all…</button>')
+    expect(markup).toContain('aria-label="Revert all 3 changes to the team file">Revert all</button>')
+    expect(count(markup, '>Keep</button>')).toBe(3)
+    expect(markup.indexOf('Keep all…')).toBeLessThan(markup.indexOf('>Keep</button>'))
+    expect([outsideCountWords(1), outsideCountWords(8)]).toEqual(['1 change', '8 changes'])
+  })
+
+  it('an agent without a recorded host shows no host as chosen and says the agent is refused until one is', () => {
+    const unknown: RosterDataShape = { ...DATA, agents: DATA.agents.map((entry) => (entry.id === 'luna' ? { ...entry, host: null } : entry)) }
+    const chosen = /aria-checked="true"[^>]*>Provider default</
+    const page = pageMarkup({ name: 'agent', id: 'luna' }, team({ data: unknown, base: unknown }))
+    expect(page).not.toMatch(chosen)
+    expect(page).toContain('No host is recorded, so BMN refuses every request for Luna. Choose one.')
+    // With nothing chosen the first option still takes the Tab key.
+    expect(page).toMatch(/aria-checked="false" tabindex="0"[^>]*>Provider default</)
+    expect(pageMarkup({ name: 'agent', id: 'luna' })).toMatch(chosen)
+    expect([hostKind(null), hostKind('default'), hostKind('api.z.ai')]).toEqual([null, 'default', 'custom'])
   })
 
   it('with nothing approved, says that nothing takes effect and offers the first approval', () => {
@@ -325,7 +353,7 @@ describe('the approval footer (60.5 AC7)', () => {
     const data = { ...DATA, exceptions: [{ id: 'zai-here', provider: 'zai', folder: '/home/synthetic/work' }] }
     // The row gives the new entry one word: neither its folder nor what it allows shows there.
     const row = words(pageMarkup({ name: 'agents' }, team({ data, outside: groupDifferences([added], data, DATA, [sentence]) })))
-    expect(row).toContain('changed outside BMN:')
+    expect(row).toContain('in the team file:')
     expect(row).not.toContain('/home/synthetic/work')
     expect(row).not.toContain(sentence)
     expect([rowHidesDetail({ differences: [added], consequences: [] }), rowHidesDetail({ differences: [field], consequences: [sentence] }), rowHidesDetail({ differences: [field], consequences: [] })]).toEqual([true, true, false])

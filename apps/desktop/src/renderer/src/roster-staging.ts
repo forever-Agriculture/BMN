@@ -3,6 +3,7 @@ import {
   ROSTER_APP_NAMES,
   ROSTER_DESIGNER_ROLE,
   ROSTER_LEAD_ROLE,
+  type AgentAppView,
   type RosterAgentShape,
   type RosterClass,
   type RosterDataShape,
@@ -576,11 +577,20 @@ export interface NewAgent {
 }
 
 /**
- * Adds an agent as active, with its provider when the roster does not know it and, for an app the
- * roster has no destination for, that app recorded on the owner's word (public work only until
- * Rules › Health inspects it).
+ * How an app the roster has no destination for is recorded: as inspected when BMN's own reading of
+ * the app reaches that provider's servers (checked again at approval), else on the owner's word.
  */
-export function addAgent(data: RosterDataShape, draft: NewAgent): { data: RosterDataShape; id: string } {
+export function unrecordedBasis(harness: RosterHarness, provider: string, apps: readonly AgentAppView[] | null | undefined): RosterRouteShape['basis'] {
+  const app = apps?.find((entry) => entry.harness === harness)
+  return app !== undefined && app.basis === 'default' && app.provider === provider ? 'observed-default' : 'owner-declared'
+}
+
+/**
+ * Adds an agent as active, with its provider when the roster does not know it and, for an app the
+ * roster has no destination for, that app recorded as BMN inspected it (`apps`, from Rules › Health)
+ * or else on the owner's word (public work only until it is inspected).
+ */
+export function addAgent(data: RosterDataShape, draft: NewAgent, apps?: readonly AgentAppView[] | null): { data: RosterDataShape; id: string } {
   const landing = landingFor(data, draft.harness, draft.host)
   const id = idFor(draft.name, data.agents.map((agent) => agent.id))
   const agent: RosterAgentShape = {
@@ -595,7 +605,7 @@ export function addAgent(data: RosterDataShape, draft: NewAgent): { data: Roster
       ? [...data.providers, { id: landing.provider.id, name: landing.provider.name, hosts: landing.host === null ? [] : [landing.host], private_work: draft.privateWork }]
       : data.providers,
     harness_routes: landing.host === null && !data.harness_routes.some((route) => route.harness === draft.harness)
-      ? [...data.harness_routes, { harness: draft.harness, provider: landing.provider.id, basis: 'owner-declared' as const }]
+      ? [...data.harness_routes, { harness: draft.harness, provider: landing.provider.id, basis: unrecordedBasis(draft.harness, landing.provider.id, apps) }]
       : data.harness_routes
   }
   for (const role of draft.roles) next = toggleAgentRole(next, id, role)
@@ -604,9 +614,11 @@ export function addAgent(data: RosterDataShape, draft: NewAgent): { data: Roster
 
 /**
  * Moves an agent to another app or host. It lands on the provider that app or host reaches; a
- * provider new to the roster is added with `answer` (Public work only unless the owner said otherwise).
+ * provider new to the roster is added with `answer` (Public work only unless the owner said otherwise);
+ * an app without a recorded destination is recorded as `addAgent` records it.
  */
-export function moveAgent(data: RosterDataShape, agentId: string, harness: RosterHarness, host: string, answer: RosterPrivateWork = 'public_only'): RosterDataShape {
+export function moveAgent(data: RosterDataShape, agentId: string, harness: RosterHarness, host: string, answer: RosterPrivateWork = 'public_only',
+  apps?: readonly AgentAppView[] | null): RosterDataShape {
   const landing = landingFor(data, harness, host)
   return {
     ...data,
@@ -615,7 +627,7 @@ export function moveAgent(data: RosterDataShape, agentId: string, harness: Roste
       ? [...data.providers, { id: landing.provider.id, name: landing.provider.name, hosts: landing.host === null ? [] : [landing.host], private_work: answer }]
       : data.providers,
     harness_routes: landing.host === null && !data.harness_routes.some((route) => route.harness === harness)
-      ? [...data.harness_routes, { harness, provider: landing.provider.id, basis: 'owner-declared' as const }]
+      ? [...data.harness_routes, { harness, provider: landing.provider.id, basis: unrecordedBasis(harness, landing.provider.id, apps) }]
       : data.harness_routes
   }
 }
