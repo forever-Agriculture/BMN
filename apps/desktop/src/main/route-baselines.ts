@@ -48,8 +48,9 @@ const same = (a: Omit<RouteResolution, 'harness' | 'version'>, b: Omit<RouteReso
  * The provider's own destination with nothing overriding it: the only route BMN offers for
  * acceptance when it holds no record at all. Owner decision 2026-10-10: the installed apps had
  * already moved past every tested version before BMN first inspected them, so no record could
- * ever exist and nothing could be accepted. A missing record never widens what is offered: any
- * override, other source or unknown part still needs a tested or accepted version to compare with.
+ * ever exist and nothing could be accepted. A lost or unreadable record reads as none, so it can
+ * widen what is offered only to this route: any override, other source or unknown part still
+ * needs a tested or accepted version to compare with.
  */
 function plainDefault(route: Omit<RouteResolution, 'harness' | 'version'>): boolean {
   return route.basis === 'default' && route.provider !== null && route.host === `default:${route.provider}` && route.sources.length === 0
@@ -59,7 +60,9 @@ function plainDefault(route: Omit<RouteResolution, 'harness' | 'version'>): bool
 export type ProviderName = (id: string) => string
 
 function describe(route: Omit<RouteResolution, 'harness' | 'version'>, providerName: ProviderName): string {
-  const where = route.host === null ? 'an unknown destination' : route.host.startsWith('default:') ? `${providerName(route.host.slice('default:'.length))}'s own servers` : route.host
+  // An unknown destination is never "not overridden": BMN could not establish what decides it.
+  if (route.host === null) return `a destination BMN cannot establish${route.sources.length ? ` (set by ${route.sources.join(', ')})` : ''}`
+  const where = route.host.startsWith('default:') ? `${providerName(route.host.slice('default:'.length))}'s own servers` : route.host
   return `${where} (${route.sources.length ? `set by ${route.sources.join(', ')}` : 'nothing overrides it'})`
 }
 

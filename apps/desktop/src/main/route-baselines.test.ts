@@ -1,5 +1,5 @@
 // MODULE: route-baselines.test.ts - Epic 60.3 AC3: acceptance of an untested harness version is offered only for an unchanged route
-import { mkdtempSync, realpathSync, rmSync, statSync } from 'node:fs'
+import { mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -44,6 +44,27 @@ describe('accepting an untested harness version (60.3 AC3, 60.5 AC2)', () => {
     expect(verdict.acceptable).toBe(false)
     expect(verdict.comparison).toContain("Without a record it accepts only the provider's own servers with nothing overriding them.")
     expect(() => assertStillAcceptable('0.170.0', route({ version: '0.170.0', ...change }))).toThrow(/no earlier codex version to compare with/)
+  })
+
+  it('with no record, offers Claude Code the same way and never calls an unknown destination unchanged', () => {
+    const claude = route({ harness: 'claude', version: '2.1.296', provider: 'anthropic', host: 'default:anthropic' })
+    expect(judgeInspection(claude, [], false, now, () => 'Anthropic')).toEqual({
+      acceptable: true, comparison: "BMN has no earlier Claude Code version to compare with. 2.1.296 sends data to Anthropic's own servers (nothing overrides it)."
+    })
+    const unknown = judgeInspection({ ...claude, provider: null, host: null, basis: 'unknown' }, [], false, now)
+    expect(unknown.acceptable).toBe(false)
+    expect(unknown.comparison).toContain('2.1.296 sends data to a destination BMN cannot establish.')
+    expect(unknown.comparison).not.toContain('nothing overrides it')
+  })
+
+  it('a record that was lost or cannot be read counts as none: only the plain default is offered again', () => {
+    const proxy = { host: 'proxy.example.com', basis: 'explicit', sources: ['OPENAI_BASE_URL'] }
+    judgeInspection(route(proxy), [], true, now)
+    expect(judgeInspection(route({ version: '0.170.0' }), [], false, now).acceptable).toBe(false)
+    writeFileSync(baselinesPath(), '{ not json')
+    expect(judgeInspection(route({ version: '0.170.0', ...proxy }), [], false, now).acceptable).toBe(false)
+    expect(() => assertStillAcceptable('0.170.0', route({ version: '0.170.0', ...proxy }))).toThrow(/no earlier codex version to compare with/)
+    expect(judgeInspection(route({ version: '0.170.0' }), [], false, now).acceptable).toBe(true)
   })
 
   it('with no record, still refuses a version that is not the installed one', () => {
