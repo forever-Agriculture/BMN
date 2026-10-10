@@ -287,6 +287,26 @@ function unquoteToml(raw) {
   return undefined
 }
 
+/**
+ * How many more brackets a piece of TOML opens than it closes, counting none inside a quoted
+ * string or a comment. `open` says a string was still open at its end: a value BMN cannot follow.
+ */
+function bracketBalance(text) {
+  let depth = 0
+  let quote = null
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]
+    if (quote !== null) {
+      if (char === '\\' && quote === '"') index += 1
+      else if (char === quote) quote = null
+    } else if (char === '"' || char === "'") quote = char
+    else if (char === '#') break
+    else if (char === '[' || char === '{') depth += 1
+    else if (char === ']' || char === '}') depth -= 1
+  }
+  return { depth, open: quote !== null }
+}
+
 function tomlKeyPath(raw) {
   const parts = []
   const pattern = /\s*(?:"((?:[^"\\]|\\.)*)"|'([^']*)'|([A-Za-z0-9_-]+))\s*(\.|$)/y
@@ -320,7 +340,9 @@ export function readCodexConfig(text) {
       continue
     }
     if (depth > 0) {
-      depth += (line.match(/[[{]/g) ?? []).length - (line.match(/[\]}]/g) ?? []).length
+      const balance = bracketBalance(line)
+      if (balance.open) out.unreadable.push('a value that spans lines')
+      depth = Math.max(0, depth + balance.depth)
       continue
     }
     if (line === '' || line.startsWith('#')) continue
@@ -338,8 +360,9 @@ export function readCodexConfig(text) {
       if (value.length < 6 || !value.endsWith(marker)) skipUntil = marker
       value = null
     } else if (value.startsWith('[') || value.startsWith('{')) {
-      depth = (value.match(/[[{]/g) ?? []).length - (value.match(/[\]}]/g) ?? []).length
-      if (depth < 0) depth = 0
+      const balance = bracketBalance(value)
+      if (balance.open) out.unreadable.push('a value that spans lines')
+      depth = Math.max(0, balance.depth)
     }
     if (keys === null) continue
     const path = [...table, ...keys]
@@ -382,6 +405,9 @@ function hostOf(url) {
 function truthy(value) {
   return value !== undefined && value !== '' && value !== '0' && value.toLowerCase?.() !== 'false'
 }
+
+/** Without HOME an app looks for its settings in the account's home folder, which BMN would not have read: the command must say where. */
+const NO_HOME = 'the command runs without HOME, so BMN cannot tell which settings the app would read; name it, as in env -i HOME="$HOME"'
 
 /** The config.toml keys that say where Codex sends data. */
 const CODEX_DESTINATION_KEYS = ['model_provider', 'profile', 'openai_base_url', 'chatgpt_base_url']
@@ -438,10 +464,11 @@ function otherCodexConfig(folders, userConfig) {
  */
 export function resolveCodexRoute(parsed, environment, cwd = null) {
   const env = dispatchEnvironment(parsed, environment)
-  const codexHome = env.CODEX_HOME || (env.HOME ? `${env.HOME}/.codex` : null)
+  if (!env.HOME) return { unsupported: NO_HOME }
+  const codexHome = env.CODEX_HOME || `${env.HOME}/.codex`
   const sources = []
-  const configPath = codexHome === null ? null : `${codexHome}/config.toml`
-  const config = readCodexConfig(configPath === null ? null : optionalText(configPath))
+  const configPath = `${codexHome}/config.toml`
+  const config = readCodexConfig(optionalText(configPath))
   const overrides = {}
   const providerOverrides = {}
   let unresolvable = config.unreadable.length > 0 ? `config.toml ${config.unreadable[0]} cannot be read` : null
@@ -531,7 +558,12 @@ function settingsEnv(text, name) {
     if (env === undefined) return { env: {} }
     if (env === null || typeof env !== 'object' || Array.isArray(env)) return { unreadable: `${name} env is not an object` }
     const out = {}
-    for (const key of ['ANTHROPIC_BASE_URL', ...CLAUDE_PROVIDER_SWITCHES]) if (typeof env[key] === 'string') out[key] = env[key]
+    for (const key of ['ANTHROPIC_BASE_URL', ...CLAUDE_PROVIDER_SWITCHES]) {
+      if (env[key] === undefined) continue
+      // A number or true where text belongs: the app may still act on it, so it is never read as absent.
+      if (typeof env[key] !== 'string') return { unreadable: `${name} env ${key} is not text` }
+      out[key] = env[key]
+    }
     return { env: out }
   } catch {
     return { unreadable: `${name} is not valid JSON` }
@@ -549,14 +581,15 @@ function settingsEnv(text, name) {
  */
 export function resolveClaudeRoute(parsed, environment, cwd) {
   const env = dispatchEnvironment(parsed, environment)
-  const configDir = env.CLAUDE_CONFIG_DIR || (env.HOME ? `${env.HOME}/.claude` : null)
+  if (!env.HOME) return { unsupported: NO_HOME }
+  const configDir = env.CLAUDE_CONFIG_DIR || `${env.HOME}/.claude`
   const files = [['managed settings', '/etc/claude-code/managed-settings.json']]
-  if (configDir !== null) files.push(['user settings', `${configDir}/settings.json`])
+  files.push(['user settings', `${configDir}/settings.json`])
   files.push(['project settings', `${cwd}/.claude/settings.json`], ['local settings', `${cwd}/.claude/settings.local.json`])
   for (const dir of [...new Set(spellings(cwd).flatMap((folder) => foldersAbove(folder).slice(1)))]) {
     for (const [label, name] of [['settings', 'settings.json'], ['local settings', 'settings.local.json']]) {
       // The user settings were read above; every other file here is one more source.
-      if (configDir === null || join(dir, '.claude', name) !== join(configDir, 'settings.json')) files.push([`${label} in ${dir}`, `${dir}/.claude/${name}`])
+      if (join(dir, '.claude', name) !== join(configDir, 'settings.json')) files.push([`${label} in ${dir}`, `${dir}/.claude/${name}`])
     }
   }
   for (const name of optionalNames('/etc/claude-code/managed-settings.d')) {

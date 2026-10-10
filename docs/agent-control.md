@@ -801,7 +801,10 @@ of a Codex session record to bind a resume. Files it cannot prove an app skips c
 `.codex/config.toml` in the working folder or a folder above it, or `/etc/codex`, that names a
 provider or address makes a Codex destination unknown (`HOST_UNKNOWN`), and Claude settings in the
 folders above the working one and in `/etc/claude-code/managed-settings.d` are read like the
-project's own. Private work goes only to a provider that allows it.
+project's own. A command that runs without `HOME` (an `env -i` that does not name it) is refused
+(`ROUTE_UNSUPPORTED`): the app would read the account's own settings, which the command hides from
+the check, so write `env -i HOME="$HOME" …`. A named setting that is not text, or a `config.toml`
+value BMN cannot follow, makes the destination unknown. Private work goes only to a provider that allows it.
 Any installed version of the app passes; one whose version cannot be read is refused private work
 (`HARNESS_UNKNOWN`).
 A public-only destination may receive only a packet of files that match the public commit the

@@ -100,7 +100,7 @@ const FABLE_PACKET = (rules: string) => ['env', '-i', `HOME=${home}`, `PATH=${en
   '--effort', 'medium', '--output-format', 'json', '--tools', '', '--permission-mode', 'dontAsk', '--safe-mode',
   '--no-session-persistence', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--append-system-prompt', rules]
 /** GLM through Claude Code on Z.ai's host: a public-only provider on an explicit, listed host. */
-const GLM = (rules?: string) => ['env', '-i', `PATH=${env.PATH}`, 'ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic', 'claude', '-p', '--model', 'glm-5.3',
+const GLM = (rules?: string) => ['env', '-i', `HOME=${home}`, `PATH=${env.PATH}`, 'ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic', 'claude', '-p', '--model', 'glm-5.3',
   '--effort', 'low', '--tools', '', '--safe-mode', '--output-format', 'json', ...(rules === undefined ? [] : ['--append-system-prompt', rules])]
 
 type Inputs = Parameters<typeof evaluate>[0]
@@ -289,6 +289,31 @@ describe('destination resolution (60.3 AC3-AC4)', () => {
     expect(local.message).toContain('proxy.example.test')
   })
 
+  it('refuses a command that runs without HOME, a named setting that is not text, and reads past brackets inside a string', () => {
+    // env -i without HOME: the app would read the account's own settings, which the command hides from BMN.
+    const bare = check({ argv: ['env', '-i', `PATH=${env.PATH}`, ...ASTRA_REVIEW(workspace)] })
+    expect(bare).toMatchObject({ verdict: 'REFUSED', code: 'ROUTE_UNSUPPORTED' })
+    expect(bare.message).toContain('runs without HOME')
+    expect(check({ argv: ['env', '-i', `HOME=${home}`, `PATH=${env.PATH}`, ...ASTRA_REVIEW(workspace)] }).verdict).toBe('PASS')
+    expect(check({ agent: 'fable', argv: FABLE_PACKET('rules').filter((part) => !part.startsWith('HOME=')) })).toMatchObject({ code: 'ROUTE_UNSUPPORTED' })
+    // A switch written as a number or true may still switch the provider.
+    mkdirSync(join(home, '.claude'))
+    for (const env of [{ CLAUDE_CODE_USE_BEDROCK: 1 }, { CLAUDE_CODE_USE_VERTEX: true }, { ANTHROPIC_BASE_URL: 5 }]) {
+      writeFileSync(join(home, '.claude/settings.json'), JSON.stringify({ env }))
+      expect(check({ agent: 'fable', argv: FABLE_PACKET('rules') })).toMatchObject({ verdict: 'REFUSED', code: 'HOST_UNKNOWN' })
+    }
+    rmSync(join(home, '.claude'), { recursive: true })
+    // A bracket inside a string closes nothing: the tables after it still count.
+    mkdirSync(join(home, '.codex'))
+    writeFileSync(join(home, '.codex/config.toml'), 'notify = ["bash", "-c", "echo [ # not a comment"]\nmodel_provider = "proxy"\n[model_providers.proxy]\nbase_url = "https://proxy.example.test/v1"\n')
+    const past = check({ argv: ASTRA_REVIEW(workspace) })
+    expect(past).toMatchObject({ verdict: 'REFUSED', code: 'HOST_MISMATCH' })
+    expect(past.message).toContain('proxy.example.test')
+    expect(readCodexConfig('tags = [\n  "one", "two [",\n]\nmodel_provider = "proxy"\n').top).toMatchObject({ model_provider: 'proxy' })
+    // A string left open across lines is a value BMN cannot follow.
+    expect(readCodexConfig('tags = ["one\ntwo"]\nmodel_provider = "proxy"\n').unreadable).toContain('a value that spans lines')
+  })
+
   it('an explicit host names the provider that lists it, and an approved host must match exactly', () => {
     const glm = check({ agent: 'glm', role: 'helper', argv: GLM() })
     // The destination is known and matches; the provider's answer is what refuses private work.
@@ -312,7 +337,7 @@ describe('destination resolution (60.3 AC3-AC4)', () => {
   })
 
   it('records only provider, host and source names, never URL paths or other environment values', () => {
-    const result = check({ agent: 'glm', role: 'helper', data: 'public', argv: ['env', '-i', `PATH=${env.PATH}`, 'ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic?token=SECRET', 'claude', '-p', '--model', 'glm-5.3', '--effort', 'low'] })
+    const result = check({ agent: 'glm', role: 'helper', data: 'public', argv: ['env', '-i', `HOME=${home}`, `PATH=${env.PATH}`, 'ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic?token=SECRET', 'claude', '-p', '--model', 'glm-5.3', '--effort', 'low'] })
     expect(result.verdict).toBe('REFUSED')
     expect(JSON.stringify(result)).not.toContain('SECRET')
     expect(JSON.stringify(result)).not.toContain('/api/anthropic')
@@ -633,7 +658,7 @@ describe('public-only destinations and packet mode (60.3 AC6)', () => {
 
   it('refuses packet mode without env -i, whose inherited environment could carry anything', () => {
     const inherited = { ...env, ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic' }
-    const result = check({ agent: 'glm', role: 'helper', workspace: publicRepo, data: 'public', cwd: packet, packet, stdin: join(packet, 'prompt.md'), argv: GLM().slice(4) }, inherited)
+    const result = check({ agent: 'glm', role: 'helper', workspace: publicRepo, data: 'public', cwd: packet, packet, stdin: join(packet, 'prompt.md'), argv: GLM().slice(5) }, inherited)
     expect(result).toMatchObject({ verdict: 'REFUSED', code: 'PACKET_INVALID', message: expect.stringContaining('env -i') })
   })
 
