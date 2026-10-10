@@ -656,7 +656,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await update.getByText(`${program} update`, { exact: true }).waitFor()
     await update.getByText('BMN recognises no Codex session right now.', { exact: false }).waitFor()
     await update.getByText("it hands over to this program, and this is the one updated.", { exact: false }).waitFor()
-    assert.deepEqual(await update.getByRole('button').allTextContents(), ['Copy command', 'Check now', 'Close'])
+    assert.deepEqual(await update.getByRole('button').allTextContents(), ['Type in a new session', 'Copy command', 'Check now', 'Close'])
     await shot('health-update-1280.png')
     await update.getByRole('button', { name: 'Copy command' }).click()
     await update.getByText('Copied', { exact: true }).waitFor()
@@ -691,6 +691,43 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     await main.getByRole('button', { name: 'Check now' }).click()
     await app('Codex').getByText('· tested').waitFor()
     passed('Update… names the program past BMN\'s own command, copies the exact command, starts no updater, says what the program reports after a check, and Health reads again when the window comes back')
+
+    phase('60.13: Update… types the command into a new session; the owner\'s Enter runs it')
+    rmSync(calls, { force: true })
+    stub('codex', `echo "$*" >> '${calls}'\necho "codex-cli 0.161.0"`)
+    const ranUpdate = () => existsSync(calls) && readFileSync(calls, 'utf8').split('\n').includes('update')
+    await updateButton.click()
+    await update.getByText('BMN can type the command into a new session; you press Enter there to run it.', { exact: false }).waitFor()
+    await shot('health-update-type-1280.png')
+    await update.getByRole('button', { name: 'Type in a new session' }).click()
+    // Preferences steps aside for the session that now holds the command.
+    await dialog.waitFor({ state: 'detached' })
+    await page.locator('.session-row', { hasText: 'Update Codex' }).waitFor()
+    await page.getByTitle('Typed the command into Update Codex. Press Enter there to run it.').waitFor()
+    await sleep(1500)
+    assert.equal(ranUpdate(), false, 'the updater ran before the owner pressed Enter')
+    await shot('update-session-typed-1280.png')
+    await page.locator('.session-terminal.selected .terminal-surface').click()
+    await page.keyboard.press('Enter')
+    await until(ranUpdate, 'the stand-in program run with its update word after Enter')
+    // The session is a plain shell: nothing about the update is part of how it starts, so a restart of BMN cannot run it again.
+    const updateSession = await page.evaluate(async () => {
+      for (const workspace of await window.aiTerminal.listWorkspaces()) {
+        const found = (await window.aiTerminal.listSessions(workspace.workspaceId)).find((entry) => entry.name === 'Update Codex')
+        if (found) return found
+      }
+      return null
+    })
+    assert.deepEqual([updateSession.executable, updateSession.argv], ['/bin/bash', []])
+    // Back on Health, which Preferences reopens on, the answer is under the app's row without a press.
+    stub('codex', 'echo "codex-cli 0.174.0"')
+    await openPreferences()
+    await main.locator('.page-title', { hasText: /^Health$/ }).waitFor()
+    await app('Codex').locator('.app-note').getByText('The program now reports 0.174.0; before it reported 0.161.0.', { exact: true }).waitFor()
+    stub('codex', 'echo "codex-cli 0.161.0"')
+    await main.getByRole('button', { name: 'Check now' }).click()
+    await app('Codex').getByText('· tested').waitFor()
+    passed('Update… types the exact command into a new plain shell session and runs nothing; the owner\'s Enter runs it, and Health says what the program reports afterwards (60.13)')
 
     phase('60.5 AC7 / 60.4 AC6: an approval that changes the Team phrase lists the rules files first')
     await go('Rules')

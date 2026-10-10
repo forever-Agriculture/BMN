@@ -2546,6 +2546,25 @@ function App(): React.JSX.Element {
           telegramCue={telegramCue}
           reportedModels={reportedModels(hookOrigins, sessions, live)}
           recognisedSessions={sessionsByApp(hookOrigins, sessions, live)}
+          onTypeInSession={activeWorkspaceId ? (name, command) => {
+            void (async () => {
+              try {
+                // A plain shell in a folder of no project. The command is typed, never part of how the session starts, so a restart of BMN cannot run it again.
+                const form = { ...INITIAL_SESSION_FORM, name, cwd: home ?? INITIAL_SESSION_FORM.cwd }
+                const created = await window.aiTerminal.createSession(sessionCreateParams(activeWorkspaceId, form, { cols: 80, rows: 24 }))
+                setSessions((current) => [...current, created.session])
+                setLive((current) => ({ ...current, [created.session.sessionId]: created.startup }))
+                applyTreeSessionAction(selectTreeSession([...sessions, created.session], created.session.sessionId))
+                // Typed and not run: the owner presses Enter in the session, where he sees the command. A moment later, so the
+                // shell usually shows its prompt first; typed earlier it would still arrive, only echoed once more above the prompt.
+                setTimeout(() => window.aiTerminal.sendTerminalInput(created.startup.attachmentId, new TextEncoder().encode(command)), 600)
+                setDialog(null)
+                brief(`Typed the command into ${created.session.name}. Press Enter there to run it.`)
+              } catch (error) {
+                setFailure(failureDetail(error, 'Session request failed'))
+              }
+            })()
+          } : undefined}
         />
       ) : null}
       {dialog?.kind === 'dev-auto-runs' ? <DevAutoRunsDialog

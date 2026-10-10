@@ -714,6 +714,21 @@ describe('Rules › Health: Update… (60.6: the app\'s own updater, shown befor
     expect(claude).not.toContain('role="status"')
   })
 
+  it('where a session can be opened, offers to type the command there and leaves the Enter to the owner', () => {
+    const typed: string[][] = []
+    const offered = sheet(1, { onType: (name, command) => { typed.push([name, command]) } })
+    expect([...offered.matchAll(/<button type="button"( class="primary")?[^>]*>([^<]+)<\/button>/g)].map((match) => [match[2], match[1] !== undefined]))
+      .toEqual([['Type in a new session', true], ['Copy command', false], ['Check now', false], ['Close', false]])
+    expect(words(offered).replace(/\s+/g, ' ')).toContain('Afterwards BMN can type the command into a new session; you press Enter there to run it. Or run it in any terminal. When you come back to Health, BMN reads the version and where Codex sends data again.')
+    // Rendering offers; nothing is typed until the press.
+    expect(typed).toEqual([])
+    // With no program there is nothing to type.
+    expect(sheet(2, { onType: () => {} })).toContain('<button type="button" class="primary" disabled="">Type in a new session</button>')
+    // Without a way to open a session the sheet is as before: the copy is the main action.
+    expect(sheet(1)).not.toContain('Type in a new session')
+    expect(sheet(1)).toContain('<button type="button" class="primary">Copy command</button>')
+  })
+
   it('says for Codex which program is meant, since BMN\'s sessions start its own command of that name', () => {
     const codex = words(sheet(1)).replace(/\s+/g, ' ')
     expect(codex).toContain("In BMN's sessions, codex is BMN's own command; it hands over to this program, and this is the one updated.".replace(/'/g, '&#x27;'))

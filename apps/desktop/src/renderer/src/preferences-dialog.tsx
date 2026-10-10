@@ -127,6 +127,8 @@ export function PreferencesDialog(props: {
   reportedModels?: readonly ReportedModel[]
   /** How many running sessions BMN recognises as each app; Rules › Health says it beside an update. */
   recognisedSessions?: RecognisedSessions
+  /** Opens a new shell session with a command typed and not run; Rules › Health offers it for an app's update command. */
+  onTypeInSession?: ((name: string, command: string) => void) | undefined
 }): React.JSX.Element {
   const onSettings = useRef(props.onSettings)
   onSettings.current = props.onSettings
@@ -502,7 +504,7 @@ export function PreferencesDialog(props: {
       </nav>
       <main className="preferences-main" ref={main}>
       {parent === 'team' ? <div className="preferences-page team-page"><TeamPreferences team={team} page={shownTeamPage} apps={rules.snapshot?.apps ?? null} reported={props.reportedModels ?? []} go={goTeam} /></div> : null}
-      {parent === 'rules' ? <div className="preferences-page rules-page"><RulesPreferences rules={rules} team={team} page={page === 'health' ? 'health' : 'editor'} recognised={props.recognisedSessions ?? {}} /></div> : null}
+      {parent === 'rules' ? <div className="preferences-page rules-page"><RulesPreferences rules={rules} team={team} page={page === 'health' ? 'health' : 'editor'} recognised={props.recognisedSessions ?? {}} onTypeInSession={props.onTypeInSession} /></div> : null}
       {pageOf('appearance', <>
       <section className="preferences-section">
         <h3>Appearance</h3>
