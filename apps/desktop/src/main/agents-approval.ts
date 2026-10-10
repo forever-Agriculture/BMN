@@ -4,12 +4,12 @@ import { spawnSync } from 'node:child_process'
 import { appendFileSync, chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, ftruncateSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { dirname } from 'node:path'
 import {
-  ID_PATTERN, RESERVED_SECTIONS, RosterError, agentsDirectory, outsideYamlBlocks, parseRoster, rewriteRoster, rosterPath, sha256, splitSections,
-  type RosterData
+  ID_PATTERN, RESERVED_SECTIONS, RosterError, SHARED_SECTIONS, agentsDirectory, outsideYamlBlocks, parseRoster, rewriteRoster, rosterPath, sha256,
+  splitSections, type RosterData
 } from '../../bin/agents-roster.mjs'
 import {
   approvalLockPath, buildGeneration, currentPointerPath, generationNumbers, generationPath, generationsDirectory, historyLogPath,
-  readApproved, readGeneration, stateDirectory, type Generation
+  readApproved, readGeneration, restoreProblem, stateDirectory, type Generation
 } from '../../bin/agents-state.mjs'
 import { pathState, replaceFileSafely, type PathState } from '../../bin/safe-config-write.mjs'
 
@@ -36,9 +36,15 @@ export interface ApprovalSeams {
    * passes one that re-inspects the route; without it every new acceptance is refused.
    */
   checkNewlyAccepted?: (versions: AcceptedVersion[]) => void
+  /**
+   * Judges app destinations an approval would newly record as inspected (60.6 AC4): throws to
+   * refuse. The app passes one that inspects each app again; without it every such change is refused.
+   */
+  checkInspectedRoutes?: (routes: InspectedRoute[]) => void
 }
 
 export interface AcceptedVersion { harness: string; version: string }
+export interface InspectedRoute { harness: string; provider: string }
 
 /** What the panel showed: the approved generation (null when none), the roster file hash and, when given, what the roster path linked to. */
 export interface ShownRevision {
@@ -56,11 +62,26 @@ export function newlyAccepted(previous: RosterData | null, next: RosterData): Ac
     .map((version) => ({ harness: route.harness, version })))
 }
 
+/** App destinations `next` records as inspected (`observed-default`) that `previous` did not record that way. */
+export function newlyInspected(previous: RosterData | null, next: RosterData): InspectedRoute[] {
+  const before = new Map((previous?.harness_routes ?? []).map((route) => [route.harness, route]))
+  return next.harness_routes
+    .filter((route) => route.basis === 'observed-default' && (before.get(route.harness)?.basis !== route.basis || before.get(route.harness)?.provider !== route.provider))
+    .map((route) => ({ harness: route.harness, provider: route.provider }))
+}
+
 function judgeAccepted(previous: RosterData | null, next: RosterData, seams: ApprovalSeams): void {
+  const routes = newlyInspected(previous, next)
+  if (routes.length > 0) {
+    if (seams.checkInspectedRoutes === undefined) {
+      throw new RosterError('ROUTE_CHANGED', `where ${routes.map((route) => route.harness).join(', ')} sends data can be recorded as inspected only by BMN, in Preferences > Rules > Health`)
+    }
+    seams.checkInspectedRoutes(routes)
+  }
   const versions = newlyAccepted(previous, next)
   if (versions.length === 0) return
   if (seams.checkNewlyAccepted === undefined) {
-    throw new RosterError('ROUTE_CHANGED', `${versions.map((entry) => `${entry.harness} ${entry.version}`).join(', ')} can be accepted only after BMN inspected its route in Preferences > Agents`)
+    throw new RosterError('ROUTE_CHANGED', `${versions.map((entry) => `${entry.harness} ${entry.version}`).join(', ')} can be accepted only after BMN inspected where that version sends data, in Preferences > Rules > Health`)
   }
   seams.checkNewlyAccepted(versions)
 }
@@ -238,10 +259,7 @@ export function approveRoster(shown: ShownRevision, seams: ApprovalSeams = {}): 
   })
 }
 
-/** Section ids a row names: an agent id, `roles`, `data-labels` or `harness-routes`. */
-const SHARED_SECTIONS = ['roles', 'data-labels', 'harness-routes'] as const
-
-/** The approved data with the named sections taken from the file, in the file's agent order. */
+/** The approved data with the named sections (an agent id or a shared section) taken from the file, in the file's agent order. */
 export function mergeSections(approved: RosterData, file: RosterData, scope: readonly string[]): RosterData {
   const fromFile = new Map(file.agents.map((agent) => [agent.id, agent]))
   const fromApproved = new Map(approved.agents.map((agent) => [agent.id, agent]))
@@ -252,13 +270,14 @@ export function mergeSections(approved: RosterData, file: RosterData, scope: rea
     ...approved,
     agents,
     roles: scope.includes('roles') ? file.roles : approved.roles,
-    data_labels: scope.includes('data-labels') ? file.data_labels : approved.data_labels,
+    providers: scope.includes('providers') ? file.providers : approved.providers,
+    exceptions: scope.includes('exceptions') ? file.exceptions : approved.exceptions,
     harness_routes: scope.includes('harness-routes') ? file.harness_routes : approved.harness_routes
   }
 }
 
 /**
- * Approves only the named sections' outside changes (60.5 AC3: one row, one Approve). The file is
+ * Approves only the named sections' outside changes (60.5 AC2: one row, one Keep). The file is
  * left as it is; the other sections stay pending. Refused when the approved result would not be a
  * valid roster on its own, for example a role chain naming an agent whose change is still pending.
  */
@@ -273,7 +292,7 @@ export function approveSections(shown: ShownRevision, scope: string[], seams: Ap
       judgeAccepted(null, fileData, seams)
       return publish(fileData, file.hash, current, seams)
     }
-    const unknown = scope.filter((id) => !(SHARED_SECTIONS as readonly string[]).includes(id)
+    const unknown = scope.filter((id) => !SHARED_SECTIONS.includes(id)
       && !fileData.agents.some((agent) => agent.id === id) && !current.data.agents.some((agent) => agent.id === id))
     if (scope.length === 0 || unknown.length > 0) throw new RosterError('INVALID_VALUE', `no section ${unknown.join(', ') || '(none named)'} to approve`)
     const parsed = parseRoster(rewriteRoster(file.text, mergeSections(current.data, fileData, scope)))
@@ -353,7 +372,12 @@ export function revertFileToApproved(shown: ShownRevision, scope: string[] | nul
     if (!keepsBytesOutsideBlocks(file.text, nextText)) {
       throw new RosterError('INVALID_VALUE', 'reverting would remove or insert text outside the yaml blocks (a repeated section, or one without its yaml block); fix that in the file, or approve')
     }
+    // A whole revert must leave a valid file; a scoped one must not break a file that was valid
+    // (reverting only the providers while an agent on a new provider stays unapproved).
     if (scope === null) validData(nextText)
+    else if (parseRoster(file.text).data !== null && parseRoster(nextText).data === null) {
+      throw new RosterError('INVALID_VALUE', 'reverting only this would leave the team file invalid, because another unapproved change depends on it; keep or revert that change first')
+    }
     keepPriorState(file.state, (seams.now ?? (() => new Date()))())
     assertLockHeld()
     replaceFileSafely(rosterPath(), file.state, nextText)
@@ -361,15 +385,16 @@ export function revertFileToApproved(shown: ShownRevision, scope: string[] | nul
   })
 }
 
-/** "Restore this approval": an earlier generation's data becomes a new generation (60.2 AC6). */
+/** "Restore…": an earlier version's data becomes a new generation (60.2 AC6); one approved under an earlier schema cannot be restored (AC7). */
 export function restoreGeneration(shown: ShownRevision, number: number, seams: ApprovalSeams = {}): Generation {
   return withLock(seams, () => {
     seams.afterLock?.()
     const current = currentGeneration()
     const file = readFileState()
     checkShown(shown, current, file.hash, file.state)
-    const earlier = readGeneration(number)
-    if (earlier === null) throw new RosterError('STATE_CORRUPT', `generation ${number} is missing or does not verify`)
+    const problem = restoreProblem(number)
+    const earlier = problem === null ? readGeneration(number) : null
+    if (earlier === null) throw new RosterError(problem?.includes('earlier roster layout') ? 'INVALID_VALUE' : 'STATE_CORRUPT', problem ?? `version ${number} is missing or does not verify`)
     judgeAccepted(current?.data ?? null, earlier.data, seams)
     return publish(earlier.data, earlier.roster_file_hash, current, seams, 'restore', number)
   })

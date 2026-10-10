@@ -72,13 +72,16 @@ function isObject(value) {
 /** Shape check of approved data: hashes guard against corruption, this against a reader crashing on garbage. */
 function wellFormed(data) {
   return isObject(data) && data.schema_version === SCHEMA_VERSION && Array.isArray(data.agents) && Array.isArray(data.roles)
-    && isObject(data.data_labels) && Array.isArray(data.data_labels.paths) && Array.isArray(data.harness_routes)
+    && Array.isArray(data.providers) && Array.isArray(data.exceptions) && Array.isArray(data.harness_routes)
     && data.agents.every((agent) => isObject(agent) && typeof agent.id === 'string' && Array.isArray(agent.efforts) && Array.isArray(agent.roles))
     && data.roles.every((role) => isObject(role) && typeof role.id === 'string' && Array.isArray(role.candidates))
+    && data.providers.every((provider) => isObject(provider) && typeof provider.id === 'string' && Array.isArray(provider.hosts))
+    && data.exceptions.every((exception) => isObject(exception) && typeof exception.id === 'string' && typeof exception.folder === 'string')
+    && data.harness_routes.every((route) => isObject(route) && typeof route.harness === 'string')
 }
 
-/** One generation file, verified; null when it is missing, unreadable, malformed or its hash does not match. */
-export function readGeneration(number) {
+/** A generation file whose hash verifies, whatever its schema; null when missing, unreadable or altered. */
+function readVerified(number) {
   let generation
   try {
     generation = JSON.parse(readFileSync(generationPath(number), 'utf8'))
@@ -86,8 +89,22 @@ export function readGeneration(number) {
     return null
   }
   if (!isObject(generation) || generation.number !== number || typeof generation.hash !== 'string'
-    || generationHash(generation) !== generation.hash || !wellFormed(generation.data)) return null
+    || generationHash(generation) !== generation.hash || !isObject(generation.data)) return null
   return generation
+}
+
+/**
+ * Whether a verified generation was approved under an earlier schema. Such a generation is
+ * history only (60.2 AC7): never in force, never restored, and nothing is derived from it.
+ */
+function isEarlierSchema(generation) {
+  return Number.isSafeInteger(generation.data.schema_version) && generation.data.schema_version < SCHEMA_VERSION
+}
+
+/** One generation file of the current schema, verified; null when it is missing, unreadable, malformed, altered or of an earlier schema. */
+export function readGeneration(number) {
+  const generation = readVerified(number)
+  return generation === null || !wellFormed(generation.data) ? null : generation
 }
 
 /** Every generation number on disk, newest first. */
@@ -120,7 +137,7 @@ export function readApproved() {
     pointerText = readFileSync(currentPointerPath(), 'utf8')
   } catch (error) {
     if (error.code === 'ENOENT') {
-      throw new RosterError('NOT_APPROVED', 'nothing is approved yet: every agent is proposed until the owner approves the roster in BMN Preferences > Agents')
+      throw new RosterError('NOT_APPROVED', 'nothing is approved yet: every agent is proposed until the owner approves the team in BMN Preferences > Team')
     }
     throw corrupt(`cannot read ${currentPointerPath()} (${error.code})`)
   }
@@ -132,6 +149,10 @@ export function readApproved() {
   }
   if (!isObject(pointer) || !Number.isSafeInteger(pointer.generation) || typeof pointer.hash !== 'string') {
     throw corrupt(`${currentPointerPath()} does not name a generation and hash`)
+  }
+  const verified = readVerified(pointer.generation)
+  if (verified !== null && verified.hash === pointer.hash && isEarlierSchema(verified)) {
+    throw new RosterError('NOT_APPROVED', `the approved team is from an earlier roster layout (schema ${verified.data.schema_version}); approve the roster again on the Team pages in BMN Preferences`)
   }
   const generation = readGeneration(pointer.generation)
   if (generation === null || generation.hash !== pointer.hash) {
@@ -147,26 +168,42 @@ function corrupt(message) {
     { lastGood })
 }
 
-/** Approval history, newest first: number, time, parent, kind and the roster hash each came from. */
+/**
+ * Approval history, newest first: number, time, parent, kind and the roster hash each came from.
+ * A generation of an earlier schema is listed with `earlier_schema` and can only be looked at.
+ */
 export function listGenerations() {
   return generationNumbers().map((number) => {
-    const generation = readGeneration(number)
-    return generation === null
-      ? { number, valid: false }
-      : {
-          number, valid: true, created_at: generation.created_at, parent: generation.parent, kind: generation.kind,
-          roster_file_hash: generation.roster_file_hash, ...(generation.restored_from === undefined ? {} : { restored_from: generation.restored_from }),
-          agents: generation.data.agents.length, hash: generation.hash
-        }
+    const verified = readVerified(number)
+    if (verified === null) return { number, valid: false }
+    const earlier = isEarlierSchema(verified)
+    if (!earlier && !wellFormed(verified.data)) return { number, valid: false }
+    return {
+      number, valid: true, created_at: verified.created_at, parent: verified.parent, kind: verified.kind,
+      roster_file_hash: verified.roster_file_hash, ...(verified.restored_from === undefined ? {} : { restored_from: verified.restored_from }),
+      agents: Array.isArray(verified.data.agents) ? verified.data.agents.length : 0, hash: verified.hash,
+      ...(earlier ? { earlier_schema: verified.data.schema_version } : {})
+    }
   })
+}
+
+/** Why a generation cannot be restored, or null when it can: missing, altered, or approved under an earlier schema. */
+export function restoreProblem(number) {
+  const verified = readVerified(number)
+  if (verified === null) return `version ${number} is missing or does not verify`
+  if (isEarlierSchema(verified)) return `version ${number} was approved under an earlier roster layout and can only be viewed`
+  return wellFormed(verified.data) ? null : `version ${number} is missing or does not verify`
 }
 
 // ---------------------------------------------------------------------------------------------
 // Differences between approved machine data and the file
 
+/** Fields status shows only as changed, with a short hash: the owner's free text and exception folders. */
+const HASHED_FIELDS = [...FREE_TEXT_FIELDS, 'folder']
+
 function shown(field, value) {
   if (value === undefined) return { present: false }
-  if (FREE_TEXT_FIELDS.includes(field)) return { present: true, hash: sha256(canonicalJson(value)).slice(0, 12) }
+  if (HASHED_FIELDS.includes(field)) return { present: true, hash: sha256(canonicalJson(value)).slice(0, 12) }
   return { present: true, value }
 }
 
@@ -174,69 +211,41 @@ function sameValue(a, b) {
   return canonicalJson(a ?? null) === canonicalJson(b ?? null) && (a === undefined) === (b === undefined)
 }
 
+/** The keyed lists machine data is made of: the scope a difference names, the key and the fields compared. */
+const DIFF_SCOPES = [
+  { scope: 'agent', list: 'agents', key: 'id', fields: AGENT_FIELDS },
+  { scope: 'roles', list: 'roles', key: 'id', fields: ['description', 'candidates', 'then', 'recheck', 'small_work'] },
+  { scope: 'providers', list: 'providers', key: 'id', fields: ['name', 'hosts', 'sites', 'private_work'] },
+  { scope: 'exceptions', list: 'exceptions', key: 'id', fields: ['provider', 'folder'] },
+  { scope: 'harness-routes', list: 'harness_routes', key: 'harness', fields: ['provider', 'basis', 'accepted_versions'] }
+]
+
 /**
- * Every machine difference, approved → file. Free-text fields carry only a short hash on each side,
- * so `status` can say a note changed without printing it.
+ * Every machine difference, approved → file. Free-text fields and exception folders carry only a
+ * short hash on each side, so `status` can say one changed without printing it.
  */
 export function machineDiff(approved, file) {
   const out = []
-  const push = (scope, id, field, before, after) => {
-    out.push({ scope, id, field, kind: before === undefined ? 'added' : after === undefined ? 'removed' : 'changed',
-      ...(FREE_TEXT_FIELDS.includes(field) ? { free_text: true } : {}), before: shown(field, before), after: shown(field, after) })
-  }
-  const keyed = (list, key) => new Map(list.map((item) => [item[key], item]))
-  const approvedAgents = keyed(approved.agents, 'id')
-  const fileAgents = keyed(file.agents, 'id')
-  for (const id of new Set([...approvedAgents.keys(), ...fileAgents.keys()])) {
-    const before = approvedAgents.get(id)
-    const after = fileAgents.get(id)
-    if (before === undefined || after === undefined) {
-      // The whole entry rides along, so an approval shows every value it adds or removes; free text as a hash.
-      const entry = before ?? after
-      const value = Object.fromEntries(AGENT_FIELDS.filter((field) => Object.hasOwn(entry, field))
-        .map((field) => [field, FREE_TEXT_FIELDS.includes(field) ? `text ${sha256(canonicalJson(entry[field])).slice(0, 8)}` : entry[field]]))
-      out.push({ scope: 'agent', id, field: null, kind: before === undefined ? 'added' : 'removed',
-        ...(after ? { after: { present: true, value } } : { before: { present: true, value } }) })
-      continue
-    }
-    for (const field of AGENT_FIELDS) {
-      if (!sameValue(before[field], after[field])) push('agent', id, field, before[field], after[field])
-    }
-  }
-  const approvedRoles = keyed(approved.roles, 'id')
-  const fileRoles = keyed(file.roles, 'id')
-  for (const id of new Set([...approvedRoles.keys(), ...fileRoles.keys()])) {
-    const before = approvedRoles.get(id)
-    const after = fileRoles.get(id)
-    if (before === undefined || after === undefined) {
-      out.push({ scope: 'roles', id, field: null, kind: before === undefined ? 'added' : 'removed',
-        ...(after ? { after: { present: true, value: after } } : { before: { present: true, value: before } }) })
-      continue
-    }
-    for (const field of ['candidates', 'then', 'recheck', 'small_epic']) {
-      if (!sameValue(before[field], after[field])) push('roles', id, field, before[field], after[field])
-    }
-  }
-  if (approved.data_labels.default !== file.data_labels.default) {
-    push('data-labels', 'default', 'label', approved.data_labels.default, file.data_labels.default)
-  }
-  const approvedPaths = new Map(approved.data_labels.paths.map((entry) => [entry.path, entry.label]))
-  const filePaths = new Map(file.data_labels.paths.map((entry) => [entry.path, entry.label]))
-  for (const path of new Set([...approvedPaths.keys(), ...filePaths.keys()])) {
-    if (approvedPaths.get(path) !== filePaths.get(path)) push('data-labels', path, 'label', approvedPaths.get(path), filePaths.get(path))
-  }
-  const approvedRoutes = keyed(approved.harness_routes, 'harness')
-  const fileRoutes = keyed(file.harness_routes, 'harness')
-  for (const harness of new Set([...approvedRoutes.keys(), ...fileRoutes.keys()])) {
-    const before = approvedRoutes.get(harness)
-    const after = fileRoutes.get(harness)
-    if (before === undefined || after === undefined) {
-      out.push({ scope: 'harness-routes', id: harness, field: null, kind: before === undefined ? 'added' : 'removed',
-        ...(after ? { after: { present: true, value: after } } : { before: { present: true, value: before } }) })
-      continue
-    }
-    for (const field of ['provider', 'security', 'basis', 'accepted_versions']) {
-      if (!sameValue(before[field], after[field])) push('harness-routes', harness, field, before[field], after[field])
+  for (const { scope, list, key, fields } of DIFF_SCOPES) {
+    const before = new Map(approved[list].map((item) => [item[key], item]))
+    const after = new Map(file[list].map((item) => [item[key], item]))
+    for (const id of new Set([...before.keys(), ...after.keys()])) {
+      const was = before.get(id)
+      const now = after.get(id)
+      if (was === undefined || now === undefined) {
+        // The whole entry rides along, so an approval shows every value it adds or removes; hashed fields as a hash.
+        const entry = was ?? now
+        const value = Object.fromEntries(fields.filter((field) => Object.hasOwn(entry, field))
+          .map((field) => [field, HASHED_FIELDS.includes(field) ? `text ${sha256(canonicalJson(entry[field])).slice(0, 8)}` : entry[field]]))
+        out.push({ scope, id, field: null, kind: was === undefined ? 'added' : 'removed',
+          ...(now ? { after: { present: true, value } } : { before: { present: true, value } }) })
+        continue
+      }
+      for (const field of fields) {
+        if (sameValue(was[field], now[field])) continue
+        out.push({ scope, id, field, kind: was[field] === undefined ? 'added' : now[field] === undefined ? 'removed' : 'changed',
+          ...(HASHED_FIELDS.includes(field) ? { free_text: true } : {}), before: shown(field, was[field]), after: shown(field, now[field]) })
+      }
     }
   }
   return out

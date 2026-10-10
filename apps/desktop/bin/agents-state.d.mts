@@ -13,7 +13,7 @@ export interface Generation {
 }
 export interface DiffSide { present: boolean; value?: unknown; hash?: string }
 export interface DiffEntry {
-  scope: 'agent' | 'roles' | 'data-labels' | 'harness-routes'
+  scope: 'agent' | 'roles' | 'providers' | 'exceptions' | 'harness-routes'
   id: string
   field: string | null
   kind: 'added' | 'removed' | 'changed'
@@ -35,6 +35,7 @@ export declare function generationNumbers(): number[]
 export declare function lastGoodGeneration(): number | null
 export declare function readApproved(): Generation
 export declare function listGenerations(): Record<string, unknown>[]
+export declare function restoreProblem(number: number): string | null
 export declare function machineDiff(approved: RosterData, file: RosterData): DiffEntry[]
 export declare function diffLine(entry: DiffEntry): string
 export declare function buildGeneration(options: { number: number; parent: number | null; data: RosterData; rosterFileHash: string; kind?: 'approval' | 'restore'; restoredFrom?: number; now?: Date }): Generation

@@ -1,0 +1,244 @@
+// MODULE: agents-ipc.test.ts - Epic 60.4–60.6: the Team and Rules handlers preview an approval, update only the rules files that were shown, and re-inspect what an approval records
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, RosterDataShape, RulesOutcome, RulesPlan, RulesSnapshot } from '@bmn/protocol'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { installAgentsIpcHandlers } from './agents-ipc'
+
+const FIXTURE = readFileSync(fileURLToPath(new URL('../utility/test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
+/** BMN cannot inspect where OpenCode sends data, so the team these tests approve records it on the owner's word. */
+const EXAMPLE = FIXTURE.replace('opencode: {provider: opencode-go, basis: observed-default}', 'opencode: {provider: opencode-go, basis: owner-declared}')
+const SCRIPT = fileURLToPath(new URL('../../bin/bmn', import.meta.url))
+const MASTER = '# Rules\n\nThe team: <!-- bmn:team -->.\n\n<!-- bmn:public -->\nAnswer first.\n<!-- /bmn:public -->\n'
+
+let home: string
+let stubs: string
+let handlers: Map<string, (event: never, params?: unknown) => unknown>
+const saved = { HOME: process.env.HOME, PATH: process.env.PATH, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME }
+
+function stub(name: string, body: string): void {
+  writeFileSync(join(stubs, name), `#!/bin/sh\n${body}\n`)
+  chmodSync(join(stubs, name), 0o755)
+}
+
+beforeEach(() => {
+  home = realpathSync(mkdtempSync(join(tmpdir(), 'bmn-agents-ipc-')))
+  stubs = join(home, 'stubs')
+  mkdirSync(stubs)
+  mkdirSync(join(home, '.config/bmn/agents'), { recursive: true })
+  stub('claude', 'echo "2.1.295 (Claude Code)"')
+  stub('codex', 'echo "codex-cli 0.161.0"')
+  process.env.HOME = home
+  process.env.PATH = `${stubs}:/usr/bin:/bin`
+  delete process.env.XDG_CONFIG_HOME
+  handlers = new Map()
+  installAgentsIpcHandlers({ handle: (channel, listener) => { handlers.set(channel, listener) } }, {
+    senderIsAllowed: () => true, cliScript: () => SCRIPT, environment: () => ({ HOME: home, PATH: `${stubs}:/usr/bin:/bin` }),
+    openPath: async (path) => (existsSync(path) ? '' : 'no such file')
+  })
+})
+
+afterEach(() => {
+  for (const [name, value] of Object.entries(saved)) {
+    if (value === undefined) delete process.env[name]
+    else process.env[name] = value
+  }
+  rmSync(home, { recursive: true, force: true })
+})
+
+const rosterFile = (): string => join(home, '.config/bmn/agents/roster.md')
+const call = async <Result>(channel: string, params: Record<string, unknown> = {}): Promise<Result> => await handlers.get(`aiterm:${channel}`)?.(undefined as never, params) as Result
+const snapshot = (): Promise<AgentsSnapshot> => call('agents:snapshot')
+const shownOf = (state: AgentsSnapshot): AgentsShownRevision => ({ generation: state.approved?.generation ?? null, fileHash: state.file.hash as string, link: state.file.link })
+const shown = async (): Promise<AgentsShownRevision> => shownOf(await snapshot())
+const activate = (data: RosterDataShape, id: string): RosterDataShape => ({ ...data, agents: data.agents.map((agent) => (agent.id === id ? { ...agent, status: 'active' as const } : agent)) })
+const bindings = (preview: AgentsPreview) => preview.teamUpdate.map((target) => ({ harness: target.harness, binding: target.binding }))
+const file = (path: string): string => readFileSync(join(home, path), 'utf8')
+
+/** A team approved from the file, the rules saved and installed into the four apps. */
+async function approvedAndInstalled(): Promise<AgentsSnapshot> {
+  writeFileSync(rosterFile(), EXAMPLE)
+  const first = await call<AgentsOutcome>('agents:approve', { shown: await shown() })
+  expect(first).toMatchObject({ ok: true, message: 'Approved · version 1' })
+  expect(await call<RulesOutcome>('rules:save-master', { text: MASTER, expectedHash: null, expectedLink: null })).toMatchObject({ ok: true })
+  const plan = await call<RulesPlan>('rules:plan-install')
+  expect(plan.targets.map((target) => [target.harness, target.rendering])).toEqual([['claude', 'full'], ['codex', 'full'], ['opencode', 'public'], ['cursor', 'public']])
+  expect(await call<RulesOutcome>('rules:install', { planHash: plan.planHash })).toMatchObject({ ok: true })
+  expect(file('.claude/CLAUDE.md')).toContain('The team: Claude Code (Opus, Fable), Codex (Sol, Astra, Luna) (roles, efforts and limits: `bmn team`).')
+  return snapshot()
+}
+
+describe('a new install and the team file', () => {
+  it('starts a team with no agents and nothing approved, once', async () => {
+    const started = await call<AgentsOutcome>('agents:start')
+    expect(started).toMatchObject({ ok: true, message: 'Team file created' })
+    expect(started.snapshot).toMatchObject({ home, approved: null, file: { exists: true, data: { agents: [], roles: [{ id: 'lead' }, { id: 'designer' }, { id: 'helper' }, { id: 'reviewer' }, { id: 'advisor' }] } } })
+    expect(await call<AgentsOutcome>('agents:start')).toMatchObject({ ok: false, code: 'REVISION_CONFLICT' })
+    expect(await call('agents:open-file')).toEqual({ ok: true, path: rosterFile() })
+  })
+
+  it('saves an agent\'s notes into the file without approving anything, and refuses when the file moved', async () => {
+    writeFileSync(rosterFile(), EXAMPLE)
+    const before = await shown()
+    const saved = await call<AgentsOutcome>('agents:notes', { shown: before, agent: 'astra', text: 'Design eye.' })
+    expect(saved).toMatchObject({ ok: true, snapshot: { approved: null, file: { prose: { astra: 'Design eye.' } } } })
+    expect(await call<AgentsOutcome>('agents:notes', { shown: before, agent: 'astra', text: 'Stale.' })).toMatchObject({ ok: false, code: 'REVISION_CONFLICT' })
+    expect(readFileSync(rosterFile(), 'utf8')).not.toContain('Stale.')
+  })
+})
+
+describe('what an approving control would approve (60.5 AC7)', () => {
+  it('previews staged data with its differences and consequences, and no rules files while none is installed', async () => {
+    writeFileSync(rosterFile(), EXAMPLE)
+    await call<AgentsOutcome>('agents:approve', { shown: await shown() })
+    const data = (await snapshot()).file.data as RosterDataShape
+    const preview = await call<AgentsPreview>('agents:preview', { request: { kind: 'staged', data: activate(data, 'haiku') } })
+    expect(preview).toMatchObject({ valid: true, errors: [], teamUpdate: [], consequences: ['Haiku could be given work', 'Haiku could receive private work'] })
+    expect(preview.differences.map((diff) => `${diff.scope}:${diff.id}:${diff.field}`)).toEqual(['agent:haiku:status'])
+    expect((await snapshot()).approved?.generation).toBe(1)
+  })
+
+  it('says why staged data would not be a valid team instead of previewing it', async () => {
+    writeFileSync(rosterFile(), EXAMPLE)
+    const data = (await snapshot()).file.data as RosterDataShape
+    const preview = await call<AgentsPreview>('agents:preview', { request: { kind: 'staged', data: { ...data, agents: data.agents.map((agent) => (agent.id === 'astra' ? { ...agent, roles: [...agent.roles, 'lead'] } : agent)) } } })
+    expect(preview.valid).toBe(false)
+    expect(preview.errors.map((issue) => issue.code)).toContain('CLASS_CANNOT_LEAD')
+    expect(preview.teamUpdate).toEqual([])
+  })
+})
+
+describe('an approval that changes the Team phrase (60.4 AC6)', () => {
+  it('lists each rules file that would change, and updates exactly those when they were shown', async () => {
+    const state = await approvedAndInstalled()
+    const staged = activate(state.file.data as RosterDataShape, 'haiku')
+    const preview = await call<AgentsPreview>('agents:preview', { request: { kind: 'staged', data: staged } })
+    expect(preview.teamUpdate.map((target) => [target.harness, target.path, target.kind])).toEqual([
+      ['claude', join(home, '.claude/CLAUDE.md'), 'full'], ['codex', join(home, '.codex/AGENTS.md'), 'full']
+    ])
+    expect(preview.teamUpdate[0]?.diff).toContain('+The team: Claude Code (Opus, Fable, Haiku), Codex (Sol, Astra, Luna)')
+    const outcome = await call<AgentsOutcome>('agents:save', { shown: shownOf(state), data: staged, teamUpdate: bindings(preview) })
+    expect(outcome).toMatchObject({ ok: true, message: 'Approved · version 2', rulesUpdate: { written: ['claude', 'codex'], skipped: [] } })
+    expect(file('.claude/CLAUDE.md')).toContain('Claude Code (Opus, Fable, Haiku)')
+    expect(file('.codex/AGENTS.md')).toContain('Claude Code (Opus, Fable, Haiku)')
+    const transaction = (outcome as Extract<AgentsOutcome, { ok: true }>).rulesUpdate?.transaction as string
+    const rules = await call<RulesSnapshot>('rules:snapshot')
+    expect(rules.transactions[0]).toMatchObject({ id: transaction, reason: 'team update', targets: ['claude', 'codex'], state: 'complete' })
+    expect(rules.health).toMatchObject({ state: 'checked', ok: true })
+    // Undo is the ordinary restore of that one transaction.
+    const undo = await call<RulesPlan>('rules:plan-restore', { transaction })
+    expect(await call<RulesOutcome>('rules:restore', { transaction, planHash: undo.planHash })).toMatchObject({ ok: true, message: 'Put back Claude Code, Codex' })
+    expect(file('.claude/CLAUDE.md')).not.toContain('Haiku')
+  })
+
+  it('an approval that showed no rules files updates none', async () => {
+    const state = await approvedAndInstalled()
+    const before = file('.claude/CLAUDE.md')
+    const outcome = await call<AgentsOutcome>('agents:save', { shown: shownOf(state), data: activate(state.file.data as RosterDataShape, 'haiku') })
+    expect(outcome).toMatchObject({ ok: true, message: 'Approved · version 2' })
+    expect(Object.hasOwn(outcome, 'rulesUpdate')).toBe(false)
+    expect(file('.claude/CLAUDE.md')).toBe(before)
+    expect((await call<RulesSnapshot>('rules:snapshot')).health).toMatchObject({ ok: false })
+  })
+
+  it('leaves a rules file that changed after it was shown for Install, and still approves', async () => {
+    const state = await approvedAndInstalled()
+    const staged = activate(state.file.data as RosterDataShape, 'haiku')
+    const preview = await call<AgentsPreview>('agents:preview', { request: { kind: 'staged', data: staged } })
+    writeFileSync(join(home, '.codex/AGENTS.md'), `${file('.codex/AGENTS.md')}\nA line added by hand.\n`)
+    const outcome = await call<AgentsOutcome>('agents:save', { shown: shownOf(state), data: staged, teamUpdate: bindings(preview) })
+    expect(outcome).toMatchObject({ ok: true, rulesUpdate: { written: ['claude'], skipped: ['codex'] } })
+    expect(file('.codex/AGENTS.md')).toContain('A line added by hand.')
+    expect(file('.codex/AGENTS.md')).not.toContain('Haiku')
+  })
+
+  it('Keep on an outside change shows and updates the rules files the same way', async () => {
+    const state = await approvedAndInstalled()
+    writeFileSync(rosterFile(), readFileSync(rosterFile(), 'utf8').replace(/(name: Sonnet[\s\S]*?status: )proposed/, '$1active'))
+    const outside = await snapshot()
+    expect(outside.differences?.map((diff) => `${diff.id}:${diff.field}`)).toEqual(['sonnet:status'])
+    const preview = await call<AgentsPreview>('agents:preview', { request: { kind: 'sections', scope: ['sonnet'] } })
+    expect(preview.teamUpdate.map((target) => target.harness)).toEqual(['claude', 'codex'])
+    const kept = await call<AgentsOutcome>('agents:approve', { shown: shownOf(outside), scope: ['sonnet'], teamUpdate: bindings(preview) })
+    expect(kept).toMatchObject({ ok: true, message: 'Kept · version 2', rulesUpdate: { written: ['claude', 'codex'] } })
+    expect(file('.claude/CLAUDE.md')).toContain('Claude Code (Opus, Fable, Sonnet)')
+    expect(state.approved?.generation).toBe(1)
+  })
+
+  it('Restore… shows and updates them too, and the team file follows the restored version', async () => {
+    const state = await approvedAndInstalled()
+    const staged = activate(state.file.data as RosterDataShape, 'haiku')
+    await call<AgentsOutcome>('agents:save', { shown: shownOf(state), data: staged, teamUpdate: bindings(await call<AgentsPreview>('agents:preview', { request: { kind: 'staged', data: staged } })) })
+    const preview = await call<AgentsPreview>('agents:preview', { request: { kind: 'restore', number: 1 } })
+    expect(preview.teamUpdate.map((target) => target.harness)).toEqual(['claude', 'codex'])
+    expect(preview.consequences).toEqual(['Haiku could no longer be given work', 'Haiku could no longer receive private work'])
+    const restored = await call<AgentsOutcome>('agents:restore', { shown: await shown(), number: 1, teamUpdate: bindings(preview) })
+    expect(restored).toMatchObject({ ok: true, message: 'Version 1 restored as version 3', rulesUpdate: { written: ['claude', 'codex'] }, snapshot: { differences: [] } })
+    expect(file('.claude/CLAUDE.md')).not.toContain('Haiku')
+    expect(restored.snapshot.file.data?.agents.find((agent) => agent.id === 'haiku')?.status).toBe('proposed')
+    expect(restored.snapshot.history.slice(0, 2).map((entry) => [entry.number, entry.kind, entry.summary])).toEqual([[3, 'restore', 'Restored version 1'], [2, 'approval', 'Haiku could be given work · 1 more']])
+  })
+})
+
+describe('restoring past an agent that was added since (60.2 AC6)', () => {
+  it('approves the earlier version, leaves the team file alone and says what still shows', async () => {
+    writeFileSync(rosterFile(), EXAMPLE)
+    await call<AgentsOutcome>('agents:approve', { shown: await shown() })
+    const added = `${readFileSync(rosterFile(), 'utf8').replace('\n## roles\n', '\n## nova\n\n```yaml\nname: Nova\nclass: pawn\nharness: codex\nmodel: gpt-6-nova\nprovider: openai\nhost: default\nenabled: true\nstatus: active\nefforts: [low]\nroles: []\n```\n\n## roles\n')}`
+    writeFileSync(rosterFile(), added)
+    expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: true, message: 'Approved · version 2' })
+    const restored = await call<AgentsOutcome>('agents:restore', { shown: await shown(), number: 1 })
+    expect(restored).toMatchObject({ ok: true, message: 'Version 1 restored as version 3 · the team file still holds later edits; keep or revert each' })
+    expect(readFileSync(rosterFile(), 'utf8')).toBe(added)
+    expect(restored.snapshot.differences?.map((diff) => `${diff.id}:${diff.kind}`)).toEqual(['nova:added'])
+  })
+})
+
+describe('an approval inspects again what it records (60.3 AC3, 60.6 AC4)', () => {
+  it('refuses to record as inspected a destination BMN cannot inspect', async () => {
+    writeFileSync(rosterFile(), FIXTURE)
+    const refused = await call<AgentsOutcome>('agents:approve', { shown: await shown() })
+    expect(refused).toMatchObject({ ok: false, code: 'ROUTE_CHANGED', snapshot: { approved: null } })
+    expect((refused as Extract<AgentsOutcome, { ok: false }>).message).toContain('OpenCode sends data to an unknown destination')
+  })
+
+  it('refuses a destination recorded as inspected once the app sends data elsewhere', async () => {
+    writeFileSync(rosterFile(), EXAMPLE)
+    mkdirSync(join(home, '.codex'))
+    writeFileSync(join(home, '.codex/config.toml'), 'model_provider = "proxy"\n[model_providers.proxy]\nbase_url = "https://proxy.example.com/v1"\n')
+    expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: false, code: 'ROUTE_CHANGED', message: expect.stringContaining('Codex sends data to proxy.example.com') })
+    rmSync(join(home, '.codex/config.toml'))
+    expect(await call<AgentsOutcome>('agents:approve', { shown: await shown() })).toMatchObject({ ok: true })
+  })
+
+  it('accepts a new version only while it still sends data where the tested one did', async () => {
+    writeFileSync(rosterFile(), EXAMPLE)
+    await call<AgentsOutcome>('agents:approve', { shown: await shown() })
+    expect((await call<RulesSnapshot>('rules:snapshot')).apps.map((app) => [app.harness, app.version, app.versionState, app.acceptable])).toEqual([
+      ['claude', '2.1.295', 'tested', false], ['codex', '0.161.0', 'tested', false], ['opencode', null, 'unknown', false], ['cursor', null, 'unknown', false]
+    ])
+    stub('codex', 'echo "codex-cli 0.170.0"')
+    expect((await call<RulesSnapshot>('rules:snapshot')).apps[1]).toMatchObject({ version: '0.170.0', versionState: 'new', acceptable: true, basis: 'default', provider: 'openai' })
+    const state = await snapshot()
+    const data = state.file.data as RosterDataShape
+    const accepting: RosterDataShape = { ...data, harness_routes: data.harness_routes.map((route) => (route.harness === 'codex' ? { ...route, accepted_versions: ['0.170.0'] } : route)) }
+    // Between the page and the commit the app moved to a version nobody looked at.
+    stub('codex', 'echo "codex-cli 0.171.0"')
+    expect(await call<AgentsOutcome>('agents:save', { shown: shownOf(state), data: accepting })).toMatchObject({ ok: false, code: 'ROUTE_CHANGED' })
+    stub('codex', 'echo "codex-cli 0.170.0"')
+    expect(await call<AgentsOutcome>('agents:save', { shown: await shown(), data: accepting })).toMatchObject({ ok: true })
+    expect((await call<RulesSnapshot>('rules:snapshot')).apps[1]).toMatchObject({ version: '0.170.0', versionState: 'accepted', acceptable: false })
+  })
+})
+
+describe('the rules snapshot (60.6)', () => {
+  it('says when the rules were saved, and that there are none before the first save', async () => {
+    expect(await call<RulesSnapshot>('rules:snapshot')).toMatchObject({ home, master: { exists: false, savedAt: null }, health: { state: 'failed' } })
+    await call<RulesOutcome>('rules:save-master', { text: MASTER, expectedHash: null, expectedLink: null })
+    const rules = await call<RulesSnapshot>('rules:snapshot')
+    expect(rules.master).toMatchObject({ exists: true, text: MASTER })
+    expect(Date.parse(rules.master.savedAt ?? '')).toBeGreaterThan(Date.now() - 60_000)
+  })
+})

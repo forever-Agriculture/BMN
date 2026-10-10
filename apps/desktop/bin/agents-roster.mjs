@@ -11,29 +11,54 @@ import { homedir } from 'node:os'
  * aliases, tags, multi-line scalars and documents are refused rather than half-understood.
  */
 
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 2
 export const HARNESSES = ['claude', 'codex', 'opencode', 'cursor']
+/** How BMN names each agent app to the owner, in the order they are always listed. */
+export const APP_NAMES = { claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor' }
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
-export const TITLES = ['knight', 'squire']
-export const SECURITY = ['high', 'low']
-export const AUTHORITIES = ['lead', 'write', 'review', 'read']
+/** The four chess classes: a knight leads an epic/project, a queen designs and thinks creatively, a bishop reviews and advises, a pawn does jobs a lead hands off. */
+export const CLASSES = ['knight', 'queen', 'bishop', 'pawn']
 export const STATUSES = ['active', 'proposed']
-export const COSTS = ['low', 'medium', 'high']
 export const THEN = ['lead', 'skip', 'blocked', 'owner-chooses']
-export const LABELS = ['public', 'private']
+export const PRIVATE_WORK = ['allowed', 'public_only']
+export const PAID_BY = ['per_token', 'subscription']
 export const BASES = ['observed-default', 'owner-declared']
-export const RESERVED_SECTIONS = ['roster', 'roles', 'data-labels', 'harness-routes']
+/** Sections that are not agents. `skills` and `tools` are held for the stories that define them. */
+export const RESERVED_SECTIONS = ['roster', 'roles', 'providers', 'exceptions', 'harness-routes', 'skills', 'tools']
+const UNREAD_SECTIONS = ['skills', 'tools']
+export const MAX_EXCEPTIONS = 64
+/** The one role only a knight may hold. */
+export const LEAD_ROLE = 'lead'
+/** The one role only a queen may hold: the design pass. */
+export const DESIGNER_ROLE = 'designer'
+/** Roles one class alone may hold, with the refusal another class gets. Every other role is open to every class. */
+export const CLASS_ROLES = {
+  [LEAD_ROLE]: { class: 'knight', code: 'CLASS_CANNOT_LEAD', rule: 'only a knight leads' },
+  [DESIGNER_ROLE]: { class: 'queen', code: 'CLASS_CANNOT_DESIGN', rule: 'only a queen designs' }
+}
+
+/** Why an agent of this class may not hold a role, or null when it may. */
+export function classRefusal(agentClass, role) {
+  const rule = Object.hasOwn(CLASS_ROLES, role) ? CLASS_ROLES[role] : undefined
+  return rule === undefined || rule.class === agentClass ? null : rule
+}
 export const ID_PATTERN = /^[a-z0-9-]{1,32}$/
 const CANDIDATE_PATTERN = /^([a-z0-9-]{1,32})@([a-z]+(?:\|[a-z]+)*)$/
 const HOST_PATTERN = /^(?=.{1,253}(?::\d{1,5})?$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*(?::\d{1,5})?$/i
+const DOMAIN_PATTERN = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/i
 
 /** Machine fields that are the owner's free text: status shows them only as changed plus a hash. */
-export const FREE_TEXT_FIELDS = ['enabled_note', 'quota', 'tags']
+export const FREE_TEXT_FIELDS = ['enabled_note', 'description']
 
-const REQUIRED_AGENT_FIELDS = ['name', 'title', 'harness', 'model', 'provider', 'host', 'security', 'trust',
-  'authority', 'enabled', 'status', 'efforts', 'roles']
-const OPTIONAL_AGENT_FIELDS = ['aliases', 'enabled_note', 'cost', 'quota', 'tags', 'context_window', 'max_context_tokens']
+const REQUIRED_AGENT_FIELDS = ['name', 'class', 'harness', 'model', 'provider', 'host', 'enabled', 'status', 'efforts', 'roles']
+const OPTIONAL_AGENT_FIELDS = ['aliases', 'enabled_note', 'context_window', 'context_limit', 'compact_at', 'paid_by', 'price']
 export const AGENT_FIELDS = [...REQUIRED_AGENT_FIELDS, ...OPTIONAL_AGENT_FIELDS]
+const PRICE_FIELDS = ['input', 'cached_input', 'output', 'source', 'as_of']
+const PROVIDER_FIELDS = ['name', 'hosts', 'sites', 'private_work']
+const ROLE_FIELDS = ['description', 'candidates', 'then', 'recheck', 'small_work']
+const ROUTE_FIELDS = ['provider', 'basis', 'accepted_versions']
+/** What schema 1 called things, for the refusal that tells its owner what changed. */
+const SCHEMA_1_CHANGES = 'schema 1 is the earlier layout: title became class (knight | queen | bishop | pawn); trust, authority, security, cost, quota, tags and ## data-labels are gone; small_epic became small_work and max_context_tokens became context_limit; privacy is now ## providers with private_work: allowed | public_only'
 
 export function agentsDirectory() {
   return `${homedir()}/.config/bmn/agents`
@@ -104,6 +129,8 @@ function plainScalar(text, line) {
     if (!Number.isSafeInteger(value)) throw new YamlError(line, `number ${text} is out of range`)
     return value
   }
+  // Decimals exist for prices; a version such as 0.170.0 is not one and stays text.
+  if (/^-?\d+\.\d+$/.test(text)) return Number(text)
   return text
 }
 
@@ -335,6 +362,20 @@ function isString(value, max) {
   return typeof value === 'string' && value.length > 0 && value.length <= max && ![...value].some((char) => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f)
 }
 
+function isMap(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function isDate(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const date = new Date(`${value}T00:00:00Z`)
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
+}
+
+function distinctList(max, each) {
+  return (value) => Array.isArray(value) && value.length <= max && value.every(each) && new Set(value).size === value.length
+}
+
 function parseCandidate(text) {
   const match = CANDIDATE_PATTERN.exec(String(text))
   if (!match) return null
@@ -372,6 +413,10 @@ export function parseRoster(text) {
       continue
     }
     seen.set(id, section.line)
+    if (UNREAD_SECTIONS.includes(id)) {
+      add('SECTION_INVALID', section.line, `"## ${id}" is reserved and not read by this version of BMN`)
+      continue
+    }
     if (section.blocks.length === 0) {
       add('MISSING_BLOCK', section.line, `"## ${id}" has no fenced yaml block`)
       continue
@@ -394,39 +439,47 @@ export function parseRoster(text) {
   // ## roster: the schema version, read first because nothing else means anything without it.
   const header = blocks.get('roster')
   if (!header) {
-    if (!seen.has('roster')) add('SCHEMA_VERSION', 1, 'missing "## roster" section with schema_version: 1')
+    if (!seen.has('roster')) add('SCHEMA_VERSION', 1, `missing "## roster" section with schema_version: ${SCHEMA_VERSION}`)
   } else {
     for (const key of Object.keys(header.value)) {
       if (key !== 'schema_version') add('UNKNOWN_FIELD', header.lines.get(key), `unknown field ${key} in ## roster`)
     }
     if (header.value.schema_version !== SCHEMA_VERSION) {
+      const found = header.value.schema_version
       add('SCHEMA_VERSION', header.lines.get('schema_version') ?? header.block.startLine,
-        `schema_version must be ${SCHEMA_VERSION}${header.value.schema_version === undefined ? '' : `, not ${header.value.schema_version}`}`)
+        `schema_version must be ${SCHEMA_VERSION}${found === undefined ? '' : `, not ${found}`}${found === 1 ? `; ${SCHEMA_1_CHANGES}` : ''}`)
       return { data: null, errors, warnings, sections }
     }
   }
 
+  const providers = validateProviders(blocks.get('providers'), add)
+  const providerIds = new Set(blocks.get('providers') ? Object.keys(blocks.get('providers').value) : [])
   const agents = []
   for (const [id, entry] of blocks) {
     if (RESERVED_SECTIONS.includes(id)) continue
-    agents.push(validateAgent(id, entry, add))
+    agents.push(validateAgent(id, entry, providerIds, add))
   }
   const agentById = new Map(agents.filter(Boolean).map((agent) => [agent.id, agent]))
   const agentIds = new Set([...seen.keys()].filter((id) => !RESERVED_SECTIONS.includes(id)))
 
-  const routes = validateRoutes(blocks.get('harness-routes'), add)
+  const routes = validateRoutes(blocks.get('harness-routes'), providerIds, add)
   const roles = validateRoles(blocks.get('roles'), agentById, agentIds, add, warnings)
-  const labels = validateLabels(blocks.get('data-labels'), add)
+  const exceptions = validateExceptions(blocks.get('exceptions'), providerIds, add)
 
+  const providerById = new Map(providers.map((provider) => [provider.id, provider]))
+  const roleIds = new Set(roles.map((role) => role.id))
   for (const agent of agentById.values()) {
     const entry = blocks.get(agent.id)
     const route = routes.find((candidate) => candidate.harness === agent.harness)
-    if (agent.security === 'high' && agent.host === 'default' && route !== undefined
-      && (route.security === 'low' || route.basis === 'owner-declared')) {
-      add('ROUTE_CONFLICT', entry.lines.get('security'),
-        `${agent.id} is high with host: default, but the ${agent.harness} route is ${route.security === 'low' ? 'low' : 'owner-declared'}`)
+    if (agent.host === 'default' && route !== undefined && route.provider !== agent.provider) {
+      add('ROUTE_CONFLICT', entry.lines.get('host'),
+        `${agent.id} has host: default on ${agent.harness}, whose default provider is ${route.provider}, not ${agent.provider}`)
     }
-    const roleIds = new Set(roles.map((role) => role.id))
+    const provider = providerById.get(agent.provider)
+    if (typeof agent.host === 'string' && agent.host !== 'default' && provider !== undefined
+      && !provider.hosts.some((host) => host.toLowerCase() === agent.host.toLowerCase())) {
+      add('HOST_UNLISTED', entry.lines.get('host'), `${agent.id}.host ${agent.host} is not among provider ${agent.provider}'s hosts`)
+    }
     for (const role of agent.roles) {
       if (!roleIds.has(role)) warnings.push({ code: 'ROLE_WITHOUT_CHAIN', line: entry.lines.get('roles'), message: `${agent.id} holds role ${role}, which has no chain in ## roles` })
     }
@@ -434,7 +487,7 @@ export function parseRoster(text) {
 
   if (errors.length > 0) return { data: null, errors: errors.sort((a, b) => (a.line ?? 0) - (b.line ?? 0)), warnings, sections }
   return {
-    data: { schema_version: SCHEMA_VERSION, agents: agents.filter(Boolean), roles, data_labels: labels, harness_routes: routes },
+    data: { schema_version: SCHEMA_VERSION, agents: agents.filter(Boolean), roles, providers, exceptions, harness_routes: routes },
     errors, warnings, sections
   }
 }
@@ -445,12 +498,24 @@ function checkFields(entry, allowed, where, add) {
   }
 }
 
-function validateAgent(id, entry, add) {
+function priceProblem(price) {
+  if (!isMap(price)) return 'a map of input and output (USD per million tokens), optionally cached_input, source and as_of'
+  const unknown = Object.keys(price).filter((key) => !PRICE_FIELDS.includes(key))
+  if (unknown.length > 0) return `unknown field ${unknown.join(', ')}; a price holds ${PRICE_FIELDS.join(', ')}`
+  const amount = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1_000_000
+  for (const key of ['input', 'output']) if (!amount(price[key])) return `${key} must be a number from 0 to 1000000 (USD per million tokens)`
+  if (Object.hasOwn(price, 'cached_input') && !amount(price.cached_input)) return 'cached_input must be a number from 0 to 1000000'
+  if (Object.hasOwn(price, 'source') && !(isString(price.source, 200) && /^https?:\/\/\S+$/.test(price.source))) return 'source must be an http(s) URL of at most 200 characters'
+  if (Object.hasOwn(price, 'as_of') && !isDate(price.as_of)) return 'as_of must be a date, YYYY-MM-DD'
+  return null
+}
+
+function validateAgent(id, entry, providerIds, add) {
   const { value, lines, block } = entry
   const at = (key) => lines.get(key) ?? block.startLine
   const bad = (key, message) => add('INVALID_VALUE', at(key), `${id}.${key}: ${message}`)
   checkFields(entry, AGENT_FIELDS, `agent ${id}`, add)
-  let valid = true
+  let valid = Object.keys(value).every((key) => AGENT_FIELDS.includes(key))
   for (const key of REQUIRED_AGENT_FIELDS) {
     if (!Object.hasOwn(value, key)) {
       add('MISSING_FIELD', block.startLine, `${id} is missing required field ${key}`)
@@ -472,43 +537,58 @@ function validateAgent(id, entry, add) {
     }
   }
   const enumOf = (options) => (v) => options.includes(v)
-  const list = (max, each) => (v) => Array.isArray(v) && v.length <= max && v.every(each) && new Set(v).size === v.length
+  const positive = (v) => Number.isSafeInteger(v) && v > 0
   check('name', (v) => isString(v, 40), 'text of 1-40 characters')
-  check('title', enumOf(TITLES), TITLES.join(' | '))
+  check('class', enumOf(CLASSES), CLASSES.join(' | '))
   check('harness', enumOf(HARNESSES), HARNESSES.join(' | '))
   check('model', (v) => isString(v, 128), 'text of 1-128 characters')
-  check('provider', (v) => isString(v, 40), 'text of 1-40 characters')
+  check('provider', (v) => typeof v === 'string' && ID_PATTERN.test(v), 'a provider id from ## providers')
   if (Object.hasOwn(value, 'host') && value.host !== null && !(value.host === 'default' || (typeof value.host === 'string' && HOST_PATTERN.test(value.host)))) {
     bad('host', 'a hostname (optionally :port), default, or null')
     valid = false
   }
-  check('security', enumOf(SECURITY), SECURITY.join(' | '))
-  check('trust', (v) => v === 1 || v === 2 || v === 3, '1 | 2 | 3')
-  check('authority', enumOf(AUTHORITIES), AUTHORITIES.join(' | '))
   check('enabled', (v) => typeof v === 'boolean', 'true | false')
   check('status', enumOf(STATUSES), STATUSES.join(' | '))
-  check('efforts', list(EFFORTS.length, (e) => EFFORTS.includes(e)), `a list of distinct efforts from ${EFFORTS.join(', ')}`)
-  check('roles', list(32, (r) => typeof r === 'string' && ID_PATTERN.test(r)), 'a list of distinct role ids')
-  check('aliases', list(4, (a) => isString(a, 64)), 'at most 4 distinct aliases of 1-64 characters')
+  check('efforts', distinctList(EFFORTS.length, (e) => EFFORTS.includes(e)), `a list of distinct efforts from ${EFFORTS.join(', ')}`)
+  check('roles', distinctList(32, (r) => typeof r === 'string' && ID_PATTERN.test(r)), 'a list of distinct role ids')
+  check('aliases', distinctList(4, (a) => isString(a, 64)), 'at most 4 distinct aliases of 1-64 characters')
   check('enabled_note', (v) => isString(v, 120), 'text of 1-120 characters')
-  check('cost', enumOf(COSTS), COSTS.join(' | '))
-  check('quota', (v) => isString(v, 40), 'text of 1-40 characters')
-  check('tags', list(8, (t) => isString(t, 40)), 'at most 8 distinct tags of 1-40 characters')
-  check('context_window', (v) => Number.isSafeInteger(v) && v > 0, 'a positive whole number')
-  check('max_context_tokens', (v) => Number.isSafeInteger(v) && v > 0, 'a positive whole number')
+  check('context_window', positive, 'a positive whole number')
+  check('context_limit', positive, 'a positive whole number')
+  check('compact_at', positive, 'a positive whole number')
+  check('paid_by', enumOf(PAID_BY), PAID_BY.join(' | '))
+  if (Object.hasOwn(value, 'price') && value.price !== null) {
+    const problem = priceProblem(value.price)
+    if (problem !== null) {
+      bad('price', problem)
+      valid = false
+    }
+  }
   if (!valid) return null
+  if (!providerIds.has(value.provider)) {
+    add('UNKNOWN_PROVIDER', at('provider'), `${id}.provider: ${value.provider} is not in ## providers`)
+    return null
+  }
   if (value.efforts.length === 0 && value.enabled) {
     bad('efforts', 'empty efforts are allowed only when enabled is false')
     return null
   }
-  if (value.title === 'squire' && value.authority === 'lead') {
-    add('SQUIRE_LEAD', at('authority'), `${id} is a squire with authority lead; a squire never leads`)
+  if (value.compact_at !== undefined && value.context_limit === undefined) {
+    bad('compact_at', 'allowed only together with context_limit')
     return null
   }
-  // Authority is what the agent may do: only authority lead may hold the lead role.
-  if (value.roles.includes('lead') && value.authority !== 'lead') {
-    if (value.title === 'squire') add('SQUIRE_LEAD', at('roles'), `${id} is a squire holding role lead; a squire never leads`)
-    else add('LEAD_AUTHORITY', at('roles'), `${id} holds role lead with authority ${value.authority}; only authority lead may lead`)
+  if (value.compact_at !== undefined && value.compact_at >= value.context_limit) {
+    bad('compact_at', `must be below context_limit (${value.context_limit})`)
+    return null
+  }
+  if (value.context_window !== undefined && value.context_limit !== undefined && value.context_limit > value.context_window) {
+    bad('context_limit', `must not exceed context_window (${value.context_window})`)
+    return null
+  }
+  for (const role of value.roles) {
+    const refusal = classRefusal(value.class, role)
+    if (refusal === null) continue
+    add(refusal.code, at('roles'), `${id} is a ${value.class} holding role ${role}; ${refusal.rule}`)
     return null
   }
   const agent = { id }
@@ -516,7 +596,49 @@ function validateAgent(id, entry, add) {
   return agent
 }
 
-function validateRoutes(entry, add) {
+function validateProviders(entry, add) {
+  if (!entry) return []
+  const providers = []
+  const hostOwner = new Map()
+  for (const [id, provider] of Object.entries(entry.value)) {
+    const line = entry.lines.get(id)
+    if (!ID_PATTERN.test(id)) {
+      add('INVALID_VALUE', line, `## providers: provider id ${id} must match [a-z0-9-]{1,32}`)
+      continue
+    }
+    if (!isMap(provider)) {
+      add('INVALID_VALUE', line, `## providers.${id} must be a map of name, hosts and private_work`)
+      continue
+    }
+    let ok = true
+    const fail = (code, key, message) => {
+      add(code, entry.lines.get(`${id}.${key}`) ?? line, `## providers.${id}: ${message}`)
+      ok = false
+    }
+    for (const key of Object.keys(provider)) {
+      if (!PROVIDER_FIELDS.includes(key)) fail('UNKNOWN_FIELD', key, `unknown field ${key}`)
+    }
+    if (!isString(provider.name, 40)) fail('INVALID_VALUE', 'name', 'name must be text of 1-40 characters')
+    if (!distinctList(8, (host) => typeof host === 'string' && HOST_PATTERN.test(host))(provider.hosts)) {
+      fail('INVALID_VALUE', 'hosts', 'hosts must be a list of at most 8 distinct hostnames')
+    }
+    if (Object.hasOwn(provider, 'sites')) {
+      if (provider.sites === null) fail('NULL_OPTIONAL', 'sites', 'sites is null; omit it instead')
+      else if (!distinctList(4, (site) => typeof site === 'string' && DOMAIN_PATTERN.test(site))(provider.sites)) fail('INVALID_VALUE', 'sites', 'sites must be a list of at most 4 distinct domains')
+    }
+    if (!PRIVATE_WORK.includes(provider.private_work)) fail('INVALID_VALUE', 'private_work', `private_work must be ${PRIVATE_WORK.join(' | ')}`)
+    if (!ok) continue
+    for (const host of provider.hosts) {
+      const key = host.toLowerCase()
+      if (hostOwner.has(key)) fail('DUPLICATE_HOST', 'hosts', `host ${host} is also listed by provider ${hostOwner.get(key)}`)
+      else hostOwner.set(key, id)
+    }
+    if (ok) providers.push({ id, ...provider })
+  }
+  return providers
+}
+
+function validateRoutes(entry, providerIds, add) {
   if (!entry) return []
   const routes = []
   for (const [harness, route] of Object.entries(entry.value)) {
@@ -525,32 +647,31 @@ function validateRoutes(entry, add) {
       add('UNKNOWN_FIELD', line, `## harness-routes: unknown harness ${harness}`)
       continue
     }
-    if (route === null || typeof route !== 'object' || Array.isArray(route)) {
-      add('INVALID_VALUE', line, `## harness-routes.${harness} must be a map of provider, security, basis`)
+    if (!isMap(route)) {
+      add('INVALID_VALUE', line, `## harness-routes.${harness} must be a map of provider and basis`)
       continue
     }
     let ok = true
     for (const key of Object.keys(route)) {
-      if (!['provider', 'security', 'basis', 'accepted_versions'].includes(key)) {
+      if (!ROUTE_FIELDS.includes(key)) {
         add('UNKNOWN_FIELD', entry.lines.get(`${harness}.${key}`) ?? line, `## harness-routes.${harness}: unknown field ${key}`)
         ok = false
       }
     }
-    const fail = (message) => {
-      add('INVALID_VALUE', line, `## harness-routes.${harness}: ${message}`)
+    const fail = (code, message) => {
+      add(code, line, `## harness-routes.${harness}: ${message}`)
       ok = false
     }
-    if (!isString(route.provider, 40)) fail('provider must be text of 1-40 characters')
-    if (!SECURITY.includes(route.security)) fail(`security must be ${SECURITY.join(' | ')}`)
-    if (!BASES.includes(route.basis)) fail(`basis must be ${BASES.join(' | ')}`)
+    if (typeof route.provider !== 'string' || !ID_PATTERN.test(route.provider)) fail('INVALID_VALUE', 'provider must be a provider id from ## providers')
+    else if (!providerIds.has(route.provider)) fail('UNKNOWN_PROVIDER', `provider ${route.provider} is not in ## providers`)
+    if (!BASES.includes(route.basis)) fail('INVALID_VALUE', `basis must be ${BASES.join(' | ')}`)
     if (Object.hasOwn(route, 'accepted_versions')) {
       const versions = route.accepted_versions
       if (versions === null) {
         add('NULL_OPTIONAL', line, `## harness-routes.${harness}.accepted_versions is null; omit it instead`)
         ok = false
-      } else if (!Array.isArray(versions) || versions.length > 8 || new Set(versions).size !== versions.length
-        || !versions.every((version) => isString(version, 64))) {
-        fail('accepted_versions must be at most 8 distinct quoted version strings')
+      } else if (!distinctList(8, (version) => isString(version, 64))(versions)) {
+        fail('INVALID_VALUE', 'accepted_versions must be at most 8 distinct quoted version strings')
       }
     }
     if (ok) routes.push({ harness, ...route })
@@ -567,7 +688,7 @@ function validateRoles(entry, agentById, agentIds, add, warnings) {
       add('INVALID_VALUE', line, `## roles: role id ${id} must match [a-z0-9-]{1,32}`)
       continue
     }
-    if (role === null || typeof role !== 'object' || Array.isArray(role)) {
+    if (!isMap(role)) {
       add('INVALID_VALUE', line, `## roles.${id} must be a map with candidates and then`)
       continue
     }
@@ -577,7 +698,11 @@ function validateRoles(entry, agentById, agentIds, add, warnings) {
       ok = false
     }
     for (const key of Object.keys(role)) {
-      if (!['candidates', 'then', 'recheck', 'small_epic'].includes(key)) fail('UNKNOWN_FIELD', { key, text: `unknown field ${key}` })
+      if (!ROLE_FIELDS.includes(key)) fail('UNKNOWN_FIELD', { key, text: `unknown field ${key}` })
+    }
+    if (Object.hasOwn(role, 'description')) {
+      if (role.description === null) fail('NULL_OPTIONAL', { key: 'description', text: 'description is null; omit it instead' })
+      else if (!isString(role.description, 80)) fail('INVALID_VALUE', { key: 'description', text: 'description must be text of 1-80 characters' })
     }
     if (!Array.isArray(role.candidates)) fail('INVALID_VALUE', { key: 'candidates', text: 'candidates must be a list of agent@effort' })
     if (!THEN.includes(role.then)) fail('INVALID_VALUE', { key: 'then', text: `then must be ${THEN.join(' | ')}` })
@@ -599,7 +724,8 @@ function validateRoles(entry, agentById, agentIds, add, warnings) {
         if (!agent.efforts.includes(effort)) fail('EFFORT_NOT_LISTED', { key, text: `"${text}": ${agent.id} does not list effort ${effort}` })
       }
       if (!agent.roles.includes(id)) fail('ROLE_NOT_HELD', { key, text: `"${text}": ${agent.id} does not hold role ${id} in its own roles` })
-      if (id === 'lead' && agent.title === 'squire') fail('SQUIRE_LEAD', { key, text: `"${text}": ${agent.id} is a squire and never leads` })
+      const refusal = classRefusal(agent.class, id)
+      if (refusal !== null) fail(refusal.code, { key, text: `"${text}": ${agent.id} is a ${agent.class}; ${refusal.rule}` })
       if (!agent.enabled) warnings.push({ code: 'CANDIDATE_DISABLED', line: entry.lines.get(`${id}.${key}`) ?? line, message: `## roles.${id}: ${agent.id} is disabled` })
       return candidate
     }
@@ -617,7 +743,7 @@ function validateRoles(entry, agentById, agentIds, add, warnings) {
     }
     if (Object.hasOwn(role, 'recheck')) {
       const recheck = role.recheck
-      if (recheck === null || typeof recheck !== 'object' || Array.isArray(recheck)) {
+      if (!isMap(recheck)) {
         fail('INVALID_VALUE', { key: 'recheck', text: 'recheck must be a map: same_reviewer plus agent: effort overrides' })
       } else {
         if (typeof recheck.same_reviewer !== 'boolean') fail('INVALID_VALUE', { key: 'recheck', text: 'recheck.same_reviewer must be true or false' })
@@ -633,22 +759,21 @@ function validateRoles(entry, agentById, agentIds, add, warnings) {
         }
       }
     }
-    if (Object.hasOwn(role, 'small_epic')) {
-      if (role.small_epic === null || typeof role.small_epic !== 'string') fail('INVALID_VALUE', { key: 'small_epic', text: 'small_epic must be agent@effort' })
-      else checkCandidate(role.small_epic, 'small_epic', true)
+    if (Object.hasOwn(role, 'small_work')) {
+      if (role.small_work === null || typeof role.small_work !== 'string') fail('INVALID_VALUE', { key: 'small_work', text: 'small_work must be agent@effort' })
+      else checkCandidate(role.small_work, 'small_work', true)
     }
     if (ok) {
-      const out = { id, candidates: role.candidates, then: role.then }
-      if (Object.hasOwn(role, 'recheck')) out.recheck = role.recheck
-      if (Object.hasOwn(role, 'small_epic')) out.small_epic = role.small_epic
+      const out = { id }
+      for (const key of ROLE_FIELDS) if (Object.hasOwn(role, key)) out[key] = role[key]
       roles.push(out)
     }
   }
   return roles
 }
 
-/** The directory a label path names, with symbolic links followed where the path exists. */
-function resolvedDirectory(path) {
+/** The directory a path names, with symbolic links followed where the path exists. */
+export function resolvedDirectory(path) {
   try {
     return realpathSync(path)
   } catch {
@@ -656,35 +781,55 @@ function resolvedDirectory(path) {
   }
 }
 
-function validateLabels(entry, add) {
-  const labels = { default: 'private', paths: [] }
-  if (!entry) return labels
+/**
+ * `## exceptions`: one entry per public-only provider the owner allowed in one workspace, keyed
+ * by an opaque id (the only part of an exception a receipt ever carries).
+ */
+function validateExceptions(entry, providerIds, add) {
+  if (!entry) return []
+  const exceptions = []
   const resolved = new Map()
-  for (const [key, label] of Object.entries(entry.value)) {
-    const line = entry.lines.get(key)
-    if (!LABELS.includes(label)) {
-      add('INVALID_VALUE', line, `## data-labels.${key} must be public or private`)
+  const ids = Object.keys(entry.value)
+  if (ids.length > MAX_EXCEPTIONS) add('INVALID_VALUE', entry.block.startLine, `## exceptions holds ${ids.length} entries; at most ${MAX_EXCEPTIONS}`)
+  for (const [id, exception] of Object.entries(entry.value)) {
+    const line = entry.lines.get(id)
+    if (!ID_PATTERN.test(id)) {
+      add('INVALID_VALUE', line, `## exceptions: id ${id} must match [a-z0-9-]{1,32}`)
       continue
     }
-    if (key === 'default') {
-      labels.default = label
+    if (!isMap(exception)) {
+      add('INVALID_VALUE', line, `## exceptions.${id} must be a map of provider and folder`)
       continue
     }
-    const parts = key.split('/')
-    if (!key.startsWith('/') || parts.includes('..') || parts.includes('.')) {
-      add('LABEL_PATH', line, `## data-labels: "${key}" must be an absolute path without . or .. (nothing is expanded, not even ~)`)
+    const unknown = Object.keys(exception).filter((key) => key !== 'provider' && key !== 'folder')
+    if (unknown.length > 0) {
+      add('UNKNOWN_FIELD', line, `## exceptions.${id}: unknown field ${unknown.join(', ')}`)
       continue
     }
-    const path = key.length > 1 ? key.replace(/\/+$/, '') : key
-    const directory = resolvedDirectory(path)
-    if (resolved.has(directory)) {
-      add('LABEL_COLLISION', line, `## data-labels: "${key}" names the same directory as "${resolved.get(directory)}"`)
+    if (typeof exception.provider !== 'string' || !ID_PATTERN.test(exception.provider)) {
+      add('INVALID_VALUE', line, `## exceptions.${id}: provider must be a provider id from ## providers`)
       continue
     }
-    resolved.set(directory, key)
-    labels.paths.push({ path, label })
+    if (!providerIds.has(exception.provider)) {
+      add('UNKNOWN_PROVIDER', line, `## exceptions.${id}: provider ${exception.provider} is not in ## providers`)
+      continue
+    }
+    const folder = exception.folder
+    const parts = typeof folder === 'string' ? folder.split('/') : []
+    if (!isString(folder, 4096) || !folder.startsWith('/') || parts.includes('..') || parts.includes('.')) {
+      add('EXCEPTION_PATH', line, `## exceptions.${id}: folder must be an absolute path without . or .. (nothing is expanded, not even ~)`)
+      continue
+    }
+    const path = folder.length > 1 ? folder.replace(/\/+$/, '') : folder
+    const key = `${exception.provider}\n${resolvedDirectory(path)}`
+    if (resolved.has(key)) {
+      add('EXCEPTION_COLLISION', line, `## exceptions.${id} names the same folder as ${resolved.get(key)} for provider ${exception.provider}`)
+      continue
+    }
+    resolved.set(key, id)
+    exceptions.push({ id, provider: exception.provider, folder: path })
   }
-  return labels
+  return exceptions
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -696,31 +841,54 @@ export function agentState(agent) {
   return 'active'
 }
 
-/** One unabridged team line: never prose, notes, cost, quota or tags. */
-export function teamEntry(agent) {
+/** The provider's answer for an agent: whether its provider may see private work at all. */
+export function privateWorkOf(data, agent) {
+  return data.providers.find((provider) => provider.id === agent.provider)?.private_work ?? 'public_only'
+}
+
+/**
+ * Whether an app's approved default destination may receive private work, with the reason in
+ * words: only an inspected default whose provider answers `allowed`. Missing, owner-declared and
+ * public-only destinations get public work only (60.3 AC4, 60.4 AC1).
+ */
+export function harnessPrivateWork(data, harness) {
+  const app = APP_NAMES[harness] ?? harness
+  const route = data?.harness_routes.find((entry) => entry.harness === harness)
+  if (route === undefined) return { allowed: false, reason: data ? `BMN has no approved destination for ${app}` : 'nothing is approved yet', route: null, provider: null }
+  const provider = data.providers.find((entry) => entry.id === route.provider) ?? null
+  if (route.basis === 'owner-declared') return { allowed: false, reason: `BMN can't confirm where ${app} sends data`, route, provider }
+  if (provider?.private_work !== 'allowed') return { allowed: false, reason: `${provider?.name ?? route.provider} gets public work only`, route, provider }
+  return { allowed: true, reason: `${provider.name} may see private work`, route, provider }
+}
+
+/**
+ * One unabridged team line: never prose, notes, prices, paid_by or exception folders. A context
+ * limit is the configured one; whether BMN applied it to a run is on that run's receipt.
+ */
+export function teamEntry(data, agent) {
   const entry = {
-    id: agent.id, name: agent.name, title: agent.title, harness: agent.harness, model: agent.model,
-    roles: agent.roles, security: agent.security, trust: agent.trust, authority: agent.authority,
-    efforts: agent.efforts, state: agentState(agent)
+    id: agent.id, name: agent.name, class: agent.class, harness: agent.harness, model: agent.model,
+    provider: agent.provider, private_work: privateWorkOf(data, agent), roles: agent.roles, efforts: agent.efforts,
+    state: agentState(agent)
   }
-  if (agent.max_context_tokens !== undefined) entry.max_context_tokens = { value: agent.max_context_tokens, enforced: false }
+  if (agent.context_limit !== undefined) entry.context_limit = agent.context_limit
   return entry
 }
 
 export function teamLine(entry) {
-  const parts = [entry.id, entry.name, entry.title, entry.harness, entry.model,
-    `roles=${entry.roles.join(',') || '-'}`, `security=${entry.security}`, `trust=${entry.trust}`,
-    `authority=${entry.authority}`, `efforts=${entry.efforts.join(',') || '-'}`]
-  if (entry.max_context_tokens) parts.push(`max_context_tokens=${entry.max_context_tokens.value} (configured; not enforced)`)
+  const parts = [entry.id, entry.name, entry.class, entry.harness, entry.model, `provider=${entry.provider}`,
+    `private-work=${entry.private_work === 'allowed' ? 'allowed' : 'public-only'}`,
+    `roles=${entry.roles.join(',') || '-'}`, `efforts=${entry.efforts.join(',') || '-'}`,
+    `context-limit=${entry.context_limit ?? 'app default'}`]
   if (entry.state !== 'active') parts.push(`[${entry.state}]`)
   return parts.join('  ')
 }
 
 export function team(data, all) {
-  return data.agents.filter((agent) => all || agentState(agent) === 'active').map(teamEntry)
+  return data.agents.filter((agent) => all || agentState(agent) === 'active').map((agent) => teamEntry(data, agent))
 }
 
-/** The full chain for a role: ordered candidates with each one's eligibility, `then` and the typed rules. */
+/** The full chain for a role: ordered candidates with each one's eligibility and private-work answer, `then` and the typed rules. */
 export function roleChain(data, roleId) {
   const role = data.roles.find((candidate) => candidate.id === roleId)
   if (role === undefined) throw new RosterError('ROLE_UNKNOWN', `no role ${roleId} in the roster's ## roles`)
@@ -731,7 +899,7 @@ export function roleChain(data, roleId) {
     const state = agent === undefined ? 'unknown' : agentState(agent)
     return {
       agent: candidate.agent, efforts: candidate.efforts, effort_choice: candidate.choice,
-      eligible: state === 'active', state
+      eligible: state === 'active', state, private_work: agent === undefined ? 'public_only' : privateWorkOf(data, agent)
     }
   }
   const chain = { role: role.id, candidates: role.candidates.map(describe), then: role.then }
@@ -739,24 +907,23 @@ export function roleChain(data, roleId) {
     const { same_reviewer: sameReviewer, ...efforts } = role.recheck
     chain.recheck = { same_reviewer: sameReviewer, efforts }
   }
-  if (role.small_epic !== undefined) chain.small_epic = describe(role.small_epic)
+  if (role.small_work !== undefined) chain.small_work = describe(role.small_work)
   return chain
 }
 
 export function roleChainText(chain) {
   const lines = [`role ${chain.role}`]
+  const about = (candidate) => `${candidate.eligible ? 'eligible' : `not eligible: ${candidate.state}`}  private-work=${candidate.private_work === 'allowed' ? 'allowed' : 'public-only'}`
   chain.candidates.forEach((candidate, index) => {
     const effort = candidate.effort_choice ? `${candidate.efforts.join('|')} (lead chooses)` : candidate.efforts[0]
-    lines.push(`  ${index + 1}. ${candidate.agent}@${effort}  ${candidate.eligible ? 'eligible' : `not eligible: ${candidate.state}`}`)
+    lines.push(`  ${index + 1}. ${candidate.agent}@${effort}  ${about(candidate)}`)
   })
   lines.push(`  then: ${chain.then}`)
   if (chain.recheck) {
     const overrides = Object.entries(chain.recheck.efforts).map(([agent, effort]) => `${agent} at ${effort}`)
     lines.push(`  recheck: ${chain.recheck.same_reviewer ? 'same reviewer' : 'any candidate'}${overrides.length ? `, ${overrides.join(', ')}` : ''}`)
   }
-  if (chain.small_epic) {
-    lines.push(`  small epic: ${chain.small_epic.agent}@${chain.small_epic.efforts[0]}  ${chain.small_epic.eligible ? 'eligible' : `not eligible: ${chain.small_epic.state}`}`)
-  }
+  if (chain.small_work) lines.push(`  small work: ${chain.small_work.agent}@${chain.small_work.efforts[0]}  ${about(chain.small_work)}`)
   return lines.join('\n')
 }
 
@@ -768,7 +935,7 @@ function yamlScalar(value) {
   if (typeof value === 'boolean' || typeof value === 'number') return String(value)
   const text = String(value)
   const plain = /^[A-Za-z0-9_./@+-][A-Za-z0-9_ ./@|+-]*$/.test(text) && !/\s$/.test(text)
-    && !['null', 'true', 'false', '~'].includes(text) && !/^-?\d+$/.test(text) && !/ #|: /.test(text)
+    && !['null', 'true', 'false', '~'].includes(text) && !/^-?\d+(\.\d+)?$/.test(text) && !/ #|: /.test(text)
   return plain ? text : JSON.stringify(text)
 }
 
@@ -784,26 +951,65 @@ export function agentYaml(agent) {
   return AGENT_FIELDS.filter((key) => Object.hasOwn(agent, key)).map((key) => `${key}: ${yamlFlow(agent[key])}`).join('\n')
 }
 
-export function rolesYaml(roles) {
-  return roles.map((role) => {
-    const { id, ...rest } = role
-    return `${id}: ${yamlFlow(rest)}`
+/** A block of `id: {…}` lines for a list of entries that each carry their key in `keyField`. */
+function keyedYaml(entries, keyField) {
+  return entries.map((entry) => {
+    const { [keyField]: key, ...rest } = entry
+    return `${key}: ${yamlFlow(rest)}`
   }).join('\n')
 }
 
-export function labelsYaml(labels) {
-  return [`default: ${labels.default}`, ...labels.paths.map((entry) => `${yamlScalar(entry.path)}: ${entry.label}`)].join('\n')
+export function rolesYaml(roles) {
+  return keyedYaml(roles, 'id')
+}
+
+export function providersYaml(providers) {
+  return keyedYaml(providers, 'id')
+}
+
+export function exceptionsYaml(exceptions) {
+  return keyedYaml(exceptions, 'id')
 }
 
 export function routesYaml(routes) {
-  return routes.map((route) => {
-    const { harness, ...rest } = route
-    return `${harness}: ${yamlFlow(rest)}`
-  }).join('\n')
+  return keyedYaml(routes, 'harness')
 }
 
 export function headerYaml() {
   return `schema_version: ${SCHEMA_VERSION}`
+}
+
+/** The four roles a new team starts with; every one is the owner's to rename, change or remove. */
+export const STARTER_ROLES = [
+  { id: 'lead', description: 'leads an epic/project start to finish', candidates: [], then: 'owner-chooses' },
+  { id: 'designer', description: 'designs and thinks creatively', candidates: [], then: 'lead' },
+  { id: 'helper', description: 'does small jobs a lead hands off', candidates: [], then: 'lead' },
+  { id: 'reviewer', description: 'judges finished work', candidates: [], then: 'blocked' },
+  { id: 'advisor', description: "answers a lead's hard questions", candidates: [], then: 'blocked' }
+]
+
+/** The roster a new install starts from: no agents, five editable roles. */
+export function starterRoster() {
+  return [
+    '# Team',
+    '',
+    'Your agents, the providers they run on and who does which job. BMN reads only the `yaml`',
+    'blocks; any text outside them is your own notes. Nothing here takes effect until you approve',
+    'it in BMN (Preferences, Team).',
+    '',
+    '## roster',
+    '',
+    '```yaml',
+    headerYaml(),
+    '```',
+    '',
+    '## roles',
+    '',
+    '```yaml',
+    rolesYaml(STARTER_ROLES),
+    '```',
+    ''
+  ].join('\n')
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -819,38 +1025,38 @@ function blockValue(section) {
 }
 
 function agentFromBlock(id, value) {
-  if (value === undefined || value === null || typeof value !== 'object') return undefined
+  if (!isMap(value)) return undefined
   const agent = { id }
   for (const key of Object.keys(value)) agent[key] = value[key]
   return agent
 }
 
-function rolesFromBlock(value) {
-  if (value === undefined || value === null || typeof value !== 'object') return undefined
-  return Object.entries(value).map(([id, role]) => ({ id, ...(role && typeof role === 'object' ? role : { invalid: role }) }))
-}
-
-function labelsFromBlock(value) {
-  if (value === undefined || value === null || typeof value !== 'object') return undefined
-  const { default: fallback = 'private', ...paths } = value
-  return { default: fallback, paths: Object.entries(paths).map(([path, label]) => ({ path: path.length > 1 ? path.replace(/\/+$/, '') : path, label })) }
-}
-
-function routesFromBlock(value) {
-  if (value === undefined || value === null || typeof value !== 'object') return undefined
-  return Object.entries(value).map(([harness, route]) => ({ harness, ...(route && typeof route === 'object' ? route : { invalid: route }) }))
+/** A keyed block read back the way `keyedYaml` wrote it. */
+function keyedFromBlock(value, keyField) {
+  if (!isMap(value)) return undefined
+  return Object.entries(value).map(([key, entry]) => ({ [keyField]: key, ...(isMap(entry) ? entry : { invalid: entry }) }))
 }
 
 function same(a, b) {
   return a !== undefined && canonicalJson(a) === canonicalJson(b)
 }
 
+/** The shared sections: heading, the data they hold and how that data is written. */
+const SHARED = [
+  { id: 'roles', key: 'id', field: 'roles', yaml: rolesYaml },
+  { id: 'providers', key: 'id', field: 'providers', yaml: providersYaml },
+  { id: 'exceptions', key: 'id', field: 'exceptions', yaml: exceptionsYaml },
+  { id: 'harness-routes', key: 'harness', field: 'harness_routes', yaml: routesYaml }
+]
+export const SHARED_SECTIONS = SHARED.map((entry) => entry.id)
+
 /**
  * The roster text rewritten so its machine data equals `data`, changing only what must change:
  * a yaml block whose fields already match keeps its bytes (comments included); a differing block
- * is replaced between its fences; an agent missing from the file gets a new section at the end;
- * an agent the file has and `data` lacks loses its whole section. Prose outside rewritten
- * blocks is never touched. `scope`, when given, limits the rewrite to those section ids.
+ * is replaced between its fences; an agent or a non-empty shared section missing from the file
+ * gets a new section at the end; an agent the file has and `data` lacks loses its whole section.
+ * Prose outside rewritten blocks is never touched. `scope`, when given, limits the rewrite to
+ * those section ids.
  */
 export function rewriteRoster(text, data, { scope = null } = {}) {
   const sections = splitSections(text)
@@ -860,7 +1066,7 @@ export function rewriteRoster(text, data, { scope = null } = {}) {
   const seen = new Set()
   sections.forEach((section, index) => {
     const id = section.heading
-    if (!ID_PATTERN.test(id) || !inScope(id)) return
+    if (!ID_PATTERN.test(id) || !inScope(id) || UNREAD_SECTIONS.includes(id)) return
     const sectionEnd = index + 1 < sections.length ? sections[index + 1].start : text.length
     if (seen.has(id)) {
       if (!RESERVED_SECTIONS.includes(id) && !targets.has(id)) return
@@ -868,20 +1074,15 @@ export function rewriteRoster(text, data, { scope = null } = {}) {
       return
     }
     seen.add(id)
+    const shared = SHARED.find((entry) => entry.id === id)
     let wanted
     let current
     if (id === 'roster') {
       wanted = headerYaml()
       current = same(blockValue(section), { schema_version: SCHEMA_VERSION }) ? wanted : undefined
-    } else if (id === 'roles') {
-      wanted = rolesYaml(data.roles)
-      current = same(rolesFromBlock(blockValue(section)), data.roles) ? wanted : undefined
-    } else if (id === 'data-labels') {
-      wanted = labelsYaml(data.data_labels)
-      current = same(labelsFromBlock(blockValue(section)), data.data_labels) ? wanted : undefined
-    } else if (id === 'harness-routes') {
-      wanted = routesYaml(data.harness_routes)
-      current = same(routesFromBlock(blockValue(section)), data.harness_routes) ? wanted : undefined
+    } else if (shared !== undefined) {
+      wanted = shared.yaml(data[shared.field])
+      current = same(keyedFromBlock(blockValue(section), shared.key), data[shared.field]) ? wanted : undefined
     } else if (!targets.has(id)) {
       edits.push({ start: section.start, end: sectionEnd, text: '' })
       return
@@ -906,10 +1107,11 @@ export function rewriteRoster(text, data, { scope = null } = {}) {
     appended += `\n## ${id}\n\n\`\`\`yaml\n${body}\n\`\`\`\n`
   }
   ensure('roster', headerYaml())
+  if (data.providers.length > 0) ensure('providers', providersYaml(data.providers))
   for (const agent of data.agents) ensure(agent.id, agentYaml(agent))
-  if (data.roles.length > 0) ensure('roles', rolesYaml(data.roles))
-  if (data.data_labels.paths.length > 0 || data.data_labels.default !== 'private') ensure('data-labels', labelsYaml(data.data_labels))
-  if (data.harness_routes.length > 0) ensure('harness-routes', routesYaml(data.harness_routes))
+  for (const shared of SHARED) {
+    if (shared.id !== 'providers' && data[shared.field].length > 0) ensure(shared.id, shared.yaml(data[shared.field]))
+  }
   let out = text
   for (const edit of edits.sort((a, b) => b.start - a.start)) out = `${out.slice(0, edit.start)}${edit.text}${out.slice(edit.end)}`
   if (appended !== '') out = `${out}${out.endsWith('\n') || out === '' ? '' : '\n'}${appended}`
@@ -947,7 +1149,7 @@ export function proseOf(text, id) {
  */
 export function rewriteProse(text, id, prose) {
   if (/^ {0,3}(```|~~~)/m.test(prose) || /^##(?!#)/m.test(prose)) {
-    throw new RosterError('ROSTER_INVALID', 'an opinion cannot hold code fences or ## headings')
+    throw new RosterError('ROSTER_INVALID', 'notes cannot hold code fences or ## headings')
   }
   const sections = splitSections(text)
   const index = sections.findIndex((section) => section.heading === id)

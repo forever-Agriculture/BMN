@@ -627,7 +627,7 @@ function installIpcHandlers(): ReturnType<typeof bridgeInvokeRegistrar> {
   })
   const defaultVoiceModelFolder = join(resolveApplicationRoots().data, 'voice', 'models')
   const productionVoiceBinary = whisperBinaryPath()
-  installAgentsIpcHandlers(bridgeIpc, { senderIsAllowed, cliScript: bmnCliScript })
+  installAgentsIpcHandlers(bridgeIpc, { senderIsAllowed, cliScript: bmnCliScript, openPath: (path) => shell.openPath(path) })
   installVoiceIpcHandlers(bridgeIpc, {
     senderIsAllowed,
     // Handlers install before the self-test's taps exist, so its stand-ins are read per call.

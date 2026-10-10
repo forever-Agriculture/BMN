@@ -6,7 +6,7 @@ import { diffLine, listGenerations, machineDiff, readApproved, readValidRoster }
 /** Exit codes shared by every Epic 60 command (the epic's shared contract). */
 export const EXIT = {
   ok: 0, usage: 2, ROSTER_MISSING: 3, MASTER_MISSING: 3, ROSTER_INVALID: 4, MASTER_INVALID: 4, NOT_APPROVED: 5, STATE_CORRUPT: 6,
-  REVISION_CONFLICT: 7, refusal: 10, RECEIPT_INVALID: 11, OWNER_APPROVAL_IN_APP: 12, HISTORY_UNAVAILABLE: 13
+  REVISION_CONFLICT: 7, refusal: 10, MASTER_EXISTS: 10, RECEIPT_INVALID: 11, OWNER_APPROVAL_IN_APP: 12, HISTORY_UNAVAILABLE: 13
 }
 
 export class AgentsUsageError extends Error {}
@@ -77,27 +77,34 @@ export function readOptions(argv, { flags = [], values = [] } = {}) {
 
 export const TEAM_USAGE = `Usage: bmn team [--all] [--json]
 
-Prints the approved team, one line per enabled active agent in roster order: id, name, title,
-harness, model, roles, security, trust, authority and efforts. --all adds disabled and proposed
-agents, marked. Reads only the approved roster (Preferences > Agents); a roster edit takes effect
-once the owner approves it there. Exit 5 when nothing is approved yet, 6 when approved state is
-corrupt.`
+Prints the approved team, one line per enabled active agent in roster order: id, name, class,
+app, model, provider, whether that provider may see private work, roles, efforts and context
+limit. --all adds disabled and proposed agents, marked. Reads only the approved team
+(Preferences > Team); a roster edit takes effect once the owner approves it there. Exit 5 when
+nothing is approved yet, 6 when approved state is corrupt.`
 
 export const ROSTER_USAGE = `Usage: bmn roster validate [--json]          Check ~/.config/bmn/agents/roster.md; exit 4 lists each error and line
-       bmn roster status [--json]            Approved generation and every pending file difference
+       bmn roster status [--json]            Approved version and every pending file difference
        bmn roster role <role> [--json]       The approved chain: ordered candidates, eligibility, then, rules
        bmn roster route --agent <id> [--json] [-- <dispatch argv>]
                                              Which provider and host a dispatch would reach (inspection only)
+       bmn roster visibility <workspace> [--refresh] [--json]
+                                             Whether a workspace is proven public; --refresh asks GitHub once
        bmn roster check --agent <id> --role <role> --workspace <path> --data private|public
                         [--cwd <dir>] [--stdin <file>] [--packet <dir>] [--resume-of <receipt>] [--json]
                         -- <dispatch argv>   PASS or the first refusal, before work leaves for another agent
        bmn roster explain <same as check>    The same evaluation in words
        bmn roster check --verify <receipt> -- <dispatch argv>
                                              Recompute a receipt; exit 11 on any difference
+       bmn roster check --research --agent <id> --stdin <prompt> [--json] -- <dispatch argv>
+                                             Check a research run
+       bmn roster bind --receipt <file> --session <id>
+                                             Bind a started session to its receipt, for a later resume
 
-Machine fields take effect only after the owner approves them in BMN (Preferences > Agents); no
-command approves (exit 12). Works with BMN closed. Exit: 0 PASS, 2 usage, 3 roster missing,
-4 invalid, 5 nothing approved, 6 state corrupt, 10 refusal, 11 receipt stale or invalid.`
+Machine fields take effect only after the owner approves them in BMN (Preferences > Team); no
+command approves (exit 12). Works with BMN closed; only visibility --refresh uses the network.
+Exit: 0 PASS, 2 usage, 3 roster missing, 4 invalid, 5 nothing approved, 6 state corrupt,
+10 refusal, 11 receipt stale or invalid.`
 
 function approvedData() {
   return readApproved()
@@ -123,9 +130,9 @@ export async function runTeam(argv) {
     if (asJson) {
       out(JSON.stringify({ ok: true, generation: generation.number, agents: entries }, null, 2))
     } else if (entries.length === 0) {
-      out(`No ${parsed.options.all ? '' : 'enabled active '}agents in approved generation ${generation.number}.`)
+      out(`No ${parsed.options.all ? '' : 'enabled active '}agents in approved version ${generation.number}.`)
     } else {
-      out([...entries.map(teamLine), `(approved generation ${generation.number})`].join('\n'))
+      out([...entries.map(teamLine), `(approved version ${generation.number})`].join('\n'))
     }
     return 0
   } catch (error) {
@@ -145,17 +152,17 @@ export async function runRoster(argv) {
     return action === undefined ? 2 : 0
   }
   if (action === 'approve' || action === 'restore' || action === 'revert') {
-    err('bmn: OWNER_APPROVAL_IN_APP: roster changes are approved, reverted and restored only in BMN Preferences > Agents; nothing was changed')
+    err('bmn: OWNER_APPROVAL_IN_APP: roster changes are approved, reverted and restored only in BMN Preferences > Team; nothing was changed')
     return EXIT.OWNER_APPROVAL_IN_APP
   }
   if (action === 'validate') return rosterValidate(rest)
   if (action === 'status') return rosterStatus(rest)
   if (action === 'role') return rosterRole(rest)
-  if (action === 'route' || action === 'check' || action === 'explain') {
+  if (action === 'route' || action === 'check' || action === 'explain' || action === 'visibility' || action === 'bind') {
     const { runCheckCommand } = await import('./agents-check.mjs')
     return runCheckCommand(action, rest)
   }
-  return usage(`roster expects validate, status, role, route, check or explain, not ${action}`)
+  return usage(`roster expects validate, status, role, route, visibility, check, explain or bind, not ${action}`)
 }
 
 function rosterValidate(argv) {
@@ -175,7 +182,7 @@ function rosterValidate(argv) {
     } else {
       const lines = [`${roster.path} is valid: ${roster.data.agents.length} agent${roster.data.agents.length === 1 ? '' : 's'}, ${roster.data.roles.length} role${roster.data.roles.length === 1 ? '' : 's'}.`]
       for (const warning of roster.warnings) lines.push(`  note, line ${warning.line ?? '?'}: ${warning.code}: ${warning.message}`)
-      lines.push('Validation reads the file; nothing in it takes effect until it is approved in BMN Preferences > Agents.')
+      lines.push('Validation reads the file; nothing in it takes effect until it is approved in BMN Preferences > Team.')
       out(lines.join('\n'))
     }
     return 0
@@ -232,7 +239,7 @@ async function rosterStatus(argv) {
   } else {
     const lines = []
     lines.push(generation
-      ? `Approved: generation ${generation.number} (${generation.created_at}), from roster ${generation.roster_file_hash.slice(0, 12)}`
+      ? `Approved: version ${generation.number} (${generation.created_at}), from roster ${generation.roster_file_hash.slice(0, 12)}`
       : `Approved: none (${approvalProblem.code}: ${approvalProblem.message})`)
     if (fileProblem) {
       lines.push(`Roster file: ${fileProblem.code}: ${fileProblem.message}`)
@@ -243,11 +250,11 @@ async function rosterStatus(argv) {
     if (differences !== null) {
       lines.push(differences.length === 0
         ? 'No pending differences: the file matches the approved roster.'
-        : `${differences.length} pending difference${differences.length === 1 ? '' : 's'}, none in effect until approved in Preferences > Agents:`)
+        : `${differences.length} pending difference${differences.length === 1 ? '' : 's'}, none in effect until approved in Preferences > Team:`)
       for (const entry of differences) lines.push(`  ${diffLine(entry)}`)
       if (effects.length > 0) lines.push('If approved:', ...effects.map((effect) => `  ${effect}`))
     } else if (generation === null && roster !== null) {
-      lines.push('Nothing takes effect until the first approval in Preferences > Agents.')
+      lines.push('Nothing takes effect until the first approval in Preferences > Team.')
     }
     out(lines.join('\n'))
   }
@@ -280,7 +287,7 @@ function rosterRole(argv) {
       throw error
     }
     if (asJson) out(JSON.stringify({ ok: true, generation: generation.number, ...chain }, null, 2))
-    else out(`${roleChainText(chain)}\n(approved generation ${generation.number})`)
+    else out(`${roleChainText(chain)}\n(approved version ${generation.number})`)
     return 0
   } catch (error) {
     return failWith(error, asJson)

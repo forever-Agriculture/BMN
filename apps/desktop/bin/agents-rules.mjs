@@ -7,27 +7,33 @@ import {
 import { homedir } from 'node:os'
 import { dirname } from 'node:path'
 import { createInterface } from 'node:readline'
-import { HARNESSES, RosterError, agentState, agentsDirectory, canonicalJson, sha256 } from './agents-roster.mjs'
+import { APP_NAMES, HARNESSES, RosterError, agentState, agentsDirectory, canonicalJson, harnessPrivateWork, sha256 } from './agents-roster.mjs'
 import { readApproved } from './agents-state.mjs'
 import { AgentsUsageError, EXIT, failWith, out, readOptions, usage } from './agents-cli.mjs'
 import { absoluteUncollapsed, pathState, replaceFileSafely, restorePathState } from './safe-config-write.mjs'
 import { unifiedDiff } from './text-diff.mjs'
 
 /**
- * The owner edits one file, `~/.config/bmn/agents/global-rules.md`. BMN renders it per harness and
- * writes each harness's own rules file as a generated regular file. A harness whose approved route
- * is not High gets the restricted rendering: the header and the sections the owner marked
- * shareable, never an empty file. Restrictions govern only the global files BMN writes, not
- * project files or skills a harness reads in a workspace.
+ * The owner edits one file, `~/.config/bmn/agents/global-rules.md`. BMN renders it per app and
+ * writes each app's own rules file as a generated regular file. An app whose approved destination
+ * may receive private work gets the full rendering; any other gets the public rendering: the
+ * header and the sections the owner marked public, never an empty file. This governs only the
+ * global files BMN writes, not project files or skills an app reads in a workspace.
  */
 
-export const TEAM_LIMIT_BYTES = 1200
-const TEAM_MARKER = '<!-- bmn:team -->'
-const OPEN_HARNESS = /^<!--\s*bmn:harness\s+([a-z ,]+?)\s*-->$/
-const CLOSE_HARNESS = /^<!--\s*\/bmn:harness\s*-->$/
-const OPEN_SHAREABLE = /^<!--\s*bmn:shareable\s*-->$/
-const CLOSE_SHAREABLE = /^<!--\s*\/bmn:shareable\s*-->$/
+/** The Team phrase names agents only while it stays this short; longer, it points at `bmn team`. */
+export const TEAM_LIMIT_BYTES = 400
+export const TEAM_MARKER = '<!-- bmn:team -->'
+const TEAM_POINTER = ' (roles, efforts and limits: `bmn team`)'
+const TEAM_FALLBACK = 'the agents `bmn team` lists'
+const OPEN_APPS = /^<!--\s*bmn:apps\s+([a-z ,]+?)\s*-->$/
+const CLOSE_APPS = /^<!--\s*\/bmn:apps\s*-->$/
+const OPEN_PUBLIC = /^<!--\s*bmn:public\s*-->$/
+const CLOSE_PUBLIC = /^<!--\s*\/bmn:public\s*-->$/
 const ANY_MARKER = /<!--\s*\/?bmn:/
+const EARLIER_MARKER = /<!--\s*\/?bmn:(harness|shareable)\b/
+/** What the owner reads for each rendering kind. */
+export const KIND_WORDS = { full: 'Full rules', public: 'Public sections only' }
 
 export function masterPath() {
   return `${agentsDirectory()}/global-rules.md`
@@ -69,9 +75,10 @@ export function targetPath(harness, environment = process.env) {
 // The master
 
 /**
- * Parses the master into ordered parts: plain text (every harness), harness-limited sections,
- * shareable sections and the single team placeholder. Markers sit alone on their line; unknown
- * harnesses and unclosed, nested or duplicate markers are MASTER_INVALID with their lines.
+ * Parses the master into ordered parts: plain text (every app), sections limited to some apps,
+ * public sections and the single team placeholder, which may sit inside a sentence. Section
+ * markers sit alone on their line; unknown app names and unclosed, nested or duplicate markers
+ * are MASTER_INVALID with their lines.
  */
 export function parseMaster(text) {
   const errors = []
@@ -79,25 +86,26 @@ export function parseMaster(text) {
   let open = null
   let teamLine = null
   const lines = text.split('\n')
+  const nested = (line) => errors.push({ code: 'MASTER_INVALID', line, message: `marker nested inside the ${open.kind} section opened at line ${open.line}` })
   lines.forEach((raw, index) => {
     const line = index + 1
     const trimmed = raw.trim()
     let match
-    if ((match = OPEN_HARNESS.exec(trimmed))) {
+    if ((match = OPEN_APPS.exec(trimmed))) {
       const names = match[1].split(/[\s,]+/).filter(Boolean)
       const unknown = names.filter((name) => !HARNESSES.includes(name))
-      if (unknown.length > 0) errors.push({ code: 'MASTER_INVALID', line, message: `unknown harness ${unknown.join(', ')} (use ${HARNESSES.join(', ')})` })
-      if (open !== null) errors.push({ code: 'MASTER_INVALID', line, message: `marker nested inside the ${open.kind} section opened at line ${open.line}` })
-      else open = { kind: 'harness', line, harnesses: names, lines: [] }
+      if (unknown.length > 0) errors.push({ code: 'MASTER_INVALID', line, message: `unknown app ${unknown.join(', ')} (use ${HARNESSES.join(', ')})` })
+      if (open !== null) nested(line)
+      else open = { kind: 'apps', line, harnesses: names, lines: [] }
       return
     }
-    if (OPEN_SHAREABLE.test(trimmed)) {
-      if (open !== null) errors.push({ code: 'MASTER_INVALID', line, message: `marker nested inside the ${open.kind} section opened at line ${open.line}` })
-      else open = { kind: 'shareable', line, lines: [] }
+    if (OPEN_PUBLIC.test(trimmed)) {
+      if (open !== null) nested(line)
+      else open = { kind: 'public', line, lines: [] }
       return
     }
-    if (CLOSE_HARNESS.test(trimmed) || CLOSE_SHAREABLE.test(trimmed)) {
-      const kind = CLOSE_HARNESS.test(trimmed) ? 'harness' : 'shareable'
+    if (CLOSE_APPS.test(trimmed) || CLOSE_PUBLIC.test(trimmed)) {
+      const kind = CLOSE_APPS.test(trimmed) ? 'apps' : 'public'
       if (open === null || open.kind !== kind) {
         errors.push({ code: 'MASTER_INVALID', line, message: `closing ${kind} marker with no matching opening marker` })
       } else {
@@ -106,19 +114,18 @@ export function parseMaster(text) {
       }
       return
     }
-    if (trimmed === TEAM_MARKER) {
-      if (teamLine !== null) errors.push({ code: 'MASTER_INVALID', line, message: `duplicate ${TEAM_MARKER} (first at line ${teamLine})` })
-      else teamLine = line
-      const team = { kind: 'team', line }
-      if (open !== null) open.lines.push(team)
-      else parts.push(team)
-      return
-    }
-    if (ANY_MARKER.test(trimmed)) {
-      errors.push({ code: 'MASTER_INVALID', line, message: `unrecognised bmn marker "${trimmed.slice(0, 60)}"` })
+    const pieces = raw.split(TEAM_MARKER)
+    if (pieces.some((piece) => ANY_MARKER.test(piece))) {
+      const earlier = EARLIER_MARKER.test(raw) ? ' (bmn:harness is now bmn:apps, bmn:shareable is now bmn:public)' : ''
+      errors.push({ code: 'MASTER_INVALID', line, message: `unrecognised bmn marker "${trimmed.slice(0, 60)}"${earlier}; section markers sit alone on their line` })
       return
     }
     const entry = { kind: 'text', text: raw }
+    if (pieces.length > 1) {
+      if (teamLine !== null || pieces.length > 2) errors.push({ code: 'MASTER_INVALID', line, message: `duplicate ${TEAM_MARKER} (first at line ${teamLine ?? line})` })
+      teamLine ??= line
+      entry.team = true
+    }
     if (open !== null) open.lines.push(entry)
     else parts.push(entry)
   })
@@ -152,62 +159,64 @@ function approvedOrNull() {
   }
 }
 
-/** The Team expansion: one line per enabled active agent, then a pointer; at most TEAM_LIMIT_BYTES. */
-export function teamExpansion(generation) {
-  const pointer = 'Ask `bmn team` for details.'
-  if (generation === null) return { form: 'pointer (nothing approved)', text: pointer }
-  const agents = generation.data.agents.filter((agent) => agentState(agent) === 'active')
-  const withRoles = agents.map((agent) => `- ${agent.name}: ${agent.title}, ${agent.harness}, roles ${agent.roles.join(', ') || 'none'}, security ${agent.security}`)
-  const full = [...withRoles, pointer].join('\n')
-  if (Buffer.byteLength(full) <= TEAM_LIMIT_BYTES) return { form: 'full', text: full }
-  const withoutRoles = [...agents.map((agent) => `- ${agent.name}: ${agent.title}, ${agent.harness}, security ${agent.security}`), pointer].join('\n')
-  if (Buffer.byteLength(withoutRoles) <= TEAM_LIMIT_BYTES) return { form: 'without roles', text: withoutRoles }
-  return { form: 'pointer only', text: pointer }
+/**
+ * The Team phrase: the enabled active agents' names grouped by app, apps in their fixed order and
+ * agents in roster order, then where the details are. Longer than TEAM_LIMIT_BYTES, or with
+ * nobody to name, it is the short phrase. Agents are pointed at `bmn team`, never at the roster file.
+ */
+export function teamPhrase(generation) {
+  if (generation === null) return { form: 'short phrase (nothing approved)', text: TEAM_FALLBACK }
+  const active = generation.data.agents.filter((agent) => agentState(agent) === 'active')
+  if (active.length === 0) return { form: 'short phrase (no active agent)', text: TEAM_FALLBACK }
+  const groups = HARNESSES.map((harness) => [APP_NAMES[harness], active.filter((agent) => agent.harness === harness).map((agent) => agent.name)])
+    .filter(([, names]) => names.length > 0)
+  const text = `${groups.map(([app, names]) => `${app} (${names.join(', ')})`).join(', ')}${TEAM_POINTER}`
+  return Buffer.byteLength(text) <= TEAM_LIMIT_BYTES ? { form: 'names by app', text } : { form: 'short phrase (names too long)', text: TEAM_FALLBACK }
 }
 
-/** The approved route for a harness, and whether it gets the full or the restricted rendering. */
+/**
+ * Which rendering an app gets and why, from the approved roster: full only when its approved
+ * destination may receive private work; public for a public-only, unknown or owner-declared one.
+ */
 export function routeFor(harness, generation) {
-  const route = generation?.data.harness_routes.find((entry) => entry.harness === harness)
-  if (route === undefined) return { restricted: true, reason: generation === null ? 'nothing is approved' : 'no approved route', route: null }
-  if (route.security === 'low') return { restricted: true, reason: `${route.basis === 'owner-declared' ? 'owner-declared ' : ''}Low route`, route }
-  return { restricted: false, reason: route.basis === 'owner-declared' ? 'owner-declared High route' : 'High route', route }
+  const answer = harnessPrivateWork(generation?.data ?? null, harness)
+  return { kind: answer.allowed ? 'full' : 'public', reason: answer.reason, route: answer.route, provider: answer.provider }
 }
 
 function renderLines(entries, harness, team) {
   const out = []
   for (const entry of entries) {
-    if (entry.kind === 'text') out.push(entry.text)
-    else if (entry.kind === 'team') out.push(team.text)
-    else if (entry.kind === 'shareable') out.push(...renderLines(entry.lines, harness, team))
-    else if (entry.kind === 'harness' && entry.harnesses.includes(harness)) out.push(...renderLines(entry.lines, harness, team))
+    if (entry.kind === 'text') out.push(entry.team ? entry.text.replace(TEAM_MARKER, () => team.text) : entry.text)
+    else if (entry.kind === 'public') out.push(...renderLines(entry.lines, harness, team))
+    else if (entry.kind === 'apps' && entry.harnesses.includes(harness)) out.push(...renderLines(entry.lines, harness, team))
   }
   return out
 }
 
-/** The exact bytes BMN writes for `harness`, with what decided them. */
-export function render(master, harness, generation, { restricted = null } = {}) {
-  if (!HARNESSES.includes(harness)) throw new RosterError('MASTER_INVALID', `unknown harness ${harness}`)
+/** The exact bytes BMN writes for `harness`, with what decided them. `kind` and `team` override the approved answer for previews. */
+export function render(master, harness, generation, { kind = null, team = null } = {}) {
+  if (!HARNESSES.includes(harness)) throw new RosterError('MASTER_INVALID', `unknown app ${harness}`)
   const decision = routeFor(harness, generation)
-  const isRestricted = restricted ?? decision.restricted
-  const team = teamExpansion(generation)
+  const used = kind ?? decision.kind
+  const phrase = team ?? teamPhrase(generation)
   const header = `> Generated by BMN from ${master.path} (master sha256 ${master.hash}); edit the master, not this file.`
   let body
-  if (isRestricted) {
-    const shared = master.parts.filter((part) => part.kind === 'shareable').map((part) => renderLines(part.lines, harness, team).join('\n').trim()).filter(Boolean)
+  if (used === 'public') {
+    const shared = master.parts.filter((part) => part.kind === 'public').map((part) => renderLines(part.lines, harness, phrase).join('\n').trim()).filter(Boolean)
     body = shared.length > 0
       ? shared.join('\n\n')
-      : 'BMN restricted these rules for a route that is not High, and the owner marked none of them shareable.'
+      : 'BMN gives this app only the rules its owner marked public, and none are marked.'
   } else {
-    body = renderLines(master.parts, harness, team).join('\n').replace(/^\n+/, '').replace(/\n+$/, '')
+    body = renderLines(master.parts, harness, phrase).join('\n').replace(/^\n+/, '').replace(/\n+$/, '')
   }
   const frontmatter = harness === 'cursor' ? '---\ndescription: The owner\'s global rules, generated by BMN\nalwaysApply: true\n---\n' : ''
   const text = `${frontmatter}${header}\n\n${body}\n`
-  return { harness, text, hash: sha256(text), restricted: isRestricted, reason: decision.reason, team_form: team.form, bytes: Buffer.byteLength(text) }
+  return { harness, text, hash: sha256(text), kind: used, reason: decision.reason, team_form: phrase.form, bytes: Buffer.byteLength(text) }
 }
 
-/** The restricted rendering for `harness` from the current master and approval (60.3 packet mode). */
-export function restrictedRendering(harness) {
-  return render(readMaster(), harness, approvedOrNull(), { restricted: true }).text
+/** The public rendering for `harness` from the current master and approval (60.3 packet mode). */
+export function publicRendering(harness) {
+  return render(readMaster(), harness, approvedOrNull(), { kind: 'public' }).text
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -255,7 +264,7 @@ export function checkTargets(environment = process.env) {
   return HARNESSES.map((harness) => {
     const path = targetPath(harness, environment)
     const rendering = render(master, harness, generation)
-    const base = { harness, path, restricted: rendering.restricted, reason: rendering.reason, rendered_hash: rendering.hash }
+    const base = { harness, path, kind: rendering.kind, reason: rendering.reason, rendered_hash: rendering.hash }
     let state
     try {
       state = pathState(path)
@@ -276,15 +285,16 @@ export function checkTargets(environment = process.env) {
 // Install and restore
 
 /**
- * Route re-inspection before a full rendering: an observed-default route must still resolve to
- * the provider's default; an owner-declared route is the owner's statement and is not inspected.
+ * Re-inspection before a full rendering leaves BMN: the app must still resolve to the default of
+ * the provider the approved roster names. A public rendering needs none, and an owner-declared
+ * destination never gets a full one (routeFor), so nothing here rests on the owner's word.
  */
 async function routeStillMatches(harness, decision, environment) {
-  if (decision.restricted || decision.route === null || decision.route.basis === 'owner-declared') return { ok: true }
+  if (decision.kind !== 'full') return { ok: true, inspected: null }
   const { inspectRoute } = await import('./agents-check.mjs')
   const inspected = inspectRoute({ harness }, null, environment, environment.HOME || homedir())
   const ok = inspected.basis === 'default' && inspected.provider === decision.route.provider
-  return ok ? { ok: true, inspected } : { ok: false, reason: `${harness} now resolves to ${inspected.host ?? 'an unknown destination'}${inspected.reason ? ` (${inspected.reason})` : ''}, not default:${decision.route.provider}` }
+  return ok ? { ok: true, inspected } : { ok: false, reason: `${APP_NAMES[harness]} now sends data to ${inspected.host ?? 'an unknown destination'}${inspected.reason ? ` (${inspected.reason})` : ''}, not default:${decision.route.provider}` }
 }
 
 /** Shows target, resolved path and diff on stderr every time, then asks (default No) unless --yes. */
@@ -373,7 +383,7 @@ export async function planInstall(harnesses, { environment = process.env } = {})
     const decision = routeFor(harness, generation)
     const route = await routeStillMatches(harness, decision, environment)
     if (!route.ok) {
-      return { code: 'ROUTE_CHANGED', message: `refusing a full rendering for ${harness}: ${route.reason}; approve the route again in Preferences > Agents`, plans: [], planHash: null }
+      return { code: 'ROUTE_CHANGED', message: `refusing a full rendering for ${harness}: ${route.reason}; set the app's destination again in Preferences > Rules > Health`, plans: [], planHash: null }
     }
     const path = targetPath(harness, environment)
     const prior = pathState(path)
@@ -400,7 +410,7 @@ function planHash(plans) {
 export function planView(result) {
   return {
     code: result.code, ...(result.message ? { message: result.message } : {}), plan_hash: result.planHash,
-    targets: result.plans.map((plan) => ({ harness: plan.harness, path: plan.path, kind: plan.kind, change: plan.change, restricted: plan.rendering.restricted,
+    targets: result.plans.map((plan) => ({ harness: plan.harness, path: plan.path, kind: plan.kind, change: plan.change, rendering: plan.rendering.kind,
       reason: plan.rendering.reason, team_form: plan.rendering.team_form, ...(plan.prior.kind === 'link' ? { link_target: plan.prior.target } : {}),
       diff: plan.diff, fold: plan.fold }))
   }
@@ -424,7 +434,7 @@ export async function installRules(harnesses, { yes = false, asJson = false, env
   const details = plans.map((plan) => [
     `${plan.harness}: ${plan.path}`,
     `  ${plan.kind}${plan.prior.kind === 'link' ? ` (link to ${plan.prior.target}; the link is replaced, its target is not touched)` : ''}`,
-    `  rendering: ${plan.rendering.restricted ? `restricted (${plan.rendering.reason})` : 'full'}; team: ${plan.rendering.team_form}`,
+    `  ${KIND_WORDS[plan.rendering.kind]} (${plan.rendering.reason}); team: ${plan.rendering.team_form}`,
     ...(plan.fold.length ? ['  lines in the outside edit you may want to fold into the master:', ...plan.fold.map((line) => `    ${line}`)] : []),
     plan.diff
   ].join('\n')).join('\n\n')
@@ -436,12 +446,21 @@ export async function installRules(harnesses, { yes = false, asJson = false, env
   if (confirmed.planHash !== planned.planHash) {
     return { code: 'REVISION_CONFLICT', message: 'the targets or the rendering changed while the confirmation was open; nothing was written', transaction: null, written: [] }
   }
+  return writeTransaction(master, plans, { now, beforeTarget })
+}
+
+/**
+ * Writes planned targets as one transaction: the manifest of each target's prior state and BMN's
+ * last-written record first, then each file through the change-refusing, read-back flow. A
+ * failure part-way stops and keeps the manifest so `restore` can undo what changed.
+ */
+function writeTransaction(master, plans, { now = new Date(), beforeTarget, reason = 'install' } = {}) {
   const id = `${now.toISOString().replaceAll(':', '-').replace(/\.\d+Z$/, 'Z')}-${process.pid}`
   const folder = `${transactionsDirectory()}/${id}`
   ensurePrivate(folder)
   const records = lastWritten()
   const manifest = {
-    id, created_at: now.toISOString(), master_hash: master.hash, state: 'started',
+    id, created_at: now.toISOString(), master_hash: master.hash, state: 'started', reason,
     targets: plans.map((plan, index) => ({
       harness: plan.harness, path: plan.path, prior: plan.prior.kind === 'file' ? { kind: 'file', backup: `${index}.bak`, mode: plan.prior.mode } : plan.prior,
       prior_record: records[plan.path] ?? null, written_hash: plan.rendering.hash, done: false
@@ -451,7 +470,7 @@ export async function installRules(harnesses, { yes = false, asJson = false, env
     if (plan.prior.kind === 'file') writePrivate(`${folder}/${index}.bak`, plan.prior.text)
   })
   writePrivate(`${folder}/manifest.json`, JSON.stringify(manifest, null, 2))
-  snapshotMaster(master, `install ${id}`, now)
+  snapshotMaster(master, `${reason} ${id}`, now)
   const written = []
   for (const [index, plan] of plans.entries()) {
     try {
@@ -467,11 +486,95 @@ export async function installRules(harnesses, { yes = false, asJson = false, env
     writePrivate(lastWrittenPath(), JSON.stringify(next, null, 2))
     manifest.targets[index].done = true
     writePrivate(`${folder}/manifest.json`, JSON.stringify(manifest, null, 2))
-    written.push({ harness: plan.harness, path: plan.path, restricted: plan.rendering.restricted })
+    written.push({ harness: plan.harness, path: plan.path, kind: plan.rendering.kind })
   }
   manifest.state = 'complete'
   writePrivate(`${folder}/manifest.json`, JSON.stringify(manifest, null, 2))
   return { code: 'OK', transaction: id, written }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The Team phrase after an approval (60.4 AC6)
+
+function teamBinding(master, harness, path, priorText, inspected, proposed) {
+  return sha256(canonicalJson({
+    master: master.hash, harness, path, prior: sha256(priorText), proposed: proposed.hash,
+    route: inspected === null ? 'not inspected' : `${inspected.basis}/${inspected.provider}/${inspected.host}`
+  }))
+}
+
+/**
+ * What approving `nextData` would rewrite in the installed rules files: exactly the targets that
+ * are `current` now, whose destination still inspects as approved, and whose new rendering keeps
+ * its kind and differs from the installed file only inside the Team phrase. Each carries a
+ * binding of the master hash, its resolved path and bytes, the inspection and the proposed bytes,
+ * which the write rechecks. Every other target is left for Install.
+ */
+export async function planTeamUpdate(nextData, { environment = process.env } = {}) {
+  let master
+  let current
+  try {
+    master = readMaster()
+    current = approvedOrNull()
+  } catch (error) {
+    if (error instanceof RosterError) return { targets: [] }
+    throw error
+  }
+  const next = { data: nextData }
+  const was = teamPhrase(current)
+  if (was.text === teamPhrase(next).text) return { targets: [] }
+  const records = lastWritten()
+  const targets = []
+  for (const harness of HARNESSES) {
+    const path = targetPath(harness, environment)
+    let prior
+    try {
+      prior = pathState(path)
+    } catch {
+      continue
+    }
+    const installed = render(master, harness, current)
+    if (prior.kind !== 'file' || records[path] !== installed.hash || prior.text !== installed.text) continue
+    const proposed = render(master, harness, next)
+    if (proposed.kind !== installed.kind || proposed.text === prior.text) continue
+    if (render(master, harness, next, { team: was }).text !== prior.text) continue
+    const route = await routeStillMatches(harness, routeFor(harness, next), environment)
+    if (!route.ok) continue
+    targets.push({ harness, path, kind: proposed.kind, diff: unifiedDiff(prior.text, proposed.text, path), binding: teamBinding(master, harness, path, prior.text, route.inspected, proposed) })
+  }
+  return { targets }
+}
+
+/**
+ * After the approval: writes, as one transaction, the targets the owner was shown whose binding
+ * still holds against the generation now approved. A changed binding skips that target, and
+ * nothing outside `shown` is ever written. Returns what was written and what was skipped.
+ */
+export async function applyTeamUpdate(shown, { environment = process.env, now = new Date(), beforeTarget } = {}) {
+  if (shown.length === 0) return { code: 'OK', transaction: null, written: [], skipped: [] }
+  const master = readMaster()
+  const generation = approvedOrNull()
+  const plans = []
+  const skipped = []
+  for (const target of shown) {
+    if (!HARNESSES.includes(target.harness)) continue
+    const path = targetPath(target.harness, environment)
+    let prior
+    try {
+      prior = pathState(path)
+    } catch {
+      prior = null
+    }
+    const rendering = render(master, target.harness, generation)
+    const route = prior?.kind === 'file' ? await routeStillMatches(target.harness, routeFor(target.harness, generation), environment) : { ok: false }
+    if (!route.ok || teamBinding(master, target.harness, path, prior.text, route.inspected, rendering) !== target.binding) {
+      skipped.push(target.harness)
+      continue
+    }
+    plans.push({ harness: target.harness, path, prior, rendering })
+  }
+  if (plans.length === 0) return { code: 'OK', transaction: null, written: [], skipped }
+  return { ...writeTransaction(master, plans, { now, beforeTarget, reason: 'team update' }), skipped }
 }
 
 export function listTransactions() {
@@ -482,10 +585,11 @@ export function listTransactions() {
     if (error.code === 'ENOENT') return []
     throw error
   }
+  // Newest first by the time each records: an id ends in a process id, so two written in one second do not sort by name.
   return names.sort().reverse().map((id) => {
     const manifest = readJson(`${transactionsDirectory()}/${id}/manifest.json`, null)
-    return manifest === null ? { id, valid: false } : { id, valid: true, created_at: manifest.created_at, state: manifest.state, targets: manifest.targets.map((target) => target.harness) }
-  })
+    return manifest === null ? { id, valid: false } : { id, valid: true, created_at: manifest.created_at, state: manifest.state, reason: manifest.reason ?? 'install', targets: manifest.targets.map((target) => target.harness) }
+  }).sort((a, b) => String(b.created_at ?? '').localeCompare(String(a.created_at ?? '')))
 }
 
 /** Puts every target of a transaction back as it was before, links as links, and resets the records. */
@@ -582,25 +686,52 @@ export async function revertMaster(revision, { yes = false, asJson = false } = {
 // ---------------------------------------------------------------------------------------------
 // Import (60.7's one-shot cut-over source)
 
+const APP_LIST = new RegExp(`(?:${Object.values(APP_NAMES).join('|')}) \\([^()\\n]*\\)(?:,? (?:and )?(?:${Object.values(APP_NAMES).join('|')}) \\([^()\\n]*\\))*`)
+const IMPORT_EDITS = [
+  { name: 'the opening Source: sentence is dropped', apply: (text) => text.replace(/^Source:.*?(?:\.[ \t]+|\.?$\n?)/m, '') },
+  { name: 'rules are changed in BMN\'s master', apply: (text) => text.replace('change rules, skills and hooks for both', 'change rules in BMN\'s master, and skills and hooks, for both') },
+  { name: 'the pointer to the agent table narrows to dispatch commands', apply: (text) => text.replace('Model roster, effort levels, safe dispatch commands and limits:', 'Safe dispatch commands:') }
+]
+
 /**
- * Today's Claude rules as the first master: unchanged except an OpenCode section appended from
- * the adapter draft when one exists, and the team placeholder at the end of a `## Team` section.
- * The owner then removes the hand-kept agent list and marks shareable sections in the Rules panel.
+ * Today's Claude rules as the first master, unchanged except the edits it names: the `Source:`
+ * sentence dropped, rules changed in BMN's master, the agent list in the Team section replaced by
+ * the inline team placeholder, the pointer to the agent table narrowed to its dispatch commands,
+ * and an `opencode` section appended from the OpenCode lines when there are any. The owner then
+ * marks public sections on the Rules page.
  */
 export function importedMaster(sourceText, opencodeText) {
-  const lines = sourceText.replace(/\n+$/, '').split('\n')
-  const team = lines.findIndex((line) => /^##\s+Team\b/.test(line))
-  if (team !== -1 && !sourceText.includes(TEAM_MARKER)) {
-    let end = lines.findIndex((line, index) => index > team && /^#{1,2}\s/.test(line))
-    if (end === -1) end = lines.length
-    while (end > team + 1 && lines[end - 1].trim() === '') end -= 1
-    lines.splice(end, 0, '', TEAM_MARKER)
+  const changes = []
+  let body = sourceText.replace(/\n+$/, '')
+  for (const edit of IMPORT_EDITS) {
+    const next = edit.apply(body)
+    if (next !== body) changes.push(edit.name)
+    body = next
   }
-  let text = `${lines.join('\n')}\n`
+  if (!body.includes(TEAM_MARKER)) {
+    const lines = body.split('\n')
+    const team = lines.findIndex((line) => /^##\s+Team\b/.test(line))
+    if (team !== -1) {
+      let end = lines.findIndex((line, index) => index > team && /^#{1,2}\s/.test(line))
+      if (end === -1) end = lines.length
+      const listed = lines.findIndex((line, index) => index > team && index < end && APP_LIST.test(line))
+      if (listed !== -1) {
+        lines[listed] = lines[listed].replace(APP_LIST, TEAM_MARKER)
+        changes.push('the agent list in the Team section becomes the team placeholder')
+      } else {
+        while (end > team + 1 && lines[end - 1].trim() === '') end -= 1
+        lines.splice(end, 0, '', TEAM_MARKER)
+        changes.push('the team placeholder is added at the end of the Team section')
+      }
+      body = lines.join('\n')
+    }
+  }
+  let text = `${body}\n`
   if (opencodeText !== null && opencodeText.trim() !== '') {
-    text += `\n<!-- bmn:harness opencode -->\n${opencodeText.replace(/\n+$/, '')}\n<!-- /bmn:harness -->\n`
+    text += `\n<!-- bmn:apps opencode -->\n${opencodeText.replace(/\n+$/, '')}\n<!-- /bmn:apps -->\n`
+    changes.push('the OpenCode lines become an opencode section')
   }
-  return text
+  return { text, changes }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -634,6 +765,7 @@ export function lastProbes({ inspect } = {}) {
     if (entry === undefined) return { harness, outcome: null }
     const rendered = master === null ? null : render(master, harness, generation).hash
     const route = routeFor(harness, generation)
+    // The rendered hash moves with the Team phrase, so a Team change makes an earlier test stale too.
     let stale = rendered !== entry.rendered_hash || canonicalRoute(route) !== entry.route
     if (!stale && inspect) {
       const now = inspect(harness)
@@ -655,7 +787,7 @@ export async function probeInspector(environment = process.env) {
 }
 
 function canonicalRoute(decision) {
-  return decision.route === null ? 'none' : `${decision.route.provider}/${decision.route.security}/${decision.route.basis}`
+  return decision.route === null ? 'none' : `${decision.route.provider}/${decision.route.basis}/${decision.kind}`
 }
 
 function hashInText(text, hash) {
@@ -684,7 +816,8 @@ export function beforeFirstToolCall(rollout) {
 /**
  * Runs the harness once in a throwaway folder under the home folder, without naming the expected
  * revision, and records pass, fail, inconclusive or unavailable against the harness version, the
- * route and the rendered file's hash. Sends the rules to that harness's provider: High routes only.
+ * route and the rendered file's hash. Sends the rules to that app's provider, so it runs only
+ * where the approved destination may receive private work.
  */
 export async function probe(harness, { environment = process.env, now = new Date(), timeoutMs = 180_000 } = {}) {
   const master = readMaster()
@@ -692,7 +825,7 @@ export async function probe(harness, { environment = process.env, now = new Date
   const rendering = render(master, harness, generation)
   const decision = routeFor(harness, generation)
   const command = PROBE_COMMANDS[harness]
-  let host = decision.route?.host ?? null
+  let host = null
   const record = (outcome, detail, version = null) => {
     const entry = { harness, at: now.toISOString(), outcome, detail, version, host, route: canonicalRoute(decision), rendered_hash: rendering.hash, master_hash: master.hash }
     ensurePrivate(dirname(probeLogPath()))
@@ -702,10 +835,10 @@ export async function probe(harness, { environment = process.env, now = new Date
   const { harnessVersion } = await import('./agents-check.mjs')
   const version = harnessVersion(command, environment)
   if (version === null) return record('unavailable', `${command} is not installed or did not answer --version`)
-  if (decision.restricted) return record('unavailable', `the ${harness} route is not High (${decision.reason}); a probe would send the rules to that provider`, version)
+  if (decision.kind !== 'full') return record('unavailable', `${decision.reason}; a loading test would send the rules to that provider`, version)
   // Like install: the destination is inspected again right before anything is sent (60.6 AC4).
   const route = await routeStillMatches(harness, decision, environment)
-  if (!route.ok) return record('unavailable', `refused: ${route.reason}; approve the route again in Preferences > Agents`, version)
+  if (!route.ok) return record('unavailable', `refused: ${route.reason}; set the app's destination again in Preferences > Rules > Health`, version)
   if (route.inspected) host = route.inspected.host ?? null
   const current = pathState(targetPath(harness, environment))
   if (current.kind !== 'file' || sha256(current.text) !== rendering.hash) {
@@ -774,26 +907,27 @@ function findRollout(root, cwd, since) {
 // ---------------------------------------------------------------------------------------------
 // CLI
 
-export const RULES_USAGE = `Usage: bmn rules render <harness>                 The exact file BMN writes for one harness (stdout)
+export const RULES_USAGE = `Usage: bmn rules render <app>                     The exact file BMN writes for one app (stdout)
        bmn rules check [--json]                    Each target: unreadable, missing, link, unmanaged,
                                                    edited-outside, stale or current; exit 0 only if all current
-       bmn rules install [harness…] [--plan] [--expect-plan <hash>] [--yes] [--json]
+       bmn rules install [app…] [--plan] [--expect-plan <hash>] [--yes] [--json]
                                                    One confirmed transaction writing every (or each named) target
        bmn rules restore --transaction <id> [--plan] [--expect-plan <hash>] [--yes] [--json]
        bmn rules restore --list                    Undo one install; links come back as links
        bmn rules history [--json]                  The master-source snapshots BMN kept
        bmn rules revert-master <revision> [--yes]  Write one snapshot back as the master (a new revision)
        bmn rules import [--from <file>] [--yes]    One-shot: today's Claude rules become the master
-       bmn rules probe <harness> [--json]          Owner-run: does the harness load the file? Sends the rules
-                                                   to that harness's provider, so High routes only
+       bmn rules probe <app> [--json]              Owner-run: does the app load the file? Sends the rules to that
+                                                   app's provider, so only where it may receive private work
 
-Harnesses: ${HARNESSES.join(', ')}. The master is ~/.config/bmn/agents/global-rules.md: untagged text goes to every
-harness; <!-- bmn:harness codex opencode --> … <!-- /bmn:harness --> limits a section; <!-- bmn:shareable -->
-… <!-- /bmn:shareable --> marks text a Low route may receive; one <!-- bmn:team --> line expands into the approved
-team. A harness whose approved route is not High gets only the shareable sections. Restrictions cover only the
-global files BMN writes, never project files or skills; sessions started before an install keep their old rules.
+Apps: ${HARNESSES.join(', ')}. The master is ~/.config/bmn/agents/global-rules.md: untagged text goes to every app;
+<!-- bmn:apps codex opencode --> … <!-- /bmn:apps --> limits a section to those apps; <!-- bmn:public --> …
+<!-- /bmn:public --> marks a section a public-only destination may receive; one <!-- bmn:team -->, which may sit
+inside a sentence, becomes the approved team's names by app. An app whose approved destination may not receive
+private work gets only the public sections. This covers only the global files BMN writes, never project files
+or skills; sessions started before an install keep their old rules.
 Exit: 0 ok, 2 usage, 3 master missing, 4 master invalid, 1 something not current or not written,
-7 changed while reading, 13 history unavailable.`
+7 changed while reading, 10 a master already exists (import), 13 history unavailable.`
 
 export async function runRulesCommand(argv) {
   const [action, ...rest] = argv
@@ -819,11 +953,11 @@ export async function runRulesCommand(argv) {
   }
   try {
     if (action === 'render') {
-      if (positionals.length !== 1) return usage('rules render expects one harness')
-      if (!HARNESSES.includes(positionals[0])) throw new RosterError('MASTER_INVALID', `unknown harness ${positionals[0]} (use ${HARNESSES.join(', ')})`)
+      if (positionals.length !== 1) return usage('rules render expects one app')
+      if (!HARNESSES.includes(positionals[0])) throw new RosterError('MASTER_INVALID', `unknown app ${positionals[0]} (use ${HARNESSES.join(', ')})`)
       const rendering = render(readMaster(), positionals[0], approvedOrNull())
       writeSync(1, rendering.text)
-      writeSync(2, `bmn: ${rendering.restricted ? `restricted rendering (${rendering.reason})` : 'full rendering'}; team: ${rendering.team_form}; ${rendering.bytes} bytes\n`)
+      writeSync(2, `bmn: ${rendering.kind} rendering (${rendering.reason}); team: ${rendering.team_form}; ${rendering.bytes} bytes\n`)
       return 0
     }
     if (action === 'check') {
@@ -832,14 +966,14 @@ export async function runRulesCommand(argv) {
       const ok = targets.every((target) => target.state === 'current')
       if (asJson) out(JSON.stringify({ ok, master: masterPath(), targets }, null, 2))
       else {
-        out([...targets.map((target) => `${target.harness.padEnd(9)}${target.state}${target.state === 'link' ? ` -> ${target.link_target}` : ''}${target.restricted ? ` (restricted: ${target.reason})` : ''}  ${target.path}`),
+        out([...targets.map((target) => `${target.harness.padEnd(9)}${target.state}${target.state === 'link' ? ` -> ${target.link_target}` : ''}${target.kind === 'public' ? ` (public rendering: ${target.reason})` : ''}  ${target.path}`),
           ok ? 'Every target holds its current rendering. This says what is on disk, not that a running session loaded it.' : 'Run `bmn rules install` to write the targets that are not current.'].join('\n'))
       }
       return ok ? 0 : 1
     }
     if (action === 'install') {
       const harnesses = positionals.length === 0 ? HARNESSES : positionals
-      for (const harness of harnesses) if (!HARNESSES.includes(harness)) return usage(`unknown harness ${harness}`)
+      for (const harness of harnesses) if (!HARNESSES.includes(harness)) return usage(`unknown app ${harness}`)
       if (options.plan) {
         const planned = planView(await planInstall(harnesses))
         out(asJson ? JSON.stringify(planned, null, 2) : planned.code !== 'OK' ? `${planned.code}: ${planned.message}` : planned.targets.length === 0 ? 'Every target already holds its current rendering.'
@@ -848,7 +982,7 @@ export async function runRulesCommand(argv) {
       }
       const result = await installRules(harnesses, { yes: options.yes === true, asJson, ...(options['expect-plan'] !== undefined ? { expectedPlanHash: options['expect-plan'] } : {}) })
       if (asJson) out(JSON.stringify(result, null, 2))
-      else if (result.code === 'OK') out(result.transaction === null ? result.message : [`Wrote ${result.written.length} rules file(s) in transaction ${result.transaction}:`, ...result.written.map((entry) => `  ${entry.harness}: ${entry.path}${entry.restricted ? ' (restricted)' : ''}`), `Undo: bmn rules restore --transaction ${result.transaction}`, 'Sessions started before this keep their old rules.'].join('\n'))
+      else if (result.code === 'OK') out(result.transaction === null ? result.message : [`Wrote ${result.written.length} rules file(s) in transaction ${result.transaction}:`, ...result.written.map((entry) => `  ${entry.harness}: ${entry.path}${entry.kind === 'public' ? ' (public rendering)' : ''}`), `Undo: bmn rules restore --transaction ${result.transaction}`, 'Sessions started before this keep their old rules.'].join('\n'))
       else if (result.code !== 'NOT_CONFIRMED') writeSync(2, `bmn: ${result.code}: ${result.message}\n`)
       return result.code === 'OK' ? 0 : result.code === 'NOT_CONFIRMED' ? (asJson ? 2 : 1) : result.code === 'REVISION_CONFLICT' ? EXIT.REVISION_CONFLICT : 1
     }
@@ -882,19 +1016,25 @@ export async function runRulesCommand(argv) {
     }
     if (action === 'import') {
       if (positionals.length > 0) return usage('rules import takes no arguments')
-      const source = options.from ?? targetPath('claude')
-      const sourceText = readFileSync(source, 'utf8')
-      const adapter = existsSync(`${agentsDirectory()}/adapters/opencode.md`) ? readFileSync(`${agentsDirectory()}/adapters/opencode.md`, 'utf8') : null
-      const text = importedMaster(sourceText, adapter)
       const expected = pathState(masterPath())
-      if (expected.kind !== 'missing') throw new RosterError('REVISION_CONFLICT', `${masterPath()} already exists; import is one-shot (edit it in Preferences > Rules)`)
-      const details = `Master: ${masterPath()} (new)\nFrom: ${source}${adapter === null ? '' : ` and ${agentsDirectory()}/adapters/opencode.md as an opencode section`}\n${unifiedDiff('', text, masterPath())}`
+      if (expected.kind !== 'missing') throw new RosterError('MASTER_EXISTS', `${masterPath()} already exists; import is one-shot (edit it in Preferences > Rules)`)
+      const source = options.from ?? targetPath('claude')
+      let sourceText
+      try {
+        sourceText = readFileSync(source, 'utf8')
+      } catch (error) {
+        throw new RosterError('MASTER_MISSING', `cannot read ${source} (${error.code})`)
+      }
+      const adapter = existsSync(`${agentsDirectory()}/adapters/opencode.md`) ? readFileSync(`${agentsDirectory()}/adapters/opencode.md`, 'utf8') : null
+      const { text, changes } = importedMaster(sourceText, adapter)
+      const details = [`Master: ${masterPath()} (new)`, `From: ${source}${adapter === null ? '' : ` and ${agentsDirectory()}/adapters/opencode.md`}`,
+        ...(changes.length === 0 ? ['Unchanged.'] : ['Changed:', ...changes.map((change) => `  ${change}`)]), unifiedDiff(sourceText, text, masterPath())].join('\n')
       if (!await confirm('Create the rules master from these rules?', details, { yes: options.yes === true, asJson })) return asJson ? 2 : 1
       writeMaster(expected, text, `import from ${source}`)
-      out(asJson ? JSON.stringify({ code: 'OK', master: masterPath(), bytes: Buffer.byteLength(text) }, null, 2) : `Created ${masterPath()}. Remove the hand-kept agent list around <!-- bmn:team -->, mark shareable sections, then install.`)
+      out(asJson ? JSON.stringify({ code: 'OK', master: masterPath(), bytes: Buffer.byteLength(text), changes }, null, 2) : `Created ${masterPath()}. Mark any public sections in Preferences > Rules, then install.`)
       return 0
     }
-    if (positionals.length !== 1 || !HARNESSES.includes(positionals[0])) return usage(`rules probe expects one harness: ${HARNESSES.join(', ')}`)
+    if (positionals.length !== 1 || !HARNESSES.includes(positionals[0])) return usage(`rules probe expects one app: ${HARNESSES.join(', ')}`)
     const result = await probe(positionals[0])
     out(asJson ? JSON.stringify(result, null, 2) : `${result.harness}: ${result.outcome} - ${result.detail}${result.version ? ` (${result.version})` : ''}`)
     return result.outcome === 'pass' ? 0 : 1

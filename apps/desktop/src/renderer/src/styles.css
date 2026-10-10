@@ -1332,19 +1332,6 @@ input[type='radio'] {
 }
 
 .terminal-search-bottom { top: auto; bottom: 8px; }
-.preferences-jump {
-  position: sticky;
-  top: -12px;
-  z-index: 2;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 0;
-  background: var(--raised);
-}
-.preferences-jump select { flex: 1; min-width: 0; }
-.preferences-section h3 { scroll-margin-top: 56px; }
 .workspace-pins-dialog code { overflow-wrap: anywhere; }
 .workspace-pins-dialog li { margin-block: 10px; }
 .workspace-pins-dialog form { display: flex; flex-wrap: wrap; gap: 8px; }

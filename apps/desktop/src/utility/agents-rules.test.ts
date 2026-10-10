@@ -1,14 +1,15 @@
-// MODULE: agents-rules.test.ts - Epic 60.4: the rules master, per-harness renderings, link-safe install transactions, restore and probes
+// MODULE: agents-rules.test.ts - Epic 60.4: the rules master, per-app renderings, link-safe install transactions, the Team phrase after an approval, restore and probes
 import { execFile } from 'node:child_process'
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { sha256 } from '../../bin/agents-roster.mjs'
+import { parseRoster, sha256 } from '../../bin/agents-roster.mjs'
 import { readValidRoster } from '../../bin/agents-state.mjs'
 import {
-  TEAM_LIMIT_BYTES, checkTargets, importedMaster, installRules, lastProbes, masterHistory, parseMaster, probe, probeInspector, readMaster, render, restoreTransaction, teamExpansion, writeMaster
+  TEAM_LIMIT_BYTES, applyTeamUpdate, checkTargets, importedMaster, installRules, lastProbes, masterHistory, parseMaster, planTeamUpdate, probe, probeInspector, readMaster, render,
+  restoreTransaction, teamPhrase, writeMaster
 } from '../../bin/agents-rules.mjs'
 import { approveRoster } from '../main/agents-approval'
 
@@ -18,23 +19,24 @@ const MASTER = `# Global rules
 
 Plain rule for everyone.
 
-<!-- bmn:shareable -->
+<!-- bmn:public -->
 ## How to talk
 Answer first, plainly.
-<!-- /bmn:shareable -->
+<!-- /bmn:public -->
 
 ## Team
-<!-- bmn:team -->
+The team: <!-- bmn:team -->, and the owner.
 
-<!-- bmn:harness opencode -->
+<!-- bmn:apps opencode -->
 ## OpenCode
 OpenCode-only rule.
-<!-- /bmn:harness -->
+<!-- /bmn:apps -->
 
-<!-- bmn:harness claude codex -->
-PRIVATE-SENTINEL: a rule only High routes may see.
-<!-- /bmn:harness -->
+<!-- bmn:apps claude codex -->
+PRIVATE-SENTINEL: a rule only a destination that may see private work receives.
+<!-- /bmn:apps -->
 `
+const TEAM = 'Claude Code (Opus, Fable), Codex (Sol, Astra, Luna) (roles, efforts and limits: `bmn team`)'
 
 let home: string
 let stubs: string
@@ -60,7 +62,18 @@ function approve(text = EXAMPLE): void {
   } catch {
     generation = null
   }
-  approveRoster({ generation, fileHash: readValidRoster().hash })
+  approveRoster({ generation, fileHash: readValidRoster().hash }, { checkNewlyAccepted: () => {}, checkInspectedRoutes: () => {} })
+}
+
+function edit(text: string, from: string, to: string): string {
+  if (text.split(from).length !== 2) throw new Error(`fixture edit expected one "${from}"`)
+  return text.replace(from, to)
+}
+
+function dataOf(text: string) {
+  const parsed = parseRoster(text)
+  if (parsed.data === null) throw new Error(JSON.stringify(parsed.errors))
+  return parsed.data
 }
 
 beforeEach(() => {
@@ -93,58 +106,77 @@ function generation() {
 
 describe('the master (60.4 AC1)', () => {
   it.each([
-    ['an unknown harness', '<!-- bmn:harness claude gemini -->\nx\n<!-- /bmn:harness -->', 1],
-    ['an unclosed section', 'a\n<!-- bmn:shareable -->\nx', 2],
-    ['a nested marker', '<!-- bmn:shareable -->\n<!-- bmn:harness codex -->\nx\n<!-- /bmn:harness -->\n<!-- /bmn:shareable -->', 2],
-    ['a duplicate team placeholder', '<!-- bmn:team -->\n<!-- bmn:team -->', 2],
-    ['a closing marker without an opening one', 'x\n<!-- /bmn:harness -->', 2],
-    ['an unrecognised marker', '<!-- bmn:secret -->', 1]
+    ['an unknown app', '<!-- bmn:apps claude gemini -->\nx\n<!-- /bmn:apps -->', 1],
+    ['an unclosed section', 'a\n<!-- bmn:public -->\nx', 2],
+    ['a nested marker', '<!-- bmn:public -->\n<!-- bmn:apps codex -->\nx\n<!-- /bmn:apps -->\n<!-- /bmn:public -->', 2],
+    ['a duplicate team placeholder', 'a <!-- bmn:team -->\nb <!-- bmn:team -->', 2],
+    ['two team placeholders on one line', 'x\n<!-- bmn:team --> and <!-- bmn:team -->', 2],
+    ['a closing marker without an opening one', 'x\n<!-- /bmn:apps -->', 2],
+    ['a section marker inside a sentence', 'x\nsome text <!-- bmn:public -->', 2],
+    ['an unrecognised marker', '<!-- bmn:secret -->', 1],
+    ['a marker from the earlier layout', 'x\n<!-- bmn:shareable -->\ny\n<!-- /bmn:shareable -->', 2]
   ])('refuses %s with its line', (_name, text, line) => {
     const { errors } = parseMaster(text)
     expect(errors.length).toBeGreaterThan(0)
     expect(errors.map((error) => error.line)).toContain(line)
+    expect(errors.every((error) => error.code === 'MASTER_INVALID')).toBe(true)
   })
 
-  it('renders full for High routes, restricted for Low ones, with header, frontmatter and the team', () => {
+  it('says what the earlier markers became', () => {
+    expect(parseMaster('<!-- bmn:harness codex -->').errors[0]?.message).toContain('bmn:harness is now bmn:apps')
+  })
+
+  it('renders full where private work may go and public elsewhere, with header, frontmatter and the team inside its sentence', () => {
     const master = readMaster()
     const approved = generation()
     const codex = render(master, 'codex', approved)
-    expect(codex.restricted).toBe(false)
+    expect(codex).toMatchObject({ kind: 'full', reason: 'OpenAI may see private work', team_form: 'names by app' })
     expect(codex.text.split('\n')[0]).toBe(`> Generated by BMN from ${join(home, '.config/bmn/agents/global-rules.md')} (master sha256 ${sha256(MASTER)}); edit the master, not this file.`)
     expect(codex.text).toContain('PRIVATE-SENTINEL')
     expect(codex.text).not.toContain('OpenCode-only rule')
     expect(codex.text).not.toContain('<!--')
-    expect(codex.text).toContain('- Luna: squire, codex, roles helper, focused-reviewer, browser, pre-reviewer, project-pre-reviewer, security high')
-    expect(codex.text).not.toContain('Sonnet') // proposed
-    expect(codex.text).not.toContain('GLM') // disabled
-    expect(codex.text).toContain('Ask `bmn team` for details.')
+    // Proposed (Sonnet) and switched-off (GLM) agents are never named; apps in their fixed order, agents in roster order.
+    expect(codex.text).toContain(`The team: ${TEAM}, and the owner.`)
+    expect(codex.text).not.toMatch(/roster\.md|NOTE-SENTINEL|PRICE-SENTINEL/)
     const opencode = render(master, 'opencode', approved)
-    expect(opencode).toMatchObject({ restricted: true, reason: 'Low route' })
+    expect(opencode).toMatchObject({ kind: 'public', reason: 'OpenCode Go gets public work only' })
     expect(opencode.text).toContain('Answer first, plainly.')
     expect(opencode.text).not.toContain('PRIVATE-SENTINEL')
     expect(opencode.text).not.toContain('Plain rule for everyone')
+    // Markers cannot nest, so the opencode section reaches OpenCode only once it may receive private work.
+    expect(opencode.text).not.toContain('OpenCode-only rule')
     const cursor = render(master, 'cursor', approved)
     expect(cursor.text.startsWith('---\ndescription: ')).toBe(true)
     expect(cursor.text).toContain('alwaysApply: true\n---\n> Generated by BMN')
-    expect(cursor.reason).toBe('owner-declared Low route')
-    // Nothing shareable: never an empty file, so OpenCode cannot fall back to ~/.claude/CLAUDE.md.
-    const bare = render({ ...master, parts: master.parts.filter((part: { kind: string }) => part.kind !== 'shareable') }, 'opencode', approved)
-    expect(bare.text).toContain('marked none of them shareable')
+    expect(cursor).toMatchObject({ kind: 'public', reason: "BMN can't confirm where Cursor sends data" })
+    // Nothing public: never an empty file, so OpenCode cannot fall back to ~/.claude/CLAUDE.md.
+    const bare = render({ ...master, parts: master.parts.filter((part: { kind: string }) => part.kind !== 'public') }, 'opencode', approved)
+    expect(bare.text.split('\n').slice(2).join('\n')).toBe('BMN gives this app only the rules its owner marked public, and none are marked.\n')
   })
 
-  it('shortens the team expansion to fit, then falls back to the pointer', () => {
+  it('gives the public rendering to an owner-declared destination whatever its provider answers, and with nothing approved', () => {
+    const declared = dataOf(edit(EXAMPLE, 'codex: {provider: openai, basis: observed-default}', 'codex: {provider: openai, basis: owner-declared}'))
+    expect(render(readMaster(), 'codex', { data: declared } as never)).toMatchObject({ kind: 'public', reason: "BMN can't confirm where Codex sends data" })
+    const missing = dataOf(edit(EXAMPLE, 'codex: {provider: openai, basis: observed-default}\n', ''))
+    expect(render(readMaster(), 'codex', { data: missing } as never)).toMatchObject({ kind: 'public', reason: 'BMN has no approved destination for Codex' })
+    expect(render(readMaster(), 'claude', null)).toMatchObject({ kind: 'public', reason: 'nothing is approved yet', team_form: 'short phrase (nothing approved)' })
+  })
+
+  it('names agents by app within 400 bytes, and points at `bmn team` beyond that or with nobody to name', () => {
     const approved = generation()
-    expect(teamExpansion(approved).form).toBe('full')
+    expect(teamPhrase(approved)).toEqual({ form: 'names by app', text: TEAM })
+    expect(TEAM_LIMIT_BYTES).toBe(400)
     const many = (count: number, nameLength: number) => ({
       ...approved,
-      data: { ...approved.data, agents: Array.from({ length: count }, (_, index) => ({ ...approved.data.agents[0], id: `a${index}`, name: `${'N'.repeat(nameLength)}${index}`, roles: ['lead', 'helper', 'focused-reviewer', 'browser'] })) }
+      data: { ...approved.data, agents: Array.from({ length: count }, (_, index) => ({ ...approved.data.agents[0], id: `a${index}`, name: `${'N'.repeat(nameLength)}${index}`, harness: ['cursor', 'codex', 'opencode', 'claude'][index % 4] })) }
     })
-    const shortened = teamExpansion(many(14, 20))
-    expect(shortened.form).toBe('without roles')
-    expect(Buffer.byteLength(shortened.text)).toBeLessThanOrEqual(TEAM_LIMIT_BYTES)
-    const pointer = teamExpansion(many(40, 30))
-    expect(pointer).toEqual({ form: 'pointer only', text: 'Ask `bmn team` for details.' })
-    expect(teamExpansion(null).form).toBe('pointer (nothing approved)')
+    const fits = teamPhrase(many(8, 30))
+    expect(fits.form).toBe('names by app')
+    expect(Buffer.byteLength(fits.text)).toBeLessThanOrEqual(TEAM_LIMIT_BYTES)
+    expect(fits.text.replace(/N+/g, '')).toBe('Claude Code (3, 7), Codex (1, 5), OpenCode (2, 6), Cursor (0, 4) (roles, efforts and limits: `bmn team`)')
+    expect(teamPhrase(many(12, 30))).toEqual({ form: 'short phrase (names too long)', text: 'the agents `bmn team` lists' })
+    expect(teamPhrase(many(0, 1))).toEqual({ form: 'short phrase (no active agent)', text: 'the agents `bmn team` lists' })
+    expect(teamPhrase(null)).toEqual({ form: 'short phrase (nothing approved)', text: 'the agents `bmn team` lists' })
   })
 })
 
@@ -205,6 +237,14 @@ describe('install transactions and restore (60.4 AC3-AC4)', () => {
     const result = await installRules(['codex'], { yes: true, environment: { ...env, OPENAI_BASE_URL: 'https://proxy.example.test/v1' } })
     expect(result.code).toBe('ROUTE_CHANGED')
     expect(existsSync(target.codex())).toBe(false)
+  })
+
+  it('never rests a full rendering on the owner\'s word: a declared destination installs the public rendering, uninspected', async () => {
+    approve(edit(EXAMPLE, 'codex: {provider: openai, basis: observed-default}', 'codex: {provider: openai, basis: owner-declared}'))
+    // The app now resolves to a proxy: nothing private is written for it, so nothing needs inspecting.
+    const result = await installRules(['codex'], { yes: true, environment: { ...env, OPENAI_BASE_URL: 'https://proxy.example.test/v1' } })
+    expect(result).toMatchObject({ code: 'OK', written: [{ harness: 'codex', kind: 'public' }] })
+    expect(readFileSync(target.codex(), 'utf8')).not.toContain('PRIVATE-SENTINEL')
   })
 
   it('stops after a failure, keeps the manifest and restores what changed', async () => {
@@ -274,7 +314,7 @@ describe('master history (60.4 AC4)', () => {
   })
 
   it('refuses to write a master that would not render', () => {
-    expect(() => writeMaster({ kind: 'file', text: MASTER, mode: 0o644 }, '<!-- bmn:shareable -->\nunclosed', 'bad')).toThrow(/would not render/)
+    expect(() => writeMaster({ kind: 'file', text: MASTER, mode: 0o644 }, '<!-- bmn:public -->\nunclosed', 'bad')).toThrow(/would not render/)
     expect(readFileSync(join(home, '.config/bmn/agents/global-rules.md'), 'utf8')).toBe(MASTER)
   })
 })
@@ -284,9 +324,10 @@ describe('CLI (60.4)', () => {
     const rendered = await runCli(['rules', 'render', 'opencode'])
     expect(rendered.code).toBe(0)
     expect(rendered.stdout).toBe(render(readMaster(), 'opencode', generation()).text)
-    expect(rendered.stderr).toContain('restricted rendering (Low route); team: full')
+    expect(rendered.stderr).toContain('public rendering (OpenCode Go gets public work only); team: names by app')
+    expect((await runCli(['rules', 'render', 'codex'])).stderr).toContain('full rendering (OpenAI may see private work)')
     expect((await runCli(['rules', 'render', 'gemini'])).code).toBe(4)
-    writeMasterFile('<!-- bmn:shareable -->\nunclosed')
+    writeMasterFile('<!-- bmn:public -->\nunclosed')
     const invalid = await runCli(['rules', 'check', '--json'])
     expect(invalid.code).toBe(4)
     expect(JSON.parse(invalid.stdout).errors[0].line).toBe(1)
@@ -294,15 +335,42 @@ describe('CLI (60.4)', () => {
     expect((await runCli(['rules', 'check'])).code).toBe(3)
   })
 
-  it('imports today\'s rules once, with the team placeholder and an opencode section', async () => {
+  it('imports a rules file once, changing only the named sentences', async () => {
     rmSync(join(home, '.config/bmn/agents/global-rules.md'))
-    const source = '# Global rules\n\n## Team\nThe team: A, B and C.\n\n## Other\nrule\n'
-    expect(importedMaster(source, '## OpenCode\n- use the guardrails\n')).toBe(
-      '# Global rules\n\n## Team\nThe team: A, B and C.\n\n<!-- bmn:team -->\n\n## Other\nrule\n\n<!-- bmn:harness opencode -->\n## OpenCode\n- use the guardrails\n<!-- /bmn:harness -->\n')
+    const source = [
+      '# Global rules', '',
+      'Source: `~/.claude/CLAUDE.md`; `~/.codex/AGENTS.md` is a symlink to it. Load skills only for the matching task.', '',
+      '## Team',
+      'You are one of the agents. The team: Claude Code (Fable, Opus, Sonnet), Codex (Astra, Sol, Luna), BMN (the terminal) and the vault. Model roster, effort levels, safe dispatch commands and limits: `models.md`. Both apps must behave the same; change rules, skills and hooks for both.', '',
+      '## Other', 'A rule that stays (see Source: elsewhere).', ''
+    ].join('\n')
+    const imported = importedMaster(source, '## OpenCode\n- use the guardrails\n')
+    expect(imported.text).toBe([
+      '# Global rules', '',
+      'Load skills only for the matching task.', '',
+      '## Team',
+      "You are one of the agents. The team: <!-- bmn:team -->, BMN (the terminal) and the vault. Safe dispatch commands: `models.md`. Both apps must behave the same; change rules in BMN's master, and skills and hooks, for both.", '',
+      '## Other', 'A rule that stays (see Source: elsewhere).', '',
+      '<!-- bmn:apps opencode -->', '## OpenCode', '- use the guardrails', '<!-- /bmn:apps -->', ''
+    ].join('\n'))
+    expect(imported.changes).toEqual(['the opening Source: sentence is dropped', "rules are changed in BMN's master", 'the pointer to the agent table narrows to dispatch commands',
+      'the agent list in the Team section becomes the team placeholder', 'the OpenCode lines become an opencode section'])
+    expect(parseMaster(imported.text).errors).toEqual([])
+    // A file with none of the named sentences comes through unchanged, with the placeholder closing its Team section.
+    expect(importedMaster('# Rules\n\n## Team\nThe team: A, B and C.\n\n## Other\nrule\n', null)).toEqual({
+      text: '# Rules\n\n## Team\nThe team: A, B and C.\n\n<!-- bmn:team -->\n\n## Other\nrule\n', changes: ['the team placeholder is added at the end of the Team section'] })
+    expect(importedMaster('# Rules\n\nno team here\n', '  ')).toEqual({ text: '# Rules\n\nno team here\n', changes: [] })
+
     writeFileSync(join(home, 'claude-rules.md'), source)
-    const imported = await runCli(['rules', 'import', '--from', join(home, 'claude-rules.md'), '--yes'])
-    expect(imported.code, imported.stderr).toBe(0)
-    expect((await runCli(['rules', 'import', '--from', join(home, 'claude-rules.md'), '--yes'])).code).toBe(7)
+    const first = await runCli(['rules', 'import', '--from', join(home, 'claude-rules.md'), '--yes'])
+    expect(first.code, first.stderr).toBe(0)
+    expect(first.stderr).toContain('  the opening Source: sentence is dropped')
+    const master = readFileSync(join(home, '.config/bmn/agents/global-rules.md'), 'utf8')
+    expect(master).toBe(importedMaster(source, null).text)
+    const again = await runCli(['rules', 'import', '--from', join(home, 'claude-rules.md'), '--yes'])
+    expect(again.code).toBe(10)
+    expect(again.stderr).toContain('MASTER_EXISTS')
+    expect(readFileSync(join(home, '.config/bmn/agents/global-rules.md'), 'utf8')).toBe(master)
   })
 })
 
@@ -376,12 +444,117 @@ describe('probes (60.4 AC5)', () => {
     expect(await claude()).toMatchObject({ stale: true })
   })
 
-  it('is unavailable for a Low route or a missing CLI, and leaves no throwaway folder', async () => {
+  it('is unavailable where the destination gets public work only or the CLI is missing, and leaves no throwaway folder', async () => {
     stub('opencode', 'echo "1.18.32"')
-    expect(await probe('opencode', { environment: env })).toMatchObject({ outcome: 'unavailable', detail: expect.stringContaining('not High') })
+    expect(await probe('opencode', { environment: env })).toMatchObject({ outcome: 'unavailable', detail: 'OpenCode Go gets public work only; a loading test would send the rules to that provider' })
     expect((await probe('cursor', { environment: env })).outcome).toBe('unavailable')
     expect(readFileSync(join(home, '.config/bmn/agents/state/probes.jsonl'), 'utf8').split('\n').filter(Boolean)).toHaveLength(2)
     expect(existsSync(join(home, '.bmn-rules-probe-'))).toBe(false)
+  })
+})
+
+describe('an approval that changes the Team phrase (60.4 AC6)', () => {
+  const ALL = ['claude', 'codex', 'opencode', 'cursor'] as const
+  /** Luna switched off: the Team phrase loses one name. */
+  const WITHOUT_LUNA = edit(EXAMPLE, 'provider: openai\nhost: default\nenabled: true\nstatus: active\nefforts: [max]', 'provider: openai\nhost: default\nenabled: false\nstatus: active\nefforts: [max]')
+  const NEW_TEAM = TEAM.replace('Sol, Astra, Luna', 'Sol, Astra')
+  const states = () => Object.fromEntries(checkTargets(env).map((entry: { harness: string; state: string }) => [entry.harness, entry.state]))
+
+  beforeEach(async () => {
+    // The public section names the team too, so the public renderings move with it.
+    writeMasterFile(MASTER.replace('Answer first, plainly.', 'Answer first, plainly. Ask <!-- bmn:team --> for help.').replace('The team: <!-- bmn:team -->, and the owner.', 'The team is in the roster.'))
+    expect((await installRules([...ALL], { yes: true, environment: env })).code).toBe('OK')
+  })
+
+  it('rewrites exactly the current targets, as one transaction with Undo', async () => {
+    const plan = await planTeamUpdate(dataOf(WITHOUT_LUNA), { environment: env })
+    expect(plan.targets.map((entry: { harness: string }) => entry.harness)).toEqual([...ALL])
+    expect(plan.targets[1]).toMatchObject({ harness: 'codex', path: target.codex(), kind: 'full' })
+    expect(plan.targets[1]?.diff).toContain(`+Answer first, plainly. Ask ${NEW_TEAM} for help.`)
+    // Nothing is written by planning, and nothing before the approval.
+    expect(states()).toEqual({ claude: 'current', codex: 'current', opencode: 'current', cursor: 'current' })
+    approve(WITHOUT_LUNA)
+    expect(states()).toEqual({ claude: 'stale', codex: 'stale', opencode: 'stale', cursor: 'stale' })
+    const result = await applyTeamUpdate(plan.targets, { environment: env })
+    expect(result).toMatchObject({ code: 'OK', skipped: [], written: ALL.map((harness) => ({ harness })) })
+    expect(states()).toEqual({ claude: 'current', codex: 'current', opencode: 'current', cursor: 'current' })
+    expect(readFileSync(target.opencode(), 'utf8')).toContain(NEW_TEAM)
+    expect((await restoreTransaction(result.transaction!, { yes: true })).code).toBe('OK')
+    expect(readFileSync(target.opencode(), 'utf8')).toContain(TEAM)
+    expect(states()).toEqual({ claude: 'stale', codex: 'stale', opencode: 'stale', cursor: 'stale' })
+  })
+
+  it('leaves alone an edited-outside file, a link, a missing file and a file stale for another reason', async () => {
+    writeFileSync(target.claude(), `${readFileSync(target.claude(), 'utf8')}an outside line\n`)
+    const elsewhere = join(home, 'elsewhere.md')
+    writeFileSync(elsewhere, readFileSync(target.codex(), 'utf8'))
+    rmSync(target.codex())
+    symlinkSync(elsewhere, target.codex())
+    rmSync(target.cursor())
+    const plan = await planTeamUpdate(dataOf(WITHOUT_LUNA), { environment: env })
+    expect(plan.targets.map((entry: { harness: string }) => entry.harness)).toEqual(['opencode'])
+    // A master edit makes every file stale for a reason that is not the Team phrase.
+    writeMasterFile(readFileSync(join(home, '.config/bmn/agents/global-rules.md'), 'utf8').replace('Plain rule for everyone.', 'Plain rule, changed.'))
+    expect((await planTeamUpdate(dataOf(WITHOUT_LUNA), { environment: env })).targets).toEqual([])
+  })
+
+  it('skips a target whose kind would change, and one whose destination no longer inspects as approved', async () => {
+    const publicOnly = edit(WITHOUT_LUNA, 'hosts: [api.openai.com], sites: [openai.com], private_work: allowed', 'hosts: [api.openai.com], sites: [openai.com], private_work: public_only')
+    expect((await planTeamUpdate(dataOf(publicOnly), { environment: env })).targets.map((entry: { harness: string }) => entry.harness)).toEqual(['claude', 'opencode', 'cursor'])
+    const moved = await planTeamUpdate(dataOf(WITHOUT_LUNA), { environment: { ...env, OPENAI_BASE_URL: 'https://proxy.example.test/v1' } })
+    expect(moved.targets.map((entry: { harness: string }) => entry.harness)).toEqual(['claude', 'opencode', 'cursor'])
+  })
+
+  it('rechecks each binding right before writing: a file, the master or a destination changed since Review is skipped', async () => {
+    const plan = await planTeamUpdate(dataOf(WITHOUT_LUNA), { environment: env })
+    approve(WITHOUT_LUNA)
+    writeFileSync(target.claude(), `${readFileSync(target.claude(), 'utf8')}edited between Review and write\n`)
+    const result = await applyTeamUpdate(plan.targets, { environment: { ...env, OPENAI_BASE_URL: 'https://proxy.example.test/v1' } })
+    expect(result).toMatchObject({ code: 'OK', skipped: ['claude', 'codex'], written: [{ harness: 'opencode' }, { harness: 'cursor' }] })
+    expect(readFileSync(target.claude(), 'utf8')).toContain('edited between Review and write')
+    expect(readFileSync(target.codex(), 'utf8')).toContain(TEAM)
+    // The master changed: every proposed file differs from the one shown, so nothing is written.
+    const later = await planTeamUpdate(dataOf(EXAMPLE), { environment: env })
+    approve(EXAMPLE)
+    writeMasterFile(readFileSync(join(home, '.config/bmn/agents/global-rules.md'), 'utf8').replace('Plain rule for everyone.', 'Plain rule, changed.'))
+    expect(await applyTeamUpdate(later.targets, { environment: env })).toMatchObject({ transaction: null, written: [], skipped: later.targets.map((entry: { harness: string }) => entry.harness) })
+  })
+
+  it('never writes beyond what was shown, and nothing when nothing was shown or another roster was approved', async () => {
+    const plan = await planTeamUpdate(dataOf(WITHOUT_LUNA), { environment: env })
+    approve(WITHOUT_LUNA)
+    expect(await applyTeamUpdate([], { environment: env })).toEqual({ code: 'OK', transaction: null, written: [], skipped: [] })
+    const onlyCodex = await applyTeamUpdate(plan.targets.filter((entry: { harness: string }) => entry.harness === 'codex'), { environment: env })
+    expect(onlyCodex.written).toEqual([{ harness: 'codex', path: target.codex(), kind: 'full' }])
+    expect(states()).toEqual({ claude: 'stale', codex: 'current', opencode: 'stale', cursor: 'stale' })
+    // The roster approved is not the one the bindings were shown for: the proposed bytes differ.
+    approve(edit(WITHOUT_LUNA, 'name: Astra', 'name: Astra2'))
+    expect((await applyTeamUpdate(plan.targets, { environment: env })).written).toEqual([])
+  })
+
+  it('stops after a failure part-way, reports what changed and keeps the manifest for rollback', async () => {
+    const plan = await planTeamUpdate(dataOf(WITHOUT_LUNA), { environment: env })
+    approve(WITHOUT_LUNA)
+    const result = await applyTeamUpdate(plan.targets, { environment: env, beforeTarget: (_harness: string, index: number) => { if (index === 2) throw new Error('disk full') } })
+    expect(result).toMatchObject({ code: 'INSTALL_FAILED', written: [{ harness: 'claude' }, { harness: 'codex' }] })
+    expect(states()).toEqual({ claude: 'current', codex: 'current', opencode: 'stale', cursor: 'stale' })
+    expect((await restoreTransaction(result.transaction!, { yes: true })).code).toBe('OK')
+    expect(readFileSync(target.claude(), 'utf8')).toContain(TEAM)
+  })
+
+  it('plans nothing when the approval leaves the Team phrase alone, or there is no master', async () => {
+    const sameTeam = edit(EXAMPLE, 'pre-reviewer: {candidates: [luna@max], then: skip}\nepic', 'pre-reviewer: {candidates: [luna@max], then: lead}\nepic')
+    expect(await planTeamUpdate(dataOf(sameTeam), { environment: env })).toEqual({ targets: [] })
+    rmSync(join(home, '.config/bmn/agents/global-rules.md'))
+    expect(await planTeamUpdate(dataOf(WITHOUT_LUNA), { environment: env })).toEqual({ targets: [] })
+  })
+
+  it('a loading test goes stale when the Team phrase in the tested file changes', async () => {
+    stub('claude', `case "$1" in --version) echo "2.1.295 (Claude Code)";; *) cat > /dev/null; grep -o 'master sha256 [0-9a-f]*' "$HOME/.claude/CLAUDE.md" | cut -d' ' -f3;; esac`)
+    expect(await probe('claude', { environment: env })).toMatchObject({ outcome: 'pass' })
+    expect(lastProbes().find((entry: { harness: string }) => entry.harness === 'claude')).toMatchObject({ stale: false })
+    approve(WITHOUT_LUNA)
+    expect(lastProbes().find((entry: { harness: string }) => entry.harness === 'claude')).toMatchObject({ stale: true })
   })
 })
 

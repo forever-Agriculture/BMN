@@ -6,8 +6,16 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { parseRoster, sha256 } from '../../bin/agents-roster.mjs'
-import { approvalLockPath, currentPointerPath, generationPath, historyLogPath, machineDiff, readApproved, readValidRoster } from '../../bin/agents-state.mjs'
-import { approveRoster, approveSections, restoreGeneration, revertFileToApproved, saveAndApprove } from './agents-approval'
+import { approvalLockPath, buildGeneration, currentPointerPath, generationPath, historyLogPath, machineDiff, readApproved, readValidRoster } from '../../bin/agents-state.mjs'
+import * as approval from './agents-approval'
+import { revertFileToApproved, type ApprovalSeams, type ShownRevision } from './agents-approval'
+
+/** These tests are not about where the apps send data: every inspected destination is taken as matching. */
+const INSPECTED: ApprovalSeams = { checkInspectedRoutes: () => {} }
+const approveRoster = (shown: ShownRevision, seams: ApprovalSeams = {}) => approval.approveRoster(shown, { ...INSPECTED, ...seams })
+const approveSections = (shown: ShownRevision, scope: string[], seams: ApprovalSeams = {}) => approval.approveSections(shown, scope, { ...INSPECTED, ...seams })
+const saveAndApprove = (shown: ShownRevision, data: Parameters<typeof approval.saveAndApprove>[1], seams: ApprovalSeams = {}) => approval.saveAndApprove(shown, data, { ...INSPECTED, ...seams })
+const restoreGeneration = (shown: ShownRevision, number: number, seams: ApprovalSeams = {}) => approval.restoreGeneration(shown, number, { ...INSPECTED, ...seams })
 
 const EXAMPLE = readFileSync(fileURLToPath(new URL('../utility/test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
 const BIN = fileURLToPath(new URL('../../bin/', import.meta.url))
@@ -45,8 +53,10 @@ function edit(text: string, from: string, to: string): string {
   return text.replace(from, to)
 }
 
-const LUNA_HIGH = 'name: Luna\ntitle: squire\nharness: codex\nmodel: gpt-6-luna\nprovider: openai\nhost: default\nsecurity: high'
-const LUNA_LOW = LUNA_HIGH.replace('security: high', 'security: low')
+/** The one agent edit these tests make: Luna's class, a pawn in the example. */
+const LUNA_PAWN = 'name: Luna\nclass: pawn'
+const LUNA_BISHOP = 'name: Luna\nclass: bishop'
+const HELPER = 'helper: {description: DESCRIPTION-SENTINEL-HELPER, candidates: [luna@max], then: lead}'
 
 describe('approved generations (60.2 AC1-AC2)', () => {
   it('writes a generation, then the pointer, with private modes', () => {
@@ -61,20 +71,20 @@ describe('approved generations (60.2 AC1-AC2)', () => {
     expect(readFileSync(approvalLockPath(), 'utf8')).toBe('')
   })
 
-  it('a file edit raising security changes nothing until approved', () => {
+  it('a file edit changing the class of an agent changes nothing until approved', () => {
     writeRoster(EXAMPLE)
     approveRoster(shown())
-    writeRoster(edit(EXAMPLE, LUNA_HIGH, LUNA_LOW))
-    expect(readApproved().data.agents.find((agent) => agent.id === 'luna')?.security).toBe('high')
+    writeRoster(edit(EXAMPLE, LUNA_PAWN, LUNA_BISHOP))
+    expect(readApproved().data.agents.find((agent) => agent.id === 'luna')?.class).toBe('pawn')
     approveRoster(shown())
-    expect(readApproved().data.agents.find((agent) => agent.id === 'luna')?.security).toBe('low')
+    expect(readApproved().data.agents.find((agent) => agent.id === 'luna')?.class).toBe('bishop')
     expect(readApproved()).toMatchObject({ number: 2, parent: 1 })
   })
 
   it('an approval killed after the generation and before the pointer leaves the previous one current', () => {
     writeRoster(EXAMPLE)
     approveRoster(shown())
-    writeRoster(edit(EXAMPLE, LUNA_HIGH, LUNA_LOW))
+    writeRoster(edit(EXAMPLE, LUNA_PAWN, LUNA_BISHOP))
     expect(() => approveRoster(shown(), { beforePointer: () => { throw new Error('killed') } })).toThrow('killed')
     expect(existsSync(generationPath(2))).toBe(true)
     expect(readApproved().number).toBe(1)
@@ -85,10 +95,10 @@ describe('approved generations (60.2 AC1-AC2)', () => {
   it('a corrupted generation exits 6 and names the last good one', () => {
     writeRoster(EXAMPLE)
     approveRoster(shown())
-    writeRoster(edit(EXAMPLE, LUNA_HIGH, LUNA_LOW))
+    writeRoster(edit(EXAMPLE, LUNA_PAWN, LUNA_BISHOP))
     approveRoster(shown())
     const path = generationPath(2)
-    writeFileSync(path, readFileSync(path, 'utf8').replace('"security": "low"', '"security": "high"'))
+    writeFileSync(path, readFileSync(path, 'utf8').replace('"class": "bishop"', '"class": "pawn"'))
     expect(() => readApproved()).toThrow(expect.objectContaining({ code: 'STATE_CORRUPT', lastGood: 1 }))
     const cli = execCli(['team'])
     expect(cli.code).toBe(6)
@@ -113,7 +123,7 @@ describe('revision checks and the lock (60.2 AC4)', () => {
   it('refuses an approval of something other than what was shown', () => {
     writeRoster(EXAMPLE)
     const before = shown()
-    writeRoster(edit(EXAMPLE, LUNA_HIGH, LUNA_LOW))
+    writeRoster(edit(EXAMPLE, LUNA_PAWN, LUNA_BISHOP))
     expect(() => approveRoster(before)).toThrow(expect.objectContaining({ code: 'REVISION_CONFLICT' }))
     approveRoster(shown())
     expect(() => approveRoster({ generation: null, fileHash: shown().fileHash })).toThrow(expect.objectContaining({ code: 'REVISION_CONFLICT' }))
@@ -151,7 +161,7 @@ describe('revision checks and the lock (60.2 AC4)', () => {
     expect(readFileSync(approvalLockPath(), 'utf8')).toBe('')
     expect(existsSync(historyLogPath()) ? readFileSync(historyLogPath(), 'utf8') : '').not.toContain('lock-broken')
     writeFileSync(approvalLockPath(), '{"pid":')
-    writeRoster(edit(EXAMPLE, LUNA_HIGH, LUNA_LOW))
+    writeRoster(edit(EXAMPLE, LUNA_PAWN, LUNA_BISHOP))
     expect(approveRoster(shown()).number).toBe(2)
     expect(readFileSync(historyLogPath(), 'utf8')).toContain('"holder":{"unreadable":true}')
   })
@@ -183,7 +193,8 @@ describe('the OS lock across separately scheduled processes (60.2 AC4)', () => {
 const [modulePath, paused, go, shownJson] = process.argv.slice(2)
 const { approveRoster } = await import(modulePath)
 const wait = new Int32Array(new SharedArrayBuffer(4))
-const seams = go === '' ? {} : { beforePointer: () => { writeFileSync(paused, 'paused'); while (!existsSync(go)) Atomics.wait(wait, 0, 0, 20) } }
+const inspected = { checkInspectedRoutes: () => {} }
+const seams = go === '' ? inspected : { ...inspected, beforePointer: () => { writeFileSync(paused, 'paused'); while (!existsSync(go)) Atomics.wait(wait, 0, 0, 20) } }
 try {
   process.stdout.write(JSON.stringify({ number: approveRoster(JSON.parse(shownJson), seams).number }))
 } catch (error) {
@@ -269,19 +280,19 @@ try {
     writeRoster(EXAMPLE)
     approveRoster(shown())
     const data = parseRoster(EXAMPLE).data!
-    const next = { ...data, agents: data.agents.map((agent) => agent.id === 'luna' ? { ...agent, security: 'low' as const } : agent) }
+    const next = { ...data, agents: data.agents.map((agent) => agent.id === 'luna' ? { ...agent, class: 'bishop' as const } : agent) }
     expect(() => saveAndApprove(shown(), next, { beforePublish: () => { throw new Error('crash') } })).toThrow('crash')
     expect(readApproved().number).toBe(1)
     const file = readValidRoster()
-    expect(machineDiff(readApproved().data, file.data).map((d) => `${d.id}.${d.field}`)).toEqual(['luna.security'])
+    expect(machineDiff(readApproved().data, file.data).map((d) => `${d.id}.${d.field}`)).toEqual(['luna.class'])
     const saved = saveAndApprove(shown(), file.data)
-    expect(saved.data.agents.find((agent) => agent.id === 'luna')?.security).toBe('low')
+    expect(saved.data.agents.find((agent) => agent.id === 'luna')?.class).toBe('bishop')
   })
 })
 
 describe('accepting a harness version outside the panel (60.3 AC3)', () => {
-  const ACCEPTED = (versions: string) => edit(EXAMPLE, 'codex: {provider: openai, security: high, basis: observed-default}',
-    `codex: {provider: openai, security: high, basis: observed-default, accepted_versions: [${versions}]}`)
+  const ACCEPTED = (versions: string) => edit(EXAMPLE, 'codex: {provider: openai, basis: observed-default}',
+    `codex: {provider: openai, basis: observed-default, accepted_versions: [${versions}]}`)
 
   it('a version added to the file is refused unless the app confirms it still resolves the recorded route', () => {
     writeRoster(EXAMPLE)
@@ -299,14 +310,38 @@ describe('accepting a harness version outside the panel (60.3 AC3)', () => {
     writeRoster(EXAMPLE)
     expect(approveRoster(shown()).number).toBe(3)
   })
+
+  it('a destination recorded as inspected is refused unless the app inspects it again at commit (60.6 AC4)', () => {
+    writeRoster(EXAMPLE)
+    // Without the app's inspector nothing is recorded as inspected, on a first approval or later.
+    expect(() => approval.approveRoster(shown())).toThrow(expect.objectContaining({ code: 'ROUTE_CHANGED', message: expect.stringContaining('claude, codex, opencode') }))
+    const seen: unknown[] = []
+    const inspect = (routes: unknown[]) => { seen.push(...routes) }
+    expect(approval.approveRoster(shown(), { checkInspectedRoutes: inspect }).number).toBe(1)
+    expect(seen).toEqual([{ harness: 'claude', provider: 'anthropic' }, { harness: 'codex', provider: 'openai' }, { harness: 'opencode', provider: 'opencode-go' }])
+    // An unchanged destination is not inspected again, and a declared one never is.
+    seen.length = 0
+    writeRoster(edit(EXAMPLE, LUNA_PAWN, LUNA_BISHOP))
+    expect(approval.approveRoster(shown()).number).toBe(2)
+    writeRoster(edit(EXAMPLE, 'codex: {provider: openai, basis: observed-default}', 'codex: {provider: openai, basis: owner-declared}'))
+    expect(approval.approveRoster(shown()).number).toBe(3)
+    expect(seen).toEqual([])
+    // Back to inspected: asked again, and a refusal leaves the approved version where it was.
+    writeRoster(EXAMPLE)
+    const moved = () => { throw Object.assign(new Error('Codex now sends data elsewhere'), { code: 'ROUTE_CHANGED' }) }
+    expect(() => approval.approveRoster(shown(), { checkInspectedRoutes: moved })).toThrow('Codex now sends data elsewhere')
+    expect(() => approval.approveSections(shown(), ['harness-routes'], { checkInspectedRoutes: moved })).toThrow('Codex now sends data elsewhere')
+    expect(() => approval.restoreGeneration(shown(), 1, { checkInspectedRoutes: moved })).toThrow('Codex now sends data elsewhere')
+    expect(readApproved().number).toBe(3)
+  })
 })
 
 describe('revert and restore (60.2 AC6)', () => {
   it('revert preserves every byte outside the edited blocks', () => {
-    const prose = edit(EXAMPLE, 'Owner\'s opinion: PROSE-SENTINEL-OPUS.', 'Owner\'s opinion: rewritten prose the revert must keep.')
+    const prose = edit(EXAMPLE, 'Owner\'s notes: PROSE-SENTINEL-OPUS.', 'Owner\'s notes: rewritten prose the revert must keep.')
     writeRoster(prose)
     approveRoster(shown())
-    const edited = edit(edit(prose, LUNA_HIGH, `${LUNA_LOW}  # a comment`), 'helper: {candidates: [luna@max], then: lead}', 'helper: {candidates: [luna@max], then: skip}')
+    const edited = edit(edit(prose, LUNA_PAWN, `${LUNA_BISHOP}  # a comment`), HELPER, HELPER.replace('then: lead', 'then: skip'))
     writeRoster(edited)
     expect(revertFileToApproved(shown())).toEqual({ changed: true })
     const reverted = readFileSync(rosterFile(), 'utf8')
@@ -320,7 +355,7 @@ describe('revert and restore (60.2 AC6)', () => {
   it('refuses to revert an agent the file added, which would delete its section and prose', () => {
     writeRoster(EXAMPLE)
     approveRoster(shown())
-    const added = `${EXAMPLE}\n## nova\n\n\`\`\`yaml\nname: Nova\ntitle: squire\nharness: codex\nmodel: m\nprovider: openai\nhost: default\nsecurity: high\ntrust: 1\nauthority: read\nenabled: true\nstatus: proposed\nefforts: [low]\nroles: []\n\`\`\`\n\nThe owner's notes on Nova.\n`
+    const added = `${EXAMPLE}\n## nova\n\n\`\`\`yaml\nname: Nova\nclass: pawn\nharness: codex\nmodel: m\nprovider: openai\nhost: default\nenabled: true\nstatus: proposed\nefforts: [low]\nroles: []\n\`\`\`\n\nThe owner's notes on Nova.\n`
     writeRoster(added)
     expect(readValidRoster().data.agents.some((agent) => agent.id === 'nova')).toBe(true)
     expect(() => revertFileToApproved(shown(), ['nova'])).toThrow(expect.objectContaining({ code: 'INVALID_VALUE' }))
@@ -330,7 +365,7 @@ describe('revert and restore (60.2 AC6)', () => {
   it('never deletes an added agent\'s section and prose, even when that section does not validate', () => {
     writeRoster(EXAMPLE)
     approveRoster(shown())
-    const added = `${EXAMPLE}\n## nova\n\n\`\`\`yaml\nname: Nova\ntitle: squire\nharness: codex\nmodel: m\nprovider: openai\nhost: default\nsecurity: high\ntrust: 1\nauthority: read\nenabled: true\nstatus: proposed\nefforts: null\nroles: []\n\`\`\`\n\nThe owner's notes on Nova.\n`
+    const added = `${EXAMPLE}\n## nova\n\n\`\`\`yaml\nname: Nova\nclass: pawn\nharness: codex\nmodel: m\nprovider: openai\nhost: default\nenabled: true\nstatus: proposed\nefforts: null\nroles: []\n\`\`\`\n\nThe owner's notes on Nova.\n`
     writeRoster(added)
     expect(() => revertFileToApproved(shown())).toThrow(expect.objectContaining({ code: 'INVALID_VALUE' }))
     expect(readFileSync(rosterFile(), 'utf8')).toBe(added)
@@ -339,7 +374,7 @@ describe('revert and restore (60.2 AC6)', () => {
   it('refuses, byte for byte, a revert that could only remove or insert text outside the yaml blocks', () => {
     writeRoster(EXAMPLE)
     approveRoster(shown())
-    const changed = edit(EXAMPLE, LUNA_HIGH, LUNA_LOW)
+    const changed = edit(EXAMPLE, LUNA_PAWN, LUNA_BISHOP)
     const refused = (text: string, scope: string[] | null = null): void => {
       writeRoster(text)
       expect(() => revertFileToApproved(shown(), scope)).toThrow(expect.objectContaining({ code: 'INVALID_VALUE' }))
@@ -352,16 +387,30 @@ describe('revert and restore (60.2 AC6)', () => {
     // An approved agent whose block was deleted: the fence would have to be inserted before its prose.
     refused(changed.replace(/(## luna\n\n)```yaml\n[\s\S]*?```\n/, '$1'))
     // Unrelated validation errors elsewhere do not hide the added section.
-    refused(`${edit(changed, 'helper: {candidates: [luna@max], then: lead}', 'helper: {candidates: [nobody@max], then: lead}')}\n## nova\n\n\`\`\`yaml\nname: Nova\n\`\`\`\n\nNotes on Nova.\n`)
+    refused(`${edit(changed, HELPER, HELPER.replace('luna@max', 'nobody@max'))}\n## nova\n\n\`\`\`yaml\nname: Nova\n\`\`\`\n\nNotes on Nova.\n`)
   })
 
   it('a scoped revert leaves an unrelated added section alone and still reverts its own block', () => {
     writeRoster(EXAMPLE)
     approveRoster(shown())
-    const added = `${edit(EXAMPLE, LUNA_HIGH, LUNA_LOW)}\n## nova\n\n\`\`\`yaml\nname: Nova\nefforts: null\n\`\`\`\n\nThe owner's notes on Nova.\n`
+    const added = `${edit(EXAMPLE, LUNA_PAWN, LUNA_BISHOP)}\n## nova\n\n\`\`\`yaml\nname: Nova\nefforts: null\n\`\`\`\n\nThe owner's notes on Nova.\n`
     writeRoster(added)
     expect(revertFileToApproved(shown(), ['luna'])).toEqual({ changed: true })
-    expect(readFileSync(rosterFile(), 'utf8')).toBe(edit(added, LUNA_LOW, LUNA_HIGH))
+    expect(readFileSync(rosterFile(), 'utf8')).toBe(edit(added, LUNA_BISHOP, LUNA_PAWN))
+  })
+
+  it('a scoped revert that would leave a valid file invalid is refused and writes nothing', () => {
+    writeRoster(EXAMPLE)
+    approveRoster(shown())
+    const moved = edit(edit(EXAMPLE, 'zai: {name: Z.ai, hosts: [api.z.ai], private_work: public_only}',
+      'zai: {name: Z.ai, hosts: [api.z.ai], private_work: public_only}\nmoon: {name: Moon, hosts: [api.moon.test], private_work: public_only}'),
+    'provider: zai\nhost: api.z.ai', 'provider: moon\nhost: api.moon.test')
+    writeRoster(moved)
+    expect(readValidRoster().data.providers.map((provider) => provider.id)).toContain('moon')
+    expect(() => revertFileToApproved(shown(), ['providers'])).toThrow(expect.objectContaining({ code: 'INVALID_VALUE', message: expect.stringContaining('would leave the team file invalid') }))
+    expect(readFileSync(rosterFile(), 'utf8')).toBe(moved)
+    expect(revertFileToApproved(shown(), ['glm', 'providers'])).toEqual({ changed: true })
+    expect(machineDiff(readApproved().data, readValidRoster().data)).toEqual([])
   })
 
   it('a revert brings back an approved section the file lost, after the end, changing no existing byte', () => {
@@ -380,12 +429,12 @@ describe('revert and restore (60.2 AC6)', () => {
     writeRoster(EXAMPLE)
     approveRoster(shown())
     const elsewhere = join(home, 'dotfiles-roster.md')
-    writeFileSync(elsewhere, edit(EXAMPLE, LUNA_HIGH, LUNA_LOW))
+    writeFileSync(elsewhere, edit(EXAMPLE, LUNA_PAWN, LUNA_BISHOP))
     rmSync(rosterFile())
     symlinkSync(elsewhere, rosterFile())
     revertFileToApproved(shown())
     expect(lstatSync(rosterFile()).isFile()).toBe(true)
-    expect(readFileSync(elsewhere, 'utf8')).toBe(edit(EXAMPLE, LUNA_HIGH, LUNA_LOW))
+    expect(readFileSync(elsewhere, 'utf8')).toBe(edit(EXAMPLE, LUNA_PAWN, LUNA_BISHOP))
     const backups = readdirSync(join(home, '.config/bmn/agents/state/roster-backups'))
     expect(JSON.parse(readFileSync(join(home, '.config/bmn/agents/state/roster-backups', backups[0]!), 'utf8'))).toEqual({ kind: 'link', target: elsewhere })
     expect(() => readlinkSync(rosterFile())).toThrow()
@@ -394,11 +443,24 @@ describe('revert and restore (60.2 AC6)', () => {
   it("restore makes an earlier generation's data a new generation", () => {
     writeRoster(EXAMPLE)
     approveRoster(shown())
-    writeRoster(edit(EXAMPLE, LUNA_HIGH, LUNA_LOW))
+    writeRoster(edit(EXAMPLE, LUNA_PAWN, LUNA_BISHOP))
     approveRoster(shown())
     const restored = restoreGeneration(shown(), 1)
     expect(restored).toMatchObject({ number: 3, parent: 2, kind: 'restore', restored_from: 1 })
     expect(restored.data).toEqual(parseRoster(EXAMPLE).data)
+  })
+
+  it('never restores a version approved under the earlier layout: it is history to view (60.2 AC7)', () => {
+    const earlier = buildGeneration({ number: 1, parent: null, rosterFileHash: 'f'.repeat(64),
+      data: { schema_version: 1, agents: [], roles: [], data_labels: { default: 'private', paths: [] }, harness_routes: [] } as never })
+    mkdirSync(join(home, '.config/bmn/agents/state/generations'), { recursive: true })
+    writeFileSync(generationPath(1), JSON.stringify(earlier))
+    writeFileSync(currentPointerPath(), JSON.stringify({ generation: 1, hash: earlier.hash }))
+    writeRoster(EXAMPLE)
+    expect(approveRoster({ generation: null, fileHash: readValidRoster().hash })).toMatchObject({ number: 2 })
+    const before = readFileSync(currentPointerPath(), 'utf8')
+    expect(() => restoreGeneration(shown(), 1)).toThrow(expect.objectContaining({ code: 'INVALID_VALUE', message: expect.stringContaining('earlier') }))
+    expect(readFileSync(currentPointerPath(), 'utf8')).toBe(before)
   })
 })
 
@@ -427,21 +489,21 @@ describe('approving one outside section (60.5 AC3)', () => {
   it('approves only the named section; the other outside change stays pending and the file is untouched', () => {
     writeRoster(EXAMPLE)
     approveRoster(shown())
-    const outside = edit(edit(EXAMPLE, FOCUSED, FOCUSED_SWAPPED), LUNA_HIGH, LUNA_LOW)
+    const outside = edit(edit(EXAMPLE, FOCUSED, FOCUSED_SWAPPED), LUNA_PAWN, LUNA_BISHOP)
     writeRoster(outside)
     const generation = approveSections(shown(), ['roles'])
     expect(generation).toMatchObject({ number: 2, parent: 1, roster_file_hash: sha256(outside) })
     expect(generation.data.roles.find((role) => role.id === 'focused-reviewer')?.candidates).toEqual(['astra@low', 'luna@max'])
-    expect(generation.data.agents.find((agent) => agent.id === 'luna')?.security).toBe('high')
+    expect(generation.data.agents.find((agent) => agent.id === 'luna')?.class).toBe('pawn')
     expect(readFileSync(rosterFile(), 'utf8')).toBe(outside)
-    expect(machineDiff(readApproved().data, readValidRoster().data).map((diff) => `${diff.scope}:${diff.id}:${diff.field}`)).toEqual(['agent:luna:security'])
+    expect(machineDiff(readApproved().data, readValidRoster().data).map((diff) => `${diff.scope}:${diff.id}:${diff.field}`)).toEqual(['agent:luna:class'])
   })
 
   it('refuses a section whose change depends on another pending one, and writes nothing', () => {
     writeRoster(EXAMPLE)
     approveRoster(shown())
     // Haiku gains the helper role in its own section and joins the helper chain: the chain alone would name a non-holder.
-    const outside = edit(EXAMPLE, 'helper: {candidates: [luna@max], then: lead}', 'helper: {candidates: [luna@max, haiku@low], then: lead}')
+    const outside = edit(EXAMPLE, HELPER, HELPER.replace('luna@max', 'luna@max, haiku@low'))
       .replace(/(## haiku[\s\S]*?roles: )\[\]/, '$1[helper]')
     writeRoster(outside)
     expect(parseRoster(outside).data).not.toBeNull()

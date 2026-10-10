@@ -3,19 +3,19 @@ import type {
   AppEventMessage,
   ProgramCopyNotice,
   AgentHistoryStatus,
+  AgentsApprovalRequest,
   AgentsOutcome,
   AgentsPreview,
   AgentsShownRevision,
   AgentsSnapshot,
+  AgentsTeamUpdateShown,
   RosterDataShape,
   RosterHarness,
-  RouteInspectionView,
   RulesOutcome,
   RulesMasterPlan,
   RulesPlan,
   RulesRevertPlan,
   RulesSnapshot,
-  WorkspaceLabelView,
   AppSettings,
   ArtifactPreview,
   ArtifactRecord,
@@ -329,26 +329,26 @@ export interface AiTerminalBridge {
   getControlInfo(): Promise<ControlInfo>
   exportBackup(): Promise<{ directory: string; manifest: BackupManifest } | null>
   verifyBackup(directory?: string): Promise<BackupVerifyResult | null>
-  /** Epic 60.5: the roster file, the approved generation, pending differences with consequences, and approval history. */
+  /** Epic 60.5: the team file, the approved version, pending differences with consequences, and approval history. */
   agentsSnapshot(): Promise<AgentsSnapshot>
-  /** The staged edits as the file would hold them: validity, the grouped diff and its consequences in words. */
-  previewAgents(data: RosterDataShape): Promise<AgentsPreview>
-  /** Approves the roster file exactly as shown, or only the named sections' changes; refused when the file or the approval moved. */
-  approveAgents(shown: AgentsShownRevision, scope?: string[]): Promise<AgentsOutcome>
+  /** What an approving control would approve: validity, the grouped diff, its consequences in words and the rules files it would also update. */
+  previewAgents(request: AgentsApprovalRequest): Promise<AgentsPreview>
+  /** Approves the team file exactly as shown, or only the named sections' changes; refused when the file or the approval moved. `teamUpdate` names the rules files shown beside it. */
+  approveAgents(shown: AgentsShownRevision, scope?: string[], teamUpdate?: AgentsTeamUpdateShown): Promise<AgentsOutcome>
   /** Writes the staged data into the file, then approves exactly that. */
-  saveAgents(shown: AgentsShownRevision, data: RosterDataShape): Promise<AgentsOutcome>
+  saveAgents(shown: AgentsShownRevision, data: RosterDataShape, teamUpdate?: AgentsTeamUpdateShown): Promise<AgentsOutcome>
   /** Writes the approved data back into the file's yaml blocks (all, or the named sections). */
   revertAgents(shown: AgentsShownRevision, scope: string[] | null): Promise<AgentsOutcome>
-  /** An earlier generation's data becomes a new generation. */
-  restoreAgents(shown: AgentsShownRevision, number: number): Promise<AgentsOutcome>
+  /** An earlier version's data becomes a new version. */
+  restoreAgents(shown: AgentsShownRevision, number: number, teamUpdate?: AgentsTeamUpdateShown): Promise<AgentsOutcome>
   agentsGeneration(number: number): Promise<{ generation: number; createdAt: string; data: RosterDataShape } | null>
-  /** An agent's prose (the owner's opinion); never reaches an agent. */
-  saveAgentOpinion(shown: AgentsShownRevision, agent: string, text: string): Promise<AgentsOutcome>
-  /** Effective label and its source for each folder, from the approved (or the given staged) labels. */
-  agentsLabels(paths: string[], data?: RosterDataShape): Promise<WorkspaceLabelView[]>
-  /** Inspection only: where a harness's default route resolves now, and its version. */
-  inspectAgentRoute(harness: RosterHarness): Promise<RouteInspectionView>
-  /** Epic 60.6: the master, each harness's rendering, health from `bmn rules check`, probes, transactions and history. */
+  /** A new install: writes the starter team file (no agents, nothing approved). Refused when a team file exists. */
+  startTeam(): Promise<AgentsOutcome>
+  /** Opens the team file in the owner's own editor. */
+  openTeamFile(): Promise<{ ok: boolean; path: string; message?: string }>
+  /** An agent's notes, the owner's own words; never reach an agent. */
+  saveAgentNotes(shown: AgentsShownRevision, agent: string, text: string): Promise<AgentsOutcome>
+  /** Epic 60.6: the master, each app's rendering, health from `bmn rules check`, loading tests, the agent apps, installs and history. */
   rulesSnapshot(): Promise<RulesSnapshot>
   planRulesMaster(text: string): Promise<RulesMasterPlan>
   saveRulesMaster(text: string, expectedHash: string | null, expectedLink: string | null): Promise<RulesOutcome>
@@ -357,7 +357,7 @@ export interface AiTerminalBridge {
   planRulesRestore(transaction: string): Promise<RulesPlan>
   restoreRules(transaction: string, planHash: string): Promise<RulesOutcome>
   planRulesRevertMaster(revision: number): Promise<RulesRevertPlan>
-  /** Owner-run: sends the rules to that harness's provider; High routes only. */
+  /** Owner-run: sends the rules to that app's provider, so only where it may receive private work. */
   probeRules(harness: RosterHarness): Promise<RulesOutcome>
   readClipboardText(): Promise<{ text: string }>
   writeClipboardText(text: string): Promise<{ written: true }>

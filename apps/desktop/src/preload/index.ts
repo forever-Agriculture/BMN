@@ -11,19 +11,19 @@ import {
   type AppEventMessage,
   type ProgramCopyNotice,
   type AgentHistoryStatus,
+  type AgentsApprovalRequest,
   type AgentsOutcome,
   type AgentsPreview,
   type AgentsShownRevision,
   type AgentsSnapshot,
+  type AgentsTeamUpdateShown,
   type RosterDataShape,
   type RosterHarness,
-  type RouteInspectionView,
   type RulesOutcome,
   type RulesMasterPlan,
   type RulesPlan,
   type RulesRevertPlan,
   type RulesSnapshot,
-  type WorkspaceLabelView,
   type AppSettings,
   type ArtifactPreview,
   type ArtifactRecord,
@@ -721,32 +721,32 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   agentsSnapshot(): Promise<AgentsSnapshot> {
     return invokeBridge('aiterm:agents:snapshot', {})
   },
-  previewAgents(data: RosterDataShape): Promise<AgentsPreview> {
-    return invokeBridge('aiterm:agents:preview', { data })
+  previewAgents(request: AgentsApprovalRequest): Promise<AgentsPreview> {
+    return invokeBridge('aiterm:agents:preview', { request })
   },
-  approveAgents(shown: AgentsShownRevision, scope?: string[]): Promise<AgentsOutcome> {
-    return invokeBridge('aiterm:agents:approve', scope === undefined ? { shown } : { shown, scope })
+  approveAgents(shown: AgentsShownRevision, scope?: string[], teamUpdate?: AgentsTeamUpdateShown): Promise<AgentsOutcome> {
+    return invokeBridge('aiterm:agents:approve', { shown, ...(scope === undefined ? {} : { scope }), ...(teamUpdate === undefined ? {} : { teamUpdate }) })
   },
-  saveAgents(shown: AgentsShownRevision, data: RosterDataShape): Promise<AgentsOutcome> {
-    return invokeBridge('aiterm:agents:save', { shown, data })
+  saveAgents(shown: AgentsShownRevision, data: RosterDataShape, teamUpdate?: AgentsTeamUpdateShown): Promise<AgentsOutcome> {
+    return invokeBridge('aiterm:agents:save', { shown, data, ...(teamUpdate === undefined ? {} : { teamUpdate }) })
   },
   revertAgents(shown: AgentsShownRevision, scope: string[] | null): Promise<AgentsOutcome> {
     return invokeBridge('aiterm:agents:revert', { shown, scope })
   },
-  restoreAgents(shown: AgentsShownRevision, number: number): Promise<AgentsOutcome> {
-    return invokeBridge('aiterm:agents:restore', { shown, number })
+  restoreAgents(shown: AgentsShownRevision, number: number, teamUpdate?: AgentsTeamUpdateShown): Promise<AgentsOutcome> {
+    return invokeBridge('aiterm:agents:restore', { shown, number, ...(teamUpdate === undefined ? {} : { teamUpdate }) })
   },
   agentsGeneration(number: number): Promise<{ generation: number; createdAt: string; data: RosterDataShape } | null> {
     return invokeBridge('aiterm:agents:generation', { number })
   },
-  saveAgentOpinion(shown: AgentsShownRevision, agent: string, text: string): Promise<AgentsOutcome> {
-    return invokeBridge('aiterm:agents:opinion', { shown, agent, text })
+  startTeam(): Promise<AgentsOutcome> {
+    return invokeBridge('aiterm:agents:start', {})
   },
-  agentsLabels(paths: string[], data?: RosterDataShape): Promise<WorkspaceLabelView[]> {
-    return invokeBridge('aiterm:agents:labels', data === undefined ? { paths } : { paths, data })
+  openTeamFile(): Promise<{ ok: boolean; path: string; message?: string }> {
+    return invokeBridge('aiterm:agents:open-file', {})
   },
-  inspectAgentRoute(harness: RosterHarness): Promise<RouteInspectionView> {
-    return invokeBridge('aiterm:agents:inspect-route', { harness })
+  saveAgentNotes(shown: AgentsShownRevision, agent: string, text: string): Promise<AgentsOutcome> {
+    return invokeBridge('aiterm:agents:notes', { shown, agent, text })
   },
   rulesSnapshot(): Promise<RulesSnapshot> {
     return invokeBridge('aiterm:rules:snapshot', {})

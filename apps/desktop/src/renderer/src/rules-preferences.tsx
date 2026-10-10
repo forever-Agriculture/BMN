@@ -1,31 +1,63 @@
-// MODULE: rules-preferences.tsx - Epic 60.6: Preferences → Rules: the master editor, per-harness preview, health, install, restore, revert and probe
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
+// MODULE: rules-preferences.tsx - Epic 60.6: Preferences › Rules: the master editor with what each app reads, install and earlier versions; Health with each rules file and agent app
+import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import {
+  ROSTER_APP_NAMES,
   ROSTER_HARNESSES,
+  type AgentAppView,
+  type RosterDataShape,
   type RosterHarness,
+  type RosterIssueShape,
   type RulesMasterPlan,
   type RulesOutcome,
   type RulesPlan,
-  type RulesRevertPlan,
+  type RulesPlanTarget,
   type RulesProbeView,
+  type RulesRenderingKind,
   type RulesRenderingView,
+  type RulesRevertPlan,
   type RulesSnapshot,
   type RulesTargetState
 } from '@bmn/protocol'
 import { failureDetail } from './bridge-error'
 import { Segmented } from './history-preferences'
+import { Dot } from './roster-marks'
+import { acceptVersion, revokeVersion, setDestination } from './roster-staging'
 import { displayPath } from './session-presentation'
+import { Issues, PageHead, shortDate } from './team-preferences'
+import type { TeamState } from './team-state'
 
-/** The master's block markers by what they do; each inserts its exact syntax at the cursor (60.6). */
-const MARKERS: ReadonlyArray<{ label: string; text: string; caret: number }> = [
-  { label: 'Harness only', text: '<!-- bmn:harness claude codex -->\n\n<!-- /bmn:harness -->\n', caret: 34 },
-  { label: 'Shareable', text: '<!-- bmn:shareable -->\n\n<!-- /bmn:shareable -->\n', caret: 23 },
-  { label: 'Team', text: '<!-- bmn:team -->\n', caret: 18 }
-]
+export type RulesPage = 'editor' | 'health'
 
 const PLAN_DELAY_MS = 300
-const cap = <Word extends string>(word: Word): string => word.charAt(0).toUpperCase() + word.slice(1)
-const when = (iso: string | undefined): string => (iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : 'unknown time')
+
+/** What Insert adds: a section's two marker lines with the cursor between them, or the Team phrase where the cursor is. */
+export const INSERTS: ReadonlyArray<{ id: 'apps' | 'public' | 'team'; label: string; line: string; text: string; caret: number; inline: boolean }> = [
+  { id: 'apps', label: 'Section for some apps', line: 'Only the apps you name read it', text: '<!-- bmn:apps claude codex -->\n\n<!-- /bmn:apps -->\n', caret: 31, inline: false },
+  { id: 'public', label: 'Public section', line: 'Also given to public-only agents', text: '<!-- bmn:public -->\n\n<!-- /bmn:public -->\n', caret: 20, inline: false },
+  { id: 'team', label: 'Team', line: 'Your approved agents, named by app', text: '<!-- bmn:team -->', caret: 17, inline: true }
+]
+
+/** The text with `insert` placed at the selection, and where the cursor goes; a section starts on its own line. */
+export function insertAt(text: string, start: number, end: number, insert: (typeof INSERTS)[number]): { text: string; caret: number } {
+  const before = text.slice(0, start)
+  const lead = insert.inline || before === '' || before.endsWith('\n') ? '' : '\n'
+  return { text: `${before}${lead}${insert.text}${text.slice(end)}`, caret: start + lead.length + insert.caret }
+}
+
+const MARKER = /<!--\s*\/?bmn:[^>]*-->/g
+
+/** A master line split into plain text and markers, so the editor can dim the markers. */
+export function markerParts(line: string): { text: string; marker: boolean }[] {
+  const parts: { text: string; marker: boolean }[] = []
+  let at = 0
+  for (const match of line.matchAll(MARKER)) {
+    if (match.index > at) parts.push({ text: line.slice(at, match.index), marker: false })
+    parts.push({ text: match[0], marker: true })
+    at = match.index + match[0].length
+  }
+  if (at < line.length || parts.length === 0) parts.push({ text: line.slice(at), marker: false })
+  return parts
+}
 
 export function kilobytes(bytes: number): string {
   return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`
@@ -35,8 +67,8 @@ export function lineCount(text: string): number {
   return text === '' ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0)
 }
 
-/** Added and removed line counts of a unified diff, headers excluded. */
-export function diffCounts(diff: string): { added: number; removed: number } {
+/** "+3 −1" for a unified diff, headers excluded; "No change" for an empty one. */
+export function diffSummary(diff: string): string {
   let added = 0
   let removed = 0
   for (const line of diff.split('\n')) {
@@ -44,113 +76,118 @@ export function diffCounts(diff: string): { added: number; removed: number } {
     if (line.startsWith('+')) added += 1
     else if (line.startsWith('-')) removed += 1
   }
-  return { added, removed }
+  return added + removed === 0 ? 'No change' : `+${added} −${removed}`
 }
+
+export const KIND_WORDS: Readonly<Record<RulesRenderingKind, string>> = { full: 'Full rules', public: 'Public sections only' }
 
 export const STATE_WORDS: Readonly<Record<RulesTargetState, string>> = {
   current: 'Current',
-  stale: 'Stale: install to update',
+  stale: 'Differs from the rules',
   'edited-outside': 'Edited outside BMN',
-  unmanaged: 'Not written by BMN',
-  link: 'A link; install replaces the link',
-  missing: 'Not installed',
+  unmanaged: 'Not installed',
+  link: 'Link',
+  missing: 'Missing',
   unreadable: 'Cannot be read'
 }
 
-export const PROBE_WORDS: Readonly<Record<NonNullable<RulesProbeView['outcome']>, string>> = {
-  pass: 'Passed: the agent read these rules',
-  fail: 'Failed: the agent did not read these rules',
-  inconclusive: 'Inconclusive: no proof either way',
-  unavailable: 'Unavailable on this route'
+export const TEST_WORDS: Readonly<Record<NonNullable<RulesProbeView['outcome']>, string>> = {
+  pass: 'Passed',
+  fail: 'Failed',
+  inconclusive: 'Inconclusive',
+  unavailable: 'Unavailable'
 }
 
-export function probeLine(probe: RulesProbeView | undefined): string {
-  if (!probe || probe.outcome === null) return 'Never probed'
-  return `${PROBE_WORDS[probe.outcome]} · ${when(probe.at)}${probe.stale ? ' · stale' : ''}`
+/** The last loading test in words: its result and date, and whether the rules or the app changed since. */
+export function testLine(test: RulesProbeView | undefined): string {
+  if (!test || test.outcome === null) return 'Never tested'
+  return `Test ${TEST_WORDS[test.outcome].toLowerCase()} ${shortDate(test.at)}${test.stale ? ' · stale' : ''}`
+}
+
+/** What an install does to one file, in words: what it replaces, then the size of the change. */
+export function changeWords(target: Pick<RulesPlanTarget, 'change' | 'diff'>): string {
+  const what = target.change === 'link' ? 'Replaces a link'
+    : target.change === 'edited-outside' ? 'Replaces an edit made outside BMN'
+      : target.change === 'unmanaged' ? 'Replaces a file BMN did not write'
+        : target.change === 'missing' ? 'New file' : null
+  const size = diffSummary(target.diff)
+  return what === null ? size : target.change === 'missing' ? what : `${what} · ${size}`
+}
+
+/** What a file becomes when an install is undone. */
+export function undoWords(target: Pick<RulesPlanTarget, 'change' | 'diff'>): string {
+  return target.change === 'link' ? 'Becomes a link again' : target.change === 'missing' ? 'Removed again' : `Put back · ${diffSummary(target.diff)}`
+}
+
+/** Where an app sends data as BMN inspected it, in words. */
+export function destinationWords(app: Pick<AgentAppView, 'basis' | 'provider' | 'host'>, providerName: (id: string) => string): string {
+  if (app.basis === 'default' && app.provider) return `Sends data to ${providerName(app.provider)}'s own servers`
+  if (app.basis === 'explicit' && app.host) return `Sends data to a custom host, ${app.host}`
+  return 'Where it sends data is unknown'
+}
+
+export const VERSION_WORDS: Readonly<Record<AgentAppView['versionState'], string>> = { tested: 'tested', accepted: 'accepted', new: 'new', unknown: 'not checked' }
+
+/** Installs and saves, newest first, as Earlier versions lists them. */
+export type Earlier =
+  | { kind: 'install'; id: string; at: string | undefined; title: string; detail: string; usable: boolean }
+  | { kind: 'save'; revision: number; at: string; title: string; detail: string; usable: boolean }
+
+export function earlierVersions(snapshot: Pick<RulesSnapshot, 'transactions' | 'history'>): Earlier[] {
+  const installs: Earlier[] = snapshot.transactions.map((entry) => ({
+    kind: 'install', id: entry.id, at: entry.createdAt, usable: entry.valid && entry.state === 'complete',
+    title: !entry.valid ? 'An install that cannot be read' : entry.reason === 'team update' ? 'Team line updated' : 'Installed',
+    detail: (entry.targets ?? []).map((harness) => ROSTER_APP_NAMES[harness]).join(', ') + (entry.valid && entry.state !== 'complete' ? ' · did not finish' : '')
+  }))
+  const saves: Earlier[] = (snapshot.history ?? []).map((entry) => ({
+    kind: 'save', revision: entry.revision, at: entry.at, usable: entry.intact, title: entry.intact ? 'Saved' : 'A saved version that cannot be read', detail: kilobytes(entry.bytes)
+  }))
+  return [...installs, ...saves].sort((a, b) => (b.at ?? '').localeCompare(a.at ?? ''))
 }
 
 type Pending =
   | { kind: 'save'; text: string; plan: RulesMasterPlan }
   | { kind: 'install'; plan: RulesPlan }
-  | { kind: 'restore'; transaction: string | null; plan: RulesPlan | null }
-  | { kind: 'revert'; revision: number | null; plan: RulesRevertPlan | null }
-  | { kind: 'probe'; harness: RosterHarness }
+  | { kind: 'undo'; transaction: string; plan: RulesPlan }
+  | { kind: 'restore'; revision: number; plan: RulesRevertPlan }
+  | { kind: 'test'; harness: RosterHarness }
 
-/** A vertical list of choices with radio semantics: arrow keys move, the chosen row is the raised plate. */
-function ChoiceList<Value extends string | number>(props: {
-  label: string
-  options: readonly { value: Value; text: string; disabled?: boolean }[]
-  value: Value | null
-  onChange(value: Value): void
-}): React.JSX.Element {
-  const buttons = useRef<Array<HTMLButtonElement | null>>([])
-  const enabled = props.options.filter((option) => !option.disabled)
-  const move = (event: KeyboardEvent<HTMLDivElement>): void => {
-    const step = event.key === 'ArrowDown' || event.key === 'ArrowRight' ? 1 : event.key === 'ArrowUp' || event.key === 'ArrowLeft' ? -1 : 0
-    if (step === 0 || enabled.length === 0) return
-    event.preventDefault()
-    const index = enabled.findIndex((option) => option.value === props.value)
-    const next = enabled[(index + step + enabled.length) % enabled.length] as (typeof enabled)[number]
-    props.onChange(next.value)
-    buttons.current[props.options.indexOf(next)]?.focus()
-  }
-  const focusable = props.value ?? enabled[0]?.value
-  return (
-    <div className="choice-list" role="radiogroup" aria-label={props.label} onKeyDown={move}>
-      {props.options.map((option, index) => (
-        <button key={String(option.value)} ref={(element) => { buttons.current[index] = element }} type="button" role="radio"
-          aria-checked={option.value === props.value} tabIndex={option.value === focusable ? 0 : -1} disabled={option.disabled}
-          onClick={() => props.onChange(option.value)}>{option.text}</button>
-      ))}
-    </div>
-  )
+export interface RulesState {
+  snapshot: RulesSnapshot | null
+  loadError: string | null
+  draft: string
+  dirty: boolean
+  /** The unsaved draft as a save would check it; null while clean or being computed. */
+  draftPlan: RulesMasterPlan | null
+  busy: boolean
+  notice: { ok: boolean; text: string } | null
+  pending: Pending | null
+  setDraft(text: string): void
+  setNotice(notice: { ok: boolean; text: string } | null): void
+  /** Reads the rules once; later calls are the owner's Check now. */
+  ensure(): void
+  /** Reads them again if they were read before: an approval changes what each app may read. */
+  refresh(): void
+  load(): Promise<void>
+  beginSave(): Promise<void>
+  beginInstall(): Promise<void>
+  beginUndo(transaction: string): Promise<void>
+  beginRestore(revision: number): Promise<void>
+  beginTest(harness: RosterHarness): void
+  confirm(): Promise<void>
+  cancel(): void
 }
 
-/** The health table: state, restriction, last probe, and the Probe plate (High routes only). */
-export function RulesHealth(props: {
-  snapshot: RulesSnapshot
-  renderings: readonly RulesRenderingView[]
-  disabled: boolean
-  onProbe(harness: RosterHarness): void
-}): React.JSX.Element {
-  const health = props.snapshot.health
-  if (health.state === 'failed') return <p className="preferences-error" role="alert">{health.reason}</p>
-  return (
-    <dl className="rules-health" aria-label="Rules health">
-      {health.targets.map((target) => {
-        const probe = props.snapshot.probes.find((entry) => entry.harness === target.harness)
-        const restricted = props.renderings.find((rendering) => rendering.harness === target.harness)?.restricted ?? target.restricted
-        return (
-          <div key={target.harness} className="rules-target" data-state={target.state}>
-            <dt>{cap(target.harness)}</dt>
-            <dd className="state">
-              <span className={`status-dot${target.state === 'current' ? '' : ' needs-you'}`} aria-hidden="true" />
-              <span title={target.reason || undefined}>{STATE_WORDS[target.state]}</span>
-              {restricted ? <span className="roster-chip"><span>restricted</span></span> : null}
-            </dd>
-            <dd className="probe">{probeLine(probe)}</dd>
-            <dd>
-              <button type="button" className="small" disabled={props.disabled || restricted}
-                title={restricted ? 'Probes run only for High routes' : undefined} aria-label={`Probe ${target.harness}`}
-                onClick={() => props.onProbe(target.harness)}>Probe…</button>
-            </dd>
-          </div>
-        )
-      })}
-    </dl>
-  )
-}
-
-export function RulesPreferences(): React.JSX.Element {
+/** The Rules pages' state, held once by the Preferences dialog so an unsaved draft survives a look at Health. */
+export function useRulesState(): RulesState {
   const [snapshot, setSnapshot] = useState<RulesSnapshot | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
-  const editor = useRef<HTMLTextAreaElement | null>(null)
   const [draftPlan, setDraftPlan] = useState<RulesMasterPlan | null>(null)
-  const [previewHarness, setPreviewHarness] = useState<RosterHarness>('claude')
   const [pending, setPending] = useState<Pending | null>(null)
-  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
+  const [notice, setNotice] = useState<{ ok: boolean; text: string } | null>(null)
   const [busy, setBusy] = useState(false)
+  const asked = useRef(false)
 
   const adopt = useCallback((next: RulesSnapshot): void => {
     setSnapshot(next)
@@ -161,16 +198,29 @@ export function RulesPreferences(): React.JSX.Element {
   const load = useCallback(async (): Promise<void> => {
     setBusy(true)
     try {
-      adopt(await window.aiTerminal.rulesSnapshot())
+      const next = await window.aiTerminal.rulesSnapshot()
+      // Check now never throws away an unsaved draft.
+      setSnapshot((current) => {
+        setDraft((text) => (current !== null && text !== (current.master.text ?? '') ? text : next.master.text ?? ''))
+        return next
+      })
       setLoadError(null)
     } catch (error) {
       setLoadError(failureDetail(error, 'Could not read the rules'))
     } finally {
       setBusy(false)
     }
-  }, [adopt])
+  }, [])
 
-  useEffect(() => { void load() }, [load])
+  const ensure = useCallback((): void => {
+    if (asked.current) return
+    asked.current = true
+    void load()
+  }, [load])
+
+  const refresh = useCallback((): void => {
+    if (asked.current) void load()
+  }, [load])
 
   const saved = snapshot?.master.text ?? ''
   const dirty = snapshot !== null && draft !== saved
@@ -193,272 +243,439 @@ export function RulesPreferences(): React.JSX.Element {
     }
   }, [draft, dirty])
 
-  const renderings = dirty && draftPlan?.valid ? draftPlan.renderings : snapshot?.renderings ?? []
-  const rendering = renderings.find((entry) => entry.harness === previewHarness)
-  const renderErrors = dirty ? draftPlan?.errors ?? [] : snapshot?.master.errors ?? []
-
-  function open(next: Pending): void {
-    setResult(null)
-    setPending(next)
-  }
-
-  async function begin(kind: Pending['kind'], harness?: RosterHarness): Promise<void> {
-    setResult(null)
-    try {
-      if (kind === 'save') {
-        const text = draft
-        open({ kind, text, plan: await window.aiTerminal.planRulesMaster(text) })
-      }
-      else if (kind === 'install') open({ kind, plan: await window.aiTerminal.planRulesInstall() })
-      else if (kind === 'restore') open({ kind, transaction: null, plan: null })
-      else if (kind === 'revert') open({ kind, revision: null, plan: null })
-      else if (harness) open({ kind: 'probe', harness })
-    } catch (error) {
-      setResult({ ok: false, text: failureDetail(error, 'Could not prepare that action') })
-    }
-  }
-
-  async function chooseTransaction(transaction: string): Promise<void> {
-    open({ kind: 'restore', transaction, plan: null })
-    try {
-      open({ kind: 'restore', transaction, plan: await window.aiTerminal.planRulesRestore(transaction) })
-    } catch (error) {
-      setResult({ ok: false, text: failureDetail(error, 'Could not plan the restore') })
-    }
-  }
-
-  async function chooseRevision(revision: number): Promise<void> {
-    open({ kind: 'revert', revision, plan: null })
-    try {
-      open({ kind: 'revert', revision, plan: await window.aiTerminal.planRulesRevertMaster(revision) })
-    } catch (error) {
-      setResult({ ok: false, text: failureDetail(error, 'Could not read that snapshot') })
-    }
-  }
-
-  async function confirm(): Promise<void> {
-    if (pending === null) return
-    let run: (() => Promise<RulesOutcome>) | null = null
-    if (pending.kind === 'save') {
-      // The text the diff was planned for, never the editor's later state (60.6 AC1).
-      const { text } = pending
-      const { expectedHash, expectedLink } = pending.plan
-      run = () => window.aiTerminal.saveRulesMaster(text, expectedHash, expectedLink)
-    }
-    else if (pending.kind === 'install' && pending.plan.planHash) {
-      const planHash = pending.plan.planHash
-      run = () => window.aiTerminal.installRules(planHash)
-    } else if (pending.kind === 'restore' && pending.transaction && pending.plan?.planHash) {
-      const { transaction } = pending
-      const planHash = pending.plan.planHash
-      run = () => window.aiTerminal.restoreRules(transaction, planHash)
-    } else if (pending.kind === 'revert' && pending.plan?.ok && pending.plan.text !== undefined) {
-      const { text, expectedHash } = pending.plan
-      const expectedLink = pending.plan.expectedLink ?? null
-      run = () => window.aiTerminal.saveRulesMaster(text, expectedHash, expectedLink)
-    } else if (pending.kind === 'probe') {
-      const { harness } = pending
-      run = () => window.aiTerminal.probeRules(harness)
-    }
-    if (run === null) return
+  async function begin(prepare: () => Promise<Pending | string>): Promise<void> {
+    setNotice(null)
     setBusy(true)
     try {
-      const outcome = await run()
-      adopt(outcome.snapshot)
-      const text = outcome.ok ? outcome.message
-        : outcome.code === 'REVISION_CONFLICT'
-          ? `Something changed since this was shown (${outcome.message}); reloaded without writing.` : outcome.message
-      setResult({ ok: outcome.ok, text })
-      setPending(null)
+      const next = await prepare()
+      if (typeof next === 'string') setNotice({ ok: false, text: next })
+      else setPending(next)
     } catch (error) {
-      setResult({ ok: false, text: failureDetail(error, 'The rules action failed') })
+      setNotice({ ok: false, text: failureDetail(error, 'Could not prepare that') })
     } finally {
       setBusy(false)
     }
   }
 
-  function onKeyDown(event: KeyboardEvent<HTMLElement>): void {
-    if (event.key !== 'Escape' || pending === null) return
-    event.preventDefault()
-    event.stopPropagation()
-    setPending(null)
-  }
-
-  const sentence = (): string => {
-    if (pending === null) return ''
-    switch (pending.kind) {
-      case 'save': {
-        const counts = diffCounts(pending.plan.diff)
-        return pending.plan.valid
-          ? `Save the master (+${counts.added} −${counts.removed}) and keep the earlier text as a source snapshot. A change made meanwhile refuses; nothing installs.`
-          : 'This master would not render, so it cannot be saved.'
-      }
-      case 'install': {
-        if (!pending.plan.ok) return pending.plan.message ?? 'Install cannot run now.'
-        const writes = pending.plan.targets
-        if (writes.length === 0) return 'Every target already holds its current rendering.'
-        const links = writes.filter((target) => target.change === 'link').length
-        const outside = writes.filter((target) => target.change === 'edited-outside' || target.change === 'unmanaged').length
-        return `Install into ${writes.length} target${writes.length === 1 ? '' : 's'} in one transaction`
-          + `${links ? `; ${links} replace${links === 1 ? 's' : ''} a link` : ''}${outside ? `; ${outside} replace${outside === 1 ? 's' : ''} an outside edit` : ''}.`
-          + ' Each file can be restored from this transaction.'
-      }
-      case 'restore':
-        return pending.plan && !pending.plan.ok ? pending.plan.message ?? 'That transaction cannot be restored.'
-          : 'Put each file back as it was before the chosen install. Choose a transaction:'
-      case 'revert':
-        return pending.plan && !pending.plan.ok ? pending.plan.message ?? 'That snapshot cannot be read.'
-          : 'Replace the master with an earlier source snapshot; the current text is kept as a new snapshot and nothing installs. Choose one:'
-      case 'probe':
-        return `Sends the rendered rules to ${pending.harness}'s provider and asks the agent which rules it read. Runs only for High routes; the answer is passed, failed, inconclusive or unavailable.`
+  async function confirm(): Promise<void> {
+    if (pending === null) return
+    let run: () => Promise<RulesOutcome>
+    if (pending.kind === 'save') {
+      // The text the diff was shown for, never the editor's later state.
+      const { text, plan } = pending
+      run = () => window.aiTerminal.saveRulesMaster(text, plan.expectedHash, plan.expectedLink)
+    } else if (pending.kind === 'install') {
+      const { planHash } = pending.plan
+      if (planHash === null) return
+      run = () => window.aiTerminal.installRules(planHash)
+    } else if (pending.kind === 'undo') {
+      const { transaction, plan } = pending
+      if (plan.planHash === null) return
+      const planHash = plan.planHash
+      run = () => window.aiTerminal.restoreRules(transaction, planHash)
+    } else if (pending.kind === 'restore') {
+      const { text, expectedHash, expectedLink } = pending.plan
+      if (text === undefined) return
+      run = () => window.aiTerminal.saveRulesMaster(text, expectedHash, expectedLink ?? null)
+    } else {
+      const { harness } = pending
+      run = () => window.aiTerminal.probeRules(harness)
+    }
+    setBusy(true)
+    try {
+      const outcome = await run()
+      adopt(outcome.snapshot)
+      setNotice({
+        ok: outcome.ok,
+        text: outcome.ok ? (pending.kind === 'restore' ? 'Restored · not installed yet' : outcome.message)
+          : outcome.code === 'REVISION_CONFLICT' ? 'Something changed since this was shown. Reloaded without writing.' : outcome.message
+      })
+      setPending(null)
+    } catch (error) {
+      setNotice({ ok: false, text: failureDetail(error, 'That could not be done') })
+    } finally {
+      setBusy(false)
     }
   }
 
-  const ready = pending !== null && !busy && (
-    pending.kind === 'save' ? pending.plan.valid && pending.plan.diff !== ''
-      : pending.kind === 'install' ? pending.plan.ok && pending.plan.planHash !== null && pending.plan.targets.length > 0
-        : pending.kind === 'restore' ? !!pending.plan?.ok && !!pending.plan.planHash
-          : pending.kind === 'revert' ? !!pending.plan?.ok
-            : true)
-  const confirmLabel = pending === null ? '' : { save: 'Save master', install: 'Install', restore: 'Restore', revert: 'Revert master', probe: 'Send probe' }[pending.kind]
-  const planTargets = pending?.kind === 'install' ? pending.plan.targets : pending?.kind === 'restore' ? pending.plan?.targets ?? [] : []
-  const diffText = pending?.kind === 'save' ? pending.plan.diff : pending?.kind === 'revert' ? pending.plan?.diff ?? '' : ''
+  return {
+    snapshot, loadError, draft, dirty, draftPlan, busy, notice, pending, setDraft, setNotice, ensure, refresh, load,
+    beginSave: () => {
+      const text = draft
+      return begin(async () => ({ kind: 'save', text, plan: await window.aiTerminal.planRulesMaster(text) }))
+    },
+    beginInstall: () => begin(async () => {
+      const plan = await window.aiTerminal.planRulesInstall()
+      return plan.ok ? { kind: 'install', plan } : plan.message ?? 'Install cannot run now'
+    }),
+    beginUndo: (transaction) => begin(async () => {
+      const plan = await window.aiTerminal.planRulesRestore(transaction)
+      return plan.ok ? { kind: 'undo', transaction, plan } : plan.message ?? 'That install cannot be undone'
+    }),
+    beginRestore: (revision) => begin(async () => {
+      const plan = await window.aiTerminal.planRulesRevertMaster(revision)
+      return plan.ok ? { kind: 'restore', revision, plan } : plan.message ?? 'That version cannot be read'
+    }),
+    beginTest: (harness) => { setNotice(null); setPending({ kind: 'test', harness }) },
+    confirm,
+    cancel: () => setPending(null)
+  }
+}
 
+/** A confirmation in place: what would happen, the files or diff it touches, then the one action and Cancel. */
+function Sheet(props: { title: string; note?: string | undefined; action: string; ready?: boolean | undefined; busy: boolean; onConfirm(): void; onCancel(): void; children?: ReactNode }): React.JSX.Element {
   return (
-    <section className="preferences-section rules-section" aria-labelledby="rules-head" onKeyDown={onKeyDown}>
-      <div className="preferences-section-head">
-        <h3 id="rules-head">Rules</h3>
-        <span className="meta">
-          {snapshot && !snapshot.master.exists ? 'No master yet' : ''}
-          <button type="button" className="small" disabled={busy} onClick={() => void load()}>{busy && !pending ? 'Checking…' : 'Check'}</button>
-        </span>
+    <div className="sheet" role="group" aria-label={props.title}>
+      <div className="sheet-head"><b>{props.title}</b>{props.note ? <span className="muted">{props.note}</span> : null}</div>
+      {props.children}
+      <div className="inline">
+        <button type="button" className="primary" disabled={props.busy || props.ready === false} onClick={props.onConfirm}>{props.busy ? 'Working…' : props.action}</button>
+        <button type="button" disabled={props.busy} onClick={props.onCancel}>Cancel</button>
       </div>
-      {result ? <p className={result.ok ? 'preferences-success' : 'preferences-error'} role={result.ok ? 'status' : 'alert'}>{result.text}</p> : null}
-      {loadError ? <p className="preferences-error" role="alert">{loadError}</p> : null}
-      {snapshot === null && loadError === null ? <p className="preferences-help">Loading…</p> : null}
-      {snapshot ? (
-        <>
-          <h4 className="preferences-subhead">Health</h4>
-          <RulesHealth snapshot={snapshot} renderings={renderings} disabled={busy} onProbe={(harness) => void begin('probe', harness)} />
-          <p className="preferences-help">
-            {snapshot.health.state === 'checked' ? `Checked ${when(snapshot.health.checkedAt)} · a snapshot of each agent's file. ` : ''}
-            A probe sends the rules to that harness's provider and runs only for High routes.
-          </p>
-          <div className="preferences-button-row rules-actions">
-            <button type="button" disabled={busy || !snapshot.master.exists || dirty} title={dirty ? 'Save or discard the master first' : undefined}
-              onClick={() => void begin('install')}>Install…</button>
-            <button type="button" disabled={busy || snapshot.transactions.length === 0} onClick={() => void begin('restore')}>Restore…</button>
-          </div>
+    </div>
+  )
+}
 
-          <h4 className="preferences-subhead" id="rules-master-head">Master</h4>
-          <div className="rules-editor-head">
-            <span className="meta">{kilobytes(new TextEncoder().encode(draft).length)} · {lineCount(draft)} lines{dirty ? ' · unsaved' : ''}</span>
-            <span className="rules-insert" role="group" aria-label="Insert a block">
-              <span className="meta" aria-hidden="true">Insert</span>
-              {MARKERS.map((marker) => (
-                <button key={marker.label} type="button" title={marker.text.trim()} disabled={busy || pending !== null}
-                  onClick={() => {
-                    const element = editor.current
-                    const at = element ? element.selectionStart : draft.length
-                    const end = element ? element.selectionEnd : draft.length
-                    const before = draft.slice(0, at)
-                    const lead = before === '' || before.endsWith('\n') ? '' : '\n'
-                    setDraft(`${before}${lead}${marker.text}${draft.slice(end)}`)
-                    const caret = at + lead.length + marker.caret
-                    requestAnimationFrame(() => { element?.focus(); element?.setSelectionRange(caret, caret) })
-                  }}>{marker.label}</button>
-              ))}
-            </span>
-          </div>
-          <textarea ref={editor} className="rules-master" aria-labelledby="rules-master-head" value={draft} spellCheck={false} readOnly={pending !== null}
-            onChange={(event) => setDraft(event.target.value)} />
-          <p className="preferences-help">Harness only: reaches just the harnesses it names. Shareable: kept in the restricted copy Low routes get. Team: becomes the approved team.</p>
-          {renderErrors.length > 0 ? (
-            <div className="preferences-error" role="alert">
-              <p>This master would not render:</p>
-              <ul>{renderErrors.map((issue, index) => <li key={index}>{issue.line ? `Line ${issue.line}: ` : ''}{issue.message}</li>)}</ul>
-            </div>
-          ) : null}
-          <div className="preferences-button-row">
-            <button type="button" className="primary" disabled={busy || !dirty || renderErrors.length > 0} onClick={() => void begin('save')}>Save…</button>
-            <button type="button" disabled={busy || !dirty} onClick={() => setDraft(saved)}>Discard</button>
-          </div>
+function Targets(props: { targets: readonly RulesPlanTarget[]; home: string | null; words(target: RulesPlanTarget): string }): React.JSX.Element {
+  return (
+    <>
+      {props.targets.map((target) => (
+        <details key={target.path} className="target">
+          <summary>
+            <span>{ROSTER_APP_NAMES[target.harness]}</span>
+            <span className="target-file"><span className="path mono" title={target.path}>{displayPath(target.path, props.home)}</span><span className="muted">{props.words(target)}</span></span>
+            <span className="muted">{target.rendering ? KIND_WORDS[target.rendering] : ''}</span>
+          </summary>
+          <pre className="diff">{target.diff || 'No change.'}</pre>
+        </details>
+      ))}
+    </>
+  )
+}
 
-          <h4 className="preferences-subhead" id="rules-preview-head">Preview{dirty ? ' of the unsaved master' : ''}</h4>
-          <Segmented<RosterHarness> labelledBy="rules-preview-head" options={ROSTER_HARNESSES} value={previewHarness} optionLabel={cap} onChange={setPreviewHarness} />
-          {rendering ? (
-            <>
-              <p className="preferences-help rules-preview-meta">
-                {rendering.restricted ? `Restricted (${rendering.reason})` : 'Full'} · {kilobytes(rendering.bytes)} · Team {rendering.teamForm}
-              </p>
-              <pre className="rules-preview" tabIndex={0} aria-label={`Rendering for ${previewHarness}`}>{rendering.text}</pre>
-            </>
-          ) : <p className="preferences-help">{snapshot.master.exists ? 'No rendering while the master has errors.' : 'Write a master to see each rendering.'}</p>}
-        </>
-      ) : null}
+function PendingSheet(props: { rules: RulesState }): React.JSX.Element | null {
+  const { rules } = props
+  const pending = rules.pending
+  const home = rules.snapshot?.home ?? null
+  if (pending === null) return null
+  const common = { busy: rules.busy, onConfirm: () => void rules.confirm(), onCancel: rules.cancel }
+  switch (pending.kind) {
+    case 'save':
+      return (
+        <Sheet {...common} title={pending.plan.valid ? `Save the rules · ${diffSummary(pending.plan.diff)}` : 'These rules cannot be saved'} action="Save" ready={pending.plan.valid && pending.plan.diff !== ''}
+          note={pending.plan.valid ? 'The text before this save is kept under Earlier versions. Nothing is installed.' : 'An app could not read them as written.'}>
+          <Issues issues={pending.plan.errors} />
+          {pending.plan.diff ? <pre className="diff">{pending.plan.diff}</pre> : null}
+        </Sheet>
+      )
+    case 'install': {
+      const count = pending.plan.targets.length
+      return (
+        <Sheet {...common} title={count === 0 ? 'Every app already has the current rules' : `Install to ${count} agent app${count === 1 ? '' : 's'}`} action="Install"
+          ready={count > 0 && pending.plan.planHash !== null} note={count === 0 ? undefined : 'Undo install, under Earlier versions, puts the files back.'}>
+          <Targets targets={pending.plan.targets} home={home} words={changeWords} />
+        </Sheet>
+      )
+    }
+    case 'undo':
+      return (
+        <Sheet {...common} title="Undo this install" action="Undo install" ready={pending.plan.planHash !== null} note="Each file goes back to what it was before that install.">
+          <Targets targets={pending.plan.targets} home={home} words={undoWords} />
+        </Sheet>
+      )
+    case 'restore':
+      return (
+        <Sheet {...common} title={`Restore this version · ${diffSummary(pending.plan.diff)}`} action="Restore" ready={pending.plan.text !== undefined && pending.plan.diff !== ''}
+          note="The current text is kept under Earlier versions. Nothing is installed.">
+          {pending.plan.diff ? <pre className="diff">{pending.plan.diff}</pre> : null}
+        </Sheet>
+      )
+    case 'test':
+      return (
+        <Sheet {...common} title={`Test whether ${ROSTER_APP_NAMES[pending.harness]} loads the rules`} action="Send test"
+          note={`Starts ${ROSTER_APP_NAMES[pending.harness]} once and sends the rules to its provider. The result is Passed, Failed, Inconclusive or Unavailable.`} />
+      )
+  }
+}
 
-      {pending ? (
-        <div className="rules-confirm" role="region" aria-live="polite" aria-label="Pending rules action">
-          <div className="confirm-head"><span className="status-dot needs-you" aria-hidden="true" /><p>{sentence()}</p></div>
-          {pending.kind === 'restore' && snapshot ? (
-            <ChoiceList label="Install transactions" value={pending.transaction}
-              options={snapshot.transactions.map((entry) => ({
-                value: entry.id, disabled: !entry.valid,
-                text: `${when(entry.createdAt)} · ${(entry.targets ?? []).join(', ') || 'no targets'}${entry.state ? ` · ${entry.state}` : ''}${entry.valid ? '' : ' · damaged'}`
-              }))}
-              onChange={(id) => void chooseTransaction(id)} />
-          ) : null}
-          {pending.kind === 'revert' && snapshot?.history ? (
-            <ChoiceList label="Master snapshots" value={pending.revision}
-              options={[...snapshot.history].reverse().map((entry) => ({
-                value: entry.revision, disabled: !entry.intact,
-                text: `${when(entry.at)} · ${kilobytes(entry.bytes)} · ${entry.reason}${entry.intact ? '' : ' · damaged'}`
-              }))}
-              onChange={(revision) => void chooseRevision(revision)} />
-          ) : null}
-          {planTargets.map((target) => {
-            const counts = diffCounts(target.diff)
-            return (
-              <details key={target.path}>
-                <summary><span title={target.path}>{displayPath(target.path, snapshot?.home ?? null)}</span> · {pending.kind === 'restore' ? `becomes ${target.kind}` : target.kind}{pending.kind === 'install' && target.linkTarget ? ` (→ ${displayPath(target.linkTarget, snapshot?.home ?? null)})` : ''}{target.restricted ? ' · restricted' : ''} · +{counts.added} −{counts.removed}</summary>
-                <pre className="rules-preview">{target.diff || 'No change.'}</pre>
-              </details>
-            )
-          })}
-          {diffText ? (
-            <details open>
-              <summary>Master · +{diffCounts(diffText).added} −{diffCounts(diffText).removed}</summary>
-              <pre className="rules-preview">{diffText}</pre>
-            </details>
-          ) : null}
-          <div className="confirm-actions">
-            <button type="button" disabled={busy} onClick={() => setPending(null)}>Cancel</button>
-            <button type="button" className="primary" disabled={!ready} onClick={() => void confirm()}>{busy ? 'Working…' : confirmLabel}</button>
+function Notice(props: { rules: RulesState }): React.JSX.Element | null {
+  const notice = props.rules.notice
+  if (notice === null) return null
+  return <p className={notice.ok ? 'preferences-success' : 'preferences-error'} role={notice.ok ? 'status' : 'alert'}>{notice.text}</p>
+}
+
+// ---------------------------------------------------------------------------------------------
+// Rules › Editor
+
+/**
+ * The master with line numbers. A transparent textarea sits exactly over a painted copy of the same
+ * text, so marker lines can be dimmed while typing, selection and the caret stay the browser's own.
+ */
+export function RulesEditor(props: { value: string; readOnly: boolean; labelledBy: string; onChange(text: string): void; area: React.RefObject<HTMLTextAreaElement | null> }): React.JSX.Element {
+  const lines = props.value.split('\n')
+  return (
+    <div className="rules-editor">
+      <div className="rules-editor-text" aria-hidden="true">
+        {lines.map((line, index) => (
+          <div key={index} className="editor-line">
+            <span className="line-number">{index + 1}</span>
+            {markerParts(line).map((part, at) => (part.marker ? <span key={at} className="marker">{part.text}</span> : part.text))}
+            {line === '' ? '​' : null}
           </div>
+        ))}
+      </div>
+      <textarea ref={props.area} aria-labelledby={props.labelledBy} value={props.value} spellCheck={false} readOnly={props.readOnly} wrap="soft"
+        onChange={(event) => props.onChange(event.currentTarget.value)} />
+    </div>
+  )
+}
+
+function InsertMenu(props: { disabled: boolean; onInsert(insert: (typeof INSERTS)[number]): void }): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const root = useRef<HTMLDivElement | null>(null)
+  const button = useRef<HTMLButtonElement | null>(null)
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if (!open) return
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      setOpen(false)
+      button.current?.focus()
+      return
+    }
+    const step = event.key === 'ArrowDown' ? 1 : event.key === 'ArrowUp' ? -1 : 0
+    if (step === 0) return
+    event.preventDefault()
+    const items = [...(root.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [])]
+    const index = items.indexOf(document.activeElement as HTMLButtonElement)
+    items[(index + step + items.length) % items.length]?.focus()
+  }
+  return (
+    <div className="insert" ref={root} onKeyDown={onKeyDown} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false) }}>
+      <button ref={button} type="button" className="small" aria-haspopup="menu" aria-expanded={open} disabled={props.disabled} onClick={() => setOpen(!open)}>Insert ▾</button>
+      {open ? (
+        <div className="insert-menu" role="menu" aria-label="Insert">
+          {INSERTS.map((insert, index) => (
+            <button key={insert.id} type="button" role="menuitem" autoFocus={index === 0} onClick={() => { setOpen(false); props.onInsert(insert) }}>
+              <span>{insert.label}</span><small>{insert.line}</small>
+            </button>
+          ))}
         </div>
       ) : null}
-
-      {snapshot ? (
-        <details className="advanced">
-          <summary>Advanced</summary>
-          <div className="advanced-body">
-            <div className="preferences-button-row">
-              <button type="button" disabled={busy || !snapshot.history || snapshot.history.length === 0} onClick={() => void begin('revert')}>Revert master…</button>
-            </div>
-            <p>Every save keeps the earlier master as a source snapshot. Sessions already running keep the rules they started with.</p>
-            <div className="preferences-row">
-              <div className="preferences-row-label"><span>Master</span></div>
-              <div className="preferences-row-control"><code className="preferences-mono preferences-path" title={snapshot.masterPath}><bdi>{snapshot.masterPath}</bdi></code></div>
-            </div>
-            {snapshot.health.state === 'checked' ? snapshot.health.targets.map((target) => (
-              <div key={target.harness} className="preferences-row">
-                <div className="preferences-row-label"><span>{cap(target.harness)}</span></div>
-                <div className="preferences-row-control"><code className="preferences-mono preferences-path" title={target.path}><bdi>{target.path}</bdi></code></div>
-              </div>
-            )) : null}
-          </div>
-        </details>
-      ) : null}
-    </section>
+    </div>
   )
+}
+
+function EditorPage(props: { rules: RulesState }): React.JSX.Element {
+  const { rules } = props
+  const snapshot = rules.snapshot as RulesSnapshot
+  const area = useRef<HTMLTextAreaElement | null>(null)
+  const pathId = useId()
+  const previewId = useId()
+  const [previewApp, setPreviewApp] = useState<RosterHarness>('claude')
+  const pending = rules.pending
+  const targets = snapshot.health.state === 'checked' ? snapshot.health.targets : []
+  const differ = targets.filter((target) => target.state !== 'current').length
+  const installed = snapshot.transactions.find((entry) => entry.valid && entry.state === 'complete' && entry.reason !== 'team update')?.createdAt
+  const renderings: readonly RulesRenderingView[] = rules.dirty && rules.draftPlan?.valid ? rules.draftPlan.renderings : snapshot.renderings
+  const rendering = renderings.find((entry) => entry.harness === previewApp)
+  const errors: readonly RosterIssueShape[] = rules.dirty ? rules.draftPlan?.errors ?? [] : snapshot.master.errors
+  const earlier = earlierVersions(snapshot)
+  const status = !snapshot.master.exists ? 'No rules yet'
+    : `Saved ${shortDate(snapshot.master.savedAt ?? undefined)} · ${installed ? `last installed ${shortDate(installed)}` : 'never installed'}`
+  return (
+    <>
+      <PageHead title="Rules" status={status}>
+        {snapshot.master.exists && differ > 0 ? (
+          <>
+            <Dot label="Needs you" />
+            <span className="muted">{differ} app{differ === 1 ? '' : 's'} differ{differ === 1 ? 's' : ''}</span>
+            <button type="button" className={pending?.kind === 'install' ? undefined : 'primary'} disabled={rules.busy || rules.dirty || pending !== null}
+              title={rules.dirty ? 'Save or discard your edits first' : undefined} onClick={() => void rules.beginInstall()}>Install…</button>
+          </>
+        ) : null}
+      </PageHead>
+      <Notice rules={rules} />
+      {pending?.kind === 'install' ? <PendingSheet rules={rules} /> : null}
+      <div className="editor-head">
+        <span className="faint mono" id={pathId} title={snapshot.masterPath}>{displayPath(snapshot.masterPath, snapshot.home)}</span>
+        <span className="faint">· {kilobytes(new TextEncoder().encode(rules.draft).length)} · {lineCount(rules.draft)} lines{rules.dirty ? ' · unsaved' : ''}</span>
+        <span className="spacer" />
+        <InsertMenu disabled={rules.busy || pending !== null} onInsert={(insert) => {
+          const element = area.current
+          const next = insertAt(rules.draft, element?.selectionStart ?? rules.draft.length, element?.selectionEnd ?? rules.draft.length, insert)
+          rules.setDraft(next.text)
+          requestAnimationFrame(() => { element?.focus(); element?.setSelectionRange(next.caret, next.caret) })
+        }} />
+      </div>
+      <RulesEditor value={rules.draft} readOnly={pending !== null} labelledBy={pathId} area={area} onChange={rules.setDraft} />
+      {errors.length > 0 ? <div role="alert"><p className="preferences-error">An app could not read these rules as written:</p><Issues issues={errors} /></div> : null}
+      <div className="inline editor-actions">
+        <button type="button" disabled={rules.busy || !rules.dirty || errors.length > 0 || pending !== null} onClick={() => void rules.beginSave()}>Save…</button>
+        <button type="button" disabled={rules.busy || !rules.dirty || pending !== null} onClick={() => rules.setDraft(snapshot.master.text ?? '')}>Discard</button>
+      </div>
+      {pending?.kind === 'save' ? <PendingSheet rules={rules} /> : null}
+
+      <details className="advanced" open>
+        <summary>What each app reads</summary>
+        <span id={previewId} hidden>Agent app</span>
+        <Segmented<RosterHarness> labelledBy={previewId} fit options={ROSTER_HARNESSES} value={previewApp} optionLabel={(harness) => ROSTER_APP_NAMES[harness]} onChange={setPreviewApp} />
+        {rendering ? (
+          <>
+            <p className="preferences-help">
+              {KIND_WORDS[rendering.kind]}{rendering.kind === 'public' && rendering.reason ? `: ${rendering.reason}` : ''} · {kilobytes(rendering.bytes)}{rules.dirty ? ' · with your unsaved edits' : ''}
+            </p>
+            <pre className="reads" tabIndex={0} aria-label={`What ${ROSTER_APP_NAMES[previewApp]} reads`}>{rendering.text}</pre>
+          </>
+        ) : <p className="preferences-help">{snapshot.master.exists || rules.dirty ? 'Nothing to show while the rules have errors.' : 'Write the rules to see what each app reads.'}</p>}
+      </details>
+
+      <details className="advanced">
+        <summary>Earlier versions</summary>
+        {earlier.length === 0 ? <p className="preferences-help">Nothing yet. Every save and install is kept here.</p> : null}
+        {earlier.map((entry) => (
+          <div key={entry.kind === 'install' ? entry.id : `save-${entry.revision}`} className="list-line">
+            <div><b>{entry.title}</b> <span className="line-detail">{shortDate(entry.at)}{entry.detail ? ` · ${entry.detail}` : ''}</span></div>
+            {entry.kind === 'install'
+              ? <button type="button" className="small" disabled={rules.busy || !entry.usable || pending !== null} aria-label={`Undo the install of ${shortDate(entry.at)}`} onClick={() => void rules.beginUndo(entry.id)}>Undo install…</button>
+              : <button type="button" className="small" disabled={rules.busy || !entry.usable || rules.dirty || pending !== null} aria-label={`Restore the version saved ${shortDate(entry.at)}`}
+                  title={rules.dirty ? 'Save or discard your edits first' : undefined} onClick={() => void rules.beginRestore(entry.revision)}>Restore…</button>}
+          </div>
+        ))}
+        {pending?.kind === 'undo' || pending?.kind === 'restore' ? <PendingSheet rules={rules} /> : null}
+      </details>
+    </>
+  )
+}
+
+// ---------------------------------------------------------------------------------------------
+// Rules › Health
+
+type AppAction = { kind: 'destination'; harness: RosterHarness } | { kind: 'accept'; harness: RosterHarness; version: string }
+
+/** Where an app sends data: its provider's own servers as BMN inspected them, or the owner's word for it. */
+function DestinationSheet(props: { app: AgentAppView; data: RosterDataShape; onDone(next: RosterDataShape | null): void }): React.JSX.Element {
+  const { app, data } = props
+  const name = ROSTER_APP_NAMES[app.harness]
+  const inspected = app.basis === 'default' && app.provider ? data.providers.find((provider) => provider.id === app.provider) ?? { id: app.provider, name: app.provider } : null
+  const recorded = data.harness_routes.find((route) => route.harness === app.harness)
+  const [choice, setChoice] = useState<string>(inspected ? 'inspected' : recorded?.provider ?? data.providers[0]?.id ?? '')
+  const declared = data.providers.find((provider) => provider.id === choice)
+  return (
+    <Sheet title={`Where ${name} sends data`} action="Set destination" busy={false} ready={choice === 'inspected' ? inspected !== null : declared !== undefined}
+      note="This waits for your approval like any other change to the team."
+      onCancel={() => props.onDone(null)}
+      onConfirm={() => props.onDone(choice === 'inspected' && inspected ? setDestination(data, app.harness, inspected, 'observed-default')
+        : declared ? setDestination(data, app.harness, declared, 'owner-declared') : null)}>
+      <div className="choice-list" role="radiogroup" aria-label={`Where ${name} sends data`}>
+        {inspected ? (
+          <label className="choice">
+            <input type="radio" name={`destination-${app.harness}`} checked={choice === 'inspected'} onChange={() => setChoice('inspected')} />
+            {inspected.name}'s own servers <span className="choice-line">as BMN inspected it just now; checked again when you approve</span>
+          </label>
+        ) : <p className="preferences-help">BMN can't confirm where {name} sends data{app.reason ? ` (${app.reason})` : ''}, so only your word can be recorded.</p>}
+        {data.providers.map((provider) => (
+          <label key={provider.id} className="choice">
+            <input type="radio" name={`destination-${app.harness}`} checked={choice === provider.id} onChange={() => setChoice(provider.id)} />
+            {provider.name} <span className="choice-line">on your word: {name} gets public sections only and its agents public work only</span>
+          </label>
+        ))}
+      </div>
+    </Sheet>
+  )
+}
+
+function HealthPage(props: { rules: RulesState; team: TeamState }): React.JSX.Element {
+  const { rules, team } = props
+  const snapshot = rules.snapshot as RulesSnapshot
+  const [action, setAction] = useState<AppAction | null>(null)
+  const health = snapshot.health
+  const data = team.data
+  const pending = rules.pending
+  const providerName = (id: string): string => data?.providers.find((provider) => provider.id === id)?.name ?? id
+  const withheld = health.state === 'checked' ? health.targets.filter((target) => target.kind === 'public').map((target) => ROSTER_APP_NAMES[target.harness]) : []
+  return (
+    <>
+      <PageHead title="Health" status={`Checked ${shortDate(health.checkedAt)}`}>
+        <button type="button" disabled={rules.busy} onClick={() => void rules.load()}>{rules.busy && pending === null ? 'Checking…' : 'Check now'}</button>
+      </PageHead>
+      <Notice rules={rules} />
+      <h4 className="group-head">Rules files</h4>
+      {health.state === 'failed' ? <p className="preferences-error" role="alert">{health.reason}</p> : health.targets.map((target) => {
+        const test = snapshot.probes.find((entry) => entry.harness === target.harness)
+        return (
+          <div key={target.harness} className="health-row" data-state={target.state}>
+            <span>{ROSTER_APP_NAMES[target.harness]}</span>
+            <span className="path mono" title={target.path}>{displayPath(target.path, snapshot.home)}</span>
+            <span className="health-state">
+              <span>{target.state === 'current' ? null : <Dot label="Needs you" />}{STATE_WORDS[target.state]} <span className="muted">· {KIND_WORDS[target.kind]}</span></span>
+              <span className="faint">{target.kind === 'full' ? testLine(test) : 'No loading test'}</span>
+            </span>
+            {target.kind === 'full'
+              ? <button type="button" className="small" disabled={rules.busy || pending !== null} aria-label={`Test ${ROSTER_APP_NAMES[target.harness]}`} onClick={() => rules.beginTest(target.harness)}>Test…</button>
+              : <span />}
+          </div>
+        )
+      })}
+      {pending?.kind === 'test' ? <PendingSheet rules={rules} /> : null}
+      <p className="preferences-help">
+        A loading test starts the app once and sends it the rules.{withheld.length > 0 ? ` It is off for ${withheld.join(' and ')}: BMN can't confirm where ${withheld.length === 1 ? 'it sends' : 'they send'} data.` : ''}
+      </p>
+
+      <h4 className="group-head">Agent apps<span className="caption">where each app sends data</span></h4>
+      {snapshot.apps.map((app) => {
+        const name = ROSTER_APP_NAMES[app.harness]
+        const route = data?.harness_routes.find((entry) => entry.harness === app.harness)
+        const accepted = route?.accepted_versions ?? []
+        return (
+          <div key={app.harness} className="app-block">
+            <div className="health-row">
+              <span>{name}</span>
+              <span><span className="mono">{app.version ?? 'not found'}</span> <span className="muted">· {VERSION_WORDS[app.versionState]}</span></span>
+              <span className="health-state">
+                <span>{destinationWords(app, providerName)}</span>
+                <span className="faint">{route ? `Recorded: ${providerName(route.provider)}, ${route.basis === 'observed-default' ? 'as inspected' : 'on your word'}` : 'No destination recorded'}</span>
+              </span>
+              <span className="app-actions">
+                <button type="button" className="small" disabled={data === null || action !== null} aria-label={`Set the destination of ${name}`} onClick={() => setAction({ kind: 'destination', harness: app.harness })}>Set destination…</button>
+                {app.acceptable && app.version && data ? (
+                  <button type="button" className="small" disabled={action !== null} aria-label={`Accept version ${app.version} of ${name}`}
+                    onClick={() => setAction({ kind: 'accept', harness: app.harness, version: app.version as string })}>Accept version…</button>
+                ) : null}
+              </span>
+            </div>
+            {accepted.length > 0 && data ? (
+              <div className="accepted">
+                <span className="muted">Accepted</span>
+                {accepted.map((version) => (
+                  <span key={version} className="chip on mono">{version}
+                    <button type="button" className="chip-remove" aria-label={`Remove accepted version ${version} of ${name}`} title="Remove accepted version…" onClick={() => team.stage(revokeVersion(data, app.harness, version))}>×</button>
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            {action?.kind === 'destination' && action.harness === app.harness && data
+              ? <DestinationSheet app={app} data={data} onDone={(next) => { setAction(null); if (next) team.stage(next) }} /> : null}
+            {action?.kind === 'accept' && action.harness === app.harness && data ? (
+              <Sheet title={`Accept version ${action.version} of ${name}`} action="Accept version" busy={false}
+                note={`BMN was not tested with this version. ${app.comparison} Accepting it lets private work go through it; BMN inspects it again when you approve.`}
+                onCancel={() => setAction(null)} onConfirm={() => { setAction(null); team.stage(acceptVersion(data, app.harness, action.version)) }} />
+            ) : null}
+            {app.versionState === 'new' && !app.acceptable ? <p className="preferences-help">{app.comparison}</p> : null}
+          </div>
+        )
+      })}
+      <p className="preferences-help">Tested versions are the ones BMN was checked against. Private work goes only through a tested or accepted version.</p>
+    </>
+  )
+}
+
+export function RulesPreferences(props: { rules: RulesState; team: TeamState; page: RulesPage }): React.JSX.Element {
+  const { rules } = props
+  const { ensure } = rules
+  useEffect(() => ensure(), [ensure])
+  const title = props.page === 'editor' ? 'Rules' : 'Health'
+  if (rules.loadError && rules.snapshot === null) return <><PageHead title={title} /><p className="preferences-error" role="alert">{rules.loadError}</p></>
+  if (rules.snapshot === null) return <><PageHead title={title} /><p className="page-note">Reading the rules…</p></>
+  return props.page === 'editor' ? <EditorPage rules={rules} /> : <HealthPage rules={rules} team={props.team} />
 }

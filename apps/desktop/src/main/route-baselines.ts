@@ -1,6 +1,6 @@
-// MODULE: route-baselines.ts - Epic 60.3 AC3: an untested harness version is offered for acceptance only when it resolves the route a tested or accepted version did
+// MODULE: route-baselines.ts - Epic 60.3 AC3: an untested app version is offered for acceptance only when it sends data where a tested or accepted version did
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import type { RosterHarness } from '@bmn/protocol'
+import { ROSTER_APP_NAMES, type RosterHarness } from '@bmn/protocol'
 import { RosterError } from '../../bin/agents-roster.mjs'
 import { stateDirectory } from '../../bin/agents-state.mjs'
 
@@ -45,7 +45,8 @@ const same = (a: Omit<RouteResolution, 'harness' | 'version'>, b: Omit<RouteReso
   a.provider === b.provider && a.host === b.host && a.basis === b.basis && JSON.stringify([...a.sources].sort()) === JSON.stringify([...b.sources].sort())
 
 function describe(route: Omit<RouteResolution, 'harness' | 'version'>): string {
-  return `${route.host ?? 'unknown host'} (${route.basis}${route.sources.length ? `, from ${route.sources.join(', ')}` : ', no overrides'})`
+  const where = route.host === null ? 'an unknown destination' : route.host.startsWith('default:') ? `the default servers of ${route.host.slice('default:'.length)}` : route.host
+  return `${where} (${route.sources.length ? `set by ${route.sources.join(', ')}` : 'nothing overrides it'})`
 }
 
 /**
@@ -56,18 +57,19 @@ function describe(route: Omit<RouteResolution, 'harness' | 'version'>): string {
 export function judgeInspection(resolution: RouteResolution, accepted: readonly string[], testedOrAccepted: boolean, now: Date): AcceptanceVerdict {
   const baselines = readBaselines()
   const baseline = baselines[resolution.harness]
-  if (resolution.version === null) return { acceptable: false, comparison: `The ${resolution.harness} version cannot be read.` }
+  const app = ROSTER_APP_NAMES[resolution.harness]
+  if (resolution.version === null) return { acceptable: false, comparison: `${app} is not installed, or its version cannot be read.` }
   if (testedOrAccepted) {
     writeBaselines({ ...baselines, [resolution.harness]: { ...resolution, version: resolution.version, at: now.toISOString() } })
-    return { acceptable: false, comparison: `${resolution.version} is ${accepted.includes(resolution.version) ? 'owner-accepted' : 'tested by BMN'}; recorded its route as the one later versions must match.` }
+    return { acceptable: false, comparison: `${resolution.version} is ${accepted.includes(resolution.version) ? 'accepted by you' : 'tested by BMN'}. Later versions must send data to the same place.` }
   }
   if (baseline === undefined) {
-    return { acceptable: false, comparison: `No route was recorded on a tested or accepted ${resolution.harness} version; inspect once on one before accepting ${resolution.version}.` }
+    return { acceptable: false, comparison: `BMN never saw where a tested or accepted ${app} version sends data, so it has nothing to compare ${resolution.version} with.` }
   }
   if (!same(resolution, baseline)) {
-    return { acceptable: false, comparison: `Resolves ${describe(resolution)}, not ${describe(baseline)} as ${baseline.version} did; not offered.` }
+    return { acceptable: false, comparison: `${resolution.version} sends data to ${describe(resolution)}, not to ${describe(baseline)} as ${baseline.version} did.` }
   }
-  return { acceptable: true, comparison: `Same route and sources as ${baseline.version}: ${describe(resolution)}.` }
+  return { acceptable: true, comparison: `Sends data to the same place as ${baseline.version}: ${describe(resolution)}.` }
 }
 
 /**
@@ -77,9 +79,9 @@ export function judgeInspection(resolution: RouteResolution, accepted: readonly 
 export function assertStillAcceptable(version: string, resolution: RouteResolution): void {
   const baseline = readBaselines()[resolution.harness]
   if (resolution.version !== version) {
-    throw new RosterError('ROUTE_CHANGED', `${resolution.harness} ${version} is not the installed version (${resolution.version ?? 'unreadable'}); inspect it in Preferences > Agents first`)
+    throw new RosterError('ROUTE_CHANGED', `${resolution.harness} ${version} is not the installed version (${resolution.version ?? 'unreadable'}); open Rules > Health and accept the installed one`)
   }
   if (baseline === undefined || !same(resolution, baseline)) {
-    throw new RosterError('ROUTE_CHANGED', `${resolution.harness} ${version} does not resolve the route a tested or accepted version recorded; it cannot be accepted`)
+    throw new RosterError('ROUTE_CHANGED', `${resolution.harness} ${version} does not send data where a tested or accepted version did; it cannot be accepted`)
   }
 }

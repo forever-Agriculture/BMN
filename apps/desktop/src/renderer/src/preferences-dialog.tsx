@@ -1,5 +1,5 @@
-// MODULE: preferences-dialog.tsx - owner-facing preferences: appearance, notifications, voice, Telegram, history, agents, rules, agent control, backup
-import { useEffect, useRef, useState } from 'react'
+// MODULE: preferences-dialog.tsx - owner-facing preferences: a left navigation over pages for the team, the rules, appearance, terminal, notifications, voice, Telegram, local control, history and backup
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type {
   AppearanceSettings,
   AppSettings,
@@ -20,8 +20,10 @@ import { VoicePreferences } from './voice-preferences'
 import { Dialog } from './dialog'
 import { failureDetail } from './bridge-error'
 import { HistoryPreferences } from './history-preferences'
-import { AgentsPreferences } from './agents-preferences'
-import { RulesPreferences } from './rules-preferences'
+import { TeamLedger, TeamPreferences, type TeamPage } from './team-preferences'
+import { useTeamState } from './team-state'
+import { RulesPreferences, useRulesState } from './rules-preferences'
+import { Dot, RulesIcon, TeamIcon } from './roster-marks'
 import { createHookCheckRunner } from './hook-check-runner'
 import { parseTelegramForm, type TelegramFormFields } from './telegram-form'
 import './preferences-dialog.css'
@@ -63,6 +65,25 @@ const HOOK_CHECK_NAMES: Readonly<Record<HookCheckAgent, string>> = {
   claude: 'Claude Code', codex: 'Codex', opencode: 'OpenCode', cursor: 'Cursor'
 }
 
+/** Every page of the dialog. Team and Rules head the navigation and open their sub-pages; the rest are grouped. */
+export type PreferencesPage = 'team' | 'roles' | 'changes' | 'rules' | 'health' | 'appearance' | 'terminal' | 'notifications' | 'voice' | 'telegram' | 'control' | 'history' | 'backup'
+
+export const PREFERENCES_NAVIGATION: ReadonlyArray<
+  | { parent: 'team' | 'rules'; label: string; pages: ReadonlyArray<{ page: PreferencesPage; label: string }> }
+  | { group: string; pages: ReadonlyArray<{ page: PreferencesPage; label: string }> }
+> = [
+  { parent: 'team', label: 'Team', pages: [{ page: 'team', label: 'Agents' }, { page: 'roles', label: 'Roles' }, { page: 'changes', label: 'Changes' }] },
+  { parent: 'rules', label: 'Rules', pages: [{ page: 'rules', label: 'Editor' }, { page: 'health', label: 'Health' }] },
+  { group: 'Workspace', pages: [{ page: 'appearance', label: 'Appearance' }, { page: 'terminal', label: 'Terminal' }, { page: 'notifications', label: 'Notifications' }, { page: 'voice', label: 'Voice' }] },
+  { group: 'Phone', pages: [{ page: 'telegram', label: 'Telegram' }] },
+  { group: 'Machine', pages: [{ page: 'control', label: 'Local control' }, { page: 'history', label: 'History' }, { page: 'backup', label: 'Backup' }] }
+]
+
+/** The navigation parent a page sits under, or null for a grouped page. */
+export function pageParent(page: PreferencesPage): 'team' | 'rules' | null {
+  return page === 'team' || page === 'roles' || page === 'changes' ? 'team' : page === 'rules' || page === 'health' ? 'rules' : null
+}
+
 /**
  * Telegram's status as a list. An error is said once: in the cue while it shows, otherwise in full under Last error;
  * State then gives only its word.
@@ -101,6 +122,37 @@ export function PreferencesDialog(props: {
 }): React.JSX.Element {
   const onSettings = useRef(props.onSettings)
   onSettings.current = props.onSettings
+
+  // --- Pages ---------------------------------------------------------------
+  const [page, setPage] = useState<PreferencesPage>(props.initialSection === 'agent-control' ? 'control' : 'team')
+  // An agent and New agent open under Team › Agents, never as navigation items.
+  const [teamPage, setTeamPage] = useState<TeamPage>({ name: 'agents' })
+  const team = useTeamState()
+  const rules = useRulesState()
+  const main = useRef<HTMLElement | null>(null)
+  const parent = pageParent(page)
+  // What each app may read, and which app versions count as accepted, follow the approved team.
+  const approvedVersion = team.snapshot?.approved?.generation ?? null
+  const refreshRules = rules.refresh
+  useEffect(() => refreshRules(), [approvedVersion, refreshRules])
+
+  function go(next: PreferencesPage): void {
+    setPage(next)
+    if (next === 'team') setTeamPage({ name: 'agents' })
+    main.current?.scrollTo({ top: 0 })
+  }
+
+  function goTeam(next: TeamPage): void {
+    setTeamPage(next)
+    setPage(next.name === 'roles' ? 'roles' : next.name === 'changes' ? 'changes' : 'team')
+    main.current?.scrollTo({ top: 0 })
+  }
+
+  const shownTeamPage: TeamPage = page === 'roles' ? { name: 'roles' } : page === 'changes' ? { name: 'changes' } : teamPage
+  const rulesNeedOwner = rules.snapshot?.health.state === 'checked' && rules.snapshot.master.exists && rules.snapshot.health.targets.some((target) => target.state !== 'current')
+  // Staged edits are approved from the footer on the pages that stage them; New agent has its own.
+  const ledger = (parent === 'team' && shownTeamPage.name !== 'new') || page === 'health'
+  const pageOf = (id: PreferencesPage, children: ReactNode): React.JSX.Element => <div className="preferences-page" hidden={page !== id}>{children}</div>
 
   // --- Appearance ---------------------------------------------------------
   const [appearance, setAppearance] = useState<AppearanceSettings>(props.settings.appearance)
@@ -351,16 +403,6 @@ export function PreferencesDialog(props: {
     }
   }, [])
 
-  useEffect(() => {
-    if (props.initialSection !== 'agent-control') return
-    const frame = requestAnimationFrame(() => {
-      const section = document.getElementById('agent-control-section')
-      section?.scrollIntoView({ block: 'start' })
-      section?.focus()
-    })
-    return () => cancelAnimationFrame(frame)
-  }, [props.initialSection])
-
   useEffect(() => () => { hookCheckRunner.current?.cancel() }, [])
 
   async function checkHooks(): Promise<void> {
@@ -418,20 +460,36 @@ export function PreferencesDialog(props: {
 
   return (
     <Dialog label="Preferences" className="preferences-dialog" onClose={props.onClose}>
-      <label className="preferences-jump">Jump to section
-        <select aria-label="Preferences section" defaultValue="" onChange={(event) => {
-          const target = [...(event.currentTarget.closest('dialog')?.querySelectorAll<HTMLElement>('.preferences-section h3') ?? [])]
-            .find(heading => heading.textContent === event.currentTarget.value)
-          if (!target) return
-          target.tabIndex = -1
-          target.scrollIntoView({ block: 'start' })
-          target.focus({ preventScroll: true })
-        }}>
-          <option value="" disabled>Choose section…</option>
-          {['Appearance', 'Terminal', 'Notifications', 'Voice', 'Telegram', 'History', 'Agents', 'Rules', 'Local agent control', 'Backup']
-            .map(section => <option key={section}>{section}</option>)}
-        </select>
-      </label>
+      <div className="preferences-frame">
+      <nav className="preferences-nav" aria-label="Preference pages">
+        {PREFERENCES_NAVIGATION.map((entry) => 'parent' in entry ? (
+          <div key={entry.parent} className="nav-parent">
+            <button type="button" className="nav-item" aria-current={parent === entry.parent ? 'true' : undefined} aria-expanded={parent === entry.parent}
+              onClick={() => go(entry.parent)}>
+              {entry.parent === 'team' ? <TeamIcon /> : <RulesIcon />}{entry.label}
+              {(entry.parent === 'team' ? team.needsOwner : rulesNeedOwner) ? <Dot label="Needs you" /> : null}
+            </button>
+            {parent === entry.parent ? (
+              <div className="nav-sub">
+                {entry.pages.map((item) => (
+                  <button key={item.page} type="button" className="nav-item" aria-current={page === item.page ? 'page' : undefined} onClick={() => go(item.page)}>{item.label}</button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <div key={entry.group} className="nav-group" role="group" aria-label={entry.group}>
+            <span className="nav-head" aria-hidden="true">{entry.group}</span>
+            {entry.pages.map((item) => (
+              <button key={item.page} type="button" className="nav-item" aria-current={page === item.page ? 'page' : undefined} onClick={() => go(item.page)}>{item.label}</button>
+            ))}
+          </div>
+        ))}
+      </nav>
+      <main className="preferences-main" ref={main}>
+      {parent === 'team' ? <div className="preferences-page team-page"><TeamPreferences team={team} page={shownTeamPage} go={goTeam} /></div> : null}
+      {parent === 'rules' ? <div className="preferences-page rules-page"><RulesPreferences rules={rules} team={team} page={page === 'health' ? 'health' : 'editor'} /></div> : null}
+      {pageOf('appearance', <>
       <section className="preferences-section">
         <h3>Appearance</h3>
         <div className="preferences-row">
@@ -526,7 +584,9 @@ export function PreferencesDialog(props: {
           </p>
         )}
       </section>
+      </>)}
 
+      {pageOf('terminal', <>
       <section className="preferences-section">
         <h3>Terminal</h3>
         <div className="preferences-row">
@@ -553,7 +613,9 @@ export function PreferencesDialog(props: {
           </p>
         )}
       </section>
+      </>)}
 
+      {pageOf('notifications', <>
       <section className="preferences-section">
         <h3>Notifications</h3>
         <div className="preferences-row">
@@ -577,9 +639,11 @@ export function PreferencesDialog(props: {
           </p>
         )}
       </section>
+      </>)}
 
-      <VoicePreferences settings={props.settings.voice} save={props.saveVoice} suggest={props.suggestVocabulary} />
+      {pageOf('voice', <VoicePreferences settings={props.settings.voice} save={props.saveVoice} suggest={props.suggestVocabulary} />)}
 
+      {pageOf('telegram', <>
       <section className="preferences-section">
         <div className="preferences-section-head">
           <h3>Telegram</h3>
@@ -925,15 +989,13 @@ export function PreferencesDialog(props: {
           </div>
         </details>
       </section>
+      </>)}
 
-      <HistoryPreferences settings={props.settings} onSettings={(next) => onSettings.current(next)} />
+      {pageOf('history', <HistoryPreferences settings={props.settings} onSettings={(next) => onSettings.current(next)} />)}
 
-      <AgentsPreferences />
-
-      <RulesPreferences />
-
-      <section className="preferences-section" id="agent-control-section" tabIndex={-1}>
-        <h3>Local agent control</h3>
+      {pageOf('control', <>
+      <section className="preferences-section" id="agent-control-section">
+        <h3>Local control</h3>
         <div className="preferences-row">
           <div className="preferences-row-label">
             <span>Listening</span>
@@ -1033,7 +1095,9 @@ export function PreferencesDialog(props: {
           </div>
         </details>
       </section>
+      </>)}
 
+      {pageOf('backup', <>
       <section className="preferences-section">
         <h3>Backup</h3>
         <div className="preferences-row">
@@ -1086,6 +1150,10 @@ export function PreferencesDialog(props: {
             </div>
           ))}
       </section>
+      </>)}
+      </main>
+      </div>
+      {ledger ? <TeamLedger team={team} /> : null}
     </Dialog>
   )
 }

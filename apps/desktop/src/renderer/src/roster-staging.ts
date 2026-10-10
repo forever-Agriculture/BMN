@@ -1,13 +1,28 @@
-// MODULE: roster-staging.ts - Epic 60.5: the Agents section's staged edits, grouped diff rows and their words, kept pure for tests
-import type { RosterAgentShape, RosterDataShape, RosterDiffShape, RosterEffort, RosterHarness, RosterRoleShape, RosterRouteShape } from '@bmn/protocol'
+// MODULE: roster-staging.ts - Epic 60.5: the Team pages' staged edits, review rows and their words, kept pure for tests
+import {
+  ROSTER_APP_NAMES,
+  ROSTER_DESIGNER_ROLE,
+  ROSTER_LEAD_ROLE,
+  type RosterAgentShape,
+  type RosterClass,
+  type RosterDataShape,
+  type RosterDiffShape,
+  type RosterEffort,
+  type RosterHarness,
+  type RosterPrivateWork,
+  type RosterProviderShape,
+  type RosterRoleShape,
+  type RosterRouteShape,
+  type RosterThen
+} from '@bmn/protocol'
 
-/** A section a row names, as the approval writer and `revertAgents` take it. */
+/** A section a row names, as the approval writer and `revertAgents` take it: an agent id or a shared section. */
 export type RosterSection = string
 
-export interface DiffLine { field: string; before: string; after: string }
+/** `detail` marks a value carried by an entry that was added or removed whole; a one-line summary leaves those out. */
+export interface DiffLine { field: string; before: string; after: string; detail?: true }
 
 export interface DiffGroup {
-  /** Section id: an agent id, `roles`, `data-labels` or `harness-routes`. */
   key: RosterSection
   subject: string
   agent?: RosterAgentShape
@@ -15,51 +30,124 @@ export interface DiffGroup {
   consequences: string[]
 }
 
+// ---------------------------------------------------------------------------------------------
+// Words the owner reads (R60-NFR8): no schema names on the pages.
+
+export const CLASS_WORDS: Readonly<Record<RosterClass, { name: string; line: string }>> = {
+  knight: { name: 'Knight', line: 'leads an epic/project' },
+  queen: { name: 'Queen', line: 'designs and thinks creatively' },
+  bishop: { name: 'Bishop', line: 'reviews and advises' },
+  pawn: { name: 'Pawn', line: 'does jobs a lead hands off' }
+}
+
+/** What happens when every candidate of a role fails, in words. */
+export const THEN_WORDS: Readonly<Record<RosterThen, string>> = { lead: 'Lead does it', skip: 'Skip', blocked: 'Stop and tell me', 'owner-chooses': 'Ask me' }
+
+export const PRIVATE_WORK_WORDS: Readonly<Record<RosterPrivateWork, string>> = { allowed: 'Allowed', public_only: 'Public work only' }
+
 const SECTION_SUBJECTS: Readonly<Record<string, string>> = {
   roles: 'Roles',
-  'data-labels': 'Workspace labels',
-  'harness-routes': 'Harness routes'
+  providers: 'Providers',
+  exceptions: 'Allowed workspaces',
+  'harness-routes': 'Agent apps'
+}
+
+const FIELD_WORDS: Readonly<Record<string, string>> = {
+  name: 'Name', class: 'Class', harness: 'Agent app', model: 'Model', provider: 'Provider', host: 'Host', enabled: 'On', status: 'Status',
+  efforts: 'Efforts', roles: 'Roles', aliases: 'Also called', enabled_note: 'Reason it is off', context_window: 'Capacity', context_limit: 'Context limit',
+  compact_at: 'Compact at', paid_by: 'Paid by', price: 'Price', description: 'Line', candidates: 'Order', then: 'If all fail', recheck: 'Recheck',
+  small_work: 'Small work', hosts: 'Hosts', sites: 'Sites', private_work: 'Private work', folder: 'Workspace', basis: 'Destination', accepted_versions: 'Accepted versions'
+}
+
+const VALUE_WORDS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  class: Object.fromEntries(Object.entries(CLASS_WORDS).map(([key, words]) => [key, words.name])),
+  harness: ROSTER_APP_NAMES,
+  then: THEN_WORDS,
+  private_work: PRIVATE_WORK_WORDS,
+  paid_by: { per_token: 'Per token', subscription: 'Subscription' },
+  enabled: { true: 'yes', false: 'no' },
+  host: { default: 'Provider default' },
+  basis: { 'observed-default': "its provider's own servers, as inspected", 'owner-declared': 'on your word' }
+}
+
+/** A role id as a name: `epic-reviewer` reads "Epic reviewer". */
+export function roleName(id: string): string {
+  const words = id.replaceAll('-', ' ')
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
+/** 272000 reads "272 000". */
+export function thousands(value: number): string {
+  return String(value).replace(/\B(?=(\d{3})+$)/g, ' ')
+}
+
+/** "$1.25 / $10.00" per million tokens, in / out; null when the agent has no price. */
+export function priceWords(agent: Pick<RosterAgentShape, 'price'>): string | null {
+  return agent.price === undefined ? null : `$${agent.price.input.toFixed(2)} / $${agent.price.output.toFixed(2)}`
+}
+
+/** The first line of an agent's notes, as its card shows it. */
+export function firstLine(notes: string | undefined): string {
+  return (notes ?? '').split('\n').map((line) => line.trim()).find((line) => line !== '') ?? ''
 }
 
 function sectionOf(diff: RosterDiffShape): RosterSection {
   return diff.scope === 'agent' ? diff.id : diff.scope
 }
 
-/** One value as the diff shows it; free text shows only that it changed, never its words outside the editor. */
-export function formatValue(side: RosterDiffShape['before']): string {
-  if (side === undefined || !side.present) return '—'
-  if (side.hash !== undefined) return `text ${side.hash.slice(0, 8)}`
-  return formatPlain(side.value)
+function formatPlain(value: unknown, field?: string): string {
+  if (value === null || value === undefined) return 'none'
+  if (Array.isArray(value)) return value.length === 0 ? 'none' : value.map((entry) => formatPlain(entry)).join(', ')
+  if (typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>).map(([key, entry]) => `${(FIELD_WORDS[key] ?? key).toLowerCase()} ${formatPlain(entry, key)}`).join(' · ')
+  }
+  const word = field === undefined ? undefined : VALUE_WORDS[field]?.[String(value)]
+  if (word !== undefined) return word
+  return typeof value === 'number' && value >= 10_000 ? thousands(value) : String(value)
 }
 
-function formatPlain(value: unknown): string {
-  if (value === null || value === undefined) return 'none'
-  if (Array.isArray(value)) return value.length === 0 ? 'none' : value.map(formatPlain).join(', ')
-  if (typeof value === 'object') {
-    return Object.entries(value as Record<string, unknown>).map(([key, entry]) => `${key} ${formatPlain(entry)}`).join(' · ')
-  }
-  return String(value)
+/** One value as the review shows it; the owner's free text and folders show only that they changed, never their words. */
+export function formatValue(side: RosterDiffShape['before'], field?: string): string {
+  if (side === undefined || !side.present) return '—'
+  if (side.hash !== undefined) return 'changed'
+  return formatPlain(side.value, field)
+}
+
+function fieldWords(diff: RosterDiffShape): string {
+  const word = FIELD_WORDS[diff.field ?? ''] ?? diff.field ?? ''
+  if (diff.scope === 'agent') return word
+  const subject = diff.scope === 'roles' ? roleName(diff.id) : diff.scope === 'harness-routes' ? ROSTER_APP_NAMES[diff.id as RosterHarness] ?? diff.id : diff.id
+  return word === '' ? subject : `${subject} · ${word.toLowerCase()}`
+}
+
+function lineFor(diff: RosterDiffShape): DiffLine {
+  return { field: fieldWords(diff), before: formatValue(diff.before, diff.field ?? undefined), after: formatValue(diff.after, diff.field ?? undefined) }
 }
 
 /** An added or removed entry shows every value it carries, one line per field (60.5 AC2). */
 function linesFor(diff: RosterDiffShape): DiffLine[] {
   if (diff.field !== null) return [lineFor(diff)]
-  const side = diff.kind === 'added' ? diff.after : diff.before
-  const prefix = diff.scope === 'agent' ? '' : `${diff.id} `
-  const head: DiffLine = { field: diff.scope === 'agent' ? 'agent' : diff.id, before: diff.kind === 'added' ? '—' : 'present', after: diff.kind === 'removed' ? 'removed' : 'added' }
+  const added = diff.kind === 'added'
+  const side = added ? diff.after : diff.before
+  const head: DiffLine = { field: fieldWords({ ...diff, field: null }) || 'Agent', before: added ? '—' : 'present', after: added ? 'added' : 'removed' }
   if (!side?.present || side.value === null || typeof side.value !== 'object') return [head]
-  return [head, ...Object.entries(side.value as Record<string, unknown>).filter(([key]) => key !== 'id' && !(diff.scope === 'harness-routes' && key === 'harness')).map(([key, value]) => {
-    const text = formatPlain(value)
-    return { field: `${prefix}${key}`, before: diff.kind === 'added' ? '—' : text, after: diff.kind === 'added' ? text : '—' }
+  const hidden = new Set(['id', ...(diff.scope === 'harness-routes' ? ['harness'] : [])])
+  return [head, ...Object.entries(side.value as Record<string, unknown>).filter(([key]) => !hidden.has(key)).map(([key, value]) => {
+    const text = typeof value === 'string' && value.startsWith('text ') ? 'set' : formatPlain(value, key)
+    return { field: fieldWords({ ...diff, field: key }), before: added ? '—' : text, after: added ? text : '—', detail: true as const }
   })]
 }
 
-function lineFor(diff: RosterDiffShape): DiffLine {
-  const field = diff.scope === 'agent' ? diff.field ?? 'agent'
-    : diff.scope === 'roles' ? `${diff.id} ${diff.field}`
-      : diff.scope === 'data-labels' ? (diff.id === 'default' ? 'default' : diff.id)
-        : `${diff.id} ${diff.field}`
-  return { field, before: formatValue(diff.before), after: formatValue(diff.after) }
+function claimant(sentence: string, groups: DiffGroup[], roleIds: ReadonlySet<string>): DiffGroup | undefined {
+  const agentGroup = groups.find((group) => group.agent !== undefined && (sentence.startsWith(`${group.subject} `) || sentence.startsWith(`${group.subject}: `)))
+  if (agentGroup) return agentGroup
+  const section = (key: string): DiffGroup | undefined => groups.find((group) => group.key === key)
+  if (sentence.startsWith('Changing ')) return section('providers')
+  if (/ could (no longer )?receive private work in /.test(sentence)) return section('exceptions')
+  if (/ could (no longer )?carry private work/.test(sentence) || sentence.includes(' would count as sending data ')) return section('harness-routes')
+  const roleWord = /^(?:when every |the )?([a-z0-9-]+) /.exec(sentence)?.[1]
+  if (roleWord !== undefined && roleIds.has(roleWord)) return section('roles')
+  return undefined
 }
 
 /**
@@ -91,68 +179,29 @@ export function groupDifferences(diffs: readonly RosterDiffShape[], data: Roster
   return { groups: [...groups.values()], general }
 }
 
-/**
- * Display only: the confirm band's unclaimed sentences gathered under the agent or role they name,
- * so a first approval reads agent by agent instead of as one list. These rows carry no differences
- * and no section to approve; whatever names nothing stays in `general`.
- */
-export function groupConsequences(sentences: readonly string[], data: RosterDataShape | null,
-  approved: RosterDataShape | null): { groups: DiffGroup[]; general: string[] } {
-  const agents = [...(data?.agents ?? []), ...(approved?.agents ?? [])]
-  const roleIds = new Set([...(data?.roles ?? []), ...(approved?.roles ?? [])].map((role) => role.id))
-  const groups = new Map<string, DiffGroup>()
-  const general: string[] = []
-  for (const sentence of sentences) {
-    const agent = agents.find((entry) => sentence.startsWith(`${entry.name} `))
-    const roleWord = /^(?:when every |the )?([a-z0-9-]+) /.exec(sentence)?.[1]
-    const key = agent ? `agent:${agent.id}` : roleWord !== undefined && roleIds.has(roleWord) ? 'roles' : null
-    if (key === null) { general.push(sentence); continue }
-    let group = groups.get(key)
-    if (group === undefined) {
-      group = { key, subject: agent?.name ?? 'Roles', lines: [], consequences: [], ...(agent ? { agent } : {}) }
-      groups.set(key, group)
-    }
-    group.consequences.push(sentence)
-  }
-  return { groups: [...groups.values()], general }
+/** A group's differences on one line, as the "changed outside BMN" row shows them. */
+export function differenceLine(group: Pick<DiffGroup, 'lines'>): string {
+  return group.lines.filter((line) => line.detail !== true).map((line) => `${line.field.toLowerCase()} ${line.before} → ${line.after}`).join(' · ')
 }
 
-function claimant(sentence: string, groups: DiffGroup[], roleIds: ReadonlySet<string>): DiffGroup | undefined {
-  const agentGroup = groups.find((group) => group.agent !== undefined && sentence.startsWith(`${group.subject} `))
-  if (agentGroup) return agentGroup
-  const section = (key: string): DiffGroup | undefined => groups.find((group) => group.key === key)
-  if (sentence.startsWith('/') || sentence.startsWith('unlabelled workspaces')) return section('data-labels')
-  if (sentence.includes(' could carry private work') || sentence.includes(' could no longer carry private work (acceptance revoked)')) return section('harness-routes')
-  const roleWord = /^(?:when every |the )?([a-z0-9-]+) /.exec(sentence)?.[1]
-  if (roleWord !== undefined && roleIds.has(roleWord)) return section('roles')
-  return undefined
-}
-
-function plural(count: number, noun: string, many = `${noun}s`): string {
-  return `${count} ${count === 1 ? noun : many}`
-}
-
-/** "3 changes in 2 agents and 1 role" - the band's first sentence. */
+/** "1 unapproved change", the footer's count. */
 export function summarize(diffs: readonly RosterDiffShape[]): string {
-  if (diffs.length === 0) return 'No machine changes'
-  const agents = new Set(diffs.filter((diff) => diff.scope === 'agent').map((diff) => diff.id)).size
-  const roles = new Set(diffs.filter((diff) => diff.scope === 'roles').map((diff) => diff.id)).size
-  const labels = diffs.filter((diff) => diff.scope === 'data-labels').length
-  const routes = new Set(diffs.filter((diff) => diff.scope === 'harness-routes').map((diff) => diff.id)).size
-  const parts = [
-    agents > 0 ? plural(agents, 'agent') : null,
-    roles > 0 ? plural(roles, 'role') : null,
-    labels > 0 ? plural(labels, 'label') : null,
-    routes > 0 ? plural(routes, 'route') : null
-  ].filter((part): part is string => part !== null)
-  const listed = parts.length <= 1 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`
-  return `${plural(diffs.length, 'change')} in ${listed}`
+  // Turning an agent off records its reason too; that is one change, not two.
+  const switched = new Set(diffs.filter((diff) => diff.scope === 'agent' && diff.field === 'enabled').map((diff) => diff.id))
+  const sections = new Set(diffs.filter((diff) => !(diff.scope === 'agent' && diff.field === 'enabled_note' && switched.has(diff.id)))
+    .map((diff) => `${diff.scope}:${diff.id}:${diff.field ?? ''}`)).size
+  return sections === 0 ? 'No changes' : `${sections} unapproved change${sections === 1 ? '' : 's'}`
+}
+
+/** "Also updates the Team line in 4 rules files", or null when an approval touches none (60.5 AC7). */
+export function teamUpdateWords(count: number): string | null {
+  return count === 0 ? null : `Also updates the Team line in ${count} rules file${count === 1 ? '' : 's'}`
 }
 
 // ---------------------------------------------------------------------------------------------
 // Edits: every helper returns new data and never mutates its input.
 
-export type AgentPatch = { [Key in Exclude<keyof RosterAgentShape, 'id' | 'roles'>]?: RosterAgentShape[Key] | undefined }
+export type AgentPatch = { [Key in Exclude<keyof RosterAgentShape, 'id' | 'roles' | 'class'>]?: RosterAgentShape[Key] | undefined }
 
 /** Optional fields set to `undefined` leave the file. */
 export function updateAgent(data: RosterDataShape, id: string, patch: AgentPatch): RosterDataShape {
@@ -178,6 +227,18 @@ export function formatCandidate(candidate: Pick<Candidate, 'agent' | 'efforts'>)
   return `${candidate.agent}@${candidate.efforts.join('|')}`
 }
 
+/** "max", or "medium or high" where the lead chooses. */
+export function effortWords(candidate: Pick<Candidate, 'efforts'>): string {
+  return candidate.efforts.join(' or ')
+}
+
+/** Why a class may not hold a role, or null when it may: only a Knight leads, only a Queen designs. */
+export function classBar(agentClass: RosterClass, roleId: string): string | null {
+  if (roleId === ROSTER_LEAD_ROLE && agentClass !== 'knight') return 'Only a Knight leads'
+  if (roleId === ROSTER_DESIGNER_ROLE && agentClass !== 'queen') return 'Only a Queen designs'
+  return null
+}
+
 function updateRole(data: RosterDataShape, roleId: string, change: (role: RosterRoleShape) => RosterRoleShape): RosterDataShape {
   return { ...data, roles: data.roles.map((role) => (role.id === roleId ? change(role) : role)) }
 }
@@ -194,7 +255,7 @@ export function moveCandidate(data: RosterDataShape, roleId: string, index: numb
 
 /**
  * Toggles one effort on a candidate. Its efforts keep the agent's declared order; the last one
- * cannot be removed. Two or more make an effort choice ("lead chooses").
+ * cannot be removed. Two or more make an effort choice the lead settles.
  */
 export function toggleCandidateEffort(data: RosterDataShape, roleId: string, agentId: string, effort: RosterEffort): RosterDataShape {
   const order = data.agents.find((agent) => agent.id === agentId)?.efforts ?? []
@@ -211,92 +272,253 @@ export function toggleCandidateEffort(data: RosterDataShape, roleId: string, age
   }))
 }
 
-export function setRoleThen(data: RosterDataShape, roleId: string, then: RosterRoleShape['then']): RosterDataShape {
+export function setRoleThen(data: RosterDataShape, roleId: string, then: RosterThen): RosterDataShape {
   return updateRole(data, roleId, (role) => ({ ...role, then }))
 }
 
-/** Same-reviewer recheck on or off; turning it off drops the per-agent effort overrides with it. */
-export function setRecheck(data: RosterDataShape, roleId: string, sameReviewer: boolean): RosterDataShape {
-  return updateRole(data, roleId, (role) => {
-    const next: RosterRoleShape = { ...role }
-    if (sameReviewer) next.recheck = { ...(role.recheck ?? {}), same_reviewer: true }
-    else delete next.recheck
-    return next
-  })
-}
-
-/** A per-agent recheck effort for one role; null returns that agent to the effort it reviewed at. */
-export function setRecheckEffort(data: RosterDataShape, roleId: string, agentId: string, effort: RosterEffort | null): RosterDataShape {
-  return updateRole(data, roleId, (role) => {
-    const recheck: Record<string, boolean | string> = { ...(role.recheck ?? { same_reviewer: true }) }
-    if (effort === null) delete recheck[agentId]
-    else recheck[agentId] = effort
-    return { ...role, recheck }
-  })
-}
-
-export function setSmallEpic(data: RosterDataShape, roleId: string, candidate: string | null): RosterDataShape {
-  return updateRole(data, roleId, (role) => {
-    const next: RosterRoleShape = { ...role }
-    if (candidate === null || candidate.trim() === '') delete next.small_epic
-    else next.small_epic = candidate.trim()
-    return next
-  })
+function withoutAgent(role: RosterRoleShape, agentId: string): RosterRoleShape {
+  const next: RosterRoleShape = { ...role, candidates: role.candidates.filter((text) => parseCandidate(text).agent !== agentId) }
+  if (next.recheck && Object.hasOwn(next.recheck, agentId)) {
+    const rest = { ...next.recheck }
+    delete rest[agentId]
+    next.recheck = rest
+  }
+  if (next.small_work && parseCandidate(next.small_work).agent === agentId) delete next.small_work
+  return next
 }
 
 /**
  * An agent holds a role exactly when it is one of the role's candidates (60.1's ROLE_NOT_HELD), so
- * both change together: holding adds it last in the chain at its highest effort, releasing removes it.
+ * both change together: holding adds it last in the chain at its highest effort, releasing removes
+ * it. A role its class may not hold is never added.
  */
 export function toggleAgentRole(data: RosterDataShape, agentId: string, roleId: string): RosterDataShape {
   const agent = data.agents.find((entry) => entry.id === agentId)
   if (agent === undefined) return data
   const holds = agent.roles.includes(roleId)
+  if (!holds && classBar(agent.class, roleId) !== null) return data
+  const top = agent.efforts.at(-1)
+  if (!holds && top === undefined) return data
   const agents = data.agents.map((entry) => entry.id !== agentId ? entry
     : { ...entry, roles: holds ? entry.roles.filter((role) => role !== roleId) : [...entry.roles, roleId] })
-  const top = agent.efforts.at(-1)
   const roles = data.roles.map((role) => {
     if (role.id !== roleId) return role
-    if (holds) {
-      const next: RosterRoleShape = { ...role, candidates: role.candidates.filter((text) => parseCandidate(text).agent !== agentId) }
-      if (next.recheck && Object.hasOwn(next.recheck, agentId)) {
-        const rest = { ...next.recheck }
-        delete rest[agentId]
-        next.recheck = rest
-      }
-      if (next.small_epic && parseCandidate(next.small_epic).agent === agentId) delete next.small_epic
-      return next
-    }
+    if (holds) return withoutAgent(role, agentId)
     return top === undefined || role.candidates.some((text) => parseCandidate(text).agent === agentId) ? role
       : { ...role, candidates: [...role.candidates, formatCandidate({ agent: agentId, efforts: [top] })] }
   })
   return { ...data, agents, roles }
 }
 
-/** Explicit label for a path, or `null` to remove it so the path inherits again. */
-export function setLabel(data: RosterDataShape, path: string, label: 'public' | 'private' | null): RosterDataShape {
-  const paths = data.data_labels.paths.filter((entry) => entry.path !== path)
-  if (label !== null) paths.push({ path, label })
-  paths.sort((a, b) => a.path.localeCompare(b.path))
-  return { ...data, data_labels: { ...data.data_labels, paths } }
+/** A new class; roles the class may not hold leave the agent and their chains with it. */
+export function setAgentClass(data: RosterDataShape, agentId: string, agentClass: RosterClass): RosterDataShape {
+  const agent = data.agents.find((entry) => entry.id === agentId)
+  if (agent === undefined || agent.class === agentClass) return data
+  let next = data
+  for (const role of agent.roles) if (classBar(agentClass, role) !== null) next = toggleAgentRole(next, agentId, role)
+  return { ...next, agents: next.agents.map((entry) => (entry.id === agentId ? { ...entry, class: agentClass } : entry)) }
 }
 
-export function setDefaultLabel(data: RosterDataShape, label: 'public' | 'private'): RosterDataShape {
-  return { ...data, data_labels: { ...data.data_labels, default: label } }
+/**
+ * Toggles one effort an agent offers. Its last effort cannot be removed while it is on; a removed
+ * effort leaves every chain that asked for it, keeping at least one effort per candidate.
+ */
+export function toggleAgentEffort(data: RosterDataShape, agentId: string, effort: RosterEffort, order: readonly RosterEffort[]): RosterDataShape {
+  const agent = data.agents.find((entry) => entry.id === agentId)
+  if (agent === undefined) return data
+  const has = agent.efforts.includes(effort)
+  if (has && agent.efforts.length === 1) return data
+  const efforts = order.filter((value) => (value === effort ? !has : agent.efforts.includes(value)))
+  const fallback = efforts.at(-1) as RosterEffort
+  const fix = (text: string): string => {
+    const candidate = parseCandidate(text)
+    if (candidate.agent !== agentId) return text
+    const kept = candidate.efforts.filter((value) => efforts.includes(value))
+    return formatCandidate({ agent: agentId, efforts: kept.length > 0 ? kept : [fallback] })
+  }
+  return {
+    ...data,
+    agents: data.agents.map((entry) => (entry.id === agentId ? { ...entry, efforts } : entry)),
+    roles: data.roles.map((role) => {
+      const next: RosterRoleShape = { ...role, candidates: role.candidates.map(fix) }
+      if (role.small_work !== undefined) next.small_work = fix(role.small_work)
+      if (role.recheck !== undefined && typeof role.recheck[agentId] === 'string' && !efforts.includes(role.recheck[agentId] as RosterEffort)) {
+        const rest = { ...role.recheck }
+        delete rest[agentId]
+        next.recheck = rest
+      }
+      return next
+    })
+  }
+}
+
+/** Turning an agent off records the owner's short reason; turning it on clears it. Efforts stay as they are. */
+export function setAgentOn(data: RosterDataShape, agentId: string, on: boolean, reason = ''): RosterDataShape {
+  return updateAgent(data, agentId, { enabled: on, enabled_note: on || reason.trim() === '' ? undefined : reason.trim() })
+}
+
+export function activateAgent(data: RosterDataShape, agentId: string): RosterDataShape {
+  return updateAgent(data, agentId, { status: 'active', enabled: true, enabled_note: undefined })
+}
+
+/** One answer per provider: it covers every agent there. */
+export function setProviderAnswer(data: RosterDataShape, providerId: string, answer: RosterPrivateWork): RosterDataShape {
+  return { ...data, providers: data.providers.map((provider) => (provider.id === providerId ? { ...provider, private_work: answer } : provider)) }
+}
+
+export function agentsOnProvider(data: RosterDataShape, providerId: string): RosterAgentShape[] {
+  return data.agents.filter((agent) => agent.provider === providerId)
+}
+
+export function providerOf(data: RosterDataShape, agent: Pick<RosterAgentShape, 'provider'>): RosterProviderShape | undefined {
+  return data.providers.find((provider) => provider.id === agent.provider)
+}
+
+/** Whether an agent's provider answers Public work only (an unknown provider does). */
+export function publicOnly(data: RosterDataShape, agent: Pick<RosterAgentShape, 'provider'>): boolean {
+  return providerOf(data, agent)?.private_work !== 'allowed'
+}
+
+/** An id from a name: lower case, digits and dashes, at most 32 characters, distinct from the ids taken. */
+export function idFor(name: string, taken: readonly string[]): string {
+  const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 28) || 'agent'
+  if (!taken.includes(base)) return base
+  for (let suffix = 2; ; suffix += 1) if (!taken.includes(`${base}-${suffix}`)) return `${base}-${suffix}`
+}
+
+/** The provider each app reaches when nothing overrides it; the roster's own record wins when it has one. */
+const APP_PROVIDERS: Readonly<Record<RosterHarness, { id: string; name: string }>> = {
+  claude: { id: 'anthropic', name: 'Anthropic' }, codex: { id: 'openai', name: 'OpenAI' },
+  opencode: { id: 'opencode-go', name: 'OpenCode Go' }, cursor: { id: 'cursor', name: 'Cursor' }
+}
+
+export interface Landing {
+  /** The provider a new agent would run on. */
+  provider: { id: string; name: string }
+  /** True when the roster has no such provider yet, so its private-work answer must be asked. */
+  isNew: boolean
+  /** A custom host, as the roster would record it; null for the provider's own servers. */
+  host: string | null
+}
+
+/** Where an agent on `harness` with `host` ("" or "default" for the provider's own servers) would run. */
+export function landingFor(data: RosterDataShape, harness: RosterHarness, host: string): Landing {
+  const custom = host.trim().toLowerCase()
+  if (custom === '' || custom === 'default') {
+    const recorded = data.harness_routes.find((route) => route.harness === harness)?.provider ?? APP_PROVIDERS[harness].id
+    const known = data.providers.find((provider) => provider.id === recorded)
+    return { provider: known ? { id: known.id, name: known.name } : recorded === APP_PROVIDERS[harness].id ? APP_PROVIDERS[harness] : { id: recorded, name: recorded }, isNew: known === undefined, host: null }
+  }
+  const owner = data.providers.find((provider) => provider.hosts.some((entry) => entry.toLowerCase() === custom))
+  if (owner) return { provider: { id: owner.id, name: owner.name }, isNew: false, host: custom }
+  return { provider: { id: idFor(custom.replace(/:\d+$/, ''), data.providers.map((provider) => provider.id)), name: custom }, isNew: true, host: custom }
+}
+
+export interface NewAgent {
+  name: string
+  class: RosterClass
+  harness: RosterHarness
+  model: string
+  host: string
+  /** Asked only when the provider is new to the roster. */
+  privateWork: RosterPrivateWork
+  roles: string[]
+  efforts: RosterEffort[]
+  contextLimit?: number
+}
+
+/**
+ * Adds an agent as active, with its provider when the roster does not know it and, for an app the
+ * roster has no destination for, that app recorded on the owner's word (public work only until
+ * Rules › Health inspects it).
+ */
+export function addAgent(data: RosterDataShape, draft: NewAgent): { data: RosterDataShape; id: string } {
+  const landing = landingFor(data, draft.harness, draft.host)
+  const id = idFor(draft.name, data.agents.map((agent) => agent.id))
+  const agent: RosterAgentShape = {
+    id, name: draft.name.trim(), class: draft.class, harness: draft.harness, model: draft.model.trim(), provider: landing.provider.id,
+    host: landing.host ?? 'default', enabled: true, status: 'active', efforts: draft.efforts, roles: [],
+    ...(draft.contextLimit === undefined ? {} : { context_limit: draft.contextLimit })
+  }
+  let next: RosterDataShape = {
+    ...data,
+    agents: [...data.agents, agent],
+    providers: landing.isNew
+      ? [...data.providers, { id: landing.provider.id, name: landing.provider.name, hosts: landing.host === null ? [] : [landing.host], private_work: draft.privateWork }]
+      : data.providers,
+    harness_routes: landing.host === null && !data.harness_routes.some((route) => route.harness === draft.harness)
+      ? [...data.harness_routes, { harness: draft.harness, provider: landing.provider.id, basis: 'owner-declared' as const }]
+      : data.harness_routes
+  }
+  for (const role of draft.roles) next = toggleAgentRole(next, id, role)
+  return { data: next, id }
+}
+
+/**
+ * Moves an agent to another app or host. It lands on the provider that app or host reaches; a
+ * provider new to the roster is added with `answer` (Public work only unless the owner said otherwise).
+ */
+export function moveAgent(data: RosterDataShape, agentId: string, harness: RosterHarness, host: string, answer: RosterPrivateWork = 'public_only'): RosterDataShape {
+  const landing = landingFor(data, harness, host)
+  return {
+    ...data,
+    agents: data.agents.map((agent) => (agent.id === agentId ? { ...agent, harness, provider: landing.provider.id, host: landing.host ?? 'default' } : agent)),
+    providers: landing.isNew
+      ? [...data.providers, { id: landing.provider.id, name: landing.provider.name, hosts: landing.host === null ? [] : [landing.host], private_work: answer }]
+      : data.providers,
+    harness_routes: landing.host === null && !data.harness_routes.some((route) => route.harness === harness)
+      ? [...data.harness_routes, { harness, provider: landing.provider.id, basis: 'owner-declared' as const }]
+      : data.harness_routes
+  }
+}
+
+/**
+ * What adding an agent means, in words, for the New agent footer. Until 60.8's guard stops a
+ * public-only lead itself, the true consequence is the check's refusal.
+ */
+export function newAgentConsequence(name: string, provider: string, answer: RosterPrivateWork, declared: boolean): string {
+  const who = name.trim() === '' ? 'This agent' : name.trim()
+  if (declared) return `${who} gets public work only: BMN can't confirm where its app sends data.`
+  return answer === 'allowed' ? `${who} may receive private work, like every agent on ${provider}.`
+    : `${who} gets public work only. Private work is refused for it until you allow ${provider}.`
+}
+
+/** A new role at the end of the list; candidates take it at their highest effort. */
+export function addRole(data: RosterDataShape, name: string, line: string, candidates: readonly string[]): RosterDataShape {
+  const id = idFor(name, data.roles.map((role) => role.id))
+  let next: RosterDataShape = { ...data, roles: [...data.roles, { id, ...(line.trim() === '' ? {} : { description: line.trim() }), candidates: [], then: 'lead' }] }
+  for (const agent of candidates) next = toggleAgentRole(next, agent, id)
+  return next
 }
 
 export function updateRoute(data: RosterDataShape, harness: RosterHarness, patch: Partial<Omit<RosterRouteShape, 'harness'>>): RosterDataShape {
   return { ...data, harness_routes: data.harness_routes.map((route) => (route.harness === harness ? { ...route, ...patch } : route)) }
 }
 
-/** Accepting an inspected harness version adds it to the route's accepted list (60.3 AC6). */
+/**
+ * Records where an app sends data: its provider's own servers as BMN inspected them, or the
+ * owner's word. A new record replaces any accepted versions, which belonged to the old destination.
+ */
+export function setDestination(data: RosterDataShape, harness: RosterHarness, provider: { id: string; name: string }, basis: RosterRouteShape['basis']): RosterDataShape {
+  const route: RosterRouteShape = { harness, provider: provider.id, basis }
+  const order = Object.keys(ROSTER_APP_NAMES)
+  const routes = [...data.harness_routes.filter((entry) => entry.harness !== harness), route].sort((a, b) => order.indexOf(a.harness) - order.indexOf(b.harness))
+  return {
+    ...data,
+    providers: data.providers.some((entry) => entry.id === provider.id) ? data.providers
+      : [...data.providers, { id: provider.id, name: provider.name, hosts: [], private_work: 'public_only' as const }],
+    harness_routes: routes
+  }
+}
+
+/** Accepting an inspected app version adds it to the app's accepted list (60.3 AC3). */
 export function acceptVersion(data: RosterDataShape, harness: RosterHarness, version: string): RosterDataShape {
   const route = data.harness_routes.find((entry) => entry.harness === harness)
   if (route === undefined || (route.accepted_versions ?? []).includes(version)) return data
   return updateRoute(data, harness, { accepted_versions: [...(route.accepted_versions ?? []), version] })
 }
 
-/** Revoking an accepted version: private work refuses on it again until it is accepted anew. */
+/** Removing an accepted version: private work stops on it again until it is accepted anew. */
 export function revokeVersion(data: RosterDataShape, harness: RosterHarness, version: string): RosterDataShape {
   return {
     ...data,
@@ -311,17 +533,17 @@ export function revokeVersion(data: RosterDataShape, harness: RosterHarness, ver
   }
 }
 
-export function agentGroups(data: RosterDataShape): { active: RosterAgentShape[]; proposed: RosterAgentShape[]; disabled: RosterAgentShape[] } {
+export function agentGroups(data: RosterDataShape): { active: RosterAgentShape[]; proposed: RosterAgentShape[]; off: RosterAgentShape[] } {
   return {
     active: data.agents.filter((agent) => agent.status === 'active' && agent.enabled),
     proposed: data.agents.filter((agent) => agent.status === 'proposed'),
-    disabled: data.agents.filter((agent) => agent.status === 'active' && !agent.enabled)
+    off: data.agents.filter((agent) => agent.status === 'active' && !agent.enabled)
   }
 }
 
-/** Host as one of three kinds: the harness default route, a named host, or none (a local model). */
-export function hostKind(agent: Pick<RosterAgentShape, 'host'>): 'default' | 'hostname' | 'none' {
-  return agent.host === null ? 'none' : agent.host === 'default' ? 'default' : 'hostname'
+/** Sections with an unapproved difference: the dot on a card and beside Team. */
+export function changedSections(diffs: readonly RosterDiffShape[] | null): Set<RosterSection> {
+  return new Set((diffs ?? []).map(sectionOf))
 }
 
 export function sameData(a: RosterDataShape | null, b: RosterDataShape | null): boolean {

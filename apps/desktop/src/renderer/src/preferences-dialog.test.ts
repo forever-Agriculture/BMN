@@ -1,9 +1,9 @@
-// MODULE: preferences-dialog.test.ts - Telegram's status list says an error once, and in full (Story 40.3); digest and quiet-hours rows
+// MODULE: preferences-dialog.test.ts - Telegram's status list says an error once, and in full (Story 40.3); digest and quiet-hours rows; the left navigation and its pages (Story 60.5)
 import { DEFAULT_APP_SETTINGS, type AppSettings, type TelegramStatus } from '@bmn/protocol'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { PreferencesDialog, TelegramStatusList } from './preferences-dialog'
+import { PREFERENCES_NAVIGATION, PreferencesDialog, TelegramStatusList, pageParent } from './preferences-dialog'
 
 const ERROR = 'Another client is polling this bot token; stop the other client or revoke the token in BotFather'
 const status = (lastError: string | null): TelegramStatus => ({
@@ -76,5 +76,40 @@ describe('Morning digest and Quiet hours rows', () => {
     expect(markup).toContain('one summary with session names, request kinds and titles, then each request that is still waiting')
     expect(markup).toContain('Each workspace with its checkout name, epics, Status, Decided-for-you entries and owner-item titles.')
     expect(markup).not.toMatch(/arrive as one summary/)
+  })
+})
+
+describe('the left navigation and its pages (Story 60.5 AC1)', () => {
+  const dialog = (initialSection?: 'agent-control'): string => renderToStaticMarkup(createElement(PreferencesDialog, {
+    settings: DEFAULT_APP_SETTINGS, initialSection, onSettings: () => undefined, onClose: () => undefined,
+    saveVoice: async () => DEFAULT_APP_SETTINGS, suggestVocabulary: () => ({ ok: false as const, reason: 'test' }) }))
+  const navigation = (markup: string): string => /<nav class="preferences-nav"[^>]*>(.*?)<\/nav>/s.exec(markup)![1] as string
+  const items = (markup: string): string[] => [...navigation(markup).matchAll(/<button[^>]*class="nav-item"[^>]*>(?:<svg.*?<\/svg>)?([A-Za-z ]+)/g)].map((match) => match[1] as string)
+
+  it('lists Team and Rules first with their icons, then Workspace, Phone and Machine', () => {
+    expect(PREFERENCES_NAVIGATION.map((entry) => 'parent' in entry ? `${entry.label}: ${entry.pages.map((page) => page.label).join(', ')}` : `${entry.group}: ${entry.pages.map((page) => page.label).join(', ')}`)).toEqual([
+      'Team: Agents, Roles, Changes', 'Rules: Editor, Health', 'Workspace: Appearance, Terminal, Notifications, Voice', 'Phone: Telegram', 'Machine: Local control, History, Backup'
+    ])
+    const markup = dialog()
+    expect(markup).toContain('<nav class="preferences-nav" aria-label="Preference pages">')
+    expect(count(navigation(markup), '<svg class="page-icon"')).toBe(2)
+    expect(markup).not.toMatch(/Jump to section|<select aria-label="Preferences section"/)
+  })
+
+  it('opens on Team with only Team\'s sub-pages showing', () => {
+    expect(items(dialog())).toEqual(['Team', 'Agents', 'Roles', 'Changes', 'Rules', 'Appearance', 'Terminal', 'Notifications', 'Voice', 'Telegram', 'Local control', 'History', 'Backup'])
+    expect(dialog()).toMatch(/aria-current="true" aria-expanded="true">.*?Team/)
+    expect(dialog()).toContain('<button type="button" class="nav-item" aria-current="page">Agents</button>')
+    expect([pageParent('team'), pageParent('changes'), pageParent('health'), pageParent('voice')]).toEqual(['team', 'team', 'rules', null])
+  })
+
+  it('keeps every earlier section as its own page, one showing at a time', () => {
+    const markup = dialog('agent-control')
+    expect(items(markup)).toEqual(['Team', 'Rules', 'Appearance', 'Terminal', 'Notifications', 'Voice', 'Telegram', 'Local control', 'History', 'Backup'])
+    expect(markup).toContain('<button type="button" class="nav-item" aria-current="page">Local control</button>')
+    expect(count(markup, '<div class="preferences-page" hidden="">')).toBe(7)
+    expect(count(markup, '<div class="preferences-page">')).toBe(1)
+    expect(markup).toMatch(/<div class="preferences-page"><section class="preferences-section" id="agent-control-section"><h3>Local control<\/h3>/)
+    for (const title of ['Appearance', 'Terminal', 'Notifications', 'Voice', 'History', 'Backup']) expect(markup).toMatch(new RegExp(`<h3[^>]*>${title}</h3>`))
   })
 })

@@ -31,7 +31,7 @@ describe('accepting an untested harness version (60.3 AC3, 60.5 AC2)', () => {
     expect(judgeInspection(route(), [], true, now).acceptable).toBe(false)
     expect(statSync(baselinesPath()).mode & 0o777).toBe(0o600)
     const verdict = judgeInspection(route({ version: '0.170.0' }), [], false, now)
-    expect(verdict).toEqual({ acceptable: true, comparison: 'Same route and sources as 0.161.0: default:openai (default, no overrides).' })
+    expect(verdict).toEqual({ acceptable: true, comparison: 'Sends data to the same place as 0.161.0: the default servers of openai (nothing overrides it).' })
   })
 
   it.each([
