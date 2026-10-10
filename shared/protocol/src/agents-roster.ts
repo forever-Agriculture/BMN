@@ -339,8 +339,8 @@ export interface ResearchSnapshot {
   /** The researcher the owner last picked, when it may still research. */
   researcher: string | null
   running: { researcher: string; done: number; total: number; lookup: boolean } | null
-  /** How the last run started from this window ended, in words; null when none has. */
-  ended: { ok: boolean; text: string } | null
+  /** How the last run started from this window ended, in words; `kept` when it found something, which the page then shows. Null when none has. */
+  ended: { ok: boolean; text: string; kept: boolean } | null
 }
 /** What Look up found for one model name. */
 export interface ResearchLookup { ok: boolean; message: string; model: ResearchModelView | null }

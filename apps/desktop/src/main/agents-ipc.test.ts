@@ -745,7 +745,7 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     expect((await call<ResearchSnapshot>('research:start', { researcher: 'opus' })).running).toMatchObject({ researcher: 'fable' })
     expect(await call<ResearchLookup>('research:lookup', { researcher: 'fable', provider: 'anthropic', model: 'claude-opus-5-6' })).toEqual({ ok: false, message: 'A research is going. Wait for it to end, or stop it.', model: null })
     const state = await ended()
-    expect(state.ended).toEqual({ ok: true, text: 'Research found 9 models.' })
+    expect(state.ended).toEqual({ ok: true, text: 'Research found 9 models.', kept: true })
     expect(state.last).toMatchObject({ researcher: 'Fable', state: 'complete', models: 9 })
     const byId = Object.fromEntries(state.models.map((model) => [model.id, model]))
     expect(byId['claude-opus-5-5']).toMatchObject({ providerId: 'anthropic', fresh: true, foundLast: true, price: { input: 15, output: 75, source: PAGE, rank: 2, verified: true } })
@@ -770,7 +770,7 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     expect((await call<ResearchSnapshot>('research:stop')).running).not.toBeNull()
     const state = await ended()
     // The owner stopped it: that is how he asked it to end, not a failure.
-    expect(state.ended).toEqual({ ok: true, text: 'Research kept 5 models. Stopped before it finished.' })
+    expect(state.ended).toEqual({ ok: true, text: 'Research kept 5 models. Stopped before it finished.', kept: true })
     expect(state.last).toMatchObject({ state: 'partial', models: 5, note: 'Stopped before it finished.' })
     expect(calls()).toHaveLength(2)
     // Stop with nothing going is not an error.

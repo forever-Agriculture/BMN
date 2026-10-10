@@ -100,12 +100,12 @@ describe('Add to team and Look up (60.10 AC6)', () => {
       price: { input: 15, output: 75, cached_input: 1.5, source: 'https://www.anthropic.com/pricing', as_of: '2026-10-10' }, contextWindow: 1_000_000 })
     expect(fill).not.toHaveProperty('class')
     expect(fillFrom(MODELS[3]!, DATA)).toEqual({ model: 'gpt-6-luna', harness: 'codex', day: fill.day })
-    expect(fillWords(fill)).toBe(`The name, the price and the capacity are from research on ${fill.day}. Check the Agent app and Host; BMN does not check that the app takes this name.`)
-    expect(fillWords(fillFrom(MODELS[3]!, DATA))).toMatch(/^The name is from research on /)
-    expect(fillWords(fillFrom(MODELS[4]!, DATA))).toMatch(/^The name and the price are from research on /)
+    expect(fillWords(fill)).toBe(`Name, price and capacity from research on ${fill.day}. Check Agent app and Host.`)
+    expect(fillWords(fillFrom(MODELS[3]!, DATA))).toMatch(/^Name from research on /)
+    expect(fillWords(fillFrom(MODELS[4]!, DATA))).toMatch(/^Name and price from research on /)
     // A Look up brings only what was found for the name the owner typed.
-    expect(fillWords(fill, true)).toBe(`The price and the capacity are from research on ${fill.day}.`)
-    expect(fillWords(fillFrom(MODELS[4]!, DATA), true)).toBe(`The price is from research on ${fill.day}.`)
+    expect(fillWords(fill, true)).toBe(`Price and capacity from research on ${fill.day}.`)
+    expect(fillWords(fillFrom(MODELS[4]!, DATA), true)).toBe(`Price from research on ${fill.day}.`)
   })
 })
 
@@ -119,11 +119,13 @@ describe('the page\'s words', () => {
     expect(researchStatus({ last: { at: '2026-10-10T09:40:00.000Z', researcher: 'Opus', state: 'partial', models: 1 }, running: null, researchers }, shortDate)).toBe('Researched <2026-10-10> by Opus · 1 model · not finished')
     expect(researchStatus({ last: null, running: { researcher: 'luna', done: 0, total: 0, lookup: false }, researchers }, shortDate)).toBe('Luna is starting')
     expect(researchStatus({ last: null, running: { researcher: 'luna', done: 3, total: 9, lookup: false }, researchers }, shortDate)).toBe('Luna is researching · 3 of 9 models')
-    expect(researchStatus({ last: null, running: { researcher: 'luna', done: 0, total: 1, lookup: true }, researchers }, shortDate)).toBe('Luna is looking one model up')
+    expect(researchStatus({ last: null, running: { researcher: 'luna', done: 0, total: 1, lookup: true }, researchers }, shortDate)).toBe('Luna is looking up one model')
   })
 
   it('names a price, its site and why a value is not counted', () => {
     expect(priceText({ input: 0.8, output: 4 })).toBe('$0.80 / $4.00')
+    // An amount that cents would round keeps every digit it has.
+    expect(priceText({ input: 0.075, output: 0.3 })).toBe('$0.075 / $0.30')
     expect(siteOf('https://www.anthropic.com/pricing#api')).toBe('anthropic.com')
     expect(siteOf('https://platform.openai.com/docs/pricing')).toBe('platform.openai.com')
     expect(siteOf('not an address')).toBe('not an address')

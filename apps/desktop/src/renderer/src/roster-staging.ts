@@ -96,7 +96,7 @@ export function thousands(value: number): string {
 
 /** "$1.25 / $10.00" per million tokens, in / out; null when the agent has no price. */
 export function priceWords(agent: Pick<RosterAgentShape, 'price'>): string | null {
-  return agent.price === undefined ? null : `$${agent.price.input.toFixed(2)} / $${agent.price.output.toFixed(2)}`
+  return agent.price === undefined ? null : priceText(agent.price)
 }
 
 /** The first line of an agent's notes, as its card shows it. */
@@ -129,8 +129,41 @@ function candidateWords(text: string, names: Names): string {
   return `${names.agents.get(candidate.agent) ?? candidate.agent} ${effortWords(candidate)}`
 }
 
+/** A dollar amount with cents, or with every digit it has when cents would round it ("$0.125"). */
+const money = (amount: number): string => (Number(amount.toFixed(2)) === amount ? amount.toFixed(2) : String(amount))
+
+/** "$15.00 / $75.00": per million tokens, in / out. */
+export function priceText(price: Pick<RosterPriceShape, 'input' | 'output'>): string {
+  return `$${money(price.input)} / $${money(price.output)}`
+}
+
+/** The site a value was read on, as the pages name it: "anthropic.com", never the whole address. */
+export function siteOf(source: string): string {
+  try {
+    return new URL(source).hostname.replace(/^www\./, '')
+  } catch {
+    return source
+  }
+}
+
+/** "Oct 10": the day a value was read or a model was seen. */
+export function dayWords(date: string): string {
+  const value = new Date(date.length === 10 ? `${date}T12:00:00` : date)
+  return Number.isNaN(value.getTime()) ? date : value.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+/** A recorded price as a review shows it: the two amounts, the cached one when there is one, and where and when it was read. */
+export function priceReview(price: RosterPriceShape): string {
+  const read = [price.source ? siteOf(price.source) : null, price.as_of ? dayWords(String(price.as_of)) : null].filter(Boolean).join(', ')
+  return [priceText(price), price.cached_input === undefined ? null : `cached $${money(price.cached_input)}`, read === '' ? null : read].filter(Boolean).join(' · ')
+}
+
+const isPrice = (value: unknown): value is RosterPriceShape =>
+  typeof value === 'object' && value !== null && typeof (value as RosterPriceShape).input === 'number' && typeof (value as RosterPriceShape).output === 'number'
+
 function formatPlain(value: unknown, field: string | undefined, names: Names): string {
   if (value === null || value === undefined) return 'none'
+  if (field === 'price' && isPrice(value)) return priceReview(value)
   if (Array.isArray(value)) {
     if (value.length === 0) return 'none'
     if (field === 'candidates') return value.map((entry) => candidateWords(String(entry), names)).join(', ')

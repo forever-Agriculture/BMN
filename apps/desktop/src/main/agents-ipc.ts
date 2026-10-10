@@ -912,9 +912,9 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
       onProgress: ({ done, total }) => Object.assign(state, { done, total })
     }).then(({ run }) => {
       // A run the owner stopped ended as he asked; only a run that failed or ran out of time reads as a problem.
-      researchEnded = { ok: run.state === 'complete' || state.controller.signal.aborted, text: researchEndedWords(run) }
+      researchEnded = { ok: run.state === 'complete' || state.controller.signal.aborted, text: researchEndedWords(run), kept: run.models > 0 }
     }, (error: unknown) => {
-      researchEnded = { ok: false, text: `Research failed: ${error instanceof Error ? error.message : String(error)}` }
+      researchEnded = { ok: false, text: `Research failed: ${error instanceof Error ? error.message : String(error)}`, kept: false }
     }).finally(() => {
       if (research === state) research = null
     })

@@ -2,6 +2,7 @@
 import type { AgentAppView, RosterAgentShape, RosterDataShape, RosterDiffShape } from '@bmn/protocol'
 import { describe, expect, it } from 'vitest'
 import {
+  dayWords,
   activateAgent,
   addAgent,
   addRole,
@@ -385,7 +386,8 @@ describe('differences in words (60.5 AC7)', () => {
     expect(lines(changed('agent', 'astra', 'roles', ['helper'], ['helper', 'epic-reviewer']))).toEqual(['Roles: Helper → Helper, Epic reviewer'])
     expect(lines(changed('agent', 'astra', 'provider', 'openai', 'zai'))).toEqual(['Provider: OpenAI → Z.ai'])
     expect(lines(changed('harness-routes', 'cursor', 'provider', 'zai', 'openai'))).toEqual(['Cursor · provider: Z.ai → OpenAI'])
-    expect(lines(changed('agent', 'astra', 'price', undefined, { input: 1.25, cached_input: 0.125, output: 10, as_of: '2026-10-01' }))).toEqual(['Price: — → in 1.25 · cached in 0.125 · out 10 · as of 2026-10-01'])
+    expect(lines(changed('agent', 'astra', 'price', undefined, { input: 1.25, cached_input: 0.125, output: 10, source: 'https://www.prices.example.test/api', as_of: '2026-10-01' }))).toEqual([`Price: — → $1.25 / $10.00 · cached $0.125 · prices.example.test, ${dayWords('2026-10-01')}`])
+    expect(lines(changed('agent', 'astra', 'price', { input: 10, output: 60 }, { input: 10, output: 40 }))).toEqual(['Price: $10.00 / $60.00 → $10.00 / $40.00'])
   })
 
   it('turns a consequence sentence into the pages\' words, leaving anything else alone', () => {

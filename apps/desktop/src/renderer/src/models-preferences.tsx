@@ -1,6 +1,6 @@
 // MODULE: models-preferences.tsx - Story 60.10: Preferences › Team › Models: what research found for the team's models, who researches, and Apply prices
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
-import { ROSTER_APP_NAMES, type ResearchLookup, type ResearchModelView, type ResearchSnapshot, type ResearcherView, type RosterDataShape } from '@bmn/protocol'
+import { type ResearchLookup, type ResearchModelView, type ResearchSnapshot, type ResearcherView, type RosterDataShape } from '@bmn/protocol'
 import { Segmented } from './history-preferences'
 import {
   applyPrices, dayWords, fillFrom, priceChanges, priceText, researchGroups, researchStatus, siteOf, unverifiedWords, type PriceChange, type ResearchFill, type TeamModelRow
@@ -40,8 +40,8 @@ export function useResearchState(): ResearchState {
 
   const adopt = useCallback((next: ResearchSnapshot): void => {
     setSnapshot((current) => {
-      // A run that just ended says how, once.
-      if (current?.running && next.running === null && next.ended !== null) setNotice(next.ended)
+      // A run that ended with nothing kept leaves no trace on the page, so it says how it ended; one that kept something shows in the head and the line under it.
+      if (current?.running && next.running === null && next.ended !== null && !next.ended.kept) setNotice(next.ended)
       // A plain read does not ask the apps again; the researchers stay as last read.
       return next.researchers.length === 0 && current !== null ? { ...next, researchers: current.researchers, researcher: next.researcher ?? current.researcher } : next
     })
@@ -120,43 +120,57 @@ export function researchedModels(snapshot: ResearchSnapshot | null): { models: r
 
 /** What the researcher gets and where it runs, for the app the chosen agent runs on. */
 export function researcherHint(harness: string | undefined): string {
-  const sends = 'BMN sends only your model names and the source list.'
-  if (harness === 'codex') return `${sends} Research runs in a separate empty folder, read-only, with web search on and Codex's command tools off.`
-  return `${sends} Research runs in a separate empty folder with web tools only.`
+  const gets = 'Gets only your model names and the source list, never your files.'
+  if (harness === 'codex') return `${gets} Runs in an empty folder, read-only, with web search and no command tools.`
+  return `${gets} Runs in an empty folder with web tools only.`
 }
 
-/** A price or a capacity with where it was read; an unverified value says so before its site. */
-function Sourced(props: { value: { source: string; as_of: string; verified: boolean; why?: string }; of: string; what: string }): React.JSX.Element {
+type Read = { source: string; as_of: string; verified: boolean; why?: string }
+
+/** The mark on a value BMN could not confirm on its page: it stands right after the value, since it says the value does not count. */
+function Unverified(props: { value: Read }): React.JSX.Element | null {
+  return props.value.verified ? null : <span title={unverifiedWords(props.value.why)}>unverified</span>
+}
+
+/** Where and when a value was read. */
+function Sourced(props: { value: Read; of: string; what: string }): React.JSX.Element {
   return (
     <>
-      {props.value.verified ? null : <span className="faint" title={unverifiedWords(props.value.why)}>unverified ·</span>}
       <span className="mono source" title={props.value.source} aria-label={`${siteOf(props.value.source)}, ${props.what} source for ${props.of}`}>{siteOf(props.value.source)}</span>
       <span className="faint">{dayWords(props.value.as_of)}</span>
     </>
   )
 }
 
-/** The agents that cannot research now, each with why in a few plain words; the check's own message stays in `bmn roster check`. */
-export function notOffered(unable: readonly ResearcherView[]): string {
-  return unable.length === 0 ? '' : ` Not offered: ${unable.map((entry) => (entry.why ? `${entry.name} (${entry.why})` : entry.name)).join(', ')}.`
-}
-
-function Facts(props: { model: ResearchModelView }): React.JSX.Element {
+/** A model's price and capacity, one line each; `teamHas` adds what the team records when a verified price differs from it. */
+function Facts(props: { model: ResearchModelView; teamHas?: string | undefined }): React.JSX.Element {
   const { model } = props
   return (
     <>
       <div className="model-facts">
         {model.price
-          ? <><span className="mono">{priceText(model.price)}</span><span className="faint">per M tokens, in / out</span><Sourced value={model.price} of={model.id} what="price" /></>
+          ? (
+            <>
+              <span className="mono value">{priceText(model.price)}</span><Unverified value={model.price} /><span className="faint">per M tokens, in / out</span>
+              <Sourced value={model.price} of={model.id} what="price" />
+              {props.teamHas ? <span className="faint">· your team has {props.teamHas}</span> : null}
+            </>
+          )
           : <span className="faint">No price found</span>}
       </div>
       {model.contextWindow ? (
         <div className="model-facts">
-          <span>{thousands(model.contextWindow.tokens)} tokens</span><span className="faint">context window</span><Sourced value={model.contextWindow} of={model.id} what="context window" />
+          <span className="mono value">{thousands(model.contextWindow.tokens)} tokens</span><Unverified value={model.contextWindow} /><span className="faint">capacity</span>
+          <Sourced value={model.contextWindow} of={model.id} what="capacity" />
         </div>
       ) : null}
     </>
   )
+}
+
+/** The agents that cannot research now, each with why in a few plain words; the check's own message stays in `bmn roster check`. */
+export function notOffered(unable: readonly ResearcherView[]): string {
+  return unable.map((entry) => ` ${entry.name} cannot research${entry.why ? `: ${entry.why}` : ''}.`).join('')
 }
 
 function FoundLine(props: { model: ResearchModelView; provider: string; add(): void }): React.JSX.Element {
@@ -180,11 +194,10 @@ function TeamLine(props: { row: TeamModelRow; researched: boolean }): React.JSX.
       <div className="model-text">
         <div><span className="mono">{row.model}</span> <span className="faint">{row.agents.join(', ')} · {row.provider}</span></div>
         {row.found === null
-          ? <div className="faint">{props.researched ? 'Never found by the research' : 'Not researched yet'}</div>
+          ? (props.researched ? <div className="faint">Not found yet</div> : null)
           : (
             <>
-              <Facts model={row.found} />
-              {row.differs ? <div className="faint">Your team has {row.teamHas ? priceText(row.teamHas) : 'no price'}</div> : null}
+              <Facts model={row.found} teamHas={row.differs ? (row.teamHas ? priceText(row.teamHas) : 'no price') : undefined} />
               {row.found.foundLast ? null : <div className="faint">Not found this time · last seen {dayWords(row.found.lastSeen)}</div>}
             </>
           )}
@@ -197,10 +210,10 @@ function TeamLine(props: { row: TeamModelRow; researched: boolean }): React.JSX.
 /** The review before prices are staged: each agent, what it records, what research found, and the page it was read on. */
 function ApplyPrices(props: { changes: readonly PriceChange[]; onStage(): void; onCancel(): void }): React.JSX.Element {
   const count = props.changes.length
-  const title = count === 1 ? 'Stage one price' : `Stage ${count} prices`
+  const title = count === 1 ? 'Apply one price' : `Apply ${count} prices`
   return (
     <div className="sheet" role="group" aria-label={title}>
-      <div className="sheet-head"><b>{title}</b><span className="muted">Each is read from the page beside it. Nothing changes until you approve.</span></div>
+      <div className="sheet-head"><b>{title}</b><span className="muted">Each was read on the page under it. Nothing changes until you approve.</span></div>
       <div className="price-changes">
         {props.changes.map((change) => (
           <div className="price-change" key={change.agent} data-agent={change.agent}>
@@ -264,7 +277,7 @@ export function ModelsPage(props: { team: TeamState; data: RosterDataShape; rese
         <ApplyPrices changes={changes} onCancel={() => setApplying(false)} onStage={() => {
           team.stage(applyPrices(data, changes))
           setApplying(false)
-          setStaged(changes.length === 1 ? 'One price staged. Approve it below.' : `${changes.length} prices staged. Approve them below.`)
+          setStaged(changes.length === 1 ? 'One price changed. Approve below to keep it.' : `${changes.length} prices changed. Approve below to keep them.`)
         }} />
       ) : changes.length > 0 ? (
         <div className="page-note with-action" role="status">
@@ -274,7 +287,10 @@ export function ModelsPage(props: { team: TeamState; data: RosterDataShape; rese
       ) : null}
       {groups.fresh.length > 0 ? (
         <>
-          <h4 className="group-head">{snapshot.previousAt ? `New since ${dayWords(snapshot.previousAt)}` : 'Not on your team'}<span className="caption">first seen by the research on {lastDay}</span></h4>
+          {/* Two researches on one day would read "New since Oct 11 · first seen on Oct 11": that case says it once. */}
+          {snapshot.previousAt && dayWords(snapshot.previousAt) === lastDay
+            ? <h4 className="group-head">New in this research</h4>
+            : <h4 className="group-head">{snapshot.previousAt ? `New since ${dayWords(snapshot.previousAt)}` : 'Not on your team'}<span className="caption">first seen by the research on {lastDay}</span></h4>}
           <div className="model-lines">{groups.fresh.map((model) => <FoundLine key={`${model.providerId}|${model.id}`} model={model} provider={providerName(model)} add={() => props.add(fillFrom(model, data))} />)}</div>
         </>
       ) : null}
@@ -286,7 +302,7 @@ export function ModelsPage(props: { team: TeamState; data: RosterDataShape; rese
           <div className="model-lines">{groups.earlier.map((model) => <FoundLine key={`${model.providerId}|${model.id}`} model={model} provider={providerName(model)} add={() => props.add(fillFrom(model, data))} />)}</div>
         </details>
       ) : null}
-      <p className="preferences-help">Research changes nothing by itself. Apply prices and Add to team stage changes you approve. BMN does not check that an app takes a name found here. {ROSTER_APP_NAMES.opencode} and {ROSTER_APP_NAMES.cursor} agents cannot research.</p>
+      <p className="preferences-help">Research changes nothing by itself. Apply prices and Add to team wait for your Approve.</p>
     </>
   )
 }

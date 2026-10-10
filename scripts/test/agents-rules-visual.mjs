@@ -1047,7 +1047,7 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
 
     await go('Team', 'Models')
     await head.getByText('Not researched yet').waitFor()
-    await main.getByText('Not researched yet').nth(1).waitFor()
+    assert.equal(await main.getByText('Not researched yet').count(), 1, 'before any research the page says so more than once')
     // Who may research: active agents on Claude Code or Codex whose provider may see private work; the others are named, not offered.
     const who = main.getByRole('radiogroup', { name: 'Researcher' })
     await who.waitFor()
@@ -1059,11 +1059,11 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
       assert.equal(teamBefore.providers.find((provider) => provider.id === agent.provider).private_work, 'allowed', `${name} is offered although its provider gets public work only`)
       assert.ok(['claude', 'codex'].includes(agent.harness) && agent.enabled && agent.status === 'active', `${name} is offered although it is not an active Claude Code or Codex agent`)
     }
-    await main.getByText(/Not offered: .*Kimi \(its provider gets public work only\)/).waitFor()
+    await main.getByText(/Kimi cannot research: its provider gets public work only\./).waitFor()
     await who.getByRole('radio', { name: researcher.name, exact: true }).click()
     await who.getByRole('radio', { name: researcher.name, exact: true }).and(main.locator('[aria-checked="true"]')).waitFor()
     assert.equal(JSON.parse(readFileSync(join(stateDir, 'research/settings.json'), 'utf8')).researcher, researcher.id)
-    await main.getByText('BMN sends only your model names and the source list. Research runs in a separate empty folder with web tools only.', { exact: false }).waitFor()
+    await main.getByText('Gets only your model names and the source list, never your files. Runs in an empty folder with web tools only.', { exact: false }).waitFor()
     assert.deepEqual(await main.locator('.sources li').allTextContents(), ['Provider pages', 'Other sites'])
     await shot('models-empty-1280.png')
 
@@ -1075,18 +1075,18 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     assert.equal(await who.getByRole('radio').first().isDisabled(), true, 'the researcher can be changed while it researches')
     await shot('models-running-1280.png')
     await head.getByRole('button', { name: 'Stop' }).click()
-    await notice(/^Research kept \d+ models?\. /)
     await head.getByText(/ · not finished$/).waitFor()
-    assert.equal(await main.getByText(/^The last research did not finish: /).count(), 0, 'how the run ended is said twice')
-    assert.equal(await dialog.locator('.preferences-main [role="alert"]').filter({ hasText: /^Research kept/ }).count(), 0, 'a run the owner stopped reads as a failure')
+    // How it ended is said once, in a plain line: he stopped it himself, so nothing reads as a failure.
+    await main.getByText('The last research did not finish: Stopped before it finished.', { exact: true }).waitFor()
+    assert.equal(await main.getByText(/Stopped before it finished/).count(), 1, 'how the run ended is said twice')
+    assert.equal(await dialog.locator('.preferences-page:not([hidden]) [role="alert"]').count(), 0, 'a run the owner stopped reads as a failure')
     await modelLine('claude-opus-5-5').getByText('$15.00 / $75.00').waitFor()
-    await modelLine('gpt-6.1-sol').getByText('Never found by the research').waitFor()
+    await modelLine('gpt-6.1-sol').getByText('Not found yet').waitFor()
     await shot('models-stopped-1280.png')
 
     // The whole research: every provider answers, and each lists what else it publishes.
     plan({ facts, listed, slow: null, delayMs: 0 })
     await head.getByRole('button', { name: 'Research now' }).click()
-    await notice(new RegExp(`^Research found ${teamModels + 2} models\\.$`))
     await head.getByText(new RegExp(`by ${researcher.name} · ${teamModels + 2} models$`)).waitFor()
     assert.deepEqual({ roster: rosterHash(), state: stateHash() }, hashesBefore, 'a research changed the team')
     // What the stand-in app was started with: an empty folder of its own, the home folder and the program path only, web tools only, no agent names and no prices.
@@ -1098,7 +1098,8 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     for (const agent of teamBefore.agents) assert.ok(!new RegExp(`\\b${agent.name}\\b`).test(prompts) || agent.model.toLowerCase().includes(agent.name.toLowerCase()), `the prompt names the agent ${agent.name}`)
     assert.doesNotMatch(prompts, /PROSE-SENTINEL|PRICE-SENTINEL|1\.25|Cheap helper/)
     // Listed models the team does not have, first seen now.
-    await main.getByRole('heading', { name: /^New since / }).waitFor()
+    // Both researches ran today, so the head says it once.
+    await main.getByRole('heading', { name: 'New in this research', exact: true }).waitFor()
     await modelLine('claude-opus-5-6').getByText('$15.00 / $75.00').waitFor()
     await modelLine('claude-opus-5-6').getByText('1 000 000 tokens').waitFor()
     await modelLine('gpt-6.1-nova').getByText('$0.50 / $4.00').waitFor()
@@ -1108,9 +1109,9 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     assert.equal(await modelLine('claude-opus-5-6').locator('.source').first().textContent(), 'prices.anthropic.test')
     // A price the cited page does not show is kept apart and never counts as a difference.
     const astra = modelLine('gpt-6-astra')
-    await astra.getByText('unverified ·').waitFor()
-    assert.equal(await astra.getByText('unverified ·').getAttribute('title'), 'BMN could not confirm this on the cited page: the page does not show this price beside the model.')
-    assert.equal(await astra.getByText('Your team has').count(), 0)
+    await astra.getByText('unverified', { exact: true }).waitFor()
+    assert.equal(await astra.getByText('unverified', { exact: true }).getAttribute('title'), 'BMN could not confirm this on the cited page: the page does not show this price beside the model.')
+    assert.equal(await astra.getByText(/your team has/).count(), 0)
     await modelLine('kimi-k3').getByText('No price found').waitFor()
     // Apply prices offers each verified price that differs, with the page it was read on, and stages nothing but prices.
     const expected = teamBefore.agents.filter((agent) => {
@@ -1119,10 +1120,10 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     })
     assert.ok(expected.some((agent) => agent.id === 'sol'), 'the synthetic team no longer has Sol on gpt-6.1-sol')
     await main.getByText(expected.length === 1 ? "One price differs from your team's." : `${expected.length} prices differ from your team's.`).waitFor()
-    await modelLine('gpt-6.1-sol').getByText('Your team has $1.25 / $10.00').waitFor()
-    await shot('models-1280.png')
+    await modelLine('gpt-6.1-sol').getByText('· your team has $1.25 / $10.00').waitFor()
+    await shot('models-found-1280.png')
     await main.getByRole('button', { name: 'Apply prices…' }).click()
-    const stageTitle = expected.length === 1 ? 'Stage one price' : `Stage ${expected.length} prices`
+    const stageTitle = expected.length === 1 ? 'Apply one price' : `Apply ${expected.length} prices`
     const applySheet = main.getByRole('group', { name: stageTitle })
     await applySheet.waitFor()
     assert.deepEqual(await applySheet.locator('.price-change').evaluateAll((rows) => rows.map((row) => row.dataset.agent)), expected.map((agent) => agent.id))
@@ -1134,8 +1135,9 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     assert.equal(await ledger.count(), 0)
     await main.getByRole('button', { name: 'Apply prices…' }).click()
     await applySheet.getByRole('button', { name: stageTitle, exact: true }).click()
-    await notice(expected.length === 1 ? /^One price staged\. Approve it below\.$/ : new RegExp(`^${expected.length} prices staged\\. Approve them below\\.$`))
-    await line.getByText(/Sol: .*price/).first().waitFor()
+    await notice(expected.length === 1 ? /^One price changed\. Approve below to keep it\.$/ : new RegExp(`^${expected.length} prices changed\\. Approve below to keep them\\.$`))
+    // The footer says a price as the pages do, with where it was read, not as the file's fields.
+    await line.getByText(/Sol: .*\$1\.25 \/ \$10\.00 .*→ \$2\.00 \/ \$8\.00 · prices\.openai\.test, /).first().waitFor()
     assert.equal(await main.getByRole('button', { name: 'Apply prices…' }).count(), 0, 'staged prices are offered again')
     assert.deepEqual({ roster: rosterHash(), state: stateHash() }, hashesBefore, 'staging wrote the team')
     await shot('models-staged-1280.png')
@@ -1155,11 +1157,11 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     const newModel = main.getByRole('combobox', { name: 'Model', exact: true })
     assert.equal(await newModel.inputValue(), 'claude-opus-5-6')
     await main.getByRole('radio', { name: 'Claude Code', exact: true }).and(main.locator('[aria-checked="true"]')).waitFor()
-    await main.getByText(/^The name, the price and the capacity are from research on .+\. Check the Agent app and Host; BMN does not check that the app takes this name\.$/).waitFor()
+    await main.getByText(/^Name, price and capacity from research on .+\. Check Agent app and Host\.$/).waitFor()
     const priceRow = main.locator('.preferences-row', { hasText: /^Price/ })
     await priceRow.getByText('$15.00 / $75.00').waitFor()
-    await priceRow.getByText(`Read on prices.anthropic.test, ${today}`).waitFor()
-    await main.getByText(/Capacity 1 000 000 tokens, found by research\./).waitFor()
+    await priceRow.getByText(/^Read on prices\.anthropic\.test, [A-Z][a-z]+ \d+$/).waitFor()
+    await main.getByText(/Capacity 1 000 000 tokens, from research\./).waitFor()
     assert.equal(await main.locator('input[name="class-new"]:checked').count() <= 1, true)
     await shot('new-agent-from-research-1280.png')
     await main.getByRole('button', { name: 'Undo', exact: true }).click()
@@ -1176,7 +1178,7 @@ setTimeout(() => console.log(JSON.stringify({ type: 'result', is_error: false, r
     await newModel.fill('claude-sonnet-5-9')
     await newModel.press('Escape')
     await main.getByRole('button', { name: 'Look up this model' }).click()
-    await main.getByText(/^The price is from research on .+\.$/).waitFor()
+    await main.getByText(/^Price from research on .+\.$/).waitFor()
     await priceRow.getByText('$3.00 / $15.00').waitFor()
     assert.equal(researchRuns().length, runsBefore + 1, 'a Look up is one run')
     assert.match(researchRuns().at(-1).prompt, /Models:\n- claude-sonnet-5-9\n\n/)

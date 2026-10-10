@@ -1,6 +1,8 @@
 // MODULE: research-view.ts - Story 60.10: what Team › Models shows of a research, worked out against the team as drafted; kept pure for tests
 import type { ResearchModelView, ResearchPrice, ResearchSnapshot, RosterAgentShape, RosterDataShape, RosterHarness, RosterPriceShape } from '@bmn/protocol'
-import { updateAgent } from './roster-staging'
+import { dayWords, priceText, siteOf, updateAgent } from './roster-staging'
+
+export { dayWords, priceText, siteOf }
 
 /** One of the team's models with the agents that use it and what research found for it, or null when it never found it. */
 export interface TeamModelRow {
@@ -80,26 +82,6 @@ export function researchGroups(models: readonly ResearchModelView[], data: Roste
   return { fresh: others.filter((model) => model.fresh), team, earlier: others.filter((model) => !model.fresh) }
 }
 
-/** "$15.00 / $75.00": per million tokens, in / out. */
-export function priceText(price: Pick<RosterPriceShape, 'input' | 'output'>): string {
-  return `$${price.input.toFixed(2)} / $${price.output.toFixed(2)}`
-}
-
-/** The site a value was read on, as the page names it: "anthropic.com", never the whole address. */
-export function siteOf(source: string): string {
-  try {
-    return new URL(source).hostname.replace(/^www\./, '')
-  } catch {
-    return source
-  }
-}
-
-/** "Oct 10": the day a value was read or a model was seen. */
-export function dayWords(date: string): string {
-  const value = new Date(date.length === 10 ? `${date}T12:00:00` : date)
-  return Number.isNaN(value.getTime()) ? date : value.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-}
-
 /** Why a value is not counted, said once beside it. */
 export function unverifiedWords(why: string | undefined): string {
   return why ? `BMN could not confirm this on the cited page: ${why}.` : 'BMN could not confirm this on the cited page.'
@@ -126,17 +108,18 @@ export function fillFrom(model: ResearchModelView, data: RosterDataShape): Resea
  * only what was found for the name the owner typed.
  */
 export function fillWords(fill: ResearchFill, typed = false): string {
-  const parts = [typed ? null : 'the name', fill.price ? 'the price' : null, fill.contextWindow ? 'the capacity' : null].filter((part): part is string => part !== null)
-  const list = parts.length === 1 ? `${parts[0]} is` : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)} are`
+  const parts = [typed ? null : 'name', fill.price ? 'price' : null, fill.contextWindow ? 'capacity' : null].filter((part): part is string => part !== null)
+  const list = parts.length === 1 ? parts[0]! : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`
   const what = `${list.charAt(0).toUpperCase()}${list.slice(1)} from research on ${fill.day}.`
-  return typed ? what : `${what} Check the Agent app and Host; BMN does not check that the app takes this name.`
+  // That BMN does not check the name is said once, under the Model field.
+  return typed ? what : `${what} Check Agent app and Host.`
 }
 
 /** The page's status line: when it was last researched, by whom, and how it ended. */
 export function researchStatus(snapshot: Pick<ResearchSnapshot, 'last' | 'running' | 'researchers'>, shortDate: (iso: string) => string): string {
   if (snapshot.running !== null) {
     const name = snapshot.researchers.find((entry) => entry.id === snapshot.running?.researcher)?.name ?? snapshot.running.researcher
-    if (snapshot.running.lookup) return `${name} is looking one model up`
+    if (snapshot.running.lookup) return `${name} is looking up one model`
     return snapshot.running.total === 0 ? `${name} is starting` : `${name} is researching · ${snapshot.running.done} of ${snapshot.running.total} models`
   }
   if (snapshot.last === null) return 'Not researched yet'

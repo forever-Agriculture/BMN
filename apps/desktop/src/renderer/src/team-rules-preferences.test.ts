@@ -1093,7 +1093,7 @@ describe('Team › Models (60.10, first release)', () => {
     researchers: [
       { id: 'sol', name: 'Sol', harness: 'codex', ok: true }, { id: 'fable', name: 'Fable', harness: 'claude', ok: true }, { id: 'luna', name: 'Luna', harness: 'codex', ok: true },
       { id: 'glm', name: 'Glm', harness: 'claude', ok: false, why: 'its provider gets public work only', reason: 'synthetic reason with the word roster in it' },
-      { id: 'kimi', name: 'Kimi', harness: 'opencode', ok: false, why: 'OpenCode cannot research', reason: 'synthetic' }
+      { id: 'kimi', name: 'Kimi', harness: 'opencode', ok: false, why: 'its app is OpenCode', reason: 'synthetic' }
     ],
     researcher: 'fable', running: null, ended: null
   }
@@ -1111,9 +1111,9 @@ describe('Team › Models (60.10, first release)', () => {
     expect(page).toContain('<button type="button">Research now</button>')
     // The researcher is one of the agents that may research; the others are named with why in plain words, never the check's own.
     expect([...page.matchAll(/role="radio" aria-checked="(true|false)"[^>]*>([^<]+)</g)].map((match) => `${match[2]}:${match[1]}`)).toEqual(['Sol:false', 'Fable:true', 'Luna:false'])
-    expect(words(page)).toContain('BMN sends only your model names and the source list. Research runs in a separate empty folder with web tools only. Not offered: Glm (its provider gets public work only), Kimi (OpenCode cannot research).')
+    expect(words(page)).toContain('Gets only your model names and the source list, never your files. Runs in an empty folder with web tools only. Glm cannot research: its provider gets public work only. Kimi cannot research: its app is OpenCode.')
     expect(page).not.toContain('synthetic')
-    expect(researcherHint('codex')).toBe("BMN sends only your model names and the source list. Research runs in a separate empty folder, read-only, with web search on and Codex's command tools off.")
+    expect(researcherHint('codex')).toBe('Gets only your model names and the source list, never your files. Runs in an empty folder, read-only, with web search and no command tools.')
     expect(page).toContain('<ol class="sources"><li>Provider pages</li><li>Other sites</li></ol>')
     expect(words(page)).not.toMatch(SCHEMA_WORDS)
   })
@@ -1123,16 +1123,19 @@ describe('Team › Models (60.10, first release)', () => {
     expect(page).toContain(`<h4 class="group-head">New since ${dayWords('2026-10-03T09:00:00.000Z')}<span class="caption">first seen by the research on ${dayWords('2026-10-10T09:40:00.000Z')}</span></h4>`)
     expect(page).toContain('<h4 class="group-head">Your team<span class="caption">as the research found them</span></h4>')
     expect(page).toContain('<summary>Found earlier · 1 model</summary>')
-    expect(page).toContain('<span class="mono">$15.00 / $75.00</span><span class="faint">per M tokens, in / out</span><span class="mono source" title="https://www.anthropic.example.test/pricing" aria-label="anthropic.example.test, price source for model-next">anthropic.example.test</span>')
-    // A value BMN could not confirm says so, with the reason on hover.
-    expect(page).toContain('<span class="faint" title="BMN could not confirm this on the cited page: the page does not name this model.">unverified ·</span><span class="mono source" title="https://blog.example.test/prices"')
-    expect(page).toContain('<span>400 000 tokens</span><span class="faint">context window</span>')
+    expect(page).toContain('<span class="mono value">$15.00 / $75.00</span><span class="faint">per M tokens, in / out</span><span class="mono source" title="https://www.anthropic.example.test/pricing" aria-label="anthropic.example.test, price source for model-next">anthropic.example.test</span>')
+    // A value BMN could not confirm says so right after it, in plain weight, with the reason on hover.
+    expect(page).toContain('<span class="mono value">$0.60 / $2.50</span><span title="BMN could not confirm this on the cited page: the page does not name this model.">unverified</span><span class="faint">per M tokens, in / out</span><span class="mono source" title="https://blog.example.test/prices"')
+    expect(page).toContain('<span class="mono value">400 000 tokens</span><span class="faint">capacity</span>')
+    // The last research and the one before it were a week apart, so the head names both days; on one day it says it once.
+    expect(modelsMarkup(research({ snapshot: { ...RESEARCH, previousAt: '2026-10-10T08:00:00.000Z' } }))).toContain('<h4 class="group-head">New in this research</h4>')
     expect(page).toContain('<button type="button" class="small" aria-label="Add model-next to team">Add to team…</button>')
     // The team: a differing price says what the team has; a model this research missed says when it was last seen.
-    expect(page).toContain('<div class="faint">Your team has $1.25 / $10.00</div>')
+    expect(page).toContain('<span class="faint">· your team has $1.25 / $10.00</span>')
     expect(page).toContain('<span class="needs-dot" role="img" aria-label="Price differs from your team&#x27;s" title="Price differs from your team&#x27;s"></span>')
     expect(page).toContain(`<div class="faint">Not found this time · last seen ${dayWords('2026-10-03T09:00:00.000Z')}</div>`)
-    expect(page).toContain('<div class="faint">Never found by the research</div>')
+    expect(page).toContain('<div class="faint">Not found yet</div>')
+    expect(page).not.toContain('BMN does not check that an app takes a name found here')
     expect(page).toContain('<span class="mono">model-fable</span> <span class="faint">Fable · Anthropic</span>')
   })
 
@@ -1151,12 +1154,13 @@ describe('Team › Models (60.10, first release)', () => {
     expect(running).not.toContain('Research now')
     expect(count(running, 'role="radio"')).toBe(3)
     expect([...running.matchAll(/role="radio"[^>]*disabled=""/g)]).toHaveLength(3)
-    const ended = modelsMarkup(research({ notice: { ok: true, text: 'Research kept 5 models. Stopped before it finished.' }, snapshot: { ...RESEARCH, last: { ...RESEARCH.last!, state: 'partial', note: 'Stopped before it finished.' } } }))
-    expect(ended).toContain('<p class="preferences-success" role="status">Research kept 5 models. Stopped before it finished.</p>')
-    expect(ended).toContain('· 6 models · not finished</span>')
-    // How the run ended is said once: the standing line shows only when the run's own notice is gone.
-    expect(ended).not.toContain('The last research did not finish')
-    expect(words(modelsMarkup(research({ snapshot: { ...RESEARCH, last: { ...RESEARCH.last!, state: 'partial', note: 'Stopped before it finished.' } } })))).toContain('The last research did not finish: Stopped before it finished.')
+    // A run that kept nothing says how it ended; one that kept something shows in the head and in one line under it.
+    const nothing = modelsMarkup(research({ notice: { ok: true, text: 'Stopped before it finished. Nothing was kept.' } }))
+    expect(nothing).toContain('<p class="preferences-success" role="status">Stopped before it finished. Nothing was kept.</p>')
+    const partial = modelsMarkup(research({ snapshot: { ...RESEARCH, last: { ...RESEARCH.last!, state: 'partial', note: 'Stopped before it finished.' } } }))
+    expect(partial).toContain('· 6 models · not finished</span>')
+    expect(count(partial, 'Stopped before it finished.')).toBe(1)
+    expect(words(partial)).toContain('The last research did not finish: Stopped before it finished.')
   })
 
   it('says plainly when no agent can research, and what the page shows before any research', () => {
@@ -1167,7 +1171,9 @@ describe('Team › Models (60.10, first release)', () => {
     expect(none).toContain('<button type="button" disabled="" title="No agent on your team can research">Research now</button>')
     expect(none).not.toContain('role="radio"')
     expect(lines(none)).toEqual(['model-sol', 'model-fable', 'model-luna', 'model-haiku', 'model-glm'])
-    expect(count(none, '<div class="faint">Not researched yet</div>')).toBe(5)
+    // The head says it once; the lines carry only their names.
+    expect(count(none, 'Not researched yet')).toBe(1)
+    expect(none).not.toContain('Not found yet')
     expect(modelsMarkup(research({ snapshot: null }))).toContain('Reading what research found…')
     expect(modelsMarkup(research({ loadError: 'Could not read what research found' }))).toContain('<p class="preferences-error" role="alert">Could not read what research found</p>')
   })
@@ -1179,10 +1185,10 @@ describe('Team › Models (60.10, first release)', () => {
   it('New agent opens filled from a find, says so once with Undo, and offers Look up (AC6)', () => {
     const fill = fillFrom(RESEARCH.models[3]!, DATA)
     const markup = renderToStaticMarkup(createElement(TeamPreferences, { team: team(), page: { name: 'new', fill }, research: research(), go: noop }))
-    expect(markup).toMatch(/<div class="page-note with-action" role="status"><span class="note-text">The name and the price are from research on [^<]+\. Check the Agent app and Host; BMN does not check that the app takes this name\.<\/span><button type="button" class="small">Undo<\/button><\/div>/)
+    expect(markup).toMatch(/<div class="page-note with-action" role="status"><span class="note-text">Name and price from research on [^<]+\. Check Agent app and Host\.<\/span><button type="button" class="small">Undo<\/button><\/div>/)
     expect(markup).toMatch(/aria-label="Model"[^>]* value="model-next"/)
     expect(markup).toContain('<span class="mono">$15.00 / $75.00</span><span class="faint"> per M tokens, in / out</span>')
-    expect(words(markup)).toContain('Read on www.anthropic.example.test, 2026-10-10')
+    expect(words(markup)).toContain(`Read on www.anthropic.example.test, ${dayWords('2026-10-10')}`)
     expect(markup).toContain('aria-live="polite">Found in research on ' + dayWords('2026-10-10T09:40:00.000Z') + '. BMN does not check that Claude Code takes this name.</p>')
     expect(markup).toMatch(/<button type="button" class="small" aria-label="Look up this model" title="Asks your researcher for this model&#x27;s published price and capacity">Look up<\/button>/)
     // Without a researcher, or without a name, Look up is off and says why.

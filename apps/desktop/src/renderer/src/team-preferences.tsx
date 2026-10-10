@@ -22,7 +22,7 @@ import { Segmented } from './history-preferences'
 import { ModelField } from './model-field'
 import { modelSourceWords, modelSuggestions, type ReportedModel } from './model-suggestions'
 import { ModelsPage, researchedModels, type ResearchState } from './models-preferences'
-import { fillFrom, fillWords, priceText, type ResearchFill } from './research-view'
+import { dayWords, fillFrom, fillWords, priceText, type ResearchFill } from './research-view'
 import { Dot, Piece } from './roster-marks'
 import {
   CLASS_WORDS,
@@ -701,12 +701,12 @@ function NewAgentPage(props: { team: TeamState; data: RosterDataShape; apps: App
           : <span>{PRIVATE_WORK_WORDS[answer]}</span>}
       </Row>
       {price ? (
-        <Row label="Price" hint={draft.price ? [draft.price.source ? `Read on ${hostOf(draft.price.source)}` : null, draft.price.as_of].filter(Boolean).join(', ') : `Taken from ${twin?.name}, which uses the same model.`}>
+        <Row label="Price" hint={draft.price ? [draft.price.source ? `Read on ${hostOf(draft.price.source)}` : null, draft.price.as_of ? dayWords(String(draft.price.as_of)) : null].filter(Boolean).join(', ') : `Taken from ${twin?.name}, which uses the same model.`}>
           <span className="mono">{priceText(price)}</span><span className="faint"> per M tokens, in / out</span>
         </Row>
       ) : null}
       <Row label="Context limit" hint={capacity
-        ? `Empty means the app's own default. Capacity ${thousands(capacity)} tokens, ${draft.contextWindow ? 'found by research' : `taken from ${twin?.name}`}.`
+        ? `Empty means the app's own default. Capacity ${thousands(capacity)} tokens, ${draft.contextWindow ? 'from research' : `taken from ${twin?.name}`}.`
         : "Empty means the app's own default."}>
         <NumberField label="Context limit" value={draft.contextLimit} placeholder="App default" onChange={(next) => setDraft((current) => {
           const rest = { ...current }

@@ -1806,6 +1806,12 @@
   font-size: 12px;
 }
 
+/* The value keeps one width down the list, so sites and dates start at the same place on every line. */
+.preferences-dialog .model-facts > .value {
+  display: inline-block;
+  min-width: 16ch;
+}
+
 .preferences-dialog .model-facts .source {
   color: var(--muted);
 }

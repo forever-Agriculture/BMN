@@ -179,7 +179,7 @@ export function researchers({ environment = process.env, now = new Date() } = {}
   for (const agent of generation.data.agents) {
     if (agentState(agent) !== 'active') continue
     if (!RESEARCH_APPS.includes(agent.harness)) {
-      found.push({ id: agent.id, name: agent.name, harness: agent.harness, ok: false, why: `${APP_NAMES[agent.harness] ?? agent.harness} cannot research`, reason: `${APP_NAMES[agent.harness] ?? agent.harness} has no research form BMN can check` })
+      found.push({ id: agent.id, name: agent.name, harness: agent.harness, ok: false, why: `its app is ${APP_NAMES[agent.harness] ?? agent.harness}`, reason: `${APP_NAMES[agent.harness] ?? agent.harness} has no research form BMN can check` })
       continue
     }
     let result
