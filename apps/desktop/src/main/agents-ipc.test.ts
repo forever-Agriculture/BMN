@@ -1,9 +1,9 @@
 // MODULE: agents-ipc.test.ts - Epic 60.4–60.6: the Team and Rules handlers preview an approval, update only the rules files that were shown, and re-inspect what an approval records
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, ContextLimitPlan, RosterDataShape, RulesMasterPlan, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSnapshot } from '@bmn/protocol'
+import type { AgentsOutcome, AgentsPreview, AgentsShownRevision, AgentsSnapshot, ContextLimitPlan, RosterDataShape, RulesMasterPlan, RulesOutcome, RulesPlan, RulesRevertPlan, RulesSnapshot, SkillsPlan } from '@bmn/protocol'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { approveRoster, restoreGeneration, saveAndApprove } from './agents-approval'
 import { fileToApproved, installAgentsIpcHandlers } from './agents-ipc'
@@ -589,5 +589,83 @@ describe('context limits on Rules › Health (60.9 AC1, AC3)', () => {
     await expect(call('rules:context-plan', { harness: 'opencode', limit: 1, compact: null })).rejects.toThrow(/codex, claude/)
     await expect(call('rules:context-plan', { harness: 'codex', limit: -5, compact: null })).rejects.toThrow(/positive whole number/)
     await expect(call('rules:context-test', { harness: 'cursor' })).rejects.toThrow(/codex, claude/)
+  })
+})
+
+describe('skills on Rules › Skills and Health (60.11 AC1-AC5)', () => {
+  /** A stub Codex that names the skills in ~/.agents/skills, whatever home folder it is started in. */
+  const codexLister = [
+    'if [ "$1" = "--version" ]; then echo "codex-cli 0.161.0"; exit 0; fi',
+    '[ "$1 $2" = "debug prompt-input" ] || exit 4',
+    'for d in "$HOME"/.agents/skills/*/; do [ -f "${d}SKILL.md" ] && echo "skill $(basename "$d")"; done',
+    'exit 0'
+  ].join('\n')
+  const skill = (name: string): void => {
+    mkdirSync(join(home, '.claude/skills', name), { recursive: true })
+    writeFileSync(join(home, '.claude/skills', name, 'SKILL.md'), `---\nname: ${name}\ndescription: Synthetic skill ${name}.\n---\n\nSYNTHETIC-BODY ${name}\n`)
+  }
+  const rulesSnapshot = (): Promise<RulesSnapshot> => call('rules:snapshot')
+
+  it('writes nothing before the owner\'s test, then installs as one transaction that Undo puts back', async () => {
+    await approvedAndInstalled()
+    skill('alpha')
+    skill('beta')
+    stub('codex', codexLister)
+    const before = (await rulesSnapshot()).skills
+    expect(before.source).toEqual({ path: join(home, '.claude/skills'), readable: true })
+    expect(before.skills.map((entry) => [entry.name, entry.description, entry.states])).toEqual([['alpha', 'Synthetic skill alpha.', {}], ['beta', 'Synthetic skill beta.', {}]])
+    expect(before.apps.map((app) => [app.harness, app.supported, app.state, app.testable])).toEqual([
+      ['claude', false, 'Not supported yet', true], ['codex', false, 'Not supported yet', true], ['opencode', false, 'Not supported yet', true], ['cursor', false, 'Not supported yet', false]
+    ])
+    expect(await call<SkillsPlan>('rules:skills-plan')).toMatchObject({ ok: false, code: 'SKILLS_UNSUPPORTED', targets: [] })
+
+    const tested = await call<RulesOutcome>('rules:skills-test', { harness: 'codex' })
+    expect(tested).toMatchObject({ ok: true, message: `Codex skills test passed: Codex reads skills from ~/.agents/skills; Codex named a test skill placed in ${join(home, '.agents/skills')}` })
+    expect(readdirSync(join(home, '.agents/skills'))).toEqual([])
+    const codex = tested.snapshot.skills.apps[1]!
+    expect(codex).toMatchObject({ supported: true, location: join(home, '.agents/skills'), format: 'link', readsSource: false, kind: 'full', state: 'Missing', test: { outcome: 'pass', version: '0.161.0' }, loading: { outcome: 'pass', stale: false } })
+    expect(tested.snapshot.skills).toMatchObject({ pending: 2, exposed: 0 })
+    expect(tested.snapshot.skills.skills.map((entry) => entry.states)).toEqual([{ codex: 'missing' }, { codex: 'missing' }])
+
+    const plan = await call<SkillsPlan>('rules:skills-plan')
+    expect(plan).toMatchObject({ ok: true, exposed: [] })
+    expect(plan.targets.map((target) => [target.harness, target.skill, target.kind, target.note, target.diff])).toEqual([
+      ['codex', 'alpha', 'adds the skill', 'A link to the skill in the skills folder.', ''], ['codex', 'beta', 'adds the skill', 'A link to the skill in the skills folder.', '']
+    ])
+    expect(JSON.stringify([before, tested, plan])).not.toContain('SYNTHETIC-BODY')
+    expect(await call<RulesOutcome>('rules:skills-install', { planHash: 'f'.repeat(64) })).toMatchObject({ ok: false, code: 'REVISION_CONFLICT' })
+    const installed = await call<RulesOutcome>('rules:skills-install', { planHash: plan.planHash })
+    expect(installed).toMatchObject({ ok: true, message: 'Changed 2 skill entries. Sessions started before this keep the skills they had.' })
+    expect(readlinkSync(join(home, '.agents/skills/alpha'))).toBe(join(home, '.claude/skills/alpha'))
+    expect(installed.snapshot.skills).toMatchObject({ pending: 0, exposed: 0 })
+    expect(installed.snapshot.skills.apps[1]).toMatchObject({ state: 'Linked' })
+    // The skills changed since the loading test: it reads stale.
+    skill('gamma')
+    expect((await rulesSnapshot()).skills.apps[1]).toMatchObject({ state: 'Missing', loading: { stale: true } })
+
+    const transaction = installed.snapshot.transactions[0]!
+    expect(transaction).toMatchObject({ reason: 'skills install', targets: ['codex'], state: 'complete' })
+    const undo = await call<RulesPlan>('rules:plan-restore', { transaction: transaction.id })
+    expect(undo.targets.map((target) => [target.harness, target.change, target.note])).toEqual([
+      ['codex', 'missing', 'A skill is put back whole; its lines are not shown.'], ['codex', 'missing', 'A skill is put back whole; its lines are not shown.']
+    ])
+    expect(await call<RulesOutcome>('rules:restore', { transaction: transaction.id, planHash: undo.planHash })).toMatchObject({ ok: true, message: 'Put back the skills in Codex' })
+    expect(readdirSync(join(home, '.agents/skills'))).toEqual([])
+    await expect(call('rules:skills-test', { harness: 'vim' })).rejects.toThrow()
+  })
+
+  it('previews which apps a staged skills change reaches, and approves it with the team', async () => {
+    await approvedAndInstalled()
+    skill('alpha')
+    const data = (await snapshot()).file.data as RosterDataShape
+    const staged: RosterDataShape = { ...data, skills: [{ id: 'alpha', public: true, only: ['codex', 'opencode'] }] }
+    const preview = await call<AgentsPreview>('agents:preview', { request: { kind: 'staged', data: staged } })
+    expect(preview.valid).toBe(true)
+    expect(preview.differences).toEqual([{ scope: 'skills', id: 'alpha', field: null, kind: 'added', after: { present: true, value: { public: true, only: ['codex', 'opencode'] } } }])
+    expect(preview.consequences).toEqual(['Skill alpha would reach OpenCode', 'Skill alpha would no longer reach Claude Code'])
+    const approved = await call<AgentsOutcome>('agents:save', { shown: await shown(), data: staged, teamUpdate: bindings(preview) })
+    expect(approved).toMatchObject({ ok: true })
+    expect(file('.config/bmn/agents/roster.md')).toContain('## skills\n\n```yaml\npublic: [alpha]\nonly: {alpha: [codex, opencode]}\n```')
+    expect(((await snapshot()).approved?.data as RosterDataShape).skills).toEqual([{ id: 'alpha', public: true, only: ['codex', 'opencode'] }])
   })
 })

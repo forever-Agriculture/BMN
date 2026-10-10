@@ -279,6 +279,12 @@ that may not see private work, the prompt is stopped before it leaves and the se
 card with **Allow here** (that provider, that workspace only) and **Keep blocked**. This works in
 Claude Code and Codex; Cursor only warns, and OpenCode is not covered.
 
+Rules → **Skills** gives every agent app the skills you keep in one folder: a link, or a copy
+where the app does not follow links, installed and undone as one step after you saw the list. A
+skill can be kept to some apps, and an app that gets public work only receives just the skills
+you mark Public; a skill an app can see but may not have is shown as exposed. Nothing is written
+for an app until its own test, on the installed version, showed where it reads skills.
+
 An agent's context limit, set on its page, is added to each run BMN or dev-auto starts with it
 and checked before the run leaves. Rules → **Health** also shows each app's default limit for the
 sessions you start yourself and can change it, one line of the app's own settings file, after

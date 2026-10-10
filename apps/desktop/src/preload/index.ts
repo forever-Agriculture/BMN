@@ -21,6 +21,7 @@ import {
   type RosterHarness,
   type ContextLimitApp,
   type ContextLimitPlan,
+  type SkillsPlan,
   type RulesOutcome,
   type RulesMasterPlan,
   type RulesPlan,
@@ -799,6 +800,15 @@ contextBridge.exposeInMainWorld('aiTerminal', {
   },
   testContextLimit(harness: ContextLimitApp): Promise<RulesOutcome> {
     return invokeBridge('aiterm:rules:context-test', { harness })
+  },
+  planSkillsInstall(): Promise<SkillsPlan> {
+    return invokeBridge('aiterm:rules:skills-plan', {})
+  },
+  installSkills(planHash: string): Promise<RulesOutcome> {
+    return invokeBridge('aiterm:rules:skills-install', { planHash })
+  },
+  testSkills(harness: RosterHarness): Promise<RulesOutcome> {
+    return invokeBridge('aiterm:rules:skills-test', { harness })
   },
   readClipboardText(): Promise<{ text: string }> {
     return invokeBridge('aiterm:clipboard:read-text', {})

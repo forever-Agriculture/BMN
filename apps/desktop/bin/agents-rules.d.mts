@@ -56,4 +56,7 @@ export declare function probe(harness: RulesHarness, options?: { environment?: N
 export declare const RULES_USAGE: string
 export declare function runRulesCommand(argv: string[]): Promise<number>
 export declare function confirm(question: string, details: string, options: { yes: boolean; asJson: boolean }): Promise<boolean>
+export declare function writePrivate(path: string, text: string): void
+export declare function newTransaction(now: Date): { id: string; folder: string }
+export declare function routeStillMatches(harness: string, decision: { kind: RenderingKind; route: { provider: string } | null }, environment: NodeJS.ProcessEnv | Record<string, string>): Promise<{ ok: boolean; reason?: string; remedy?: string; inspected?: unknown }>
 export declare function findRollout(root: string, cwd: string, since: number): string | null

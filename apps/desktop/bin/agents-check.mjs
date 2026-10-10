@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { chmodSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, statSync, writeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path'
-import { APP_NAMES, DESIGNER_ROLE, LEAD_ROLE, RosterError, UNCHECKED_APPS, agentState, canonicalJson, classRefusal, resolvedDirectory, sha256 } from './agents-roster.mjs'
+import { APP_NAMES, DESIGNER_ROLE, HARNESSES, LEAD_ROLE, RosterError, UNCHECKED_APPS, agentState, canonicalJson, classRefusal, harnessPrivateWork, resolvedDirectory, sha256 } from './agents-roster.mjs'
 import { readApproved, readApprovedWithFile, readValidRoster, stateDirectory } from './agents-state.mjs'
 import { AgentsUsageError, EXIT, failWith, out, readOptions, usage } from './agents-cli.mjs'
 import { publicRendering } from './agents-rules.mjs'
@@ -1271,6 +1271,22 @@ export function consequences(before, after) {
         : `${app} would count as sending data to ${providerName(route.provider)}, as inspected`)
     }
   }
+  // A skill's marks: which apps would start or stop being meant to have it (60.11 AC5). The folder is never named here.
+  const marks = (data) => new Map((data.skills ?? []).map((entry) => [entry.id, entry]))
+  const oldMarks = marks(prior)
+  const newMarks = marks(after)
+  const mayHave = (mark, harness) => (mark?.only === undefined || mark.only.includes(harness)) && (harnessPrivateWork(after, harness).allowed || mark?.public === true)
+  for (const id of [...new Set([...oldMarks.keys(), ...newMarks.keys()])].sort()) {
+    const was = oldMarks.get(id)
+    const now = newMarks.get(id)
+    if (canonicalJson(was ?? null) === canonicalJson(now ?? null)) continue
+    const gains = HARNESSES.filter((harness) => !mayHave(was, harness) && mayHave(now, harness)).map((harness) => APP_NAMES[harness])
+    const loses = HARNESSES.filter((harness) => mayHave(was, harness) && !mayHave(now, harness)).map((harness) => APP_NAMES[harness])
+    if (gains.length > 0) out.push(`Skill ${id} would reach ${listed(gains)}`)
+    if (loses.length > 0) out.push(`Skill ${id} would no longer reach ${listed(loses)}`)
+    if (gains.length === 0 && loses.length === 0) out.push(`Skill ${id}: no app gains or loses it`)
+  }
+  if ((prior.skills_source ?? null) !== (after.skills_source ?? null)) out.push('Skills would come from another folder')
   return [...new Set(out)]
 }
 

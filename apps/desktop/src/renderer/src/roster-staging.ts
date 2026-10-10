@@ -2,6 +2,7 @@
 import {
   ROSTER_APP_NAMES,
   ROSTER_DESIGNER_ROLE,
+  ROSTER_HARNESSES,
   ROSTER_LEAD_ROLE,
   type AgentAppView,
   type RosterAgentShape,
@@ -14,6 +15,7 @@ import {
   type RosterProviderShape,
   type RosterRoleShape,
   type RosterRouteShape,
+  type RosterSkillShape,
   type RosterThen
 } from '@bmn/protocol'
 
@@ -56,7 +58,8 @@ const SECTION_SUBJECTS: Readonly<Record<string, string>> = {
   roles: 'Roles',
   providers: 'Providers',
   exceptions: 'Allowed workspaces',
-  'harness-routes': 'Agent apps'
+  'harness-routes': 'Agent apps',
+  skills: 'Skills'
 }
 
 const FIELD_WORDS: Readonly<Record<string, string>> = {
@@ -64,7 +67,7 @@ const FIELD_WORDS: Readonly<Record<string, string>> = {
   efforts: 'Efforts', roles: 'Roles', aliases: 'Also called', enabled_note: 'Reason it is off', context_window: 'Capacity', context_limit: 'Context limit',
   compact_at: 'Compact at', paid_by: 'Paid by', price: 'Price', description: 'Line', candidates: 'Order', then: 'If all fail', recheck: 'Recheck',
   small_work: 'Small work', hosts: 'Hosts', sites: 'Sites', private_work: 'Private work', folder: 'Workspace', basis: 'Destination', accepted_versions: 'Accepted versions',
-  input: 'In', cached_input: 'Cached in', output: 'Out', source: 'Source', as_of: 'As of'
+  input: 'In', cached_input: 'Cached in', output: 'Out', source: 'Source', as_of: 'As of', public: 'Public', only: 'Only in'
 }
 
 const VALUE_WORDS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
@@ -74,6 +77,7 @@ const VALUE_WORDS: Readonly<Record<string, Readonly<Record<string, string>>>> = 
   private_work: PRIVATE_WORK_WORDS,
   paid_by: { per_token: 'Per token', subscription: 'Subscription' },
   enabled: { true: 'yes', false: 'no' },
+  public: { true: 'yes' },
   host: { default: 'Provider default' },
   basis: { 'observed-default': "its provider's own servers, as inspected", 'owner-declared': 'on your word' }
 }
@@ -130,6 +134,7 @@ function formatPlain(value: unknown, field: string | undefined, names: Names): s
     if (value.length === 0) return 'none'
     if (field === 'candidates') return value.map((entry) => candidateWords(String(entry), names)).join(', ')
     if (field === 'roles') return value.map((entry) => roleName(String(entry))).join(', ')
+    if (field === 'only') return value.map((entry) => ROSTER_APP_NAMES[entry as RosterHarness] ?? String(entry)).join(', ')
     return value.map((entry) => formatPlain(entry, undefined, names)).join(', ')
   }
   if (typeof value === 'object') {
@@ -160,6 +165,8 @@ export function formatValue(side: RosterDiffShape['before'], field?: string, nam
 function fieldWords(diff: RosterDiffShape, names: Names): string {
   const word = FIELD_WORDS[diff.field ?? ''] ?? diff.field ?? ''
   if (diff.scope === 'agent') return word
+  // The folder the skills come from is one value of the section, not a skill.
+  if (diff.scope === 'skills' && diff.id === SKILLS_SOURCE_ID) return 'Skills folder'
   const provider = (id: string): string => names.providers.get(id) ?? id
   const subject = diff.scope === 'roles' ? roleName(diff.id)
     : diff.scope === 'harness-routes' ? ROSTER_APP_NAMES[diff.id as RosterHarness] ?? diff.id
@@ -195,6 +202,7 @@ function claimant(sentence: string, groups: DiffGroup[], roleIds: ReadonlySet<st
   if (agentGroup) return agentGroup
   const section = (key: string): DiffGroup | undefined => groups.find((group) => group.key === key)
   if (sentence.startsWith('Changing ')) return section('providers')
+  if (/^Skills? /.test(sentence)) return section('skills')
   if (/ could (no longer )?receive private work in /.test(sentence)) return section('exceptions')
   if (/ could (no longer )?carry private work/.test(sentence) || sentence.includes(' would count as sending data ')) return section('harness-routes')
   const roleWord = /^(?:when every |the )?([a-z0-9-]+) /.exec(sentence)?.[1]
@@ -314,7 +322,7 @@ export function diffSummary(diff: string): string {
 
 /** What a file becomes when an install or a rules update is undone. */
 export function undoWords(target: { change: string; diff: string }): string {
-  return target.change === 'link' ? 'Becomes a link again' : target.change === 'missing' ? 'Removed again' : `Put back · ${diffSummary(target.diff)}`
+  return target.change === 'link' ? 'Becomes a link again' : target.change === 'missing' ? 'Removed again' : target.change === 'folder' ? 'Put back as it was' : `Put back · ${diffSummary(target.diff)}`
 }
 
 /** A group's differences on one line, as the "changed outside BMN" row shows them. */
@@ -513,6 +521,41 @@ export function activateAgent(data: RosterDataShape, agentId: string): RosterDat
 /** One answer per provider: it covers every agent there. */
 export function setProviderAnswer(data: RosterDataShape, providerId: string, answer: RosterPrivateWork): RosterDataShape {
   return { ...data, providers: data.providers.map((provider) => (provider.id === providerId ? { ...provider, private_work: answer } : provider)) }
+}
+
+/** The id the skills folder's difference carries; no skill can be named so. */
+export const SKILLS_SOURCE_ID = '.source'
+
+/** A skill's marks in the team, or none: every app that may receive private work has it, and it is not public. */
+export function skillMark(data: Pick<RosterDataShape, 'skills'>, name: string): RosterSkillShape {
+  return data.skills?.find((entry) => entry.id === name) ?? { id: name }
+}
+
+/** The team with one skill's marks replaced; a skill with no mark has no entry, and a team with none has no list. */
+function withSkillMark(data: RosterDataShape, mark: RosterSkillShape): RosterDataShape {
+  const kept = (data.skills ?? []).filter((entry) => entry.id !== mark.id)
+  const skills = [...kept, ...(mark.public === true || mark.only !== undefined ? [mark] : [])].sort((a, b) => (a.id < b.id ? -1 : 1))
+  const rest = Object.fromEntries(Object.entries(data).filter(([key]) => key !== 'skills')) as Omit<RosterDataShape, 'skills'>
+  return skills.length === 0 ? rest : { ...rest, skills }
+}
+
+/** Public lets an app on a public-only route have the skill. */
+export function setSkillPublic(data: RosterDataShape, name: string, on: boolean): RosterDataShape {
+  const mark = skillMark(data, name)
+  return withSkillMark(data, { id: name, ...(on ? { public: true as const } : {}), ...(mark.only === undefined ? {} : { only: mark.only }) })
+}
+
+/** Whether a skill is meant for an app: every app, unless it is kept to some. */
+export function skillForApp(mark: RosterSkillShape, harness: RosterHarness): boolean {
+  return mark.only === undefined || mark.only.includes(harness)
+}
+
+/** Adds an app to a skill's scope or takes it out; all four apps is "all apps" again, and the last app cannot be taken out. */
+export function toggleSkillApp(data: RosterDataShape, name: string, harness: RosterHarness): RosterDataShape {
+  const mark = skillMark(data, name)
+  const now = ROSTER_HARNESSES.filter((app) => skillForApp(mark, app) !== (app === harness))
+  if (now.length === 0) return data
+  return withSkillMark(data, { id: name, ...(mark.public === true ? { public: true as const } : {}), ...(now.length === ROSTER_HARNESSES.length ? {} : { only: now }) })
 }
 
 /** One allowed workspace taken away: its provider may no longer see private work there (60.8 AC5). */

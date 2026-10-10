@@ -1722,6 +1722,64 @@
   text-overflow: ellipsis;
 }
 
+/* Rules › Skills: one row per skill: its name and first line, the Public switch, then the apps it is for with its state in each. */
+.preferences-dialog .skill-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 14px;
+  align-items: center;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.preferences-dialog .skill-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.preferences-dialog .skill-name > .faint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preferences-dialog .skill-public {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.preferences-dialog .skill-row > .chips {
+  grid-column: 1 / -1;
+}
+
+.preferences-dialog .scope-word {
+  min-width: 52px;
+  font-size: 12px;
+}
+
+.preferences-dialog .chip-state {
+  color: var(--faint);
+}
+
+.preferences-dialog .chip.on .chip-state {
+  color: var(--muted);
+}
+
+.preferences-dialog .chip .needs-dot {
+  margin-right: 2px;
+}
+
+.preferences-dialog .rules-page .skill-rows {
+  margin-top: 8px;
+  border-top: 1px solid var(--hairline);
+}
+
+.preferences-dialog .rules-page .skill-rows ~ .preferences-help {
+  margin-top: 10px;
+}
+
 /* A program's path is shown whole: its last part is the program's name. */
 .preferences-dialog .path.wrap {
   white-space: normal;
@@ -1782,7 +1840,7 @@
 }
 
 .preferences-dialog .rules-page .health-row ~ .preferences-help,
-.preferences-dialog .rules-page :is(.app-block, .limit-block) ~ .preferences-help,
+.preferences-dialog .rules-page :is(.app-block, .limit-block, .skills-block) ~ .preferences-help,
 .preferences-dialog .team-page .role ~ .preferences-help {
   margin-top: 10px;
 }

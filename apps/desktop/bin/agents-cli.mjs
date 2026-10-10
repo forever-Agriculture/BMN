@@ -326,6 +326,11 @@ export async function runRules(argv) {
   return runRulesCommand(argv)
 }
 
+export async function runSkills(argv) {
+  const { runSkillsCommand } = await import('./agents-skills.mjs')
+  return runSkillsCommand(argv)
+}
+
 export async function runContext(argv) {
   const { runContextCommand } = await import('./agents-context.mjs')
   return runContextCommand(argv)

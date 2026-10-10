@@ -6,7 +6,7 @@
 // BMN looked where a session does. No step reaches a provider or the owner's own rules. Screenshots land in .dev-auto/evidence/epic-60/shots/ (ignored).
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -168,7 +168,7 @@ await withTemporaryRoot(temporaryRootContracts.electronDevelopment, async ({ roo
     }
     await shot('page-appearance-1280.png')
     await go('Rules')
-    assert.deepEqual(await nav.locator('.nav-sub .nav-item').allTextContents(), ['Editor', 'Health'])
+    assert.deepEqual(await nav.locator('.nav-sub .nav-item').allTextContents(), ['Editor', 'Skills', 'Health'])
     await go('Team')
     passed('Team and Rules head the navigation with their sub-pages; the eight earlier sections are pages; no jump list (60.5 AC1)')
 
@@ -912,6 +912,88 @@ done`)
     assert.doesNotMatch(readFileSync(join(home, '.claude/CLAUDE.md'), 'utf8'), /Haiku|added outside BMN/)
     passed('Approve first lists each rules file with its path and diff, commits from there, updates exactly those files; Undo shows what it puts back and waits for the owner')
 
+    phase('60.11: Skills lists each skill with its apps and state; the owner\'s test finds where Codex reads skills; Install… links them after showing the list, and Undo puts the folder back')
+    const skillsDir = join(home, '.claude/skills')
+    const codexSkills = join(home, '.agents/skills')
+    const writeSkill = (folder, name, text) => {
+      mkdirSync(join(folder, name), { recursive: true })
+      writeFileSync(join(folder, name, 'SKILL.md'), text)
+    }
+    writeSkill(skillsDir, 'evidence-first', '---\nname: evidence-first\ndescription: Check a claim against the files before saying it.\n---\n\nSynthetic skill text.\n')
+    writeSkill(skillsDir, 'small-steps', '---\nname: small-steps\ndescription: Change one thing, then check it.\n---\n\nSynthetic skill text.\n')
+    // Codex already holds a folder of its own under one skill's name.
+    writeSkill(codexSkills, 'small-steps', '---\nname: small-steps\n---\n\nKept by hand.\n')
+    writeFileSync(join(codexSkills, 'small-steps/own.md'), 'own\n')
+    // A stand-in Codex that names the skills in ~/.agents/skills of whatever home folder it is started in.
+    stub('codex', ['if [ "$1" = "--version" ]; then echo "codex-cli 0.161.0"; exit 0; fi', '[ "$1 $2" = "debug prompt-input" ] || exit 4',
+      'for d in "$HOME"/.agents/skills/*/; do [ -f "${d}SKILL.md" ] && echo "skill $(basename "$d")"; done', 'exit 0'].join('\n'))
+    const skillRow = (name) => main.locator(`.skill-row[data-skill="${name}"]`)
+    const skillsApp = (name) => main.locator('.skills-block', { has: page.locator('.health-row[data-skills] > span:first-child', { hasText: new RegExp(`^${name}$`) }) })
+    await go('Rules', 'Skills')
+    await main.getByRole('button', { name: 'Check now' }).click()
+    await skillRow('evidence-first').getByText('Check a claim against the files before saying it.', { exact: true }).waitFor()
+    await skillRow('evidence-first').getByRole('button', { name: 'evidence-first in Codex: Not yet' }).waitFor()
+    assert.equal(await main.getByRole('button', { name: 'Install…' }).count(), 0, 'Install… is offered before any app was tested')
+    await go('Rules', 'Health')
+    await skillsApp('Codex').getByText('Not tested on 0.161.0').waitFor()
+    assert.equal(await main.getByRole('button', { name: 'Skills test for Cursor' }).isDisabled(), true, 'a test is offered for an app BMN cannot ask')
+    await main.getByRole('button', { name: 'Skills test for Codex' }).click()
+    const skillsSheet = skillsApp('Codex').locator('.sheet')
+    await skillsSheet.getByText('no sign-in is there, so nothing is sent', { exact: false }).waitFor()
+    await skillsSheet.getByRole('button', { name: 'Run test' }).click()
+    await notice(/^Codex skills test passed: Codex reads skills from ~\/\.agents\/skills; Codex named a test skill placed in /)
+    await skillsApp('Codex').locator('.path', { hasText: '~/.agents/skills' }).waitFor()
+    await skillsApp('Codex').getByText('Differs').waitFor()
+    await skillsApp('Codex').getByText(/^Loading test passed /).waitFor()
+    assert.deepEqual(readdirSync(codexSkills), ['small-steps'], 'the test left a test skill behind')
+    assert.equal(readdirSync(home).filter((name) => name.startsWith('.bmn-skills-test-')).length, 0, 'the test left its folder behind')
+    await skillsApp('Codex').scrollIntoViewIfNeeded()
+    await shot('health-skills-1280.png')
+
+    await go('Rules', 'Skills')
+    await skillRow('evidence-first').getByRole('button', { name: 'evidence-first in Codex: Missing' }).waitFor()
+    await skillRow('small-steps').getByRole('button', { name: 'small-steps in Codex: Differs' }).waitFor()
+    // Kept away from Claude Code: a staged change, said in the footer with the app it reaches, in effect only once approved.
+    const beforeScope = { roster: rosterHash(), state: stateHash() }
+    await skillRow('small-steps').getByRole('button', { name: /^small-steps in Claude Code: / }).click()
+    await ledger.getByText('1 unapproved change', { exact: true }).waitFor()
+    await line.getByText('Skill small-steps would no longer reach Claude Code').waitFor()
+    assert.deepEqual({ roster: rosterHash(), state: stateHash() }, beforeScope, 'a scope change was written before it was approved')
+    await skillRow('small-steps').getByText('Only', { exact: true }).waitFor()
+    await shot('skills-staged-1280.png')
+    await approve()
+    await notice(/^Approved · version \d+/)
+    assert.deepEqual(approved().skills, [{ id: 'small-steps', only: ['codex', 'opencode', 'cursor'] }])
+    await main.getByText('2 to install', { exact: true }).waitFor()
+    await main.getByRole('button', { name: 'Install…' }).click()
+    const skillsInstall = main.getByRole('group', { name: 'Change 2 skill entries' })
+    await skillsInstall.waitFor()
+    const entries = await skillsInstall.locator('.target > summary').allTextContents()
+    assert.match(entries[0], /^Codex.*evidence-first.*adds the skill/)
+    assert.match(entries[1], /^Codex.*small-steps.*takes over an entry BMN did not write \(unmanaged\)/)
+    await skillsInstall.locator('.target > summary').nth(1).click()
+    await skillsInstall.getByText('the folder there differs from the skill in SKILL.md; holds own.md, which the skill does not', { exact: true }).waitFor()
+    assert.equal(existsSync(join(codexSkills, 'evidence-first')), false, 'an entry was written before Install was pressed')
+    await skillsInstall.scrollIntoViewIfNeeded()
+    await shot('skills-install-1280.png')
+    await skillsInstall.getByRole('button', { name: 'Install', exact: true }).click()
+    await notice(/^Changed 2 skill entries\. Sessions started before this keep the skills they had\./)
+    assert.equal(readlinkSync(join(codexSkills, 'evidence-first')), join(skillsDir, 'evidence-first'))
+    assert.equal(readlinkSync(join(codexSkills, 'small-steps')), join(skillsDir, 'small-steps'))
+    await skillRow('small-steps').getByRole('button', { name: 'small-steps in Codex: Linked' }).waitFor()
+    assert.equal(await main.getByRole('button', { name: 'Install…' }).count(), 0)
+    await main.locator('details.advanced > summary', { hasText: 'Earlier installs' }).click()
+    await main.getByRole('button', { name: /^Undo the skills install of / }).click()
+    const skillsUndo = main.getByRole('group', { name: 'Undo this install' })
+    await skillsUndo.locator('.target > summary').first().waitFor()
+    assert.equal(readlinkSync(join(codexSkills, 'small-steps')), join(skillsDir, 'small-steps'), 'Undo wrote before its entries were shown')
+    await skillsUndo.getByRole('button', { name: 'Undo install', exact: true }).click()
+    await notice(/^Put back the skills in Codex/)
+    assert.equal(readFileSync(join(codexSkills, 'small-steps/own.md'), 'utf8'), 'own\n')
+    assert.equal(existsSync(join(codexSkills, 'evidence-first')), false)
+    stub('codex', 'echo "codex-cli 0.161.0"')
+    passed('Skills lists each skill with its apps and state; the owner\'s test finds where Codex reads skills; a scope change is approved first; Install… shows each entry, replaces a folder BMN did not write only then, and Undo puts it back (60.11)')
+
     phase('three sizes: no horizontal scrollbar, every control named')
     const pages = [
       ['team', () => go('Team')],
@@ -920,6 +1002,7 @@ done`)
       ['roles', async () => { await go('Team', 'Roles'); await main.getByRole('button', { name: 'Edit Lead' }).click() }],
       ['changes', () => go('Team', 'Changes')],
       ['rules', () => go('Rules')],
+      ['skills', () => go('Rules', 'Skills')],
       ['health', () => go('Rules', 'Health')],
       // The sheet closes when the owner leaves Health, so each size opens it again.
       ['health-update', async () => { await go('Rules', 'Health'); await main.getByRole('button', { name: 'Update Claude Code' }).click(); await main.getByRole('group', { name: 'Update Claude Code' }).waitFor() }],
@@ -955,7 +1038,7 @@ done`)
         return !name || name.trim() === ''
       }).map((element) => element.outerHTML.slice(0, 120)))
     assert.deepEqual(unnamed, [])
-    passed('no horizontal scroll on nine pages at 800x500, 1000x700 and 1280x900; every control has a name (60.5 AC8, 60.6 AC5)')
+    passed('no horizontal scroll on ten pages at 800x500, 1000x700 and 1280x900; every control has a name (60.5 AC8, 60.6 AC5)')
 
     phase('keyboard: the navigation and a card open from the keyboard')
     await resize(1280, 900)

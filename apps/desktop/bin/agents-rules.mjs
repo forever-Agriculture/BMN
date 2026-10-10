@@ -228,7 +228,7 @@ function ensurePrivate(path) {
   chmodSync(path, 0o700)
 }
 
-function writePrivate(path, text) {
+export function writePrivate(path, text) {
   ensurePrivate(dirname(path))
   const temporary = `${path}.tmp-${process.pid}-${Date.now()}`
   const handle = openSync(temporary, 'wx', 0o600)
@@ -292,7 +292,7 @@ export function checkTargets(environment = process.env) {
  * A public rendering needs none, and an owner-declared destination never gets a full one
  * (routeFor), so nothing here rests on the owner's word. `remedy` says where the owner fixes it.
  */
-async function routeStillMatches(harness, decision, environment) {
+export async function routeStillMatches(harness, decision, environment) {
   if (decision.kind !== 'full') return { ok: true, inspected: null }
   const { inspectRoute } = await import('./agents-check.mjs')
   const inspected = inspectRoute({ harness }, null, environment, environment.HOME || homedir())
@@ -468,7 +468,7 @@ export async function installRules(harnesses, { yes = false, asJson = false, env
  * when that is taken: an existing directory is never reused, so one transaction can never
  * overwrite another's manifest or backups.
  */
-function newTransaction(now) {
+export function newTransaction(now) {
   ensurePrivate(transactionsDirectory())
   const base = `${now.toISOString().replaceAll(':', '-').replace(/\.\d+Z$/, 'Z')}-${process.pid}`
   for (let count = 1; ; count += 1) {
@@ -626,7 +626,7 @@ export function listTransactions() {
   // Newest first by the time each records: an id ends in a process id, so two written in one second do not sort by name.
   return names.sort().reverse().map((id) => {
     const manifest = readJson(`${transactionsDirectory()}/${id}/manifest.json`, null)
-    return manifest === null ? { id, valid: false } : { id, valid: true, created_at: manifest.created_at, state: manifest.state, reason: manifest.reason ?? 'install', targets: manifest.targets.map((target) => target.harness) }
+    return manifest === null ? { id, valid: false } : { id, valid: true, created_at: manifest.created_at, state: manifest.state, reason: manifest.reason ?? 'install', targets: [...new Set(manifest.targets.map((target) => target.harness))] }
   }).sort((a, b) => String(b.created_at ?? '').localeCompare(String(a.created_at ?? '')))
 }
 
@@ -636,6 +636,8 @@ export async function restoreTransaction(id, { yes = false, asJson = false, plan
   const folder = `${transactionsDirectory()}/${id}`
   const manifest = readJson(`${folder}/manifest.json`, null)
   if (manifest === null) return { code: 'NOT_FOUND', message: `no transaction ${id}` }
+  // A skills install shares the transactions folder and this command; its entries are folders and links, undone by their own module.
+  if (manifest.kind === 'skills') return (await import('./agents-skills.mjs')).restoreSkillsTransaction(manifest, folder, { yes, asJson, planOnly, expectedPlanHash })
   const plans = manifest.targets.map((target) => {
     const prior = target.prior.kind === 'file'
       ? { kind: 'file', text: readFileSync(`${folder}/${target.prior.backup}`, 'utf8'), mode: target.prior.mode ?? 0o600 }

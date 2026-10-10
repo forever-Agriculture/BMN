@@ -78,6 +78,8 @@ function wellFormed(data) {
     && data.providers.every((provider) => isObject(provider) && typeof provider.id === 'string' && Array.isArray(provider.hosts))
     && data.exceptions.every((exception) => isObject(exception) && typeof exception.id === 'string' && typeof exception.folder === 'string')
     && data.harness_routes.every((route) => isObject(route) && typeof route.harness === 'string')
+    && (data.skills === undefined || (Array.isArray(data.skills) && data.skills.every((skill) => isObject(skill) && typeof skill.id === 'string')))
+    && (data.skills_source === undefined || typeof data.skills_source === 'string')
 }
 
 /** A generation file whose hash verifies, whatever its schema; null when missing, unreadable or altered. */
@@ -286,13 +288,17 @@ function sameValue(a, b) {
   return canonicalJson(a ?? null) === canonicalJson(b ?? null) && (a === undefined) === (b === undefined)
 }
 
+/** The id the skills folder's difference carries: no skill can be named so. */
+export const SKILLS_SOURCE_ID = '.source'
+
 /** The keyed lists machine data is made of: the scope a difference names, the key and the fields compared. */
 const DIFF_SCOPES = [
   { scope: 'agent', list: 'agents', key: 'id', fields: AGENT_FIELDS },
   { scope: 'roles', list: 'roles', key: 'id', fields: ['description', 'candidates', 'then', 'recheck', 'small_work'] },
   { scope: 'providers', list: 'providers', key: 'id', fields: ['name', 'hosts', 'sites', 'private_work'] },
   { scope: 'exceptions', list: 'exceptions', key: 'id', fields: ['provider', 'folder'] },
-  { scope: 'harness-routes', list: 'harness_routes', key: 'harness', fields: ['provider', 'basis', 'accepted_versions'] }
+  { scope: 'harness-routes', list: 'harness_routes', key: 'harness', fields: ['provider', 'basis', 'accepted_versions'] },
+  { scope: 'skills', list: 'skills', key: 'id', fields: ['public', 'only'] }
 ]
 
 /**
@@ -304,8 +310,8 @@ export function machineDiff(approved, file, { folders = false } = {}) {
   const hashed = (field) => HASHED_FIELDS.includes(field) && !(folders && field === 'folder')
   const out = []
   for (const { scope, list, key, fields } of DIFF_SCOPES) {
-    const before = new Map(approved[list].map((item) => [item[key], item]))
-    const after = new Map(file[list].map((item) => [item[key], item]))
+    const before = new Map((approved[list] ?? []).map((item) => [item[key], item]))
+    const after = new Map((file[list] ?? []).map((item) => [item[key], item]))
     for (const id of new Set([...before.keys(), ...after.keys()])) {
       const was = before.get(id)
       const now = after.get(id)
@@ -324,6 +330,12 @@ export function machineDiff(approved, file, { folders = false } = {}) {
           ...(hashed(field) ? { free_text: true } : {}), before: shown(field, was[field], hashed(field)), after: shown(field, now[field], hashed(field)) })
       }
     }
+  }
+  // The folder the skills come from is one value, not a keyed list.
+  if (approved.skills_source !== file.skills_source) {
+    out.push({ scope: 'skills', id: SKILLS_SOURCE_ID, field: 'folder',
+      kind: approved.skills_source === undefined ? 'added' : file.skills_source === undefined ? 'removed' : 'changed',
+      ...(hashed('folder') ? { free_text: true } : {}), before: shown('folder', approved.skills_source, hashed('folder')), after: shown('folder', file.skills_source, hashed('folder')) })
   }
   return out
 }

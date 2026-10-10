@@ -88,6 +88,8 @@ Commands:
                                             (bmn rules --help)
   context check|set|test                    Each app's default context limit for your own sessions, and the
                                             owner-run test of the setting (bmn context --help)
+  skills check|install|test                 One skills folder linked or copied into each agent app, with
+                                            the owner-run test of where an app reads skills (bmn skills --help)
   help [agents|terminal]                    Show this help or a short agent/terminal guide
 
 Long text from standard input (instead of one quoted argument; only - is accepted, pipe a file with cat):
@@ -905,6 +907,67 @@ pointed to is never written. `bmn context set <app> --limit N|default` does the 
 terminal, with Yes/No. Claude Code's file is shared by every Claude Code agent, so a default set
 there reaches the runs BMN starts too: an agent whose own limit differs is refused until they agree.
 
+### Skills
+
+You keep your skills in one folder, `~/.claude/skills/` unless the approved team file names
+another (`source:` in its `## skills` section): one folder, or link to a folder, per skill, each
+with a `SKILL.md`. BMN gives every agent app the skills it may have and tells you where they
+differ. Rules → **Skills** lists each skill with its first line, the apps it is for and its state
+in each; `bmn skills check` prints the same.
+
+**Where an app reads skills is tested, not assumed.** Until **Test…** (Rules → Health → Skills, or
+`bmn skills test <app>`) passed on exactly the installed version, an app's skills are "not
+supported yet" and nothing is written for it. The test starts the app in an empty home folder
+that holds only test skills, one real folder and one link in each folder the app may read, and
+asks which it sees; no sign-in is there, so nothing is sent. It records the folders the app named
+and whether it follows links. Where the app may receive private work, the test then puts one
+empty test skill where the app keeps its skills, asks again, and removes it.
+
+| App | What BMN asks | Folders it looks in | Tested on a live app |
+| --- | --- | --- | --- |
+| Claude Code | the start-up message of `claude -p`, given `/context` | `~/.claude/skills` | not yet |
+| Codex | `codex debug prompt-input` | `~/.agents/skills`, `~/.codex/skills`, `~/.claude/skills` | not yet |
+| OpenCode | `opencode debug skill` | `~/.config/opencode/skills`, `~/.config/opencode/skill`, `~/.agents/skills`, `~/.claude/skills` | not yet |
+| Cursor | nothing: it has no way to list skills without a prompt | - | not supported yet |
+
+**Which skills an app may have.** Every skill reaches every app, with two limits you set on the
+Skills page and approve like any team change: a skill kept to some apps (`only`) reaches only
+those, and an app whose approved destination is public-only, unknown or your word gets only the
+skills you marked **Public** (`public`). The approval names the apps a change reaches.
+
+**One state per app and skill.**
+
+| State | Meaning |
+| --- | --- |
+| `current` | BMN's link or copy is in place |
+| `read-directly` | the app reads the skills folder itself, and may have the skill |
+| `missing` | not in the app yet |
+| `link` | a link there points somewhere else |
+| `unmanaged` | an entry BMN did not write, even one that points at the skill |
+| `edited-outside` | BMN's entry was changed outside BMN |
+| `stale` | BMN's copy is older than the skill, or the skill left the folder |
+| `unreadable` | BMN cannot read the skill, or its name is not lowercase letters, digits and hyphens |
+| `excluded` | the app is not meant to have the skill, and does not |
+| `exposed` | the app can see a skill it may not have |
+
+`bmn skills check` exits 0 only when at least one app is supported, the folder is readable and
+every skill is `current`, `read-directly` or `excluded` in every supported app.
+
+**Install.** `bmn skills install [app…]`, or **Install…** on the Skills page, lists every entry
+first and writes after you confirm: a link to the skill where the app follows links, or a copy
+with BMN's line in its `SKILL.md` where it does not. An entry BMN did not write is named, with
+its link target or the files that differ, and replaced only then; a link is replaced as a link,
+and what it points at is never written. Entries an app may no longer have, and entries of a skill
+that left the folder, are removed in the same install. It is one transaction: every entry's prior
+state is kept under BMN's own private state, a folder as a complete copy with its modes and its
+own links, and **Undo install…** (or `bmn rules restore --transaction <id>`) puts all of it back.
+A skill's lines are never printed: a plan names files, not their text.
+
+**Exposed cannot be installed away.** An app that reads the skills folder itself sees every skill
+in it, so a skill it may not have stays `exposed` until you mark it Public or move it out of the
+folder; so does an entry BMN did not write. While anything is exposed the check exits 1 and an
+install does not report success.
+
 ### The prompt guard
 
 `bmn roster check` sees only work one agent hands to another. A lead you start yourself is not a
@@ -960,6 +1023,11 @@ on Rules → Health: a provider that may see private work passes, any other warn
   `model_providers`, `profile`, `profiles`, `openai_base_url` and `chatgpt_base_url`, is taken
   not to say where work goes.
 
+- Skills are checked only in the user-level folders the test found. Skills inside a project
+  folder, plugins, and sessions already running are outside what BMN installs or checks. The
+  test asks the app which skills it lists; whether a model then uses one is not tested. Cursor's
+  program names `~/.cursor/skills` and `~/.claude/skills` among the folders it reads, but BMN has
+  no test for it, so treat every skill in the folder as visible to Cursor.
 - A context limit is checked from the run's command and the named settings, like the destination;
   what the app does with it afterwards is the app's. The test proves the setting on one version
   in one empty folder with a short prompt; it does not prove where summarising starts, and BMN

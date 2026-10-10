@@ -1,5 +1,5 @@
 // MODULE: team-rules-preferences.test.ts - Epic 60.5/60.6 markup: shape and plain words carry meaning, every control is named, no schema word reaches the owner
-import type { AgentsPreview, AgentsSnapshot, RosterAgentShape, RosterDataShape, RosterDiffShape, RulesSnapshot } from '@bmn/protocol'
+import type { AgentsPreview, AgentsSnapshot, RosterAgentShape, RosterDataShape, RosterDiffShape, RulesSnapshot, SkillsPlan } from '@bmn/protocol'
 import { createElement, createRef } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
@@ -21,6 +21,9 @@ import {
   markerParts,
   recheckWords,
   sessionsWords,
+  skillStateHint,
+  skillStateWords,
+  skillsTestLine,
   testLine,
   undoWords,
   updateCommand,
@@ -34,7 +37,7 @@ import {
 } from './team-preferences'
 import { ModelList } from './model-field'
 import { modelSuggestions } from './model-suggestions'
-import { changeModel, groupDifferences, removeException } from './roster-staging'
+import { changeModel, groupDifferences, removeException, setSkillPublic, skillMark, toggleSkillApp } from './roster-staging'
 import { confirmsBeforeCommit, rowHidesDetail, rulesUpdateWords, type TeamState } from './team-state'
 
 const noop = (): void => {}
@@ -534,7 +537,26 @@ const RULES: RulesSnapshot = {
     { harness: 'claude', path: '/home/synthetic/.claude/settings.json', exists: true, limit: null, compact: null, version: '2.1.295', limitProven: true, compactProven: false, min: 100000, max: 1000000,
       test: { at: '2026-10-09T20:00:00.000Z', version: '2.1.295', outcome: 'pass', detail: 'asked for 137000; Claude Code reports a window of 137000' }, agents: ['Opus', 'Fable'] }
   ],
+  skills: {
+    source: { path: '/home/synthetic/.claude/skills', readable: true }, markedMissing: [], pending: 1, exposed: 1,
+    skills: [
+      { name: 'alpha', description: 'First synthetic skill.', readable: true, states: { claude: 'read-directly', codex: 'current', opencode: 'exposed' } },
+      { name: 'beta', description: 'Second synthetic skill.', readable: true, states: { claude: 'read-directly', codex: 'missing', opencode: 'read-directly' } },
+      { name: 'Bad_Name', description: '', readable: false, detail: 'the name must be lowercase letters, digits and hyphens', states: {} }
+    ],
+    apps: [
+      { harness: 'claude', version: '2.1.295', supported: true, testable: true, location: null, format: null, readsSource: true, kind: 'full', kindReason: '', state: 'Reads the source',
+        test: { at: '2026-10-09T20:00:00.000Z', version: '2.1.295', outcome: 'pass', detail: 'Claude Code reads skills from ~/.claude/skills' },
+        loading: { at: '2026-10-09T20:00:00.000Z', version: '2.1.295', outcome: 'pass', detail: 'Claude Code named a test skill', stale: true } },
+      { harness: 'codex', version: '0.171.0', supported: true, testable: true, location: '/home/synthetic/.agents/skills', format: 'link', readsSource: false, kind: 'full', kindReason: '', state: 'Missing',
+        test: { at: '2026-10-09T20:00:00.000Z', version: '0.171.0', outcome: 'pass', detail: 'Codex reads skills from ~/.agents/skills' }, loading: null },
+      { harness: 'opencode', version: '1.18.32', supported: true, testable: true, location: null, format: null, readsSource: true, kind: 'public', kindReason: 'OpenCode Go gets public work only', state: 'Exposed',
+        test: { at: '2026-10-09T20:00:00.000Z', version: '1.18.32', outcome: 'pass', detail: 'OpenCode reads skills from ~/.claude/skills' }, loading: null },
+      { harness: 'cursor', version: '2026.09.26', supported: false, reason: 'no test has run on Cursor 2026.09.26', testable: false, location: null, format: null, readsSource: false, kind: 'public', kindReason: '', state: 'Not supported yet', test: null, loading: null }
+    ]
+  },
   transactions: [
+    { id: 't3', createdAt: '2026-10-09T23:00:00.000Z', state: 'complete', reason: 'skills install', targets: ['codex'], valid: true },
     { id: 't2', createdAt: '2026-10-09T22:00:00.000Z', state: 'complete', reason: 'team update', targets: ['claude'], valid: true },
     { id: 't1', createdAt: '2026-10-08T14:02:00.000Z', state: 'complete', reason: 'install', targets: ['claude', 'codex'], valid: true },
     { id: 't0', valid: false }
@@ -544,9 +566,9 @@ const RULES: RulesSnapshot = {
 
 const rules = (extra: Partial<RulesState> = {}): RulesState => ({
   snapshot: RULES, loadError: null, draft: RULES.master.text ?? '', dirty: false, draftPlan: null, busy: false, notice: null, pending: null, setDraft: noop, setNotice: noop,
-  ensure: noop, refresh: noop, load: later, beginSave: later, beginInstall: later, beginUndo: later, beginRestore: later, beginTest: noop, confirm: later, cancel: noop, run: async () => true, ...extra
+  ensure: noop, refresh: noop, load: later, beginSave: later, beginInstall: later, beginSkillsInstall: later, beginUndo: later, beginRestore: later, beginTest: noop, confirm: later, cancel: noop, run: async () => true, ...extra
 })
-const rulesMarkup = (page: 'editor' | 'health', state: RulesState = rules(), teamState: TeamState = team()): string =>
+const rulesMarkup = (page: 'editor' | 'skills' | 'health', state: RulesState = rules(), teamState: TeamState = team()): string =>
   renderToStaticMarkup(createElement(RulesPreferences, { rules: state, team: teamState, page }))
 
 describe('Rules › Editor (60.6 AC1–AC3)', () => {
@@ -647,7 +669,9 @@ describe('Rules › Health (60.6 AC4)', () => {
   const markup = rulesMarkup('health')
 
   it('shows one row per rules file: path, state in words, the kind of rules and the last loading test', () => {
-    expect(markup).toContain(`<span class="faint">Checked ${shortDate('2026-10-09T22:13:00.000Z')}</span>`)
+    expect(markup).toContain(`<span class="faint">Checked ${shortDate('2026-10-09T22:13:00.000Z')} · 1 skill entry to install · 1 skill exposed</span>`)
+    // With the skills in order, the header says only when Health was read.
+    expect(rulesMarkup('health', rules({ snapshot: { ...RULES, skills: { ...RULES.skills, pending: 0, exposed: 0 } } }))).toContain(`<span class="faint">Checked ${shortDate('2026-10-09T22:13:00.000Z')}</span>`)
     expect(markup).toContain('>Check now</button>')
     expect(markup).toMatch(/data-state="current"><span>Claude Code<\/span><span class="path mono" title="\/home\/synthetic\/.claude\/CLAUDE.md">~\/.claude\/CLAUDE.md<\/span><span class="health-state"><span>Current <span class="muted">· Full rules<\/span>/)
     expect(markup).toContain(`<span class="faint">Test passed ${shortDate('2026-10-09T20:00:00.000Z')} · stale</span>`)
@@ -929,5 +953,119 @@ describe('context limits (60.9 AC3, AC4)', () => {
     expect(contextLimitHint({ harness: 'opencode', context_limit: 90000 }, RULES.context)).toBe('Not supported yet: BMN has no context setting for OpenCode. The limit is kept but not applied.')
     expect(contextLimitHint({ harness: 'codex', context_limit: 90000 }, null)).toBe("Empty means the app's own default.")
     expect(compactHint({ harness: 'codex' }, RULES.context.map((row) => ({ ...row, compactProven: true })))).toBe('The app starts summarising the conversation here.')
+  })
+})
+
+describe('skills (60.11 AC5)', () => {
+  const page = rulesMarkup('skills')
+
+  it('shows one row per skill: its name, the first line of its description, Public and its state in each app', () => {
+    expect(page).toContain('<h3 class="page-title">Skills</h3><span class="faint">3 skills</span>')
+    expect(page).toContain('<span class="faint mono" title="/home/synthetic/.claude/skills">~/.claude/skills</span>')
+    expect(page).toContain('<b class="mono">alpha</b><span class="faint" title="First synthetic skill.">First synthetic skill.</span>')
+    expect([...page.matchAll(/aria-label="alpha in ([A-Za-z ]+): ([^"]+)"/g)].map((match) => `${match[1]}: ${match[2]}`)).toEqual(['Claude Code: Reads it', 'Codex: Linked', 'OpenCode: Exposed', 'Cursor: Not yet'])
+    expect([...page.matchAll(/aria-label="beta in ([A-Za-z ]+): ([^"]+)"/g)].map((match) => match[2])).toEqual(['Reads it', 'Missing', 'Reads it', 'Not yet'])
+    expect(page).toContain('<span class="faint scope-word">All apps</span>')
+    expect(page).toMatch(/role="switch" aria-checked="false" aria-label="alpha is public"/)
+    // The exposed skill carries the attention mark on its chip, and the page says what to do about it.
+    expect(page).toMatch(/aria-label="alpha in OpenCode: Exposed" title="OpenCode can see this skill but may not have it"><span class="needs-dot"[^>]*><\/span>OpenCode<span class="chip-state">Exposed<\/span>/)
+    expect(words(page)).toContain('One skill can be seen by an app that may not have it. Mark the skill Public, or move it out of the skills folder.')
+  })
+
+  it('offers Install… with the count while entries are to install, and keeps a skill it cannot read out of reach', () => {
+    expect(page).toMatch(/<span class="muted">1 to install<\/span><button type="button" class="primary">Install…<\/button>/)
+    expect(rulesMarkup('skills', rules({ snapshot: { ...RULES, skills: { ...RULES.skills, pending: 0 } } }))).not.toContain('Install…</button>')
+    expect(page).toContain('<b class="mono">Bad_Name</b><span class="faint">the name must be lowercase letters, digits and hyphens</span>')
+    expect(page).toMatch(/aria-label="Bad_Name is public" disabled=""/)
+  })
+
+  it('shows a staged scope as chips, and stages Public and scope changes for approval', () => {
+    const staged = { ...DATA, skills: [{ id: 'beta', public: true as const, only: ['codex' as const, 'opencode' as const] }] }
+    const markup = rulesMarkup('skills', rules(), team({ data: staged, hasStaged: true }))
+    expect(markup).toContain('<span class="faint scope-word">Only</span>')
+    expect([...markup.matchAll(/aria-pressed="(true|false)" aria-label="beta in/g)].map((match) => match[1])).toEqual(['false', 'true', 'true', 'false'])
+    expect(markup).toMatch(/aria-pressed="false" aria-label="beta in Claude Code: Off" title="Not for Claude Code"/)
+    expect(markup).toMatch(/role="switch" aria-checked="true" aria-label="beta is public"/)
+    expect(setSkillPublic(DATA, 'alpha', true).skills).toEqual([{ id: 'alpha', public: true }])
+    expect(Object.keys(setSkillPublic(setSkillPublic(DATA, 'alpha', true), 'alpha', false))).not.toContain('skills')
+    expect(toggleSkillApp(DATA, 'alpha', 'cursor').skills).toEqual([{ id: 'alpha', only: ['claude', 'codex', 'opencode'] }])
+    expect(skillMark(toggleSkillApp(toggleSkillApp(DATA, 'alpha', 'cursor'), 'alpha', 'cursor'), 'alpha')).toEqual({ id: 'alpha' })
+    const one = { ...DATA, skills: [{ id: 'alpha', only: ['codex' as const] }] }
+    expect(toggleSkillApp(one, 'alpha', 'codex')).toBe(one)
+    expect(rulesMarkup('skills', rules(), team({ data: one }))).toMatch(/aria-label="alpha in Codex: Linked" disabled="" title="A skill needs at least one app"/)
+  })
+
+  it('names in the approval which apps a change reaches', () => {
+    const differences: RosterDiffShape[] = [
+      { scope: 'skills', id: 'alpha', field: null, kind: 'added', after: { present: true, value: { public: true, only: ['codex', 'opencode'] } } },
+      { scope: 'skills', id: '.source', field: 'folder', kind: 'changed', before: { present: true, value: '/a' }, after: { present: true, value: '/srv/skills' } }
+    ]
+    const { groups, general } = groupDifferences(differences, DATA, DATA, ['Skill alpha would reach OpenCode', 'Skill alpha would no longer reach Claude Code and Cursor', 'Skills would come from another folder'])
+    expect(general).toEqual([])
+    expect(groups).toHaveLength(1)
+    expect(groups[0]).toMatchObject({ key: 'skills', subject: 'Skills', consequences: ['Skill alpha would reach OpenCode', 'Skill alpha would no longer reach Claude Code and Cursor', 'Skills would come from another folder'] })
+    expect(groups[0]!.lines).toEqual([
+      { field: 'alpha', before: '—', after: 'added' },
+      { field: 'alpha · public', before: '—', after: 'yes', detail: true },
+      { field: 'alpha · only in', before: '—', after: 'Codex, OpenCode', detail: true },
+      { field: 'Skills folder', before: '/a', after: '/srv/skills' }
+    ])
+  })
+
+  it('shows the install as entries with what each becomes in words, never a skill\'s lines, and what stays exposed', () => {
+    const plan: SkillsPlan = {
+      ok: true, code: 'OK', planHash: 'h'.repeat(64),
+      targets: [
+        { harness: 'codex', skill: 'beta', path: '/home/synthetic/.agents/skills/beta', kind: 'adds the skill', change: 'missing', diff: '', note: 'A link to the skill in the skills folder.' },
+        { harness: 'codex', skill: 'gamma', path: '/home/synthetic/.agents/skills/gamma', kind: 'takes over an entry BMN did not write (unmanaged)', change: 'unmanaged', diff: '', note: 'the folder there differs from the skill in SKILL.md' }
+      ],
+      exposed: [{ harness: 'opencode', skill: 'alpha', fix: 'OpenCode reads the skills folder itself: move alpha out of it, or mark it public' }]
+    }
+    const sheet = rulesMarkup('skills', rules({ pending: { kind: 'skills', plan } }))
+    expect(sheet).toContain('aria-label="Change 2 skill entries"')
+    expect(words(sheet)).toContain('Undo install, under Earlier installs, puts every entry back.')
+    expect(sheet).toContain('<span class="muted">beta · adds the skill</span>')
+    expect(sheet).toContain('<p class="preferences-help">the folder there differs from the skill in SKILL.md</p>')
+    expect(sheet).not.toContain('<pre class="diff">')
+    expect(words(sheet)).toContain('One skill stays exposed whatever is installed:')
+    expect(sheet).toContain('<p class="preferences-help">OpenCode reads the skills folder itself: move alpha out of it, or mark it public</p>')
+    const none = rulesMarkup('skills', rules({ pending: { kind: 'skills', plan: { ...plan, targets: [] } } }))
+    expect(none).toMatch(/aria-label="Every app already has its skills".*<button type="button" class="primary" disabled="">Install<\/button>/s)
+  })
+
+  it('lists its own installs with Undo, and leaves them out of the rules\' earlier versions', () => {
+    expect(page).toMatch(/<summary>Earlier installs<\/summary><div class="list-line"><div><b>Installed<\/b> <span class="line-detail">[^<]+ · Codex<\/span><\/div><button type="button" class="small" aria-label="Undo the skills install of [^"]+">Undo install…<\/button>/)
+    expect(earlierVersions(RULES).some((entry) => entry.kind === 'install' && entry.id === 't3')).toBe(false)
+    expect(undoWords({ change: 'folder', diff: '' })).toBe('Put back as it was')
+  })
+
+  it('Health shows one row per app: where its skills live, the state in words, Full or Public skills only and the last loading test', () => {
+    const health = rulesMarkup('health')
+    expect(health).toContain('<h4 class="group-head">Skills<span class="caption">where each app reads skills, and whether it has the ones it may have</span></h4>')
+    expect(words(health)).toMatch(/Checked [^·]+ · 1 skill entry to install · 1 skill exposed/)
+    expect(health).toMatch(/data-skills="Reads the source"><span>Claude Code<\/span><span class="health-state"><span>The skills folder itself<\/span><\/span><span class="health-state"><span>Reads the source<span class="muted"> · Full<\/span><\/span><span class="faint" title="Claude Code named a test skill">Loading test passed [^<]+ · stale<\/span>/)
+    expect(health).toMatch(/data-skills="Missing"><span>Codex<\/span><span class="health-state"><span class="path mono" title="\/home\/synthetic\/.agents\/skills">~\/.agents\/skills<\/span><\/span><span class="health-state"><span><span class="needs-dot"[^>]*><\/span>Missing<span class="muted"> · Full<\/span><\/span><span class="faint" title="[^"]*">Loading never tested<\/span>/)
+    expect(health).toMatch(/data-skills="Exposed"><span>OpenCode<\/span>.*?Exposed<span class="muted"> · Public skills only<\/span><\/span><span class="faint" title="[^"]*">No loading test<\/span>/)
+    expect(health).toMatch(/data-skills="Not supported yet"><span>Cursor<\/span><span class="health-state"><span class="faint">Not known yet<\/span><\/span><span class="health-state"><span title="no test has run on Cursor 2026.09.26">Not supported yet<\/span><span class="faint">BMN has no test for this app<\/span>/)
+    expect([...health.matchAll(/(disabled="" )?aria-label="Skills test for ([A-Za-z ]+)"/g)].map((match) => `${match[2]}${match[1] ? ' off' : ''}`)).toEqual(['Claude Code', 'Codex', 'OpenCode', 'Cursor off'])
+  })
+
+  it('says each state and test in plain words', () => {
+    const app = { harness: 'codex' as const, supported: true, format: 'copy' as const, kind: 'full' as const }
+    expect(skillStateWords('current', app, true)).toBe('Copied')
+    expect(skillStateWords('stale', app, true)).toBe('Differs')
+    expect(skillStateWords('excluded', app, true)).toBe('Not public')
+    expect(skillStateWords('excluded', app, false)).toBe('Off')
+    expect(skillStateWords('exposed', app, false)).toBe('Exposed')
+    expect(skillStateWords('unreadable', app, true)).toBe("Can't read")
+    expect(skillStateWords(undefined, { supported: false, format: null }, true)).toBe('Not yet')
+    expect(skillStateHint('excluded', { ...app, kind: 'public' }, true, 'OpenCode')).toBe('OpenCode gets public skills only')
+    expect(skillStateHint('missing', app, true, 'Codex')).toBe('Not in Codex yet: Install… adds it')
+    expect(skillStateHint(undefined, { ...app, supported: false }, true, 'Cursor')).toBe('Skills are not supported yet in Cursor: run its test on Health')
+    const base = { supported: false, version: '0.171.0', test: null, loading: null, kind: 'full' as const, testable: true }
+    expect(skillsTestLine({ ...base, version: null })).toBe('The app is not found')
+    expect(skillsTestLine(base)).toBe('Not tested on 0.171.0')
+    expect(skillsTestLine({ ...base, test: { at: 'x', version: '0.171.0', outcome: 'inconclusive', detail: 'd' } })).toBe('The test was inconclusive on 0.171.0')
+    expect(skillsTestLine({ ...base, test: { at: 'x', version: '0.170.0', outcome: 'fail', detail: 'd' } })).toBe('Not tested on 0.171.0')
   })
 })

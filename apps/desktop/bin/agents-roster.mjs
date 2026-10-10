@@ -25,10 +25,13 @@ export const THEN = ['lead', 'skip', 'blocked', 'owner-chooses']
 export const PRIVATE_WORK = ['allowed', 'public_only']
 export const PAID_BY = ['per_token', 'subscription']
 export const BASES = ['observed-default', 'owner-declared']
-/** Sections that are not agents. `skills` and `tools` are held for the stories that define them. */
+/** Sections that are not agents. `tools` is held for the story that defines it. */
 export const RESERVED_SECTIONS = ['roster', 'roles', 'providers', 'exceptions', 'harness-routes', 'skills', 'tools']
-const UNREAD_SECTIONS = ['skills', 'tools']
+const UNREAD_SECTIONS = ['tools']
 export const MAX_EXCEPTIONS = 64
+export const MAX_SKILLS = 256
+/** A skill's name is its folder's name in the skills source. */
+export const SKILL_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/
 /** The role only a knight or a queen may hold. */
 export const LEAD_ROLE = 'lead'
 /** The role only a rook or a queen may hold: the design pass. */
@@ -467,6 +470,7 @@ export function parseRoster(text) {
   const routes = validateRoutes(blocks.get('harness-routes'), providerIds, add)
   const roles = validateRoles(blocks.get('roles'), agentById, agentIds, add, warnings)
   const exceptions = validateExceptions(blocks.get('exceptions'), providerIds, add, (code, line, message) => warnings.push({ code, line, message }))
+  const skills = validateSkills(blocks.get('skills'), add)
 
   const providerById = new Map(providers.map((provider) => [provider.id, provider]))
   const roleIds = new Set(roles.map((role) => role.id))
@@ -489,7 +493,7 @@ export function parseRoster(text) {
 
   if (errors.length > 0) return { data: null, errors: errors.sort((a, b) => (a.line ?? 0) - (b.line ?? 0)), warnings, sections }
   return {
-    data: { schema_version: SCHEMA_VERSION, agents: agents.filter(Boolean), roles, providers, exceptions, harness_routes: routes },
+    data: { schema_version: SCHEMA_VERSION, agents: agents.filter(Boolean), roles, providers, exceptions, harness_routes: routes, ...skills },
     errors, warnings, sections
   }
 }
@@ -959,6 +963,81 @@ function yamlFlow(value) {
   return yamlScalar(value)
 }
 
+/**
+ * `## skills`: `source` (the folder the skills live in, when it is not the default), `public`
+ * (the skills an app on a public-only route may have) and `only` (a skill kept to some apps).
+ * The data holds one entry per skill that has either mark, in name order, and nothing at all when
+ * the section says nothing, so a team file without the section keeps the hash it always had.
+ */
+function validateSkills(entry, add) {
+  if (!entry) return {}
+  const where = entry.block.startLine
+  for (const key of Object.keys(entry.value)) {
+    if (!['source', 'public', 'only'].includes(key)) add('UNKNOWN_FIELD', entry.lines.get(key), `unknown field ${key} in ## skills`)
+  }
+  const out = {}
+  const { source, public: open = [], only = {} } = entry.value
+  if (source !== undefined) {
+    const parts = typeof source === 'string' ? source.split('/') : []
+    if (!isString(source, 4096) || !source.startsWith('/') || parts.includes('..') || parts.includes('.')) {
+      add('INVALID_VALUE', entry.lines.get('source') ?? where, '## skills: source must be an absolute path without . or .. (nothing is expanded, not even ~)')
+    } else {
+      out.skills_source = source.length > 1 ? source.replace(/\/+$/, '') : source
+    }
+  }
+  const marks = new Map()
+  const mark = (id) => {
+    if (!marks.has(id)) marks.set(id, { id })
+    return marks.get(id)
+  }
+  if (!Array.isArray(open) || open.some((name) => typeof name !== 'string' || !SKILL_PATTERN.test(name))) {
+    add('INVALID_VALUE', entry.lines.get('public') ?? where, '## skills: public must be a list of skill names (lowercase letters, digits and hyphens)')
+  } else if (new Set(open).size !== open.length) {
+    add('DUPLICATE_ID', entry.lines.get('public') ?? where, '## skills: public names a skill twice')
+  } else {
+    for (const name of open) mark(name).public = true
+  }
+  if (!isMap(only)) {
+    add('INVALID_VALUE', entry.lines.get('only') ?? where, '## skills: only must be a map of skill name to a list of apps')
+  } else {
+    for (const [name, apps] of Object.entries(only)) {
+      const line = entry.lines.get('only') ?? where
+      if (!SKILL_PATTERN.test(name)) {
+        add('INVALID_VALUE', line, `## skills.only: ${name} is not a skill name (lowercase letters, digits and hyphens)`)
+      } else if (!Array.isArray(apps) || apps.length === 0 || apps.some((app) => !HARNESSES.includes(app))) {
+        add('INVALID_VALUE', line, `## skills.only.${name} must be a list of one or more of ${HARNESSES.join(', ')}`)
+      } else if (new Set(apps).size !== apps.length) {
+        add('DUPLICATE_ID', line, `## skills.only.${name} names an app twice`)
+      } else {
+        mark(name).only = HARNESSES.filter((app) => apps.includes(app))
+      }
+    }
+  }
+  if (marks.size > MAX_SKILLS) add('INVALID_VALUE', where, `## skills marks ${marks.size} skills; at most ${MAX_SKILLS}`)
+  if (marks.size > 0) out.skills = [...marks.values()].sort((a, b) => (a.id < b.id ? -1 : 1))
+  return out
+}
+
+/** The skills marks as the section holds them, or '' when there is nothing to say. */
+export function skillsYaml(data) {
+  const marks = data.skills ?? []
+  const open = marks.filter((entry) => entry.public === true).map((entry) => entry.id)
+  const only = Object.fromEntries(marks.filter((entry) => entry.only !== undefined).map((entry) => [entry.id, entry.only]))
+  return [
+    ...(data.skills_source === undefined ? [] : [`source: ${yamlFlow(data.skills_source)}`]),
+    ...(open.length === 0 ? [] : [`public: ${yamlFlow(open)}`]),
+    ...(Object.keys(only).length === 0 ? [] : [`only: ${yamlFlow(only)}`])
+  ].join('\n')
+}
+
+/** The skills part of machine data read back from a block's parsed value, the way `validateSkills` builds it. */
+function skillsFromBlock(value) {
+  if (!isMap(value)) return undefined
+  const issues = []
+  const out = validateSkills({ value, lines: new Map(), block: { startLine: 0 } }, (code) => issues.push(code))
+  return issues.length > 0 ? undefined : { skills: out.skills ?? [], source: out.skills_source ?? null }
+}
+
 export function agentYaml(agent) {
   return AGENT_FIELDS.filter((key) => Object.hasOwn(agent, key)).map((key) => `${key}: ${yamlFlow(agent[key])}`).join('\n')
 }
@@ -1060,7 +1139,7 @@ const SHARED = [
   { id: 'exceptions', key: 'id', field: 'exceptions', yaml: exceptionsYaml },
   { id: 'harness-routes', key: 'harness', field: 'harness_routes', yaml: routesYaml }
 ]
-export const SHARED_SECTIONS = SHARED.map((entry) => entry.id)
+export const SHARED_SECTIONS = [...SHARED.map((entry) => entry.id), 'skills']
 
 /**
  * The roster text rewritten so its machine data equals `data`, changing only what must change:
@@ -1092,6 +1171,10 @@ export function rewriteRoster(text, data, { scope = null } = {}) {
     if (id === 'roster') {
       wanted = headerYaml()
       current = same(blockValue(section), { schema_version: SCHEMA_VERSION }) ? wanted : undefined
+    } else if (id === 'skills') {
+      // An emptied section keeps its heading and says so, rather than leaving a block nothing parses.
+      wanted = skillsYaml(data) || 'public: []'
+      current = same(skillsFromBlock(blockValue(section)), { skills: data.skills ?? [], source: data.skills_source ?? null }) ? wanted : undefined
     } else if (shared !== undefined) {
       wanted = shared.yaml(data[shared.field])
       current = same(keyedFromBlock(blockValue(section), shared.key), data[shared.field]) ? wanted : undefined
@@ -1124,6 +1207,7 @@ export function rewriteRoster(text, data, { scope = null } = {}) {
   for (const shared of SHARED) {
     if (shared.id !== 'providers' && data[shared.field].length > 0) ensure(shared.id, shared.yaml(data[shared.field]))
   }
+  if (skillsYaml(data) !== '') ensure('skills', skillsYaml(data))
   let out = text
   for (const edit of edits.sort((a, b) => b.start - a.start)) out = `${out.slice(0, edit.start)}${edit.text}${out.slice(edit.end)}`
   if (appended !== '') out = `${out}${out.endsWith('\n') || out === '' ? '' : '\n'}${appended}`

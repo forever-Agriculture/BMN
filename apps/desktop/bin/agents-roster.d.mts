@@ -53,7 +53,12 @@ export interface RosterData {
   providers: RosterProvider[]
   exceptions: RosterException[]
   harness_routes: RosterRoute[]
+  /** Skills that carry a mark, in name order; absent when no skill has one. */
+  skills?: RosterSkill[]
+  /** The folder the skills come from, when it is not the default. */
+  skills_source?: string
 }
+export interface RosterSkill { id: string; public?: true; only?: Harness[] }
 export interface RosterIssue { code: string; line?: number; message: string }
 export interface RosterBlock { startLine: number; contentLine: number; endLine: number; start: number; end: number; contentStart: number; contentEnd: number; source: string }
 export interface RosterSection { heading: string; line: number; start: number; blocks: RosterBlock[] }
@@ -69,6 +74,8 @@ export interface ClassRule { classes: AgentClass[]; code: 'CLASS_CANNOT_LEAD' | 
 export declare const CLASS_ROLES: Record<string, ClassRule>
 export declare function classRefusal(agentClass: AgentClass, role: string): ClassRule | null
 export declare const MAX_EXCEPTIONS: number
+export declare const MAX_SKILLS: number
+export declare const SKILL_PATTERN: RegExp
 export declare const SHARED_SECTIONS: string[]
 export declare const STARTER_ROLES: RosterRole[]
 export declare const AGENT_FIELDS: string[]
@@ -104,6 +111,7 @@ export declare function agentYaml(agent: RosterAgent): string
 export declare function rolesYaml(roles: RosterRole[]): string
 export declare function providersYaml(providers: RosterProvider[]): string
 export declare function exceptionsYaml(exceptions: RosterException[]): string
+export declare function skillsYaml(data: Pick<RosterData, 'skills' | 'skills_source'>): string
 export declare function starterRoster(): string
 export declare function privateWorkOf(data: RosterData, agent: RosterAgent): PrivateWork
 export declare function resolvedDirectory(path: string): string

@@ -67,12 +67,19 @@ export interface RosterDataShape {
   providers: RosterProviderShape[]
   exceptions: RosterExceptionShape[]
   harness_routes: RosterRouteShape[]
+  /** Skills that carry a mark, in name order; absent when no skill has one. */
+  skills?: RosterSkillShape[]
+  /** The folder the skills come from, when it is not the default. */
+  skills_source?: string
 }
+
+/** One skill's marks: `public` lets an app on a public-only route have it, `only` keeps it to some apps. */
+export interface RosterSkillShape { id: string; public?: true; only?: RosterHarness[] }
 
 export interface RosterIssueShape { code: string; line?: number; message: string }
 
 export interface RosterDiffShape {
-  scope: 'agent' | 'roles' | 'providers' | 'exceptions' | 'harness-routes'
+  scope: 'agent' | 'roles' | 'providers' | 'exceptions' | 'harness-routes' | 'skills'
   id: string
   field: string | null
   kind: 'added' | 'removed' | 'changed'
@@ -248,6 +255,61 @@ export interface ContextLimitView {
   agents: string[]
 }
 
+/** One skill's state in one app (60.11 AC2); `excluded` is a skill the app is not meant to have and does not have. */
+export type SkillStateName = 'unreadable' | 'missing' | 'link' | 'unmanaged' | 'edited-outside' | 'stale' | 'current' | 'read-directly' | 'exposed' | 'excluded'
+
+/** One app's skills, as Rules › Health shows them (60.11 AC5). */
+export interface SkillsAppView {
+  harness: RosterHarness
+  version: string | null
+  /** Whether the owner's test showed, on the installed version, where this app reads skills. Until then nothing is written for it. */
+  supported: boolean
+  /** Why skills are not supported yet in this app. */
+  reason?: string
+  /** Whether BMN can ask this app which skills it sees. */
+  testable: boolean
+  /** The folder BMN installs into, or null when the app reads the skills folder itself. */
+  location: string | null
+  format: 'link' | 'copy' | null
+  readsSource: boolean
+  /** Every skill the app may have, or only the public ones. */
+  kind: RulesRenderingKind
+  kindReason: string
+  /** Linked, Copied, Reads the source, Differs, Missing, Not supported yet or Exposed. */
+  state: string
+  /** The last test of where the app reads skills, whatever version it ran against. */
+  test: { at: string; version: string | null; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string } | null
+  /** The last loading test; stale when the app, its destination or a skill changed since. */
+  loading: { at: string; version: string | null; outcome: 'pass' | 'fail' | 'inconclusive' | 'unavailable'; detail: string; stale: boolean } | null
+}
+
+/** One skill of the skills folder, as Rules › Skills shows it. */
+export interface SkillView {
+  name: string
+  /** The first line of its description. */
+  description: string
+  readable: boolean
+  detail?: string
+  /** Its state in each app whose skills are supported. */
+  states: Partial<Record<RosterHarness, SkillStateName>>
+}
+
+export interface SkillsView {
+  source: { path: string; readable: boolean; detail?: string }
+  skills: SkillView[]
+  /** Skills the approved team marks that the folder does not hold. */
+  markedMissing: string[]
+  apps: SkillsAppView[]
+  /** Entries an install would add, replace or remove. */
+  pending: number
+  /** Skills an app can see but may not have; no install hides them. */
+  exposed: number
+}
+
+export interface SkillsPlanTarget extends RulesPlanTarget { skill: string }
+/** What a skills install would do, before it does it (R60-NFR2), and what stays exposed whatever is installed. */
+export interface SkillsPlan { ok: boolean; code: string; message?: string; planHash: string | null; targets: SkillsPlanTarget[]; exposed: { harness: RosterHarness; skill: string; fix: string }[] }
+
 /** What changing a default would write, before it is written (R60-NFR2). */
 export interface ContextLimitPlan {
   ok: boolean
@@ -273,6 +335,8 @@ export interface RulesSnapshot {
   apps: AgentAppView[]
   /** Each app's default context limit, and whether its setting is proven on the installed version. */
   context: ContextLimitView[]
+  /** The skills folder, each skill's state in each app, and where each app reads skills. */
+  skills: SkillsView
   /**
    * Set when BMN could not ask the owner's shell for its settings and inspected with its own
    * environment instead: why, in words. A session may then find other programs than BMN does.
@@ -292,6 +356,8 @@ export interface RulesPlanTarget {
   /** Install: the target's state before (`link`, `missing`, `unmanaged`, `edited-outside`, `stale`); restore: what it becomes (`link`, `file`, `missing`). */
   change: string
   diff: string
+  /** Said in place of a diff, where the entry is a folder or a link whose lines BMN never shows. */
+  note?: string
   rendering?: RulesRenderingKind
   linkTarget?: string
   fold?: string[]

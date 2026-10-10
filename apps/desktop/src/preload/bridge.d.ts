@@ -13,6 +13,7 @@ import type {
   RosterHarness,
   ContextLimitApp,
   ContextLimitPlan,
+  SkillsPlan,
   RulesOutcome,
   RulesMasterPlan,
   RulesPlan,
@@ -374,6 +375,11 @@ export interface AiTerminalBridge {
   applyContextLimit(harness: ContextLimitApp, limit: number | null, compact: number | null, planHash: string): Promise<RulesOutcome>
   /** Owner-run: starts the app once in an empty folder to see whether it takes the setting. */
   testContextLimit(harness: ContextLimitApp): Promise<RulesOutcome>
+  /** Story 60.11: what a skills install would link, copy or remove in each app, then the install itself, bound to that plan. */
+  planSkillsInstall(): Promise<SkillsPlan>
+  installSkills(planHash: string): Promise<RulesOutcome>
+  /** Owner-run: asks the app which skills it sees, first in an empty home folder, then with one test skill placed where its skills live. */
+  testSkills(harness: RosterHarness): Promise<RulesOutcome>
   readClipboardText(): Promise<{ text: string }>
   writeClipboardText(text: string): Promise<{ written: true }>
   /** Local Whisper dictation: engine and model availability, with progress for running downloads. */

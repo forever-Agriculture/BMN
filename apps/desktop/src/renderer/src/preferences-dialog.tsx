@@ -67,7 +67,7 @@ const HOOK_CHECK_NAMES: Readonly<Record<HookCheckAgent, string>> = {
 }
 
 /** Every page of the dialog. Team and Rules head the navigation and open their sub-pages; the rest are grouped. */
-export type PreferencesPage = 'team' | 'roles' | 'changes' | 'rules' | 'health' | 'appearance' | 'terminal' | 'notifications' | 'voice' | 'telegram' | 'control' | 'history' | 'backup'
+export type PreferencesPage = 'team' | 'roles' | 'changes' | 'rules' | 'skills' | 'health' | 'appearance' | 'terminal' | 'notifications' | 'voice' | 'telegram' | 'control' | 'history' | 'backup'
 
 /** The page Preferences last showed, kept while BMN runs; a new start opens on Team. */
 let lastPage: PreferencesPage = 'team'
@@ -77,7 +77,7 @@ export const PREFERENCES_NAVIGATION: ReadonlyArray<
   | { group: string; pages: ReadonlyArray<{ page: PreferencesPage; label: string }> }
 > = [
   { parent: 'team', label: 'Team', pages: [{ page: 'team', label: 'Agents' }, { page: 'roles', label: 'Roles' }, { page: 'changes', label: 'Changes' }] },
-  { parent: 'rules', label: 'Rules', pages: [{ page: 'rules', label: 'Editor' }, { page: 'health', label: 'Health' }] },
+  { parent: 'rules', label: 'Rules', pages: [{ page: 'rules', label: 'Editor' }, { page: 'skills', label: 'Skills' }, { page: 'health', label: 'Health' }] },
   { group: 'Workspace', pages: [{ page: 'appearance', label: 'Appearance' }, { page: 'terminal', label: 'Terminal' }, { page: 'notifications', label: 'Notifications' }, { page: 'voice', label: 'Voice' }] },
   { group: 'Phone', pages: [{ page: 'telegram', label: 'Telegram' }] },
   { group: 'Machine', pages: [{ page: 'control', label: 'Local control' }, { page: 'history', label: 'History' }, { page: 'backup', label: 'Backup' }] }
@@ -85,7 +85,7 @@ export const PREFERENCES_NAVIGATION: ReadonlyArray<
 
 /** The navigation parent a page sits under, or null for a grouped page. */
 export function pageParent(page: PreferencesPage): 'team' | 'rules' | null {
-  return page === 'team' || page === 'roles' || page === 'changes' ? 'team' : page === 'rules' || page === 'health' ? 'rules' : null
+  return page === 'team' || page === 'roles' || page === 'changes' ? 'team' : page === 'rules' || page === 'skills' || page === 'health' ? 'rules' : null
 }
 
 /**
@@ -165,9 +165,10 @@ export function PreferencesDialog(props: {
   const stagesDestination = parent === 'team' && (shownTeamPage.name === 'agent' || shownTeamPage.name === 'new')
   const ensureRules = rules.ensure
   useEffect(() => { if (stagesDestination) ensureRules() }, [stagesDestination, ensureRules])
-  const rulesNeedOwner = rules.snapshot?.health.state === 'checked' && rules.snapshot.master.exists && rules.snapshot.health.targets.some((target) => target.state !== 'current')
+  const rulesNeedOwner = (rules.snapshot?.health.state === 'checked' && rules.snapshot.master.exists && rules.snapshot.health.targets.some((target) => target.state !== 'current'))
+    || (rules.snapshot?.skills.pending ?? 0) > 0 || (rules.snapshot?.skills.exposed ?? 0) > 0
   // Staged edits are approved from the footer on the pages that stage them; New agent has its own.
-  const ledger = (parent === 'team' && shownTeamPage.name !== 'new') || page === 'health'
+  const ledger = (parent === 'team' && shownTeamPage.name !== 'new') || page === 'health' || page === 'skills'
   const pageOf = (id: PreferencesPage, children: ReactNode): React.JSX.Element => <div className="preferences-page" hidden={page !== id}>{children}</div>
 
   // --- Appearance ---------------------------------------------------------
@@ -504,7 +505,7 @@ export function PreferencesDialog(props: {
       </nav>
       <main className="preferences-main" ref={main}>
       {parent === 'team' ? <div className="preferences-page team-page"><TeamPreferences team={team} page={shownTeamPage} apps={rules.snapshot?.apps ?? null} context={rules.snapshot?.context ?? null} reported={props.reportedModels ?? []} go={goTeam} /></div> : null}
-      {parent === 'rules' ? <div className="preferences-page rules-page"><RulesPreferences rules={rules} team={team} page={page === 'health' ? 'health' : 'editor'} recognised={props.recognisedSessions ?? {}} onTypeInSession={props.onTypeInSession} /></div> : null}
+      {parent === 'rules' ? <div className="preferences-page rules-page"><RulesPreferences rules={rules} team={team} page={page === 'health' ? 'health' : page === 'skills' ? 'skills' : 'editor'} recognised={props.recognisedSessions ?? {}} onTypeInSession={props.onTypeInSession} /></div> : null}
       {pageOf('appearance', <>
       <section className="preferences-section">
         <h3>Appearance</h3>

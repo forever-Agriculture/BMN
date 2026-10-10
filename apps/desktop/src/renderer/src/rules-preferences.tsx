@@ -1,4 +1,4 @@
-// MODULE: rules-preferences.tsx - Epic 60.6: Preferences › Rules: the master editor with what each app reads, install and earlier versions; Health with each rules file and agent app
+// MODULE: rules-preferences.tsx - Epic 60.6: Preferences › Rules: the master editor with what each app reads, install and earlier versions; Skills with each skill's apps and state; Health with each rules file and agent app
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import {
   ROSTER_APP_NAMES,
@@ -20,20 +20,24 @@ import {
   type RulesRenderingView,
   type RulesRevertPlan,
   type RulesSnapshot,
-  type RulesTargetState
+  type RulesTargetState,
+  type SkillStateName,
+  type SkillView,
+  type SkillsAppView,
+  type SkillsPlan
 } from '@bmn/protocol'
 import { failureDetail } from './bridge-error'
 import { Segmented } from './history-preferences'
 import { quoteArgv } from './launch-template'
 import { Dot } from './roster-marks'
-import { diffBody, diffSummary, revokeVersion, setDestination, thousands, undoWords } from './roster-staging'
+import { diffBody, diffSummary, revokeVersion, setDestination, setSkillPublic, skillForApp, skillMark, thousands, toggleSkillApp, undoWords } from './roster-staging'
 import { displayPath } from './session-presentation'
-import { Issues, NumberField, PageHead, TargetPath, shortDate } from './team-preferences'
+import { Issues, NumberField, PageHead, Switch, TargetPath, shortDate } from './team-preferences'
 import type { TeamState } from './team-state'
 
 export { diffSummary, undoWords }
 
-export type RulesPage = 'editor' | 'health'
+export type RulesPage = 'editor' | 'skills' | 'health'
 
 const PLAN_DELAY_MS = 300
 
@@ -118,13 +122,17 @@ export function destinationWords(app: Pick<AgentAppView, 'basis' | 'provider' | 
 
 export const VERSION_WORDS: Readonly<Record<AgentAppView['versionState'], string>> = { tested: 'tested', newer: 'newer than tested', other: 'not tested', unknown: 'not checked' }
 
+/** The reason a skills install records, which tells it from a rules install. */
+const SKILLS_INSTALL = 'skills install'
+
 /** Installs and saves, newest first, as Earlier versions lists them. */
 export type Earlier =
   | { kind: 'install'; id: string; at: string | undefined; title: string; detail: string; usable: boolean }
   | { kind: 'save'; revision: number; at: string; title: string; detail: string; usable: boolean }
 
 export function earlierVersions(snapshot: Pick<RulesSnapshot, 'transactions' | 'history'>): Earlier[] {
-  const installs: Earlier[] = snapshot.transactions.map((entry) => ({
+  // A skills install is undone on the Skills page, where it was made.
+  const installs: Earlier[] = snapshot.transactions.filter((entry) => entry.reason !== SKILLS_INSTALL).map((entry) => ({
     kind: 'install', id: entry.id, at: entry.createdAt, usable: entry.valid && entry.state === 'complete',
     title: !entry.valid ? 'An install that cannot be read' : entry.reason === 'team update' ? 'Team line updated' : 'Installed',
     detail: (entry.targets ?? []).map((harness) => ROSTER_APP_NAMES[harness]).join(', ') + (entry.valid && entry.state !== 'complete' ? ' · did not finish' : '')
@@ -141,6 +149,7 @@ type Pending =
   | { kind: 'undo'; transaction: string; plan: RulesPlan }
   | { kind: 'restore'; revision: number; plan: RulesRevertPlan }
   | { kind: 'test'; harness: RosterHarness }
+  | { kind: 'skills'; plan: SkillsPlan }
 
 export interface RulesState {
   snapshot: RulesSnapshot | null
@@ -161,6 +170,8 @@ export interface RulesState {
   load(): Promise<void>
   beginSave(): Promise<void>
   beginInstall(): Promise<void>
+  /** Shows what a skills install would link, copy or remove in each app. */
+  beginSkillsInstall(): Promise<void>
   beginUndo(transaction: string): Promise<void>
   beginRestore(revision: number): Promise<void>
   beginTest(harness: RosterHarness): void
@@ -261,6 +272,10 @@ export function useRulesState(): RulesState {
       const { planHash } = pending.plan
       if (planHash === null) return
       run = () => window.aiTerminal.installRules(planHash)
+    } else if (pending.kind === 'skills') {
+      const { planHash } = pending.plan
+      if (planHash === null) return
+      run = () => window.aiTerminal.installSkills(planHash)
     } else if (pending.kind === 'undo') {
       const { transaction, plan } = pending
       if (plan.planHash === null) return
@@ -334,6 +349,10 @@ export function useRulesState(): RulesState {
       const plan = await window.aiTerminal.planRulesInstall()
       return plan.ok ? { kind: 'install', plan } : plan.message ?? 'Install cannot run now'
     }),
+    beginSkillsInstall: () => begin(async () => {
+      const plan = await window.aiTerminal.planSkillsInstall()
+      return plan.ok ? { kind: 'skills', plan } : plan.message ?? 'The skills cannot be installed now'
+    }),
     beginUndo: (transaction) => begin(async () => {
       const plan = await window.aiTerminal.planRulesRestore(transaction)
       return plan.ok ? { kind: 'undo', transaction, plan } : plan.message ?? 'That install cannot be undone'
@@ -377,7 +396,7 @@ function Targets(props: { targets: readonly RulesPlanTarget[]; home: string | nu
             <span className="target-file"><TargetPath target={target} home={props.home} /><span className="muted">{props.words(target)}</span></span>
             <span className="muted">{target.rendering ? KIND_WORDS[target.rendering] : ''}</span>
           </summary>
-          <pre className="diff">{diffBody(target.diff) || 'No change.'}</pre>
+          {target.note !== undefined && target.diff === '' ? <p className="preferences-help">{target.note}</p> : <pre className="diff">{diffBody(target.diff) || 'No change.'}</pre>}
         </details>
       ))}
     </>
@@ -417,6 +436,22 @@ function PendingSheet(props: { rules: RulesState }): React.JSX.Element | null {
         <Sheet {...common} title={count === 0 ? 'Every app already has the current rules' : `Install to ${count} agent app${count === 1 ? '' : 's'}`} action="Install"
           ready={count > 0 && pending.plan.planHash !== null} note={count === 0 ? undefined : 'Undo install, under Earlier versions, puts the files back.'}>
           <Targets targets={pending.plan.targets} home={home} words={changeWords} />
+        </Sheet>
+      )
+    }
+    case 'skills': {
+      const count = pending.plan.targets.length
+      const open = pending.plan.exposed
+      return (
+        <Sheet {...common} title={count === 0 ? 'Every app already has its skills' : `Change ${count} skill entr${count === 1 ? 'y' : 'ies'}`} action="Install"
+          ready={count > 0 && pending.plan.planHash !== null} note={count === 0 ? undefined : 'Undo install, under Earlier installs, puts every entry back.'}>
+          <Targets targets={pending.plan.targets} home={home} words={(target) => `${(target as SkillsPlan['targets'][number]).skill} · ${target.kind}`} />
+          {open.length > 0 ? (
+            <div role="status">
+              <p className="preferences-help"><Dot label="Needs you" />{open.length === 1 ? 'One skill stays' : `${open.length} skills stay`} exposed whatever is installed:</p>
+              {open.map((entry) => <p key={`${entry.harness}:${entry.skill}`} className="preferences-help">{entry.fix}</p>)}
+            </div>
+          ) : null}
         </Sheet>
       )
     }
@@ -520,7 +555,7 @@ function EditorPage(props: { rules: RulesState }): React.JSX.Element {
   const pending = rules.pending
   const targets = snapshot.health.state === 'checked' ? snapshot.health.targets : []
   const differ = targets.filter((target) => target.state !== 'current').length
-  const installed = snapshot.transactions.find((entry) => entry.valid && entry.state === 'complete' && entry.reason !== 'team update')?.createdAt
+  const installed = snapshot.transactions.find((entry) => entry.valid && entry.state === 'complete' && entry.reason !== 'team update' && entry.reason !== SKILLS_INSTALL)?.createdAt
   const renderings: readonly RulesRenderingView[] = rules.dirty && rules.draftPlan?.valid ? rules.draftPlan.renderings : snapshot.renderings
   const rendering = renderings.find((entry) => entry.harness === previewApp)
   const errors: readonly RosterIssueShape[] = rules.dirty ? rules.draftPlan?.errors ?? [] : snapshot.master.errors
@@ -596,7 +631,7 @@ function EditorPage(props: { rules: RulesState }): React.JSX.Element {
 // Rules › Health
 
 type AppAction = { kind: 'destination'; harness: RosterHarness } | { kind: 'update'; harness: RosterHarness }
-  | { kind: 'context-test'; harness: ContextLimitApp } | { kind: 'context-change'; harness: ContextLimitApp }
+  | { kind: 'context-test'; harness: ContextLimitApp } | { kind: 'context-change'; harness: ContextLimitApp } | { kind: 'skills-test'; harness: RosterHarness }
 
 /** How many running sessions BMN recognises as each app. */
 export type RecognisedSessions = Readonly<Partial<Record<RosterHarness, number>>>
@@ -865,6 +900,187 @@ function ContextLimits(props: { rules: RulesState; action: AppAction | null; set
   )
 }
 
+// ---------------------------------------------------------------------------------------------
+// Skills (60.11 AC5)
+
+/** A skill's state in one app, in a word or two; `on` is whether the skill is meant for that app. */
+export function skillStateWords(state: SkillStateName | undefined, app: Pick<SkillsAppView, 'supported' | 'format'> | undefined, on: boolean): string {
+  if (!on && state !== 'exposed') return 'Off'
+  if (app === undefined || !app.supported) return 'Not yet'
+  switch (state) {
+    case 'current': return app.format === 'copy' ? 'Copied' : 'Linked'
+    case 'read-directly': return 'Reads it'
+    case 'missing': return 'Missing'
+    case 'exposed': return 'Exposed'
+    case 'excluded': return 'Not public'
+    case 'unreadable': return "Can't read"
+    case undefined: return 'Not yet'
+    default: return 'Differs'
+  }
+}
+
+/** What that word means for this skill and app, as the chip's hint. */
+export function skillStateHint(state: SkillStateName | undefined, app: Pick<SkillsAppView, 'harness' | 'supported' | 'kind'> | undefined, on: boolean, name: string): string {
+  if (state === 'exposed') return `${name} can see this skill but may not have it`
+  if (!on) return `Not for ${name}`
+  if (app === undefined || !app.supported) return `Skills are not supported yet in ${name}: run its test on Health`
+  switch (state) {
+    case 'current': return `${name} has it`
+    case 'read-directly': return `${name} reads the skills folder itself`
+    case 'missing': return `Not in ${name} yet: Install… adds it`
+    case 'excluded': return `${name} gets public skills only`
+    case 'unreadable': return 'BMN cannot read this skill'
+    case undefined: return `Not checked in ${name}`
+    default: return `${name} holds something else under this name: Install… shows it`
+  }
+}
+
+/** An app's last skills test, or why its skills are not supported yet. */
+export function skillsTestLine(app: Pick<SkillsAppView, 'supported' | 'version' | 'test' | 'loading' | 'kind' | 'testable'>): string {
+  if (!app.supported) {
+    if (app.version === null) return 'The app is not found'
+    if (!app.testable) return 'BMN has no test for this app'
+    const last = app.test !== null && app.test.version === app.version ? app.test.outcome : null
+    return last === 'fail' ? `The test failed on ${app.version}` : last === 'inconclusive' ? `The test was inconclusive on ${app.version}` : `Not tested on ${app.version}`
+  }
+  if (app.kind !== 'full') return 'No loading test'
+  if (app.loading === null) return 'Loading never tested'
+  return `Loading test ${TEST_WORDS[app.loading.outcome].toLowerCase()} ${shortDate(app.loading.at)}${app.loading.stale ? ' · stale' : ''}`
+}
+
+function SkillRow(props: { skill: SkillView; apps: readonly SkillsAppView[]; team: TeamState; busy: boolean }): React.JSX.Element {
+  const { skill, team } = props
+  const data = team.data
+  const mark = skillMark(data ?? {}, skill.name)
+  const scoped = ROSTER_HARNESSES.filter((harness) => skillForApp(mark, harness))
+  const locked = data === null || !skill.readable || props.busy
+  return (
+    <div className="skill-row" data-skill={skill.name}>
+      <div className="skill-name">
+        <b className="mono">{skill.name}</b>
+        <span className="faint" title={skill.readable ? skill.description : undefined}>{skill.readable ? skill.description || 'No description' : skill.detail ?? 'Cannot be read'}</span>
+      </div>
+      <span className="skill-public">
+        <span className="faint">Public</span>
+        <Switch label={`${skill.name} is public`} on={mark.public === true} disabled={locked} onChange={(next) => { if (data) team.stage(setSkillPublic(data, skill.name, next)) }} />
+      </span>
+      <span className="chips" role="group" aria-label={`Apps that get ${skill.name}`}>
+        <span className="faint scope-word">{mark.only === undefined ? 'All apps' : 'Only'}</span>
+        {ROSTER_HARNESSES.map((harness) => {
+          const app = props.apps.find((entry) => entry.harness === harness)
+          const on = skillForApp(mark, harness)
+          const state = skill.states[harness]
+          const name = ROSTER_APP_NAMES[harness]
+          const words = skillStateWords(state, app, on)
+          const last = on && scoped.length === 1
+          return (
+            <button key={harness} type="button" className={on ? 'chip on' : 'chip'} aria-pressed={on} aria-label={`${skill.name} in ${name}: ${words}`} disabled={locked || last}
+              title={last ? 'A skill needs at least one app' : skillStateHint(state, app, on, name)} onClick={() => { if (data) team.stage(toggleSkillApp(data, skill.name, harness)) }}>
+              {state === 'exposed' ? <Dot label="Needs you" /> : null}{name}<span className="chip-state">{words}</span>
+            </button>
+          )
+        })}
+      </span>
+    </div>
+  )
+}
+
+function SkillsPage(props: { rules: RulesState; team: TeamState }): React.JSX.Element {
+  const { rules, team } = props
+  const snapshot = rules.snapshot as RulesSnapshot
+  const view = snapshot.skills
+  const pending = rules.pending
+  const idle = !rules.busy && pending === null
+  const installs = snapshot.transactions.filter((entry) => entry.reason === SKILLS_INSTALL)
+  const count = view.skills.length
+  return (
+    <>
+      <PageHead title="Skills" status={view.source.readable ? `${count} skill${count === 1 ? '' : 's'}` : 'The skills folder cannot be read'}>
+        {view.pending > 0 ? (
+          <>
+            <Dot label="Needs you" />
+            <span className="muted">{view.pending} to install</span>
+            <button type="button" className={pending?.kind === 'skills' ? undefined : 'primary'} disabled={!idle} onClick={() => void rules.beginSkillsInstall()}>Install…</button>
+          </>
+        ) : null}
+        <button type="button" disabled={rules.busy} onClick={() => void rules.load()}>{rules.busy && pending === null ? 'Checking…' : 'Check now'}</button>
+      </PageHead>
+      <Notice rules={rules} />
+      {pending?.kind === 'skills' ? <PendingSheet rules={rules} /> : null}
+      <div className="editor-head">
+        <span className="faint mono" title={view.source.path}>{displayPath(view.source.path, snapshot.home)}</span>
+        <span className="faint">· one folder per skill, each with a SKILL.md</span>
+      </div>
+      {view.source.readable ? null : <p className="preferences-error" role="alert">{view.source.detail ?? 'The skills folder cannot be read'}</p>}
+      {view.exposed > 0 ? (
+        <p className="page-note" role="status"><Dot label="Needs you" />{view.exposed === 1 ? 'One skill can be seen by an app that may not have it.' : `${view.exposed} skills can be seen by an app that may not have them.`} Mark the skill Public, or move it out of the skills folder.</p>
+      ) : null}
+      <div className="skill-rows">
+        {view.skills.map((skill) => <SkillRow key={skill.name} skill={skill} apps={view.apps} team={team} busy={rules.busy} />)}
+      </div>
+      {count === 0 && view.source.readable ? <p className="preferences-help">No skills in this folder yet.</p> : null}
+      {view.markedMissing.length > 0 ? <p className="preferences-help">The team marks {named(view.markedMissing)}, which the folder does not hold.</p> : null}
+      <p className="preferences-help">A skill reaches every app unless you keep it to some. An app that gets public work only receives just the skills you mark Public. A change here takes effect once you approve it; Install… then updates each app.</p>
+
+      <details className="advanced">
+        <summary>Earlier installs</summary>
+        {installs.length === 0 ? <p className="preferences-help">Nothing yet. Every skills install is kept here.</p> : null}
+        {installs.map((entry) => (
+          <div key={entry.id} className="list-line">
+            <div><b>{entry.valid ? 'Installed' : 'An install that cannot be read'}</b> <span className="line-detail">{shortDate(entry.createdAt)}{entry.targets?.length ? ` · ${entry.targets.map((harness) => ROSTER_APP_NAMES[harness]).join(', ')}` : ''}{entry.valid && entry.state !== 'complete' ? ' · did not finish' : ''}</span></div>
+            <button type="button" className="small" disabled={!idle || !entry.valid} aria-label={`Undo the skills install of ${shortDate(entry.createdAt)}`} onClick={() => void rules.beginUndo(entry.id)}>Undo install…</button>
+          </div>
+        ))}
+        {pending?.kind === 'undo' ? <PendingSheet rules={rules} /> : null}
+      </details>
+    </>
+  )
+}
+
+/** Rules › Health › Skills: one row per app (60.11 AC5). */
+function SkillsHealth(props: { rules: RulesState; action: AppAction | null; setAction(action: AppAction | null): void }): React.JSX.Element {
+  const { rules, action } = props
+  const snapshot = rules.snapshot as RulesSnapshot
+  const view = snapshot.skills
+  return (
+    <>
+      <h4 className="group-head">Skills<span className="caption">where each app reads skills, and whether it has the ones it may have</span></h4>
+      {view.source.readable ? null : <p className="preferences-error" role="alert">{view.source.detail ?? 'The skills folder cannot be read'}</p>}
+      {view.apps.map((app) => {
+        const name = ROSTER_APP_NAMES[app.harness]
+        const idle = !rules.busy && action === null && rules.pending === null
+        const needs = app.supported && app.state !== 'Linked' && app.state !== 'Copied' && app.state !== 'Reads the source'
+        return (
+          <div key={app.harness} className="skills-block">
+            <div className="health-row" data-skills={app.state}>
+              <span>{name}</span>
+              <span className="health-state">
+                {app.location !== null ? <span className="path mono" title={app.location}>{displayPath(app.location, snapshot.home)}</span>
+                  : <span className={app.supported ? undefined : 'faint'}>{app.supported ? 'The skills folder itself' : 'Not known yet'}</span>}
+                {app.location !== null && app.readsSource ? <span className="faint">Also reads the skills folder itself</span> : null}
+              </span>
+              <span className="health-state">
+                <span title={app.reason}>{needs ? <Dot label="Needs you" /> : null}{app.state}{app.supported ? <span className="muted"> · {app.kind === 'full' ? 'Full' : 'Public skills only'}</span> : null}</span>
+                <span className="faint" title={app.loading?.detail ?? app.test?.detail}>{skillsTestLine(app)}</span>
+              </span>
+              <span className="app-actions">
+                <button type="button" className="small" disabled={!idle || !app.testable || app.version === null} aria-label={`Skills test for ${name}`}
+                  title={app.testable ? undefined : `BMN has no way to ask ${name} which skills it sees`} onClick={() => props.setAction({ kind: 'skills-test', harness: app.harness })}>Test…</button>
+              </span>
+            </div>
+            {action?.kind === 'skills-test' && action.harness === app.harness ? (
+              <Sheet title={`Test where ${name} reads skills`} action="Run test" busy={rules.busy} onCancel={() => props.setAction(null)}
+                note={`Starts ${name} in an empty home folder that holds only test skills and asks which it sees; no sign-in is there, so nothing is sent.${app.kind === 'full' ? ` Then puts one empty test skill where ${name} keeps its skills, asks again, and removes it.` : ''} The result is kept for this version.`}
+                onConfirm={() => void rules.run(() => window.aiTerminal.testSkills(app.harness)).then(() => props.setAction(null))} />
+            ) : null}
+          </div>
+        )
+      })}
+      <p className="preferences-help">Nothing is written for an app until its test passed on the installed version. Skills inside a project folder, and sessions already running, are outside what BMN installs.</p>
+    </>
+  )
+}
+
 function HealthPage(props: { rules: RulesState; team: TeamState; recognised: RecognisedSessions; onType?: ((name: string, command: string) => void) | undefined }): React.JSX.Element {
   const { rules, team } = props
   const snapshot = rules.snapshot as RulesSnapshot
@@ -907,9 +1123,13 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
   const pending = rules.pending
   const providerName = (id: string): string => data?.providers.find((provider) => provider.id === id)?.name ?? id
   const withheld = health.state === 'checked' ? health.targets.filter((target) => target.kind === 'public').map((target) => ROSTER_APP_NAMES[target.harness]) : []
+  const skillsCount = [
+    ...(snapshot.skills.pending > 0 ? [`${snapshot.skills.pending} skill entr${snapshot.skills.pending === 1 ? 'y' : 'ies'} to install`] : []),
+    ...(snapshot.skills.exposed > 0 ? [`${snapshot.skills.exposed} skill${snapshot.skills.exposed === 1 ? '' : 's'} exposed`] : [])
+  ].join(' · ')
   return (
     <>
-      <PageHead title="Health" status={`Checked ${shortDate(health.checkedAt)}`}>
+      <PageHead title="Health" status={`Checked ${shortDate(health.checkedAt)}${skillsCount === '' ? '' : ` · ${skillsCount}`}`}>
         <button type="button" disabled={rules.busy} onClick={() => void rules.load()}>{rules.busy && pending === null ? 'Checking…' : 'Check now'}</button>
       </PageHead>
       <Notice rules={rules} />
@@ -991,6 +1211,8 @@ function HealthPage(props: { rules: RulesState; team: TeamState; recognised: Rec
       })}
       <p className="preferences-help">Tested versions are the ones BMN was checked against. Every installed version is supported: BMN works out where an app sends data the same way on each and notes the version with every check.</p>
 
+      <SkillsHealth rules={rules} action={action} setAction={setAction} />
+
       <ContextLimits rules={rules} action={action} setAction={setAction} />
     </>
   )
@@ -1011,8 +1233,9 @@ export function RulesPreferences(props: {
     shown.current = props.page
     setNotice(null)
   }, [props.page, setNotice])
-  const title = props.page === 'editor' ? 'Rules' : 'Health'
+  const title = props.page === 'editor' ? 'Rules' : props.page === 'skills' ? 'Skills' : 'Health'
   if (rules.loadError && rules.snapshot === null) return <><PageHead title={title} /><p className="preferences-error" role="alert">{rules.loadError}</p></>
   if (rules.snapshot === null) return <><PageHead title={title} /><p className="page-note">Reading the rules…</p></>
+  if (props.page === 'skills') return <SkillsPage rules={rules} team={props.team} />
   return props.page === 'editor' ? <EditorPage rules={rules} /> : <HealthPage rules={rules} team={props.team} recognised={props.recognised ?? {}} onType={props.onTypeInSession} />
 }

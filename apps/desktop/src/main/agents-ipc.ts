@@ -23,6 +23,9 @@ import {
   type RulesRenderingView,
   type RulesSnapshot,
   type RulesTargetHealth,
+  type SkillStateName,
+  type SkillsPlan,
+  type SkillsView,
   type TeamUpdateTarget
 } from '@bmn/protocol'
 import type { IpcMainInvokeEvent } from 'electron'
@@ -36,6 +39,7 @@ import { pathState, replaceFileSafely } from '../../bin/safe-config-write.mjs'
 import { unifiedDiff } from '../../bin/text-diff.mjs'
 import { decide as decidePrompt } from '../../bin/agents-guard.mjs'
 import { CONTEXT_APPS, ContextError, applyContextDefault, contextDefault, planContextDefault, sharingAgents } from '../../bin/agents-context.mjs'
+import { SKILL_APPS, appStateWord, checkSkills, lastLoadingTests, lastSkillsTest, pendingCounts, skillsTests } from '../../bin/agents-skills.mjs'
 import { allowWorkspace, approveRoster, approveSections, mergeSections, restoreGeneration, revertFileToApproved, saveAndApprove, type ApprovalSeams } from './agents-approval'
 import { findAppProgram } from './app-program'
 import { MainIpcError } from './workspace-ipc'
@@ -420,6 +424,67 @@ function contextView(harness: ContextLimitApp, version: string | null, generatio
   }
 }
 
+/**
+ * Rules › Skills and Health's Skills group (60.11 AC5): the skills folder, each skill's state in
+ * each app, and where each app reads skills. A skill's description is its first line only, and
+ * never its text; the versions are the ones Health's Agent apps rows show.
+ */
+function skillsView(apps: AgentAppView[], generation: Generation | null, context: RulesIpcContext): SkillsView {
+  const versions = Object.fromEntries(apps.map((app) => [app.harness, app.version]))
+  try {
+    const tests = skillsTests()
+    const check = checkSkills({ environment: context.env, tests, versions, generation, descriptions: true })
+    const loading = lastLoadingTests({ environment: context.env, tests, versions, generation })
+    return {
+      source: check.source,
+      markedMissing: check.marked_missing,
+      ...pendingCounts(check),
+      skills: check.skills.map((skill) => ({
+        name: skill.name, description: skill.description ?? '', readable: skill.readable, ...(skill.detail === undefined ? {} : { detail: skill.detail }),
+        states: Object.fromEntries(check.apps.filter((app) => app.supported).flatMap((app) => {
+          const row = app.skills.find((entry) => entry.name === skill.name && entry.removed !== true)
+          return row === undefined ? [] : [[app.harness, row.state as SkillStateName]]
+        }))
+      })),
+      apps: check.apps.map((app) => {
+        const test = lastSkillsTest(app.harness, 'capability', tests)
+        const loaded = loading.find((entry) => entry.harness === app.harness)
+        return {
+          harness: app.harness, version: app.version, supported: app.supported, ...(app.reason === undefined ? {} : { reason: app.reason }),
+          testable: SKILL_APPS[app.harness].list !== null, location: app.location, format: app.format, readsSource: app.reads_source,
+          kind: app.kind, kindReason: app.kind_reason, state: appStateWord(app, check.source.readable),
+          test: test === null ? null : { at: test.at, version: test.version, outcome: test.outcome, detail: test.detail },
+          loading: loaded === undefined || loaded.outcome === null || loaded.outcome === 'unavailable' ? null
+            : { at: String(loaded.at), version: loaded.version ?? null, outcome: loaded.outcome, detail: String(loaded.detail ?? ''), stale: loaded.stale === true }
+        }
+      })
+    }
+  } catch (error) {
+    // BMN's own record of what it wrote cannot be read: say so on the page rather than fail every Rules page.
+    return { source: { path: '', readable: false, detail: error instanceof Error ? error.message : String(error) }, skills: [], markedMissing: [], apps: [], pending: 0, exposed: 0 }
+  }
+}
+
+function skillsPlanFrom(result: CliResult): SkillsPlan {
+  const report = parseJson(result.stdout)
+  const refused = (code: string, message: string): SkillsPlan => ({ ok: false, code, message, planHash: null, targets: [], exposed: [] })
+  if (result.failed || report === null) return refused('IO_ERROR', `The skills plan could not be read${result.failed ? ` (${result.failed})` : ''}`)
+  if (report.code !== 'OK') return refused(String(report.code ?? 'IO_ERROR'), String(report.message ?? 'The plan was refused'))
+  const rows = (value: unknown): Record<string, unknown>[] => (Array.isArray(value) ? value as Record<string, unknown>[] : [])
+  return {
+    ok: true, code: 'OK', planHash: typeof report.plan_hash === 'string' ? report.plan_hash : null,
+    targets: rows(report.targets).map((row) => ({
+      harness: row.harness as RosterHarness, skill: String(row.skill), path: String(row.path), kind: String(row.words ?? ''), change: String(row.change ?? ''),
+      // A skill's lines are never shown: what the entry holds, or becomes, is said in words.
+      diff: '', note: typeof row.detail === 'string' ? row.detail : row.action === 'remove' ? 'The entry is removed; the skill itself stays in the skills folder.'
+        : row.action === 'copy' ? "A copy of the skill, with BMN's line in its SKILL.md." : 'A link to the skill in the skills folder.',
+      ...(typeof row.resolved_path === 'string' && row.resolved_path !== row.path ? { resolvedPath: row.resolved_path } : {}),
+      ...(typeof row.link_target === 'string' ? { linkTarget: row.link_target } : {})
+    })),
+    exposed: rows(report.exposed).map((row) => ({ harness: row.harness as RosterHarness, skill: String(row.skill), fix: String(row.fix) }))
+  }
+}
+
 function contextApp(value: unknown): ContextLimitApp {
   if (typeof value !== 'string' || !(CONTEXT_APPS as readonly string[]).includes(value)) invalid('harness is not one of codex, claude')
   return value as ContextLimitApp
@@ -479,6 +544,7 @@ export async function rulesSnapshot(context: RulesIpcContext): Promise<RulesSnap
     apps,
     // The version each limit setting is judged against is the one the row above shows.
     context: (CONTEXT_APPS as ContextLimitApp[]).map((harness) => contextView(harness, apps.find((app) => app.harness === harness)?.version ?? null, generation, context)),
+    skills: skillsView(apps, generation, context),
     ...(context.ownEnvironment === undefined ? {} : { ownEnvironment: context.ownEnvironment }),
     transactions: listTransactions().slice(0, 10).map((entry) => ({
       id: entry.id, valid: entry.valid, ...(entry.created_at ? { createdAt: entry.created_at } : {}),
@@ -497,6 +563,7 @@ function planFrom(result: CliResult, kind: 'install' | 'restore'): RulesPlan {
     ...(typeof row.resolved_path === 'string' && row.resolved_path !== row.path ? { resolvedPath: row.resolved_path } : {}),
     ...(row.rendering === 'full' ? { rendering: 'full' as const } : row.rendering === 'public' ? { rendering: 'public' as const } : {}),
     ...(typeof row.link_target === 'string' ? { linkTarget: row.link_target } : {}),
+    ...(typeof row.note === 'string' ? { note: row.note } : {}),
     ...(Array.isArray(row.fold) ? { fold: (row.fold as unknown[]).map(String) } : {})
   })) : []
   return { ok: true, code: 'OK', planHash: typeof report.plan_hash === 'string' ? report.plan_hash : null, targets }
@@ -705,7 +772,7 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     const result = await runCli(ctx.script, ['rules', 'restore', '--transaction', id, '--expect-plan', planHash, '--yes', '--json'], ctx.env)
     return rulesOutcome(ctx, result, (report) => {
       const apps = ((report.restored as RosterHarness[] | undefined) ?? []).map((harness) => ROSTER_APP_NAMES[harness] ?? harness)
-      return `Put back the rules in ${apps.length <= 1 ? apps.join('') : `${apps.slice(0, -1).join(', ')} and ${apps.at(-1) as string}`}`
+      return `Put back the ${report.kind === 'skills' ? 'skills' : 'rules'} in ${apps.length <= 1 ? apps.join('') : `${apps.slice(0, -1).join(', ')} and ${apps.at(-1) as string}`}`
     })
   })
   handle('aiterm:rules:plan-revert-master', (params) => {
@@ -760,6 +827,28 @@ export function installAgentsIpcHandlers(ipc: AgentsIpcRegistrar, options: Agent
     // Owner-run: the app starts once with its own environment, as a loading test does.
     const result = await runCli(ctx.script, ['context', 'test', harness, '--json'], ctx.probeEnv, PROBE_TIMEOUT_MS)
     return rulesOutcome(ctx, result, (report) => `${ROSTER_APP_NAMES[harness]} context test ${PROBE_OUTCOME_WORDS[String(report.outcome)] ?? String(report.outcome)}: ${String(report.detail)}`)
+  })
+  handle('aiterm:rules:skills-plan', async () => {
+    const ctx = context()
+    return skillsPlanFrom(await runCli(ctx.script, ['skills', 'install', '--plan', '--json'], ctx.env))
+  })
+  handle('aiterm:rules:skills-install', async (params) => {
+    const planHash = textParam(params, 'planHash', 64)
+    const ctx = context()
+    const result = await runCli(ctx.script, ['skills', 'install', '--expect-plan', planHash, '--yes', '--json'], ctx.env)
+    return rulesOutcome(ctx, result, (report) => {
+      const changed = Array.isArray(report.written) ? report.written.length : 0
+      const open = Array.isArray(report.exposed) ? report.exposed.length : 0
+      const done = changed === 0 ? 'Every app already had its skills.' : `Changed ${changed} skill entr${changed === 1 ? 'y' : 'ies'}. Sessions started before this keep the skills they had.`
+      return open === 0 ? done : `${done} ${open} skill${open === 1 ? ' stays' : 's stay'} exposed.`
+    })
+  })
+  handle('aiterm:rules:skills-test', async (params) => {
+    const harness = harnessParam(params.harness)
+    const ctx = context()
+    // Owner-run: the app starts with its own environment, as a loading test does.
+    const result = await runCli(ctx.script, ['skills', 'test', harness, '--json'], ctx.probeEnv, PROBE_TIMEOUT_MS)
+    return rulesOutcome(ctx, result, (report) => `${ROSTER_APP_NAMES[harness]} skills test ${PROBE_OUTCOME_WORDS[String(report.outcome)] ?? String(report.outcome)}: ${String(report.detail)}`)
   })
   handle('aiterm:rules:probe', async (params) => {
     const harness = harnessParam(params.harness)
