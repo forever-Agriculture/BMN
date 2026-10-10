@@ -29,7 +29,7 @@ import {
 import { Chain, TeamLedger, TeamPreferences, TeamToast, firstApprovalWords, hostKind, nothingInEffectWords, outsideCountWords, shortDate, type TeamPage } from './team-preferences'
 import { ModelList } from './model-field'
 import { modelSuggestions } from './model-suggestions'
-import { changeModel, groupDifferences } from './roster-staging'
+import { changeModel, groupDifferences, removeException } from './roster-staging'
 import { confirmsBeforeCommit, rowHidesDetail, rulesUpdateWords, type TeamState } from './team-state'
 
 const noop = (): void => {}
@@ -813,5 +813,54 @@ describe('universal words (R60-NFR8)', () => {
         .map((match) => match[0])
       expect(unnamed).toEqual([])
     }
+  })
+})
+
+describe('allowed workspaces (60.8 AC5)', () => {
+  const ALLOWED: RosterDataShape = { ...DATA, exceptions: [
+    { id: 'zai-1a2b3c4d', provider: 'zai', folder: '/home/synthetic/code/app' },
+    { id: 'zai-5e6f7a8b', provider: 'zai', folder: '/home/synthetic/code/site' }
+  ] }
+  const allowed = (extra: Partial<TeamState> = {}): TeamState => team({ data: ALLOWED, base: ALLOWED, approved: ALLOWED, ...extra })
+
+  it('lists each one on Changes with its provider and folder, above the versions, and a Remove that names both', () => {
+    const markup = pageMarkup({ name: 'changes' }, allowed())
+
+    expect(markup).toContain('<h4 class="group-head">Allowed workspaces<span class="caption">where a provider that may see public work only was allowed</span></h4>')
+    expect(markup).toContain('<b>Z.ai</b> <span class="path mono wrap">/home/synthetic/code/app</span>')
+    expect(markup).toContain('aria-label="Stop allowing Z.ai in /home/synthetic/code/site"')
+    expect(count(markup, '>Remove</button>')).toBe(2)
+    expect(markup.indexOf('Allowed workspaces')).toBeLessThan(markup.indexOf('<h4 class="group-head">Versions</h4>'))
+    expect(words(markup)).not.toMatch(SCHEMA_WORDS)
+    expect(words(markup)).not.toMatch(/\bexceptions?\b/i)
+  })
+
+  it('shows no such group on Changes while none is allowed', () => {
+    const markup = pageMarkup({ name: 'changes' })
+
+    expect(markup).not.toContain('Allowed workspaces')
+    expect(markup).not.toContain('<h4 class="group-head">Versions</h4>')
+  })
+
+  it('lists them in the Advanced section of each agent on that provider, says None for a public-only provider without any, and leaves other agents alone', () => {
+    const glm = pageMarkup({ name: 'agent', id: 'glm' }, allowed())
+
+    expect(glm).toContain('Allowed workspaces')
+    expect(glm).toContain('Where Z.ai may see private work although it otherwise may not. One is added from the card a stopped prompt shows.')
+    expect(glm).toContain('<span class="path mono wrap">/home/synthetic/code/app</span>')
+    expect(glm).not.toContain('<b>Z.ai</b> <span class="path mono wrap">')
+    expect(count(glm, '>Remove</button>')).toBe(2)
+    expect(pageMarkup({ name: 'agent', id: 'glm' })).toContain('<span class="line-detail">None</span>')
+    expect(pageMarkup({ name: 'agent', id: 'sol' }, allowed())).not.toContain('Allowed workspaces')
+  })
+
+  it('removing one stages the team without it, and the Review says what that means', () => {
+    const staged = removeException(ALLOWED, 'zai-1a2b3c4d')
+
+    expect(staged.exceptions).toEqual([{ id: 'zai-5e6f7a8b', provider: 'zai', folder: '/home/synthetic/code/site' }])
+    expect(removeException(ALLOWED, 'nobody')).toEqual(ALLOWED)
+    const differences: RosterDiffShape[] = [{ scope: 'exceptions', id: 'zai-1a2b3c4d', field: null, kind: 'removed', before: { present: true, value: { provider: 'zai', folder: '/home/synthetic/code/app' } } }]
+    const { groups } = groupDifferences(differences, staged, ALLOWED, ['GLM could no longer receive private work in /home/synthetic/code/app'])
+    expect(groups.map((group) => [group.subject, group.consequences])).toEqual([['Allowed workspaces', ['GLM could no longer receive private work in /home/synthetic/code/app']]])
   })
 })

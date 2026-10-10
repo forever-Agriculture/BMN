@@ -515,6 +515,11 @@ export function setProviderAnswer(data: RosterDataShape, providerId: string, ans
   return { ...data, providers: data.providers.map((provider) => (provider.id === providerId ? { ...provider, private_work: answer } : provider)) }
 }
 
+/** One allowed workspace taken away: its provider may no longer see private work there (60.8 AC5). */
+export function removeException(data: RosterDataShape, id: string): RosterDataShape {
+  return { ...data, exceptions: data.exceptions.filter((entry) => entry.id !== id) }
+}
+
 export function agentsOnProvider(data: RosterDataShape, providerId: string): RosterAgentShape[] {
   return data.agents.filter((agent) => agent.provider === providerId)
 }

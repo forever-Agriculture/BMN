@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { GUARD_APPS, decide, decideWithin, guardStanding, guardState, parseLaunch, stopAnswer } from '../../bin/agents-guard.mjs'
 import { visibilityPath } from '../../bin/agents-check.mjs'
-import { readValidRoster } from '../../bin/agents-state.mjs'
+import { buildGeneration, currentPointerPath, generationPath, readValidRoster } from '../../bin/agents-state.mjs'
 import { approveRoster } from '../main/agents-approval'
 
 const EXAMPLE = readFileSync(fileURLToPath(new URL('./test-fixtures/agents/roster-example.md', import.meta.url)), 'utf8')
@@ -104,6 +104,17 @@ describe('whether the guard applies at all (60.8 AC2)', () => {
     const file = join(state, 'generations/000001.json')
     writeFileSync(file, readFileSync(file, 'utf8').replace('"hash": "', '"hash": "0'))
     expect(prompt('claude', pid)).toMatchObject({ outcome: 'stop', cause: 'state' })
+  })
+
+  it('stops every prompt while the approved team is still the one from the earlier layout', () => {
+    const earlier = buildGeneration({ number: 1, parent: null, rosterFileHash: 'f'.repeat(64),
+      data: { schema_version: 1, agents: [], roles: [], data_labels: { default: 'private', paths: [] }, harness_routes: [] } as never })
+    mkdirSync(join(home, '.config/bmn/agents/state/generations'), { recursive: true })
+    writeFileSync(generationPath(1), JSON.stringify(earlier))
+    writeFileSync(currentPointerPath(), JSON.stringify({ generation: 1, hash: earlier.hash }))
+
+    expect(guardState()).toEqual({ state: 'broken', fix: 'The approved team is from an earlier BMN. Open BMN Preferences › Team and approve it again.' })
+    expect(prompt('claude', session(['claude']))).toMatchObject({ outcome: 'stop', cause: 'state', allow: false })
   })
 
   it('stops a prompt whose agent process cannot be read, naming the fix', () => {

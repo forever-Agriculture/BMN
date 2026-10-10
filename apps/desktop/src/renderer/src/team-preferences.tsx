@@ -48,6 +48,7 @@ import {
   roleIdsOf,
   providerOf,
   publicOnly,
+  removeException,
   roleName,
   setAgentClass,
   setAgentOn,
@@ -358,6 +359,29 @@ function PrivateWorkRow(props: { team: TeamState; data: RosterDataShape; agent: 
   )
 }
 
+/**
+ * The workspaces in which a provider that may otherwise see public work only was allowed (60.8
+ * AC5). One is added from the card a stopped prompt raises; taking one away here is a staged
+ * change, approved like any other. `provider` limits the list to one provider's.
+ */
+export function AllowedWorkspaces(props: { team: TeamState; data: RosterDataShape; provider?: string }): React.JSX.Element | null {
+  const { team, data } = props
+  const entries = data.exceptions.filter((entry) => props.provider === undefined || entry.provider === props.provider)
+  const nameOf = (id: string): string => data.providers.find((provider) => provider.id === id)?.name ?? id
+  if (entries.length === 0) return props.provider === undefined ? null : <span className="line-detail">None</span>
+  return (
+    <div className="allowed-workspaces">
+      {entries.map((entry) => (
+        <div key={entry.id} className="list-line">
+          <div>{props.provider === undefined ? <><b>{nameOf(entry.provider)}</b>{' '}</> : null}<span className="path mono wrap">{entry.folder}</span></div>
+          <button type="button" className="small" aria-label={`Stop allowing ${nameOf(entry.provider)} in ${entry.folder}`}
+            onClick={() => team.stage(removeException(data, entry.id))}>Remove</button>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 /** What the Host row selects for a recorded host: nothing while none is recorded, since the check then refuses the agent. */
 export function hostKind(host: string | null): 'default' | 'custom' | null {
   return host === null ? null : host === 'default' ? 'default' : 'custom'
@@ -505,6 +529,11 @@ function AgentPage(props: { team: TeamState; data: RosterDataShape; agent: Roste
         </Row>
         <HostRow key={`${agent.id}-${agent.host}`} team={team} data={data} agent={agent} apps={props.apps} />
         <AlsoCalled team={team} data={data} agent={agent} />
+        {publicOnly(data, agent) || data.exceptions.some((entry) => entry.provider === agent.provider) ? (
+          <Row label="Allowed workspaces" hint={`Where ${providerOf(data, agent)?.name ?? agent.provider} may see private work although it otherwise may not. One is added from the card a stopped prompt shows.`}>
+            <AllowedWorkspaces team={team} data={data} provider={agent.provider} />
+          </Row>
+        ) : null}
         <Row label="Team file" hint={fileMessage ?? undefined}>
           <div className="inline">
             <button type="button" className="small" onClick={() => {
@@ -816,6 +845,13 @@ function ChangesPage(props: { team: TeamState }): React.JSX.Element {
       <PageHead title="Changes" status="Every approved version of the team" />
       {history.length === 0 || damagedApproval(team) ? <FirstApproval team={team} /> : null}
       {outside ? <p className="page-note">The team file holds changes made outside BMN. Keep or revert them on Agents before restoring a version.</p> : null}
+      {team.data !== null && team.data.exceptions.length > 0 ? (
+        <>
+          <h4 className="group-head">Allowed workspaces<span className="caption">where a provider that may see public work only was allowed</span></h4>
+          <AllowedWorkspaces team={team} data={team.data} />
+          <h4 className="group-head">Versions</h4>
+        </>
+      ) : null}
       {history.map((entry) => (
         <div key={entry.number} className="role">
           <div className="list-line">
